@@ -748,9 +748,7 @@ class Session:
             remaining_budget -= item["tokens"]
 
         archive_tokens = latest_archive_tokens + pre_archive_tokens
-        included_archives = (1 if include_latest_overview else 0) + len(
-            included_pre_archive_abstracts
-        )
+        included_archives = len(included_pre_archive_abstracts)
         dropped_archives = max(
             0, context["total_archives"] - context["failed_archives"] - included_archives
         )
@@ -759,7 +757,6 @@ class Session:
             "latest_archive_overview": (
                 latest_archive["overview"] if include_latest_overview else ""
             ),
-            "latest_archive_id": latest_archive["archive_id"] if latest_archive else "",
             "pre_archive_abstracts": included_pre_archive_abstracts,
             "messages": [m.to_dict() for m in merged_messages],
             "estimatedTokens": message_tokens + archive_tokens,
@@ -843,8 +840,6 @@ class Session:
                         archive["archive_uri"], overview
                     ),
                 }
-                continue
-
             abstract = await self._read_archive_abstract(archive["archive_uri"])
             if abstract:
                 pre_archive_abstracts.append(

@@ -265,6 +265,10 @@ class EmbeddingConfig(BaseModel):
     max_concurrent: int = Field(
         default=10, description="Maximum number of concurrent embedding requests"
     )
+    max_retries: int = Field(
+        default=3,
+        description="Maximum retry attempts for embedding provider calls (0 disables retry)",
+    )
     text_source: str = Field(
         default="summary_first",
         description="Text source for file vectorization: summary_first|summary_only|content_only",
@@ -340,6 +344,7 @@ class EmbeddingConfig(BaseModel):
                     "api_version": cfg.api_version,
                     "dimension": cfg.dimension,
                     "provider": "openai",
+                    "config": {"max_retries": self.max_retries},
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                     **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
@@ -354,6 +359,7 @@ class EmbeddingConfig(BaseModel):
                     "api_version": cfg.api_version,
                     "dimension": cfg.dimension,
                     "provider": "azure",
+                    "config": {"max_retries": self.max_retries},
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                     **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
@@ -367,6 +373,7 @@ class EmbeddingConfig(BaseModel):
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
                     "input_type": cfg.input,
+                    "config": {"max_retries": self.max_retries},
                 },
             ),
             ("volcengine", "sparse"): (
@@ -375,6 +382,7 @@ class EmbeddingConfig(BaseModel):
                     "model_name": cfg.model,
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
+                    "config": {"max_retries": self.max_retries},
                 },
             ),
             ("volcengine", "hybrid"): (
@@ -385,6 +393,7 @@ class EmbeddingConfig(BaseModel):
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
                     "input_type": cfg.input,
+                    "config": {"max_retries": self.max_retries},
                 },
             ),
             ("vikingdb", "dense"): (
@@ -398,6 +407,7 @@ class EmbeddingConfig(BaseModel):
                     "host": cfg.host,
                     "dimension": cfg.dimension,
                     "input_type": cfg.input,
+                    "config": {"max_retries": self.max_retries},
                 },
             ),
             ("vikingdb", "sparse"): (
@@ -409,6 +419,7 @@ class EmbeddingConfig(BaseModel):
                     "sk": cfg.sk,
                     "region": cfg.region,
                     "host": cfg.host,
+                    "config": {"max_retries": self.max_retries},
                 },
             ),
             ("vikingdb", "hybrid"): (
@@ -422,6 +433,7 @@ class EmbeddingConfig(BaseModel):
                     "host": cfg.host,
                     "dimension": cfg.dimension,
                     "input_type": cfg.input,
+                    "config": {"max_retries": self.max_retries},
                 },
             ),
             ("jina", "dense"): (
@@ -431,6 +443,7 @@ class EmbeddingConfig(BaseModel):
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
+                    "config": {"max_retries": self.max_retries},
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                 },
@@ -441,6 +454,7 @@ class EmbeddingConfig(BaseModel):
                     "model_name": cfg.model,
                     "api_key": cfg.api_key,
                     "dimension": cfg.dimension,
+                    "config": {"max_retries": self.max_retries},
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                 },
@@ -454,6 +468,7 @@ class EmbeddingConfig(BaseModel):
                     or "no-key",  # Ollama ignores the key, but client requires non-empty
                     "api_base": cfg.api_base or "http://localhost:11434/v1",
                     "dimension": cfg.dimension,
+                    "config": {"max_retries": self.max_retries},
                 },
             ),
             ("voyage", "dense"): (
@@ -463,6 +478,7 @@ class EmbeddingConfig(BaseModel):
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
+                    "config": {"max_retries": self.max_retries},
                 },
             ),
             ("minimax", "dense"): (
@@ -472,6 +488,7 @@ class EmbeddingConfig(BaseModel):
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
+                    "config": {"max_retries": self.max_retries},
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                     **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
@@ -493,6 +510,7 @@ class EmbeddingConfig(BaseModel):
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
+                    "config": {"max_retries": self.max_retries},
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                     **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),

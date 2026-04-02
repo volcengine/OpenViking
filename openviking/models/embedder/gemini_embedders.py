@@ -151,9 +151,9 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
                 api_key=api_key,
                 http_options=HttpOptions(
                     retry_options=HttpRetryOptions(
-                        attempts=3,
-                        initial_delay=1.0,
-                        max_delay=30.0,
+                        attempts=max(self.max_retries + 1, 1),
+                        initial_delay=0.5,
+                        max_delay=8.0,
                         exp_base=2.0,
                     )
                 ),
@@ -207,8 +207,9 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
                 task_type = self.query_param
             elif not is_query and self.document_param:
                 task_type = self.document_param
+
         # SDK accepts plain str; converts to REST Parts format internally.
-        try:
+        def _call() -> EmbedResult:
             result = self.client.models.embed_content(
                 model=self.model_name,
                 contents=text,
@@ -216,6 +217,15 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
             )
             vector = truncate_and_normalize(list(result.embeddings[0].values), self._dimension)
             return EmbedResult(dense_vector=vector)
+
+        try:
+            if _HTTP_RETRY_AVAILABLE:
+                return _call()
+            return self._run_with_retry(
+                _call,
+                logger=logger,
+                operation_name="Gemini embedding",
+            )
         except (APIError, ClientError) as e:
             _raise_api_error(e, self.model_name)
 
@@ -233,7 +243,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
         if titles is not None:
             return [
                 self.embed(text, is_query=is_query, task_type=task_type, title=title)
-                for text, title in zip(texts, titles)
+                for text, title in zip(texts, titles, strict=True)
             ]
         # Resolve effective task_type from is_query when no explicit override
         if task_type is None:
@@ -253,14 +263,29 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
                 continue
 
             non_empty_texts = [batch[j] for j in non_empty_indices]
-            try:
+
+            def _call_batch(
+                non_empty_texts: List[str] = non_empty_texts,
+                config: types.EmbedContentConfig = config,
+            ) -> Any:
                 response = self.client.models.embed_content(
                     model=self.model_name,
                     contents=non_empty_texts,
                     config=config,
                 )
+                return response
+
+            try:
+                if _HTTP_RETRY_AVAILABLE:
+                    response = _call_batch()
+                else:
+                    response = self._run_with_retry(
+                        _call_batch,
+                        logger=logger,
+                        operation_name="Gemini batch embedding",
+                    )
                 batch_results = [None] * len(batch)
-                for j, emb in zip(non_empty_indices, response.embeddings):
+                for j, emb in zip(non_empty_indices, response.embeddings, strict=True):
                     batch_results[j] = EmbedResult(
                         dense_vector=truncate_and_normalize(list(emb.values), self._dimension)
                     )

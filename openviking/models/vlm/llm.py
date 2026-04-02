@@ -183,7 +183,12 @@ class StructuredVLM:
         if schema and not messages:
             prompt = f"{prompt}\n\n{get_json_schema_prompt(schema)}"
 
-        response = self._get_vlm().get_completion(prompt, thinking, tools, messages)
+        response = self._get_vlm().get_completion(
+            prompt=prompt,
+            thinking=thinking,
+            tools=tools,
+            messages=messages,
+        )
         return parse_json_from_response(response)
 
     async def complete_json_async(
@@ -191,7 +196,6 @@ class StructuredVLM:
         prompt: str = "",
         schema: Optional[Dict[str, Any]] = None,
         thinking: bool = False,
-        max_retries: int = 0,
         tools: Optional[List[Dict[str, Any]]] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Optional[Dict[str, Any]]:
@@ -200,7 +204,10 @@ class StructuredVLM:
             prompt = f"{prompt}\n\n{get_json_schema_prompt(schema)}"
 
         response = await self._get_vlm().get_completion_async(
-            prompt, thinking, max_retries, tools, messages
+            prompt=prompt,
+            thinking=thinking,
+            tools=tools,
+            messages=messages,
         )
         return parse_json_from_response(response)
 
@@ -227,13 +234,10 @@ class StructuredVLM:
         prompt: str,
         model_class: Type[T],
         thinking: bool = False,
-        max_retries: int = 0,
     ) -> Optional[T]:
         """Async version of complete_model."""
         schema = model_class.model_json_schema()
-        response = await self.complete_json_async(
-            prompt, schema=schema, thinking=thinking, max_retries=max_retries
-        )
+        response = await self.complete_json_async(prompt, schema=schema, thinking=thinking)
         if response is None:
             return None
 
@@ -252,7 +256,13 @@ class StructuredVLM:
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, Any]:
         """Get vision completion."""
-        return self._get_vlm().get_vision_completion(prompt, images, thinking, tools, messages)
+        return self._get_vlm().get_vision_completion(
+            prompt=prompt,
+            images=images,
+            thinking=thinking,
+            tools=tools,
+            messages=messages,
+        )
 
     async def get_vision_completion_async(
         self,
@@ -264,5 +274,9 @@ class StructuredVLM:
     ) -> Union[str, Any]:
         """Async vision completion."""
         return await self._get_vlm().get_vision_completion_async(
-            prompt, images, thinking, tools, messages
+            prompt=prompt,
+            images=images,
+            thinking=thinking,
+            tools=tools,
+            messages=messages,
         )

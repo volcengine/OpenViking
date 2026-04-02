@@ -2,10 +2,11 @@ version: "3.8"
 
 services:
   openviking:
-    image: ghcr.io/volcengine/openviking:main
+    image: ghcr.io/volcengine/openviking:latest
     container_name: openviking
     ports:
       - "1933:1933"
+      - "8020:8020"
     volumes:
       # Mount the configuration and data directory to persist state
       - /var/lib/openviking/ov.conf:/app/ov.conf

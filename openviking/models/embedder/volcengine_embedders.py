@@ -11,27 +11,10 @@ from openviking.models.embedder.base import (
     EmbedResult,
     HybridEmbedderBase,
     SparseEmbedderBase,
-    exponential_backoff_retry,
     truncate_and_normalize,
 )
 from openviking.telemetry import get_current_telemetry
 from openviking_cli.utils.logger import default_logger as logger
-
-
-def is_429_error(exception: Exception) -> bool:
-    """
-    判断异常是否为 429 限流错误
-
-    Args:
-        exception: 要检查的异常
-
-    Returns:
-        如果是 429 错误则返回 True，否则返回 False
-    """
-    exception_str = str(exception)
-    return (
-        "429" in exception_str or "TooManyRequests" in exception_str or "RateLimit" in exception_str
-    )
 
 
 def process_sparse_embedding(sparse_data: Any) -> Dict[str, float]:
@@ -177,14 +160,10 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
             return EmbedResult(dense_vector=vector)
 
         try:
-            return exponential_backoff_retry(
+            return self._run_with_retry(
                 _embed_call,
-                max_wait=10.0,
-                base_delay=0.5,
-                max_delay=2.0,
-                jitter=True,
-                is_retryable=is_429_error,
                 logger=logger,
+                operation_name="Volcengine embedding",
             )
         except Exception as e:
             raise RuntimeError(f"Volcengine embedding failed: {str(e)}") from e
@@ -205,7 +184,7 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
         if not texts:
             return []
 
-        try:
+        def _call() -> List[EmbedResult]:
             if self.input_type == "multimodal":
                 multimodal_inputs = [{"type": "text", "text": text} for text in texts]
                 response = self.client.multimodal_embeddings.create(
@@ -222,6 +201,13 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
                 EmbedResult(dense_vector=truncate_and_normalize(item.embedding, self.dimension))
                 for item in data
             ]
+
+        try:
+            return self._run_with_retry(
+                _call,
+                logger=logger,
+                operation_name="Volcengine batch embedding",
+            )
         except Exception as e:
             logger.error(
                 f"Volcengine batch embedding failed, texts length: {len(texts)}, input_type: {self.input_type}, model_name: {self.model_name}"
@@ -295,14 +281,10 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
             return EmbedResult(sparse_vector=process_sparse_embedding(sparse_vector))
 
         try:
-            return exponential_backoff_retry(
+            return self._run_with_retry(
                 _embed_call,
-                max_wait=10.0,
-                base_delay=0.5,
-                max_delay=2.0,
-                jitter=True,
-                is_retryable=is_429_error,
                 logger=logger,
+                operation_name="Volcengine sparse embedding",
             )
         except Exception as e:
             raise RuntimeError(f"Volcengine sparse embedding failed: {str(e)}") from e
@@ -400,14 +382,10 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
             )
 
         try:
-            return exponential_backoff_retry(
+            return self._run_with_retry(
                 _embed_call,
-                max_wait=10.0,
-                base_delay=0.5,
-                max_delay=2.0,
-                jitter=True,
-                is_retryable=is_429_error,
                 logger=logger,
+                operation_name="Volcengine hybrid embedding",
             )
         except Exception as e:
             raise RuntimeError(f"Volcengine hybrid embedding failed: {str(e)}") from e

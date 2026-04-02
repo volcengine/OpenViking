@@ -14,6 +14,8 @@ from openviking.storage.collection_schemas import (
     init_context_collection,
 )
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
+from openviking.storage.viking_vector_index_backend import _SingleAccountBackend
+from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
 
 class _DummyEmbedder:
@@ -203,3 +205,98 @@ async def test_init_context_collection_excludes_parent_uri_for_local_backend(mon
     field_names = [field["FieldName"] for field in captured["schema"]["Fields"]]
     assert "parent_uri" not in field_names
     assert "parent_uri" not in captured["schema"]["ScalarIndex"]
+
+
+def test_single_account_backend_filters_parent_uri_against_current_schema():
+    class _Collection:
+        def get_meta_data(self):
+            return {
+                "Fields": [
+                    {"FieldName": "id"},
+                    {"FieldName": "uri"},
+                    {"FieldName": "abstract"},
+                    {"FieldName": "account_id"},
+                ]
+            }
+
+    class _Adapter:
+        mode = "local"
+
+        def get_collection(self):
+            return _Collection()
+
+    backend = _SingleAccountBackend(
+        config=VectorDBBackendConfig(backend="local", name="context", dimension=2),
+        bound_account_id="acc1",
+        shared_adapter=_Adapter(),
+    )
+
+    filtered = backend._filter_known_fields(
+        {
+            "id": "rec-1",
+            "uri": "viking://resources/sample",
+            "abstract": "sample",
+            "account_id": "acc1",
+            "parent_uri": "viking://resources",
+        }
+    )
+
+    assert filtered == {
+        "id": "rec-1",
+        "uri": "viking://resources/sample",
+        "abstract": "sample",
+        "account_id": "acc1",
+    }
+
+
+@pytest.mark.asyncio
+async def test_single_account_backend_upsert_drops_legacy_parent_uri_before_write():
+    captured = {}
+
+    class _Collection:
+        def get_meta_data(self):
+            return {
+                "Fields": [
+                    {"FieldName": "id"},
+                    {"FieldName": "uri"},
+                    {"FieldName": "abstract"},
+                    {"FieldName": "active_count"},
+                    {"FieldName": "account_id"},
+                ]
+            }
+
+    class _Adapter:
+        mode = "local"
+
+        def get_collection(self):
+            return _Collection()
+
+        def upsert(self, data):
+            captured["data"] = dict(data)
+            return ["rec-legacy"]
+
+    backend = _SingleAccountBackend(
+        config=VectorDBBackendConfig(backend="local", name="context", dimension=2),
+        bound_account_id="acc1",
+        shared_adapter=_Adapter(),
+    )
+
+    record_id = await backend.upsert(
+        {
+            "id": "rec-legacy",
+            "uri": "viking://resources/sample",
+            "abstract": "sample",
+            "active_count": 2,
+            "account_id": "acc1",
+            "parent_uri": "viking://resources",
+        }
+    )
+
+    assert record_id == "rec-legacy"
+    assert captured["data"] == {
+        "id": "rec-legacy",
+        "uri": "viking://resources/sample",
+        "abstract": "sample",
+        "active_count": 2,
+        "account_id": "acc1",
+    }

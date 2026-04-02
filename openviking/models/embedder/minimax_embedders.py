@@ -90,8 +90,8 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
         """Create a requests session with retry logic"""
         session = requests.Session()
         retry_strategy = Retry(
-            total=6,
-            backoff_factor=1,  # 1s, 2s, 4s, 8s, 16s, 32s
+            total=self.max_retries,
+            backoff_factor=0.5,
             status_forcelist=[429, 500, 502, 503, 504],
             allowed_methods=["POST"],
         )

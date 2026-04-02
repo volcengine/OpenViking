@@ -182,14 +182,12 @@ openviking session get a1b2c3d4
 
 该接口返回：
 - `latest_archive_overview`：最新一个已完成归档的 `overview` 文本，在 token budget 足够时返回
-- `latest_archive_id`：最新一个已完成归档的 ID，用于后续展开 archive 详情
-- `pre_archive_abstracts`：更早历史归档的轻量列表，每项只包含 `archive_id` 和 `abstract`
+- `pre_archive_abstracts`：已完成归档的轻量列表，每项只包含 `archive_id` 和 `abstract`
 - `messages`：最新已完成归档之后的所有未完成归档消息，再加上当前 live session 消息
 - `stats`：返回结果对应的 token 与纳入统计
 
 说明：
 - 没有可用 completed archive，或最新 overview 超出 token budget 时，`latest_archive_overview` 返回空字符串。
-- 只要存在最新 completed archive，就会返回 `latest_archive_id`；即使 `latest_archive_overview` 因 budget 被裁剪，这个 ID 仍然可用。
 - `token_budget` 会在 active `messages` 之后作用于 assembled archive payload：`latest_archive_overview` 优先级高于 `pre_archive_abstracts`，预算紧张时先淘汰最旧的 abstracts。
 - 只有最终实际返回的 archive 内容，才会计入 `estimatedTokens` 和 `stats.archiveTokens`。
 - 当前每次有消息的 session commit 都会在 Phase 2 生成 archive 摘要；只有带 `.done` 标记的 completed archive 才会被这里返回。
@@ -206,7 +204,6 @@ openviking session get a1b2c3d4
 ```python
 context = await client.get_session_context("a1b2c3d4", token_budget=128000)
 print(context["latest_archive_overview"])
-print(context["latest_archive_id"])
 print(context["pre_archive_abstracts"])
 print(len(context["messages"]))
 
@@ -238,8 +235,11 @@ ov session get-session-context a1b2c3d4 --token-budget 128000
   "status": "ok",
   "result": {
     "latest_archive_overview": "# Session Summary\n\n**Overview**: User discussed deployment and auth setup.",
-    "latest_archive_id": "archive_002",
     "pre_archive_abstracts": [
+      {
+        "archive_id": "archive_002",
+        "abstract": "用户讨论了部署和鉴权配置。"
+      },
       {
         "archive_id": "archive_001",
         "abstract": "用户之前讨论了仓库初始化和鉴权配置。"
@@ -263,14 +263,14 @@ ov session get-session-context a1b2c3d4 --token-budget 128000
         "created_at": "2026-03-24T09:10:20Z"
       }
     ],
-    "estimatedTokens": 147,
+    "estimatedTokens": 160,
     "stats": {
       "totalArchives": 2,
       "includedArchives": 2,
       "droppedArchives": 0,
       "failedArchives": 0,
       "activeTokens": 98,
-      "archiveTokens": 49
+      "archiveTokens": 62
     }
   }
 }
@@ -282,7 +282,7 @@ ov session get-session-context a1b2c3d4 --token-budget 128000
 
 获取某次已完成归档的完整内容。
 
-该接口通常配合 `get_session_context()` 返回的 `latest_archive_id` 或 `pre_archive_abstracts[*].archive_id` 使用。
+该接口通常配合 `get_session_context()` 返回的 `pre_archive_abstracts[*].archive_id` 使用。
 
 该接口返回：
 - `archive_id`：被展开的 archive ID

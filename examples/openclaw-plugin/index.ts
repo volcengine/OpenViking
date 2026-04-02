@@ -8,8 +8,10 @@ import { OpenVikingClient, localClientCache, localClientPendingPromises, isMemor
 import type { FindResultItem, PendingClientEntry, CommitSessionResult, OVMessage } from "./client.js";
 import { formatMessageFaithful } from "./context-engine.js";
 import {
+  compileSessionPatterns,
   isTranscriptLikeIngest,
   extractLatestUserText,
+  shouldSkipIngestReplyAssistSession,
 } from "./text-utils.js";
 import {
   clampScore,
@@ -21,7 +23,7 @@ import {
 } from "./memory-ranking.js";
 import {
   IS_WIN,
-  waitForHealth,
+  waitForHealthOrExit,
   quickHealthCheck,
   quickRecallPrecheck,
   withTimeout,
@@ -273,6 +275,9 @@ const contextEnginePlugin = {
         ? (api.pluginConfig as Record<string, unknown>)
         : {};
     const cfg = memoryOpenVikingConfigSchema.parse(api.pluginConfig);
+    const ingestReplyAssistIgnoreSessionPatterns = compileSessionPatterns(
+      cfg.ingestReplyAssistIgnoreSessionPatterns,
+    );
     const rawAgentId = rawCfg.agentId;
     if (cfg.logFindRequests) {
       api.logger.info(
@@ -338,6 +343,10 @@ const contextEnginePlugin = {
             entry.resolve = resolve;
             entry.reject = reject;
           });
+          // Service startup can reject this shared promise before any hook/tool
+          // awaits it. Attach a sink now so expected local-startup failures do
+          // not surface as process-level unhandled rejections.
+          void entry.promise.catch(() => {});
           clientPromise = entry.promise;
           localClientPendingPromises.set(localCacheKey, entry);
         }
@@ -925,22 +934,28 @@ const contextEnginePlugin = {
       }
 
       if (cfg.ingestReplyAssist) {
-        const decision = isTranscriptLikeIngest(queryText, {
-          minSpeakerTurns: cfg.ingestReplyAssistMinSpeakerTurns,
-          minChars: cfg.ingestReplyAssistMinChars,
-        });
-        if (decision.shouldAssist) {
+        if (shouldSkipIngestReplyAssistSession(ctx ?? {}, ingestReplyAssistIgnoreSessionPatterns)) {
           verboseRoutingInfo(
-            `openviking: ingest-reply-assist applied (reason=${decision.reason}, speakerTurns=${decision.speakerTurns}, chars=${decision.chars})`,
+            `openviking: skipping ingest-reply-assist due to session pattern match (sessionKey=${ctx?.sessionKey ?? "none"}, sessionId=${ctx?.sessionId ?? "none"})`,
           );
-          prependContextParts.push(
-            "<ingest-reply-assist>\n" +
-              "The latest user input looks like a multi-speaker transcript used for memory ingestion.\n" +
-              "Reply with 1-2 concise sentences to acknowledge or summarize key points.\n" +
-              "Do not output NO_REPLY or an empty reply.\n" +
-              "Do not fabricate facts beyond the provided transcript and recalled memories.\n" +
-              "</ingest-reply-assist>",
-          );
+        } else {
+          const decision = isTranscriptLikeIngest(queryText, {
+            minSpeakerTurns: cfg.ingestReplyAssistMinSpeakerTurns,
+            minChars: cfg.ingestReplyAssistMinChars,
+          });
+          if (decision.shouldAssist) {
+            verboseRoutingInfo(
+              `openviking: ingest-reply-assist applied (reason=${decision.reason}, speakerTurns=${decision.speakerTurns}, chars=${decision.chars})`,
+            );
+            prependContextParts.push(
+              "<ingest-reply-assist>\n" +
+                "The latest user input looks like a multi-speaker transcript used for memory ingestion.\n" +
+                "Reply with 1-2 concise sentences to acknowledge or summarize key points.\n" +
+                "Do not output NO_REPLY or an empty reply.\n" +
+                "Do not fabricate facts beyond the provided transcript and recalled memories.\n" +
+                "</ingest-reply-assist>",
+            );
+          }
         }
       }
 
@@ -979,6 +994,10 @@ const contextEnginePlugin = {
           cfg,
           logger: api.logger,
           getClient,
+          quickPrecheck:
+            cfg.mode === "local"
+              ? () => quickRecallPrecheck(cfg.mode, cfg.baseUrl, cfg.port, localProcess)
+              : undefined,
           resolveAgentId,
           rememberSessionAgentId,
         });
@@ -1017,8 +1036,9 @@ const contextEnginePlugin = {
 
           // Inherit system environment; optionally override Go/Python paths via env vars
           const pathSep = IS_WIN ? ";" : ":";
+          const { ALL_PROXY, all_proxy, HTTP_PROXY, http_proxy, HTTPS_PROXY, https_proxy, ...filteredEnv } = process.env;
           const env = {
-            ...process.env,
+            ...filteredEnv,
             PYTHONUNBUFFERED: "1",
             PYTHONWARNINGS: "ignore::RuntimeWarning",
             OPENVIKING_CONFIG_FILE: cfg.configPath,
@@ -1082,7 +1102,7 @@ const contextEnginePlugin = {
             api.logger.warn(`openviking: subprocess exited (code=${code}, signal=${signal})${out}`);
           });
           try {
-            await waitForHealth(baseUrl, timeoutMs, intervalMs);
+            await waitForHealthOrExit(baseUrl, timeoutMs, intervalMs, child);
             const client = new OpenVikingClient(
               baseUrl,
               cfg.apiKey,
@@ -1159,7 +1179,7 @@ const contextEnginePlugin = {
                 api.logger.warn(`openviking: re-spawned subprocess exited (code=${code}, signal=${signal})`);
               });
               try {
-                await waitForHealth(baseUrl, timeoutMs, intervalMs);
+                await waitForHealthOrExit(baseUrl, timeoutMs, intervalMs, child);
                 const client = new OpenVikingClient(baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs);
                 localClientCache.set(localCacheKey, { client, process: child });
                 if (resolveLocalClient) {

@@ -113,6 +113,12 @@
       "help": "Minimum sanitized text length required before ingest reply assist can trigger.",
       "advanced": true
     },
+    "ingestReplyAssistIgnoreSessionPatterns": {
+      "label": "Ingest Ignore Session Patterns",
+      "placeholder": "agent:*:cron:**",
+      "help": "Skip ingest reply assist when the session key matches any glob pattern. Use * within one segment and ** across segments.",
+      "advanced": true
+    },
     "emitStandardDiagnostics": {
       "label": "Standard diagnostics (diag JSON lines)",
       "advanced": true,
@@ -190,6 +196,12 @@
       },
       "ingestReplyAssistMinChars": {
         "type": "number"
+      },
+      "ingestReplyAssistIgnoreSessionPatterns": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
       },
       "emitStandardDiagnostics": {
         "type": "boolean"

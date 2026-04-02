@@ -1,456 +1,241 @@
 # OpenClaw + OpenViking 上下文引擎插件
 
-使用 [OpenViking](https://github.com/volcengine/OpenViking) 作为 [OpenClaw](https://github.com/openclaw/openclaw) 的长期记忆后端。在 OpenClaw 中，此插件注册为 `openviking` 上下文引擎。安装后，OpenClaw 将自动**记忆**对话中的重要信息，并在响应前**召回**相关上下文。
+使用 [OpenViking](https://github.com/volcengine/OpenViking) 作为 [OpenClaw](https://github.com/openclaw/openclaw) 的长期记忆后端。在 OpenClaw 中，此插件注册为 `openviking` 上下文引擎。
 
-> **ℹ️ 历史兼容性说明**
->
-> 传统的 OpenViking/OpenClaw 集成在 OpenClaw `2026.3.12` 附近存在一个已知问题，即对话可能在插件加载后挂起。
-> 该问题仅影响传统插件路径；本文档中描述的当前上下文引擎插件 2.0 不受此影响，因此新安装无需因此降级 OpenClaw。
-> 插件 2.0 也不向后兼容传统的 `memory-openviking` 插件及其配置，因此升级必须替换旧设置，而不是混合使用两个版本。
-> 插件 2.0 还依赖于 OpenClaw 的上下文引擎功能，不支持旧版 OpenClaw；使用此插件前请先升级 OpenClaw。
-> 如果您正在排查传统部署的问题，请参阅 [#591](https://github.com/volcengine/OpenViking/issues/591) 和上游修复 PR：openclaw/openclaw#34673、openclaw/openclaw#33547。
+本文档不是安装教程，而是面向集成方和工程师的“当前实现设计说明”。它基于 `examples/openclaw-plugin` 里的现有代码，重点解释这套插件今天实际上如何工作，而不是未来可能的重构方向。
 
-> **🚀 插件 2.0（上下文引擎架构）**
->
-> 本文档涵盖当前基于上下文引擎架构的 OpenViking 插件 2.0，这是 AI 编码助手的推荐集成路径。
-> 有关设计背景和早期讨论，请参阅：
-> https://github.com/volcengine/OpenViking/discussions/525
+## 文档入口
 
----
+- 安装与升级：[INSTALL-ZH.md](./INSTALL-ZH.md)
+- English install guide: [INSTALL.md](./INSTALL.md)
+- Agent 专用操作文档：[INSTALL-AGENT.md](./INSTALL-AGENT.md)
 
-## 目录
+## 设计定位
 
-- [一键安装](#一键安装)
-- [手动设置](#手动设置)
-  - [前置要求](#前置要求)
-  - [本地模式（个人使用）](#本地模式个人使用)
-  - [远程模式（团队共享）](#远程模式团队共享)
-  - [火山引擎 ECS 部署](#火山引擎-ecs-部署)
-- [启动与验证](#启动与验证)
-- [配置参考](#配置参考)
-- [日常使用](#日常使用)
-- [Web 控制台（可视化）](#web-控制台可视化)
-- [故障排除](#故障排除)
-- [卸载](#卸载)
+- OpenClaw 仍然负责 agent runtime、prompt 编排和工具执行。
+- OpenViking 负责长期记忆检索、session 归档、archive summary 和记忆抽取。
+- `examples/openclaw-plugin` 不是一个单一职责的“记忆查询插件”，而是一组围绕 OpenClaw 生命周期工作的集成层。
 
----
+按当前代码职责看，插件同时扮演四个角色：
 
-## 一键安装
+- `context-engine`：实现 `assemble`、`afterTurn`、`compact`
+- Hook 层：接管 `before_prompt_build`、`session_start`、`session_end`、`agent_end`、`before_reset`
+- Tool 提供者：注册 `memory_recall`、`memory_store`、`memory_forget`、`ov_archive_expand`
+- 运行时管理器：在 `local` 模式下拉起并监控 OpenViking 子进程
 
-适用于想要快速获得本地体验的用户。安装助手会自动处理环境检测、依赖安装和配置文件生成。
+## 总体架构
 
-### 方法 A：npm 安装（推荐，跨平台）
+![OpenClaw 与 OpenViking 插件总体架构](./images/openclaw-plugin-engine-overview.png)
 
-```bash
-npm install -g openclaw-openviking-setup-helper
-ov-install
-```
+上图对应的是当前实现里的整体边界：
 
-### 方法 B：curl 一键安装（Linux / macOS）
+- OpenClaw 在左侧，仍然是主运行时；插件并不接管 agent 执行本身。
+- 插件中间层把 Hook、Context Engine、Tools、Runtime Manager 四部分合并在一个注册单元里。
+- 所有 HTTP 调用最终都走 `OpenVikingClient`，由 client 层统一补 `X-OpenViking-*` 头和路由日志。
+- OpenViking 服务端承接 session、memory、archive 和 Phase 2 抽取，底层存储落在 `viking://user/*`、`viking://agent/*`、`viking://session/*`。
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash
-```
+这套拆分的意义，是让 OpenClaw 继续专注推理与编排，让 OpenViking 成为长期上下文的事实源。
 
-安装助手将引导您完成：
+## 身份与路由
 
-1. **环境检查** — 检测 Python >= 3.10、Node.js、cmake 等
-2. **选择 OpenClaw 实例** — 如果本地安装了多个实例，列出供您选择
-3. **选择部署模式** — 本地或远程（见下文）
-4. **生成配置** — 自动写入 `~/.openviking/ov.conf` 和 `~/.openclaw/openviking.env`
+这套插件不是把所有请求都打到一个固定 agent ID 上，而是尽量保持 OpenClaw 会话身份和 OpenViking 路由一致。
 
-<details>
-<summary>安装助手选项</summary>
+核心规则如下：
 
-```
-ov-install [options]
+- `sessionId` 是 UUID 时直接复用。
+- `sessionKey` 存在时优先用它生成稳定的 `ovSessionId`。
+- 非安全路径字符会被规整或退化成稳定的 SHA-256。
+- `X-OpenViking-Agent` 按 session 解析，不按进程写死。
+- 若 `plugins.entries.openviking.config.agentId` 不是 `default`，会形成 `<configAgentId>_<sessionAgent>` 的前缀形式。
+- client 层统一补全 `X-OpenViking-Account`、`X-OpenViking-User`、`X-OpenViking-Agent` 这些 header。
 
-  -y, --yes              非交互式，使用默认值
-  --workdir <path>       OpenClaw 配置目录（默认：~/.openclaw）
-  -h, --help             显示帮助
+这样做是为了支持多 agent、多 session 并发时的记忆隔离，避免不同 OpenClaw 会话串用同一套长期上下文。
 
-环境变量：
-  OPENVIKING_PYTHON       Python 路径
-  OPENVIKING_CONFIG_FILE  ov.conf 路径
-  OPENVIKING_REPO         本地 OpenViking 仓库路径
-  OPENVIKING_ARK_API_KEY  火山引擎 API Key（-y 模式下跳过提示）
-```
+## Prompt 前召回链路
 
-</details>
+![Prompt 前的自动召回流程](./images/openclaw-plugin-recall-flow.png)
 
----
+当前主召回路径仍然挂在 `before_prompt_build`，流程是：
 
-## 手动设置
+1. 从 `messages` 或 `prompt` 中提取最后一条用户文本。
+2. 基于当前 `sessionId/sessionKey` 解析本轮的 agent 路由。
+3. 先做一次快速可用性检查，避免在 OpenViking 不可用时把 prompt 前链路拖死。
+4. 并行检索 `viking://user/memories` 和 `viking://agent/memories`。
+5. 在插件侧做去重、阈值筛选、重排和 token budget 裁剪。
+6. 把最终记忆块以 `<relevant-memories>` 形式 prepend 到 prompt。
 
-### 前置要求
+这里的重排不是单纯依赖向量分数。当前实现还会额外考虑：
 
-| 组件 | 版本 | 用途 |
-|-----------|---------|---------|
-| **Python** | >= 3.10 | OpenViking 运行时（本地模式） |
-| **Node.js** | >= 22 | OpenClaw 运行时 |
-| **火山引擎 Ark API Key** | — | Embedding + VLM 模型调用 |
+- 是否是 `level == 2` 的叶子记忆
+- 是否属于偏好类记忆
+- 是否属于事件类记忆
+- 与当前 query 的词面重合度
 
-```bash
-python3 --version   # >= 3.10
-node -v              # >= v22
-openclaw --version   # 已安装
-```
+### Transcript ingest assist
 
-- Python: https://www.python.org/downloads/
-- Node.js: https://nodejs.org/
-- OpenClaw: `npm install -g openclaw && openclaw onboard`
+除了普通 recall，这条链路还包含一个“转录文本辅助分支”。
 
----
+如果最后一条用户输入看起来像多说话人的转录文本：
 
-### 本地模式个人使用
+- 会先清理 metadata block、命令文本、纯提问文本等噪音
+- 再按说话人数和文本长度做 transcript-like 判断
+- 命中后 prepend 一个很轻量的 `<ingest-reply-assist>` 指令
 
-最简单的选项 — 几乎无需配置。记忆服务与您的OpenClaw一起在本地运行。您只需要一个火山引擎Ark API Key。
+它的目标不是改写记忆逻辑，而是降低模型在“用户粘贴聊天记录/会议纪要/对话转录”这类场景里直接返回 `NO_REPLY` 的概率。
 
-#### 步骤 1：安装 OpenViking
+## Session 生命周期
 
-```bash
-python3 -m pip install openviking --upgrade
-```
+![Session 生命周期与压缩边界](./images/openclaw-plugin-session-lifecycle.png)
 
-验证：`python3 -c "import openviking; print('ok')"`
+Session 是这套设计的主轴。当前实现里，它覆盖了“历史组装、增量写入、异步提交、阻塞压缩回读”四个动作。
 
-> 遇到 `externally-managed-environment`？使用一键安装程序（自动处理 venv）或手动创建一个：
-> ```bash
-> python3 -m venv ~/.openviking/venv && ~/.openviking/venv/bin/pip install openviking
-> ```
+### `assemble()` 负责什么
 
-#### 步骤 2：运行安装助手
+`assemble()` 并不是简单地把旧聊天记录塞回来，而是按 token budget 从 OpenViking 回读当前 session context，然后重新组装成 OpenClaw 可消费的消息：
 
-```bash
-# 方法 A：npm 安装（推荐，跨平台）
-npm install -g openclaw-openviking-setup-helper
-ov-install
+- `latest_archive_overview` 被改写成 `[Session History Summary]`
+- `pre_archive_abstracts` 被改写成 `[Archive Index]`
+- 当前活跃消息保持 message block 形式回放
+- assistant 的 tool part 会被还原成 `toolUse`
+- tool output 会被拆成独立的 `toolResult`
+- 之后再做一轮 `toolUse/toolResult` 配对修复，降低 transcript 结构不稳定的风险
 
-# 方法 B：curl 一键安装（Linux / macOS）
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash
-```
+因此，OpenClaw 拿到的是“压缩后的历史摘要 + archive 索引 + 当前活跃消息”，而不是无限增长的原始 transcript。
 
-选择 **本地** 模式，保持默认设置，并输入您的 Ark API Key。
+### `afterTurn()` 负责什么
 
-生成的配置文件：
-- `~/.openviking/ov.conf` — OpenViking 服务配置
-- `~/.openclaw/openviking.env` — 环境变量（Python 路径等）
+`afterTurn()` 的职责更窄，专门处理本轮增量写入：
 
-#### 步骤 3：启动
+- 只切出本轮新增消息，不重写整段对话
+- 只保留 `user` / `assistant` 相关文本内容
+- 会把 `toolUse` / `toolResult` 格式化进 capture 文本
+- 会先剥掉注入过的 `<relevant-memories>` 和元数据噪音
+- 最终把清洗后的增量内容追加到 OpenViking session
 
-```bash
-source ~/.openclaw/openviking.env && openclaw gateway restart
-```
+之后插件会读取 session 的 `pending_tokens`。当它超过 `commitTokenThreshold` 时，会触发一次 `commit(wait=false)`：
 
-> 在本地模式下，您必须先 `source` 环境文件 — 插件会自动启动一个 OpenViking子进程。
+- archive 和 Phase 2 记忆抽取在服务端异步继续跑
+- 当前 turn 不会因为等待抽取而阻塞
+- 如果打开 `logFindRequests`，日志里能看到 task id 和后续抽取结果
 
-#### 步骤 4：验证
+### `compact()` 负责什么
 
-```bash
-openclaw status
-# ContextEngine 行应显示：enabled (plugin openviking)
-```
+`compact()` 走的是另一条更严格的同步边界：
 
----
+- 它调用 `commit(wait=true)`，阻塞等待 commit 完成
+- 如果有 archive 生成，会再回读 `latest_archive_overview`
+- 返回新的 token 估算、latest archive id 和 summary
+- 如果摘要不够精确，模型可以再调用 `ov_archive_expand` 读取某个 archive 的原始消息
 
-### 远程模式团队共享
+所以 `afterTurn()` 更像“增量写入 + 条件触发异步提交”，而 `compact()` 才是“明确等待压缩与归档完成”的正式边界。
 
-适用于多个OpenClaw实例或团队使用。部署一个独立的OpenViking服务，供多个agents共享。**客户端无需 Python/OpenViking。**
+## 工具层与可展开能力
 
-#### 步骤 1：部署 OpenViking 服务
+这套插件除了自动行为，还直接暴露了 4 个工具：
 
-编辑 `~/.openviking/ov.conf` — 设置 `root_api_key` 以启用多租户：
+- `memory_recall`：显式检索长期记忆
+- `memory_store`：把文本写入 OpenViking session 并立即触发 commit
+- `memory_forget`：按 URI 删除，或先搜索再删除唯一高置信候选
+- `ov_archive_expand`：展开某个 archive 的原始消息
 
-```json
-{
-  "server": {
-    "host": "127.0.0.1",
-    "port": 1933,
-    "root_api_key": "<your-root-api-key>",
-    "cors_origins": ["*"]
-  },
-  "storage": {
-    "workspace": "~/.openviking/data",
-    "vectordb": {
-      "name": "context",
-      "backend": "local"
-    },
-    "agfs": {
-      "log_level": "warn",
-      "backend": "local"
-    }
-  },
-  "embedding": {
-    "dense": {
-      "provider": "volcengine",
-      "api_key": "<your-ark-api-key>",
-      "model": "doubao-embedding-vision-251215",
-      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-      "dimension": 1024,
-      "input": "multimodal"
-    }
-  },
-  "vlm": {
-    "provider": "volcengine",
-    "api_key": "<your-ark-api-key>",
-    "model": "doubao-seed-2-0-pro-260215",
-    "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-    "temperature": 0.1,
-    "max_retries": 3
-  }
-}
-```
+它们各自的作用不同：
 
-启动服务：
+- 自动 recall 解决“模型不知道该先查什么”的默认场景。
+- `memory_recall` 给模型一个显式补查入口。
+- `memory_store` 适合把一段明确的重要信息立刻落入记忆管线。
+- `ov_archive_expand` 负责在 summary 不够细时回到 archive 级原文。
+
+其中 `ov_archive_expand` 是 `assemble()` 的重要补充，因为 `assemble()` 默认给的是压缩后的索引和摘要，而不是完整历史正文。
+
+## Local / Remote 运行模式
+
+![运行模式与路由解析](./images/openclaw-plugin-runtime-routing.png)
+
+当前实现支持两种运行方式，但 session、memory、archive 的上层逻辑是一致的。
+
+### Local 模式
+
+`local` 模式下，插件自己管理 OpenViking 子进程：
+
+- 解析 `OPENVIKING_PYTHON`、env 文件或系统默认 Python
+- 启动前先做端口准备
+- 若目标端口上残留旧 OpenViking，会尝试清理
+- 若端口被其他进程占用，会自动寻找下一个空闲端口
+- 只有 `/health` 成功后，才把服务视为可用
+- 会缓存 local client，避免同一环境里重复拉起多个运行时
+
+这也是为什么插件不仅是“查记忆的逻辑层”，还是一个本地运行时管理器。
+
+### Remote 模式
+
+`remote` 模式下，插件只作为 HTTP 客户端工作：
+
+- 不会启动本地子进程
+- `baseUrl` 和可选 `apiKey` 由插件配置提供
+- session context、memory find/read、commit、archive expand 这些行为保持不变
+
+换句话说，`local` 和 `remote` 的差异主要在“谁负责把 OpenViking 服务启动起来”，不在上层的上下文模型本身。
+
+## 与旧设计稿的关系
+
+仓库里还有一份更偏“未来演进方向”的设计稿：`docs/design/openclaw-context-engine-refactor.md`。阅读时需要区分两者的口径：
+
+- 本文描述的是当前实现已经落地的行为。
+- 旧设计稿讨论的是“进一步把更多主链路迁入 context-engine 生命周期”的目标态。
+- 当前版本里，自动 recall 的主入口仍然在 `before_prompt_build`，并没有完全迁到 `assemble()`。
+- 当前版本里，`afterTurn()` 已经负责增量写入 OpenViking session，但它仍然依赖阈值触发异步 commit。
+- 当前版本里，`compact()` 已经走 `commit(wait=true)`，但它的职责仍以“同步提交 + 结果回读”为主，而不是承载一切上层编排。
+
+这段区分很重要，否则很容易把未来设计误读成现状。
+
+## 运维与调试入口
+
+如果你要排查这套插件，优先看这几类入口：
+
+### 查看当前配置
 
 ```bash
-openviking-server
+ov-install --current-version
+openclaw config get plugins.entries.openviking.config
+openclaw config get plugins.slots.contextEngine
 ```
 
-#### 步骤 2：创建团队和用户
+### 看日志
+
+OpenClaw 插件侧日志：
 
 ```bash
-# 创建团队 + 管理员
-curl -X POST http://localhost:1933/api/v1/admin/accounts \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: <root-api-key>" \
-  -d '{
-    "account_id": "my-team",
-    "admin_user_id": "admin"
-  }'
-
-# 添加成员
-curl -X POST http://localhost:1933/api/v1/admin/accounts/my-team/users \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: <root-or-admin-key>" \
-  -d '{
-    "user_id": "xiaomei",
-    "role": "user"
-  }'
+openclaw logs --follow
 ```
 
-#### 步骤 3：配置 OpenClaw 插件
+OpenViking 服务侧日志：
 
 ```bash
-openclaw plugins enable openviking
-openclaw config set gateway.mode local
-openclaw config set plugins.slots.contextEngine openviking
-openclaw config set plugins.entries.openviking.config.mode remote
-openclaw config set plugins.entries.openviking.config.baseUrl "http://your-server:1933"
-openclaw config set plugins.entries.openviking.config.apiKey "<user-api-key>"
-openclaw config set plugins.entries.openviking.config.agentId "<agent-id>"
-openclaw config set plugins.entries.openviking.config.autoRecall true --json
-openclaw config set plugins.entries.openviking.config.autoCapture true --json
+cat ~/.openviking/data/log/openviking.log
 ```
 
-#### 步骤 4：启动与验证
+### Web Console
 
 ```bash
-# 远程模式 — 无需 source 环境文件
-openclaw gateway restart
-openclaw status
-```
-
----
-
-### 火山引擎 ECS 部署
-
-在火山引擎 ECS 上部署 OpenClaw + OpenViking。详见 [火山引擎文档](https://www.volcengine.com/docs/6396/2249500?lang=zh)。
-
-> ECS 实例限制在 root 下全局 pip 安装以保护系统 Python。请先创建 venv。
-
-```bash
-# 1. 安装
-npm install -g openclaw-openviking-setup-helper
-ov-install
-
-# 2. 加载环境
-source /root/.openclaw/openviking.env
-
-# 3. 启动 OpenViking 服务器
-python -m openviking.server.bootstrap
-
-# 4. 启动 Web 控制台（确保入站安全组允许 TCP 8020）
 python -m openviking.console.bootstrap --host 0.0.0.0 --port 8020 --openviking-url http://127.0.0.1:1933
 ```
 
-访问 `http://<public-ip>:8020` 使用 Web 控制台。
+### `ov tui`
+
+```bash
+ov tui
+```
+
+### 常见排查点
+
+| 现象 | 更可能的原因 | 优先检查 |
+| --- | --- | --- |
+| `plugins.slots.contextEngine` 不是 `openviking` | 插件槽位未设置或被其他插件覆盖 | `openclaw config get plugins.slots.contextEngine` |
+| `local` 模式启动失败 | Python 路径、env 文件或 `ov.conf` 不对 | `source ~/.openclaw/openviking.env && openclaw gateway restart` |
+| recall 在不同 session 间不稳定 | 路由身份和预期不一致 | 打开 `logFindRequests`，再看 `openclaw logs --follow` |
+| 长对话后没有持续抽取记忆 | `pending_tokens` 未过阈值，或服务端 Phase 2 失败 | 检查插件配置和 `~/.openviking/data/log/openviking.log` |
+| summary 太粗，不够回答细节问题 | 你要的是 archive 级明细，不是摘要 | 用 `[Archive Index]` 里的 ID 调用 `ov_archive_expand` |
 
 ---
 
-## 启动与验证
-
-### 本地模式
-
-```bash
-source ~/.openclaw/openviking.env && openclaw gateway restart
-```
-
-### 远程模式
-
-```bash
-openclaw gateway restart
-```
-
-### 检查插件状态
-
-```bash
-openclaw status
-# ContextEngine 行应显示：enabled (plugin openviking)
-```
-
-### 查看插件配置
-
-```bash
-openclaw config get plugins.entries.openviking.config
-```
-
----
-
-## 配置参考
-
-### `~/.openviking/ov.conf`（本地模式）
-
-```json
-{
-  "root_api_key": null,
-  "server": { "host": "127.0.0.1", "port": 1933 },
-  "storage": {
-    "workspace": "~/.openviking/data",
-    "vectordb": { "backend": "local" },
-    "agfs": { "backend": "local", "port": 1833 }
-  },
-  "embedding": {
-    "dense": {
-      "provider": "volcengine",
-      "api_key": "<your-ark-api-key>",
-      "model": "doubao-embedding-vision-251215",
-      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-      "dimension": 1024,
-      "input": "multimodal"
-    }
-  },
-  "vlm": {
-    "provider": "volcengine",
-    "api_key": "<your-ark-api-key>",
-    "model": "doubao-seed-2-0-pro-260215",
-    "api_base": "https://ark.cn-beijing.volces.com/api/v3"
-  }
-}
-```
-
-> `root_api_key`：设置后，所有 HTTP 请求必须包含 `X-API-Key` 头。本地模式下默认为 `null`（禁用身份验证）。
-
-### 插件配置选项
-
-| 选项 | 默认值 | 描述 |
-|--------|---------|-------------|
-| `mode` | `remote` | `local`（启动本地服务器）或 `remote`（连接远程服务器） |
-| `baseUrl` | `http://127.0.0.1:1933` | OpenViking 服务器 URL（远程模式） |
-| `apiKey` | — | OpenViking API Key（可选） |
-| `agentId` | 自动生成 | agent标识符，用于区分 OpenClaw 实例。如果未设置则自动生成 `openclaw-<hostname>-<random>` |
-| `configPath` | `~/.openviking/ov.conf` | 配置文件路径（本地模式） |
-| `port` | `1933` | 本地服务器端口（本地模式） |
-| `targetUri` | `viking://user/memories` | 默认记忆搜索范围 |
-| `autoCapture` | `true` | 对话后自动提取记忆 |
-| `captureMode` | `semantic` | 提取模式：`semantic`（完整语义）/ `keyword`（仅触发词） |
-| `captureMaxLength` | `24000` | 每次提取的最大文本长度 |
-| `autoRecall` | `true` | 对话前自动召回相关记忆 |
-| `recallLimit` | `6` | 自动召回期间注入的最大记忆数 |
-| `recallScoreThreshold` | `0.01` | 召回的最低相关性分数 |
-| `ingestReplyAssist` | `true` | 检测到多方对话文本时添加回复指导 |
-
-### `~/.openclaw/openviking.env`
-
-由安装助手自动生成，存储环境变量（如 Python 路径）：
-
-```bash
-export OPENVIKING_PYTHON='/usr/local/bin/python3'
-```
-
----
-
-## 日常使用
-
-```bash
-# 启动（本地模式 — 先 source 环境文件）
-source ~/.openclaw/openviking.env && openclaw gateway
-
-# 启动（远程模式 — 无需环境文件）
-openclaw gateway
-
-# 禁用上下文引擎
-openclaw config set plugins.slots.contextEngine legacy
-
-# 重新启用 OpenViking 作为上下文引擎
-openclaw config set plugins.slots.contextEngine openviking
-```
-
-> 更改上下文引擎插槽后请重启网关。
-
----
-
-## Web-控制台可视化
-
-OpenViking 提供 Web 控制台用于调试和检查存储的记忆。
-
-```bash
-python -m openviking.console.bootstrap \
-  --host 127.0.0.1 \
-  --port 8020 \
-  --openviking-url http://127.0.0.1:1933 \
-  --write-enabled
-```
-
-在浏览器中打开 http://127.0.0.1:8020。
-
----
-
-## 故障排除
-
-### 常见问题
-
-| 症状 | 原因 | 解决方案 |
-|---------|-------|-----|
-| 对话挂起，无响应 | 通常是受历史 OpenClaw `2026.3.12` 问题影响的 2.0 之前传统集成 | 如果您使用传统路径，请参阅 [#591](https://github.com/volcengine/OpenViking/issues/591) 并临时降级到 `2026.3.11`；对于当前安装，请迁移到插件 2.0 |
-| 日志中出现 `registerContextEngine is unavailable` | OpenClaw 版本过旧，未暴露插件 2.0 所需的上下文引擎 API | 升级 OpenClaw 到当前版本，然后重启网关并验证 `openclaw status` 显示 `openviking` 作为 ContextEngine |
-| agent静默挂起，无输出 | 自动召回缺少超时保护 | 临时禁用自动召回：`openclaw config set plugins.entries.openviking.config.autoRecall false --json`，或应用 [#673](https://github.com/volcengine/OpenViking/issues/673) 中的补丁 |
-| ContextEngine 不是 `openviking` | 插件插槽未配置 | `openclaw config set plugins.slots.contextEngine openviking` |
-| `memory_store failed: fetch failed` | OpenViking 未运行 | 检查 `ov.conf` 和 Python 路径；验证服务是否运行 |
-| `health check timeout` | 端口被陈旧进程占用 | `lsof -ti tcp:1933 \| xargs kill -9`，然后重启 |
-| `extracted 0 memories` | API Key 或模型名称错误 | 检查 `ov.conf` 中的 `api_key` 和 `model` |
-| `port occupied` | 端口被其他进程占用 | 更改端口：`openclaw config set plugins.entries.openviking.config.port 1934` |
-| 插件未加载 | 环境文件未 source | 启动前运行 `source ~/.openclaw/openviking.env` |
-| `externally-managed-environment` | Python PEP 668 限制 | 使用 venv 或一键安装程序 |
-| `TypeError: unsupported operand type(s) for \|` | Python < 3.10 | 升级 Python 到 3.10+ |
-
-### 查看日志
-
-```bash
-# OpenViking 日志
-cat ~/.openviking/data/log/openviking.log
-
-# OpenClaw 网关日志
-cat ~/.openclaw/logs/gateway.log
-cat ~/.openclaw/logs/gateway.err.log
-
-# 检查 OpenViking 进程是否存活
-lsof -i:1933
-
-# 快速连接检查
-curl http://localhost:1933
-# 预期：{"detail":"Not Found"}
-```
-
----
-
-## 卸载
-
-```bash
-lsof -ti tcp:1933 tcp:1833 tcp:18789 | xargs kill -9
-python3 -m pip uninstall openviking -y && rm -rf ~/.openviking
-```
-
----
-
-**另见：** [INSTALL-ZH.md](./INSTALL-ZH.md)（中文详细安装指南）· [INSTALL.md](./INSTALL.md)（英文安装指南）· [INSTALL-AGENT.md](./INSTALL-AGENT.md)（Agent 安装指南）
+安装、升级、卸载请查看 [INSTALL-ZH.md](./INSTALL-ZH.md)。

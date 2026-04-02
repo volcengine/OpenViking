@@ -1,0 +1,34 @@
+{
+  "storage": {
+    "agfs": {
+      "port": 1876
+    }
+  },
+  "log": {
+    "level": "INFO",
+    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    "output": "stdout"
+  },
+  "embedding": {
+    "dense": {
+        "model": "doubao-embedding-vision-250615",
+        "api_key": "your_api_key_here",
+        "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+        "dimension": 1024,
+        "provider": "volcengine",
+        "input": "multimodal",
+        "batch_size": 8
+    },
+    "max_concurrent": 10
+  },
+  "vlm": {
+    "model": "doubao-seed-2-0-pro-260215",
+    "api_key": "your_api_key_here",
+    "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+    "temperature": 0.0,
+    "max_retries": 240,
+    "provider": "volcengine",
+    "thinking": false,
+    "max_concurrent": 64
+  }
+}

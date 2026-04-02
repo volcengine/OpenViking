@@ -99,6 +99,7 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 {
   "embedding": {
     "max_concurrent": 10,
+    "max_retries": 3,
     "dense": {
       "provider": "volcengine",
       "api_key": "your-api-key",
@@ -115,12 +116,15 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `max_concurrent` | int | Maximum concurrent embedding requests (`embedding.max_concurrent`, default: `10`) |
+| `max_retries` | int | Maximum retry attempts for transient embedding provider errors (`embedding.max_retries`, default: `3`; `0` disables retry) |
 | `provider` | str | `"volcengine"`, `"openai"`, `"vikingdb"`, `"jina"`, `"voyage"`, or `"gemini"` |
 | `api_key` | str | API key |
 | `model` | str | Model name |
 | `dimension` | int | Vector dimension. For Voyage, this maps to `output_dimension` |
 | `input` | str | Input type: `"text"` or `"multimodal"` |
 | `batch_size` | int | Batch size for embedding requests |
+
+`embedding.max_retries` only applies to transient errors such as `429`, `5xx`, timeouts, and connection failures. Permanent errors such as `400`, `401`, `403`, and `AccountOverdue` are not retried automatically. The backoff strategy is exponential backoff with jitter, starting at `0.5s` and capped at `8s`.
 
 **Available Models**
 
@@ -355,7 +359,8 @@ Vision Language Model for semantic extraction (L0/L1 generation).
   "vlm": {
     "api_key": "your-api-key",
     "model": "doubao-seed-2-0-pro-260215",
-    "api_base": "https://ark.cn-beijing.volces.com/api/v3"
+    "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+    "max_retries": 3
   }
 }
 ```
@@ -369,8 +374,11 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 | `api_base` | str | API endpoint (optional) |
 | `thinking` | bool | Enable thinking mode for VolcEngine models (default: `false`) |
 | `max_concurrent` | int | Maximum concurrent semantic LLM calls (default: `100`) |
+| `max_retries` | int | Maximum retry attempts for transient VLM provider errors (default: `3`; `0` disables retry) |
 | `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
 | `stream` | bool | Enable streaming mode (for OpenAI-compatible providers, default: `false`) |
+
+`vlm.max_retries` only applies to transient errors such as `429`, `5xx`, timeouts, and connection failures. Permanent authentication, authorization, and billing errors are not retried automatically. The backoff strategy is exponential backoff with jitter, starting at `0.5s` and capped at `8s`.
 
 **Available Models**
 
@@ -956,6 +964,7 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
 {
   "embedding": {
     "max_concurrent": 10,
+    "max_retries": 3,
     "dense": {
       "provider": "volcengine",
       "api_key": "string",
@@ -971,6 +980,7 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
     "api_base": "string",
     "thinking": false,
     "max_concurrent": 100,
+    "max_retries": 3,
     "extra_headers": {},
     "stream": false
   },
@@ -1058,7 +1068,9 @@ Error: VLM request timeout
 
 - Check network connectivity
 - Increase timeout in config
+- For intermittent timeouts, increase `vlm.max_retries` moderately
 - Try a smaller model
+- For bulk ingestion, consider lowering `vlm.max_concurrent`
 
 ### Rate Limiting
 
@@ -1067,6 +1079,8 @@ Error: Rate limit exceeded
 ```
 
 Volcengine has rate limits. Consider batch processing with delays or upgrading your plan.
+- Lower `embedding.max_concurrent` / `vlm.max_concurrent` first
+- Keep a small `max_retries` value for occasional `429`s; set it to `0` if you prefer fail-fast behavior
 
 ## Related Documentation
 

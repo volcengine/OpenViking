@@ -182,14 +182,12 @@ Get the assembled session context used by OpenClaw-style context rebuilding.
 
 This endpoint returns:
 - `latest_archive_overview`: the `overview` of the latest completed archive, when it fits the token budget
-- `latest_archive_id`: the ID of the latest completed archive, used for archive expansion
-- `pre_archive_abstracts`: lightweight history entries for older completed archives, each containing `archive_id` and `abstract`
+- `pre_archive_abstracts`: lightweight entries for completed archives, each containing `archive_id` and `abstract`
 - `messages`: all incomplete archive messages after the latest completed archive, plus current live session messages
 - `stats`: token and inclusion stats for the returned context
 
 Notes:
 - `latest_archive_overview` becomes an empty string when no completed archive exists, or when the latest overview does not fit in the token budget.
-- `latest_archive_id` is returned whenever a latest completed archive exists, even if `latest_archive_overview` is trimmed by budget.
 - `token_budget` is applied to the assembled payload after active `messages`: `latest_archive_overview` has higher priority than `pre_archive_abstracts`, and older abstracts are dropped first when budget is tight.
 - Only archive content that is actually returned is counted toward `estimatedTokens` and `stats.archiveTokens`.
 - Session commit generates an archive summary during Phase 2 for every non-empty archive attempt. Only archives with a completed `.done` marker are exposed here.
@@ -206,7 +204,6 @@ Notes:
 ```python
 context = await client.get_session_context("a1b2c3d4", token_budget=128000)
 print(context["latest_archive_overview"])
-print(context["latest_archive_id"])
 print(context["pre_archive_abstracts"])
 print(len(context["messages"]))
 
@@ -238,8 +235,11 @@ ov session get-session-context a1b2c3d4 --token-budget 128000
   "status": "ok",
   "result": {
     "latest_archive_overview": "# Session Summary\n\n**Overview**: User discussed deployment and auth setup.",
-    "latest_archive_id": "archive_002",
     "pre_archive_abstracts": [
+      {
+        "archive_id": "archive_002",
+        "abstract": "User discussed deployment and authentication setup."
+      },
       {
         "archive_id": "archive_001",
         "abstract": "User previously discussed repository bootstrap and authentication setup."
@@ -263,14 +263,14 @@ ov session get-session-context a1b2c3d4 --token-budget 128000
         "created_at": "2026-03-24T09:10:20Z"
       }
     ],
-    "estimatedTokens": 160,
+    "estimatedTokens": 173,
     "stats": {
       "totalArchives": 2,
       "includedArchives": 2,
       "droppedArchives": 0,
       "failedArchives": 0,
       "activeTokens": 98,
-      "archiveTokens": 62
+      "archiveTokens": 75
     }
   }
 }
@@ -282,7 +282,7 @@ ov session get-session-context a1b2c3d4 --token-budget 128000
 
 Get the full contents of one completed archive for a session.
 
-This endpoint is intended to work with `latest_archive_id` and `pre_archive_abstracts[*].archive_id` returned by `get_session_context()`.
+This endpoint is intended to work with `pre_archive_abstracts[*].archive_id` returned by `get_session_context()`.
 
 This endpoint returns:
 - `archive_id`: the archive ID that was expanded

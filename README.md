@@ -496,6 +496,8 @@ openviking-server --with-bot
 ov chat
 ```
 
+If you use the official Docker image, `vikingbot` is already bundled in the image and starts by default together with the OpenViking server and console UI. You can disable it at runtime with either `--without-bot` or `-e OPENVIKING_WITH_BOT=0`.
+
 ---
 
 ## Server Deployment Details

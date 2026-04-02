@@ -154,13 +154,21 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
         Raises:
             RuntimeError: When embedding call fails
         """
-        try:
+
+        def _call() -> EmbedResult:
             kwargs = self._build_kwargs(is_query=is_query)
             kwargs["input"] = [text]
             response = litellm.embedding(**kwargs)
             self._update_telemetry_token_usage(response)
             vector = response.data[0]["embedding"]
             return EmbedResult(dense_vector=vector)
+
+        try:
+            return self._run_with_retry(
+                _call,
+                logger=logger,
+                operation_name="LiteLLM embedding",
+            )
         except Exception as e:
             raise RuntimeError(f"LiteLLM embedding failed: {e}") from e
 
@@ -180,12 +188,19 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
         if not texts:
             return []
 
-        try:
+        def _call() -> List[EmbedResult]:
             kwargs = self._build_kwargs(is_query=is_query)
             kwargs["input"] = texts
             response = litellm.embedding(**kwargs)
             self._update_telemetry_token_usage(response)
             return [EmbedResult(dense_vector=item["embedding"]) for item in response.data]
+
+        try:
+            return self._run_with_retry(
+                _call,
+                logger=logger,
+                operation_name="LiteLLM batch embedding",
+            )
         except Exception as e:
             raise RuntimeError(f"LiteLLM batch embedding failed: {e}") from e
 

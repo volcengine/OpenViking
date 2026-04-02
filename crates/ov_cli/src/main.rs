@@ -724,9 +724,15 @@ async fn main() {
             no_history,
         } => {
             let session_id = session.or_else(|| config::get_or_create_machine_id().ok());
+            let endpoint = if let Ok(env_endpoint) = std::env::var("VIKINGBOT_ENDPOINT") {
+                env_endpoint
+            } else if let Ok(config_url) = std::env::var("OPENVIKING_URL") {
+                format!("{}/bot/v1", config_url)
+            } else {
+                format!("{}/bot/v1", ctx.config.url)
+            };
             let cmd = commands::chat::ChatCommand {
-                endpoint: std::env::var("VIKINGBOT_ENDPOINT")
-                    .unwrap_or_else(|_| "http://localhost:1933/bot/v1".to_string()),
+                endpoint,
                 api_key: std::env::var("VIKINGBOT_API_KEY").ok(),
                 session: session_id,
                 sender,

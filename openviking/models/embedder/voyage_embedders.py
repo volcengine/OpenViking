@@ -2,11 +2,14 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Voyage AI dense embedder implementation."""
 
+import logging
 from typing import Any, Dict, List, Optional
 
 import openai
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
+
+logger = logging.getLogger(__name__)
 
 VOYAGE_MODEL_DIMENSIONS = {
     "voyage-3": 1024,
@@ -83,7 +86,8 @@ class VoyageDenseEmbedder(DenseEmbedderBase):
 
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform dense embedding on text."""
-        try:
+
+        def _call() -> EmbedResult:
             kwargs: Dict[str, Any] = {"input": text, "model": self.model_name}
             if self.dimension is not None:
                 kwargs["extra_body"] = {"output_dimension": self.dimension}
@@ -91,6 +95,13 @@ class VoyageDenseEmbedder(DenseEmbedderBase):
             response = self.client.embeddings.create(**kwargs)
             vector = response.data[0].embedding
             return EmbedResult(dense_vector=vector)
+
+        try:
+            return self._run_with_retry(
+                _call,
+                logger=logger,
+                operation_name="Voyage embedding",
+            )
         except openai.APIError as e:
             raise RuntimeError(f"Voyage API error: {e.message}") from e
         except Exception as e:
@@ -101,13 +112,20 @@ class VoyageDenseEmbedder(DenseEmbedderBase):
         if not texts:
             return []
 
-        try:
+        def _call() -> List[EmbedResult]:
             kwargs: Dict[str, Any] = {"input": texts, "model": self.model_name}
             if self.dimension is not None:
                 kwargs["extra_body"] = {"output_dimension": self.dimension}
 
             response = self.client.embeddings.create(**kwargs)
             return [EmbedResult(dense_vector=item.embedding) for item in response.data]
+
+        try:
+            return self._run_with_retry(
+                _call,
+                logger=logger,
+                operation_name="Voyage batch embedding",
+            )
         except openai.APIError as e:
             raise RuntimeError(f"Voyage API error: {e.message}") from e
         except Exception as e:

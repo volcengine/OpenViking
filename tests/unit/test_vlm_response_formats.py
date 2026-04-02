@@ -18,9 +18,7 @@ class TestVLMBaseResponseFormats:
         def get_completion(self, prompt: str, thinking: bool = False) -> str:
             pass
 
-        async def get_completion_async(
-            self, prompt: str, thinking: bool = False, max_retries: int = 0
-        ) -> str:
+        async def get_completion_async(self, prompt: str, thinking: bool = False) -> str:
             pass
 
         def get_vision_completion(

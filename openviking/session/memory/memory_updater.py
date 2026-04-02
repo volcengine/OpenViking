@@ -246,32 +246,26 @@ class MemoryUpdater:
                 result.add_error("unknown", ValueError(error))
             return result
 
-        # Apply write operations
-        for resolved_op in resolved_ops.write_operations:
+        # Apply unified operations - _apply_edit returns True if edited, False if written
+        for resolved_op in resolved_ops.operations:
             try:
-                await self._apply_write(
+                is_edited = await self._apply_edit(
                     resolved_op.model,
                     resolved_op.uri,
                     ctx,
-                    extract_context=extract_context,
                     memory_type=resolved_op.memory_type,
                 )
-                result.add_written(resolved_op.uri)
+                if is_edited:
+                    result.add_edited(resolved_op.uri)
+                else:
+                    result.add_written(resolved_op.uri)
             except Exception as e:
-                tracer.info(
-                    f"Failed to write memory: {e}, op={resolved_op.model}, op type={type(resolved_op.model)}"
+                tracer.error(
+                    f"Failed to apply operation: {e}, op={resolved_op.model}, op type={type(resolved_op.model)}",
+                    e
                 )
                 if hasattr(resolved_op.model, "model_dump"):
                     tracer.info(f"Op dump: {resolved_op.model.model_dump()}")
-                result.add_error(resolved_op.uri, e)
-
-        # Apply edit operations
-        for resolved_op in resolved_ops.edit_operations:
-            try:
-                await self._apply_edit(resolved_op.model, resolved_op.uri, ctx)
-                result.add_edited(resolved_op.uri)
-            except Exception as e:
-                tracer.error(f"Failed to edit memory {resolved_op.uri}",e)
                 result.add_error(resolved_op.uri, e)
 
         # Apply edit_overview operations
@@ -400,8 +394,12 @@ class MemoryUpdater:
 
         return isinstance(content, StrPatch)
 
-    async def _apply_edit(self, flat_model: Any, uri: str, ctx: RequestContext) -> None:
-        """Apply edit operation from a flat model."""
+    async def _apply_edit(self, flat_model: Any, uri: str, ctx: RequestContext, memory_type: str = None) -> bool:
+        """Apply edit operation from a flat model.
+
+        Returns:
+            True if file was edited (existed), False if file was written (new)
+        """
         viking_fs = self._get_viking_fs()
 
         # Convert flat model to dict first (needed for checking content type)
@@ -416,16 +414,16 @@ class MemoryUpdater:
             has_str_patch = any(self._is_patch_format(v) for v in model_dict.values())
             if not has_str_patch:
                 await self._apply_write(flat_model, uri, ctx)
-                return
+                return False  # New file written
             # Has StrPatch field but file doesn't exist - cannot apply
             tracer.error(f"Memory not found for edit: {uri}")
-            return
+            return False
 
         # Deserialize content and metadata
         current_plain_content, current_metadata = deserialize_full(current_full_content)
 
-        # Get memory type schema
-        memory_type_str = model_dict.get("memory_type") or current_metadata.get("memory_type")
+        # Get memory type schema - use parameter first, then fallback to model_dict
+        memory_type_str = memory_type or model_dict.get("memory_type")
         field_schema_map: Dict[str, MemoryField] = {}
 
         if self._registry and memory_type_str:
@@ -474,6 +472,7 @@ class MemoryUpdater:
         self._print_diff(uri, current_plain_content, new_plain_content)
 
         await viking_fs.write_file(uri, new_full_content, ctx=ctx)
+        return True  # File was edited (existed)
 
     async def _apply_delete(self, uri: str, ctx: RequestContext) -> None:
         """Apply delete operation (uri is already a string)."""

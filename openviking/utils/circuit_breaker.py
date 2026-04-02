@@ -7,54 +7,10 @@ from __future__ import annotations
 import threading
 import time
 
+from openviking.utils.model_retry import classify_api_error
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
-
-# --- Error classification ---
-
-_PERMANENT_PATTERNS = ("403", "401", "Forbidden", "Unauthorized", "AccountOverdue")
-_TRANSIENT_PATTERNS = (
-    "429",
-    "500",
-    "502",
-    "503",
-    "504",
-    "TooManyRequests",
-    "RateLimit",
-    "timeout",
-    "Timeout",
-    "ConnectionError",
-    "Connection refused",
-    "Connection reset",
-)
-
-
-def classify_api_error(error: Exception) -> str:
-    """Classify an API error as permanent, transient, or unknown.
-
-    Checks both str(error) and str(error.__cause__) for known patterns.
-
-    Returns:
-        "permanent" — 403/401, never retry.
-        "transient" — 429/5xx/timeout, safe to retry.
-        "unknown"   — unrecognized, treated as transient by callers.
-    """
-    texts = [str(error)]
-    if error.__cause__ is not None:
-        texts.append(str(error.__cause__))
-
-    for text in texts:
-        for pattern in _PERMANENT_PATTERNS:
-            if pattern in text:
-                return "permanent"
-
-    for text in texts:
-        for pattern in _TRANSIENT_PATTERNS:
-            if pattern in text:
-                return "transient"
-
-    return "unknown"
 
 
 # --- Circuit breaker ---

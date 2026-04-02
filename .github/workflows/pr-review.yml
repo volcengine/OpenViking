@@ -25,8 +25,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI_KEY: ${{ secrets.DOUBAO_API_KEY }}
-          OPENAI.API_BASE: "https://ark.cn-beijing.volces.com/api/coding/v3"
-          config.model: "ark-code-latest"
+          OPENAI.API_BASE: "https://ark.cn-beijing.volces.com/api/v3"
           github_action_config.auto_review: "true"
-          github_action_config.auto_describe: "true"
+          github_action_config.auto_describe: "false"
           github_action_config.auto_improve: "true"

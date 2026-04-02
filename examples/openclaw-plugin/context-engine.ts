@@ -460,6 +460,7 @@ export function createMemoryOpenVikingContextEngine(params: {
   cfg: Required<MemoryOpenVikingConfig>;
   logger: Logger;
   getClient: () => Promise<OpenVikingClient>;
+  quickPrecheck?: () => Promise<{ ok: true } | { ok: false; reason: string }>;
   /** Extra args help match hook-populated routing when OpenClaw provides sessionKey / OV session id. */
   resolveAgentId: (sessionId: string, sessionKey?: string, ovSessionId?: string) => string;
   rememberSessionAgentId?: (ctx: {
@@ -476,6 +477,7 @@ export function createMemoryOpenVikingContextEngine(params: {
     cfg,
     logger,
     getClient,
+    quickPrecheck,
     resolveAgentId,
     rememberSessionAgentId,
   } = params;
@@ -543,6 +545,30 @@ export function createMemoryOpenVikingContextEngine(params: {
     return typeof agentId === "string" && agentId.trim() ? agentId.trim() : undefined;
   }
 
+  async function runLocalPrecheck(
+    stage: "assemble" | "afterTurn",
+    sessionId: string,
+    extra: Record<string, unknown> = {},
+  ): Promise<boolean> {
+    if (cfg.mode !== "local" || !quickPrecheck) {
+      return true;
+    }
+    const result = await quickPrecheck();
+    if (result.ok) {
+      return true;
+    }
+    warnOrInfo(
+      logger,
+      `openviking: ${stage} precheck failed for session=${sessionId}: ${result.reason}`,
+    );
+    diag(`${stage}_skip`, sessionId, {
+      reason: "precheck_failed",
+      precheckReason: result.reason,
+      ...extra,
+    });
+    return false;
+  }
+
   return {
     info: {
       id,
@@ -586,6 +612,11 @@ export function createMemoryOpenVikingContextEngine(params: {
       });
 
       try {
+        if (!(await runLocalPrecheck("assemble", OVSessionId, {
+          tokenBudget,
+        }))) {
+          return { messages, estimatedTokens: roughEstimate(messages) };
+        }
         const client = await getClient();
         const routingRef =
           assembleParams.sessionId ?? sessionKey ?? OVSessionId;
@@ -596,9 +627,9 @@ export function createMemoryOpenVikingContextEngine(params: {
           agentId,
         );
 
-        const hasArchives = !!ctx?.latest_archive_id;
-        const activeCount = ctx?.messages?.length ?? 0;
         const preAbstracts = ctx?.pre_archive_abstracts ?? [];
+        const hasArchives = !!ctx?.latest_archive_overview || preAbstracts.length > 0;
+        const activeCount = ctx?.messages?.length ?? 0;
 
         if (!ctx || (!hasArchives && activeCount === 0)) {
           diag("assemble_result", OVSessionId, {
@@ -633,15 +664,10 @@ export function createMemoryOpenVikingContextEngine(params: {
           });
         }
 
-        if (preAbstracts.length > 0 || ctx.latest_archive_id) {
+        if (preAbstracts.length > 0) {
           const lines: string[] = preAbstracts.map(
             (a) => `${a.archive_id}: ${a.abstract}`,
           );
-          if (ctx.latest_archive_id) {
-            lines.push(
-              `(latest: ${ctx.latest_archive_id} — see [Session History Summary] above)`,
-            );
-          }
           assembled.push({
             role: "user" as const,
             content: `[Archive Index]\n${lines.join("\n")}`,
@@ -656,7 +682,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         if (sanitized.length === 0 && messages.length > 0) {
           diag("assemble_result", OVSessionId, {
             passthrough: true, reason: "sanitized_empty",
-            archiveCount: preAbstracts.length + (ctx.latest_archive_id ? 1 : 0),
+            archiveCount: preAbstracts.length,
             activeCount,
             outputMessagesCount: messages.length,
             inputTokenEstimate: originalTokens,
@@ -667,7 +693,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         }
 
         const assembledTokens = roughEstimate(sanitized);
-        const archiveCount = preAbstracts.length + (ctx.latest_archive_id ? 1 : 0);
+        const archiveCount = preAbstracts.length;
         const tokensSaved = originalTokens - assembledTokens;
         const savingPct = originalTokens > 0 ? Math.round((tokensSaved / originalTokens) * 100) : 0;
 
@@ -680,7 +706,6 @@ export function createMemoryOpenVikingContextEngine(params: {
           estimatedTokens: assembledTokens,
           tokensSaved,
           savingPct,
-          latestArchiveId: ctx.latest_archive_id ?? null,
           messages: messageDigest(sanitized),
         });
 
@@ -773,6 +798,13 @@ export function createMemoryOpenVikingContextEngine(params: {
           messages: newMsgFull,
         });
 
+        if (!(await runLocalPrecheck("afterTurn", OVSessionId, {
+          totalMessages: messages.length,
+          newMessageCount: newCount,
+          prePromptMessageCount: start,
+        }))) {
+          return;
+        }
         const client = await getClient();
         const turnText = newTexts.join("\n");
         const sanitized = turnText.replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>/gi, " ").replace(/\s+/g, " ").trim();

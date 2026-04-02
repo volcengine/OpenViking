@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Jina AI Embedder Implementation"""
 
+import logging
 from typing import Any, Dict, List, Optional
 
 import openai
@@ -10,6 +11,8 @@ from openviking.models.embedder.base import (
     DenseEmbedderBase,
     EmbedResult,
 )
+
+logger = logging.getLogger(__name__)
 
 # Default dimensions for Jina embedding models
 JINA_MODEL_DIMENSIONS = {
@@ -165,7 +168,8 @@ class JinaDenseEmbedder(DenseEmbedderBase):
         Raises:
             RuntimeError: When API call fails
         """
-        try:
+
+        def _call() -> EmbedResult:
             kwargs: Dict[str, Any] = {"input": text, "model": self.model_name}
             if self.dimension:
                 kwargs["dimensions"] = self.dimension
@@ -178,6 +182,13 @@ class JinaDenseEmbedder(DenseEmbedderBase):
             vector = response.data[0].embedding
 
             return EmbedResult(dense_vector=vector)
+
+        try:
+            return self._run_with_retry(
+                _call,
+                logger=logger,
+                operation_name="Jina embedding",
+            )
         except openai.APIError as e:
             self._raise_task_error(e)
             raise RuntimeError(f"Jina API error: {e.message}") from e
@@ -200,7 +211,7 @@ class JinaDenseEmbedder(DenseEmbedderBase):
         if not texts:
             return []
 
-        try:
+        def _call() -> List[EmbedResult]:
             kwargs: Dict[str, Any] = {"input": texts, "model": self.model_name}
             if self.dimension:
                 kwargs["dimensions"] = self.dimension
@@ -212,6 +223,13 @@ class JinaDenseEmbedder(DenseEmbedderBase):
             response = self.client.embeddings.create(**kwargs)
 
             return [EmbedResult(dense_vector=item.embedding) for item in response.data]
+
+        try:
+            return self._run_with_retry(
+                _call,
+                logger=logger,
+                operation_name="Jina batch embedding",
+            )
         except openai.APIError as e:
             self._raise_task_error(e)
             raise RuntimeError(f"Jina API error: {e.message}") from e

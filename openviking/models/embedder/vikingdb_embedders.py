@@ -124,29 +124,44 @@ class VikingDBDenseEmbedder(DenseEmbedderBase, VikingDBClientMixin):
         self.dense_model = {"name": model_name, "version": model_version, "dim": dimension}
 
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
-        results = self._call_api([text], dense_model=self.dense_model)
-        if not results:
-            return EmbedResult(dense_vector=[])
+        def _call() -> EmbedResult:
+            results = self._call_api([text], dense_model=self.dense_model)
+            if not results:
+                return EmbedResult(dense_vector=[])
 
-        item = results[0]
-        dense_vector = []
-        if "dense_embedding" in item:
-            dense_vector = self._truncate_and_normalize(item["dense_embedding"], self.dimension)
+            item = results[0]
+            dense_vector = []
+            if "dense_embedding" in item:
+                dense_vector = self._truncate_and_normalize(item["dense_embedding"], self.dimension)
 
-        return EmbedResult(dense_vector=dense_vector)
+            return EmbedResult(dense_vector=dense_vector)
+
+        return self._run_with_retry(
+            _call,
+            logger=logger,
+            operation_name="VikingDB embedding",
+        )
 
     def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         if not texts:
             return []
-        raw_results = self._call_api(texts, dense_model=self.dense_model)
-        return [
-            EmbedResult(
-                dense_vector=self._truncate_and_normalize(
-                    item.get("dense_embedding", []), self.dimension
+
+        def _call() -> List[EmbedResult]:
+            raw_results = self._call_api(texts, dense_model=self.dense_model)
+            return [
+                EmbedResult(
+                    dense_vector=self._truncate_and_normalize(
+                        item.get("dense_embedding", []), self.dimension
+                    )
                 )
-            )
-            for item in raw_results
-        ]
+                for item in raw_results
+            ]
+
+        return self._run_with_retry(
+            _call,
+            logger=logger,
+            operation_name="VikingDB batch embedding",
+        )
 
     def get_dimension(self) -> int:
         return self.dimension if self.dimension else 2048
@@ -174,27 +189,42 @@ class VikingDBSparseEmbedder(SparseEmbedderBase, VikingDBClientMixin):
         }
 
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
-        results = self._call_api([text], sparse_model=self.sparse_model)
-        if not results:
-            return EmbedResult(sparse_vector={})
+        def _call() -> EmbedResult:
+            results = self._call_api([text], sparse_model=self.sparse_model)
+            if not results:
+                return EmbedResult(sparse_vector={})
 
-        item = results[0]
-        sparse_vector = {}
-        if "sparse" in item:
-            sparse_vector = item["sparse"]
+            item = results[0]
+            sparse_vector = {}
+            if "sparse" in item:
+                sparse_vector = item["sparse"]
 
-        return EmbedResult(sparse_vector=sparse_vector)
+            return EmbedResult(sparse_vector=sparse_vector)
+
+        return self._run_with_retry(
+            _call,
+            logger=logger,
+            operation_name="VikingDB sparse embedding",
+        )
 
     def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         if not texts:
             return []
-        raw_results = self._call_api(texts, sparse_model=self.sparse_model)
-        return [
-            EmbedResult(
-                sparse_vector=self._process_sparse_embedding(item.get("sparse_embedding", {}))
-            )
-            for item in raw_results
-        ]
+
+        def _call() -> List[EmbedResult]:
+            raw_results = self._call_api(texts, sparse_model=self.sparse_model)
+            return [
+                EmbedResult(
+                    sparse_vector=self._process_sparse_embedding(item.get("sparse_embedding", {}))
+                )
+                for item in raw_results
+            ]
+
+        return self._run_with_retry(
+            _call,
+            logger=logger,
+            operation_name="VikingDB sparse batch embedding",
+        )
 
 
 class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
@@ -224,37 +254,54 @@ class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
         }
 
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
-        results = self._call_api(
-            [text], dense_model=self.dense_model, sparse_model=self.sparse_model
-        )
-        if not results:
-            return EmbedResult(dense_vector=[], sparse_vector={})
+        def _call() -> EmbedResult:
+            results = self._call_api(
+                [text], dense_model=self.dense_model, sparse_model=self.sparse_model
+            )
+            if not results:
+                return EmbedResult(dense_vector=[], sparse_vector={})
 
-        item = results[0]
-        dense_vector = []
-        sparse_vector = {}
+            item = results[0]
+            dense_vector = []
+            sparse_vector = {}
 
-        if "dense" in item:
-            dense_vector = self._truncate_and_normalize(item["dense"], self.dimension)
-        if "sparse" in item:
-            sparse_vector = item["sparse"]
-
-        return EmbedResult(dense_vector=dense_vector, sparse_vector=sparse_vector)
-
-    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
-        if not texts:
-            return []
-        raw_results = self._call_api(
-            texts, dense_model=self.dense_model, sparse_model=self.sparse_model
-        )
-        results = []
-        for item in raw_results:
             if "dense" in item:
                 dense_vector = self._truncate_and_normalize(item["dense"], self.dimension)
             if "sparse" in item:
                 sparse_vector = item["sparse"]
-            results.append(EmbedResult(dense_vector=dense_vector, sparse_vector=sparse_vector))
-        return results
+
+            return EmbedResult(dense_vector=dense_vector, sparse_vector=sparse_vector)
+
+        return self._run_with_retry(
+            _call,
+            logger=logger,
+            operation_name="VikingDB hybrid embedding",
+        )
+
+    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
+        if not texts:
+            return []
+
+        def _call() -> List[EmbedResult]:
+            raw_results = self._call_api(
+                texts, dense_model=self.dense_model, sparse_model=self.sparse_model
+            )
+            results = []
+            for item in raw_results:
+                dense_vector = []
+                sparse_vector = {}
+                if "dense" in item:
+                    dense_vector = self._truncate_and_normalize(item["dense"], self.dimension)
+                if "sparse" in item:
+                    sparse_vector = item["sparse"]
+                results.append(EmbedResult(dense_vector=dense_vector, sparse_vector=sparse_vector))
+            return results
+
+        return self._run_with_retry(
+            _call,
+            logger=logger,
+            operation_name="VikingDB hybrid batch embedding",
+        )
 
     def get_dimension(self) -> int:
         return self.dimension if self.dimension else 2048

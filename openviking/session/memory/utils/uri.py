@@ -104,12 +104,12 @@ def generate_uri(
     if not uri_template:
         raise ValueError("Memory type has neither directory nor filename_template")
 
-    # Build the context for Jinja2 rendering
+    # Build the context for Jinja2 rendering - include user_space and agent_space
     context = {
         "user_space": user_space,
         "agent_space": agent_space,
     }
-    # Add all fields to context
+    # Add all fields to context (uri_fields with actual values)
     context.update(fields)
 
     # Render using unified render_template method (same as content_template)
@@ -281,6 +281,7 @@ def is_uri_allowed_for_schema(
     schemas: List[MemoryTypeSchema],
     user_space: str = "default",
     agent_space: str = "default",
+    extract_context: Any = None,
 ) -> bool:
     """
     Check if a URI is allowed for the given activated schemas.
@@ -290,6 +291,7 @@ def is_uri_allowed_for_schema(
         schemas: List of activated memory type schemas
         user_space: User space to substitute for {{ user_space }}
         agent_space: Agent space to substitute for {{ agent_space }}
+        extract_context: ExtractContext instance for template rendering
 
     Returns:
         True if the URI is allowed
@@ -424,8 +426,8 @@ class ResolvedOperations:
     """Operations with resolved URIs."""
 
     def __init__(self):
-        self.write_operations: List[ResolvedOperation] = []
-        self.edit_operations: List[ResolvedOperation] = []
+        # Unified operations list - all are edit (will read existing file first)
+        self.operations: List[ResolvedOperation] = []
         self.edit_overview_operations: List[
             Tuple[Any, str]
         ] = []  # (overview_edit_model, overview_uri)
@@ -447,6 +449,8 @@ def resolve_all_operations(
     Resolve URIs for all operations.
 
     Supports both legacy format (write_uris/edit_uris) and new per-memory_type format.
+    All operations are unified into a single list - each will attempt to read existing
+    file first, then merge (or write new if not exists).
 
     Args:
         operations: StructuredMemoryOperations
@@ -470,12 +474,6 @@ def resolve_all_operations(
                 continue
             items = value if isinstance(value, list) else [value]
             for item in items:
-                # Determine if edit (has uri) or write
-                is_edit = False
-                if hasattr(item, "uri") and item.uri:
-                    is_edit = True
-                elif isinstance(item, dict) and item.get("uri"):
-                    is_edit = True
                 # Convert to dict for URI resolution
                 item_dict = dict(item) if hasattr(item, "model_dump") else dict(item)
                 try:
@@ -483,18 +481,14 @@ def resolve_all_operations(
                         item_dict, registry, user_space, agent_space,
                         memory_type=field_name, extract_context=extract_context
                     )
-                    if is_edit:
-                        resolved.edit_operations.append(
-                            ResolvedOperation(model=item_dict, uri=uri, memory_type=field_name)
-                        )
-                    else:
-                        resolved.write_operations.append(
-                            ResolvedOperation(model=item_dict, uri=uri, memory_type=field_name)
-                        )
+                    # All operations go to unified list - will read existing file first
+                    resolved.operations.append(
+                        ResolvedOperation(model=item_dict, uri=uri, memory_type=field_name)
+                    )
                 except Exception as e:
                     resolved.errors.append(f"Failed to resolve {field_name} operation: {e}")
     else:
-        # Legacy format
+        # Legacy format - unify both write and edit into operations list
         write_uris = operations.write_uris if hasattr(operations, "write_uris") else []
         edit_uris = operations.edit_uris if hasattr(operations, "edit_uris") else []
 
@@ -505,7 +499,7 @@ def resolve_all_operations(
                 )
                 # Legacy format: try to get memory_type from model, otherwise empty
                 memory_type = op.get("memory_type", "") if isinstance(op, dict) else ""
-                resolved.write_operations.append(
+                resolved.operations.append(
                     ResolvedOperation(model=op, uri=uri, memory_type=memory_type)
                 )
             except Exception as e:
@@ -517,7 +511,7 @@ def resolve_all_operations(
                     op, registry, user_space, agent_space, extract_context=extract_context
                 )
                 memory_type = op.get("memory_type", "") if isinstance(op, dict) else ""
-                resolved.edit_operations.append(
+                resolved.operations.append(
                     ResolvedOperation(model=op, uri=uri, memory_type=memory_type)
                 )
             except Exception as e:
@@ -577,14 +571,10 @@ def validate_operations_uris(
     if resolved.has_errors():
         errors.extend(resolved.errors)
     else:
-        # Validate resolved URIs
-        for resolved_op in resolved.write_operations:
+        # Validate resolved URIs - all operations use unified list
+        for resolved_op in resolved.operations:
             if not is_uri_allowed(resolved_op.uri, allowed_dirs, allowed_patterns):
-                errors.append(f"Write operation URI not allowed: {resolved_op.uri}")
-
-        for resolved_op in resolved.edit_operations:
-            if not is_uri_allowed(resolved_op.uri, allowed_dirs, allowed_patterns):
-                errors.append(f"Edit operation URI not allowed: {resolved_op.uri}")
+                errors.append(f"Operation URI not allowed: {resolved_op.uri}")
 
         for _op, uri in resolved.edit_overview_operations:
             if not is_uri_allowed(uri, allowed_dirs, allowed_patterns):

@@ -197,10 +197,42 @@ OpenViking 提供预构建的 Docker 镜像，发布在 GitHub Container Registr
 docker run -d \
   --name openviking \
   -p 1933:1933 \
+  -p 8020:8020 \
   -v ~/.openviking/ov.conf:/app/ov.conf \
   -v /var/lib/openviking/data:/app/data \
   --restart unless-stopped \
   ghcr.io/volcengine/openviking:main
+```
+
+Docker 镜像默认会同时启动：
+- OpenViking HTTP 服务，端口 `1933`
+- OpenViking Console，端口 `8020`
+- `vikingbot` gateway
+
+如果你希望本次容器启动时关闭 `vikingbot`，可以使用下面任一方式：
+
+```bash
+docker run -d \
+  --name openviking \
+  -p 1933:1933 \
+  -p 8020:8020 \
+  -v ~/.openviking/ov.conf:/app/ov.conf \
+  -v /var/lib/openviking/data:/app/data \
+  --restart unless-stopped \
+  ghcr.io/volcengine/openviking:main \
+  --without-bot
+```
+
+```bash
+docker run -d \
+  --name openviking \
+  -e OPENVIKING_WITH_BOT=0 \
+  -p 1933:1933 \
+  -p 8020:8020 \
+  -v ~/.openviking/ov.conf:/app/ov.conf \
+  -v /var/lib/openviking/data:/app/data \
+  --restart unless-stopped \
+  ghcr.io/volcengine/openviking:latest
 ```
 
 也可以使用 Docker Compose，项目根目录提供了 `docker-compose.yml`：
@@ -208,6 +240,10 @@ docker run -d \
 ```bash
 docker compose up -d
 ```
+
+启动后可以访问：
+- API 服务：`http://localhost:1933`
+- Console 界面：`http://localhost:8020`
 
 如需自行构建镜像：`docker build -t openviking:latest .`
 
@@ -244,5 +280,5 @@ curl http://localhost:1933/ready
 ## 相关文档
 
 - [认证](04-authentication.md) - API Key 设置
-- [监控](05-monitoring.md) - 健康检查与可观测性
+- [可观测性与排障](05-observability.md) - 健康检查、追踪与排障
 - [API 概览](../api/01-overview.md) - 完整 API 参考

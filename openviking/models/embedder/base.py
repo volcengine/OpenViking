@@ -6,6 +6,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, TypeVar
 
+from openviking.utils.model_retry import retry_sync
+
 T = TypeVar("T")
 
 
@@ -74,6 +76,7 @@ class EmbedderBase(ABC):
         """
         self.model_name = model_name
         self.config = config or {}
+        self.max_retries = int(self.config.get("max_retries", 3))
 
     @abstractmethod
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
@@ -103,6 +106,14 @@ class EmbedderBase(ABC):
     def close(self):
         """Release resources, subclasses can override as needed"""
         pass
+
+    def _run_with_retry(self, func: Callable[[], T], *, logger=None, operation_name: str) -> T:
+        return retry_sync(
+            func,
+            max_retries=self.max_retries,
+            logger=logger,
+            operation_name=operation_name,
+        )
 
     @property
     def is_dense(self) -> bool:
@@ -255,7 +266,7 @@ class CompositeHybridEmbedder(HybridEmbedderBase):
 
         return [
             EmbedResult(dense_vector=d.dense_vector, sparse_vector=s.sparse_vector)
-            for d, s in zip(dense_results, sparse_results)
+            for d, s in zip(dense_results, sparse_results, strict=True)
         ]
 
     def get_dimension(self) -> int:

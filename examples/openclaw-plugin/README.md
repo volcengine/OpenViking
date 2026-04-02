@@ -1,456 +1,241 @@
 # OpenClaw + OpenViking Context-Engine Plugin
 
-Use [OpenViking](https://github.com/volcengine/OpenViking) as the long-term memory backend for [OpenClaw](https://github.com/openclaw/openclaw). In OpenClaw, this plugin is registered as the `openviking` context engine. Once installed, OpenClaw will automatically **remember** important information from conversations and **recall** relevant context before responding.
+Use [OpenViking](https://github.com/volcengine/OpenViking) as the long-term memory backend for [OpenClaw](https://github.com/openclaw/openclaw). In OpenClaw, this plugin is registered as the `openviking` context engine.
 
-> **ℹ️ Historical Compatibility Note**
->
-> Legacy OpenViking/OpenClaw integrations had a known issue around OpenClaw `2026.3.12` where conversations could hang after the plugin loaded.
-> That issue affected the legacy plugin path; the current context-engine Plugin 2.0 described in this document is not affected, so new installations do not need to downgrade OpenClaw for this reason.
-> Plugin 2.0 is also not backward-compatible with the legacy `memory-openviking` plugin and its configuration, so upgrades must replace the old setup instead of mixing the two versions.
-> Plugin 2.0 also depends on OpenClaw's context-engine capability and does not support older OpenClaw releases; upgrade OpenClaw first before using this plugin.
-> If you are troubleshooting a legacy deployment, see [#591](https://github.com/volcengine/OpenViking/issues/591) and upstream fix PRs: openclaw/openclaw#34673, openclaw/openclaw#33547.
+This document is not an installation guide. It is an implementation-focused design note for integrators and engineers. It describes how the plugin works today based on the code under `examples/openclaw-plugin`, not a future refactor target.
 
-> **🚀 Plugin 2.0 (Context-Engine Architecture)**
->
-> This document covers the current OpenViking Plugin 2.0 built on the context-engine architecture, which is the recommended integration path for AI coding assistants.
-> For design background and earlier discussion, see:
-> https://github.com/volcengine/OpenViking/discussions/525
+## Documentation
 
----
+- Install and upgrade: [INSTALL.md](./INSTALL.md)
+- Chinese design and install guide: [INSTALL-ZH.md](./INSTALL-ZH.md)
+- Agent-oriented operator guide: [INSTALL-AGENT.md](./INSTALL-AGENT.md)
 
-## Table of Contents
+## Design Positioning
 
-- [One-Click Installation](#one-click-installation)
-- [Manual Setup](#manual-setup)
-  - [Prerequisites](#prerequisites)
-  - [Local Mode (Personal Use)](#local-mode-personal-use)
-  - [Remote Mode (Team Sharing)](#remote-mode-team-sharing)
-  - [Volcengine ECS Deployment](#volcengine-ecs-deployment)
-- [Starting & Verification](#starting--verification)
-- [Configuration Reference](#configuration-reference)
-- [Daily Usage](#daily-usage)
-- [Web Console (Visualization)](#web-console-visualization)
-- [Troubleshooting](#troubleshooting)
-- [Uninstallation](#uninstallation)
+- OpenClaw still owns the agent runtime, prompt orchestration, and tool execution.
+- OpenViking owns long-term memory retrieval, session archiving, archive summaries, and memory extraction.
+- `examples/openclaw-plugin` is not a narrow “memory lookup” plugin. It is an integration layer that spans the OpenClaw lifecycle.
 
----
+In the current implementation, the plugin plays four roles at once:
 
-## One-Click Installation
+- `context-engine`: implements `assemble`, `afterTurn`, and `compact`
+- hook layer: handles `before_prompt_build`, `session_start`, `session_end`, `agent_end`, and `before_reset`
+- tool provider: registers `memory_recall`, `memory_store`, `memory_forget`, and `ov_archive_expand`
+- runtime manager: starts and monitors an OpenViking subprocess in `local` mode
 
-For users who want a quick local experience. The setup helper handles environment detection, dependency installation, and config file generation automatically.
+## Overall Architecture
 
-### Method A: npm Install (Recommended, Cross-platform)
+![Overall OpenClaw and OpenViking plugin architecture](./images/openclaw-plugin-engine-overview.png)
 
-```bash
-npm install -g openclaw-openviking-setup-helper
-ov-install
-```
+The diagram above reflects the current implementation boundary:
 
-### Method B: curl One-Click (Linux / macOS)
+- OpenClaw remains the primary runtime on the left. The plugin does not take over agent execution.
+- The middle layer combines hooks, the context engine, tools, and runtime management in one plugin registration.
+- All HTTP traffic goes through `OpenVikingClient`, which centralizes `X-OpenViking-*` headers and routing logs.
+- The OpenViking service owns sessions, memories, archives, and Phase 2 extraction, with storage under `viking://user/*`, `viking://agent/*`, and `viking://session/*`.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash
-```
+That split lets OpenClaw stay focused on reasoning and orchestration while OpenViking becomes the source of truth for long-lived context.
 
-The setup helper will walk you through:
+## Identity and Routing
 
-1. **Environment check** — Detects Python >= 3.10, Node.js, cmake, etc.
-2. **Select OpenClaw instance** — If multiple instances are installed locally, lists them for you to choose
-3. **Select deployment mode** — Local or Remote (see below)
-4. **Generate config** — Writes `~/.openviking/ov.conf` and `~/.openclaw/openviking.env` automatically
+The plugin does not send one fixed agent ID to OpenViking. It tries to keep OpenClaw session identity and OpenViking routing aligned.
 
-<details>
-<summary>Setup helper options</summary>
+The main rules are:
 
-```
-ov-install [options]
+- reuse `sessionId` directly when it is already a UUID
+- prefer `sessionKey` when deriving a stable `ovSessionId`
+- normalize unsafe path characters, or fall back to a stable SHA-256 when needed
+- resolve `X-OpenViking-Agent` per session, not per process
+- when `plugins.entries.openviking.config.agentId` is not `default`, prefix the session agent as `<configAgentId>_<sessionAgent>`
+- add `X-OpenViking-Account`, `X-OpenViking-User`, and `X-OpenViking-Agent` in the client layer
 
-  -y, --yes              Non-interactive, use defaults
-  --workdir <path>       OpenClaw config directory (default: ~/.openclaw)
-  -h, --help             Show help
+This matters because the plugin is built to support multi-agent and multi-session OpenClaw usage without mixing memories across sessions.
 
-Env vars:
-  OPENVIKING_PYTHON       Python path
-  OPENVIKING_CONFIG_FILE  ov.conf path
-  OPENVIKING_REPO         Local OpenViking repo path
-  OPENVIKING_ARK_API_KEY  Volcengine API Key (skip prompt in -y mode)
-```
+## Prompt-Front Recall Flow
 
-</details>
+![Automatic recall flow before prompt build](./images/openclaw-plugin-recall-flow.png)
 
----
+Today the main recall path still lives in `before_prompt_build`:
 
-## Manual Setup
+1. Extract the latest user text from `messages` or `prompt`.
+2. Resolve the agent routing for the current `sessionId/sessionKey`.
+3. Run a quick availability precheck so prompt building does not stall when OpenViking is unavailable.
+4. Query both `viking://user/memories` and `viking://agent/memories` in parallel.
+5. Deduplicate, threshold-filter, rerank, and trim the results under a token budget.
+6. Prepend the selected memories as a `<relevant-memories>` block.
 
-### Prerequisites
+The reranking logic is not pure vector-score sorting. The current implementation also considers:
 
-| Component | Version | Purpose |
-|-----------|---------|---------|
-| **Python** | >= 3.10 | OpenViking runtime (Local mode) |
-| **Node.js** | >= 22 | OpenClaw runtime |
-| **Volcengine Ark API Key** | — | Embedding + VLM model calls |
+- whether a result is a leaf memory with `level == 2`
+- whether it looks like a preference memory
+- whether it looks like an event memory
+- lexical overlap with the current query
 
-```bash
-python3 --version   # >= 3.10
-node -v              # >= v22
-openclaw --version   # installed
-```
+### Transcript ingest assist
 
-- Python: https://www.python.org/downloads/
-- Node.js: https://nodejs.org/
-- OpenClaw: `npm install -g openclaw && openclaw onboard`
+This path also includes a special transcript-oriented branch.
 
----
+When the latest user input looks like pasted multi-speaker transcript content:
 
-### Local Mode (Personal Use)
+- metadata blocks, command text, and pure question text are filtered out
+- the cleaned text is checked against speaker-turn and length thresholds
+- if it matches, the plugin prepends a lightweight `<ingest-reply-assist>` instruction
 
-The simplest option — nearly zero configuration. The memory service runs alongside your OpenClaw agent locally. You only need a Volcengine Ark API Key.
+The goal is not to change memory logic. It is to reduce the chance that the model responds with `NO_REPLY` when the user pastes chat history, meeting notes, or conversation transcripts for ingestion.
 
-#### Step 1: Install OpenViking
+## Session Lifecycle
 
-```bash
-python3 -m pip install openviking --upgrade
-```
+![Session lifecycle and compaction boundary](./images/openclaw-plugin-session-lifecycle.png)
 
-Verify: `python3 -c "import openviking; print('ok')"`
+Session handling is the main axis of this design. In the current implementation it covers history assembly, incremental append, asynchronous commit, and blocking compaction readback.
 
-> Hit `externally-managed-environment`? Use the one-click installer (handles venv automatically) or create one manually:
-> ```bash
-> python3 -m venv ~/.openviking/venv && ~/.openviking/venv/bin/pip install openviking
-> ```
+### What `assemble()` does
 
-#### Step 2: Run the Setup Helper
+`assemble()` is not just replaying old chat history. It reads session context back from OpenViking under a token budget, then rebuilds OpenClaw-facing messages:
 
-```bash
-# Method A: npm install (recommended, cross-platform)
-npm install -g openclaw-openviking-setup-helper
-ov-install
+- `latest_archive_overview` becomes `[Session History Summary]`
+- `pre_archive_abstracts` becomes `[Archive Index]`
+- active session messages stay in message-block form
+- assistant tool parts become `toolUse`
+- tool output becomes separate `toolResult`
+- the final message list goes through a tool-use/result pairing repair pass
 
-# Method B: curl one-click (Linux / macOS)
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash
-```
+That means OpenClaw sees “compressed history summary + archive index + active messages”, not an ever-growing raw transcript.
 
-Select **local** mode, keep defaults, and enter your Ark API Key.
+### What `afterTurn()` does
 
-Generated config files:
-- `~/.openviking/ov.conf` — OpenViking service config
-- `~/.openclaw/openviking.env` — Environment variables (Python path, etc.)
+`afterTurn()` has a narrower job: append only the new turn into the OpenViking session.
 
-#### Step 3: Start
+- it slices only the newly added messages
+- it keeps only `user` / `assistant` capture text
+- it preserves `toolUse` / `toolResult` content in the serialized turn text
+- it strips injected `<relevant-memories>` blocks and metadata noise before capture
+- it appends the sanitized turn text into the OpenViking session
 
-```bash
-source ~/.openclaw/openviking.env && openclaw gateway restart
-```
+After that, the plugin checks `pending_tokens`. Once the session crosses `commitTokenThreshold`, it triggers `commit(wait=false)`:
 
-> In Local mode you must `source` the env file first — the plugin auto-starts an OpenViking subprocess.
+- archive generation and Phase 2 memory extraction continue asynchronously on the server
+- the current turn is not blocked waiting for extraction
+- if `logFindRequests` is enabled, the logs include the task id and follow-up extraction detail
 
-#### Step 4: Verify
+### What `compact()` does
 
-```bash
-openclaw status
-# ContextEngine row should show: enabled (plugin openviking)
-```
+`compact()` is the stricter synchronous boundary:
 
----
+- it calls `commit(wait=true)` and blocks for completion
+- when an archive exists, it re-reads `latest_archive_overview`
+- it returns updated token estimates, the latest archive id, and summary content
+- if the summary is too coarse, the model can call `ov_archive_expand` to reopen a specific archive
 
-### Remote Mode (Team Sharing)
+So `afterTurn()` is closer to “incremental append plus threshold-triggered async commit”, while `compact()` is the explicit “wait for archive and compaction to finish” boundary.
 
-For multiple OpenClaw instances or team use. Deploy a standalone OpenViking service that is shared across agents. **No Python/OpenViking needed on the client side.**
+## Tools and Expandability
 
-#### Step 1: Deploy the OpenViking Service
+Beyond automatic behavior, the plugin exposes four tools directly:
 
-Edit `~/.openviking/ov.conf` — set `root_api_key` to enable multi-tenancy:
+- `memory_recall`: explicit long-term memory search
+- `memory_store`: write text into an OpenViking session and trigger commit
+- `memory_forget`: delete by URI, or search first and remove a single strong match
+- `ov_archive_expand`: expand a concrete archive back into raw messages
 
-```json
-{
-  "server": {
-    "host": "127.0.0.1",
-    "port": 1933,
-    "root_api_key": "<your-root-api-key>",
-    "cors_origins": ["*"]
-  },
-  "storage": {
-    "workspace": "~/.openviking/data",
-    "vectordb": {
-      "name": "context",
-      "backend": "local"
-    },
-    "agfs": {
-      "log_level": "warn",
-      "backend": "local"
-    }
-  },
-  "embedding": {
-    "dense": {
-      "provider": "volcengine",
-      "api_key": "<your-ark-api-key>",
-      "model": "doubao-embedding-vision-251215",
-      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-      "dimension": 1024,
-      "input": "multimodal"
-    }
-  },
-  "vlm": {
-    "provider": "volcengine",
-    "api_key": "<your-ark-api-key>",
-    "model": "doubao-seed-2-0-pro-260215",
-    "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-    "temperature": 0.1,
-    "max_retries": 3
-  }
-}
-```
+They serve different roles:
 
-Start the service:
+- automatic recall covers the default case where the model does not know what to search yet
+- `memory_recall` gives the model an explicit follow-up search path
+- `memory_store` is for immediately persisting clearly important information
+- `ov_archive_expand` is the “go back to archive detail” escape hatch when summaries are not enough
+
+`ov_archive_expand` is especially important because `assemble()` normally returns archive summaries and indexes, not the full raw transcript.
+
+## Local / Remote Runtime Modes
+
+![Runtime modes and routing behavior](./images/openclaw-plugin-runtime-routing.png)
+
+The current implementation supports two runtime modes. The upper-layer session, memory, and archive model stays the same in both.
+
+### Local mode
+
+In `local` mode, the plugin manages the OpenViking subprocess itself:
+
+- resolve Python from `OPENVIKING_PYTHON`, env files, or system defaults
+- prepare the port before startup
+- kill stale OpenViking processes on the target port
+- move to the next free port if another process owns the configured one
+- wait for `/health` before marking the service ready
+- cache the local client so multiple plugin registrations do not spawn duplicates
+
+That is why this plugin is not only “memory logic”. It is also a local runtime manager.
+
+### Remote mode
+
+In `remote` mode, the plugin behaves as a pure HTTP client:
+
+- no local subprocess is started
+- `baseUrl` and optional `apiKey` come from plugin config
+- session context, memory find/read, commit, and archive expansion behavior stays the same
+
+The main difference between `local` and `remote` is who is responsible for bringing up the OpenViking service, not the higher-level context model.
+
+## Relationship to the Older Design Draft
+
+The repo also contains a more future-looking design draft at `docs/design/openclaw-context-engine-refactor.md`. It is important not to conflate the two:
+
+- this README describes current implemented behavior
+- the older draft discusses a stronger future move into context-engine-owned lifecycle control
+- in the current version, the main automatic recall path still lives in `before_prompt_build`, not fully in `assemble()`
+- in the current version, `afterTurn()` already appends to the OpenViking session, but commit remains threshold-triggered and asynchronous on that path
+- in the current version, `compact()` already uses `commit(wait=true)`, but it is still focused on synchronous commit plus readback rather than owning every orchestration concern
+
+That distinction matters, otherwise the future design draft is easy to misread as already shipped behavior.
+
+## Operator and Debugging Surfaces
+
+If you need to debug this plugin, start with these entry points.
+
+### Inspect the current setup
 
 ```bash
-openviking-server
+ov-install --current-version
+openclaw config get plugins.entries.openviking.config
+openclaw config get plugins.slots.contextEngine
 ```
 
-#### Step 2: Create Team & Users
+### Watch logs
+
+OpenClaw plugin logs:
 
 ```bash
-# Create team + admin
-curl -X POST http://localhost:1933/api/v1/admin/accounts \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: <root-api-key>" \
-  -d '{
-    "account_id": "my-team",
-    "admin_user_id": "admin"
-  }'
-
-# Add member
-curl -X POST http://localhost:1933/api/v1/admin/accounts/my-team/users \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: <root-or-admin-key>" \
-  -d '{
-    "user_id": "xiaomei",
-    "role": "user"
-  }'
+openclaw logs --follow
 ```
 
-#### Step 3: Configure the OpenClaw Plugin
+OpenViking service logs:
 
 ```bash
-openclaw plugins enable openviking
-openclaw config set gateway.mode local
-openclaw config set plugins.slots.contextEngine openviking
-openclaw config set plugins.entries.openviking.config.mode remote
-openclaw config set plugins.entries.openviking.config.baseUrl "http://your-server:1933"
-openclaw config set plugins.entries.openviking.config.apiKey "<user-api-key>"
-openclaw config set plugins.entries.openviking.config.agentId "<agent-id>"
-openclaw config set plugins.entries.openviking.config.autoRecall true --json
-openclaw config set plugins.entries.openviking.config.autoCapture true --json
+cat ~/.openviking/data/log/openviking.log
 ```
 
-#### Step 4: Start & Verify
+### Web Console
 
 ```bash
-# Remote mode — no env sourcing needed
-openclaw gateway restart
-openclaw status
-```
-
----
-
-### Volcengine ECS Deployment
-
-Deploy OpenClaw + OpenViking on Volcengine ECS. See [Volcengine docs](https://www.volcengine.com/docs/6396/2249500?lang=zh) for details.
-
-> ECS instances restrict global pip installs under root to protect system Python. Create a venv first.
-
-```bash
-# 1. Install
-npm install -g openclaw-openviking-setup-helper
-ov-install
-
-# 2. Load environment
-source /root/.openclaw/openviking.env
-
-# 3. Start OpenViking server
-python -m openviking.server.bootstrap
-
-# 4. Start Web Console (ensure security group allows TCP 8020 inbound)
 python -m openviking.console.bootstrap --host 0.0.0.0 --port 8020 --openviking-url http://127.0.0.1:1933
 ```
 
-Access `http://<public-ip>:8020` to use the Web Console.
+### `ov tui`
+
+```bash
+ov tui
+```
+
+### Common things to check
+
+| Symptom | More likely cause | First check |
+| --- | --- | --- |
+| `plugins.slots.contextEngine` is not `openviking` | The plugin slot was never set, or another plugin replaced it | `openclaw config get plugins.slots.contextEngine` |
+| `local` mode fails to start | Python path, env file, or `ov.conf` is wrong | `source ~/.openclaw/openviking.env && openclaw gateway restart` |
+| recall behaves inconsistently across sessions | Routing identity is not what you expected | Enable `logFindRequests`, then inspect `openclaw logs --follow` |
+| long chats stop extracting memory | `pending_tokens` never crosses the threshold, or Phase 2 fails server-side | Check plugin config and `~/.openviking/data/log/openviking.log` |
+| summaries are too coarse for detailed questions | You need archive-level detail, not just summary | Use an ID from `[Archive Index]` with `ov_archive_expand` |
 
 ---
 
-## Starting & Verification
-
-### Local Mode
-
-```bash
-source ~/.openclaw/openviking.env && openclaw gateway restart
-```
-
-### Remote Mode
-
-```bash
-openclaw gateway restart
-```
-
-### Check Plugin Status
-
-```bash
-openclaw status
-# ContextEngine row should show: enabled (plugin openviking)
-```
-
-### View Plugin Config
-
-```bash
-openclaw config get plugins.entries.openviking.config
-```
-
----
-
-## Configuration Reference
-
-### `~/.openviking/ov.conf` (Local Mode)
-
-```json
-{
-  "root_api_key": null,
-  "server": { "host": "127.0.0.1", "port": 1933 },
-  "storage": {
-    "workspace": "~/.openviking/data",
-    "vectordb": { "backend": "local" },
-    "agfs": { "backend": "local", "port": 1833 }
-  },
-  "embedding": {
-    "dense": {
-      "provider": "volcengine",
-      "api_key": "<your-ark-api-key>",
-      "model": "doubao-embedding-vision-251215",
-      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-      "dimension": 1024,
-      "input": "multimodal"
-    }
-  },
-  "vlm": {
-    "provider": "volcengine",
-    "api_key": "<your-ark-api-key>",
-    "model": "doubao-seed-2-0-pro-260215",
-    "api_base": "https://ark.cn-beijing.volces.com/api/v3"
-  }
-}
-```
-
-> `root_api_key`: When set, all HTTP requests must include the `X-API-Key` header. Defaults to `null` in Local mode (auth disabled).
-
-### Plugin Config Options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `mode` | `remote` | `local` (start local server) or `remote` (connect to remote) |
-| `baseUrl` | `http://127.0.0.1:1933` | OpenViking server URL (Remote mode) |
-| `apiKey` | — | OpenViking API Key (optional) |
-| `agentId` | auto-generated | Agent identifier, distinguishes OpenClaw instances. Auto-generates `openclaw-<hostname>-<random>` if unset |
-| `configPath` | `~/.openviking/ov.conf` | Config file path (Local mode) |
-| `port` | `1933` | Local server port (Local mode) |
-| `targetUri` | `viking://user/memories` | Default memory search scope |
-| `autoCapture` | `true` | Auto-extract memories after conversations |
-| `captureMode` | `semantic` | Extraction mode: `semantic` (full semantic) / `keyword` (trigger-word only) |
-| `captureMaxLength` | `24000` | Max text length per capture |
-| `autoRecall` | `true` | Auto-recall relevant memories before conversations |
-| `recallLimit` | `6` | Max memories injected during auto-recall |
-| `recallScoreThreshold` | `0.01` | Minimum relevance score for recall |
-| `ingestReplyAssist` | `true` | Add reply guidance when multi-party conversation text is detected |
-
-### `~/.openclaw/openviking.env`
-
-Auto-generated by the setup helper, stores environment variables like the Python path:
-
-```bash
-export OPENVIKING_PYTHON='/usr/local/bin/python3'
-```
-
----
-
-## Daily Usage
-
-```bash
-# Start (Local mode — source env first)
-source ~/.openclaw/openviking.env && openclaw gateway
-
-# Start (Remote mode — no env needed)
-openclaw gateway
-
-# Disable the context engine
-openclaw config set plugins.slots.contextEngine legacy
-
-# Re-enable OpenViking as the context engine
-openclaw config set plugins.slots.contextEngine openviking
-```
-
-> Restart the gateway after changing the context-engine slot.
-
----
-
-## Web Console (Visualization)
-
-OpenViking provides a Web Console for debugging and inspecting stored memories.
-
-```bash
-python -m openviking.console.bootstrap \
-  --host 127.0.0.1 \
-  --port 8020 \
-  --openviking-url http://127.0.0.1:1933 \
-  --write-enabled
-```
-
-Open http://127.0.0.1:8020 in your browser.
-
----
-
-## Troubleshooting
-
-### Common Issues
-
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| Conversation hangs, no response | Usually a legacy pre-2.0 integration affected by the historical OpenClaw `2026.3.12` issue | If you are on the legacy path, see [#591](https://github.com/volcengine/OpenViking/issues/591) and temporarily downgrade to `2026.3.11`; for current installs, migrate to Plugin 2.0 |
-| `registerContextEngine is unavailable` in logs | OpenClaw version is too old and does not expose the context-engine API required by Plugin 2.0 | Upgrade OpenClaw to a current release, then restart the gateway and verify `openclaw status` shows `openviking` as the ContextEngine |
-| Agent hangs silently, no output | auto-recall missing timeout protection | Disable auto-recall temporarily: `openclaw config set plugins.entries.openviking.config.autoRecall false --json`, or apply the patch in [#673](https://github.com/volcengine/OpenViking/issues/673) |
-| ContextEngine is not `openviking` | Plugin slot not configured | `openclaw config set plugins.slots.contextEngine openviking` |
-| `memory_store failed: fetch failed` | OpenViking not running | Check `ov.conf` and Python path; verify service is up |
-| `health check timeout` | Port held by stale process | `lsof -ti tcp:1933 \| xargs kill -9`, then restart |
-| `extracted 0 memories` | Wrong API Key or model name | Check `api_key` and `model` in `ov.conf` |
-| `port occupied` | Port used by another process | Change port: `openclaw config set plugins.entries.openviking.config.port 1934` |
-| Plugin not loaded | Env file not sourced | Run `source ~/.openclaw/openviking.env` before starting |
-| `externally-managed-environment` | Python PEP 668 restriction | Use venv or the one-click installer |
-| `TypeError: unsupported operand type(s) for \|` | Python < 3.10 | Upgrade Python to 3.10+ |
-
-### Viewing Logs
-
-```bash
-# OpenViking logs
-cat ~/.openviking/data/log/openviking.log
-
-# OpenClaw gateway logs
-cat ~/.openclaw/logs/gateway.log
-cat ~/.openclaw/logs/gateway.err.log
-
-# Check if OpenViking process is alive
-lsof -i:1933
-
-# Quick connectivity check
-curl http://localhost:1933
-# Expected: {"detail":"Not Found"}
-```
-
----
-
-## Uninstallation
-
-```bash
-lsof -ti tcp:1933 tcp:1833 tcp:18789 | xargs kill -9
-python3 -m pip uninstall openviking -y && rm -rf ~/.openviking
-```
-
----
-
-**See also:** [INSTALL-ZH.md](./INSTALL-ZH.md) (中文详细安装指南) · [INSTALL.md](./INSTALL.md) (English Install Guide) · [INSTALL-AGENT.md](./INSTALL-AGENT.md) (Agent Install Guide)
+For installation, upgrade, and uninstall operations, use [INSTALL.md](./INSTALL.md).

@@ -6,12 +6,14 @@ Memory tools - encapsulate VikingFS read operations for ReAct loop.
 Reference: bot/vikingbot/agent/tools/base.py design pattern
 """
 
+import json
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from openviking.session.memory.utils import parse_memory_file_with_fields
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import tracer
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -66,7 +68,12 @@ def add_tool_call_pair_to_messages(
 ) -> None:
     """Add a tool call pair with optimized format to save tokens."""
     messages.append(
-        {"role": "user", "content": {"tool_call_name": tool_name, "args": params, "result": result}}
+        {
+            "role": "user",
+            "content": json.dumps(
+                {"tool_call_name": tool_name, "args": params, "result": result}, ensure_ascii=False
+            ),
+        }
     )
 
 
@@ -173,8 +180,9 @@ class MemoryReadTool(MemoryTool):
         ctx: Optional["ToolContext"],
         **kwargs: Any,
     ) -> Any:
+        uri = kwargs.get("uri", "")
         try:
-            uri = kwargs.get("uri", "")
+
             content = await viking_fs.read_file(
                 uri,
                 ctx=ctx.request_ctx,
@@ -182,8 +190,11 @@ class MemoryReadTool(MemoryTool):
             # Parse MEMORY_FIELDS from comment and return dict directly
             parsed = parse_memory_file_with_fields(content)
             return parsed
+        except NotFoundError as e:
+            tracer.info(f"read not found: {uri}")
+            return {"error": str(e)}
         except Exception as e:
-            tracer.info(f"Failed to execute read：e")
+            tracer.error(f"Failed to execute read", e)
             return {"error": str(e)}
 
 
