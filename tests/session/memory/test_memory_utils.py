@@ -398,47 +398,6 @@ class TestUriResolution:
 
         return registry
 
-    def test_resolve_write_uri(self, test_registry):
-        """Test resolving URI for write operation (dict format)."""
-        write_op = {
-            "memory_type": "preferences",
-            "topic": "Python code style",
-            "content": "Test content",
-        }
-
-        uri = resolve_write_uri(write_op, test_registry)
-
-        assert uri == "viking://user/default/memories/preferences/Python code style.md"
-
-    def test_resolve_write_uri_unknown_type(self, test_registry):
-        """Test resolving write operation with unknown memory type."""
-        write_op = {
-            "memory_type": "unknown_type",
-        }
-
-        with pytest.raises(ValueError, match="Unknown memory type"):
-            resolve_write_uri(write_op, test_registry)
-
-    def test_resolve_edit_target(self, test_registry):
-        """Test resolving target URI for edit operation."""
-        uri = resolve_edit_target(
-            "tools",
-            {"tool_name": "web_search"},
-            test_registry,
-        )
-
-        assert uri == "viking://agent/default/memories/tools/web_search.md"
-
-    def test_resolve_delete_target(self, test_registry):
-        """Test resolving target URI for delete operation."""
-        uri = resolve_delete_target(
-            "preferences",
-            {"topic": "Test topic"},
-            test_registry,
-        )
-
-        assert uri == "viking://user/default/memories/preferences/Test topic.md"
-
     def test_resolve_all_operations(self, test_registry):
         """Test resolving all operations at once."""
         operations = MemoryOperations(

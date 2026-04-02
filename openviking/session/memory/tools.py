@@ -8,13 +8,17 @@ Reference: bot/vikingbot/agent/tools/base.py design pattern
 
 import json
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from openviking.session.memory.utils import parse_memory_file_with_fields
+from openviking.session.memory.utils.content import truncate_content
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import tracer
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
+
+if TYPE_CHECKING:
+    from openviking.server.identity import ToolContext
 
 logger = get_logger(__name__)
 
@@ -193,7 +197,7 @@ class MemoryReadTool(MemoryTool):
             tracer.info(f"read not found: {uri}")
             return {"error": str(e)}
         except Exception as e:
-            tracer.error(f"Failed to execute read", e)
+            tracer.error(f"Failed to execute read: {e}")
             return {"error": str(e)}
 
 
