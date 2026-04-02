@@ -5,7 +5,7 @@ Core domain data classes for memory system.
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import (
     Any,
     Dict,
@@ -73,6 +73,9 @@ class MemoryData(BaseModel):
     tags: List[str] = Field(default_factory=list, description="Tags")
     created_at: Optional[datetime] = Field(None, description="Created time")
     updated_at: Optional[datetime] = Field(None, description="Updated time")
+    expires_at: Optional[datetime] = Field(
+        None, description="Expiration time (None = never expires)"
+    )
 
     def get_field(self, field_name: str) -> Any:
         """Get field value."""
@@ -81,6 +84,17 @@ class MemoryData(BaseModel):
     def set_field(self, field_name: str, value: Any) -> None:
         """Set field value."""
         self.fields[field_name] = value
+
+    def is_expired(self) -> bool:
+        """Return True if memory has expired."""
+        if self.expires_at is None:
+            return False
+        expires_at = (
+            self.expires_at.replace(tzinfo=timezone.utc)
+            if self.expires_at.tzinfo is None
+            else self.expires_at
+        )
+        return expires_at <= datetime.now(timezone.utc)
 
 
 # ============================================================================
@@ -114,7 +128,7 @@ class FaultTolerantBaseModel(BaseModel):
         origin = get_origin(annotation)
         if origin is Union:
             args = get_args(annotation)
-            if len(args) == 2 and args[1] == type(None):
+            if len(args) == 2 and args[1] is type(None):
                 return cls.get_origin_type(args[0])
         elif origin is list:
             return list
@@ -126,7 +140,7 @@ class FaultTolerantBaseModel(BaseModel):
         origin = get_origin(annotation)
         if origin is Union:
             args = get_args(annotation)
-            if len(args) == 2 and args[1] == type(None):
+            if len(args) == 2 and args[1] is type(None):
                 return cls.get_arg_type(args[0])
         elif origin is list:
             args = get_args(annotation)
