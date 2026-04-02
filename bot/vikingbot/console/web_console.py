@@ -1,13 +1,12 @@
 import json
 import sys
-import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import gradio as gr
 
-from vikingbot.config.loader import load_config, save_config, get_config_path
-from vikingbot.config.schema import Config, ChannelType, SandboxBackend, SandboxMode
+from vikingbot.config.loader import get_config_path, load_config, save_config
+from vikingbot.config.schema import Config
 
 
 def resolve_schema_ref(

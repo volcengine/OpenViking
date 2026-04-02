@@ -3,14 +3,15 @@
 
 import json
 import time
+
 from opencode_ai import Opencode
 from opencode_utils import (
     check_serve_status,
     execute_cmd,
+    list_project,
     read_new_messages,
     read_status,
     write_status,
-    list_project,
 )
 from pydantic import BaseModel
 

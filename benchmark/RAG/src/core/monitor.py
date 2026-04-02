@@ -34,7 +34,7 @@ class BenchmarkMonitor:
         """Return real-time status dictionary for tqdm progress bar display"""
         elapsed = time.time() - self.stats.start_time
         qps = self.stats.completed_tasks / elapsed if elapsed > 0 else 0
-        
+
         tokens = self.stats.total_tokens
         if tokens > 1_000_000:
             token_str = f"{tokens/1_000_000:.1f}M"

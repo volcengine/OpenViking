@@ -9,14 +9,14 @@ evidence_text in evidence is used for recall calculation.
 
 import json
 import os
-from collections import defaultdict
-from typing import List, Dict, Any
-from pathlib import Path
 import sys
+from collections import defaultdict
+from pathlib import Path
+from typing import Any, Dict, List
 
 sys.path.append(str(Path(__file__).parent))
 
-from base import BaseAdapter, StandardDoc, StandardSample, StandardQA
+from base import BaseAdapter, StandardDoc, StandardQA, StandardSample
 
 CATEGORY_INSTRUCTIONS = {
     "domain-relevant": """Answer the financial question based on the document.
@@ -24,14 +24,14 @@ CATEGORY_INSTRUCTIONS = {
 - If numerical, include units (e.g., USD millions, %)
 - Provide concise, direct answer
 - Do NOT invent information""",
-    
+
     "metrics-generated": """Calculate the financial metric based on the document.
 - Use ONLY numbers from the context
 - Show your calculations clearly
 - Round to appropriate decimal places
 - Include units (e.g., USD millions, %)
 - Do NOT invent numbers""",
-    
+
     "novel-generated": """Answer the financial question based on the document.
 - Use ONLY facts from the context
 - If numerical, include units (e.g., USD millions, %)
@@ -136,10 +136,10 @@ class FinanceBenchAdapter(BaseAdapter):
 
     def build_prompt(self, qa: StandardQA, context_blocks: List[str]) -> tuple[str, Dict[str, Any]]:
         context_text = "\n\n".join(context_blocks)
-        
+
         category = qa.category
         category_instruction = CATEGORY_INSTRUCTIONS.get(category, "")
-        
+
         if category_instruction:
             full_prompt = f"""{context_text}
 
@@ -158,7 +158,7 @@ Answer:"""
 Question: {qa.question}
 
 Answer:"""
-        
+
         meta = {
             "question_type": qa.category,
             "financebench_id": qa.metadata.get("financebench_id"),

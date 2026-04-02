@@ -15,11 +15,8 @@ os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 import litellm
 from litellm import acompletion, completion
 
-
 from openviking.telemetry import tracer
-
 from openviking.utils.model_retry import retry_async, retry_sync
-
 
 from ..base import ToolCall, VLMBase, VLMResponse
 

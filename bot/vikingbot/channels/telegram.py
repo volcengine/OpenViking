@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import re
+
 from loguru import logger
 from telegram import BotCommand, Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from telegram.request import HTTPXRequest
 
 from vikingbot.bus.events import OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
-from vikingbot.config.schema import TelegramChannelConfig
 from vikingbot.channels.utils import extract_image_paths, read_image_file
+from vikingbot.config.schema import TelegramChannelConfig
 
 
 def _markdown_to_telegram_html(text: str) -> str:
@@ -318,7 +319,6 @@ class TelegramChannel(BaseChannel):
                 ext = self._get_extension(media_type, getattr(media_file, "mime_type", None))
 
                 # Save to workspace/media/
-                from pathlib import Path
                 from vikingbot.utils.helpers import get_media_path
 
                 if self.workspace_path:

@@ -11,7 +11,7 @@ from loguru import logger
 
 from vikingbot.bus.events import InboundMessage, OutboundMessage
 from vikingbot.bus.queue import MessageBus
-from vikingbot.config.schema import SessionKey, BaseChannelConfig
+from vikingbot.config.schema import BaseChannelConfig, SessionKey
 from vikingbot.utils import get_data_path
 
 # Optional HTML processing libraries

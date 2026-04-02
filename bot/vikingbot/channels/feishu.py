@@ -31,7 +31,7 @@ except ImportError:
 from vikingbot.bus.events import OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
-from vikingbot.config.schema import FeishuChannelConfig, BotMode
+from vikingbot.config.schema import BotMode, FeishuChannelConfig
 
 try:
     import lark_oapi as lark
@@ -46,7 +46,7 @@ try:
         GetMessageResourceRequest,
         P2ImMessageReceiveV1,
         ReplyMessageRequest,
-        ReplyMessageRequestBody
+        ReplyMessageRequestBody,
     )
 
     FEISHU_AVAILABLE = True
@@ -750,13 +750,13 @@ class FeishuChannel(BaseChannel):
         if self.config.thread_require_mention:
             # 模式1：所有消息都需要@才处理
             if not is_mentioned:
-                logger.info(f"Skipping thread message: thread_require_mention is True and not mentioned")
+                logger.info("Skipping thread message: thread_require_mention is True and not mentioned")
                 return False
         else:
             # 模式2：仅话题首条消息不需要@，后续回复需要@（DEBUG模式除外）
             config = load_config()
             if not is_topic_starter and not is_mentioned and config.mode != BotMode.DEBUG:
-                logger.info(f"Skipping thread message: not topic starter and not mentioned")
+                logger.info("Skipping thread message: not topic starter and not mentioned")
                 return False
 
         return True

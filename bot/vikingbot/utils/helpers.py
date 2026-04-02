@@ -1,7 +1,8 @@
 """Utility functions for vikingbot."""
 
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
+
 from loguru import logger
 
 
@@ -106,6 +107,7 @@ def get_workspace_path() -> Path:
 
 def ensure_workspace_templates(workspace: Path) -> None:
     import shutil
+
     from vikingbot.agent.skills import BUILTIN_SKILLS_DIR
 
     # Ensure workspace directory exists first

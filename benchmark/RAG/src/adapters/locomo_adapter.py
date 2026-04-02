@@ -1,10 +1,9 @@
 # src/adapters/locomo_adapter.py
 import json
 import os
-from typing import List, Dict, Any
+from typing import Any, Dict, List
 
-from .base import BaseAdapter, StandardDoc, StandardSample, StandardQA
-
+from .base import BaseAdapter, StandardDoc, StandardQA, StandardSample
 
 MISSING_RULE = "If no information is available to answer the question, write 'Not mentioned'."
 
@@ -13,19 +12,19 @@ CATEGORY_INSTRUCTIONS = {
     "1": """Extract the exact factual answer from the conversation.
 - Use the exact words from the context when possible
 - If multiple items, separate with commas""",
-    
+
     "2": """Answer the time-related question.
 - Pay close attention to DATE labels in the conversation
 - Calculate relative time (e.g., "10 years ago") when needed
 - Use the exact dates from the context""",
-    
+
     "3": """Reason and infer based on the conversation.
 - Use ONLY the facts in the context
 - State your conclusion clearly (e.g., "Likely yes", "Probably no")
 - Do NOT explain your reasoning or provide any basis/justification
 - Only output your final conclusion, nothing else
 - Do NOT invent information""",
-    
+
     "4": """Understand the meaning and significance.
 - Focus on what the speakers mean, not just what they say
 - Identify symbolism or implied meaning
@@ -136,20 +135,20 @@ class LocomoAdapter(BaseAdapter):
                 txt = turn.get("text", "")
 
                 raw_id = turn.get("dia_id") or turn.get("id")
-                
+
                 image_suffix = ""
                 img_url = turn.get("img_url", [])
                 blip_caption = turn.get("blip_caption", "")
-                
+
                 if img_url and blip_caption:
                     if len(img_url) == 1:
                         image_suffix = f"[Attached image：{blip_caption}]"
                     else:
                         for i, caption in enumerate([blip_caption] * len(img_url)):
                             image_suffix += f"[Attached image {i+1}：{caption}]"
-                
+
                 dia_suffix = f" [{raw_id}]" if raw_id else ""
-                
+
                 md_lines.append(f"**{spk}**: {txt}{image_suffix}{dia_suffix}")
 
             session_idx += 1
@@ -159,9 +158,9 @@ class LocomoAdapter(BaseAdapter):
     def build_prompt(self, qa: StandardQA, context_blocks: List[str]) -> tuple[str, Dict[str, Any]]:
         category = str(qa.category)
         context_text = "\n\n".join(context_blocks)
-        
+
         category_instruction = CATEGORY_INSTRUCTIONS.get(category, "")
-        
+
         if category_instruction:
             full_prompt = f"""{context_text}
 

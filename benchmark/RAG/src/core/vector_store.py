@@ -1,13 +1,14 @@
 import os
-import time
-from typing import List
 import sys
+import time
 from pathlib import Path
+from typing import List
 
 sys.path.append(str(Path(__file__).parent.parent))
 
-from adapters.base import StandardDoc, StandardSample
 import tiktoken
+from adapters.base import StandardDoc
+
 import openviking as ov
 
 
@@ -16,9 +17,9 @@ class VikingStoreWrapper:
         self.store_path = store_path
         if not os.path.exists(store_path):
             os.makedirs(store_path)
-        
+
         self.client = ov.SyncOpenViking(path=store_path)
-        
+
         try:
             self.enc = tiktoken.get_encoding("cl100k_base")
         except Exception as e:
@@ -35,14 +36,14 @@ class VikingStoreWrapper:
         total_input_tokens = 0
         total_output_tokens = 0
         total_embedding_tokens = 0
-        
+
         if not samples:
             return {
                 "time": time.time() - start_time,
                 "input_tokens": 0,
                 "output_tokens": 0
             }
-        
+
         if ingest_mode == "directory":
             doc_paths = [os.path.abspath(s.doc_path) for s in samples]
             common_ancestor = None
@@ -51,7 +52,7 @@ class VikingStoreWrapper:
                     common_ancestor = os.path.commonpath(doc_paths)
                 except ValueError:
                     common_ancestor = None
-            
+
             if common_ancestor:
                 result = self.client.add_resource(common_ancestor, wait=True, telemetry=True)
                 telemetry = result.get("telemetry", {})

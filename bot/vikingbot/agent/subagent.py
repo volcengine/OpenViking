@@ -35,7 +35,6 @@ class SubagentManager:
         model: str | None = None,
         sandbox_manager: "SandboxManager | None" = None,
     ):
-        from vikingbot.config.schema import ExecToolConfig
 
         self.provider = provider
         self.workspace = workspace
@@ -202,8 +201,8 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
 
     def _build_subagent_prompt(self, task: str) -> str:
         """Build a focused system prompt for the subagent."""
-        from datetime import datetime
         import time as _time
+        from datetime import datetime
 
         now = datetime.now().strftime("%Y-%m-%d %H:%M (%A)")
         tz = _time.strftime("%Z") or "UTC"

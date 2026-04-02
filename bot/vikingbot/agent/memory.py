@@ -2,8 +2,8 @@
 
 from pathlib import Path
 from typing import Any
+
 from loguru import logger
-import time
 
 from vikingbot.config.loader import load_config
 from vikingbot.openviking_mount.ov_server import VikingClient

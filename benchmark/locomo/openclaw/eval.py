@@ -379,7 +379,7 @@ def run_ingest(
     if args.clear_ingest_record:
         ingest_record = {}
         save_ingest_record(ingest_record)
-        print(f"[INFO] All existing ingest records cleared", file=sys.stderr)
+        print("[INFO] All existing ingest records cleared", file=sys.stderr)
     else:
         ingest_record = load_ingest_record()
 
@@ -416,7 +416,7 @@ def run_ingest(
                 if args.viking:
                     try:
                         viking_ingest(msg)
-                        print(f"    -> [viking] saved", file=sys.stderr)
+                        print("    -> [viking] saved", file=sys.stderr)
                         results.append({
                             "sample_id": sample_id,
                             "session": meta["session_key"],
@@ -488,7 +488,7 @@ def run_ingest(
         # Save ingest record
         save_ingest_record(ingest_record)
         total_processed = len(results) + skipped_count
-        print(f"\n=== Ingest summary ===", file=sys.stderr)
+        print("\n=== Ingest summary ===", file=sys.stderr)
         print(f"Total sessions: {total_processed}", file=sys.stderr)
         print(f"Completed: {len(results)}", file=sys.stderr)
         print(f"Skipped (already ingested): {skipped_count}", file=sys.stderr)
@@ -569,7 +569,7 @@ def run_sample_qa(
     qas = filtered_qas
     if not qas:
         print(f"\n=== Sample {sample_id} [{sample_idx}] (user={user_key}) ===", file=sys.stderr)
-        print(f"    All QA questions already executed, skipping sample.", file=sys.stderr)
+        print("    All QA questions already executed, skipping sample.", file=sys.stderr)
         return [], {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
 
     jsonl_path = f"{args.output}.{sample_idx}.jsonl" if args.output else None
@@ -762,7 +762,7 @@ def run_qa(
 
     samples = load_locomo_data(args.input, args.sample)
     print(f"    user: {args.user or 'eval-{sample_idx}'}", file=sys.stderr)
-    print(f"    running in single-thread mode", file=sys.stderr)
+    print("    running in single-thread mode", file=sys.stderr)
 
     # Load already executed records from CSV
     csv_path = f"{args.output}.csv" if args.output else "qa_results.csv"

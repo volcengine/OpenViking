@@ -15,10 +15,9 @@ from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import get_viking_fs
-from openviking.telemetry import get_current_telemetry
+from openviking.telemetry import get_current_telemetry, tracer
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
-from openviking.telemetry import tracer
 from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)

@@ -14,11 +14,10 @@ from typing import Any, Optional, Union
 
 from vikingbot.agent.tools.base import Tool
 
-from .base import WebSearchBackend
-from .registry import registry
-
 # Import backends to register them
 from . import brave, ddgs, exa, tavily
+from .base import WebSearchBackend
+from .registry import registry
 
 
 class WebSearchTool(Tool):

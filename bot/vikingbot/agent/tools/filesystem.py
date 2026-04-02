@@ -1,12 +1,8 @@
 """File system tools: read, write, edit."""
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from vikingbot.agent.tools.base import Tool
-from vikingbot.config.schema import SessionKey
-
-
-from vikingbot.sandbox.manager import SandboxManager
 
 
 class ReadFileTool(Tool):
@@ -107,7 +103,7 @@ class EditFileTool(Tool):
             content = await sandbox.read_file(path)
 
             if old_text not in content:
-                return f"Error: old_text not found in file. Make sure it matches exactly."
+                return "Error: old_text not found in file. Make sure it matches exactly."
 
             count = content.count(old_text)
             if count > 1:

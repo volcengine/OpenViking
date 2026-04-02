@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import sys
-import os
-import stat
 import errno
-import tempfile
+import os
 import shutil
+import stat
+import sys
+import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
-from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from loguru import logger
 
-from .mount import OpenVikingMount, MountConfig
+from .mount import MountConfig, OpenVikingMount
 
 try:
     from fuse import FUSE, FuseOSError, Operations
@@ -166,7 +166,7 @@ if FUSE_AVAILABLE:
             except Exception as e:
                 logger.warning(f"getattr error for {path}: {e}")
 
-            logger.debug(f"[FUSE] getattr failed: ENOENT")
+            logger.debug("[FUSE] getattr failed: ENOENT")
             raise FuseOSError(errno.ENOENT)
 
         def readdir(self, path: str, fh: int) -> list:
@@ -438,7 +438,7 @@ def mount_fuse(config: MountConfig, foreground: bool = True) -> None:
     logger.info(f"Mounting OpenViking FUSE at: {config.mount_point}")
     logger.info(f"  Scope: {config.scope.value}")
     logger.info(f"  Read-only: {config.read_only}")
-    logger.info(f"  Press Ctrl+C to unmount")
+    logger.info("  Press Ctrl+C to unmount")
 
     try:
         FUSE(

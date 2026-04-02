@@ -1,6 +1,7 @@
 """Sandbox backend registry."""
 
-from typing import TYPE_CHECKING, Type, Callable, Dict
+from typing import TYPE_CHECKING, Callable, Dict, Type
+
 from vikingbot.sandbox.base import SandboxBackend
 
 _BACKENDS: Dict[str, Type[SandboxBackend]] = {}
@@ -28,7 +29,4 @@ def list_backends() -> list[str]:
 
 # Import backends to register them (avoid circular import)
 
-from vikingbot.sandbox.backends import srt
-from vikingbot.sandbox.backends import opensandbox
-from vikingbot.sandbox.backends import direct
-from vikingbot.sandbox.backends import aiosandbox
+from vikingbot.sandbox.backends import aiosandbox, direct, opensandbox, srt

@@ -1,7 +1,6 @@
 """CLI commands for vikingbot."""
 
 import asyncio
-from dataclasses import dataclass
 import json
 import os
 import random
@@ -10,6 +9,7 @@ import select
 import sys
 import time
 import warnings
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -1401,9 +1401,9 @@ def demo_werewolf_ui(
     config = ensure_config(path)
     _init_bot_data(config)
 
+    import uvicorn
     from fastapi import FastAPI
     from fastapi.responses import HTMLResponse, JSONResponse
-    import uvicorn
 
     workspace_root = config.workspace_path
     storage_root = (config.storage_workspace or "~/.openviking/data")
@@ -2101,7 +2101,7 @@ async def _ww_run_witch(
         except Exception:
             poison_target = None
     if poison is True and poison_target is None:
-        poison_target = _ww_pick_random_target(rng, alive_seats, exclude={witch.seat}) 
+        poison_target = _ww_pick_random_target(rng, alive_seats, exclude={witch.seat})
 
     if poison_target is not None and (poison_target not in alive_seats or poison_target == witch.seat):
         poison_target = None

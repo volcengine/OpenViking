@@ -1,11 +1,10 @@
 import argparse
-import json
-import subprocess
-import time
 import csv
+import json
 import os
-import re
+import subprocess
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
@@ -88,7 +87,7 @@ def run_vikingbot_chat(question: str) -> tuple[str, dict, float, int, list]:
             time_cost = resp_json.get("time_cost", time_cost)
             iteration = resp_json.get("iteration", 0)
             tools_used_names = resp_json.get("tools_used_names", [])
-        except (json.JSONDecodeError, ValueError) as e:
+        except (json.JSONDecodeError, ValueError):
             response = f"[PARSE ERROR] {output}"
             token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
             iteration = 0
