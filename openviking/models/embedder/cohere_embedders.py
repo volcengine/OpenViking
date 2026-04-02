@@ -70,9 +70,7 @@ class CohereDenseEmbedder(DenseEmbedderBase):
 
         # Prefer server-side output_dimension when the model supports it
         self._use_server_dim = (
-            allowed is not None
-            and dimension is not None
-            and dimension != self._native_dimension
+            allowed is not None and dimension is not None and dimension != self._native_dimension
         )
         # Fallback to client-side truncation for v3 models
         self._needs_truncation = (
@@ -113,9 +111,20 @@ class CohereDenseEmbedder(DenseEmbedderBase):
         input_type = "search_query" if is_query else "search_document"
         try:
             vectors = self._call_api([text], input_type)
-            return EmbedResult(dense_vector=self._normalize_vector(vectors[0]))
+            result = EmbedResult(dense_vector=self._normalize_vector(vectors[0]))
+            # Estimate token usage
+            estimated_tokens = self._estimate_tokens(text)
+            self.update_token_usage(
+                model_name=self.model_name,
+                provider="cohere",
+                prompt_tokens=estimated_tokens,
+                completion_tokens=0,
+            )
+            return result
         except httpx.HTTPStatusError as e:
-            raise RuntimeError(f"Cohere API error: {e.response.status_code} {e.response.text}") from e
+            raise RuntimeError(
+                f"Cohere API error: {e.response.status_code} {e.response.text}"
+            ) from e
         except Exception as e:
             raise RuntimeError(f"Cohere embedding failed: {e}") from e
 
@@ -128,12 +137,20 @@ class CohereDenseEmbedder(DenseEmbedderBase):
             for i in range(0, len(texts), 96):
                 batch = texts[i : i + 96]
                 vectors = self._call_api(batch, input_type)
-                results.extend(
-                    EmbedResult(dense_vector=self._normalize_vector(v)) for v in vectors
-                )
+                results.extend(EmbedResult(dense_vector=self._normalize_vector(v)) for v in vectors)
+            # Estimate token usage for batch
+            total_tokens = sum(self._estimate_tokens(text) for text in texts)
+            self.update_token_usage(
+                model_name=self.model_name,
+                provider="cohere",
+                prompt_tokens=total_tokens,
+                completion_tokens=0,
+            )
             return results
         except httpx.HTTPStatusError as e:
-            raise RuntimeError(f"Cohere API error: {e.response.status_code} {e.response.text}") from e
+            raise RuntimeError(
+                f"Cohere API error: {e.response.status_code} {e.response.text}"
+            ) from e
         except Exception as e:
             raise RuntimeError(f"Cohere batch embedding failed: {e}") from e
 

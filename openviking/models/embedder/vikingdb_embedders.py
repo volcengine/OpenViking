@@ -136,11 +136,20 @@ class VikingDBDenseEmbedder(DenseEmbedderBase, VikingDBClientMixin):
 
             return EmbedResult(dense_vector=dense_vector)
 
-        return self._run_with_retry(
+        result = self._run_with_retry(
             _call,
             logger=logger,
             operation_name="VikingDB embedding",
         )
+        # Estimate token usage
+        estimated_tokens = self._estimate_tokens(text)
+        self.update_token_usage(
+            model_name=self.model_name,
+            provider="volcengine",
+            prompt_tokens=estimated_tokens,
+            completion_tokens=0,
+        )
+        return result
 
     def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         if not texts:
@@ -157,11 +166,20 @@ class VikingDBDenseEmbedder(DenseEmbedderBase, VikingDBClientMixin):
                 for item in raw_results
             ]
 
-        return self._run_with_retry(
+        results = self._run_with_retry(
             _call,
             logger=logger,
             operation_name="VikingDB batch embedding",
         )
+        # Estimate token usage for batch
+        total_tokens = sum(self._estimate_tokens(text) for text in texts)
+        self.update_token_usage(
+            model_name=self.model_name,
+            provider="volcengine",
+            prompt_tokens=total_tokens,
+            completion_tokens=0,
+        )
+        return results
 
     def get_dimension(self) -> int:
         return self.dimension if self.dimension else 2048
@@ -201,11 +219,20 @@ class VikingDBSparseEmbedder(SparseEmbedderBase, VikingDBClientMixin):
 
             return EmbedResult(sparse_vector=sparse_vector)
 
-        return self._run_with_retry(
+        result = self._run_with_retry(
             _call,
             logger=logger,
             operation_name="VikingDB sparse embedding",
         )
+        # Estimate token usage
+        estimated_tokens = self._estimate_tokens(text)
+        self.update_token_usage(
+            model_name=self.model_name,
+            provider="volcengine",
+            prompt_tokens=estimated_tokens,
+            completion_tokens=0,
+        )
+        return result
 
     def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         if not texts:
@@ -220,11 +247,20 @@ class VikingDBSparseEmbedder(SparseEmbedderBase, VikingDBClientMixin):
                 for item in raw_results
             ]
 
-        return self._run_with_retry(
+        results = self._run_with_retry(
             _call,
             logger=logger,
             operation_name="VikingDB sparse batch embedding",
         )
+        # Estimate token usage for batch
+        total_tokens = sum(self._estimate_tokens(text) for text in texts)
+        self.update_token_usage(
+            model_name=self.model_name,
+            provider="volcengine",
+            prompt_tokens=total_tokens,
+            completion_tokens=0,
+        )
+        return results
 
 
 class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
@@ -272,11 +308,20 @@ class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
 
             return EmbedResult(dense_vector=dense_vector, sparse_vector=sparse_vector)
 
-        return self._run_with_retry(
+        result = self._run_with_retry(
             _call,
             logger=logger,
             operation_name="VikingDB hybrid embedding",
         )
+        # Estimate token usage
+        estimated_tokens = self._estimate_tokens(text)
+        self.update_token_usage(
+            model_name=self.model_name,
+            provider="volcengine",
+            prompt_tokens=estimated_tokens,
+            completion_tokens=0,
+        )
+        return result
 
     def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         if not texts:
@@ -297,11 +342,20 @@ class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
                 results.append(EmbedResult(dense_vector=dense_vector, sparse_vector=sparse_vector))
             return results
 
-        return self._run_with_retry(
+        results = self._run_with_retry(
             _call,
             logger=logger,
             operation_name="VikingDB hybrid batch embedding",
         )
+        # Estimate token usage for batch
+        total_tokens = sum(self._estimate_tokens(text) for text in texts)
+        self.update_token_usage(
+            model_name=self.model_name,
+            provider="volcengine",
+            prompt_tokens=total_tokens,
+            completion_tokens=0,
+        )
+        return results
 
     def get_dimension(self) -> int:
         return self.dimension if self.dimension else 2048

@@ -97,11 +97,20 @@ class VoyageDenseEmbedder(DenseEmbedderBase):
             return EmbedResult(dense_vector=vector)
 
         try:
-            return self._run_with_retry(
+            result = self._run_with_retry(
                 _call,
                 logger=logger,
                 operation_name="Voyage embedding",
             )
+            # Estimate token usage
+            estimated_tokens = self._estimate_tokens(text)
+            self.update_token_usage(
+                model_name=self.model_name,
+                provider="voyage",
+                prompt_tokens=estimated_tokens,
+                completion_tokens=0,
+            )
+            return result
         except openai.APIError as e:
             raise RuntimeError(f"Voyage API error: {e.message}") from e
         except Exception as e:
@@ -121,11 +130,20 @@ class VoyageDenseEmbedder(DenseEmbedderBase):
             return [EmbedResult(dense_vector=item.embedding) for item in response.data]
 
         try:
-            return self._run_with_retry(
+            results = self._run_with_retry(
                 _call,
                 logger=logger,
                 operation_name="Voyage batch embedding",
             )
+            # Estimate token usage for batch
+            total_tokens = sum(self._estimate_tokens(text) for text in texts)
+            self.update_token_usage(
+                model_name=self.model_name,
+                provider="voyage",
+                prompt_tokens=total_tokens,
+                completion_tokens=0,
+            )
+            return results
         except openai.APIError as e:
             raise RuntimeError(f"Voyage API error: {e.message}") from e
         except Exception as e:

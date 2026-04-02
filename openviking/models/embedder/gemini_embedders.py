@@ -219,13 +219,24 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
             return EmbedResult(dense_vector=vector)
 
         try:
-            if _HTTP_RETRY_AVAILABLE:
-                return _call()
-            return self._run_with_retry(
-                _call,
-                logger=logger,
-                operation_name="Gemini embedding",
+            result = (
+                _call()
+                if _HTTP_RETRY_AVAILABLE
+                else self._run_with_retry(
+                    _call,
+                    logger=logger,
+                    operation_name="Gemini embedding",
+                )
             )
+            # Estimate token usage
+            estimated_tokens = self._estimate_tokens(text)
+            self.update_token_usage(
+                model_name=self.model_name,
+                provider="gemini",
+                prompt_tokens=estimated_tokens,
+                completion_tokens=0,
+            )
+            return result
         except (APIError, ClientError) as e:
             _raise_api_error(e, self.model_name)
 
@@ -300,6 +311,8 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
                 )
                 for text in batch:
                     results.append(self.embed(text, is_query=is_query))
+        # Token usage is already tracked via individual embed() calls
+        # No need to track here to avoid double counting
         return results
 
     async def async_embed_batch(self, texts: List[str]) -> List[EmbedResult]:
@@ -331,12 +344,21 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
                         )
                         for emb in response.embeddings
                     ]
+                    # Track token usage for successful API call
+                    total_tokens = sum(self._estimate_tokens(text) for text in batch)
+                    self.update_token_usage(
+                        model_name=self.model_name,
+                        provider="gemini",
+                        prompt_tokens=total_tokens,
+                        completion_tokens=0,
+                    )
                 except (APIError, ClientError) as e:
                     logger.warning(
                         "Gemini async batch embed failed (HTTP %d) for batch of %d, falling back",
                         e.code,
                         len(batch),
                     )
+                    # Token usage will be tracked via self.embed() calls
                     results[idx] = [
                         await anyio.to_thread.run_sync(self.embed, text) for text in batch
                     ]

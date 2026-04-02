@@ -163,11 +163,21 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
 
         prompt_tokens = _usage_value("prompt_tokens", 0)
         total_tokens = _usage_value("total_tokens", prompt_tokens)
-        output_tokens = max(total_tokens - prompt_tokens, 0)
+        completion_tokens = max(total_tokens - prompt_tokens, 0)
+
+        # Update telemetry
         get_current_telemetry().add_token_usage_by_source(
             "embedding",
             prompt_tokens,
-            output_tokens,
+            completion_tokens,
+        )
+
+        # Update token tracker
+        self.update_token_usage(
+            model_name=self.model_name,
+            provider=self._provider,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
         )
 
     def _parse_param_string(self, param: Optional[str]) -> Dict[str, str]:

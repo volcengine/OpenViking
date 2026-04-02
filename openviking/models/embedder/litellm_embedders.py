@@ -122,7 +122,7 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
         return kwargs
 
     def _update_telemetry_token_usage(self, response) -> None:
-        """Update telemetry with token usage from response."""
+        """Update telemetry and token usage from response."""
         usage = getattr(response, "usage", None)
         if not usage:
             return
@@ -135,10 +135,20 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
         prompt_tokens = _usage_value("prompt_tokens", 0)
         total_tokens = _usage_value("total_tokens", prompt_tokens)
         output_tokens = max(total_tokens - prompt_tokens, 0)
+
+        # Update telemetry
         get_current_telemetry().add_token_usage_by_source(
             "embedding",
             prompt_tokens,
             output_tokens,
+        )
+
+        # Update token usage tracker
+        self.update_token_usage(
+            model_name=self.model_name,
+            provider="litellm",
+            prompt_tokens=prompt_tokens,
+            completion_tokens=output_tokens,
         )
 
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
