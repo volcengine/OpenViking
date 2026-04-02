@@ -216,7 +216,7 @@ class DirectoryInitializer:
         ctx: RequestContext,
     ) -> None:
         """Initialize memory files (soul.md, identity.md) with init_value."""
-        from openviking.session.memory import create_default_registry
+        from openviking.session.memory.memory_type_registry import create_default_registry
 
         registry = create_default_registry()
         agent_space = ctx.user.agent_space_name()
