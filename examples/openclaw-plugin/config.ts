@@ -24,9 +24,11 @@ export type MemoryOpenVikingConfig = {
   recallPreferAbstract?: boolean;
   recallTokenBudget?: number;
   commitTokenThreshold?: number;
+  bypassSessionPatterns?: string[];
   ingestReplyAssist?: boolean;
   ingestReplyAssistMinSpeakerTurns?: number;
   ingestReplyAssistMinChars?: number;
+  /** Deprecated alias for bypassSessionPatterns. */
   ingestReplyAssistIgnoreSessionPatterns?: string[];
   /**
    * When true (default), emit structured `openviking: diag {...}` lines (and any future
@@ -49,6 +51,7 @@ const DEFAULT_RECALL_MAX_CONTENT_CHARS = 500;
 const DEFAULT_RECALL_PREFER_ABSTRACT = true;
 const DEFAULT_RECALL_TOKEN_BUDGET = 2000;
 const DEFAULT_COMMIT_TOKEN_THRESHOLD = 20000;
+const DEFAULT_BYPASS_SESSION_PATTERNS: string[] = [];
 const DEFAULT_INGEST_REPLY_ASSIST = true;
 const DEFAULT_INGEST_REPLY_ASSIST_MIN_SPEAKER_TURNS = 2;
 const DEFAULT_INGEST_REPLY_ASSIST_MIN_CHARS = 120;
@@ -157,6 +160,7 @@ export const memoryOpenVikingConfigSchema = {
         "recallPreferAbstract",
         "recallTokenBudget",
         "commitTokenThreshold",
+        "bypassSessionPatterns",
         "ingestReplyAssist",
         "ingestReplyAssistMinSpeakerTurns",
         "ingestReplyAssistMinChars",
@@ -226,6 +230,13 @@ export const memoryOpenVikingConfigSchema = {
       commitTokenThreshold: Math.max(
         0,
         Math.min(100_000, Math.floor(toNumber(cfg.commitTokenThreshold, DEFAULT_COMMIT_TOKEN_THRESHOLD))),
+      ),
+      bypassSessionPatterns: toStringArray(
+        cfg.bypassSessionPatterns,
+        toStringArray(
+          cfg.ingestReplyAssistIgnoreSessionPatterns,
+          DEFAULT_BYPASS_SESSION_PATTERNS,
+        ),
       ),
       ingestReplyAssist: cfg.ingestReplyAssist !== false,
       ingestReplyAssistMinSpeakerTurns: Math.max(
@@ -350,6 +361,12 @@ export const memoryOpenVikingConfigSchema = {
       advanced: true,
       help: "Maximum estimated tokens for auto-recall memory injection. Injection stops when budget is exhausted.",
     },
+    bypassSessionPatterns: {
+      label: "Bypass Session Patterns",
+      placeholder: "agent:*:cron:**",
+      help: "Completely bypass OpenViking for matching session keys. Use * within one segment and ** across segments.",
+      advanced: true,
+    },
     commitTokenThreshold: {
       label: "Commit Token Threshold",
       placeholder: String(DEFAULT_COMMIT_TOKEN_THRESHOLD),
@@ -374,9 +391,9 @@ export const memoryOpenVikingConfigSchema = {
       advanced: true,
     },
     ingestReplyAssistIgnoreSessionPatterns: {
-      label: "Ingest Ignore Session Patterns",
+      label: "Deprecated Ingest Ignore Session Patterns",
       placeholder: "agent:*:cron:**",
-      help: "Skip ingest reply assist when the session key matches any glob pattern. Use * within one segment and ** across segments.",
+      help: "Deprecated alias for bypassSessionPatterns. Matching sessions now bypass OpenViking entirely.",
       advanced: true,
     },
     emitStandardDiagnostics: {

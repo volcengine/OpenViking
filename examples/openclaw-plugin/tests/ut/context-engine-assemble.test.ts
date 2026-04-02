@@ -155,6 +155,38 @@ describe("context-engine assemble()", () => {
     });
   });
 
+  it("passes through live messages when the session matches bypassSessionPatterns", async () => {
+    const { engine, client, getClient } = makeEngine(
+      {
+        latest_archive_overview: "unused",
+        pre_archive_abstracts: [],
+        messages: [],
+        estimatedTokens: 123,
+        stats: makeStats(),
+      },
+      {
+        cfgOverrides: {
+          bypassSessionPatterns: ["agent:*:cron:**"],
+        },
+      },
+    );
+
+    const liveMessages = [{ role: "user", content: "fallback live message" }];
+    const result = await engine.assemble({
+      sessionId: "runtime-session",
+      sessionKey: "agent:main:cron:nightly:run:1",
+      messages: liveMessages,
+      tokenBudget: 4096,
+    });
+
+    expect(getClient).not.toHaveBeenCalled();
+    expect(client.getSessionContext).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      messages: liveMessages,
+      estimatedTokens: roughEstimate(liveMessages),
+    });
+  });
+
   it("falls back immediately when local precheck reports OpenViking unavailable", async () => {
     const quickPrecheck = vi.fn().mockResolvedValue({
       ok: false as const,

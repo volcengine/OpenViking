@@ -2,8 +2,10 @@ import { createHash } from "node:crypto";
 import type { OpenVikingClient, OVMessage } from "./client.js";
 import type { MemoryOpenVikingConfig } from "./config.js";
 import {
+  compileSessionPatterns,
   getCaptureDecision,
   extractNewTurnTexts,
+  shouldBypassSession,
 } from "./text-utils.js";
 import {
   trimForLog,
@@ -90,7 +92,7 @@ type ContextEngine = {
 
 export type ContextEngineWithCommit = ContextEngine & {
   /** Commit (archive + extract) the OV session. Returns true on success. */
-  commitOVSession: (sessionId: string) => Promise<boolean>;
+  commitOVSession: (sessionId: string, sessionKey?: string) => Promise<boolean>;
 };
 
 type Logger = {
@@ -483,19 +485,30 @@ export function createMemoryOpenVikingContextEngine(params: {
   } = params;
 
   const diagEnabled = cfg.emitStandardDiagnostics;
+  const bypassSessionPatterns = compileSessionPatterns(cfg.bypassSessionPatterns);
   const diag = (stage: string, sessionId: string, data: Record<string, unknown>) =>
     emitDiag(logger, stage, sessionId, data, diagEnabled);
 
-  async function doCommitOVSession(sessionId: string): Promise<boolean> {
+  const isBypassedSession = (params: { sessionId?: string; sessionKey?: string }): boolean =>
+    shouldBypassSession(params, bypassSessionPatterns);
+
+  async function doCommitOVSession(sessionId: string, sessionKey?: string): Promise<boolean> {
+    if (isBypassedSession({ sessionId, sessionKey })) {
+      warnOrInfo(
+        logger,
+        `openviking: commit skipped because session is bypassed (sessionId=${sessionId}, sessionKey=${sessionKey ?? "none"})`,
+      );
+      return false;
+    }
     try {
       const client = await getClient();
-      const ovId = openClawSessionRefToOvStorageId(sessionId);
+      const ovId = openClawSessionToOvStorageId(sessionId, sessionKey);
       rememberSessionAgentId?.({
         sessionId,
-        sessionKey: sessionId,
+        sessionKey,
         ovSessionId: ovId,
       });
-      const agentId = resolveAgentId(sessionId, sessionId, ovId);
+      const agentId = resolveAgentId(sessionId, sessionKey, ovId);
       const commitResult = await client.commitSession(ovId, { wait: true, agentId });
       const memCount = totalExtractedMemories(commitResult.memories_extracted);
       if (commitResult.status === "failed") {
@@ -610,6 +623,19 @@ export function createMemoryOpenVikingContextEngine(params: {
         sessionKey: sessionKey ?? null,
         messages: messageDigest(messages),
       });
+
+      if (isBypassedSession({ sessionId: assembleParams.sessionId, sessionKey })) {
+        diag("assemble_result", OVSessionId, {
+          passthrough: true,
+          reason: "session_bypassed",
+          outputMessagesCount: messages.length,
+          inputTokenEstimate: originalTokens,
+          estimatedTokens: originalTokens,
+          tokensSaved: 0,
+          savingPct: 0,
+        });
+        return { messages, estimatedTokens: originalTokens };
+      }
 
       try {
         if (!(await runLocalPrecheck("assemble", OVSessionId, {
@@ -757,6 +783,14 @@ export function createMemoryOpenVikingContextEngine(params: {
           afterTurnParams.sessionId ?? sessionKey ?? OVSessionId;
         const agentId = resolveAgentId(routingRef, sessionKey, OVSessionId);
 
+        if (isBypassedSession({ sessionId: afterTurnParams.sessionId, sessionKey })) {
+          diag("afterTurn_skip", OVSessionId, {
+            reason: "session_bypassed",
+            totalMessages: afterTurnParams.messages?.length ?? 0,
+          });
+          return;
+        }
+
         const messages = afterTurnParams.messages ?? [];
         if (messages.length === 0) {
           diag("afterTurn_skip", OVSessionId, {
@@ -873,6 +907,7 @@ export function createMemoryOpenVikingContextEngine(params: {
 
     async compact(compactParams): Promise<CompactResult> {
       const OVSessionId = compactParams.sessionId;
+      const sessionKey = extractSessionKey(compactParams.runtimeContext);
       const tokenBudget = validTokenBudget(compactParams.tokenBudget) ?? 128_000;
       diag("compact_entry", OVSessionId, {
         tokenBudget,
@@ -882,6 +917,19 @@ export function createMemoryOpenVikingContextEngine(params: {
         hasCustomInstructions: typeof compactParams.customInstructions === "string" &&
           compactParams.customInstructions.trim().length > 0,
       });
+
+      if (isBypassedSession({ sessionId: compactParams.sessionId, sessionKey })) {
+        diag("compact_result", OVSessionId, {
+          ok: true,
+          compacted: false,
+          reason: "session_bypassed",
+        });
+        return {
+          ok: true,
+          compacted: false,
+          reason: "session_bypassed",
+        };
+      }
 
       const client = await getClient();
       const agentId = resolveAgentId(OVSessionId);
