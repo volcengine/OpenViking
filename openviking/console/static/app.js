@@ -111,6 +111,8 @@ const elements = {
   systemBtn: document.getElementById("systemBtn"),
   observerBtn: document.getElementById("observerBtn"),
   monitorResults: document.getElementById("monitorResults"),
+  monitorDashboard: document.getElementById("monitorDashboard"),
+  monitorRefreshBtn: document.getElementById("monitorRefreshBtn"),
   navToggleBtn: document.getElementById("navToggleBtn"),
   resultToggleBtn: document.getElementById("resultToggleBtn"),
   clearOutputBtn: document.getElementById("clearOutputBtn"),
@@ -2431,30 +2433,178 @@ function bindTenants() {
   });
 }
 
+function parseAsciiTable(text) {
+  if (!text || typeof text !== "string") return null;
+  const lines = text.split("\n").filter(l => l.trim());
+  const dataLines = lines.filter(l => !l.match(/^[+\-]+$/));
+  if (dataLines.length < 2) return null;
+  const splitRow = row =>
+    row.split("|").slice(1, -1).map(c => c.trim());
+  const headers = splitRow(dataLines[0]);
+  const rows = dataLines.slice(1).map(splitRow);
+  return { headers, rows };
+}
+
+function renderMonitorTable(parsed) {
+  if (!parsed) return document.createDocumentFragment();
+  const table = document.createElement("table");
+  const thead = table.createTHead();
+  const headerRow = thead.insertRow();
+  for (const h of parsed.headers) {
+    const th = document.createElement("th");
+    th.textContent = h;
+    headerRow.appendChild(th);
+  }
+  const tbody = table.createTBody();
+  for (const row of parsed.rows) {
+    const tr = tbody.insertRow();
+    const isTotal = row.some(c => /^TOTAL$/i.test(c));
+    if (isTotal) tr.className = "total-row";
+    for (const cell of row) {
+      const td = tr.insertCell();
+      td.textContent = cell;
+    }
+  }
+  return table;
+}
+
+function renderComponentCard(name, comp) {
+  const healthy = comp.is_healthy !== false;
+  const friendlyNames = {
+    queue: "Processing Queue",
+    vikingdb: "Vector Database",
+    vlm: "Language Model",
+    lock: "Active Locks",
+    retrieval: "Retrieval Stats",
+  };
+
+  const card = document.createElement("div");
+  card.className = "monitor-card";
+
+  const header = document.createElement("div");
+  header.className = "monitor-card-header";
+  const dot = document.createElement("span");
+  dot.className = `health-dot ${healthy ? "ok" : "error"}`;
+  const h3 = document.createElement("h3");
+  h3.textContent = friendlyNames[name] || name;
+  header.appendChild(dot);
+  header.appendChild(h3);
+  card.appendChild(header);
+
+  const statusText = comp.status || "";
+  const tables = statusText.split("\n\n").filter(Boolean);
+  for (const tableText of tables) {
+    const parsed = parseAsciiTable(tableText);
+    if (parsed) {
+      card.appendChild(renderMonitorTable(parsed));
+    } else {
+      const plain = document.createElement("div");
+      plain.className = "plain-text";
+      plain.textContent = tableText;
+      card.appendChild(plain);
+    }
+  }
+  return card;
+}
+
+function renderSystemStatus(result) {
+  const dashboard = elements.monitorDashboard;
+  dashboard.replaceChildren();
+  if (!result) return;
+
+  const card = document.createElement("div");
+  card.className = "monitor-card";
+
+  const header = document.createElement("div");
+  header.className = "monitor-card-header";
+  const dot = document.createElement("span");
+  dot.className = `health-dot ${result.initialized ? "ok" : "error"}`;
+  const h3 = document.createElement("h3");
+  h3.textContent = "System";
+  header.appendChild(dot);
+  header.appendChild(h3);
+  card.appendChild(header);
+
+  const grid = document.createElement("div");
+  grid.className = "kv-grid";
+  for (const [k, v] of Object.entries(result)) {
+    const label = document.createElement("span");
+    label.className = "kv-label";
+    label.textContent = k;
+    const value = document.createElement("span");
+    value.className = "kv-value";
+    value.textContent = typeof v === "string" ? v : JSON.stringify(v);
+    grid.appendChild(label);
+    grid.appendChild(value);
+  }
+  card.appendChild(grid);
+  dashboard.appendChild(card);
+}
+
+function renderObserverDashboard(result) {
+  const dashboard = elements.monitorDashboard;
+  dashboard.replaceChildren();
+  if (!result?.components) return;
+
+  const summary = document.createElement("div");
+  summary.style.cssText = "margin-bottom:12px;display:flex;align-items:center;gap:12px;font-size:13px;color:var(--muted)";
+  for (const [name, comp] of Object.entries(result.components)) {
+    const dot = document.createElement("span");
+    dot.className = `health-dot ${comp.is_healthy !== false ? "ok" : "error"}`;
+    const label = document.createTextNode(` ${name}  `);
+    summary.appendChild(dot);
+    summary.appendChild(label);
+  }
+  dashboard.appendChild(summary);
+
+  const order = ["queue", "vikingdb", "vlm", "retrieval", "lock"];
+  const sorted = order.filter(n => result.components[n]);
+  for (const name of Object.keys(result.components)) {
+    if (!sorted.includes(name)) sorted.push(name);
+  }
+  for (const name of sorted) {
+    dashboard.appendChild(renderComponentCard(name, result.components[name]));
+  }
+}
+
+let monitorRefreshInterval = null;
+
 function bindMonitor() {
   elements.systemBtn.addEventListener("click", async () => {
     try {
       const payload = await callConsole("/ov/system/status", { method: "GET" });
-      const rows = Object.entries(payload.result || {}).map(([key, value]) => ({
-        label: `${key}: ${typeof value === "string" ? value : JSON.stringify(value)}`,
-      }));
-      renderList(elements.monitorResults, rows);
+      elements.monitorResults.innerHTML = "";
+      renderSystemStatus(payload.result);
       setOutput(payload);
     } catch (error) {
       setOutput(error.message);
     }
   });
 
-  elements.observerBtn.addEventListener("click", async () => {
+  async function loadObserver() {
     try {
       const payload = await callConsole("/ov/observer/system", { method: "GET" });
-      const rows = Object.entries(payload.result?.components || {}).map(([name, value]) => ({
-        label: `${name}: ${value?.status || JSON.stringify(value)}`,
-      }));
-      renderList(elements.monitorResults, rows);
+      elements.monitorResults.innerHTML = "";
+      renderObserverDashboard(payload.result);
       setOutput(payload);
     } catch (error) {
       setOutput(error.message);
+    }
+  }
+
+  elements.observerBtn.addEventListener("click", loadObserver);
+
+  elements.monitorRefreshBtn.addEventListener("click", () => {
+    if (monitorRefreshInterval) {
+      clearInterval(monitorRefreshInterval);
+      monitorRefreshInterval = null;
+      elements.monitorRefreshBtn.textContent = "Auto-refresh: OFF";
+      elements.monitorRefreshBtn.classList.remove("active");
+    } else {
+      loadObserver();
+      monitorRefreshInterval = setInterval(loadObserver, 10000);
+      elements.monitorRefreshBtn.textContent = "Auto-refresh: ON";
+      elements.monitorRefreshBtn.classList.add("active");
     }
   });
 }
