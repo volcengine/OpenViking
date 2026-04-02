@@ -327,7 +327,9 @@ async def viking_ingest(
             else:
                 token_usage = {"embedding": 0, "vlm": 0, "total": 0}
 
-            return {"token_usage": token_usage, "task_id": task_id}
+            # Get trace_id from commit result
+            trace_id = result.get("trace_id", "")
+            return {"token_usage": token_usage, "task_id": task_id, "trace_id": trace_id}
 
         finally:
             await client.close()
@@ -367,9 +369,10 @@ async def process_single_session(
         result = await viking_ingest(messages, args.openviking_url, semaphore, meta.get("date_time"))
         token_usage = result["token_usage"]
         task_id = result.get("task_id")
+        trace_id = result.get("trace_id", "")
         embedding_tokens = token_usage.get("embedding", 0)
         vlm_tokens = token_usage.get("vlm", 0)
-        print(f"    -> [COMPLETED] [{sample_id}/{session_key}] embed={embedding_tokens}, vlm={vlm_tokens}", file=sys.stderr)
+        print(f"    -> [COMPLETED] [{sample_id}/{session_key}] embed={embedding_tokens}, vlm={vlm_tokens}, task_id={task_id}, trace_id={trace_id}", file=sys.stderr)
 
         # Write success record
         result = {
@@ -381,7 +384,8 @@ async def process_single_session(
             "token_usage": token_usage,
             "embedding_tokens": embedding_tokens,
             "vlm_tokens": vlm_tokens,
-            "task_id": task_id
+            "task_id": task_id,
+            "trace_id": trace_id
         }
 
         # 写入成功CSV
