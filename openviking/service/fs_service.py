@@ -162,13 +162,19 @@ class FSService:
         uri: str,
         pattern: str,
         ctx: RequestContext,
+        exclude_uri: Optional[str] = None,
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
     ) -> Dict:
         """Content search."""
         viking_fs = self._ensure_initialized()
         return await viking_fs.grep(
-            uri, pattern, case_insensitive=case_insensitive, node_limit=node_limit, ctx=ctx
+            uri,
+            pattern,
+            exclude_uri=exclude_uri,
+            case_insensitive=case_insensitive,
+            node_limit=node_limit,
+            ctx=ctx,
         )
 
     async def glob(

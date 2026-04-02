@@ -4,7 +4,7 @@
 Session Compressor for OpenViking.
 
 Handles extraction of long-term memories from session conversations.
-Uses MemoryExtractor for 6-category extraction and MemoryDeduplicator for LLM-based dedup.
+Uses MemoryExtractor for 8-category extraction and MemoryDeduplicator for LLM-based dedup.
 """
 
 from dataclasses import dataclass
@@ -57,7 +57,7 @@ class ExtractionStats:
 
 
 class SessionCompressor:
-    """Session memory extractor with 6-category memory extraction."""
+    """Session memory extractor with 8-category memory extraction."""
 
     def __init__(
         self,

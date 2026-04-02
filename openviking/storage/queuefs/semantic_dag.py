@@ -421,7 +421,10 @@ class SemanticDagExecutor:
 
                 if not content_changed:
                     summary_dict = await self._read_existing_summary(file_path)
-                    need_vectorize = False
+                    if summary_dict is not None:
+                        need_vectorize = False
+                    else:
+                        self._file_change_status[file_path] = True
             else:
                 self._file_change_status[file_path] = True
             if summary_dict is None:

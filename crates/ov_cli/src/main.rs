@@ -405,6 +405,9 @@ enum Commands {
         /// Target URI
         #[arg(short, long, default_value = "viking://")]
         uri: String,
+        /// Excluded URI range. Any entry whose URI falls under this URI prefix is skipped
+        #[arg(short = 'x', long = "exclude-uri")]
+        exclude_uri: Option<String>,
         /// Search pattern
         pattern: String,
         /// Case insensitive
@@ -801,10 +804,11 @@ async fn main() {
         } => handle_search(query, uri, session_id, node_limit, threshold, ctx).await,
         Commands::Grep {
             uri,
+            exclude_uri,
             pattern,
             ignore_case,
             node_limit,
-        } => handle_grep(uri, pattern, ignore_case, node_limit, ctx).await,
+        } => handle_grep(uri, exclude_uri, pattern, ignore_case, node_limit, ctx).await,
 
         Commands::Glob {
             pattern,
@@ -1425,12 +1429,16 @@ async fn handle_stat(uri: String, ctx: CliContext) -> Result<()> {
 
 async fn handle_grep(
     uri: String,
+    exclude_uri: Option<String>,
     pattern: String,
     ignore_case: bool,
     node_limit: i32,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
+    if let Some(excluded) = &exclude_uri {
+        params.push(format!("-x {}", excluded));
+    }
     if ignore_case {
         params.push("-i".to_string());
     }
@@ -1440,6 +1448,7 @@ async fn handle_grep(
     commands::search::grep(
         &client,
         &uri,
+        exclude_uri,
         &pattern,
         ignore_case,
         node_limit,

@@ -648,6 +648,7 @@ class AsyncHTTPClient(BaseClient):
         pattern: str,
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
+        exclude_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Content search with pattern."""
         uri = VikingURI.normalize(uri)
@@ -658,6 +659,8 @@ class AsyncHTTPClient(BaseClient):
         }
         if node_limit is not None:
             request_json["node_limit"] = node_limit
+        if exclude_uri is not None:
+            request_json["exclude_uri"] = VikingURI.normalize(exclude_uri)
         response = await self._http.post(
             "/api/v1/search/grep",
             json=request_json,

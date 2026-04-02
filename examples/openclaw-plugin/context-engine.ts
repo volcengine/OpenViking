@@ -846,7 +846,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           status: commitResult.status,
           archived: commitResult.archived ?? false,
           taskId: commitResult.task_id ?? null,
-          extractedMemories: (commitResult as any).extracted_memories ?? null,
+          extractedMemories: totalExtractedMemories(commitResult.memories_extracted),
         });
         if (commitResult.task_id && cfg.logFindRequests) {
           logger.info(

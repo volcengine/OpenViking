@@ -176,7 +176,14 @@ class BaseClient(ABC):
         ...
 
     @abstractmethod
-    async def grep(self, uri: str, pattern: str, case_insensitive: bool = False) -> Dict[str, Any]:
+    async def grep(
+        self,
+        uri: str,
+        pattern: str,
+        case_insensitive: bool = False,
+        exclude_uri: Optional[str] = None,
+        node_limit: Optional[int] = None
+    ) -> Dict[str, Any]:
         """Content search with pattern."""
         ...
 

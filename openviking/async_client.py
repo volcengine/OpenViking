@@ -422,10 +422,23 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         await self._client.rm(uri, recursive=recursive)
 
-    async def grep(self, uri: str, pattern: str, case_insensitive: bool = False) -> Dict:
+    async def grep(
+        self,
+        uri: str,
+        pattern: str,
+        case_insensitive: bool = False,
+        node_limit: Optional[int] = None,
+        exclude_uri: Optional[str] = None,
+    ) -> Dict:
         """Content search"""
         await self._ensure_initialized()
-        return await self._client.grep(uri, pattern, case_insensitive=case_insensitive)
+        return await self._client.grep(
+            uri,
+            pattern,
+            case_insensitive=case_insensitive,
+            node_limit=node_limit,
+            exclude_uri=exclude_uri,
+        )
 
     async def glob(self, pattern: str, uri: str = "viking://") -> Dict:
         """File pattern matching"""

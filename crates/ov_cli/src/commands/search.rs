@@ -44,13 +44,16 @@ pub async fn search(
 pub async fn grep(
     client: &HttpClient,
     uri: &str,
+    exclude_uri: Option<String>,
     pattern: &str,
     ignore_case: bool,
     node_limit: i32,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let result = client.grep(uri, pattern, ignore_case, node_limit).await?;
+    let result = client
+        .grep(uri, exclude_uri, pattern, ignore_case, node_limit)
+        .await?;
     output_success(&result, output_format, compact);
     Ok(())
 }

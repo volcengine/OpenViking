@@ -320,10 +320,22 @@ class LocalClient(BaseClient):
             execution.telemetry,
         )
 
-    async def grep(self, uri: str, pattern: str, case_insensitive: bool = False) -> Dict[str, Any]:
+    async def grep(
+        self,
+        uri: str,
+        pattern: str,
+        case_insensitive: bool = False,
+        node_limit: Optional[int] = None,
+        exclude_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Content search with pattern."""
         return await self._service.fs.grep(
-            uri, pattern, ctx=self._ctx, case_insensitive=case_insensitive
+            uri,
+            pattern,
+            ctx=self._ctx,
+            case_insensitive=case_insensitive,
+            node_limit=node_limit,
+            exclude_uri=exclude_uri,
         )
 
     async def glob(self, pattern: str, uri: str = "viking://") -> Dict[str, Any]:

@@ -148,7 +148,7 @@ Parameters:
 
 - `session_id?`: optional explicit OpenViking session ID
 
-Returns background task progress or completion details, including `task_id`, `memories_extracted`, and `archived`.
+Returns background task progress or completion details, including `task_id`, per-category `memories_extracted`, and `archived`.
 
 ## Usage Examples
 

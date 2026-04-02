@@ -69,6 +69,7 @@ result = session.commit()
 # 查询后台任务进度
 task = client.get_task(result["task_id"])
 # task["status"]: "pending" | "running" | "completed" | "failed"
+# sum(task["result"]["memories_extracted"].values()): 3
 ```
 
 ## 消息结构
@@ -132,7 +133,7 @@ commit() 分两阶段执行：
 
 ## 记忆提取
 
-### 6 种分类
+### 8 种分类
 
 | 分类 | 归属 | 说明 | 可合并 |
 |------|------|------|--------|
@@ -142,6 +143,8 @@ commit() 分两阶段执行：
 | **events** | user | 事件/决策 | ❌ |
 | **cases** | agent | 问题+解决方案 | ❌ |
 | **patterns** | agent | 可复用流程 | ✅ |
+| **tools** | agent | 工具使用经验与最佳实践 | ✅ |
+| **skills** | agent | 技能执行经验与工作流策略 | ✅ |
 
 ### 提取流程
 
@@ -150,19 +153,20 @@ commit() 分两阶段执行：
          ↓
 向量预过滤 → 找相似记忆
          ↓
-LLM 去重决策 → CREATE/UPDATE/MERGE/SKIP
+LLM 去重决策 → candidate(skip/create/none) + item(merge/delete)
          ↓
 写入 AGFS → 向量化
 ```
 
 ### 去重决策
 
-| 决策 | 说明 |
-|------|------|
-| `CREATE` | 新记忆，直接创建 |
-| `UPDATE` | 更新现有记忆 |
-| `MERGE` | 合并多条记忆 |
-| `SKIP` | 完全重复，跳过 |
+| 层级 | 决策 | 说明 |
+|------|------|------|
+| Candidate | `skip` | 候选记忆重复，直接跳过 |
+| Candidate | `create` | 创建候选记忆；必要时先删除冲突旧记忆 |
+| Candidate | `none` | 不创建候选记忆，只处理已有记忆 |
+| Existing item | `merge` | 将候选内容合并到指定已有记忆 |
+| Existing item | `delete` | 删除冲突的已有记忆 |
 
 ## 存储结构
 
@@ -189,7 +193,9 @@ viking://user/memories/
 
 viking://agent/memories/
 ├── cases/
-└── patterns/
+├── patterns/
+├── tools/
+└── skills/
 ```
 
 ## 相关文档

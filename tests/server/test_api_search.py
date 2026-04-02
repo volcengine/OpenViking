@@ -195,6 +195,86 @@ async def test_grep_case_insensitive(client_with_resource):
     assert resp.json()["status"] == "ok"
 
 
+
+
+async def test_grep_exclude_uri_excludes_specific_uri_range(
+    client: httpx.AsyncClient,
+    upload_temp_dir,
+):
+    include_file = upload_temp_dir / "include.md"
+    include_file.write_text("# Include\n\nOpenViking should match here.\n")
+    exclude_file = upload_temp_dir / "exclude.md"
+    exclude_file.write_text("# Exclude\n\nOpenViking should be excluded here.\n")
+
+    await client.post(
+        "/api/v1/resources",
+        json={"temp_file_id": include_file.name, "reason": "include"},
+    )
+    await client.post(
+        "/api/v1/resources",
+        json={"temp_file_id": exclude_file.name, "reason": "exclude"},
+    )
+
+    root_uri = "viking://resources"
+    exclude_uri = "viking://resources/exclude.md"
+    resp = await client.post(
+        "/api/v1/search/grep",
+        json={
+            "uri": root_uri,
+            "pattern": "OpenViking",
+            "exclude_uri": exclude_uri,
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    matches = body["result"]["matches"]
+    assert matches
+    assert all(not m["uri"].startswith(exclude_uri.rstrip('/')) for m in matches)
+
+
+async def test_grep_exclude_uri_does_not_exclude_same_named_sibling_dirs(
+    client: httpx.AsyncClient,
+    upload_temp_dir,
+):
+    group_a_file = upload_temp_dir / "group_a_cache_a.md"
+    group_a_file.write_text("# Group A\n\nOpenViking match in group A cache.\n")
+    group_b_file = upload_temp_dir / "group_b_cache_b.md"
+    group_b_file.write_text("# Group B\n\nOpenViking match in group B cache.\n")
+
+    await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": group_a_file.name,
+            "to": "viking://resources/group_a/cache/a.md",
+            "reason": "test",
+        },
+    )
+    await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": group_b_file.name,
+            "to": "viking://resources/group_b/cache/b.md",
+            "reason": "test",
+        },
+    )
+
+    resp = await client.post(
+        "/api/v1/search/grep",
+        json={
+            "uri": "viking://resources",
+            "pattern": "OpenViking",
+            "exclude_uri": "viking://resources/group_a/cache",
+        },
+    )
+
+    assert resp.status_code == 200
+    matches = resp.json()["result"]["matches"]
+    uris = {m["uri"] for m in matches}
+    assert any(uri.startswith("viking://resources/group_b/cache/") for uri in uris)
+    assert all(not uri.startswith("viking://resources/group_a/cache/") for uri in uris)
+
 async def test_glob(client_with_resource):
     client, _ = client_with_resource
     resp = await client.post(

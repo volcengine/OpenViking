@@ -632,7 +632,7 @@ print(f"Task ID: {result['task_id']}")
 # Poll background task progress
 task = client.get_task(result["task_id"])
 if task["status"] == "completed":
-    print(f"Memories extracted: {task['result']['memories_extracted']}")
+    print(f"Memories extracted: {sum(task['result']['memories_extracted'].values())}")
 ```
 
 **HTTP API**
@@ -728,12 +728,19 @@ curl -X GET http://localhost:1933/api/v1/tasks/uuid-xxx \
     "result": {
       "session_id": "a1b2c3d4",
       "archive_uri": "viking://session/a1b2c3d4/history/archive_001",
-      "memories_extracted": 5,
+      "memories_extracted": {
+        "profile": 1,
+        "preferences": 2,
+        "entities": 1,
+        "cases": 1
+      },
       "active_count_updated": 2
     }
   }
 }
 ```
+
+`memories_extracted` in the completed task result reports per-category counts for this commit only. Sum its values when you want the total for this commit.
 
 ---
 
@@ -776,12 +783,14 @@ viking://session/{session_id}/
 
 | Category | Location | Description |
 |----------|----------|-------------|
-| profile | `user/memories/.overview.md` | User profile information |
+| profile | `user/memories/profile.md` | User profile information |
 | preferences | `user/memories/preferences/` | User preferences by topic |
 | entities | `user/memories/entities/` | Important entities (people, projects) |
 | events | `user/memories/events/` | Significant events |
 | cases | `agent/memories/cases/` | Problem-solution cases |
 | patterns | `agent/memories/patterns/` | Interaction patterns |
+| tools | `agent/memories/tools/` | Tool usage knowledge and best practices |
+| skills | `agent/memories/skills/` | Skill execution knowledge and workflow strategies |
 
 ---
 
@@ -828,7 +837,7 @@ print(f"Task ID: {result['task_id']}")
 # Optional: poll for completion
 task = client.get_task(result["task_id"])
 if task and task["status"] == "completed":
-    print(f"Memories extracted: {task['result']['memories_extracted']}")
+    print(f"Memories extracted: {sum(task['result']['memories_extracted'].values())}")
 
 client.close()
 ```

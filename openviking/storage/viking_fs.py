@@ -536,6 +536,7 @@ class VikingFS:
         self,
         uri: str,
         pattern: str,
+        exclude_uri: Optional[str] = None,
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
         ctx: Optional[RequestContext] = None,
@@ -548,6 +549,10 @@ class VikingFS:
 
         flags = re.IGNORECASE if case_insensitive else 0
         compiled_pattern = re.compile(pattern, flags)
+        excluded_prefix = None
+        if exclude_uri:
+            excluded_prefix = self._normalize_uri(exclude_uri).rstrip("/")
+            self._ensure_access(excluded_prefix, ctx)
 
         results = []
 
@@ -555,8 +560,16 @@ class VikingFS:
             if node_limit and len(results) >= node_limit:
                 return
 
+            normalized_current_uri = self._normalize_uri(current_uri)
+            if excluded_prefix and (
+                normalized_current_uri == excluded_prefix
+                or normalized_current_uri.startswith(excluded_prefix + "/")
+            ):
+                logger.debug(f"Skipping excluded uri during grep: {normalized_current_uri}")
+                return
+
             try:
-                entries = await self.ls(current_uri, ctx=ctx)
+                entries = await self.ls(normalized_current_uri, ctx=ctx)
             except Exception:
                 return
 
@@ -564,7 +577,12 @@ class VikingFS:
                 if node_limit and len(results) >= node_limit:
                     break
 
-                entry_uri = f"{current_uri.rstrip('/')}/{entry['name']}"
+                entry_uri = f"{normalized_current_uri.rstrip('/')}/{entry['name']}"
+                if excluded_prefix and (
+                    entry_uri == excluded_prefix or entry_uri.startswith(excluded_prefix + "/")
+                ):
+                    logger.debug(f"Skipping excluded uri during grep: {entry_uri}")
+                    continue
 
                 if entry.get("isDir"):
                     await search_recursive(entry_uri)
@@ -591,7 +609,7 @@ class VikingFS:
 
         await search_recursive(uri)
 
-        return {"matches": results}
+        return {"matches": results, "count": len(results)}
 
     async def stat(self, uri: str, ctx: Optional[RequestContext] = None) -> Dict[str, Any]:
         """

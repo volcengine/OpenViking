@@ -263,9 +263,20 @@ class SyncOpenViking:
         """Wait for all async operations to complete"""
         return run_async(self._async_client.wait_processed(timeout))
 
-    def grep(self, uri: str, pattern: str, case_insensitive: bool = False) -> Dict:
+    def grep(
+        self,
+        uri: str,
+        pattern: str,
+        case_insensitive: bool = False,
+        node_limit: Optional[int] = None,
+        exclude_uri: Optional[str] = None,
+    ) -> Dict:
         """Content search"""
-        return run_async(self._async_client.grep(uri, pattern, case_insensitive))
+        return run_async(
+            self._async_client.grep(
+                uri, pattern, case_insensitive, node_limit, exclude_uri
+            )
+        )
 
     def glob(self, pattern: str, uri: str = "viking://") -> Dict:
         """File pattern matching"""

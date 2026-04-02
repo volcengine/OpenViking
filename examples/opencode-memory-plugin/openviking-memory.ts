@@ -305,12 +305,14 @@ interface SearchResult {
   query_plan?: string
 }
 
+type MemoryCounts = number | Record<string, number>
+
 interface CommitResult {
   session_id: string
   status: string
-  memories_extracted: number
-  active_count_updated: number
-  archived: boolean
+  memories_extracted?: MemoryCounts
+  active_count_updated?: number
+  archived?: boolean
   task_id?: string
   message?: string
   stats?: {
@@ -334,7 +336,7 @@ interface TaskResult {
   resource_id?: string
   result?: {
     session_id?: string
-    memories_extracted?: number
+    memories_extracted?: MemoryCounts
     archived?: boolean
   }
   error?: string | null
@@ -353,6 +355,27 @@ const DEFAULT_CONFIG: OpenVikingConfig = {
     enabled: true,
     intervalMinutes: 10
   }
+}
+
+function totalMemoriesExtracted(memories?: MemoryCounts): number {
+  if (typeof memories === "number") {
+    return memories
+  }
+  if (!memories || typeof memories !== "object") {
+    return 0
+  }
+  return Object.entries(memories).reduce((sum, [key, value]) => {
+    if (key === "total") {
+      return sum
+    }
+    return sum + (typeof value === "number" ? value : 0)
+  }, 0)
+}
+
+function totalMemoriesFromResult(result?: {
+  memories_extracted?: MemoryCounts
+} | null): number {
+  return totalMemoriesExtracted(result?.memories_extracted)
 }
 
 function loadConfig(): OpenVikingConfig {
@@ -788,7 +811,7 @@ async function runSynchronousCommit(
     log("INFO", "session", "OpenViking synchronous commit completed", {
       openviking_session: mapping.ovSessionId,
       opencode_session: opencodeSessionId,
-      memories_extracted: result?.memories_extracted ?? 0,
+      memories_extracted: totalMemoriesFromResult(result),
       archived: result?.archived ?? false,
     })
 
@@ -981,7 +1004,7 @@ async function pollCommitTaskOnce(
     }
 
     if (task.status === "completed") {
-      const memoriesExtracted = task.result?.memories_extracted ?? 0
+      const memoriesExtracted = totalMemoriesFromResult(task.result)
       const archived = task.result?.archived ?? false
 
       log("INFO", "session", "OpenViking background commit completed", {
@@ -1060,7 +1083,7 @@ async function waitForCommitCompletion(
     const task = unwrapResponse(response)
 
     if (task.status === "completed") {
-      const memoriesExtracted = task.result?.memories_extracted ?? 0
+      const memoriesExtracted = totalMemoriesFromResult(task.result)
       const archived = task.result?.archived ?? false
 
       await finalizeCommitSuccess(mapping, opencodeSessionId, config)
@@ -1694,12 +1717,13 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
                 context.abort,
               )
               if (task?.status === "completed") {
+                const memoriesExtracted = totalMemoriesFromResult(task.result)
                 return JSON.stringify(
                   {
-                    message: `Memory extraction complete: ${task.result?.memories_extracted ?? 0} memories extracted`,
+                    message: `Memory extraction complete: ${memoriesExtracted} memories extracted`,
                     session_id: task.result?.session_id ?? sessionId,
                     status: task.status,
-                    memories_extracted: task.result?.memories_extracted ?? 0,
+                    memories_extracted: memoriesExtracted,
                     archived: task.result?.archived ?? false,
                     task_id: task.task_id,
                   },
@@ -1729,12 +1753,13 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
             }
 
             if (commitStart.mode === "completed") {
+              const memoriesExtracted = totalMemoriesFromResult(commitStart.result)
               return JSON.stringify(
                 {
-                  message: `Memory extraction complete: ${commitStart.result.memories_extracted ?? 0} memories extracted`,
+                  message: `Memory extraction complete: ${memoriesExtracted} memories extracted`,
                   session_id: commitStart.result.session_id ?? sessionId,
                   status: commitStart.result.status ?? "completed",
-                  memories_extracted: commitStart.result.memories_extracted ?? 0,
+                  memories_extracted: memoriesExtracted,
                   archived: commitStart.result.archived ?? false,
                 },
                 null,
@@ -1762,12 +1787,13 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
               )
             }
 
+            const memoriesExtracted = totalMemoriesFromResult(task.result)
             return JSON.stringify(
               {
-                message: `Memory extraction complete: ${task.result?.memories_extracted ?? 0} memories extracted`,
+                message: `Memory extraction complete: ${memoriesExtracted} memories extracted`,
                 session_id: task.result?.session_id ?? sessionId,
                 status: task.status,
-                memories_extracted: task.result?.memories_extracted ?? 0,
+                memories_extracted: memoriesExtracted,
                 archived: task.result?.archived ?? false,
                 task_id: task.task_id,
               },

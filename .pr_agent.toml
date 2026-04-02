@@ -17,8 +17,10 @@
 # ---------------------------------------------------------------------------
 [config]
 output_relevant_configurations = false
-# Use Ark token-billed Chat API instead of Coding Plan.
-model = "doubao-seed-2-0-code-preview-260215"
+# Use Ark token-billed Chat API via LiteLLM's OpenAI-compatible provider.
+# Without the `openai/` prefix, PR-Agent fails with:
+# "LLM Provider NOT provided" and skips review/improve generation.
+model = "openai/doubao-seed-2-0-code-preview-260215"
 fallback_models = []
 custom_model_max_tokens = 256000
 # Use high reasoning for this complex polyglot codebase with subtle async/

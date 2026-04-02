@@ -299,6 +299,8 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 | uri | str | 是 | - | 要搜索的 Viking URI |
 | pattern | str | 是 | - | 搜索模式（正则表达式） |
 | case_insensitive | bool | 否 | False | 忽略大小写 |
+| node_limit | int | 否 | None | 最大搜索节点数 |
+| exclude_uri | str | 否 | None | 要排除在搜索之外的 URI 前缀 |
 
 **Python SDK (Embedded / HTTP)**
 

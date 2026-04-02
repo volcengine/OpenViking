@@ -514,12 +514,14 @@ impl HttpClient {
     pub async fn grep(
         &self,
         uri: &str,
+        exclude_uri: Option<String>,
         pattern: &str,
         ignore_case: bool,
         node_limit: i32,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "uri": uri,
+            "exclude_uri": exclude_uri,
             "pattern": pattern,
             "case_insensitive": ignore_case,
             "node_limit": node_limit,
