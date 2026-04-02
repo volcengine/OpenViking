@@ -3,9 +3,9 @@
 提供关键词匹配和文本相似度两种断言方式
 """
 
+import difflib
 import logging
 from typing import List, Union
-import difflib
 
 logger = logging.getLogger(__name__)
 
@@ -91,9 +91,9 @@ class AssertionHelper:
             success = len(found_keywords) > 0
 
         if success:
-            logger.info(f"✅ 关键词断言通过")
+            logger.info("✅ 关键词断言通过")
         else:
-            logger.error(f"❌ 关键词断言失败")
+            logger.error("❌ 关键词断言失败")
 
         return success
 
@@ -169,5 +169,5 @@ class AssertionHelper:
                     logger.info(f"✅ 在第 {i + 1} 组中找到关键词: {keyword}")
                     return True
 
-        logger.error(f"❌ 未在任何关键词组中找到匹配")
+        logger.error("❌ 未在任何关键词组中找到匹配")
         return False

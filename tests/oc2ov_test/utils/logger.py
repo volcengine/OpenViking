@@ -4,8 +4,9 @@
 
 import logging
 import logging.config
-from config.settings import LOGGING_CONFIG, TEST_CONFIG
 import os
+
+from config.settings import LOGGING_CONFIG, TEST_CONFIG
 
 
 def setup_logger():

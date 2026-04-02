@@ -17,7 +17,7 @@ class TestMemoryWriteGroupA(BaseOpenClawCLITest):
         """测试场景：基本信息写入与验证"""
         self.logger.info("[1/4] 发送记忆写入指令")
         message = "我叫小明，今年30岁，住在华东区，职业是测试开发"
-        response1 = self.send_and_log(message)
+        self.send_and_log(message)
 
         self.wait_for_sync()
 
@@ -52,7 +52,7 @@ class TestMemoryWriteGroupB(BaseOpenClawCLITest):
             "喜欢美食和旅游，不喜欢加班，我的生日是1999年8月15日"
         )
         self.logger.info("[1/3] 发送丰富信息记忆写入")
-        response1 = self.send_and_log(message)
+        self.send_and_log(message)
 
         self.wait_for_sync()
 

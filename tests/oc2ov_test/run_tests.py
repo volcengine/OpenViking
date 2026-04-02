@@ -3,9 +3,10 @@
 测试运行入口
 """
 
+import argparse
 import sys
 import unittest
-import argparse
+
 from utils.logger import setup_logger
 
 

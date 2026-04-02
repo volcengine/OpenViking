@@ -85,7 +85,7 @@ class TestMemoryDelete(BaseOpenClawCLITest):
         self.logger.info("[3/3] 请求删除临时信息")
         self.send_and_log("请删除关于我的临时密码的信息")
         self.wait_for_sync()
-        resp2 = self.send_and_log("我的临时密码是什么？")
+        self.send_and_log("我的临时密码是什么？")
         self.logger.info("删除验证完成，检查响应是否不包含原密码信息")
 
 

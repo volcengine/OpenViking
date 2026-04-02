@@ -26,7 +26,7 @@ class TestComplexScenarioMultiUsers(BaseOpenClawCLITest):
             self.send_and_log(msg)
             self.wait_for_sync()
 
-            self.logger.info(f"  验证信息:")
+            self.logger.info("  验证信息:")
             resp = self.send_and_log("请介绍一下我自己")
             self.assertAnyKeywordInResponse(
                 resp,

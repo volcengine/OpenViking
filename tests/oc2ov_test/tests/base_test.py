@@ -2,12 +2,13 @@
 测试基类
 """
 
-import unittest
-import time
 import logging
-from utils.openclaw_client import OpenClawClient
-from utils.assertions import AssertionHelper
+import time
+import unittest
+
 from config.settings import TEST_CONFIG
+from utils.assertions import AssertionHelper
+from utils.openclaw_client import OpenClawClient
 
 
 class BaseOpenClawTest(unittest.TestCase):
@@ -48,7 +49,7 @@ class BaseOpenClawTest(unittest.TestCase):
         发送消息并记录日志
         """
         self.logger.info("\n" + "▸" * 40)
-        self.logger.info(f"📨 测试步骤 - 发送消息")
+        self.logger.info("📨 测试步骤 - 发送消息")
         self.logger.info("▸" * 40)
         self.logger.info(f"消息内容: {message}")
         if agent_id:
@@ -57,7 +58,7 @@ class BaseOpenClawTest(unittest.TestCase):
         response = self.client.send_message(message, agent_id)
 
         self.logger.info("\n" + "◂" * 40)
-        self.logger.info(f"📩 测试步骤 - 响应接收")
+        self.logger.info("📩 测试步骤 - 响应接收")
         self.logger.info("◂" * 40)
 
         # 提取并显示响应文本
