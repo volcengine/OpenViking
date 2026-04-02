@@ -101,6 +101,7 @@ CODE_EXTENSIONS = {
     ".c",
     ".h",
     ".hpp",
+    ".inl",
     ".cs",
     ".js",
     ".ts",
