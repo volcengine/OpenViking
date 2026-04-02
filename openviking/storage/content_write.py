@@ -14,6 +14,7 @@ from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.transaction import get_lock_manager
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
+from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import build_queue_status_payload
 from openviking.utils.embedding_utils import vectorize_file
 from openviking_cli.exceptions import DeadlineExceededError, InvalidArgumentError, NotFoundError
@@ -52,6 +53,7 @@ class ContentWriteCoordinator:
         context_type = self._context_type_for_uri(normalized_uri)
         root_uri = await self._resolve_root_uri(normalized_uri, ctx=ctx)
         written_bytes = len(content.encode("utf-8"))
+        telemetry_id = get_current_telemetry().telemetry_id
 
         if context_type == "memory":
             return await self._write_memory_with_refresh(
@@ -63,6 +65,7 @@ class ContentWriteCoordinator:
                 timeout=timeout,
                 ctx=ctx,
                 written_bytes=written_bytes,
+                telemetry_id=telemetry_id,
             )
 
         lock_manager = get_lock_manager()
@@ -78,6 +81,8 @@ class ContentWriteCoordinator:
         temp_root_uri = ""
         lock_transferred = False
         try:
+            if wait and telemetry_id:
+                get_request_wait_tracker().register_request(telemetry_id)
             temp_root_uri, temp_target_uri = await self._prepare_temp_write(
                 uri=normalized_uri,
                 root_uri=root_uri,
@@ -94,7 +99,11 @@ class ContentWriteCoordinator:
                 lifecycle_lock_handle_id=handle.id,
             )
             lock_transferred = True
-            queue_status = await self._wait_for_queues(timeout=timeout) if wait else None
+            queue_status = (
+                await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
+                if wait
+                else None
+            )
             return {
                 "uri": normalized_uri,
                 "root_uri": root_uri,
@@ -114,6 +123,9 @@ class ContentWriteCoordinator:
             if not lock_transferred:
                 await lock_manager.release(handle)
             raise
+        finally:
+            if wait and telemetry_id:
+                get_request_wait_tracker().cleanup(telemetry_id)
 
     def _validate_mode(self, mode: str) -> None:
         if mode not in {"replace", "append"}:
@@ -237,11 +249,13 @@ class ContentWriteCoordinator:
             agent_id=ctx.user.agent_id,
             role=ctx.role.value,
             skip_vectorization=False,
-            telemetry_id=telemetry.telemetry_id if telemetry.enabled else "",
+            telemetry_id=telemetry.telemetry_id,
             lifecycle_lock_handle_id=lifecycle_lock_handle_id,
             changes={"modified": [temp_target_uri]},
         )
         await semantic_queue.enqueue(msg)
+        if msg.telemetry_id:
+            get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)
 
     async def _enqueue_memory_refresh(
         self,
@@ -262,11 +276,13 @@ class ContentWriteCoordinator:
             agent_id=ctx.user.agent_id,
             role=ctx.role.value,
             skip_vectorization=False,
-            telemetry_id=telemetry.telemetry_id if telemetry.enabled else "",
+            telemetry_id=telemetry.telemetry_id,
             lifecycle_lock_handle_id=lifecycle_lock_handle_id,
             changes={"modified": [modified_uri]},
         )
         await semantic_queue.enqueue(msg)
+        if msg.telemetry_id:
+            get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)
 
     async def _wait_for_queues(self, *, timeout: Optional[float]) -> Dict[str, Any]:
         queue_manager = get_queue_manager()
@@ -275,6 +291,21 @@ class ContentWriteCoordinator:
         except TimeoutError as exc:
             raise DeadlineExceededError("queue processing", timeout) from exc
         return build_queue_status_payload(status)
+
+    async def _wait_for_request(
+        self,
+        *,
+        telemetry_id: str,
+        timeout: Optional[float],
+    ) -> Dict[str, Any]:
+        if not telemetry_id:
+            return await self._wait_for_queues(timeout=timeout)
+        tracker = get_request_wait_tracker()
+        try:
+            await tracker.wait_for_request(telemetry_id, timeout=timeout)
+        except TimeoutError as exc:
+            raise DeadlineExceededError("queue processing", timeout) from exc
+        return tracker.build_queue_status(telemetry_id)
 
     async def _vectorize_single_file(
         self,
@@ -330,6 +361,7 @@ class ContentWriteCoordinator:
         timeout: Optional[float],
         ctx: RequestContext,
         written_bytes: int,
+        telemetry_id: str,
     ) -> Dict[str, Any]:
         lock_manager = get_lock_manager()
         handle = lock_manager.create_handle()
@@ -341,6 +373,8 @@ class ContentWriteCoordinator:
 
         lock_transferred = False
         try:
+            if wait and telemetry_id:
+                get_request_wait_tracker().register_request(telemetry_id)
             await self._write_in_place(uri, content, mode=mode, ctx=ctx)
             await self._vectorize_single_file(uri, context_type="memory", ctx=ctx)
             await self._enqueue_memory_refresh(
@@ -350,7 +384,11 @@ class ContentWriteCoordinator:
                 lifecycle_lock_handle_id=handle.id,
             )
             lock_transferred = True
-            queue_status = await self._wait_for_queues(timeout=timeout) if wait else None
+            queue_status = (
+                await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
+                if wait
+                else None
+            )
             return {
                 "uri": uri,
                 "root_uri": root_uri,
@@ -365,6 +403,9 @@ class ContentWriteCoordinator:
             if not lock_transferred:
                 await lock_manager.release(handle)
             raise
+        finally:
+            if wait and telemetry_id:
+                get_request_wait_tracker().cleanup(telemetry_id)
 
     async def _resolve_root_uri(self, uri: str, *, ctx: RequestContext) -> str:
         parsed = VikingURI(uri)

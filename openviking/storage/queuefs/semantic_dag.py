@@ -8,6 +8,7 @@ from typing import Awaitable, Callable, Dict, List, Optional
 
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import get_viking_fs
+from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking_cli.utils import VikingURI
 from openviking_cli.utils.logger import get_logger
 
@@ -75,6 +76,7 @@ class SemanticDagExecutor:
         incremental_update: bool = False,
         target_uri: Optional[str] = None,
         semantic_msg_id: Optional[str] = None,
+        telemetry_id: str = "",
         recursive: bool = True,
         lifecycle_lock_handle_id: str = "",
         is_code_repo: bool = False,
@@ -86,6 +88,7 @@ class SemanticDagExecutor:
         self._incremental_update = incremental_update
         self._target_uri = target_uri
         self._semantic_msg_id = semantic_msg_id
+        self._telemetry_id = telemetry_id
         self._recursive = recursive
         self._lifecycle_lock_handle_id = lifecycle_lock_handle_id
         self._is_code_repo = is_code_repo
@@ -168,6 +171,10 @@ class SemanticDagExecutor:
             try:
                 if original_on_complete:
                     await original_on_complete()
+                if self._telemetry_id and self._semantic_msg_id:
+                    get_request_wait_tracker().mark_semantic_done(
+                        self._telemetry_id, self._semantic_msg_id
+                    )
             finally:
                 await self._release_lifecycle_lock()
 

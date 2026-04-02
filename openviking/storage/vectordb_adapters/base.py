@@ -114,7 +114,7 @@ class CollectionAdapter(ABC):
         self._collection_name = name
         self._index_name = index_name
         collection_meta = dict(schema)
-        scalar_index_fields = collection_meta.pop("ScalarIndex", [])
+        scalar_index_fields = collection_meta.get("ScalarIndex", [])
         if "CollectionName" not in collection_meta:
             collection_meta["CollectionName"] = name
 

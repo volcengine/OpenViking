@@ -75,6 +75,13 @@ def test_telemetry_summary_breaks_down_llm_and_embedding_token_usage():
     assert "errors" not in summary
 
 
+def test_disabled_telemetry_still_has_request_id():
+    telemetry = MemoryOperationTelemetry(operation="resources.add_resource", enabled=False)
+
+    assert telemetry.telemetry_id
+    assert telemetry.telemetry_id.startswith("tm_")
+
+
 def test_telemetry_summary_uses_simplified_internal_metric_keys():
     summary = MemoryOperationTelemetry(
         operation="search.find",
