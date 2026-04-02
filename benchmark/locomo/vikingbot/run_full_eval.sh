@@ -2,11 +2,6 @@
 
 set -e
 
-# 加载本地环境变量
-if [ -f ~/.openviking_benchmark_env ]; then
-    source ~/.openviking_benchmark_env
-fi
-
 # Step 1: 导入数据
 echo "[1/4] 导入数据..."
 python benchmark/locomo/vikingbot/import_to_ov.py --input ~/.test_data/locomo10.json --force-ingest
