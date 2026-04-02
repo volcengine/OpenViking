@@ -506,8 +506,8 @@ enum ObserverCommands {
     Queue,
     /// Get VikingDB status
     Vikingdb,
-    /// Get VLM status
-    Vlm,
+    /// Get models status (VLM, Embedding, Rerank)
+    Models,
     /// Get transaction system status
     Transaction,
     /// Get retrieval quality metrics
@@ -1013,8 +1013,8 @@ async fn handle_observer(cmd: ObserverCommands, ctx: CliContext) -> Result<()> {
         ObserverCommands::Vikingdb => {
             commands::observer::vikingdb(&client, ctx.output_format, ctx.compact).await
         }
-        ObserverCommands::Vlm => {
-            commands::observer::vlm(&client, ctx.output_format, ctx.compact).await
+        ObserverCommands::Models => {
+            commands::observer::models(&client, ctx.output_format, ctx.compact).await
         }
         ObserverCommands::Transaction => {
             commands::observer::transaction(&client, ctx.output_format, ctx.compact).await

@@ -77,9 +77,9 @@ class _HTTPObserver:
         """Fetch VikingDB status asynchronously."""
         return await self._client._get_vikingdb_status()
 
-    async def _fetch_vlm_status(self) -> Dict[str, Any]:
-        """Fetch VLM status asynchronously."""
-        return await self._client._get_vlm_status()
+    async def _fetch_models_status(self) -> Dict[str, Any]:
+        """Fetch models status asynchronously."""
+        return await self._client._get_models_status()
 
     async def _fetch_system_status(self) -> Dict[str, Any]:
         """Fetch system status asynchronously."""
@@ -96,9 +96,9 @@ class _HTTPObserver:
         return run_async(self._fetch_vikingdb_status())
 
     @property
-    def vlm(self) -> Dict[str, Any]:
-        """Get VLM status (sync wrapper)."""
-        return run_async(self._fetch_vlm_status())
+    def models(self) -> Dict[str, Any]:
+        """Get models status (VLM, Embedding, Rerank) (sync wrapper)."""
+        return run_async(self._fetch_models_status())
 
     @property
     def system(self) -> Dict[str, Any]:
@@ -884,9 +884,9 @@ class AsyncHTTPClient(BaseClient):
         response = await self._http.get("/api/v1/observer/vikingdb")
         return self._handle_response(response)
 
-    async def _get_vlm_status(self) -> Dict[str, Any]:
-        """Get VLM status (internal for _HTTPObserver)."""
-        response = await self._http.get("/api/v1/observer/vlm")
+    async def _get_models_status(self) -> Dict[str, Any]:
+        """Get models status (VLM, Embedding, Rerank) (internal for _HTTPObserver)."""
+        response = await self._http.get("/api/v1/observer/models")
         return self._handle_response(response)
 
     async def _get_system_status(self) -> Dict[str, Any]:
