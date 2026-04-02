@@ -931,7 +931,7 @@ openviking --account acme --user alice --agent-id assistant-2 ls viking://
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
 | `lock_timeout` | float | 获取路径锁的等待超时（秒）。`0` = 立即失败（默认）；`> 0` = 最多等待此时间后抛出 `LockAcquisitionError` | `0.0` |
-| `lock_expire` | float | 锁过期时间（秒）。超过此时间的锁将被视为崩溃进程遗留的陈旧锁并强制释放 | `300.0` |
+| `lock_expire` | float | 锁失活阈值（秒）。超过此时间未被 refresh 的锁会被视为陈旧锁并回收 | `300.0` |
 
 路径锁机制的详细说明见 [路径锁与崩溃恢复](../concepts/09-transaction.md)。
 

@@ -50,7 +50,8 @@ Storage Layer (VikingFS, VectorDB, QueueManager)
 class LockHandle:
     id: str          # Unique ID used to generate fencing tokens
     locks: list[str] # Acquired lock file paths
-    created_at: float # Creation time
+    created_at: float # Handle creation time
+    last_active_at: float # Last successful acquire/refresh time
 ```
 
 **LockManager** is a global singleton managing lock lifecycle:
@@ -142,7 +143,7 @@ Operation flow:
 4. Release POINT lock
 5. Clean up temp directory
 6. Enqueue SemanticMsg(lifecycle_lock_handle_id=...) -> DAG runs on final
-7. DAG starts lock refresh loop (refreshes timestamp every lock_expire/2 seconds)
+7. DAG starts lock refresh loop (refreshes the lock token and updates handle activity every lock_expire/2 seconds)
 8. DAG complete + all embeddings done -> release SUBTREE lock
 ```
 
@@ -306,7 +307,7 @@ Timeout (default 0 = no-wait) raises LockAcquisitionError
 
 **Stale lock detection**: PathLock checks the fencing token timestamp. Locks older than `lock_expire` (default 300s) are considered stale and are removed automatically during acquisition.
 
-**In-process cleanup**: LockManager checks active LockHandles every 60 seconds. Handles created more than 3600 seconds ago are force-released.
+**In-process cleanup**: LockManager checks active LockHandles every 60 seconds. Handles that still own lock files but have been inactive for longer than `lock_expire` are force-released.
 
 **Orphan locks**: Lock files left behind after a process crash are automatically removed via stale lock detection when any operation next attempts to acquire a lock on the same path.
 
@@ -349,7 +350,7 @@ Path locks are enabled by default with no extra configuration needed. **The defa
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `lock_timeout` | float | Lock acquisition timeout (seconds). `0` = fail immediately if locked (default). `> 0` = wait/retry up to this many seconds. | `0.0` |
-| `lock_expire` | float | Stale lock expiry threshold (seconds). Locks held longer than this by a crashed process are force-released. | `300.0` |
+| `lock_expire` | float | Lock inactivity threshold (seconds). Locks not refreshed within this window are treated as stale and reclaimed. | `300.0` |
 
 ### QueueFS Persistence
 

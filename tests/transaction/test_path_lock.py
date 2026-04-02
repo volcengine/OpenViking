@@ -3,7 +3,7 @@
 """Tests for path lock with fencing tokens."""
 
 import time
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from openviking.storage.transaction.lock_handle import LockHandle
 from openviking.storage.transaction.path_lock import (
@@ -71,6 +71,67 @@ class TestPathLockStale:
         agfs.read.return_value = token.encode("utf-8")
         lock = PathLock(agfs)
         assert lock.is_lock_stale("/test/.path.ovlock", expire_seconds=300.0) is False
+
+
+class TestPathLockOwnership:
+    async def test_refresh_reports_refreshed_lost_and_failed_paths(self):
+        owned_path = "/locks/owned/.path.ovlock"
+        lost_path = "/locks/lost/.path.ovlock"
+        missing_path = "/locks/missing/.path.ovlock"
+        failed_path = "/locks/failed/.path.ovlock"
+
+        tokens = {
+            owned_path: _make_fencing_token("tx-1", LOCK_TYPE_POINT),
+            lost_path: _make_fencing_token("tx-2", LOCK_TYPE_SUBTREE),
+            failed_path: _make_fencing_token("tx-1", LOCK_TYPE_SUBTREE),
+        }
+        agfs = MagicMock()
+
+        def read_side_effect(lock_path):
+            if lock_path == missing_path:
+                raise FileNotFoundError(lock_path)
+            return tokens[lock_path].encode("utf-8")
+
+        def write_side_effect(lock_path, content):
+            if lock_path == failed_path:
+                raise OSError("write failed")
+            tokens[lock_path] = content.decode("utf-8")
+
+        agfs.read.side_effect = read_side_effect
+        agfs.write.side_effect = write_side_effect
+
+        lock = PathLock(agfs)
+        tx = LockHandle(id="tx-1")
+        for lock_path in [owned_path, lost_path, missing_path, failed_path]:
+            tx.add_lock(lock_path)
+
+        result = await lock.refresh(tx)
+
+        assert result.refreshed_paths == [owned_path]
+        assert set(result.lost_paths) == {lost_path, missing_path}
+        assert result.failed_paths == [failed_path]
+
+    async def test_release_skips_locks_no_longer_owned(self):
+        owned_path = "/locks/owned/.path.ovlock"
+        replaced_path = "/locks/replaced/.path.ovlock"
+
+        tokens = {
+            owned_path: _make_fencing_token("tx-1", LOCK_TYPE_POINT),
+            replaced_path: _make_fencing_token("tx-2", LOCK_TYPE_POINT),
+        }
+        agfs = MagicMock()
+        agfs.read.side_effect = lambda lock_path: tokens[lock_path].encode("utf-8")
+
+        lock = PathLock(agfs)
+        lock._remove_lock_file = AsyncMock(return_value=True)
+        tx = LockHandle(id="tx-1")
+        tx.add_lock(owned_path)
+        tx.add_lock(replaced_path)
+
+        await lock.release(tx)
+
+        lock._remove_lock_file.assert_awaited_once_with(owned_path)
+        assert tx.locks == []
 
 
 class TestPathLockBehavior:
