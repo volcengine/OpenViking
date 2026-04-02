@@ -204,7 +204,83 @@ class DirectoryInitializer:
         count += await self._initialize_children(
             "agent", agent_tree.children, agent_space_root, ctx=ctx
         )
+
+        # Initialize memory files with init_value
+        await self._initialize_memory_files(agent_space_root, ctx=ctx)
+
         return count
+
+    async def _initialize_memory_files(
+        self,
+        agent_space_root: str,
+        ctx: RequestContext,
+    ) -> None:
+        """Initialize memory files (soul.md, identity.md) with init_value."""
+        from openviking.session.memory import create_default_registry
+
+        registry = create_default_registry()
+        agent_space = ctx.user.agent_space_name()
+
+        # Get memory schemas directory path
+        memories_uri = f"{agent_space_root}/memories"
+
+        for schema in registry.list_all(include_disabled=False):
+            if not schema.enabled or not schema.filename_template:
+                continue
+
+            # Render filename
+            import jinja2
+
+            env = jinja2.Environment(autoescape=False)
+            try:
+                filename = env.from_string(schema.filename_template).render(
+                    user_space=ctx.user.user_space_name(),
+                    agent_space=agent_space,
+                )
+            except Exception:
+                continue
+
+            file_uri = f"{memories_uri}/{filename}"
+
+            # Check if file already exists
+            from openviking.storage.viking_fs import get_viking_fs
+
+            viking_fs = get_viking_fs()
+            try:
+                await viking_fs.read_file(file_uri, ctx=ctx)
+                # File exists, skip
+                continue
+            except Exception:
+                pass
+
+            # File doesn't exist, create with init_value
+            if not schema.content_template:
+                continue
+
+            # Build fields dict with init_value
+            fields = {}
+            has_init_value = False
+            for f in schema.fields:
+                if f.init_value is not None:
+                    fields[f.name] = f.init_value
+                    has_init_value = True
+
+            # Only initialize if at least one field has init_value
+            if not has_init_value:
+                continue
+
+            # Render content_template with fields
+            try:
+                template = env.from_string(schema.content_template)
+                content = template.render(**fields).strip()
+            except Exception:
+                continue
+
+            # Write the file
+            try:
+                await viking_fs.write_file(file_uri, content, ctx=ctx)
+            except Exception:
+                pass
 
     async def _ensure_directory(
         self,
