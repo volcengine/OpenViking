@@ -6,7 +6,6 @@ import functools
 import inspect
 import json
 import logging
-import sys
 from typing import Any, Callable, Optional
 
 from loguru import logger
@@ -14,13 +13,13 @@ from loguru import logger
 # Try to import opentelemetry - will be None if not installed
 try:
     from opentelemetry import trace as otel_trace
-    from opentelemetry.sdk.trace import TracerProvider, Status, StatusCode
-    from opentelemetry.sdk.trace.export import BatchSpanProcessor
-    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-    from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
     from opentelemetry.context import Context
-    from opentelemetry.propagate import inject, extract
+    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+    from opentelemetry.propagate import extract, inject
     from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import Status, StatusCode, TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 except ImportError:
     otel_trace = None
     TracerProvider = None
@@ -483,7 +482,7 @@ class tracer:
             logger.info(line)
         if _otel_tracer is None:
             return
-        with tracer.start_as_current_span(name=line) as span:
+        with tracer.start_as_current_span(name=line):
             pass
 
     @staticmethod
