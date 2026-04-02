@@ -529,6 +529,7 @@ To ensure optimal storage performance and data security, we recommend deploying 
 After integrating OpenViking:
 - With native memory enabled: 43% improvement over original OpenClaw with 91% reduction in input token cost; 15% improvement over LanceDB with 96% reduction in input token cost.
 - With native memory disabled: 49% improvement over original OpenClaw with 83% reduction in input token cost; 17% improvement over LanceDB with 92% reduction in input token cost.
+- [skill-taxonomy](https://github.com/SeeleAI/skill-taxonomy) - Structured taxonomy for AI agent skills: discovery, classification and routing across multi-agent workflows.
 
 👉 **[View: OpenClaw Context Plugin](examples/openclaw-plugin/README.md)**
 
