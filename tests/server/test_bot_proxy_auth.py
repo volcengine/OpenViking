@@ -3,8 +3,10 @@
 
 """Regression tests for bot proxy endpoint auth enforcement."""
 
+import httpx
 import pytest
-from fastapi import Request
+import pytest_asyncio
+from fastapi import FastAPI, Request
 
 import openviking.server.routers.bot as bot_router_module
 

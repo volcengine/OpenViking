@@ -2,11 +2,13 @@
 
 import asyncio
 from pathlib import Path
-from typing import Any, Callable, Coroutine
+from typing import Any, Callable, Coroutine, TYPE_CHECKING, Dict, List
 
 from loguru import logger
 
 from vikingbot.config.schema import SessionKey
+
+
 from vikingbot.session.manager import SessionManager
 
 # Default interval: 30 minutes

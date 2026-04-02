@@ -1,20 +1,21 @@
-import json
 import os
-import sys
+import json
 import time
+import random
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
-
 from tqdm import tqdm
+from pathlib import Path
+import sys
 
 sys.path.append(str(Path(__file__).parent))
 
 from adapters.base import BaseAdapter
-from core.judge_util import llm_grader
 from core.logger import get_logger
-from core.metrics import MetricsCalculator
-from core.monitor import BenchmarkMonitor
 from core.vector_store import VikingStoreWrapper
+from core.monitor import BenchmarkMonitor
+from core.metrics import MetricsCalculator
+from core.judge_util import llm_grader
 
 
 class BenchmarkPipeline:
@@ -25,14 +26,14 @@ class BenchmarkPipeline:
         self.llm = llm
         self.logger = get_logger()
         self.monitor = BenchmarkMonitor()
-
+        
         self.output_dir = self.config['paths']['output_dir']
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir, exist_ok=True)
         self.generated_file = os.path.join(self.output_dir, "generated_answers.json")
         self.eval_file = os.path.join(self.output_dir, "qa_eval_detailed_results.json")
         self.report_file = os.path.join(self.output_dir, "benchmark_metrics_report.json")
-
+        
         self.metrics_summary = {
             "insertion": {"time": 0, "input_tokens": 0, "output_tokens": 0, "embedding_tokens": 0},
             "deletion": {"time": 0, "input_tokens": 0, "output_tokens": 0, "embedding_tokens": 0}
@@ -58,17 +59,17 @@ class BenchmarkPipeline:
 
             ingest_workers = self.config['execution'].get('ingest_workers', 10)
             ingest_mode = self.config['execution'].get('ingest_mode', 'per_file')
-
+            
             mode_desc = {
                 'directory': 'Unified directory mode',
                 'per_file': 'Per-file mode'
             }
             self.logger.info(f"Ingestion mode: {ingest_mode} ({mode_desc.get(ingest_mode, 'Unknown mode')})")
             self.logger.info(f"Number of documents: {len(doc_info)}")
-
+            
             ingest_stats = self.db.ingest(
-                doc_info,
-                max_workers=ingest_workers,
+                doc_info, 
+                max_workers=ingest_workers, 
                 monitor=self.monitor,
                 ingest_mode=ingest_mode
             )
@@ -83,19 +84,19 @@ class BenchmarkPipeline:
                     "Total Embedding Tokens": self.metrics_summary["insertion"].get("embedding_tokens", 0)
                 }
             })
-
-        samples = self.adapter.load_and_transform()
+        
+        samples = self.adapter.load_and_transform()    
         tasks = self._prepare_tasks(samples)
         results_map = {}
         max_workers = self.config['execution']['max_workers']
         task_errors = []
-
+        
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_task = {
-                executor.submit(self._process_generation_task, task): task
+                executor.submit(self._process_generation_task, task): task 
                 for task in tasks
             }
-
+            
             pbar = tqdm(total=len(tasks), desc="Generating Answers", unit="task")
             for future in as_completed(future_to_task):
                 task = future_to_task[future]
@@ -148,13 +149,13 @@ class BenchmarkPipeline:
 
         eval_items = items
         eval_results_map = {}
-
+        
         with ThreadPoolExecutor(max_workers=self.config['execution']['max_workers']) as executor:
             future_to_item = {
-                executor.submit(self._process_evaluation_task, item): item
+                executor.submit(self._process_evaluation_task, item): item 
                 for item in eval_items
             }
-
+            
             pbar = tqdm(total=len(eval_items), desc="Evaluating", unit="item")
             for future in as_completed(future_to_item):
                 try:
@@ -218,7 +219,7 @@ class BenchmarkPipeline:
         self.monitor.worker_start()
         try:
             qa = task['qa']
-
+            
             t0 = time.time()
             # Get retrieval instruction from config, default to empty
             retrieval_instruction = self.config['execution'].get('retrieval_instruction', '')
@@ -232,22 +233,22 @@ class BenchmarkPipeline:
                 self.logger.debug(f"[Query-{task['id']}] No retrieval instruction, using raw query")
             search_res = self.db.retrieve(query=enhanced_query, topk=self.config['execution']['retrieval_topk'])
             latency = time.time() - t0
-
+            
             retrieved_texts = []
             retrieved_uris = []
             context_blocks = []
-
+            
             for r in search_res.resources:
                 retrieved_uris.append(r.uri)
                 content = self.db.read_resource(r.uri) if getattr(r, 'level', 2) == 2 else f"{getattr(r, 'abstract', '')}\n{getattr(r, 'overview', '')}"
                 retrieved_texts.append(content)
                 clean = content[:8000]
                 context_blocks.append(clean)
-
+            
             recall = MetricsCalculator.check_recall(retrieved_texts, qa.evidence)
-
+            
             full_prompt, meta = self.adapter.build_prompt(qa, context_blocks)
-
+            
             ans_raw = self.llm.generate(full_prompt)
 
             ans = self.adapter.post_process_answer(qa, ans_raw, meta)
@@ -255,7 +256,7 @@ class BenchmarkPipeline:
             in_tokens = self.db.count_tokens(full_prompt) + self.db.count_tokens(qa.question)
             out_tokens = self.db.count_tokens(ans)
             self.monitor.worker_end(tokens=in_tokens + out_tokens)
-
+            
             self.logger.info(f"[Query-{task['id']}] Q: {qa.question[:30]}... | Recall: {recall:.2f} | Latency: {latency:.2f}s")
 
             return {
@@ -281,31 +282,31 @@ class BenchmarkPipeline:
         This correctly handles multi-annotator scenarios while maintaining compatibility with single-answer datasets (like Locomo).
         """
         ans, golds = item['llm']['final_answer'], item['gold_answers']
-
+        
         f1 = max((MetricsCalculator.calculate_f1(ans, gt) for gt in golds), default=0.0)
-
+        
         dataset_name = self.config.get('dataset_name', 'Unknown_Dataset')
-
+        
         eval_record = {
             "score": 0.0,
             "reasoning": "",
             "prompt_type": ""
         }
-
+        
         try:
             eval_res = llm_grader(
-                self.llm.llm,
-                self.config['llm']['model'],
-                item['question'],
+                self.llm.llm, 
+                self.config['llm']['model'], 
+                item['question'], 
                 golds,
                 ans,
                 dataset_name=dataset_name
             )
             eval_record = eval_res
-
+                
         except Exception as e:
             self.logger.error(f"Grader error: {e}")
-
+            
         if MetricsCalculator.check_refusal(ans) and any(MetricsCalculator.check_refusal(gt) for gt in golds):
             f1 = 1.0
             eval_record["score"] = 4.0
@@ -315,7 +316,7 @@ class BenchmarkPipeline:
         acc = eval_record["score"]
 
         item["metrics"].update({"F1": f1, "Accuracy": acc})
-
+        
         item["llm_evaluation"] = {
             "prompt_used": eval_record["prompt_type"],
             "reasoning": eval_record["reasoning"],
@@ -323,7 +324,7 @@ class BenchmarkPipeline:
         }
 
         detailed_info = (
-            "\n" + "="*60 +
+            f"\n" + "="*60 +
             f"\n[Query ID]: {item['_global_index']}"
             f"\n[Question]: {item['question']}"
             f"\n[Retrieved URIs]: {item['retrieval'].get('uris', [])}"

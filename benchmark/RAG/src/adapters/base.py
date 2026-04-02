@@ -1,8 +1,8 @@
-import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from typing import List, Dict, Any, Union, Optional
+import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
 
 sys.path.append(str(Path(__file__).parent.parent))
 
@@ -27,7 +27,7 @@ class StandardSample:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass
+@dataclass 
 class StandardDoc:
     """Standardized sampleid to doc_path mapping structure"""
     sample_id:str
@@ -36,7 +36,7 @@ class StandardDoc:
 
 class BaseAdapter(ABC):
     """Base class for all dataset adapters"""
-
+    
     def __init__(self, raw_file_path: str):
         self.raw_file_path = raw_file_path
         self.logger = get_logger()
@@ -60,7 +60,7 @@ class BaseAdapter(ABC):
         Must be implemented by subclasses.
         """
         pass
-
+    
     @abstractmethod
     def build_prompt(self, qa: StandardQA, context_blocks: List[str]) -> tuple[str, Dict[str, Any]]:
         """

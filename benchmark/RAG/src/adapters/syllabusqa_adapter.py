@@ -25,12 +25,12 @@ Adapter functions:
 - post_process_answer: Post-process LLM output
 """
 
-import csv
 import json
 import os
-from typing import Any, Dict, List
+import csv
+from typing import List, Dict, Any
 
-from .base import BaseAdapter, StandardDoc, StandardQA, StandardSample
+from .base import BaseAdapter, StandardDoc, StandardSample, StandardQA
 
 # Rule for when answer cannot be found
 MISSING_RULE = "If no information is available to answer the question, write 'Not mentioned'."
@@ -41,27 +41,27 @@ CATEGORY_INSTRUCTIONS = {
 - Use EXACT wording from context when possible
 - Provide concise, direct answer
 - Do NOT add extra info or explanation""",
-
+    
     "multi factual": """Extract multiple factual answers from the syllabus.
 - Use EXACT wording from context when possible
 - List items separated by commas
 - Include all relevant facts""",
-
+    
     "single reasoning": """Answer using simple logical reasoning based on the syllabus.
 - Use ONLY facts from context
 - Make clear, direct conclusion
 - Do NOT explain reasoning
 - Do NOT invent information""",
-
+    
     "multi reasoning": """Answer using reasoning based on the syllabus.
 - Use ONLY facts from context
 - Do NOT invent information""",
-
+    
     "summarization": """Summarize relevant information from the syllabus.
 - Provide concise summary covering key points
 - Use wording from syllabus when possible
 - Include all important details""",
-
+    
     "yes/no": """Answer Yes/No question based on the syllabus.
 - First respond "Yes" or "No"
 - Do NOT add explanation
@@ -82,7 +82,7 @@ class SyllabusQAAdapter(BaseAdapter):
         syllabus_dir: docx file directory path
         logger: Logger
     """
-
+    
     def __init__(self, raw_file_path: str, **kwargs):
         """
         Initialize SyllabusQAAdapter.
@@ -97,7 +97,7 @@ class SyllabusQAAdapter(BaseAdapter):
             base_dir = raw_file_path
         else:
             base_dir = os.path.dirname(raw_file_path)
-
+        
         # Check for official repo structure first
         official_syllabus_dir = os.path.join(base_dir, 'syllabi', 'syllabi_redacted', 'word')
         if os.path.exists(official_syllabus_dir):
@@ -105,7 +105,7 @@ class SyllabusQAAdapter(BaseAdapter):
         else:
             # Fallback to original structure
             self.syllabus_dir = os.path.join(base_dir, 'syllabi')
-
+    
     def data_prepare(self, doc_dir: str) -> List[StandardDoc]:
         """
         Load raw docx files and convert to OpenViking-friendly format.
@@ -127,27 +127,27 @@ class SyllabusQAAdapter(BaseAdapter):
 
         res: List[StandardDoc] = []
         os.makedirs(doc_dir, exist_ok=True)
-
+        
         # Get list of syllabus_name mentioned in CSV
         required_syllabi = self._get_required_syllabi()
         self.logger.info(f"[SyllabusQAAdapter] Required syllabi from CSV: {len(required_syllabi)}")
-
+        
         # Get all docx files
         docx_files = [f for f in os.listdir(self.syllabus_dir) if f.endswith('.docx')]
-
+        
         for docx_file in docx_files:
             syllabus_id = docx_file.replace('.docx', '')
-
+            
             # Only process syllabi mentioned in CSV
             if syllabus_id not in required_syllabi:
                 continue
-
+            
             docx_path = os.path.join(self.syllabus_dir, docx_file)
-
+            
             try:
                 # Convert docx to Markdown
                 doc_content = self._convert_docx_to_markdown(docx_path)
-
+                
                 doc_path = os.path.join(doc_dir, f"{syllabus_id}_doc.md")
                 with open(doc_path, "w", encoding="utf-8") as f:
                     f.write(doc_content)
@@ -159,7 +159,7 @@ class SyllabusQAAdapter(BaseAdapter):
                     self.logger.warning("python-docx not installed, skipping docx conversion")
                     break
                 raise e
-
+        
         self.logger.info(f"[SyllabusQAAdapter] Processed {len(res)} syllabus documents")
         return res
 
@@ -171,28 +171,28 @@ class SyllabusQAAdapter(BaseAdapter):
             set: syllabus_name set
         """
         required = set()
-
+        
         # Determine data source type
         if self.raw_file_path.endswith('.json'):
             # Load from JSON
             if not os.path.exists(self.raw_file_path):
                 return required
-
+            
             with open(self.raw_file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-
+            
             for syllabus_name in data.keys():
                 if syllabus_name:
                     required.add(syllabus_name)
         elif self.raw_file_path.endswith('.csv'):
             csv_files = [self.raw_file_path]
         elif os.path.isdir(self.raw_file_path):
-            csv_files = [os.path.join(self.raw_file_path, f)
-                        for f in os.listdir(self.raw_file_path)
+            csv_files = [os.path.join(self.raw_file_path, f) 
+                        for f in os.listdir(self.raw_file_path) 
                         if f.endswith('.csv')]
         else:
             return required
-
+        
         # Process CSV files if any
         if 'csv_files' in locals():
             for csv_file in csv_files:
@@ -205,7 +205,7 @@ class SyllabusQAAdapter(BaseAdapter):
                         syllabus_name = row.get('syllabus_name', '')
                         if syllabus_name:
                             required.add(syllabus_name)
-
+        
         return required
 
     def _convert_docx_to_markdown(self, docx_path: str) -> str:
@@ -222,15 +222,15 @@ class SyllabusQAAdapter(BaseAdapter):
             from docx import Document
         except ImportError:
             raise ImportError("python-docx is required. Install with: pip install python-docx")
-
+        
         doc = Document(docx_path)
         md_lines = []
-
+        
         # Extract filename as title
         filename = os.path.basename(docx_path).replace('.docx', '')
         md_lines.append(f"# {filename}")
         md_lines.append("")
-
+        
         # Iterate through all paragraphs
         for para in doc.paragraphs:
             text = para.text.strip()
@@ -246,7 +246,7 @@ class SyllabusQAAdapter(BaseAdapter):
                 else:
                     md_lines.append(text)
                 md_lines.append("")
-
+        
         # Extract tables
         for table in doc.tables:
             md_lines.append("## Table")
@@ -254,7 +254,7 @@ class SyllabusQAAdapter(BaseAdapter):
                 cells = [cell.text.strip() for cell in row.cells]
                 md_lines.append("| " + " | ".join(cells) + " |")
             md_lines.append("")
-
+        
         return "\n".join(md_lines)
 
     def load_and_transform(self) -> List[StandardSample]:
@@ -281,8 +281,8 @@ class SyllabusQAAdapter(BaseAdapter):
             return self._load_from_csv([self.raw_file_path])
         elif os.path.isdir(self.raw_file_path):
             # Directory, find all CSV files
-            csv_files = [os.path.join(self.raw_file_path, f)
-                        for f in os.listdir(self.raw_file_path)
+            csv_files = [os.path.join(self.raw_file_path, f) 
+                        for f in os.listdir(self.raw_file_path) 
                         if f.endswith('.csv')]
             return self._load_from_csv(csv_files)
         else:
@@ -302,24 +302,24 @@ class SyllabusQAAdapter(BaseAdapter):
 
         for syllabus_name, qa_list in data.items():
             qa_pairs = []
-
+            
             for qa_item in qa_list:
                 question = qa_item.get("question", "")
                 answer = qa_item.get("answer", "")
                 question_type = qa_item.get("question_type", "")
                 qa_id = qa_item.get("id", "")
-
+                
                 # Skip "no answer" type questions as RAG results cannot be evaluated
                 if question_type == "no answer":
                     continue
-
+                
                 # Collect answer_span as evidence
                 evidence = []
                 for i in range(1, 6):
                     span = qa_item.get(f"answer_span_{i}", "")
                     if span and span.strip():
                         evidence.append(span.strip())
-
+                
                 # Collect reasoning_steps, also as evidence (for reasoning type questions)
                 reasoning_steps = []
                 for i in range(1, 6):
@@ -329,10 +329,10 @@ class SyllabusQAAdapter(BaseAdapter):
                         # reasoning_steps also added to evidence for recall calculation
                         if step.strip() not in evidence:
                             evidence.append(step.strip())
-
+                
                 # Format question
                 formatted_question = f'Based on the syllabus "{syllabus_name}", {question}'
-
+                
                 qa_pairs.append(StandardQA(
                     question=formatted_question,
                     gold_answers=[answer] if answer else ["Not mentioned"],
@@ -365,12 +365,12 @@ class SyllabusQAAdapter(BaseAdapter):
         """
         # Group by syllabus_name
         syllabus_qa_map: Dict[str, List] = {}
-
+        
         for csv_file in csv_files:
             if not os.path.exists(csv_file):
                 self.logger.warning(f"CSV file not found: {csv_file}")
                 continue
-
+            
             with open(csv_file, 'r', encoding='utf-8') as f:
                 reader = csv.DictReader(f)
                 for row in reader:
@@ -378,29 +378,29 @@ class SyllabusQAAdapter(BaseAdapter):
                     if syllabus_name not in syllabus_qa_map:
                         syllabus_qa_map[syllabus_name] = []
                     syllabus_qa_map[syllabus_name].append(row)
-
+        
         standard_samples = []
-
+        
         for syllabus_name, qa_list in syllabus_qa_map.items():
             qa_pairs = []
-
+            
             for qa_item in qa_list:
                 question = qa_item.get("question", "")
                 answer = qa_item.get("answer", "")
                 question_type = qa_item.get("question_type", "")
                 qa_id = qa_item.get("id", "")
-
+                
                 # Skip "no answer" type questions as RAG results cannot be evaluated
                 if question_type == "no answer":
                     continue
-
+                
                 # Collect answer_span as evidence
                 evidence = []
                 for i in range(1, 6):
                     span = qa_item.get(f"answer_span_{i}", "")
                     if span and span.strip():
                         evidence.append(span.strip())
-
+                
                 # Collect reasoning_steps, also as evidence (for reasoning type questions)
                 reasoning_steps = []
                 for i in range(1, 6):
@@ -410,10 +410,10 @@ class SyllabusQAAdapter(BaseAdapter):
                         # reasoning_steps also added to evidence for recall calculation
                         if step.strip() not in evidence:
                             evidence.append(step.strip())
-
+                
                 # Format question
                 formatted_question = f'Based on the syllabus "{syllabus_name}", {question}'
-
+                
                 qa_pairs.append(StandardQA(
                     question=formatted_question,
                     gold_answers=[answer] if answer else ["Not mentioned"],
@@ -455,11 +455,11 @@ class SyllabusQAAdapter(BaseAdapter):
         """
         eff_q = qa.question
         category = qa.category
-
+        
         category_instruction = CATEGORY_INSTRUCTIONS.get(category, "")
-
+        
         context_text = "\n\n".join(context_blocks)
-
+        
         if category_instruction:
             full_prompt = f"{context_text}\n\n{category_instruction}\n\n{MISSING_RULE}\n\nQuestion: {eff_q}\n\nAnswer:"
         else:

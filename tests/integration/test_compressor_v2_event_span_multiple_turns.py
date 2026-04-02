@@ -135,7 +135,7 @@ def run_ingest(client: ov.SyncHTTPClient, session_id: str, wait_seconds: float):
         console.print(f"  [green]任务 {status}，耗时 {elapsed:.2f}s[/green]")
         console.print(f"  Task 详情: {task}")
 
-    console.print("  [yellow]等待向量化完成...[/yellow]")
+    console.print(f"  [yellow]等待向量化完成...[/yellow]")
     client.wait_processed()
 
     if wait_seconds > 0:

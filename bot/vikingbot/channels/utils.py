@@ -3,7 +3,9 @@
 import base64
 import re
 from pathlib import Path
-from typing import List, Tuple
+from loguru import logger
+from typing import Tuple, List
+
 
 # Common image file extensions
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".tiff"}

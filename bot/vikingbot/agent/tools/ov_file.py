@@ -175,7 +175,7 @@ class VikingAddResourceTool(OVFileTool):
             else:
                 return "Failed to add resource"
         except httpx.ReadTimeout:
-            return "Request timed out. The resource addition task may still be processing on the server side."
+            return f"Request timed out. The resource addition task may still be processing on the server side."
         except Exception as e:
             logger.warning(f"Error adding resource: {e}")
             return f"Error adding resource to Viking: {str(e)}"

@@ -20,6 +20,7 @@ from .consts import (
 )
 from .embedding_config import EmbeddingConfig
 from .encryption_config import EncryptionConfig
+from .telemetry_config import TelemetryConfig
 from .log_config import LogConfig
 from .memory_config import MemoryConfig
 from .parser_config import (
@@ -38,7 +39,6 @@ from .parser_config import (
 from .prompts_config import PromptsConfig
 from .rerank_config import RerankConfig
 from .storage_config import StorageConfig
-from .telemetry_config import TelemetryConfig
 from .vlm_config import VLMConfig
 
 

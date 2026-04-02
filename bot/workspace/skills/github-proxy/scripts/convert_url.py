@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-import re
 import sys
+import re
 
 DEFAULT_PROXY = "https://githubproxy.cc"
 BACKUP_PROXY = "https://ghfast.top"

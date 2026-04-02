@@ -1,14 +1,17 @@
 """Direct backend implementation - executes commands directly on host without sandboxing."""
 
 import asyncio
+import os
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from vikingbot.config.schema import SandboxConfig, SessionKey
-from vikingbot.sandbox.backends import register_backend
 from vikingbot.sandbox.base import SandboxBackend
+from vikingbot.sandbox.backends import register_backend
+
+
+from vikingbot.config.schema import SandboxConfig, SessionKey
 
 
 @register_backend("direct")

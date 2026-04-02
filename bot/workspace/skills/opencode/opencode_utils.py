@@ -5,8 +5,8 @@ import json
 import os
 import subprocess
 import sys
-import time
 import traceback
+import time
 
 from opencode_ai import Opencode
 

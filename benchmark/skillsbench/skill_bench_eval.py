@@ -118,7 +118,7 @@ def run_prepare(args: argparse.Namespace) -> None:
     temp_dir = PROJECT_ROOT / f"temp_skillsbench_{int(time.time())}"
 
     print(f"    Cloning {SKILLSBENCH_REPO}...", file=sys.stderr)
-    print("    (this may take a moment...)", file=sys.stderr)
+    print(f"    (this may take a moment...)", file=sys.stderr)
 
     process = subprocess.Popen(
         ["git", "clone", "--progress", SKILLSBENCH_REPO, str(temp_dir)],
@@ -144,18 +144,18 @@ def run_prepare(args: argparse.Namespace) -> None:
             shutil.rmtree(temp_dir)
         sys.exit(1)
 
-    print("    Extracting tasks directory...", file=sys.stderr)
+    print(f"    Extracting tasks directory...", file=sys.stderr)
 
     src_tasks = temp_dir / "tasks"
     if not src_tasks.exists():
-        print("    [error] tasks directory not found in cloned repo", file=sys.stderr)
+        print(f"    [error] tasks directory not found in cloned repo", file=sys.stderr)
         shutil.rmtree(temp_dir)
         sys.exit(1)
 
     BENCH_DATA_DIR.mkdir(parents=True, exist_ok=True)
     shutil.copytree(src_tasks, TASKS_DIR)
 
-    print("    Cleaning up temp files...", file=sys.stderr)
+    print(f"    Cleaning up temp files...", file=sys.stderr)
     shutil.rmtree(temp_dir)
 
     excluded_count = 0
@@ -210,7 +210,7 @@ def run_verification(task_dir: Path, work_dir: Path, storage_workspace: Path) ->
         result["error"] = "no tests directory"
         result["verified"] = True
         result["passed"] = True
-        print("    [verify] no tests directory, skipping verification", file=sys.stderr)
+        print(f"    [verify] no tests directory, skipping verification", file=sys.stderr)
         return result
 
     test_sh = tests_dir / "test.sh"
@@ -222,10 +222,10 @@ def run_verification(task_dir: Path, work_dir: Path, storage_workspace: Path) ->
         result["error"] = "no test files found"
         result["verified"] = True
         result["passed"] = True
-        print("    [verify] no test files, skipping verification", file=sys.stderr)
+        print(f"    [verify] no test files, skipping verification", file=sys.stderr)
         return result
 
-    print("    [verify] running tests...", file=sys.stderr)
+    print(f"    [verify] running tests...", file=sys.stderr)
 
     logs_dir = work_dir / "logs" / "verifier"
     logs_dir.mkdir(parents=True, exist_ok=True)
@@ -385,7 +385,7 @@ def run_verification(task_dir: Path, work_dir: Path, storage_workspace: Path) ->
                 f"--junitxml={logs_dir}/junit.xml",
             ]
 
-            print("    [verify] running: pytest test_outputs.py", file=sys.stderr)
+            print(f"    [verify] running: pytest test_outputs.py", file=sys.stderr)
 
             proc_result = subprocess.run(
                 test_cmd,
@@ -413,9 +413,9 @@ def run_verification(task_dir: Path, work_dir: Path, storage_workspace: Path) ->
                 result["test_score"] = round(score, 2)
 
             if result["passed"]:
-                print("    [verify] PASSED", file=sys.stderr)
+                print(f"    [verify] PASSED", file=sys.stderr)
             else:
-                print("    [verify] FAILED", file=sys.stderr)
+                print(f"    [verify] FAILED", file=sys.stderr)
                 if proc_result.stdout:
                     print(f"    [verify stdout] {proc_result.stdout[:500]}", file=sys.stderr)
                 if proc_result.stderr:
@@ -425,7 +425,7 @@ def run_verification(task_dir: Path, work_dir: Path, storage_workspace: Path) ->
             result["error"] = "test timeout"
             result["verified"] = True
             result["passed"] = False
-            print("    [verify] TIMEOUT", file=sys.stderr)
+            print(f"    [verify] TIMEOUT", file=sys.stderr)
         except Exception as e:
             result["error"] = str(e)
             result["verified"] = True
@@ -434,7 +434,7 @@ def run_verification(task_dir: Path, work_dir: Path, storage_workspace: Path) ->
     else:
         result["verified"] = True
         result["passed"] = True
-        print("    [verify] no pytest file, skipping", file=sys.stderr)
+        print(f"    [verify] no pytest file, skipping", file=sys.stderr)
 
     return result
 
@@ -495,7 +495,7 @@ def run_task(
     if not instruction_file.exists():
         result["status"] = "error"
         result["error"] = "instruction.md not found"
-        print("    [error] instruction.md not found", file=sys.stderr)
+        print(f"    [error] instruction.md not found", file=sys.stderr)
         return result
 
     task_skills_dir = task_dir / "environment" / "skills"
@@ -551,7 +551,7 @@ def run_task(
 
         if not verify_only:
             # Run vikingbot command
-            print("    [running] vikingbot chat...", file=sys.stderr)
+            print(f"    [running] vikingbot chat...", file=sys.stderr)
             cmd = [
                 "vikingbot",
                 "chat",
@@ -854,7 +854,7 @@ def run_run(args: argparse.Namespace) -> None:
         except Exception as e:
             print(f"    [warn] failed to generate summary from result.csv: {e}", file=sys.stderr)
 
-    print("\n=== Summary ===", file=sys.stderr)
+    print(f"\n=== Summary ===", file=sys.stderr)
     print(
         f"    Completed: {final_summary['completed']}/{final_summary['total_tasks']}",
         file=sys.stderr,

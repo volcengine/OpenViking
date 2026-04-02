@@ -1,7 +1,7 @@
 """User API Key persistence manager for OpenViking remote mode."""
 
-import hashlib
 import json
+import hashlib
 from pathlib import Path
 from typing import Optional
 

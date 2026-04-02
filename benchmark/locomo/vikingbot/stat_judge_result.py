@@ -70,7 +70,7 @@ def main():
         f"Accuracy: {accuracy:.2%}",
         f"\nAverage time cost: {avg_time:.2f}s",
         f"\nAverage iteration: {total_iteration / valid_rows if valid_rows > 0 else 0.0:.2f}",
-        "\nToken usage:",
+        f"\nToken usage:",
         f"  Total prompt tokens: {total_prompt_tokens}",
         f"  Total completion tokens: {total_completion_tokens}",
         f"  Total tokens: {total_tokens}",

@@ -1,9 +1,10 @@
 """Tool registry for dynamic tool management."""
 
 import time
-from typing import Any
 
 from loguru import logger
+
+from typing import Any
 
 from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.config.schema import SessionKey

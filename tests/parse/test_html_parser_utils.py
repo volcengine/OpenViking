@@ -1,3 +1,4 @@
+import pytest
 from openviking.parse.parsers.html import HTMLParser
 
 

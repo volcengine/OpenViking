@@ -1,9 +1,11 @@
 """Spawn tool for creating background subagents."""
 
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+from vikingbot.agent.tools.base import Tool
+
 
 from vikingbot.agent.subagent import SubagentManager
-from vikingbot.agent.tools.base import Tool
 
 
 class SpawnTool(Tool):

@@ -4,6 +4,8 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from openviking_cli.utils.cohere_rerank import CohereRerankClient
 
 

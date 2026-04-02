@@ -1,6 +1,6 @@
-import collections
 import re
 import string
+import collections
 from typing import List
 
 
@@ -8,7 +8,7 @@ class MetricsCalculator:
     @staticmethod
     def normalize_answer(s):
         """Normalize answer text: remove punctuation, convert to lowercase, remove articles"""
-        s = str(s).replace(',', "")
+        s = str(s).replace(',', "") 
         def remove_articles(text): return re.sub(r'\b(a|an|the|and)\b', ' ', text)
         def white_space_fix(text): return ' '.join(text.split())
         def remove_punc(text):
@@ -53,34 +53,34 @@ class MetricsCalculator:
         Returns:
             float, retrieval recall score, range 0.0 to 1.0
         """
-        if not evidence_list:
-            return 0.0
-
+        if not evidence_list: 
+            return 0.0 
+            
         combined_retrieved = " ".join(retrieved_texts)
-
+        
         normalized_retrieved = MetricsCalculator.normalize_answer(combined_retrieved)
         ret_tokens = set(normalized_retrieved.split())
-
+        
         hit_count = 0
-
+        
         for evidence in evidence_list:
             if evidence in combined_retrieved:
                 hit_count += 1
                 continue
-
+                
             normalized_ev = MetricsCalculator.normalize_answer(evidence)
             ev_tokens = set(normalized_ev.split())
-
+            
             if not ev_tokens:
                 continue
-
+                
             if len(ev_tokens) < min_soft_match_tokens:
                 continue
-
+                
             overlap_count = len(ev_tokens & ret_tokens)
             coverage = overlap_count / len(ev_tokens)
-
+            
             if coverage >= soft_threshold:
                 hit_count += 1
-
+                
         return hit_count / len(evidence_list)

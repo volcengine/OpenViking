@@ -4,13 +4,14 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from typing import Any
-
+from typing import TYPE_CHECKING, Any
 from loguru import logger
 
-from vikingbot.config.schema import SessionKey
-from vikingbot.sandbox.backends import register_backend
 from vikingbot.sandbox.base import SandboxBackend, SandboxNotStartedError
+from vikingbot.sandbox.backends import register_backend
+
+
+from vikingbot.config.schema import SandboxConfig, SessionKey
 
 
 @register_backend("srt")

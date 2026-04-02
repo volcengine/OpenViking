@@ -7,17 +7,19 @@ OpenViking FUSE 会话集成
 
 from __future__ import annotations
 
+import sys
+import asyncio
 import shutil
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Dict, Optional, Any
 
 from loguru import logger
 
 from vikingbot.utils.helpers import get_workspace_path
 
 # 相对导入同一包内的模块
-from .mount import MountConfig, MountScope, OpenVikingMount
-from .viking_fuse import FUSE_AVAILABLE, FUSEMountManager, mount_fuse
+from .mount import OpenVikingMount, MountConfig, MountScope
+from .viking_fuse import mount_fuse, FUSEMountManager, FUSE_AVAILABLE
 
 
 class SessionOpenVikingManager:
@@ -46,7 +48,7 @@ class SessionOpenVikingManager:
         # FUSE 挂载管理器（如果可用）
         self._fuse_manager = FUSEMountManager() if FUSE_AVAILABLE else None
 
-        logger.info("SessionOpenVikingManager initialized")
+        logger.info(f"SessionOpenVikingManager initialized")
         logger.info(f"  Base workspace: {self.base_workspace}")
         logger.info(f"  FUSE available: {FUSE_AVAILABLE}")
 

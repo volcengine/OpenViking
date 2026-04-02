@@ -1,15 +1,13 @@
-import importlib
 import os
 import sys
+import yaml
+import importlib 
 from argparse import ArgumentParser
 from pathlib import Path
-
-import yaml
 
 sys.path.append(str(Path(__file__).parent))
 
 from src.core.logger import setup_logging
-
 # ==========================================
 # 1. Environment Initialization
 # ==========================================
@@ -22,9 +20,9 @@ if os.path.exists(ov_config_path):
     print(f"[Init] Auto-detected OpenViking config: {ov_config_path}")
 
 try:
-    from src.core.llm_client import LLMClientWrapper
+    from src.pipeline import BenchmarkPipeline 
     from src.core.vector_store import VikingStoreWrapper
-    from src.pipeline import BenchmarkPipeline
+    from src.core.llm_client import LLMClientWrapper 
 except SyntaxError as e:
     print(f"\n[Fatal Error] Syntax error while importing modules: {e}")
     sys.exit(1)
@@ -61,19 +59,19 @@ def resolve_path(path_str, base_path):
 def main():
     parser = ArgumentParser(description="Run RAG Benchmark (Smart Path Handling)")
     default_config_path = os.path.join(SCRIPT_DIR, "config/config.yaml")
-
-    parser.add_argument("--config", default=default_config_path,
+    
+    parser.add_argument("--config", default=default_config_path, 
                         help=f"Path to config file. Default: {default_config_path}")
-
-    parser.add_argument("--step", choices=["all", "gen", "eval", "del"], default="all",
+    
+    parser.add_argument("--step", choices=["all", "gen", "eval", "del"], default="all", 
                         help="Execution step: 'gen' (Retrieval+LLM), 'eval' (Judge), or 'all'")
-
+    
     args = parser.parse_args()
 
     # --- B. Load and Parse Config ---
     config_path = os.path.abspath(args.config)
     print(f"[Init] Loading configuration from: {config_path}")
-
+    
     try:
         config = load_config(config_path)
     except FileNotFoundError as e:
@@ -84,12 +82,12 @@ def main():
     print(f"[Init] Resolving paths relative to Project Root: {PROJECT_ROOT}")
     dataset_name = config.get('dataset_name', 'UnknownDataset')
     retrieval_topk = config.get('execution', {}).get('retrieval_topk', 5)
-
+    
     format_vars = {
         'dataset_name': dataset_name,
         'retrieval_topk': retrieval_topk
     }
-
+    
     path_keys = ['dataset_path', 'output_dir', 'vector_store', 'log_file', 'doc_output_dir']
     for key in path_keys:
         if key in config.get('paths', {}):
@@ -103,15 +101,15 @@ def main():
     try:
         logger = setup_logging(config['paths']['log_file'])
         logger.info(">>> Benchmark Session Started")
-
+        
         # 1. Adapter (Dynamic Loading)
         adapter_cfg = config.get('adapter', {})
         module_path = adapter_cfg.get('module', 'src.adapters.locomo_adapter')
         class_name = adapter_cfg.get('class_name', 'LocomoAdapter')
-
+        
         logger.info(f"Dynamically loading Adapter: {class_name} from {module_path}")
         logger.info(f"Loading dataset from: {config['paths']['dataset_path']}")
-
+        
         try:
             mod = importlib.import_module(module_path)
             AdapterClass = getattr(mod, class_name)
@@ -122,18 +120,18 @@ def main():
         except AttributeError as e:
             logger.error(f"Class '{class_name}' not found in module '{module_path}'. Please check your config 'adapter.class_name'. Error: {e}")
             raise e
-
+        
         # 2. Vector Store
         vector_store = VikingStoreWrapper(store_path=config['paths']['vector_store'])
-
+        
         # 3. LLM Client
         api_key = os.environ.get(
-            config['llm'].get('api_key_env_var', ''),
+            config['llm'].get('api_key_env_var', ''), 
             config['llm'].get('api_key')
         )
         if not api_key:
             logger.warning("No API Key found in config or environment variables!")
-
+            
         llm_client = LLMClientWrapper(config=config['llm'], api_key=api_key)
 
         # 4. Pipeline
@@ -148,7 +146,7 @@ def main():
         if args.step in ["all", "gen"]:
             logger.info("Stage: Generation (Ingest -> Retrieve -> Generate)")
             pipeline.run_generation()
-
+            
         if args.step in ["all", "eval"]:
             logger.info("Stage: Evaluation (Judge -> Metrics)")
             pipeline.run_evaluation()
@@ -156,7 +154,7 @@ def main():
         if args.step in ["all", "del"]:
             logger.info("Stage: Delete Vector Store")
             pipeline.run_deletion()
-
+        
         logger.info("Benchmark finished successfully.")
 
     except KeyboardInterrupt:

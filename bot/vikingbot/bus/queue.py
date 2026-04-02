@@ -1,7 +1,7 @@
 """Async message queue for decoupled channel-agent communication."""
 
 import asyncio
-from typing import Awaitable, Callable
+from typing import Callable, Awaitable, Any
 
 from loguru import logger
 

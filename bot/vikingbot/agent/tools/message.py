@@ -1,9 +1,10 @@
 """Message tool for sending messages to users."""
 
-from typing import Any, Awaitable, Callable
+from typing import Any, Callable, Awaitable
 
 from vikingbot.agent.tools.base import Tool
 from vikingbot.bus.events import OutboundMessage
+from vikingbot.config.schema import SessionKey
 
 
 class MessageTool(Tool):
@@ -38,6 +39,7 @@ class MessageTool(Tool):
         }
 
     async def execute(self, tool_context: "ToolContext", **kwargs: Any) -> str:
+        from loguru import logger
 
         content = kwargs.get("content")
 

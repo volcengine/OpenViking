@@ -4,6 +4,7 @@ from typing import Any
 from loguru import logger
 
 from vikingbot.config.loader import load_config
+from vikingbot.config.schema import SessionKey, AgentMemoryMode
 
 from ...session import Session
 from ..base import Hook, HookContext

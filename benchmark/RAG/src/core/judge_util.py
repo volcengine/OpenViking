@@ -28,7 +28,7 @@ def llm_grader(
     score = 0
     reasoning = "No reasoning provided."
     prompt_type = "Generic_0-4"
-
+    
     # Handle case when gold_answer is a list
     if isinstance(gold_answer, list):
         gold_answer_str = " | ".join(gold_answer)

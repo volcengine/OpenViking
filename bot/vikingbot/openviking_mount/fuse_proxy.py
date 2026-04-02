@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import errno
-import os
-import shutil
-import stat
 import sys
+import os
+import stat
+import errno
 import tempfile
-from datetime import datetime
+import shutil
 from pathlib import Path
 from typing import Any, Dict
+
+from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from loguru import logger
 
-from .mount import MountConfig, OpenVikingMount
+from .mount import OpenVikingMount, MountConfig
 
 try:
     from fuse import FUSE, FuseOSError, Operations
@@ -72,7 +73,7 @@ if FUSE_AVAILABLE:
                     "st_mtime": stat_info.st_mtime,
                     "st_ctime": stat_info.st_ctime,
                 }
-            print("2222222")
+            print(f"2222222")
             if path in self._pending_uploads:
                 now = datetime.now().timestamp()
                 return {
@@ -299,7 +300,7 @@ def mount_fuse(config: MountConfig, foreground: bool = True) -> None:
 
     logger.info(f"Mounting OpenViking FUSE Proxy at: {config.mount_point}")
     logger.info(f"  Proxy to: {config.openviking_data_path / '.original_files'}")
-    logger.info("  Press Ctrl+C to unmount")
+    logger.info(f"  Press Ctrl+C to unmount")
 
     try:
         FUSE(

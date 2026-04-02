@@ -866,7 +866,7 @@ def run_full_test(
     tree.add(f"Phase 2a: 线上排障 — {ok2}/{len(CHAT_BATCH_2)}")
     tree.add(f"Phase 2b: 代码评审 — {ok3}/{len(CHAT_BATCH_3)}")
     tree.add(f"Phase 2c: 架构设计 — {ok4}/{len(CHAT_BATCH_4)}")
-    tree.add("Phase 3: Archive Index 验证")
+    tree.add(f"Phase 3: Archive Index 验证")
 
     expand_ok = sum(1 for r in expand_results if r["success"])
     tree.add(f"Phase 4: 归档展开 — {expand_ok}/{len(expand_results)} 问题回答正确")

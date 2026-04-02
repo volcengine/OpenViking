@@ -1,11 +1,10 @@
 import argparse
-import asyncio
 import csv
 import json
 import os
-
-from dotenv import load_dotenv
+import asyncio
 from openai import AsyncOpenAI
+from dotenv import load_dotenv
 
 load_dotenv()
 

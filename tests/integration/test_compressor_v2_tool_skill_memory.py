@@ -207,7 +207,7 @@ def run_ingest(client: ov.SyncHTTPClient, session_id: str, wait_seconds: float):
         console.print(f"  [green]任务 {status}，耗时 {elapsed:.2f}s[/green]")
         console.print(f"  Task 详情: {task}")
 
-    console.print("  [yellow]等待向量化完成...[/yellow]")
+    console.print(f"  [yellow]等待向量化完成...[/yellow]")
     client.wait_processed()
 
     if wait_seconds > 0:
@@ -299,7 +299,7 @@ def run_verify(client: ov.SyncHTTPClient):
 
 def main():
     """入口函数"""
-    parser = argparse.ArgumentParser(description="OpenViking 记忆演示 — 工具调用和Skill调用")
+    parser = argparse.ArgumentParser(description=f"OpenViking 记忆演示 — 工具调用和Skill调用")
     parser.add_argument("--url", default=DEFAULT_URL, help=f"Server URL (默认: {DEFAULT_URL})")
     parser.add_argument("--api-key", default=DEFAULT_API_KEY, help="API key")
     parser.add_argument("--agent-id", default=DEFAULT_AGENT_ID, help="Agent ID")
