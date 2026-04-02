@@ -182,7 +182,6 @@ class MemoryReadTool(MemoryTool):
     ) -> Any:
         uri = kwargs.get("uri", "")
         try:
-
             content = await viking_fs.read_file(
                 uri,
                 ctx=ctx.request_ctx,

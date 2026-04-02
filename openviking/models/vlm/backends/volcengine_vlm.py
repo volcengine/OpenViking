@@ -49,7 +49,7 @@ class VolcEngineVLM(OpenAIVLM):
         """Build response from Chat Completions response. Returns str or VLMResponse based on has_tools."""
         choice = response.choices[0]
         message = choice.message
-        tracer.info(f'message.content={message.content}')
+        tracer.info(f"message.content={message.content}")
         if has_tools:
             usage = {}
             if hasattr(response, "usage") and response.usage:
@@ -174,9 +174,6 @@ class VolcEngineVLM(OpenAIVLM):
                 last_error = e
                 if attempt < max_retries:
                     await asyncio.sleep(2**attempt)
-
-
-
 
         if last_error:
             raise last_error

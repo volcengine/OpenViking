@@ -346,6 +346,7 @@ class LiteLLMVLMProvider(VLMBase):
         kwargs = self._build_text_kwargs(prompt, thinking, tools, tool_choice, messages)
         # 用 tracer.info 打印请求
         tracer.info(f"request: {json.dumps(kwargs, ensure_ascii=False, indent=2)}")
+
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
             response = await acompletion(**kwargs)
@@ -354,7 +355,6 @@ class LiteLLMVLMProvider(VLMBase):
             if tools:
                 return self._build_vlm_response(response, has_tools=True)
             return self._clean_response(self._extract_content_from_response(response))
-
 
         return await retry_async(
             _call,

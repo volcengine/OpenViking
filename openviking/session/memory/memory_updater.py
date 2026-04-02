@@ -131,7 +131,15 @@ class MessageRange:
                 continue
             if hasattr(elem, "created_at") and elem.created_at:
                 # 获取周几的英文全称
-                weekday_en = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+                weekday_en = [
+                    "Monday",
+                    "Tuesday",
+                    "Wednesday",
+                    "Thursday",
+                    "Friday",
+                    "Saturday",
+                    "Sunday",
+                ]
                 weekday = weekday_en[elem.created_at.weekday()]
                 return f"{elem.created_at.strftime('%Y-%m-%d')} ({weekday})"
         return None
@@ -262,7 +270,7 @@ class MemoryUpdater:
             except Exception as e:
                 tracer.error(
                     f"Failed to apply operation: {e}, op={resolved_op.model}, op type={type(resolved_op.model)}",
-                    e
+                    e,
                 )
                 if hasattr(resolved_op.model, "model_dump"):
                     tracer.info(f"Op dump: {resolved_op.model.model_dump()}")
@@ -274,7 +282,7 @@ class MemoryUpdater:
                 await self._apply_edit_overview(op, uri, ctx)
                 result.add_edited(uri)
             except Exception as e:
-                tracer.error(f"Failed to edit overview {uri}",e)
+                tracer.error(f"Failed to edit overview {uri}", e)
                 result.add_error(uri, e)
 
         # Apply delete operations
@@ -283,7 +291,7 @@ class MemoryUpdater:
                 await self._apply_delete(uri, ctx)
                 result.add_deleted(uri)
             except Exception as e:
-                tracer.error(f"Failed to delete memory {uri}",e)
+                tracer.error(f"Failed to delete memory {uri}", e)
                 result.add_error(uri, e)
 
         # Vectorize written and edited memories
@@ -350,7 +358,6 @@ class MemoryUpdater:
         # VikingFS automatically handles L0/L1/L2 and vector index updates
         await viking_fs.write_file(uri, full_content, ctx=ctx)
 
-
     def _render_content_template(
         self, template: str, fields: Dict[str, Any], extract_context: Any = None
     ) -> str:
@@ -394,7 +401,9 @@ class MemoryUpdater:
 
         return isinstance(content, StrPatch)
 
-    async def _apply_edit(self, flat_model: Any, uri: str, ctx: RequestContext, memory_type: str = None) -> bool:
+    async def _apply_edit(
+        self, flat_model: Any, uri: str, ctx: RequestContext, memory_type: str = None
+    ) -> bool:
         """Apply edit operation from a flat model.
 
         Returns:
@@ -631,7 +640,7 @@ class MemoryUpdater:
             lines.append(f"{'=' * 60}\n")
 
             # Print directly
-            tracer.info(f'diff={"\n".join(lines)}')
+            tracer.info("diff=" + "\n".join(lines))
         except ImportError:
             # Fallback: just show file name
             tracer.error(f"diff_match_patch not available, skipping diff for {uri}")

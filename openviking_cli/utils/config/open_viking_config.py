@@ -152,7 +152,6 @@ class OpenVikingConfig(BaseModel):
         default_factory=lambda: MemoryConfig(), description="Memory configuration"
     )
 
-
     telemetry: "TelemetryConfig" = Field(
         default_factory=lambda: TelemetryConfig(), description="Telemetry configuration"
     )

@@ -297,7 +297,9 @@ def is_uri_allowed_for_schema(
         True if the URI is allowed
     """
     allowed_dirs = collect_allowed_directories(schemas, user_space, agent_space, extract_context)
-    allowed_patterns = collect_allowed_path_patterns(schemas, user_space, agent_space, extract_context)
+    allowed_patterns = collect_allowed_path_patterns(
+        schemas, user_space, agent_space, extract_context
+    )
     return is_uri_allowed(uri, allowed_dirs, allowed_patterns)
 
 
@@ -478,8 +480,12 @@ def resolve_all_operations(
                 item_dict = dict(item) if hasattr(item, "model_dump") else dict(item)
                 try:
                     uri = resolve_flat_model_uri(
-                        item_dict, registry, user_space, agent_space,
-                        memory_type=field_name, extract_context=extract_context
+                        item_dict,
+                        registry,
+                        user_space,
+                        agent_space,
+                        memory_type=field_name,
+                        extract_context=extract_context,
                     )
                     # All operations go to unified list - will read existing file first
                     resolved.operations.append(
@@ -561,12 +567,16 @@ def validate_operations_uris(
         Tuple of (is_valid, list of error messages)
     """
     allowed_dirs = collect_allowed_directories(schemas, user_space, agent_space, extract_context)
-    allowed_patterns = collect_allowed_path_patterns(schemas, user_space, agent_space, extract_context)
+    allowed_patterns = collect_allowed_path_patterns(
+        schemas, user_space, agent_space, extract_context
+    )
 
     errors = []
 
     # First resolve all URIs
-    resolved = resolve_all_operations(operations, registry, user_space, agent_space, extract_context)
+    resolved = resolve_all_operations(
+        operations, registry, user_space, agent_space, extract_context
+    )
 
     if resolved.has_errors():
         errors.extend(resolved.errors)

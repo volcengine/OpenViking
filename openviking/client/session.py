@@ -57,8 +57,12 @@ class Session:
         """
         if parts is not None:
             parts_dicts = [asdict(p) for p in parts]
-            return await self._client.add_message(self.session_id, role, parts=parts_dicts, created_at=created_at)
-        return await self._client.add_message(self.session_id, role, content=content, created_at=created_at)
+            return await self._client.add_message(
+                self.session_id, role, parts=parts_dicts, created_at=created_at
+            )
+        return await self._client.add_message(
+            self.session_id, role, content=content, created_at=created_at
+        )
 
     async def commit(self, telemetry: TelemetryRequest = False) -> Dict[str, Any]:
         """Commit the session (archive messages and extract memories).

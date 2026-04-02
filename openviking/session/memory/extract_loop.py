@@ -286,7 +286,7 @@ See the complete JSON Schema below:
         schemas = self.context_provider.get_memory_schemas(self.ctx)
 
         # Use pre-initialized extract_context
-        if not hasattr(self, '_extract_context') or self._extract_context is None:
+        if not hasattr(self, "_extract_context") or self._extract_context is None:
             raise ValueError("ExtractContext not initialized")
 
         is_valid, errors = validate_operations_uris(
@@ -405,7 +405,7 @@ See the complete JSON Schema below:
         tool_ctx = ToolContext(request_ctx=self.ctx, transaction_handle=self._transaction_handle)
 
         try:
-            tracer.info(f'tool_call.arguments={tool_call.arguments}')
+            tracer.info(f"tool_call.arguments={tool_call.arguments}")
             result = await tool.execute(self.viking_fs, tool_ctx, **tool_call.arguments)
 
             return result
@@ -444,8 +444,12 @@ See the complete JSON Schema below:
                 item_dict = dict(item) if hasattr(item, "model_dump") else dict(item)
                 try:
                     uri = resolve_flat_model_uri(
-                        item_dict, registry, "default", "default",
-                        memory_type=field_name, extract_context=self._extract_context
+                        item_dict,
+                        registry,
+                        "default",
+                        "default",
+                        memory_type=field_name,
+                        extract_context=self._extract_context,
                     )
                 except Exception as e:
                     logger.warning(f"Failed to resolve URI for {item}: {e}")

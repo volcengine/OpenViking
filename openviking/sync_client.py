@@ -84,7 +84,9 @@ class SyncOpenViking:
 
         If both content and parts are provided, parts takes precedence.
         """
-        return run_async(self._async_client.add_message(session_id, role, content, parts, created_at))
+        return run_async(
+            self._async_client.add_message(session_id, role, content, parts, created_at)
+        )
 
     def commit_session(
         self, session_id: str, telemetry: TelemetryRequest = False

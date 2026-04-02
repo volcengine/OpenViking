@@ -58,7 +58,11 @@ def _setup_logging():
 
     try:
         # Configure logger to patch records with trace_id
-        logger.configure(patcher=lambda record: record.__setitem__("extra", {**record["extra"], "trace_id": get_trace_id()}))
+        logger.configure(
+            patcher=lambda record: record.__setitem__(
+                "extra", {**record["extra"], "trace_id": get_trace_id()}
+            )
+        )
         _trace_id_filter_added = True
     except Exception:
         pass
@@ -106,6 +110,7 @@ def _init_asyncio_instrumentation() -> None:
     """Initialize asyncio instrumentation to create child spans for create_task."""
     try:
         from opentelemetry.instrumentation.asyncio import AsyncioInstrumentor
+
         AsyncioInstrumentor().instrument()
         logger.info("[TRACER] initialized AsyncioInstrumentor")
     except ImportError:
@@ -341,6 +346,7 @@ class tracer:
         context = Context() if self.is_new_trace else None
 
         if inspect.iscoroutinefunction(func):
+
             @functools.wraps(func)
             async def async_wrapper(*args, **kwargs):
                 if _otel_tracer is None:
@@ -366,8 +372,10 @@ class tracer:
                         span.record_exception(exception=e)
                         span.set_status(Status(StatusCode.ERROR))
                         raise
+
             return async_wrapper
         else:
+
             @functools.wraps(func)
             def sync_wrapper(*args, **kwargs):
                 if _otel_tracer is None:
@@ -393,6 +401,7 @@ class tracer:
                         span.record_exception(exception=e)
                         span.set_status(Status(StatusCode.ERROR))
                         raise
+
             return sync_wrapper
 
     @classmethod

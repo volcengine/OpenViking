@@ -143,6 +143,7 @@ class SessionCompressorV2:
                     agent_space = ctx.user.agent_space_name() if ctx and ctx.user else "default"
                     # 使用 Jinja2 渲染 directory
                     import jinja2
+
                     env = jinja2.Environment(autoescape=False)
                     template = env.from_string(schema.directory)
                     dir_path = template.render(user_space=user_space, agent_space=agent_space)

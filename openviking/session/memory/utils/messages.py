@@ -74,7 +74,7 @@ def pretty_print_messages(messages: List[Dict[str, Any]]) -> None:
                     output.append(json.dumps(tool_calls, indent=2, ensure_ascii=False))
 
     output.append("\n=== End Messages ===")
-    tracer.info(f'messages={"\n".join(output)}')
+    tracer.info("messages=" + "\n".join(output))
 
 
 def parse_memory_file_with_fields(content: str) -> Dict[str, Any]:
