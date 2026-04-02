@@ -261,6 +261,7 @@ class MemoryUpdater:
                     resolved_op.model,
                     resolved_op.uri,
                     ctx,
+                    extract_context=extract_context,
                     memory_type=resolved_op.memory_type,
                 )
                 if is_edited:
@@ -299,64 +300,6 @@ class MemoryUpdater:
 
         tracer.info(f"Memory operations applied: {result.summary()}")
         return result
-
-    async def _apply_write(
-        self,
-        flat_model: Any,
-        uri: str,
-        ctx: RequestContext,
-        extract_context: Any = None,
-        memory_type: str = None,
-    ) -> None:
-        """Apply write operation from a flat model."""
-        viking_fs = self._get_viking_fs()
-
-        # Convert model to dict
-        model_dict = flat_model_to_dict(flat_model)
-
-        # Extract content - priority: model_dict["content"]
-        content = model_dict.pop("content", None) or ""
-
-        # Get memory type schema - use passed memory_type first, then fallback to model_dict
-        memory_type_str = memory_type or model_dict.get("memory_type")
-
-        field_schema_map: Dict[str, MemoryField] = {}
-        business_fields: Dict[str, Any] = {}
-
-        if self._registry and memory_type_str:
-            schema = self._registry.get(memory_type_str)
-            if schema:
-                field_schema_map = {f.name: f for f in schema.fields}
-                # Extract business fields (those defined in the schema)
-                for field_name in field_schema_map:
-                    if field_name in model_dict:
-                        business_fields[field_name] = model_dict[field_name]
-
-                # 模板渲染逻辑
-                if schema.content_template:
-                    try:
-                        rendered_content = self._render_content_template(
-                            schema.content_template,
-                            business_fields,
-                            extract_context=extract_context,
-                        )
-                        if rendered_content:
-                            content = rendered_content
-                    except Exception as e:
-                        tracer.warning(
-                            f"Failed to render content template for memory type {memory_type_str}: {e}"
-                        )
-                        # 渲染失败时保留原始 content，确保写入操作继续进行
-
-        # Collect metadata - only include business fields (from schema, except content)
-        metadata = business_fields.copy()
-
-        # Serialize content with metadata
-        full_content = serialize_with_metadata(content, metadata)
-
-        # Write content to VikingFS
-        # VikingFS automatically handles L0/L1/L2 and vector index updates
-        await viking_fs.write_file(uri, full_content, ctx=ctx)
 
     def _render_content_template(
         self, template: str, fields: Dict[str, Any], extract_context: Any = None
@@ -402,7 +345,12 @@ class MemoryUpdater:
         return isinstance(content, StrPatch)
 
     async def _apply_edit(
-        self, flat_model: Any, uri: str, ctx: RequestContext, memory_type: str = None
+        self,
+        flat_model: Any,
+        uri: str,
+        ctx: RequestContext,
+        extract_context: Any = None,
+        memory_type: str = None,
     ) -> bool:
         """Apply edit operation from a flat model.
 
@@ -414,6 +362,9 @@ class MemoryUpdater:
         # Convert flat model to dict first (needed for checking content type)
         model_dict = flat_model_to_dict(flat_model)
 
+        # Get memory type schema - use parameter first, then fallback to model_dict
+        memory_type_str = memory_type or model_dict.get("memory_type")
+
         # Read current memory
         try:
             current_full_content = await viking_fs.read_file(uri, ctx=ctx) or ""
@@ -422,7 +373,57 @@ class MemoryUpdater:
             # If no StrPatch fields, treat as write operation
             has_str_patch = any(self._is_patch_format(v) for v in model_dict.values())
             if not has_str_patch:
-                await self._apply_write(flat_model, uri, ctx)
+                # Write operation (new file) - with template rendering
+                # Extract content - priority: model_dict["content"]
+                content = model_dict.pop("content", None) or ""
+
+                field_schema_map: Dict[str, MemoryField] = {}
+                business_fields: Dict[str, Any] = {}
+
+                if self._registry and memory_type_str:
+                    schema = self._registry.get(memory_type_str)
+                    if schema:
+                        field_schema_map = {f.name: f for f in schema.fields}
+                        # Extract business fields (those defined in the schema)
+                        for field_name in field_schema_map:
+                            if field_name in model_dict:
+                                business_fields[field_name] = model_dict[field_name]
+
+                        # 模板渲染逻辑
+                        if schema.content_template:
+                            try:
+                                tracer.info(
+                                    f"[content_template] Rendering template for {memory_type_str}, "
+                                    f"business_fields={list(business_fields.keys())}, "
+                                    f"extract_context={'provided' if extract_context else 'None'}"
+                                )
+                                rendered_content = self._render_content_template(
+                                    schema.content_template,
+                                    business_fields,
+                                    extract_context=extract_context,
+                                )
+                                if rendered_content:
+                                    content = rendered_content
+                                    tracer.info(
+                                        f"[content_template] Rendered result (first 200 chars): {rendered_content[:200]}"
+                                    )
+                                else:
+                                    tracer.warning(
+                                        f"[content_template] Rendered content is empty for {memory_type_str}"
+                                    )
+                            except Exception as e:
+                                tracer.error(
+                                    f"Failed to render content template for memory type {memory_type_str}: {e}"
+                                )
+
+                # Collect metadata
+                metadata = business_fields.copy()
+
+                # Serialize content with metadata
+                full_content = serialize_with_metadata(content, metadata)
+
+                # Write content to VikingFS
+                await viking_fs.write_file(uri, full_content, ctx=ctx)
                 return False  # New file written
             # Has StrPatch field but file doesn't exist - cannot apply
             tracer.error(f"Memory not found for edit: {uri}")
@@ -434,11 +435,44 @@ class MemoryUpdater:
         # Get memory type schema - use parameter first, then fallback to model_dict
         memory_type_str = memory_type or model_dict.get("memory_type")
         field_schema_map: Dict[str, MemoryField] = {}
+        business_fields: Dict[str, Any] = {}
 
         if self._registry and memory_type_str:
             schema = self._registry.get(memory_type_str)
             if schema:
                 field_schema_map = {f.name: f for f in schema.fields}
+                # Extract business fields (those defined in the schema)
+                for field_name in field_schema_map:
+                    if field_name in model_dict:
+                        business_fields[field_name] = model_dict[field_name]
+
+                # 模板渲染逻辑（编辑时也支持）
+                if schema.content_template:
+                    try:
+                        tracer.info(
+                            f"[content_template] Editing: Rendering template for {memory_type_str}, "
+                            f"business_fields={list(business_fields.keys())}, "
+                            f"extract_context={'provided' if extract_context else 'None'}"
+                        )
+                        rendered_content = self._render_content_template(
+                            schema.content_template,
+                            business_fields,
+                            extract_context=extract_context,
+                        )
+                        if rendered_content:
+                            # 用渲染后的 content 覆盖 model_dict 中的 content
+                            model_dict["content"] = rendered_content
+                            tracer.info(
+                                f"[content_template] Edited result (first 200 chars): {rendered_content[:200]}"
+                            )
+                        else:
+                            tracer.warning(
+                                f"[content_template] Edited render result is empty for {memory_type_str}"
+                            )
+                    except Exception as e:
+                        tracer.error(
+                            f"Failed to render content template for edit {memory_type_str}: {e}"
+                        )
 
         # Apply all fields (including content) through MergeOp
         new_plain_content = current_plain_content
