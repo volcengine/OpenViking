@@ -92,6 +92,7 @@ test = [
 dev = [
     "mypy>=1.0.0",
     "ruff>=0.1.0",
+    "setuptools_scm>=10.0.0",
 ]
 doc = [
     "sphinx>=7.0.0",
