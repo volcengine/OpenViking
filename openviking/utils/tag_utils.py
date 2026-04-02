@@ -182,14 +182,31 @@ def merge_tags(*sources: str | Sequence[str] | None, max_tags: int = 8) -> List[
     return merged
 
 
+def _force_namespace(tags: str | Sequence[str] | None, namespace: str) -> List[str]:
+    normalized_namespace = _normalize_namespace(namespace)
+    if not normalized_namespace:
+        return []
+
+    forced: List[str] = []
+    seen = set()
+    for tag in parse_tags(tags):
+        body = tag.split(":", 1)[1] if ":" in tag else tag
+        normalized = f"{normalized_namespace}:{body}"
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        forced.append(normalized)
+    return forced
+
+
 def canonicalize_user_tags(tags: str | Sequence[str] | None) -> List[str]:
     """Canonicalize persisted user-provided tags as ``user:<tag>``."""
-    return parse_tags(tags, default_namespace=USER_TAG_NAMESPACE)
+    return _force_namespace(tags, USER_TAG_NAMESPACE)
 
 
 def namespace_tags(tags: str | Sequence[str] | None, namespace: str) -> List[str]:
-    """Apply a namespace to bare tags while preserving already namespaced ones."""
-    return parse_tags(tags, default_namespace=namespace)
+    """Apply a namespace to every tag body, overriding any existing prefix."""
+    return _force_namespace(tags, namespace)
 
 
 def expand_query_tags(

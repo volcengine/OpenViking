@@ -19,7 +19,7 @@ from openviking.utils.tag_utils import (
     AUTO_TAG_NAMESPACE,
     extract_context_tags,
     merge_tags,
-    parse_tags,
+    namespace_tags,
 )
 from openviking_cli.utils import VikingURI, get_logger
 from openviking_cli.utils.config import get_openviking_config
@@ -251,9 +251,9 @@ async def vectorize_file(
 
         file_name = summary_dict.get("name") or os.path.basename(file_path)
         summary = summary_dict.get("summary", "")
-        summary_tags = parse_tags(
+        summary_tags = namespace_tags(
             summary_dict.get("tags"),
-            default_namespace=AUTO_TAG_NAMESPACE,
+            AUTO_TAG_NAMESPACE,
         )
         resolved_tags = extract_context_tags(
             file_path,

@@ -9,6 +9,7 @@ from openviking.utils.tag_utils import (
     canonicalize_user_tags,
     expand_query_tags,
     extract_context_tags,
+    namespace_tags,
     parse_tags,
     serialize_tags,
 )
@@ -24,6 +25,13 @@ def test_parse_tags_preserves_explicit_namespace():
 def test_canonicalize_user_tags_adds_default_namespace():
     assert canonicalize_user_tags("machine-learning;feature-store") == [
         "user:machine-learning",
+        "user:feature-store",
+    ]
+
+
+def test_canonicalize_user_tags_rewrites_explicit_auto_namespace():
+    assert canonicalize_user_tags("auto:pytorch;feature-store") == [
+        "user:pytorch",
         "user:feature-store",
     ]
 
@@ -52,8 +60,18 @@ def test_extract_context_tags_namespaces_auto_generated_terms():
     assert any(tag.startswith(f"{AUTO_TAG_NAMESPACE}:") for tag in tags if tag != "user:retrieval")
 
 
+def test_namespace_tags_overrides_existing_prefix():
+    assert namespace_tags("user:feature-store;model-training", AUTO_TAG_NAMESPACE) == [
+        "auto:feature-store",
+        "auto:model-training",
+    ]
+
+
 def test_serialize_tags_preserves_namespaces():
-    assert serialize_tags(
-        ["user:machine-learning", "auto:feature-store"],
-        default_namespace=USER_TAG_NAMESPACE,
-    ) == "user:machine-learning;auto:feature-store"
+    assert (
+        serialize_tags(
+            ["user:machine-learning", "auto:feature-store"],
+            default_namespace=USER_TAG_NAMESPACE,
+        )
+        == "user:machine-learning;auto:feature-store"
+    )

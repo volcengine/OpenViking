@@ -157,7 +157,7 @@ async def test_add_resource_forwards_tags_to_service(
         json={
             "temp_file_id": demo_file.name,
             "reason": "tagged resource",
-            "tags": "machine-learning;feature-store",
+            "tags": "auto:machine-learning;feature-store",
         },
     )
 
