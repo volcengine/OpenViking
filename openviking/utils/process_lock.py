@@ -43,15 +43,17 @@ def _is_pid_alive(pid: int) -> bool:
     except PermissionError:
         # Process exists but we can't signal it.
         return True
-    except OSError:
+    except (OSError, SystemError):
         if sys.platform == "win32":
             # On Windows, os.kill(pid, 0) raises OSError for stale or invalid
-            # PIDs instead of ProcessLookupError. Common errors include:
+            # PIDs instead of ProcessLookupError. In some environments it can
+            # also bubble up as SystemError from the underlying Win32 wrapper.
+            # Common failures include:
             # - WinError 87 "The parameter is incorrect"
             # - WinError 11 "An attempt was made to load a program with an
             #   incorrect format"
-            # Treat any OSError as "not alive" so stale lock files are
-            # correctly reclaimed on Windows.
+            # Treat these as "not alive" so stale lock files are correctly
+            # reclaimed on Windows.
             return False
         raise
 
