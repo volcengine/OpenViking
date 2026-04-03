@@ -325,7 +325,7 @@ class AsyncHTTPClient(BaseClient):
         instruction: str = "",
         wait: bool = False,
         timeout: Optional[float] = None,
-        strict: bool = True,
+        strict: bool = False,
         ignore_dirs: Optional[str] = None,
         include: Optional[str] = None,
         exclude: Optional[str] = None,
@@ -360,6 +360,8 @@ class AsyncHTTPClient(BaseClient):
         path_obj = Path(path)
         if path_obj.exists():
             if path_obj.is_dir():
+                source_name = path_obj.name
+                request_data["source_name"] = source_name
                 zip_path = self._zip_directory(path)
                 try:
                     temp_file_id = await self._upload_temp_file(zip_path)
