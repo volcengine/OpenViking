@@ -809,12 +809,10 @@ class FeishuChannel(BaseChannel):
 
             # 6. 检查是否需要处理该消息
             should_process = await self._check_should_process(chat_type, chat_id, message, is_mentioned)
-            if not should_process:
-                return
 
             # 7. 添加已读表情
             config = load_config()
-            if config.mode != BotMode.DEBUG:
+            if config.mode != BotMode.DEBUG and should_process:
                 await self._add_reaction(message_id, "MeMeMe")
 
             # 8. 处理@占位符
@@ -840,6 +838,7 @@ class FeishuChannel(BaseChannel):
                 chat_id=final_chat_id,
                 content=content,
                 media=media if media else None,
+                need_reply=should_process,
                 metadata={
                     "message_id": message_id,
                     "chat_type": chat_type,
