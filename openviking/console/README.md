@@ -30,7 +30,7 @@ http://127.0.0.1:8020/
 ```
 
 4. In **Settings**, paste your OpenViking `X-API-Key` and click **Save** (or press Enter).
-`X-API-Key` is configured in the web UI Settings panel and stored in browser session storage.
+`X-API-Key` is configured in the web UI Settings panel, stored locally in the browser, and restored into the current tab.
 
 ## Startup parameters
 
