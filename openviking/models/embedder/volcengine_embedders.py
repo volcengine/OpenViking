@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Volcengine Embedder Implementation"""
 
 from typing import Any, Dict, List, Optional
@@ -11,27 +11,10 @@ from openviking.models.embedder.base import (
     EmbedResult,
     HybridEmbedderBase,
     SparseEmbedderBase,
-    exponential_backoff_retry,
     truncate_and_normalize,
 )
 from openviking.telemetry import get_current_telemetry
 from openviking_cli.utils.logger import default_logger as logger
-
-
-def is_429_error(exception: Exception) -> bool:
-    """
-    判断异常是否为 429 限流错误
-
-    Args:
-        exception: 要检查的异常
-
-    Returns:
-        如果是 429 错误则返回 True，否则返回 False
-    """
-    exception_str = str(exception)
-    return (
-        "429" in exception_str or "TooManyRequests" in exception_str or "RateLimit" in exception_str
-    )
 
 
 def process_sparse_embedding(sparse_data: Any) -> Dict[str, float]:
@@ -138,11 +121,21 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
 
         prompt_tokens = _usage_value("prompt_tokens", 0)
         total_tokens = _usage_value("total_tokens", prompt_tokens)
-        output_tokens = max(total_tokens - prompt_tokens, 0)
+        completion_tokens = max(total_tokens - prompt_tokens, 0)
+
+        # Update telemetry
         get_current_telemetry().add_token_usage_by_source(
             "embedding",
             prompt_tokens,
-            output_tokens,
+            completion_tokens,
+        )
+
+        # Update token tracker
+        self.update_token_usage(
+            model_name=self.model_name,
+            provider="volcengine",
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
         )
 
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
@@ -177,14 +170,10 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
             return EmbedResult(dense_vector=vector)
 
         try:
-            return exponential_backoff_retry(
+            return self._run_with_retry(
                 _embed_call,
-                max_wait=10.0,
-                base_delay=0.5,
-                max_delay=2.0,
-                jitter=True,
-                is_retryable=is_429_error,
                 logger=logger,
+                operation_name="Volcengine embedding",
             )
         except Exception as e:
             raise RuntimeError(f"Volcengine embedding failed: {str(e)}") from e
@@ -205,7 +194,7 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
         if not texts:
             return []
 
-        try:
+        def _call() -> List[EmbedResult]:
             if self.input_type == "multimodal":
                 multimodal_inputs = [{"type": "text", "text": text} for text in texts]
                 response = self.client.multimodal_embeddings.create(
@@ -222,6 +211,13 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
                 EmbedResult(dense_vector=truncate_and_normalize(item.embedding, self.dimension))
                 for item in data
             ]
+
+        try:
+            return self._run_with_retry(
+                _call,
+                logger=logger,
+                operation_name="Volcengine batch embedding",
+            )
         except Exception as e:
             logger.error(
                 f"Volcengine batch embedding failed, texts length: {len(texts)}, input_type: {self.input_type}, model_name: {self.model_name}"
@@ -269,6 +265,35 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
             ark_kwargs["base_url"] = self.api_base
         self.client = volcenginesdkarkruntime.Ark(**ark_kwargs)
 
+    def _update_telemetry_token_usage(self, response) -> None:
+        usage = getattr(response, "usage", None)
+        if not usage:
+            return
+
+        def _usage_value(key: str, default: int = 0) -> int:
+            if isinstance(usage, dict):
+                return int(usage.get(key, default) or default)
+            return int(getattr(usage, key, default) or default)
+
+        prompt_tokens = _usage_value("prompt_tokens", 0)
+        total_tokens = _usage_value("total_tokens", prompt_tokens)
+        completion_tokens = max(total_tokens - prompt_tokens, 0)
+
+        # Update telemetry
+        get_current_telemetry().add_token_usage_by_source(
+            "embedding",
+            prompt_tokens,
+            completion_tokens,
+        )
+
+        # Update token tracker
+        self.update_token_usage(
+            model_name=self.model_name,
+            provider="volcengine",
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform sparse embedding on text
 
@@ -290,19 +315,16 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
                 model=self.model_name,
                 sparse_embedding={"type": "enabled"},
             )
+            self._update_telemetry_token_usage(response)
             item = response.data
             sparse_vector = getattr(item, "sparse_embedding", None)
             return EmbedResult(sparse_vector=process_sparse_embedding(sparse_vector))
 
         try:
-            return exponential_backoff_retry(
+            return self._run_with_retry(
                 _embed_call,
-                max_wait=10.0,
-                base_delay=0.5,
-                max_delay=2.0,
-                jitter=True,
-                is_retryable=is_429_error,
                 logger=logger,
+                operation_name="Volcengine sparse embedding",
             )
         except Exception as e:
             raise RuntimeError(f"Volcengine sparse embedding failed: {str(e)}") from e
@@ -369,6 +391,35 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
         self.client = volcenginesdkarkruntime.Ark(**ark_kwargs)
         self._dimension = dimension or 2048
 
+    def _update_telemetry_token_usage(self, response) -> None:
+        usage = getattr(response, "usage", None)
+        if not usage:
+            return
+
+        def _usage_value(key: str, default: int = 0) -> int:
+            if isinstance(usage, dict):
+                return int(usage.get(key, default) or default)
+            return int(getattr(usage, key, default) or default)
+
+        prompt_tokens = _usage_value("prompt_tokens", 0)
+        total_tokens = _usage_value("total_tokens", prompt_tokens)
+        completion_tokens = max(total_tokens - prompt_tokens, 0)
+
+        # Update telemetry
+        get_current_telemetry().add_token_usage_by_source(
+            "embedding",
+            prompt_tokens,
+            completion_tokens,
+        )
+
+        # Update token tracker
+        self.update_token_usage(
+            model_name=self.model_name,
+            provider="volcengine",
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform hybrid embedding on text
 
@@ -391,6 +442,7 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
                 model=self.model_name,
                 sparse_embedding={"type": "enabled"},
             )
+            self._update_telemetry_token_usage(response)
             item = response.data
             dense_vector = truncate_and_normalize(item.embedding, self.dimension)
             sparse_vector = getattr(item, "sparse_embedding", None)
@@ -400,14 +452,10 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
             )
 
         try:
-            return exponential_backoff_retry(
+            return self._run_with_retry(
                 _embed_call,
-                max_wait=10.0,
-                base_delay=0.5,
-                max_delay=2.0,
-                jitter=True,
-                is_retryable=is_429_error,
                 logger=logger,
+                operation_name="Volcengine hybrid embedding",
             )
         except Exception as e:
             raise RuntimeError(f"Volcengine hybrid embedding failed: {str(e)}") from e

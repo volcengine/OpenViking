@@ -22,7 +22,14 @@ variables:
     description: "List of subdirectories and their abstracts, format: '- dirname/: abstract'"
     default: ""
 
+  - name: "output_language"
+    type: "string"
+    description: "Language code for output (e.g., 'en', 'zh-CN', 'ja', 'ko', 'ru', 'ar')"
+    required: true
+
 template: |
+  Output Language: {{ output_language }}
+
   Generate an overview document based on the following directory content:
 
   [Directory Name]

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Gemini Embedding 2 provider using the official google-genai SDK."""
 
 from typing import Any, Dict, List, Optional
@@ -151,9 +151,9 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
                 api_key=api_key,
                 http_options=HttpOptions(
                     retry_options=HttpRetryOptions(
-                        attempts=3,
-                        initial_delay=1.0,
-                        max_delay=30.0,
+                        attempts=max(self.max_retries + 1, 1),
+                        initial_delay=0.5,
+                        max_delay=8.0,
                         exp_base=2.0,
                     )
                 ),
@@ -207,8 +207,9 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
                 task_type = self.query_param
             elif not is_query and self.document_param:
                 task_type = self.document_param
+
         # SDK accepts plain str; converts to REST Parts format internally.
-        try:
+        def _call() -> EmbedResult:
             result = self.client.models.embed_content(
                 model=self.model_name,
                 contents=text,
@@ -216,6 +217,26 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
             )
             vector = truncate_and_normalize(list(result.embeddings[0].values), self._dimension)
             return EmbedResult(dense_vector=vector)
+
+        try:
+            result = (
+                _call()
+                if _HTTP_RETRY_AVAILABLE
+                else self._run_with_retry(
+                    _call,
+                    logger=logger,
+                    operation_name="Gemini embedding",
+                )
+            )
+            # Estimate token usage
+            estimated_tokens = self._estimate_tokens(text)
+            self.update_token_usage(
+                model_name=self.model_name,
+                provider="gemini",
+                prompt_tokens=estimated_tokens,
+                completion_tokens=0,
+            )
+            return result
         except (APIError, ClientError) as e:
             _raise_api_error(e, self.model_name)
 
@@ -233,7 +254,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
         if titles is not None:
             return [
                 self.embed(text, is_query=is_query, task_type=task_type, title=title)
-                for text, title in zip(texts, titles)
+                for text, title in zip(texts, titles, strict=True)
             ]
         # Resolve effective task_type from is_query when no explicit override
         if task_type is None:
@@ -253,14 +274,29 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
                 continue
 
             non_empty_texts = [batch[j] for j in non_empty_indices]
-            try:
+
+            def _call_batch(
+                non_empty_texts: List[str] = non_empty_texts,
+                config: types.EmbedContentConfig = config,
+            ) -> Any:
                 response = self.client.models.embed_content(
                     model=self.model_name,
                     contents=non_empty_texts,
                     config=config,
                 )
+                return response
+
+            try:
+                if _HTTP_RETRY_AVAILABLE:
+                    response = _call_batch()
+                else:
+                    response = self._run_with_retry(
+                        _call_batch,
+                        logger=logger,
+                        operation_name="Gemini batch embedding",
+                    )
                 batch_results = [None] * len(batch)
-                for j, emb in zip(non_empty_indices, response.embeddings):
+                for j, emb in zip(non_empty_indices, response.embeddings, strict=True):
                     batch_results[j] = EmbedResult(
                         dense_vector=truncate_and_normalize(list(emb.values), self._dimension)
                     )
@@ -275,6 +311,8 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
                 )
                 for text in batch:
                     results.append(self.embed(text, is_query=is_query))
+        # Token usage is already tracked via individual embed() calls
+        # No need to track here to avoid double counting
         return results
 
     async def async_embed_batch(self, texts: List[str]) -> List[EmbedResult]:
@@ -306,12 +344,21 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
                         )
                         for emb in response.embeddings
                     ]
+                    # Track token usage for successful API call
+                    total_tokens = sum(self._estimate_tokens(text) for text in batch)
+                    self.update_token_usage(
+                        model_name=self.model_name,
+                        provider="gemini",
+                        prompt_tokens=total_tokens,
+                        completion_tokens=0,
+                    )
                 except (APIError, ClientError) as e:
                     logger.warning(
                         "Gemini async batch embed failed (HTTP %d) for batch of %d, falling back",
                         e.code,
                         len(batch),
                     )
+                    # Token usage will be tracked via self.embed() calls
                     results[idx] = [
                         await anyio.to_thread.run_sync(self.embed, text) for text in batch
                     ]

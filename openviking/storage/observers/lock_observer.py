@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """LockObserver: Lock system observability."""
 
 import time
@@ -26,15 +26,16 @@ class LockObserver(BaseObserver):
                 "id": h.id,
                 "lock_count": len(h.locks),
                 "created_at": h.created_at,
+                "last_active_at": h.last_active_at,
                 "duration_seconds": round(now - h.created_at, 1),
+                "idle_seconds": round(now - h.last_active_at, 1),
             }
             for h in self._manager.get_active_handles().values()
         ]
 
     def get_hanging_locks(self, threshold: float = 600) -> List[Dict[str, Any]]:
-        """Return locks that have been held longer than *threshold* seconds."""
-        now = time.time()
-        return [lock for lock in self.get_active_locks() if now - lock["created_at"] > threshold]
+        """Return locks that have been idle longer than *threshold* seconds."""
+        return [lock for lock in self.get_active_locks() if lock["idle_seconds"] > threshold]
 
     # ------ BaseObserver interface ------
 
@@ -50,6 +51,7 @@ class LockObserver(BaseObserver):
                 "Handle ID": l["id"][:8] + "...",
                 "Locks": l["lock_count"],
                 "Duration": f"{l['duration_seconds']}s",
+                "Idle": f"{l['idle_seconds']}s",
                 "Created": time.strftime("%H:%M:%S", time.localtime(l["created_at"])),
             }
             for l in locks
@@ -59,6 +61,7 @@ class LockObserver(BaseObserver):
                 "Handle ID": f"TOTAL ({len(locks)})",
                 "Locks": sum(l["lock_count"] for l in locks),
                 "Duration": "",
+                "Idle": "",
                 "Created": "",
             }
         )

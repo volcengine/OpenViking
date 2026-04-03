@@ -1,7 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Jina AI Embedder Implementation"""
 
+import logging
 from typing import Any, Dict, List, Optional
 
 import openai
@@ -10,6 +11,8 @@ from openviking.models.embedder.base import (
     DenseEmbedderBase,
     EmbedResult,
 )
+
+logger = logging.getLogger(__name__)
 
 # Default dimensions for Jina embedding models
 JINA_MODEL_DIMENSIONS = {
@@ -165,7 +168,8 @@ class JinaDenseEmbedder(DenseEmbedderBase):
         Raises:
             RuntimeError: When API call fails
         """
-        try:
+
+        def _call() -> EmbedResult:
             kwargs: Dict[str, Any] = {"input": text, "model": self.model_name}
             if self.dimension:
                 kwargs["dimensions"] = self.dimension
@@ -178,6 +182,22 @@ class JinaDenseEmbedder(DenseEmbedderBase):
             vector = response.data[0].embedding
 
             return EmbedResult(dense_vector=vector)
+
+        try:
+            result = self._run_with_retry(
+                _call,
+                logger=logger,
+                operation_name="Jina embedding",
+            )
+            # Estimate token usage
+            estimated_tokens = self._estimate_tokens(text)
+            self.update_token_usage(
+                model_name=self.model_name,
+                provider="jina",
+                prompt_tokens=estimated_tokens,
+                completion_tokens=0,
+            )
+            return result
         except openai.APIError as e:
             self._raise_task_error(e)
             raise RuntimeError(f"Jina API error: {e.message}") from e
@@ -200,7 +220,7 @@ class JinaDenseEmbedder(DenseEmbedderBase):
         if not texts:
             return []
 
-        try:
+        def _call() -> List[EmbedResult]:
             kwargs: Dict[str, Any] = {"input": texts, "model": self.model_name}
             if self.dimension:
                 kwargs["dimensions"] = self.dimension
@@ -212,6 +232,22 @@ class JinaDenseEmbedder(DenseEmbedderBase):
             response = self.client.embeddings.create(**kwargs)
 
             return [EmbedResult(dense_vector=item.embedding) for item in response.data]
+
+        try:
+            results = self._run_with_retry(
+                _call,
+                logger=logger,
+                operation_name="Jina batch embedding",
+            )
+            # Estimate token usage for batch
+            total_tokens = sum(self._estimate_tokens(text) for text in texts)
+            self.update_token_usage(
+                model_name=self.model_name,
+                provider="jina",
+                prompt_tokens=total_tokens,
+                completion_tokens=0,
+            )
+            return results
         except openai.APIError as e:
             self._raise_task_error(e)
             raise RuntimeError(f"Jina API error: {e.message}") from e

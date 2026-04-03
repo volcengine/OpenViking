@@ -93,10 +93,13 @@ if [ ! -f "${CONFIG_FILE}" ]; then
     exit 1
 fi
 
-OC_ENV=()
-if [ "${OPENCLAW_DIR}" != "${HOME_DIR}/.openclaw" ]; then
-    OC_ENV=(env OPENCLAW_STATE_DIR="${OPENCLAW_DIR}")
-fi
+run_openclaw() {
+    if [ "${OPENCLAW_DIR}" != "${HOME_DIR}/.openclaw" ]; then
+        OPENCLAW_STATE_DIR="${OPENCLAW_DIR}" openclaw "$@"
+    else
+        openclaw "$@"
+    fi
+}
 
 info "OpenClaw 目录：${OPENCLAW_DIR}"
 info "配置文件：${CONFIG_FILE}"
@@ -107,7 +110,7 @@ echo ""
 # Step 1: 停止 OpenClaw gateway
 # ============================================================
 info "Step 1: 停止 OpenClaw gateway..."
-if "${OC_ENV[@]}" openclaw gateway stop 2>/dev/null; then
+if run_openclaw gateway stop 2>/dev/null; then
     info "gateway 已停止"
 else
     warn "gateway 可能未在运行，继续..."
@@ -250,7 +253,7 @@ echo ""
 # Step 4: 恢复 OpenClaw memory 为 memory-core
 # ============================================================
 info "Step 4: 恢复 OpenClaw memory 为 memory-core..."
-"${OC_ENV[@]}" openclaw plugins enable memory-core >/dev/null
+run_openclaw plugins enable memory-core >/dev/null
 info "已执行：openclaw plugins enable memory-core"
 echo ""
 

@@ -1,12 +1,15 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Voyage AI dense embedder implementation."""
 
+import logging
 from typing import Any, Dict, List, Optional
 
 import openai
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
+
+logger = logging.getLogger(__name__)
 
 VOYAGE_MODEL_DIMENSIONS = {
     "voyage-3": 1024,
@@ -83,7 +86,8 @@ class VoyageDenseEmbedder(DenseEmbedderBase):
 
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform dense embedding on text."""
-        try:
+
+        def _call() -> EmbedResult:
             kwargs: Dict[str, Any] = {"input": text, "model": self.model_name}
             if self.dimension is not None:
                 kwargs["extra_body"] = {"output_dimension": self.dimension}
@@ -91,6 +95,22 @@ class VoyageDenseEmbedder(DenseEmbedderBase):
             response = self.client.embeddings.create(**kwargs)
             vector = response.data[0].embedding
             return EmbedResult(dense_vector=vector)
+
+        try:
+            result = self._run_with_retry(
+                _call,
+                logger=logger,
+                operation_name="Voyage embedding",
+            )
+            # Estimate token usage
+            estimated_tokens = self._estimate_tokens(text)
+            self.update_token_usage(
+                model_name=self.model_name,
+                provider="voyage",
+                prompt_tokens=estimated_tokens,
+                completion_tokens=0,
+            )
+            return result
         except openai.APIError as e:
             raise RuntimeError(f"Voyage API error: {e.message}") from e
         except Exception as e:
@@ -101,13 +121,29 @@ class VoyageDenseEmbedder(DenseEmbedderBase):
         if not texts:
             return []
 
-        try:
+        def _call() -> List[EmbedResult]:
             kwargs: Dict[str, Any] = {"input": texts, "model": self.model_name}
             if self.dimension is not None:
                 kwargs["extra_body"] = {"output_dimension": self.dimension}
 
             response = self.client.embeddings.create(**kwargs)
             return [EmbedResult(dense_vector=item.embedding) for item in response.data]
+
+        try:
+            results = self._run_with_retry(
+                _call,
+                logger=logger,
+                operation_name="Voyage batch embedding",
+            )
+            # Estimate token usage for batch
+            total_tokens = sum(self._estimate_tokens(text) for text in texts)
+            self.update_token_usage(
+                model_name=self.model_name,
+                provider="voyage",
+                prompt_tokens=total_tokens,
+                completion_tokens=0,
+            )
+            return results
         except openai.APIError as e:
             raise RuntimeError(f"Voyage API error: {e.message}") from e
         except Exception as e:

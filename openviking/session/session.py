@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Session management for OpenViking.
 
 Session as Context: Sessions integrated into L0/L1/L2 system.
@@ -301,13 +301,14 @@ class Session:
         self,
         role: str,
         parts: List[Part],
+        created_at: datetime = None,
     ) -> Message:
         """Add a message."""
         msg = Message(
             id=f"msg_{uuid4().hex}",
             role=role,
             parts=parts,
-            created_at=datetime.now(),
+            created_at=created_at or datetime.now(),
         )
         self._messages.append(msg)
 
@@ -739,9 +740,7 @@ class Session:
             remaining_budget -= item["tokens"]
 
         archive_tokens = latest_archive_tokens + pre_archive_tokens
-        included_archives = (1 if include_latest_overview else 0) + len(
-            included_pre_archive_abstracts
-        )
+        included_archives = len(included_pre_archive_abstracts)
         dropped_archives = max(
             0, context["total_archives"] - context["failed_archives"] - included_archives
         )
@@ -750,7 +749,6 @@ class Session:
             "latest_archive_overview": (
                 latest_archive["overview"] if include_latest_overview else ""
             ),
-            "latest_archive_id": latest_archive["archive_id"] if latest_archive else "",
             "pre_archive_abstracts": included_pre_archive_abstracts,
             "messages": [m.to_dict() for m in merged_messages],
             "estimatedTokens": message_tokens + archive_tokens,
@@ -834,8 +832,6 @@ class Session:
                         archive["archive_uri"], overview
                     ),
                 }
-                continue
-
             abstract = await self._read_archive_abstract(archive["archive_uri"])
             if abstract:
                 pre_archive_abstracts.append(

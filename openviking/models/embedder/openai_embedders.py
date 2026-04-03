@@ -1,19 +1,22 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """OpenAI Embedder Implementation"""
 
+import logging
 from typing import Any, Dict, List, Optional
 
 import openai
 
-from openviking.models.vlm.registry import DEFAULT_AZURE_API_VERSION
 from openviking.models.embedder.base import (
     DenseEmbedderBase,
     EmbedResult,
     HybridEmbedderBase,
     SparseEmbedderBase,
 )
+from openviking.models.vlm.registry import DEFAULT_AZURE_API_VERSION
 from openviking.telemetry import get_current_telemetry
+
+logger = logging.getLogger(__name__)
 
 
 class OpenAIDenseEmbedder(DenseEmbedderBase):
@@ -160,11 +163,21 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
 
         prompt_tokens = _usage_value("prompt_tokens", 0)
         total_tokens = _usage_value("total_tokens", prompt_tokens)
-        output_tokens = max(total_tokens - prompt_tokens, 0)
+        completion_tokens = max(total_tokens - prompt_tokens, 0)
+
+        # Update telemetry
         get_current_telemetry().add_token_usage_by_source(
             "embedding",
             prompt_tokens,
-            output_tokens,
+            completion_tokens,
+        )
+
+        # Update token tracker
+        self.update_token_usage(
+            model_name=self.model_name,
+            provider=self._provider,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
         )
 
     def _parse_param_string(self, param: Optional[str]) -> Dict[str, str]:
@@ -235,8 +248,11 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         Raises:
             RuntimeError: When API call fails
         """
-        try:
+
+        def _call() -> EmbedResult:
             kwargs: Dict[str, Any] = {"input": text, "model": self.model_name}
+            if self.dimension:
+                kwargs["dimensions"] = self.dimension
 
             extra_body = self._build_extra_body(is_query=is_query)
             if extra_body:
@@ -247,6 +263,13 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             vector = response.data[0].embedding
 
             return EmbedResult(dense_vector=vector)
+
+        try:
+            return self._run_with_retry(
+                _call,
+                logger=logger,
+                operation_name="OpenAI embedding",
+            )
         except openai.APIError as e:
             raise RuntimeError(f"OpenAI API error: {e.message}") from e
         except Exception as e:
@@ -268,7 +291,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         if not texts:
             return []
 
-        try:
+        def _call() -> List[EmbedResult]:
             kwargs: Dict[str, Any] = {"input": texts, "model": self.model_name}
             if self.dimension:
                 kwargs["dimensions"] = self.dimension
@@ -281,6 +304,13 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             self._update_telemetry_token_usage(response)
 
             return [EmbedResult(dense_vector=item.embedding) for item in response.data]
+
+        try:
+            return self._run_with_retry(
+                _call,
+                logger=logger,
+                operation_name="OpenAI batch embedding",
+            )
         except openai.APIError as e:
             raise RuntimeError(f"OpenAI API error: {e.message}") from e
         except Exception as e:

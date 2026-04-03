@@ -1,82 +1,56 @@
-# Basic Usage Example: Getting Started with OpenViking Python SDK
+# Basic Usage Example: OpenViking Python SDK
 
-This example demonstrates the core features of OpenViking using the Python SDK. It covers the essential operations for building AI Agent applications with persistent context management.
+This example is the shortest path to understanding OpenViking's core Python SDK workflow:
+initialize a client, ingest a resource, browse the `viking://` filesystem, retrieve context,
+and create a session that can later be committed into long-term memory.
 
-## What You'll Learn
+It is intentionally SDK-first. If you want production deployment, shared access, or MCP client
+integration, use this example as the foundation and then move to the server and MCP guides linked below.
 
-- **Initializing OpenViking**: Embedded mode vs HTTP client mode
-- **Adding Resources**: URLs, files, and directories
-- **Browsing the Virtual Filesystem**: Using `ls`, `tree`, `glob`
-- **Semantic Search**: Finding relevant context with `find` and `search`
-- **Tiered Context Loading**: Using L0 (abstract), L1 (overview), L2 (full content)
-- **Session Management**: Storing and recalling conversation memories
+## What This Example Covers
+
+- Embedded SDK usage for local exploration
+- HTTP client usage for server mode
+- Resource ingestion from a remote URL
+- Filesystem-style access with `ls`, `tree`, and `read`
+- Retrieval with `find`, `abstract`, `overview`, and `grep`
+- Session creation and message appending for memory workflows
+
+## Choose the Right Mode
+
+OpenViking currently has three common integration paths:
+
+| Mode | Best for | Recommended? |
+|------|----------|--------------|
+| Embedded SDK | Single-process local experimentation | Yes, for first contact |
+| HTTP server + SDK/CLI | Shared service, multi-session, multi-agent workloads | Yes, preferred for real deployments |
+| MCP | Claude Code, Cursor, Claude Desktop, OpenClaw, and other MCP hosts | Yes, for tool-based client integration |
+
+If you are building anything beyond a one-process local demo, prefer HTTP server mode over spawning isolated local processes repeatedly. For MCP specifically, follow the dedicated [MCP Integration Guide](../../docs/en/guides/06-mcp-integration.md).
 
 ## Prerequisites
 
-1. **Python 3.10+**
-2. **OpenViking installed**:
-   ```bash
-   pip install openviking --upgrade
-   ```
-3. **Configuration file** at `~/.openviking/ov.conf` (see [Configuration](#configuration) below)
+1. Python 3.10+
+2. OpenViking installed:
+
+```bash
+pip install openviking --upgrade --force-reinstall
+```
+
+3. A valid config file at `~/.openviking/ov.conf`
 
 ## Quick Start
 
 ### 1. Run the Example Script
 
 ```bash
-# Clone the repository
 git clone https://github.com/volcengine/OpenViking.git
 cd OpenViking/examples/basic-usage
-
-# Run the basic usage example
 python basic_usage.py
 ```
 
-### 2. Expected Output
+The script uses embedded mode by default:
 
-```
-=== OpenViking Basic Usage Example ===
-
-1. Initializing OpenViking...
-   Status: healthy
-
-2. Adding a resource (URL)...
-   Root URI: viking://resources/raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md
-   Files indexed: 1
-
-3. Browsing the virtual filesystem...
-   viking://resources/raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/
-   └── README.md
-
-4. Waiting for semantic processing...
-
-5. Tiered Context Loading:
-   L0 (Abstract): OpenViking is an open-source Context Database designed specifically for AI Agents...
-
-   L1 (Overview):
-   [Contains key points and usage scenarios]
-
-6. Semantic Search:
-   Query: "what is openviking"
-   Results:
-   - viking://resources/.../README.md (score: 0.8523)
-
-7. Content search (grep):
-   Pattern: "Agent"
-   Found 15 matches
-
-8. Closing OpenViking...
-   Done!
-```
-
-## Code Walkthrough
-
-### Initialization
-
-OpenViking supports two modes:
-
-**Embedded Mode** (default for local development):
 ```python
 import openviking as ov
 
@@ -84,117 +58,173 @@ client = ov.OpenViking(path="./data")
 client.initialize()
 ```
 
-**HTTP Client Mode** (connect to remote server):
+To point the same flow at a running server instead, switch to:
+
 ```python
 import openviking as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933")
+client.initialize()
 ```
 
-### Adding Resources
+See the dedicated [Server Mode Quick Start](../../docs/en/getting-started/03-quickstart-server.md) for the recommended shared-service setup.
 
-Add URLs, local files, or directories:
+### 2. What the Script Demonstrates
+
+`basic_usage.py` walks through the same sequence most applications need:
+
+1. Initialize a client and verify health.
+2. Add a resource from a URL.
+3. Inspect the resulting `viking://resources/...` tree.
+4. Wait for semantic processing.
+5. Load L0/L1/L2 context with `abstract`, `overview`, and `read`.
+6. Run retrieval with `find`.
+7. Run literal content search with `grep`.
+8. Create a session and append messages for later memory extraction.
+
+## Code Walkthrough
+
+### Initialization
+
+Use embedded mode for a local first run:
 
 ```python
-# Add a URL
-result = client.add_resource(
-    path="https://example.com/documentation",
-    wait=True  # Wait for semantic processing
-)
+import openviking as ov
 
-# Add a local file
-result = client.add_resource(
-    path="/path/to/your/document.pdf"
-)
+client = ov.OpenViking(path="./data")
+client.initialize()
+```
 
-# Add a directory (repository)
-result = client.add_resource(
-    path="/path/to/your/project",
-    instruction="This is a Python web application"
+Use HTTP client mode when OpenViking runs as a separate service:
+
+```python
+import openviking as ov
+
+client = ov.SyncHTTPClient(url="http://localhost:1933")
+client.initialize()
+```
+
+If server authentication is enabled, use a `user_key` for normal data access:
+
+```python
+client = ov.SyncHTTPClient(
+    url="http://localhost:1933",
+    api_key="<user-key>",
+    agent_id="my-agent",
 )
 ```
 
-### Browsing the Filesystem
+`root_key` is for administrative access. It does not directly work with tenant-scoped APIs such as
+`add_resource`, `find`, or `ls` unless you also pass `account` and `user`.
+See [Authentication](../../docs/en/guides/04-authentication.md) and [Server Mode Quick Start](../../docs/en/getting-started/03-quickstart-server.md).
 
-OpenViking uses a virtual filesystem paradigm with `viking://` URIs:
+### Resource Ingestion
+
+Add a URL, local file, or directory:
 
 ```python
-# List directory contents
+result = client.add_resource(
+    path="https://example.com/docs",
+    wait=False,
+)
+
+result = client.add_resource(path="/path/to/manual.pdf")
+
+result = client.add_resource(
+    path="/path/to/repo",
+    instruction="This is a Python web application",
+)
+```
+
+For scripts and demos, `wait=True` is fine. In long-running applications, it is often better to ingest
+asynchronously and call `wait_processed()` when you actually need the indexed result.
+
+### Filesystem Access
+
+OpenViking organizes context as a virtual filesystem:
+
+```python
 files = client.ls("viking://resources/")
-
-# Show directory tree
 tree = client.tree("viking://resources/my-project", level_limit=3)
-
-# Find files by pattern
-matches = client.glob("**/*.md", uri="viking://resources/my-project")
+content = client.read("viking://resources/my-project/README.md")
 ```
 
-### Semantic Search
+This same URI model applies to memories and skills as well:
 
-Find context using natural language queries:
+- `viking://resources/`
+- `viking://user/memories/`
+- `viking://agent/memories/`
+- `viking://agent/skills/`
+
+### Retrieval
+
+Use `find` for fast semantic search and `search` for more advanced retrieval:
 
 ```python
-# Quick semantic search
 results = client.find(
-    query="how to handle API authentication",
+    query="how does authentication work",
     target_uri="viking://resources/my-project",
-    limit=5
+    limit=5,
 )
 
-# Advanced search with intent analysis
 results = client.search(
-    query="database connection configuration and error handling",
+    query="database configuration and failure handling",
     target_uri="viking://resources/",
-    limit=10
+    limit=10,
 )
 ```
 
-### Tiered Context Loading
-
-OpenViking processes content into three layers for efficient retrieval:
+Use tiered loading after retrieval:
 
 ```python
 uri = "viking://resources/my-project/docs/api.md"
 
-# L0: Quick abstract (~100 tokens)
 abstract = client.abstract(uri)
-
-# L1: Overview with key points (~2k tokens)
 overview = client.overview(uri)
-
-# L2: Full content
 content = client.read(uri)
 ```
 
-### Session Management
-
-Store conversation memories for long-term recall:
+Use `grep` when you need literal text matching instead of semantic retrieval:
 
 ```python
-# Create a session
+result = client.grep("viking://resources/my-project", "Agent", case_insensitive=True)
+matches = result.get("matches", [])
+```
+
+### Sessions and Long-Term Memory
+
+The example script creates a session and appends messages:
+
+```python
 session_info = client.create_session()
 session_id = session_info["session_id"]
 
-# Add conversation messages
 client.add_message(session_id, "user", "I prefer TypeScript over JavaScript")
-client.add_message(session_id, "assistant", "Noted! I'll use TypeScript in your projects.")
+client.add_message(session_id, "assistant", "Understood. I will use TypeScript where appropriate.")
+```
 
-# Commit session to extract long-term memories
+To extract durable memories from that conversation, commit the session:
+
+```python
 client.commit_session(session_id)
+```
 
-# Later, recall relevant memories
+After commit, you can retrieve those memories through normal search APIs:
+
+```python
 memories = client.find(
     query="user programming preferences",
-    target_uri="viking://user/memories/"
+    target_uri="viking://user/memories/",
 )
 ```
 
 ## Configuration
 
-Create `~/.openviking/ov.conf` with your model provider settings:
+Create `~/.openviking/ov.conf` with storage, embedding, and VLM settings. A minimal local setup looks like this:
 
 ```json
 {
+  "server": { "host": "127.0.0.1", "port": 1933 },
   "storage": {
     "workspace": "~/.openviking/data"
   },
@@ -214,87 +244,26 @@ Create `~/.openviking/ov.conf` with your model provider settings:
 }
 ```
 
-> **Tip**: You can also use Volcengine (Doubao), Azure OpenAI, or LiteLLM (supports Anthropic, DeepSeek, Gemini, etc.). See the main README for provider-specific configuration.
+You can also use Volcengine, Azure OpenAI, or LiteLLM-backed providers. For current provider-specific examples, check the main [README](../../README.md) and the [Configuration Guide](../../docs/en/guides/01-configuration.md).
 
-## Use Cases
+## Recommended Next Steps
 
-### Building a Documentation-Aware Agent
-
-```python
-import openviking as ov
-
-class DocumentationAgent:
-    def __init__(self):
-        self.ov = ov.OpenViking(path="./data")
-        self.ov.initialize()
-    
-    def ingest_docs(self, doc_path: str):
-        """Add documentation to the knowledge base."""
-        self.ov.add_resource(doc_path, wait=True)
-    
-    def answer(self, question: str) -> str:
-        """Find relevant documentation and answer."""
-        results = self.ov.find(question, limit=3)
-        
-        context = []
-        for r in results.resources:
-            content = self.ov.read(r.uri)
-            context.append(content)
-        
-        # Use context with your LLM to generate answer
-        return context
-
-# Usage
-agent = DocumentationAgent()
-agent.ingest_docs("https://docs.python.org/3/")
-agent.ingest_docs("/path/to/your/project/docs")
-```
-
-### Creating a Memory-Aware Assistant
-
-```python
-import openviking as ov
-
-class MemoryAssistant:
-    def __init__(self, user_id: str):
-        self.ov = ov.SyncHTTPClient(url="http://localhost:1933")
-        self.user_id = user_id
-        self.session_id = None
-    
-    def start_conversation(self):
-        """Start a new conversation session."""
-        session = self.ov.create_session()
-        self.session_id = session["session_id"]
-    
-    def remember(self, user_input: str, assistant_response: str):
-        """Store conversation turn."""
-        self.ov.add_message(self.session_id, "user", user_input)
-        self.ov.add_message(self.session_id, "assistant", assistant_response)
-    
-    def recall(self, query: str) -> list:
-        """Recall relevant memories."""
-        return self.ov.find(query, target_uri="viking://user/memories/")
-    
-    def end_conversation(self):
-        """Extract long-term memories from session."""
-        self.ov.commit_session(self.session_id)
-```
-
-## Next Steps
-
-- **[OpenClaw Plugin](../openclaw-plugin/)**: Integrate with OpenClaw AI assistant
-- **[Claude Memory Plugin](../claude-memory-plugin/)**: Use with Claude Code
-- **[OpenCode Memory Plugin](../opencode-memory-plugin/)**: Integrate with OpenCode
-- **[Skills Examples](../skills/)**: CLI-based search and management skills
+- [Configuration Guide](../../docs/en/guides/01-configuration.md): review the current config model before moving to shared deployments.
+- [Server Mode Quick Start](../../docs/en/getting-started/03-quickstart-server.md): set up `openviking-server` properly.
+- [MCP Integration Guide](../../docs/en/guides/06-mcp-integration.md): connect OpenViking to Claude Code, Cursor, Claude Desktop, or OpenClaw.
+- [Claude Code Memory Plugin](../claude-code-memory-plugin/README.md): use OpenViking as long-term memory inside Claude Code.
+- [OpenCode Memory Plugin](../opencode-memory-plugin/README.md): use OpenViking memory tools inside OpenCode.
+- [OpenClaw Plugin](../openclaw-plugin/README.md): integrate OpenViking with OpenClaw.
 
 ## Troubleshooting
 
-| Issue | Solution |
-|-------|----------|
-| `ImportError: pyagfs not found` | Run: `pip install -e third_party/agfs/agfs-sdk/python` from source |
-| `Connection refused` | Ensure OpenViking server is running: `openviking-server` |
-| `API key error` | Check your `~/.openviking/ov.conf` configuration |
-| `Slow semantic processing` | Wait for `wait_processed()` or use `add_resource(..., wait=True)` |
+| Issue | What to check |
+|-------|---------------|
+| `ImportError` or local extension issues | Reinstall `openviking`; if developing from source, ensure local build dependencies are available. |
+| `Connection refused` in HTTP mode | Start `openviking-server` and verify `http://localhost:1933/health`. |
+| Tenant/auth errors | Prefer `user_key` for normal data APIs; use `root_key` only with explicit tenant headers. |
+| Slow or empty search results right after ingestion | Wait for `wait_processed()` or ingest with `wait=True`. |
+| Multiple clients or sessions competing for local storage | Use HTTP server mode instead of spinning up separate local processes. |
 
 ## License
 

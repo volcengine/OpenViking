@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0
 #include "index/detail/vector/sparse_retrieval/sparse_row_index.h"
 #include "common/io_utils.h"
 #include <algorithm>

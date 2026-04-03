@@ -124,6 +124,15 @@ tests/api_test/api-test-report.html
 tests/api_test/openviking-server.log
 tests/api_test/openviking-server.pid
 
+# Benchmark outputs
+examples/benchmark/outputs/
+examples/benchmark/datasets/full/
+examples/benchmark/*.log
+RAGbenchmark/datasets/*/
+!RAGbenchmark/datasets/Benchmark_Lite/
+RAGbenchmark/Output/
+RAGbenchmark/*.log
+
 # AI Coding
 CLAUDE.md
 *.so
@@ -141,6 +150,7 @@ logs/
 *.temp
 .tmp/
 ov.conf
+result/
 
 # Jupyter Notebook
 .ipynb_checkpoints

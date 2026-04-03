@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Tests for stripping <think> reasoning tags from VLM responses."""
 
 import pytest
@@ -18,7 +18,7 @@ class TestStripThinkTags:
             def get_completion(self, prompt, thinking=False):
                 return ""
 
-            async def get_completion_async(self, prompt, thinking=False, max_retries=0):
+            async def get_completion_async(self, prompt, thinking=False):
                 return ""
 
             def get_vision_completion(self, prompt, images, thinking=False):

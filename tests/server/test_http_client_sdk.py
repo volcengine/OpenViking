@@ -1,13 +1,14 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 
 """SDK tests using AsyncHTTPClient against a real uvicorn server."""
 
+import asyncio
 import io
 import zipfile
-import asyncio
-import pytest_asyncio
+
 import pytest
+import pytest_asyncio
 
 from openviking_cli.client.http import AsyncHTTPClient
 from openviking_cli.exceptions import FailedPreconditionError
@@ -149,7 +150,6 @@ async def test_sdk_session_lifecycle(http_client):
 
     context = await client.get_session_context(session_id)
     assert context["latest_archive_overview"] == ""
-    assert context["latest_archive_id"] == ""
     assert context["pre_archive_abstracts"] == []
     assert [m["parts"][0]["text"] for m in context["messages"]] == ["Hello from SDK"]
 

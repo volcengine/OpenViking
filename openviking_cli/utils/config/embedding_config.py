@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 from typing import Any, Optional, cast
 
 from pydantic import BaseModel, Field, model_validator
@@ -103,11 +103,12 @@ class EmbeddingModelConfig(BaseModel):
             "gemini",
             "voyage",
             "minimax",
+            "cohere",
             "litellm",
         ]:
             raise ValueError(
                 f"Invalid embedding provider: '{self.provider}'. Must be one of: "
-                "'openai', 'azure', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'minimax', 'litellm'"
+                "'openai', 'azure', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'minimax', 'cohere', 'litellm'"
             )
 
         # Provider-specific validation
@@ -179,6 +180,10 @@ class EmbeddingModelConfig(BaseModel):
             if not self.api_key:
                 raise ValueError("MiniMax provider requires 'api_key' to be set")
 
+        elif self.provider == "cohere":
+            if not self.api_key:
+                raise ValueError("Cohere provider requires 'api_key' to be set")
+
         elif self.provider == "litellm":
             # litellm handles auth via env vars or explicit api_key; no strict requirement
             if not self.dimension:
@@ -201,6 +206,13 @@ class EmbeddingModelConfig(BaseModel):
             )
 
             return get_voyage_model_default_dimension(self.model)
+
+        if provider == "cohere":
+            from openviking.models.embedder.cohere_embedders import (
+                get_cohere_model_default_dimension,
+            )
+
+            return get_cohere_model_default_dimension(self.model)
 
         if provider == "gemini":
             from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
@@ -253,6 +265,10 @@ class EmbeddingConfig(BaseModel):
     max_concurrent: int = Field(
         default=10, description="Maximum number of concurrent embedding requests"
     )
+    max_retries: int = Field(
+        default=3,
+        description="Maximum retry attempts for embedding provider calls (0 disables retry)",
+    )
     text_source: str = Field(
         default="summary_first",
         description="Text source for file vectorization: summary_first|summary_only|content_only",
@@ -298,6 +314,7 @@ class EmbeddingConfig(BaseModel):
             ValueError: If provider/type combination is not supported
         """
         from openviking.models.embedder import (
+            CohereDenseEmbedder,
             GeminiDenseEmbedder,
             JinaDenseEmbedder,
             LiteLLMDenseEmbedder,
@@ -327,6 +344,7 @@ class EmbeddingConfig(BaseModel):
                     "api_version": cfg.api_version,
                     "dimension": cfg.dimension,
                     "provider": "openai",
+                    "config": {"max_retries": self.max_retries},
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                     **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
@@ -341,6 +359,7 @@ class EmbeddingConfig(BaseModel):
                     "api_version": cfg.api_version,
                     "dimension": cfg.dimension,
                     "provider": "azure",
+                    "config": {"max_retries": self.max_retries},
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                     **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
@@ -354,6 +373,7 @@ class EmbeddingConfig(BaseModel):
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
                     "input_type": cfg.input,
+                    "config": {"max_retries": self.max_retries},
                 },
             ),
             ("volcengine", "sparse"): (
@@ -362,6 +382,7 @@ class EmbeddingConfig(BaseModel):
                     "model_name": cfg.model,
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
+                    "config": {"max_retries": self.max_retries},
                 },
             ),
             ("volcengine", "hybrid"): (
@@ -372,6 +393,7 @@ class EmbeddingConfig(BaseModel):
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
                     "input_type": cfg.input,
+                    "config": {"max_retries": self.max_retries},
                 },
             ),
             ("vikingdb", "dense"): (
@@ -385,6 +407,7 @@ class EmbeddingConfig(BaseModel):
                     "host": cfg.host,
                     "dimension": cfg.dimension,
                     "input_type": cfg.input,
+                    "config": {"max_retries": self.max_retries},
                 },
             ),
             ("vikingdb", "sparse"): (
@@ -396,6 +419,7 @@ class EmbeddingConfig(BaseModel):
                     "sk": cfg.sk,
                     "region": cfg.region,
                     "host": cfg.host,
+                    "config": {"max_retries": self.max_retries},
                 },
             ),
             ("vikingdb", "hybrid"): (
@@ -409,6 +433,7 @@ class EmbeddingConfig(BaseModel):
                     "host": cfg.host,
                     "dimension": cfg.dimension,
                     "input_type": cfg.input,
+                    "config": {"max_retries": self.max_retries},
                 },
             ),
             ("jina", "dense"): (
@@ -418,6 +443,7 @@ class EmbeddingConfig(BaseModel):
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
+                    "config": {"max_retries": self.max_retries},
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                 },
@@ -428,6 +454,7 @@ class EmbeddingConfig(BaseModel):
                     "model_name": cfg.model,
                     "api_key": cfg.api_key,
                     "dimension": cfg.dimension,
+                    "config": {"max_retries": self.max_retries},
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                 },
@@ -441,6 +468,7 @@ class EmbeddingConfig(BaseModel):
                     or "no-key",  # Ollama ignores the key, but client requires non-empty
                     "api_base": cfg.api_base or "http://localhost:11434/v1",
                     "dimension": cfg.dimension,
+                    "config": {"max_retries": self.max_retries},
                 },
             ),
             ("voyage", "dense"): (
@@ -450,6 +478,7 @@ class EmbeddingConfig(BaseModel):
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
+                    "config": {"max_retries": self.max_retries},
                 },
             ),
             ("minimax", "dense"): (
@@ -459,9 +488,19 @@ class EmbeddingConfig(BaseModel):
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
+                    "config": {"max_retries": self.max_retries},
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                     **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
+                },
+            ),
+            ("cohere", "dense"): (
+                CohereDenseEmbedder,
+                lambda cfg: {
+                    "model_name": cfg.model,
+                    "api_key": cfg.api_key,
+                    "api_base": cfg.api_base,
+                    "dimension": cfg.dimension,
                 },
             ),
             ("litellm", "dense"): (
@@ -471,6 +510,7 @@ class EmbeddingConfig(BaseModel):
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
+                    "config": {"max_retries": self.max_retries},
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                     **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),

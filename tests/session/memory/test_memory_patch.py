@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Tests for MemoryPatchHandler.
 """
@@ -123,7 +123,7 @@ Line 3 modified
 >>>>>>> REPLACE
 """
         result = self.handler.apply_content_patch(original, patch)
-        assert '    if True:' in result
+        assert "    if True:" in result
         assert '        print("hello world")' in result
         assert '        print("another line")' in result
 

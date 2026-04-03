@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Stale RocksDB LOCK file cleanup for Windows.
 
 On Windows, RocksDB LOCK files can persist after a process crash because
@@ -80,13 +80,9 @@ def clean_stale_rocksdb_locks(data_dir: str) -> int:
                     lock_path,
                 )
             except OSError as exc:
-                logger.warning(
-                    "Could not remove RocksDB LOCK %s: %s", lock_path, exc
-                )
+                logger.warning("Could not remove RocksDB LOCK %s: %s", lock_path, exc)
 
     if removed:
-        logger.info(
-            "Cleaned %d stale RocksDB LOCK file(s) under %s", removed, data_dir
-        )
+        logger.info("Cleaned %d stale RocksDB LOCK file(s) under %s", removed, data_dir)
 
     return removed

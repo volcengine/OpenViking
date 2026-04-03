@@ -2,7 +2,7 @@
 # Qodo PR-Agent Configuration for OpenViking
 # =============================================================================
 # OpenViking: polyglot (Python/TypeScript/Rust) context database for AI agents.
-# By ByteDance/Volcengine — Apache-2.0 licensed.
+# By ByteDance/Volcengine — AGPL-3.0 licensed.
 #
 # Rules derived from: real bug history (PRs #505, #728, #749, #740/#745),
 # codebase conventions, CI pipeline (ruff, mypy, pytest), and Qodo best
@@ -17,6 +17,12 @@
 # ---------------------------------------------------------------------------
 [config]
 output_relevant_configurations = false
+# Use Ark token-billed Chat API via LiteLLM's OpenAI-compatible provider.
+# Without the `openai/` prefix, PR-Agent fails with:
+# "LLM Provider NOT provided" and skips review/improve generation.
+model = "openai/doubao-seed-2-0-code-preview-260215"
+fallback_models = []
+custom_model_max_tokens = 256000
 # Use high reasoning for this complex polyglot codebase with subtle async/
 # concurrency bugs. Worth the extra latency for quality.
 reasoning_effort = "high"
@@ -193,8 +199,8 @@ R6. LICENSE HEADERS
 WHEN a new .py file is created in openviking/ or openviking_cli/
 THEN it MUST contain at the top:
      # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-     # SPDX-License-Identifier: Apache-2.0
-BECAUSE Apache-2.0 compliance requires headers on all source files.
+     # SPDX-License-Identifier: AGPL-3.0
+BECAUSE AGPL-3.0 compliance requires headers on all source files.
      Every existing file in these directories follows this convention.
 
 R7. ERROR HANDLING

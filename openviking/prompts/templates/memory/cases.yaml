@@ -5,9 +5,9 @@ description: |
   Cases should be about specific problems that have clear solutions.
   Each case should include: what the problem was (symptoms, error messages, context), what the solution was (steps taken, principles used), and why it worked.
   Case names should be in "Problem → Solution" format to make them easily searchable.
-directory: "viking://agent/{agent_space}/memories/cases"
-filename_template: "{case_name}.md"
-enabled: true
+directory: "viking://agent/{{ agent_space }}/memories/cases"
+filename_template: "{{ case_name }}.md"
+enabled: false
 fields:
   - name: case_name
     type: string

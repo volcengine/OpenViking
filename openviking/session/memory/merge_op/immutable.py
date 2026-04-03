@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Immutable merge operation - field cannot be changed once set.
 """
@@ -7,9 +7,9 @@ Immutable merge operation - field cannot be changed once set.
 from typing import Any, Type
 
 from openviking.session.memory.merge_op.base import (
+    FieldType,
     MergeOp,
     MergeOpBase,
-    FieldType,
     get_python_type_for_field,
 )
 

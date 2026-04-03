@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 
 """Comprehensive tests for Context class."""
 
@@ -428,6 +428,17 @@ class TestContextFromDict:
         ctx = Context.from_dict(d)
 
         assert ctx.vector == [0.1, 0.2, 0.3]
+
+    def test_from_dict_derives_parent_uri_when_missing(self):
+        """Test parent_uri is derived from uri for records written without the field."""
+        d = {
+            "uri": "viking://user/test/memories/preferences/theme.md",
+            "context_type": "memory",
+        }
+
+        ctx = Context.from_dict(d)
+
+        assert ctx.parent_uri == "viking://user/test/memories/preferences"
 
     def test_roundtrip(self):
         """Test to_dict -> from_dict roundtrip."""

@@ -5,9 +5,9 @@ description: |
   Patterns should be about: how to approach certain types of tasks, what steps to follow, what considerations to keep in mind.
   Each pattern should include: trigger conditions (when to use this pattern), process steps (what to do), and considerations (what to watch out for).
   Pattern names should be in "Process name: Step description" format.
-directory: "viking://agent/{agent_space}/memories/patterns"
-filename_template: "{pattern_name}.md"
-enabled: true
+directory: "viking://agent/{{ agent_space }}/memories/patterns"
+filename_template: "{{ pattern_name }}.md"
+enabled: false
 fields:
   - name: pattern_name
     type: string

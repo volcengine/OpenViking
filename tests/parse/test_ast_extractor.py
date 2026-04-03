@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Tests for AST-based code skeleton extraction."""
 
 from openviking.parse.parsers.code.ast.skeleton import ClassSkeleton, CodeSkeleton, FunctionSig
@@ -37,6 +37,12 @@ def _csharp_extractor():
     from openviking.parse.parsers.code.ast.languages.csharp import CSharpExtractor
 
     return CSharpExtractor()
+
+
+def _php_extractor():
+    from openviking.parse.parsers.code.ast.languages.php import PhpExtractor
+
+    return PhpExtractor()
 
 
 # ---------------------------------------------------------------------------
@@ -467,6 +473,168 @@ public class Calculator {
         assert "simple calculator service" in text
         assert "@param a first operand" in text
         assert "@return sum of a and b" in text
+
+
+class TestPhpExtractor:
+    SAMPLE = """
+<?php
+/** Module for math utilities.
+ *
+ * Provides simple arithmetic operations.
+ */
+namespace App\\Services;
+
+use Foo\\Bar;
+use Foo\\Baz as BazAlias;
+use Foo\\Group\\{A, B as Bee};
+
+/** A simple calculator service.
+ *
+ * Supports basic arithmetic operations.
+ */
+class Calculator extends BaseCalc implements ICalc {
+    /** Add two integers.
+     *
+     * @param int $a First operand
+     * @param int $b Second operand
+     * @return int Sum
+     */
+    public function add(int $a, int $b): int {
+        return $a + $b;
+    }
+
+    // Subtract b from a.
+    public function subtract(int $a, int $b): int {
+        return $a - $b;
+    }
+}
+
+/** Multiply two integers. */
+function mul(int $a, int $b): int {
+    return $a * $b;
+}
+"""
+
+    def setup_method(self):
+        self.e = _php_extractor()
+
+    def test_module_doc(self):
+        sk = self.e.extract("math.php", self.SAMPLE)
+        print(sk.to_text(verbose=True))
+        assert "Module for math utilities" in sk.module_doc
+
+    def test_imports(self):
+        sk = self.e.extract("math.php", self.SAMPLE)
+        assert "Foo\\Bar" in sk.imports
+        assert "Foo\\Baz" in sk.imports
+        assert "Foo\\Group\\A" in sk.imports
+        assert "Foo\\Group\\B" in sk.imports
+
+    def test_class_extracted(self):
+        sk = self.e.extract("math.php", self.SAMPLE)
+        names = {c.name for c in sk.classes}
+        assert "Calculator" in names
+
+    def test_methods_extracted(self):
+        sk = self.e.extract("math.php", self.SAMPLE)
+        cls = next(c for c in sk.classes if c.name == "Calculator")
+        methods = {m.name: m for m in cls.methods}
+        assert "add" in methods
+        assert "subtract" in methods
+        assert "$a" in methods["add"].params
+        assert methods["add"].return_type == "int"
+
+    def test_method_docstring(self):
+        sk = self.e.extract("math.php", self.SAMPLE)
+        cls = next(c for c in sk.classes if c.name == "Calculator")
+        methods = {m.name: m for m in cls.methods}
+        assert "Add two integers." in methods["add"].docstring
+        assert "@param int $a" in methods["add"].docstring
+        assert "Subtract b from a." in methods["subtract"].docstring
+
+    def test_function_extracted(self):
+        sk = self.e.extract("math.php", self.SAMPLE)
+        names = {f.name for f in sk.functions}
+        assert "mul" in names
+
+    def test_to_text_compact(self):
+        sk = self.e.extract("math.php", self.SAMPLE)
+        text = sk.to_text(verbose=False)
+        assert "# math.php [PHP]" in text
+        assert "class Calculator" in text
+        assert "@param" not in text
+
+    def test_to_text_verbose(self):
+        sk = self.e.extract("math.php", self.SAMPLE)
+        text = sk.to_text(verbose=True)
+        assert "Supports basic arithmetic operations." in text
+        assert "@param int $a First operand" in text
+
+    def test_trait_use_added_to_bases(self):
+        code = """
+<?php
+trait T1 {}
+trait T2 {}
+class C {
+  use T1, T2;
+  public function m() {}
+}
+"""
+        sk = self.e.extract("traits.php", code)
+        cls = next(c for c in sk.classes if c.name == "C")
+        assert "T1" in cls.bases
+        assert "T2" in cls.bases
+
+    def test_trait_and_interface_declarations_included(self):
+        code = """
+<?php
+interface ICalc {}
+/** T doc */
+trait T { public function t() {} }
+"""
+        sk = self.e.extract("defs.php", code)
+        names = {c.name for c in sk.classes}
+        assert "interface ICalc" in names
+        assert "trait T" in names
+
+    def test_assignment_closure_extracted_as_function(self):
+        code = """
+<?php
+/** Handler doc. */
+$handler = function(int $x): int { return $x; };
+$fn = fn($x): int => $x + 1;
+"""
+        sk = self.e.extract("closures.php", code)
+        fns = {f.name: f for f in sk.functions}
+        assert "$handler" in fns
+        assert fns["$handler"].return_type == "int"
+        assert "Handler doc." in fns["$handler"].docstring
+        assert "$fn" in fns
+        assert fns["$fn"].return_type == "int"
+
+    def test_preceding_doc_prefers_phpdoc(self):
+        code = """
+<?php
+// Noise comment.
+
+/** Real doc. */
+function f() {}
+"""
+        sk = self.e.extract("doc.php", code)
+        f = next(fn for fn in sk.functions if fn.name == "f")
+        assert f.docstring == "Real doc."
+
+    def test_preceding_doc_falls_back_to_line_comments(self):
+        code = """
+<?php
+// Line 1.
+// Line 2.
+function g() {}
+"""
+        sk = self.e.extract("doc2.php", code)
+        g = next(fn for fn in sk.functions if fn.name == "g")
+        assert "Line 1." in g.docstring
+        assert "Line 2." in g.docstring
 
 
 # ---------------------------------------------------------------------------

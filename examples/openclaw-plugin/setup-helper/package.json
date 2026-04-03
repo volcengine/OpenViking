@@ -1,6 +1,6 @@
 {
   "name": "openclaw-openviking-setup-helper",
-  "version": "0.2.11",
+  "version": "0.2.15",
   "description": "Setup helper for installing OpenViking memory plugin into OpenClaw",
   "type": "module",
   "bin": {

@@ -8,8 +8,10 @@ import { OpenVikingClient, localClientCache, localClientPendingPromises, isMemor
 import type { FindResultItem, PendingClientEntry, CommitSessionResult, OVMessage } from "./client.js";
 import { formatMessageFaithful } from "./context-engine.js";
 import {
+  compileSessionPatterns,
   isTranscriptLikeIngest,
   extractLatestUserText,
+  shouldBypassSession,
 } from "./text-utils.js";
 import {
   clampScore,
@@ -21,7 +23,7 @@ import {
 } from "./memory-ranking.js";
 import {
   IS_WIN,
-  waitForHealth,
+  waitForHealthOrExit,
   quickHealthCheck,
   quickRecallPrecheck,
   withTimeout,
@@ -273,6 +275,7 @@ const contextEnginePlugin = {
         ? (api.pluginConfig as Record<string, unknown>)
         : {};
     const cfg = memoryOpenVikingConfigSchema.parse(api.pluginConfig);
+    const bypassSessionPatterns = compileSessionPatterns(cfg.bypassSessionPatterns);
     const rawAgentId = rawCfg.agentId;
     if (cfg.logFindRequests) {
       api.logger.info(
@@ -338,6 +341,10 @@ const contextEnginePlugin = {
             entry.resolve = resolve;
             entry.reject = reject;
           });
+          // Service startup can reject this shared promise before any hook/tool
+          // awaits it. Attach a sink now so expected local-startup failures do
+          // not surface as process-level unhandled rejections.
+          void entry.promise.catch(() => {});
           clientPromise = entry.promise;
           localClientPendingPromises.set(localCacheKey, entry);
         }
@@ -358,6 +365,25 @@ const contextEnginePlugin = {
 
     const getClient = (): Promise<OpenVikingClient> => clientPromise;
 
+    const isBypassedSession = (ctx?: {
+      sessionId?: string;
+      sessionKey?: string;
+    }): boolean => shouldBypassSession(ctx ?? {}, bypassSessionPatterns);
+
+    const makeBypassedToolResult = (toolName: string) => ({
+      content: [
+        {
+          type: "text" as const,
+          text: `OpenViking is bypassed for this session by bypassSessionPatterns; ${toolName} was skipped.`,
+        },
+      ],
+      details: {
+        action: "bypassed",
+        reason: "session_bypassed",
+        toolName,
+      },
+    });
+
     api.registerTool(
       (ctx: ToolContext) => ({
         name: "memory_recall",
@@ -377,6 +403,9 @@ const contextEnginePlugin = {
           ),
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
+          if (isBypassedSession(ctx)) {
+            return makeBypassedToolResult("memory_recall");
+          }
           rememberSessionAgentId(ctx);
           const agentId = resolveAgentId(ctx.sessionId, ctx.sessionKey);
           const { query } = params as { query: string };
@@ -492,6 +521,9 @@ const contextEnginePlugin = {
           sessionId: Type.Optional(Type.String({ description: "Existing OpenViking session ID" })),
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
+          if (isBypassedSession(ctx)) {
+            return makeBypassedToolResult("memory_store");
+          }
           rememberSessionAgentId(ctx);
           const storeAgentId = resolveAgentId(ctx.sessionId, ctx.sessionKey);
           const { text } = params as { text: string };
@@ -600,6 +632,9 @@ const contextEnginePlugin = {
           ),
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
+          if (isBypassedSession(ctx)) {
+            return makeBypassedToolResult("memory_forget");
+          }
           rememberSessionAgentId(ctx);
           const agentId = resolveAgentId(ctx.sessionId, ctx.sessionKey);
           const client = await getClient();
@@ -706,6 +741,9 @@ const contextEnginePlugin = {
         }),
       }),
       async execute(_toolCallId: string, params: Record<string, unknown>) {
+        if (isBypassedSession(ctx)) {
+          return makeBypassedToolResult("ov_archive_expand");
+        }
         rememberSessionAgentId(ctx);
         const archiveId = String((params as { archiveId?: string }).archiveId ?? "").trim();
         const sessionId = ctx.sessionId ?? "";
@@ -823,6 +861,12 @@ const contextEnginePlugin = {
             agentId: ctx?.agentId,
           })}`,
         );
+      }
+      if (isBypassedSession(ctx)) {
+        verboseRoutingInfo(
+          `openviking: bypassing before_prompt_build due to session pattern match (sessionKey=${ctx?.sessionKey ?? "none"}, sessionId=${ctx?.sessionId ?? "none"})`,
+        );
+        return;
       }
       const agentId = resolveAgentId(ctx?.sessionId, ctx?.sessionKey);
       let client: OpenVikingClient;
@@ -958,10 +1002,16 @@ const contextEnginePlugin = {
       rememberSessionAgentId(ctx ?? {});
     });
     api.on("before_reset", async (_event: unknown, ctx?: HookAgentContext) => {
+      if (isBypassedSession(ctx)) {
+        verboseRoutingInfo(
+          `openviking: bypassing before_reset due to session pattern match (sessionKey=${ctx?.sessionKey ?? "none"}, sessionId=${ctx?.sessionId ?? "none"})`,
+        );
+        return;
+      }
       const sessionId = ctx?.sessionId;
       if (sessionId && contextEngineRef) {
         try {
-          const ok = await contextEngineRef.commitOVSession(sessionId);
+          const ok = await contextEngineRef.commitOVSession(sessionId, ctx?.sessionKey);
           if (ok) {
             api.logger.info(`openviking: committed OV session on reset for session=${sessionId}`);
           }
@@ -983,6 +1033,10 @@ const contextEnginePlugin = {
           cfg,
           logger: api.logger,
           getClient,
+          quickPrecheck:
+            cfg.mode === "local"
+              ? () => quickRecallPrecheck(cfg.mode, cfg.baseUrl, cfg.port, localProcess)
+              : undefined,
           resolveAgentId,
           rememberSessionAgentId,
         });
@@ -1021,8 +1075,9 @@ const contextEnginePlugin = {
 
           // Inherit system environment; optionally override Go/Python paths via env vars
           const pathSep = IS_WIN ? ";" : ":";
+          const { ALL_PROXY, all_proxy, HTTP_PROXY, http_proxy, HTTPS_PROXY, https_proxy, ...filteredEnv } = process.env;
           const env = {
-            ...process.env,
+            ...filteredEnv,
             PYTHONUNBUFFERED: "1",
             PYTHONWARNINGS: "ignore::RuntimeWarning",
             OPENVIKING_CONFIG_FILE: cfg.configPath,
@@ -1086,7 +1141,7 @@ const contextEnginePlugin = {
             api.logger.warn(`openviking: subprocess exited (code=${code}, signal=${signal})${out}`);
           });
           try {
-            await waitForHealth(baseUrl, timeoutMs, intervalMs);
+            await waitForHealthOrExit(baseUrl, timeoutMs, intervalMs, child);
             const client = new OpenVikingClient(
               baseUrl,
               cfg.apiKey,
@@ -1163,7 +1218,7 @@ const contextEnginePlugin = {
                 api.logger.warn(`openviking: re-spawned subprocess exited (code=${code}, signal=${signal})`);
               });
               try {
-                await waitForHealth(baseUrl, timeoutMs, intervalMs);
+                await waitForHealthOrExit(baseUrl, timeoutMs, intervalMs, child);
                 const client = new OpenVikingClient(baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs);
                 localClientCache.set(localCacheKey, { client, process: child });
                 if (resolveLocalClient) {

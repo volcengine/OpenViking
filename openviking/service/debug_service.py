@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Debug Service - provides system status query and health check.
 """
@@ -11,10 +11,10 @@ from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager
 from openviking.storage.observers import (
     LockObserver,
+    ModelsObserver,
     QueueObserver,
     RetrievalObserver,
     VikingDBObserver,
-    VLMObserver,
 )
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.transaction import get_lock_manager
@@ -118,18 +118,37 @@ class ObserverService:
         )
 
     @property
-    def vlm(self) -> ComponentStatus:
-        """Get VLM status."""
+    def models(self) -> ComponentStatus:
+        """Get Models status (VLM, Embedding, Rerank)."""
         if self._config is None:
             return ComponentStatus(
-                name="vlm",
+                name="models",
                 is_healthy=False,
                 has_errors=True,
                 status="Not initialized",
             )
-        observer = VLMObserver(self._config.vlm.get_vlm_instance())
+
+        vlm_instance = self._config.vlm.get_vlm_instance()
+        embedding_instance = None
+        rerank_instance = None
+
+        # Get embedding instance if available
+        if self._config.embedding:
+            embedding_instance = self._config.embedding.get_embedder()
+
+        # Get rerank instance if available
+        if self._config.rerank and self._config.rerank.is_available():
+            from openviking.models.rerank import RerankClient
+
+            rerank_instance = RerankClient.from_config(self._config.rerank)
+
+        observer = ModelsObserver(
+            vlm_instance=vlm_instance,
+            embedding_instance=embedding_instance,
+            rerank_instance=rerank_instance,
+        )
         return ComponentStatus(
-            name="vlm",
+            name="models",
             is_healthy=observer.is_healthy(),
             has_errors=observer.has_errors(),
             status=observer.get_status_table(),
@@ -171,7 +190,7 @@ class ObserverService:
         components = {
             "queue": self.queue,
             "vikingdb": self.vikingdb(ctx=ctx),
-            "vlm": self.vlm,
+            "models": self.models,
             "lock": self.lock,
             "retrieval": self.retrieval,
         }

@@ -1,0 +1,32 @@
+project_name: "RAG_Benchmark"
+
+# ===========Modify Configuration================
+dataset_name: "FinanceBench" 
+
+adapter:
+  module: "src.adapters.financebench_adapter"  
+  class_name: "FinanceBenchAdapter"     
+
+execution:
+  max_workers: 8
+  ingest_workers: 8
+  retrieval_topk: 10
+  max_queries: null
+  skip_ingestion: false
+  ingest_mode: "directory"
+  retrieval_instruction: ""  
+# ==================================  
+
+paths:
+  dataset_path: "datasets/{dataset_name}/financebench_open_source.jsonl"
+  doc_output_dir: "ov_storage/{dataset_name}/{dataset_name}_processed_docs"
+  vector_store: "ov_storage/{dataset_name}/{dataset_name}_viking_store_index"
+  output_dir: "Output/{dataset_name}/experiment_test_top_{retrieval_topk}"
+  log_file: "Output/{dataset_name}/experiment_test_top_{retrieval_topk}/benchmark.log"
+
+
+llm:
+  model: "doubao-seed-2-0-pro-260215"
+  temperature: 0
+  base_url: "https://ark.cn-beijing.volces.com/api/v3"
+  api_key: "your_api_key_here"

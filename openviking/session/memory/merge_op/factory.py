@@ -1,15 +1,15 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Factory for creating MergeOp instances.
 """
 
 from typing import TYPE_CHECKING
 
-from openviking.session.memory.merge_op.base import MergeOp, MergeOpBase, FieldType
+from openviking.session.memory.merge_op.base import FieldType, MergeOp, MergeOpBase
+from openviking.session.memory.merge_op.immutable import ImmutableOp
 from openviking.session.memory.merge_op.patch import PatchOp
 from openviking.session.memory.merge_op.sum import SumOp
-from openviking.session.memory.merge_op.immutable import ImmutableOp
 
 if TYPE_CHECKING:
     from openviking.session.memory.dataclass import MemoryField
@@ -40,7 +40,7 @@ class MergeOpFactory:
             return PatchOp(field_type)
 
     @staticmethod
-    def from_field(field: 'MemoryField') -> MergeOpBase:
+    def from_field(field: "MemoryField") -> MergeOpBase:
         """Create a MergeOp instance from a MemoryField.
 
         Args:

@@ -143,6 +143,95 @@ openviking read viking://resources/docs/api.md
 
 ---
 
+### write()
+
+修改一个已存在的文件，并自动刷新相关语义与向量。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| uri | str | 是 | - | 已存在文件的 URI |
+| content | str | 是 | - | 要写入的新内容 |
+| mode | str | 否 | `replace` | `replace` 或 `append` |
+| wait | bool | 否 | `false` | 是否等待后台语义/向量刷新完成 |
+| timeout | float | 否 | `null` | 当 `wait=true` 时的超时时间（秒） |
+
+**说明**
+
+- 只支持已存在文件；目录会被拒绝。
+- 不允许直接写入派生语义文件：`.abstract.md`、`.overview.md`、`.relations.json`。
+- 公共 API 已不再接受 `regenerate_semantics` 或 `revectorize`；写入后一定会自动刷新相关语义与向量。
+
+**Python SDK (Embedded / HTTP)**
+
+```python
+result = client.write(
+    "viking://resources/docs/api.md",
+    "# Updated API\n\nFresh content.",
+    mode="replace",
+    wait=True,
+)
+print(result["root_uri"])
+```
+
+**HTTP API**
+
+```
+POST /api/v1/content/write
+```
+
+```bash
+curl -X POST "http://localhost:1933/api/v1/content/write" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "uri": "viking://resources/docs/api.md",
+    "content": "# Updated API\n\nFresh content.",
+    "mode": "replace",
+    "wait": true
+  }'
+```
+
+**CLI**
+
+```bash
+openviking write viking://resources/docs/api.md \
+  --content "# Updated API\n\nFresh content." \
+  --wait
+```
+
+**响应**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://resources/docs/api.md",
+    "root_uri": "viking://resources/docs",
+    "context_type": "resource",
+    "mode": "replace",
+    "written_bytes": 29,
+    "semantic_updated": true,
+    "vector_updated": true,
+    "queue_status": {
+      "Semantic": {
+        "processed": 1,
+        "error_count": 0,
+        "errors": []
+      },
+      "Embedding": {
+        "processed": 2,
+        "error_count": 0,
+        "errors": []
+      }
+    }
+  }
+}
+```
+
+---
+
 ### ls()
 
 列出目录内容。

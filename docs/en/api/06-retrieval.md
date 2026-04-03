@@ -299,6 +299,8 @@ Search content by pattern (regex).
 | uri | str | Yes | - | Viking URI to search in |
 | pattern | str | Yes | - | Search pattern (regex) |
 | case_insensitive | bool | No | False | Ignore case |
+| node_limit | int | No | None | Maximum number of nodes to search |
+| exclude_uri | str | No | None | URI prefix to exclude from search |
 
 **Python SDK (Embedded / HTTP)**
 

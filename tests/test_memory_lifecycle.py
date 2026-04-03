@@ -1,14 +1,12 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Tests for memory lifecycle hotness scoring (#296)."""
 
-import math
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from openviking.retrieve.memory_lifecycle import DEFAULT_HALF_LIFE_DAYS, hotness_score
-
 
 NOW = datetime(2026, 2, 26, 12, 0, 0, tzinfo=timezone.utc)
 

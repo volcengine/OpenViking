@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """VikingDB storage backend for OpenViking."""
 
 from __future__ import annotations
@@ -136,6 +136,12 @@ class _SingleAccountBackend:
         except Exception:
             return data
 
+    def _prepare_upsert_payload(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Drop runtime-only or stale legacy fields before writing back to the current schema."""
+        payload = {k: v for k, v in data.items() if v is not None}
+        filtered = self._filter_known_fields(payload)
+        return {k: v for k, v in filtered.items() if v is not None}
+
     # =========================================================================
     # Collection Management
     # =========================================================================
@@ -224,7 +230,7 @@ class _SingleAccountBackend:
         if not payload.get("id"):
             payload["id"] = str(uuid.uuid4())
 
-        payload = self._filter_known_fields(payload)
+        payload = self._prepare_upsert_payload(payload)
         ids = self._adapter.upsert(payload)
         return ids[0] if ids else ""
 

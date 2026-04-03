@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Async OpenViking client implementation (embedded mode only).
 
@@ -166,6 +166,7 @@ class AsyncOpenViking:
         role: str,
         content: str | None = None,
         parts: list[dict] | None = None,
+        created_at: str | None = None,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -174,12 +175,13 @@ class AsyncOpenViking:
             role: Message role ("user" or "assistant")
             content: Text content (simple mode)
             parts: Parts array (full Part support: TextPart, ContextPart, ToolPart)
+            created_at: Message creation time (ISO format string)
 
         If both content and parts are provided, parts takes precedence.
         """
         await self._ensure_initialized()
         return await self._client.add_message(
-            session_id=session_id, role=role, content=content, parts=parts
+            session_id=session_id, role=role, content=content, parts=parts, created_at=created_at
         )
 
     async def commit_session(
@@ -371,6 +373,26 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         return await self._client.read(uri, offset=offset, limit=limit)
 
+    async def write(
+        self,
+        uri: str,
+        content: str,
+        mode: str = "replace",
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Write text content to an existing file and refresh semantics/vectors."""
+        await self._ensure_initialized()
+        return await self._client.write(
+            uri=uri,
+            content=content,
+            mode=mode,
+            wait=wait,
+            timeout=timeout,
+            telemetry=telemetry,
+        )
+
     async def ls(self, uri: str, **kwargs) -> List[Any]:
         """
         List directory contents.
@@ -400,10 +422,23 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         await self._client.rm(uri, recursive=recursive)
 
-    async def grep(self, uri: str, pattern: str, case_insensitive: bool = False) -> Dict:
+    async def grep(
+        self,
+        uri: str,
+        pattern: str,
+        case_insensitive: bool = False,
+        node_limit: Optional[int] = None,
+        exclude_uri: Optional[str] = None,
+    ) -> Dict:
         """Content search"""
         await self._ensure_initialized()
-        return await self._client.grep(uri, pattern, case_insensitive=case_insensitive)
+        return await self._client.grep(
+            uri,
+            pattern,
+            case_insensitive=case_insensitive,
+            node_limit=node_limit,
+            exclude_uri=exclude_uri,
+        )
 
     async def glob(self, pattern: str, uri: str = "viking://") -> Dict:
         """File pattern matching"""

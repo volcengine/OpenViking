@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Tests for OpenAI-compatible rerank client and factory dispatch."""
 
 from unittest.mock import MagicMock, patch
@@ -7,9 +7,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
+from openviking.models.rerank import OpenAIRerankClient, RerankClient
 from openviking_cli.utils.config.rerank_config import RerankConfig
-from openviking_cli.utils.rerank import RerankClient
-from openviking_cli.utils.rerank_openai import OpenAIRerankClient
 
 
 class TestOpenAIRerankClient:
@@ -32,7 +31,9 @@ class TestOpenAIRerankClient:
         }
         mock_response.raise_for_status = MagicMock()
 
-        with patch("openviking_cli.utils.rerank_openai.requests.post", return_value=mock_response):
+        with patch(
+            "openviking.models.rerank.openai_rerank.requests.post", return_value=mock_response
+        ):
             scores = client.rerank_batch("test query", ["doc1", "doc2", "doc3"])
 
         assert scores == [0.9, 0.3, 0.7]
@@ -50,7 +51,9 @@ class TestOpenAIRerankClient:
         }
         mock_response.raise_for_status = MagicMock()
 
-        with patch("openviking_cli.utils.rerank_openai.requests.post", return_value=mock_response):
+        with patch(
+            "openviking.models.rerank.openai_rerank.requests.post", return_value=mock_response
+        ):
             scores = client.rerank_batch("test query", ["doc1", "doc2", "doc3"])
 
         assert scores == [0.9, 0.3, 0.7]
@@ -66,7 +69,9 @@ class TestOpenAIRerankClient:
         mock_response.json.return_value = {"unexpected": "format"}
         mock_response.raise_for_status = MagicMock()
 
-        with patch("openviking_cli.utils.rerank_openai.requests.post", return_value=mock_response):
+        with patch(
+            "openviking.models.rerank.openai_rerank.requests.post", return_value=mock_response
+        ):
             result = client.rerank_batch("query", ["doc1"])
 
         assert result is None
@@ -81,7 +86,9 @@ class TestOpenAIRerankClient:
         }
         mock_response.raise_for_status = MagicMock()
 
-        with patch("openviking_cli.utils.rerank_openai.requests.post", return_value=mock_response):
+        with patch(
+            "openviking.models.rerank.openai_rerank.requests.post", return_value=mock_response
+        ):
             result = client.rerank_batch("query", ["doc1", "doc2"])
 
         assert result is None
@@ -97,7 +104,9 @@ class TestOpenAIRerankClient:
         }
         mock_response.raise_for_status = MagicMock()
 
-        with patch("openviking_cli.utils.rerank_openai.requests.post", return_value=mock_response):
+        with patch(
+            "openviking.models.rerank.openai_rerank.requests.post", return_value=mock_response
+        ):
             result = client.rerank_batch("query", ["doc1"])
 
         assert result is None
@@ -113,7 +122,9 @@ class TestOpenAIRerankClient:
         }
         mock_response.raise_for_status = MagicMock()
 
-        with patch("openviking_cli.utils.rerank_openai.requests.post", return_value=mock_response):
+        with patch(
+            "openviking.models.rerank.openai_rerank.requests.post", return_value=mock_response
+        ):
             result = client.rerank_batch("query", ["doc1"])
 
         assert result is None
@@ -122,7 +133,7 @@ class TestOpenAIRerankClient:
         client = self._make_client()
 
         with patch(
-            "openviking_cli.utils.rerank_openai.requests.post",
+            "openviking.models.rerank.openai_rerank.requests.post",
             side_effect=Exception("connection error"),
         ):
             result = client.rerank_batch("query", ["doc1"])
@@ -136,7 +147,7 @@ class TestOpenAIRerankClient:
         mock_response.raise_for_status = MagicMock()
 
         with patch(
-            "openviking_cli.utils.rerank_openai.requests.post", return_value=mock_response
+            "openviking.models.rerank.openai_rerank.requests.post", return_value=mock_response
         ) as mock_post:
             client.rerank_batch("my query", ["doc1"])
 

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Tests for extra_headers support in OpenAIDenseEmbedder and EmbeddingConfig factory.
 
 Covers:
@@ -97,6 +97,23 @@ class TestExtraHeadersViaFactory:
         mock_openai_class.assert_called_once()
         call_kwargs = mock_openai_class.call_args[1]
         assert "default_headers" not in call_kwargs
+
+    @patch("openai.OpenAI")
+    def test_factory_injects_embedding_max_retries(self, mock_openai_class):
+        """Factory should inject top-level embedding.max_retries into embedder config."""
+        mock_openai_class.return_value = _make_mock_client()
+
+        cfg = EmbeddingModelConfig(
+            provider="openai",
+            model="text-embedding-3-small",
+            api_key="sk-test",
+            dimension=8,
+        )
+        embedder = EmbeddingConfig(dense=cfg, max_retries=0)._create_embedder(
+            "openai", "dense", cfg
+        )
+
+        assert embedder.max_retries == 0
 
 
 class TestEmbeddingModelConfigExtraHeaders:

@@ -480,6 +480,7 @@ setup(
             "lib/libagfsbinding.dll",
             "bin/ov",
             "bin/ov.exe",
+            "console/static/**/*",
             "storage/vectordb/engine/*.abi3.so",
             "storage/vectordb/engine/*.pyd",
         ],

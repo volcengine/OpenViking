@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Parser registry for OpenViking.
 
@@ -19,14 +19,14 @@ from openviking.parse.parsers.excel import ExcelParser
 
 # Import will be handled dynamically to avoid dependency issues
 from openviking.parse.parsers.html import HTMLParser
+
+# Import markitdown-inspired parsers
+from openviking.parse.parsers.legacy_doc import LegacyDocParser
 from openviking.parse.parsers.markdown import MarkdownParser
 from openviking.parse.parsers.media import AudioParser, ImageParser, VideoParser
 from openviking.parse.parsers.pdf import PDFParser
 from openviking.parse.parsers.powerpoint import PowerPointParser
 from openviking.parse.parsers.text import TextParser
-
-# Import markitdown-inspired parsers
-from openviking.parse.parsers.legacy_doc import LegacyDocParser
 from openviking.parse.parsers.word import WordParser
 from openviking.parse.parsers.zip_parser import ZipParser
 

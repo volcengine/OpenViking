@@ -1,28 +1,21 @@
 memory_type: skills
 description: |
-  Skill execution memory - captures "how this skill is executed, what works well, and what doesn't".
-  Extract skill execution patterns, statistics, and learnings from skill usage in conversation.
-  For each skill, track: how many times it's been executed, success rate, what it's best for, recommended execution flow, key dependencies, common failure modes, and actionable recommendations.
-  Also accumulate complete guidelines with "Good Cases" and "Bad Cases" examples.
-  Skill memories help the agent learn from experience and execute skills more effectively over time.
-directory: "viking://agent/{agent_space}/memories/skills"
-filename_template: "{skill_name}.md"
-
-content_template: |
-  Skill: {skill_name}
-
-  Skill Memory Context:
-  Based on {total_executions} historical executions:
-  - Success rate: {success_rate}% ({success_count} successful, {fail_count} failed)
-  - Best for: {best_for}
-  - Recommended flow: {recommended_flow}
-  - Key dependencies: {key_dependencies}
-  - Common failures: {common_failures}
-  - Recommendation: {recommendation}
-
-  {guidelines}
-
+  Record all skills uses，
+directory: "viking://agent/{{ agent_space }}/memories/skills"
+filename_template: "{{ skill_name }}.md"
 enabled: true
+content_template: |
+  Skill: {{ skill_name }}
+  
+  - Success rate: {{ ((success_count|default(0) / (total_executions|default(1) if total_executions|default(0) > 0 else 1)) * 100)|round|int }}% ({{ success_count|default(0) }}/{{ total_executions|default(0) }})
+  - Best for: {{ best_for|default('N/A') }}
+  - Recommended flow: {{ recommended_flow|default('N/A') }}
+  - Key dependencies: {{ key_dependencies|default('N/A') }}
+  - Common failures: {{ common_failures|default('N/A') }}
+  - Recommendation: {{ recommendation|default('N/A') }}
+
+  {{ guidelines|default('') }}
+
 fields:
   - name: skill_name
     type: string
@@ -64,7 +57,7 @@ fields:
     type: string
     description: |
       Recommended execution flow for the skill, describing the best steps to execute this skill.
-      Examples: "1. Confirm topic and audience → 2. Collect reference materials → 3. Generate outline → 4. Create slides → 5. Refine content"
+      Examples: "1. Confirm topic and audience -> 2. Collect reference materials -> 3. Generate outline -> 4. Create slides -> 5. Refine content"
     merge_op: patch
 
   - name: key_dependencies

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Tests for JSON stable parsing utilities.
 """
@@ -7,20 +7,16 @@ Tests for JSON stable parsing utilities.
 import json
 from typing import List, Optional
 
-import pytest
 from pydantic import BaseModel, Field
 
 from openviking.session.memory.utils import (
-    remove_json_trailing_content,
-    extract_json_content,
-    extract_json_from_markdown,
-    parse_memory_file_with_fields,
-    value_fault_tolerance,
-    parse_value_with_tolerance,
-    parse_json_with_stability,
-    _get_origin_type,
     _get_arg_type,
-    _any_to_str,
+    _get_origin_type,
+    extract_json_content,
+    parse_json_with_stability,
+    parse_memory_file_with_fields,
+    remove_json_trailing_content,
+    value_fault_tolerance,
 )
 
 
@@ -29,55 +25,55 @@ class TestExtractJsonContent:
 
     def test_removes_trailing_content_after_closing_brace(self):
         """Test that content after the last } is removed."""
-        content = '''{"reasonning": "test", "write_uris": []}
+        content = """{"reasonning": "test", "write_uris": []}
 
-Note: This is a safety warning from the model.'''
+Note: This is a safety warning from the model."""
         result = extract_json_content(content)
         assert result == '{"reasonning": "test", "write_uris": []}'
 
     def test_removes_trailing_content_after_closing_bracket(self):
         """Test that content after the last ] is removed."""
-        content = '''[{"reasonning": "test"}]
+        content = """[{"reasonning": "test"}]
 
-Extra content after.'''
+Extra content after."""
         result = extract_json_content(content)
         assert result == '[{"reasonning": "test"}]'
 
     def test_handles_leading_content_before_json(self):
         """Test that content before the first { is removed."""
-        content = '''Here's the JSON:
-{"reasonning": "test", "write_uris": []}'''
+        content = """Here's the JSON:
+{"reasonning": "test", "write_uris": []}"""
         result = extract_json_content(content)
         assert result == '{"reasonning": "test", "write_uris": []}'
 
     def test_handles_both_leading_and_trailing_content(self):
         """Test that both content before { and after } are removed."""
-        content = '''Alright, let me analyze this.
+        content = """Alright, let me analyze this.
 
 First, I need to create some memory entries.
 {"reasonning": "test", "write_uris": [{"memory_type": "cards", "name": "test"}]}
 
-That's all for now.'''
+That's all for now."""
         result = extract_json_content(content)
         parsed = json.loads(result)
-        assert parsed['reasonning'] == 'test'
-        assert len(parsed['write_uris']) == 1
+        assert parsed["reasonning"] == "test"
+        assert len(parsed["write_uris"]) == 1
 
     def test_preserves_nested_structures(self):
         """Test that nested structures are preserved correctly."""
-        content = '''{"reasonning": "test", "write_uris": [{"memory_type": "preferences", "topic": "test"}]}
+        content = """{"reasonning": "test", "write_uris": [{"memory_type": "preferences", "topic": "test"}]}
 
-Trailing content.'''
+Trailing content."""
         result = extract_json_content(content)
-        assert 'Trailing' not in result
+        assert "Trailing" not in result
         parsed = json.loads(result)
-        assert parsed['reasonning'] == 'test'
-        assert len(parsed['write_uris']) == 1
+        assert parsed["reasonning"] == "test"
+        assert len(parsed["write_uris"]) == 1
 
     def test_empty_string_returns_empty(self):
         """Test empty string input returns empty string."""
-        assert extract_json_content('') == ''
-        assert extract_json_content('   ') == '   '
+        assert extract_json_content("") == ""
+        assert extract_json_content("   ") == "   "
 
 
 class TestRemoveJsonTrailingContent:
@@ -85,38 +81,12 @@ class TestRemoveJsonTrailingContent:
 
     def test_alias_works(self):
         """Test that remove_json_trailing_content is an alias for extract_json_content."""
-        content = '''Alright, let's see.
+        content = """Alright, let's see.
 {"reasonning": "test"}
-And then some.'''
+And then some."""
         result1 = extract_json_content(content)
         result2 = remove_json_trailing_content(content)
         assert result1 == result2
-
-
-class TestExtractJsonFromMarkdown:
-    """Tests for markdown extraction."""
-
-    def test_extracts_json_from_json_code_block(self):
-        """Test JSON wrapped in ```json ... ```."""
-        content = '''```json
-{"reasonning": "test", "write_uris": []}
-```'''
-        result = extract_json_from_markdown(content)
-        assert result == '{"reasonning": "test", "write_uris": []}'
-
-    def test_extracts_json_from_generic_code_block(self):
-        """Test JSON wrapped in ``` ... ``` without json specifier."""
-        content = '''```
-{"reasonning": "test"}
-```'''
-        result = extract_json_from_markdown(content)
-        assert result == '{"reasonning": "test"}'
-
-    def test_returns_plain_json_when_no_markdown(self):
-        """Test plain JSON without markdown is returned as-is."""
-        content = '{"reasonning": "test"}'
-        result = extract_json_from_markdown(content)
-        assert result == content
 
 
 class TestValueFaultTolerance:
@@ -124,45 +94,45 @@ class TestValueFaultTolerance:
 
     def test_none_string_converts_to_none(self):
         """Test 'None' string converts to None for non-str types."""
-        assert value_fault_tolerance(int, 'None') is None
-        assert value_fault_tolerance(List[str], 'None') is None
+        assert value_fault_tolerance(int, "None") is None
+        assert value_fault_tolerance(List[str], "None") is None
 
     def test_none_string_remains_string_for_str_type(self):
         """Test 'None' remains as string when target type is str."""
-        assert value_fault_tolerance(str, 'None') == 'None'
+        assert value_fault_tolerance(str, "None") == "None"
 
     def test_list_converts_to_string(self):
         """Test list converts to comma-separated string for str type."""
-        assert value_fault_tolerance(str, ['a', 'b', 'c']) == 'a,b,c'
+        assert value_fault_tolerance(str, ["a", "b", "c"]) == "a,b,c"
 
     def test_dict_converts_to_json_string(self):
         """Test dict converts to JSON string for str type."""
-        result = value_fault_tolerance(str, {'key': 'value'})
-        assert 'key' in result
-        assert 'value' in result
+        result = value_fault_tolerance(str, {"key": "value"})
+        assert "key" in result
+        assert "value" in result
 
     def test_number_converts_to_string(self):
         """Test numbers convert to string for str type."""
-        assert value_fault_tolerance(str, 42) == '42'
-        assert value_fault_tolerance(str, 3.14) == '3.14'
-        assert value_fault_tolerance(str, True) == 'True'
+        assert value_fault_tolerance(str, 42) == "42"
+        assert value_fault_tolerance(str, 3.14) == "3.14"
+        assert value_fault_tolerance(str, True) == "True"
 
     def test_string_converts_to_int(self):
         """Test string converts to int for int type."""
-        assert value_fault_tolerance(int, '42') == 42
+        assert value_fault_tolerance(int, "42") == 42
 
     def test_string_converts_to_float(self):
         """Test string converts to float for float type."""
-        assert value_fault_tolerance(float, '3.14') == 3.14
+        assert value_fault_tolerance(float, "3.14") == 3.14
 
     def test_string_wraps_to_list(self):
         """Test string wraps in list for list type."""
-        assert value_fault_tolerance(List[str], 'test') == ['test']
+        assert value_fault_tolerance(List[str], "test") == ["test"]
 
     def test_dict_wraps_to_list(self):
         """Test dict wraps in list for list type."""
-        result = value_fault_tolerance(List[dict], {'key': 'value'})
-        assert result == [{'key': 'value'}]
+        result = value_fault_tolerance(List[dict], {"key": "value"})
+        assert result == [{"key": "value"}]
 
 
 class TestTypeHelpers:
@@ -187,7 +157,7 @@ class TestParseJsonWithStability:
     """Tests for full five-layer stable JSON parsing."""
 
     class TestModel(BaseModel):
-        reasonning: str = ''
+        reasonning: str = ""
         count: Optional[int] = None
         tags: List[str] = Field(default_factory=list)
 
@@ -196,16 +166,16 @@ class TestParseJsonWithStability:
         content = '{"reasonning": "test", "count": 42, "tags": ["a", "b"]}'
         data, error = parse_json_with_stability(content, model_class=self.TestModel)
         assert error is None
-        assert data.reasonning == 'test'
+        assert data.reasonning == "test"
         assert data.count == 42
-        assert data.tags == ['a', 'b']
+        assert data.tags == ["a", "b"]
 
     def test_handles_list_wrapped_response(self):
         """Test [{"..."}] is handled correctly."""
         content = '[{"reasonning": "test", "count": 42}]'
         data, error = parse_json_with_stability(content, model_class=self.TestModel)
         assert error is None
-        assert data.reasonning == 'test'
+        assert data.reasonning == "test"
 
     def test_filters_extra_fields(self):
         """Test extra fields are filtered when expected_fields is provided."""
@@ -213,10 +183,10 @@ class TestParseJsonWithStability:
         data, error = parse_json_with_stability(
             content,
             model_class=self.TestModel,
-            expected_fields=['reasonning', 'count', 'tags'],
+            expected_fields=["reasonning", "count", "tags"],
         )
         assert error is None
-        assert data.reasonning == 'test'
+        assert data.reasonning == "test"
         assert data.count == 42
 
     def test_returns_raw_dict_when_no_model_class(self):
@@ -225,30 +195,30 @@ class TestParseJsonWithStability:
         data, error = parse_json_with_stability(content)
         assert error is None
         assert isinstance(data, dict)
-        assert data['reasonning'] == 'test'
+        assert data["reasonning"] == "test"
 
     def test_handles_trailing_content(self):
         """Test JSON with trailing content parses."""
-        content = '''{"reasonning": "test"}
+        content = """{"reasonning": "test"}
 
 Note: This is a safety warning.
-Please be careful with the output.'''
+Please be careful with the output."""
         data, error = parse_json_with_stability(content, model_class=self.TestModel)
         assert error is None
-        assert data.reasonning == 'test'
+        assert data.reasonning == "test"
 
     def test_handles_markdown_code_blocks(self):
         """Test JSON wrapped in markdown parses."""
-        content = '''```json
+        content = """```json
 {"reasonning": "test", "count": 42}
-```'''
+```"""
         data, error = parse_json_with_stability(content, model_class=self.TestModel)
         assert error is None
-        assert data.reasonning == 'test'
+        assert data.reasonning == "test"
 
     def test_returns_error_for_completely_invalid_content(self):
         """Test completely invalid content returns error."""
-        content = 'This is not JSON at all'
+        content = "This is not JSON at all"
         data, error = parse_json_with_stability(content)
         assert data is None
         assert error is not None
@@ -262,36 +232,38 @@ class TestMemoryOperationsIntegration:
         topic: str
 
     class SimpleOperations(BaseModel):
-        reasonning: str = ''
-        write_uris: List['TestMemoryOperationsIntegration.SimpleWriteOperation'] = Field(default_factory=list)
+        reasonning: str = ""
+        write_uris: List["TestMemoryOperationsIntegration.SimpleWriteOperation"] = Field(
+            default_factory=list
+        )
         delete_uris: List[str] = Field(default_factory=list)
 
     def test_parses_nested_write_operations(self):
         """Test nested write operations parse correctly."""
-        content = '''{
+        content = """{
             "reasonning": "Added user preferences",
             "write_uris": [
                 {"memory_type": "preferences", "topic": "theme"},
                 {"memory_type": "preferences", "topic": "notifications"}
             ]
-        }'''
+        }"""
         data, error = parse_json_with_stability(content, model_class=self.SimpleOperations)
         assert error is None
-        assert data.reasonning == 'Added user preferences'
+        assert data.reasonning == "Added user preferences"
         assert len(data.write_uris) == 2
-        assert data.write_uris[0].topic == 'theme'
+        assert data.write_uris[0].topic == "theme"
 
     def test_handles_string_instead_of_list_for_delete(self):
         """Test single string for delete_uris wraps to list via tolerance."""
         # Note: This would need field-level tolerance applied
-        content = '''{
+        content = """{
             "reasonning": "Removed old memory",
             "delete_uris": "viking://user/default/memories/old.md"
-        }'''
+        }"""
         # First parse as raw dict
         data, error = parse_json_with_stability(content)
         assert error is None
-        assert data['delete_uris'] == 'viking://user/default/memories/old.md'
+        assert data["delete_uris"] == "viking://user/default/memories/old.md"
 
 
 class TestParseMemoryFileWithFields:
@@ -299,7 +271,7 @@ class TestParseMemoryFileWithFields:
 
     def test_parses_memory_fields_comment(self):
         """Test parsing MEMORY_FIELDS HTML comment."""
-        content = '''<!-- MEMORY_FIELDS
+        content = """<!-- MEMORY_FIELDS
 {
   "tool_name": "web_search",
   "static_desc": "Searches the web for information",
@@ -308,7 +280,7 @@ class TestParseMemoryFileWithFields:
 }
 -->
 Here is the actual file content.
-It has multiple lines.'''
+It has multiple lines."""
         result = parse_memory_file_with_fields(content)
         assert result["tool_name"] == "web_search"
         assert result["static_desc"] == "Searches the web for information"
@@ -332,10 +304,10 @@ It has multiple lines.'''
     def test_handles_invalid_json_in_comment(self):
         """Test handles invalid JSON in MEMORY_FIELDS comment gracefully."""
         # Use truly invalid JSON that even json_repair can't parse
-        content = '''<!-- MEMORY_FIELDS
+        content = """<!-- MEMORY_FIELDS
 not json at all, just random text
 -->
-File content'''
+File content"""
         result = parse_memory_file_with_fields(content)
         assert "File content" in result["content"]
         # No extra fields added
@@ -343,9 +315,9 @@ File content'''
 
     def test_removes_comment_from_content(self):
         """Test that the comment is completely removed from content."""
-        content = '''Before comment
+        content = """Before comment
 <!-- MEMORY_FIELDS {"test": "value"} -->
-After comment'''
+After comment"""
         result = parse_memory_file_with_fields(content)
         assert "<!-- MEMORY_FIELDS" not in result["content"]
         assert "Before comment" in result["content"]
@@ -354,8 +326,8 @@ After comment'''
 
     def test_fields_on_same_line(self):
         """Test MEMORY_FIELDS on single line."""
-        content = '''<!-- MEMORY_FIELDS {"tool_name": "test", "value": 42} -->
-Content'''
+        content = """<!-- MEMORY_FIELDS {"tool_name": "test", "value": 42} -->
+Content"""
         result = parse_memory_file_with_fields(content)
         assert result["tool_name"] == "test"
         assert result["value"] == 42

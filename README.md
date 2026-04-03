@@ -496,6 +496,8 @@ openviking-server --with-bot
 ov chat
 ```
 
+If you use the official Docker image, `vikingbot` is already bundled in the image and starts by default together with the OpenViking server and console UI. You can disable it at runtime with either `--without-bot` or `-e OPENVIKING_WITH_BOT=0`.
+
 ---
 
 ## Server Deployment Details
@@ -654,14 +656,19 @@ Let's work together to define and build the future of AI Agent context managemen
 
 ## License
 
-This project is licensed under the Apache License 2.0 - see the [LICENSE](./LICENSE) file for details.
+The OpenViking project uses different licenses for different components:
+
+- **Main Project**: AGPLv3 - see the [LICENSE](./LICENSE) file for details
+- **crates/ov_cli**: Apache 2.0 - see the [LICENSE](./crates/ov_cli/LICENSE) for details
+- **examples**: Apache 2.0 - see the [LICENSE](./examples/LICENSE) for details
+- **third_party**: Respective original licenses of third-party projects
 
 
 <!-- Link Definitions -->
 
 [release-shield]: https://img.shields.io/github/v/release/volcengine/OpenViking?color=369eff&labelColor=black&logo=github&style=flat-square
 [release-link]: https://github.com/volcengine/OpenViking/releases
-[license-shield]: https://img.shields.io/badge/license-apache%202.0-white?labelColor=black&style=flat-square
+[license-shield]: https://img.shields.io/badge/license-AGPLv3-white?labelColor=black&style=flat-square
 [license-shield-link]: https://github.com/volcengine/OpenViking/blob/main/LICENSE
 [last-commit-shield]: https://img.shields.io/github/last-commit/volcengine/OpenViking?color=c4f042&labelColor=black&style=flat-square
 [last-commit-shield-link]: https://github.com/volcengine/OpenViking/commits/main

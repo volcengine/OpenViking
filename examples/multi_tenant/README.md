@@ -162,4 +162,4 @@ README.md            本文件
 - [认证指南](../../docs/zh/guides/04-authentication.md) - 完整认证说明
 - [配置指南](../../docs/zh/guides/01-configuration.md) - 配置文件参考
 - [API 概览](../../docs/zh/api/01-overview.md) - 完整 API 参考
-- [Server-Client 示例](../server_client/) - 基础 Server/Client 用法
+- [服务端模式快速开始](../../docs/zh/getting-started/03-quickstart-server.md) - 基础 HTTP 服务接入方式

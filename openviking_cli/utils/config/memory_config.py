@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 from typing import Any, Dict
 
 from pydantic import BaseModel, Field, field_validator
@@ -18,6 +18,11 @@ class MemoryConfig(BaseModel):
             "Agent memory namespace mode: 'user+agent' keeps agent memory isolated by "
             "(user_id, agent_id), while 'agent' shares agent memory across users of the same agent."
         ),
+    )
+
+    custom_templates_dir: str = Field(
+        default="",
+        description="Custom memory templates directory. If set, templates from this directory will be loaded in addition to built-in templates",
     )
 
     model_config = {"extra": "forbid"}

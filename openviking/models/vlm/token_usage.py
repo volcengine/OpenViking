@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """VLM Token usage monitoring data structures"""
 
 from dataclasses import dataclass, field
@@ -16,6 +16,7 @@ class TokenUsage:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    call_count: int = 0
     last_updated: datetime = field(default_factory=datetime.now)
 
     def update(self, prompt_tokens: int, completion_tokens: int) -> None:
@@ -28,6 +29,7 @@ class TokenUsage:
         self.prompt_tokens += prompt_tokens
         self.completion_tokens += completion_tokens
         self.total_tokens = self.prompt_tokens + self.completion_tokens
+        self.call_count += 1
         self.last_updated = datetime.now()
 
     def reset(self) -> None:
@@ -35,6 +37,7 @@ class TokenUsage:
         self.prompt_tokens = 0
         self.completion_tokens = 0
         self.total_tokens = 0
+        self.call_count = 0
         self.last_updated = datetime.now()
 
     def to_dict(self) -> Dict:
@@ -47,6 +50,7 @@ class TokenUsage:
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
             "total_tokens": self.total_tokens,
+            "call_count": self.call_count,
             "last_updated": format_iso8601(self.last_updated),
         }
 
@@ -54,7 +58,8 @@ class TokenUsage:
         return (
             f"TokenUsage(prompt={self.prompt_tokens}, "
             f"completion={self.completion_tokens}, "
-            f"total={self.total_tokens})"
+            f"total={self.total_tokens}, "
+            f"calls={self.call_count})"
         )
 
 

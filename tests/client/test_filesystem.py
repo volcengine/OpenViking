@@ -1,11 +1,13 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 
 """Filesystem operation tests"""
 
+from unittest.mock import AsyncMock
+
 import pytest
 
-from openviking import AsyncOpenViking
+from openviking import AsyncOpenViking, OpenViking
 
 
 class TestLs:
@@ -115,3 +117,34 @@ class TestTree:
         tree = await client.tree(parent_uri)
 
         assert isinstance(tree, (list, dict))
+
+
+async def test_sync_openviking_write_updates_existing_file(test_data_dir, sample_markdown_file):
+    """Sync OpenViking exposes write() and delegates to the async client."""
+    await AsyncOpenViking.reset()
+    client = OpenViking(path=str(test_data_dir))
+
+    try:
+        client._async_client.write = AsyncMock(return_value={"uri": "viking://resources/demo.md"})
+
+        write_result = client.write(
+            "viking://resources/demo.md",
+            "updated content",
+            mode="append",
+            wait=True,
+            timeout=3.0,
+            telemetry=False,
+        )
+
+        assert write_result == {"uri": "viking://resources/demo.md"}
+        client._async_client.write.assert_awaited_once_with(
+            uri="viking://resources/demo.md",
+            content="updated content",
+            mode="append",
+            wait=True,
+            timeout=3.0,
+            telemetry=False,
+        )
+    finally:
+        client.close()
+        await AsyncOpenViking.reset()

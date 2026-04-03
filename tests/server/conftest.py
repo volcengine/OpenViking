@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 
 """Shared fixtures for OpenViking server tests."""
 
@@ -73,7 +73,7 @@ def _install_fake_embedder(monkeypatch):
 def _install_fake_vlm(monkeypatch):
     """Use a fake VLM so server tests never hit external LLM APIs."""
 
-    async def _fake_get_completion(self, prompt, thinking=False, max_retries=0):
+    async def _fake_get_completion(self, prompt, thinking=False):
         return "# Test Summary\n\nFake summary for testing.\n\n## Details\nTest content."
 
     async def _fake_get_vision_completion(self, prompt, images, thinking=False):

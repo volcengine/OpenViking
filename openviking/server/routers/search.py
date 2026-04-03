@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Search endpoints for OpenViking HTTP Server."""
 
 import math
@@ -63,6 +63,7 @@ class GrepRequest(BaseModel):
     """Request model for grep."""
 
     uri: str
+    exclude_uri: Optional[str] = None
     pattern: str
     case_insensitive: bool = False
     node_limit: Optional[int] = None
@@ -158,6 +159,7 @@ async def grep(
         request.uri,
         request.pattern,
         ctx=_ctx,
+        exclude_uri=request.exclude_uri,
         case_insensitive=request.case_insensitive,
         node_limit=request.node_limit,
     )

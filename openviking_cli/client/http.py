@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Async HTTP Client for OpenViking.
 
 Implements BaseClient interface using HTTP calls to OpenViking Server.
@@ -77,9 +77,9 @@ class _HTTPObserver:
         """Fetch VikingDB status asynchronously."""
         return await self._client._get_vikingdb_status()
 
-    async def _fetch_vlm_status(self) -> Dict[str, Any]:
-        """Fetch VLM status asynchronously."""
-        return await self._client._get_vlm_status()
+    async def _fetch_models_status(self) -> Dict[str, Any]:
+        """Fetch models status asynchronously."""
+        return await self._client._get_models_status()
 
     async def _fetch_system_status(self) -> Dict[str, Any]:
         """Fetch system status asynchronously."""
@@ -96,9 +96,9 @@ class _HTTPObserver:
         return run_async(self._fetch_vikingdb_status())
 
     @property
-    def vlm(self) -> Dict[str, Any]:
-        """Get VLM status (sync wrapper)."""
-        return run_async(self._fetch_vlm_status())
+    def models(self) -> Dict[str, Any]:
+        """Get models status (VLM, Embedding, Rerank) (sync wrapper)."""
+        return run_async(self._fetch_models_status())
 
     @property
     def system(self) -> Dict[str, Any]:
@@ -552,6 +552,32 @@ class AsyncHTTPClient(BaseClient):
         )
         return self._handle_response(response)
 
+    async def write(
+        self,
+        uri: str,
+        content: str,
+        mode: str = "replace",
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Write text content to an existing file and refresh semantics/vectors."""
+        telemetry = self._validate_telemetry(telemetry)
+        uri = VikingURI.normalize(uri)
+        response = await self._http.post(
+            "/api/v1/content/write",
+            json={
+                "uri": uri,
+                "content": content,
+                "mode": mode,
+                "wait": wait,
+                "timeout": timeout,
+                "telemetry": telemetry,
+            },
+        )
+        response_data = self._handle_response_data(response)
+        return self._attach_telemetry(response_data.get("result") or {}, response_data)
+
     # ============= Search =============
 
     async def find(
@@ -622,6 +648,7 @@ class AsyncHTTPClient(BaseClient):
         pattern: str,
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
+        exclude_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Content search with pattern."""
         uri = VikingURI.normalize(uri)
@@ -632,6 +659,8 @@ class AsyncHTTPClient(BaseClient):
         }
         if node_limit is not None:
             request_json["node_limit"] = node_limit
+        if exclude_uri is not None:
+            request_json["exclude_uri"] = VikingURI.normalize(exclude_uri)
         response = await self._http.post(
             "/api/v1/search/grep",
             json=request_json,
@@ -759,6 +788,7 @@ class AsyncHTTPClient(BaseClient):
         role: str,
         content: str | None = None,
         parts: list[dict] | None = None,
+        created_at: str | None = None,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -767,6 +797,7 @@ class AsyncHTTPClient(BaseClient):
             role: Message role ("user" or "assistant")
             content: Text content (simple mode, backward compatible)
             parts: Parts array (full Part support mode)
+            created_at: Message creation time (ISO format string)
 
         If both content and parts are provided, parts takes precedence.
         """
@@ -777,6 +808,9 @@ class AsyncHTTPClient(BaseClient):
             payload["content"] = content
         else:
             raise ValueError("Either content or parts must be provided")
+
+        if created_at is not None:
+            payload["created_at"] = created_at
 
         response = await self._http.post(
             f"/api/v1/sessions/{session_id}/messages",
@@ -850,9 +884,9 @@ class AsyncHTTPClient(BaseClient):
         response = await self._http.get("/api/v1/observer/vikingdb")
         return self._handle_response(response)
 
-    async def _get_vlm_status(self) -> Dict[str, Any]:
-        """Get VLM status (internal for _HTTPObserver)."""
-        response = await self._http.get("/api/v1/observer/vlm")
+    async def _get_models_status(self) -> Dict[str, Any]:
+        """Get models status (VLM, Embedding, Rerank) (internal for _HTTPObserver)."""
+        response = await self._http.get("/api/v1/observer/models")
         return self._handle_response(response)
 
     async def _get_system_status(self) -> Dict[str, Any]:

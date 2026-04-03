@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 from pydantic import BaseModel, Field
 
 
@@ -24,8 +24,8 @@ class TransactionConfig(BaseModel):
     lock_expire: float = Field(
         default=300.0,
         description=(
-            "Stale lock expiry threshold (seconds). "
-            "Locks held longer than this by a crashed process are force-released."
+            "Lock inactivity threshold (seconds). "
+            "Locks not refreshed within this window are treated as stale and reclaimed."
         ),
     )
 

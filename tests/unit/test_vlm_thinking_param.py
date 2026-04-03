@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Tests for LiteLLM thinking parameter scoping to DashScope providers."""
 
 from openviking.models.vlm.backends.litellm_vlm import LiteLLMVLMProvider

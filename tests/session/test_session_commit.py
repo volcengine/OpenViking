@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 
 """Commit tests"""
 
@@ -37,6 +37,7 @@ class TestCommit:
         assert result.get("status") == "accepted"
         assert "session_id" in result
         assert result.get("task_id") is not None
+        assert "memories_extracted" not in result
 
     async def test_commit_extracts_memories(
         self, session_with_messages: Session, client: AsyncOpenViking
@@ -49,6 +50,8 @@ class TestCommit:
         task_result = await _wait_for_task(task_id)
         assert task_result["status"] == "completed"
         assert "memories_extracted" in task_result["result"]
+        memory_counts = task_result["result"]["memories_extracted"]
+        assert isinstance(memory_counts, dict)
 
         # Wait for semantic/embedding queues
         await client.wait_processed(timeout=60.0)
