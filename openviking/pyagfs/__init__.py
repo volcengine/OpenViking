@@ -2,8 +2,12 @@
 
 __version__ = "0.1.7"
 
+import glob
+import importlib.util
 import logging
 import os
+import sysconfig
+from pathlib import Path
 
 from .client import AGFSClient, FileHandle
 from .exceptions import (
@@ -17,6 +21,9 @@ from .helpers import cp, download, upload
 
 _logger = logging.getLogger(__name__)
 
+# Directory that ships pre-built native libraries (Go .so/.dylib and Rust .so/.dylib).
+_LIB_DIR = Path(__file__).resolve().parent.parent / "lib"
+
 # ---------------------------------------------------------------------------
 # Binding implementation selection via RAGFS_IMPL environment variable.
 #
@@ -28,11 +35,41 @@ _logger = logging.getLogger(__name__)
 _RAGFS_IMPL_ENV = os.environ.get("RAGFS_IMPL", "").lower() or None
 
 
+def _find_ragfs_so():
+    """Locate the ragfs_python native extension inside openviking/lib/.
+
+    Returns the path to the ``.so`` / ``.dylib`` / ``.pyd`` file, or *None*.
+    """
+    ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
+    # Exact match first: ragfs_python.cpython-312-darwin.so
+    exact = _LIB_DIR / f"ragfs_python{ext_suffix}"
+    if exact.exists():
+        return str(exact)
+    # Glob fallback: ragfs_python.cpython-*.so / ragfs_python.*.pyd
+    for pattern in ("ragfs_python.cpython-*", "ragfs_python.*"):
+        matches = glob.glob(str(_LIB_DIR / pattern))
+        if matches:
+            return matches[0]
+    return None
+
+
 def _load_rust_binding():
-    """Attempt to load the Rust (PyO3) binding client."""
+    """Attempt to load the Rust (PyO3) binding client.
+
+    Searches openviking/lib/ for the pre-built native extension first,
+    then falls back to a pip-installed ``ragfs_python`` package.
+    """
+    so_path = _find_ragfs_so()
+    if so_path:
+        spec = importlib.util.spec_from_file_location("ragfs_python", so_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.RAGFSBindingClient, None
+
+    # Fallback: maybe ragfs_python was pip-installed (dev environment)
     from ragfs_python import RAGFSBindingClient as _Rust
 
-    return _Rust, None  # FileHandle not yet implemented in ragfs-python
+    return _Rust, None
 
 
 def _load_go_binding():
@@ -56,7 +93,7 @@ def _resolve_binding(impl: str):
             return client, fh
         except ImportError as exc:
             raise ImportError(
-                "RAGFS_IMPL=rust but ragfs_python is not installed: " + str(exc)
+                "RAGFS_IMPL=rust but ragfs_python native library is not available: " + str(exc)
             ) from exc
 
     if impl == "go":
@@ -73,14 +110,14 @@ def _resolve_binding(impl: str):
         # Rust first, Go fallback, silent None if neither available
         try:
             client, fh = _load_rust_binding()
-            _logger.info("RAGFS_IMPL=auto: loaded Rust binding")
+            _logger.info("RAGFS_IMPL=auto: loaded Rust binding (ragfs-python)")
             return client, fh
         except ImportError:
             pass
 
         try:
             client, fh = _load_go_binding()
-            _logger.info("RAGFS_IMPL=auto: Rust unavailable, loaded Go binding")
+            _logger.info("RAGFS_IMPL=auto: Rust unavailable, loaded Go binding (libagfsbinding)")
             return client, fh
         except (ImportError, OSError):
             pass

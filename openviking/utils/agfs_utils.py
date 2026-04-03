@@ -34,6 +34,8 @@ def create_agfs_client(agfs_config: Any) -> Any:
         from openviking.pyagfs import get_binding_client
 
         config_impl = getattr(agfs_config, "impl", "auto")
+        env_impl = os.environ.get("RAGFS_IMPL", "").lower() or None
+        effective_impl = env_impl or config_impl or "auto"
         AGFSBindingClient, _ = get_binding_client(config_impl)
 
         if AGFSBindingClient is None:
@@ -45,7 +47,6 @@ def create_agfs_client(agfs_config: Any) -> Any:
 
         # Go ctypes binding needs AGFS_LIB_PATH and a shared library on disk.
         # Rust PyO3 binding is compiled into ragfs_python — skip library checks.
-        actual_lib_path = None
         try:
             from openviking.pyagfs.binding_client import (
                 AGFSBindingClient as _GoBindingClient,
@@ -65,15 +66,17 @@ def create_agfs_client(agfs_config: Any) -> Any:
             try:
                 from openviking.pyagfs.binding_client import _find_library
 
-                actual_lib_path = _find_library()
+                _find_library()
             except Exception:
                 raise ImportError(
                     "AGFS binding library not found. Please run 'pip install -e .' in the project root to build and install the AGFS SDK."
                 )
 
         client = AGFSBindingClient()
-        logger.info(
-            f"[AGFSUtils] Created AGFSBindingClient (impl={config_impl}, lib_path={actual_lib_path})"
+        binding_type = "Rust (ragfs-python)" if not is_go_binding else "Go (libagfsbinding)"
+        logger.warning(
+            f"[AGFS] Binding impl selected: {binding_type} "
+            f"(RAGFS_IMPL={effective_impl}, env={env_impl}, config={config_impl})"
         )
 
         # Automatically mount backend for binding client

@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
 use ragfs::core::{ConfigValue, FileInfo, FileSystem, MountableFS, PluginConfig, WriteFlag};
-use ragfs::plugins::{KVFSPlugin, MemFSPlugin, QueueFSPlugin, SQLFSPlugin};
+use ragfs::plugins::{KVFSPlugin, LocalFSPlugin, MemFSPlugin, QueueFSPlugin, ServerInfoFSPlugin, SQLFSPlugin};
 
 /// Convert a ragfs error into a Python RuntimeError
 fn to_py_err(e: ragfs::core::Error) -> PyErr {
@@ -123,6 +123,8 @@ impl RAGFSBindingClient {
             fs.register_plugin(KVFSPlugin).await;
             fs.register_plugin(QueueFSPlugin).await;
             fs.register_plugin(SQLFSPlugin::new()).await;
+            fs.register_plugin(LocalFSPlugin::new()).await;
+            fs.register_plugin(ServerInfoFSPlugin::new()).await;
         });
 
         Ok(Self { fs, rt })
@@ -390,12 +392,14 @@ impl RAGFSBindingClient {
 
     /// List all registered plugin names.
     fn list_plugins(&self) -> PyResult<Vec<String>> {
-        // Return the names of built-in plugins
+        // Return names of built-in plugins
         Ok(vec![
             "memfs".to_string(),
             "kvfs".to_string(),
             "queuefs".to_string(),
             "sqlfs".to_string(),
+            "localfs".to_string(),
+            "serverinfofs".to_string(),
         ])
     }
 

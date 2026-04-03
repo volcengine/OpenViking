@@ -49,6 +49,17 @@ impl FileInfo {
             is_dir: true,
         }
     }
+
+    /// Create a new FileInfo with all parameters
+    pub fn new(name: String, size: u64, mode: u32, mod_time: SystemTime, is_dir: bool) -> Self {
+        Self {
+            name,
+            size,
+            mode,
+            mod_time,
+            is_dir,
+        }
+    }
 }
 
 /// Write operation flags
@@ -196,7 +207,9 @@ mod systemtime_serde {
     where
         S: Serializer,
     {
-        let duration = time.duration_since(UNIX_EPOCH).map_err(serde::ser::Error::custom)?;
+        let duration = time
+            .duration_since(UNIX_EPOCH)
+            .map_err(serde::ser::Error::custom)?;
         duration.as_secs().serialize(serializer)
     }
 

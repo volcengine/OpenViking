@@ -200,6 +200,8 @@ openviking = [
     "lib/libagfsbinding.so",
     "lib/libagfsbinding.dylib",
     "lib/libagfsbinding.dll",
+    "lib/ragfs_python*.so",
+    "lib/ragfs_python*.pyd",
     "bin/ov",
     "bin/ov.exe",
     "storage/vectordb/engine/*.abi3.so",
