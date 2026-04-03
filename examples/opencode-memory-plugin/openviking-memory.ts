@@ -1042,6 +1042,19 @@ async function pollCommitTaskOnce(
 
     return task.status
   } catch (error: any) {
+    // If task not found (404/expired), clear commit state so new commits can proceed
+    if (error.message?.includes("not found") || error.message?.includes("404")) {
+      log("INFO", "session", "Commit task expired or not found, clearing commit state", {
+        openviking_session: mapping.ovSessionId,
+        opencode_session: opencodeSessionId,
+        task_id: mapping.commitTaskId,
+        error: error.message,
+      })
+      clearCommitState(mapping)
+      debouncedSaveSessionMap()
+      return "completed"
+    }
+
     log("ERROR", "session", "Failed to poll OpenViking background commit", {
       openviking_session: mapping.ovSessionId,
       opencode_session: opencodeSessionId,
@@ -1477,7 +1490,7 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
               role: role,
             })
           }
-        } else if (role === "assistant" && finish === "stop") {
+        } else if (role === "assistant") {
           mapping.messageRoles.set(messageId, role)
 
           log("DEBUG", "message", `${role} message completed and role stored`, {
@@ -1486,6 +1499,15 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
             role: role,
             finish: finish,
           })
+
+          if (finish && finish !== "stop") {
+            log("INFO", "message", `assistant message role stored with non-stop finish`, {
+              session_id: sessionId,
+              message_id: messageId,
+              role: role,
+              finish: finish,
+            })
+          }
         }
 
         await flushPendingMessages(sessionId, mapping, config)
