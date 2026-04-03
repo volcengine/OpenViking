@@ -909,12 +909,22 @@ cd third_party/agfs/agfs-server && go run ./cmd/server --port 8080
 
 ---
 
-### Milestone 1.0: 功能完整 (8 周)
+### Milestone 1.0: 功能完整 (8 周) 🔄 进行中
 
 **目标**: 功能与 Go 版本对等
 
-- [ ] 提供 python wrapper，用于 OpenViking 内联集成
+- [x] 提供 Python wrapper (ragfs-python)，用于 OpenViking 内联集成
 - [ ] 支持切换和功能回滚，将默认实现切换为 Rust 版本
+
+**当前进展**:
+- ragfs-python crate 已完成 (crates/ragfs-python/): PyO3 native binding
+- RAGFSBindingClient 类，API 兼容 Go AGFSBindingClient
+- 支持所有核心操作: ls/read/write/create/mkdir/rm/stat/mv/chmod/touch
+- 支持 mount/unmount/mounts 插件管理
+- 所有内置插件可用: memfs, kvfs, queuefs, sqlfs
+- maturin develop 构建集成
+- openviking/pyagfs/__init__.py 已更新: Rust 优先 -> Go fallback
+- Python 端到端测试全部通过 (memfs + sqlfs + kvfs + queuefs)
 
 ---
 
@@ -947,6 +957,7 @@ cd third_party/agfs/agfs-server && go run ./cmd/server --port 8080
 |------|------|---------|
 | 2026-04-03 | v1.0 | 初始计划创建 |
 | 2026-04-03 | v1.1 | 标注 Milestone 0.1/0.2 完成，阶段 1-6 完成；SQLFS 修复 18 个编译错误并通过所有测试；开始 Milestone 0.3 |
+| 2026-04-03 | v1.2 | S3FS 完成并通过 MinIO 端到端验证；ragfs-python PyO3 binding 完成 (Milestone 1.0 开始) |
 
 ---
 
