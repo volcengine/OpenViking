@@ -291,9 +291,7 @@ class SyncOpenViking:
     ) -> Dict:
         """Content search"""
         return run_async(
-            self._async_client.grep(
-                uri, pattern, case_insensitive, node_limit, exclude_uri
-            )
+            self._async_client.grep(uri, pattern, case_insensitive, node_limit, exclude_uri)
         )
 
     def glob(self, pattern: str, uri: str = "viking://") -> Dict:

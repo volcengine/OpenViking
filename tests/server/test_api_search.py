@@ -252,8 +252,6 @@ async def test_grep_case_insensitive(client_with_resource):
     assert resp.json()["status"] == "ok"
 
 
-
-
 async def test_grep_exclude_uri_excludes_specific_uri_range(
     client: httpx.AsyncClient,
     upload_temp_dir,
@@ -288,7 +286,7 @@ async def test_grep_exclude_uri_excludes_specific_uri_range(
     assert body["status"] == "ok"
     matches = body["result"]["matches"]
     assert matches
-    assert all(not m["uri"].startswith(exclude_uri.rstrip('/')) for m in matches)
+    assert all(not m["uri"].startswith(exclude_uri.rstrip("/")) for m in matches)
 
 
 async def test_grep_exclude_uri_does_not_exclude_same_named_sibling_dirs(
@@ -331,6 +329,7 @@ async def test_grep_exclude_uri_does_not_exclude_same_named_sibling_dirs(
     uris = {m["uri"] for m in matches}
     assert any(uri.startswith("viking://resources/group_b/cache/") for uri in uris)
     assert all(not uri.startswith("viking://resources/group_a/cache/") for uri in uris)
+
 
 async def test_glob(client_with_resource):
     client, _ = client_with_resource

@@ -262,7 +262,9 @@ class SyncHTTPClient:
         exclude_uri: Optional[str] = None,
     ) -> Dict:
         """Content search with pattern."""
-        return run_async(self._async_client.grep(uri, pattern, case_insensitive, node_limit, exclude_uri))
+        return run_async(
+            self._async_client.grep(uri, pattern, case_insensitive, node_limit, exclude_uri)
+        )
 
     def glob(self, pattern: str, uri: str = "viking://") -> Dict:
         """File pattern matching."""

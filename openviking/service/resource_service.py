@@ -15,7 +15,6 @@ from openviking.storage import VikingDBManager
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
-from openviking.utils.tag_utils import canonicalize_user_tags
 from openviking.telemetry.resource_summary import (
     build_queue_status_payload,
     record_resource_wait_metrics,
@@ -24,6 +23,7 @@ from openviking.telemetry.resource_summary import (
 )
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking.utils.skill_processor import SkillProcessor
+from openviking.utils.tag_utils import canonicalize_user_tags
 from openviking_cli.exceptions import (
     ConflictError,
     DeadlineExceededError,
