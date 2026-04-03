@@ -227,20 +227,24 @@ class ChannelManager:
                     except Exception as e:
                         logger.exception(f"Error sending to {msg.session_key}: {e}")
                 elif msg.session_key.type == "bot_api":
-                    # For bot_api messages, try to find an OpenAPIChannel to handle it
-                    openapi_channel = None
+                    # For bot_api messages, find any channel that can handle it
+                    # (typically OpenAPIChannel which integrates BotChannel functionality)
+                    handled = False
                     for ch in self.channels.values():
-                        if ch.name == "openapi":
-                            openapi_channel = ch
-                            break
-                    if openapi_channel:
-                        try:
-                            await openapi_channel.send(msg)
-                        except Exception as e:
-                            logger.exception(f"Error sending bot_api message to OpenAPIChannel: {e}")
-                    else:
+                        # Check if channel has a send method and can handle bot_api messages
+                        # OpenAPIChannel identifies itself with name "openapi" and handles bot_api
+                        if hasattr(ch, 'name') and ch.name == "openapi":
+                            try:
+                                await ch.send(msg)
+                                handled = True
+                                break
+                            except Exception as e:
+                                logger.exception(f"Error sending bot_api message to {ch.name}: {e}")
+                                handled = True
+                                break
+                    if not handled:
                         logger.warning(
-                            f"Unknown channel: {msg.session_key}. Available: {list(self.channels.keys())}"
+                            f"No channel found to handle bot_api message: {msg.session_key}. Available: {list(self.channels.keys())}"
                         )
                 else:
                     logger.warning(

@@ -713,15 +713,18 @@ def get_openapi_router(bus: MessageBus, config: Config) -> APIRouter:
     )
 
     # Register channel's send method as subscriber for outbound messages
-    # Subscribe to both cli and bot_api types
+    # Subscribe to cli type
     bus.subscribe_outbound(
         f"cli__{openapi_config.channel_id()}",
         channel.send,
     )
 
-    # Also subscribe to all bot_api channels
-    # We'll do this by checking session key type in send()
-    # But we need to make sure we get all bot_api messages
-    # Let's just register a separate wildcard-like approach by checking in send()
+    # Subscribe to all bot_api channels that were loaded
+    for channel_id in channel._bot_configs.keys():
+        bus.subscribe_outbound(
+            f"bot_api__{channel_id}",
+            channel.send,
+        )
+        logger.info(f"Subscribed to bot_api channel: {channel_id}")
 
     return channel.get_router()
