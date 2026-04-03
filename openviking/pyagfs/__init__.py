@@ -12,15 +12,19 @@ from .exceptions import (
 )
 from .helpers import cp, download, upload
 
-# Binding client depends on a native shared library (libagfsbinding.so/dylib/dll).
-# Make it optional so the pure-HTTP AGFSClient remains usable when the native
-# library is not installed (e.g. Docker images without CGO build).
+# Binding client: try Rust native (ragfs-python via PyO3) first,
+# then fall back to Go ctypes binding (libagfsbinding.so/dylib/dll).
 try:
-    from .binding_client import AGFSBindingClient
-    from .binding_client import FileHandle as BindingFileHandle
-except (ImportError, OSError):
-    AGFSBindingClient = None
-    BindingFileHandle = None
+    from ragfs_python import RAGFSBindingClient as AGFSBindingClient
+
+    BindingFileHandle = None  # FileHandle not yet implemented in ragfs-python
+except ImportError:
+    try:
+        from .binding_client import AGFSBindingClient
+        from .binding_client import FileHandle as BindingFileHandle
+    except (ImportError, OSError):
+        AGFSBindingClient = None
+        BindingFileHandle = None
 
 __all__ = [
     "AGFSClient",
