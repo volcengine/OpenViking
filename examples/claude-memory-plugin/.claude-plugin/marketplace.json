@@ -1,0 +1,17 @@
+{
+  "name": "openviking-memory",
+  "description": "Persistent cross-session memory for Claude Code powered by OpenViking",
+  "owner": {
+    "name": "volcengine",
+    "email": "openviking@volcengine.com"
+  },
+  "plugins": [
+    {
+      "name": "openviking-memory",
+      "description": "Cross-session memory plugin using OpenViking sessions, hooks, and semantic recall.",
+      "version": "0.1.0",
+      "source": "./",
+      "tags": ["memory", "sessions", "recall", "openviking"]
+    }
+  ]
+}

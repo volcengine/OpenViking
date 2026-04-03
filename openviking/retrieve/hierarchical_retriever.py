@@ -564,6 +564,8 @@ class HierarchicalRetriever:
                     abstract=c.get("abstract", ""),
                     category=c.get("category", ""),
                     score=final_score,
+                    created_at=c.get("created_at"),
+                    updated_at=c.get("updated_at"),
                     relations=relations,
                 )
             )

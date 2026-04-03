@@ -18,16 +18,13 @@ import json
 import logging
 import os
 import sys
-from pathlib import Path
+from datetime import datetime
 from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from common.recipe import Recipe
 from mcp.server.fastmcp import FastMCP
-
-import openviking as ov
-from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("openviking-mcp")
@@ -36,17 +33,51 @@ logger = logging.getLogger("openviking-mcp")
 _recipe: Optional[Recipe] = None
 _config_path: str = "./ov.conf"
 _data_path: str = "./data"
-_api_key: str = ""
+_server_url: str = ""
+_ov_api_key: str = ""
+_ov_account: str = ""
+_ov_user: str = ""
+_ov_agent_id: str = ""
+_llm_api_key: str = ""
+_timeout: float = 60.0
 _default_uri: str = ""
+
+
+def _format_timestamp(raw_value: Optional[str]) -> Optional[str]:
+    """Format ISO-like timestamps into a user-friendly absolute time string."""
+    if not raw_value:
+        return None
+
+    try:
+        dt = datetime.fromisoformat(raw_value)
+    except ValueError:
+        return raw_value
+
+    formatted = dt.strftime("%B %d, %Y %H:%M")
+    if dt.tzinfo is not None:
+        offset = dt.strftime("%z")
+        if offset == "+0000":
+            formatted += " UTC"
+        elif offset:
+            formatted += f" UTC{offset[:3]}:{offset[3:]}"
+    return formatted
 
 
 def _get_recipe() -> Recipe:
     """Get or create the Recipe (RAG pipeline) instance."""
     global _recipe
     if _recipe is None:
-        _recipe = Recipe(config_path=_config_path, data_path=_data_path)
-        if _api_key:
-            _recipe.api_key = _api_key
+        _recipe = Recipe(
+            config_path=_config_path,
+            data_path=_data_path,
+            server_url=_server_url or None,
+            api_key=_ov_api_key or None,
+            account=_ov_account or None,
+            user=_ov_user or None,
+            agent_id=_ov_agent_id or None,
+            timeout=_timeout,
+            llm_api_key=_llm_api_key or None,
+        )
     return _recipe
 
 
@@ -55,9 +86,9 @@ def create_server(host: str = "127.0.0.1", port: int = 2033) -> FastMCP:
     mcp = FastMCP(
         name="openviking-mcp",
         instructions=(
-            "OpenViking MCP Server provides RAG (Retrieval-Augmented Generation) capabilities. "
-            "Use 'query' for full RAG answers, 'search' for semantic search only, "
-            "and 'add_resource' to ingest new documents."
+            "OpenViking MCP Server exposes OpenViking over MCP. "
+            "Use 'search' to retrieve context from OpenViking and 'add_resource' to ingest files, "
+            "directories, or URLs. Use 'query' only when this bridge also has local LLM config."
         ),
         host=host,
         port=port,
@@ -72,7 +103,7 @@ def create_server(host: str = "127.0.0.1", port: int = 2033) -> FastMCP:
         temperature: float = 0.7,
         max_tokens: int = 2048,
         score_threshold: float = 0.2,
-        system_prompt: str = "",
+        system_prompt: Optional[str] = None,
     ) -> str:
         """
         Ask a question and get an answer using RAG (Retrieval-Augmented Generation).
@@ -91,6 +122,16 @@ def create_server(host: str = "127.0.0.1", port: int = 2033) -> FastMCP:
 
         def _query_sync():
             recipe = _get_recipe()
+            if not recipe.query_ready:
+                return {
+                    "answer": (
+                        "Query is not configured on this MCP bridge. "
+                        "Provide a local ov.conf with vlm.api_base and vlm.model, "
+                        "or use the search tool and let Codex synthesize the answer."
+                    ),
+                    "context": [],
+                    "timings": {},
+                }
             return recipe.query(
                 user_query=question,
                 search_top_k=top_k,
@@ -127,7 +168,7 @@ def create_server(host: str = "127.0.0.1", port: int = 2033) -> FastMCP:
         query: str,
         top_k: int = 5,
         score_threshold: float = 0.2,
-        target_uri: str = "",
+        target_uri: Optional[str] = None,
     ) -> str:
         """
         Search the OpenViking database for relevant content (no LLM generation).
@@ -160,7 +201,17 @@ def create_server(host: str = "127.0.0.1", port: int = 2033) -> FastMCP:
         output_parts = []
         for i, r in enumerate(results, 1):
             preview = r["content"][:500] + "..." if len(r["content"]) > 500 else r["content"]
-            output_parts.append(f"[{i}] {r['uri']} (score: {r['score']:.4f})\n{preview}")
+            timestamp_parts = []
+            if r.get("updated_at"):
+                timestamp_parts.append(f"updated: {_format_timestamp(r['updated_at'])}")
+            if r.get("created_at"):
+                timestamp_parts.append(f"created: {_format_timestamp(r['created_at'])}")
+            timestamp_block = ""
+            if timestamp_parts:
+                timestamp_block = "\n" + "\n".join(timestamp_parts)
+            output_parts.append(
+                f"[{i}] {r['uri']} (score: {r['score']:.4f}){timestamp_block}\n{preview}"
+            )
 
         return f"Found {len(results)} results:\n\n" + "\n\n".join(output_parts)
 
@@ -176,52 +227,107 @@ def create_server(host: str = "127.0.0.1", port: int = 2033) -> FastMCP:
         Args:
             resource_path: Path to a local file/directory, or a URL to add.
         """
-        config_path = _config_path
-        data_path = _data_path
-
         def _add_sync():
-            with open(config_path, "r") as f:
-                config_dict = json.load(f)
-
-            config = OpenVikingConfig.from_dict(config_dict)
-            client = ov.SyncOpenViking(path=data_path, config=config)
-
-            try:
-                client.initialize()
-
-                path = resource_path
-                if not path.startswith("http"):
-                    resolved = Path(path).expanduser()
-                    if not resolved.exists():
-                        return f"Error: File not found: {resolved}"
-                    path = str(resolved)
-
-                result = client.add_resource(path=path)
-
-                if result and "root_uri" in result:
-                    root_uri = result["root_uri"]
-                    client.wait_processed(timeout=300)
-                    return f"Resource added and indexed: {root_uri}"
-                elif result and result.get("status") == "error":
-                    errors = result.get("errors", [])[:3]
-                    error_msg = "\n".join(f"  - {e}" for e in errors)
-                    return (
-                        f"Resource had parsing issues:\n{error_msg}\n"
-                        "Some content may still be searchable."
-                    )
-                else:
-                    return "Failed to add resource."
-            finally:
-                client.close()
+            recipe = _get_recipe()
+            return recipe.add_resource(resource_path)
 
         return await asyncio.to_thread(_add_sync)
+
+    @mcp.tool()
+    async def memory_start_session() -> dict:
+        """
+        Create a new OpenViking session for manual memory capture.
+
+        Call this once at the beginning of a task you want to remember, then use
+        `memory_add_turn` for the important exchanges and `memory_commit_session`
+        when you want OpenViking to extract memories.
+        """
+
+        def _start_sync():
+            recipe = _get_recipe()
+            return recipe.create_memory_session()
+
+        return await asyncio.to_thread(_start_sync)
+
+    @mcp.tool()
+    async def memory_get_session(session_id: str) -> dict:
+        """
+        Inspect an existing OpenViking memory session.
+
+        Use this to recover the current message count or verify that a session id
+        is still valid before appending or committing.
+        """
+
+        def _get_sync():
+            recipe = _get_recipe()
+            return recipe.get_memory_session(session_id)
+
+        return await asyncio.to_thread(_get_sync)
+
+    @mcp.tool()
+    async def memory_add_turn(
+        session_id: str,
+        user_message: Optional[str] = None,
+        assistant_message: Optional[str] = None,
+        note: Optional[str] = None,
+    ) -> dict:
+        """
+        Append one important turn into an OpenViking memory session.
+
+        Typical usage:
+        - Put the user's message in `user_message`
+        - Put the assistant's reply or short summary in `assistant_message`
+        - Put any extra context you want to preserve in `note`
+        """
+
+        def _add_turn_sync():
+            recipe = _get_recipe()
+            return recipe.add_memory_turn(
+                session_id=session_id,
+                user_message=user_message,
+                assistant_message=assistant_message,
+                note=note,
+            )
+
+        return await asyncio.to_thread(_add_turn_sync)
+
+    @mcp.tool()
+    async def memory_commit_session(session_id: str) -> dict:
+        """
+        Commit an OpenViking session so memories are extracted and indexed.
+
+        This is the manual equivalent of the Claude plugin's session-end commit step.
+        """
+
+        def _commit_sync():
+            recipe = _get_recipe()
+            return recipe.commit_memory_session(session_id)
+
+        return await asyncio.to_thread(_commit_sync)
+
+    @mcp.tool()
+    async def memory_delete_session(session_id: str) -> dict:
+        """
+        Delete an OpenViking memory session.
+
+        Useful if you started a session by mistake and do not want to keep it.
+        """
+
+        def _delete_sync():
+            recipe = _get_recipe()
+            return recipe.delete_memory_session(session_id)
+
+        return await asyncio.to_thread(_delete_sync)
 
     @mcp.resource("openviking://status")
     def server_status() -> str:
         """Get the current server status and configuration."""
         info = {
+            "mode": "http" if _server_url else "local",
             "config_path": _config_path,
             "data_path": _data_path,
+            "server_url": _server_url or None,
+            "default_uri": _default_uri or None,
             "status": "running",
         }
         return json.dumps(info, indent=2)
@@ -235,28 +341,40 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Start with defaults
+  # Start in embedded/local mode
   uv run server.py
 
-  # Custom config and port
-  uv run server.py --config ./ov.conf --data ./data --port 9000
+  # Bridge to an existing remote OpenViking HTTP server
+  uv run server.py --url http://192.168.1.50:1933 --api-key sk-xxx
+
+  # Bridge to a remote OpenViking HTTP server with root-key tenant headers
+  uv run server.py --url http://192.168.1.50:1933 --api-key root-key --account acme --user alice
+
+  # Remote OpenViking for search/add-resource, but local ov.conf for the optional query tool
+  uv run server.py --url http://192.168.1.50:1933 --config ./ov.conf
 
   # Use stdio transport (for Claude Desktop integration)
   uv run server.py --transport stdio
 
-  # Connect from Claude CLI (use 127.0.0.1 instead of localhost for Windows compatibility)
-  claude mcp add --transport http openviking http://127.0.0.1:2033/mcp
+  # Connect from Codex
+  codex mcp add openviking --url http://127.0.0.1:2033/mcp
 
-  # With API key and default search scope
-  uv run server.py --api-key sk-xxx --default-uri viking://user/memories
+  # With default search scope
+  uv run server.py --url http://192.168.1.50:1933 --default-uri viking://user/memories
 
 Environment variables:
-  OV_CONFIG      Path to config file (default: ./ov.conf)
-  OV_DATA        Path to data directory (default: ./data)
-  OV_PORT        Server port (default: 2033)
-  OV_API_KEY     API key for OpenViking server authentication
-  OV_DEFAULT_URI Default target URI for search scoping
-  OV_DEBUG       Enable debug logging (set to 1)
+  OV_CONFIG       Path to local ov.conf for the optional query tool (default: ./ov.conf)
+  OV_DATA         Path to local OpenViking data directory (default: ./data)
+  OV_PORT         MCP bridge port (default: 2033)
+  OV_SERVER_URL   Remote OpenViking HTTP server URL
+  OV_API_KEY      Remote OpenViking HTTP API key
+  OV_ACCOUNT      Remote OpenViking account header (root-key access only)
+  OV_USER         Remote OpenViking user header (root-key access only)
+  OV_AGENT_ID     Remote OpenViking agent header
+  OV_LLM_API_KEY  Override the local query LLM API key from ov.conf
+  OV_DEFAULT_URI  Default target URI for search scoping
+  OV_TIMEOUT      Timeout in seconds for OpenViking and query LLM calls
+  OV_DEBUG        Enable debug logging (set to 1)
         """,
     )
     parser.add_argument(
@@ -270,6 +388,12 @@ Environment variables:
         type=str,
         default=os.getenv("OV_DATA", "./data"),
         help="Path to data directory (default: ./data)",
+    )
+    parser.add_argument(
+        "--url",
+        type=str,
+        default=os.getenv("OV_SERVER_URL", ""),
+        help="Remote OpenViking HTTP server URL (default: local embedded mode)",
     )
     parser.add_argument(
         "--host",
@@ -294,7 +418,37 @@ Environment variables:
         "--api-key",
         type=str,
         default=os.getenv("OV_API_KEY", ""),
-        help="API key for OpenViking server authentication (default: $OV_API_KEY)",
+        help="API key for remote OpenViking HTTP authentication (default: $OV_API_KEY)",
+    )
+    parser.add_argument(
+        "--account",
+        type=str,
+        default=os.getenv("OV_ACCOUNT", ""),
+        help="Remote OpenViking account header (needed with root key access)",
+    )
+    parser.add_argument(
+        "--user",
+        type=str,
+        default=os.getenv("OV_USER", ""),
+        help="Remote OpenViking user header (needed with root key access)",
+    )
+    parser.add_argument(
+        "--agent-id",
+        type=str,
+        default=os.getenv("OV_AGENT_ID", ""),
+        help="Remote OpenViking agent header",
+    )
+    parser.add_argument(
+        "--llm-api-key",
+        type=str,
+        default=os.getenv("OV_LLM_API_KEY", ""),
+        help="Override the local query LLM API key from ov.conf",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=float(os.getenv("OV_TIMEOUT", "60")),
+        help="Timeout in seconds for OpenViking and query LLM calls",
     )
     parser.add_argument(
         "--default-uri",
@@ -308,18 +462,36 @@ Environment variables:
 def main():
     args = parse_args()
 
-    global _config_path, _data_path, _api_key, _default_uri
+    global _config_path, _data_path, _server_url, _ov_api_key, _ov_account, _ov_user
+    global _ov_agent_id, _llm_api_key, _timeout, _default_uri
     _config_path = args.config
     _data_path = args.data
-    _api_key = args.api_key
+    _server_url = args.url
+    _ov_api_key = args.api_key
+    _ov_account = args.account
+    _ov_user = args.user
+    _ov_agent_id = args.agent_id
+    _llm_api_key = args.llm_api_key
+    _timeout = args.timeout
     _default_uri = args.default_uri
 
     if os.getenv("OV_DEBUG") == "1":
         logging.getLogger().setLevel(logging.DEBUG)
 
+    if not _server_url and not os.path.exists(_config_path):
+        raise SystemExit(
+            f"Config file not found: {_config_path}. "
+            "Create a local ov.conf or pass --url to bridge to a remote OpenViking HTTP server."
+        )
+
     logger.info("OpenViking MCP Server starting")
+    logger.info(f"  mode:   {'http-bridge' if _server_url else 'local'}")
     logger.info(f"  config: {_config_path}")
     logger.info(f"  data:   {_data_path}")
+    if _server_url:
+        logger.info(f"  ov url: {_server_url}")
+        if _ov_account or _ov_user:
+            logger.info(f"  tenant: account={_ov_account or '-'} user={_ov_user or '-'}")
     logger.info(f"  transport: {args.transport}")
 
     mcp = create_server(host=args.host, port=args.port)

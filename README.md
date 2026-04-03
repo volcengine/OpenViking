@@ -532,6 +532,8 @@ After integrating OpenViking:
 
 👉 **[View: OpenCode Memory Plugin Example](examples/opencode-memory-plugin/README.md)**
 
+👉 **[View: Codex Setup Guide](./docs/en/guides/09-codex-setup.md)**
+
 --
 
 ## Core Concepts

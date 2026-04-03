@@ -289,6 +289,8 @@ class MatchedContext:
     category: str = ""
     score: float = 0.0
     match_reason: str = ""
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
     relations: List[RelatedContext] = field(default_factory=list)
 
@@ -371,6 +373,8 @@ class FindResult:
             "score": ctx.score,
             "category": ctx.category,
             "match_reason": ctx.match_reason,
+            "created_at": ctx.created_at,
+            "updated_at": ctx.updated_at,
             "relations": [{"uri": r.uri, "abstract": r.abstract} for r in ctx.relations],
             "abstract": ctx.abstract,
             "overview": ctx.overview,
@@ -399,6 +403,8 @@ class FindResult:
                 category=d.get("category", ""),
                 score=d.get("score", 0.0),
                 match_reason=d.get("match_reason", ""),
+                created_at=d.get("created_at"),
+                updated_at=d.get("updated_at"),
                 relations=[
                     RelatedContext(uri=r.get("uri", ""), abstract=r.get("abstract", ""))
                     for r in d.get("relations", [])

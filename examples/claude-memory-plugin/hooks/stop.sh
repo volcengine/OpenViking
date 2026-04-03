@@ -4,13 +4,20 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
+# Skip subagent sessions
+AGENT_ID="$(_json_val "$INPUT" "agent_id" "")"
+if [[ -n "$AGENT_ID" ]]; then
+  echo '{}'
+  exit 0
+fi
+
 STOP_HOOK_ACTIVE="$(_json_val "$INPUT" "stop_hook_active" "false")"
 if [[ "$STOP_HOOK_ACTIVE" == "true" ]]; then
   echo '{}'
   exit 0
 fi
 
-if [[ ! -f "$OV_CONF" || ! -f "$STATE_FILE" ]]; then
+if [[ -z "$OV_CONF" || ! -f "$OV_CONF" || ! -f "$STATE_FILE" ]]; then
   echo '{}'
   exit 0
 fi

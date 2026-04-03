@@ -174,6 +174,10 @@ In your OpenClaw configuration (`openclaw.json` or `openclaw.yaml`):
 }
 ```
 
+### Codex
+
+If your OpenViking deployment already runs as a normal HTTP API server and you want to use it from Codex, use the local MCP bridge example described in [Codex Setup Guide](09-codex-setup.md).
+
 ## Available MCP Tools
 
 Once connected, OpenViking exposes the following MCP tools:
@@ -227,4 +231,5 @@ curl http://localhost:1933/health
 - [MCP Specification](https://modelcontextprotocol.io/)
 - [OpenViking Configuration](01-configuration.md)
 - [OpenViking Deployment](03-deployment.md)
+- [Codex Setup Guide](09-codex-setup.md)
 - [Related issue: stdio contention (#473)](https://github.com/volcengine/OpenViking/issues/473)

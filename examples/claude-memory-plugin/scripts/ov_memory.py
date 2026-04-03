@@ -16,6 +16,7 @@ import os
 import shutil
 import subprocess
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -30,9 +31,19 @@ class BackendInfo:
     local_data_path: str = ""
 
 
+def _expand_env_vars(obj: Any) -> Any:
+    if isinstance(obj, str):
+        return os.path.expandvars(obj)
+    if isinstance(obj, dict):
+        return {k: _expand_env_vars(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_expand_env_vars(v) for v in obj]
+    return obj
+
+
 def _load_json(path: Path) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+        return _expand_env_vars(json.load(f))
 
 
 def _save_json(path: Path, data: Dict[str, Any]) -> None:
@@ -50,7 +61,7 @@ def _load_state(path: Path) -> Dict[str, Any]:
         return {}
 
 
-def _health_check(url: str, timeout: float = 1.2) -> bool:
+def _health_check(url: str, timeout: float = 1.5) -> bool:
     try:
         with request.urlopen(f"{url.rstrip('/')}/health", timeout=timeout) as resp:
             if resp.status != 200:
@@ -88,6 +99,8 @@ def detect_backend(project_dir: Path, ov_conf: Dict[str, Any]) -> BackendInfo:
 
         if _health_check(url):
             return BackendInfo(mode="http", url=url, api_key=str(api_key))
+        # Server configured but unreachable — don't fall back to local
+        return BackendInfo(mode="offline", url=url, api_key=str(api_key))
 
     return BackendInfo(
         mode="local",
@@ -108,6 +121,8 @@ class OVClient:
             self.client = SyncHTTPClient(
                 url=self.backend.url,
                 api_key=self.backend.api_key or None,
+                account="default",
+                user="kalev",
             )
             self.client.initialize()
             return self
@@ -429,9 +444,61 @@ def _build_backend_from_state_or_detect(
     return detect_backend(project_dir, ov_conf)
 
 
+def _resolve_ov_conf(args: argparse.Namespace) -> Path:
+    if getattr(args, "ov_conf", "") and args.ov_conf:
+        return Path(args.ov_conf).resolve()
+    return Path(args.project_dir).resolve() / "ov.conf"
+
+
+def _offline_turns_path(state_dir: Path, session_id: str) -> Path:
+    return state_dir / "offline" / f"{session_id}.turns.jsonl"
+
+
+def _replay_offline_sessions(
+    backend: BackendInfo, ov_conf_path: Path, state_dir: Path,
+) -> int:
+    """Replay buffered offline sessions to the server. Returns count replayed."""
+    offline_dir = state_dir / "offline"
+    if not offline_dir.is_dir():
+        return 0
+    replayed = 0
+    for turns_file in sorted(offline_dir.glob("*.turns.jsonl")):
+        turns: List[Dict[str, Any]] = []
+        try:
+            for line in turns_file.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line:
+                    turns.append(json.loads(line))
+        except Exception:
+            continue
+        if not turns:
+            turns_file.unlink(missing_ok=True)
+            continue
+        try:
+            with OVClient(backend, ov_conf_path) as cli:
+                sess = cli.create_session()
+                sid = _as_text(sess.get("session_id"))
+                if not sid:
+                    continue
+                for t in turns:
+                    cli.add_message(sid, t["role"], t["content"])
+                cli.commit_session(sid)
+            turns_file.unlink(missing_ok=True)
+            replayed += 1
+        except Exception:
+            break  # server may have gone offline mid-replay
+    # Clean up empty offline dir
+    try:
+        if offline_dir.is_dir() and not list(offline_dir.iterdir()):
+            offline_dir.rmdir()
+    except Exception:
+        pass
+    return replayed
+
+
 def cmd_session_start(args: argparse.Namespace) -> Dict[str, Any]:
     project_dir = Path(args.project_dir).resolve()
-    ov_conf_path = project_dir / "ov.conf"
+    ov_conf_path = _resolve_ov_conf(args)
     state_file = Path(args.state_file)
 
     if not ov_conf_path.exists():
@@ -441,8 +508,44 @@ def cmd_session_start(args: argparse.Namespace) -> Dict[str, Any]:
             "error": "ov.conf not found",
         }
 
+    state_dir = state_file.parent
     ov_conf = _load_json(ov_conf_path)
     backend = detect_backend(project_dir, ov_conf)
+
+    if backend.mode == "offline":
+        # Create a local session so turns are still captured
+        session_id = str(uuid.uuid4())
+        state = {
+            "active": True,
+            "project_dir": str(project_dir),
+            "ov_conf": str(ov_conf_path),
+            "mode": "offline",
+            "url": backend.url,
+            "api_key": backend.api_key,
+            "local_data_path": "",
+            "session_id": session_id,
+            "last_turn_uuid": "",
+            "ingested_turns": 0,
+            "started_at": int(time.time()),
+        }
+        _save_json(state_file, state)
+        # Ensure offline turns dir exists
+        _offline_turns_path(state_dir, session_id).parent.mkdir(
+            parents=True, exist_ok=True,
+        )
+        return {
+            "ok": True,
+            "mode": "offline",
+            "session_id": session_id,
+            "status_line": f"[openviking-memory] server offline ({backend.url}), buffering locally",
+            "additional_context": (
+                "OpenViking server is offline. Turns will be buffered locally "
+                "and uploaded when the server is reachable again."
+            ),
+        }
+
+    # Server is online — replay any buffered offline sessions first
+    replayed = _replay_offline_sessions(backend, ov_conf_path, state_dir)
 
     with OVClient(backend, ov_conf_path) as cli:
         session = cli.create_session()
@@ -468,6 +571,8 @@ def cmd_session_start(args: argparse.Namespace) -> Dict[str, Any]:
     status = f"[openviking-memory] mode={backend.mode} session={session_id}"
     if backend.mode == "http":
         status += f" server={backend.url}"
+    if replayed > 0:
+        status += f" replayed_offline={replayed}"
 
     additional = (
         "OpenViking memory is active. "
@@ -485,7 +590,7 @@ def cmd_session_start(args: argparse.Namespace) -> Dict[str, Any]:
 
 def cmd_ingest_stop(args: argparse.Namespace) -> Dict[str, Any]:
     project_dir = Path(args.project_dir).resolve()
-    ov_conf_path = project_dir / "ov.conf"
+    ov_conf_path = _resolve_ov_conf(args)
     state_file = Path(args.state_file)
     transcript = Path(args.transcript_path)
 
@@ -506,9 +611,6 @@ def cmd_ingest_stop(args: argparse.Namespace) -> Dict[str, Any]:
     if _as_text(turn.get("turn_uuid")) == _as_text(state.get("last_turn_uuid")):
         return {"ok": True, "ingested": False, "reason": "duplicate turn"}
 
-    ov_conf = _load_json(ov_conf_path)
-    backend = _build_backend_from_state_or_detect(state, project_dir, ov_conf)
-
     summary = summarize_turn(turn)
 
     user_text = _as_text(turn.get("user_text"))
@@ -520,8 +622,34 @@ def cmd_ingest_stop(args: argparse.Namespace) -> Dict[str, Any]:
     if assistant_excerpt:
         assistant_msg += f"\n\nAssistant excerpt:\n{_short(assistant_excerpt, 1500)}"
 
+    session_id = _as_text(state.get("session_id"))
+    state_dir = state_file.parent
+
+    # Offline mode: buffer turns locally
+    if _as_text(state.get("mode")) == "offline":
+        turns_path = _offline_turns_path(state_dir, session_id)
+        turns_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(turns_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"role": "user", "content": user_text}) + "\n")
+            f.write(json.dumps({"role": "assistant", "content": assistant_msg}) + "\n")
+        state["last_turn_uuid"] = _as_text(turn.get("turn_uuid"))
+        state["ingested_turns"] = int(state.get("ingested_turns", 0)) + 1
+        state["last_ingested_at"] = int(time.time())
+        _save_json(state_file, state)
+        return {
+            "ok": True,
+            "ingested": True,
+            "mode": "offline",
+            "session_id": session_id,
+            "turn_uuid": turn.get("turn_uuid"),
+            "ingested_turns": state.get("ingested_turns"),
+        }
+
+    # Online mode: send to server
+    ov_conf = _load_json(ov_conf_path)
+    backend = _build_backend_from_state_or_detect(state, project_dir, ov_conf)
+
     with OVClient(backend, ov_conf_path) as cli:
-        session_id = _as_text(state.get("session_id"))
         cli.add_message(session_id, "user", user_text)
         cli.add_message(session_id, "assistant", assistant_msg)
 
@@ -537,7 +665,7 @@ def cmd_ingest_stop(args: argparse.Namespace) -> Dict[str, Any]:
     return {
         "ok": True,
         "ingested": True,
-        "session_id": state.get("session_id"),
+        "session_id": session_id,
         "turn_uuid": turn.get("turn_uuid"),
         "ingested_turns": state.get("ingested_turns"),
     }
@@ -545,7 +673,7 @@ def cmd_ingest_stop(args: argparse.Namespace) -> Dict[str, Any]:
 
 def cmd_session_end(args: argparse.Namespace) -> Dict[str, Any]:
     project_dir = Path(args.project_dir).resolve()
-    ov_conf_path = project_dir / "ov.conf"
+    ov_conf_path = _resolve_ov_conf(args)
     state_file = Path(args.state_file)
 
     state = _load_state(state_file)
@@ -554,6 +682,25 @@ def cmd_session_end(args: argparse.Namespace) -> Dict[str, Any]:
             "ok": True,
             "committed": False,
             "status_line": "[openviking-memory] no active session",
+        }
+
+    # Offline session: turns are already buffered, mark inactive
+    # They'll be replayed on next online session-start
+    if _as_text(state.get("mode")) == "offline":
+        session_id = _as_text(state.get("session_id"))
+        turns = int(state.get("ingested_turns", 0))
+        state["active"] = False
+        state["committed_at"] = int(time.time())
+        _save_json(state_file, state)
+        return {
+            "ok": True,
+            "committed": False,
+            "mode": "offline",
+            "status_line": (
+                f"[openviking-memory] offline session closed"
+                f" id={session_id} buffered_turns={turns}"
+                f" (will upload when server is back)"
+            ),
         }
 
     if not ov_conf_path.exists():
@@ -567,12 +714,28 @@ def cmd_session_end(args: argparse.Namespace) -> Dict[str, Any]:
     ov_conf = _load_json(ov_conf_path)
     backend = _build_backend_from_state_or_detect(state, project_dir, ov_conf)
 
-    with OVClient(backend, ov_conf_path) as cli:
-        result = cli.commit_session(_as_text(state.get("session_id")))
+    state["commit_requested_at"] = int(state.get("commit_requested_at") or time.time())
+    state["commit_started_at"] = int(time.time())
+    state["commit_in_progress"] = True
+    state["commit_attempts"] = int(state.get("commit_attempts", 0)) + 1
+    state["last_commit_error"] = ""
+    _save_json(state_file, state)
+
+    try:
+        with OVClient(backend, ov_conf_path) as cli:
+            result = cli.commit_session(_as_text(state.get("session_id")))
+    except Exception as exc:
+        state["commit_in_progress"] = False
+        state["last_commit_error"] = str(exc)
+        state["last_commit_failed_at"] = int(time.time())
+        _save_json(state_file, state)
+        raise
 
     state["active"] = False
+    state["commit_in_progress"] = False
     state["committed_at"] = int(time.time())
     state["commit_result"] = result
+    state["last_commit_error"] = ""
     _save_json(state_file, state)
 
     extracted = int(result.get("memories_extracted", 0)) if isinstance(result, dict) else 0
@@ -592,7 +755,7 @@ def cmd_session_end(args: argparse.Namespace) -> Dict[str, Any]:
 
 def cmd_recall(args: argparse.Namespace) -> int:
     project_dir = Path(args.project_dir).resolve()
-    ov_conf_path = project_dir / "ov.conf"
+    ov_conf_path = _resolve_ov_conf(args)
     state_file = Path(args.state_file)
     query = _as_text(args.query)
 
@@ -665,6 +828,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="OpenViking memory bridge")
     parser.add_argument("--project-dir", required=True, help="Claude project directory")
     parser.add_argument("--state-file", required=True, help="Plugin state file path")
+    parser.add_argument("--ov-conf", default="", help="Path to ov.conf (overrides project-dir lookup)")
 
     sub = parser.add_subparsers(dest="command", required=True)
 

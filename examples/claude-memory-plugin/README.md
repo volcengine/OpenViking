@@ -3,7 +3,7 @@
 Claude Code memory plugin built on **OpenViking Session memory**.
 
 - Session data is accumulated during a Claude session (`Stop` hook).
-- At `SessionEnd`, plugin calls `session.commit()` to trigger OpenViking memory extraction.
+- At `SessionEnd`, plugin now queues a detached commit worker instead of blocking Claude exit on `session.commit()`.
 - Memory recall is handled by `memory-recall` skill.
 
 ## Design choices in this version
@@ -14,6 +14,9 @@ Claude Code memory plugin built on **OpenViking Session memory**.
 - Config: **strict**
   - Must have `./ov.conf` in project root
 - Plugin state dir: `./.openviking/memory/`
+  - Session state: `./.openviking/memory/session_state.json`
+  - Detached commit queue: `./.openviking/memory/pending/`
+  - Detached commit logs: `./.openviking/memory/logs/`
 
 ## Structure
 
@@ -50,7 +53,24 @@ examples/claude-memory-plugin/
   - Append user + assistant summary to OpenViking session
   - Deduplicate by last user turn UUID
 - `SessionEnd`
-  - Commit OpenViking session to extract long-term memories
+  - Queue a detached commit worker so `/exit` is not blocked on remote extraction
+  - Persist `pending_commit_file`, `pending_commit_log`, `commit_requested_at`, and `commit_in_progress`
+  - Finish the real `session.commit()` in the background and write the final result into the pending state/log
+
+## SessionEnd behavior
+
+The plugin now treats `SessionEnd` as a queueing step, not a long blocking RPC.
+
+- The hook returns quickly with a status like `session commit queued`
+- A detached Python worker continues the real OpenViking commit after Claude exits
+- The live session state flips to `active=false` immediately so exit is not held open
+- The background worker records final outcome in the pending state file and log
+
+If you want to inspect a commit after exit, check:
+
+- `./.openviking/memory/session_state.json`
+- `./.openviking/memory/pending/<session-id>.json`
+- `./.openviking/memory/logs/session-end-<session-id>-<timestamp>.log`
 
 ## Skill behavior
 
@@ -90,10 +110,19 @@ What the script does:
 - Generates a temporary project `./ov.conf` from source config and injects HTTP server fields.
 - Starts OpenViking HTTP server, runs a real `claude -p` session with this plugin, then triggers deterministic Stop + SessionEnd validation.
 - Verifies `session_state.json`, `ingested_turns >= 1`, and session archive file creation.
+- Also tolerates the detached SessionEnd path by waiting briefly for the queued commit to finish.
 - Restores original `./ov.conf` when done.
+
+## Resolved issues
+
+- **Health check timeout:** `_health_check()` uses 1.5s timeout (down from 3.5s). Offline detection completes in ~2.7s total.
+- **SessionStart hook:** Runs synchronously with 5s timeout. Subagent sessions are filtered (exit immediately on `agent_id`). Recall is skipped when server is offline.
+- **Offline buffering:** When the OV server is unreachable, turns are buffered locally and replayed on reconnect.
 
 ## Notes
 
 - This MVP does not modify OpenViking core.
 - If `./ov.conf` is missing, hooks degrade safely and report status in systemMessage.
-- State file: `./.openviking/memory/session_state.json`
+- Primary state file: `./.openviking/memory/session_state.json`
+- Detached SessionEnd state: `./.openviking/memory/pending/`
+- Detached SessionEnd logs: `./.openviking/memory/logs/`

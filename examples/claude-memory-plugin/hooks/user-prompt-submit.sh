@@ -10,7 +10,7 @@ if [[ -z "$PROMPT" || ${#PROMPT} -lt 10 ]]; then
   exit 0
 fi
 
-if [[ ! -f "$OV_CONF" || ! -f "$STATE_FILE" ]]; then
+if [[ -z "$OV_CONF" || ! -f "$OV_CONF" || ! -f "$STATE_FILE" ]]; then
   echo '{}'
   exit 0
 fi
