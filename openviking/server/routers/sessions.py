@@ -4,6 +4,7 @@
 
 import asyncio
 import logging
+import time
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Body, Depends, Path, Query
@@ -15,6 +16,9 @@ from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import ErrorInfo, Response
 from openviking.server.telemetry import resolve_selection, run_operation
+from openviking.storage import get_queue_manager
+from openviking.telemetry.resource_summary import record_resource_wait_metrics, register_wait_telemetry
+from openviking.telemetry.resource_summary import unregister_wait_telemetry
 from openviking.service.task_tracker import get_task_tracker
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import InvalidArgumentError
@@ -80,6 +84,14 @@ class CommitSessionRequest(BaseModel):
     """Request model for session commit."""
 
     telemetry: TelemetryRequest = False
+
+
+class ExtractSessionRequest(BaseModel):
+    """Request model for session extract."""
+
+    telemetry: TelemetryRequest = False
+    wait: bool = False
+    timeout: Optional[float] = None
 
 
 def _to_jsonable(value: Any) -> Any:
@@ -250,13 +262,52 @@ async def _background_commit_tracked(
 
 @router.post("/{session_id}/extract")
 async def extract_session(
+    request: ExtractSessionRequest = Body(default_factory=ExtractSessionRequest),
     session_id: str = Path(..., description="Session ID"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Extract memories from a session."""
     service = get_service()
-    result = await service.sessions.extract(session_id, _ctx)
-    return Response(status="ok", result=_to_jsonable(result))
+
+    async def _extract():
+        request_started_at = time.perf_counter()
+        telemetry_id = register_wait_telemetry(request.wait)
+        try:
+            result = await service.sessions.extract(session_id, _ctx)
+            if request.wait:
+                qm = get_queue_manager()
+                wait_started_at = time.perf_counter()
+                status = await qm.wait_complete(timeout=request.timeout)
+                record_resource_wait_metrics(
+                    telemetry_id=telemetry_id,
+                    queue_status=status,
+                    root_uri=None,
+                )
+                from openviking.telemetry import get_current_telemetry
+
+                telemetry = get_current_telemetry()
+                telemetry.set(
+                    "queue.wait.duration_ms",
+                    round((time.perf_counter() - wait_started_at) * 1000, 3),
+                )
+                telemetry.set(
+                    "session.extract.request.duration_ms",
+                    round((time.perf_counter() - request_started_at) * 1000, 3),
+                )
+            return _to_jsonable(result)
+        finally:
+            unregister_wait_telemetry(telemetry_id)
+
+    execution = await run_operation(
+        operation="session.extract",
+        telemetry=request.telemetry,
+        fn=_extract,
+    )
+    return Response(
+        status="ok",
+        result=execution.result,
+        telemetry=execution.telemetry,
+    ).model_dump(exclude_none=True)
 
 
 @router.post("/{session_id}/messages")

@@ -1,8 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 """Server configuration for OpenViking HTTP Server."""
-
-import sys
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -91,26 +89,20 @@ def validate_server_config(config: ServerConfig) -> None:
     """Validate server config for safe startup.
 
     When ``root_api_key`` is not set, authentication is disabled (dev mode).
-    This is only acceptable when the server binds to localhost.  Binding to a
-    non-loopback address without authentication exposes an unauthenticated ROOT
-    endpoint to the network.
-
-    Raises:
-        SystemExit: If the configuration is unsafe.
+    Binding to a non-loopback address without authentication exposes an
+    unauthenticated ROOT endpoint to the network.
     """
     if config.root_api_key:
         return
 
     if not _is_localhost(config.host):
-        logger.error(
-            "SECURITY: server.root_api_key is not configured and server.host "
-            "is '%s' (non-localhost). This would expose an unauthenticated "
+        logger.warning(
+            "SECURITY WARNING: server.root_api_key is not configured and "
+            "server.host is '%s' (non-localhost). This exposes an unauthenticated "
             "ROOT endpoint to the network.",
             config.host,
         )
-        logger.error(
-            "To fix, either:\n"
-            "  1. Set server.root_api_key in ov.conf, or\n"
-            '  2. Bind to localhost (server.host = "127.0.0.1")'
+        logger.warning(
+            "Set server.root_api_key in ov.conf if you need authentication for "
+            "network-accessible deployments."
         )
-        sys.exit(1)

@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import json
 import threading
+import time
 from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -34,6 +35,9 @@ logger = get_logger(__name__)
 class RequestQueueStats:
     processed: int = 0
     error_count: int = 0
+    duration_ms: float = 0.0
+    wall_start_ms: Optional[float] = None
+    wall_end_ms: Optional[float] = None
 
 
 class CollectionSchemas:
@@ -166,7 +170,13 @@ class TextEmbeddingHandler(DequeueHandlerBase):
 
     @classmethod
     def _merge_request_stats(
-        cls, telemetry_id: str, processed: int = 0, error_count: int = 0
+        cls,
+        telemetry_id: str,
+        processed: int = 0,
+        error_count: int = 0,
+        duration_ms: float = 0.0,
+        wall_start_ms: Optional[float] = None,
+        wall_end_ms: Optional[float] = None,
     ) -> None:
         if not telemetry_id:
             return
@@ -174,6 +184,13 @@ class TextEmbeddingHandler(DequeueHandlerBase):
             stats = cls._request_stats_by_telemetry_id.setdefault(telemetry_id, RequestQueueStats())
             stats.processed += processed
             stats.error_count += error_count
+            stats.duration_ms += duration_ms
+            if wall_start_ms is not None:
+                if stats.wall_start_ms is None or wall_start_ms < stats.wall_start_ms:
+                    stats.wall_start_ms = wall_start_ms
+            if wall_end_ms is not None:
+                if stats.wall_end_ms is None or wall_end_ms > stats.wall_end_ms:
+                    stats.wall_end_ms = wall_end_ms
             cls._request_stats_order.append(telemetry_id)
             if len(cls._request_stats_order) > cls._max_cached_stats:
                 old_telemetry_id = cls._request_stats_order.pop(0)
@@ -242,13 +259,23 @@ class TextEmbeddingHandler(DequeueHandlerBase):
 
                 # Generate embedding vector(s)
                 if self._embedder:
+                    embed_started_at = time.perf_counter()
+                    embed_started_wall_ms = embed_started_at * 1000.0
                     try:
                         # embed() is a blocking HTTP call; offload to thread pool to avoid
                         # blocking the event loop and allow real concurrency.
                         result: EmbedResult = await asyncio.to_thread(
                             self._embedder.embed, embedding_msg.message
                         )
+                        embed_duration_ms = (time.perf_counter() - embed_started_at) * 1000.0
+                        self._merge_request_stats(
+                            embedding_msg.telemetry_id,
+                            duration_ms=embed_duration_ms,
+                            wall_start_ms=embed_started_wall_ms,
+                            wall_end_ms=embed_started_wall_ms + embed_duration_ms,
+                        )
                     except Exception as embed_err:
+                        embed_duration_ms = (time.perf_counter() - embed_started_at) * 1000.0
                         error_msg = f"Failed to generate embedding: {embed_err}"
                         logger.error(error_msg)
 
@@ -263,7 +290,13 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                             except Exception as requeue_err:
                                 logger.error(f"Failed to re-enqueue message: {requeue_err}")
 
-                        self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
+                        self._merge_request_stats(
+                            embedding_msg.telemetry_id,
+                            error_count=1,
+                            duration_ms=embed_duration_ms,
+                            wall_start_ms=embed_started_wall_ms,
+                            wall_end_ms=embed_started_wall_ms + embed_duration_ms,
+                        )
                         self.report_error(error_msg, data)
                         return None
 

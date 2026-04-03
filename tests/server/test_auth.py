@@ -9,6 +9,7 @@ import httpx
 import pytest
 import pytest_asyncio
 
+import openviking.server.config as server_config_module
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig, _is_localhost, validate_server_config
 from openviking.server.dependencies import set_service
@@ -232,11 +233,19 @@ def test_validate_no_key_localhost_passes():
         validate_server_config(config)  # should not raise
 
 
-def test_validate_no_key_non_localhost_raises():
-    """No root_api_key + non-localhost should raise SystemExit."""
+def test_validate_no_key_non_localhost_warns(monkeypatch: pytest.MonkeyPatch):
+    """No root_api_key + non-localhost should log a warning but not exit."""
+    warnings: list[str] = []
+
+    def fake_warning(message, *args):
+        warnings.append(message % args if args else message)
+
+    monkeypatch.setattr(server_config_module.logger, "warning", fake_warning)
+
     config = ServerConfig(host="0.0.0.0", root_api_key=None)
-    with pytest.raises(SystemExit):
-        validate_server_config(config)
+    validate_server_config(config)
+
+    assert any("SECURITY WARNING" in message for message in warnings)
 
 
 def test_validate_with_key_any_host_passes():

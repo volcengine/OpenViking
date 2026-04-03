@@ -3,6 +3,7 @@
 """OpenAI Embedder Implementation"""
 
 import logging
+import time
 from typing import Any, Dict, List, Optional
 
 import openai
@@ -16,6 +17,12 @@ from openviking.models.embedder.base import (
 from openviking.telemetry import get_current_telemetry
 
 logger = logging.getLogger(__name__)
+
+
+def _record_embedding_duration(duration_ms: float, request_count: int = 1) -> None:
+    telemetry = get_current_telemetry()
+    telemetry.count("embedding.duration_ms", duration_ms)
+    telemetry.count("embedding.requests", request_count)
 
 
 class OpenAIDenseEmbedder(DenseEmbedderBase):
@@ -144,6 +151,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         Raises:
             RuntimeError: When API call fails
         """
+        started_at = time.perf_counter()
         try:
             kwargs = {"input": text, "model": self.model_name}
             if self.dimension:
@@ -155,9 +163,13 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
 
             return EmbedResult(dense_vector=vector)
         except openai.APIError as e:
+            get_current_telemetry().count("embedding.error_count", 1)
             raise RuntimeError(f"OpenAI API error: {e.message}") from e
         except Exception as e:
+            get_current_telemetry().count("embedding.error_count", 1)
             raise RuntimeError(f"Embedding failed: {str(e)}") from e
+        finally:
+            _record_embedding_duration((time.perf_counter() - started_at) * 1000.0)
 
     def embed(self, text: str) -> EmbedResult:
         """Embed single text, with automatic chunking for oversized input.
@@ -208,6 +220,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
                 short_texts.append(text)
 
         if short_texts:
+            started_at = time.perf_counter()
             try:
                 kwargs = {"input": short_texts, "model": self.model_name}
                 if self.dimension:
@@ -218,9 +231,16 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
                 for idx, item in zip(short_indices, response.data):
                     results[idx] = EmbedResult(dense_vector=item.embedding)
             except openai.APIError as e:
+                get_current_telemetry().count("embedding.error_count", 1)
                 raise RuntimeError(f"OpenAI API error: {e.message}") from e
             except Exception as e:
+                get_current_telemetry().count("embedding.error_count", 1)
                 raise RuntimeError(f"Batch embedding failed: {str(e)}") from e
+            finally:
+                _record_embedding_duration(
+                    (time.perf_counter() - started_at) * 1000.0,
+                    request_count=len(short_texts),
+                )
 
         return results  # type: ignore[return-value]
 
