@@ -9,3 +9,8 @@ RAGFS is based on the Go implementation of AGFS located at `third_party/agfs/` i
 ## License
 
 The original AGFS project is open source. This Rust implementation maintains compatibility with and references the original AGFS license.
+
+## Switch
+export RAGFS_IMPL=auto (default to rust, with fallback to go)
+export RAGFS_IMPL=rust
+export RAGFS_IMPL=go
