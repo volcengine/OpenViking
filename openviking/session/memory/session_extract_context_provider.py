@@ -225,6 +225,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             user_space = ctx.user.user_space_name() if ctx and ctx.user else "default"
             agent_space = ctx.user.agent_space_name() if ctx and ctx.user else "default"
             import jinja2
+
             env = jinja2.Environment(autoescape=False)
             template = env.from_string(schema.directory)
             dir_path = template.render(user_space=user_space, agent_space=agent_space)
@@ -240,7 +241,9 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             # Check if filename_template has variables (contains {{ xxx }})
             has_variables = False
             if schema.filename_template:
-                has_variables = "{{" in schema.filename_template and "}}" in schema.filename_template
+                has_variables = (
+                    "{{" in schema.filename_template and "}}" in schema.filename_template
+                )
 
             if has_variables or not schema.filename_template:
                 # Multi-file schema or no filename template: ls the directory
@@ -354,10 +357,8 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         return self._schema_directories
 
     def _get_registry(self) -> MemoryTypeRegistry:
-        """内部获取 registry（自动加载）"""
+        """内部获取 registry（自动在初始化时加载）"""
         if self._registry is None:
-            self._registry = MemoryTypeRegistry()
-            for dir_path in self.get_schema_directories():
-                if os.path.exists(dir_path):
-                    self._registry.load_from_directory(dir_path)
+            # MemoryTypeRegistry 在 __init__ 时自动加载 schemas
+            self._registry = MemoryTypeRegistry(load_schemas=True)
         return self._registry

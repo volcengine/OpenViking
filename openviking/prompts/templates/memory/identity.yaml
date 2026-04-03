@@ -30,7 +30,13 @@ fields:
     type: string
     description: Creature type (AI, robot, familiar, etc.)
     merge_op: patch
-    init_value: "AI"
+    init_value: "AI assistant"
+
+  - name: name
+    type: string
+    description: Agent name
+    merge_op: immutable
+    init_value: ""
 
   - name: vibe
     type: string
@@ -51,4 +57,4 @@ fields:
     type: string
     description: Self introduction
     merge_op: patch
-    init_value: "This isn't just metadata. It's the start of figuring out who you are."
+    init_value: "The start of figuring out who you are."

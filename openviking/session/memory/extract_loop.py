@@ -191,6 +191,10 @@ See the complete JSON Schema below:
 
             if tool_calls:
                 await self._execute_tool_calls(messages, tool_calls, tools_used)
+                # Allow one extra iteration for refetch
+                if iteration >= max_iterations:
+                    max_iterations += 1
+                    tracer.info(f"Extended max_iterations to {max_iterations} for tool call")
                 continue
 
             # If model returned final operations, check if refetch is needed

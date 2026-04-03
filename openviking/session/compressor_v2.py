@@ -101,6 +101,12 @@ class SessionCompressorV2:
 
         tracer.info("Starting v2 memory extraction from conversation")
 
+        # Initialize default memory files (soul.md, identity.md) if not exist
+        from openviking.session.memory.memory_type_registry import create_default_registry
+
+        registry = create_default_registry()
+        await registry.initialize_memory_files(ctx)
+
         # Initialize telemetry to 0 (matching v1 pattern)
         telemetry = get_current_telemetry()
         telemetry.set("memory.extract.candidates.total", 0)
