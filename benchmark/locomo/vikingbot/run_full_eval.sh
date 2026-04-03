@@ -2,16 +2,22 @@
 
 set -e
 
-# Step 1: 导入数据
-echo "[1/4] 导入数据..."
-python benchmark/locomo/vikingbot/import_to_ov.py --input ~/.test_data/locomo10.json --force-ingest
+# 使用 JSON 格式（包含对话时间，用于时间上下文注入）
+INPUT_FILE=~/.test_data/locomo10.json
 
-echo "等待 3 分钟..."
-sleep 180
+# Step 1: 导入数据（可跳过）
+if [ "$1" != "--skip-import" ]; then
+    echo "[1/4] 导入数据..."
+    python benchmark/locomo/vikingbot/import_to_ov.py --input $INPUT_FILE --force-ingest
+    echo "等待 3 分钟..."
+    sleep 180
+else
+    echo "[1/4] 跳过导入数据..."
+fi
 
 # Step 2: 评估
 echo "[2/4] 评估..."
-python benchmark/locomo/vikingbot/run_eval.py ~/.test_data/locomo_qa_1528.csv --output ./result/locomo_result_multi_read_all.csv --threads 20
+python benchmark/locomo/vikingbot/run_eval.py $INPUT_FILE --output ./result/locomo_result_multi_read_all.csv --threads 20
 
 echo "等待 3 分钟..."
 sleep 180
