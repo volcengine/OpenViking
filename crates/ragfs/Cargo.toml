@@ -1,0 +1,95 @@
+[package]
+name = "ragfs"
+version = "0.1.0"
+edition = "2021"
+authors = ["OpenViking Contributors"]
+description = "Rust implementation of AGFS - Aggregated File System for AI Agents"
+license = "Apache-2.0"
+repository = "https://github.com/OpenViking/openviking"
+keywords = ["filesystem", "agents", "rest-api", "plugin-system"]
+categories = ["filesystem", "network-programming"]
+
+[lib]
+name = "ragfs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ragfs-server"
+path = "src/server/main.rs"
+
+[[bin]]
+name = "ragfs-shell"
+path = "src/shell/main.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.38", features = ["full"] }
+async-trait = "0.1"
+
+# HTTP server
+axum = "0.7"
+tower = "0.5"
+tower-http = { version = "0.5", features = ["trace", "cors"] }
+hyper = "1.0"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+
+# Configuration
+clap = { version = "4.5", features = ["derive", "env"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Path handling and filesystem
+path-clean = "1.0"
+
+# Data structures
+radix_trie = "0.2"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# UUIDs
+uuid = { version = "1.0", features = ["v4", "serde"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Bytes handling
+bytes = "1.5"
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "mysql"], optional = true }
+
+# AWS S3
+aws-config = { version = "1", features = ["behavior-version-latest"], optional = true }
+aws-sdk-s3 = { version = "1", optional = true }
+aws-types = { version = "1", optional = true }
+
+# Cache
+lru = "0.12"
+
+# Development dependencies
+[dev-dependencies]
+tempfile = "3.12"
+criterion = "0.5"
+
+[features]
+default = []
+s3 = ["aws-sdk-s3", "aws-config", "aws-types"]
+full = ["s3"]
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
+codegen-units = 1
+
+[profile.dev]
+opt-level = 0
