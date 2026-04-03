@@ -224,16 +224,19 @@ def mark_ingested(
 # ---------------------------------------------------------------------------
 # OpenViking import
 # ---------------------------------------------------------------------------
-def _parse_token_usage(commit_result: Dict[str, Any]) -> Dict[str, int]:
-    """解析Token使用数据（从commit返回的telemetry中提取）"""
-    telemetry = commit_result.get("telemetry", {}).get("summary", {})
-    tokens = telemetry.get("tokens", {})
+def _parse_token_usage(task_result: Dict[str, Any]) -> Dict[str, int]:
+    """解析Token使用数据（从get_task返回的result中提取）"""
+    result_data = task_result.get("result", {})
+    token_usage = result_data.get("token_usage", {})
+    llm_tokens = token_usage.get("llm", {})
+    embedding_tokens = token_usage.get("embedding", {})
+    total_tokens = token_usage.get("total", {})
     return {
-        "embedding": tokens.get("embedding", {}).get("total", 0),
-        "vlm": tokens.get("llm", {}).get("total", 0),
-        "llm_input": tokens.get("llm", {}).get("input", 0),
-        "llm_output": tokens.get("llm", {}).get("output", 0),
-        "total": tokens.get("total", 0)
+        "embedding": embedding_tokens.get("total_tokens", 0),
+        "vlm": llm_tokens.get("total_tokens", 0),
+        "llm_input": llm_tokens.get("prompt_tokens", 0),
+        "llm_output": llm_tokens.get("completion_tokens", 0),
+        "total": total_tokens.get("total_tokens", 0)
     }
 
 
@@ -279,21 +282,40 @@ async def viking_ingest(
                     msg_dt = base_datetime + timedelta(seconds=idx)
                     msg_created_at = msg_dt.isoformat()
 
-                await client.add_message(
-                    session_id=session_id,
-                    role=msg["role"],
-                    parts=[{"type": "text", "text": msg["text"]}],
-                    created_at=msg_created_at
-                )
+            await client.add_message(
+                session_id=session_id,
+                role=msg["role"],
+                parts=[{"type": "text", "text": "你好"}],
+                created_at=msg_created_at
+            )
 
             # Commit
-            result = await client.commit_session(session_id, telemetry=True)
+            commit_result = await client.commit_session(session_id, telemetry=True)
 
-            if result.get("status") != "committed":
-                raise RuntimeError(f"Commit failed: {result}")
+            if commit_result.get("status") != "accepted":
+                raise RuntimeError(f"Commit failed: {commit_result}")
 
-            # 直接从commit结果中提取token使用情况
-            token_usage = _parse_token_usage(result)
+            # 获取异步任务ID并轮询任务完成状态
+            task_id = commit_result.get("task_id")
+            if not task_id:
+                raise RuntimeError(f"No task_id in commit result: {commit_result}")
+
+            # 轮询任务状态直到完成
+            max_attempts = 1200  # 最多等待20分钟
+            for attempt in range(max_attempts):
+                task_result = await client.get_task(task_id)
+                task_status = task_result.get("status")
+                if task_status == "completed":
+                    break
+                elif task_status in ("failed", "cancelled"):
+                    raise RuntimeError(f"Task {task_id} {task_status}: {task_result.get('error')}")
+                # 等待1秒后重试
+                await asyncio.sleep(1)
+            else:
+                raise RuntimeError(f"Task {task_id} timed out after {max_attempts} attempts")
+
+            # 从任务结果中提取token使用情况
+            token_usage = _parse_token_usage(task_result)
 
             return token_usage
 
@@ -305,7 +327,6 @@ def sync_viking_ingest(messages: List[Dict[str, Any]], openviking_url: str, sess
     """Synchronous wrapper for viking_ingest to maintain existing API."""
     semaphore = asyncio.Semaphore(1)  # 同步调用时使用信号量为1
     return asyncio.run(viking_ingest(messages, openviking_url, semaphore, session_time))
-
 
 # ---------------------------------------------------------------------------
 # Main import logic
