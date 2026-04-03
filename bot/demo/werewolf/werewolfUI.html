@@ -362,6 +362,15 @@
     }
     .rankList { display: grid; gap: 8px; }
     .rankItem { display: flex; justify-content: space-between; gap: 10px; font-size: 14px; padding: 10px 12px; border-radius: 10px; border: 2px solid rgba(43, 51, 80, 0.6); background: rgba(9, 11, 21, 0.55); }
+    .humanChatWrap { display: grid; grid-template-rows: auto 1fr auto; height: 100%; min-height: 300px; border: 2px solid rgba(167,139,250,0.5); border-radius: 14px; overflow: hidden; }
+    .humanChatHeader { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border-bottom: 2px solid rgba(167,139,250,0.5); background: rgba(26,20,46,0.8); }
+    .humanChatBody { padding: 12px; overflow: auto; display: grid; gap: 10px; min-height: 150px; background: rgba(10,8,20,0.4); }
+    .humanChatFooter { padding: 10px 12px; border-top: 2px solid rgba(167,139,250,0.5); background: rgba(26,20,46,0.8); display: grid; gap: 8px; }
+    .humanInput { width: 100%; padding: 10px 12px; border-radius: 10px; border: 2px solid rgba(167,139,250,0.5); background: rgba(10,8,20,0.6); color: rgba(233,237,247,0.95); font-family: inherit; font-size: 13px; resize: none; min-height: 60px; }
+    .humanInput:focus { outline: none; border-color: rgba(167,139,250,0.9); }
+    .humanModeIndicator { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: rgba(167,139,250,0.15); border: 2px solid rgba(167,139,250,0.4); }
+    .humanModeIndicator .dot { width: 8px; height: 8px; border-radius: 2px; background: rgba(167,139,250,0.9); animation: pulse 1s ease-in-out infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
     .bar { height: 6px; border-radius: 999px; background: rgba(56, 189, 248, 0.2); overflow: hidden; margin-top: 6px; }
     .bar > span { display: block; height: 100%; background: rgba(56, 189, 248, 0.75); }
     .searchRow { display: flex; gap: 8px; align-items: center; }
@@ -532,7 +541,7 @@
     </div>
   </header>
   <section class="page active" id="page-game">
-  <div class="wrap" style="height: calc(100vh - 80px); grid-template-columns: minmax(560px, 1.8fr) minmax(360px, 1fr); gap: 16px;">
+  <div class="wrap" id="gameWrap" style="height: calc(100vh - 80px); grid-template-columns: minmax(560px, 1.8fr) minmax(360px, 1fr); gap: 16px;">
     <div class="leftCol" style="height: 100%; display: flex; flex-direction: column;">
       <section class="panel" style="flex: 1; display: flex; flex-direction: column;">
         <div class="panelHeader">
@@ -543,7 +552,7 @@
         </div>
       </section>
     </div>
-    <div class="rightCol" style="height: 100%; display: flex; flex-direction: column; min-height: 0;">
+    <div class="rightCol" style="height: 100%; display: flex; flex-direction: column; min-height: 0; gap: 16px;">
         <section class="panel" style="flex: 1; display: flex; flex-direction: column; min-height: 0;">
         <div class="chatWrap" style="flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0;">
           <div class="chatHeader">
@@ -558,6 +567,22 @@
           <div class="chatFooter">
             <div id="chatStatus">等待开始...</div>
             <div class="voteRow" id="chatVotes"></div>
+          </div>
+        </div>
+      </section>
+      <section class="panel" id="humanPlayerPanel" style="display: none; min-height: 320px;">
+        <div class="panelHeader">
+          <h2>真实玩家</h2>
+          <div class="humanModeIndicator"><span class="dot"></span><span id="humanStatus">等待中...</span></div>
+        </div>
+        <div class="humanChatWrap" style="flex: 1;">
+          <div class="humanChatBody" id="humanChatBody"></div>
+          <div class="humanChatFooter">
+            <textarea class="humanInput" id="humanInput" placeholder="在此输入你的回复..."></textarea>
+            <button class="btn" id="humanSendBtn" style="width: 100%; background: rgba(167,139,250,0.2); border-color: rgba(167,139,250,0.6);">发送</button>
+            <div style="display: flex; gap: 8px; margin-top: 8px;">
+              <button class="btn" id="humanEditGameMd" style="flex: 1; font-size: 11px;">编辑GAME.md</button>
+            </div>
           </div>
         </div>
       </section>
@@ -2717,6 +2742,28 @@ function bindNav() {
           loadHistoryLeaderboard();
         });
       }
+
+      // Human player buttons
+      const humanSendBtn = document.getElementById('humanSendBtn');
+      if (humanSendBtn) {
+        humanSendBtn.addEventListener('click', sendHumanMessage);
+      }
+      const humanInput = document.getElementById('humanInput');
+      if (humanInput) {
+        humanInput.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendHumanMessage();
+          }
+        });
+      }
+      const humanEditGameMd = document.getElementById('humanEditGameMd');
+      if (humanEditGameMd) {
+        humanEditGameMd.addEventListener('click', editHumanGameMd);
+      }
+
+      // Load human GAME.md on init
+      loadHumanGameMd();
     }
 
     async function loadHistoryLeaderboard() {
@@ -3112,6 +3159,92 @@ function bindNav() {
         } else {
           forceBtn.style.display = '';
           forceBtn.textContent = '重新开始';
+        }
+      }
+
+      updateHumanPlayerUI(status);
+    }
+
+    let humanGameMdContent = '';
+
+    async function updateHumanPlayerUI(status) {
+      const hasHumanPlayer = status.has_human_player || false;
+      const waitingForHuman = status.waiting_for_human || false;
+      const humanPanel = document.getElementById('humanPlayerPanel');
+      const gameWrap = document.getElementById('gameWrap');
+      const humanStatus = document.getElementById('humanStatus');
+      const humanSendBtn = document.getElementById('humanSendBtn');
+      const humanInput = document.getElementById('humanInput');
+
+      if (!hasHumanPlayer) {
+        if (humanPanel) humanPanel.style.display = 'none';
+        if (gameWrap) gameWrap.style.gridTemplateColumns = 'minmax(560px, 1.8fr) minmax(360px, 1fr)';
+        return;
+      }
+
+      if (humanPanel) humanPanel.style.display = '';
+      if (gameWrap) gameWrap.style.gridTemplateColumns = 'minmax(520px, 1.5fr) minmax(340px, 1fr)';
+
+      if (humanStatus) {
+        humanStatus.textContent = waitingForHuman ? '需要你回复！' : '等待中...';
+      }
+
+      if (humanSendBtn) {
+        humanSendBtn.disabled = !waitingForHuman;
+        humanSendBtn.style.opacity = waitingForHuman ? '1' : '0.5';
+      }
+
+      if (humanInput) {
+        humanInput.disabled = !waitingForHuman;
+        humanInput.placeholder = waitingForHuman ? '在此输入你的回复...' : '等待轮到你...';
+      }
+    }
+
+    async function sendHumanMessage() {
+      const input = document.getElementById('humanInput');
+      if (!input || !input.value.trim()) return;
+
+      try {
+        const res = await fetch('/api/human/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: input.value.trim() })
+        });
+        if (res.ok) {
+          input.value = '';
+        }
+      } catch (e) {
+        console.error('Failed to send human message:', e);
+      }
+    }
+
+    async function loadHumanGameMd() {
+      try {
+        const res = await fetch('/api/human/game-md');
+        if (res.ok) {
+          const data = await res.json();
+          humanGameMdContent = data.content || '';
+        }
+      } catch (e) {
+        console.error('Failed to load human GAME.md:', e);
+      }
+    }
+
+    async function editHumanGameMd() {
+      await loadHumanGameMd();
+      const content = prompt('编辑你的GAME.md（角色、状态等）:', humanGameMdContent);
+      if (content !== null) {
+        try {
+          const res = await fetch('/api/human/game-md', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: content })
+          });
+          if (res.ok) {
+            humanGameMdContent = content;
+          }
+        } catch (e) {
+          console.error('Failed to save human GAME.md:', e);
         }
       }
     }

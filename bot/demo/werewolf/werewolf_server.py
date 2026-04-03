@@ -57,6 +57,10 @@ class GameState:
     message_queue: List[Dict[str, Any]] = field(default_factory=list)
     game_ended: bool = False
     force_restarted: bool = False
+    has_human_player: bool = False
+    human_player_channel: str = "human"
+    waiting_for_human: bool = False
+    human_player_message: Optional[str] = None
 
 
 # ============================================================================
@@ -303,6 +307,7 @@ async def broadcast_to_players(
     Broadcast message to all players:
     - Mentioned players: need_reply=True, wait for reply
     - Other players: need_reply=False, just receive
+    - Human player: if mentioned, wait for user input
 
     Returns:
         List of replies from mentioned players
@@ -311,6 +316,7 @@ async def broadcast_to_players(
     tasks = []
     reply_channels = []
     all_player_channels = []
+    human_mentioned = False
 
     # Build player seat number map first
     player_seat_map = {}
@@ -328,8 +334,18 @@ async def broadcast_to_players(
         sender_seat = player_seat_map.get(sender_id, sender_id)
         sender_prefix = f"{sender_seat}号："
 
+    # Check if human player is mentioned
+    if state.has_human_player and state.human_player_channel in mentioned_players:
+        human_mentioned = True
+        mentioned_players = [ch for ch in mentioned_players if ch != state.human_player_channel]
+        logger.info(f"Human player mentioned, will wait for user input")
+
     for ch in state.channels:
         if ch == "god":
+            continue
+        if ch == state.human_player_channel:
+            # Skip human player in bot broadcast
+            all_player_channels.append(ch)
             continue
         all_player_channels.append(ch)
 
@@ -357,7 +373,14 @@ async def broadcast_to_players(
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     # Record replies from players (these are visible)
-    for ch, result in zip(all_player_channels, results):
+    replies = []
+    result_idx = 0
+    for ch in all_player_channels:
+        if ch == state.human_player_channel:
+            continue
+        result = results[result_idx] if result_idx < len(results) else None
+        result_idx += 1
+
         is_mentioned = ch in reply_channels
 
         # If this player was mentioned and replied successfully, record the reply
@@ -370,19 +393,44 @@ async def broadcast_to_players(
                 timestamp=time.time(),
             ))
             logger.info(f"Received reply from {ch}: {response_content[:100]}...")
-
-    # Save after receiving player replies
-    if state.session_id:
-        save_conversation_to_file(state.storage_path, state.session_id, state.messages)
-
-    # Collect replies from mentioned players
-    replies = []
-    for ch, result in zip(all_player_channels, results):
-        if ch in reply_channels and not isinstance(result, Exception):
             replies.append({
                 "channel_id": ch,
                 "response": result
             })
+
+    # Handle human player
+    if human_mentioned:
+        logger.info(f"Waiting for human player input...")
+        state.waiting_for_human = True
+
+        # Record the message to human player
+        human_message = f"{sender_prefix}{message}"
+        state.messages.append(ChatMessage(
+            channel_id=sender_id,
+            content=human_message,
+            is_user=False,
+            timestamp=time.time(),
+        ))
+        if state.session_id:
+            save_conversation_to_file(state.storage_path, state.session_id, state.messages)
+
+        # Wait for human player to respond
+        while state.waiting_for_human and state.running:
+            await asyncio.sleep(0.1)
+
+        if state.human_player_message:
+            # Add human reply
+            reply_content = state.human_player_message
+            state.human_player_message = None
+            replies.append({
+                "channel_id": state.human_player_channel,
+                "response": {"message": reply_content}
+            })
+            logger.info(f"Received human player reply: {reply_content[:100]}...")
+
+    # Save after receiving player replies
+    if state.session_id:
+        save_conversation_to_file(state.storage_path, state.session_id, state.messages)
 
     return replies
 
@@ -703,7 +751,62 @@ def create_fastapi_app(state: GameState) -> FastAPI:
             "smart_buttons": state.config.get("smart_buttons", False),
             "game_ended": state.game_ended,
             "force_restarted": state.force_restarted,
+            "has_human_player": state.has_human_player,
+            "human_player_channel": state.human_player_channel,
+            "waiting_for_human": state.waiting_for_human,
         })
+
+    @fastapi_app.post("/api/human/send")
+    async def send_human_message(payload: dict):
+        """Send a message from human player."""
+        if not state.has_human_player:
+            return JSONResponse(content={"success": False, "error": "Human player mode not enabled"})
+
+        message = payload.get("message", "")
+        if not message:
+            return JSONResponse(content={"success": False, "error": "Message is empty"})
+
+        import time
+        # Record human message
+        state.messages.append(ChatMessage(
+            channel_id=state.human_player_channel,
+            content=message,
+            is_user=True,
+            timestamp=time.time(),
+        ))
+        if state.session_id:
+            save_conversation_to_file(state.storage_path, state.session_id, state.messages)
+
+        # Set the message for the router
+        state.human_player_message = message
+        state.waiting_for_human = False
+
+        return JSONResponse(content={"success": True})
+
+    @fastapi_app.get("/api/human/game-md")
+    async def get_human_game_md():
+        """Get human player's GAME.md content."""
+        if not state.has_human_player:
+            return JSONResponse(content={"error": "Human player mode not enabled"}, status_code=400)
+
+        human_game_md = state.storage_path / "bot" / "workspace" / "human" / "GAME.md"
+        if not human_game_md.exists():
+            return JSONResponse(content={"content": "# 真实玩家游戏文件\n\n请编辑此文件来设置你的角色和状态。\n"})
+
+        return JSONResponse(content={"content": human_game_md.read_text(encoding="utf-8")})
+
+    @fastapi_app.post("/api/human/game-md")
+    async def save_human_game_md(payload: dict):
+        """Save human player's GAME.md content."""
+        if not state.has_human_player:
+            return JSONResponse(content={"error": "Human player mode not enabled"}, status_code=400)
+
+        content = payload.get("content", "")
+        human_game_md = state.storage_path / "bot" / "workspace" / "human" / "GAME.md"
+        human_game_md.parent.mkdir(parents=True, exist_ok=True)
+        human_game_md.write_text(content, encoding="utf-8")
+
+        return JSONResponse(content={"success": True})
 
     @fastapi_app.get("/api/messages")
     async def get_messages():
@@ -1229,6 +1332,7 @@ def main(
     ),
     game_id: str = typer.Option("default", "--game-id", help="Game ID"),
     smart_buttons: bool = typer.Option(False, "--smart-buttons", "-s", help="Enable smart button visibility control"),
+    game_mode: str = typer.Option("all_agents", "--game-mode", "-m", help="Game mode: all_agents or human_player"),
 ):
     """Start the werewolf game server."""
     import uvicorn
@@ -1242,6 +1346,26 @@ def main(
 
     storage_path = get_storage_path(config)
     logger.info(f"Storage path: {storage_path}")
+
+    has_human_player = game_mode == "human_player"
+    human_channel = "human"
+    if has_human_player:
+        # Remove last bot player and add human
+        if len(channels) > 1 and "god" in channels:
+            # Keep god and remove the last player
+            non_god_channels = [ch for ch in channels if ch != "god"]
+            if len(non_god_channels) > 0:
+                channels = ["god"] + non_god_channels[:-1]
+            channels.append(human_channel)
+        logger.info(f"Human player mode enabled. Channels: {channels}")
+
+        # Create human player GAME.md
+        human_workspace = storage_path / "bot" / "workspace" / "human"
+        human_workspace.mkdir(parents=True, exist_ok=True)
+        human_game_md = human_workspace / "GAME.md"
+        if not human_game_md.exists():
+            human_game_md.write_text("# 真实玩家游戏文件\n\n请编辑此文件来设置你的角色和状态。\n", encoding="utf-8")
+        logger.info(f"Human player GAME.md at: {human_game_md}")
 
     init_ui_files(storage_path, channels, game_id)
 
@@ -1273,6 +1397,8 @@ def main(
 
     # Store smart_buttons in config for easy access
     state.config["smart_buttons"] = smart_buttons
+    state.has_human_player = has_human_player
+    state.human_player_channel = human_channel
 
     # Load messages if available
     if previous_messages:
