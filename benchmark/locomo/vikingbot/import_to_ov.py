@@ -282,12 +282,12 @@ async def viking_ingest(
                     msg_dt = base_datetime + timedelta(seconds=idx)
                     msg_created_at = msg_dt.isoformat()
 
-            await client.add_message(
-                session_id=session_id,
-                role=msg["role"],
-                parts=[{"type": "text", "text": "你好"}],
-                created_at=msg_created_at
-            )
+                await client.add_message(
+                    session_id=session_id,
+                    role=msg["role"],
+                    parts=[{"type": "text", "text": msg["text"]}],
+                    created_at=msg_created_at
+                )
 
             # Commit
             commit_result = await client.commit_session(session_id, telemetry=True)
