@@ -63,6 +63,9 @@ pub trait QueueBackend: Send + Sync {
 
     /// Get the last enqueue time for the queue
     fn get_last_enqueue_time(&self, queue_name: &str) -> Result<SystemTime>;
+
+    /// Acknowledge (delete) a message by ID
+    fn ack(&mut self, queue_name: &str, msg_id: &str) -> Result<bool>;
 }
 
 /// A single queue with its messages
@@ -175,6 +178,17 @@ impl QueueBackend for MemoryBackend {
         })?;
 
         Ok(queue.last_enqueue_time)
+    }
+
+    fn ack(&mut self, queue_name: &str, msg_id: &str) -> Result<bool> {
+        let queue = self.queues.get_mut(queue_name).ok_or_else(|| {
+            Error::NotFound(format!("queue '{}' not found", queue_name))
+        })?;
+
+        // Find and remove message by ID
+        let original_len = queue.messages.len();
+        queue.messages.retain(|msg| msg.id != msg_id);
+        Ok(queue.messages.len() != original_len)
     }
 }
 

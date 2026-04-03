@@ -7,6 +7,7 @@
 //! - `/queue_name/peek` - Read from this file to view the first message without removing it
 //! - `/queue_name/size` - Read from this file to get the current queue size
 //! - `/queue_name/clear` - Write to this file to clear all messages from the queue
+//! - `/queue_name/ack` - Write message ID to this file to acknowledge and delete it
 
 mod backend;
 
@@ -53,7 +54,7 @@ impl QueueFileSystem {
 
     /// Check if a name is a control operation
     fn is_control_operation(name: &str) -> bool {
-        matches!(name, "enqueue" | "dequeue" | "peek" | "size" | "clear")
+        matches!(name, "enqueue" | "dequeue" | "peek" | "size" | "clear" | "ack")
     }
 
     /// Normalize path by removing trailing slashes and ensuring it starts with /
@@ -216,8 +217,13 @@ impl FileSystem for QueueFileSystem {
                 backend.clear(&queue_name)?;
                 Ok(0)
             }
+            "ack" => {
+                let msg_id = String::from_utf8_lossy(data).trim().to_string();
+                backend.ack(&queue_name, &msg_id)?;
+                Ok(0)
+            }
             _ => Err(Error::InvalidOperation(format!(
-                "Cannot write to '{}'. Use enqueue or clear",
+                "Cannot write to '{}'. Use enqueue, clear, or ack",
                 operation
             ))),
         }
@@ -333,6 +339,13 @@ impl FileSystem for QueueFileSystem {
                 mod_time: now,
                 is_dir: false,
             },
+            FileInfo {
+                name: "ack".to_string(),
+                size: 0,
+                mode: 0o222,
+                mod_time: now,
+                is_dir: false,
+            },
         ])
     }
 
@@ -372,7 +385,7 @@ impl FileSystem for QueueFileSystem {
             Ok(FileInfo {
                 name: operation.clone(),
                 size: 0,
-                mode: if matches!(operation.as_str(), "enqueue" | "clear") {
+                mode: if matches!(operation.as_str(), "enqueue" | "clear" | "ack") {
                     0o222
                 } else {
                     0o444
