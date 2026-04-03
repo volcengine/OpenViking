@@ -222,7 +222,7 @@ export const memoryOpenVikingConfigSchema = {
         50,
         Math.min(10000, Math.floor(toNumber(cfg.recallMaxContentChars, DEFAULT_RECALL_MAX_CONTENT_CHARS))),
       ),
-      recallPreferAbstract: cfg.recallPreferAbstract !== false,
+      recallPreferAbstract: cfg.recallPreferAbstract === true,
       recallTokenBudget: Math.max(
         100,
         Math.min(50000, Math.floor(toNumber(cfg.recallTokenBudget, DEFAULT_RECALL_TOKEN_BUDGET))),
