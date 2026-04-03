@@ -22,7 +22,6 @@ from openviking.server.identity import RequestContext, Role
 from openviking.storage import VikingDBManager, VikingDBManagerProxy
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
-from openviking.utils.tag_utils import expand_query_tags, merge_tags, parse_tags
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.retrieve.types import (
     ContextType,
@@ -51,9 +50,6 @@ class HierarchicalRetriever:
     DIRECTORY_DOMINANCE_RATIO = 1.2  # Directory score must exceed max child score
     GLOBAL_SEARCH_TOPK = 10  # Global retrieval count (more candidates = better rerank precision)
     HOTNESS_ALPHA = 0.2  # Weight for hotness score in final ranking (0 = disabled)
-    MAX_TAG_EXPANSION_TAGS = 8  # Upper bound on expansion tags collected per query.
-    TAG_EXPANSION_LIMIT = 8  # Upper bound on extra nodes discovered via tags.
-    TAG_EXPANSION_SCORE = 0.15  # Lower seed score for tag-expanded nodes.
     LEVEL_URI_SUFFIX = {0: ".abstract.md", 1: ".overview.md"}
 
     def __init__(
@@ -117,7 +113,6 @@ class HierarchicalRetriever:
         vector_proxy = VikingDBManagerProxy(self.vector_store, ctx)
 
         target_dirs = [d for d in (query.target_directories or []) if d]
-        query_tags = expand_query_tags(query.tags)
 
         if not await vector_proxy.collection_exists_bound():
             logger.warning(
@@ -151,7 +146,6 @@ class HierarchicalRetriever:
             sparse_query_vector=sparse_query_vector,
             context_type=query.context_type.value if query.context_type else None,
             target_dirs=target_dirs,
-            tags=query_tags,
             scope_dsl=scope_dsl,
             limit=max(limit, self.GLOBAL_SEARCH_TOPK),
         )
@@ -173,22 +167,11 @@ class HierarchicalRetriever:
                     f"  [{i}] URI: {uri}, score: {score:.4f}, level: {level}, account_id: {account_id}"
                 )
 
-        expanded_points, expanded_candidates = await self._expand_starting_points_by_tags(
-            vector_proxy=vector_proxy,
-            global_results=global_results,
-            explicit_tags=query_tags,
-            context_type=query.context_type.value if query.context_type else None,
-            target_dirs=target_dirs,
-            scope_dsl=scope_dsl,
-            limit=self.TAG_EXPANSION_LIMIT,
-        )
-
         # Step 3: Merge starting points
         starting_points = self._merge_starting_points(
             query.query,
             root_uris,
             global_results,
-            extra_points=expanded_points,
             mode=mode,
         )
 
@@ -199,10 +182,6 @@ class HierarchicalRetriever:
             query.query,
             initial_candidates,
             mode=mode,
-        )
-        initial_candidates = self._merge_initial_candidates(
-            initial_candidates,
-            expanded_candidates,
         )
 
         # Step 4: Recursive search
@@ -250,7 +229,6 @@ class HierarchicalRetriever:
         sparse_query_vector: Optional[Dict[str, float]],
         context_type: Optional[str],
         target_dirs: List[str],
-        tags: List[str],
         scope_dsl: Optional[Dict[str, Any]],
         limit: int,
     ) -> List[Dict[str, Any]]:
@@ -260,7 +238,6 @@ class HierarchicalRetriever:
             sparse_query_vector=sparse_query_vector,
             context_type=context_type,
             target_directories=target_dirs,
-            tags=tags,
             extra_filter=scope_dsl,
             limit=limit,
         )
@@ -307,7 +284,6 @@ class HierarchicalRetriever:
         query: str,
         root_uris: List[str],
         global_results: List[Dict[str, Any]],
-        extra_points: Optional[List[Tuple[str, float]]] = None,
         mode: str = "thinking",
     ) -> List[Tuple[str, float]]:
         """Merge starting points.
@@ -344,110 +320,7 @@ class HierarchicalRetriever:
                 points.append((uri, 0.0))
                 seen.add(uri)
 
-        for uri, score in extra_points or []:
-            if uri not in seen:
-                points.append((uri, score))
-                seen.add(uri)
-
         return points
-
-    def _merge_initial_candidates(
-        self,
-        *candidate_groups: Optional[List[Dict[str, Any]]],
-    ) -> List[Dict[str, Any]]:
-        merged: Dict[str, Dict[str, Any]] = {}
-        for group in candidate_groups:
-            for candidate in group or []:
-                uri = candidate.get("uri", "")
-                if not uri:
-                    continue
-                previous = merged.get(uri)
-                if previous is None or candidate.get("_score", 0.0) > previous.get("_score", 0.0):
-                    merged[uri] = candidate
-        return sorted(merged.values(), key=lambda item: item.get("_score", 0.0), reverse=True)
-
-    async def _expand_starting_points_by_tags(
-        self,
-        vector_proxy: VikingDBManagerProxy,
-        global_results: List[Dict[str, Any]],
-        explicit_tags: List[str],
-        context_type: Optional[str],
-        target_dirs: List[str],
-        scope_dsl: Optional[Dict[str, Any]],
-        limit: int,
-    ) -> Tuple[List[Tuple[str, float]], List[Dict[str, Any]]]:
-        expansion_tags = self._collect_expansion_tags(global_results, explicit_tags)
-        if not expansion_tags or limit <= 0:
-            return [], []
-
-        tag_matches = await vector_proxy.search_by_tags_in_tenant(
-            tags=expansion_tags,
-            context_type=context_type,
-            target_directories=target_dirs,
-            extra_filter=scope_dsl,
-            levels=[0, 1, 2],
-            limit=limit,
-        )
-        telemetry = get_current_telemetry()
-        telemetry.count("retrieval.tag_expansion.tags", len(expansion_tags))
-        telemetry.count("retrieval.tag_expansion.matches", len(tag_matches))
-
-        seen_uris = {result.get("uri", "") for result in global_results}
-        expansion_points: Dict[str, float] = {}
-        expansion_candidates: Dict[str, Dict[str, Any]] = {}
-        expansion_tag_set = set(expansion_tags)
-
-        for match in tag_matches:
-            uri = match.get("uri", "")
-            if not uri or uri in seen_uris:
-                continue
-
-            overlap = expansion_tag_set.intersection(parse_tags(match.get("tags")))
-            score = self._score_tag_expansion(len(overlap))
-
-            if match.get("level", 2) == 2:
-                candidate = dict(match)
-                candidate["_score"] = score
-                previous = expansion_candidates.get(uri)
-                if previous is None or score > previous.get("_score", 0.0):
-                    expansion_candidates[uri] = candidate
-
-            start_uri = self._start_uri_from_record(match)
-            if start_uri and score > expansion_points.get(start_uri, 0.0):
-                expansion_points[start_uri] = score
-
-        return list(expansion_points.items()), list(expansion_candidates.values())
-
-    def _collect_expansion_tags(
-        self,
-        global_results: List[Dict[str, Any]],
-        explicit_tags: List[str],
-    ) -> List[str]:
-        collected = [explicit_tags]
-        for result in global_results:
-            collected.append(parse_tags(result.get("tags")))
-        return merge_tags(*collected, max_tags=self.MAX_TAG_EXPANSION_TAGS)
-
-    def _score_tag_expansion(self, overlap_count: int) -> float:
-        if overlap_count <= 1:
-            return self.TAG_EXPANSION_SCORE
-        return self.TAG_EXPANSION_SCORE * (1.0 + 0.2 * min(overlap_count - 1, 3))
-
-    def _start_uri_from_record(self, record: Dict[str, Any]) -> str:
-        uri = record.get("uri", "")
-        if not uri:
-            return ""
-        if record.get("level", 2) != 2:
-            return uri
-
-        parent_uri = record.get("parent_uri")
-        if parent_uri:
-            return parent_uri
-
-        normalized = uri.rstrip("/")
-        if "/" not in normalized:
-            return ""
-        return normalized.rsplit("/", 1)[0]
 
     def _prepare_initial_candidates(
         self,

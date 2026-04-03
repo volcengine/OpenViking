@@ -107,37 +107,3 @@ async def test_vectorize_file_truncates_content_when_content_only(monkeypatch):
     text = queue.items[0].get_vectorization_text()
     assert text.startswith("A" * 1000)
     assert text.endswith("...(truncated for embedding)")
-
-
-@pytest.mark.asyncio
-async def test_vectorize_file_forces_summary_tags_into_auto_namespace(monkeypatch):
-    queue = DummyQueue()
-    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
-    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("content"))
-    monkeypatch.setattr(
-        embedding_utils,
-        "get_openviking_config",
-        lambda: types.SimpleNamespace(
-            embedding=types.SimpleNamespace(text_source="summary_first", max_input_chars=1000)
-        ),
-    )
-    monkeypatch.setattr(
-        embedding_utils.EmbeddingMsgConverter,
-        "from_context",
-        lambda context: context,
-    )
-
-    await embedding_utils.vectorize_file(
-        file_path="viking://user/default/resources/ml-notes.md",
-        summary_dict={
-            "name": "ml-notes.md",
-            "summary": "short summary",
-            "tags": "user:model-training;pytorch",
-        },
-        parent_uri="viking://user/default/resources",
-        ctx=DummyReq(),
-    )
-
-    assert len(queue.items) == 1
-    assert "auto:model-training" in queue.items[0].tags
-    assert "user:model-training" not in queue.items[0].tags

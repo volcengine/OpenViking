@@ -14,7 +14,6 @@ from typing import Any, Dict, List, Optional, Union
 import httpx
 
 from openviking.telemetry import TelemetryRequest, normalize_telemetry_request
-from openviking.utils.tag_utils import serialize_tags
 from openviking_cli.client.base import BaseClient
 from openviking_cli.exceptions import (
     AlreadyExistsError,
@@ -331,7 +330,6 @@ class AsyncHTTPClient(BaseClient):
         exclude: Optional[str] = None,
         directly_upload_media: bool = True,
         preserve_structure: Optional[bool] = None,
-        tags: Optional[Union[str, List[str]]] = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
@@ -351,7 +349,6 @@ class AsyncHTTPClient(BaseClient):
             "include": include,
             "exclude": exclude,
             "directly_upload_media": directly_upload_media,
-            "tags": serialize_tags(tags),
             "telemetry": telemetry,
         }
         if preserve_structure is not None:
@@ -593,7 +590,6 @@ class AsyncHTTPClient(BaseClient):
         node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
-        tags: Optional[Union[str, List[str]]] = None,
         telemetry: TelemetryRequest = False,
     ) -> FindResult:
         """Semantic search without session context."""
@@ -609,7 +605,6 @@ class AsyncHTTPClient(BaseClient):
                 "limit": actual_limit,
                 "score_threshold": score_threshold,
                 "filter": filter,
-                "tags": serialize_tags(tags),
                 "telemetry": telemetry,
             },
         )
@@ -626,7 +621,6 @@ class AsyncHTTPClient(BaseClient):
         node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
-        tags: Optional[Union[str, List[str]]] = None,
         telemetry: TelemetryRequest = False,
     ) -> FindResult:
         """Semantic search with optional session context."""
@@ -644,7 +638,6 @@ class AsyncHTTPClient(BaseClient):
                 "limit": actual_limit,
                 "score_threshold": score_threshold,
                 "filter": filter,
-                "tags": serialize_tags(tags),
                 "telemetry": telemetry,
             },
         )

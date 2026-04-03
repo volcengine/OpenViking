@@ -3,12 +3,7 @@
 
 """Search tests"""
 
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
-
 from openviking.message import TextPart
-from openviking.sync_client import SyncOpenViking
-from openviking_cli.client.sync_http import SyncHTTPClient
 
 
 class TestFind:
@@ -79,83 +74,3 @@ class TestSearch:
         result = await client.search(query="sample", target_uri=parent_uri)
 
         assert hasattr(result, "resources")
-
-
-class TestSyncWrappers:
-    def test_sync_http_client_find_forwards_keyword_args(self):
-        mock_find = AsyncMock(return_value="ok")
-        client = object.__new__(SyncHTTPClient)
-        client._async_client = SimpleNamespace(find=mock_find)
-
-        result = client.find(
-            query="sample",
-            target_uri="viking://resources/demo",
-            limit=5,
-            node_limit=3,
-            score_threshold=0.25,
-            filter={"kind": "resource"},
-            tags=["machine-learning"],
-            telemetry=True,
-        )
-
-        assert result == "ok"
-        mock_find.assert_awaited_once_with(
-            query="sample",
-            target_uri="viking://resources/demo",
-            limit=5,
-            node_limit=3,
-            score_threshold=0.25,
-            filter={"kind": "resource"},
-            tags=["machine-learning"],
-            telemetry=True,
-        )
-
-    def test_sync_openviking_search_and_find_forward_keyword_args(self):
-        mock_search = AsyncMock(return_value="search-ok")
-        mock_find = AsyncMock(return_value="find-ok")
-        client = object.__new__(SyncOpenViking)
-        client._async_client = SimpleNamespace(search=mock_search, find=mock_find)
-
-        search_result = client.search(
-            query="sample",
-            target_uri="viking://resources/demo",
-            session="session-object",
-            session_id="sess-1",
-            limit=4,
-            score_threshold=0.2,
-            filter={"kind": "resource"},
-            tags=["feature-store"],
-            telemetry=True,
-        )
-        find_result = client.find(
-            query="sample",
-            target_uri="viking://resources/demo",
-            limit=2,
-            score_threshold=0.1,
-            filter={"kind": "resource"},
-            tags=["feature-store"],
-            telemetry=True,
-        )
-
-        assert search_result == "search-ok"
-        assert find_result == "find-ok"
-        mock_search.assert_awaited_once_with(
-            query="sample",
-            target_uri="viking://resources/demo",
-            session="session-object",
-            session_id="sess-1",
-            limit=4,
-            score_threshold=0.2,
-            filter={"kind": "resource"},
-            tags=["feature-store"],
-            telemetry=True,
-        )
-        mock_find.assert_awaited_once_with(
-            query="sample",
-            target_uri="viking://resources/demo",
-            limit=2,
-            score_threshold=0.1,
-            filter={"kind": "resource"},
-            tags=["feature-store"],
-            telemetry=True,
-        )

@@ -42,7 +42,6 @@ class BaseClient(ABC):
         wait: bool = False,
         timeout: Optional[float] = None,
         watch_interval: float = 0,
-        tags: Optional[Union[str, List[str]]] = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
@@ -157,7 +156,6 @@ class BaseClient(ABC):
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
-        tags: Optional[Union[str, List[str]]] = None,
         telemetry: TelemetryRequest = False,
     ) -> Any:
         """Semantic search without session context."""
@@ -172,7 +170,6 @@ class BaseClient(ABC):
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
-        tags: Optional[Union[str, List[str]]] = None,
         telemetry: TelemetryRequest = False,
     ) -> Any:
         """Semantic search with optional session context."""

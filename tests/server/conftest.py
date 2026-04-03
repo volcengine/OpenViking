@@ -3,14 +3,12 @@
 
 """Shared fixtures for OpenViking server tests."""
 
-import json
 import shutil
 import socket
 import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
 
 import httpx
 import pytest
@@ -26,9 +24,7 @@ from openviking.service.core import OpenVikingService
 from openviking.storage.transaction import reset_lock_manager
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig
-from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 from openviking_cli.utils.config.vlm_config import VLMConfig
-from tests.utils.mock_agfs import MockLocalAGFS
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -88,44 +84,6 @@ def _install_fake_vlm(monkeypatch):
     monkeypatch.setattr(VLMConfig, "get_vision_completion_async", _fake_get_vision_completion)
 
 
-@pytest.fixture(scope="function")
-def _configure_test_env(monkeypatch, tmp_path):
-    """Provide an isolated local config for in-process server tests."""
-    config_path = tmp_path / "ov.conf"
-    config_path.write_text(
-        json.dumps(
-            {
-                "storage": {
-                    "workspace": str(tmp_path / "workspace"),
-                    "agfs": {"backend": "local", "mode": "binding-client"},
-                    "vectordb": {"backend": "local"},
-                },
-                "embedding": {
-                    "dense": {
-                        "provider": "openai",
-                        "model": "test-embedder",
-                        "api_base": "http://127.0.0.1:11434/v1",
-                        "dimension": 2048,
-                    }
-                },
-                "encryption": {"enabled": False},
-                "server": {"host": "127.0.0.1"},
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    mock_agfs = MockLocalAGFS(root_path=tmp_path / "mock_agfs_root")
-
-    monkeypatch.setenv("OPENVIKING_CONFIG_FILE", str(config_path))
-    OpenVikingConfigSingleton.reset_instance()
-
-    with patch("openviking.utils.agfs_utils.create_agfs_client", return_value=mock_agfs):
-        yield
-
-    OpenVikingConfigSingleton.reset_instance()
-
-
 # ---------------------------------------------------------------------------
 # Core fixtures: service + app + async client (HTTP API tests, in-process)
 # ---------------------------------------------------------------------------
@@ -168,7 +126,7 @@ def upload_temp_dir(temp_dir: Path, monkeypatch) -> Path:
 
 
 @pytest_asyncio.fixture(scope="function")
-async def service(temp_dir: Path, monkeypatch, _configure_test_env):
+async def service(temp_dir: Path, monkeypatch):
     """Create and initialize an OpenVikingService in embedded mode."""
     reset_lock_manager()
     fake_embedder_cls = _install_fake_embedder(monkeypatch)
@@ -222,7 +180,7 @@ async def client_with_resource(client, service, sample_markdown_file):
 
 
 @pytest_asyncio.fixture(scope="function")
-async def running_server(temp_dir: Path, monkeypatch, _configure_test_env):
+async def running_server(temp_dir: Path, monkeypatch):
     """Start a real uvicorn server in a background thread."""
     await AsyncOpenViking.reset()
     reset_lock_manager()

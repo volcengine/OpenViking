@@ -132,39 +132,6 @@ async def test_add_resource_with_telemetry_includes_resource_breakdown(
     }
 
 
-async def test_add_resource_forwards_tags_to_service(
-    client: httpx.AsyncClient,
-    service,
-    monkeypatch,
-    upload_temp_dir,
-):
-    captured = {}
-
-    async def fake_add_resource(**kwargs):
-        captured.update(kwargs)
-        return {
-            "status": "success",
-            "root_uri": "viking://resources/demo",
-        }
-
-    monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
-
-    demo_file = upload_temp_dir / "demo.md"
-    demo_file.write_text("# demo\n")
-
-    resp = await client.post(
-        "/api/v1/resources",
-        json={
-            "temp_file_id": demo_file.name,
-            "reason": "tagged resource",
-            "tags": "auto:machine-learning;feature-store",
-        },
-    )
-
-    assert resp.status_code == 200
-    assert captured["tags"] == ["user:machine-learning", "user:feature-store"]
-
-
 async def test_add_resource_with_summary_only_telemetry(
     client: httpx.AsyncClient,
     sample_markdown_file,

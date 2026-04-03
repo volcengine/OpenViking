@@ -6,11 +6,10 @@ Search Service for OpenViking.
 Provides semantic search operations: search, find.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import VikingFS
-from openviking.utils.tag_utils import expand_query_tags
 from openviking_cli.exceptions import NotInitializedError
 from openviking_cli.utils import get_logger
 
@@ -44,7 +43,6 @@ class SearchService:
         session: Optional["Session"] = None,
         limit: int = 10,
         score_threshold: Optional[float] = None,
-        tags: Optional[List[str]] = None,
         filter: Optional[Dict] = None,
     ) -> Any:
         """Complex search with session context.
@@ -61,7 +59,6 @@ class SearchService:
             FindResult
         """
         viking_fs = self._ensure_initialized()
-        tags = expand_query_tags(tags)
 
         session_info = None
         if session:
@@ -74,7 +71,6 @@ class SearchService:
             session_info=session_info,
             limit=limit,
             score_threshold=score_threshold,
-            tags=tags,
             filter=filter,
         )
         return result
@@ -86,7 +82,6 @@ class SearchService:
         target_uri: str = "",
         limit: int = 10,
         score_threshold: Optional[float] = None,
-        tags: Optional[List[str]] = None,
         filter: Optional[Dict] = None,
     ) -> Any:
         """Semantic search without session context.
@@ -102,14 +97,12 @@ class SearchService:
             FindResult
         """
         viking_fs = self._ensure_initialized()
-        tags = expand_query_tags(tags)
         result = await viking_fs.find(
             query=query,
             ctx=ctx,
             target_uri=target_uri,
             limit=limit,
             score_threshold=score_threshold,
-            tags=tags,
             filter=filter,
         )
         return result

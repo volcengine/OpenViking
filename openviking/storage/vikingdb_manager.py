@@ -426,7 +426,6 @@ class VikingDBManagerProxy:
         sparse_query_vector: Optional[Dict[str, float]] = None,
         context_type: Optional[str] = None,
         target_directories: Optional[List[str]] = None,
-        tags: Optional[List[str]] = None,
         extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
         limit: int = 10,
     ) -> List[Dict[str, Any]]:
@@ -436,7 +435,6 @@ class VikingDBManagerProxy:
             sparse_query_vector=sparse_query_vector,
             context_type=context_type,
             target_directories=target_directories,
-            tags=tags,
             extra_filter=extra_filter,
             limit=limit,
         )
@@ -459,25 +457,6 @@ class VikingDBManagerProxy:
             context_type=context_type,
             target_directories=target_directories,
             extra_filter=extra_filter,
-            limit=limit,
-        )
-
-    async def search_by_tags_in_tenant(
-        self,
-        tags: List[str],
-        context_type: Optional[str] = None,
-        target_directories: Optional[List[str]] = None,
-        extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
-        levels: Optional[List[int]] = None,
-        limit: int = 10,
-    ) -> List[Dict[str, Any]]:
-        return await self._manager.search_by_tags_in_tenant(
-            self._ctx,
-            tags=tags,
-            context_type=context_type,
-            target_directories=target_directories,
-            extra_filter=extra_filter,
-            levels=levels,
             limit=limit,
         )
 

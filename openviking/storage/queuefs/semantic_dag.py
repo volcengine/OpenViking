@@ -58,7 +58,6 @@ class VectorizeTask:
     summary_dict: Optional[Dict[str, str]] = None
     parent_uri: Optional[str] = None
     use_summary: bool = False
-    tags: Optional[List[str]] = None
     # For directory tasks
     abstract: Optional[str] = None
     overview: Optional[str] = None
@@ -79,7 +78,6 @@ class SemanticDagExecutor:
         recursive: bool = True,
         lifecycle_lock_handle_id: str = "",
         is_code_repo: bool = False,
-        tags: Optional[List[str]] = None,
     ):
         self._processor = processor
         self._context_type = context_type
@@ -91,7 +89,6 @@ class SemanticDagExecutor:
         self._recursive = recursive
         self._lifecycle_lock_handle_id = lifecycle_lock_handle_id
         self._is_code_repo = is_code_repo
-        self._tags = list(tags or [])
         self._llm_sem = asyncio.Semaphore(max_concurrent_llm)
         self._viking_fs = get_viking_fs()
         self._nodes: Dict[str, DirNode] = {}
@@ -200,7 +197,6 @@ class SemanticDagExecutor:
                             ctx=task.ctx,
                             semantic_msg_id=task.semantic_msg_id,
                             use_summary=task.use_summary,
-                            tags=task.tags,
                         )
                     )
                 else:
@@ -212,7 +208,6 @@ class SemanticDagExecutor:
                             task.overview,
                             ctx=task.ctx,
                             semantic_msg_id=task.semantic_msg_id,
-                            tags=task.tags,
                         )
                     )
         else:
@@ -456,7 +451,6 @@ class SemanticDagExecutor:
                     summary_dict=summary_dict,
                     parent_uri=parent_uri,
                     use_summary=use_summary,
-                    tags=self._tags,
                 )
                 await self._add_vectorize_task(task)
         except Exception as e:
@@ -575,7 +569,6 @@ class SemanticDagExecutor:
                         semantic_msg_id=self._semantic_msg_id,
                         abstract=abstract,
                         overview=overview,
-                        tags=self._tags,
                     )
                     await self._add_vectorize_task(task)
             except Exception as e:

@@ -15,12 +15,6 @@ from openviking.server.identity import RequestContext
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.viking_fs import get_viking_fs
-from openviking.utils.tag_utils import (
-    AUTO_TAG_NAMESPACE,
-    extract_context_tags,
-    merge_tags,
-    namespace_tags,
-)
 from openviking_cli.utils import VikingURI, get_logger
 from openviking_cli.utils.config import get_openviking_config
 
@@ -140,7 +134,6 @@ async def vectorize_directory_meta(
     context_type: str = "resource",
     ctx: Optional[RequestContext] = None,
     semantic_msg_id: Optional[str] = None,
-    tags: Optional[str | list[str]] = None,
 ) -> None:
     """
     Vectorize directory metadata (.abstract.md and .overview.md).
@@ -158,11 +151,6 @@ async def vectorize_directory_meta(
 
         parent_uri = VikingURI(uri).parent.uri
         owner_space = _owner_space_for_uri(uri, ctx)
-        resolved_tags = extract_context_tags(
-            uri,
-            texts=[abstract, overview],
-            inherited_tags=tags,
-        )
 
         # Vectorize L0: .abstract.md (abstract)
         context_abstract = Context(
@@ -175,7 +163,6 @@ async def vectorize_directory_meta(
             user=ctx.user,
             account_id=ctx.account_id,
             owner_space=owner_space,
-            tags=resolved_tags,
         )
         context_abstract.set_vectorize(Vectorize(text=abstract))
         msg_abstract = EmbeddingMsgConverter.from_context(context_abstract)
@@ -202,7 +189,6 @@ async def vectorize_directory_meta(
             user=ctx.user,
             account_id=ctx.account_id,
             owner_space=owner_space,
-            tags=resolved_tags,
         )
         context_overview.set_vectorize(Vectorize(text=overview))
         msg_overview = EmbeddingMsgConverter.from_context(context_overview)
@@ -229,7 +215,6 @@ async def vectorize_file(
     ctx: Optional[RequestContext] = None,
     semantic_msg_id: Optional[str] = None,
     use_summary: bool = False,
-    tags: Optional[str | list[str]] = None,
 ) -> None:
     """
     Vectorize a single file.
@@ -251,15 +236,6 @@ async def vectorize_file(
 
         file_name = summary_dict.get("name") or os.path.basename(file_path)
         summary = summary_dict.get("summary", "")
-        summary_tags = namespace_tags(
-            summary_dict.get("tags"),
-            AUTO_TAG_NAMESPACE,
-        )
-        resolved_tags = extract_context_tags(
-            file_path,
-            texts=[summary, file_name],
-            inherited_tags=merge_tags(tags, summary_tags),
-        )
 
         context = Context(
             uri=file_path,
@@ -271,7 +247,6 @@ async def vectorize_file(
             user=ctx.user,
             account_id=ctx.account_id,
             owner_space=_owner_space_for_uri(file_path, ctx),
-            tags=resolved_tags,
         )
 
         content_type = get_resource_content_type(file_name)
@@ -372,10 +347,7 @@ async def index_resource(
             overview = content.decode("utf-8")
 
     if abstract or overview:
-        directory_tags = extract_context_tags(uri, texts=[abstract, overview])
-        await vectorize_directory_meta(uri, abstract, overview, ctx=ctx, tags=directory_tags)
-    else:
-        directory_tags = extract_context_tags(uri)
+        await vectorize_directory_meta(uri, abstract, overview, ctx=ctx)
 
     # 2. Index Files
     try:
@@ -396,11 +368,7 @@ async def index_resource(
             # For direct indexing, we might not have summaries.
             # We pass empty summary_dict, vectorize_file will try to read content for text files.
             await vectorize_file(
-                file_path=file_uri,
-                summary_dict={"name": file_name},
-                parent_uri=uri,
-                ctx=ctx,
-                tags=directory_tags,
+                file_path=file_uri, summary_dict={"name": file_name}, parent_uri=uri, ctx=ctx
             )
 
     except Exception as e:

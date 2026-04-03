@@ -23,7 +23,6 @@ from openviking.telemetry.resource_summary import (
 )
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking.utils.skill_processor import SkillProcessor
-from openviking.utils.tag_utils import canonicalize_user_tags
 from openviking_cli.exceptions import (
     ConflictError,
     DeadlineExceededError,
@@ -106,7 +105,6 @@ class ResourceService:
         instruction: str = "",
         wait: bool = False,
         timeout: Optional[float] = None,
-        tags: Optional[List[str]] = None,
         build_index: bool = True,
         summarize: bool = False,
         watch_interval: float = 0,
@@ -161,7 +159,6 @@ class ResourceService:
         telemetry.set("resource.flags.build_index", build_index)
         telemetry.set("resource.flags.summarize", summarize)
         telemetry.set("resource.flags.watch_enabled", watch_enabled)
-        tags = canonicalize_user_tags(tags)
 
         try:
             # add_resource only supports resources scope
@@ -190,7 +187,6 @@ class ResourceService:
                 scope="resources",
                 to=to,
                 parent=parent,
-                tags=tags,
                 build_index=build_index,
                 summarize=summarize,
                 allow_local_path_resolution=allow_local_path_resolution,
@@ -223,8 +219,6 @@ class ResourceService:
                     if watch_interval > 0:
                         try:
                             processor_kwargs = self._sanitize_watch_processor_kwargs(kwargs)
-                            if tags:
-                                processor_kwargs["tags"] = tags
                             await self._handle_watch_task_creation(
                                 path=path,
                                 to_uri=to,

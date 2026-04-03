@@ -7,7 +7,6 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from openviking.utils.tag_utils import parse_tags
 from openviking.utils.time_utils import format_iso8601, parse_iso_datetime
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.uri import VikingURI
@@ -68,7 +67,6 @@ class Context:
         active_count: int = 0,
         related_uri: Optional[List[str]] = None,
         meta: Optional[Dict[str, Any]] = None,
-        tags: Optional[List[str] | str] = None,
         level: int | ContextLevel | None = None,
         session_id: Optional[str] = None,
         user: Optional[UserIdentifier] = None,
@@ -92,9 +90,6 @@ class Context:
         self.active_count = active_count
         self.related_uri = related_uri or []
         self.meta = meta or {}
-        self.tags = parse_tags(tags if tags is not None else self.meta.get("tags"))
-        if self.tags and "tags" not in self.meta:
-            self.meta["tags"] = list(self.tags)
         try:
             self.level = int(level) if level is not None else None
         except (TypeError, ValueError):
@@ -177,7 +172,6 @@ class Context:
             "active_count": self.active_count,
             "vector": self.vector,
             "meta": self.meta,
-            "tags": self.tags,
             "related_uri": self.related_uri,
             "session_id": self.session_id,
             "account_id": self.account_id,
@@ -231,13 +225,6 @@ class Context:
             active_count=data.get("active_count", 0),
             related_uri=data.get("related_uri", []),
             meta=data.get("meta", {}),
-            tags=(
-                data.get("tags")
-                if data.get("tags") is not None
-                else data.get("meta", {}).get("tags")
-                if isinstance(data.get("meta"), dict)
-                else None
-            ),
             level=(
                 data.get("level")
                 if data.get("level") is not None

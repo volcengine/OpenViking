@@ -29,7 +29,6 @@ class DummyStorage:
         sparse_query_vector=None,
         context_type=None,
         target_directories=None,
-        tags=None,
         extra_filter=None,
         limit: int = 10,
     ):
@@ -40,7 +39,6 @@ class DummyStorage:
                 "sparse_query_vector": sparse_query_vector,
                 "context_type": context_type,
                 "target_directories": target_directories,
-                "tags": tags,
                 "extra_filter": extra_filter,
                 "limit": limit,
             }
@@ -70,18 +68,6 @@ class DummyStorage:
                 "limit": limit,
             }
         )
-        return []
-
-    async def search_by_tags_in_tenant(
-        self,
-        ctx,
-        tags,
-        context_type=None,
-        target_directories=None,
-        extra_filter=None,
-        levels=None,
-        limit: int = 10,
-    ):
         return []
 
 

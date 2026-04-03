@@ -156,7 +156,6 @@ class SyncHTTPClient:
         include: Optional[str] = None,
         exclude: Optional[str] = None,
         directly_upload_media: bool = True,
-        tags: Optional[Union[str, List[str]]] = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
@@ -164,19 +163,18 @@ class SyncHTTPClient:
             raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
         return run_async(
             self._async_client.add_resource(
-                path=path,
-                to=to,
-                parent=parent,
-                reason=reason,
-                instruction=instruction,
-                wait=wait,
-                timeout=timeout,
-                strict=strict,
-                ignore_dirs=ignore_dirs,
-                include=include,
-                exclude=exclude,
-                directly_upload_media=directly_upload_media,
-                tags=tags,
+                path,
+                to,
+                parent,
+                reason,
+                instruction,
+                wait,
+                timeout,
+                strict,
+                ignore_dirs,
+                include,
+                exclude,
+                directly_upload_media,
                 telemetry=telemetry,
             )
         )
@@ -209,7 +207,6 @@ class SyncHTTPClient:
         node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
-        tags: Optional[Union[str, List[str]]] = None,
         telemetry: TelemetryRequest = False,
     ):
         """Semantic search with optional session context."""
@@ -223,7 +220,6 @@ class SyncHTTPClient:
                 node_limit=node_limit,
                 score_threshold=score_threshold,
                 filter=filter,
-                tags=tags,
                 telemetry=telemetry,
             )
         )
@@ -236,19 +232,17 @@ class SyncHTTPClient:
         node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
-        tags: Optional[Union[str, List[str]]] = None,
         telemetry: TelemetryRequest = False,
     ):
         """Semantic search without session context."""
         return run_async(
             self._async_client.find(
-                query=query,
-                target_uri=target_uri,
-                limit=limit,
-                node_limit=node_limit,
-                score_threshold=score_threshold,
-                filter=filter,
-                tags=tags,
+                query,
+                target_uri,
+                limit,
+                node_limit,
+                score_threshold,
+                filter,
                 telemetry=telemetry,
             )
         )
