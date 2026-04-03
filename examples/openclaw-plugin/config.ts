@@ -238,7 +238,7 @@ export const memoryOpenVikingConfigSchema = {
           DEFAULT_BYPASS_SESSION_PATTERNS,
         ),
       ),
-      ingestReplyAssist: cfg.ingestReplyAssist !== false,
+      ingestReplyAssist: cfg.ingestReplyAssist === true,
       ingestReplyAssistMinSpeakerTurns: Math.max(
         1,
         Math.min(
