@@ -17,6 +17,7 @@ def test_semantic_config_defaults():
     assert config.overview_max_chars == 4000
     assert config.memory_chunk_chars == 2000
     assert config.memory_chunk_overlap == 200
+    assert config.summary_enqueue_cooldown_seconds == 300
 
 
 def test_semantic_config_custom_values():
