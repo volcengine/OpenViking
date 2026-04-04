@@ -276,8 +276,9 @@ def _parse_token_usage(commit_result: Dict[str, Any]) -> Dict[str, int]:
 async def viking_ingest(
     messages: List[Dict[str, Any]],
     openviking_url: str,
-    semaphore: asyncio.Semaphore,
     session_time: Optional[str] = None,
+    user_id: Optional[str] = None,
+    agent_id: Optional[str] = None,
 ) -> Dict[str, int]:
     """Save messages to OpenViking via OpenViking SDK client.
     Returns token usage dict with embedding and vlm token counts.
@@ -285,8 +286,9 @@ async def viking_ingest(
     Args:
         messages: List of message dicts with role and text
         openviking_url: OpenViking service URL
-        semaphore: Async semaphore for concurrency control
         session_time: Session time string (e.g., "9:36 am on 2 April, 2023")
+        user_id: User identifier for separate userspace (e.g., "conv-26")
+        agent_id: Agent identifier for separate agentspace (e.g., "conv-26")
     """
     # 解析 session_time - 为每条消息计算递增的时间戳
     base_datetime = None
@@ -296,68 +298,69 @@ async def viking_ingest(
         except ValueError:
             print(f"Warning: Failed to parse session_time: {session_time}", file=sys.stderr)
 
-    # 使用信号量控制并发
-    async with semaphore:
-        # Create client
-        client = ov.AsyncHTTPClient(url=openviking_url)
-        await client.initialize()
+    # Create client
+    client = ov.AsyncHTTPClient(
+        url=openviking_url,
+        user=user_id,
+        agent_id=agent_id,
+    )
+    await client.initialize()
 
-        try:
-            # Create session
-            create_res = await client.create_session()
-            session_id = create_res["session_id"]
+    try:
+        # Create session
+        create_res = await client.create_session()
+        session_id = create_res["session_id"]
 
-            # Add messages one by one with created_at
-            for idx, msg in enumerate(messages):
-                msg_created_at = None
-                if base_datetime:
-                    # 每条消息递增1秒，确保时间顺序
-                    msg_dt = base_datetime + timedelta(seconds=idx)
-                    msg_created_at = msg_dt.isoformat()
+        # Add messages one by one with created_at
+        for idx, msg in enumerate(messages):
+            msg_created_at = None
+            if base_datetime:
+                # 每条消息递增1秒，确保时间顺序
+                msg_dt = base_datetime + timedelta(seconds=idx)
+                msg_created_at = msg_dt.isoformat()
 
-                await client.add_message(
-                    session_id=session_id,
-                    role=msg["role"],
-                    parts=[{"type": "text", "text": msg["text"]}],
-                    created_at=msg_created_at,
-                )
+            await client.add_message(
+                session_id=session_id,
+                role=msg["role"],
+                parts=[{"type": "text", "text": msg["text"]}],
+                created_at=msg_created_at,
+            )
 
-            # Commit
-            result = await client.commit_session(session_id, telemetry=True)
+        # Commit
+        result = await client.commit_session(session_id, telemetry=True)
 
-            # Accept both "committed" and "accepted" as success - accepted means the session was archived
-            if result.get("status") not in ("committed", "accepted"):
-                raise RuntimeError(f"Commit failed: {result}")
+        # Accept both "committed" and "accepted" as success - accepted means the session was archived
+        if result.get("status") not in ("committed", "accepted"):
+            raise RuntimeError(f"Commit failed: {result}")
 
-            # 等待 task 完成以获取准确 token 消耗
-            task_id = result.get("task_id")
-            if task_id:
-                while True:
-                    task = await client.get_task(task_id)
-                    status = task.get("status") if task else "unknown"
-                    if status == "completed":
-                        token_usage = _parse_token_usage(task)
-                        break
-                    elif status in ("failed", "unknown"):
-                        raise RuntimeError(f"Task {task_id} failed: {task}")
-                    await asyncio.sleep(1)
-            else:
-                token_usage = {"embedding": 0, "vlm": 0, "total": 0}
+        # 等待 task 完成以获取准确 token 消耗
+        task_id = result.get("task_id")
+        if task_id:
+            while True:
+                task = await client.get_task(task_id)
+                status = task.get("status") if task else "unknown"
+                if status == "completed":
+                    token_usage = _parse_token_usage(task)
+                    break
+                elif status in ("failed", "unknown"):
+                    raise RuntimeError(f"Task {task_id} failed: {task}")
+                await asyncio.sleep(1)
+        else:
+            token_usage = {"embedding": 0, "vlm": 0, "total": 0}
 
-            # Get trace_id from commit result
-            trace_id = result.get("trace_id", "")
-            return {"token_usage": token_usage, "task_id": task_id, "trace_id": trace_id}
+        # Get trace_id from commit result
+        trace_id = result.get("trace_id", "")
+        return {"token_usage": token_usage, "task_id": task_id, "trace_id": trace_id}
 
-        finally:
-            await client.close()
+    finally:
+        await client.close()
 
 
 def sync_viking_ingest(
     messages: List[Dict[str, Any]], openviking_url: str, session_time: Optional[str] = None
 ) -> Dict[str, int]:
     """Synchronous wrapper for viking_ingest to maintain existing API."""
-    semaphore = asyncio.Semaphore(1)  # 同步调用时使用信号量为1
-    return asyncio.run(viking_ingest(messages, openviking_url, semaphore, session_time))
+    return asyncio.run(viking_ingest(messages, openviking_url, session_time))
 
 
 # ---------------------------------------------------------------------------
@@ -382,12 +385,16 @@ async def process_single_session(
     run_time: str,
     ingest_record: Dict[str, Any],
     args: argparse.Namespace,
-    semaphore: asyncio.Semaphore,
 ) -> Dict[str, Any]:
     """处理单个会话的导入任务"""
     try:
+        # 使用 sample_id 作为 user_id 和 agent_id，实现独立的 userspace/agentspace
         result = await viking_ingest(
-            messages, args.openviking_url, semaphore, meta.get("date_time")
+            messages,
+            args.openviking_url,
+            meta.get("date_time"),
+            user_id=str(sample_id),
+            agent_id=str(sample_id),
         )
         token_usage = result["token_usage"]
         task_id = result.get("task_id")
@@ -442,10 +449,45 @@ async def process_single_session(
 
 
 async def run_import(args: argparse.Namespace) -> None:
-    # 初始化信号量控制并发
-    semaphore = asyncio.Semaphore(args.parallel)
-
     session_range = parse_session_range(args.sessions) if args.sessions else None
+
+    # 如果指定了 question-index，自动从 evidence 推断需要的 session
+    if args.question_index is not None and not args.sessions:
+        # 加载数据获取 question 的 evidence
+        with open(args.input, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        # 获取 sample
+        sample_idx = args.sample if args.sample is not None else 0
+        if sample_idx < 0 or sample_idx >= len(data):
+            raise ValueError(f"sample index {sample_idx} out of range")
+        sample = data[sample_idx]
+
+        # 获取 question 的 evidence
+        qa_items = sample.get("qa", [])
+        if args.question_index < 0 or args.question_index >= len(qa_items):
+            raise ValueError(f"question index {args.question_index} out of range")
+        qa = qa_items[args.question_index]
+        evidence_list = qa.get("evidence", [])
+
+        # 从 evidence 提取 session 号 (D1:3 -> session 1)
+        session_nums = set()
+        for ev in evidence_list:
+            try:
+                # D1:3 -> session 1
+                sess_num = int(ev.split(":")[0][1:])
+                session_nums.add(sess_num)
+            except (ValueError, IndexError):
+                pass
+
+        if session_nums:
+            min_sess = min(session_nums)
+            max_sess = max(session_nums)
+            session_range = (min_sess, max_sess)
+            print(
+                f"[INFO] Auto-detected sessions from evidence: {min_sess}-{max_sess}",
+                file=sys.stderr,
+            )
 
     # Handle ingest record operations
     if args.clear_ingest_record:
@@ -517,7 +559,6 @@ async def run_import(args: argparse.Namespace) -> None:
                     run_time=run_time,
                     ingest_record=ingest_record,
                     args=args,
-                    semaphore=semaphore,
                 )
 
         # 不同 sample 之间并行执行
@@ -563,7 +604,6 @@ async def run_import(args: argparse.Namespace) -> None:
                     run_time=run_time,
                     ingest_record=ingest_record,
                     args=args,
-                    semaphore=semaphore,
                 )
             )
             tasks.append(task)
@@ -648,6 +688,12 @@ def main():
         "--sessions",
         default=None,
         help="LoCoMo JSON: session range, e.g. '1-4' or '3'. Default: all sessions.",
+    )
+    parser.add_argument(
+        "--question-index",
+        type=int,
+        default=None,
+        help="LoCoMo JSON: question index (0-based). When specified, auto-detect required sessions from question's evidence.",
     )
     parser.add_argument(
         "--force-ingest",

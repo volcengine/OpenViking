@@ -450,7 +450,7 @@ def resolve_all_operations(
     """
     Resolve URIs for all operations.
 
-    Supports both legacy format (write_uris/edit_uris) and new per-memory_type format.
+    Uses per-memory_type format (e.g., soul, identity fields).
     All operations are unified into a single list - each will attempt to read existing
     file first, then merge (or write new if not exists).
 
@@ -493,44 +493,15 @@ def resolve_all_operations(
                     )
                 except Exception as e:
                     resolved.errors.append(f"Failed to resolve {field_name} operation: {e}")
-    else:
-        # Legacy format - unify both write and edit into operations list
-        write_uris = operations.write_uris if hasattr(operations, "write_uris") else []
-        edit_uris = operations.edit_uris if hasattr(operations, "edit_uris") else []
-
-        for op in write_uris:
-            try:
-                uri = resolve_flat_model_uri(
-                    op, registry, user_space, agent_space, extract_context=extract_context
-                )
-                # Legacy format: try to get memory_type from model, otherwise empty
-                memory_type = op.get("memory_type", "") if isinstance(op, dict) else ""
-                resolved.operations.append(
-                    ResolvedOperation(model=op, uri=uri, memory_type=memory_type)
-                )
-            except Exception as e:
-                resolved.errors.append(f"Failed to resolve write operation: {e}")
-
-        for op in edit_uris:
-            try:
-                uri = resolve_flat_model_uri(
-                    op, registry, user_space, agent_space, extract_context=extract_context
-                )
-                memory_type = op.get("memory_type", "") if isinstance(op, dict) else ""
-                resolved.operations.append(
-                    ResolvedOperation(model=op, uri=uri, memory_type=memory_type)
-                )
-            except Exception as e:
-                resolved.errors.append(f"Failed to resolve edit operation: {e}")
 
     # Resolve edit_overview operations (overview edit models)
-    if hasattr(operations, "edit_overview_uris"):
-        for op in operations.edit_overview_uris:
-            try:
-                uri = resolve_overview_edit_uri(op, registry, user_space, agent_space)
-                resolved.edit_overview_operations.append((op, uri))
-            except Exception as e:
-                resolved.errors.append(f"Failed to resolve edit_overview operation: {e}")
+    # if hasattr(operations, "edit_overview_uris"):
+    #     for op in operations.edit_overview_uris:
+    #         try:
+    #             uri = resolve_overview_edit_uri(op, registry, user_space, agent_space)
+    #             resolved.edit_overview_operations.append((op, uri))
+    #         except Exception as e:
+    #             resolved.errors.append(f"Failed to resolve edit_overview operation: {e}")
 
     # Resolve delete operations (already URI strings)
     if hasattr(operations, "delete_uris"):

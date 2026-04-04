@@ -72,20 +72,25 @@ All memory content MUST be written in {output_language}.
 ## URI Handling
 The system automatically generates URIs based on memory_type and fields. Just provide correct memory_type and fields.
 
-## Edit Overview Files
-After writing new memories, you MUST also update the corresponding .overview.md file.
-- Provide memory_type to identify which directory's overview to update
-
-## Overview Format
-Two options:
-1. **PREFERRED: Direct string** - Just provide the complete new overview content:
-   {{"memory_type": "events", "overview": "# Events Overview\n- [event1](event1.md) - Description"}}
-2. **SEARCH/REPLACE** - Only use if you must modify a small portion:
-   {{"memory_type": "events", "overview": {{"blocks": [{{"search": "exact line to change", "replace": "new line"}}]}}}}
-
-See GenericOverviewEdit in the JSON Schema below."""
+"""
 
         return goal
+
+        """
+    ## Edit Overview Files
+    After writing new memories, you MUST also update the corresponding .overview.md file.
+    - Provide memory_type to identify which directory's overview to update
+
+    ## Overview Format
+    Two options:
+    1. **PREFERRED: Direct string** - Just provide the complete new overview content:
+       {{"memory_type": "events", "overview": "# Events Overview\n- [event1](event1.md) - Description"}}
+    2. **SEARCH/REPLACE** - Only use if you must modify a small portion:
+       {{"memory_type": "events", "overview": {{"blocks": [{{"search": "exact line to change", "replace": "new line"}}]}}}}
+
+    See GenericOverviewEdit in the JSON Schema below.
+        """
+
 
     def _build_conversation_message(self) -> Dict[str, Any]:
         """构建包含 Conversation History 的 user message"""
@@ -263,19 +268,20 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         tool_ctx = ToolContext(
             request_ctx=ctx, transaction_handle=transaction_handle, default_search_uris=[]
         )
-        for overview_uri in overview_files:
-            try:
-                result_str = await read_tool.execute(viking_fs, tool_ctx, uri=overview_uri)
-                add_tool_call_pair_to_messages(
-                    messages=pre_fetch_messages,
-                    call_id=call_id_seq,
-                    tool_name="read",
-                    params={"uri": overview_uri},
-                    result=result_str,
-                )
-                call_id_seq += 1
-            except Exception as e:
-                logger.warning(f"Failed to read .overview.md: {e}")
+
+        # for overview_uri in overview_files:
+        #     try:
+        #         result_str = await read_tool.execute(viking_fs, tool_ctx, uri=overview_uri)
+        #         add_tool_call_pair_to_messages(
+        #             messages=pre_fetch_messages,
+        #             call_id=call_id_seq,
+        #             tool_name="read",
+        #             params={"uri": overview_uri},
+        #             result=result_str,
+        #         )
+        #         call_id_seq += 1
+        #     except Exception as e:
+        #         logger.warning(f"Failed to read .overview.md: {e}")
 
         # 在每个之前 ls 的目录内执行 search（替换原来的 ls 操作）
         if search_tool and viking_fs and ls_dirs:

@@ -42,8 +42,29 @@ echo "Bot URL: $BOT_URL"
 echo "Bot Port: $BOT_PORT"
 echo ""
 
-# Step 0: Kill existing vikingbot processes
-echo "Step 0: Stopping existing vikingbot processes..."
+# Step 0: Kill process on port and delete data directory
+echo "Step 0: Killing process on port $PORT..."
+if lsof -i :"$PORT" > /dev/null 2>&1; then
+    pid=$(lsof -ti :"$PORT")
+    kill -9 "$pid" 2>/dev/null || true
+    sleep 1
+    echo "  ✓ Killed process $pid on port $PORT"
+else
+    echo "  ✓ No process found on port $PORT"
+fi
+
+echo ""
+echo "Step 0b: Deleting data directory /Users/bytedance/.openviking/data..."
+if [ -d "/Users/bytedance/.openviking/data" ]; then
+    rm -rf /Users/bytedance/.openviking/data
+    echo "  ✓ Deleted /Users/bytedance/.openviking/data"
+else
+    echo "  ✓ Data directory does not exist"
+fi
+
+# Kill existing vikingbot processes
+echo ""
+echo "Step 0c: Stopping existing vikingbot processes..."
 if pgrep -f "vikingbot.*openapi" > /dev/null 2>&1 || pgrep -f "vikingbot.*gateway" > /dev/null 2>&1; then
     pkill -f "vikingbot.*openapi" 2>/dev/null || true
     pkill -f "vikingbot.*gateway" 2>/dev/null || true
@@ -53,36 +74,20 @@ else
     echo "  ✓ No existing vikingbot processes found"
 fi
 
-# Step 1: Kill existing openviking-server processes
-echo "Step 1: Stopping existing openviking-server processes..."
-if pgrep -f "openviking-server" > /dev/null 2>&1; then
-    pkill -f "openviking-server" 2>/dev/null || true
-    sleep 2
-    # Force kill if still running
-    if pgrep -f "openviking-server" > /dev/null 2>&1; then
-        echo "  Force killing remaining processes..."
-        pkill -9 -f "openviking-server" 2>/dev/null || true
-        sleep 1
-    fi
-    echo "  ✓ Stopped existing processes"
-else
-    echo "  ✓ No existing processes found"
-fi
-
-# Step 2: Wait for port to be released
+# Step 1: Verify port is free
 echo ""
-echo "Step 2: Waiting for port $PORT to be released..."
-for i in {1..10}; do
-    if ! lsof -i :"$PORT" > /dev/null 2>&1; then
-        echo "  ✓ Port $PORT is free"
-        break
-    fi
+echo "Step 1: Verifying port $PORT is free..."
+if lsof -i :"$PORT" > /dev/null 2>&1; then
+    echo "  ✗ Port $PORT is still in use, trying to force kill..."
+    pid=$(lsof -ti :"$PORT")
+    kill -9 "$pid" 2>/dev/null || true
     sleep 1
-done
+fi
+echo "  ✓ Port $PORT is free"
 
-# Step 3: Start openviking-server with --with-bot
+# Step 2: Start openviking-server with --with-bot
 echo ""
-echo "Step 3: Starting openviking-server with Bot API..."
+echo "Step 2: Starting openviking-server with Bot API..."
 echo "  Command: openviking-server --with-bot --port $PORT --bot-url $BOT_URL"
 echo ""
 
@@ -102,9 +107,9 @@ openviking-server \
 SERVER_PID=$!
 echo "  Server PID: $SERVER_PID"
 
-# Step 4: Wait for server to start
+# Step 3: Wait for server to start
 echo ""
-echo "Step 4: Waiting for server to be ready..."
+echo "Step 3: Waiting for server to be ready..."
 sleep 3
 
 # First check if server is responding at all

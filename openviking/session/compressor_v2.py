@@ -195,7 +195,7 @@ class SessionCompressorV2:
 
             tracer.info(
                 f"Generated memory operations: write={len(write_uris)}, "
-                f"edit={len(edit_uris)}, edit_overview={len(operations.edit_overview_uris)}, "
+                f"edit={len(edit_uris)} "
                 f"delete={len(operations.delete_uris)}"
             )
 

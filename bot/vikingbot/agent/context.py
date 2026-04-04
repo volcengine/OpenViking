@@ -173,6 +173,7 @@ Skills with available="false" need dependencies installed first - you can try in
         viking_memory = await self.memory.get_viking_memory_context(
             current_message=current_message, workspace_id=workspace_id, sender_id=sender_id
         )
+        logger.info(f'viking_memory={viking_memory}')
         cost = round(_time.time() - start, 2)
         logger.info(
             f"[READ_USER_MEMORY]: cost {cost}s, memory={viking_memory[:50] if viking_memory else 'None'}"

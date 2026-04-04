@@ -11,6 +11,40 @@ from datetime import datetime
 from pathlib import Path
 
 
+def get_evidence_text(evidence_list: list, sample: dict) -> list[str]:
+    """根据 evidence 列表获取原始对话文本
+
+    evidence 格式: ['D1:3', 'D2:5'] -> session_1 第3条, session_2 第5条
+    """
+    if not evidence_list:
+        return []
+
+    conv = sample.get("conversation", {})
+    results = []
+
+    for ev in evidence_list:
+        # 解析 D1:3 -> session_1, index 2
+        try:
+            parts = ev.split(":")
+            session_num = int(parts[0][1:])  # D1 -> 1
+            msg_index = int(parts[1]) - 1  # 3 -> index 2
+
+            session_key = f"session_{session_num}"
+            session_messages = conv.get(session_key, [])
+
+            if msg_index < len(session_messages):
+                msg = session_messages[msg_index]
+                text = msg.get("text", "")
+                speaker = msg.get("speaker", "")
+                results.append(f"{speaker}: {text}")
+            else:
+                results.append(f"[{ev}: out of range]")
+        except (ValueError, IndexError):
+            results.append(f"[{ev}: invalid format]")
+
+    return results
+
+
 def parse_locomo_datetime(date_str: str) -> datetime | None:
     """解析 LoCoMo 时间格式，如 '1:56 pm on 8 May, 2023'"""
     try:
@@ -24,23 +58,36 @@ def parse_locomo_datetime(date_str: str) -> datetime | None:
 
 
 def get_sample_question_time(sample: dict) -> str | None:
-    """从 sample 的 conversation 中提取最晚的对话时间，返回 ISO 格式日期"""
+    """从 sample 的 conversation 中提取最后一个有内容 session 的时间，返回 ISO 格式日期"""
     conversation = sample.get("conversation", {})
-    # 找所有 session_N_date_time 字段
-    date_times = {k: v for k, v in conversation.items() if "date_time" in k}
-    if not date_times:
+
+    # 找所有 session_N 字段（非 date_time）
+    session_keys = [
+        k for k in conversation.keys() if k.startswith("session_") and "date_time" not in k
+    ]
+    if not session_keys:
         return None
 
-    # 解析所有时间，取最晚的一个
-    latest_dt = None
-    for key, date_str in date_times.items():
-        dt = parse_locomo_datetime(date_str)
-        if dt:
-            if latest_dt is None or dt > latest_dt:
-                latest_dt = dt
+    # 按 session 编号排序，找到最后一个有内容的
+    def get_session_num(key):
+        try:
+            return int(key.replace("session_", ""))
+        except ValueError:
+            return 0
 
-    if latest_dt:
-        return latest_dt.strftime("%Y-%m-%d")
+    session_keys.sort(key=get_session_num, reverse=True)
+
+    for session_key in session_keys:
+        if conversation.get(session_key):  # 有内容
+            # 找到对应的 date_time
+            session_num = get_session_num(session_key)
+            dt_key = f"session_{session_num}_date_time"
+            date_str = conversation.get(dt_key)
+            if date_str:
+                dt = parse_locomo_datetime(date_str)
+                if dt:
+                    return dt.strftime("%Y-%m-%d")
+
     return None
 
 
@@ -74,8 +121,13 @@ def load_locomo_qa(
     count: int | None = None,
     default_time: str | None = None,
     question_index: int | None = None,
+    invalid_question_ids: set | None = None,
 ) -> list[dict]:
-    """加载LoCoMo数据集的QA部分，支持JSON和CSV格式"""
+    """加载LoCoMo数据集的QA部分，支持JSON和CSV格式
+
+    Args:
+        invalid_question_ids: 无效题目ID集合，用于标记无效题目
+    """
     if input_path.lower().endswith(".csv"):
         return load_csv_qa(input_path, count, default_time)
 
@@ -84,10 +136,20 @@ def load_locomo_qa(
         data = json.load(f)
 
     qa_list = []
+    # 支持数字索引或 sample_id (如 "conv-26")
     if sample_index is not None:
-        if sample_index < 0 or sample_index >= len(data):
-            raise ValueError(f"sample index {sample_index} out of range (0-{len(data) - 1})")
-        samples = [data[sample_index]]
+        # 尝试解析为数字索引
+        try:
+            idx = int(sample_index)
+            if idx < 0 or idx >= len(data):
+                raise ValueError(f"sample index {idx} out of range (0-{len(data) - 1})")
+            samples = [data[idx]]
+        except ValueError:
+            # 尝试匹配 sample_id
+            matched = [s for s in data if s.get("sample_id") == sample_index]
+            if not matched:
+                raise ValueError(f"sample_id '{sample_index}' not found")
+            samples = matched
     else:
         samples = data
 
@@ -103,26 +165,42 @@ def load_locomo_qa(
                     f"question index {question_index} out of range (0-{len(qa_items) - 1})"
                 )
             qa = qa_items[question_index]
+            evidence_list = qa.get("evidence", [])
+            question_id = f"{sample_id}_qa{question_index}"
             qa_list.append(
                 {
                     "sample_id": sample_id,
+                    "question_id": question_id,
+                    "question_index": question_index,
                     "question": qa["question"],
                     "answer": qa["answer"],
                     "category": qa.get("category", ""),
-                    "evidence": qa.get("evidence", []),
+                    "evidence": evidence_list,
+                    "evidence_text": get_evidence_text(evidence_list, sample),
                     "question_time": question_time,
+                    "is_invalid": question_id in invalid_question_ids
+                    if invalid_question_ids
+                    else False,
                 }
             )
         else:
-            for qa in qa_items:
+            for q_idx, qa in enumerate(qa_items):
+                evidence_list = qa.get("evidence", [])
+                question_id = f"{sample_id}_qa{q_idx}"
                 qa_list.append(
                     {
                         "sample_id": sample_id,
+                        "question_id": question_id,
+                        "question_index": q_idx,
                         "question": qa["question"],
                         "answer": qa["answer"],
                         "category": qa.get("category", ""),
-                        "evidence": qa.get("evidence", []),
+                        "evidence": evidence_list,
+                        "evidence_text": get_evidence_text(evidence_list, sample),
                         "question_time": question_time,
+                        "is_invalid": question_id in invalid_question_ids
+                        if invalid_question_ids
+                        else False,
                     }
                 )
 
@@ -132,15 +210,38 @@ def load_locomo_qa(
 
 
 def run_vikingbot_chat(
-    question: str, question_time: str | None = None
+    question: str, question_time: str | None = None, sample_id: str | None = None
 ) -> tuple[str, dict, float, int, list]:
     """执行vikingbot chat命令，返回回答、token使用情况、耗时（秒）、迭代次数、使用的工具列表"""
+    # 先执行 /new 命令清除会话
+    if sample_id:
+        new_cmd = [
+            "vikingbot",
+            "chat",
+            "-m",
+            "/new",
+            "-e",
+            "--sender",
+            sample_id,
+            "--session",
+            sample_id,
+        ]
+        try:
+            subprocess.run(new_cmd, capture_output=True, text=True, timeout=60)
+        except Exception:
+            # 忽略 /new 命令的错误
+            pass
+
     # 如果有 question_time，注入到 prompt 中
     if question_time:
         input = f"Current date: {question_time}. Answer the question directly: {question}"
     else:
         input = f"Answer the question directly: {question}"
+
     cmd = ["vikingbot", "chat", "-m", input, "-e"]
+    # 添加 --sender 作为 user_id，--session 作为 agent_id，实现访问独立 userspace
+    if sample_id:
+        cmd.extend(["--sender", sample_id, "--session", sample_id])
     start_time = time.time()
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=300)
@@ -203,10 +304,15 @@ def main():
         help="Path to output csv file, default: ./result/locomo_qa_result.csv",
     )
     parser.add_argument(
+        "--errors",
+        default="~/.test_data/locomo_exclude.json",
+        help="Path to invalid questions JSON file, default: ~/.test_data/locomo_exclude.json",
+    )
+    parser.add_argument(
         "--sample",
-        type=int,
+        type=str,
         default=None,
-        help="LoCoMo sample index (0-based), default all samples",
+        help="LoCoMo sample index (0-based) or sample_id (e.g., conv-26)",
     )
     parser.add_argument(
         "--question-index",
@@ -220,6 +326,11 @@ def main():
     parser.add_argument(
         "--threads", type=int, default=5, help="Number of concurrent threads, default: 5"
     )
+    parser.add_argument(
+        "--update-mode",
+        action="store_true",
+        help="Update mode: if output file exists, update matching question_index rows instead of overwriting",
+    )
     args = parser.parse_args()
 
     # 如果指定了 question-index，自动设置 count=1
@@ -229,11 +340,34 @@ def main():
     # 确保输出目录存在
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
 
-    # 加载QA数据
+    # 加载无效题目ID集合
+    invalid_question_ids = set()
+    errors_path = os.path.expanduser(args.errors)
+    if os.path.exists(errors_path):
+        with open(errors_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        # 支持两种格式：string数组 或 dict数组（dict需要提取question_id）
+        if data and isinstance(data[0], dict):
+            invalid_question_ids = {item["question_id"] for item in data}
+        else:
+            invalid_question_ids = set(data)
+        print(f"Loaded {len(invalid_question_ids)} invalid questions from {errors_path}")
+    else:
+        print(f"No errors file found at {errors_path}, is_invalid will be False for all questions")
+
+    # 加载QA数据（所有题目，包括无效题目，只标记 is_invalid）
     qa_list = load_locomo_qa(
-        args.input, args.sample, args.count, question_index=args.question_index
+        args.input,
+        args.sample,
+        args.count,
+        question_index=args.question_index,
+        invalid_question_ids=invalid_question_ids,
     )
     total = len(qa_list)
+
+    # 过滤掉 category=5 的问题
+    qa_list = [qa for qa in qa_list if str(qa.get("category")) != "5"]
+    print(f"Filtered to {len(qa_list)} questions after removing category=5")
 
     # 加载已处理的问题
     processed_questions = load_processed_questions(args.output)
@@ -244,96 +378,133 @@ def main():
 
     fieldnames = [
         "sample_id",
+        "question_index",
+        "result",
         "question",
         "answer",
+        "category",
         "question_time",
+        "evidence",
+        "evidence_text",
         "response",
         "token_usage",
         "time_cost",
         "iteration",
         "tools_used_names",
-        "result",
+        "is_invalid",
     ]
-    # 打开CSV文件，不存在则创建写表头，存在则追加
-    file_exists = os.path.exists(args.output)
-    # 兼容旧结果：如果文件存在但没有 question_time 列，则删除重建
-    if file_exists:
-        with open(args.output, "r", encoding="utf-8", newline="") as f:
-            reader = csv.reader(f)
-            first_row = next(reader)
-            if "question_time" not in first_row:
-                print(f"Old result missing 'question_time' column, removing and recreating...")
-                os.remove(args.output)
-                file_exists = False
 
     # 创建线程锁，确保多线程写文件安全
     write_lock = threading.Lock()
 
-    with open(args.output, "a+", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        if not file_exists:
-            writer.writeheader()
-            f.flush()
+    # 存储处理后的新行
+    new_rows = []
+    processed_count = 0
 
-        processed_count = len(processed_questions)
-        # 过滤掉已经处理过的问题
-        remaining_qa = [qa for qa in qa_list if qa["question"] not in processed_questions]
-        remaining_count = len(remaining_qa)
-        print(
-            f"Starting evaluation with {args.threads} concurrent threads, {remaining_count} questions to process"
+    # 过滤掉已经处理过的问题
+    remaining_qa = [qa for qa in qa_list if qa["question"] not in processed_questions]
+    remaining_count = len(remaining_qa)
+    print(
+        f"Starting evaluation with {args.threads} concurrent threads, {remaining_count} questions to process"
+    )
+
+    def process_qa(qa_item, idx, total_count):
+        """单个QA处理函数，供多线程调用"""
+        question = qa_item["question"]
+        answer = qa_item["answer"]
+        question_time = qa_item.get("question_time")
+        sample_id = qa_item.get("sample_id")
+        print(f"Processing {idx}/{total_count}: {question[:60]}...")
+        if question_time:
+            print(f"  [time context: {question_time}]")
+
+        response, token_usage, time_cost, iteration, tools_used_names = run_vikingbot_chat(
+            question, question_time, sample_id
         )
 
-        def process_qa(qa_item, idx, total_count):
-            """单个QA处理函数，供多线程调用"""
-            question = qa_item["question"]
-            answer = qa_item["answer"]
-            question_time = qa_item.get("question_time")
-            print(f"Processing {idx}/{total_count}: {question[:60]}...")
-            if question_time:
-                print(f"  [time context: {question_time}]")
+        row = {
+            "sample_id": qa_item["sample_id"],
+            "question_index": qa_item.get("question_index", ""),
+            "result": "",
+            "question": question,
+            "answer": answer,
+            "category": qa_item.get("category", ""),
+            "question_time": question_time or "",
+            "evidence": json.dumps(qa_item.get("evidence", [])),
+            "evidence_text": json.dumps(qa_item.get("evidence_text", [])),
+            "response": response,
+            "token_usage": json.dumps(token_usage, ensure_ascii=False),
+            "time_cost": round(time_cost, 2),
+            "iteration": iteration,
+            "tools_used_names": json.dumps(tools_used_names, ensure_ascii=False),
+            "is_invalid": qa_item.get("is_invalid", False),
+        }
 
-            response, token_usage, time_cost, iteration, tools_used_names = run_vikingbot_chat(
-                question, question_time
-            )
+        # 线程安全的结果收集
+        with write_lock:
+            nonlocal processed_count
+            new_rows.append(row)
+            processed_questions.add(question)
+            processed_count += 1
+            print(f"Completed {processed_count}/{total_count}, time cost: {round(time_cost, 2)}s")
+        return True
 
-            row = {
-                "sample_id": qa_item["sample_id"],
-                "question": question,
-                "answer": answer,
-                "question_time": question_time or "",
-                "response": response,
-                "token_usage": json.dumps(token_usage, ensure_ascii=False),
-                "time_cost": round(time_cost, 2),
-                "iteration": iteration,
-                "tools_used_names": json.dumps(tools_used_names, ensure_ascii=False),
-                "result": "",
-            }
+    # 使用线程池处理
+    with ThreadPoolExecutor(max_workers=args.threads) as executor:
+        # 提交所有任务
+        futures = []
+        for idx, qa_item in enumerate(remaining_qa, 1):
+            futures.append(executor.submit(process_qa, qa_item, idx, remaining_count))
 
-            # 线程安全的文件写入
-            with write_lock:
-                nonlocal processed_count
-                writer.writerow(row)
-                f.flush()
-                processed_questions.add(question)
-                processed_count += 1
-                print(f"Completed {processed_count}/{total}, time cost: {round(time_cost, 2)}s")
-            return True
+        # 等待所有任务完成
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception as e:
+                print(f"Error processing QA item: {str(e)}")
 
-        # 使用线程池处理
-        with ThreadPoolExecutor(max_workers=args.threads) as executor:
-            # 提交所有任务
-            futures = []
-            for idx, qa_item in enumerate(remaining_qa, 1):
-                futures.append(executor.submit(process_qa, qa_item, idx, remaining_count))
+    # 写文件逻辑
+    if args.update_mode and os.path.exists(args.output):
+        # 更新模式：读取现有文件，更新匹配行
+        print(f"Update mode: updating existing file {args.output}")
+        with open(args.output, "r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            existing_rows = list(reader)
+            existing_fieldnames = reader.fieldnames or fieldnames
 
-            # 等待所有任务完成
-            for future in as_completed(futures):
-                try:
-                    future.result()
-                except Exception as e:
-                    print(f"Error processing QA item: {str(e)}")
+        # 更新匹配的行
+        updated_count = 0
+        for new_row in new_rows:
+            q_idx = str(new_row.get("question_index", ""))
+            found = False
+            for row in existing_rows:
+                if str(row.get("question_index", "")) == q_idx:
+                    row.update(new_row)
+                    found = True
+                    updated_count += 1
+                    break
+            if not found:
+                existing_rows.append(new_row)
+                updated_count += 1
 
-    print(f"Evaluation completed, results saved to {args.output}")
+        # 写回文件
+        with open(args.output, "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=existing_fieldnames)
+            writer.writeheader()
+            writer.writerows(existing_rows)
+
+        print(f"Updated {updated_count} rows in {args.output}")
+    else:
+        # 普通模式：覆盖写入
+        if os.path.exists(args.output):
+            os.remove(args.output)
+
+        with open(args.output, "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(new_rows)
+
+        print(f"Evaluation completed, results saved to {args.output}")
 
 
 if __name__ == "__main__":
