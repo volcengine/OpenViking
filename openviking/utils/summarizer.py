@@ -56,7 +56,7 @@ class Summarizer:
         enqueued_count = 0
 
         telemetry = get_current_telemetry()
-        for uri, temp_uri in zip(resource_uris, temp_uris, strict=True):
+        for uri, temp_uri in zip(resource_uris, temp_uris, strict=False):
             # Determine context_type based on URI
             context_type = get_context_type_for_uri(uri)
 
