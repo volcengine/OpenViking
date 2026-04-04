@@ -12,7 +12,6 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from openviking.models.vlm.base import VLMBase
 from openviking.server.identity import RequestContext
-from openviking.session.memory.dataclass import MemoryOperations
 from openviking.session.memory.schema_model_generator import (
     SchemaModelGenerator,
     SchemaPromptGenerator,
@@ -88,12 +87,12 @@ class ExtractLoop:
         # Transaction handle for file locking
         self._transaction_handle = None
 
-    async def run(self) -> Tuple[Optional[MemoryOperations], List[Dict[str, Any]]]:
+    async def run(self) -> Tuple[Optional[Any], List[Dict[str, Any]]]:
         """
         Run the simplified ReAct loop for memory updates.
 
         Returns:
-            Tuple of (final MemoryOperations, tools_used list)
+            Tuple of (final operations, tools_used list)
         """
         iteration = 0
         max_iterations = self.max_iterations
@@ -118,7 +117,8 @@ class ExtractLoop:
         ]
 
         # 预计算 expected_fields
-        self._expected_fields = ["reasoning", "edit_overview_uris", "delete_uris"]
+        # self._expected_fields = ["reasoning", "edit_overview_uris", "delete_uris"]
+        self._expected_fields = ["delete_uris"]
 
         # 获取 ExtractContext（整个流程复用）
         self._extract_context = self.context_provider.get_extract_context()
@@ -220,7 +220,7 @@ See the complete JSON Schema below:
             )
             # If it's the last iteration, use empty operations
             if is_last_iteration:
-                final_operations = MemoryOperations()
+                final_operations = self._operations_model()
                 break
             # Otherwise continue and try again
             continue
@@ -275,12 +275,12 @@ See the complete JSON Schema below:
                 result=result,
             )
 
-    def _validate_operations(self, operations: MemoryOperations) -> None:
+    def _validate_operations(self, operations: Any) -> None:
         """
         Validate that all operations have allowed URIs.
 
         Args:
-            operations: The MemoryOperations to validate
+            operations: The operations to validate
 
         Raises:
             ValueError: If any operation has a disallowed URI
@@ -297,8 +297,8 @@ See the complete JSON Schema below:
             operations,
             schemas,
             registry,
-            user_space="default",
-            agent_space="default",
+            user_space=self.ctx.user.user_space_name(),
+            agent_space=self.ctx.user.agent_space_name(),
             extract_context=self._extract_context,
         )
         if not is_valid:
@@ -310,7 +310,7 @@ See the complete JSON Schema below:
         self,
         messages: List[Dict[str, Any]],
         force_final: bool = False,
-    ) -> Tuple[Optional[List], Optional[MemoryOperations]]:
+    ) -> Tuple[Optional[List], Optional[Any]]:
         """
         Call LLM with tools. Returns either tool calls OR final operations.
 
@@ -360,7 +360,7 @@ See the complete JSON Schema below:
                 tracer.info(f"  {json.dumps(tc.arguments, indent=2, ensure_ascii=False)}")
             return (response.tool_calls, None)
 
-        # Case 2: Try to parse MemoryOperations from content with stability
+        # Case 2: Try to parse operations from content with stability
         content = response.content or ""
         if content:
             try:
@@ -425,7 +425,7 @@ See the complete JSON Schema below:
 
     async def _check_unread_existing_files(
         self,
-        operations: MemoryOperations,
+        operations: Any,
     ) -> List[str]:
         """Check if write operations target existing files that weren't read during ReAct."""
         memory_type_fields = getattr(operations, "_memory_type_fields", None)
@@ -449,8 +449,8 @@ See the complete JSON Schema below:
                     uri = resolve_flat_model_uri(
                         item_dict,
                         registry,
-                        "default",
-                        "default",
+                        user_space=self.ctx.user.user_space_name(),
+                        agent_space=self.ctx.user.agent_space_name(),
                         memory_type=field_name,
                         extract_context=self._extract_context,
                     )

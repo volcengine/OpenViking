@@ -242,10 +242,10 @@ class SchemaModelGenerator:
         # Build field definitions for each memory_type
         field_definitions: Dict[str, Tuple[Type[Any], Any]] = {}
 
-        field_definitions["reasoning"] = (
-            str,
-            Field("", description="reasoning"),
-        )
+        # field_definitions["reasoning"] = (
+        #     str,
+        #     Field("", description="reasoning"),
+        # )
 
         for mt in enabled_memory_types:
             flat_model = self.create_flat_data_model(mt)
@@ -267,17 +267,17 @@ class SchemaModelGenerator:
                 )
 
         # Use single generic model for overview edit (same for all memory types)
-        generic_overview_edit = self.create_overview_edit_model(
-            enabled_memory_types[0] if enabled_memory_types else None
-        )
+        # generic_overview_edit = self.create_overview_edit_model(
+        #     enabled_memory_types[0] if enabled_memory_types else None
+        # )
 
-        field_definitions["edit_overview_uris"] = (
-            List[generic_overview_edit],  # type: ignore
-            Field(
-                default_factory=list,
-                description="Edit operations for .overview.md files using memory_type",
-            ),
-        )
+        # field_definitions["edit_overview_uris"] = (
+        #     List[generic_overview_edit],  # type: ignore
+        #     Field(
+        #         default_factory=list,
+        #         description="Edit operations for .overview.md files using memory_type",
+        #     ),
+        # )
 
         field_definitions["delete_uris"] = (
             List[str],
@@ -330,7 +330,7 @@ class SchemaModelGenerator:
             return {
                 "write_uris": write_uris,
                 "edit_uris": edit_uris,
-                "edit_overview_uris": self.edit_overview_uris,
+                #"edit_overview_uris": self.edit_overview_uris,
                 "delete_uris": self.delete_uris,
             }
 

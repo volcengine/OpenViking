@@ -14,7 +14,6 @@ from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryField
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.merge_op import MergeOpFactory, PatchOp
-from openviking.session.memory.merge_op.base import FieldType, SearchReplaceBlock, StrPatch
 from openviking.session.memory.utils import (
     deserialize_full,
     flat_model_to_dict,
@@ -217,7 +216,7 @@ class MemoryUpdater:
         This is the system executor - no LLM involved at this stage.
 
         Args:
-            operations: StructuredMemoryOperations from LLM (final output) with flat models
+            operations: StructuredMemoryOperations from LLM with per-memory_type fields (e.g., soul, identity)
             ctx: Request context
             registry: Optional MemoryTypeRegistry for URI resolution
 
@@ -301,48 +300,7 @@ class MemoryUpdater:
         tracer.info(f"Memory operations applied: {result.summary()}")
         return result
 
-    def _render_content_template(
-        self, template: str, fields: Dict[str, Any], extract_context: Any = None
-    ) -> str:
-        """
-        Render content template using Jinja2 template engine.
 
-        Args:
-            template: The content template string with placeholders
-            fields: Dictionary of field values to use for substitution
-            extract_context: Extract context for message extraction
-
-        Returns:
-            Rendered template string
-
-        Raises:
-            Exception: If template rendering fails
-        """
-        try:
-            # 导入 Jinja2（延迟导入以避免循环依赖）
-            import jinja2
-            from jinja2 import Environment
-
-            # 创建 Jinja2 环境，允许未定义的变量（打印警告但不报错）
-            env = Environment(autoescape=False, undefined=jinja2.DebugUndefined)
-
-            # 创建模板变量
-            template_vars = fields.copy()
-            # 始终传入 extract_context，即使是 None，避免模板中访问时 undefined
-            template_vars["extract_context"] = extract_context
-
-            # 渲染模板
-            jinja_template = env.from_string(template)
-            return jinja_template.render(**template_vars).strip()
-        except Exception as e:
-            tracer.error(f"Template rendering failed: {e}")
-            raise
-
-    def _is_patch_format(self, content: Any) -> bool:
-        """Check if content is a patch format (StrPatch), not a complete replacement."""
-        from openviking.session.memory.merge_op.patch import StrPatch
-
-        return isinstance(content, StrPatch)
 
     async def _apply_edit(
         self,
@@ -365,157 +323,60 @@ class MemoryUpdater:
         # Get memory type schema - use parameter first, then fallback to model_dict
         memory_type_str = memory_type or model_dict.get("memory_type")
 
-        # Read current memory
+        # Read current memory (or use empty if not found)
+        current_full_content = ""
+        file_existed = True
         try:
             current_full_content = await viking_fs.read_file(uri, ctx=ctx) or ""
         except NotFoundError:
-            # If memory doesn't exist, check if any field is a StrPatch
-            # If no StrPatch fields, treat as write operation
-            has_str_patch = any(self._is_patch_format(v) for v in model_dict.values())
-            if not has_str_patch:
-                # Write operation (new file) - with template rendering
-                # Extract content - priority: model_dict["content"]
-                content = model_dict.pop("content", None) or ""
-
-                field_schema_map: Dict[str, MemoryField] = {}
-                business_fields: Dict[str, Any] = {}
-
-                if self._registry and memory_type_str:
-                    schema = self._registry.get(memory_type_str)
-                    if schema:
-                        field_schema_map = {f.name: f for f in schema.fields}
-                        # Extract business fields (those defined in the schema)
-                        for field_name in field_schema_map:
-                            if field_name in model_dict:
-                                business_fields[field_name] = model_dict[field_name]
-
-                        # 模板渲染逻辑
-                        if schema.content_template:
-                            try:
-                                tracer.info(
-                                    f"[content_template] Rendering template for {memory_type_str}, "
-                                    f"business_fields={list(business_fields.keys())}, "
-                                    f"extract_context={'provided' if extract_context else 'None'}"
-                                )
-                                rendered_content = self._render_content_template(
-                                    schema.content_template,
-                                    business_fields,
-                                    extract_context=extract_context,
-                                )
-                                if rendered_content:
-                                    content = rendered_content
-                                    tracer.info(
-                                        f"[content_template] Rendered result (first 200 chars): {rendered_content[:200]}"
-                                    )
-                                else:
-                                    tracer.warning(
-                                        f"[content_template] Rendered content is empty for {memory_type_str}"
-                                    )
-                            except Exception as e:
-                                tracer.error(
-                                    f"Failed to render content template for memory type {memory_type_str}: {e}"
-                                )
-
-                # Collect metadata
-                metadata = business_fields.copy()
-
-                # Serialize content with metadata
-                full_content = serialize_with_metadata(content, metadata)
-
-                # Write content to VikingFS
-                await viking_fs.write_file(uri, full_content, ctx=ctx)
-                return False  # New file written
-            # Has StrPatch field but file doesn't exist - cannot apply
-            tracer.error(f"Memory not found for edit: {uri}")
-            return False
+            file_existed = False
 
         # Deserialize content and metadata
         current_plain_content, current_metadata = deserialize_full(current_full_content)
+        metadata = current_metadata or {}
 
-        # Get memory type schema - use parameter first, then fallback to model_dict
-        memory_type_str = memory_type or model_dict.get("memory_type")
+        # Get schema
         field_schema_map: Dict[str, MemoryField] = {}
-        business_fields: Dict[str, Any] = {}
-
         if self._registry and memory_type_str:
             schema = self._registry.get(memory_type_str)
             if schema:
                 field_schema_map = {f.name: f for f in schema.fields}
-                # Extract business fields (those defined in the schema)
-                for field_name in field_schema_map:
-                    if field_name in model_dict:
-                        business_fields[field_name] = model_dict[field_name]
 
-                # 模板渲染逻辑（编辑时也支持）
-                if schema.content_template:
-                    try:
-                        tracer.info(
-                            f"[content_template] Editing: Rendering template for {memory_type_str}, "
-                            f"business_fields={list(business_fields.keys())}, "
-                            f"extract_context={'provided' if extract_context else 'None'}"
-                        )
-                        rendered_content = self._render_content_template(
-                            schema.content_template,
-                            business_fields,
-                            extract_context=extract_context,
-                        )
-                        if rendered_content:
-                            # 用渲染后的 content 覆盖 model_dict 中的 content
-                            model_dict["content"] = rendered_content
-                            tracer.info(
-                                f"[content_template] Edited result (first 200 chars): {rendered_content[:200]}"
-                            )
-                        else:
-                            tracer.warning(
-                                f"[content_template] Edited render result is empty for {memory_type_str}"
-                            )
-                    except Exception as e:
-                        tracer.error(
-                            f"Failed to render content template for edit {memory_type_str}: {e}"
-                        )
-
-        # Apply all fields (including content) through MergeOp
-        new_plain_content = current_plain_content
-        metadata = current_metadata or {}
-
-        # Handle schema-defined fields first
+        # Build metadata by applying merge_op to each field
+        # (merge_op.apply handles current_value=None case for new files)
+        metadata: Dict[str, Any] = {}
         for field_name, field_schema in field_schema_map.items():
             if field_name in model_dict:
                 patch_value = model_dict[field_name]
-
                 # Get current value
                 if field_name == "content":
                     current_value = current_plain_content
                 else:
                     current_value = metadata.get(field_name)
-
-                # Create MergeOp and apply
+                # Use merge_op to process field value
                 merge_op = MergeOpFactory.from_field(field_schema)
                 new_value = merge_op.apply(current_value, patch_value)
+                metadata[field_name] = new_value
 
-                # Update the field
-                if field_name == "content":
-                    new_plain_content = new_value
-                else:
-                    metadata[field_name] = new_value
+        # Serialize and write (template rendering is handled inside serialize_with_metadata)
+        content_template = None
+        if self._registry and memory_type_str:
+            schema = self._registry.get(memory_type_str)
+            if schema:
+                content_template = schema.content_template
 
-        # Special case: handle content field even without schema (for backward compatibility/testing)
-        if "content" in model_dict and "content" not in field_schema_map:
-            from openviking.session.memory.merge_op import PatchOp
-            from openviking.session.memory.merge_op.base import FieldType
+        # serialize_with_metadata modifies metadata dict, so pass a copy
+        new_full_content = serialize_with_metadata(
+            metadata.copy(),
+            content_template=content_template,
+            extract_context=extract_context,
+        )
 
-            patch_value = model_dict["content"]
-            merge_op = PatchOp(FieldType.STRING)
-            new_plain_content = merge_op.apply(current_plain_content, patch_value)
-
-        # Re-serialize with updated content and metadata
-        new_full_content = serialize_with_metadata(new_plain_content, metadata)
-
-        # Print diff of the edit
-        self._print_diff(uri, current_plain_content, new_plain_content)
+        if file_existed:
+            self._print_diff(uri, current_plain_content, new_full_content)
 
         await viking_fs.write_file(uri, new_full_content, ctx=ctx)
-        return True  # File was edited (existed)
+        return file_existed
 
     async def _apply_delete(self, uri: str, ctx: RequestContext) -> None:
         """Apply delete operation (uri is already a string)."""
@@ -529,117 +390,11 @@ class MemoryUpdater:
             tracer.error(f"Memory not found for delete: {uri}")
             # Idempotent - deleting non-existent file succeeds
 
-    async def _apply_edit_overview(
-        self, overview_model: Any, uri: str, ctx: RequestContext
-    ) -> None:
-        """
-        Apply edit operation for .overview.md file.
 
-        Args:
-            overview_model: Overview edit model with memory_type and overview fields
-            uri: URI of the .overview.md file
-            ctx: Request context
-        """
-        viking_fs = self._get_viking_fs()
 
-        # Get overview value from model
-        if hasattr(overview_model, "overview"):
-            overview_value = overview_model.overview
-        elif isinstance(overview_model, dict):
-            overview_value = overview_model.get("overview")
-        else:
-            raise ValueError("overview_model must have overview field")
 
-        # Read current overview if exists
-        current_overview = ""
-        try:
-            current_overview = await viking_fs.read_file(uri, ctx=ctx) or ""
-        except NotFoundError:
-            # File doesn't exist yet, start with empty content
-            pass
 
-        # Apply patch or replace based on overview_value type
-        new_overview = current_overview
-        if overview_value is None:
-            # No overview provided, nothing to do
-            return
-        elif isinstance(overview_value, str):
-            # 空字符串保持原值
-            if overview_value == "":
-                new_overview = current_overview
-            else:
-                new_overview = overview_value
-        elif isinstance(overview_value, dict):
-            # Dict format - convert to StrPatch if needed
-            if "blocks" in overview_value:
-                # Already in StrPatch format
-                blocks = [SearchReplaceBlock(**block) for block in overview_value["blocks"]]
-                str_patch = StrPatch(blocks=blocks)
-            else:
-                # Unexpected format
-                raise ValueError(f"Invalid overview patch format: {overview_value}")
 
-            # Apply patch
-            patch_op = PatchOp(FieldType.STRING)
-            new_overview = patch_op.apply(current_overview, str_patch)
-        else:
-            # StrPatch object
-            patch_op = PatchOp(FieldType.STRING)
-            new_overview = patch_op.apply(current_overview, overview_value)
-
-        # Print diff of the edit
-        self._print_diff(uri, current_overview, new_overview)
-
-        # Write new overview
-        await viking_fs.write_file(uri, new_overview, ctx=ctx)
-
-        # Extract and write .abstract.md
-        await self._write_abstract_from_overview(uri, new_overview, ctx)
-
-    def _extract_abstract_from_overview(self, overview_content: str) -> str:
-        """Extract abstract from overview.md - same logic as SemanticProcessor."""
-        # Use parse_memory_file_with_fields to strip MEMORY_FIELDS comment
-        parsed = parse_memory_file_with_fields(overview_content)
-        content = parsed.get("content", "")
-
-        # Then extract abstract from the cleaned content
-        lines = content.split("\n")
-
-        # Skip header lines (starting with #)
-        content_lines = []
-        in_header = True
-
-        for line in lines:
-            if in_header and line.startswith("#"):
-                continue
-            elif in_header and line.strip():
-                in_header = False
-
-            if not in_header:
-                # Stop at first ##
-                if line.startswith("##"):
-                    break
-                if line.strip():
-                    content_lines.append(line.strip())
-
-        return "\n".join(content_lines).strip()
-
-    async def _write_abstract_from_overview(
-        self, overview_uri: str, overview_content: str, ctx: RequestContext
-    ) -> None:
-        """Extract abstract from overview and write to .abstract.md."""
-        viking_fs = self._get_viking_fs()
-
-        # Extract abstract from overview
-        abstract = self._extract_abstract_from_overview(overview_content)
-
-        # Convert overview_uri (e.g., skills/.overview.md) to abstract path
-        abstract_uri = overview_uri.replace("/.overview.md", "/.abstract.md")
-
-        try:
-            await viking_fs.write_file(abstract_uri, abstract, ctx=ctx)
-        except Exception as e:
-            tracer.error(f"Failed to write abstract {abstract_uri}: {e}")
 
     def _print_diff(self, uri: str, old_content: str, new_content: str) -> None:
         """Print a diff of the memory edit using diff_match_patch."""

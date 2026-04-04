@@ -119,7 +119,8 @@ Line 2
 Line 3
 Line 4"""
         original_metadata = {"name": "test"}
-        original_full_content = serialize_with_metadata(original_content, original_metadata)
+        original_metadata_with_content = {**original_metadata, "content": original_content}
+        original_full_content = serialize_with_metadata(original_metadata_with_content)
 
         # Mock VikingFS
         mock_viking_fs = MagicMock()
@@ -168,7 +169,8 @@ Line 4"""
 This is a test
 Goodbye"""
         original_metadata = {"name": "test"}
-        original_full_content = serialize_with_metadata(original_content, original_metadata)
+        original_metadata_with_content = {**original_metadata, "content": original_content}
+        original_full_content = serialize_with_metadata(original_metadata_with_content)
 
         # Mock VikingFS
         mock_viking_fs = MagicMock()
@@ -210,7 +212,8 @@ Goodbye"""
         # Original content
         original_content = "Old content"
         original_metadata = {"name": "test"}
-        original_full_content = serialize_with_metadata(original_content, original_metadata)
+        original_metadata_with_content = {**original_metadata, "content": original_content}
+        original_full_content = serialize_with_metadata(original_metadata_with_content)
 
         # Mock VikingFS
         mock_viking_fs = MagicMock()
