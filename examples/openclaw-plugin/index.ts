@@ -262,6 +262,8 @@ function totalCommitMemories(r: CommitSessionResult): number {
   return Object.values(m).reduce((sum, n) => sum + (n ?? 0), 0);
 }
 
+let _registered = false;
+
 const contextEnginePlugin = {
   id: "openviking",
   name: "Context Engine (OpenViking)",
@@ -270,6 +272,17 @@ const contextEnginePlugin = {
   configSchema: memoryOpenVikingConfigSchema,
 
   register(api: OpenClawPluginApi) {
+    // Idempotency guard: when OpenClaw reloads the plugin with a different cacheKey,
+    // module-level state (localClientCache, localClientPendingPromises) persists from
+    // the previous load. Reset stale state so the second registration works cleanly.
+    // See: https://github.com/volcengine/OpenViking/issues/1210
+    if (_registered) {
+      api.logger.info("openviking: plugin re-loaded, resetting stale state");
+      localClientCache.clear();
+      localClientPendingPromises.clear();
+    }
+    _registered = true;
+
     const rawCfg =
       api.pluginConfig && typeof api.pluginConfig === "object" && !Array.isArray(api.pluginConfig)
         ? (api.pluginConfig as Record<string, unknown>)
