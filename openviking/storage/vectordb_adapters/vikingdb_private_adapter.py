@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Private VikingDB backend collection adapter."""
 
 from __future__ import annotations
@@ -23,8 +23,9 @@ class VikingDBPrivateCollectionAdapter(CollectionAdapter):
         headers: Optional[dict[str, str]],
         project_name: str,
         collection_name: str,
+        index_name: str,
     ):
-        super().__init__(collection_name=collection_name)
+        super().__init__(collection_name=collection_name, index_name=index_name)
         self.mode = "vikingdb"
         self._host = host
         self._headers = headers
@@ -39,6 +40,7 @@ class VikingDBPrivateCollectionAdapter(CollectionAdapter):
             headers=config.vikingdb.headers,
             project_name=config.project_name or "default",
             collection_name=config.name or "context",
+            index_name=config.index_name or "default",
         )
 
     def _client(self) -> VikingDBClient:

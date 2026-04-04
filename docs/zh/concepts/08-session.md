@@ -6,6 +6,8 @@ Session 负责管理对话消息、记录上下文使用、提取长期记忆。
 
 **生命周期**：创建 → 交互 → 提交
 
+通过 session_id 获取会话时，默认不会自动创建不存在的会话；如果需要自动创建，请显式使用 `client.get_session(..., auto_create=True)`。
+
 ```python
 session = client.session(session_id="chat_001")
 session.add_message("user", [TextPart("...")])
@@ -18,7 +20,8 @@ session.commit()
 |------|------|
 | `add_message(role, parts)` | 添加消息 |
 | `used(contexts, skill)` | 记录使用的上下文/技能 |
-| `commit()` | 提交：归档 + 记忆提取 |
+| `commit()` | 提交：归档（同步） + 摘要生成和记忆提取（异步后台） |
+| `get_task(task_id)` | 查询后台任务状态 |
 
 ### add_message
 
@@ -57,11 +60,16 @@ session.used(skill={
 ```python
 result = session.commit()
 # {
-#   "status": "committed",
-#   "memories_extracted": 5,
-#   "active_count_updated": 2,
+#   "status": "accepted",
+#   "task_id": "uuid-xxx",
+#   "archive_uri": "viking://session/.../history/archive_001",
 #   "archived": True
 # }
+
+# 查询后台任务进度
+task = client.get_task(result["task_id"])
+# task["status"]: "pending" | "running" | "completed" | "failed"
+# sum(task["result"]["memories_extracted"].values()): 3
 ```
 
 ## 消息结构
@@ -89,12 +97,19 @@ class Message:
 
 ### 归档流程
 
-commit() 时自动归档：
+commit() 分两阶段执行：
 
+**Phase 1（同步，立即完成）**：
 1. 递增 compression_index
-2. 复制当前消息到归档目录
-3. 生成结构化摘要（LLM）
-4. 清空当前消息列表
+2. 写入消息到归档目录（`messages.jsonl`）
+3. 清空当前消息列表
+4. 返回 `task_id`
+
+**Phase 2（异步后台）**：
+5. 生成结构化摘要（LLM）→ 写入 `.abstract.md` 和 `.overview.md`
+6. 提取长期记忆
+7. 更新 active_count
+8. 写入 `.done` 完成标记
 
 ### 摘要格式
 
@@ -118,7 +133,7 @@ commit() 时自动归档：
 
 ## 记忆提取
 
-### 6 种分类
+### 8 种分类
 
 | 分类 | 归属 | 说明 | 可合并 |
 |------|------|------|--------|
@@ -128,6 +143,8 @@ commit() 时自动归档：
 | **events** | user | 事件/决策 | ❌ |
 | **cases** | agent | 问题+解决方案 | ❌ |
 | **patterns** | agent | 可复用流程 | ✅ |
+| **tools** | agent | 工具使用经验与最佳实践 | ✅ |
+| **skills** | agent | 技能执行经验与工作流策略 | ✅ |
 
 ### 提取流程
 
@@ -136,19 +153,20 @@ commit() 时自动归档：
          ↓
 向量预过滤 → 找相似记忆
          ↓
-LLM 去重决策 → CREATE/UPDATE/MERGE/SKIP
+LLM 去重决策 → candidate(skip/create/none) + item(merge/delete)
          ↓
 写入 AGFS → 向量化
 ```
 
 ### 去重决策
 
-| 决策 | 说明 |
-|------|------|
-| `CREATE` | 新记忆，直接创建 |
-| `UPDATE` | 更新现有记忆 |
-| `MERGE` | 合并多条记忆 |
-| `SKIP` | 完全重复，跳过 |
+| 层级 | 决策 | 说明 |
+|------|------|------|
+| Candidate | `skip` | 候选记忆重复，直接跳过 |
+| Candidate | `create` | 创建候选记忆；必要时先删除冲突旧记忆 |
+| Candidate | `none` | 不创建候选记忆，只处理已有记忆 |
+| Existing item | `merge` | 将候选内容合并到指定已有记忆 |
+| Existing item | `delete` | 删除冲突的已有记忆 |
 
 ## 存储结构
 
@@ -159,9 +177,10 @@ viking://session/{session_id}/
 ├── .overview.md              # 当前概览
 ├── history/
 │   ├── archive_001/
-│   │   ├── messages.jsonl
-│   │   ├── .abstract.md
-│   │   └── .overview.md
+│   │   ├── messages.jsonl    # Phase 1 写入
+│   │   ├── .abstract.md      # Phase 2 写入（后台）
+│   │   ├── .overview.md      # Phase 2 写入（后台）
+│   │   └── .done             # Phase 2 完成标记
 │   └── archive_NNN/
 └── tools/
     └── {tool_id}/tool.json
@@ -174,7 +193,9 @@ viking://user/memories/
 
 viking://agent/memories/
 ├── cases/
-└── patterns/
+├── patterns/
+├── tools/
+└── skills/
 ```
 
 ## 相关文档

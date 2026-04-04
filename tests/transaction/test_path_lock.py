@@ -1,9 +1,9 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Tests for path lock with fencing tokens."""
 
 import time
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from openviking.storage.transaction.lock_handle import LockHandle
 from openviking.storage.transaction.path_lock import (
@@ -71,6 +71,67 @@ class TestPathLockStale:
         agfs.read.return_value = token.encode("utf-8")
         lock = PathLock(agfs)
         assert lock.is_lock_stale("/test/.path.ovlock", expire_seconds=300.0) is False
+
+
+class TestPathLockOwnership:
+    async def test_refresh_reports_refreshed_lost_and_failed_paths(self):
+        owned_path = "/locks/owned/.path.ovlock"
+        lost_path = "/locks/lost/.path.ovlock"
+        missing_path = "/locks/missing/.path.ovlock"
+        failed_path = "/locks/failed/.path.ovlock"
+
+        tokens = {
+            owned_path: _make_fencing_token("tx-1", LOCK_TYPE_POINT),
+            lost_path: _make_fencing_token("tx-2", LOCK_TYPE_SUBTREE),
+            failed_path: _make_fencing_token("tx-1", LOCK_TYPE_SUBTREE),
+        }
+        agfs = MagicMock()
+
+        def read_side_effect(lock_path):
+            if lock_path == missing_path:
+                raise FileNotFoundError(lock_path)
+            return tokens[lock_path].encode("utf-8")
+
+        def write_side_effect(lock_path, content):
+            if lock_path == failed_path:
+                raise OSError("write failed")
+            tokens[lock_path] = content.decode("utf-8")
+
+        agfs.read.side_effect = read_side_effect
+        agfs.write.side_effect = write_side_effect
+
+        lock = PathLock(agfs)
+        tx = LockHandle(id="tx-1")
+        for lock_path in [owned_path, lost_path, missing_path, failed_path]:
+            tx.add_lock(lock_path)
+
+        result = await lock.refresh(tx)
+
+        assert result.refreshed_paths == [owned_path]
+        assert set(result.lost_paths) == {lost_path, missing_path}
+        assert result.failed_paths == [failed_path]
+
+    async def test_release_skips_locks_no_longer_owned(self):
+        owned_path = "/locks/owned/.path.ovlock"
+        replaced_path = "/locks/replaced/.path.ovlock"
+
+        tokens = {
+            owned_path: _make_fencing_token("tx-1", LOCK_TYPE_POINT),
+            replaced_path: _make_fencing_token("tx-2", LOCK_TYPE_POINT),
+        }
+        agfs = MagicMock()
+        agfs.read.side_effect = lambda lock_path: tokens[lock_path].encode("utf-8")
+
+        lock = PathLock(agfs)
+        lock._remove_lock_file = AsyncMock(return_value=True)
+        tx = LockHandle(id="tx-1")
+        tx.add_lock(owned_path)
+        tx.add_lock(replaced_path)
+
+        await lock.release(tx)
+
+        lock._remove_lock_file.assert_awaited_once_with(owned_path)
+        assert tx.locks == []
 
 
 class TestPathLockBehavior:
@@ -334,3 +395,53 @@ class TestPathLockBehavior:
         ok2_retry = await lock.acquire_subtree(target, tx2, timeout=3.0)
         assert ok2_retry is True
         await lock.release(tx2)
+
+    async def test_point_reuses_same_owner_subtree_lock_on_same_path(self, agfs_client, test_dir):
+        lock = PathLock(agfs_client)
+        tx = LockHandle(id="tx-reentrant-same-path")
+
+        ok = await lock.acquire_subtree(test_dir, tx, timeout=3.0)
+        assert ok is True
+
+        lock_path = f"{test_dir}/{LOCK_FILE_NAME}"
+        before = agfs_client.cat(lock_path)
+        before_token = before.decode("utf-8") if isinstance(before, bytes) else before
+        assert ":S" in before_token
+
+        ok_reuse = await lock.acquire_point(test_dir, tx, timeout=0.5)
+        assert ok_reuse is True
+
+        after = agfs_client.cat(lock_path)
+        after_token = after.decode("utf-8") if isinstance(after, bytes) else after
+        assert after_token == before_token
+        assert ":S" in after_token
+
+        await lock.release(tx)
+
+    async def test_point_under_same_owner_subtree_does_not_create_child_lock(
+        self, agfs_client, test_dir
+    ):
+        import uuid as _uuid
+
+        child = f"{test_dir}/child-reentrant-{_uuid.uuid4().hex}"
+        agfs_client.mkdir(child)
+
+        lock = PathLock(agfs_client)
+        tx = LockHandle(id="tx-reentrant-child")
+
+        ok = await lock.acquire_subtree(test_dir, tx, timeout=3.0)
+        assert ok is True
+
+        ok_child = await lock.acquire_point(child, tx, timeout=0.5)
+        assert ok_child is True
+
+        child_lock_path = f"{child}/{LOCK_FILE_NAME}"
+        try:
+            agfs_client.stat(child_lock_path)
+            raise AssertionError("child lock should not be created when ancestor subtree is owned")
+        except AssertionError:
+            raise
+        except Exception:
+            pass
+
+        await lock.release(tx)

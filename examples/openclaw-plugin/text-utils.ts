@@ -80,6 +80,62 @@ export type TranscriptLikeIngestDecision = {
   chars: number;
 };
 
+export function compileSessionPattern(pattern: string): RegExp {
+  const escaped = pattern
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*\*/g, "\u0000")
+    .replace(/\*/g, "[^:]*")
+    .replace(/\u0000/g, ".*");
+  return new RegExp(`^${escaped}$`);
+}
+
+export function compileSessionPatterns(patterns: string[]): RegExp[] {
+  return patterns.map((pattern) => compileSessionPattern(pattern));
+}
+
+export function matchesSessionPattern(sessionRef: string, patterns: RegExp[]): boolean {
+  return patterns.some((pattern) => pattern.test(sessionRef));
+}
+
+export function resolveSessionPatternCandidate(params: {
+  sessionId?: string;
+  sessionKey?: string;
+}): string | undefined {
+  const sessionKey = typeof params.sessionKey === "string" ? params.sessionKey.trim() : "";
+  if (sessionKey) {
+    return sessionKey;
+  }
+  const sessionId = typeof params.sessionId === "string" ? params.sessionId.trim() : "";
+  return sessionId || undefined;
+}
+
+export function shouldBypassSession(
+  params: {
+    sessionId?: string;
+    sessionKey?: string;
+  },
+  patterns: RegExp[],
+): boolean {
+  if (patterns.length === 0) {
+    return false;
+  }
+  const candidate = resolveSessionPatternCandidate(params);
+  if (!candidate) {
+    return false;
+  }
+  return matchesSessionPattern(candidate, patterns);
+}
+
+export function shouldSkipIngestReplyAssistSession(
+  params: {
+    sessionId?: string;
+    sessionKey?: string;
+  },
+  patterns: RegExp[],
+): boolean {
+  return shouldBypassSession(params, patterns);
+}
+
 function countSpeakerTurns(text: string): number {
   let count = 0;
   for (const _match of text.matchAll(SPEAKER_TAG_RE)) {
@@ -318,8 +374,47 @@ export function extractTextsFromUserMessages(messages: unknown[]): string[] {
   return texts;
 }
 
+function formatToolUseBlock(b: Record<string, unknown>): string {
+  const name = typeof b.name === "string" ? b.name : "unknown";
+  let inputStr = "";
+  if (b.input !== undefined && b.input !== null) {
+    try {
+      inputStr = typeof b.input === "string" ? b.input : JSON.stringify(b.input);
+    } catch {
+      inputStr = String(b.input);
+    }
+  }
+  return inputStr
+    ? `[toolUse: ${name}]\n${inputStr}`
+    : `[toolUse: ${name}]`;
+}
+
+function formatToolResultContent(content: unknown): string {
+  if (typeof content === "string") return content.trim();
+  if (Array.isArray(content)) {
+    const parts: string[] = [];
+    for (const block of content) {
+      const b = block as Record<string, unknown>;
+      if (b?.type === "text" && typeof b.text === "string") {
+        parts.push((b.text as string).trim());
+      }
+    }
+    return parts.join("\n");
+  }
+  if (content !== undefined && content !== null) {
+    try {
+      return JSON.stringify(content);
+    } catch {
+      return String(content);
+    }
+  }
+  return "";
+}
+
 /**
- * 提取从 startIndex 开始的新消息（user + assistant），返回格式化的文本。
+ * 提取从 startIndex 开始的新消息（user + assistant + toolResult），返回格式化的文本。
+ * 保留 toolUse 完整内容（tool name + input）和 toolResult 完整内容，
+ * 跳过 system 消息（框架注入的元数据）。
  */
 export function extractNewTurnTexts(
   messages: unknown[],
@@ -331,8 +426,18 @@ export function extractNewTurnTexts(
     const msg = messages[i] as Record<string, unknown>;
     if (!msg || typeof msg !== "object") continue;
     const role = msg.role as string;
-    if (role !== "user" && role !== "assistant") continue;
+    if (!role || role === "system") continue;
     count++;
+
+    if (role === "toolResult") {
+      const toolName = typeof msg.toolName === "string" ? msg.toolName : "tool";
+      const resultText = formatToolResultContent(msg.content);
+      if (resultText) {
+        texts.push(`[${toolName} result]: ${resultText}`);
+      }
+      continue;
+    }
+
     const content = msg.content;
     if (typeof content === "string" && content.trim()) {
       texts.push(`[${role}]: ${content.trim()}`);
@@ -341,6 +446,8 @@ export function extractNewTurnTexts(
         const b = block as Record<string, unknown>;
         if (b?.type === "text" && typeof b.text === "string") {
           texts.push(`[${role}]: ${(b.text as string).trim()}`);
+        } else if (b?.type === "toolUse") {
+          texts.push(`[${role}]: ${formatToolUseBlock(b)}`);
         }
       }
     }

@@ -217,7 +217,7 @@ class AgentLoop:
         session_key: SessionKey,
         publish_events: bool = True,
         sender_id: str | None = None,
-    ) -> tuple[str | None, list[dict], dict[str, int]]:
+    ) -> tuple[str | None, list[dict], dict[str, int], int]:
         """
         Run the core agent loop: call LLM, execute tools, repeat until done.
 
@@ -351,19 +351,21 @@ class AgentLoop:
                     tools_used.append(tool_used_dict)
 
                 messages.append(
-                    {"role": "system", "content": "Reflect on the results and decide next steps."}
+                    {"role": "user", "content": "Reflect on the results and decide next steps."}
                 )
             else:
                 final_content = response.content
                 break
 
-        if final_content is None:
+        if final_content is None or (
+            isinstance(final_content, str) and not final_content.strip()
+        ):
             if iteration >= self.max_iterations:
                 final_content = f"Reached {self.max_iterations} iterations without completion."
             else:
                 final_content = "I've completed processing but have no response to give."
 
-        return final_content, tools_used, token_usage
+        return final_content, tools_used, token_usage, iteration
 
     @trace(
         name="process_message",
@@ -477,6 +479,16 @@ class AgentLoop:
                 await self.sessions.save(session)
                 return None
 
+            if not msg.need_reply:
+                session.add_message("user", msg.content, sender_id=msg.sender_id)
+                await self.sessions.save(session)
+                return OutboundMessage(
+                    session_key=msg.session_key,
+                    content=None,
+                    metadata=msg.metadata,
+                    event_type=OutboundEventType.NO_REPLY,
+                )
+
             # Consolidate memory before processing if session is too large
             if len(session.messages) > self.memory_window:
                 # Clone session for async consolidation, then immediately trim original
@@ -512,7 +524,7 @@ class AgentLoop:
             # logger.info(f"New messages: {messages}")
 
             # Run agent loop
-            final_content, tools_used, token_usage = await self._run_agent_loop(
+            final_content, tools_used, token_usage, iteration = await self._run_agent_loop(
                 messages=messages,
                 session_key=session_key,
                 publish_events=True,
@@ -532,13 +544,18 @@ class AgentLoop:
             await self.sessions.save(session)
 
             time_cost = round(time.time() - start_time, 2)
+            if tools_used is not None:
+                tools_used_names = [tool["tool_name"] for tool in tools_used]
+            else:
+                tools_used_names = []
             return OutboundMessage(
                 session_key=msg.session_key,
                 content=final_content,
                 metadata=msg.metadata,
                 token_usage=token_usage,
-                time_cost=time_cost
-                or {},  # Pass through for channel-specific needs (e.g. Slack thread_ts)
+                time_cost=time_cost,
+                iteration=iteration,
+                tools_used_names=tools_used_names
             )
         finally:
             long_running_notified = True
@@ -565,13 +582,15 @@ class AgentLoop:
         )
 
         # Run agent loop (no events published)
-        final_content, tools_used, token_usage = await self._run_agent_loop(
+        final_content, tools_used, token_usage, iteration = await self._run_agent_loop(
             messages=messages,
             session_key=msg.session_key,
             publish_events=False,
         )
 
-        if final_content is None:
+        if final_content is None or (
+            isinstance(final_content, str) and not final_content.strip()
+        ):
             final_content = "Background task completed."
 
         # Save to session (mark as system message in history)
@@ -724,8 +743,9 @@ Respond with ONLY valid JSON, no markdown fences."""
             allow_from.append(self.config.ov_server.admin_user_id)
         for channel in self.config.channels_config.get_all_channels():
             if channel.channel_key() == msg.session_key.channel_key():
-                if channel.allow_from:
-                    allow_from.extend(channel.allow_from)
+                allow_cmd = getattr(channel, 'allow_cmd_from', [])
+                if allow_cmd:
+                    allow_from.extend(allow_cmd)
                 break
 
         # If channel not found or sender not in allow_from list, ignore message

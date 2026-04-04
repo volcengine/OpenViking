@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """PID-based advisory lock for data directory exclusivity.
 
 Prevents multiple OpenViking processes from contending for the same data
@@ -9,6 +9,7 @@ directory, which causes silent failures in AGFS and VectorDB.
 import atexit
 import os
 import signal
+import sys
 
 from openviking_cli.utils import get_logger
 
@@ -42,6 +43,19 @@ def _is_pid_alive(pid: int) -> bool:
     except PermissionError:
         # Process exists but we can't signal it.
         return True
+    except (OSError, SystemError):
+        if sys.platform == "win32":
+            # On Windows, os.kill(pid, 0) raises OSError for stale or invalid
+            # PIDs instead of ProcessLookupError. In some environments it can
+            # also bubble up as SystemError from the underlying Win32 wrapper.
+            # Common failures include:
+            # - WinError 87 "The parameter is incorrect"
+            # - WinError 11 "An attempt was made to load a program with an
+            #   incorrect format"
+            # Treat these as "not alive" so stale lock files are correctly
+            # reclaimed on Windows.
+            return False
+        raise
 
 
 def acquire_data_dir_lock(data_dir: str) -> str:

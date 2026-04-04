@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Session Service for OpenViking.
 
@@ -9,11 +9,12 @@ Provides session management operations: session, sessions, add_message, commit, 
 from typing import Any, Dict, List, Optional
 
 from openviking.server.identity import RequestContext
+from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
 from openviking.session.compressor import SessionCompressor
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.exceptions import NotFoundError, NotInitializedError
+from openviking_cli.exceptions import AlreadyExistsError, NotFoundError, NotInitializedError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -67,20 +68,41 @@ class SessionService:
             session_id=session_id,
         )
 
-    async def create(self, ctx: RequestContext) -> Session:
-        """Create a session and persist its root path."""
-        session = self.session(ctx)
+    async def create(self, ctx: RequestContext, session_id: Optional[str] = None) -> Session:
+        """Create a session and persist its root path.
+
+        Args:
+            ctx: Request context
+            session_id: Optional session ID. If provided, creates a session with the given ID.
+                       If None, creates a new session with auto-generated ID.
+
+        Raises:
+            AlreadyExistsError: If a session with the given ID already exists
+        """
+        if session_id:
+            existing = self.session(ctx, session_id)
+            if await existing.exists():
+                raise AlreadyExistsError(f"Session '{session_id}' already exists")
+        session = self.session(ctx, session_id)
         await session.ensure_exists()
         return session
 
-    async def get(self, session_id: str, ctx: RequestContext) -> Session:
+    async def get(
+        self, session_id: str, ctx: RequestContext, *, auto_create: bool = False
+    ) -> Session:
         """Get an existing session.
 
-        Raises NotFoundError when the session does not exist under current user scope.
+        Args:
+            session_id: Session ID
+            ctx: Request context
+            auto_create: If True, create the session when it does not exist.
+                         Default is False (raise NotFoundError).
         """
         session = self.session(ctx, session_id)
         if not await session.exists():
-            raise NotFoundError(session_id, "session")
+            if not auto_create:
+                raise NotFoundError(session_id, "session")
+            await session.ensure_exists()
         await session.load()
         return session
 
@@ -145,22 +167,30 @@ class SessionService:
         return await self.commit_async(session_id, ctx)
 
     async def commit_async(self, session_id: str, ctx: RequestContext) -> Dict[str, Any]:
-        """Async commit a session without blocking the event loop.
+        """Async commit a session.
 
-        Unlike the previous implementation which used run_async() (blocking
-        the calling thread during LLM calls), this method uses native async/await
-        throughout, keeping the event loop free to serve other requests.
+        Phase 1 (archive) always runs inline.  Phase 2 (memory extraction)
+        runs in a background task, returning a task_id for polling.
 
         Args:
             session_id: Session ID to commit
 
         Returns:
-            Commit result with keys: session_id, status, memories_extracted,
-            active_count_updated, archived, stats
+            Commit result with keys: session_id, status, task_id,
+            archive_uri, archived
         """
         self._ensure_initialized()
         session = await self.get(session_id, ctx)
         return await session.commit_async()
+
+    async def get_commit_task(self, task_id: str, ctx: RequestContext) -> Optional[Dict[str, Any]]:
+        """Query background commit task status by task_id for the calling owner."""
+        task = get_task_tracker().get(
+            task_id,
+            owner_account_id=ctx.account_id,
+            owner_user_id=ctx.user.user_id,
+        )
+        return task.to_dict() if task else None
 
     async def extract(self, session_id: str, ctx: RequestContext) -> List[Any]:
         """Extract memories from a session.

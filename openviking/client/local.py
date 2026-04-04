@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Local Client for OpenViking.
 
 Implements BaseClient interface using direct service calls (embedded mode).
@@ -17,6 +17,18 @@ from openviking.telemetry.execution import (
 from openviking_cli.client.base import BaseClient
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import run_async
+
+
+def _to_jsonable(value: Any) -> Any:
+    """Convert internal objects into JSON-serializable values."""
+    to_dict = getattr(value, "to_dict", None)
+    if callable(to_dict):
+        return to_dict()
+    if isinstance(value, list):
+        return [_to_jsonable(item) for item in value]
+    if isinstance(value, dict):
+        return {k: _to_jsonable(v) for k, v in value.items()}
+    return value
 
 
 class LocalClient(BaseClient):
@@ -215,6 +227,33 @@ class LocalClient(BaseClient):
         """Read L1 overview."""
         return await self._service.fs.overview(uri, ctx=self._ctx)
 
+    async def write(
+        self,
+        uri: str,
+        content: str,
+        mode: str = "replace",
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Write text content to an existing file and refresh semantics/vectors."""
+        execution = await run_with_telemetry(
+            operation="content.write",
+            telemetry=telemetry,
+            fn=lambda: self._service.fs.write(
+                uri=uri,
+                content=content,
+                ctx=self._ctx,
+                mode=mode,
+                wait=wait,
+                timeout=timeout,
+            ),
+        )
+        return attach_telemetry_payload(
+            execution.result,
+            execution.telemetry,
+        )
+
     # ============= Search =============
 
     async def find(
@@ -281,10 +320,22 @@ class LocalClient(BaseClient):
             execution.telemetry,
         )
 
-    async def grep(self, uri: str, pattern: str, case_insensitive: bool = False) -> Dict[str, Any]:
+    async def grep(
+        self,
+        uri: str,
+        pattern: str,
+        case_insensitive: bool = False,
+        node_limit: Optional[int] = None,
+        exclude_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Content search with pattern."""
         return await self._service.fs.grep(
-            uri, pattern, ctx=self._ctx, case_insensitive=case_insensitive
+            uri,
+            pattern,
+            ctx=self._ctx,
+            case_insensitive=case_insensitive,
+            node_limit=node_limit,
+            exclude_uri=exclude_uri,
         )
 
     async def glob(self, pattern: str, uri: str = "viking://") -> Dict[str, Any]:
@@ -307,11 +358,16 @@ class LocalClient(BaseClient):
 
     # ============= Sessions =============
 
-    async def create_session(self) -> Dict[str, Any]:
-        """Create a new session."""
+    async def create_session(self, session_id: Optional[str] = None) -> Dict[str, Any]:
+        """Create a new session.
+
+        Args:
+            session_id: Optional session ID. If provided, creates a session with the given ID.
+                       If None, creates a new session with auto-generated ID.
+        """
         await self._service.initialize_user_directories(self._ctx)
         await self._service.initialize_agent_directories(self._ctx)
-        session = await self._service.sessions.create(self._ctx)
+        session = await self._service.sessions.create(self._ctx, session_id)
         return {
             "session_id": session.session_id,
             "user": session.user.to_dict(),
@@ -321,14 +377,28 @@ class LocalClient(BaseClient):
         """List all sessions."""
         return await self._service.sessions.sessions(self._ctx)
 
-    async def get_session(self, session_id: str) -> Dict[str, Any]:
+    async def get_session(self, session_id: str, *, auto_create: bool = False) -> Dict[str, Any]:
         """Get session details."""
-        session = await self._service.sessions.get(session_id, self._ctx)
-        return {
-            "session_id": session.session_id,
-            "user": session.user.to_dict(),
-            "message_count": len(session.messages),
-        }
+        session = await self._service.sessions.get(session_id, self._ctx, auto_create=auto_create)
+        result = session.meta.to_dict()
+        result["user"] = session.user.to_dict()
+        return result
+
+    async def get_session_context(
+        self, session_id: str, token_budget: int = 128_000
+    ) -> Dict[str, Any]:
+        """Get assembled session context."""
+        session = self._service.sessions.session(self._ctx, session_id)
+        await session.load()
+        result = await session.get_session_context(token_budget=token_budget)
+        return _to_jsonable(result)
+
+    async def get_session_archive(self, session_id: str, archive_id: str) -> Dict[str, Any]:
+        """Get one completed archive for a session."""
+        session = self._service.sessions.session(self._ctx, session_id)
+        await session.load()
+        result = await session.get_session_archive(archive_id)
+        return _to_jsonable(result)
 
     async def delete_session(self, session_id: str) -> None:
         """Delete a session."""
@@ -348,12 +418,17 @@ class LocalClient(BaseClient):
             execution.telemetry,
         )
 
+    async def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Query background task status."""
+        return await self._service.sessions.get_commit_task(task_id, self._ctx)
+
     async def add_message(
         self,
         session_id: str,
         role: str,
         content: Optional[str] = None,
         parts: Optional[List[Dict[str, Any]]] = None,
+        created_at: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -362,9 +437,12 @@ class LocalClient(BaseClient):
             role: Message role ("user" or "assistant")
             content: Text content (simple mode, backward compatible)
             parts: Parts array (full Part support mode)
+            created_at: Message creation time (ISO format string)
 
         If both content and parts are provided, parts takes precedence.
         """
+        from datetime import datetime
+
         from openviking.message.part import Part, TextPart, part_from_dict
 
         session = self._service.sessions.session(self._ctx, session_id)
@@ -378,7 +456,15 @@ class LocalClient(BaseClient):
         else:
             raise ValueError("Either content or parts must be provided")
 
-        session.add_message(role, message_parts)
+        # 解析 created_at
+        msg_created_at = None
+        if created_at:
+            try:
+                msg_created_at = datetime.fromisoformat(created_at)
+            except ValueError:
+                pass
+
+        session.add_message(role, message_parts, created_at=msg_created_at)
         return {
             "session_id": session_id,
             "message_count": len(session.messages),
@@ -449,7 +535,7 @@ class LocalClient(BaseClient):
         Returns:
             SystemStatus containing health status of all components.
         """
-        return self._service.debug.observer.system
+        return self._service.debug.observer.system()
 
     def is_healthy(self) -> bool:
         """Quick health check (synchronous).

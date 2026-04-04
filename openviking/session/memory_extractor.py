@@ -1,11 +1,11 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Memory Extractor for OpenViking.
 
-Extracts 6 categories of memories from session:
+Extracts 8 categories of memories from session:
 - UserMemory: profile, preferences, entities, events
-- AgentMemory: cases, patterns
+- AgentMemory: cases, patterns, tools, skills
 """
 
 import re
@@ -99,7 +99,7 @@ class MergedMemoryPayload:
 
 
 class MemoryExtractor:
-    """Extracts memories from session messages with 6-category classification."""
+    """Extracts memories from session messages with 8-category classification."""
 
     # Category to directory mapping
     CATEGORY_DIRS = {
@@ -282,11 +282,12 @@ class MemoryExtractor:
             output_language = self._detect_output_language(
                 messages, fallback_language=fallback_language
             )
+            history_summary = str(context.get("summary") or "")
 
             prompt = render_prompt(
                 "compression.memory_extraction",
                 {
-                    "summary": "",
+                    "summary": history_summary,
                     "recent_messages": formatted_messages,
                     "user": user._user_id,
                     "feedback": "",
@@ -304,7 +305,9 @@ class MemoryExtractor:
             request_summary = {
                 "user": user._user_id,
                 "output_language": output_language,
+                "summary_len": len(history_summary),
                 "recent_messages_len": len(formatted_messages),
+                "summary": history_summary,
                 "recent_messages": formatted_messages,
             }
             logger.debug("Memory extraction LLM request summary: %s", request_summary)

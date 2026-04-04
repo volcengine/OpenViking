@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0
 #pragma once
 
 #include <vector>
@@ -36,10 +36,6 @@ struct SearchResult {
   std::vector<uint64_t> labels;
   std::vector<float> scores;
   std::string extra_json;
-};
-
-struct FetchDataResult {
-  std::vector<float> embedding;
 };
 
 struct StateResult {

@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Test CodeRepositoryParser functionality and compliance with README.md requirements"""
 
 import os
-import tempfile
-from pathlib import Path
 import sys
+from pathlib import Path
 
 # Add parent directory to path to import openviking
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))

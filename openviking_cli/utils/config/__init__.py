@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 from .agfs_config import AGFSConfig
 from .config_loader import (
     load_json_config,
@@ -12,6 +12,7 @@ from .consts import (
     DEFAULT_OVCLI_CONF,
     OPENVIKING_CLI_CONFIG_ENV,
     OPENVIKING_CONFIG_ENV,
+    OPENVIKING_PROMPT_TEMPLATES_DIR_ENV,
     SYSTEM_CONFIG_DIR,
 )
 from .embedding_config import EmbeddingConfig
@@ -24,6 +25,7 @@ from .open_viking_config import (
     is_valid_openviking_config,
     set_openviking_config,
 )
+from .ovcli_config import OVCLIConfig, load_ovcli_config
 from .parser_config import (
     PARSER_CONFIG_REGISTRY,
     AudioConfig,
@@ -38,6 +40,7 @@ from .parser_config import (
     get_parser_config,
     load_parser_configs_from_dict,
 )
+from .prompts_config import PromptsConfig
 from .rerank_config import RerankConfig
 from .storage_config import StorageConfig
 from .vectordb_config import VectorDBBackendConfig
@@ -52,8 +55,10 @@ __all__ = [
     "LogConfig",
     "OPENVIKING_CLI_CONFIG_ENV",
     "OPENVIKING_CONFIG_ENV",
+    "OPENVIKING_PROMPT_TEMPLATES_DIR_ENV",
     "OpenVikingConfig",
     "OpenVikingConfigSingleton",
+    "OVCLIConfig",
     "RerankConfig",
     "StorageConfig",
     "VectorDBBackendConfig",
@@ -70,9 +75,11 @@ __all__ = [
     "get_parser_config",
     "load_parser_configs_from_dict",
     "PARSER_CONFIG_REGISTRY",
+    "PromptsConfig",
     "get_openviking_config",
     "initialize_openviking_config",
     "load_json_config",
+    "load_ovcli_config",
     "require_config",
     "resolve_config_path",
     "set_openviking_config",

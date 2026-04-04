@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.12)
+cmake_minimum_required(VERSION 3.15)
 
 project(openviking_cpp)
 
@@ -8,6 +8,7 @@ include(CMakeParseArguments)
 set(OV_X86_BUILD_VARIANTS "sse3;avx2;avx512" CACHE STRING "x86 engine variants to build")
 set(OV_PY_OUTPUT_DIR "" CACHE PATH "Output directory for Python extension modules")
 set(OV_PY_EXT_SUFFIX ".so" CACHE STRING "Python extension suffix, including ABI tag if needed")
+set(OV_PYTHON_SABI_LIBRARY "" CACHE FILEPATH "Stable-ABI Python import library or DLL for Windows abi3 modules")
 
 if(NOT OV_PY_OUTPUT_DIR)
     set(OV_PY_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/python_engine")
@@ -43,12 +44,14 @@ set(CMAKE_CXX_LINK_EXECUTABLE "${CMAKE_CXX_LINK_EXECUTABLE} -lpthread")
 set(Python3_ARCH_INCLUDE_DIR "/usr/include/${CMAKE_SYSTEM_PROCESSOR}-linux-gnu/")
 
 find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
+if(WIN32 AND CMAKE_VERSION VERSION_GREATER_EQUAL "3.26")
+    find_package(Python3 COMPONENTS Development.SABIModule QUIET)
+endif()
 
 if(UNIX AND NOT APPLE)
     set(Python3_LIBRARIES "")
 endif()
 
-find_package(pybind11 REQUIRED)
 find_package(Threads REQUIRED)
 
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
@@ -184,19 +187,39 @@ function(ov_get_x86_variant_flags variant out_flags out_defs out_supported)
     set(${out_supported} ${OV_SUPPORTED} PARENT_SCOPE)
 endfunction()
 
+function(ov_link_python_abi target_name)
+    if(WIN32)
+        if(OV_PYTHON_SABI_LIBRARY)
+            target_link_libraries(${target_name} PRIVATE "${OV_PYTHON_SABI_LIBRARY}")
+        elseif(TARGET Python3::SABIModule)
+            target_link_libraries(${target_name} PRIVATE Python3::SABIModule)
+        else()
+            message(
+                FATAL_ERROR
+                "Windows abi3 modules require OV_PYTHON_SABI_LIBRARY or Python3::SABIModule"
+            )
+        endif()
+    endif()
+
+    if(APPLE)
+        target_link_options(${target_name} PRIVATE "-undefined" "dynamic_lookup")
+    endif()
+endfunction()
+
 function(ov_add_python_backend backend_suffix module_name)
     set(oneValueArgs INDEX_LIBRARY)
     set(multiValueArgs COMPILE_OPTIONS COMPILE_DEFINITIONS)
     cmake_parse_arguments(OV_BACKEND "" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
     set(MODULE_TARGET "engine_module_${backend_suffix}")
-    pybind11_add_module(${MODULE_TARGET} MODULE pybind11_interface.cpp)
+    add_library(${MODULE_TARGET} MODULE abi3_engine_backend.cpp)
 
     target_include_directories(${MODULE_TARGET} PRIVATE ${Python3_INCLUDE_DIRS})
     target_compile_options(${MODULE_TARGET} PRIVATE -fPIC ${OV_BACKEND_COMPILE_OPTIONS})
     target_compile_definitions(
         ${MODULE_TARGET}
         PRIVATE
+            Py_LIMITED_API=0x030A0000
             OV_PY_MODULE_NAME=${module_name}
             ${OV_BACKEND_COMPILE_DEFINITIONS}
     )
@@ -207,6 +230,7 @@ function(ov_add_python_backend backend_suffix module_name)
             ${OV_BACKEND_INDEX_LIBRARY}
             Threads::Threads
     )
+    ov_link_python_abi(${MODULE_TARGET})
     ov_link_filesystem_libs(${MODULE_TARGET})
 
     if(MINGW)
@@ -225,6 +249,7 @@ function(ov_add_python_backend backend_suffix module_name)
         PROPERTIES
             LIBRARY_OUTPUT_DIRECTORY "${OV_PY_OUTPUT_DIR}"
             RUNTIME_OUTPUT_DIRECTORY "${OV_PY_OUTPUT_DIR}"
+            PREFIX ""
             OUTPUT_NAME "${module_name}"
             SUFFIX "${OV_PY_EXT_SUFFIX}"
     )
@@ -259,13 +284,16 @@ if(OV_PLATFORM_X86)
         list(APPEND OV_BUILT_X86_VARIANTS "${OV_VARIANT}")
     endforeach()
 
-    pybind11_add_module(engine_module_x86_caps MODULE cpu_feature_probe.cpp)
+    add_library(engine_module_x86_caps MODULE abi3_x86_caps.cpp)
     target_include_directories(engine_module_x86_caps PRIVATE ${Python3_INCLUDE_DIRS})
+    target_compile_definitions(engine_module_x86_caps PRIVATE Py_LIMITED_API=0x030A0000)
+    ov_link_python_abi(engine_module_x86_caps)
     set_target_properties(
         engine_module_x86_caps
         PROPERTIES
             LIBRARY_OUTPUT_DIRECTORY "${OV_PY_OUTPUT_DIR}"
             RUNTIME_OUTPUT_DIRECTORY "${OV_PY_OUTPUT_DIR}"
+            PREFIX ""
             OUTPUT_NAME "_x86_caps"
             SUFFIX "${OV_PY_EXT_SUFFIX}"
     )

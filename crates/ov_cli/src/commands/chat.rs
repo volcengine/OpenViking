@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use clap::Parser;
 use reqwest::Client;
-use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
+use rustyline::error::ReadlineError;
 use serde::{Deserialize, Serialize};
 use termimad::MadSkin;
 
@@ -42,7 +42,7 @@ pub struct ChatCommand {
     pub sender: String,
 
     /// Non-interactive mode (single message)
-    #[arg(short = 'M', long)]
+    #[arg(short, long)]
     pub message: Option<String>,
 
     /// Stream the response (default: true)
@@ -90,7 +90,7 @@ struct ChatResponse {
 /// Stream event from SSE
 #[derive(Debug, Deserialize)]
 struct ChatStreamEvent {
-    event: String,  // "reasoning", "tool_call", "tool_result", "response"
+    event: String, // "reasoning", "tool_call", "tool_result", "response"
     data: serde_json::Value,
     timestamp: Option<String>,
 }
@@ -198,7 +198,11 @@ impl ChatCommand {
         let mut buffer = String::new();
         let mut final_message = String::new();
 
-        while let Some(chunk) = response.chunk().await.map_err(|e| Error::Network(format!("Stream error: {}", e)))? {
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|e| Error::Network(format!("Stream error: {}", e)))?
+        {
             let chunk_str = String::from_utf8_lossy(&chunk);
             buffer.push_str(&chunk_str);
 
@@ -221,7 +225,8 @@ impl ChatCommand {
                             } else if let Some(obj) = event.data.as_object() {
                                 if let Some(msg) = obj.get("message").and_then(|m| m.as_str()) {
                                     final_message = msg.to_string();
-                                } else if let Some(err) = obj.get("error").and_then(|e| e.as_str()) {
+                                } else if let Some(err) = obj.get("error").and_then(|e| e.as_str())
+                                {
                                     eprintln!("\x1b[1;31mError: {}\x1b[0m", err);
                                 }
                             }
@@ -290,7 +295,10 @@ impl ChatCommand {
                     }
 
                     // Send message
-                    match self.send_interactive_message(client, input, &mut session_id).await {
+                    match self
+                        .send_interactive_message(client, input, &mut session_id)
+                        .await
+                    {
                         Ok(_) => {}
                         Err(e) => {
                             eprintln!("\x1b[1;31mError: {}\x1b[0m", e);
@@ -330,9 +338,11 @@ impl ChatCommand {
         session_id: &mut Option<String>,
     ) -> Result<()> {
         if self.stream {
-            self.send_interactive_message_stream(client, input, session_id).await
+            self.send_interactive_message_stream(client, input, session_id)
+                .await
         } else {
-            self.send_interactive_message_non_stream(client, input, session_id).await
+            self.send_interactive_message_non_stream(client, input, session_id)
+                .await
         }
     }
 
@@ -431,7 +441,11 @@ impl ChatCommand {
         let mut final_message = String::new();
         let mut got_session_id = false;
 
-        while let Some(chunk) = response.chunk().await.map_err(|e| Error::Network(format!("Stream error: {}", e)))? {
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|e| Error::Network(format!("Stream error: {}", e)))?
+        {
             let chunk_str = String::from_utf8_lossy(&chunk);
             buffer.push_str(&chunk_str);
 
@@ -464,7 +478,8 @@ impl ChatCommand {
                             } else if let Some(obj) = event.data.as_object() {
                                 if let Some(msg) = obj.get("message").and_then(|m| m.as_str()) {
                                     final_message = msg.to_string();
-                                } else if let Some(err) = obj.get("error").and_then(|e| e.as_str()) {
+                                } else if let Some(err) = obj.get("error").and_then(|e| e.as_str())
+                                {
                                     eprintln!("\x1b[1;31mError: {}\x1b[0m", err);
                                 }
                             }

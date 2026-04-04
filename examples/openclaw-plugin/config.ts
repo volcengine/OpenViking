@@ -20,9 +20,23 @@ export type MemoryOpenVikingConfig = {
   autoRecall?: boolean;
   recallLimit?: number;
   recallScoreThreshold?: number;
+  recallMaxContentChars?: number;
+  recallPreferAbstract?: boolean;
+  recallTokenBudget?: number;
+  commitTokenThreshold?: number;
+  bypassSessionPatterns?: string[];
   ingestReplyAssist?: boolean;
   ingestReplyAssistMinSpeakerTurns?: number;
   ingestReplyAssistMinChars?: number;
+  /** Deprecated alias for bypassSessionPatterns. */
+  ingestReplyAssistIgnoreSessionPatterns?: string[];
+  /**
+   * When true (default), emit structured `openviking: diag {...}` lines (and any future
+   * standard-diagnostics file writes) for assemble/afterTurn. Set false to disable.
+   */
+  emitStandardDiagnostics?: boolean;
+  /** When true, log tenant routing for semantic find and session writes (messages/commit) to the plugin logger. */
+  logFindRequests?: boolean;
 };
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:1933";
@@ -32,10 +46,17 @@ const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_CAPTURE_MODE = "semantic";
 const DEFAULT_CAPTURE_MAX_LENGTH = 24000;
 const DEFAULT_RECALL_LIMIT = 6;
-const DEFAULT_RECALL_SCORE_THRESHOLD = 0.01;
+const DEFAULT_RECALL_SCORE_THRESHOLD = 0.15;
+const DEFAULT_RECALL_MAX_CONTENT_CHARS = 500;
+const DEFAULT_RECALL_PREFER_ABSTRACT = true;
+const DEFAULT_RECALL_TOKEN_BUDGET = 2000;
+const DEFAULT_COMMIT_TOKEN_THRESHOLD = 20000;
+const DEFAULT_BYPASS_SESSION_PATTERNS: string[] = [];
 const DEFAULT_INGEST_REPLY_ASSIST = true;
 const DEFAULT_INGEST_REPLY_ASSIST_MIN_SPEAKER_TURNS = 2;
 const DEFAULT_INGEST_REPLY_ASSIST_MIN_CHARS = 120;
+const DEFAULT_INGEST_REPLY_ASSIST_IGNORE_SESSION_PATTERNS: string[] = [];
+const DEFAULT_EMIT_STANDARD_DIAGNOSTICS = false;
 const DEFAULT_LOCAL_CONFIG_PATH = join(homedir(), ".openviking", "ov.conf");
 
 const DEFAULT_AGENT_ID = "default";
@@ -68,6 +89,32 @@ function toNumber(value: unknown, fallback: number): number {
     }
   }
   return fallback;
+}
+
+function toStringArray(value: unknown, fallback: string[]): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  }
+  if (typeof value === "string") {
+    return value
+      .split(/[,\n]/)
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  }
+  return fallback;
+}
+
+/** True when env is 1 / true / yes (case-insensitive). Used for debug flags without editing plugin JSON. */
+function envFlag(name: string): boolean {
+  const v = process.env[name];
+  if (v == null || v === "") {
+    return false;
+  }
+  const t = String(v).trim().toLowerCase();
+  return t === "1" || t === "true" || t === "yes";
 }
 
 function assertAllowedKeys(value: Record<string, unknown>, allowed: string[], label: string) {
@@ -109,9 +156,17 @@ export const memoryOpenVikingConfigSchema = {
         "autoRecall",
         "recallLimit",
         "recallScoreThreshold",
+        "recallMaxContentChars",
+        "recallPreferAbstract",
+        "recallTokenBudget",
+        "commitTokenThreshold",
+        "bypassSessionPatterns",
         "ingestReplyAssist",
         "ingestReplyAssistMinSpeakerTurns",
         "ingestReplyAssistMinChars",
+        "ingestReplyAssistIgnoreSessionPatterns",
+        "emitStandardDiagnostics",
+        "logFindRequests",
       ],
       "openviking config",
     );
@@ -163,7 +218,27 @@ export const memoryOpenVikingConfigSchema = {
         1,
         Math.max(0, toNumber(cfg.recallScoreThreshold, DEFAULT_RECALL_SCORE_THRESHOLD)),
       ),
-      ingestReplyAssist: cfg.ingestReplyAssist !== false,
+      recallMaxContentChars: Math.max(
+        50,
+        Math.min(10000, Math.floor(toNumber(cfg.recallMaxContentChars, DEFAULT_RECALL_MAX_CONTENT_CHARS))),
+      ),
+      recallPreferAbstract: cfg.recallPreferAbstract === true,
+      recallTokenBudget: Math.max(
+        100,
+        Math.min(50000, Math.floor(toNumber(cfg.recallTokenBudget, DEFAULT_RECALL_TOKEN_BUDGET))),
+      ),
+      commitTokenThreshold: Math.max(
+        0,
+        Math.min(100_000, Math.floor(toNumber(cfg.commitTokenThreshold, DEFAULT_COMMIT_TOKEN_THRESHOLD))),
+      ),
+      bypassSessionPatterns: toStringArray(
+        cfg.bypassSessionPatterns,
+        toStringArray(
+          cfg.ingestReplyAssistIgnoreSessionPatterns,
+          DEFAULT_BYPASS_SESSION_PATTERNS,
+        ),
+      ),
+      ingestReplyAssist: cfg.ingestReplyAssist === true,
       ingestReplyAssistMinSpeakerTurns: Math.max(
         1,
         Math.min(
@@ -183,6 +258,18 @@ export const memoryOpenVikingConfigSchema = {
           Math.floor(toNumber(cfg.ingestReplyAssistMinChars, DEFAULT_INGEST_REPLY_ASSIST_MIN_CHARS)),
         ),
       ),
+      ingestReplyAssistIgnoreSessionPatterns: toStringArray(
+        cfg.ingestReplyAssistIgnoreSessionPatterns,
+        DEFAULT_INGEST_REPLY_ASSIST_IGNORE_SESSION_PATTERNS,
+      ),
+      emitStandardDiagnostics:
+        typeof cfg.emitStandardDiagnostics === "boolean"
+          ? cfg.emitStandardDiagnostics
+          : DEFAULT_EMIT_STANDARD_DIAGNOSTICS,
+      logFindRequests:
+        cfg.logFindRequests === true ||
+        envFlag("OPENVIKING_LOG_ROUTING") ||
+        envFlag("OPENVIKING_DEBUG"),
     };
   },
   uiHints: {
@@ -209,7 +296,7 @@ export const memoryOpenVikingConfigSchema = {
     agentId: {
       label: "Agent ID",
       placeholder: "auto-generated",
-      help: "Identifies this agent to OpenViking (sent as X-OpenViking-Agent header). Defaults to \"default\" if not set.",
+      help: 'OpenViking X-OpenViking-Agent: non-default values combine with OpenClaw ctx.agentId as "<config>_<sessionAgent>" (then sanitized to [a-zA-Z0-9_-]). Use "default" to send only ctx.agentId.',
     },
     apiKey: {
       label: "OpenViking API Key",
@@ -257,6 +344,35 @@ export const memoryOpenVikingConfigSchema = {
       placeholder: String(DEFAULT_RECALL_SCORE_THRESHOLD),
       advanced: true,
     },
+    recallMaxContentChars: {
+      label: "Recall Max Content Chars",
+      placeholder: String(DEFAULT_RECALL_MAX_CONTENT_CHARS),
+      advanced: true,
+      help: "Maximum characters per memory content in auto-recall injection. Content exceeding this is truncated.",
+    },
+    recallPreferAbstract: {
+      label: "Recall Prefer Abstract",
+      advanced: true,
+      help: "Use memory abstract instead of fetching full content when abstract is available. Reduces token usage.",
+    },
+    recallTokenBudget: {
+      label: "Recall Token Budget",
+      placeholder: String(DEFAULT_RECALL_TOKEN_BUDGET),
+      advanced: true,
+      help: "Maximum estimated tokens for auto-recall memory injection. Injection stops when budget is exhausted.",
+    },
+    bypassSessionPatterns: {
+      label: "Bypass Session Patterns",
+      placeholder: "agent:*:cron:**",
+      help: "Completely bypass OpenViking for matching session keys. Use * within one segment and ** across segments.",
+      advanced: true,
+    },
+    commitTokenThreshold: {
+      label: "Commit Token Threshold",
+      placeholder: String(DEFAULT_COMMIT_TOKEN_THRESHOLD),
+      advanced: true,
+      help: "Minimum estimated pending tokens before auto-commit triggers. Set to 0 to commit every turn.",
+    },
     ingestReplyAssist: {
       label: "Ingest Reply Assist",
       help: "When transcript-like memory ingestion is detected, add a lightweight reply instruction to reduce NO_REPLY.",
@@ -272,6 +388,24 @@ export const memoryOpenVikingConfigSchema = {
       label: "Ingest Min Chars",
       placeholder: String(DEFAULT_INGEST_REPLY_ASSIST_MIN_CHARS),
       help: "Minimum sanitized text length required before ingest reply assist can trigger.",
+      advanced: true,
+    },
+    ingestReplyAssistIgnoreSessionPatterns: {
+      label: "Deprecated Ingest Ignore Session Patterns",
+      placeholder: "agent:*:cron:**",
+      help: "Deprecated alias for bypassSessionPatterns. Matching sessions now bypass OpenViking entirely.",
+      advanced: true,
+    },
+    emitStandardDiagnostics: {
+      label: "Standard diagnostics (diag JSON lines)",
+      advanced: true,
+      help: "When enabled, emit structured openviking: diag {...} lines for assemble and afterTurn. Disable to reduce log noise.",
+    },
+    logFindRequests: {
+      label: "Log find requests",
+      help:
+        "Log tenant routing: POST /api/v1/search/find (query, target_uri) and session POST .../messages + .../commit (sessionId, X-OpenViking-*). Never logs apiKey. " +
+        "Or set env OPENVIKING_LOG_ROUTING=1 or OPENVIKING_DEBUG=1 (no JSON edit). When on, local-mode OpenViking subprocess stderr is also logged at info.",
       advanced: true,
     },
   },

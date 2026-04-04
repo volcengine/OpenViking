@@ -1,11 +1,10 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 
 import shutil
 from pathlib import Path
 
 import pytest
-
 
 @pytest.fixture(scope="session")
 def agfs_test_root():

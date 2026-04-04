@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Unified resource processor with strategy-based routing."""
 
 import tempfile
@@ -9,6 +9,12 @@ from typing import TYPE_CHECKING, Optional
 
 from openviking.parse import DocumentConverter, parse
 from openviking.parse.base import ParseResult
+from openviking.server.local_input_guard import (
+    is_remote_resource_source,
+    looks_like_local_path,
+)
+from openviking.utils.zip_safe import safe_extract_zip
+from openviking_cli.exceptions import PermissionDeniedError
 from openviking_cli.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -46,6 +52,7 @@ class UnifiedResourceProcessor:
         self,
         source: str,
         instruction: str = "",
+        allow_local_path_resolution: bool = True,
         **kwargs,
     ) -> ParseResult:
         """Process any source (file/URL/content) with appropriate strategy."""
@@ -54,7 +61,9 @@ class UnifiedResourceProcessor:
             return await self._process_url(source, instruction)
 
         # Check if looks like a file path (short enough and no newlines)
-        is_potential_path = len(source) <= 1024 and "\n" not in source
+        is_potential_path = (
+            allow_local_path_resolution and len(source) <= 1024 and "\n" not in source
+        )
         if is_potential_path:
             path = Path(source)
             if path.exists():
@@ -65,12 +74,18 @@ class UnifiedResourceProcessor:
                 logger.warning(f"Path {path} does not exist")
                 raise FileNotFoundError(f"Path {path} does not exist")
 
+        if not allow_local_path_resolution and looks_like_local_path(source):
+            raise PermissionDeniedError(
+                "HTTP server only accepts remote resource URLs or temp-uploaded files; "
+                "direct host filesystem paths are not allowed."
+            )
+
         # Treat as raw content
         return await parse(source, instruction=instruction)
 
     def _is_url(self, source: str) -> bool:
         """Check if source is a URL."""
-        return source.startswith(("http://", "https://", "git@", "ssh://", "git://"))
+        return is_remote_resource_source(source)
 
     async def _process_url(self, url: str, instruction: str, **kwargs) -> ParseResult:
         """Process URL source."""
@@ -79,6 +94,18 @@ class UnifiedResourceProcessor:
         # Validate git@ SSH URIs early
         if url.startswith("git@"):
             validate_git_ssh_uri(url)
+
+        # Route Feishu/Lark cloud document URLs to FeishuParser
+        if self._is_feishu_url(url):
+            from openviking.parse.registry import get_registry
+
+            parser = get_registry().get_parser("feishu")
+            if parser is None:
+                raise ImportError(
+                    "FeishuParser not available. "
+                    "Install lark-oapi: pip install 'openviking[bot-feishu]'"
+                )
+            return await parser.parse(url, instruction=instruction)
 
         # Route git protocols and repo URLs to CodeRepositoryParser
         if url.startswith(("git@", "git://", "ssh://")) or is_git_repo_url(url):
@@ -91,6 +118,20 @@ class UnifiedResourceProcessor:
 
         parser = HTMLParser()
         return await parser.parse(url, instruction=instruction)
+
+    @staticmethod
+    def _is_feishu_url(url: str) -> bool:
+        """Check if URL is a Feishu/Lark cloud document."""
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
+        path = parsed.path
+        is_feishu_domain = host.endswith(".feishu.cn") or host.endswith(".larksuite.com")
+        has_doc_path = any(
+            path == f"/{t}" or path.startswith(f"/{t}/") for t in ("docx", "wiki", "sheets", "base")
+        )
+        return is_feishu_domain and has_doc_path
 
     async def _process_directory(
         self,
@@ -125,7 +166,7 @@ class UnifiedResourceProcessor:
             temp_dir = Path(tempfile.mkdtemp())
             try:
                 with zipfile.ZipFile(file_path, "r") as zipf:
-                    zipf.extractall(temp_dir)
+                    safe_extract_zip(zipf, temp_dir)
                 return await self._process_directory(temp_dir, instruction, **kwargs)
             finally:
                 pass  # Don't delete temp_dir yet, it will be used by TreeBuilder

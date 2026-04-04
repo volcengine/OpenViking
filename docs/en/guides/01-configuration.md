@@ -8,28 +8,32 @@ Create `~/.openviking/ov.conf` in your project directory:
 
 ```json
 {
+  "storage": {
+    "workspace": "./data",
+    "vectordb": {
+      "name": "context",
+      "backend": "local"
+    },
+    "agfs": {
+      "port": 1833,
+      "log_level": "warn",
+      "backend": "local"
+    }
+  },
   "embedding": {
     "dense": {
-      "provider": "volcengine",
-      "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-250615",
-      "dimension": 1024
+      "api_base" : "<api-endpoint>",
+      "api_key"  : "<your-api-key>",
+      "provider" : "<provider-type>",
+      "dimension": 1024,
+      "model"    : "<model-name>"
     }
   },
   "vlm": {
-    "provider": "volcengine",
-    "api_key": "your-api-key",
-    "model": "doubao-seed-2-0-pro-260215"
-  },
-  "rerank": {
-    "provider": "volcengine",
-    "api_key": "your-api-key",
-    "model": "doubao-rerank-250615"
-  },
-  "storage": {
-    "workspace": "./data",
-    "agfs": { "backend": "local" },
-    "vectordb": { "backend": "local" }
+    "api_base" : "<api-endpoint>",
+    "api_key"  : "<your-api-key>",
+    "provider" : "<provider-type>",
+    "model"    : "<model-name>"
   }
 }
 ```
@@ -99,6 +103,7 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 {
   "embedding": {
     "max_concurrent": 10,
+    "max_retries": 3,
     "dense": {
       "provider": "volcengine",
       "api_key": "your-api-key",
@@ -115,12 +120,15 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `max_concurrent` | int | Maximum concurrent embedding requests (`embedding.max_concurrent`, default: `10`) |
-| `provider` | str | `"volcengine"`, `"openai"`, `"vikingdb"`, `"jina"`, or `"voyage"` |
+| `max_retries` | int | Maximum retry attempts for transient embedding provider errors (`embedding.max_retries`, default: `3`; `0` disables retry) |
+| `provider` | str | `"volcengine"`, `"openai"`, `"vikingdb"`, `"jina"`, `"voyage"`, or `"gemini"` |
 | `api_key` | str | API key |
 | `model` | str | Model name |
 | `dimension` | int | Vector dimension. For Voyage, this maps to `output_dimension` |
 | `input` | str | Input type: `"text"` or `"multimodal"` |
 | `batch_size` | int | Batch size for embedding requests |
+
+`embedding.max_retries` only applies to transient errors such as `429`, `5xx`, timeouts, and connection failures. Permanent errors such as `400`, `401`, `403`, and `AccountOverdue` are not retried automatically. The backoff strategy is exponential backoff with jitter, starting at `0.5s` and capped at `8s`.
 
 **Available Models**
 
@@ -138,6 +146,7 @@ With `input: "multimodal"`, OpenViking can embed text, images (PNG, JPG, etc.), 
 - `jina`: Jina AI Embedding API
 - `voyage`: Voyage AI Embedding API
 - `minimax`: MiniMax Embedding API
+- `gemini`: Google Gemini Embedding API (text-only; requires `google-genai>=1.0.0`)
 
 **minimax provider example:**
 
@@ -227,7 +236,6 @@ Supported Voyage text embedding models include:
 
 If `dimension` is omitted, OpenViking uses the model's default output dimension when creating the vector schema.
 
-OpenViking currently configures a single dense embedder for both indexing and query-time retrieval, so provider-specific query/document modes are not exposed in config yet.
 OpenViking also expects dense float vectors throughout storage and retrieval, so Voyage quantized output dtypes are not exposed in config.
 
 **Local deployment (GGUF/MLX):** Jina embedding models are open-weight and available in GGUF and MLX formats on [Hugging Face](https://huggingface.co/jinaai). You can run them locally with any OpenAI-compatible server (e.g. llama.cpp, MLX, vLLM) and point the `api_base` to your local endpoint:
@@ -245,6 +253,51 @@ OpenViking also expects dense float vectors throughout storage and retrieval, so
   }
 }
 ```
+
+**gemini provider example:**
+
+> **Note:** Requires `pip install "google-genai>=1.0.0"`. For async batching: `pip install "openviking[gemini-async]"`.
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "gemini",
+      "api_key": "your-google-api-key",
+      "model": "gemini-embedding-2-preview",
+      "dimension": 3072
+    }
+  }
+}
+```
+
+Available Gemini embedding models:
+- `gemini-embedding-2-preview`: 8192 token input limit, 1–3072 output dimension (MRL)
+- `gemini-embedding-001`: 2048 token input limit, 1–3072 output dimension (MRL)
+- `text-embedding-004`: 2048 token input limit, 768 output dimension (fixed)
+
+Recommended dimensions: `768`, `1536`, or `3072` (default: `3072`).
+
+Get your API key at https://aistudio.google.com/apikey
+
+**Non-symmetric retrieval** (different task types for indexing vs. query):
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "gemini",
+      "api_key": "your-google-api-key",
+      "model": "gemini-embedding-2-preview",
+      "dimension": 3072,
+      "query_param": "RETRIEVAL_QUERY",
+      "document_param": "RETRIEVAL_DOCUMENT"
+    }
+  }
+}
+```
+
+Supported task types: `RETRIEVAL_QUERY`, `RETRIEVAL_DOCUMENT`, `SEMANTIC_SIMILARITY`, `CLASSIFICATION`, `CLUSTERING`, `CODE_RETRIEVAL_QUERY`, `QUESTION_ANSWERING`, `FACT_VERIFICATION`.
 
 #### Sparse Embedding
 
@@ -310,7 +363,8 @@ Vision Language Model for semantic extraction (L0/L1 generation).
   "vlm": {
     "api_key": "your-api-key",
     "model": "doubao-seed-2-0-pro-260215",
-    "api_base": "https://ark.cn-beijing.volces.com/api/v3"
+    "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+    "max_retries": 3
   }
 }
 ```
@@ -324,8 +378,11 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 | `api_base` | str | API endpoint (optional) |
 | `thinking` | bool | Enable thinking mode for VolcEngine models (default: `false`) |
 | `max_concurrent` | int | Maximum concurrent semantic LLM calls (default: `100`) |
+| `max_retries` | int | Maximum retry attempts for transient VLM provider errors (default: `3`; `0` disables retry) |
 | `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
 | `stream` | bool | Enable streaming mode (for OpenAI-compatible providers, default: `false`) |
+
+`vlm.max_retries` only applies to transient errors such as `429`, `5xx`, timeouts, and connection failures. Permanent authentication, authorization, and billing errors are not retried automatically. The backoff strategy is exponential backoff with jitter, starting at `0.5s` and capped at `8s`.
 
 **Available Models**
 
@@ -383,6 +440,34 @@ For OpenAI-compatible providers that return SSE (Server-Sent Events) format resp
 
 > **Note**: The OpenAI SDK requires `stream=true` to properly parse SSE responses. When using providers that force SSE format, you must set this option to `true`.
 
+### feishu
+
+Configuration for Feishu/Lark cloud document parsing. See [Resources](../api/02-resources.md) for supported URL patterns.
+
+```json
+{
+  "feishu": {
+    "app_id": "",
+    "app_secret": "",
+    "domain": "https://open.feishu.cn",
+    "max_rows_per_sheet": 1000,
+    "max_records_per_table": 1000
+  }
+}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `app_id` | str | Feishu app ID (can also be set via `FEISHU_APP_ID` env var) |
+| `app_secret` | str | Feishu app secret (can also be set via `FEISHU_APP_SECRET` env var) |
+| `domain` | str | Feishu API domain. Use `https://open.larksuite.com` for Lark international |
+| `max_rows_per_sheet` | int | Maximum rows to import per spreadsheet sheet (default: `1000`) |
+| `max_records_per_table` | int | Maximum records to import per bitable table (default: `1000`) |
+
+**Dependency**: `pip install 'openviking[bot-feishu]'`
+
+**Lark international**: For Lark URLs (`*.larksuite.com`), set `domain` to `https://open.larksuite.com`.
+
 ### code
 
 Controls how code files are summarized via `code_summary_mode`. Both config formats are equivalent:
@@ -419,23 +504,54 @@ See [Code Skeleton Extraction](../concepts/06-extraction.md#code-skeleton-extrac
 
 ### rerank
 
-Reranking model for search result refinement.
+Reranking model for search result refinement. Supports VikingDB (Volcengine), Cohere, OpenAI-compatible APIs, and LiteLLM.
+
+**Volcengine (VikingDB):**
 
 ```json
 {
   "rerank": {
-    "provider": "volcengine",
-    "api_key": "your-api-key",
-    "model": "doubao-rerank-250615"
+    "provider": "vikingdb",
+    "ak": "your-access-key",
+    "sk": "your-secret-key",
+    "model_name": "doubao-seed-rerank",
+    "model_version": "251028"
   }
 }
 ```
 
+**OpenAI-compatible provider (e.g. DashScope):**
+
+```json
+{
+  "rerank": {
+    "provider": "openai",
+    "api_key": "your-api-key",
+    "api_base": "https://dashscope.aliyuncs.com/compatible-api/v1/reranks",
+    "model": "qwen3-vl-rerank",
+    "threshold": 0.1
+  }
+}
+```
+
+**Parameters**
+
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `provider` | str | `"volcengine"` |
-| `api_key` | str | API key |
-| `model` | str | Model name |
+| `provider` | str | `"vikingdb"`, `"cohere"`, `"openai"`, or `"litellm"`. Auto-detected if omitted. |
+| `ak` | str | VikingDB Access Key (vikingdb provider only) |
+| `sk` | str | VikingDB Secret Key (vikingdb provider only) |
+| `model_name` | str | Model name (vikingdb provider only, default: `doubao-seed-rerank`) |
+| `api_key` | str | API key (for `openai`, `cohere`, or `litellm` providers) |
+| `api_base` | str | Endpoint URL (for `openai` provider) |
+| `model` | str | Model name (for `openai` or `litellm` providers) |
+| `threshold` | float | Score threshold between `0.0` and `1.0`; results below this are filtered out. Default: `0.1` |
+
+**Supported providers:**
+- `vikingdb`: Volcengine VikingDB Rerank API (uses AK/SK)
+- `cohere`: Cohere Rerank API
+- `openai`: OpenAI-compatible Rerank API
+- `litellm`: Rerank services via LiteLLM (requires `litellm` package)
 
 If rerank is not configured, search uses vector similarity only.
 
@@ -530,6 +646,19 @@ Directly uses the AGFS Go implementation through a shared library.
 | `prefix` | str | Optional key prefix for namespace isolation | "" |
 | `use_ssl` | bool | Enable/disable SSL (HTTPS) for S3 connections | true |
 | `use_path_style` | bool | true for PathStyle used by MinIO and some S3-compatible services; false for VirtualHostStyle used by TOS and some S3-compatible services | true |
+| `directory_marker_mode` | str | How to persist directory markers: `none`, `empty`, or `nonempty` | `"empty"` |
+
+`directory_marker_mode` controls how AGFS materializes directory objects in S3:
+
+- `empty` is the default. AGFS writes a zero-byte directory marker and preserves empty-directory semantics.
+- `nonempty` writes a non-empty marker payload. Use this for S3-compatible services such as TOS that reject zero-byte directory markers.
+- `none` switches AGFS to prefix-style S3 semantics. AGFS does not create directory marker objects, so empty directories are not persisted and may not be discoverable until they contain at least one child object.
+
+Typical choices:
+
+- For MinIO, SeaweedFS, and most PathStyle backends, keep the default `empty`.
+- For TOS or other VirtualHostStyle backends that reject zero-byte directory markers, use `nonempty`.
+- If you want pure prefix-style behavior and do not need persisted empty directories, use `none`.
 
 </details>
 
@@ -571,7 +700,8 @@ Supports S3 storage in VirtualHostStyle mode, such as TOS.
         "region": "us-east-1",
         "access_key": "your-ak",
         "secret_key": "your-sk",
-        "use_path_style": false
+        "use_path_style": false,
+        "directory_marker_mode": "nonempty"
       }
     }
   }
@@ -655,6 +785,22 @@ openviking-server --config /path/to/ov.conf
 
 The config sections documented above (embedding, vlm, rerank, storage) all belong to `ov.conf`. SDK embedded mode and server share this file.
 
+For memory-related settings, add a `memory` section in `ov.conf`:
+
+```json
+{
+  "memory": {
+    "agent_scope_mode": "user+agent"
+  }
+}
+```
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| `agent_scope_mode` | Agent memory namespace mode: `"user+agent"` isolates by `(user_id, agent_id)`, while `"agent"` isolates only by `agent_id` and shares agent memories across users of the same agent | `"user+agent"` |
+
+`agent_scope_mode` only affects agent-level namespaces such as `viking://agent/{agent_space}/memories/...`. User memories under `viking://user/{user_space}/memories/...` are not affected.
+
 ### ovcli.conf
 
 Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI to connect to a remote server:
@@ -663,6 +809,8 @@ Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI t
 {
   "url": "http://localhost:1933",
   "api_key": "your-secret-key",
+  "account": "acme",
+  "user": "alice",
   "agent_id": "my-agent",
   "output": "table"
 }
@@ -672,8 +820,16 @@ Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI t
 |-------|-------------|---------|
 | `url` | Server address | (required) |
 | `api_key` | API key for authentication (root key or user key) | `null` (no auth) |
+| `account` | Default account sent as `X-OpenViking-Account` | `null` |
+| `user` | Default user sent as `X-OpenViking-User` | `null` |
 | `agent_id` | Agent identifier for agent space isolation | `null` |
 | `output` | Default output format: `"table"` or `"json"` | `"table"` |
+
+CLI flags can override these identity fields per command:
+
+```bash
+openviking --account acme --user alice --agent-id assistant-2 ls viking://
+```
 
 See [Deployment](./03-deployment.md) for details.
 
@@ -686,6 +842,7 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
   "server": {
     "host": "0.0.0.0",
     "port": 1933,
+    "auth_mode": "api_key",
     "root_api_key": "your-secret-root-key",
     "cors_origins": ["*"]
   }
@@ -696,10 +853,13 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 |-------|------|-------------|---------|
 | `host` | str | Bind address | `0.0.0.0` |
 | `port` | int | Bind port | `1933` |
-| `root_api_key` | str | Root API key for multi-tenant auth, disabled if not set | `null` |
+| `auth_mode` | str | Authentication mode: `"api_key"` or `"trusted"`. Default is `"api_key"` | `"api_key"` |
+| `root_api_key` | str | Root API key for multi-tenant auth in `api_key` mode. In `trusted` mode it is optional extra protection, not the source of user identity | `null` |
 | `cors_origins` | list | Allowed CORS origins | `["*"]` |
 
-When `root_api_key` is configured, the server enables multi-tenant authentication. Use the Admin API to create accounts and user keys. When not set, the server runs in dev mode with no authentication.
+`api_key` mode uses API keys and is the default. `trusted` mode trusts `X-OpenViking-Account` / `X-OpenViking-User` headers from a trusted gateway or internal caller.
+
+When `root_api_key` is configured in `api_key` mode, the server enables multi-tenant authentication. Use the Admin API to create accounts and user keys. In `trusted` mode, ordinary requests do not require user registration first; each request is resolved as `USER` from the injected identity headers. Development mode only applies when `auth_mode = "api_key"` and `root_api_key` is not set.
 
 For startup and deployment details see [Deployment](./03-deployment.md), for authentication see [Authentication](./04-authentication.md).
 
@@ -721,9 +881,101 @@ Path locks are enabled by default and usually require no configuration. **The de
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `lock_timeout` | float | Path lock acquisition timeout (seconds). `0` = fail immediately if locked (default). `> 0` = wait/retry up to this many seconds, then raise `LockAcquisitionError`. | `0.0` |
-| `lock_expire` | float | Stale lock expiry threshold (seconds). Locks held longer than this by a crashed process are force-released. | `300.0` |
+| `lock_expire` | float | Lock inactivity threshold (seconds). Locks not refreshed within this window are treated as stale and reclaimed. | `300.0` |
 
 For details on the lock mechanism, see [Path Locks and Crash Recovery](../concepts/09-transaction.md).
+
+## encryption Section
+
+Enable at-rest data encryption to ensure data security and isolation in multi-tenant environments. Encryption is completely transparent to users with no API changes.
+
+```json
+{
+  "encryption": {
+    "enabled": true,
+    "provider": "local|vault|volcengine_kms"
+  }
+}
+```
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `enabled` | bool | Whether encryption is enabled | `false` |
+| `provider` | str | Key provider: `"local"`, `"vault"`, or `"volcengine_kms"` | - |
+
+### Local (File)
+
+Suitable for development environments and single-node deployments:
+
+```json
+{
+  "encryption": {
+    "enabled": true,
+    "provider": "local",
+    "local": {
+      "key_file": "~/.openviking/master.key"
+    }
+  }
+}
+```
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `local.key_file` | str | Root key file path | `~/.openviking/master.key` |
+
+### Vault (HashiCorp Vault)
+
+Suitable for production and multi-cloud deployments:
+
+```json
+{
+  "encryption": {
+    "enabled": true,
+    "provider": "vault",
+    "vault": {
+      "address": "https://vault.example.com:8200",
+      "token": "vault-token-xxx",
+      "mount_point": "transit",
+      "key_name": "openviking-root"
+    }
+  }
+}
+```
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `vault.address` | str | Vault service address | - |
+| `vault.token` | str | Vault access token | - |
+| `vault.mount_point` | str | Transit engine mount point | `"transit"` |
+| `vault.key_name` | str | Root key name | `"openviking-root"` |
+
+### Volcengine KMS
+
+Suitable for Volcengine cloud deployments:
+
+```json
+{
+  "encryption": {
+    "enabled": true,
+    "provider": "volcengine_kms",
+    "volcengine_kms": {
+      "key_id": "kms-key-id-xxx",
+      "region": "cn-beijing",
+      "access_key": "AKLTxxxxxxxx",
+      "secret_key": "Tmpxxxxxxxx"
+    }
+  }
+}
+```
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `volcengine_kms.key_id` | str | KMS key ID | - |
+| `volcengine_kms.region` | str | Region | `"cn-beijing"` |
+| `volcengine_kms.access_key` | str | Volcengine Access Key | - |
+| `volcengine_kms.secret_key` | str | Volcengine Secret Key | - |
+
+For detailed encryption explanations, see [Data Encryption](../concepts/10-encryption.md). For complete usage instructions, see [Encryption Guide](./08-encryption.md).
 
 ## Full Schema
 
@@ -731,6 +983,7 @@ For details on the lock mechanism, see [Path Locks and Crash Recovery](../concep
 {
   "embedding": {
     "max_concurrent": 10,
+    "max_retries": 3,
     "dense": {
       "provider": "volcengine",
       "api_key": "string",
@@ -746,13 +999,35 @@ For details on the lock mechanism, see [Path Locks and Crash Recovery](../concep
     "api_base": "string",
     "thinking": false,
     "max_concurrent": 100,
+    "max_retries": 3,
     "extra_headers": {},
     "stream": false
   },
   "rerank": {
-    "provider": "volcengine",
+    "provider": "volcengine|openai",
     "api_key": "string",
-    "model": "string"
+    "model": "string",
+    "api_base": "string",
+    "threshold": 0.1
+  },
+  "encryption": {
+    "enabled": false,
+    "provider": "local|vault|volcengine_kms",
+    "local": {
+      "key_file": "~/.openviking/master.key"
+    },
+    "vault": {
+      "address": "https://vault.example.com:8200",
+      "token": "string",
+      "mount_point": "transit",
+      "key_name": "openviking-root"
+    },
+    "volcengine_kms": {
+      "key_id": "string",
+      "region": "cn-beijing",
+      "access_key": "string",
+      "secret_key": "string"
+    }
   },
   "storage": {
     "workspace": "string",
@@ -812,7 +1087,9 @@ Error: VLM request timeout
 
 - Check network connectivity
 - Increase timeout in config
+- For intermittent timeouts, increase `vlm.max_retries` moderately
 - Try a smaller model
+- For bulk ingestion, consider lowering `vlm.max_concurrent`
 
 ### Rate Limiting
 
@@ -821,6 +1098,8 @@ Error: Rate limit exceeded
 ```
 
 Volcengine has rate limits. Consider batch processing with delays or upgrading your plan.
+- Lower `embedding.max_concurrent` / `vlm.max_concurrent` first
+- Keep a small `max_retries` value for occasional `429`s; set it to `0` if you prefer fail-fast behavior
 
 ## Related Documentation
 

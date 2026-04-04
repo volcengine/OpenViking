@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 import random
 import shutil
 import unittest
@@ -502,9 +502,6 @@ class TestRecall(unittest.TestCase):
         # Let's assume standard behavior where defined fields are attributes or in a dictionary.
         # For LocalCollection, non-vector fields are often serialized into a 'fields' JSON string or accessible directly if mapped.
         # We need to check if the data came back.
-
-        # NOTE: FetchDataResult structure: result_num, labels, scores, extra_json?
-        # Actually fetch_data returns a list of results.
 
         print(f"Full Record Fetch: {res_full.items[0]}")
 

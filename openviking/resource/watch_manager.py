@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Resource monitoring task manager.
 
@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-from openviking_cli.exceptions import ConflictError
+from openviking_cli.exceptions import ConflictError, NotFoundError
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -156,7 +156,7 @@ class WatchManager:
                 content = await self._viking_fs.read_file(self.STORAGE_URI, ctx=ctx)
                 if content and content.strip():
                     data = json.loads(content)
-            except FileNotFoundError:
+            except NotFoundError:
                 data = None
             except json.JSONDecodeError as e:
                 logger.warning(f"[WatchManager] Invalid task storage JSON: {e}")
@@ -170,7 +170,7 @@ class WatchManager:
                     if bak_content and bak_content.strip():
                         data = json.loads(bak_content)
                         recovered_from_backup = True
-                except FileNotFoundError:
+                except NotFoundError:
                     data = None
                 except json.JSONDecodeError as e:
                     logger.warning(f"[WatchManager] Invalid backup task storage JSON: {e}")
@@ -210,7 +210,7 @@ class WatchManager:
                 normalized = True
             if normalized:
                 await self._save_tasks()
-        except FileNotFoundError:
+        except NotFoundError:
             logger.debug("[WatchManager] No existing task storage found, starting fresh")
         except Exception as e:
             logger.error(f"[WatchManager] Failed to load tasks: {e}")

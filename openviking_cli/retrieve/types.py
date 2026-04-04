@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Data types for OpenViking retrieval module.
 """
@@ -345,8 +345,13 @@ class FindResult:
     def __post_init__(self):
         self.total = len(self.memories) + len(self.resources) + len(self.skills)
 
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary format."""
+    def to_dict(self, include_provenance: bool = False) -> Dict[str, Any]:
+        """Convert to dictionary format.
+
+        Args:
+            include_provenance: If True, include query_results with thinking
+                trace and searched_directories for retrieval observability.
+        """
         result = {
             "memories": [self._context_to_dict(m) for m in self.memories],
             "resources": [self._context_to_dict(r) for r in self.resources],
@@ -359,6 +364,9 @@ class FindResult:
                 "reasoning": self.query_plan.reasoning,
                 "queries": [self._query_to_dict(q) for q in self.query_plan.queries],
             }
+
+        if include_provenance and self.query_results:
+            result["provenance"] = [self._query_result_to_dict(qr) for qr in self.query_results]
 
         return result
 
@@ -383,6 +391,24 @@ class FindResult:
             "context_type": q.context_type.value,
             "intent": q.intent,
             "priority": q.priority,
+        }
+
+    def _query_result_to_dict(self, qr: "QueryResult") -> Dict[str, Any]:
+        """Convert QueryResult to dict with provenance data."""
+        return {
+            "query": qr.query.query,
+            "searched_directories": qr.searched_directories,
+            "matched_contexts": [
+                {
+                    "uri": ctx.uri,
+                    "tier": f"L{ctx.level}",
+                    "context_type": ctx.context_type.value,
+                    "score": ctx.score,
+                    "match_reason": ctx.match_reason,
+                }
+                for ctx in qr.matched_contexts
+            ],
+            "thinking_trace": qr.thinking_trace.to_dict(),
         }
 
     @classmethod

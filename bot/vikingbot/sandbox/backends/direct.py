@@ -24,6 +24,7 @@ class DirectBackend(SandboxBackend):
         self.session_key = session_key
         self._workspace = workspace
         self._running = False
+        self.restrict_workspaces = config.restrict_workspaces
 
     async def start(self) -> None:
         """Start the backend (no-op for direct backend)."""
@@ -140,3 +141,27 @@ class DirectBackend(SandboxBackend):
         for item in sorted(sandbox_path.iterdir()):
             items.append((item.name, item.is_dir()))
         return items
+
+    def _check_path_restriction(self, path: Path) -> None:
+        """Check if path is within workspace (if restricted).
+
+        Args:
+            path: Path to check
+
+        Raises:
+            PermissionError: If path outside workspace and restriction is enabled
+        """
+
+        workspace = self.workspace.resolve()
+        resolved = path.resolve()
+
+        if self.restrict_workspaces and self.session_key in self.restrict_workspaces:
+            restrict_path = Path(self.restrict_workspaces[self.session_key]).resolve()
+            logger.info(f"Restricted workspace: {restrict_path}")
+            logger.info(f"Checking path: {resolved}")
+            if resolved != restrict_path and restrict_path not in resolved.parents:
+                raise PermissionError(f"Path outside restricted workspace: {path}")
+            return
+
+        if resolved != workspace and workspace not in resolved.parents:
+            raise PermissionError(f"Path outside workspace: {path}")

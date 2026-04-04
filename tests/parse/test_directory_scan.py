@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Unit tests for directory pre-scan validation module (RFC #83 T1)."""
 
 from pathlib import Path
@@ -35,6 +35,8 @@ def tmp_tree(tmp_path: Path) -> Path:
 
     # text (code/config, no dedicated parser or text parser only): .py, .yaml
     (tmp_path / "main.py").write_text("print(1)", encoding="utf-8")
+    (tmp_path / "engine.cc").write_text("int main() { return 0; }", encoding="utf-8")
+    (tmp_path / "inline.inl").write_text("inline impl", encoding="utf-8")
     (tmp_path / "config.yaml").write_text("key: value", encoding="utf-8")
 
     # unsupported: unknown extension
@@ -136,6 +138,8 @@ class TestScanDirectoryClassification:
         result: DirectoryScanResult = scan_directory(tmp_tree, registry=registry, strict=False)
         processable_rel = [f.rel_path for f in result.processable]
         assert "main.py" in processable_rel
+        assert "engine.cc" in processable_rel
+        assert "inline.inl" in processable_rel
         assert "config.yaml" in processable_rel
         assert "src/app.py" in processable_rel
 

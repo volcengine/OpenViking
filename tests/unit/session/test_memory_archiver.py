@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Unit tests for memory cold-storage archival."""
 
 from datetime import datetime, timedelta, timezone
@@ -122,6 +122,26 @@ RECENT_DATE = NOW - timedelta(days=2)
 
 class TestScan:
     @pytest.mark.asyncio
+    async def test_scan_requests_no_parent_uri_field(self):
+        storage = _make_storage([])
+        archiver = MemoryArchiver(
+            viking_fs=_make_viking_fs(),
+            storage=storage,
+            threshold=0.5,
+            min_age_days=7,
+        )
+
+        await archiver.scan("viking://memories/", now=NOW)
+
+        assert storage.scroll.await_count == 1
+        assert storage.scroll.await_args.kwargs["output_fields"] == [
+            "uri",
+            "active_count",
+            "updated_at",
+            "context_type",
+        ]
+
+    @pytest.mark.asyncio
     async def test_scan_finds_cold_memories(self):
         records = [
             {
@@ -129,7 +149,6 @@ class TestScan:
                 "active_count": 0,
                 "updated_at": OLD_DATE,
                 "context_type": "memory",
-                "parent_uri": "viking://memories/",
             },
         ]
         archiver = MemoryArchiver(

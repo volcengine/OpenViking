@@ -137,10 +137,7 @@ impl TreeState {
         }
     }
 
-    async fn fetch_children(
-        client: &HttpClient,
-        uri: &str,
-    ) -> Result<Vec<TreeNode>, String> {
+    async fn fetch_children(client: &HttpClient, uri: &str) -> Result<Vec<TreeNode>, String> {
         let result = client
             .ls(uri, false, false, "original", 256, false, 1000)
             .await
@@ -167,10 +164,12 @@ impl TreeState {
 
         // Sort: directories first, then alphabetical
         nodes.sort_by(|a, b| {
-            b.entry
-                .is_dir
-                .cmp(&a.entry.is_dir)
-                .then_with(|| a.entry.name().to_lowercase().cmp(&b.entry.name().to_lowercase()))
+            b.entry.is_dir.cmp(&a.entry.is_dir).then_with(|| {
+                a.entry
+                    .name()
+                    .to_lowercase()
+                    .cmp(&b.entry.name().to_lowercase())
+            })
         });
 
         Ok(nodes)

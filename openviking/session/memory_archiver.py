@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Cold-storage archival for stale memories based on hotness scoring.
 
 Moves memories with low hotness scores to an archive directory,
@@ -16,6 +16,7 @@ from openviking.server.identity import RequestContext
 from openviking.storage.expr import And, Eq
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.utils.logger import get_logger
+from openviking_cli.utils.uri import VikingURI
 
 logger = get_logger(__name__)
 
@@ -79,6 +80,14 @@ class MemoryArchiver:
         self.threshold = threshold
         self.min_age_days = min_age_days
 
+    @staticmethod
+    def _derive_parent_uri(uri: str) -> str:
+        try:
+            parent = VikingURI(uri).parent
+        except Exception:
+            return ""
+        return parent.uri if parent else ""
+
     async def scan(
         self,
         scope_uri: str,
@@ -121,7 +130,6 @@ class MemoryArchiver:
                     "active_count",
                     "updated_at",
                     "context_type",
-                    "parent_uri",
                 ],
             )
 
@@ -165,7 +173,7 @@ class MemoryArchiver:
                             updated_at=updated_at,
                             score=score,
                             context_type=record.get("context_type", ""),
-                            parent_uri=record.get("parent_uri", ""),
+                            parent_uri=self._derive_parent_uri(uri),
                         )
                     )
 

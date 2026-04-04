@@ -1,10 +1,10 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Identity and role types for OpenViking multi-tenant HTTP Server."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
+from typing import Any, List, Optional
 
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -35,3 +35,24 @@ class RequestContext:
     @property
     def account_id(self) -> str:
         return self.user.account_id
+
+
+@dataclass
+class ToolContext:
+    """Tool-level context, containing request context and additional tool-specific information."""
+
+    request_ctx: RequestContext
+    default_search_uris: List[str] = field(default_factory=list)
+    transaction_handle: Optional[Any] = None
+
+    @property
+    def user(self):
+        return self.request_ctx.user
+
+    @property
+    def role(self):
+        return self.request_ctx.role
+
+    @property
+    def account_id(self) -> str:
+        return self.request_ctx.user.account_id

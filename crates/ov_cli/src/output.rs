@@ -91,6 +91,16 @@ fn print_table<T: Serialize>(result: T, compact: bool) {
     // Handle object
     if let Some(obj) = value.as_object() {
         if !obj.is_empty() {
+            if let Some(rendered) = render_session_context(obj, compact) {
+                println!("{}", rendered);
+                return;
+            }
+
+            if let Some(rendered) = render_session_archive(obj, compact) {
+                println!("{}", rendered);
+                return;
+            }
+
             // Rule 5: ComponentStatus (name + is_healthy + status)
             if obj.contains_key("name")
                 && obj.contains_key("is_healthy")
@@ -347,6 +357,233 @@ fn value_to_table(value: &serde_json::Value, compact: bool) -> Option<String> {
     }
 
     None
+}
+
+fn render_session_context(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    compact: bool,
+) -> Option<String> {
+    if !(obj.contains_key("latest_archive_overview")
+        && obj.contains_key("pre_archive_abstracts")
+        && obj.contains_key("messages"))
+    {
+        return None;
+    }
+
+    let latest_archive_overview = obj
+        .get("latest_archive_overview")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let estimated_tokens = obj
+        .get("estimatedTokens")
+        .map(format_value)
+        .unwrap_or_else(|| "0".to_string());
+
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(format!("estimated_tokens       {}", estimated_tokens));
+
+    if let Some(stats) = obj.get("stats").and_then(|v| v.as_object()) {
+        lines.push(format!(
+            "active_messages        {}",
+            obj.get("messages")
+                .and_then(|v| v.as_array())
+                .map(|items| items.len())
+                .unwrap_or(0)
+        ));
+        lines.push(format!(
+            "total_archives         {}",
+            stats.get("totalArchives")
+                .map(format_value)
+                .unwrap_or_else(|| "0".to_string())
+        ));
+        lines.push(format!(
+            "included_archives      {}",
+            stats.get("includedArchives")
+                .map(format_value)
+                .unwrap_or_else(|| "0".to_string())
+        ));
+        lines.push(format!(
+            "dropped_archives       {}",
+            stats.get("droppedArchives")
+                .map(format_value)
+                .unwrap_or_else(|| "0".to_string())
+        ));
+    }
+
+    lines.push(String::new());
+    lines.push("latest_archive_overview".to_string());
+    if latest_archive_overview.is_empty() {
+        let has_abstracts = obj
+            .get("pre_archive_abstracts")
+            .and_then(|v| v.as_array())
+            .map(|items| !items.is_empty())
+            .unwrap_or(false);
+        if !has_abstracts {
+            lines.push("(none)".to_string());
+        } else {
+            lines.push("(trimmed by token budget or unavailable)".to_string());
+        }
+    } else {
+        lines.push(latest_archive_overview.to_string());
+    }
+
+    if let Some(items) = obj.get("pre_archive_abstracts").and_then(|v| v.as_array()) {
+        lines.push(String::new());
+        lines.push(format!("pre_archive_abstracts ({})", items.len()));
+        if items.is_empty() {
+            lines.push("(empty)".to_string());
+        } else if let Some(table) = format_array_to_table(items, compact) {
+            lines.push(table.trim_end().to_string());
+        }
+    }
+
+    if let Some(messages) = obj.get("messages").and_then(|v| v.as_array()) {
+        lines.push(String::new());
+        lines.push(format!("messages ({})", messages.len()));
+        if messages.is_empty() {
+            lines.push("(empty)".to_string());
+        } else {
+            let rows = build_message_rows(messages);
+            if let Some(table) = format_array_to_table(&rows, compact) {
+                lines.push(table.trim_end().to_string());
+            }
+        }
+    }
+
+    Some(lines.join("\n"))
+}
+
+fn render_session_archive(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    compact: bool,
+) -> Option<String> {
+    if !(obj.contains_key("archive_id") && obj.contains_key("overview") && obj.contains_key("messages"))
+    {
+        return None;
+    }
+
+    let archive_id = obj.get("archive_id").and_then(|v| v.as_str()).unwrap_or("");
+    let abstract_text = obj.get("abstract").and_then(|v| v.as_str()).unwrap_or("");
+    let overview = obj.get("overview").and_then(|v| v.as_str()).unwrap_or("");
+
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(format!(
+        "archive_id             {}",
+        if archive_id.is_empty() {
+            "(none)"
+        } else {
+            archive_id
+        }
+    ));
+    lines.push(format!(
+        "abstract               {}",
+        if abstract_text.is_empty() {
+            "(empty)"
+        } else {
+            abstract_text
+        }
+    ));
+
+    lines.push(String::new());
+    lines.push("overview".to_string());
+    lines.push(if overview.is_empty() {
+        "(empty)".to_string()
+    } else {
+        overview.to_string()
+    });
+
+    if let Some(messages) = obj.get("messages").and_then(|v| v.as_array()) {
+        lines.push(String::new());
+        lines.push(format!("messages ({})", messages.len()));
+        if messages.is_empty() {
+            lines.push("(empty)".to_string());
+        } else {
+            let rows = build_message_rows(messages);
+            if let Some(table) = format_array_to_table(&rows, compact) {
+                lines.push(table.trim_end().to_string());
+            }
+        }
+    }
+
+    Some(lines.join("\n"))
+}
+
+fn build_message_rows(messages: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    let mut rows: Vec<serde_json::Value> = Vec::new();
+
+    for message in messages {
+        let Some(obj) = message.as_object() else {
+            continue;
+        };
+
+        let mut row = serde_json::Map::new();
+        row.insert(
+            "id".to_string(),
+            obj.get("id").cloned().unwrap_or(serde_json::Value::Null),
+        );
+        row.insert(
+            "role".to_string(),
+            obj.get("role").cloned().unwrap_or(serde_json::Value::Null),
+        );
+        row.insert(
+            "created_at".to_string(),
+            obj.get("created_at")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        );
+        row.insert(
+            "content".to_string(),
+            serde_json::Value::String(summarize_message_content(
+                obj.get("parts").and_then(|v| v.as_array()),
+            )),
+        );
+        rows.push(serde_json::Value::Object(row));
+    }
+
+    rows
+}
+
+fn summarize_message_content(parts: Option<&Vec<serde_json::Value>>) -> String {
+    let Some(parts) = parts else {
+        return String::new();
+    };
+
+    let mut chunks: Vec<String> = Vec::new();
+    for part in parts {
+        let Some(obj) = part.as_object() else {
+            chunks.push(format_value(part));
+            continue;
+        };
+
+        let part_type = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        match part_type {
+            "text" => {
+                if let Some(text) = obj.get("text").and_then(|v| v.as_str()) {
+                    chunks.push(text.to_string());
+                }
+            }
+            "context" => {
+                let abstract_text = obj.get("abstract").and_then(|v| v.as_str()).unwrap_or("");
+                chunks.push(if abstract_text.is_empty() {
+                    "[context]".to_string()
+                } else {
+                    format!("[context] {}", abstract_text)
+                });
+            }
+            "tool" => {
+                let name = obj.get("tool_name").and_then(|v| v.as_str()).unwrap_or("tool");
+                let status = obj.get("tool_status").and_then(|v| v.as_str()).unwrap_or("");
+                chunks.push(if status.is_empty() {
+                    format!("[tool:{}]", name)
+                } else {
+                    format!("[tool:{}:{}]", name, status)
+                });
+            }
+            _ => chunks.push(format_value(part)),
+        }
+    }
+
+    chunks.join(" | ")
 }
 
 struct ColumnInfo {

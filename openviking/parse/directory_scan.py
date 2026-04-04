@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Directory pre-scan validation module for OpenViking.
 
@@ -289,9 +289,7 @@ def scan_directory(
             raise UnsupportedDirectoryFilesError(msg, unsupported_paths)
         else:
             logger.warning(msg)
-        result.warnings.append(msg)
-        for rel in unsupported_paths:
-            result.warnings.append(f"  - {rel}")
+            result.warnings.append(msg)
 
     result.processable.sort(key=lambda x: x.rel_path)
     result.unsupported.sort(key=lambda x: x.rel_path)

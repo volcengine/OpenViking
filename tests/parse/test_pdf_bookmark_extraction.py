@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Tests for PDF bookmark/outline extraction in PDFParser.
 
@@ -104,6 +104,49 @@ class TestExtractBookmarks:
         bookmarks = self.parser._extract_bookmarks(mock_pdf)
         assert len(bookmarks) == 1
         assert bookmarks[0]["page_num"] is None
+
+    def test_extract_bookmarks_integer_page_index(self):
+        """Bookmarks with integer destination (0-based) are resolved correctly."""
+        mock_pdf = MagicMock()
+
+        mock_page1 = MagicMock()
+        mock_page1.page_obj.objid = 100
+        mock_page2 = MagicMock()
+        mock_page2.page_obj.objid = 200
+        mock_pdf.pages = [mock_page1, mock_page2]
+
+        # Integer page indices instead of object references
+        mock_pdf.doc.get_outlines.return_value = [
+            (1, "Chapter 1", [0, "/Fit"], None, None),
+            (1, "Chapter 2", [1, "/Fit"], None, None),
+        ]
+
+        bookmarks = self.parser._extract_bookmarks(mock_pdf)
+        assert len(bookmarks) == 2
+        assert bookmarks[0]["page_num"] == 1
+        assert bookmarks[0]["title"] == "Chapter 1"
+        assert bookmarks[1]["page_num"] == 2
+        assert bookmarks[1]["title"] == "Chapter 2"
+
+    def test_extract_bookmarks_integer_page_index_out_of_range(self):
+        """Out-of-range integer page indices are treated as unresolved."""
+        mock_pdf = MagicMock()
+
+        mock_page1 = MagicMock()
+        mock_page1.page_obj.objid = 100
+        mock_pdf.pages = [mock_page1]  # Only 1 page
+
+        mock_pdf.doc.get_outlines.return_value = [
+            (1, "Valid", [0, "/Fit"], None, None),
+            (1, "Too High", [5, "/Fit"], None, None),
+            (1, "Negative", [-1, "/Fit"], None, None),
+        ]
+
+        bookmarks = self.parser._extract_bookmarks(mock_pdf)
+        assert len(bookmarks) == 3
+        assert bookmarks[0]["page_num"] == 1
+        assert bookmarks[1]["page_num"] is None
+        assert bookmarks[2]["page_num"] is None
 
     def test_extract_bookmarks_exception_returns_empty(self):
         """Returns empty list on unexpected exceptions (best-effort)."""

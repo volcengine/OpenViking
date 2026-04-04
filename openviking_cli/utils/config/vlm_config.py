@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
-from typing import Any, Dict, Optional
+# SPDX-License-Identifier: AGPL-3.0
+from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -12,7 +12,7 @@ class VLMConfig(BaseModel):
     api_key: Optional[str] = Field(default=None, description="API key")
     api_base: Optional[str] = Field(default=None, description="API base URL")
     temperature: float = Field(default=0.0, description="Generation temperature")
-    max_retries: int = Field(default=2, description="Maximum retry attempts")
+    max_retries: int = Field(default=3, description="Maximum retry attempts")
 
     provider: Optional[str] = Field(default=None, description="Provider type")
     backend: Optional[str] = Field(
@@ -35,6 +35,11 @@ class VLMConfig(BaseModel):
 
     max_concurrent: int = Field(
         default=100, description="Maximum number of concurrent LLM calls for semantic processing"
+    )
+
+    api_version: Optional[str] = Field(
+        default=None,
+        description="API version for Azure OpenAI (e.g., '2025-01-01-preview').",
     )
 
     extra_headers: Optional[Dict[str, str]] = Field(
@@ -158,6 +163,7 @@ class VLMConfig(BaseModel):
             "thinking": self.thinking,
             "max_tokens": self.max_tokens,
             "stream": stream,
+            "api_version": self.api_version,
         }
 
         if config:
@@ -167,17 +173,35 @@ class VLMConfig(BaseModel):
 
         return result
 
-    def get_completion(self, prompt: str, thinking: bool = False) -> str:
+    def get_completion(
+        self,
+        prompt: str = "",
+        thinking: bool = False,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, Any]:
         """Get LLM completion."""
-        return self.get_vlm_instance().get_completion(prompt, thinking)
+        return self.get_vlm_instance().get_completion(
+            prompt=prompt,
+            thinking=thinking,
+            tools=tools,
+            messages=messages,
+        )
 
     async def get_completion_async(
-        self, prompt: str, thinking: bool = False, max_retries: int | None = None
-    ) -> str:
-        """Get LLM completion asynchronously. Uses self.max_retries if not specified."""
-        if max_retries is None:
-            max_retries = self.max_retries
-        return await self.get_vlm_instance().get_completion_async(prompt, thinking, max_retries)
+        self,
+        prompt: str = "",
+        thinking: bool = False,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, Any]:
+        """Get LLM completion asynchronously."""
+        return await self.get_vlm_instance().get_completion_async(
+            prompt=prompt,
+            thinking=thinking,
+            tools=tools,
+            messages=messages,
+        )
 
     def is_available(self) -> bool:
         """Check if LLM is configured."""
@@ -185,18 +209,34 @@ class VLMConfig(BaseModel):
 
     def get_vision_completion(
         self,
-        prompt: str,
-        images: list,
+        prompt: str = "",
+        images: Optional[list] = None,
         thinking: bool = False,
-    ) -> str:
+        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, Any]:
         """Get LLM completion with images."""
-        return self.get_vlm_instance().get_vision_completion(prompt, images, thinking)
+        return self.get_vlm_instance().get_vision_completion(
+            prompt=prompt,
+            images=images,
+            thinking=thinking,
+            tools=tools,
+            messages=messages,
+        )
 
     async def get_vision_completion_async(
         self,
-        prompt: str,
-        images: list,
+        prompt: str = "",
+        images: Optional[list] = None,
         thinking: bool = False,
-    ) -> str:
+        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, Any]:
         """Get LLM completion with images asynchronously."""
-        return await self.get_vlm_instance().get_vision_completion_async(prompt, images, thinking)
+        return await self.get_vlm_instance().get_vision_completion_async(
+            prompt=prompt,
+            images=images,
+            thinking=thinking,
+            tools=tools,
+            messages=messages,
+        )

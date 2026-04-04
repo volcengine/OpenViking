@@ -120,7 +120,7 @@ viking://
 │       ├── entities/             # Each independent
 │       └── events/               # Each independent
 │
-├── agent/{agent_space}/          # agent_space = agent_space_name()
+├── agent/{agent_space}/          # agent_space is derived from memory.agent_scope_mode
 │   ├── skills/                   # Skill definitions
 │   ├── memories/
 │   │   ├── cases/
@@ -133,6 +133,11 @@ viking://
     ├── tools/
     └── history/
 ```
+
+The `agent_space` value depends on `memory.agent_scope_mode`:
+
+- `user+agent` (default): `agent_space = md5(f"{user_id}:{agent_id}")[:12]`
+- `agent`: `agent_space = md5(agent_id)[:12]`
 
 ## URI Operations
 

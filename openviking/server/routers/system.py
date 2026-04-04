@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """System endpoints for OpenViking HTTP Server."""
 
 from typing import Optional
@@ -109,15 +109,20 @@ async def readiness_check(request: Request):
 
 @router.get("/api/v1/system/status", tags=["system"])
 async def system_status(
-    _ctx: RequestContext = Depends(get_request_context),
+    ctx: RequestContext = Depends(get_request_context),
 ):
-    """Get system status."""
+    """Get system status.
+
+    ``result.user`` is the authenticated request's ``user_id`` (from API key or
+    headers), not the process-wide service default — clients use this to resolve
+    multi-tenant paths (e.g. OpenClaw plugin).
+    """
     service = get_service()
     return Response(
         status="ok",
         result={
             "initialized": service._initialized,
-            "user": service.user._user_id,
+            "user": ctx.user.user_id,
         },
     )
 

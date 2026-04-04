@@ -258,7 +258,7 @@ docker run -d \
   -v ~/.openviking/ov.conf:/app/ov.conf \
   -v /var/lib/openviking/data:/app/data \
   --restart unless-stopped \
-  ghcr.io/volcengine/openviking:main
+  ghcr.io/volcengine/openviking:latest
 ```
 
 > 将 `~/.openviking/ov.conf` 替换为你实际的配置文件路径。

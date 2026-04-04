@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Excel (.xlsx/.xls/.xlsm) parser for OpenViking.
 
@@ -142,7 +142,9 @@ class ExcelParser(BaseParser):
                 dt = xlrd.xldate_as_tuple(cell.value, wb.datemode)
                 # Include time component if non-zero
                 if dt[3] or dt[4] or dt[5]:
-                    return f"{dt[0]:04d}-{dt[1]:02d}-{dt[2]:02d} {dt[3]:02d}:{dt[4]:02d}:{dt[5]:02d}"
+                    return (
+                        f"{dt[0]:04d}-{dt[1]:02d}-{dt[2]:02d} {dt[3]:02d}:{dt[4]:02d}:{dt[5]:02d}"
+                    )
                 return f"{dt[0]:04d}-{dt[1]:02d}-{dt[2]:02d}"
             except Exception:
                 return str(cell.value)
@@ -151,8 +153,13 @@ class ExcelParser(BaseParser):
         if cell.ctype == xlrd.XL_CELL_ERROR:
             # xlrd error code map
             error_map = {
-                0x00: "#NULL!", 0x07: "#DIV/0!", 0x0F: "#VALUE!",
-                0x17: "#REF!", 0x1D: "#NAME?", 0x24: "#NUM!", 0x2A: "#N/A",
+                0x00: "#NULL!",
+                0x07: "#DIV/0!",
+                0x0F: "#VALUE!",
+                0x17: "#REF!",
+                0x1D: "#NAME?",
+                0x24: "#NUM!",
+                0x2A: "#N/A",
             }
             return error_map.get(cell.value, f"#ERR({cell.value})")
         if cell.ctype == xlrd.XL_CELL_NUMBER:

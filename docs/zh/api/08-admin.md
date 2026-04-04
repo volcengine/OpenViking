@@ -2,6 +2,8 @@
 
 Admin API 用于多租户环境下的账户和用户管理。包括工作区（account）的创建与删除、用户注册与移除、角色变更、API Key 重新生成。
 
+该 API 只适用于 `api_key` 模式下的管理链路。在 `trusted` 模式里，普通请求不使用 user key 注册流程；如果去调用 Admin API，服务端会返回明确权限错误，说明账户/用户管理需要切换到配置了 `root_api_key` 的 `api_key` 模式。
+
 ## 角色与权限
 
 | 角色 | 说明 |
@@ -443,6 +445,7 @@ curl -X DELETE http://localhost:1933/api/v1/admin/accounts/acme \
 
 ## 相关文档
 
+- [多租户](../concepts/11-multi-tenant.md) - 多租户模型、角色和共享边界
 - [API 概览](01-overview.md) - 认证与响应格式
 - [会话管理](05-sessions.md) - 会话管理
 - [系统](07-system.md) - 系统和监控 API

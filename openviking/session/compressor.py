@@ -1,10 +1,10 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Session Compressor for OpenViking.
 
 Handles extraction of long-term memories from session conversations.
-Uses MemoryExtractor for 6-category extraction and MemoryDeduplicator for LLM-based dedup.
+Uses MemoryExtractor for 8-category extraction and MemoryDeduplicator for LLM-based dedup.
 """
 
 from dataclasses import dataclass
@@ -57,7 +57,7 @@ class ExtractionStats:
 
 
 class SessionCompressor:
-    """Session memory extractor with 6-category memory extraction."""
+    """Session memory extractor with 8-category memory extraction."""
 
     def __init__(
         self,
@@ -279,12 +279,16 @@ class SessionCompressor:
         session_id: Optional[str] = None,
         ctx: Optional[RequestContext] = None,
         strict_extract_errors: bool = False,
+        latest_archive_overview: str = "",
     ) -> List[Context]:
         """Extract long-term memories from messages."""
         if not messages:
             return []
 
-        context = {"messages": messages}
+        context = {
+            "messages": messages,
+            "summary": latest_archive_overview or "",
+        }
         if not ctx:
             return []
 

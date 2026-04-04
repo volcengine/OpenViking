@@ -73,6 +73,8 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 {
   "url": "http://localhost:1933",
   "api_key": "your-key",
+  "account": "acme",
+  "user": "alice",
   "agent_id": "my-agent"
 }
 ```
@@ -81,11 +83,20 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 |------|------|--------|
 | `url` | 服务端地址 | （必填） |
 | `api_key` | API Key | `null`（无认证） |
+| `account` | 面向租户请求的默认 account 请求头 | `null` |
+| `user` | 面向租户请求的默认 user 请求头 | `null` |
 | `agent_id` | Agent 标识符 | `null` |
 | `timeout` | HTTP 请求超时时间（秒） | `60.0` |
 | `output` | 默认输出格式：`"table"` 或 `"json"` | `"table"` |
 
 详见 [配置指南](../guides/01-configuration.md#ovcliconf)。
+
+**HTTP 模式下的本地文件**
+
+- CLI、`SyncHTTPClient`、`AsyncHTTPClient` 遇到本地文件或目录时，会先自动上传，再调用服务端 API。
+- 裸 HTTP 调用没有这层封装。使用 `curl` 或其他 HTTP 客户端时，需要先调用 `POST /api/v1/resources/temp_upload`，再把返回的 `temp_file_id` 传给目标 API。
+- 裸 HTTP 如果导入本地目录，需要先自行打成 `.zip` 再上传；服务端不接受直接传宿主机目录路径。
+- `POST /api/v1/resources` 可以直接接收远端 URL，但不接受 `./doc.md`、`/tmp/doc.md` 这类宿主机本地路径。
 
 ### 直接 HTTP（curl）
 
@@ -300,6 +311,7 @@ openviking -o json ls viking://resources/
 | GET | `/api/v1/content/read` | 读取完整内容（L2） |
 | GET | `/api/v1/content/abstract` | 读取摘要（L0） |
 | GET | `/api/v1/content/overview` | 读取概览（L1） |
+| POST | `/api/v1/content/write` | 修改已有文件并自动刷新语义与向量 |
 
 ### 搜索
 
@@ -325,6 +337,7 @@ openviking -o json ls viking://resources/
 | POST | `/api/v1/sessions` | 创建会话 |
 | GET | `/api/v1/sessions` | 列出会话 |
 | GET | `/api/v1/sessions/{id}` | 获取会话 |
+| GET | `/api/v1/sessions/{id}/context` | 获取组装后的会话上下文 |
 | DELETE | `/api/v1/sessions/{id}` | 删除会话 |
 | POST | `/api/v1/sessions/{id}/commit` | 提交会话 |
 | POST | `/api/v1/sessions/{id}/messages` | 添加消息 |

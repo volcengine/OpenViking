@@ -6,6 +6,7 @@ import os
 import select
 import sys
 import time
+import warnings
 from pathlib import Path
 
 import typer
@@ -38,6 +39,14 @@ from vikingbot.utils.helpers import (
     get_history_path,
     get_source_workspace_path,
     set_bot_data_path,
+)
+
+# Ignore Pydantic V1 compatibility warning with Python 3.14+ from volcenginesdkarkruntime
+warnings.filterwarnings(
+    "ignore",
+    message="Core Pydantic V1 functionality isn't compatible with Python 3.14 or greater.",
+    category=UserWarning,
+    module="volcenginesdkarkruntime._compat",
 )
 
 app = typer.Typer(
@@ -193,18 +202,20 @@ def main(
 
 
 def _make_provider(config, langfuse_client: None = None):
-    """Create LiteLLMProvider from config. Allows starting without API key."""
+    """Create LiteLLM provider from configuration."""
     from vikingbot.providers.litellm_provider import LiteLLMProvider
 
-    config = load_config()
     p = config.agents
-
-    model = p.model
+    model = p.model if p else None
     api_key = p.api_key if p else None
     api_base = p.api_base if p else None
     provider_name = p.provider if p else None
+    extra_headers = p.extra_headers if p else {}
 
-    if not (api_key) and not model.startswith("bedrock/"):
+    if not model:
+        raise RuntimeError("No LLM model configured. Please set it in ~/.openviking/ov.conf")
+
+    if not api_key and not model.startswith("bedrock/"):
         console.print("[yellow]Warning: No API key configured.[/yellow]")
         console.print("You can configure providers later in the Console UI.")
 
@@ -212,9 +223,9 @@ def _make_provider(config, langfuse_client: None = None):
         api_key=api_key,
         api_base=api_base,
         default_model=model,
-        extra_headers=p.extra_headers if p else None,
+        extra_headers=extra_headers,
         provider_name=provider_name,
-        # langfuse_client=langfuse_client,
+        langfuse_client=langfuse_client,
     )
 
 
@@ -429,6 +440,7 @@ def prepare_channel(
             openapi_config,
             bus,
             app=fastapi_app,  # Pass the external FastAPI app
+            global_config=config,
         )
         channels.add_channel(openapi_channel)
         logger.info(f"OpenAPI channel enabled on port {openapi_port}")
@@ -443,7 +455,6 @@ def prepare_channel(
 def prepare_heartbeat(config, agent_loop, session_manager) -> HeartbeatService:
     # Create heartbeat service
     async def on_heartbeat(prompt: str, session_key: SessionKey | None = None) -> str:
-
         return await agent_loop.process_direct(
             prompt,
             session_key=session_key,
@@ -573,21 +584,9 @@ def chat(
     bus = MessageBus()
     config = ensure_config(path)
     _init_bot_data(config)
-    session_manager = SessionManager(config.bot_data_path)
-
-    is_single_turn = message is not None
-    # Use unified default session ID
-    if session_id is None:
-        session_id = get_or_create_machine_id()
-    cron = prepare_cron(bus, quiet=is_single_turn)
-    channels = prepare_agent_channel(config, bus, message, session_id, markdown, logs, eval, sender)
-    agent_loop = prepare_agent_loop(
-        config, bus, session_manager, cron, quiet=is_single_turn, eval=eval
-    )
 
     logger.remove()
-
-    log_file = get_data_dir() / f"vikingbot.debug.{os.getpid()}.log"
+    log_file = get_data_dir() / "log" / f"vikingbot.debug.{os.getpid()}.log"
     logger.add(
         log_file,
         level="DEBUG",
@@ -602,6 +601,18 @@ def chat(
         logger.add(sys.stderr, level="DEBUG")
     else:
         logger.add(sys.stderr, level="ERROR")
+
+    session_manager = SessionManager(config.bot_data_path)
+
+    is_single_turn = message is not None
+    # Use unified default session ID
+    if session_id is None:
+        session_id = get_or_create_machine_id()
+    cron = prepare_cron(bus, quiet=is_single_turn)
+    channels = prepare_agent_channel(config, bus, message, session_id, markdown, logs, eval, sender)
+    agent_loop = prepare_agent_loop(
+        config, bus, session_manager, cron, quiet=is_single_turn, eval=eval
+    )
 
     async def run():
         if is_single_turn:

@@ -152,7 +152,7 @@ Tests for session management (`Session` class).
 | `test_session_messages.py` | Message management | `add_message()` user/assistant roles, TextPart/ContextPart/ToolPart; `update_tool_part()` status transitions (running→completed/failed) |
 | `test_session_usage.py` | Usage tracking | `used()` record context URIs, record skill usage, record both; multiple usage records per session |
 | `test_session_commit.py` | Session commit | `commit()` success status, memory extraction trigger, message archiving, empty session handling, multiple commits, usage record persistence |
-| `test_session_context.py` | Context for search | `get_context_for_search()` with max_messages/max_archives limits; context after commit with archived summaries |
+| `test_session_context.py` | Context for search | `get_context_for_search()` with `current_messages` + `latest_archive_overview`; latest completed archive only |
 
 ### vectordb/
 

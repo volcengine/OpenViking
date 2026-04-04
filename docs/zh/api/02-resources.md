@@ -16,6 +16,7 @@
 | 视频 | `.mp4`, `.mov`, `.avi` | 帧提取 + VLM |
 | 音频 | `.mp3`, `.wav`, `.m4a` | 语音转录 |
 | 文档 | `.docx` | 文本提取 |
+| 飞书/Lark | URL（`*.feishu.cn`、`*.larksuite.com`） | 云端文档解析（`lark-oapi`） |
 
 ## 处理流程
 
@@ -39,13 +40,35 @@ Input -> Parser -> TreeBuilder -> AGFS -> SemanticQueue -> Vector Index
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| path | str | 是 | - | 本地文件路径、目录路径或 URL |
+| path | str | 是 | - | SDK/CLI 可传本地路径、目录路径或 URL；裸 HTTP 仅支持远端 URL |
+| temp_file_id | str | 否 | None | `POST /api/v1/resources/temp_upload` 返回的上传 ID，用于裸 HTTP 导入本地文件 |
 | target | str | 否 | None | 目标 Viking URI（必须在 `resources` 作用域内） |
 | reason | str | 否 | "" | 添加该资源的原因（可提升搜索相关性） |
 | instruction | str | 否 | "" | 特殊处理指令 |
 | wait | bool | 否 | False | 等待语义处理完成 |
 | timeout | float | 否 | None | 超时时间（秒），仅在 wait=True 时生效 |
 | watch_interval | float | 否 | 0 | 定时更新间隔（分钟）。>0 开启/更新定时任务；<=0 关闭（停用）定时任务。仅在指定 target 时生效 |
+
+**本地文件和目录如何处理**
+
+- Python SDK 和 CLI 可以直接接收本地文件和目录路径。处于 HTTP 模式时，它们会先自动上传，再调用服务端 API。
+- 裸 HTTP 调用可以按两类理解：
+  - 远端资源：直接传 `path`，例如 `https://example.com/doc.pdf`
+  - 本地文件：先调用 `POST /api/v1/resources/temp_upload`，再把返回的 `temp_file_id` 传给目标 API
+  - 本地目录：先自行打成 `.zip`，上传该压缩包，再把返回的 `temp_file_id` 传给目标 API
+- `POST /api/v1/resources` 不接受 `./guide.md`、`/tmp/guide.md`、`/tmp/my-dir/` 这类宿主机本地路径。
+
+**增量更新（Incremental Update）**
+
+当你为同一个资源 URI 反复调用 `add_resource()` 时，系统会走“增量更新”而不是每次全量重建：
+
+- **触发条件**：请求里显式指定 `target`，且该 `target` 在知识库中已存在。
+- **总体思路**：每次导入都会先把新内容解析/构建成一棵“临时资源树”，随后在异步语义处理阶段，将临时树与 `target` 对应的现有资源树进行对比，只对发生变化的部分做重算与同步。
+- **语义阶段的增量**：
+  - 对**未变化的文件**：复用已有 L0（摘要）与向量索引记录，跳过向量化。
+  - 对**发生变化的文件**：重新生成摘要/向量索引。
+  - 对**目录级 L0/L1（abstract/overview）**：若目录下子项及其变更状态不变，则复用已有结果并跳过向量化；否则重算并更新。
+- **落盘与索引同步**：语义 DAG 结束后会对临时树与 `target` 做一次 top-down diff，同步三类变更：新增（添加新文件/目录）、删除（移除消失项）、更新（覆盖变化项）。同步过程中会同时联动更新向量库中的记录：删除项会删除对应向量记录；移动/覆盖会同步更新向量记录的 URI 映射，从而完成“文件树与向量索引的一致性增量更新”。
 
 **Python SDK (Embedded / HTTP)**
 
@@ -70,7 +93,7 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
   -d '{
-    "path": "./documents/guide.md",
+    "path": "https://example.com/guide.md",
     "reason": "User guide documentation"
   }'
 ```
@@ -129,6 +152,109 @@ curl -X POST http://localhost:1933/api/v1/resources \
 openviking add-resource https://example.com/api-docs.md --to viking://resources/external/ --reason "External API documentation"
 ```
 
+**示例：用裸 HTTP 添加本地文件**
+
+如果你直接调用 HTTP API，本地文件要先上传，再使用 `temp_file_id`。
+
+```bash
+# 第一步：上传本地文件
+TEMP_FILE_ID=$(
+  curl -sS -X POST http://localhost:1933/api/v1/resources/temp_upload \
+    -H "X-API-Key: your-key" \
+    -F 'file=@./documents/guide.md' \
+  | jq -r '.result.temp_file_id'
+)
+
+# 第二步：用 temp_file_id 添加资源
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d "{
+    \"temp_file_id\": \"$TEMP_FILE_ID\",
+    \"reason\": \"User guide documentation\",
+    \"wait\": true
+  }"
+```
+
+**示例：用裸 HTTP 添加本地目录**
+
+如果你直接调用 HTTP API，本地目录需要先自行打成 zip。CLI 和 SDK 会自动完成这一步。
+
+```bash
+# 第一步：先把本地目录打成 zip
+cd ./documents
+zip -r /tmp/guide.zip ./guide
+
+# 第二步：上传 zip 文件
+TEMP_FILE_ID=$(
+  curl -sS -X POST http://localhost:1933/api/v1/resources/temp_upload \
+    -H "X-API-Key: your-key" \
+    -F 'file=@/tmp/guide.zip' \
+  | jq -r '.result.temp_file_id'
+)
+
+# 第三步：用上传后的目录压缩包添加资源
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d "{
+    \"temp_file_id\": \"$TEMP_FILE_ID\",
+    \"reason\": \"Import local directory\",
+    \"wait\": true
+  }"
+```
+
+**示例：添加飞书/Lark 云端文档**
+
+[飞书](https://www.feishu.cn)及其国际版 [Lark](https://www.larksuite.com) 是国内科技公司广泛使用的协作平台。OpenViking 可以通过 URL 直接导入飞书云端文档。
+
+支持的文档类型：
+
+| 类型 | URL 格式 |
+|------|----------|
+| 文档 | `https://*.feishu.cn/docx/{id}` |
+| 知识库 | `https://*.feishu.cn/wiki/{token}` |
+| 电子表格 | `https://*.feishu.cn/sheets/{token}` |
+| 多维表格 | `https://*.feishu.cn/base/{token}` |
+
+> **前置配置**：安装可选依赖 `pip install 'openviking[bot-feishu]'`
+>
+> 通过 `ov.conf` 配置凭据（详见[配置文档](../../zh/guides/01-configuration.md#feishu)），或设置环境变量：
+> ```bash
+> export FEISHU_APP_ID="cli_xxx"
+> export FEISHU_APP_SECRET="xxx"
+> ```
+
+**Python SDK (Embedded / HTTP)**
+
+```python
+# 导入飞书文档
+result = client.add_resource(
+    "https://example.feishu.cn/docx/doxcnABC123",
+    reason="项目设计文档"
+)
+client.wait_processed()
+
+# 导入知识库页面（自动解析为底层文档类型）
+client.add_resource("https://example.feishu.cn/wiki/wikiXYZ")
+
+# 导入电子表格
+client.add_resource("https://example.feishu.cn/sheets/shtcn456")
+```
+
+**CLI**
+
+```bash
+# 导入飞书文档
+openviking add-resource "https://example.feishu.cn/docx/doxcnABC123" --reason "项目设计文档"
+
+# 导入知识库页面
+openviking add-resource "https://example.feishu.cn/wiki/wikiXYZ"
+
+# 增量更新到已有 target
+openviking add-resource "https://example.feishu.cn/docx/doxcnABC123" --to viking://resources/design-doc
+```
+
 **示例：等待处理完成**
 
 **Python SDK (Embedded / HTTP)**
@@ -154,7 +280,7 @@ print(f"All processed: {status}")
 curl -X POST http://localhost:1933/api/v1/resources \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
-  -d '{"path": "./documents/guide.md", "wait": true}'
+  -d '{"path": "https://example.com/guide.md", "wait": true}'
 
 # 批量添加后单独等待
 curl -X POST http://localhost:1933/api/v1/system/wait \
@@ -196,7 +322,7 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
   -d '{
-    "path": "./documents/guide.md",
+    "path": "https://example.com/guide.md",
     "target": "viking://resources/documents/guide.md",
     "watch_interval": 60
   }'
@@ -274,11 +400,20 @@ openviking export viking://resources/my-project/ ./exports/my-project.ovpack
 
 导入 `.ovpack` 文件。
 
-**参数**
+**SDK / CLI 参数**
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | file_path | str | 是 | - | 本地 `.ovpack` 文件路径 |
+| parent | str | 是 | - | 目标父级 URI |
+| force | bool | 否 | False | 覆盖已有资源 |
+| vectorize | bool | 否 | True | 导入后触发向量化 |
+
+**裸 HTTP 请求体**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| temp_file_id | str | 是 | - | `POST /api/v1/resources/temp_upload` 返回的上传 ID |
 | parent | str | 是 | - | 目标父级 URI |
 | force | bool | 否 | False | 覆盖已有资源 |
 | vectorize | bool | 否 | True | 导入后触发向量化 |
@@ -304,15 +439,24 @@ POST /api/v1/pack/import
 ```
 
 ```bash
+# 第一步：上传本地 ovpack 文件
+TEMP_FILE_ID=$(
+  curl -sS -X POST http://localhost:1933/api/v1/resources/temp_upload \
+    -H "X-API-Key: your-key" \
+    -F 'file=@./exports/my-project.ovpack' \
+  | jq -r '.result.temp_file_id'
+)
+
+# 第二步：使用 temp_file_id 导入
 curl -X POST http://localhost:1933/api/v1/pack/import \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
-  -d '{
-    "file_path": "./exports/my-project.ovpack",
-    "parent": "viking://resources/imported/",
-    "force": true,
-    "vectorize": true
-  }'
+  -d "{
+    \"temp_file_id\": \"$TEMP_FILE_ID\",
+    \"parent\": \"viking://resources/imported/\",
+    \"force\": true,
+    \"vectorize\": true
+  }"
 ```
 
 **CLI**

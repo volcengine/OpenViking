@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Local backend collection adapter."""
 
 from __future__ import annotations
@@ -19,8 +19,8 @@ class LocalCollectionAdapter(CollectionAdapter):
 
     DEFAULT_LOCAL_PROJECT_NAME = "vectordb"
 
-    def __init__(self, collection_name: str, project_path: str):
-        super().__init__(collection_name=collection_name)
+    def __init__(self, collection_name: str, project_path: str, index_name: str):
+        super().__init__(collection_name=collection_name, index_name=index_name)
         self.mode = "local"
         self._project_path = project_path
 
@@ -29,7 +29,11 @@ class LocalCollectionAdapter(CollectionAdapter):
         project_path = (
             str(Path(config.path) / cls.DEFAULT_LOCAL_PROJECT_NAME) if config.path else ""
         )
-        return cls(collection_name=config.name or "context", project_path=project_path)
+        return cls(
+            collection_name=config.name or "context",
+            project_path=project_path,
+            index_name=config.index_name or "default",
+        )
 
     def _collection_path(self) -> str:
         if not self._project_path:

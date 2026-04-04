@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Directory parser for OpenViking.
 
@@ -87,7 +87,7 @@ class DirectoryParser(BaseParser):
         if not source_path.is_dir():
             raise NotADirectoryError(f"Not a directory: {source_path}")
 
-        dir_name = source_path.name
+        dir_name = kwargs.get("source_name") or source_path.name
         warnings: List[str] = []
 
         try:

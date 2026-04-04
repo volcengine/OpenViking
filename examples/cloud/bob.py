@@ -128,7 +128,7 @@ def main():
                 "本地开发步骤：1) 安装 Python 3.10+ 和 uv "
                 "2) git clone 后执行 uv sync 安装依赖 "
                 "3) 复制 examples/ov.conf.example 为 ~/.openviking/ov.conf 填入 API Key "
-                "4) 运行 openviking-server 启动开发服务。C++ 扩展需要 cmake 和 pybind11。",
+                "4) 运行 openviking-server 启动开发服务。构建 abi3 C++ 扩展需要 cmake。",
             ),
             ("user", "测试怎么跑？"),
             (

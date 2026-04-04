@@ -1,13 +1,14 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 VikingDBObserver: VikingDB storage observability tool.
 
 Provides methods to observe and report VikingDB collection status.
 """
 
-from typing import Dict
+from typing import Dict, Optional
 
+from openviking.server.identity import RequestContext
 from openviking.storage.observers.base_observer import BaseObserver
 from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking_cli.utils import run_async
@@ -26,23 +27,27 @@ class VikingDBObserver(BaseObserver):
     def __init__(self, vikingdb_manager: VikingDBManager):
         self._vikingdb_manager = vikingdb_manager
 
-    async def get_status_table_async(self) -> str:
+    async def get_status_table_async(self, ctx: Optional[RequestContext] = None) -> str:
         if not self._vikingdb_manager:
             return "VikingDB manager not initialized."
 
         if not await self._vikingdb_manager.collection_exists():
             return "No collections found."
 
-        statuses = await self._get_collection_statuses([self._vikingdb_manager.collection_name])
+        statuses = await self._get_collection_statuses(
+            [self._vikingdb_manager.collection_name], ctx=ctx
+        )
         return self._format_status_as_table(statuses)
 
-    def get_status_table(self) -> str:
-        return run_async(self.get_status_table_async())
+    def get_status_table(self, ctx: Optional[RequestContext] = None) -> str:
+        return run_async(self.get_status_table_async(ctx=ctx))
 
     def __str__(self) -> str:
         return self.get_status_table()
 
-    async def _get_collection_statuses(self, collection_names: list) -> Dict[str, Dict]:
+    async def _get_collection_statuses(
+        self, collection_names: list, *, ctx: Optional[RequestContext] = None
+    ) -> Dict[str, Dict]:
         statuses = {}
 
         for name in collection_names:
@@ -52,7 +57,7 @@ class VikingDBObserver(BaseObserver):
 
                 # Current OpenViking flow uses one managed default index per collection.
                 index_count = 1
-                vector_count = await self._vikingdb_manager.count()
+                vector_count = await self._vikingdb_manager.count(ctx=ctx)
 
                 statuses[name] = {
                     "index_count": index_count,

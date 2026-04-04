@@ -17,24 +17,63 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+type DirectoryMarkerMode string
+
+const (
+	DirectoryMarkerModeNone     DirectoryMarkerMode = "none"
+	DirectoryMarkerModeEmpty    DirectoryMarkerMode = "empty"
+	DirectoryMarkerModeNonEmpty DirectoryMarkerMode = "nonempty"
+)
+
 // S3Client wraps AWS S3 client with helper methods
 type S3Client struct {
-	client *s3.Client
-	bucket string
-	region string // AWS region
-	prefix string // Optional prefix for all keys
+	client              *s3.Client
+	bucket              string
+	region              string // AWS region
+	prefix              string // Optional prefix for all keys
+	directoryMarkerMode DirectoryMarkerMode
 }
 
 // S3Config holds S3 client configuration
 type S3Config struct {
-	Region          string
-	Bucket          string
-	AccessKeyID     string
-	SecretAccessKey string
-	Endpoint        string // Optional custom endpoint (for S3-compatible services)
-	Prefix          string // Optional prefix for all keys
-	DisableSSL      bool   // For testing with local S3
-	UsePathStyle    bool  // Whether to use path-style addressing (true) or virtual-host-style (false)
+	Region              string
+	Bucket              string
+	AccessKeyID         string
+	SecretAccessKey     string
+	Endpoint            string // Optional custom endpoint (for S3-compatible services)
+	Prefix              string // Optional prefix for all keys
+	DisableSSL          bool   // For testing with local S3
+	UsePathStyle        bool   // Whether to use path-style addressing (true) or virtual-host-style (false)
+	DirectoryMarkerMode DirectoryMarkerMode
+}
+
+var nonEmptyDirectoryMarkerPayload = []byte{'\n'}
+
+func normalizeDirectoryMarkerMode(mode DirectoryMarkerMode) DirectoryMarkerMode {
+	if mode == "" {
+		return DirectoryMarkerModeEmpty
+	}
+	return mode
+}
+
+func isValidDirectoryMarkerMode(mode DirectoryMarkerMode) bool {
+	switch mode {
+	case DirectoryMarkerModeNone, DirectoryMarkerModeEmpty, DirectoryMarkerModeNonEmpty:
+		return true
+	default:
+		return false
+	}
+}
+
+func directoryMarkerPayload(mode DirectoryMarkerMode) ([]byte, bool) {
+	switch normalizeDirectoryMarkerMode(mode) {
+	case DirectoryMarkerModeNone:
+		return nil, false
+	case DirectoryMarkerModeNonEmpty:
+		return nonEmptyDirectoryMarkerPayload, true
+	default:
+		return []byte{}, true
+	}
 }
 
 // NewS3Client creates a new S3 client
@@ -70,7 +109,7 @@ func NewS3Client(cfg S3Config) (*S3Client, error) {
 			o.BaseEndpoint = aws.String(cfg.Endpoint)
 			// true represent UsePathStyle for MinIO and some S3-compatible services
 			// false represent VirtualHostStyle for TOS  and some S3-compatible services
-			o.UsePathStyle = cfg.UsePathStyle 
+			o.UsePathStyle = cfg.UsePathStyle
 		})
 	}
 
@@ -90,11 +129,16 @@ func NewS3Client(cfg S3Config) (*S3Client, error) {
 	prefix := strings.Trim(cfg.Prefix, "/")
 
 	return &S3Client{
-		client: client,
-		bucket: cfg.Bucket,
-		region: cfg.Region,
-		prefix: prefix,
+		client:              client,
+		bucket:              cfg.Bucket,
+		region:              cfg.Region,
+		prefix:              prefix,
+		directoryMarkerMode: normalizeDirectoryMarkerMode(cfg.DirectoryMarkerMode),
 	}, nil
+}
+
+func (c *S3Client) shouldEnforceParentDirectoryExistence() bool {
+	return normalizeDirectoryMarkerMode(c.directoryMarkerMode) != DirectoryMarkerModeNone
 }
 
 // buildKey builds the full S3 key with prefix
@@ -308,9 +352,14 @@ func (c *S3Client) ListObjects(ctx context.Context, path string) ([]S3Object, er
 	return objects, nil
 }
 
-// CreateDirectory creates a directory marker in S3
-// S3 doesn't have real directories, but we create empty objects ending with "/"
+// CreateDirectory creates a directory marker in S3.
+// S3 doesn't have real directories; they are represented by object keys ending with "/".
 func (c *S3Client) CreateDirectory(ctx context.Context, path string) error {
+	payload, shouldCreate := directoryMarkerPayload(c.directoryMarkerMode)
+	if !shouldCreate {
+		return nil
+	}
+
 	key := c.buildKey(path)
 	if !strings.HasSuffix(key, "/") {
 		key += "/"
@@ -319,7 +368,7 @@ func (c *S3Client) CreateDirectory(ctx context.Context, path string) error {
 	_, err := c.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket: aws.String(c.bucket),
 		Key:    aws.String(key),
-		Body:   bytes.NewReader([]byte{}),
+		Body:   bytes.NewReader(payload),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create directory %s: %w", key, err)

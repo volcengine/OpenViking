@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 from typing import Any, Dict
 
 from pydantic import BaseModel, Field
@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field
 
 class LogConfig(BaseModel):
     """Logging configuration for OpenViking."""
+
+    model_config = {"extra": "forbid"}
 
     level: str = Field(
         default="WARNING", description="Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL"

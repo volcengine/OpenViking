@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
-"""Semantic extraction queue."""
+# SPDX-License-Identifier: AGPL-3.0
+"""SemanticQueue: Semantic extraction queue."""
 
 import threading
 import time

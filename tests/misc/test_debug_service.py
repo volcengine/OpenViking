@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Tests for DebugService and ObserverService.
 """
@@ -166,7 +166,7 @@ class TestObserverService:
         mock_observer_cls.return_value = mock_observer
 
         service = ObserverService(vikingdb=mock_vikingdb)
-        status = service.vikingdb
+        status = service.vikingdb()
 
         assert isinstance(status, ComponentStatus)
         assert status.name == "vikingdb"
@@ -175,61 +175,95 @@ class TestObserverService:
         assert status.status == "VikingDB Status Table"
         mock_observer_cls.assert_called_once_with(mock_vikingdb)
 
-    @patch("openviking.service.debug_service.VLMObserver")
-    def test_vlm_property(self, mock_observer_cls):
-        """Test vlm property returns ComponentStatus."""
-        mock_config = MagicMock()
+    @patch("openviking.service.debug_service.ModelsObserver")
+    def test_models_property(self, mock_observer_cls):
+        """Test models property returns ComponentStatus."""
+        mock_config = MagicMock(spec=["vlm"])  # Only allow vlm attribute
         mock_vlm_instance = MagicMock()
         mock_config.vlm.get_vlm_instance.return_value = mock_vlm_instance
 
         mock_observer = MagicMock()
         mock_observer.is_healthy.return_value = True
         mock_observer.has_errors.return_value = False
-        mock_observer.get_status_table.return_value = "VLM Status Table"
+        mock_observer.get_status_table.return_value = "Models Status Table"
         mock_observer_cls.return_value = mock_observer
 
         service = ObserverService(config=mock_config)
-        status = service.vlm
+        status = service.models
 
         assert isinstance(status, ComponentStatus)
-        assert status.name == "vlm"
+        assert status.name == "models"
         assert status.is_healthy is True
         assert status.has_errors is False
-        assert status.status == "VLM Status Table"
-        mock_observer_cls.assert_called_once_with(mock_vlm_instance)
+        assert status.status == "Models Status Table"
+        mock_observer_cls.assert_called_once_with(
+            vlm_instance=mock_vlm_instance,
+            embedding_instance=None,
+            rerank_instance=None,
+        )
 
-    @patch("openviking.service.debug_service.get_queue_manager")
-    @patch("openviking.service.debug_service.QueueObserver")
+    @patch("openviking.service.debug_service.get_lock_manager")
+    @patch("openviking.service.debug_service.RetrievalObserver")
+    @patch("openviking.service.debug_service.LockObserver")
+    @patch("openviking.service.debug_service.ModelsObserver")
     @patch("openviking.service.debug_service.VikingDBObserver")
-    @patch("openviking.service.debug_service.VLMObserver")
+    @patch("openviking.service.debug_service.QueueObserver")
+    @patch("openviking.service.debug_service.get_queue_manager")
     def test_system_property_all_healthy(
-        self, mock_vlm_cls, mock_vikingdb_cls, mock_queue_cls, mock_get_queue_manager
+        self,
+        mock_get_queue_mgr,
+        mock_queue_cls,
+        mock_vikingdb_cls,
+        mock_models_cls,
+        mock_lock_cls,
+        mock_retrieval_cls,
+        mock_get_lock_mgr,
     ):
         """Test system property when all components are healthy."""
         # Setup mocks
-        for mock_cls in [mock_queue_cls, mock_vikingdb_cls, mock_vlm_cls]:
+        for mock_cls in [
+            mock_queue_cls,
+            mock_vikingdb_cls,
+            mock_models_cls,
+            mock_lock_cls,
+            mock_retrieval_cls,
+        ]:
             mock_observer = MagicMock()
             mock_observer.is_healthy.return_value = True
             mock_observer.has_errors.return_value = False
             mock_observer.get_status_table.return_value = "OK"
             mock_cls.return_value = mock_observer
 
-        mock_config = MagicMock()
+        # Mock get_lock_manager to return a MagicMock
+        mock_get_lock_mgr.return_value = MagicMock()
+
+        mock_config = MagicMock(spec=["vlm"])  # Only allow vlm attribute
+        mock_config.vlm.get_vlm_instance.return_value = MagicMock()
         service = ObserverService(vikingdb=MagicMock(), config=mock_config)
-        status = service.system
+        status = service.system()
 
         assert isinstance(status, SystemStatus)
-        for name in ("queue", "vikingdb", "vlm"):
+        for name in ("queue", "vikingdb", "models", "lock", "retrieval"):
             assert status.components[name].is_healthy is True
         non_transaction_errors = [e for e in status.errors if "transaction" not in e]
         assert non_transaction_errors == []
 
-    @patch("openviking.service.debug_service.get_queue_manager")
-    @patch("openviking.service.debug_service.QueueObserver")
+    @patch("openviking.service.debug_service.get_lock_manager")
+    @patch("openviking.service.debug_service.RetrievalObserver")
+    @patch("openviking.service.debug_service.LockObserver")
+    @patch("openviking.service.debug_service.ModelsObserver")
     @patch("openviking.service.debug_service.VikingDBObserver")
-    @patch("openviking.service.debug_service.VLMObserver")
+    @patch("openviking.service.debug_service.QueueObserver")
+    @patch("openviking.service.debug_service.get_queue_manager")
     def test_system_property_with_errors(
-        self, mock_vlm_cls, mock_vikingdb_cls, mock_queue_cls, mock_get_queue_manager
+        self,
+        mock_get_queue_mgr,
+        mock_queue_cls,
+        mock_vikingdb_cls,
+        mock_models_cls,
+        mock_lock_cls,
+        mock_retrieval_cls,
+        mock_get_lock_mgr,
     ):
         """Test system property when some components have errors."""
         # Queue has errors
@@ -246,42 +280,63 @@ class TestObserverService:
         mock_vikingdb.get_status_table.return_value = "OK"
         mock_vikingdb_cls.return_value = mock_vikingdb
 
-        # VLM has errors
-        mock_vlm = MagicMock()
-        mock_vlm.is_healthy.return_value = False
-        mock_vlm.has_errors.return_value = True
-        mock_vlm.get_status_table.return_value = "Error"
-        mock_vlm_cls.return_value = mock_vlm
+        # Models has errors
+        mock_models = MagicMock()
+        mock_models.is_healthy.return_value = False
+        mock_models.has_errors.return_value = True
+        mock_models.get_status_table.return_value = "Error"
+        mock_models_cls.return_value = mock_models
 
-        mock_config = MagicMock()
-        service = ObserverService(vikingdb=MagicMock(), config=mock_config)
-        status = service.system
-
-        assert isinstance(status, SystemStatus)
-        assert status.is_healthy is False
-        non_transaction_errors = [e for e in status.errors if "transaction" not in e]
-        assert len(non_transaction_errors) == 2
-        assert "queue has errors" in non_transaction_errors
-        assert "vlm has errors" in non_transaction_errors
-
-    @patch("openviking.service.debug_service.get_queue_manager")
-    @patch("openviking.service.debug_service.QueueObserver")
-    @patch("openviking.service.debug_service.VikingDBObserver")
-    @patch("openviking.service.debug_service.VLMObserver")
-    def test_is_healthy_returns_true(
-        self, mock_vlm_cls, mock_vikingdb_cls, mock_queue_cls, mock_get_queue_manager
-    ):
-        """Test is_healthy returns True when system is healthy."""
-        for mock_cls in [mock_queue_cls, mock_vikingdb_cls, mock_vlm_cls]:
+        # Lock and Retrieval are healthy
+        for mock_cls in [mock_lock_cls, mock_retrieval_cls]:
             mock_observer = MagicMock()
             mock_observer.is_healthy.return_value = True
             mock_observer.has_errors.return_value = False
             mock_observer.get_status_table.return_value = "OK"
             mock_cls.return_value = mock_observer
 
-        mock_config = MagicMock()
+        # Mock get_lock_manager to return a MagicMock
+        mock_get_lock_mgr.return_value = MagicMock()
+
+        mock_config = MagicMock(spec=["vlm"])  # Only allow vlm attribute
+        mock_config.vlm.get_vlm_instance.return_value = MagicMock()
         service = ObserverService(vikingdb=MagicMock(), config=mock_config)
-        status = service.system
+        status = service.system()
+
+        assert isinstance(status, SystemStatus)
+        assert status.is_healthy is False
+        non_transaction_errors = [e for e in status.errors if "transaction" not in e]
+        assert len(non_transaction_errors) == 2
+        assert "queue has errors" in non_transaction_errors
+        assert "models has errors" in non_transaction_errors
+
+    @patch("openviking.service.debug_service.get_lock_manager")
+    @patch("openviking.service.debug_service.get_queue_manager")
+    @patch("openviking.service.debug_service.QueueObserver")
+    @patch("openviking.service.debug_service.VikingDBObserver")
+    @patch("openviking.service.debug_service.ModelsObserver")
+    def test_is_healthy_returns_true(
+        self,
+        mock_models_cls,
+        mock_vikingdb_cls,
+        mock_queue_cls,
+        mock_get_queue_mgr,
+        mock_get_lock_mgr,
+    ):
+        """Test is_healthy returns True when system is healthy."""
+        for mock_cls in [mock_queue_cls, mock_vikingdb_cls, mock_models_cls]:
+            mock_observer = MagicMock()
+            mock_observer.is_healthy.return_value = True
+            mock_observer.has_errors.return_value = False
+            mock_observer.get_status_table.return_value = "OK"
+            mock_cls.return_value = mock_observer
+
+        mock_get_lock_mgr.return_value = MagicMock()
+
+        mock_config = MagicMock(spec=["vlm"])
+        mock_config.vlm.get_vlm_instance.return_value = MagicMock()
+        service = ObserverService(vikingdb=MagicMock(), config=mock_config)
+        status = service.system()
         assert all(c.is_healthy for name, c in status.components.items() if name != "transaction")
 
     def test_is_healthy_without_dependencies(self):
@@ -292,19 +347,19 @@ class TestObserverService:
     def test_vikingdb_property_without_dependency(self):
         """Test vikingdb property returns unhealthy ComponentStatus when vikingdb is None."""
         service = ObserverService()
-        status = service.vikingdb
+        status = service.vikingdb()
         assert isinstance(status, ComponentStatus)
         assert status.name == "vikingdb"
         assert status.is_healthy is False
         assert status.has_errors is True
         assert status.status == "Not initialized"
 
-    def test_vlm_property_without_dependency(self):
-        """Test vlm property returns unhealthy ComponentStatus when config is None."""
+    def test_models_property_without_dependency(self):
+        """Test models property returns unhealthy ComponentStatus when config is None."""
         service = ObserverService()
-        status = service.vlm
+        status = service.models
         assert isinstance(status, ComponentStatus)
-        assert status.name == "vlm"
+        assert status.name == "models"
         assert status.is_healthy is False
         assert status.has_errors is True
         assert status.status == "Not initialized"
@@ -312,16 +367,16 @@ class TestObserverService:
     def test_system_property_without_dependencies(self):
         """Test system property returns unhealthy SystemStatus when dependencies not set."""
         service = ObserverService()
-        status = service.system
+        status = service.system()
         assert isinstance(status, SystemStatus)
         assert status.is_healthy is False
 
     @patch("openviking.service.debug_service.get_queue_manager")
     @patch("openviking.service.debug_service.QueueObserver")
     @patch("openviking.service.debug_service.VikingDBObserver")
-    @patch("openviking.service.debug_service.VLMObserver")
+    @patch("openviking.service.debug_service.ModelsObserver")
     def test_is_healthy_returns_false(
-        self, mock_vlm_cls, mock_vikingdb_cls, mock_queue_cls, mock_get_queue_manager
+        self, mock_models_cls, mock_vikingdb_cls, mock_queue_cls, mock_get_queue_manager
     ):
         """Test is_healthy returns False when system is unhealthy."""
         # Queue has errors
@@ -332,14 +387,15 @@ class TestObserverService:
         mock_queue_cls.return_value = mock_queue
 
         # Others are healthy
-        for mock_cls in [mock_vikingdb_cls, mock_vlm_cls]:
+        for mock_cls in [mock_vikingdb_cls, mock_models_cls]:
             mock_observer = MagicMock()
             mock_observer.is_healthy.return_value = True
             mock_observer.has_errors.return_value = False
             mock_observer.get_status_table.return_value = "OK"
             mock_cls.return_value = mock_observer
 
-        mock_config = MagicMock()
+        mock_config = MagicMock(spec=["vlm"])  # Only allow vlm attribute
+        mock_config.vlm.get_vlm_instance.return_value = MagicMock()
         service = ObserverService(vikingdb=MagicMock(), config=mock_config)
         assert service.is_healthy() is False
 

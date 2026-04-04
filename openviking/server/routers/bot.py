@@ -8,9 +8,11 @@ import json
 from typing import AsyncGenerator, Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
+from openviking.server.auth import get_request_context
+from openviking.server.identity import RequestContext
 from openviking_cli.utils.logger import get_logger
 
 router = APIRouter(prefix="", tags=["bot"])
@@ -35,21 +37,6 @@ def get_bot_url() -> str:
             detail="Bot service not enabled. Start server with --with-bot option.",
         )
     return BOT_API_URL
-
-
-async def verify_auth(request: Request) -> Optional[str]:
-    """Extract and return authorization token from request."""
-    # Try X-API-Key header first
-    api_key = request.headers.get("X-API-Key")
-    if api_key:
-        return api_key
-
-    # Try Authorization header (Bearer token)
-    auth_header = request.headers.get("Authorization")
-    if auth_header and auth_header.startswith("Bearer "):
-        return auth_header[7:]  # Remove "Bearer " prefix
-
-    return None
 
 
 @router.get("/health")
@@ -85,14 +72,32 @@ async def health_check(request: Request):
         )
 
 
+def extract_auth_token(request: Request) -> Optional[str]:
+    """Extract and return authorization token from request."""
+    # Try X-API-Key header first
+    api_key = request.headers.get("X-API-Key")
+    if api_key:
+        return api_key
+
+    # Try Authorization header (Bearer token)
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        return auth_header[7:]  # Remove "Bearer " prefix
+
+    return None
+
+
 @router.post("/chat")
-async def chat(request: Request):
+async def chat(
+    request: Request,
+    _ctx: RequestContext = Depends(get_request_context),
+):
     """Send a message to the bot and get a response.
 
     Proxies the request to Vikingbot OpenAPIChannel.
     """
     bot_url = get_bot_url()
-    auth_token = await verify_auth(request)
+    auth_token = extract_auth_token(request)
 
     # Read request body
     try:
@@ -105,7 +110,7 @@ async def chat(request: Request):
 
     try:
         async with httpx.AsyncClient() as client:
-            # Build headers
+            # Build headers - only include X-API-Key if provided
             headers = {"Content-Type": "application/json"}
             if auth_token:
                 headers["X-API-Key"] = auth_token
@@ -140,13 +145,16 @@ async def chat(request: Request):
 
 
 @router.post("/chat/stream")
-async def chat_stream(request: Request):
+async def chat_stream(
+    request: Request,
+    _ctx: RequestContext = Depends(get_request_context),
+):
     """Send a message to the bot and get a streaming response.
 
     Proxies the request to Vikingbot OpenAPIChannel with SSE streaming.
     """
     bot_url = get_bot_url()
-    auth_token = await verify_auth(request)
+    auth_token = extract_auth_token(request)
 
     # Read request body
     try:
@@ -161,7 +169,7 @@ async def chat_stream(request: Request):
         """Generate SSE events from bot response stream."""
         try:
             async with httpx.AsyncClient() as client:
-                # Build headers
+                # Build headers - only include X-API-Key if provided
                 headers = {"Content-Type": "application/json"}
                 if auth_token:
                     headers["X-API-Key"] = auth_token

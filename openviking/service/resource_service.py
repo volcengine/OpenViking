@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Resource Service for OpenViking.
 
@@ -109,6 +109,7 @@ class ResourceService:
         summarize: bool = False,
         watch_interval: float = 0,
         skip_watch_management: bool = False,
+        allow_local_path_resolution: bool = True,
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking (only supports resources scope).
@@ -188,6 +189,7 @@ class ResourceService:
                 parent=parent,
                 build_index=build_index,
                 summarize=summarize,
+                allow_local_path_resolution=allow_local_path_resolution,
                 **kwargs,
             )
 
@@ -377,6 +379,7 @@ class ResourceService:
         ctx: RequestContext,
         wait: bool = False,
         timeout: Optional[float] = None,
+        allow_local_path_resolution: bool = True,
     ) -> Dict[str, Any]:
         """Add skill to OpenViking.
 
@@ -394,6 +397,7 @@ class ResourceService:
             data=data,
             viking_fs=self._viking_fs,
             ctx=ctx,
+            allow_local_path_resolution=allow_local_path_resolution,
         )
 
         if wait:

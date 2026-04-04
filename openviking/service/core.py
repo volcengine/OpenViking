@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 OpenViking Service Core.
 
@@ -11,6 +11,7 @@ from typing import Any, Optional
 
 from openviking.agfs_manager import AGFSManager
 from openviking.core.directories import DirectoryInitializer
+from openviking.crypto.config import bootstrap_encryption
 from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.server.identity import RequestContext, Role
 from openviking.service.debug_service import DebugService
@@ -20,7 +21,7 @@ from openviking.service.relation_service import RelationService
 from openviking.service.resource_service import ResourceService
 from openviking.service.search_service import SearchService
 from openviking.service.session_service import SessionService
-from openviking.session.compressor import SessionCompressor
+from openviking.session import SessionCompressor, create_session_compressor
 from openviking.storage import VikingDBManager
 from openviking.storage.collection_schemas import init_context_collection
 from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
@@ -79,6 +80,7 @@ class OpenVikingService:
         self._lock_manager: Optional[LockManager] = None
         self._directory_initializer: Optional[DirectoryInitializer] = None
         self._watch_scheduler: Optional[WatchScheduler] = None
+        self._encryptor: Optional[Any] = None
 
         # Sub-services
         self._fs_service = FSService()
@@ -248,6 +250,14 @@ class OpenVikingService:
 
         config = get_openviking_config()
 
+        # Initialize encryption module
+        full_config = config.to_dict()
+        self._encryptor = await bootstrap_encryption(full_config)
+        if self._encryptor:
+            logger.info("Encryption module initialized")
+        else:
+            logger.info("Encryption module not enabled")
+
         # Initialize VikingFS and VikingDB with recorder if enabled
         enable_recorder = os.environ.get("OPENVIKING_ENABLE_RECORDER", "").lower() == "true"
 
@@ -267,6 +277,7 @@ class OpenVikingService:
             rerank_config=config.rerank,
             vector_store=self._vikingdb_manager,
             enable_recorder=enable_recorder,
+            encryptor=self._encryptor,
         )
         if enable_recorder:
             logger.info("VikingFS IO Recorder enabled")
@@ -296,7 +307,7 @@ class OpenVikingService:
             vikingdb=self._vikingdb_manager,
         )
         self._skill_processor = SkillProcessor(vikingdb=self._vikingdb_manager)
-        self._session_compressor = SessionCompressor(vikingdb=self._vikingdb_manager)
+        self._session_compressor = create_session_compressor(vikingdb=self._vikingdb_manager)
 
         # Start LockManager if initialized
         if self._lock_manager:

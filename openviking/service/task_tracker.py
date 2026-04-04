@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Async Task Tracker for OpenViking.
 
@@ -48,6 +48,8 @@ class TaskRecord:
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     resource_id: Optional[str] = None  # e.g. session_id
+    owner_account_id: Optional[str] = None
+    owner_user_id: Optional[str] = None
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
 
@@ -55,6 +57,8 @@ class TaskRecord:
         """Serialize for JSON response."""
         d = asdict(self)
         d["status"] = self.status.value
+        d.pop("owner_account_id", None)
+        d.pop("owner_user_id", None)
         return d
 
 
@@ -170,14 +174,43 @@ class TaskTracker:
             if to_delete:
                 logger.debug("[TaskTracker] Evicted %d expired tasks", len(to_delete))
 
+    @staticmethod
+    def _matches_owner(
+        task: TaskRecord,
+        owner_account_id: Optional[str] = None,
+        owner_user_id: Optional[str] = None,
+    ) -> bool:
+        """Return True when a task belongs to the requested owner filter."""
+        if owner_account_id is not None and task.owner_account_id != owner_account_id:
+            return False
+        if owner_user_id is not None and task.owner_user_id != owner_user_id:
+            return False
+        return True
+
+    @staticmethod
+    def _validate_owner(owner_account_id: str, owner_user_id: str) -> None:
+        """Reject ownerless task creation for user-originated background work."""
+        if not owner_account_id or not owner_user_id:
+            raise ValueError("Task ownership requires non-empty owner_account_id and owner_user_id")
+
     # ── CRUD ──
 
-    def create(self, task_type: str, resource_id: Optional[str] = None) -> TaskRecord:
+    def create(
+        self,
+        task_type: str,
+        resource_id: Optional[str] = None,
+        *,
+        owner_account_id: str,
+        owner_user_id: str,
+    ) -> TaskRecord:
         """Register a new pending task. Returns a snapshot copy."""
+        self._validate_owner(owner_account_id, owner_user_id)
         task = TaskRecord(
             task_id=str(uuid4()),
             task_type=task_type,
             resource_id=resource_id,
+            owner_account_id=owner_account_id,
+            owner_user_id=owner_user_id,
         )
         with self._lock:
             self._tasks[task.task_id] = task
@@ -189,17 +222,26 @@ class TaskTracker:
         )
         return self._copy(task)
 
-    def create_if_no_running(self, task_type: str, resource_id: str) -> Optional[TaskRecord]:
+    def create_if_no_running(
+        self,
+        task_type: str,
+        resource_id: str,
+        *,
+        owner_account_id: str,
+        owner_user_id: str,
+    ) -> Optional[TaskRecord]:
         """Atomically check for running tasks and create a new one if none exist.
 
         Returns TaskRecord on success, None if a running task already exists.
         This eliminates the race condition between has_running() and create().
         """
+        self._validate_owner(owner_account_id, owner_user_id)
         with self._lock:
             # Check for existing running tasks
             has_active = any(
                 t.task_type == task_type
                 and t.resource_id == resource_id
+                and self._matches_owner(t, owner_account_id, owner_user_id)
                 and t.status in (TaskStatus.PENDING, TaskStatus.RUNNING)
                 for t in self._tasks.values()
             )
@@ -210,6 +252,8 @@ class TaskTracker:
                 task_id=str(uuid4()),
                 task_type=task_type,
                 resource_id=resource_id,
+                owner_account_id=owner_account_id,
+                owner_user_id=owner_user_id,
             )
             self._tasks[task.task_id] = task
         logger.debug(
@@ -248,11 +292,18 @@ class TaskTracker:
                 task.updated_at = time.time()
         logger.warning("[TaskTracker] Task %s failed: %s", task_id, _sanitize_error(error))
 
-    def get(self, task_id: str) -> Optional[TaskRecord]:
+    def get(
+        self,
+        task_id: str,
+        owner_account_id: Optional[str] = None,
+        owner_user_id: Optional[str] = None,
+    ) -> Optional[TaskRecord]:
         """Look up a single task. Returns a snapshot copy (None if not found)."""
         with self._lock:
             task = self._tasks.get(task_id)
-            return self._copy(task) if task else None
+            if task is None or not self._matches_owner(task, owner_account_id, owner_user_id):
+                return None
+            return self._copy(task)
 
     def list_tasks(
         self,
@@ -260,10 +311,16 @@ class TaskTracker:
         status: Optional[str] = None,
         resource_id: Optional[str] = None,
         limit: int = 50,
+        owner_account_id: Optional[str] = None,
+        owner_user_id: Optional[str] = None,
     ) -> List[TaskRecord]:
         """List tasks with optional filters. Most-recent first. Returns snapshot copies."""
         with self._lock:
-            tasks = [self._copy(t) for t in self._tasks.values()]
+            tasks = [
+                self._copy(t)
+                for t in self._tasks.values()
+                if self._matches_owner(t, owner_account_id, owner_user_id)
+            ]
         if task_type:
             tasks = [t for t in tasks if t.task_type == task_type]
         if status:
@@ -273,12 +330,19 @@ class TaskTracker:
         tasks.sort(key=lambda t: t.created_at, reverse=True)
         return tasks[:limit]
 
-    def has_running(self, task_type: str, resource_id: str) -> bool:
+    def has_running(
+        self,
+        task_type: str,
+        resource_id: str,
+        owner_account_id: Optional[str] = None,
+        owner_user_id: Optional[str] = None,
+    ) -> bool:
         """Check if there is already a running task for the given type+resource."""
         with self._lock:
             return any(
                 t.task_type == task_type
                 and t.resource_id == resource_id
+                and self._matches_owner(t, owner_account_id, owner_user_id)
                 and t.status in (TaskStatus.PENDING, TaskStatus.RUNNING)
                 for t in self._tasks.values()
             )

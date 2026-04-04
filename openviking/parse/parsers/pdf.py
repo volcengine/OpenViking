@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 PDF parser for OpenViking.
 
@@ -261,8 +261,9 @@ class PDFParser(BaseParser):
                 # Group bookmarks by page_num
                 bookmarks_by_page = defaultdict(list)
                 for bm in bookmarks:
-                    if bm["page_num"]:
-                        bookmarks_by_page[bm["page_num"]].append(bm)
+                    # Fall back to page 1 for unresolvable destinations
+                    page = bm["page_num"] or 1
+                    bookmarks_by_page[page].append(bm)
 
                 for page_num, page in enumerate(pdf.pages, 1):
                     # Inject headings before page text
@@ -314,10 +315,7 @@ class PDFParser(BaseParser):
                                 f"Failed to extract image {img_idx + 1} on page {page_num}: {img_err}"
                             )
 
-                # Append any bookmarks with unresolved page numbers at the end
-                unresolved = [bm for bm in bookmarks if bm.get("page_num") is None]
-                if unresolved:
-                    logger.debug(f"{len(unresolved)} bookmarks had unresolved page numbers")
+                # Note: bookmarks with unresolvable page numbers are injected at page 1
 
             if not parts:
                 logger.warning(f"No content extracted from {pdf_path}")
@@ -372,6 +370,11 @@ class PDFParser(BaseParser):
                             resolved = page_ref.resolve()
                             if hasattr(resolved, "objid"):
                                 page_num = objid_to_num.get(resolved.objid)
+                        elif isinstance(page_ref, int):
+                            # 0-based integer page index (common in many PDF producers)
+                            candidate = page_ref + 1
+                            if 1 <= candidate <= len(pdf.pages):
+                                page_num = candidate
                 except Exception:
                     pass
 
@@ -415,7 +418,7 @@ class PDFParser(BaseParser):
                 [
                     s
                     for s, count in size_counter.items()
-                    if s >= body_size + min_delta and count < size_counter[body_size] * 0.3
+                    if s >= body_size + min_delta and count < size_counter[body_size] * 0.5
                 ],
                 reverse=True,
             )

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Audio parser - Future implementation.
 
@@ -24,13 +24,22 @@ Example workflow:
 Supported formats: MP3, WAV, OGG, FLAC, AAC, M4A
 """
 
+import asyncio
+import base64
+import os
+import tempfile
 from pathlib import Path
 from typing import List, Optional, Union
+
+import openai
 
 from openviking.parse.base import NodeType, ParseResult, ResourceNode
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.media.constants import AUDIO_EXTENSIONS
 from openviking_cli.utils.config.parser_config import AudioConfig
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class AudioParser(BaseParser):
@@ -171,8 +180,53 @@ class AudioParser(BaseParser):
 
         TODO: Integrate with actual ASR API (Whisper, etc.)
         """
-        # Fallback implementation - returns basic placeholder
-        return "Audio transcription (ASR integration pending)\n\nThis is an audio. ASR transcription feature has not yet integrated external API."
+        model_name = model or self.config.transcription_model
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            logger.error("OPENAI_API_KEY not found, skip audio transcription")
+            return "Audio transcription unavailable: OPENAI_API_KEY is not set."
+
+        temp_file_path = None
+
+        def _sync_transcribe() -> str:
+            nonlocal temp_file_path
+            client_kwargs = {"api_key": api_key}
+            base_url = os.getenv("OPENAI_BASE_URL")
+            if base_url:
+                client_kwargs["base_url"] = base_url
+
+            client = openai.OpenAI(**client_kwargs)
+            with tempfile.NamedTemporaryFile(mode="wb", suffix=".wav", delete=False) as temp_file:
+                temp_file.write(audio_bytes)
+                temp_file_path = temp_file.name
+
+            with open(temp_file_path, "rb") as f:
+                response = client.audio.transcriptions.create(
+                    model=model_name,
+                    file=f,
+                    language=self.config.language,
+                )
+
+            if isinstance(response, dict):
+                return str(response.get("text", "")).strip()
+            return str(getattr(response, "text", "")).strip()
+
+        try:
+            text = await asyncio.get_event_loop().run_in_executor(None, _sync_transcribe)
+            return text or "Audio transcription returned empty result."
+        except Exception as e:
+            logger.exception("Audio transcription failed: %s", e)
+            return f"Audio transcription failed: {str(e)}"
+        finally:
+            if temp_file_path and os.path.exists(temp_file_path):
+                try:
+                    os.remove(temp_file_path)
+                except Exception as cleanup_error:
+                    logger.warning(
+                        "Failed to cleanup temporary audio file %s: %s",
+                        temp_file_path,
+                        cleanup_error,
+                    )
 
     async def _asr_transcribe_with_timestamps(
         self, audio_bytes: bytes, model: Optional[str]
@@ -189,8 +243,84 @@ class AudioParser(BaseParser):
 
         TODO: Integrate with ASR API
         """
-        # Not implemented - return None
-        return None
+        model_name = model or self.config.transcription_model
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            logger.error("OPENAI_API_KEY not found, skip timestamp transcription")
+            return None
+
+        temp_file_path = None
+
+        def _format_timestamp(seconds: float) -> str:
+            total_seconds = max(0, int(float(seconds)))
+            minutes, secs = divmod(total_seconds, 60)
+            return f"{minutes:02d}:{secs:02d}"
+
+        def _sync_transcribe_with_timestamps() -> Optional[str]:
+            nonlocal temp_file_path
+            client_kwargs = {"api_key": api_key}
+            base_url = os.getenv("OPENAI_BASE_URL")
+            if base_url:
+                client_kwargs["base_url"] = base_url
+
+            client = openai.OpenAI(**client_kwargs)
+            with tempfile.NamedTemporaryFile(mode="wb", suffix=".wav", delete=False) as temp_file:
+                temp_file.write(audio_bytes)
+                temp_file_path = temp_file.name
+
+            with open(temp_file_path, "rb") as f:
+                response = client.audio.transcriptions.create(
+                    model=model_name,
+                    file=f,
+                    language=self.config.language,
+                    response_format="verbose_json",
+                    timestamp_granularities=["segment"],
+                )
+
+            segments = None
+            if isinstance(response, dict):
+                segments = response.get("segments")
+            else:
+                segments = getattr(response, "segments", None)
+
+            if not segments:
+                return None
+
+            lines = []
+            for segment in segments:
+                if isinstance(segment, dict):
+                    start = segment.get("start")
+                    end = segment.get("end")
+                    text = str(segment.get("text", "")).strip()
+                else:
+                    start = getattr(segment, "start", None)
+                    end = getattr(segment, "end", None)
+                    text = str(getattr(segment, "text", "")).strip()
+
+                if start is None or end is None or not text:
+                    continue
+
+                lines.append(f"**[{_format_timestamp(start)} - {_format_timestamp(end)}]** {text}")
+
+            return "\n\n".join(lines) if lines else None
+
+        try:
+            return await asyncio.get_event_loop().run_in_executor(
+                None, _sync_transcribe_with_timestamps
+            )
+        except Exception as e:
+            logger.exception("Timestamp transcription failed: %s", e)
+            return None
+        finally:
+            if temp_file_path and os.path.exists(temp_file_path):
+                try:
+                    os.remove(temp_file_path)
+                except Exception as cleanup_error:
+                    logger.warning(
+                        "Failed to cleanup temporary audio file %s: %s",
+                        temp_file_path,
+                        cleanup_error,
+                    )
 
     async def _generate_semantic_info(
         self, node: ResourceNode, description: str, viking_fs, has_transcript: bool
@@ -258,7 +388,7 @@ class AudioParser(BaseParser):
         self, content: str, source_path: Optional[str] = None, instruction: str = "", **kwargs
     ) -> ParseResult:
         """
-        Parse audio from content string - Not yet implemented.
+        Parse audio from base64 content string.
 
         Args:
             content: Audio content (base64 or binary string)
@@ -269,6 +399,36 @@ class AudioParser(BaseParser):
             ParseResult with audio content
 
         Raises:
-            NotImplementedError: This feature is not yet implemented
+            ValueError: If content is not valid base64 audio data
         """
-        raise NotImplementedError("Audio parsing from content not yet implemented")
+        temp_file_path = None
+        try:
+            if content.startswith("data:") and "," in content:
+                content = content.split(",", 1)[1]
+
+            audio_bytes = base64.b64decode(content, validate=True)
+            suffix = Path(source_path).suffix if source_path else ".wav"
+            if not suffix:
+                suffix = ".wav"
+
+            with tempfile.NamedTemporaryFile(mode="wb", suffix=suffix, delete=False) as temp_file:
+                temp_file.write(audio_bytes)
+                temp_file_path = temp_file.name
+
+            result = await self.parse(temp_file_path, instruction=instruction, **kwargs)
+            if source_path:
+                result.source_path = source_path
+            return result
+        except Exception as e:
+            logger.exception("Failed to parse audio content: %s", e)
+            raise ValueError(f"Invalid audio content: {str(e)}") from e
+        finally:
+            if temp_file_path and os.path.exists(temp_file_path):
+                try:
+                    os.remove(temp_file_path)
+                except Exception as cleanup_error:
+                    logger.warning(
+                        "Failed to cleanup temporary parse file %s: %s",
+                        temp_file_path,
+                        cleanup_error,
+                    )

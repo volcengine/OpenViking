@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Test if config validators work correctly"""
 
 import sys
@@ -91,6 +91,14 @@ def test_vectordb_validation():
         print("   Pass")
     except ValueError as e:
         print(f"   Fail: {e}")
+
+
+def test_vectordb_index_name_defaults_and_overrides():
+    default_config = VectorDBBackendConfig()
+    assert default_config.index_name == "default"
+
+    custom_config = VectorDBBackendConfig(index_name="context_idx")
+    assert custom_config.index_name == "context_idx"
 
 
 def test_embedding_validation():

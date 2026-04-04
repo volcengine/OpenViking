@@ -29,6 +29,68 @@ export function waitForHealth(baseUrl: string, timeoutMs: number, intervalMs: nu
   });
 }
 
+export function waitForHealthOrExit(
+  baseUrl: string,
+  timeoutMs: number,
+  intervalMs: number,
+  child: ReturnType<typeof spawn>,
+): Promise<void> {
+  const exited =
+    child.killed || child.exitCode !== null || child.signalCode !== null;
+  if (exited) {
+    return Promise.reject(
+      new Error(
+        `OpenViking subprocess exited before health check ` +
+          `(code=${child.exitCode}, signal=${child.signalCode})`,
+      ),
+    );
+  }
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+
+    const cleanup = () => {
+      child.off?.("error", onError);
+      child.off?.("exit", onExit);
+    };
+
+    const finishResolve = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve();
+    };
+
+    const finishReject = (err: unknown) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      reject(err instanceof Error ? err : new Error(String(err)));
+    };
+
+    const onError = (err: Error) => {
+      finishReject(err);
+    };
+
+    const onExit = (code: number | null, signal: string | null) => {
+      finishReject(
+        new Error(
+          `OpenViking subprocess exited before health check ` +
+            `(code=${code}, signal=${signal})`,
+        ),
+      );
+    };
+
+    child.once("error", onError);
+    child.once("exit", onExit);
+    waitForHealth(baseUrl, timeoutMs, intervalMs).then(finishResolve, finishReject);
+  });
+}
+
 export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMessage: string): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);

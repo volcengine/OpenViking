@@ -16,6 +16,7 @@ Resources are external knowledge that agents can reference. This guide covers ho
 | Video | `.mp4`, `.mov`, `.avi` | Frame extraction + VLM |
 | Audio | `.mp3`, `.wav`, `.m4a` | Transcription |
 | Documents | `.docx` | Text extraction |
+| Feishu/Lark | URL (`*.feishu.cn`, `*.larksuite.com`) | Cloud document parsing via `lark-oapi` |
 
 ## Processing Pipeline
 
@@ -39,13 +40,35 @@ Add a resource to the knowledge base.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| path | str | Yes | - | Local file path, directory path, or URL |
+| path | str | Yes | - | SDK/CLI: local path, directory path, or URL. Raw HTTP: remote URL only |
+| temp_file_id | str | No | None | Upload ID returned by `POST /api/v1/resources/temp_upload` for raw HTTP local file ingestion |
 | target | str | No | None | Target Viking URI (must be in `resources` scope) |
 | reason | str | No | "" | Why this resource is being added (improves search relevance) |
 | instruction | str | No | "" | Special processing instructions |
 | wait | bool | No | False | Wait for semantic processing to complete |
 | timeout | float | No | None | Timeout in seconds (only used when wait=True) |
 | watch_interval | float | No | 0 | Watch interval (minutes). >0 enables/updates watch; <=0 disables watch. Only takes effect when target is provided |
+
+**How local files and directories work**
+
+- Python SDK and CLI accept local file and directory paths directly. In HTTP mode they automatically upload local files before calling the server API.
+- Raw HTTP callers should think in two categories:
+  - Remote source: pass `path` directly, for example `https://example.com/doc.pdf`
+  - Local file: call `POST /api/v1/resources/temp_upload` first, then pass the returned `temp_file_id`
+  - Local directory: zip it first, upload the `.zip` file, then pass the returned `temp_file_id`
+- `POST /api/v1/resources` does not accept direct host filesystem paths such as `./guide.md`, `/tmp/guide.md`, or `/tmp/my-dir/`.
+
+**Incremental Updates**
+
+When you call `add_resource()` repeatedly for the same resource URI, the system performs an incremental update instead of rebuilding everything from scratch:
+
+- **Trigger**: `target` is provided and already exists in the knowledge base.
+- **High-level idea**: each ingestion first builds a temporary resource tree from the new input. During asynchronous semantic processing, the temporary tree is compared against the existing tree at `target`, and only the changed parts are re-processed and synchronized.
+- **Incremental behavior in the semantic stage**:
+  - **Unchanged files**: reuse existing L0 summaries and vector index records; skip vectorization.
+  - **Changed files**: regenerate summaries and vector index entries.
+  - **Directory-level L0/L1 (abstract/overview)**: if the child set and their change status are unchanged, reuse existing results and skip vectorization; otherwise recompute and update.
+- **Filesystem + index sync**: after the semantic DAG finishes, a top-down diff is applied from the temporary tree to `target` to synchronize additions, deletions, and updates. Vector store records are kept consistent: deletions remove corresponding vectors, while moves/overwrites update vector records’ URI mapping, completing an incremental update of both the resource tree and the semantic index.
 
 **Python SDK (Embedded / HTTP)**
 
@@ -70,7 +93,7 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
   -d '{
-    "path": "./documents/guide.md",
+    "path": "https://example.com/guide.md",
     "reason": "User guide documentation"
   }'
 ```
@@ -129,6 +152,109 @@ curl -X POST http://localhost:1933/api/v1/resources \
 openviking add-resource https://example.com/api-docs.md --to viking://resources/external/ --reason "External API documentation"
 ```
 
+**Example: Add a Local File with Raw HTTP**
+
+When you call the HTTP API directly, upload local files first and then use `temp_file_id`.
+
+```bash
+# Step 1: upload the local file
+TEMP_FILE_ID=$(
+  curl -sS -X POST http://localhost:1933/api/v1/resources/temp_upload \
+    -H "X-API-Key: your-key" \
+    -F 'file=@./documents/guide.md' \
+  | jq -r '.result.temp_file_id'
+)
+
+# Step 2: add the uploaded file
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d "{
+    \"temp_file_id\": \"$TEMP_FILE_ID\",
+    \"reason\": \"User guide documentation\",
+    \"wait\": true
+  }"
+```
+
+**Example: Add a Local Directory with Raw HTTP**
+
+When you call the HTTP API directly, zip the directory yourself first. CLI and SDK do this automatically for you.
+
+```bash
+# Step 1: zip the local directory
+cd ./documents
+zip -r /tmp/guide.zip ./guide
+
+# Step 2: upload the zip file
+TEMP_FILE_ID=$(
+  curl -sS -X POST http://localhost:1933/api/v1/resources/temp_upload \
+    -H "X-API-Key: your-key" \
+    -F 'file=@/tmp/guide.zip' \
+  | jq -r '.result.temp_file_id'
+)
+
+# Step 3: add the uploaded directory archive
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d "{
+    \"temp_file_id\": \"$TEMP_FILE_ID\",
+    \"reason\": \"Import local directory\",
+    \"wait\": true
+  }"
+```
+
+**Example: Add Feishu/Lark Cloud Documents**
+
+[Feishu](https://www.feishu.cn) (飞书) and its international version [Lark](https://www.larksuite.com) are widely used for documentation in Chinese tech companies. OpenViking can directly import cloud documents by URL.
+
+Supported document types:
+
+| Type | URL Pattern |
+|------|-------------|
+| Documents | `https://*.feishu.cn/docx/{id}` |
+| Wiki pages | `https://*.feishu.cn/wiki/{token}` |
+| Spreadsheets | `https://*.feishu.cn/sheets/{token}` |
+| Bitable | `https://*.feishu.cn/base/{token}` |
+
+> **Setup**: Install the optional dependency: `pip install 'openviking[bot-feishu]'`
+>
+> Configure credentials via `ov.conf` (see [Configuration](../../guides/01-configuration.md#feishu)) or environment variables:
+> ```bash
+> export FEISHU_APP_ID="cli_xxx"
+> export FEISHU_APP_SECRET="xxx"
+> ```
+
+**Python SDK (Embedded / HTTP)**
+
+```python
+# Import a Feishu document
+result = client.add_resource(
+    "https://example.feishu.cn/docx/doxcnABC123",
+    reason="Project design document"
+)
+client.wait_processed()
+
+# Import a wiki page (auto-resolves to underlying type)
+client.add_resource("https://example.feishu.cn/wiki/wikiXYZ")
+
+# Import a spreadsheet
+client.add_resource("https://example.feishu.cn/sheets/shtcn456")
+```
+
+**CLI**
+
+```bash
+# Import a Feishu document
+openviking add-resource "https://example.feishu.cn/docx/doxcnABC123" --reason "Project design document"
+
+# Import a wiki page
+openviking add-resource "https://example.feishu.cn/wiki/wikiXYZ"
+
+# Incremental update to an existing target
+openviking add-resource "https://example.feishu.cn/docx/doxcnABC123" --to viking://resources/design-doc
+```
+
 **Example: Wait for Processing**
 
 **Python SDK (Embedded / HTTP)**
@@ -154,7 +280,7 @@ print(f"All processed: {status}")
 curl -X POST http://localhost:1933/api/v1/resources \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
-  -d '{"path": "./documents/guide.md", "wait": true}'
+  -d '{"path": "https://example.com/guide.md", "wait": true}'
 
 # Wait separately after batch
 curl -X POST http://localhost:1933/api/v1/system/wait \
@@ -196,7 +322,7 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
   -d '{
-    "path": "./documents/guide.md",
+    "path": "https://example.com/guide.md",
     "target": "viking://resources/documents/guide.md",
     "watch_interval": 60
   }'
@@ -274,11 +400,20 @@ openviking export viking://resources/my-project/ ./exports/my-project.ovpack
 
 Import a `.ovpack` file.
 
-**Parameters**
+**SDK / CLI parameters**
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | file_path | str | Yes | - | Local `.ovpack` file path |
+| parent | str | Yes | - | Target parent URI |
+| force | bool | No | False | Overwrite existing resources |
+| vectorize | bool | No | True | Trigger vectorization after import |
+
+**Raw HTTP request body**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| temp_file_id | str | Yes | - | Upload ID returned by `POST /api/v1/resources/temp_upload` |
 | parent | str | Yes | - | Target parent URI |
 | force | bool | No | False | Overwrite existing resources |
 | vectorize | bool | No | True | Trigger vectorization after import |
@@ -304,15 +439,24 @@ POST /api/v1/pack/import
 ```
 
 ```bash
+# Step 1: upload the local ovpack file
+TEMP_FILE_ID=$(
+  curl -sS -X POST http://localhost:1933/api/v1/resources/temp_upload \
+    -H "X-API-Key: your-key" \
+    -F 'file=@./exports/my-project.ovpack' \
+  | jq -r '.result.temp_file_id'
+)
+
+# Step 2: import using temp_file_id
 curl -X POST http://localhost:1933/api/v1/pack/import \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
-  -d '{
-    "file_path": "./exports/my-project.ovpack",
-    "parent": "viking://resources/imported/",
-    "force": true,
-    "vectorize": true
-  }'
+  -d "{
+    \"temp_file_id\": \"$TEMP_FILE_ID\",
+    \"parent\": \"viking://resources/imported/\",
+    \"force\": true,
+    \"vectorize\": true
+  }"
 ```
 
 **CLI**

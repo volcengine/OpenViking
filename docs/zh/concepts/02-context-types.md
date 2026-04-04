@@ -52,16 +52,18 @@ results = client.find(
 - **动态更新：**由 Agent 从交互中持续更新
 - **个性化：**针对特定用户或 特定 Agent 学习记录
 
-### 6 种分类
+### 8 种分类
 
 | 分类 | 位置 | 说明 | 更新策略 |
 |------|------|------|----------|
-| **profile** | `user/memories/.overview.md` | 用户基本信息 | ✅ 可追加 |
+| **profile** | `user/memories/profile.md` | 用户基本信息 | ✅ 合并到单文件 |
 | **preferences** | `user/memories/preferences/` | 按主题的用户偏好 | ✅ 可追加 |
 | **entities** | `user/memories/entities/` | 实体记忆（人物、项目） | ✅ 可追加 |
 | **events** | `user/memories/events/` | 事件记录（决策、里程碑） | ❌ 不更新 |
 | **cases** | `agent/memories/cases/` | 学习的案例 | ❌ 不更新 |
-| **patterns** | `agent/memories/patterns/` | 学习的模式 | ❌ 不更新 |
+| **patterns** | `agent/memories/patterns/` | 学习的模式 | ✅ 可合并 |
+| **tools** | `agent/memories/tools/` | 工具使用经验与最佳实践 | ✅ 可合并 |
+| **skills** | `agent/memories/skills/` | 技能执行经验与工作流策略 | ✅ 可合并 |
 
 ### 使用
 
@@ -69,7 +71,8 @@ results = client.find(
 # 记忆从会话中自动提取
 session = client.session()
 await session.add_message("user", [{"type": "text", "text": "我喜欢深色模式"}])
-await session.commit()  # 提取偏好记忆
+commit = await session.commit()  # 启动后台记忆提取
+task = await client.get_task(commit["task_id"])  # 轮询直到 task["status"] == "completed"
 
 # 搜索记忆
 results = await client.find(

@@ -1,18 +1,18 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Single-turn channel - no extra output, just the result."""
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any
-import json
 
 from loguru import logger
 
-from vikingbot.bus.events import InboundMessage, OutboundMessage, OutboundEventType
+from vikingbot.bus.events import InboundMessage, OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
-from vikingbot.config.schema import SessionKey, BaseChannelConfig
+from vikingbot.config.schema import BaseChannelConfig, SessionKey
 
 
 class SingleTurnChannelConfig(BaseChannelConfig):
@@ -77,9 +77,10 @@ class SingleTurnChannel(BaseChannel):
         try:
             await asyncio.wait_for(self._response_received.wait(), timeout=3000.0)
             if self._last_response:
-                from vikingbot.cli.commands import console
                 from rich.markdown import Markdown
                 from rich.text import Text
+
+                from vikingbot.cli.commands import console
 
                 content = self._last_response or ""
                 body = Markdown(content) if self.markdown else Text(content)
@@ -95,10 +96,13 @@ class SingleTurnChannel(BaseChannel):
         """Send a message - store final response for later retrieval."""
         if msg.is_normal_message:
             if self._eval:
+                content = msg.content.replace('"', "'") if msg.content else ""
                 output = {
-                    "text": msg.content,
+                    "text": content,
                     "token_usage": msg.token_usage,
                     "time_cost": msg.time_cost,
+                    "iteration": msg.iteration,
+                    "tools_used_names": msg.tools_used_names,
                 }
                 msg.content = json.dumps(output, ensure_ascii=False)
             self._last_response = msg.content

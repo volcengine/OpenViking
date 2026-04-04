@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Message class definition - based on opencode Message design.
 
 Message = role + parts, supports serialization to JSONL.
@@ -30,6 +30,37 @@ class Message:
             if isinstance(p, TextPart):
                 return p.text
         return ""
+
+    @property
+    def estimated_tokens(self) -> int:
+        """Estimate token count from all parts (ceil(len/4) heuristic).
+
+        Counts fields that actually appear in the assembled prompt:
+        - TextPart.text: always emitted
+        - ContextPart.abstract: injected as text (uri is not sent to the model)
+        - ToolPart: tool_id (appears in toolUse.id / toolResult.toolCallId),
+          tool_name, tool_input (JSON), tool_output
+
+        Known limitation: ToolPart estimation undercounts by ~10-20 tokens per
+        tool call because tool_id/toolName appear twice in the assembled transcript
+        (toolUse + toolResult), and small literals like "(no output)" / "{}" are
+        not counted. Under 128k budgets this is negligible; for smaller budgets
+        (8k/16k) or tool-dense sessions, consider adding a conservative per-tool
+        buffer instead of mirroring the full convertToAgentMessages logic.
+        """
+        total_chars = 0
+        for p in self.parts:
+            if isinstance(p, TextPart):
+                total_chars += len(p.text)
+            elif isinstance(p, ContextPart):
+                total_chars += len(p.abstract)
+            elif isinstance(p, ToolPart):
+                total_chars += len(p.tool_id) + len(p.tool_name)
+                if p.tool_input:
+                    total_chars += len(json.dumps(p.tool_input, ensure_ascii=False))
+                if p.tool_output:
+                    total_chars += len(p.tool_output)
+        return -(-total_chars // 4)  # ceil division
 
     def to_dict(self) -> dict:
         """Serialize to JSONL."""

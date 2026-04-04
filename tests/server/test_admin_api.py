@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 
 """Tests for Admin API endpoints (openviking/server/routers/admin.py)."""
 
@@ -39,7 +39,7 @@ async def admin_app(admin_service):
     app = create_app(config=config, service=admin_service)
     set_service(admin_service)
 
-    manager = APIKeyManager(root_key=ROOT_KEY, agfs_client=admin_service._agfs)
+    manager = APIKeyManager(root_key=ROOT_KEY, viking_fs=admin_service.viking_fs)
     await manager.load()
     app.state.api_key_manager = manager
 
@@ -344,3 +344,58 @@ async def test_no_auth_admin_api_returns_401(admin_client: httpx.AsyncClient):
     """Admin API without key should return 401."""
     resp = await admin_client.get("/api/v1/admin/accounts")
     assert resp.status_code == 401
+
+
+@pytest_asyncio.fixture(scope="function")
+async def trusted_admin_app(admin_service):
+    config = ServerConfig(auth_mode="trusted")
+    app = create_app(config=config, service=admin_service)
+    set_service(admin_service)
+    return app
+
+
+@pytest_asyncio.fixture(scope="function")
+async def trusted_admin_client(trusted_admin_app):
+    transport = httpx.ASGITransport(app=trusted_admin_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:
+        yield c
+
+
+async def test_trusted_mode_create_account_returns_mode_specific_error(
+    trusted_admin_client: httpx.AsyncClient,
+):
+    """Trusted mode should explain why account management is unavailable."""
+    resp = await trusted_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": _uid(), "admin_user_id": "alice"},
+        headers={
+            "X-OpenViking-Account": "acme",
+            "X-OpenViking-User": "alice",
+        },
+    )
+    assert resp.status_code == 403
+    body = resp.json()
+    assert body["error"]["code"] == "PERMISSION_DENIED"
+    assert "trusted mode" in body["error"]["message"].lower()
+    assert "user-key registration" in body["error"]["message"].lower()
+    assert "api_key mode" in body["error"]["message"].lower()
+
+
+async def test_trusted_mode_register_user_returns_mode_specific_error(
+    trusted_admin_client: httpx.AsyncClient,
+):
+    """Trusted mode should explain why user registration is unavailable."""
+    resp = await trusted_admin_client.post(
+        "/api/v1/admin/accounts/acme/users",
+        json={"user_id": "bob", "role": "user"},
+        headers={
+            "X-OpenViking-Account": "acme",
+            "X-OpenViking-User": "alice",
+        },
+    )
+    assert resp.status_code == 403
+    body = resp.json()
+    assert body["error"]["code"] == "PERMISSION_DENIED"
+    assert "trusted mode" in body["error"]["message"].lower()
+    assert "resolved as user" in body["error"]["message"].lower()
+    assert "root_api_key" in body["error"]["message"].lower()

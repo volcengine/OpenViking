@@ -1,6 +1,6 @@
 use crate::client::HttpClient;
 use crate::error::Result;
-use crate::output::{output_success, OutputFormat};
+use crate::output::{OutputFormat, output_success};
 
 pub async fn find(
     client: &HttpClient,
@@ -11,7 +11,9 @@ pub async fn find(
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let result = client.find(query.to_string(), uri.to_string(), node_limit, threshold).await?;
+    let result = client
+        .find(query.to_string(), uri.to_string(), node_limit, threshold)
+        .await?;
     output_success(&result, output_format, compact);
     Ok(())
 }
@@ -26,7 +28,15 @@ pub async fn search(
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let result = client.search(query.to_string(), uri.to_string(), session_id, node_limit, threshold).await?;
+    let result = client
+        .search(
+            query.to_string(),
+            uri.to_string(),
+            session_id,
+            node_limit,
+            threshold,
+        )
+        .await?;
     output_success(&result, output_format, compact);
     Ok(())
 }
@@ -34,17 +44,19 @@ pub async fn search(
 pub async fn grep(
     client: &HttpClient,
     uri: &str,
+    exclude_uri: Option<String>,
     pattern: &str,
     ignore_case: bool,
     node_limit: i32,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let result = client.grep(uri, pattern, ignore_case, node_limit).await?;
+    let result = client
+        .grep(uri, exclude_uri, pattern, ignore_case, node_limit)
+        .await?;
     output_success(&result, output_format, compact);
     Ok(())
 }
-
 
 pub async fn glob(
     client: &HttpClient,

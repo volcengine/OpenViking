@@ -16,6 +16,7 @@ class OutboundEventType(str, Enum):
     TOOL_RESULT = "tool_result"  # Result from tool execution
     REASONING = "reasoning"  # Reasoning content
     ITERATION = "iteration"  # Iteration marker
+    NO_REPLY = "no_reply"  # No reply required
 
 
 @dataclass
@@ -26,6 +27,7 @@ class InboundMessage:
     content: str  # Message text
     session_key: SessionKey
     timestamp: datetime = field(default_factory=datetime.now)
+    need_reply: bool = True
     media: list[str] = field(default_factory=list)  # Media URLs
     metadata: dict[str, Any] = field(default_factory=dict)  # Channel-specific data
 
@@ -42,6 +44,8 @@ class OutboundMessage:
     metadata: dict[str, Any] = field(default_factory=dict)
     token_usage: dict[str, int] = field(default_factory=dict)
     time_cost: float = field(default_factory=float)
+    iteration: int = field(default_factory=int)
+    tools_used_names: list[str] = field(default_factory=list)
 
     @property
     def channel(self) -> str:

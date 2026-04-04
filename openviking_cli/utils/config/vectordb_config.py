@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field, model_validator
@@ -8,6 +8,7 @@ from openviking_cli.utils.logger import get_logger
 
 COLLECTION_NAME = "context"
 DEFAULT_PROJECT_NAME = "default"
+DEFAULT_INDEX_NAME = "default"
 logger = get_logger(__name__)
 
 
@@ -68,6 +69,11 @@ class VectorDBBackendConfig(BaseModel):
 
     project_name: Optional[str] = Field(
         default=DEFAULT_PROJECT_NAME, description="project name", alias="project"
+    )
+
+    index_name: Optional[str] = Field(
+        default=DEFAULT_INDEX_NAME,
+        description="Default index name for VectorDB operations",
     )
 
     distance_metric: str = Field(

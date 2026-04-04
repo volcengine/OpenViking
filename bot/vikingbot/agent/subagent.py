@@ -14,6 +14,7 @@ from vikingbot.bus.queue import MessageBus
 from vikingbot.config.schema import SessionKey
 from vikingbot.providers.base import LLMProvider
 from vikingbot.sandbox.manager import SandboxManager
+from vikingbot.utils.helpers import ensure_non_empty_assistant_content
 
 
 class SubagentManager:
@@ -128,7 +129,7 @@ class SubagentManager:
                     messages.append(
                         {
                             "role": "assistant",
-                            "content": response.content or "",
+                            "content": ensure_non_empty_assistant_content(response.content),
                             "tool_calls": tool_call_dicts,
                         }
                     )

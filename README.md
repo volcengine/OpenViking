@@ -1,8 +1,10 @@
 <div align="center">
 
-<picture>
-  <img alt="OpenViking" src="docs/images/banner.jpg" width="100%" height="auto">
-</picture>
+<a href="https://openviking.ai/" target="_blank">
+  <picture>
+    <img alt="OpenViking" src="docs/images/ov-logo.png" width="200px" height="auto">
+  </picture>
+</a>
 
 ### OpenViking: The Context Database for AI Agents
 
@@ -275,7 +277,7 @@ Create a configuration file `~/.openviking/ov.conf`, remove the comments before 
 }
 ```
 
-> **Note**: For embedding models, currently `volcengine` (Doubao), `openai`, and `jina` providers are supported. For VLM models, we support three providers: `volcengine`, `openai`, and `litellm`. The `litellm` provider supports various models including Anthropic (Claude), DeepSeek, Gemini, Moonshot, Zhipu, DashScope, MiniMax, vLLM, Ollama, and more.
+> **Note**: For embedding models, supported providers are `volcengine` (Doubao), `openai`, `jina`, `voyage`, `minimax`, `vikingdb`, and `gemini` (requires `pip install "google-genai>=1.0.0"`). For VLM models, we support three providers: `volcengine`, `openai`, and `litellm`. The `litellm` provider supports various models including Anthropic (Claude), DeepSeek, Gemini, Moonshot, Zhipu, DashScope, MiniMax, vLLM, Ollama, and more.
 
 #### Server Configuration Examples
 
@@ -346,6 +348,43 @@ Create a configuration file `~/.openviking/ov.conf`, remove the comments before 
   }
 }
 ```
+
+</details>
+
+<details>
+<summary><b>Example 3: Using Google Gemini Embedding</b></summary>
+
+Install the required package first:
+
+```bash
+pip install "google-genai>=1.0.0"
+```
+
+```json
+{
+  "storage": {
+    "workspace": "/home/your-name/openviking_workspace"
+  },
+  "embedding": {
+    "dense": {
+      "provider": "gemini",
+      "api_key": "your-google-api-key",
+      "model": "gemini-embedding-2-preview",
+      "dimension": 3072
+    },
+    "max_concurrent": 10
+  },
+  "vlm": {
+    "api_base" : "https://api.openai.com/v1",
+    "api_key"  : "your-openai-api-key",
+    "provider" : "openai",
+    "model"    : "gpt-4o",
+    "max_concurrent": 100
+  }
+}
+```
+
+Get your Google API key at https://aistudio.google.com/apikey
 
 </details>
 
@@ -456,6 +495,8 @@ openviking-server --with-bot
 # In another terminal, start interactive chat
 ov chat
 ```
+
+If you use the official Docker image, `vikingbot` is already bundled in the image and starts by default together with the OpenViking server and console UI. You can disable it at runtime with either `--without-bot` or `-e OPENVIKING_WITH_BOT=0`.
 
 ---
 
@@ -615,14 +656,19 @@ Let's work together to define and build the future of AI Agent context managemen
 
 ## License
 
-This project is licensed under the Apache License 2.0 - see the [LICENSE](./LICENSE) file for details.
+The OpenViking project uses different licenses for different components:
+
+- **Main Project**: AGPLv3 - see the [LICENSE](./LICENSE) file for details
+- **crates/ov_cli**: Apache 2.0 - see the [LICENSE](./crates/ov_cli/LICENSE) for details
+- **examples**: Apache 2.0 - see the [LICENSE](./examples/LICENSE) for details
+- **third_party**: Respective original licenses of third-party projects
 
 
 <!-- Link Definitions -->
 
 [release-shield]: https://img.shields.io/github/v/release/volcengine/OpenViking?color=369eff&labelColor=black&logo=github&style=flat-square
 [release-link]: https://github.com/volcengine/OpenViking/releases
-[license-shield]: https://img.shields.io/badge/license-apache%202.0-white?labelColor=black&style=flat-square
+[license-shield]: https://img.shields.io/badge/license-AGPLv3-white?labelColor=black&style=flat-square
 [license-shield-link]: https://github.com/volcengine/OpenViking/blob/main/LICENSE
 [last-commit-shield]: https://img.shields.io/github/last-commit/volcengine/OpenViking?color=c4f042&labelColor=black&style=flat-square
 [last-commit-shield-link]: https://github.com/volcengine/OpenViking/commits/main

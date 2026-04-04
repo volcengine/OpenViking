@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Debug Service - provides system status query and health check.
 """
@@ -7,13 +7,14 @@ Debug Service - provides system status query and health check.
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
+from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager
 from openviking.storage.observers import (
     LockObserver,
+    ModelsObserver,
     QueueObserver,
     RetrievalObserver,
     VikingDBObserver,
-    VLMObserver,
 )
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.transaction import get_lock_manager
@@ -99,8 +100,7 @@ class ObserverService:
             status=observer.get_status_table(),
         )
 
-    @property
-    def vikingdb(self) -> ComponentStatus:
+    def vikingdb(self, ctx: Optional[RequestContext] = None) -> ComponentStatus:
         """Get VikingDB status."""
         if self._vikingdb is None:
             return ComponentStatus(
@@ -114,22 +114,41 @@ class ObserverService:
             name="vikingdb",
             is_healthy=observer.is_healthy(),
             has_errors=observer.has_errors(),
-            status=observer.get_status_table(),
+            status=observer.get_status_table(ctx=ctx),
         )
 
     @property
-    def vlm(self) -> ComponentStatus:
-        """Get VLM status."""
+    def models(self) -> ComponentStatus:
+        """Get Models status (VLM, Embedding, Rerank)."""
         if self._config is None:
             return ComponentStatus(
-                name="vlm",
+                name="models",
                 is_healthy=False,
                 has_errors=True,
                 status="Not initialized",
             )
-        observer = VLMObserver(self._config.vlm.get_vlm_instance())
+
+        vlm_instance = self._config.vlm.get_vlm_instance()
+        embedding_instance = None
+        rerank_instance = None
+
+        # Get embedding instance if available
+        if self._config.embedding:
+            embedding_instance = self._config.embedding.get_embedder()
+
+        # Get rerank instance if available
+        if self._config.rerank and self._config.rerank.is_available():
+            from openviking.models.rerank import RerankClient
+
+            rerank_instance = RerankClient.from_config(self._config.rerank)
+
+        observer = ModelsObserver(
+            vlm_instance=vlm_instance,
+            embedding_instance=embedding_instance,
+            rerank_instance=rerank_instance,
+        )
         return ComponentStatus(
-            name="vlm",
+            name="models",
             is_healthy=observer.is_healthy(),
             has_errors=observer.has_errors(),
             status=observer.get_status_table(),
@@ -166,13 +185,12 @@ class ObserverService:
             status=observer.get_status_table(),
         )
 
-    @property
-    def system(self) -> SystemStatus:
+    def system(self, ctx: Optional[RequestContext] = None) -> SystemStatus:
         """Get system overall status."""
         components = {
             "queue": self.queue,
-            "vikingdb": self.vikingdb,
-            "vlm": self.vlm,
+            "vikingdb": self.vikingdb(ctx=ctx),
+            "models": self.models,
             "lock": self.lock,
             "retrieval": self.retrieval,
         }
@@ -187,7 +205,7 @@ class ObserverService:
         """Quick health check."""
         if not self._dependencies_ready:
             return False
-        return self.system.is_healthy
+        return self.system().is_healthy
 
 
 class DebugService:

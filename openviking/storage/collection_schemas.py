@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Collection schema definitions for OpenViking.
 
@@ -16,13 +16,17 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from openviking.models.embedder.base import EmbedResult
-from openviking.models.embedder.volcengine_embedders import is_429_error
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.errors import CollectionNotFoundError
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
 from openviking.telemetry import bind_telemetry, resolve_telemetry
+from openviking.utils.circuit_breaker import (
+    CircuitBreaker,
+    CircuitBreakerOpen,
+    classify_api_error,
+)
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
@@ -53,28 +57,27 @@ class CollectionSchemas:
         Returns:
             Schema definition for the context collection
         """
-        return {
-            "CollectionName": name,
-            "Description": "Unified context collection",
-            "Fields": [
-                {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
-                {"FieldName": "uri", "FieldType": "path"},
-                # type 字段：当前版本未使用，保留用于未来扩展
-                # 预留用于表示资源的具体类型，如 "file", "directory", "image", "video", "repository" 等
-                {"FieldName": "type", "FieldType": "string"},
-                # context_type 字段：区分上下文的大类
-                # 枚举值："resource"（资源，默认）, "memory"（记忆）, "skill"（技能）
-                # 推导规则：
-                #   - URI 以 viking://agent/skills 开头 → "skill"
-                #   - URI 包含 "memories" → "memory"
-                #   - 其他情况 → "resource"
-                {"FieldName": "context_type", "FieldType": "string"},
-                {"FieldName": "vector", "FieldType": "vector", "Dim": vector_dim},
-                {"FieldName": "sparse_vector", "FieldType": "sparse_vector"},
-                {"FieldName": "created_at", "FieldType": "date_time"},
-                {"FieldName": "updated_at", "FieldType": "date_time"},
-                {"FieldName": "active_count", "FieldType": "int64"},
-                {"FieldName": "parent_uri", "FieldType": "path"},
+        fields = [
+            {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+            {"FieldName": "uri", "FieldType": "path"},
+            # type 字段：当前版本未使用，保留用于未来扩展
+            # 预留用于表示资源的具体类型，如 "file", "directory", "image", "video", "repository" 等
+            {"FieldName": "type", "FieldType": "string"},
+            # context_type 字段：区分上下文的大类
+            # 枚举值："resource"（资源，默认）, "memory"（记忆）, "skill"（技能）
+            # 推导规则：
+            #   - URI 以 viking://agent/skills 开头 → "skill"
+            #   - URI 包含 "memories" → "memory"
+            #   - 其他情况 → "resource"
+            {"FieldName": "context_type", "FieldType": "string"},
+            {"FieldName": "vector", "FieldType": "vector", "Dim": vector_dim},
+            {"FieldName": "sparse_vector", "FieldType": "sparse_vector"},
+            {"FieldName": "created_at", "FieldType": "date_time"},
+            {"FieldName": "updated_at", "FieldType": "date_time"},
+            {"FieldName": "active_count", "FieldType": "int64"},
+        ]
+        fields.extend(
+            [
                 # level 字段：区分 L0/L1/L2 层级
                 # 枚举值：
                 #   - 0 = L0（abstract，摘要）
@@ -91,21 +94,30 @@ class CollectionSchemas:
                 {"FieldName": "abstract", "FieldType": "string"},
                 {"FieldName": "account_id", "FieldType": "string"},
                 {"FieldName": "owner_space", "FieldType": "string"},
-            ],
-            "ScalarIndex": [
-                "uri",
-                "type",
-                "context_type",
-                "created_at",
-                "updated_at",
-                "active_count",
-                "parent_uri",
+            ]
+        )
+        scalar_index = [
+            "uri",
+            "type",
+            "context_type",
+            "created_at",
+            "updated_at",
+            "active_count",
+        ]
+        scalar_index.extend(
+            [
                 "level",
                 "name",
                 "tags",
                 "account_id",
                 "owner_space",
-            ],
+            ]
+        )
+        return {
+            "CollectionName": name,
+            "Description": "Unified context collection",
+            "Fields": fields,
+            "ScalarIndex": scalar_index,
         }
 
 
@@ -162,6 +174,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
         self._collection_name = config.storage.vectordb.name
         self._vector_dim = config.embedding.dimension
         self._initialize_embedder(config)
+        self._circuit_breaker = CircuitBreaker()
 
     def _initialize_embedder(self, config: "OpenVikingConfig"):
         """Initialize the embedder instance from config."""
@@ -214,6 +227,8 @@ class TextEmbeddingHandler(DequeueHandlerBase):
 
         embedding_msg: Optional[EmbeddingMsg] = None
         collector = None
+        report_success = False
+        report_error_args: Optional[tuple[str, Optional[Dict[str, Any]]]] = None
         try:
             queue_data = json.loads(data["data"])
             # Parse EmbeddingMsg from data
@@ -226,15 +241,33 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 if self._vikingdb.is_closing:
                     logger.debug("Skip embedding dequeue during shutdown")
                     self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
-                    self.report_success()
+                    report_success = True
                     return None
 
                 # Only process string messages
                 if not isinstance(embedding_msg.message, str):
                     logger.debug(f"Skipping non-string message type: {type(embedding_msg.message)}")
                     self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
-                    self.report_success()
+                    report_success = True
                     return data
+
+                # Circuit breaker: if API is known-broken, re-enqueue and wait
+                try:
+                    self._circuit_breaker.check()
+                except CircuitBreakerOpen:
+                    logger.warning(
+                        f"Circuit breaker is open, re-enqueueing embedding: {embedding_msg.id}"
+                    )
+                    if self._vikingdb.has_queue_manager:
+                        wait = self._circuit_breaker.retry_after
+                        if wait > 0:
+                            await asyncio.sleep(wait)
+                        await self._vikingdb.enqueue_embedding_msg(embedding_msg)
+                        report_success = True
+                        return None
+                    # No queue manager — cannot re-enqueue, drop with error
+                    report_error_args = ("Circuit breaker open and no queue manager", data)
+                    return None
 
                 # Initialize embedder if not already initialized
                 if not self._embedder:
@@ -248,26 +281,50 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     try:
                         # embed() is a blocking HTTP call; offload to thread pool to avoid
                         # blocking the event loop and allow real concurrency.
+                        import time as _time
+
+                        _embed_t0 = _time.monotonic()
                         result: EmbedResult = await asyncio.to_thread(
                             self._embedder.embed, embedding_msg.message
                         )
+                        _embed_elapsed = _time.monotonic() - _embed_t0
+                        try:
+                            from openviking.storage.observers.prometheus_observer import (
+                                get_prometheus_observer,
+                            )
+
+                            _prom = get_prometheus_observer()
+                            if _prom is not None:
+                                _prom.record_embedding(_embed_elapsed)
+                        except Exception:
+                            pass
                     except Exception as embed_err:
                         error_msg = f"Failed to generate embedding: {embed_err}"
-                        logger.error(error_msg)
+                        error_class = classify_api_error(embed_err)
 
-                        if is_429_error(embed_err) and self._vikingdb.has_queue_manager:
+                        if error_class == "permanent":
+                            logger.critical(error_msg)
+                            self._circuit_breaker.record_failure(embed_err)
+                            self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
+                            report_error_args = (error_msg, data)
+                            return None
+
+                        # Transient or unknown — re-enqueue for retry
+                        logger.warning(error_msg)
+                        self._circuit_breaker.record_failure(embed_err)
+                        if self._vikingdb.has_queue_manager:
                             try:
                                 await self._vikingdb.enqueue_embedding_msg(embedding_msg)
                                 logger.info(
-                                    f"Re-enqueued embedding message after rate limit: {embedding_msg.id}"
+                                    f"Re-enqueued embedding message after transient error: {embedding_msg.id}"
                                 )
-                                self.report_success()
+                                report_success = True
                                 return None
                             except Exception as requeue_err:
                                 logger.error(f"Failed to re-enqueue message: {requeue_err}")
 
                         self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
-                        self.report_error(error_msg, data)
+                        report_error_args = (error_msg, data)
                         return None
 
                     # Add dense vector
@@ -278,7 +335,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                             error_msg = f"Dense vector dimension mismatch: expected {self._vector_dim}, got {len(result.dense_vector)}"
                             logger.error(error_msg)
                             self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
-                            self.report_error(error_msg, data)
+                            report_error_args = (error_msg, data)
                             return None
 
                     # Add sparse vector if present
@@ -291,7 +348,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     error_msg = "Embedder not initialized, skipping vector generation"
                     logger.warning(error_msg)
                     self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
-                    self.report_error(error_msg, data)
+                    report_error_args = (error_msg, data)
                     return None
 
                 # Write to vector database
@@ -320,28 +377,29 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     if self._vikingdb.is_closing:
                         logger.debug(f"Skip embedding write during shutdown: {db_err}")
                         self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
-                        self.report_success()
+                        report_success = True
                         return None
                     logger.error(f"Failed to write to vector database: {db_err}")
                     self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
-                    self.report_error(str(db_err), data)
+                    report_error_args = (str(db_err), data)
                     return None
                 except Exception as db_err:
                     if self._vikingdb.is_closing:
                         logger.debug(f"Skip embedding write during shutdown: {db_err}")
                         self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
-                        self.report_success()
+                        report_success = True
                         return None
                     logger.error(f"Failed to write to vector database: {db_err}")
                     import traceback
 
                     traceback.print_exc()
                     self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
-                    self.report_error(str(db_err), data)
+                    report_error_args = (str(db_err), data)
                     return None
 
                 self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
-                self.report_success()
+                report_success = True
+                self._circuit_breaker.record_success()
                 return inserted_data
 
         except Exception as e:
@@ -351,7 +409,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
             traceback.print_exc()
             if embedding_msg is not None:
                 self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
-            self.report_error(str(e), data)
+            report_error_args = (str(e), data)
             return None
         finally:
             if embedding_msg and embedding_msg.semantic_msg_id:
@@ -362,3 +420,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     await tracker.decrement(embedding_msg.semantic_msg_id)
                 except Exception as tracker_err:
                     logger.warning(f"Failed to decrement embedding tracker: {tracker_err}")
+            if report_error_args is not None:
+                self.report_error(*report_error_args)
+            elif report_success:
+                self.report_success()

@@ -1,0 +1,41 @@
+memory_type: cases
+description: |
+  Case memory - captures "what problem was encountered and how it was solved".
+  Extract specific problem-solution pairs from the conversation that are worth remembering for future reference.
+  Cases should be about specific problems that have clear solutions.
+  Each case should include: what the problem was (symptoms, error messages, context), what the solution was (steps taken, principles used), and why it worked.
+  Case names should be in "Problem → Solution" format to make them easily searchable.
+directory: "viking://agent/{{ agent_space }}/memories/cases"
+filename_template: "{{ case_name }}.md"
+enabled: false
+fields:
+  - name: case_name
+    type: string
+    description: |
+      Case name used to uniquely identify this case memory.
+      Should be in "Problem → Solution" format such as "Band not recognized → Request member/album/style details", "Memory merge timeout → Split into smaller chunks", etc.
+      Example: "[Problem] → [Solution]"
+    merge_op: immutable
+
+  - name: problem
+    type: string
+    description: |
+      Problem description specifically detailing what problem was encountered.
+      Includes: error messages, symptoms, context, and other specific details.
+      Example: "User feedback that a band cannot be recognized by system."
+    merge_op: patch
+
+  - name: solution
+    type: string
+    description: |
+      Solution description detailing how to solve this problem.
+      Includes: solution method, steps, principles, etc.
+      Example: "Request user to provide more identification details: band member names, representative album names, music style, etc. This information can improve recognition accuracy."
+    merge_op: patch
+
+  - name: content
+    type: string
+    description: |
+      Complete case content including full narrative of problem and solution.
+      Example: "User feedback mentioned a band that the system could not recognize. Solution is to request user to provide more identification details: band member names, representative album names, music style, etc. This information can improve recognition accuracy."
+    merge_op: patch

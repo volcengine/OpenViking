@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Tests for Jina AI Embedder"""
 
 from unittest.mock import MagicMock, patch
@@ -148,6 +148,54 @@ class TestJinaDenseEmbedder:
         assert call_kwargs["extra_body"]["task"] == "retrieval.query"
 
     @patch("openviking.models.embedder.jina_embedders.openai.OpenAI")
+    def test_code_model_uses_code_task_defaults(self, mock_openai_class):
+        """Jina code models should use code-specific default task names."""
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+
+        mock_embedding = MagicMock()
+        mock_embedding.embedding = [0.1] * 1024
+
+        mock_response = MagicMock()
+        mock_response.data = [mock_embedding]
+        mock_client.embeddings.create.return_value = mock_response
+
+        embedder = JinaDenseEmbedder(
+            model_name="jina-code-embeddings-1.5b",
+            api_key="test-api-key",
+        )
+
+        embedder.embed("Write a binary search in Python", is_query=True)
+
+        call_kwargs = mock_client.embeddings.create.call_args[1]
+        assert call_kwargs["extra_body"]["task"] == "nl2code.query"
+
+    @patch("openviking.models.embedder.jina_embedders.openai.OpenAI")
+    def test_code_model_keeps_explicit_task_override(self, mock_openai_class):
+        """Explicit task params should override the model-specific defaults."""
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+
+        mock_embedding = MagicMock()
+        mock_embedding.embedding = [0.1] * 1024
+
+        mock_response = MagicMock()
+        mock_response.data = [mock_embedding]
+        mock_client.embeddings.create.return_value = mock_response
+
+        embedder = JinaDenseEmbedder(
+            model_name="jina-code-embeddings-1.5b",
+            api_key="test-api-key",
+            query_param="custom.query",
+            document_param="custom.passage",
+        )
+
+        embedder.embed("Write a binary search in Python", is_query=True)
+
+        call_kwargs = mock_client.embeddings.create.call_args[1]
+        assert call_kwargs["extra_body"]["task"] == "custom.query"
+
+    @patch("openviking.models.embedder.jina_embedders.openai.OpenAI")
     def test_embed_with_late_chunking(self, mock_openai_class):
         """Test embedding with late_chunking parameter"""
         mock_client = MagicMock()
@@ -276,3 +324,63 @@ class TestJinaDenseEmbedder:
             dimension=256,
         )
         assert embedder.get_dimension() == 256
+
+    @patch("openviking.models.embedder.jina_embedders.openai.OpenAI")
+    def test_422_task_error_actionable_message(self, mock_openai_class):
+        """422 error mentioning 'task' should produce actionable RuntimeError."""
+        import openai
+
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+
+        error = openai.BadRequestError(
+            message="Validation error",
+            response=MagicMock(status_code=422, headers={}),
+            body={"detail": "Input should be 'nl2code.query' ... task"},
+        )
+        mock_client.embeddings.create.side_effect = error
+
+        embedder = JinaDenseEmbedder(
+            model_name="jina-code-embeddings-1.5b",
+            api_key="test-key",
+        )
+
+        with pytest.raises(RuntimeError, match="query_param.*document_param"):
+            embedder.embed("hello")
+
+    @patch("openviking.models.embedder.jina_embedders.openai.OpenAI")
+    def test_non_422_error_passthrough(self, mock_openai_class):
+        """Non-422 API errors should use the generic 'Jina API error' message."""
+        import openai
+
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+
+        error = openai.APIError(
+            message="Internal server error",
+            request=MagicMock(),
+            body=None,
+        )
+        mock_client.embeddings.create.side_effect = error
+
+        embedder = JinaDenseEmbedder(
+            model_name="jina-embeddings-v5-text-small",
+            api_key="test-key",
+        )
+
+        with pytest.raises(RuntimeError, match="Jina API error"):
+            embedder.embed("hello")
+
+    def test_code_model_dimensions(self):
+        """Code models should have correct default dimensions."""
+        embedder_1_5b = JinaDenseEmbedder(
+            model_name="jina-code-embeddings-1.5b",
+            api_key="test-key",
+        )
+        assert embedder_1_5b.get_dimension() == 1024
+
+        embedder_0_5b = JinaDenseEmbedder(
+            model_name="jina-code-embeddings-0.5b",
+            api_key="test-key",
+        )
+        assert embedder_0_5b.get_dimension() == 768

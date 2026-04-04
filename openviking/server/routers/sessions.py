@@ -1,12 +1,12 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Sessions endpoints for OpenViking HTTP Server."""
 
-import asyncio
 import logging
+from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Body, Depends, Path, Query
+from fastapi import APIRouter, Depends, Path, Query
 from pydantic import BaseModel, model_validator
 
 from openviking.message.part import TextPart, part_from_dict
@@ -14,10 +14,6 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import ErrorInfo, Response
-from openviking.server.telemetry import resolve_selection, run_operation
-from openviking.service.task_tracker import get_task_tracker
-from openviking.telemetry import TelemetryRequest
-from openviking_cli.exceptions import InvalidArgumentError
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
 logger = logging.getLogger(__name__)
@@ -68,6 +64,7 @@ class AddMessageRequest(BaseModel):
     role: str
     content: Optional[str] = None
     parts: Optional[List[Dict[str, Any]]] = None
+    created_at: Optional[str] = None
 
     @model_validator(mode="after")
     def validate_content_or_parts(self) -> "AddMessageRequest":
@@ -83,10 +80,10 @@ class UsedRequest(BaseModel):
     skill: Optional[Dict[str, Any]] = None
 
 
-class CommitSessionRequest(BaseModel):
-    """Request model for session commit."""
+class CreateSessionRequest(BaseModel):
+    """Request model for creating a session."""
 
-    telemetry: TelemetryRequest = False
+    session_id: Optional[str] = None
 
 
 def _to_jsonable(value: Any) -> Any:
@@ -103,13 +100,19 @@ def _to_jsonable(value: Any) -> Any:
 
 @router.post("")
 async def create_session(
+    request: Optional[CreateSessionRequest] = None,
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Create a new session."""
+    """Create a new session.
+
+    If session_id is provided, creates a session with the given ID.
+    If session_id is None, creates a new session with auto-generated ID.
+    """
     service = get_service()
     await service.initialize_user_directories(_ctx)
     await service.initialize_agent_directories(_ctx)
-    session = await service.sessions.create(_ctx)
+    session_id = request.session_id if request else None
+    session = await service.sessions.create(_ctx, session_id)
     return Response(
         status="ok",
         result={
@@ -132,19 +135,61 @@ async def list_sessions(
 @router.get("/{session_id}")
 async def get_session(
     session_id: str = Path(..., description="Session ID"),
+    auto_create: bool = Query(False, description="Create the session if it does not exist"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get session details."""
+    from openviking_cli.exceptions import NotFoundError
+
     service = get_service()
-    session = await service.sessions.get(session_id, _ctx)
-    return Response(
-        status="ok",
-        result={
-            "session_id": session.session_id,
-            "user": session.user.to_dict(),
-            "message_count": len(session.messages),
-        },
-    )
+    try:
+        session = await service.sessions.get(session_id, _ctx, auto_create=auto_create)
+    except NotFoundError:
+        return Response(
+            status="error",
+            error=ErrorInfo(code="NOT_FOUND", message=f"Session {session_id} not found"),
+        )
+    result = session.meta.to_dict()
+    result["user"] = session.user.to_dict()
+    pending_tokens = sum(len(m.content) // 4 for m in session.messages)
+    result["pending_tokens"] = pending_tokens
+    return Response(status="ok", result=result)
+
+
+@router.get("/{session_id}/context")
+async def get_session_context(
+    session_id: str = Path(..., description="Session ID"),
+    token_budget: int = Query(128_000, description="Token budget for session context"),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Get assembled session context."""
+    service = get_service()
+    session = service.sessions.session(_ctx, session_id)
+    await session.load()
+    result = await session.get_session_context(token_budget=token_budget)
+    return Response(status="ok", result=_to_jsonable(result))
+
+
+@router.get("/{session_id}/archives/{archive_id}")
+async def get_session_archive(
+    session_id: str = Path(..., description="Session ID"),
+    archive_id: str = Path(..., description="Archive ID"),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Get one completed archive for a session."""
+    from openviking_cli.exceptions import NotFoundError
+
+    service = get_service()
+    session = service.sessions.session(_ctx, session_id)
+    await session.load()
+    try:
+        result = await session.get_session_archive(archive_id)
+    except NotFoundError:
+        return Response(
+            status="error",
+            error=ErrorInfo(code="NOT_FOUND", message=f"Archive {archive_id} not found"),
+        )
+    return Response(status="ok", result=_to_jsonable(result))
 
 
 @router.delete("/{session_id}")
@@ -160,99 +205,18 @@ async def delete_session(
 
 @router.post("/{session_id}/commit")
 async def commit_session(
-    request: CommitSessionRequest = Body(default_factory=CommitSessionRequest),
     session_id: str = Path(..., description="Session ID"),
-    wait: bool = Query(
-        True,
-        description="If False, commit runs in background and returns immediately",
-    ),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Commit a session (archive and extract memories).
 
-    When wait=False, the commit is processed in the background and a
-    ``task_id`` is returned.  Use ``GET /tasks/{task_id}`` to poll for
-    completion status, results, or errors.
-
-    When wait=True (default), the commit blocks until complete and
-    returns the full result inline.
+    Archive (Phase 1) completes before returning.  Memory extraction
+    (Phase 2) runs in the background.  A ``task_id`` is returned for
+    polling progress via ``GET /tasks/{task_id}``.
     """
     service = get_service()
-    tracker = get_task_tracker()
-
-    if wait:
-        # Reject if same session already has a background commit running
-        if tracker.has_running("session_commit", session_id):
-            return Response(
-                status="error",
-                error=ErrorInfo(
-                    code="CONFLICT",
-                    message=f"Session {session_id} already has a commit in progress",
-                ),
-            )
-        execution = await run_operation(
-            operation="session.commit",
-            telemetry=request.telemetry,
-            fn=lambda: service.sessions.commit_async(session_id, _ctx),
-        )
-        return Response(
-            status="ok",
-            result=execution.result,
-            telemetry=execution.telemetry,
-        ).model_dump(exclude_none=True)
-
-    selection = resolve_selection(request.telemetry)
-    if selection.include_payload:
-        raise InvalidArgumentError("telemetry is not supported when wait=false for session.commit")
-
-    # Atomically check + create to prevent race conditions
-    task = tracker.create_if_no_running("session_commit", session_id)
-    if task is None:
-        return Response(
-            status="error",
-            error=ErrorInfo(
-                code="CONFLICT",
-                message=f"Session {session_id} already has a commit in progress",
-            ),
-        )
-    asyncio.create_task(_background_commit_tracked(service, session_id, _ctx, task.task_id))
-
-    return Response(
-        status="ok",
-        result={
-            "session_id": session_id,
-            "status": "accepted",
-            "task_id": task.task_id,
-            "message": "Commit is processing in the background",
-        },
-    )
-
-
-async def _background_commit_tracked(
-    service, session_id: str, ctx: RequestContext, task_id: str
-) -> None:
-    """Run session commit in background with task tracking."""
-    tracker = get_task_tracker()
-    tracker.start(task_id)
-    try:
-        result = await service.sessions.commit_async(session_id, ctx)
-        tracker.complete(
-            task_id,
-            {
-                "session_id": session_id,
-                "memories_extracted": result.get("memories_extracted", 0),
-                "archived": result.get("archived", False),
-            },
-        )
-        logger.info(
-            "Background commit completed: session=%s task=%s memories=%d",
-            session_id,
-            task_id,
-            result.get("memories_extracted", 0),
-        )
-    except Exception as exc:
-        tracker.fail(task_id, str(exc))
-        logger.exception("Background commit failed: session=%s task=%s", session_id, task_id)
+    result = await service.sessions.commit_async(session_id, _ctx)
+    return Response(status="ok", result=result).model_dump(exclude_none=True)
 
 
 @router.post("/{session_id}/extract")
@@ -295,7 +259,15 @@ async def add_message(
     else:
         parts = [TextPart(text=request.content or "")]
 
-    session.add_message(request.role, parts)
+    # 解析 created_at
+    created_at = None
+    if request.created_at:
+        try:
+            created_at = datetime.fromisoformat(request.created_at)
+        except ValueError:
+            logger.warning(f"Invalid created_at format: {request.created_at}")
+
+    session.add_message(request.role, parts, created_at=created_at)
     return Response(
         status="ok",
         result={

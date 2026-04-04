@@ -1,19 +1,19 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
-import unittest
-from unittest.mock import MagicMock, patch
-import sys
+# SPDX-License-Identifier: AGPL-3.0
 import os
+import sys
+import unittest
 
 # Add paths to sys.path to ensure modules can be found
 # sys.path.insert(0, "/cloudide/workspace/viking_python_client")
 sys.path.insert(0, "/cloudide/workspace/open_test")
 
-from openviking.storage.vectordb_adapters.factory import create_collection_adapter
-from openviking_cli.utils.config import get_openviking_config, OpenVikingConfigSingleton
 import json
 import shutil
 import tempfile
+
+from openviking.storage.vectordb_adapters.factory import create_collection_adapter
+from openviking_cli.utils.config import OpenVikingConfigSingleton, get_openviking_config
 
 
 class TestAdapterLoading(unittest.TestCase):
@@ -27,6 +27,7 @@ class TestAdapterLoading(unittest.TestCase):
                 "vectordb": {
                     "backend": "tests.storage.mock_backend.MockCollectionAdapter",
                     "name": "mock_test_collection",
+                    "index_name": "mock_test_index",
                     "custom_params": {"custom_param1": "val1", "custom_param2": 123},
                 }
             },
@@ -69,6 +70,7 @@ class TestAdapterLoading(unittest.TestCase):
             self.assertEqual(adapter.__class__.__name__, "MockCollectionAdapter")
             self.assertEqual(adapter.mode, "mock")
             self.assertEqual(adapter.collection_name, "mock_test_collection")
+            self.assertEqual(adapter.index_name, "mock_test_index")
             self.assertEqual(adapter.custom_param1, "val1")
             self.assertEqual(adapter.custom_param2, 123)
 

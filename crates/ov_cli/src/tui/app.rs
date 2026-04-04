@@ -120,15 +120,14 @@ impl App {
 
         // If in vector mode, reload records with new current_uri
         if self.showing_vector_records {
-            self.load_vector_records(Some(self.current_uri.clone())).await;
+            self.load_vector_records(Some(self.current_uri.clone()))
+                .await;
         }
     }
 
     async fn load_directory_content(&mut self, uri: &str) {
-        let (abstract_result, overview_result) = tokio::join!(
-            self.client.abstract_content(uri),
-            self.client.overview(uri),
-        );
+        let (abstract_result, overview_result) =
+            tokio::join!(self.client.abstract_content(uri), self.client.overview(uri),);
 
         let mut parts = Vec::new();
 
@@ -218,7 +217,8 @@ impl App {
                 self.vector_state.next_page_cursor = next_cursor;
                 self.vector_state.cursor = 0;
                 self.vector_state.scroll_offset = 0;
-                self.status_message = format!("Loaded {} vector records", self.vector_state.records.len());
+                self.status_message =
+                    format!("Loaded {} vector records", self.vector_state.records.len());
             }
             Err(e) => {
                 self.status_message = format!("Failed to load vector records: {}", e);
@@ -246,7 +246,10 @@ impl App {
                 self.vector_state.records.append(&mut new_records);
                 self.vector_state.has_more = next_cursor.is_some();
                 self.vector_state.next_page_cursor = next_cursor;
-                self.status_message = format!("Loaded {} total vector records", self.vector_state.records.len());
+                self.status_message = format!(
+                    "Loaded {} total vector records",
+                    self.vector_state.records.len()
+                );
             }
             Err(e) => {
                 self.status_message = format!("Failed to load next page: {}", e);
@@ -257,7 +260,8 @@ impl App {
     pub async fn toggle_vector_records_mode(&mut self) {
         self.showing_vector_records = !self.showing_vector_records;
         if self.showing_vector_records && self.vector_state.records.is_empty() {
-            self.load_vector_records(Some(self.current_uri.clone())).await;
+            self.load_vector_records(Some(self.current_uri.clone()))
+                .await;
         }
     }
 

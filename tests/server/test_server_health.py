@@ -1,9 +1,14 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 
 """Tests for server infrastructure: health, system status, middleware, error handling."""
 
+import asyncio
+
 import httpx
+
+from openviking.server.app import create_app
+from openviking.server.config import ServerConfig
 
 
 async def test_health_endpoint(client: httpx.AsyncClient):
@@ -40,3 +45,14 @@ async def test_openviking_error_handler(client: httpx.AsyncClient):
 async def test_404_for_unknown_route(client: httpx.AsyncClient):
     resp = await client.get("/this/route/does/not/exist")
     assert resp.status_code == 404
+
+
+async def test_lifespan_shutdown_ignores_cancelled_service_close():
+    class _Service:
+        async def close(self):
+            raise asyncio.CancelledError("shutdown")
+
+    app = create_app(config=ServerConfig(), service=_Service())
+
+    async with app.router.lifespan_context(app):
+        pass

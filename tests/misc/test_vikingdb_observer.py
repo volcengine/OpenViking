@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Test VikingDBObserver functionality
 """
@@ -42,7 +42,7 @@ async def test_vikingdb_observer():
 
         # Test VikingDBObserver
         print("\n4. Test VikingDBObserver:")
-        vikingdb_status = client.observer.vikingdb
+        vikingdb_status = client.observer.vikingdb()
         print(f"Type: {type(vikingdb_status)}")
         print(f"Is healthy: {vikingdb_status.is_healthy}")
         print(f"Has errors: {vikingdb_status.has_errors}")
@@ -58,7 +58,7 @@ async def test_vikingdb_observer():
 
         # Test system status
         print("\n7. Test system status:")
-        system_status = client.observer.system
+        system_status = client.observer.system()
         print(f"System is_healthy: {system_status.is_healthy}")
         for name, component in system_status.components.items():
             print(f"\n{name}:")
@@ -102,7 +102,7 @@ async def test_sync_client():
 
         # Test VikingDBObserver
         print("\nVikingDBObserver status:")
-        print(client.observer.vikingdb)
+        print(client.observer.vikingdb())
 
         print("\n=== Sync client test completed ===")
 

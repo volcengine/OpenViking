@@ -1,7 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Search endpoints for OpenViking HTTP Server."""
 
+import math
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends
@@ -13,6 +14,20 @@ from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
+
+
+def _sanitize_floats(obj: Any) -> Any:
+    """Recursively replace inf/nan with 0.0 to ensure JSON compliance."""
+    if isinstance(obj, float):
+        if math.isinf(obj) or math.isnan(obj):
+            return 0.0
+        return obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_floats(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_floats(v) for v in obj]
+    return obj
+
 
 router = APIRouter(prefix="/api/v1/search", tags=["search"])
 
@@ -26,6 +41,7 @@ class FindRequest(BaseModel):
     node_limit: Optional[int] = None
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None
+    include_provenance: bool = False
     telemetry: TelemetryRequest = False
 
 
@@ -39,6 +55,7 @@ class SearchRequest(BaseModel):
     node_limit: Optional[int] = None
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None
+    include_provenance: bool = False
     telemetry: TelemetryRequest = False
 
 
@@ -46,6 +63,7 @@ class GrepRequest(BaseModel):
     """Request model for grep."""
 
     uri: str
+    exclude_uri: Optional[str] = None
     pattern: str
     case_insensitive: bool = False
     node_limit: Optional[int] = None
@@ -81,7 +99,8 @@ async def find(
     )
     result = execution.result
     if hasattr(result, "to_dict"):
-        result = result.to_dict()
+        result = result.to_dict(include_provenance=request.include_provenance)
+    result = _sanitize_floats(result)
     return Response(
         status="ok",
         result=result,
@@ -120,7 +139,8 @@ async def search(
     )
     result = execution.result
     if hasattr(result, "to_dict"):
-        result = result.to_dict()
+        result = result.to_dict(include_provenance=request.include_provenance)
+    result = _sanitize_floats(result)
     return Response(
         status="ok",
         result=result,
@@ -139,6 +159,7 @@ async def grep(
         request.uri,
         request.pattern,
         ctx=_ctx,
+        exclude_uri=request.exclude_uri,
         case_insensitive=request.case_insensitive,
         node_limit=request.node_limit,
     )

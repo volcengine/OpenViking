@@ -58,7 +58,7 @@ OpenViking is a context database designed for AI Agents, unifying all context ty
 | **Retrieve** | Context retrieval | Intent analysis (IntentAnalyzer), hierarchical retrieval (HierarchicalRetriever), Rerank |
 | **Session** | Session management | Message recording, usage tracking, session compression, memory commit |
 | **Parse** | Context extraction | Document parsing (PDF/MD/HTML), tree building (TreeBuilder), async semantic generation |
-| **Compressor** | Memory compression | 6-category memory extraction, LLM deduplication decisions |
+| **Compressor** | Memory compression | 8-category memory extraction, LLM deduplication decisions |
 | **Storage** | Storage layer | VikingFS virtual filesystem, vector index, AGFS integration |
 
 ## Service Layer
@@ -117,7 +117,7 @@ Messages → Compress → Archive → Memory Extraction → Storage
 1. **Messages**: Accumulate conversation messages and usage records
 2. **Compress**: Keep recent N rounds, archive older messages
 3. **Archive**: Generate L0/L1 for history segments
-4. **Memory Extraction**: Extract 6-category memories from messages
+4. **Memory Extraction**: Extract 8-category memories from messages
 5. **Storage**: Write to AGFS + vector index
 
 ## Deployment Modes

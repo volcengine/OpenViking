@@ -18,9 +18,25 @@ Rust CLI 独立发布能力完全保留，用户可通过以下方式获取：
 """
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 from shutil import which
+
+
+def _exec_binary(binary: str, argv: list[str]) -> None:
+    """Execute a binary, replacing the current process on Unix.
+
+    On Windows, ``os.execv`` does not truly replace the process — CPython's
+    MSVC implementation spawns a child process instead.  This breaks console
+    handle inheritance and prevents the Rust TUI from receiving keyboard
+    input (see #587).  We use ``subprocess.call`` on Windows to work around
+    this.
+    """
+    if sys.platform == "win32":
+        sys.exit(subprocess.call([binary] + argv))
+    else:
+        os.execv(binary, [binary] + argv)
 
 
 def main():
@@ -28,22 +44,26 @@ def main():
     极简入口点：查找 ov 二进制并执行
 
     按优先级查找：
-    0. ./target/release/ov（开发环境）
-    1. Wheel 自带：{package_dir}/openviking/bin/ov
-    2. PATH 查找：系统全局安装的 ov
+    0. Python-native 子命令（doctor）
+    1. ./target/release/ov（开发环境）
+    2. Wheel 自带：{package_dir}/openviking/bin/ov
+    3. PATH 查找：系统全局安装的 ov
     """
-    # 0. 检查开发环境（仅在直接运行脚本时有效）
+    # 0. Python-native subcommands (no Rust binary needed)
+    if len(sys.argv) > 1 and sys.argv[1] == "doctor":
+        from openviking_cli.doctor import main as doctor_main
+
+        sys.exit(doctor_main())
+    # 1. 检查开发环境（仅在直接运行脚本时有效）
     try:
         # __file__ is openviking_cli/rust_cli.py, so parent is openviking_cli directory
         dev_binary = Path(__file__).parent.parent / "target" / "release" / "ov"
         if dev_binary.exists() and os.access(dev_binary, os.X_OK):
-            # 找到后立即 execv，不返回
-            args = [str(dev_binary)] + sys.argv[1:]
-            os.execv(str(dev_binary), args)
+            _exec_binary(str(dev_binary), sys.argv[1:])
     except Exception:
         pass
 
-    # 1. 检查 Wheel 自带（不导入 openviking，避免额外开销）
+    # 2. 检查 Wheel 自带（不导入 openviking，避免额外开销）
     try:
         # __file__ is openviking_cli/rust_cli.py, so parent is openviking_cli directory
         package_dir = Path(__file__).parent.parent / "openviking"
@@ -51,13 +71,11 @@ def main():
         for binary_name in ["ov", "ov.exe"]:
             binary = package_bin / binary_name
             if binary.exists() and os.access(binary, os.X_OK):
-                # 找到后立即 execv，不返回
-                args = [str(binary)] + sys.argv[1:]
-                os.execv(str(binary), args)
+                _exec_binary(str(binary), sys.argv[1:])
     except Exception:
         pass
 
-    # 2. 检查 PATH，但跳过当前 Python 脚本
+    # 3. 检查 PATH，但跳过当前 Python 脚本
     path_binary = which("ov")
     if path_binary:
         # 检查文件是否是 Python 脚本（避免无限循环）
@@ -67,8 +85,7 @@ def main():
                 first_bytes = f.read(2)
             # Skip if it starts with #! (shebang, likely Python script)
             if first_bytes != b"#!":
-                args = [path_binary] + sys.argv[1:]
-                os.execv(path_binary, args)
+                _exec_binary(path_binary, sys.argv[1:])
         except Exception:
             pass
 

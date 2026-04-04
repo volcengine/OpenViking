@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 
 """Tests for error scenarios: invalid JSON, missing fields, error mapping."""
 
@@ -43,16 +43,16 @@ async def test_not_found_resource_returns_structured_error(
 async def test_add_resource_file_not_found(client: httpx.AsyncClient):
     """Adding a resource with non-existent file path.
 
-    The service accepts the request (queues it) and returns 200.
-    The actual error surfaces during processing.
+    HTTP server no longer accepts direct host filesystem paths.
     """
     resp = await client.post(
         "/api/v1/resources",
         json={"path": "/tmp/nonexistent_file_xyz_12345.md", "reason": "test"},
     )
     body = resp.json()
-    # Service queues the request and returns ok
-    assert resp.status_code == 200 or body["status"] == "error"
+    assert resp.status_code == 403
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "PERMISSION_DENIED"
 
 
 async def test_empty_body_on_post(client: httpx.AsyncClient):

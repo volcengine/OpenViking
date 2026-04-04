@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 
 import importlib.util
 import sys
@@ -104,7 +104,12 @@ def test_detect_output_language_japanese_with_single_cyrillic():
 
 def test_detect_output_language_russian_with_threshold():
     """Russian text with sufficient Cyrillic chars should be detected as Russian."""
-    messages = [_msg("user", "\u042d\u0442\u043e \u0440\u0443\u0441\u0441\u043a\u0438\u0439 \u0442\u0435\u043a\u0441\u0442")]
+    messages = [
+        _msg(
+            "user",
+            "\u042d\u0442\u043e \u0440\u0443\u0441\u0441\u043a\u0438\u0439 \u0442\u0435\u043a\u0441\u0442",
+        )
+    ]
     language = MemoryExtractor._detect_output_language(messages, fallback_language="en")
     assert language == "ru"
 

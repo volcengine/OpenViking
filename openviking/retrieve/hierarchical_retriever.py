@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Hierarchical retriever for OpenViking.
 
@@ -9,11 +9,13 @@ and rerank-based relevance scoring.
 
 import heapq
 import logging
+import math
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from openviking.models.embedder.base import EmbedResult
+from openviking.models.rerank import RerankClient
 from openviking.retrieve.memory_lifecycle import hotness_score
 from openviking.retrieve.retrieval_stats import get_stats_collector
 from openviking.server.identity import RequestContext, Role
@@ -30,7 +32,6 @@ from openviking_cli.retrieve.types import (
 )
 from openviking_cli.utils.config import RerankConfig
 from openviking_cli.utils.logger import get_logger
-from openviking_cli.utils.rerank import RerankClient
 
 logger = get_logger(__name__)
 
@@ -47,7 +48,7 @@ class HierarchicalRetriever:
     MAX_RELATIONS = 5  # Maximum relations per resource
     SCORE_PROPAGATION_ALPHA = 0.5  # Score propagation coefficient
     DIRECTORY_DOMINANCE_RATIO = 1.2  # Directory score must exceed max child score
-    GLOBAL_SEARCH_TOPK = 5  # Global retrieval count
+    GLOBAL_SEARCH_TOPK = 10  # Global retrieval count (more candidates = better rerank precision)
     HOTNESS_ALPHA = 0.2  # Weight for hotness score in final ranking (0 = disabled)
     LEVEL_URI_SUFFIX = {0: ".abstract.md", 1: ".overview.md"}
 
@@ -71,11 +72,12 @@ class HierarchicalRetriever:
         # Use rerank threshold if available, otherwise use a default
         self.threshold = rerank_config.threshold if rerank_config else 0
 
-        # Initialize rerank client only if config is available
+        # Initialize rerank client — all providers go through unified dispatch
         if rerank_config and rerank_config.is_available():
             self._rerank_client = RerankClient.from_config(rerank_config)
+            provider = rerank_config._effective_provider()
             logger.info(
-                f"[HierarchicalRetriever] Rerank config available, threshold={self.threshold}"
+                f"[HierarchicalRetriever] Rerank enabled (provider={provider}), threshold={self.threshold}"
             )
         else:
             self._rerank_client = None
@@ -145,7 +147,7 @@ class HierarchicalRetriever:
             context_type=query.context_type.value if query.context_type else None,
             target_dirs=target_dirs,
             scope_dsl=scope_dsl,
-            limit=min(limit, self.GLOBAL_SEARCH_TOPK),
+            limit=max(limit, self.GLOBAL_SEARCH_TOPK),
         )
 
         # Debug: Print all URIs in global_results
@@ -270,7 +272,7 @@ class HierarchicalRetriever:
             return fallback_scores
 
         normalized_scores: List[float] = []
-        for score, fallback in zip(scores, fallback_scores):
+        for score, fallback in zip(scores, fallback_scores, strict=True):
             if isinstance(score, (int, float)):
                 normalized_scores.append(float(score))
             else:
@@ -294,7 +296,9 @@ class HierarchicalRetriever:
         global_results = [r for r in global_results if r.get("level", 2) != 2]
 
         # Results from global search
-        default_scores = [r.get("_score", 0.0) for r in global_results]
+        default_scores = [
+            s if math.isfinite(s) else 0.0 for s in (r.get("_score", 0.0) for r in global_results)
+        ]
         if self._rerank_client and mode == RetrieverMode.THINKING:
             docs = [str(r.get("abstract", "")) for r in global_results]
             query_scores = self._rerank_scores(query, docs, default_scores)
@@ -329,14 +333,17 @@ class HierarchicalRetriever:
         if not initial_candidates:
             return []
 
-        default_scores = [r.get("_score", 0.0) for r in initial_candidates]
+        default_scores = [
+            s if math.isfinite(s) else 0.0
+            for s in (r.get("_score", 0.0) for r in initial_candidates)
+        ]
         if self._rerank_client and mode == RetrieverMode.THINKING:
             docs = [str(r.get("abstract", "")) for r in initial_candidates]
             query_scores = self._rerank_scores(query, docs, default_scores)
         else:
             query_scores = default_scores
 
-        for candidate, score in zip(initial_candidates, query_scores):
+        for candidate, score in zip(initial_candidates, query_scores, strict=True):
             candidate["_score"] = score
 
         return initial_candidates
@@ -430,12 +437,14 @@ class HierarchicalRetriever:
             if not results:
                 continue
 
-            query_scores = [r.get("_score", 0.0) for r in results]
+            query_scores = [
+                s if math.isfinite(s) else 0.0 for s in (r.get("_score", 0.0) for r in results)
+            ]
             if self._rerank_client and mode == RetrieverMode.THINKING:
                 documents = [str(r.get("abstract", "")) for r in results]
                 query_scores = self._rerank_scores(query, documents, query_scores)
 
-            for r, score in zip(results, query_scores):
+            for r, score in zip(results, query_scores, strict=True):
                 uri = r.get("uri", "")
                 final_score = (
                     alpha * score + (1 - alpha) * current_score if current_score else score
@@ -516,6 +525,9 @@ class HierarchicalRetriever:
                             relations.append(RelatedContext(uri=uri, abstract=abstract))
 
             semantic_score = c.get("_final_score", c.get("_score", 0.0))
+            # Fix: clamp inf/nan scores from vector search (#inf-score)
+            if not math.isfinite(semantic_score):
+                semantic_score = 0.0
 
             # --- hotness boost ---
             updated_at_raw = c.get("updated_at")
@@ -536,6 +548,8 @@ class HierarchicalRetriever:
 
             alpha = self.HOTNESS_ALPHA
             final_score = (1 - alpha) * semantic_score + alpha * h_score
+            if not math.isfinite(final_score):
+                final_score = 0.0
             level = c.get("level", 2)
             display_uri = self._append_level_suffix(c.get("uri", ""), level)
 

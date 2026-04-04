@@ -1,12 +1,12 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Observer endpoints for OpenViking HTTP Server.
 
 Provides observability API for monitoring component status.
-Mirrors the SDK's client.observer API:
+Mirrors SDK's client.observer API:
 - /api/v1/observer/queue - Queue status
 - /api/v1/observer/vikingdb - VikingDB status
-- /api/v1/observer/vlm - VLM status
+- /api/v1/observer/models - Models status (VLM, Embedding, Rerank)
 - /api/v1/observer/system - System overall status
 """
 
@@ -54,21 +54,21 @@ async def observer_queue(
 
 @router.get("/vikingdb")
 async def observer_vikingdb(
-    _ctx: RequestContext = Depends(get_request_context),
+    ctx: RequestContext = Depends(get_request_context),
 ):
     """Get VikingDB status."""
     service = get_service()
-    component = service.debug.observer.vikingdb
+    component = service.debug.observer.vikingdb(ctx=ctx)
     return Response(status="ok", result=_component_to_dict(component))
 
 
-@router.get("/vlm")
-async def observer_vlm(
+@router.get("/models")
+async def observer_models(
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Get VLM (Vision Language Model) token usage status."""
+    """Get models status (VLM, Embedding, Rerank)."""
     service = get_service()
-    component = service.debug.observer.vlm
+    component = service.debug.observer.models
     return Response(status="ok", result=_component_to_dict(component))
 
 
@@ -94,9 +94,9 @@ async def observer_retrieval(
 
 @router.get("/system")
 async def observer_system(
-    _ctx: RequestContext = Depends(get_request_context),
+    ctx: RequestContext = Depends(get_request_context),
 ):
     """Get system overall status (includes all components)."""
     service = get_service()
-    status = service.debug.observer.system
+    status = service.debug.observer.system(ctx=ctx)
     return Response(status="ok", result=_system_to_dict(status))

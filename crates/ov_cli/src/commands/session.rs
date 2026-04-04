@@ -1,6 +1,6 @@
 use crate::client::HttpClient;
 use crate::error::Result;
-use crate::output::{output_success, OutputFormat};
+use crate::output::{OutputFormat, output_success};
 use serde_json::json;
 
 pub async fn new_session(
@@ -35,6 +35,41 @@ pub async fn get_session(
     Ok(())
 }
 
+pub async fn get_session_context(
+    client: &HttpClient,
+    session_id: &str,
+    token_budget: i32,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let path = format!("/api/v1/sessions/{}/context", url_encode(session_id));
+    let response: serde_json::Value = client
+        .get(
+            &path,
+            &[("token_budget".to_string(), token_budget.to_string())],
+        )
+        .await?;
+    output_success(&response, output_format, compact);
+    Ok(())
+}
+
+pub async fn get_session_archive(
+    client: &HttpClient,
+    session_id: &str,
+    archive_id: &str,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let path = format!(
+        "/api/v1/sessions/{}/archives/{}",
+        url_encode(session_id),
+        url_encode(archive_id)
+    );
+    let response: serde_json::Value = client.get(&path, &[]).await?;
+    output_success(&response, output_format, compact);
+    Ok(())
+}
+
 pub async fn delete_session(
     client: &HttpClient,
     session_id: &str,
@@ -43,14 +78,15 @@ pub async fn delete_session(
 ) -> Result<()> {
     let path = format!("/api/v1/sessions/{}", url_encode(session_id));
     let response: serde_json::Value = client.delete(&path, &[]).await?;
-    
+
     // Return session_id in result if empty (similar to Python implementation)
-    let result = if response.is_null() || response.as_object().map(|o| o.is_empty()).unwrap_or(false) {
-        json!({"session_id": session_id})
-    } else {
-        response
-    };
-    
+    let result =
+        if response.is_null() || response.as_object().map(|o| o.is_empty()).unwrap_or(false) {
+            json!({"session_id": session_id})
+        } else {
+            response
+        };
+
     output_success(&result, output_format, compact);
     Ok(())
 }
@@ -68,7 +104,7 @@ pub async fn add_message(
         "role": role,
         "content": content
     });
-    
+
     let response: serde_json::Value = client.post(&path, &body).await?;
     output_success(&response, output_format, compact);
     Ok(())
@@ -99,35 +135,36 @@ pub async fn add_memory(
     compact: bool,
 ) -> Result<()> {
     // Parse input to determine messages
-    let messages: Vec<(String, String)> = if let Ok(value) = serde_json::from_str::<serde_json::Value>(input) {
-        if let Some(arr) = value.as_array() {
-            // JSON array of {role, content}
-            arr.iter()
-                .map(|item| {
-                    let role = item["role"].as_str().unwrap_or("user").to_string();
-                    let content = item["content"].as_str().unwrap_or("").to_string();
-                    (role, content)
-                })
-                .collect()
-        } else if value.get("role").is_some() || value.get("content").is_some() {
-            // Single JSON object with role/content
-            let role = value["role"].as_str().unwrap_or("user").to_string();
-            let content = value["content"].as_str().unwrap_or("").to_string();
-            vec![(role, content)]
+    let messages: Vec<(String, String)> =
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(input) {
+            if let Some(arr) = value.as_array() {
+                // JSON array of {role, content}
+                arr.iter()
+                    .map(|item| {
+                        let role = item["role"].as_str().unwrap_or("user").to_string();
+                        let content = item["content"].as_str().unwrap_or("").to_string();
+                        (role, content)
+                    })
+                    .collect()
+            } else if value.get("role").is_some() || value.get("content").is_some() {
+                // Single JSON object with role/content
+                let role = value["role"].as_str().unwrap_or("user").to_string();
+                let content = value["content"].as_str().unwrap_or("").to_string();
+                vec![(role, content)]
+            } else {
+                // JSON but not a message object, treat as plain string
+                vec![("user".to_string(), input.to_string())]
+            }
         } else {
-            // JSON but not a message object, treat as plain string
+            // Plain string
             vec![("user".to_string(), input.to_string())]
-        }
-    } else {
-        // Plain string
-        vec![("user".to_string(), input.to_string())]
-    };
+        };
 
     // 1. Create a new session
     let session_response: serde_json::Value = client.post("/api/v1/sessions", &json!({})).await?;
-    let session_id = session_response["session_id"]
-        .as_str()
-        .ok_or_else(|| crate::error::Error::Api("Failed to get session_id from new session response".to_string()))?;
+    let session_id = session_response["session_id"].as_str().ok_or_else(|| {
+        crate::error::Error::Api("Failed to get session_id from new session response".to_string())
+    })?;
 
     // 2. Add messages
     for (role, content) in &messages {

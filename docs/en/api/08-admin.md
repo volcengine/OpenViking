@@ -2,6 +2,8 @@
 
 The Admin API manages accounts and users in a multi-tenant environment. It covers workspace (account) creation/deletion, user registration/removal, role changes, and API key regeneration.
 
+This API is for the `api_key` admin workflow. In `trusted` mode, ordinary requests do not use user-key registration, and Admin API calls return a permission error explaining that account/user management requires `api_key` mode with `root_api_key`.
+
 ## Roles and Permissions
 
 | Role | Description |
@@ -443,6 +445,7 @@ curl -X DELETE http://localhost:1933/api/v1/admin/accounts/acme \
 
 ## Related Documentation
 
+- [Multi-Tenant](../concepts/11-multi-tenant.md) - Tenant model, roles, and sharing boundaries
 - [API Overview](01-overview.md) - Authentication and response format
 - [Sessions](05-sessions.md) - Session management
 - [System](07-system.md) - System and monitoring API
