@@ -539,7 +539,7 @@ class VikingFS:
         exclude_uri: Optional[str] = None,
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
-        level_limit: int = 10,
+        level_limit: int = 5,
         ctx: Optional[RequestContext] = None,
     ) -> Dict:
         """Content search by pattern or keywords.
@@ -552,7 +552,7 @@ class VikingFS:
             exclude_uri: Optional URI prefix to exclude from search
             case_insensitive: Whether to perform case-insensitive matching
             node_limit: Maximum number of results to return
-            level_limit: Maximum depth level to traverse (default: 10)
+            level_limit: Maximum depth level to traverse (default: 5)
             ctx: Request context
         """
         self._ensure_access(uri, ctx)

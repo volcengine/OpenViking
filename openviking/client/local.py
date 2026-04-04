@@ -327,7 +327,7 @@ class LocalClient(BaseClient):
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
         exclude_uri: Optional[str] = None,
-        level_limit: int = 10,
+        level_limit: int = 5,
     ) -> Dict[str, Any]:
         """Content search with pattern."""
         return await self._service.fs.grep(
