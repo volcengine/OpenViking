@@ -12,7 +12,8 @@
     "test": "vitest run",
     "lint": "eslint",
     "format": "prettier --check .",
-    "check": "prettier --write . && eslint --fix"
+    "check": "prettier --write . && eslint --fix",
+    "gen-server-client": "sh ./script/gen-server-client/gen-server-client.sh"
   },
   "dependencies": {
     "@base-ui/react": "^1.3.0",
@@ -33,6 +34,7 @@
     "tw-animate-css": "^1.4.0"
   },
   "devDependencies": {
+    "@hey-api/openapi-ts": "^0.95.0",
     "@tailwindcss/typography": "^0.5.16",
     "@tanstack/devtools-vite": "latest",
     "@tanstack/eslint-config": "latest",
@@ -44,6 +46,7 @@
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^5.1.4",
     "jsdom": "^28.1.0",
+    "openapi-format": "^1.30.1",
     "prettier": "^3.8.1",
     "typescript": "^5.7.2",
     "vite": "^7.3.1",
