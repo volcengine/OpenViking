@@ -94,6 +94,157 @@ npm run gen-server-client
 - 如果后端新增或调整了路由，优先检查生成后的 `operationId` 是否仍然符合预期
 - 如果需要修改命名规则，调整 `script/gen-server-client/polishOpId.js`，然后重新执行生成命令验证结果
 
+## ov-client 适配层
+
+前端真正使用的不是 `src/gen/ov-client` 里的原始生成代码，而是 `src/lib/ov-client` 这一层薄适配。
+
+职责拆分如下：
+
+- `src/gen/ov-client`：基于 OpenAPI 自动生成的原始 SDK，只描述真后端接口，不承载前端运行时约定
+- `src/lib/ov-client`：在生成 SDK 之上补齐前端侧约定，例如连接信息注入、telemetry 默认行为、错误格式归一化
+
+相关文件：
+
+- `src/lib/ov-client/client.ts`：创建和维护适配后的 client
+- `src/lib/ov-client/errors.ts`：统一错误对象和结果解包
+- `src/lib/ov-client/types.ts`：适配层类型定义
+- `src/lib/ov-client/index.ts`：统一导出入口
+
+### 对接对象
+
+当前 `src/lib/ov-client` 直接对接真 OpenViking HTTP Server，而不是旧 console 的 BFF。
+
+也就是说：
+
+- 请求目标是 OpenAPI 中定义的真实后端路径，例如 `/api/v1/...`
+- 不再依赖旧控制台里的 `/console/api/v1` 前缀
+- 不再依赖 BFF 提供的 `/ov/...` 别名
+- 不再依赖 BFF 的 `runtime/capabilities` 语义
+
+当前默认对接地址是 `http://127.0.0.1:1933`。这也是本地 codegen 使用的后端地址。
+
+如需调整目标服务地址，有两种方式：
+
+1. 创建 client 时传入 `baseUrl`
+2. 运行时调用 `ovClient.setOptions({ baseUrl })`
+
+### 适配层做了什么
+
+适配层当前只做三类事情：
+
+1. 直连真后端所需的连接信息注入
+
+- 自动注入 `X-API-Key`
+- 自动注入 `X-OpenViking-Account`
+- 自动注入 `X-OpenViking-User`
+- 自动注入 `X-OpenViking-Agent`
+- API key 默认沿用旧前端的会话存储键 `ov_console_api_key`
+
+2. 对齐旧 console/BFF 的 telemetry 默认行为
+
+适配层会在以下 POST 请求中自动补 `telemetry: true`，前提是请求体是普通对象且调用方没有显式传 telemetry：
+
+- `/api/v1/search/find`
+- `/api/v1/resources`
+- `/api/v1/sessions/{session_id}/commit`
+
+这个行为是为了与旧 BFF 保持一致，避免页面迁移后行为悄悄变化。
+
+3. 优化错误返回格式
+
+适配层会把以下几类异常统一归一化为 `OvClientError`：
+
+- 后端标准 JSON 错误包 `{ status: "error", error: ... }`
+- 非 JSON 的 HTTP 错误文本
+- 网络错误和 Axios 错误
+
+统一后的错误字段包括：
+
+- `code`
+- `message`
+- `statusCode`
+- `requestId`
+- `details`
+- `responseBody`
+
+其中，若后端返回 `UNAUTHENTICATED` 且消息中包含 `Missing API Key`，适配层会补上旧前端一致的提示：`Please go to Settings and set X-API-Key.`
+
+### 适配层不做什么
+
+当前适配层明确不处理以下内容：
+
+- 不实现 BFF 的 `runtime/capabilities`
+- 不在前端预判写权限或模块权限
+- 不改写 OpenAPI 路径或参数结构
+- 不修改 `src/gen/ov-client` 的生成产物
+
+权限和可写性以真后端返回结果为准，页面层按实际错误做反馈。
+
+### 调用约定
+
+页面或业务模块统一从 `src/lib/ov-client` 导入，而不是直接从 `src/gen/ov-client` 导入。
+
+推荐调用方式：
+
+1. 先配置连接信息
+2. 调用生成 SDK 方法，并显式传入 `client: ovClient.client`
+3. 使用 `getOvResult()` 解包 `result`
+4. 在页面层捕获 `OvClientError`
+
+示例：
+
+```ts
+import {
+	getOvResult,
+	getSystemStatus,
+	ovClient,
+	OvClientError,
+} from '#/lib/ov-client'
+
+ovClient.setConnection({
+	apiKey: '<your-api-key>',
+	accountId: 'default',
+	userId: 'default',
+	agentId: 'default',
+})
+
+try {
+	const result = await getOvResult(
+		getSystemStatus({
+			client: ovClient.client,
+		}),
+	)
+
+	console.log(result)
+} catch (error) {
+	if (error instanceof OvClientError) {
+		console.error(error.code, error.message)
+	}
+}
+```
+
+如果只需要调整目标服务地址，可以这样做：
+
+```ts
+import { ovClient } from '#/lib/ov-client'
+
+ovClient.setOptions({
+	baseUrl: 'http://127.0.0.1:1933',
+	defaultTelemetry: true,
+})
+```
+
+### 使用约定
+
+为了避免调用方式分裂，后续开发建议遵守这些约定：
+
+- 业务代码默认只从 `#/lib/ov-client` 导入
+- 不直接改 `src/gen/ov-client`
+- 需要拿 `result` 时，优先使用 `getOvResult()`
+- 需要保留完整响应头或状态码时，再直接处理原始 SDK 返回值
+- 页面层统一消费 `OvClientError`，不要自行拼接错误文案
+- 若某个请求不希望默认补 telemetry，显式传 `telemetry: false`
+
 ## 项目结构
 
 核心目录如下：
