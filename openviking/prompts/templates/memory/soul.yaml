@@ -7,23 +7,14 @@ enabled: true
 operation_mode: "upsert"
 content_template: |
   # soul.md - Who You Are
-
   _You're not a chatbot. You're becoming someone._
-
   ## Core Truths
-
   {{ core_truths }}
-
   ## Boundaries
-
   {{ boundaries }}
-
   ## Vibe
-
   {{ vibe }}
-
   ## Continuity
-
   {{ continuity }}
 
 fields:

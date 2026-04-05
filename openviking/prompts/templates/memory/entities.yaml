@@ -6,14 +6,19 @@ description: |
   - Example: [skin_itching](../entities/skin_itching.md) → see dermatologist
   - Cards should be rich and distributed - avoid putting all info in one card.
 directory: "viking://user/{{ user_space }}/memories/entities"
-filename_template: "{{ name }}.md"
+filename_template: "{{ category }}/{{ name }}.md"
 enabled: true
 
 fields:
+  - name: category
+    type: string
+    description: |
+      - Category name in Chinese or English. If English, use lowercase with underscores, max 3 words. Do not include any dates.
+    merge_op: immutable
+
   - name: name
     type: string
     description: |
-      # Content
       - Entity name in Chinese or English. If English, use lowercase with underscores, max 3 words. Do not include any dates.
   
       ### Good Examples

@@ -6,6 +6,7 @@ import csv
 import os
 import re
 import threading
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -324,9 +325,6 @@ def main():
         "--count", type=int, default=None, help="Number of QA questions to run, default all"
     )
     parser.add_argument(
-        "--threads", type=int, default=5, help="Number of concurrent threads, default: 5"
-    )
-    parser.add_argument(
         "--update-mode",
         action="store_true",
         help="Update mode: if output file exists, update matching question_index rows instead of overwriting",
@@ -404,64 +402,70 @@ def main():
     # 过滤掉已经处理过的问题
     remaining_qa = [qa for qa in qa_list if qa["question"] not in processed_questions]
     remaining_count = len(remaining_qa)
-    print(
-        f"Starting evaluation with {args.threads} concurrent threads, {remaining_count} questions to process"
-    )
 
-    def process_qa(qa_item, idx, total_count):
-        """单个QA处理函数，供多线程调用"""
-        question = qa_item["question"]
-        answer = qa_item["answer"]
-        question_time = qa_item.get("question_time")
-        sample_id = qa_item.get("sample_id")
-        print(f"Processing {idx}/{total_count}: {question[:60]}...")
-        if question_time:
-            print(f"  [time context: {question_time}]")
+    # 按 sample_id 分组：同 sample 内串行，不同 sample 间并行
+    sample_groups = defaultdict(list)
+    for qa in remaining_qa:
+        sample_groups[qa["sample_id"]].append(qa)
 
-        response, token_usage, time_cost, iteration, tools_used_names = run_vikingbot_chat(
-            question, question_time, sample_id
-        )
+    sample_count = len(sample_groups)
+    print(f"Starting evaluation: {sample_count} samples, {remaining_count} questions to process")
 
-        row = {
-            "sample_id": qa_item["sample_id"],
-            "question_index": qa_item.get("question_index", ""),
-            "result": "",
-            "question": question,
-            "answer": answer,
-            "category": qa_item.get("category", ""),
-            "question_time": question_time or "",
-            "evidence": json.dumps(qa_item.get("evidence", [])),
-            "evidence_text": json.dumps(qa_item.get("evidence_text", [])),
-            "response": response,
-            "token_usage": json.dumps(token_usage, ensure_ascii=False),
-            "time_cost": round(time_cost, 2),
-            "iteration": iteration,
-            "tools_used_names": json.dumps(tools_used_names, ensure_ascii=False),
-            "is_invalid": qa_item.get("is_invalid", False),
-        }
+    def process_sample(sample_id, qa_items, total_count):
+        """处理单个 sample 的所有 query，串行执行"""
+        for qa_item in qa_items:
+            question = qa_item["question"]
+            answer = qa_item["answer"]
+            question_time = qa_item.get("question_time")
+            question_idx = qa_item.get("question_index", "")
+            print(f"[{sample_id}] Processing q{question_idx}: {question[:60]}...")
+            if question_time:
+                print(f"  [time context: {question_time}]")
 
-        # 线程安全的结果收集
-        with write_lock:
-            nonlocal processed_count
-            new_rows.append(row)
-            processed_questions.add(question)
-            processed_count += 1
-            print(f"Completed {processed_count}/{total_count}, time cost: {round(time_cost, 2)}s")
+            response, token_usage, time_cost, iteration, tools_used_names = run_vikingbot_chat(
+                question, question_time, sample_id
+            )
+
+            row = {
+                "sample_id": qa_item["sample_id"],
+                "question_index": question_idx,
+                "result": "",
+                "question": question,
+                "answer": answer,
+                "category": qa_item.get("category", ""),
+                "question_time": question_time or "",
+                "evidence": json.dumps(qa_item.get("evidence", [])),
+                "evidence_text": json.dumps(qa_item.get("evidence_text", [])),
+                "response": response,
+                "token_usage": json.dumps(token_usage, ensure_ascii=False),
+                "time_cost": round(time_cost, 2),
+                "iteration": iteration,
+                "tools_used_names": json.dumps(tools_used_names, ensure_ascii=False),
+                "is_invalid": qa_item.get("is_invalid", False),
+            }
+
+            # 线程安全的结果收集
+            with write_lock:
+                nonlocal processed_count
+                new_rows.append(row)
+                processed_questions.add(question)
+                processed_count += 1
+                print(f"[{sample_id}] Completed q{question_idx}, time cost: {round(time_cost, 2)}s")
         return True
 
-    # 使用线程池处理
-    with ThreadPoolExecutor(max_workers=args.threads) as executor:
-        # 提交所有任务
+    # 使用线程池处理：按 sample 分组，组内串行，组间并行（无限制并发）
+    with ThreadPoolExecutor(max_workers=None) as executor:
+        # 提交所有任务：每个 sample 一个任务，任务内部串行执行
         futures = []
-        for idx, qa_item in enumerate(remaining_qa, 1):
-            futures.append(executor.submit(process_qa, qa_item, idx, remaining_count))
+        for sample_id, qa_items in sample_groups.items():
+            futures.append(executor.submit(process_sample, sample_id, qa_items, remaining_count))
 
         # 等待所有任务完成
         for future in as_completed(futures):
             try:
                 future.result()
             except Exception as e:
-                print(f"Error processing QA item: {str(e)}")
+                print(f"Error processing sample: {str(e)}")
 
     # 写文件逻辑
     if args.update_mode and os.path.exists(args.output):

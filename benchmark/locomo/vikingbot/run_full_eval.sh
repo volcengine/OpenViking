@@ -17,14 +17,14 @@ fi
 
 # Step 2: 评估
 echo "[2/4] 评估..."
-python benchmark/locomo/vikingbot/run_eval.py $INPUT_FILE --output ./result/locomo_result_multi_read_all.csv --threads 20
+python benchmark/locomo/vikingbot/run_eval.py $INPUT_FILE --output ./result/locomo_result_multi_read_all.csv
 
 echo "等待 3 分钟..."
 sleep 180
 
 # Step 3: 裁判打分
 echo "[3/4] 裁判打分..."
-python benchmark/locomo/vikingbot/judge.py --input ./result/locomo_result_multi_read_all.csv --parallel 10
+python benchmark/locomo/vikingbot/judge.py --input ./result/locomo_result_multi_read_all.csv --parallel 40
 
 echo "等待 3 分钟..."
 sleep 180
