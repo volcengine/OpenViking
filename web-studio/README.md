@@ -74,7 +74,7 @@ npm run gen-server-client
 - `script/gen-server-client/oaf-generate-conf.json`：`openapi-format` 配置
 - `script/gen-server-client/polishOpId.js`：`operationId` 后处理脚本
 - `script/gen-server-client/generate/openapi-formatted.json`：格式化后的中间 OpenAPI 文件
-- `src/ov-client`：最终生成的前端客户端代码
+- `src/gen/ov-client`：最终生成的前端客户端代码
 
 `polishOpId.js` 的职责是把 `<pathRef>` 风格的原始 `operationId` 转成更适合前端使用的 camelCase 方法名。当前规则包括：
 
@@ -90,7 +90,7 @@ npm run gen-server-client
 使用和维护时注意：
 
 - 运行 codegen 前，需要本地后端能提供 `http://127.0.0.1:1933/openapi.json`
-- 不要手动修改 `src/ov-client` 内的生成产物，应该通过重新执行 `npm run gen-server-client` 更新
+- 不要手动修改 `src/gen/ov-client` 内的生成产物，应该通过重新执行 `npm run gen-server-client` 更新
 - 如果后端新增或调整了路由，优先检查生成后的 `operationId` 是否仍然符合预期
 - 如果需要修改命名规则，调整 `script/gen-server-client/polishOpId.js`，然后重新执行生成命令验证结果
 
