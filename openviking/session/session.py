@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 _ARCHIVE_WAIT_POLL_SECONDS = 0.1
+_ARCHIVE_WAIT_TIMEOUT_SECONDS = 300.0  # 5 minutes max wait for previous archive
 
 
 @dataclass
@@ -1034,11 +1035,18 @@ class Session:
         return int(match.group(1))
 
     async def _wait_for_previous_archive_done(self, archive_index: int) -> bool:
-        """Wait until the previous archive is done, or report dependency failure."""
+        """Wait until the previous archive is done, or report dependency failure.
+
+        Returns True if the previous archive completed successfully, False if it
+        failed or timed out.  A timeout is treated as a failure so that the
+        current archive does not hang indefinitely when the previous archive's
+        Phase 2 crashed without writing either .done or .failed.json.
+        """
         if archive_index <= 1 or not self._viking_fs:
             return True
 
         previous_archive_uri = f"{self._session_uri}/history/archive_{archive_index - 1:03d}"
+        deadline = asyncio.get_event_loop().time() + _ARCHIVE_WAIT_TIMEOUT_SECONDS
         while True:
             try:
                 await self._viking_fs.read_file(f"{previous_archive_uri}/.done", ctx=self.ctx)
@@ -1054,6 +1062,13 @@ class Session:
                 return False
             except Exception:
                 pass
+
+            if asyncio.get_event_loop().time() >= deadline:
+                logger.error(
+                    f"Timed out waiting for previous archive archive_{archive_index - 1:03d} "
+                    f"after {_ARCHIVE_WAIT_TIMEOUT_SECONDS}s — treating as failed"
+                )
+                return False
 
             await asyncio.sleep(_ARCHIVE_WAIT_POLL_SECONDS)
 
