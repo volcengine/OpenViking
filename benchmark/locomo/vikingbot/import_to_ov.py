@@ -654,10 +654,14 @@ async def run_import(args: argparse.Namespace) -> None:
 
 
 def main():
+    # 基于脚本所在目录计算默认数据文件路径
+    script_dir = Path(__file__).parent.resolve()
+    default_input = str(script_dir / ".." / "data" / "locomo10.json")
+
     parser = argparse.ArgumentParser(description="Import conversations into OpenViking")
     parser.add_argument(
         "--input",
-        default="../data/locomo10.json",
+        default=default_input,
         help="Path to input file (.txt or LoCoMo .json)",
     )
     parser.add_argument(

@@ -291,12 +291,17 @@ def load_processed_questions(output_path: str) -> set:
 
 
 def main():
+    # 基于脚本所在目录计算默认数据文件路径
+    script_dir = Path(__file__).parent.resolve()
+    default_input = str(script_dir / ".." / "data" / "locomo10.json")
+    default_errors = str(script_dir / ".." / "data" / "errors.json")
+
     parser = argparse.ArgumentParser(description="VikingBot QA evaluation script")
     parser.add_argument(
         "input",
         nargs="?",
-        default="../data/locomo10.json",
-        help="Path to locomo10.json file, default: ../data/locomo10.json",
+        default=default_input,
+        help="Path to locomo10.json file",
     )
     parser.add_argument(
         "--output",
@@ -305,8 +310,8 @@ def main():
     )
     parser.add_argument(
         "--errors",
-        default="../data/errors.json",
-        help="Path to invalid questions JSON file, default: ../data/errors.json",
+        default=default_errors,
+        help="Path to invalid questions JSON file",
     )
     parser.add_argument(
         "--sample",

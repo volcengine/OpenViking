@@ -8,9 +8,10 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SAMPLE=$1
 QUESTION_INDEX=$2
-INPUT_FILE=../data/locomo10.json
+INPUT_FILE="$SCRIPT_DIR/../data/locomo10.json"
 
 if [ -z "$SAMPLE" ]; then
     echo "Usage: $0 <sample_index|sample_id> [question_index]"

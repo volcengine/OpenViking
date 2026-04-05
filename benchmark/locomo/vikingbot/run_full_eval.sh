@@ -2,8 +2,9 @@
 
 set -e
 
-# 使用 JSON 格式（包含对话时间，用于时间上下文注入）
-INPUT_FILE=../data/locomo10.json
+# 基于脚本所在目录计算数据文件路径
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+INPUT_FILE="$SCRIPT_DIR/../data/locomo10.json"
 
 # Step 1: 导入数据（可跳过）
 if [ "$1" != "--skip-import" ]; then
