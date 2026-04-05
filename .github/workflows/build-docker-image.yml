@@ -163,11 +163,14 @@ jobs:
         env:
           SOURCE_TAGS: ${{ steps.meta.outputs.tags }}
         run: |
-          # Collect GHCR image references
+          # Collect image references for both registries
           ghcr_image_refs=()
+          dockerhub_image_refs=()
           for digest_file in /tmp/digests/*; do
             [ -e "$digest_file" ] || continue
-            ghcr_image_refs+=("${{ env.REGISTRY }}/${{ steps.image-name.outputs.image }}@sha256:$(basename "$digest_file")")
+            digest="sha256:$(basename "$digest_file")"
+            ghcr_image_refs+=("${{ env.REGISTRY }}/${{ steps.image-name.outputs.image }}@${digest}")
+            dockerhub_image_refs+=("docker.io/${{ secrets.DOCKERHUB_USERNAME }}/openviking@${digest}")
           done
 
           [ ${#ghcr_image_refs[@]} -gt 0 ] || {
@@ -185,9 +188,8 @@ jobs:
                 --tag "$tag" \
                 "${ghcr_image_refs[@]}"
             elif [[ "$tag" == docker.io/* ]]; then
-              # For Docker Hub, use the same digests (they were pushed to both registries)
               docker buildx imagetools create \
                 --tag "$tag" \
-                "${ghcr_image_refs[@]}"
+                "${dockerhub_image_refs[@]}"
             fi
           done <<< "$SOURCE_TAGS"
