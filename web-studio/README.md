@@ -1,15 +1,31 @@
 # Web Studio
 
-这是 OpenViking 的前端工作区，基于 TanStack Start 构建，当前主要使用以下技术栈：
+Web Studio 是 OpenViking 当前的前端工作区，用来承接旧控制台能力的迁移与整理。当前实现不是 TanStack Start SSR 项目，而是一个基于 Vite 的 React 单页应用，默认入口会跳转到遗留控制台页面集合。
+
+## 当前状态
+
+当前已落地的页面都位于 legacy 路由下：
+
+- / 会重定向到 /legacy/data
+- /legacy/access 用于配置连接信息和身份请求头
+- /legacy/data 用于文件系统浏览、内容读取、资源导入、检索与会话相关操作
+- /legacy/ops 用于租户、用户、密钥与系统状态相关的管理操作
+
+这套界面保留了旧控制台的入口形态，但请求链路已经切到新的 ov-client 适配层，直接访问真实 OpenViking HTTP Server。
+
+## 技术栈
 
 - React 19
+- Vite 7
 - TanStack Router 文件路由
-- Vite
+- TanStack Query
 - Tailwind CSS v4
 - shadcn/ui
 - lucide-react
+- Axios
+- Vitest
 
-## 启动与构建
+## 本地开发
 
 安装依赖：
 
@@ -17,13 +33,13 @@
 npm install
 ```
 
-启动开发环境：
+启动开发服务器：
 
 ```bash
 npm run dev
 ```
 
-默认开发端口为 `3000`。
+默认端口是 3000。
 
 生产构建：
 
@@ -31,13 +47,13 @@ npm run dev
 npm run build
 ```
 
-本地预览构建结果：
+预览构建产物：
 
 ```bash
 npm run preview
 ```
 
-代码检查：
+质量检查：
 
 ```bash
 npm run lint
@@ -45,15 +61,37 @@ npm run format
 npm run check
 ```
 
-测试：
+运行测试：
 
 ```bash
 npm run test
 ```
 
-## Client Codegen
+## 后端依赖与连接方式
 
-当前前端请求客户端不是手写维护，而是基于 OpenAPI 自动生成。
+前端默认连接地址是 http://127.0.0.1:1933。这个地址同时用于：
+
+- 运行时 API 请求
+- OpenAPI 文档拉取与客户端生成
+
+连接信息分两类保存：
+
+- X-API-Key 保存在 sessionStorage，键名为 ov_console_api_key
+- baseUrl、accountId、userId、agentId 保存在 localStorage
+
+页面初始化时会读取这些值，并同步到 src/lib/ov-client/client.ts 导出的全局 ovClient。
+
+如果需要通过环境变量覆盖默认服务地址，可以设置 VITE_OV_BASE_URL。但当前代码里已经显式创建了 ovClient 默认实例指向 http://127.0.0.1:1933，因此本地联调通常直接通过页面中的 Access 配置即可。
+
+## API Client 结构
+
+前端请求层分成两层。
+
+### OpenAPI 生成层
+
+- 目录：src/gen/ov-client
+- 来源：后端 OpenAPI 文档自动生成
+- 规则：禁止手动修改生成产物
 
 生成命令：
 
@@ -61,324 +99,114 @@ npm run test
 npm run gen-server-client
 ```
 
-这条命令会串联执行以下步骤：
+这条命令会执行以下流程：
 
-1. 从 `http://127.0.0.1:1933/openapi.json` 拉取最新 OpenAPI 文档
-2. 使用 `openapi-format` 输出格式化后的中间文件
-3. 运行 `script/gen-server-client/polishOpId.js` 对 `operationId` 做二次整理
-4. 使用 `openapi-ts` 生成最终客户端代码
-
-相关文件位置：
-
-- `script/gen-server-client/gen-server-client.sh`：codegen 总入口脚本
-- `script/gen-server-client/oaf-generate-conf.json`：`openapi-format` 配置
-- `script/gen-server-client/polishOpId.js`：`operationId` 后处理脚本
-- `script/gen-server-client/generate/openapi-formatted.json`：格式化后的中间 OpenAPI 文件
-- `src/gen/ov-client`：最终生成的前端客户端代码
-
-`polishOpId.js` 的职责是把 `<pathRef>` 风格的原始 `operationId` 转成更适合前端使用的 camelCase 方法名。当前规则包括：
-
-- 忽略 `api/v1` 这类版本前缀
-- 中间 path parameter 会优先内联到前一个相似资源段中
-- 末尾 path parameter 会整理为 `By...` / `And...` 后缀
-
-例如：
-
-- `/api/v1/sessions/{session_id}/context` -> `getSessionIdContext`
-- `/api/v1/sessions/{session_id}/archives/{archive_id}` -> `getSessionIdArchiveByArchiveId`
-
-使用和维护时注意：
-
-- 运行 codegen 前，需要本地后端能提供 `http://127.0.0.1:1933/openapi.json`
-- 不要手动修改 `src/gen/ov-client` 内的生成产物，应该通过重新执行 `npm run gen-server-client` 更新
-- 如果后端新增或调整了路由，优先检查生成后的 `operationId` 是否仍然符合预期
-- 如果需要修改命名规则，调整 `script/gen-server-client/polishOpId.js`，然后重新执行生成命令验证结果
-
-## ov-client 适配层
-
-前端真正使用的不是 `src/gen/ov-client` 里的原始生成代码，而是 `src/lib/ov-client` 这一层薄适配。
-
-职责拆分如下：
-
-- `src/gen/ov-client`：基于 OpenAPI 自动生成的原始 SDK，只描述真后端接口，不承载前端运行时约定
-- `src/lib/ov-client`：在生成 SDK 之上补齐前端侧约定，例如连接信息注入、telemetry 默认行为、错误格式归一化
+1. 从 http://127.0.0.1:1933/openapi.json 拉取最新 OpenAPI 文档
+2. 使用 openapi-format 格式化中间文件
+3. 运行 script/gen-server-client/polishOpId.js 清洗 operationId
+4. 使用 @hey-api/openapi-ts 生成最终 SDK
 
 相关文件：
 
-- `src/lib/ov-client/client.ts`：创建和维护适配后的 client
-- `src/lib/ov-client/errors.ts`：统一错误对象和结果解包
-- `src/lib/ov-client/types.ts`：适配层类型定义
-- `src/lib/ov-client/index.ts`：统一导出入口
+- script/gen-server-client/gen-server-client.sh
+- script/gen-server-client/oaf-generate-conf.json
+- script/gen-server-client/polishOpId.js
+- script/gen-server-client/generate/openapi-formatted.json
+- src/gen/ov-client
 
-### 对接对象
+### 前端适配层
 
-当前 `src/lib/ov-client` 直接对接真 OpenViking HTTP Server，而不是旧 console 的 BFF。
+- 目录：src/lib/ov-client
+- 作用：为生成 SDK 补齐前端运行时约定，而不是重写接口定义
 
-也就是说：
+适配层当前职责：
 
-- 请求目标是 OpenAPI 中定义的真实后端路径，例如 `/api/v1/...`
-- 不再依赖旧控制台里的 `/console/api/v1` 前缀
-- 不再依赖 BFF 提供的 `/ov/...` 别名
-- 不再依赖 BFF 的 `runtime/capabilities` 语义
+- 注入 X-API-Key、X-OpenViking-Account、X-OpenViking-User、X-OpenViking-Agent
+- 为部分 POST 请求自动补 telemetry: true
+- 将服务端错误、HTTP 错误、网络错误统一归一化为 OvClientError
+- 提供 getOvResult() 等调用辅助方法
 
-当前默认对接地址是 `http://127.0.0.1:1933`。这也是本地 codegen 使用的后端地址。
+适配层当前不做这些事：
 
-如需调整目标服务地址，有两种方式：
+- 不复刻旧 console BFF
+- 不引入 /console/api/v1 或 /ov/... 别名
+- 不实现 runtime/capabilities
+- 不直接修改生成层代码
 
-1. 创建 client 时传入 `baseUrl`
-2. 运行时调用 `ovClient.setOptions({ baseUrl })`
+业务代码应优先从 #/lib/ov-client 导入，而不是直接从 #/gen/ov-client 导入。
 
-### 适配层做了什么
+## 页面与目录
 
-适配层当前只做三类事情：
-
-1. 直连真后端所需的连接信息注入
-
-- 自动注入 `X-API-Key`
-- 自动注入 `X-OpenViking-Account`
-- 自动注入 `X-OpenViking-User`
-- 自动注入 `X-OpenViking-Agent`
-- API key 默认沿用旧前端的会话存储键 `ov_console_api_key`
-
-2. 对齐旧 console/BFF 的 telemetry 默认行为
-
-适配层会在以下 POST 请求中自动补 `telemetry: true`，前提是请求体是普通对象且调用方没有显式传 telemetry：
-
-- `/api/v1/search/find`
-- `/api/v1/resources`
-- `/api/v1/sessions/{session_id}/commit`
-
-这个行为是为了与旧 BFF 保持一致，避免页面迁移后行为悄悄变化。
-
-3. 优化错误返回格式
-
-适配层会把以下几类异常统一归一化为 `OvClientError`：
-
-- 后端标准 JSON 错误包 `{ status: "error", error: ... }`
-- 非 JSON 的 HTTP 错误文本
-- 网络错误和 Axios 错误
-
-统一后的错误字段包括：
-
-- `code`
-- `message`
-- `statusCode`
-- `requestId`
-- `details`
-- `responseBody`
-
-其中，若后端返回 `UNAUTHENTICATED` 且消息中包含 `Missing API Key`，适配层会补上旧前端一致的提示：`Please go to Settings and set X-API-Key.`
-
-### 适配层不做什么
-
-当前适配层明确不处理以下内容：
-
-- 不实现 BFF 的 `runtime/capabilities`
-- 不在前端预判写权限或模块权限
-- 不改写 OpenAPI 路径或参数结构
-- 不修改 `src/gen/ov-client` 的生成产物
-
-权限和可写性以真后端返回结果为准，页面层按实际错误做反馈。
-
-### 调用约定
-
-页面或业务模块统一从 `src/lib/ov-client` 导入，而不是直接从 `src/gen/ov-client` 导入。
-
-推荐调用方式：
-
-1. 先配置连接信息
-2. 调用生成 SDK 方法，并显式传入 `client: ovClient.client`
-3. 使用 `getOvResult()` 解包 `result`
-4. 在页面层捕获 `OvClientError`
-
-示例：
-
-```ts
-import {
-	getOvResult,
-	getSystemStatus,
-	ovClient,
-	OvClientError,
-} from '#/lib/ov-client'
-
-ovClient.setConnection({
-	apiKey: '<your-api-key>',
-	accountId: 'default',
-	userId: 'default',
-	agentId: 'default',
-})
-
-try {
-	const result = await getOvResult(
-		getSystemStatus({
-			client: ovClient.client,
-		}),
-	)
-
-	console.log(result)
-} catch (error) {
-	if (error instanceof OvClientError) {
-		console.error(error.code, error.message)
-	}
-}
-```
-
-如果只需要调整目标服务地址，可以这样做：
-
-```ts
-import { ovClient } from '#/lib/ov-client'
-
-ovClient.setOptions({
-	baseUrl: 'http://127.0.0.1:1933',
-	defaultTelemetry: true,
-})
-```
-
-### 使用约定
-
-为了避免调用方式分裂，后续开发建议遵守这些约定：
-
-- 业务代码默认只从 `#/lib/ov-client` 导入
-- 不直接改 `src/gen/ov-client`
-- 需要拿 `result` 时，优先使用 `getOvResult()`
-- 需要保留完整响应头或状态码时，再直接处理原始 SDK 返回值
-- 页面层统一消费 `OvClientError`，不要自行拼接错误文案
-- 若某个请求不希望默认补 telemetry，显式传 `telemetry: false`
-
-## 项目结构
-
-核心目录如下：
+当前核心目录如下：
 
 ```text
 web-studio/
+├── public/                        # 静态资源
+├── script/gen-server-client/      # OpenAPI 客户端生成脚本
 ├── src/
 │   ├── components/
-│   │   ├── ui/          # shadcn/ui 生成的基础组件
-│   │   └── ...          # 业务级共享组件
-│   ├── lib/             # 工具函数与通用逻辑
-│   ├── routes/          # TanStack Router 文件路由
-│   ├── main.tsx         # 前端入口
-│   ├── router.tsx       # Router 初始化
-│   ├── routeTree.gen.ts # 自动生成，禁止手改
-│   └── styles.css       # 全局样式与主题变量
-├── components.json      # shadcn/ui 配置
-├── package.json
+│   │   ├── legacy/                # 旧控制台迁移页面组件
+│   │   └── ui/                    # shadcn/ui 基础组件
+│   ├── gen/ov-client/             # OpenAPI 生成代码，禁止手改
+│   ├── hooks/                     # 通用 hooks
+│   ├── lib/
+│   │   ├── legacy/                # legacy 页面所需连接与路由工具
+│   │   └── ov-client/             # 生成 SDK 上方的前端适配层
+│   ├── routes/                    # TanStack Router 文件路由
+│   ├── main.tsx                   # 应用入口，接入 Router 和 QueryClient
+│   ├── routeTree.gen.ts           # 路由生成文件，禁止手改
+│   ├── router.tsx                 # Router 工厂
+│   └── styles.css                 # 全局样式与主题变量
+├── AGENTS.md                      # 本工作区内的 agent 约束
 └── README.md
 ```
 
-## 开发约定
+## 路由约定
 
-### 路由
+- 路由文件放在 src/routes
+- src/routes/__root.tsx 提供全局样式入口与 devtools 容器
+- src/routes/index.tsx 当前只负责重定向到 /legacy/data
+- 遗留页面路由保持轻量，复杂逻辑应下沉到 src/components/legacy
+- src/routeTree.gen.ts 由路由工具生成，不要手动编辑
 
-项目使用 TanStack Router 的文件路由，所有页面都放在 `src/routes` 下。
+## UI 与样式约定
 
-常见映射关系：
+- 基础组件放在 src/components/ui
+- 业务页面组件放在 src/components/legacy 或其他业务目录
+- 全局设计 token 和基础样式集中在 src/styles.css
+- 已配置路径别名 #/...，新增代码时优先沿用
 
-1. `src/routes/index.tsx` 对应 `/`
-2. `src/routes/about.tsx` 对应 `/about`
-3. `src/routes/settings/profile.tsx` 对应 `/settings/profile`
-4. `src/routes/blog/$slug.tsx` 对应动态路由 `/blog/:slug`
-5. `src/routes/__root.tsx` 用于全局路由壳和公共布局
-
-新增页面时，直接在 `src/routes` 中创建文件即可。例如新增 `/settings` 页面：
-
-```tsx
-import { createFileRoute } from '@tanstack/react-router'
-
-export const Route = createFileRoute('/settings')({
-	component: SettingsPage,
-})
-
-function SettingsPage() {
-	return <main className="page-wrap px-4 py-10">Settings</main>
-}
-```
-
-注意事项：
-
-- `src/routeTree.gen.ts` 由路由插件自动生成，不要手动修改。
-- 页面级布局优先通过路由结构表达，跨页面公共壳放在 `src/routes/__root.tsx`。
-
-### 组件
-
-组件分两层：
-
-1. `src/components/ui`：shadcn/ui 生成的基础组件，尽量保持通用。
-2. `src/components`：项目自己的业务组件、页面区块、组合组件。
-
-建议做法：
-
-- 基础按钮、输入框、对话框等放在 `src/components/ui`
-- 页面头部、空状态、工具栏、卡片区块等放在 `src/components`
-
-### 添加 shadcn/ui 组件
-
-当前项目已配置好 `components.json`，并启用了别名：
-
-- `#/components`
-- `#/components/ui`
-- `#/lib`
-
-新增 shadcn/ui 组件时，在 `web-studio` 目录执行：
-
-```bash
-npx shadcn@latest add card
-```
-
-例如添加 button、card、dialog：
+如果需要新增 shadcn/ui 组件，在当前目录执行：
 
 ```bash
 npx shadcn@latest add button card dialog
 ```
 
-生成后的组件默认位于 `src/components/ui`。
+## 开发建议
 
-### 使用 lucide 图标
+- 新功能优先判断是继续承接 legacy 页面，还是抽成新的共享业务组件
+- 路由文件尽量只保留参数解析、数据装配和页面入口
+- 页面逻辑里需要请求后端时，统一走 #/lib/ov-client
+- 生成代码变更后，优先运行 npm run build 至少验证一次
+- 如果接口签名变化，先重新执行 npm run gen-server-client，不要手工补丁生成文件
 
-项目图标库使用 `lucide-react`。直接按需导入：
+## 常见维护动作
 
-```tsx
-import { Plus, Settings } from 'lucide-react'
-import { Button } from '#/components/ui/button'
+更新客户端：
 
-export function Toolbar() {
-	return (
-		<div className="flex gap-2">
-			<Button>
-				<Plus className="size-4" />
-				新建
-			</Button>
-			<Button variant="outline">
-				<Settings className="size-4" />
-				设置
-			</Button>
-		</div>
-	)
-}
+```bash
+npm run gen-server-client
 ```
 
-### 样式
+做完改动后做一次完整检查：
 
-样式主要由以下两部分组成：
+```bash
+npm run build
+npm run test
+```
 
-1. `src/styles.css`：全局样式、主题变量、基础 token
-2. 组件内 Tailwind class：页面和组件局部样式
+如果只是校验格式和 lint：
 
-如果要调整整体视觉风格，优先从 `src/styles.css` 入手；如果只是局部页面样式，直接修改对应组件即可。
-
-## 推荐开发流程
-
-新增一个页面或功能时，通常按这个顺序：
-
-1. 在 `src/routes` 中创建或调整路由文件
-2. 在 `src/components` 中拆出页面区块或复用组件
-3. 需要基础 UI 时，用 shadcn CLI 添加到 `src/components/ui`
-4. 需要图标时，从 `lucide-react` 导入
-5. 完成后运行 `npm run check`
-
-## 维护说明
-
-- 不要手动修改 `src/routeTree.gen.ts`
-- 新增组件时优先复用已有 `ui` 组件，避免重复造轮子
-- 路由文件保持轻量，复杂 UI 尽量下沉到 `src/components`
-- 项目已配置路径别名，优先使用 `#/...` 形式导入
+```bash
+npm run check
+```
