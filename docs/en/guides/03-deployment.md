@@ -194,6 +194,7 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 ### Docker
 
 OpenViking provides pre-built Docker images published to GitHub Container Registry:
+> ~/.openviking/ov.conf need to be configured correctly first.
 
 ```bash
 docker run -d \
