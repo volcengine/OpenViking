@@ -28,6 +28,19 @@ function getEnvelope(value: unknown): OvErrorEnvelope | undefined {
   return isRecord(value) ? (value as OvErrorEnvelope) : undefined
 }
 
+function hasResult(value: unknown): value is { result: unknown } {
+  return isRecord(value) && 'result' in value
+}
+
+function isResponseLike(value: unknown): value is OvResponse<unknown> {
+  return (
+    isRecord(value) &&
+    'data' in value &&
+    'headers' in value &&
+    'status' in value
+  )
+}
+
 export class OvClientError extends Error {
   code: string
   details?: unknown
@@ -137,7 +150,11 @@ export function normalizeOvClientError(error: unknown): OvClientError {
   })
 }
 
-export function unwrapOvResponse<TResult>(response: OvResponse<TResult>): TResult {
+export function unwrapOvResponse<TResult>(response: unknown): TResult {
+  if (!isResponseLike(response)) {
+    throw normalizeOvClientError(response)
+  }
+
   const payload = response.data
   const envelope = getEnvelope(payload)
 
@@ -155,10 +172,14 @@ export function unwrapOvResponse<TResult>(response: OvResponse<TResult>): TResul
     })
   }
 
-  return payload.result as TResult
+  if (hasResult(payload)) {
+    return payload.result as TResult
+  }
+
+  return payload as TResult
 }
 
-export async function getOvResult<TResult>(request: Promise<OvResponse<TResult>>): Promise<TResult> {
+export async function getOvResult<TResult>(request: Promise<unknown>): Promise<TResult> {
   try {
     return unwrapOvResponse(await request)
   } catch (error) {

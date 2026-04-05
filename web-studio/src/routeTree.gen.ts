@@ -9,27 +9,105 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as IndexRouteImport } from './routes/index'
+import { Route as LegacyOpsRouteImport } from './routes/legacy/ops'
+import { Route as LegacyDataRouteImport } from './routes/legacy/data'
+import { Route as LegacyAccessRouteImport } from './routes/legacy/access'
 
-export interface FileRoutesByFullPath {}
-export interface FileRoutesByTo {}
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LegacyOpsRoute = LegacyOpsRouteImport.update({
+  id: '/legacy/ops',
+  path: '/legacy/ops',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LegacyDataRoute = LegacyDataRouteImport.update({
+  id: '/legacy/data',
+  path: '/legacy/data',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LegacyAccessRoute = LegacyAccessRouteImport.update({
+  id: '/legacy/access',
+  path: '/legacy/access',
+  getParentRoute: () => rootRouteImport,
+} as any)
+
+export interface FileRoutesByFullPath {
+  '/': typeof IndexRoute
+  '/legacy/access': typeof LegacyAccessRoute
+  '/legacy/data': typeof LegacyDataRoute
+  '/legacy/ops': typeof LegacyOpsRoute
+}
+export interface FileRoutesByTo {
+  '/': typeof IndexRoute
+  '/legacy/access': typeof LegacyAccessRoute
+  '/legacy/data': typeof LegacyDataRoute
+  '/legacy/ops': typeof LegacyOpsRoute
+}
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
+  '/': typeof IndexRoute
+  '/legacy/access': typeof LegacyAccessRoute
+  '/legacy/data': typeof LegacyDataRoute
+  '/legacy/ops': typeof LegacyOpsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: never
+  fullPaths: '/' | '/legacy/access' | '/legacy/data' | '/legacy/ops'
   fileRoutesByTo: FileRoutesByTo
-  to: never
-  id: '__root__'
+  to: '/' | '/legacy/access' | '/legacy/data' | '/legacy/ops'
+  id: '__root__' | '/' | '/legacy/access' | '/legacy/data' | '/legacy/ops'
   fileRoutesById: FileRoutesById
 }
-export interface RootRouteChildren {}
-
-declare module '@tanstack/react-router' {
-  interface FileRoutesByPath {}
+export interface RootRouteChildren {
+  IndexRoute: typeof IndexRoute
+  LegacyAccessRoute: typeof LegacyAccessRoute
+  LegacyDataRoute: typeof LegacyDataRoute
+  LegacyOpsRoute: typeof LegacyOpsRoute
 }
 
-const rootRouteChildren: RootRouteChildren = {}
+declare module '@tanstack/react-router' {
+  interface FileRoutesByPath {
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/legacy/ops': {
+      id: '/legacy/ops'
+      path: '/legacy/ops'
+      fullPath: '/legacy/ops'
+      preLoaderRoute: typeof LegacyOpsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/legacy/data': {
+      id: '/legacy/data'
+      path: '/legacy/data'
+      fullPath: '/legacy/data'
+      preLoaderRoute: typeof LegacyDataRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/legacy/access': {
+      id: '/legacy/access'
+      path: '/legacy/access'
+      fullPath: '/legacy/access'
+      preLoaderRoute: typeof LegacyAccessRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+  }
+}
+
+const rootRouteChildren: RootRouteChildren = {
+  IndexRoute: IndexRoute,
+  LegacyAccessRoute: LegacyAccessRoute,
+  LegacyDataRoute: LegacyDataRoute,
+  LegacyOpsRoute: LegacyOpsRoute,
+}
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()

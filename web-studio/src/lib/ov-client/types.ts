@@ -57,4 +57,6 @@ export interface OvSuccessEnvelope<TResult = unknown> {
   telemetry?: unknown
 }
 
-export type OvResponse<TResult = unknown> = AxiosResponse<OvSuccessEnvelope<TResult>>
+export type OvResponse<TResult = unknown> = AxiosResponse<unknown> & {
+  data: OvSuccessEnvelope<TResult> | TResult | unknown
+}
