@@ -65,7 +65,10 @@ impl HttpClient {
             let path = entry.path();
             if path.is_file() {
                 let name = path.strip_prefix(dir_path).unwrap_or(path);
-                zip.start_file(name.to_string_lossy(), options)?;
+                let name_str = name.to_str().ok_or_else(|| {
+                    Error::InvalidPath(format!("Non-UTF-8 path: {}", name.to_string_lossy()))
+                })?;
+                zip.start_file(name_str, options)?;
                 let mut file = File::open(path)?;
                 std::io::copy(&mut file, &mut zip)?;
             }
