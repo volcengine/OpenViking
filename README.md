@@ -534,6 +534,8 @@ After integrating OpenViking:
 
 👉 **[View: OpenCode Memory Plugin Example](examples/opencode-memory-plugin/README.md)**
 
+👉 **[View: Claude Code Memory Plugin Example](examples/claude-code-memory-plugin/README.md)**
+
 --
 
 ## Core Concepts
