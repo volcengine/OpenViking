@@ -15,3 +15,5 @@ todos.json
 # 根目录的 gitignore 忽略了所有目录下 lib 的文件，在这里反忽略这个目录
 !src/lib/
 !src/lib/**
+
+script/gen-server-client/generate
