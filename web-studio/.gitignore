@@ -1,0 +1,17 @@
+node_modules
+.DS_Store
+dist
+dist-ssr
+*.local
+.env
+.nitro
+.tanstack
+.wrangler
+.output
+.vinxi
+__unconfig*
+todos.json
+
+# 根目录的 gitignore 忽略了所有目录下 lib 的文件，在这里反忽略这个目录
+!src/lib/
+!src/lib/**
