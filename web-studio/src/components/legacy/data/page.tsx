@@ -25,7 +25,6 @@ import {
   getFsLs,
   getFsStat,
   getOvResult,
-  ovClient,
   postResources,
   postResourcesTempUpload,
   postSearchFind,
@@ -314,7 +313,6 @@ export function DataLegacyPage() {
     queryFn: async () => {
       const result = await getOvResult(
         getFsLs({
-          client: ovClient.client,
           query: {
             show_all_hidden: true,
             uri: normalizeDirUri(currentUri),
@@ -334,7 +332,6 @@ export function DataLegacyPage() {
     mutationFn: async (uri: string) =>
       getOvResult(
         getFsStat({
-          client: ovClient.client,
           query: { uri },
         }),
       ),
@@ -350,7 +347,6 @@ export function DataLegacyPage() {
     mutationFn: async (uri: string) => {
       const result = await getOvResult(
         getContentRead({
-          client: ovClient.client,
           query: {
             limit: -1,
             offset: 0,
@@ -379,7 +375,6 @@ export function DataLegacyPage() {
             query: findQuery.trim(),
             target_uri: findTargetUri.trim() || undefined,
           },
-          client: ovClient.client,
         }),
       )
 
@@ -421,7 +416,7 @@ export function DataLegacyPage() {
         }
 
         request.path = resourcePath.trim()
-        return getOvResult(postResources({ body: request, client: ovClient.client }))
+        return getOvResult(postResources({ body: request }))
       }
 
       if (!resourceFile) {
@@ -434,7 +429,6 @@ export function DataLegacyPage() {
             file: resourceFile,
             telemetry: true,
           },
-          client: ovClient.client,
         }),
       )
 
@@ -446,7 +440,7 @@ export function DataLegacyPage() {
       request.temp_file_id = tempFileId
 
       return {
-        addResource: await getOvResult(postResources({ body: request, client: ovClient.client })),
+        addResource: await getOvResult(postResources({ body: request })),
         upload: uploadResult,
       }
     },
@@ -475,7 +469,7 @@ export function DataLegacyPage() {
         messages = [{ content: text, role: 'user' }]
       }
 
-      const session = await getOvResult(postSessions({ client: ovClient.client, body: {} }))
+      const session = await getOvResult(postSessions({ body: {} }))
       const sessionId = isRecord(session) ? session.session_id : undefined
       if (typeof sessionId !== 'string' || !sessionId.trim()) {
         throw new Error('创建 session 失败，未返回 session_id。')
@@ -485,7 +479,6 @@ export function DataLegacyPage() {
         await getOvResult(
           postSessionIdMessages({
             body: message,
-            client: ovClient.client,
             path: { session_id: sessionId },
           }),
         )
@@ -493,7 +486,6 @@ export function DataLegacyPage() {
 
       const commit = await getOvResult(
         postSessionIdCommit({
-          client: ovClient.client,
           path: { session_id: sessionId },
         }),
       )

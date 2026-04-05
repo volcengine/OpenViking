@@ -15,6 +15,7 @@ export interface OvClientOptions {
   apiKeyStorageKey?: string
   axios?: AxiosInstance
   baseUrl?: string
+  bindSdkClient?: boolean
   connection?: Partial<OvConnectionState>
   defaultHeaders?: Record<string, string>
   defaultTelemetry?: boolean

@@ -1,6 +1,7 @@
 import axios, { AxiosHeaders, type InternalAxiosRequestConfig } from 'axios'
 
 import { createClient } from '#/gen/ov-client/client'
+import { client as sdkClient } from '#/gen/ov-client/client.gen'
 
 import { normalizeOvClientError, OvClientError } from './errors'
 import {
@@ -110,6 +111,7 @@ function isEnvelopeError(value: unknown): value is OvErrorEnvelope {
 }
 
 export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
+  const bindSdkClient = options.bindSdkClient ?? false
   let runtimeOptions = {
     apiKeyStorageKey: options.apiKeyStorageKey || DEFAULT_API_KEY_STORAGE_KEY,
     baseUrl: normalizeBaseUrl(options.baseUrl),
@@ -179,6 +181,17 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
       baseURL: runtimeOptions.baseUrl,
       throwOnError: true,
     })
+
+    if (!bindSdkClient) {
+      return
+    }
+
+    sdkClient.setConfig({
+      axios: instance,
+      baseURL: runtimeOptions.baseUrl,
+      headers: defaultHeaders,
+      throwOnError: true,
+    })
   }
 
   function getConnection(): Readonly<OvConnectionState> {
@@ -239,4 +252,7 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
   }
 }
 
-export const ovClient = createOvClient({baseUrl: 'http://127.0.0.1:1933'})
+export const ovClient = createOvClient({
+  baseUrl: 'http://127.0.0.1:1933',
+  bindSdkClient: true,
+})

@@ -26,7 +26,6 @@ import {
   getObserverSystem,
   getOvResult,
   getSystemStatus,
-  ovClient,
   postAdminAccountIdUserIdKey,
   postAdminAccountIdUsers,
   postAdminAccounts,
@@ -144,7 +143,7 @@ export function OpsLegacyPage() {
 
   const accountsQuery = useQuery({
     queryKey: ['legacy-ops-accounts'],
-    queryFn: async () => normalizeTenantAccounts(await getOvResult(getAdminAccounts({ client: ovClient.client }))),
+    queryFn: async () => normalizeTenantAccounts(await getOvResult(getAdminAccounts())),
   })
 
   useEffect(() => {
@@ -167,7 +166,6 @@ export function OpsLegacyPage() {
       normalizeTenantUsers(
         await getOvResult(
           getAdminAccountIdUsers({
-            client: ovClient.client,
             path: { account_id: selectedAccountId },
           }),
         ),
@@ -189,7 +187,6 @@ export function OpsLegacyPage() {
             account_id: createAccountId.trim(),
             admin_user_id: createAdminUserId.trim(),
           },
-          client: ovClient.client,
         }),
       ),
     onError: (error) => {
@@ -210,7 +207,6 @@ export function OpsLegacyPage() {
             role: newUserRole,
             user_id: newUserId.trim(),
           },
-          client: ovClient.client,
           path: { account_id: selectedAccountId },
         }),
       ),
@@ -229,7 +225,6 @@ export function OpsLegacyPage() {
       getOvResult(
         putAdminAccountIdUserIdRole({
           body: { role },
-          client: ovClient.client,
           path: {
             account_id: selectedAccountId,
             user_id: userId,
@@ -249,7 +244,6 @@ export function OpsLegacyPage() {
     mutationFn: async (userId: string) =>
       getOvResult(
         postAdminAccountIdUserIdKey({
-          client: ovClient.client,
           path: {
             account_id: selectedAccountId,
             user_id: userId,
@@ -268,7 +262,6 @@ export function OpsLegacyPage() {
     mutationFn: async (userId: string) =>
       getOvResult(
         deleteAdminAccountIdUserByUserId({
-          client: ovClient.client,
           path: {
             account_id: selectedAccountId,
             user_id: userId,
@@ -288,7 +281,6 @@ export function OpsLegacyPage() {
     mutationFn: async (accountId: string) =>
       getOvResult(
         deleteAdminAccountByAccountId({
-          client: ovClient.client,
           path: { account_id: accountId },
         }),
       ),
@@ -302,7 +294,7 @@ export function OpsLegacyPage() {
   })
 
   const systemMutation = useMutation({
-    mutationFn: async () => getOvResult(getSystemStatus({ client: ovClient.client })),
+    mutationFn: async () => getOvResult(getSystemStatus()),
     onError: (error) => {
       setLatestResult({ title: 'System Status Error', value: getErrorMessage(error) })
     },
@@ -312,7 +304,7 @@ export function OpsLegacyPage() {
   })
 
   const observerMutation = useMutation({
-    mutationFn: async () => getOvResult(getObserverSystem({ client: ovClient.client })),
+    mutationFn: async () => getOvResult(getObserverSystem()),
     onError: (error) => {
       setLatestResult({ title: 'Observer Error', value: getErrorMessage(error) })
     },
