@@ -204,7 +204,7 @@ docker run -d \
   -v ~/.openviking/ov.conf:/app/ov.conf \
   -v /var/lib/openviking/data:/app/data \
   --restart unless-stopped \
-  ghcr.io/volcengine/openviking:main
+  ghcr.io/volcengine/openviking:latest
 ```
 
 By default, the Docker image starts:
@@ -222,7 +222,7 @@ docker run -d \
   -v ~/.openviking/ov.conf:/app/ov.conf \
   -v /var/lib/openviking/data:/app/data \
   --restart unless-stopped \
-  ghcr.io/volcengine/openviking:main \
+  ghcr.io/volcengine/openviking:latest \
   --without-bot
 ```
 
