@@ -250,6 +250,10 @@ class OpenVikingService:
 
         config = get_openviking_config()
 
+        from openviking.parse.custom_loader import register_configured_custom_parsers
+
+        register_configured_custom_parsers(config=config)
+
         # Initialize encryption module
         full_config = config.to_dict()
         self._encryptor = await bootstrap_encryption(full_config)

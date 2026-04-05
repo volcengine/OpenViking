@@ -18,6 +18,7 @@ from .consts import (
     OPENVIKING_CONFIG_ENV,
     SYSTEM_CONFIG_DIR,
 )
+from .custom_parser_config import CustomParserConfig
 from .embedding_config import EmbeddingConfig
 from .encryption_config import EncryptionConfig
 from .log_config import LogConfig
@@ -156,6 +157,11 @@ class OpenVikingConfig(BaseModel):
         description="Prompt template configuration",
     )
 
+    custom_parsers: Dict[str, CustomParserConfig] = Field(
+        default_factory=dict,
+        description="Custom parser registrations loaded at startup",
+    )
+
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid"}
 
     @classmethod
@@ -215,6 +221,7 @@ class OpenVikingConfig(BaseModel):
                 memory_config_data = config_copy.pop("memory")
 
             instance = cls(**config_copy)
+            cls._validate_custom_parsers(instance.custom_parsers)
 
             # Apply log configuration
             if log_config_data is not None:
@@ -252,7 +259,20 @@ class OpenVikingConfig(BaseModel):
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary."""
-        return self.model_dump()
+        return self.model_dump(by_alias=True)
+
+    @staticmethod
+    def _validate_custom_parsers(custom_parsers: Dict[str, CustomParserConfig]) -> None:
+        extension_map: Dict[str, str] = {}
+        for parser_name, parser_config in custom_parsers.items():
+            for ext in parser_config.extensions:
+                existing = extension_map.get(ext)
+                if existing is not None:
+                    raise ValueError(
+                        f"custom_parsers contains duplicate extension '{ext}': "
+                        f"'{existing}' and '{parser_name}'"
+                    )
+                extension_map[ext] = parser_name
 
 
 class OpenVikingConfigSingleton:

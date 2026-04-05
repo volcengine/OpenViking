@@ -180,3 +180,103 @@ def test_openviking_config_singleton_preserves_value_error_for_bad_config(tmp_pa
     with pytest.raises(ValueError, match="server"):
         OpenVikingConfigSingleton.initialize(config_path=str(config_path))
     OpenVikingConfigSingleton.reset_instance()
+
+
+def test_openviking_config_accepts_custom_parsers(monkeypatch):
+    monkeypatch.setenv("OPENVIKING_CONFIG_FILE", "/tmp/codex-no-config.json")
+
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    config = OpenVikingConfig.from_dict(
+        {
+            "embedding": {
+                "dense": {
+                    "provider": "openai",
+                    "api_key": "test-key",
+                    "model": "text-embedding-3-small",
+                }
+            },
+            "custom_parsers": {
+                "my-docx-parser": {
+                    "class": "tests.utils.custom_parser_samples.SampleDocxParser",
+                    "extensions": [".DOCX", "doc"],
+                    "kwargs": {"plugin-name": "my-docx-parser", "version": 1.0},
+                }
+            },
+        }
+    )
+
+    parser = config.custom_parsers["my-docx-parser"]
+    assert parser.class_path == "tests.utils.custom_parser_samples.SampleDocxParser"
+    assert parser.extensions == [".docx", ".doc"]
+    assert parser.kwargs == {"plugin-name": "my-docx-parser", "version": 1.0}
+    assert config.to_dict()["custom_parsers"]["my-docx-parser"]["class"] == parser.class_path
+
+    OpenVikingConfigSingleton.reset_instance()
+
+
+def test_openviking_config_rejects_duplicate_custom_parser_extensions(monkeypatch):
+    monkeypatch.setenv("OPENVIKING_CONFIG_FILE", "/tmp/codex-no-config.json")
+
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    with pytest.raises(ValueError, match=r"custom_parsers.*\.docx"):
+        OpenVikingConfig.from_dict(
+            {
+                "embedding": {
+                    "dense": {
+                        "provider": "openai",
+                        "api_key": "test-key",
+                        "model": "text-embedding-3-small",
+                    }
+                },
+                "custom_parsers": {
+                    "first": {
+                        "class": "tests.utils.custom_parser_samples.SampleDocxParser",
+                        "extensions": [".docx"],
+                    },
+                    "second": {
+                        "class": "tests.utils.custom_parser_samples.SampleDocxParser",
+                        "extensions": [".DOCX"],
+                    },
+                },
+            }
+        )
+
+    OpenVikingConfigSingleton.reset_instance()
+
+
+def test_openviking_config_rejects_invalid_custom_parser_extensions(monkeypatch):
+    monkeypatch.setenv("OPENVIKING_CONFIG_FILE", "/tmp/codex-no-config.json")
+
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    with pytest.raises(ValueError, match=r"custom_parsers\.my-docx-parser\.extensions"):
+        OpenVikingConfig.from_dict(
+            {
+                "embedding": {
+                    "dense": {
+                        "provider": "openai",
+                        "api_key": "test-key",
+                        "model": "text-embedding-3-small",
+                    }
+                },
+                "custom_parsers": {
+                    "my-docx-parser": {
+                        "class": "tests.utils.custom_parser_samples.SampleDocxParser",
+                        "extensions": [],
+                    }
+                },
+            }
+        )
+
+    OpenVikingConfigSingleton.reset_instance()

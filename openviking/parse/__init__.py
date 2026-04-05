@@ -5,6 +5,10 @@
 from openviking.parse.base import NodeType, ParseResult, ResourceNode, create_parse_result
 from openviking.parse.converter import DocumentConverter
 from openviking.parse.custom import CallbackParserWrapper, CustomParserProtocol, CustomParserWrapper
+from openviking.parse.custom_loader import (
+    ConfiguredParserWrapper,
+    register_configured_custom_parsers,
+)
 from openviking.parse.directory_scan import (
     CLASS_PROCESSABLE,
     CLASS_UNSUPPORTED,
@@ -40,10 +44,12 @@ __all__ = [
     "CustomParserProtocol",
     "CustomParserWrapper",
     "CallbackParserWrapper",
+    "ConfiguredParserWrapper",
     # Registry
     "ParserRegistry",
     "get_registry",
     "parse",
+    "register_configured_custom_parsers",
     # Tree builder
     "TreeBuilder",
     "BuildingTree",
