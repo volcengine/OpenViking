@@ -10,7 +10,7 @@ set -e
 
 SAMPLE=$1
 QUESTION_INDEX=$2
-INPUT_FILE=~/.test_data/locomo10.json
+INPUT_FILE=../data/locomo10.json
 
 if [ -z "$SAMPLE" ]; then
     echo "Usage: $0 <sample_index|sample_id> [question_index]"

@@ -654,7 +654,7 @@ def main():
     parser = argparse.ArgumentParser(description="Import conversations into OpenViking")
     parser.add_argument(
         "--input",
-        default="./test_data/locomo10.json",
+        default="../data/locomo10.json",
         help="Path to input file (.txt or LoCoMo .json)",
     )
     parser.add_argument(

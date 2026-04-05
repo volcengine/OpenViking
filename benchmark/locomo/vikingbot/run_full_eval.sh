@@ -3,7 +3,7 @@
 set -e
 
 # 使用 JSON 格式（包含对话时间，用于时间上下文注入）
-INPUT_FILE=~/.test_data/locomo10.json
+INPUT_FILE=../data/locomo10.json
 
 # Step 1: 导入数据（可跳过）
 if [ "$1" != "--skip-import" ]; then

@@ -295,8 +295,8 @@ def main():
     parser.add_argument(
         "input",
         nargs="?",
-        default="./test_data/locomo10.json",
-        help="Path to locomo10.json file, default: ./test_data/locomo10.json",
+        default="../data/locomo10.json",
+        help="Path to locomo10.json file, default: ../data/locomo10.json",
     )
     parser.add_argument(
         "--output",
@@ -305,8 +305,8 @@ def main():
     )
     parser.add_argument(
         "--errors",
-        default="~/.test_data/locomo_exclude.json",
-        help="Path to invalid questions JSON file, default: ~/.test_data/locomo_exclude.json",
+        default="../data/errors.json",
+        help="Path to invalid questions JSON file, default: ../data/errors.json",
     )
     parser.add_argument(
         "--sample",
