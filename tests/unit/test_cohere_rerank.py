@@ -4,15 +4,13 @@
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from openviking_cli.utils.cohere_rerank import CohereRerankClient
+from openviking.models.rerank import CohereRerankClient
 
 
 class TestCohereRerankClient:
     """Test cases for CohereRerankClient."""
 
-    @patch("openviking_cli.utils.cohere_rerank.httpx.Client")
+    @patch("openviking.models.rerank.cohere_rerank.httpx.Client")
     def test_rerank_batch_basic(self, mock_client_class):
         mock_client = MagicMock()
         mock_client_class.return_value = mock_client
@@ -38,12 +36,12 @@ class TestCohereRerankClient:
         assert payload["documents"] == ["doc A", "doc B", "doc C"]
         assert payload["return_documents"] is False
 
-    @patch("openviking_cli.utils.cohere_rerank.httpx.Client")
+    @patch("openviking.models.rerank.cohere_rerank.httpx.Client")
     def test_rerank_batch_empty(self, mock_client_class):
         client = CohereRerankClient(api_key="test-key")
         assert client.rerank_batch("query", []) == []
 
-    @patch("openviking_cli.utils.cohere_rerank.httpx.Client")
+    @patch("openviking.models.rerank.cohere_rerank.httpx.Client")
     def test_rerank_batch_api_error_returns_none(self, mock_client_class):
         import httpx
 
@@ -62,7 +60,7 @@ class TestCohereRerankClient:
         result = client.rerank_batch("query", ["doc"])
         assert result is None
 
-    @patch("openviking_cli.utils.cohere_rerank.httpx.Client")
+    @patch("openviking.models.rerank.cohere_rerank.httpx.Client")
     def test_rerank_preserves_original_order(self, mock_client_class):
         mock_client = MagicMock()
         mock_client_class.return_value = mock_client
@@ -86,7 +84,7 @@ class TestCohereRerankClient:
         assert scores[1] == 0.01  # "second" was index 1
         assert scores[2] == 0.99  # "third" was index 2
 
-    @patch("openviking_cli.utils.cohere_rerank.httpx.Client")
+    @patch("openviking.models.rerank.cohere_rerank.httpx.Client")
     def test_close(self, mock_client_class):
         mock_client = MagicMock()
         mock_client_class.return_value = mock_client
@@ -130,10 +128,10 @@ class TestRerankConfig:
 class TestUnifiedRerankDispatch:
     """Test that RerankClient.from_config() dispatches all providers uniformly."""
 
-    @patch("openviking_cli.utils.cohere_rerank.httpx.Client")
+    @patch("openviking.models.rerank.cohere_rerank.httpx.Client")
     def test_from_config_creates_cohere_client(self, mock_client_class):
+        from openviking.models.rerank import RerankClient
         from openviking_cli.utils.config.rerank_config import RerankConfig
-        from openviking_cli.utils.rerank import RerankClient
 
         config = RerankConfig(api_key="cohere-key")
         client = RerankClient.from_config(config)
@@ -141,26 +139,26 @@ class TestUnifiedRerankDispatch:
         assert client.api_key == "cohere-key"
         assert client.model == "rerank-v3.5"
 
-    @patch("openviking_cli.utils.cohere_rerank.httpx.Client")
+    @patch("openviking.models.rerank.cohere_rerank.httpx.Client")
     def test_from_config_cohere_explicit_provider(self, mock_client_class):
+        from openviking.models.rerank import RerankClient
         from openviking_cli.utils.config.rerank_config import RerankConfig
-        from openviking_cli.utils.rerank import RerankClient
 
         config = RerankConfig(provider="cohere", api_key="key")
         client = RerankClient.from_config(config)
         assert isinstance(client, CohereRerankClient)
 
     def test_from_config_returns_none_when_unavailable(self):
+        from openviking.models.rerank import RerankClient
         from openviking_cli.utils.config.rerank_config import RerankConfig
-        from openviking_cli.utils.rerank import RerankClient
 
         config = RerankConfig()
         assert RerankClient.from_config(config) is None
 
-    @patch("openviking_cli.utils.cohere_rerank.httpx.Client")
+    @patch("openviking.models.rerank.cohere_rerank.httpx.Client")
     def test_cohere_from_config_uses_custom_model(self, mock_client_class):
+        from openviking.models.rerank import RerankClient
         from openviking_cli.utils.config.rerank_config import RerankConfig
-        from openviking_cli.utils.rerank import RerankClient
 
         config = RerankConfig(api_key="key", model_name="rerank-v4.0")
         client = RerankClient.from_config(config)

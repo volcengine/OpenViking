@@ -11,6 +11,19 @@ from openviking.utils.model_retry import retry_sync
 T = TypeVar("T")
 
 
+_token_tracker_instance = None
+
+
+def _get_token_tracker():
+    """Lazy import to avoid circular dependency."""
+    global _token_tracker_instance
+    if _token_tracker_instance is None:
+        from openviking.models.vlm.token_usage import TokenUsageTracker
+
+        _token_tracker_instance = TokenUsageTracker()
+    return _token_tracker_instance
+
+
 def truncate_and_normalize(embedding: List[float], dimension: Optional[int]) -> List[float]:
     """Truncate and L2 normalize embedding vector
 
@@ -77,6 +90,10 @@ class EmbedderBase(ABC):
         self.model_name = model_name
         self.config = config or {}
         self.max_retries = int(self.config.get("max_retries", 3))
+        self.provider = self.config.get("provider", "unknown")
+
+        # Token usage tracking
+        self._token_tracker = _get_token_tracker()
 
     @abstractmethod
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
@@ -129,6 +146,57 @@ class EmbedderBase(ABC):
     def is_hybrid(self) -> bool:
         """Check if result is hybrid (contains both dense and sparse vectors)"""
         return False
+
+    def update_token_usage(
+        self,
+        model_name: str,
+        provider: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+    ) -> None:
+        """Update token usage
+
+        Args:
+            model_name: Model name
+            provider: Provider name (openai, volcengine, etc.)
+            prompt_tokens: Number of input tokens
+            completion_tokens: Number of output tokens
+        """
+        self._token_tracker.update(
+            model_name=model_name,
+            provider=provider,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+
+    def get_token_usage(self) -> Dict[str, Any]:
+        """Get token usage
+
+        Returns:
+            Dict[str, Any]: Token usage dictionary
+        """
+        return self._token_tracker.to_dict()
+
+    def reset_token_usage(self) -> None:
+        """Reset token usage"""
+        self._token_tracker.reset()
+
+    def _estimate_tokens(self, text: str) -> int:
+        """Estimate token count from text (1 token ≈ 4 characters for English)
+
+        Args:
+            text: Input text to estimate tokens for
+
+        Returns:
+            Estimated token count
+        """
+        if not text:
+            return 0
+        # Approximate: 1 token ≈ 4 characters
+        # For Chinese characters, 1 token ≈ 1-2 characters
+        chinese_chars = sum(1 for c in text if "\u4e00" <= c <= "\u9fff")
+        other_chars = len(text) - chinese_chars
+        return max(1, (chinese_chars // 1) + (other_chars // 4))
 
 
 class DenseEmbedderBase(EmbedderBase):

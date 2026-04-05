@@ -4,7 +4,6 @@ use serde_json::Value;
 use std::fs::File;
 use std::path::Path;
 use tempfile::{Builder, NamedTempFile};
-use url::Url;
 use zip::CompressionMethod;
 use zip::write::FileOptions;
 
@@ -314,6 +313,34 @@ impl HttpClient {
         self.get("/api/v1/content/overview", &params).await
     }
 
+    pub async fn write(
+        &self,
+        uri: &str,
+        content: &str,
+        mode: &str,
+        wait: bool,
+        timeout: Option<f64>,
+    ) -> Result<serde_json::Value> {
+        let body = Self::build_write_body(uri, content, mode, wait, timeout);
+        self.post("/api/v1/content/write", &body).await
+    }
+
+    fn build_write_body(
+        uri: &str,
+        content: &str,
+        mode: &str,
+        wait: bool,
+        timeout: Option<f64>,
+    ) -> Value {
+        serde_json::json!({
+            "uri": uri,
+            "content": content,
+            "mode": mode,
+            "wait": wait,
+            "timeout": timeout,
+        })
+    }
+
     pub async fn reindex(
         &self,
         uri: &str,
@@ -487,12 +514,14 @@ impl HttpClient {
     pub async fn grep(
         &self,
         uri: &str,
+        exclude_uri: Option<String>,
         pattern: &str,
         ignore_case: bool,
         node_limit: i32,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "uri": uri,
+            "exclude_uri": exclude_uri,
             "pattern": pattern,
             "case_insensitive": ignore_case,
             "node_limit": node_limit,
@@ -536,11 +565,16 @@ impl HttpClient {
 
         if path_obj.exists() {
             if path_obj.is_dir() {
+                let source_name = path_obj
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|s| s.to_string());
                 let zip_file = self.zip_directory(path_obj)?;
                 let temp_file_id = self.upload_temp_file(zip_file.path()).await?;
 
                 let body = serde_json::json!({
                     "temp_file_id": temp_file_id,
+                    "source_name": source_name,
                     "to": to,
                     "parent": parent,
                     "reason": reason,
@@ -858,6 +892,7 @@ impl HttpClient {
 #[cfg(test)]
 mod tests {
     use super::HttpClient;
+    use serde_json::json;
 
     #[test]
     fn build_headers_includes_tenant_identity_headers() {
@@ -896,5 +931,29 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("alice")
         );
+    }
+
+    #[test]
+    fn build_write_body_omits_removed_semantic_flags() {
+        let body = HttpClient::build_write_body(
+            "viking://resources/demo.md",
+            "updated",
+            "replace",
+            true,
+            Some(3.0),
+        );
+
+        assert_eq!(
+            body,
+            json!({
+                "uri": "viking://resources/demo.md",
+                "content": "updated",
+                "mode": "replace",
+                "wait": true,
+                "timeout": 3.0,
+            })
+        );
+        assert!(body.get("regenerate_semantics").is_none());
+        assert!(body.get("revectorize").is_none());
     }
 }

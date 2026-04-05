@@ -87,7 +87,7 @@ class DirectoryParser(BaseParser):
         if not source_path.is_dir():
             raise NotADirectoryError(f"Not a directory: {source_path}")
 
-        dir_name = source_path.name
+        dir_name = kwargs.get("source_name") or source_path.name
         warnings: List[str] = []
 
         try:

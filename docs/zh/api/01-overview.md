@@ -311,6 +311,7 @@ openviking -o json ls viking://resources/
 | GET | `/api/v1/content/read` | 读取完整内容（L2） |
 | GET | `/api/v1/content/abstract` | 读取摘要（L0） |
 | GET | `/api/v1/content/overview` | 读取概览（L1） |
+| POST | `/api/v1/content/write` | 修改已有文件并自动刷新语义与向量 |
 
 ### 搜索
 

@@ -8,6 +8,7 @@ Uses AsyncHTTPClient to connect to local openviking-server at 127.0.0.1:1933.
 No need to worry about ov.conf - server uses its own config.
 """
 
+import asyncio
 from dataclasses import asdict
 from datetime import datetime
 
@@ -22,6 +23,16 @@ logger = get_logger(__name__)
 
 # Server URL - user starts openviking-server separately
 SERVER_URL = "http://127.0.0.1:1933"
+
+
+async def _wait_for_task(client: AsyncHTTPClient, task_id: str, timeout: float = 60.0) -> dict:
+    """Wait for a background session commit task to finish."""
+    for _ in range(int(timeout / 0.1)):
+        task = await client.get_task(task_id)
+        if task and task["status"] in {"completed", "failed"}:
+            return task
+        await asyncio.sleep(0.1)
+    raise TimeoutError(f"Task {task_id} did not complete within {timeout}s")
 
 
 def create_test_conversation_messages():
@@ -151,8 +162,11 @@ class TestCompressorV2EndToEnd:
         # 3. Commit session (this should trigger memory extraction)
         print("\nCommitting session...")
         commit_result = await client.commit_session(session_id)
-        assert commit_result["status"] == "committed"
+        assert commit_result["status"] == "accepted"
+        assert commit_result["task_id"] is not None
         print(f"Commit result: {commit_result}")
+        task_result = await _wait_for_task(client, commit_result["task_id"])
+        assert task_result["status"] == "completed"
 
         # 4. Wait for memory extraction to complete
         print("\nWaiting for processing...")

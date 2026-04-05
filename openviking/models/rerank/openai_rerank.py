@@ -7,16 +7,18 @@ Supports third-party rerank services like Alibaba Cloud DashScope (qwen3-rerank)
 via api_key + api_base configuration.
 """
 
+# For logging, use Python's built-in logging
+import logging
 from typing import List, Optional
 
 import requests
 
-from openviking_cli.utils.logger import get_logger
+from openviking.models.rerank.base import RerankBase
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
-class OpenAIRerankClient:
+class OpenAIRerankClient(RerankBase):
     """
     OpenAI-compatible rerank API client using Bearer token auth.
 
@@ -32,9 +34,11 @@ class OpenAIRerankClient:
             api_base: Full endpoint URL for the rerank API
             model_name: Model name to use for reranking
         """
+        super().__init__()
         self.api_key = api_key
         self.api_base = api_base
         self.model_name = model_name
+        self.provider = "openai"
 
     def rerank_batch(self, query: str, documents: List[str]) -> Optional[List[float]]:
         """
@@ -69,6 +73,9 @@ class OpenAIRerankClient:
             )
             response.raise_for_status()
             result = response.json()
+
+            # Update token usage tracking (estimate, OpenAI rerank doesn't provide token info)
+            self._extract_and_update_token_usage(result, query, documents)
 
             # Standard OpenAI/Cohere rerank format: results[].{index, relevance_score}
             results = result.get("results")

@@ -336,15 +336,19 @@ async def viking_ingest(
         # 等待 task 完成以获取准确 token 消耗
         task_id = result.get("task_id")
         if task_id:
-            while True:
+            # 轮询任务状态直到完成
+            max_attempts = 1200  # 最多等待20分钟
+            for attempt in range(max_attempts):
                 task = await client.get_task(task_id)
                 status = task.get("status") if task else "unknown"
                 if status == "completed":
                     token_usage = _parse_token_usage(task)
                     break
-                elif status in ("failed", "unknown"):
-                    raise RuntimeError(f"Task {task_id} failed: {task}")
+                elif status in ("failed", "cancelled", "unknown"):
+                    raise RuntimeError(f"Task {task_id} {status}: {task}")
                 await asyncio.sleep(1)
+            else:
+                raise RuntimeError(f"Task {task_id} timed out after {max_attempts} attempts")
         else:
             token_usage = {"embedding": 0, "vlm": 0, "total": 0}
 
@@ -361,7 +365,6 @@ def sync_viking_ingest(
 ) -> Dict[str, int]:
     """Synchronous wrapper for viking_ingest to maintain existing API."""
     return asyncio.run(viking_ingest(messages, openviking_url, session_time))
-
 
 # ---------------------------------------------------------------------------
 # Main import logic

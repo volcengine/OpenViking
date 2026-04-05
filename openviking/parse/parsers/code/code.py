@@ -371,7 +371,12 @@ class CodeRepositoryParser(BaseParser):
 
         # Download (blocking HTTP; run in thread pool to avoid stalling event loop).
         def _download() -> None:
-            req = urllib.request.Request(zip_url, headers={"User-Agent": "OpenViking"})
+            headers = {"User-Agent": "OpenViking"}
+            github_token = os.environ.get("GITHUB_TOKEN")
+            if github_token:
+                headers["Authorization"] = f"token {github_token}"
+
+            req = urllib.request.Request(zip_url, headers=headers)
             with urllib.request.urlopen(req, timeout=1800) as resp, open(zip_path, "wb") as f:
                 shutil.copyfileobj(resp, f)
 

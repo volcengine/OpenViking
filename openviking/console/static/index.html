@@ -109,6 +109,14 @@
                     <tbody id="fsEntries"></tbody>
                   </table>
                 </div>
+                <div class="fs-editor-shell" hidden>
+                  <label for="fsEditor">Editor</label>
+                  <textarea id="fsEditor" rows="16" spellcheck="false"></textarea>
+                  <div class="row">
+                    <button id="fsSaveBtn">Save</button>
+                    <button id="fsRevertBtn" class="ghost">Revert</button>
+                  </div>
+                </div>
               </section>
 
               <section id="panel-find" class="panel">
@@ -319,7 +327,13 @@
               <section id="panel-settings" class="panel">
                 <h2>Settings</h2>
                 <label for="apiKeyInput">X-API-Key</label>
-                <input id="apiKeyInput" type="password" placeholder="Paste key for this browser session" />
+                <input id="apiKeyInput" type="password" placeholder="Paste key to reuse in this browser" />
+                <label for="accountInput">X-OpenViking-Account</label>
+                <input id="accountInput" type="text" placeholder="Default account_id for console requests" />
+                <label for="userInput">X-OpenViking-User</label>
+                <input id="userInput" type="text" placeholder="Default user_id for console requests" />
+                <label for="agentIdInput">X-OpenViking-Agent</label>
+                <input id="agentIdInput" type="text" placeholder="Default agent_id for console requests" />
                 <div class="row">
                   <button id="saveKeyBtn">Save</button>
                   <button id="clearKeyBtn" class="ghost">Clear</button>

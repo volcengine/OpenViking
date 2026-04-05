@@ -78,9 +78,14 @@ class SyncHTTPClient:
         """Check whether a session exists in storage."""
         return run_async(self._async_client.session_exists(session_id))
 
-    def create_session(self) -> Dict[str, Any]:
-        """Create a new session."""
-        return run_async(self._async_client.create_session())
+    def create_session(self, session_id: Optional[str] = None) -> Dict[str, Any]:
+        """Create a new session.
+
+        Args:
+            session_id: Optional session ID. If provided, creates a session with the given ID.
+                       If None, creates a new session with auto-generated ID.
+        """
+        return run_async(self._async_client.create_session(session_id))
 
     def list_sessions(self) -> List[Any]:
         """List all sessions."""
@@ -248,9 +253,10 @@ class SyncHTTPClient:
         pattern: str,
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
+        exclude_uri: Optional[str] = None,
     ) -> Dict:
         """Content search with pattern."""
-        return run_async(self._async_client.grep(uri, pattern, case_insensitive, node_limit))
+        return run_async(self._async_client.grep(uri, pattern, case_insensitive, node_limit, exclude_uri))
 
     def glob(self, pattern: str, uri: str = "viking://") -> Dict:
         """File pattern matching."""
@@ -329,6 +335,27 @@ class SyncHTTPClient:
     def overview(self, uri: str) -> str:
         """Read L1 overview."""
         return run_async(self._async_client.overview(uri))
+
+    def write(
+        self,
+        uri: str,
+        content: str,
+        mode: str = "replace",
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Write text content to an existing file and refresh semantics/vectors."""
+        return run_async(
+            self._async_client.write(
+                uri=uri,
+                content=content,
+                mode=mode,
+                wait=wait,
+                timeout=timeout,
+                telemetry=telemetry,
+            )
+        )
 
     # ============= Relations =============
 

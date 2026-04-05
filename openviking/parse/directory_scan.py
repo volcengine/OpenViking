@@ -289,9 +289,7 @@ def scan_directory(
             raise UnsupportedDirectoryFilesError(msg, unsupported_paths)
         else:
             logger.warning(msg)
-        result.warnings.append(msg)
-        for rel in unsupported_paths:
-            result.warnings.append(f"  - {rel}")
+            result.warnings.append(msg)
 
     result.processable.sort(key=lambda x: x.rel_path)
     result.unsupported.sort(key=lambda x: x.rel_path)

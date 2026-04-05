@@ -447,7 +447,12 @@ class Session:
 
         # Create TaskRecord for tracking Phase 2
         tracker = get_task_tracker()
-        task = tracker.create("session_commit", resource_id=self.session_id)
+        task = tracker.create(
+            "session_commit",
+            resource_id=self.session_id,
+            owner_account_id=self.ctx.account_id,
+            owner_user_id=self.ctx.user.user_id,
+        )
 
         asyncio.create_task(
             self._run_memory_extraction(

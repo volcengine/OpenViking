@@ -109,7 +109,7 @@ export function resolveSessionPatternCandidate(params: {
   return sessionId || undefined;
 }
 
-export function shouldSkipIngestReplyAssistSession(
+export function shouldBypassSession(
   params: {
     sessionId?: string;
     sessionKey?: string;
@@ -124,6 +124,16 @@ export function shouldSkipIngestReplyAssistSession(
     return false;
   }
   return matchesSessionPattern(candidate, patterns);
+}
+
+export function shouldSkipIngestReplyAssistSession(
+  params: {
+    sessionId?: string;
+    sessionKey?: string;
+  },
+  patterns: RegExp[],
+): boolean {
+  return shouldBypassSession(params, patterns);
 }
 
 function countSpeakerTurns(text: string): number {

@@ -133,6 +133,19 @@ class BaseClient(ABC):
         """Read L1 overview (.overview.md)."""
         ...
 
+    @abstractmethod
+    async def write(
+        self,
+        uri: str,
+        content: str,
+        mode: str = "replace",
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Write text content to an existing file and refresh semantics/vectors."""
+        ...
+
     # ============= Search =============
 
     @abstractmethod
@@ -163,7 +176,14 @@ class BaseClient(ABC):
         ...
 
     @abstractmethod
-    async def grep(self, uri: str, pattern: str, case_insensitive: bool = False) -> Dict[str, Any]:
+    async def grep(
+        self,
+        uri: str,
+        pattern: str,
+        case_insensitive: bool = False,
+        exclude_uri: Optional[str] = None,
+        node_limit: Optional[int] = None
+    ) -> Dict[str, Any]:
         """Content search with pattern."""
         ...
 
@@ -192,8 +212,13 @@ class BaseClient(ABC):
     # ============= Sessions =============
 
     @abstractmethod
-    async def create_session(self) -> Dict[str, Any]:
-        """Create a new session."""
+    async def create_session(self, session_id: Optional[str] = None) -> Dict[str, Any]:
+        """Create a new session.
+
+        Args:
+            session_id: Optional session ID. If provided, creates a session with the given ID.
+                       If None, creates a new session with auto-generated ID.
+        """
         ...
 
     @abstractmethod

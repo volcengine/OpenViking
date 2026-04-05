@@ -21,6 +21,7 @@ class ChannelType(str, Enum):
     SLACK = "slack"
     QQ = "qq"
     OPENAPI = "openapi"
+    BOT_API = "bot_api"
 
 
 class SandboxBackend(str, Enum):
@@ -273,6 +274,21 @@ class OpenAPIChannelConfig(BaseChannelConfig):
         return self._channel_id
 
 
+class BotChannelConfig(BaseChannelConfig):
+    """Bot channel configuration for multi-channel support."""
+
+    type: ChannelType = ChannelType.BOT_API
+    enabled: bool = True
+    api_key: str = ""  # If empty, no auth required
+    allow_from: list[str] = Field(default_factory=list)
+    max_concurrent_requests: int = 100
+    need_mention: bool = False
+    id: str = "default"  # Channel identifier for multi-channel support
+
+    def channel_id(self) -> str:
+        return self.id
+
+
 class ChannelsConfig(BaseModel):
     """Configuration for chat channels - array of channel configs."""
 
@@ -372,6 +388,8 @@ class ChannelsConfig(BaseModel):
             return QQChannelConfig(**config)
         elif channel_type == ChannelType.OPENAPI:
             return OpenAPIChannelConfig(**config)
+        elif channel_type == ChannelType.BOT_API:
+            return BotChannelConfig(**config)
         else:
             return BaseChannelConfig(**config)
 
@@ -593,6 +611,7 @@ class SandboxConfig(BaseModel):
     backend: SandboxBackend = SandboxBackend.DIRECT
     mode: SandboxMode = SandboxMode.SHARED
     backends: SandboxBackendsConfig = Field(default_factory=SandboxBackendsConfig)
+    restrict_workspaces: dict[str, str] = Field(default_factory=dict)
 
 
 class Config(BaseSettings):

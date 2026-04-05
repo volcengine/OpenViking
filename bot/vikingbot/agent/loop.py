@@ -491,6 +491,16 @@ class AgentLoop:
                 await self.sessions.save(session)
                 return None
 
+            if not msg.need_reply:
+                session.add_message("user", msg.content, sender_id=msg.sender_id)
+                await self.sessions.save(session)
+                return OutboundMessage(
+                    session_key=msg.session_key,
+                    content=None,
+                    metadata=msg.metadata,
+                    event_type=OutboundEventType.NO_REPLY,
+                )
+
             # Consolidate memory before processing if session is too large
             if len(session.messages) > self.memory_window:
                 # Clone session for async consolidation, then immediately trim original

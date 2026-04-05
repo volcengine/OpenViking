@@ -4,14 +4,16 @@
 LiteLLM Rerank API Client.
 """
 
+# For logging, use Python's built-in logging
+import logging
 from typing import List, Optional
 
-from openviking_cli.utils.logger import get_logger
+from openviking.models.rerank.base import RerankBase
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
-class LiteLLMRerankClient:
+class LiteLLMRerankClient(RerankBase):
     """
     LiteLLM rerank API client.
     """
@@ -25,9 +27,11 @@ class LiteLLMRerankClient:
             api_base: API base for LiteLLM providers (optional, can come from env)
             model_name: Model name to use for reranking
         """
+        super().__init__()
         self.api_key = api_key
         self.api_base = api_base
         self.model_name = model_name
+        self.provider = "litellm"
 
     def rerank_batch(self, query: str, documents: List[str]) -> Optional[List[float]]:
         """
@@ -54,6 +58,12 @@ class LiteLLMRerankClient:
                 api_key=self.api_key,
                 api_base=self.api_base,
             )
+
+            # Update token usage tracking (estimate from response or input)
+            response_dict = (
+                response.model_dump() if hasattr(response, "model_dump") else response.__dict__
+            )
+            self._extract_and_update_token_usage(response_dict, query, documents)
 
             results = response.results
             if not results:

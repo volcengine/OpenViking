@@ -96,6 +96,28 @@ describe("context-engine afterTurn()", () => {
     expect(client.addSessionMessage).not.toHaveBeenCalled();
   });
 
+  it("skips afterTurn completely when the session matches bypassSessionPatterns", async () => {
+    const { engine, client, getClient, logger } = makeEngine({
+      cfgOverrides: {
+        bypassSessionPatterns: ["agent:*:cron:**"],
+      },
+    });
+
+    await engine.afterTurn!({
+      sessionId: "runtime-session",
+      sessionKey: "agent:main:cron:nightly:run:1",
+      sessionFile: "",
+      messages: [{ role: "user", content: "hello" }],
+      prePromptMessageCount: 0,
+    });
+
+    expect(getClient).not.toHaveBeenCalled();
+    expect(client.addSessionMessage).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("\"reason\":\"session_bypassed\""),
+    );
+  });
+
   it("skips when messages array is empty", async () => {
     const { engine, client, logger } = makeEngine();
 

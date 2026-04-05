@@ -7,12 +7,14 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Body, Depends, Query
 from fastapi.responses import Response as FastAPIResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import ErrorInfo, Response
+from openviking.server.telemetry import run_operation
+from openviking.telemetry import TelemetryRequest
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -26,6 +28,19 @@ class ReindexRequest(BaseModel):
     uri: str
     regenerate: bool = False
     wait: bool = True
+
+
+class WriteContentRequest(BaseModel):
+    """Request to write or append text content to an existing file."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    uri: str
+    content: str
+    mode: str = "replace"
+    wait: bool = False
+    timeout: float | None = None
+    telemetry: TelemetryRequest = False
 
 
 router = APIRouter(prefix="/api/v1/content", tags=["content"])
@@ -105,6 +120,32 @@ async def download(
     )
 
 
+@router.post("/write")
+async def write(
+    request: WriteContentRequest = Body(...),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Write text content to an existing file and refresh semantics/vectors."""
+    service = get_service()
+    execution = await run_operation(
+        operation="content.write",
+        telemetry=request.telemetry,
+        fn=lambda: service.fs.write(
+            uri=request.uri,
+            content=request.content,
+            ctx=_ctx,
+            mode=request.mode,
+            wait=request.wait,
+            timeout=request.timeout,
+        ),
+    )
+    return Response(
+        status="ok",
+        result=execution.result,
+        telemetry=execution.telemetry,
+    ).model_dump(exclude_none=True)
+
+
 @router.post("/reindex")
 async def reindex(
     request: ReindexRequest = Body(...),
@@ -137,7 +178,12 @@ async def reindex(
 
     if request.wait:
         # Synchronous path: block until reindex completes
-        if tracker.has_running(REINDEX_TASK_TYPE, uri):
+        if tracker.has_running(
+            REINDEX_TASK_TYPE,
+            uri,
+            owner_account_id=_ctx.account_id,
+            owner_user_id=_ctx.user.user_id,
+        ):
             return Response(
                 status="error",
                 error=ErrorInfo(
@@ -149,7 +195,12 @@ async def reindex(
         return Response(status="ok", result=result)
     else:
         # Async path: run in background, return task_id for polling
-        task = tracker.create_if_no_running(REINDEX_TASK_TYPE, uri)
+        task = tracker.create_if_no_running(
+            REINDEX_TASK_TYPE,
+            uri,
+            owner_account_id=_ctx.account_id,
+            owner_user_id=_ctx.user.user_id,
+        )
         if task is None:
             return Response(
                 status="error",

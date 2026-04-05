@@ -310,6 +310,7 @@ Compact JSON with status wrapper (when `--compact` is true, which is the default
 | GET | `/api/v1/content/read` | Read full content (L2) |
 | GET | `/api/v1/content/abstract` | Read abstract (L0) |
 | GET | `/api/v1/content/overview` | Read overview (L1) |
+| POST | `/api/v1/content/write` | Update an existing file and refresh semantics/vectors |
 
 ### Search
 

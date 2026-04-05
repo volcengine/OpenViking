@@ -126,9 +126,77 @@ describe("context-engine commitOVSession()", () => {
       expect.stringContaining("memories=4"),
     );
   });
+
+  it("skips commitOVSession when the session matches bypassSessionPatterns", async () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      mode: "remote",
+      baseUrl: "http://127.0.0.1:1933",
+      autoCapture: false,
+      autoRecall: false,
+      ingestReplyAssist: false,
+      bypassSessionPatterns: ["agent:*:cron:**"],
+    });
+    const logger = makeLogger();
+    const getClient = vi.fn();
+    const resolveAgentId = vi.fn((_sid: string) => "test-agent");
+
+    const engine = createMemoryOpenVikingContextEngine({
+      id: "openviking",
+      name: "Test Engine",
+      version: "test",
+      cfg,
+      logger,
+      getClient: getClient as any,
+      resolveAgentId,
+    });
+
+    const ok = await engine.commitOVSession("runtime-session", "agent:main:cron:nightly:run:1");
+
+    expect(ok).toBe(false);
+    expect(getClient).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("session is bypassed"),
+    );
+  });
 });
 
 describe("context-engine compact()", () => {
+  it("returns compacted=false when the session matches bypassSessionPatterns", async () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      mode: "remote",
+      baseUrl: "http://127.0.0.1:1933",
+      autoCapture: false,
+      autoRecall: false,
+      ingestReplyAssist: false,
+      bypassSessionPatterns: ["agent:*:cron:**"],
+    });
+    const logger = makeLogger();
+    const getClient = vi.fn();
+    const resolveAgentId = vi.fn((_sid: string) => "test-agent");
+
+    const engine = createMemoryOpenVikingContextEngine({
+      id: "openviking",
+      name: "Test Engine",
+      version: "test",
+      cfg,
+      logger,
+      getClient: getClient as any,
+      resolveAgentId,
+    });
+
+    const result = await engine.compact({
+      sessionId: "agent:main:cron:nightly:run:1",
+      sessionFile: "",
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      compacted: false,
+      reason: "session_bypassed",
+    });
+    expect(getClient).not.toHaveBeenCalled();
+  });
+
   it("returns compacted=true when commit succeeds with archived=true", async () => {
     const { engine } = makeEngine({
       status: "completed",

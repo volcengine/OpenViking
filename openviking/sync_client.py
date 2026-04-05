@@ -39,9 +39,14 @@ class SyncOpenViking:
         """Check whether a session exists in storage."""
         return run_async(self._async_client.session_exists(session_id))
 
-    def create_session(self) -> Dict[str, Any]:
-        """Create a new session."""
-        return run_async(self._async_client.create_session())
+    def create_session(self, session_id: Optional[str] = None) -> Dict[str, Any]:
+        """Create a new session.
+
+        Args:
+            session_id: Optional session ID. If provided, creates a session with the given ID.
+                       If None, creates a new session with auto-generated ID.
+        """
+        return run_async(self._async_client.create_session(session_id))
 
     def list_sessions(self) -> List[Any]:
         """List all sessions."""
@@ -201,6 +206,27 @@ class SyncOpenViking:
         """Read file"""
         return run_async(self._async_client.read(uri, offset=offset, limit=limit))
 
+    def write(
+        self,
+        uri: str,
+        content: str,
+        mode: str = "replace",
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Write text content to an existing file and refresh semantics/vectors."""
+        return run_async(
+            self._async_client.write(
+                uri=uri,
+                content=content,
+                mode=mode,
+                wait=wait,
+                timeout=timeout,
+                telemetry=telemetry,
+            )
+        )
+
     def ls(self, uri: str, **kwargs) -> List[Any]:
         """
         List directory contents.
@@ -246,9 +272,20 @@ class SyncOpenViking:
         """Wait for all async operations to complete"""
         return run_async(self._async_client.wait_processed(timeout))
 
-    def grep(self, uri: str, pattern: str, case_insensitive: bool = False) -> Dict:
+    def grep(
+        self,
+        uri: str,
+        pattern: str,
+        case_insensitive: bool = False,
+        node_limit: Optional[int] = None,
+        exclude_uri: Optional[str] = None,
+    ) -> Dict:
         """Content search"""
-        return run_async(self._async_client.grep(uri, pattern, case_insensitive))
+        return run_async(
+            self._async_client.grep(
+                uri, pattern, case_insensitive, node_limit, exclude_uri
+            )
+        )
 
     def glob(self, pattern: str, uri: str = "viking://") -> Dict:
         """File pattern matching"""

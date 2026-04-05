@@ -6,7 +6,7 @@ mod output;
 mod tui;
 mod utils;
 
-use clap::{Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand};
 use config::Config;
 use error::{Error, Result};
 use output::OutputFormat;
@@ -128,9 +128,9 @@ enum Commands {
         /// Wait timeout in seconds (only used with --wait)
         #[arg(long)]
         timeout: Option<f64>,
-        /// No strict mode for directory scanning
-        #[arg(long = "no-strict", default_value_t = false)]
-        no_strict: bool,
+        /// Enable strict mode for directory scanning (fail if any unsupported files found)
+        #[arg(long = "strict", action = ArgAction::SetTrue)]
+        strict_mode: bool,
         /// Ignore directories, e.g. --ignore-dirs "node_modules,dist"
         #[arg(long)]
         ignore_dirs: Option<String>,
@@ -321,6 +321,26 @@ enum Commands {
         /// Viking URI
         uri: String,
     },
+    /// Write text content to an existing file
+    Write {
+        /// Viking URI
+        uri: String,
+        /// Content to write
+        #[arg(long, conflicts_with = "from_file")]
+        content: Option<String>,
+        /// Read content from a local file
+        #[arg(long = "from-file", conflicts_with = "content")]
+        from_file: Option<String>,
+        /// Append instead of replacing the file
+        #[arg(long)]
+        append: bool,
+        /// Wait for async processing to finish
+        #[arg(long, default_value = "false")]
+        wait: bool,
+        /// Optional wait timeout in seconds
+        #[arg(long)]
+        timeout: Option<f64>,
+    },
     /// Reindex content at URI (regenerates .abstract.md and .overview.md)
     Reindex {
         /// Viking URI
@@ -385,6 +405,9 @@ enum Commands {
         /// Target URI
         #[arg(short, long, default_value = "viking://")]
         uri: String,
+        /// Excluded URI range. Any entry whose URI falls under this URI prefix is skipped
+        #[arg(short = 'x', long = "exclude-uri")]
+        exclude_uri: Option<String>,
         /// Search pattern
         pattern: String,
         /// Case insensitive
@@ -483,8 +506,8 @@ enum ObserverCommands {
     Queue,
     /// Get VikingDB status
     Vikingdb,
-    /// Get VLM status
-    Vlm,
+    /// Get models status (VLM, Embedding, Rerank)
+    Models,
     /// Get transaction system status
     Transaction,
     /// Get retrieval quality metrics
@@ -637,7 +660,7 @@ async fn main() {
             instruction,
             wait,
             timeout,
-            no_strict,
+            strict_mode,
             ignore_dirs,
             include,
             exclude,
@@ -652,7 +675,7 @@ async fn main() {
                 instruction,
                 wait,
                 timeout,
-                no_strict,
+                strict_mode,
                 ignore_dirs,
                 include,
                 exclude,
@@ -751,6 +774,15 @@ async fn main() {
         Commands::Read { uri } => handle_read(uri, ctx).await,
         Commands::Abstract { uri } => handle_abstract(uri, ctx).await,
         Commands::Overview { uri } => handle_overview(uri, ctx).await,
+        Commands::Write {
+            uri,
+            content,
+            from_file,
+            append,
+            wait,
+            timeout,
+        } => handle_write(uri, content, from_file, append, wait, timeout, ctx)
+            .await,
         Commands::Reindex {
             uri,
             regenerate,
@@ -772,10 +804,11 @@ async fn main() {
         } => handle_search(query, uri, session_id, node_limit, threshold, ctx).await,
         Commands::Grep {
             uri,
+            exclude_uri,
             pattern,
             ignore_case,
             node_limit,
-        } => handle_grep(uri, pattern, ignore_case, node_limit, ctx).await,
+        } => handle_grep(uri, exclude_uri, pattern, ignore_case, node_limit, ctx).await,
 
         Commands::Glob {
             pattern,
@@ -798,7 +831,7 @@ async fn handle_add_resource(
     instruction: String,
     wait: bool,
     timeout: Option<f64>,
-    no_strict: bool,
+    strict_mode: bool,
     ignore_dirs: Option<String>,
     include: Option<String>,
     exclude: Option<String>,
@@ -846,7 +879,7 @@ async fn handle_add_resource(
         std::process::exit(1);
     }
 
-    let strict = !no_strict;
+    let strict = strict_mode;
     let directly_upload_media = !no_directly_upload_media;
 
     let effective_timeout = if wait {
@@ -980,8 +1013,8 @@ async fn handle_observer(cmd: ObserverCommands, ctx: CliContext) -> Result<()> {
         ObserverCommands::Vikingdb => {
             commands::observer::vikingdb(&client, ctx.output_format, ctx.compact).await
         }
-        ObserverCommands::Vlm => {
-            commands::observer::vlm(&client, ctx.output_format, ctx.compact).await
+        ObserverCommands::Models => {
+            commands::observer::models(&client, ctx.output_format, ctx.compact).await
         }
         ObserverCommands::Transaction => {
             commands::observer::transaction(&client, ctx.output_format, ctx.compact).await
@@ -1186,6 +1219,35 @@ async fn handle_overview(uri: String, ctx: CliContext) -> Result<()> {
     commands::content::overview(&client, &uri, ctx.output_format, ctx.compact).await
 }
 
+async fn handle_write(
+    uri: String,
+    content: Option<String>,
+    from_file: Option<String>,
+    append: bool,
+    wait: bool,
+    timeout: Option<f64>,
+    ctx: CliContext,
+) -> Result<()> {
+    let client = ctx.get_client();
+    let payload = match (content, from_file) {
+        (Some(value), None) => value,
+        (None, Some(path)) => std::fs::read_to_string(path)
+            .map_err(|e| Error::Client(format!("Failed to read --from-file: {}", e)))?,
+        _ => return Err(Error::Client("Specify exactly one of --content or --from-file".into())),
+    };
+    commands::content::write(
+        &client,
+        &uri,
+        &payload,
+        append,
+        wait,
+        timeout,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
+}
+
 async fn handle_reindex(uri: String, regenerate: bool, wait: bool, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     commands::content::reindex(
@@ -1367,12 +1429,16 @@ async fn handle_stat(uri: String, ctx: CliContext) -> Result<()> {
 
 async fn handle_grep(
     uri: String,
+    exclude_uri: Option<String>,
     pattern: String,
     ignore_case: bool,
     node_limit: i32,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
+    if let Some(excluded) = &exclude_uri {
+        params.push(format!("-x {}", excluded));
+    }
     if ignore_case {
         params.push("-i".to_string());
     }
@@ -1382,6 +1448,7 @@ async fn handle_grep(
     commands::search::grep(
         &client,
         &uri,
+        exclude_uri,
         &pattern,
         ignore_case,
         node_limit,
@@ -1475,5 +1542,20 @@ mod tests {
         assert_eq!(ctx.config.account.as_deref(), Some("from-cli-account"));
         assert_eq!(ctx.config.user.as_deref(), Some("from-cli-user"));
         assert_eq!(ctx.config.agent_id.as_deref(), Some("from-cli-agent"));
+    }
+
+    #[test]
+    fn cli_write_rejects_removed_semantic_flags() {
+        let result = Cli::try_parse_from([
+            "ov",
+            "write",
+            "viking://resources/demo.md",
+            "--content",
+            "updated",
+            "--no-semantics",
+            "--no-vectorize",
+        ]);
+
+        assert!(result.is_err(), "removed write flags should not parse");
     }
 }

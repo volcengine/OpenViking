@@ -4,27 +4,39 @@ import { memoryOpenVikingConfigSchema } from "../config.js";
 import {
   compileSessionPatterns,
   matchesSessionPattern,
-  shouldSkipIngestReplyAssistSession,
+  shouldBypassSession,
 } from "../text-utils.js";
 
-describe("ingest reply assist session patterns", () => {
-  it("parses ignore session patterns from config", () => {
+describe("bypass session patterns", () => {
+  it("parses bypass session patterns from config", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({
-      ingestReplyAssistIgnoreSessionPatterns: [
+      bypassSessionPatterns: [
         "agent:*:cron:**",
         "agent:ops:maintenance:**",
       ],
     });
 
-    expect(cfg.ingestReplyAssistIgnoreSessionPatterns).toEqual([
+    expect(cfg.bypassSessionPatterns).toEqual([
       "agent:*:cron:**",
       "agent:ops:maintenance:**",
     ]);
   });
 
-  it("defaults ignore session patterns to an empty list", () => {
+  it("supports ingestReplyAssistIgnoreSessionPatterns as a deprecated alias", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      ingestReplyAssistIgnoreSessionPatterns: [
+        "agent:*:cron:**",
+      ],
+    });
+
+    expect(cfg.bypassSessionPatterns).toEqual([
+      "agent:*:cron:**",
+    ]);
+  });
+
+  it("defaults bypass session patterns to an empty list", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({});
-    expect(cfg.ingestReplyAssistIgnoreSessionPatterns).toEqual([]);
+    expect(cfg.bypassSessionPatterns).toEqual([]);
   });
 
   it("matches lossless-claw style session globs", () => {
@@ -38,11 +50,11 @@ describe("ingest reply assist session patterns", () => {
     expect(matchesSessionPattern("agent:main:main", patterns)).toBe(false);
   });
 
-  it("prefers sessionKey over sessionId when deciding whether to skip assist", () => {
+  it("prefers sessionKey over sessionId when deciding whether to bypass", () => {
     const patterns = compileSessionPatterns(["agent:*:cron:**"]);
 
     expect(
-      shouldSkipIngestReplyAssistSession(
+      shouldBypassSession(
         {
           sessionId: "agent:main:cron:from-id",
           sessionKey: "agent:main:main",
@@ -56,7 +68,7 @@ describe("ingest reply assist session patterns", () => {
     const patterns = compileSessionPatterns(["agent:*:cron:**"]);
 
     expect(
-      shouldSkipIngestReplyAssistSession(
+      shouldBypassSession(
         {
           sessionId: "agent:main:cron:nightly:run:1",
         },

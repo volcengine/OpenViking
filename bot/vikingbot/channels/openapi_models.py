@@ -48,6 +48,10 @@ class ChatRequest(BaseModel):
     context: Optional[List[ChatMessage]] = Field(
         default=None, description="Additional context messages"
     )
+    need_reply: bool = True
+    channel_id: Optional[str] = Field(
+        default=None, description="Channel ID for multi-channel routing (optional)"
+    )
 
 
 class ChatResponse(BaseModel):

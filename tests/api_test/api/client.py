@@ -191,10 +191,21 @@ class OpenVikingAPIClient:
             payload["filter"] = filter
         return self._request_with_retry("POST", url, json=payload)
 
-    def grep(self, uri: str, pattern: str, case_insensitive: bool = False) -> requests.Response:
+    def grep(
+        self,
+        uri: str,
+        pattern: str,
+        case_insensitive: bool = False,
+        node_limit: Optional[int] = None,
+        exclude_uri: Optional[str] = None,
+    ) -> requests.Response:
         endpoint = "/api/v1/search/grep"
         url = self._build_url(self.server_url, endpoint)
         payload = {"uri": uri, "pattern": pattern, "case_insensitive": case_insensitive}
+        if node_limit is not None:
+            payload["node_limit"] = node_limit
+        if exclude_uri is not None:
+            payload["exclude_uri"] = exclude_uri
         return self._request_with_retry("POST", url, json=payload)
 
     def glob(self, pattern: str, uri: Optional[str] = None) -> requests.Response:
@@ -327,10 +338,25 @@ class OpenVikingAPIClient:
         url = self._build_url(self.server_url, endpoint, params)
         return self._request_with_retry("GET", url)
 
-    def fs_write(self, uri: str, content: str) -> requests.Response:
+    def fs_write(
+        self,
+        uri: str,
+        content: str,
+        mode: str = "replace",
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> requests.Response:
         endpoint = "/api/v1/content/write"
         url = self._build_url(self.server_url, endpoint)
-        return self._request_with_retry("POST", url, json={"uri": uri, "content": content})
+        payload = {
+            "uri": uri,
+            "content": content,
+            "mode": mode,
+            "wait": wait,
+        }
+        if timeout is not None:
+            payload["timeout"] = timeout
+        return self._request_with_retry("POST", url, json=payload)
 
     def fs_rm(self, uri: str, recursive: bool = False) -> requests.Response:
         endpoint = "/api/v1/fs"

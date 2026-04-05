@@ -7,16 +7,18 @@ Drop-in replacement for VikingDB RerankClient, using Cohere's Rerank v3.5 API.
 Same interface: rerank_batch(query, documents) -> List[float]
 """
 
+# For logging, use Python's built-in logging
+import logging
 from typing import List, Optional
 
 import httpx
 
-from openviking_cli.utils.logger import get_logger
+from openviking.models.rerank.base import RerankBase
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
-class CohereRerankClient:
+class CohereRerankClient(RerankBase):
     """Cohere Rerank API client — same interface as VikingDB RerankClient."""
 
     def __init__(
@@ -25,9 +27,11 @@ class CohereRerankClient:
         model: str = "rerank-v3.5",
         api_base: str = "https://api.cohere.com",
     ):
+        super().__init__()
         self.api_key = api_key
         self.model = model
         self.api_base = api_base.rstrip("/")
+        self.provider = "cohere"
         self._client = httpx.Client(
             base_url=self.api_base,
             headers={
@@ -66,6 +70,9 @@ class CohereRerankClient:
             resp.raise_for_status()
             data = resp.json()
 
+            # Update token usage tracking
+            self._extract_and_update_token_usage(data, query, documents)
+
             # Cohere returns results sorted by score desc with index field
             # We need to map back to original order
             scores = [0.0] * len(documents)
@@ -101,7 +108,5 @@ class CohereRerankClient:
             return None
         return cls(
             api_key=config.api_key,
-            model=config.model_name
-            if config.model_name != "doubao-seed-rerank"
-            else "rerank-v3.5",
+            model=config.model_name if config.model_name != "doubao-seed-rerank" else "rerank-v3.5",
         )

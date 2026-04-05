@@ -73,7 +73,8 @@ class AddResourceRequest(BaseModel):
     instruction: str = ""
     wait: bool = False
     timeout: Optional[float] = None
-    strict: bool = True
+    strict: bool = False
+    source_name: Optional[str] = None
     ignore_dirs: Optional[str] = None
     include: Optional[str] = None
     exclude: Optional[str] = None
@@ -190,6 +191,7 @@ async def add_resource(
 
     kwargs = {
         "strict": request.strict,
+        "source_name": request.source_name,
         "ignore_dirs": request.ignore_dirs,
         "include": request.include,
         "exclude": request.exclude,

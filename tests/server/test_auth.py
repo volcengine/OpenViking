@@ -23,6 +23,7 @@ from openviking.server.dependencies import set_service
 from openviking.server.identity import ResolvedIdentity, Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 from openviking.service.core import OpenVikingService
+from openviking.service.task_tracker import get_task_tracker, reset_task_tracker
 from openviking_cli.exceptions import InvalidArgumentError, OpenVikingError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -125,6 +126,15 @@ def _build_auth_http_test_app(
         """Expose a tenant-scoped debug route for auth regression tests."""
         return {"status": "ok", "result": {"role": ctx.role.value}}
 
+    return app
+
+
+def _build_task_http_test_app(identity: ResolvedIdentity | None) -> FastAPI:
+    """Build a lightweight app that mounts the real task router."""
+    from openviking.server.routers import tasks as tasks_router
+
+    app = _build_auth_http_test_app(identity=identity, auth_enabled=True, root_api_key=ROOT_KEY)
+    app.include_router(tasks_router.router)
     return app
 
 
@@ -274,6 +284,69 @@ async def test_auth_on_multiple_endpoints(auth_client: httpx.AsyncClient):
         },
     )
     assert tenant_resp.status_code == 200
+
+
+async def test_task_endpoints_require_auth():
+    """Task endpoints must reject unauthenticated callers before lookup/filtering."""
+    reset_task_tracker()
+    app = _build_task_http_test_app(identity=None)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        for url in ("/api/v1/tasks", "/api/v1/tasks/nonexistent-id"):
+            resp = await client.get(url)
+            assert resp.status_code == 401
+    reset_task_tracker()
+
+
+async def test_task_endpoints_are_user_scoped():
+    """Authenticated callers must not see another user's background tasks."""
+    reset_task_tracker()
+    account_id = _uid()
+    tracker = get_task_tracker()
+    alice_task = tracker.create(
+        "session_commit",
+        resource_id="alice-session",
+        owner_account_id=account_id,
+        owner_user_id="alice",
+    )
+    bob_task = tracker.create(
+        "session_commit",
+        resource_id="bob-session",
+        owner_account_id=account_id,
+        owner_user_id="bob",
+    )
+
+    alice_app = _build_task_http_test_app(
+        ResolvedIdentity(role=Role.ADMIN, account_id=account_id, user_id="alice")
+    )
+    bob_app = _build_task_http_test_app(
+        ResolvedIdentity(role=Role.ADMIN, account_id=account_id, user_id="bob")
+    )
+    alice_transport = httpx.ASGITransport(app=alice_app)
+    bob_transport = httpx.ASGITransport(app=bob_app)
+
+    async with httpx.AsyncClient(
+        transport=alice_transport, base_url="http://testserver"
+    ) as alice_client:
+        alice_get = await alice_client.get(f"/api/v1/tasks/{alice_task.task_id}")
+        assert alice_get.status_code == 200
+        assert alice_get.json()["result"]["resource_id"] == "alice-session"
+
+        alice_list = await alice_client.get("/api/v1/tasks")
+        assert alice_list.status_code == 200
+        assert {task["task_id"] for task in alice_list.json()["result"]} == {alice_task.task_id}
+
+    async with httpx.AsyncClient(
+        transport=bob_transport, base_url="http://testserver"
+    ) as bob_client:
+        bob_get_other = await bob_client.get(f"/api/v1/tasks/{alice_task.task_id}")
+        assert bob_get_other.status_code == 404
+
+        bob_list = await bob_client.get("/api/v1/tasks")
+        assert bob_list.status_code == 200
+        assert {task["task_id"] for task in bob_list.json()["result"]} == {bob_task.task_id}
+
+    reset_task_tracker()
 
 
 # ---- Role-based access tests ----

@@ -7,6 +7,9 @@ Provides rerank functionality for hierarchical retrieval.
 """
 
 import json
+
+# For logging, use Python's built-in logging
+import logging
 from typing import List, Optional
 
 import requests
@@ -14,12 +17,12 @@ from volcengine.auth.SignerV4 import SignerV4
 from volcengine.base.Request import Request
 from volcengine.Credentials import Credentials
 
-from openviking_cli.utils.logger import get_logger
+from openviking.models.rerank.base import RerankBase
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
-class RerankClient:
+class RerankClient(RerankBase):
     """
     VikingDB Rerank API client.
 
@@ -44,11 +47,13 @@ class RerankClient:
             model_name: Rerank model name
             model_version: Rerank model version
         """
+        super().__init__()
         self.ak = ak
         self.sk = sk
         self.host = host
         self.model_name = model_name
         self.model_version = model_version
+        self.provider = "vikingdb"
 
     def _prepare_request(
         self,
@@ -89,7 +94,7 @@ class RerankClient:
 
         Returns:
             List of rerank scores for each document (same order as input),
-            or None when rerank fails and the caller should fall back
+            or None when rerankver fails and the caller should fall back
         """
         if not documents:
             return []
@@ -123,6 +128,9 @@ class RerankClient:
             if "result" not in result or "data" not in result["result"]:
                 logger.warning(f"[RerankClient] Unexpected response format: {result}")
                 return None
+
+            # Update token usage tracking (estimate, VikingDB doesn't provide token info)
+            self._extract_and_update_token_usage(result, query, documents)
 
             # Each document is a separate group, data array returns scores for each group sequentially
             data = result["result"]["data"]
@@ -159,17 +167,17 @@ class RerankClient:
         provider = config._effective_provider()
 
         if provider == "cohere":
-            from openviking_cli.utils.cohere_rerank import CohereRerankClient
+            from openviking.models.rerank.cohere_rerank import CohereRerankClient
 
             return CohereRerankClient.from_config(config)
 
         if provider == "litellm":
-            from openviking_cli.utils.rerank_litellm import LiteLLMRerankClient
+            from openviking.models.rerank.litellm_rerank import LiteLLMRerankClient
 
             return LiteLLMRerankClient.from_config(config)
 
         if provider == "openai":
-            from openviking_cli.utils.rerank_openai import OpenAIRerankClient
+            from openviking.models.rerank.openai_rerank import OpenAIRerankClient
 
             return OpenAIRerankClient.from_config(config)
 

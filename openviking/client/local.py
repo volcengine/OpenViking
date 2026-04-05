@@ -227,6 +227,33 @@ class LocalClient(BaseClient):
         """Read L1 overview."""
         return await self._service.fs.overview(uri, ctx=self._ctx)
 
+    async def write(
+        self,
+        uri: str,
+        content: str,
+        mode: str = "replace",
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Write text content to an existing file and refresh semantics/vectors."""
+        execution = await run_with_telemetry(
+            operation="content.write",
+            telemetry=telemetry,
+            fn=lambda: self._service.fs.write(
+                uri=uri,
+                content=content,
+                ctx=self._ctx,
+                mode=mode,
+                wait=wait,
+                timeout=timeout,
+            ),
+        )
+        return attach_telemetry_payload(
+            execution.result,
+            execution.telemetry,
+        )
+
     # ============= Search =============
 
     async def find(
@@ -293,10 +320,22 @@ class LocalClient(BaseClient):
             execution.telemetry,
         )
 
-    async def grep(self, uri: str, pattern: str, case_insensitive: bool = False) -> Dict[str, Any]:
+    async def grep(
+        self,
+        uri: str,
+        pattern: str,
+        case_insensitive: bool = False,
+        node_limit: Optional[int] = None,
+        exclude_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Content search with pattern."""
         return await self._service.fs.grep(
-            uri, pattern, ctx=self._ctx, case_insensitive=case_insensitive
+            uri,
+            pattern,
+            ctx=self._ctx,
+            case_insensitive=case_insensitive,
+            node_limit=node_limit,
+            exclude_uri=exclude_uri,
         )
 
     async def glob(self, pattern: str, uri: str = "viking://") -> Dict[str, Any]:
@@ -319,11 +358,16 @@ class LocalClient(BaseClient):
 
     # ============= Sessions =============
 
-    async def create_session(self) -> Dict[str, Any]:
-        """Create a new session."""
+    async def create_session(self, session_id: Optional[str] = None) -> Dict[str, Any]:
+        """Create a new session.
+
+        Args:
+            session_id: Optional session ID. If provided, creates a session with the given ID.
+                       If None, creates a new session with auto-generated ID.
+        """
         await self._service.initialize_user_directories(self._ctx)
         await self._service.initialize_agent_directories(self._ctx)
-        session = await self._service.sessions.create(self._ctx)
+        session = await self._service.sessions.create(self._ctx, session_id)
         return {
             "session_id": session.session_id,
             "user": session.user.to_dict(),
@@ -376,7 +420,7 @@ class LocalClient(BaseClient):
 
     async def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Query background task status."""
-        return await self._service.sessions.get_commit_task(task_id)
+        return await self._service.sessions.get_commit_task(task_id, self._ctx)
 
     async def add_message(
         self,

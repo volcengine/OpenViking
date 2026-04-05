@@ -456,8 +456,9 @@ export class OpenVikingClient {
       if (!task) break;
       if (task.status === "completed") {
         const taskResult = (task.result ?? {}) as Record<string, unknown>;
+        const memoriesExtracted = (taskResult.memories_extracted ?? {}) as Record<string, number>;
         result.status = "completed";
-        result.memories_extracted = (taskResult.memories_extracted ?? {}) as Record<string, number>;
+        result.memories_extracted = memoriesExtracted;
         return result;
       }
       if (task.status === "failed") {

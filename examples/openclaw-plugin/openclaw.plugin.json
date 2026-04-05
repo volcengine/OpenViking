@@ -90,6 +90,12 @@
       "advanced": true,
       "help": "Maximum estimated tokens for auto-recall memory injection"
     },
+    "bypassSessionPatterns": {
+      "label": "Bypass Session Patterns",
+      "placeholder": "agent:*:cron:**",
+      "help": "Completely bypass OpenViking for matching session keys. Use * within one segment and ** across segments.",
+      "advanced": true
+    },
     "commitTokenThreshold": {
       "label": "Commit Token Threshold",
       "placeholder": "2000",
@@ -114,9 +120,9 @@
       "advanced": true
     },
     "ingestReplyAssistIgnoreSessionPatterns": {
-      "label": "Ingest Ignore Session Patterns",
+      "label": "Deprecated Ingest Ignore Session Patterns",
       "placeholder": "agent:*:cron:**",
-      "help": "Skip ingest reply assist when the session key matches any glob pattern. Use * within one segment and ** across segments.",
+      "help": "Deprecated alias for bypassSessionPatterns. Matching sessions now bypass OpenViking entirely.",
       "advanced": true
     },
     "emitStandardDiagnostics": {
@@ -187,6 +193,12 @@
       },
       "commitTokenThreshold": {
         "type": "number"
+      },
+      "bypassSessionPatterns": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
       },
       "ingestReplyAssist": {
         "type": "boolean"

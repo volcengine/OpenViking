@@ -61,6 +61,16 @@ async def test_decrypt_unencrypted_data(encryptor):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("plaintext", [b"", b"a", b"ab", b"abc"])
+async def test_decrypt_unencrypted_short_plaintext(encryptor, plaintext):
+    """Test decrypting unencrypted plaintext shorter than the magic header."""
+    account_id = "test_account"
+
+    decrypted = await encryptor.decrypt(account_id, plaintext)
+    assert decrypted == plaintext
+
+
+@pytest.mark.asyncio
 async def test_decrypt_corrupted_ciphertext(encryptor):
     """Test decrypting corrupted ciphertext."""
     account_id = "test_account"

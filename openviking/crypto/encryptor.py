@@ -108,13 +108,15 @@ class FileEncryptor:
         Returns:
             Decrypted plaintext content
         """
-        # 1. Check magic number
-        if len(ciphertext) < MAGIC_LENGTH:
-            raise InvalidMagicError("Ciphertext too short")
-
+        # 1. Check magic number (check prefix first, before length)
+        #    This ensures plaintext files (including empty/short ones) are
+        #    returned as-is instead of raising "Ciphertext too short".
         if not ciphertext.startswith(MAGIC):
             # Unencrypted file, return directly
             return ciphertext
+
+        if len(ciphertext) < MAGIC_LENGTH:
+            raise InvalidMagicError("Ciphertext too short")
 
         try:
             # 2. Parse Envelope

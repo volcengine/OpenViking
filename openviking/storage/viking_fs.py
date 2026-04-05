@@ -33,6 +33,7 @@ from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
 
 if TYPE_CHECKING:
+    from openviking.storage.transaction.lock_handle import LockHandle
     from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
     from openviking_cli.utils.config import RerankConfig
 
@@ -358,7 +359,11 @@ class VikingFS:
         self.agfs.mkdir(path)
 
     async def rm(
-        self, uri: str, recursive: bool = False, ctx: Optional[RequestContext] = None
+        self,
+        uri: str,
+        recursive: bool = False,
+        ctx: Optional[RequestContext] = None,
+        lock_handle: Optional["LockHandle"] = None,
     ) -> Dict[str, Any]:
         """Delete file/directory + recursively update vector index.
 
@@ -397,7 +402,12 @@ class VikingFS:
             lock_mode = "point"
 
         try:
-            async with LockContext(get_lock_manager(), lock_paths, lock_mode=lock_mode):
+            async with LockContext(
+                get_lock_manager(),
+                lock_paths,
+                lock_mode=lock_mode,
+                handle=lock_handle,
+            ):
                 uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
                 uris_to_delete.append(target_uri)
                 await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
@@ -411,6 +421,7 @@ class VikingFS:
         old_uri: str,
         new_uri: str,
         ctx: Optional[RequestContext] = None,
+        lock_handle: Optional["LockHandle"] = None,
     ) -> Dict[str, Any]:
         """Move file/directory + recursively update vector index.
 
@@ -441,6 +452,7 @@ class VikingFS:
             lock_mode="mv",
             mv_dst_parent_path=dst_parent,
             src_is_dir=is_dir,
+            handle=lock_handle,
         ):
             uris_to_move = await self._collect_uris(old_path, recursive=True, ctx=ctx)
             uris_to_move.append(target_uri)
@@ -524,6 +536,7 @@ class VikingFS:
         self,
         uri: str,
         pattern: str,
+        exclude_uri: Optional[str] = None,
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
         ctx: Optional[RequestContext] = None,
@@ -536,6 +549,10 @@ class VikingFS:
 
         flags = re.IGNORECASE if case_insensitive else 0
         compiled_pattern = re.compile(pattern, flags)
+        excluded_prefix = None
+        if exclude_uri:
+            excluded_prefix = self._normalize_uri(exclude_uri).rstrip("/")
+            self._ensure_access(excluded_prefix, ctx)
 
         results = []
 
@@ -543,8 +560,16 @@ class VikingFS:
             if node_limit and len(results) >= node_limit:
                 return
 
+            normalized_current_uri = self._normalize_uri(current_uri)
+            if excluded_prefix and (
+                normalized_current_uri == excluded_prefix
+                or normalized_current_uri.startswith(excluded_prefix + "/")
+            ):
+                logger.debug(f"Skipping excluded uri during grep: {normalized_current_uri}")
+                return
+
             try:
-                entries = await self.ls(current_uri, ctx=ctx)
+                entries = await self.ls(normalized_current_uri, ctx=ctx)
             except Exception:
                 return
 
@@ -552,7 +577,12 @@ class VikingFS:
                 if node_limit and len(results) >= node_limit:
                     break
 
-                entry_uri = f"{current_uri.rstrip('/')}/{entry['name']}"
+                entry_uri = f"{normalized_current_uri.rstrip('/')}/{entry['name']}"
+                if excluded_prefix and (
+                    entry_uri == excluded_prefix or entry_uri.startswith(excluded_prefix + "/")
+                ):
+                    logger.debug(f"Skipping excluded uri during grep: {entry_uri}")
+                    continue
 
                 if entry.get("isDir"):
                     await search_recursive(entry_uri)
@@ -579,7 +609,7 @@ class VikingFS:
 
         await search_recursive(uri)
 
-        return {"matches": results}
+        return {"matches": results, "count": len(results)}
 
     async def stat(self, uri: str, ctx: Optional[RequestContext] = None) -> Dict[str, Any]:
         """
@@ -1409,6 +1439,7 @@ class VikingFS:
         old_uri: str,
         new_uri: str,
         ctx: Optional[RequestContext] = None,
+        lock_handle: Optional["LockHandle"] = None,
     ) -> None:
         from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
         from openviking.storage.transaction import LockContext, get_lock_manager
@@ -1451,6 +1482,7 @@ class VikingFS:
                 lock_mode="mv",
                 mv_dst_parent_path=dst_parent,
                 src_is_dir=True,
+                handle=lock_handle,
             ):
                 await self._update_vector_store_uris(
                     uris=[old_dir],

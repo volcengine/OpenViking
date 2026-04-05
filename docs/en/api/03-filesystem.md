@@ -143,6 +143,95 @@ openviking read viking://resources/docs/api.md
 
 ---
 
+### write()
+
+Update an existing file and automatically refresh related semantics and vectors.
+
+**Parameters**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| uri | str | Yes | - | Existing file URI |
+| content | str | Yes | - | New content to write |
+| mode | str | No | `replace` | `replace` or `append` |
+| wait | bool | No | `false` | Wait for background semantic/vector refresh |
+| timeout | float | No | `null` | Timeout in seconds when `wait=true` |
+
+**Notes**
+
+- Only existing files are supported; directories are rejected.
+- Derived semantic files cannot be written directly: `.abstract.md`, `.overview.md`, `.relations.json`.
+- The public API no longer accepts `regenerate_semantics` or `revectorize`; write always refreshes related semantics and vectors.
+
+**Python SDK (Embedded / HTTP)**
+
+```python
+result = client.write(
+    "viking://resources/docs/api.md",
+    "# Updated API\n\nFresh content.",
+    mode="replace",
+    wait=True,
+)
+print(result["root_uri"])
+```
+
+**HTTP API**
+
+```
+POST /api/v1/content/write
+```
+
+```bash
+curl -X POST "http://localhost:1933/api/v1/content/write" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "uri": "viking://resources/docs/api.md",
+    "content": "# Updated API\n\nFresh content.",
+    "mode": "replace",
+    "wait": true
+  }'
+```
+
+**CLI**
+
+```bash
+openviking write viking://resources/docs/api.md \
+  --content "# Updated API\n\nFresh content." \
+  --wait
+```
+
+**Response**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://resources/docs/api.md",
+    "root_uri": "viking://resources/docs",
+    "context_type": "resource",
+    "mode": "replace",
+    "written_bytes": 29,
+    "semantic_updated": true,
+    "vector_updated": true,
+    "queue_status": {
+      "Semantic": {
+        "processed": 1,
+        "error_count": 0,
+        "errors": []
+      },
+      "Embedding": {
+        "processed": 2,
+        "error_count": 0,
+        "errors": []
+      }
+    }
+  }
+}
+```
+
+---
+
 ### ls()
 
 List directory contents.

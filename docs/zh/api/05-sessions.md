@@ -20,6 +20,10 @@
 # 创建新会话（自动生成 ID）
 session = client.session()
 print(f"Session URI: {session.uri}")
+
+# 创建指定 ID 的新会话
+session = client.create_session(session_id="my-custom-session-id")
+print(f"Session ID: {session['session_id']}")
 ```
 
 **HTTP API**
@@ -29,9 +33,16 @@ POST /api/v1/sessions
 ```
 
 ```bash
+# 创建新会话（自动生成 ID）
 curl -X POST http://localhost:1933/api/v1/sessions \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key"
+
+# 创建指定 ID 的新会话
+curl -X POST http://localhost:1933/api/v1/sessions \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{"session_id": "my-custom-session-id"}'
 ```
 
 **CLI**
@@ -632,7 +643,7 @@ print(f"Task ID: {result['task_id']}")
 # 查询后台任务进度
 task = client.get_task(result["task_id"])
 if task["status"] == "completed":
-    print(f"Memories extracted: {task['result']['memories_extracted']}")
+    print(f"Memories extracted: {sum(task['result']['memories_extracted'].values())}")
 ```
 
 **HTTP API**
@@ -728,12 +739,19 @@ curl -X GET http://localhost:1933/api/v1/tasks/uuid-xxx \
     "result": {
       "session_id": "a1b2c3d4",
       "archive_uri": "viking://session/a1b2c3d4/history/archive_001",
-      "memories_extracted": 5,
+      "memories_extracted": {
+        "profile": 1,
+        "preferences": 2,
+        "entities": 1,
+        "cases": 1
+      },
       "active_count_updated": 2
     }
   }
 }
 ```
+
+完成态任务结果里的 `memories_extracted` 表示本次 commit 的分类计数；如果只需要本次 commit 的总数，请把这些值求和。
 
 ---
 
@@ -776,12 +794,14 @@ viking://session/{session_id}/
 
 | 分类 | 位置 | 说明 |
 |------|------|------|
-| profile | `user/memories/.overview.md` | 用户个人信息 |
+| profile | `user/memories/profile.md` | 用户个人信息 |
 | preferences | `user/memories/preferences/` | 按主题分类的用户偏好 |
 | entities | `user/memories/entities/` | 重要实体（人物、项目等） |
 | events | `user/memories/events/` | 重要事件 |
 | cases | `agent/memories/cases/` | 问题-解决方案案例 |
 | patterns | `agent/memories/patterns/` | 交互模式 |
+| tools | `agent/memories/tools/` | 工具使用经验与最佳实践 |
+| skills | `agent/memories/skills/` | 技能执行经验与工作流策略 |
 
 ---
 
@@ -828,7 +848,7 @@ print(f"Task ID: {result['task_id']}")
 # 可选：等待后台任务完成
 task = client.get_task(result["task_id"])
 if task and task["status"] == "completed":
-    print(f"Memories extracted: {task['result']['memories_extracted']}")
+    print(f"Memories extracted: {sum(task['result']['memories_extracted'].values())}")
 
 client.close()
 ```

@@ -1,0 +1,198 @@
+name: 05. OpenClaw2OpenViking Memory Tests
+
+on:
+  release:
+    types: [prereleased, released]
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: 'Skip tests (for emergency releases)'
+        required: false
+        type: boolean
+        default: false
+      release_tag:
+        description: 'Release tag to associate with this test run'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  p0-tests:
+    name: P0 Memory Tests
+    runs-on: [self-hosted, linux, x64]
+    if: inputs.skip_tests != true
+    
+    steps:
+      - name: Clean up previous artifacts
+        run: |
+          echo "🧹 Cleaning up previous artifacts..."
+          
+          # Clean up old test reports
+          echo "  - Removing old test reports..."
+          rm -rf tests/oc2ov_test/reports/*.html || true
+          
+          # Clean up old logs
+          echo "  - Removing old logs..."
+          rm -rf tests/oc2ov_test/logs/*.log || true
+          
+          # Clean up pip cache (optional, saves disk space)
+          echo "  - Cleaning pip cache..."
+          pip3 cache purge 2>/dev/null || echo "    (pip cache not available or already clean)"
+          
+          # Clean up old pytest cache
+          echo "  - Removing pytest cache..."
+          rm -rf .pytest_cache || true
+          rm -rf tests/oc2ov_test/.pytest_cache || true
+          
+          # Clean up __pycache__ directories
+          echo "  - Removing __pycache__ directories..."
+          find tests/oc2ov_test -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+          
+          echo "✅ Cleanup completed"
+
+      - name: Debug - Start
+        run: |
+          echo "🚀 Job started at $(date)"
+          echo "Runner: $(hostname)"
+          echo "Working directory: $(pwd)"
+          echo "Python version: $(python3 --version 2>&1 || echo 'Python not found')"
+          echo "Environment variables:"
+          echo "  - RUNNER_OS: ${{ runner.os }}"
+          echo "  - GITHUB_REF: ${{ github.ref }}"
+          echo "  - GITHUB_SHA: ${{ github.sha }}"
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.ref }}
+          submodules: false
+
+      - name: Upgrade OpenViking to latest main
+        run: |
+          echo "🔄 Upgrading OpenViking to latest main branch..."
+          
+          # Make upgrade script executable
+          chmod +x tests/oc2ov_test/upgrade_openviking.sh
+          
+          # Run upgrade script
+          bash tests/oc2ov_test/upgrade_openviking.sh
+          
+          echo "✅ OpenViking upgrade completed"
+          
+          # Wait for services to be fully ready
+          echo "⏳ Waiting for services to be ready..."
+          sleep 10
+          
+          # Health check
+          echo "🏥 Performing health check..."
+          if command -v openclaw &> /dev/null; then
+            for i in {1..5}; do
+              if openclaw gateway status | grep -q "running"; then
+                echo "✅ OpenClaw gateway is running"
+                break
+              else
+                echo "⏳ Attempt $i/5: Gateway not ready, waiting..."
+                sleep 5
+              fi
+            done
+          else
+            echo "⚠️  openclaw command not found, skipping health check"
+          fi
+
+      - name: Install test dependencies
+        run: |
+          echo "📦 Setting up Python virtual environment..."
+          cd tests/oc2ov_test
+          
+          # Create virtual environment
+          python3 -m venv venv
+          echo "✅ Virtual environment created"
+          
+          # Activate and install dependencies
+          source venv/bin/activate
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-html pytest-timeout
+          echo "✅ Dependencies installed in virtual environment"
+
+      - name: Create settings.py from example
+        run: |
+          echo "📝 Creating settings.py from settings.example.py..."
+          cd tests/oc2ov_test/config
+          
+          # Check if settings.py exists
+          if [ -f "settings.py" ]; then
+            echo "✅ settings.py already exists"
+          else
+            # Copy settings.example.py to settings.py
+            cp settings.example.py settings.py
+            echo "✅ settings.py created from settings.example.py"
+            echo "⚠️  Note: Using default settings. For custom settings, manually create settings.py on the ECS node."
+          fi
+
+      - name: Run P0 tests
+        id: run-tests
+        run: |
+          echo "🧪 Starting P0 tests..."
+          cd tests/oc2ov_test
+          
+          # Activate virtual environment
+          source venv/bin/activate
+          
+          # Set PYTHONPATH to include both project root and tests/oc2ov_test
+          # This allows imports like:
+          # - 'from tests.base_cli_test import ...' (from project root)
+          # - 'from config.settings import ...' (from tests/oc2ov_test)
+          export PYTHONPATH="$(cd ../.. && pwd):$(pwd)"
+          echo "PYTHONPATH: $PYTHONPATH"
+          
+          mkdir -p reports
+          pytest tests/p0 -v \
+            --html=reports/test_report_p0.html \
+            --self-contained-html \
+            --tb=short \
+            --timeout=3600
+          echo "✅ P0 tests completed"
+        continue-on-error: true
+
+      - name: Upload test reports
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: p0-test-reports-${{ github.run_id }}
+          path: |
+            tests/oc2ov_test/reports/test_report_p0.html
+            tests/oc2ov_test/logs/
+          retention-days: 30
+
+      - name: Check test results
+        if: steps.run-tests.outcome != 'success'
+        run: |
+          echo "::error::P0 tests failed! Please check the test report for details."
+          exit 1
+
+      - name: Test summary
+        if: success()
+        run: |
+          echo "::notice::P0 tests passed successfully! Ready for release."
+
+  release-approval:
+    name: Release Approval Gate
+    needs: [p0-tests]
+    if: github.event_name == 'release' && github.event.action == 'prereleased'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Approve release
+        run: |
+          echo "::notice::P0 tests passed. Release can proceed."
+          echo "Release ${{ github.event.release.tag_name }} has been validated by P0 tests."

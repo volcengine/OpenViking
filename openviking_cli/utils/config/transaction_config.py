@@ -24,8 +24,8 @@ class TransactionConfig(BaseModel):
     lock_expire: float = Field(
         default=300.0,
         description=(
-            "Stale lock expiry threshold (seconds). "
-            "Locks held longer than this by a crashed process are force-released."
+            "Lock inactivity threshold (seconds). "
+            "Locks not refreshed within this window are treated as stale and reclaimed."
         ),
     )
 

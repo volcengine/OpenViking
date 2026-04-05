@@ -128,10 +128,15 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         return await self._client.session_exists(session_id)
 
-    async def create_session(self) -> Dict[str, Any]:
-        """Create a new session."""
+    async def create_session(self, session_id: Optional[str] = None) -> Dict[str, Any]:
+        """Create a new session.
+
+        Args:
+            session_id: Optional session ID. If provided, creates a session with the given ID.
+                       If None, creates a new session with auto-generated ID.
+        """
         await self._ensure_initialized()
-        return await self._client.create_session()
+        return await self._client.create_session(session_id)
 
     async def list_sessions(self) -> List[Any]:
         """List all sessions."""
@@ -373,6 +378,26 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         return await self._client.read(uri, offset=offset, limit=limit)
 
+    async def write(
+        self,
+        uri: str,
+        content: str,
+        mode: str = "replace",
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Write text content to an existing file and refresh semantics/vectors."""
+        await self._ensure_initialized()
+        return await self._client.write(
+            uri=uri,
+            content=content,
+            mode=mode,
+            wait=wait,
+            timeout=timeout,
+            telemetry=telemetry,
+        )
+
     async def ls(self, uri: str, **kwargs) -> List[Any]:
         """
         List directory contents.
@@ -402,10 +427,23 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         await self._client.rm(uri, recursive=recursive)
 
-    async def grep(self, uri: str, pattern: str, case_insensitive: bool = False) -> Dict:
+    async def grep(
+        self,
+        uri: str,
+        pattern: str,
+        case_insensitive: bool = False,
+        node_limit: Optional[int] = None,
+        exclude_uri: Optional[str] = None,
+    ) -> Dict:
         """Content search"""
         await self._ensure_initialized()
-        return await self._client.grep(uri, pattern, case_insensitive=case_insensitive)
+        return await self._client.grep(
+            uri,
+            pattern,
+            case_insensitive=case_insensitive,
+            node_limit=node_limit,
+            exclude_uri=exclude_uri,
+        )
 
     async def glob(self, pattern: str, uri: str = "viking://") -> Dict:
         """File pattern matching"""

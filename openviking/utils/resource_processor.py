@@ -152,8 +152,8 @@ class ResourceProcessor:
                     )
                     return result
 
-                if parse_result.warnings:
-                    result["errors"].extend(parse_result.warnings)
+                if parse_result.warnings and kwargs.get("strict", False):
+                    result.setdefault("warnings", []).extend(parse_result.warnings)
 
                 telemetry.set(
                     "resource.parse.duration_ms",

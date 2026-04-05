@@ -148,7 +148,7 @@ export OPENVIKING_API_KEY="your-api-key-here"
 
 - `session_id?`：可选的显式 OpenViking 会话 ID
 
-返回后台任务进度或完成详情，包括 `task_id`、`memories_extracted` 和 `archived`。
+返回后台任务进度或完成详情，包括 `task_id`、分类计数 `memories_extracted` 和 `archived`。
 
 ## 使用示例
 

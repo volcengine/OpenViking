@@ -121,11 +121,21 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
 
         prompt_tokens = _usage_value("prompt_tokens", 0)
         total_tokens = _usage_value("total_tokens", prompt_tokens)
-        output_tokens = max(total_tokens - prompt_tokens, 0)
+        completion_tokens = max(total_tokens - prompt_tokens, 0)
+
+        # Update telemetry
         get_current_telemetry().add_token_usage_by_source(
             "embedding",
             prompt_tokens,
-            output_tokens,
+            completion_tokens,
+        )
+
+        # Update token tracker
+        self.update_token_usage(
+            model_name=self.model_name,
+            provider="volcengine",
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
         )
 
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
@@ -255,6 +265,35 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
             ark_kwargs["base_url"] = self.api_base
         self.client = volcenginesdkarkruntime.Ark(**ark_kwargs)
 
+    def _update_telemetry_token_usage(self, response) -> None:
+        usage = getattr(response, "usage", None)
+        if not usage:
+            return
+
+        def _usage_value(key: str, default: int = 0) -> int:
+            if isinstance(usage, dict):
+                return int(usage.get(key, default) or default)
+            return int(getattr(usage, key, default) or default)
+
+        prompt_tokens = _usage_value("prompt_tokens", 0)
+        total_tokens = _usage_value("total_tokens", prompt_tokens)
+        completion_tokens = max(total_tokens - prompt_tokens, 0)
+
+        # Update telemetry
+        get_current_telemetry().add_token_usage_by_source(
+            "embedding",
+            prompt_tokens,
+            completion_tokens,
+        )
+
+        # Update token tracker
+        self.update_token_usage(
+            model_name=self.model_name,
+            provider="volcengine",
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform sparse embedding on text
 
@@ -276,6 +315,7 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
                 model=self.model_name,
                 sparse_embedding={"type": "enabled"},
             )
+            self._update_telemetry_token_usage(response)
             item = response.data
             sparse_vector = getattr(item, "sparse_embedding", None)
             return EmbedResult(sparse_vector=process_sparse_embedding(sparse_vector))
@@ -351,6 +391,35 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
         self.client = volcenginesdkarkruntime.Ark(**ark_kwargs)
         self._dimension = dimension or 2048
 
+    def _update_telemetry_token_usage(self, response) -> None:
+        usage = getattr(response, "usage", None)
+        if not usage:
+            return
+
+        def _usage_value(key: str, default: int = 0) -> int:
+            if isinstance(usage, dict):
+                return int(usage.get(key, default) or default)
+            return int(getattr(usage, key, default) or default)
+
+        prompt_tokens = _usage_value("prompt_tokens", 0)
+        total_tokens = _usage_value("total_tokens", prompt_tokens)
+        completion_tokens = max(total_tokens - prompt_tokens, 0)
+
+        # Update telemetry
+        get_current_telemetry().add_token_usage_by_source(
+            "embedding",
+            prompt_tokens,
+            completion_tokens,
+        )
+
+        # Update token tracker
+        self.update_token_usage(
+            model_name=self.model_name,
+            provider="volcengine",
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform hybrid embedding on text
 
@@ -373,6 +442,7 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
                 model=self.model_name,
                 sparse_embedding={"type": "enabled"},
             )
+            self._update_telemetry_token_usage(response)
             item = response.data
             dense_vector = truncate_and_normalize(item.embedding, self.dimension)
             sparse_vector = getattr(item, "sparse_embedding", None)
