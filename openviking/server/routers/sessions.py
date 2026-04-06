@@ -151,9 +151,13 @@ async def get_session_context(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get assembled session context."""
+    from openviking_cli.exceptions import NotFoundError
     service = get_service()
     session = service.sessions.session(_ctx, session_id)
-    await session.load()
+    try:
+        await session.load()
+    except NotFoundError:
+        session = await service.sessions.create(_ctx, session_id)
     result = await session.get_session_context(token_budget=token_budget)
     return Response(status="ok", result=_to_jsonable(result))
 
