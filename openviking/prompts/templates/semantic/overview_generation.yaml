@@ -62,6 +62,7 @@ template: |
      - Concise keyword descriptions
 
   4. **Detailed Description** (H2): One H3 subsection for each file/subdirectory
+     - **H3 title MUST be the exact file or directory name only, with no additional description**
      - Use the file summaries or subdirectory summaries provided above as description content
 
   Total length: 400-800 words
