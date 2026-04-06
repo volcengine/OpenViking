@@ -256,7 +256,9 @@ class SyncHTTPClient:
         exclude_uri: Optional[str] = None,
     ) -> Dict:
         """Content search with pattern."""
-        return run_async(self._async_client.grep(uri, pattern, case_insensitive, node_limit, exclude_uri))
+        return run_async(
+            self._async_client.grep(uri, pattern, case_insensitive, node_limit, exclude_uri)
+        )
 
     def glob(self, pattern: str, uri: str = "viking://") -> Dict:
         """File pattern matching."""
@@ -374,7 +376,15 @@ class SyncHTTPClient:
     # ============= Pack =============
 
     def export_ovpack(self, uri: str, to: str) -> str:
-        """Export context as .ovpack file."""
+        """Export context as .ovpack file and save to local path.
+
+        Args:
+            uri: Viking URI to export
+            to: Local file path where to save the .ovpack file
+
+        Returns:
+            Local file path where the .ovpack was saved
+        """
         return run_async(self._async_client.export_ovpack(uri, to))
 
     def import_ovpack(
