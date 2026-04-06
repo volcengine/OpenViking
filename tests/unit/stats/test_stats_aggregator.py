@@ -19,7 +19,9 @@ def mock_vikingdb():
 @pytest.fixture
 def mock_ctx():
     """Create a mock request context."""
-    return MagicMock()
+    ctx = MagicMock()
+    ctx.user.user_id = "default"
+    return ctx
 
 
 @pytest.fixture
@@ -48,6 +50,7 @@ class TestStatsAggregator:
     @pytest.mark.asyncio
     async def test_empty_store(self, aggregator, mock_vikingdb, mock_ctx):
         """Stats for an empty memory store should return zeros."""
+        mock_vikingdb.count = AsyncMock(return_value=0)
         mock_vikingdb.query = AsyncMock(return_value=[])
 
         result = await aggregator.get_memory_stats(mock_ctx)
@@ -65,6 +68,18 @@ class TestStatsAggregator:
             _make_memory_record("cases", active_count=3, updated_at=now),
             _make_memory_record("tools", active_count=1, updated_at=now),
         ]
+
+        async def _count_by_category(**kwargs):
+            filt = kwargs.get("filter")
+            # Return counts based on the PathScope URI in the filter
+            filt_str = str(filt)
+            if "/cases" in filt_str:
+                return 2
+            if "/tools" in filt_str:
+                return 1
+            return 0
+
+        mock_vikingdb.count = AsyncMock(side_effect=_count_by_category)
         mock_vikingdb.query = AsyncMock(return_value=records)
 
         result = await aggregator.get_memory_stats(mock_ctx)
@@ -80,6 +95,7 @@ class TestStatsAggregator:
         records = [
             _make_memory_record("patterns", active_count=2, updated_at=now),
         ]
+        mock_vikingdb.count = AsyncMock(return_value=1)
         mock_vikingdb.query = AsyncMock(return_value=records)
 
         result = await aggregator.get_memory_stats(mock_ctx, category="patterns")
@@ -97,6 +113,7 @@ class TestStatsAggregator:
         cold_record = _make_memory_record(
             "cases", active_count=0, updated_at=now - timedelta(days=60)
         )
+        mock_vikingdb.count = AsyncMock(return_value=2)
         mock_vikingdb.query = AsyncMock(return_value=[hot_record, cold_record])
 
         result = await aggregator.get_memory_stats(mock_ctx, category="cases")
@@ -115,6 +132,7 @@ class TestStatsAggregator:
             updated_at=now - timedelta(days=40),
             created_at=now - timedelta(days=50),
         )
+        mock_vikingdb.count = AsyncMock(return_value=1)
         mock_vikingdb.query = AsyncMock(return_value=[old_record])
 
         result = await aggregator.get_memory_stats(mock_ctx, category="events")
@@ -124,8 +142,9 @@ class TestStatsAggregator:
         assert result["staleness"]["oldest_memory_age_days"] >= 49
 
     @pytest.mark.asyncio
-    async def test_query_error_returns_empty(self, aggregator, mock_vikingdb, mock_ctx):
-        """If VikingDB query fails, the category should show 0 records."""
+    async def test_count_error_returns_empty(self, aggregator, mock_vikingdb, mock_ctx):
+        """If VikingDB count fails, the category should show 0 records."""
+        mock_vikingdb.count = AsyncMock(side_effect=Exception("connection error"))
         mock_vikingdb.query = AsyncMock(side_effect=Exception("connection error"))
 
         result = await aggregator.get_memory_stats(mock_ctx, category="cases")

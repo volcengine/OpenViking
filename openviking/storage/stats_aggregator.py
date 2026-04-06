@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from openviking.retrieve.memory_lifecycle import hotness_score
 from openviking.server.identity import RequestContext
-from openviking.storage.expr import Eq
+from openviking.storage.expr import And, Eq, PathScope
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -63,7 +63,7 @@ class StatsAggregator:
         # Build category list to query
         categories = [category] if category else MEMORY_CATEGORIES
 
-        by_category: Dict[str, int] = {}
+        by_category: Dict[str, int] = {cat: 0 for cat in categories}
         hotness_dist = {"cold": 0, "warm": 0, "hot": 0}
         staleness = {
             "not_accessed_7d": 0,
@@ -71,51 +71,62 @@ class StatsAggregator:
             "oldest_memory_age_days": 0,
         }
 
-        # Fetch all memories once and group by category in Python
-        all_records = await self._query_all_memories(ctx)
-        grouped: Dict[str, List[Dict[str, Any]]] = {cat: [] for cat in categories}
-        for record in all_records:
-            uri = record.get("uri", "")
-            for cat in categories:
-                if f"/{cat}/" in uri:
-                    grouped[cat].append(record)
-                    break
+        # Use count() (aggregate) for per-category counts instead of query()
+        # (vector search). query() with no query_vector falls through to
+        # search_by_random in the local HNSW backend, which can miss filtered
+        # results. count() uses a scalar aggregate that reliably returns
+        # correct results.
+        user_id = ctx.user.user_id
+        memory_base = f"viking://user/{user_id}/memories"
 
         for cat in categories:
-            records = grouped[cat]
-            by_category[cat] = len(records)
-
-            for record in records:
-                active_count = record.get("active_count", 0)
-                updated_at_raw = record.get("updated_at")
-                updated_at = _parse_datetime(updated_at_raw)
-                created_at_raw = record.get("created_at")
-                created_at = _parse_datetime(created_at_raw)
-
-                # Hotness distribution
-                score = hotness_score(active_count, updated_at, now=now)
-                if score < COLD_THRESHOLD:
-                    hotness_dist["cold"] += 1
-                elif score > HOT_THRESHOLD:
-                    hotness_dist["hot"] += 1
-                else:
-                    hotness_dist["warm"] += 1
-
-                # Staleness: use updated_at for access tracking
-                if updated_at:
-                    age_days = (now - updated_at).total_seconds() / 86400.0
-                    if age_days > 7:
-                        staleness["not_accessed_7d"] += 1
-                    if age_days > 30:
-                        staleness["not_accessed_30d"] += 1
-
-                # Track oldest memory by created_at
-                if created_at:
-                    age = (now - created_at).total_seconds() / 86400.0
-                    if age > staleness["oldest_memory_age_days"]:
-                        staleness["oldest_memory_age_days"] = round(age, 1)
+            try:
+                by_category[cat] = await self._vikingdb.count(
+                    filter=And([
+                        Eq("context_type", "memory"),
+                        PathScope("uri", f"{memory_base}/{cat}", depth=2),
+                    ]),
+                    ctx=ctx,
+                )
+            except Exception as e:
+                logger.error("Error counting memories for %s: %s", cat, e)
 
         total_memories = sum(by_category.values())
+
+        # Fetch individual records for hotness/staleness metrics (best-effort).
+        # On the local HNSW backend, query() may return incomplete results
+        # when no query vector is provided; category counts above are
+        # authoritative regardless.
+        all_records = await self._query_all_memories(ctx)
+        for record in all_records:
+            active_count = record.get("active_count", 0)
+            updated_at_raw = record.get("updated_at")
+            updated_at = _parse_datetime(updated_at_raw)
+            created_at_raw = record.get("created_at")
+            created_at = _parse_datetime(created_at_raw)
+
+            # Hotness distribution
+            score = hotness_score(active_count, updated_at, now=now)
+            if score < COLD_THRESHOLD:
+                hotness_dist["cold"] += 1
+            elif score > HOT_THRESHOLD:
+                hotness_dist["hot"] += 1
+            else:
+                hotness_dist["warm"] += 1
+
+            # Staleness: use updated_at for access tracking
+            if updated_at:
+                age_days = (now - updated_at).total_seconds() / 86400.0
+                if age_days > 7:
+                    staleness["not_accessed_7d"] += 1
+                if age_days > 30:
+                    staleness["not_accessed_30d"] += 1
+
+            # Track oldest memory by created_at
+            if created_at:
+                age = (now - created_at).total_seconds() / 86400.0
+                if age > staleness["oldest_memory_age_days"]:
+                    staleness["oldest_memory_age_days"] = round(age, 1)
 
         return {
             "total_memories": total_memories,
@@ -156,10 +167,11 @@ class StatsAggregator:
         self,
         ctx: RequestContext,
     ) -> List[Dict[str, Any]]:
-        """Query all memory records in a single DB round-trip.
+        """Query all memory records for hotness/staleness metrics.
 
-        Uses the context_type="memory" filter. Callers group by category
-        in Python to avoid N+1 queries.
+        Note: This uses query() which relies on vector search internally.
+        On the local HNSW backend it may return incomplete results when no
+        query vector is provided. Category counts use count() instead.
         """
         try:
             return await self._vikingdb.query(
@@ -172,6 +184,7 @@ class StatsAggregator:
                     "created_at",
                     "context_type",
                 ],
+                order_by="created_at",
                 ctx=ctx,
             )
         except Exception as e:
