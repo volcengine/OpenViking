@@ -51,13 +51,13 @@ COPY third_party/ third_party/
 RUN --mount=type=cache,target=/root/.cache/uv,id=uv-${TARGETPLATFORM} \
     case "${UV_LOCK_STRATEGY}" in \
         locked) \
-            uv sync --locked --no-editable --extra bot \
+            uv sync --locked --no-editable --extra bot --extra gemini \
             ;; \
         auto) \
             if ! uv lock --check; then \
                 uv lock; \
             fi; \
-            uv sync --locked --no-editable --extra bot \
+            uv sync --locked --no-editable --extra bot --extra gemini \
             ;; \
         *) \
             echo "Unsupported UV_LOCK_STRATEGY: ${UV_LOCK_STRATEGY}" >&2; \
