@@ -1,8 +1,9 @@
 # OpenViking Memory Plugin for Claude Code
 
 Long-term semantic memory for Claude Code, powered by [OpenViking](https://github.com/volcengine/OpenViking).
+Provide a plugin marketplace repository for one-click installation: [openviking-plugins](https://github.com/Castor6/openviking-plugins)
 
-> Ported from the [OpenClaw context-engine plugin](../openclaw-plugin/) and adapted for Claude Code's plugin architecture (MCP + hooks).
+> Ported from the [OpenClaw context-engine plugin](https://github.com/volcengine/OpenViking/tree/main/examples/openclaw-plugin) and adapted for Claude Code's plugin architecture (MCP + hooks).
 
 ## Architecture
 
@@ -117,7 +118,7 @@ pipx install openviking
 
 ### 2. Create Config
 
-If you don't already have `~/.openviking/ov.conf`, create it:
+If you don't already have `~/.openviking/ov.conf`(Can override the default path via the environment variable `OPENVIKING_CONFIG_FILE`), create it:
 
 ```bash
 mkdir -p ~/.openviking
@@ -154,7 +155,8 @@ vim ~/.openviking/ov.conf
 }
 ```
 
-> `root_api_key`: Once set, all HTTP requests must carry the `X-API-Key` header. Defaults to `null` in local mode (authentication disabled).
+> `root_api_key`: Once set, all HTTP requests must carry the `X-API-Key` header. Defaults to `null` in local mode (authentication disabled).  
+> For Windows system paths in the workspace, use / instead of \, for example: `D:/.openviking/data`
 
 Optionally add a `claude_code` section for plugin-specific overrides:
 

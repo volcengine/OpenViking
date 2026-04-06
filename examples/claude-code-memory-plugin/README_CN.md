@@ -1,8 +1,9 @@
 # OpenViking Memory Plugin for Claude Code
 
 为 Claude Code 提供长期语义记忆功能，基于 [OpenViking](https://github.com/volcengine/OpenViking) 构建。
+提供一键安装的插件市场仓库：[openviking-plugins](https://github.com/Castor6/openviking-plugins)
 
-> 移植自 [OpenClaw context-engine plugin](../openclaw-plugin/)，并适配 Claude Code 的插件架构（MCP + hooks）。
+> 移植自 [OpenClaw context-engine plugin](https://github.com/volcengine/OpenViking/tree/main/examples/openclaw-plugin)，并适配 Claude Code 的插件架构（MCP + hooks）。
 
 ## 架构
 
@@ -114,7 +115,7 @@ pipx install openviking
 
 ### 2. 创建配置
 
-如果还没有 `~/.openviking/ov.conf`，请创建：
+如果还没有 `~/.openviking/ov.conf`（可通过环境变量 `OPENVIKING_CONFIG_FILE` 覆盖默认路径），请创建：
 
 ```bash
 mkdir -p ~/.openviking
@@ -151,7 +152,8 @@ vim ~/.openviking/ov.conf
 }
 ```
 
-> `root_api_key`：设置后，所有 HTTP 请求必须携带 `X-API-Key` 头。本地模式默认为 `null`（禁用认证）。
+> `root_api_key`：设置后，所有 HTTP 请求必须携带 `X-API-Key` 头。本地模式默认为 `null`（禁用认证）。  
+> windows 系统的 workspace 路径分隔请用 / ，不要用 \ ，如 `D:/.openviking/data`
 
 可选添加 `claude_code` 部分用于插件特定覆盖：
 
