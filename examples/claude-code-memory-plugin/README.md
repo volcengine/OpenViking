@@ -1,6 +1,7 @@
 # OpenViking Memory Plugin for Claude Code
 
 Long-term semantic memory for Claude Code, powered by [OpenViking](https://github.com/volcengine/OpenViking).
+
 Provide a plugin marketplace repository for one-click installation: [openviking-plugins](https://github.com/Castor6/openviking-plugins)
 
 > Ported from the [OpenClaw context-engine plugin](https://github.com/volcengine/OpenViking/tree/main/examples/openclaw-plugin) and adapted for Claude Code's plugin architecture (MCP + hooks).

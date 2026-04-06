@@ -1,6 +1,7 @@
 # OpenViking Memory Plugin for Claude Code
 
 为 Claude Code 提供长期语义记忆功能，基于 [OpenViking](https://github.com/volcengine/OpenViking) 构建。
+
 提供一键安装的插件市场仓库：[openviking-plugins](https://github.com/Castor6/openviking-plugins)
 
 > 移植自 [OpenClaw context-engine plugin](https://github.com/volcengine/OpenViking/tree/main/examples/openclaw-plugin)，并适配 Claude Code 的插件架构（MCP + hooks）。
