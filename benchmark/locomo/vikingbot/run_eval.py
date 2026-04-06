@@ -121,12 +121,12 @@ def load_locomo_qa(
     count: int | None = None,
     default_time: str | None = None,
     question_index: int | None = None,
-    invalid_question_ids: set | None = None,
+    invalid_questions: set | None = None,
 ) -> list[dict]:
     """加载LoCoMo数据集的QA部分，支持JSON和CSV格式
 
     Args:
-        invalid_question_ids: 无效题目ID集合，用于标记无效题目
+        invalid_questions: 无效题目问题内容集合，用于标记无效题目
     """
     if input_path.lower().endswith(".csv"):
         return load_csv_qa(input_path, count, default_time)
@@ -178,8 +178,8 @@ def load_locomo_qa(
                     "evidence": evidence_list,
                     "evidence_text": get_evidence_text(evidence_list, sample),
                     "question_time": question_time,
-                    "is_invalid": question_id in invalid_question_ids
-                    if invalid_question_ids
+                    "is_invalid": qa["question"] in invalid_questions
+                    if invalid_questions
                     else False,
                 }
             )
@@ -198,8 +198,8 @@ def load_locomo_qa(
                         "evidence": evidence_list,
                         "evidence_text": get_evidence_text(evidence_list, sample),
                         "question_time": question_time,
-                        "is_invalid": question_id in invalid_question_ids
-                        if invalid_question_ids
+                        "is_invalid": qa["question"] in invalid_questions
+                        if invalid_questions
                         else False,
                     }
                 )
@@ -210,7 +210,10 @@ def load_locomo_qa(
 
 
 def run_vikingbot_chat(
-    question: str, question_time: str | None = None, sample_id: str | None = None
+    question: str,
+    question_time: str | None = None,
+    sample_id: str | None = None,
+    question_id: str | None = None,
 ) -> tuple[str, dict, float, int, list]:
     """执行vikingbot chat命令，返回回答、token使用情况、耗时（秒）、迭代次数、使用的工具列表"""
     # 先执行 /new 命令清除会话
@@ -224,9 +227,10 @@ def run_vikingbot_chat(
             "--sender",
             sample_id,
             "--session",
-            sample_id,
+            question_id,
         ]
         try:
+            # print(f'new_cmd={new_cmd}')
             subprocess.run(new_cmd, capture_output=True, text=True, timeout=60)
         except Exception:
             # 忽略 /new 命令的错误
@@ -241,9 +245,10 @@ def run_vikingbot_chat(
     cmd = ["vikingbot", "chat", "-m", input, "-e"]
     # 添加 --sender 作为 user_id，--session 作为 agent_id，实现访问独立 userspace
     if sample_id:
-        cmd.extend(["--sender", sample_id, "--session", sample_id])
+        cmd.extend(["--sender", sample_id, "--session", question_id])
     start_time = time.time()
     try:
+        # print(f'cmd={cmd}')
         result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=300)
         end_time = time.time()
         time_cost = end_time - start_time
@@ -329,7 +334,7 @@ def main():
         "--count", type=int, default=None, help="Number of QA questions to run, default all"
     )
     parser.add_argument(
-        "--threads", type=int, default=20, help="Number of concurrent threads, default: 20"
+        "--threads", type=int, default=40, help="Number of concurrent threads, default: 40"
     )
     parser.add_argument(
         "--update-mode",
@@ -345,18 +350,18 @@ def main():
     # 确保输出目录存在
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
 
-    # 加载无效题目ID集合
-    invalid_question_ids = set()
+    # 加载无效题目集合（按问题内容匹配，因为 errors.json 索引可能与数据不匹配）
+    invalid_questions = set()
     errors_path = os.path.expanduser(args.errors)
     if os.path.exists(errors_path):
         with open(errors_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        # 支持两种格式：string数组 或 dict数组（dict需要提取question_id）
-        if data and isinstance(data[0], dict):
-            invalid_question_ids = {item["question_id"] for item in data}
+            errors_data = json.load(f)
+        # 按问题内容建立集合
+        if errors_data and isinstance(errors_data[0], dict):
+            invalid_questions = {item["question"] for item in errors_data}
         else:
-            invalid_question_ids = set(data)
-        print(f"Loaded {len(invalid_question_ids)} invalid questions from {errors_path}")
+            invalid_questions = set(errors_data)
+        print(f"Loaded {len(invalid_questions)} invalid questions from {errors_path}")
     else:
         print(f"No errors file found at {errors_path}, is_invalid will be False for all questions")
 
@@ -366,7 +371,7 @@ def main():
         args.sample,
         args.count,
         question_index=args.question_index,
-        invalid_question_ids=invalid_question_ids,
+        invalid_questions=invalid_questions,
     )
     total = len(qa_list)
 
@@ -385,6 +390,7 @@ def main():
         "sample_id",
         "question_index",
         "result",
+        "is_invalid",
         "question",
         "answer",
         "category",
@@ -396,7 +402,6 @@ def main():
         "time_cost",
         "iteration",
         "tools_used_names",
-        "is_invalid",
     ]
 
     # 创建线程锁，确保多线程写文件安全
@@ -419,13 +424,14 @@ def main():
         answer = qa_item["answer"]
         question_time = qa_item.get("question_time")
         # 使用 question_id 作为 session_id，实现完全独立并行
-        session_id = qa_item.get("question_id", qa_item.get("sample_id"))
+        sample_id = qa_item.get("sample_id")
+        question_id = qa_item.get("question_id")
         print(f"Processing {idx}/{total_count}: {question[:60]}...")
         if question_time:
             print(f"  [time context: {question_time}]")
 
         response, token_usage, time_cost, iteration, tools_used_names = run_vikingbot_chat(
-            question, question_time, session_id
+            question, question_time, sample_id, question_id
         )
 
         row = {
