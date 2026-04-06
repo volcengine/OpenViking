@@ -258,7 +258,7 @@ class MemoryTypeRegistry:
 
             metadata = {
                 "memory_type": schema.memory_type,
-                "fields": fields_with_init,
+                **fields_with_init,
                 "content": "",  # content will come from content_template rendering
             }
             full_content = serialize_with_metadata(

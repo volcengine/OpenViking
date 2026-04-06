@@ -469,25 +469,23 @@ class TestParseMemoryFileWithFields:
 Here is the actual file content.
 It has multiple lines."""
         result = parse_memory_file_with_fields(content)
-        assert result["fields"] is not None
-        assert result["fields"]["tool_name"] == "web_search"
-        assert result["fields"]["static_desc"] == "Searches the web for information"
-        assert result["fields"]["total_calls"] == 100
-        assert result["fields"]["success_count"] == 92
+        assert result["tool_name"] == "web_search"
+        assert result["static_desc"] == "Searches the web for information"
+        assert result["total_calls"] == 100
+        assert result["success_count"] == 92
         assert "Here is the actual file content" in result["content"]
         assert "<!-- MEMORY_FIELDS" not in result["content"]
 
-    def test_returns_null_fields_when_no_comment(self):
-        """Test returns null fields when no MEMORY_FIELDS comment."""
+    def test_returns_only_content_when_no_comment(self):
+        """Test returns only content when no MEMORY_FIELDS comment."""
         content = "Just plain file content\nwithout any special comments"
         result = parse_memory_file_with_fields(content)
-        assert result["fields"] is None
+        assert list(result.keys()) == ["content"]
         assert result["content"] == content
 
     def test_handles_empty_content(self):
         """Test handles empty string input."""
         result = parse_memory_file_with_fields("")
-        assert result["fields"] is None
         assert result["content"] == ""
 
     def test_handles_invalid_json_in_comment(self):
@@ -500,8 +498,9 @@ It has multiple lines."""
 -->
 File content"""
         result = parse_memory_file_with_fields(content)
-        assert result["fields"] is None
         assert "File content" in result["content"]
+        # No extra fields added
+        assert "not" not in result
 
     def test_removes_comment_from_content(self):
         """Test that the comment is completely removed from content."""
@@ -512,15 +511,13 @@ After comment"""
         assert "<!-- MEMORY_FIELDS" not in result["content"]
         assert "Before comment" in result["content"]
         assert "After comment" in result["content"]
-        # The comment should be removed, leaving the surrounding content
-        assert "Before comment" in result["content"]
-        assert "After comment" in result["content"]
+        assert result["test"] == "value"
 
     def test_fields_on_same_line(self):
         """Test MEMORY_FIELDS on single line."""
         content = """<!-- MEMORY_FIELDS {"tool_name": "test", "value": 42} -->
 Content"""
         result = parse_memory_file_with_fields(content)
-        assert result["fields"] is not None
-        assert result["fields"]["tool_name"] == "test"
-        assert result["fields"]["value"] == 42
+        assert result["tool_name"] == "test"
+        assert result["value"] == 42
+        assert result["content"] == "Content"
