@@ -16,7 +16,7 @@ import {
   type LegacyConnectionSettings,
 } from '#/lib/legacy/connection'
 
-export function AccessLegacyPage() {
+export function SettingsPage() {
   const [message, setMessage] = useState('')
   const [settings, setSettings] = useState<LegacyConnectionSettings>(() => loadLegacyConnectionSettings())
 
@@ -33,9 +33,8 @@ export function AccessLegacyPage() {
 
   return (
     <LegacyPageShell
-      description="这里只保留旧前端的连接入口，不再复刻 capability 预判。所有请求都会直接走真实 OpenViking 服务。"
-      section="access"
-      title="旧控制台访问配置"
+      description="连接配置，设置 API Key 和身份信息。"
+      title="Settings"
     >
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
           <Card>

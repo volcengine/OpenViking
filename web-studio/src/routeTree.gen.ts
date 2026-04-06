@@ -11,8 +11,10 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as LegacyOpsRouteImport } from './routes/legacy/ops'
-import { Route as LegacyDataRouteImport } from './routes/legacy/data'
-import { Route as LegacyAccessRouteImport } from './routes/legacy/access'
+import { Route as DataMemoryRouteImport } from './routes/data/memory'
+import { Route as DataFindRouteImport } from './routes/data/find'
+import { Route as DataFilesystemRouteImport } from './routes/data/filesystem'
+import { Route as AccessSettingsRouteImport } from './routes/access/settings'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -24,48 +26,85 @@ const LegacyOpsRoute = LegacyOpsRouteImport.update({
   path: '/legacy/ops',
   getParentRoute: () => rootRouteImport,
 } as any)
-const LegacyDataRoute = LegacyDataRouteImport.update({
-  id: '/legacy/data',
-  path: '/legacy/data',
+const DataMemoryRoute = DataMemoryRouteImport.update({
+  id: '/data/memory',
+  path: '/data/memory',
   getParentRoute: () => rootRouteImport,
 } as any)
-const LegacyAccessRoute = LegacyAccessRouteImport.update({
-  id: '/legacy/access',
-  path: '/legacy/access',
+const DataFindRoute = DataFindRouteImport.update({
+  id: '/data/find',
+  path: '/data/find',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DataFilesystemRoute = DataFilesystemRouteImport.update({
+  id: '/data/filesystem',
+  path: '/data/filesystem',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AccessSettingsRoute = AccessSettingsRouteImport.update({
+  id: '/access/settings',
+  path: '/access/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/legacy/access': typeof LegacyAccessRoute
-  '/legacy/data': typeof LegacyDataRoute
+  '/access/settings': typeof AccessSettingsRoute
+  '/data/filesystem': typeof DataFilesystemRoute
+  '/data/find': typeof DataFindRoute
+  '/data/memory': typeof DataMemoryRoute
   '/legacy/ops': typeof LegacyOpsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/legacy/access': typeof LegacyAccessRoute
-  '/legacy/data': typeof LegacyDataRoute
+  '/access/settings': typeof AccessSettingsRoute
+  '/data/filesystem': typeof DataFilesystemRoute
+  '/data/find': typeof DataFindRoute
+  '/data/memory': typeof DataMemoryRoute
   '/legacy/ops': typeof LegacyOpsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/legacy/access': typeof LegacyAccessRoute
-  '/legacy/data': typeof LegacyDataRoute
+  '/access/settings': typeof AccessSettingsRoute
+  '/data/filesystem': typeof DataFilesystemRoute
+  '/data/find': typeof DataFindRoute
+  '/data/memory': typeof DataMemoryRoute
   '/legacy/ops': typeof LegacyOpsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/legacy/access' | '/legacy/data' | '/legacy/ops'
+  fullPaths:
+    | '/'
+    | '/access/settings'
+    | '/data/filesystem'
+    | '/data/find'
+    | '/data/memory'
+    | '/legacy/ops'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/legacy/access' | '/legacy/data' | '/legacy/ops'
-  id: '__root__' | '/' | '/legacy/access' | '/legacy/data' | '/legacy/ops'
+  to:
+    | '/'
+    | '/access/settings'
+    | '/data/filesystem'
+    | '/data/find'
+    | '/data/memory'
+    | '/legacy/ops'
+  id:
+    | '__root__'
+    | '/'
+    | '/access/settings'
+    | '/data/filesystem'
+    | '/data/find'
+    | '/data/memory'
+    | '/legacy/ops'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  LegacyAccessRoute: typeof LegacyAccessRoute
-  LegacyDataRoute: typeof LegacyDataRoute
+  AccessSettingsRoute: typeof AccessSettingsRoute
+  DataFilesystemRoute: typeof DataFilesystemRoute
+  DataFindRoute: typeof DataFindRoute
+  DataMemoryRoute: typeof DataMemoryRoute
   LegacyOpsRoute: typeof LegacyOpsRoute
 }
 
@@ -85,18 +124,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LegacyOpsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/legacy/data': {
-      id: '/legacy/data'
-      path: '/legacy/data'
-      fullPath: '/legacy/data'
-      preLoaderRoute: typeof LegacyDataRouteImport
+    '/data/memory': {
+      id: '/data/memory'
+      path: '/data/memory'
+      fullPath: '/data/memory'
+      preLoaderRoute: typeof DataMemoryRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/legacy/access': {
-      id: '/legacy/access'
-      path: '/legacy/access'
-      fullPath: '/legacy/access'
-      preLoaderRoute: typeof LegacyAccessRouteImport
+    '/data/find': {
+      id: '/data/find'
+      path: '/data/find'
+      fullPath: '/data/find'
+      preLoaderRoute: typeof DataFindRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/data/filesystem': {
+      id: '/data/filesystem'
+      path: '/data/filesystem'
+      fullPath: '/data/filesystem'
+      preLoaderRoute: typeof DataFilesystemRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/access/settings': {
+      id: '/access/settings'
+      path: '/access/settings'
+      fullPath: '/access/settings'
+      preLoaderRoute: typeof AccessSettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -104,8 +157,10 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  LegacyAccessRoute: LegacyAccessRoute,
-  LegacyDataRoute: LegacyDataRoute,
+  AccessSettingsRoute: AccessSettingsRoute,
+  DataFilesystemRoute: DataFilesystemRoute,
+  DataFindRoute: DataFindRoute,
+  DataMemoryRoute: DataMemoryRoute,
   LegacyOpsRoute: LegacyOpsRoute,
 }
 export const routeTree = rootRouteImport

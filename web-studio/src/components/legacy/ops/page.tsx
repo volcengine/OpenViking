@@ -340,7 +340,6 @@ export function OpsLegacyPage() {
   return (
     <LegacyPageShell
       description="对应旧版的 Tenants 与 Monitor 两块功能，但不复刻 capability 预判和确认弹窗细节。"
-      section="ops"
       title="旧控制台运维面板"
     >
         {activeError ? (

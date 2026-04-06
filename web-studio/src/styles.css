@@ -140,3 +140,9 @@
     min-height: 100vh;
   }
 }
+
+/* Offset sidebar below the top header bar */
+[data-slot="sidebar-container"] {
+  top: var(--header-height, 3.5rem);
+  height: calc(100svh - var(--header-height, 3.5rem));
+}
