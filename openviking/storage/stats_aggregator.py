@@ -11,7 +11,8 @@ from typing import Any, Dict, List, Optional
 
 from openviking.retrieve.memory_lifecycle import hotness_score
 from openviking.server.identity import RequestContext
-from openviking.storage.expr import And, Eq, PathScope
+from openviking.storage.expr import Eq
+from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -28,6 +29,20 @@ MEMORY_CATEGORIES = [
     "skills",
 ]
 
+# Categories that are directories (contain individual memory files)
+_DIRECTORY_CATEGORIES = [
+    "preferences",
+    "entities",
+    "events",
+    "cases",
+    "patterns",
+    "tools",
+    "skills",
+]
+
+# Categories that are single files at the memories root
+_FILE_CATEGORIES = ["profile"]
+
 # Hotness buckets
 COLD_THRESHOLD = 0.2
 HOT_THRESHOLD = 0.6
@@ -42,6 +57,53 @@ class StatsAggregator:
 
     def __init__(self, vikingdb_manager) -> None:
         self._vikingdb = vikingdb_manager
+
+    async def _count_memories_on_fs(
+        self,
+        memory_base: str,
+        ctx: RequestContext,
+    ) -> Dict[str, int]:
+        """Count memory files directly from the filesystem.
+
+        This is the authoritative count — it reflects what actually
+        exists on disk, regardless of whether individual files have
+        been vectorized.  The semantic_processor only vectorizes
+        directory-level .abstract.md / .overview.md files, not
+        individual memory .md files, so the vector index is always
+        an undercount.
+
+        Returns a dict mapping category name → file count.
+        """
+        viking_fs = get_viking_fs()
+        counts: Dict[str, int] = {cat: 0 for cat in MEMORY_CATEGORIES}
+
+        # Count profile.md (single file, not a directory)
+        try:
+            if await viking_fs.exists(f"{memory_base}/profile.md", ctx=ctx):
+                counts["profile"] = 1
+        except Exception as e:
+            logger.debug("Error checking profile.md existence: %s", e)
+
+        # Count files in each directory category
+        for cat in _DIRECTORY_CATEGORIES:
+            dir_uri = f"{memory_base}/{cat}"
+            try:
+                entries = await viking_fs.ls(dir_uri, ctx=ctx)
+            except Exception:
+                # Directory doesn't exist — count stays 0
+                continue
+
+            for entry in entries:
+                name = entry.get("name", "")
+                is_dir = entry.get("isDir", False)
+                # Skip dotfiles (.abstract.md, .overview.md), dotdirs (.)
+                if name.startswith(".") or not name or is_dir:
+                    continue
+                # Only count .md files (memory files)
+                if name.endswith(".md"):
+                    counts[cat] += 1
+
+        return counts
 
     async def get_memory_stats(
         self,
@@ -71,25 +133,16 @@ class StatsAggregator:
             "oldest_memory_age_days": 0,
         }
 
-        # Use count() (aggregate) for per-category counts instead of query()
-        # (vector search). query() with no query_vector falls through to
-        # search_by_random in the local HNSW backend, which can miss filtered
-        # results. count() uses a scalar aggregate that reliably returns
-        # correct results.
+        # Primary count: use the filesystem (source of truth).
+        # The vector index is incomplete because the semantic_processor
+        # only vectorizes directory-level abstract/overview files, not
+        # individual memory .md files created during session commit.
         user_id = ctx.user.user_id
         memory_base = f"viking://user/{user_id}/memories"
 
+        fs_counts = await self._count_memories_on_fs(memory_base, ctx)
         for cat in categories:
-            try:
-                by_category[cat] = await self._vikingdb.count(
-                    filter=And([
-                        Eq("context_type", "memory"),
-                        PathScope("uri", f"{memory_base}/{cat}", depth=2),
-                    ]),
-                    ctx=ctx,
-                )
-            except Exception as e:
-                logger.error("Error counting memories for %s: %s", cat, e)
+            by_category[cat] = fs_counts.get(cat, 0)
 
         total_memories = sum(by_category.values())
 
@@ -171,7 +224,7 @@ class StatsAggregator:
 
         Note: This uses query() which relies on vector search internally.
         On the local HNSW backend it may return incomplete results when no
-        query vector is provided. Category counts use count() instead.
+        query vector is provided. Category counts use filesystem counting instead.
         """
         try:
             return await self._vikingdb.query(
