@@ -180,8 +180,7 @@ Skills with available="false" need dependencies installed first - you can try in
         )
         if viking_memory:
             parts.append(
-                f"## Long term memory about this conversation.\n"
-                f"You do not need to use tool to search again:\n"
+                f"## openviking_search(query=[user_query])\n"
                 f"{viking_memory}"
             )
 

@@ -2,36 +2,33 @@ memory_type: entities
 description: |
   Wikipedia article - manages page using Zettelkasten method.
   Each page represents an article with relative path links to events.
-
+  Cards should be rich and distributed - avoid putting all info in one card.
 directory: "viking://user/{{ user_space }}/memories/entities"
 filename_template: "{{ category }}/{{ name }}.md"
-enabled: false
+enabled: true
 
 fields:
   - name: category
     type: string
     description: |
-      - Category name in Chinese or English. If English, use lowercase with underscores, max 3 words. Do not include any dates.
+      - Category name in Chinese or English. If English, use lowercase with underscores, max 3 words.
     merge_op: immutable
 
   - name: name
     type: string
     description: |
-      - Entity name in Chinese or English. If English, use lowercase with underscores, max 3 words. Do not include any dates.
-  
-      ### Good Examples
-      emergency_department
-      cough_symptom
-
-      ### Bad Examples
-      progressive_memory_loss_with_personality_change  // Too long, max 3 words
+      - Entity name in Chinese or English. If English, use lowercase with underscores, max 3 words.
     merge_op: immutable
 
   - name: content
     type: string
     description: |
       - Detailed Zettelkasten card content in markdown format
-      Relative path format: ../entities/entity_name.md
-      - Example: [skin_itching](events://{event_name}) 
-      - Cards should be rich and distributed - avoid putting all info in one card.
+      Relative path format: events://{event_name} or ../events/{year}/{month}/{day}/{event_name}.md
+      - Example:  
+      # LGBTQ+ events Caroline participated in: 
+      - [Pride parade](../events/2023/03/05/Pride parade.md) 
+      - [Caroline's school LGBTQ talk](events://Caroline's school LGBTQ talk)
+      - [Support group](../events/2024/03/10/Support group.md)
+
     merge_op: patch
