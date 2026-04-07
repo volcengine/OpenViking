@@ -69,6 +69,7 @@ dependencies = [
     "tree-sitter-go>=0.23.0",
     "tree-sitter-c-sharp>=0.23.0",
     "tree-sitter-php>=0.23.0",
+    "tree-sitter-lua>=0.1.0",
     # OpenTelemetry
     "opentelemetry-api>=1.14",
     "opentelemetry-sdk>=1.14",
