@@ -7,6 +7,7 @@ Uses the new Memory Templating System with ReAct orchestrator.
 Maintains the same interface as compressor.py for backward compatibility.
 """
 
+import asyncio
 from typing import List, Optional
 
 from openviking.core.context import Context
@@ -158,8 +159,11 @@ class SessionCompressorV2:
                         memory_schema_dirs.append(dir_path)
                 logger.debug(f"Memory schema directories to lock: {memory_schema_dirs}")
 
-                # 循环等待获取锁（机制确保不会死锁）
-                # 由于使用有序加锁法，可以安全地无限等待
+                retry_interval = config.memory.v2_lock_retry_interval_seconds
+                max_retries = config.memory.v2_lock_max_retries
+                retry_count = 0
+
+                # 循环重试获取锁（机制确保不会死锁）
                 while True:
                     lock_acquired = await lock_manager.acquire_subtree_batch(
                         transaction_handle,
@@ -168,7 +172,19 @@ class SessionCompressorV2:
                     )
                     if lock_acquired:
                         break
-                    logger.warning("Failed to acquire memory locks, retrying...")
+                    retry_count += 1
+                    if max_retries > 0 and retry_count >= max_retries:
+                        raise TimeoutError(
+                            "Failed to acquire memory locks after "
+                            f"{retry_count} retries (max={max_retries})"
+                        )
+
+                    logger.warning(
+                        "Failed to acquire memory locks, retrying "
+                        f"(attempt={retry_count}, max={max_retries or 'unlimited'})..."
+                    )
+                    if retry_interval > 0:
+                        await asyncio.sleep(retry_interval)
 
             orchestrator._transaction_handle = transaction_handle  # 传递给 ExtractLoop
 
