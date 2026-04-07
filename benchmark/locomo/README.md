@@ -16,7 +16,10 @@ benchmark/locomo/
 │   ├── data/           # 测试数据目录
 │   └── result/         # 评测结果目录
 └── openclaw/           # OpenClaw 评测脚本
-    └── eval.py         # OpenClaw 评估脚本
+    ├── eval.py         # OpenClaw 评估脚本
+    ├── judge.py        # LLM 裁判打分（适配 OpenClaw）
+    ├── run_full_eval.sh        # 一键运行完整评测流程
+    └── result/         # 评测结果目录
 ```
 
 ---
@@ -148,6 +151,38 @@ python stat_judge_result.py --input <评分结果文件>
 ---
 
 ## OpenClaw 评测流程
+
+### 完整一键评测
+
+使用 `openclaw/run_full_eval.sh` 可以一键运行完整评测流程：
+
+```bash
+cd benchmark/locomo/openclaw
+bash run_full_eval.sh                      # 只导入 OpenViking
+bash run_full_eval.sh --with-claw-import   # 同时导入 OpenViking 和 OpenClaw（并行执行）
+bash run_full_eval.sh --skip-import        # 跳过导入步骤，直接运行 QA 评估
+```
+
+**脚本参数说明：**
+
+**脚本执行流程：**
+1. 导入数据到 OpenViking（可选同时导入 OpenClaw）
+2. 等待 60 秒确保数据导入完成
+3. 运行 QA 评估（`eval.py qa`，输出到 `result/qa_results.csv`）
+4. 裁判打分（`judge.py`，并行度 40）
+5. 统计结果（`stat_judge_result.py`）
+
+**脚本内部配置参数：**
+
+在 `run_full_eval.sh` 脚本顶部可以修改以下配置：
+
+| 变量 | 说明 | 默认值                       |
+|------|------|---------------------------|
+| `INPUT_FILE` | 输入数据文件路径 | `../data/locomo10.json`   |
+| `RESULT_DIR` | 结果输出目录 | `./result`                |
+| `GATEWAY_TOKEN` | OpenClaw Gateway Token | 需要设置为实际 openclaw 网关 token |
+
+### 分步使用说明
 
 使用 `openclaw/eval.py` 进行 OpenClaw 评测，该脚本有两种模式：
 
