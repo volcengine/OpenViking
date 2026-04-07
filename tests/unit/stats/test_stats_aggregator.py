@@ -3,7 +3,7 @@
 """Tests for StatsAggregator."""
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -29,26 +29,20 @@ def aggregator(mock_vikingdb):
     return StatsAggregator(mock_vikingdb)
 
 
-@pytest.fixture
-def mock_viking_fs():
-    """Create a mock VikingFS that returns empty directory listings."""
-    fs = AsyncMock()
-    # Default: profile.md doesn't exist, all dirs are empty
-    fs.exists = AsyncMock(return_value=False)
-    fs.ls = AsyncMock(return_value=[])
-    return fs
-
-
 def _make_memory_record(
     category: str,
     active_count: int = 1,
     updated_at: datetime = None,
     created_at: datetime = None,
 ):
-    """Helper to build a mock memory record."""
+    """Helper to build a mock memory record with a realistic URI."""
     now = datetime.now(timezone.utc)
+    if category == "profile":
+        uri = "viking://user/default/memories/profile.md"
+    else:
+        uri = f"viking://user/default/memories/{category}/test-item"
     return {
-        "uri": f"viking://memories/{category}/test-item",
+        "uri": uri,
         "context_type": "memory",
         "active_count": active_count,
         "updated_at": (updated_at or now).isoformat(),
@@ -58,14 +52,8 @@ def _make_memory_record(
 
 class TestStatsAggregator:
     @pytest.mark.asyncio
-    @patch("openviking.storage.stats_aggregator.get_viking_fs")
-    async def test_empty_store(self, mock_get_fs, aggregator, mock_vikingdb, mock_ctx):
+    async def test_empty_store(self, aggregator, mock_vikingdb, mock_ctx):
         """Stats for an empty memory store should return zeros."""
-        fs = AsyncMock()
-        fs.exists = AsyncMock(return_value=False)
-        fs.ls = AsyncMock(return_value=[])
-        mock_get_fs.return_value = fs
-
         mock_vikingdb.query = AsyncMock(return_value=[])
 
         result = await aggregator.get_memory_stats(mock_ctx)
@@ -75,9 +63,8 @@ class TestStatsAggregator:
         assert result["hotness_distribution"] == {"cold": 0, "warm": 0, "hot": 0}
 
     @pytest.mark.asyncio
-    @patch("openviking.storage.stats_aggregator.get_viking_fs")
-    async def test_counts_by_category(self, mock_get_fs, aggregator, mock_vikingdb, mock_ctx):
-        """Records should be bucketed into the correct category based on filesystem."""
+    async def test_counts_by_category(self, aggregator, mock_vikingdb, mock_ctx):
+        """Records should be bucketed into the correct category from their URI."""
         now = datetime.now(timezone.utc)
         records = [
             _make_memory_record("cases", active_count=5, updated_at=now),
@@ -85,90 +72,66 @@ class TestStatsAggregator:
             _make_memory_record("tools", active_count=1, updated_at=now),
         ]
 
-        fs = AsyncMock()
-        fs.exists = AsyncMock(return_value=False)
-
-        async def _ls(uri, **kwargs):
-            if "/cases" in uri:
-                return [
-                    {"name": "mem_abc.md", "isDir": False},
-                    {"name": "mem_def.md", "isDir": False},
-                    {"name": ".abstract.md", "isDir": False},
-                ]
-            if "/tools" in uri:
-                return [
-                    {"name": "mem_ghi.md", "isDir": False},
-                ]
-            return []
-
-        fs.ls = AsyncMock(side_effect=_ls)
-        mock_get_fs.return_value = fs
         mock_vikingdb.query = AsyncMock(return_value=records)
 
         result = await aggregator.get_memory_stats(mock_ctx)
 
-        # .abstract.md should be excluded, only .md files counted
         assert result["by_category"]["cases"] == 2
         assert result["by_category"]["tools"] == 1
         assert result["total_memories"] == 3
 
     @pytest.mark.asyncio
-    @patch("openviking.storage.stats_aggregator.get_viking_fs")
-    async def test_category_filter(self, mock_get_fs, aggregator, mock_vikingdb, mock_ctx):
+    async def test_category_filter(self, aggregator, mock_vikingdb, mock_ctx):
         """Passing a category filter should only count that category."""
         now = datetime.now(timezone.utc)
         records = [
             _make_memory_record("patterns", active_count=2, updated_at=now),
         ]
 
-        fs = AsyncMock()
-        fs.exists = AsyncMock(return_value=False)
-        fs.ls = AsyncMock(return_value=[
-            {"name": "mem_xyz.md", "isDir": False},
-        ])
-        mock_get_fs.return_value = fs
         mock_vikingdb.query = AsyncMock(return_value=records)
 
         result = await aggregator.get_memory_stats(mock_ctx, category="patterns")
 
         assert "patterns" in result["by_category"]
         assert len(result["by_category"]) == 1
+        assert result["total_memories"] == 1
 
     @pytest.mark.asyncio
-    @patch("openviking.storage.stats_aggregator.get_viking_fs")
-    async def test_profile_counted(self, mock_get_fs, aggregator, mock_vikingdb, mock_ctx):
-        """profile.md should be counted as 1 when it exists."""
-        fs = AsyncMock()
-        fs.exists = AsyncMock(return_value=True)
-        fs.ls = AsyncMock(return_value=[])
-        mock_get_fs.return_value = fs
-        mock_vikingdb.query = AsyncMock(return_value=[])
+    async def test_profile_counted(self, aggregator, mock_vikingdb, mock_ctx):
+        """profile.md should be counted as 1 when present in query results."""
+        records = [
+            _make_memory_record("profile", active_count=0),
+        ]
+        mock_vikingdb.query = AsyncMock(return_value=records)
 
         result = await aggregator.get_memory_stats(mock_ctx)
 
         assert result["by_category"]["profile"] == 1
+        assert result["total_memories"] == 1
 
     @pytest.mark.asyncio
-    @patch("openviking.storage.stats_aggregator.get_viking_fs")
-    async def test_dotfiles_excluded(self, mock_get_fs, aggregator, mock_vikingdb, mock_ctx):
-        """.abstract.md and .overview.md should not be counted as memories."""
-        fs = AsyncMock()
-        fs.exists = AsyncMock(return_value=False)
-        fs.ls = AsyncMock(return_value=[
-            {"name": ".abstract.md", "isDir": False},
-            {"name": ".overview.md", "isDir": False},
-            {"name": "mem_real.md", "isDir": False},
-        ])
-        mock_get_fs.return_value = fs
-        mock_vikingdb.query = AsyncMock(return_value=[])
+    async def test_unrecognized_uri_ignored(self, aggregator, mock_vikingdb, mock_ctx):
+        """Records with unrecognized URIs should not be counted in any category."""
+        now = datetime.now(timezone.utc)
+        records = [
+            {
+                "uri": "viking://some/random/path",
+                "context_type": "memory",
+                "active_count": 1,
+                "updated_at": now.isoformat(),
+                "created_at": now.isoformat(),
+            }
+        ]
+        mock_vikingdb.query = AsyncMock(return_value=records)
 
-        result = await aggregator.get_memory_stats(mock_ctx, category="entities")
+        result = await aggregator.get_memory_stats(mock_ctx)
 
-        assert result["by_category"]["entities"] == 1
+        assert result["total_memories"] == 0
+        for cat in result["by_category"]:
+            assert result["by_category"][cat] == 0
 
     @pytest.mark.asyncio
-    @patch("openviking.storage.stats_aggregator.get_viking_fs")
-    async def test_hotness_buckets(self, mock_get_fs, aggregator, mock_vikingdb, mock_ctx):
+    async def test_hotness_buckets(self, aggregator, mock_vikingdb, mock_ctx):
         """Records should be classified into cold/warm/hot based on score."""
         now = datetime.now(timezone.utc)
         hot_record = _make_memory_record("cases", active_count=50, updated_at=now)
@@ -176,13 +139,6 @@ class TestStatsAggregator:
             "cases", active_count=0, updated_at=now - timedelta(days=60)
         )
 
-        fs = AsyncMock()
-        fs.exists = AsyncMock(return_value=False)
-        fs.ls = AsyncMock(return_value=[
-            {"name": "mem_a.md", "isDir": False},
-            {"name": "mem_b.md", "isDir": False},
-        ])
-        mock_get_fs.return_value = fs
         mock_vikingdb.query = AsyncMock(return_value=[hot_record, cold_record])
 
         result = await aggregator.get_memory_stats(mock_ctx, category="cases")
@@ -192,8 +148,7 @@ class TestStatsAggregator:
         assert dist["cold"] >= 1
 
     @pytest.mark.asyncio
-    @patch("openviking.storage.stats_aggregator.get_viking_fs")
-    async def test_staleness_metrics(self, mock_get_fs, aggregator, mock_vikingdb, mock_ctx):
+    async def test_staleness_metrics(self, aggregator, mock_vikingdb, mock_ctx):
         """Staleness should detect records not accessed in 7 and 30 days."""
         now = datetime.now(timezone.utc)
         old_record = _make_memory_record(
@@ -203,12 +158,6 @@ class TestStatsAggregator:
             created_at=now - timedelta(days=50),
         )
 
-        fs = AsyncMock()
-        fs.exists = AsyncMock(return_value=False)
-        fs.ls = AsyncMock(return_value=[
-            {"name": "mem_old.md", "isDir": False},
-        ])
-        mock_get_fs.return_value = fs
         mock_vikingdb.query = AsyncMock(return_value=[old_record])
 
         result = await aggregator.get_memory_stats(mock_ctx, category="events")
@@ -218,20 +167,15 @@ class TestStatsAggregator:
         assert result["staleness"]["oldest_memory_age_days"] >= 49
 
     @pytest.mark.asyncio
-    @patch("openviking.storage.stats_aggregator.get_viking_fs")
-    async def test_missing_directory_returns_zero(self, mock_get_fs, aggregator, mock_vikingdb, mock_ctx):
-        """If a directory doesn't exist on filesystem, the category should show 0."""
-        fs = AsyncMock()
-        fs.exists = AsyncMock(return_value=False)
-        # ls raises for nonexistent dirs
-        fs.ls = AsyncMock(side_effect=Exception("directory not found"))
-        mock_get_fs.return_value = fs
-        mock_vikingdb.query = AsyncMock(return_value=[])
+    async def test_query_error_returns_zeros(self, aggregator, mock_vikingdb, mock_ctx):
+        """If the vector query fails, stats should gracefully return zeros."""
+        mock_vikingdb.query = AsyncMock(side_effect=Exception("db down"))
 
         result = await aggregator.get_memory_stats(mock_ctx, category="cases")
 
         assert result["by_category"]["cases"] == 0
         assert result["total_memories"] == 0
+        assert result["hotness_distribution"] == {"cold": 0, "warm": 0, "hot": 0}
 
 
 class TestParseDatetime:
