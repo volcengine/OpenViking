@@ -38,7 +38,9 @@ class TestVaultProviderIntegration:
     @pytest_asyncio.fixture(scope="function")
     async def vault_provider(self):
         """Fixture that provides a VaultProvider instance."""
-        provider = VaultProvider(addr=VAULT_ADDR, token=VAULT_TOKEN, mount_path=VAULT_MOUNT_PATH)
+        provider = VaultProvider(
+            addr=VAULT_ADDR, token=VAULT_TOKEN, mount_path=VAULT_MOUNT_PATH, kv_version=2
+        )
         yield provider
 
     @pytest.fixture(scope="function")
@@ -49,6 +51,7 @@ class TestVaultProviderIntegration:
                 "address": VAULT_ADDR,
                 "token": VAULT_TOKEN,
                 "mount_point": VAULT_MOUNT_PATH,
+                "kv_version": 2,
             }
         }
 
@@ -200,7 +203,12 @@ async def vault_encryption_config():
         "encryption": {
             "enabled": True,
             "provider": "vault",
-            "vault": {"address": VAULT_ADDR, "token": VAULT_TOKEN, "mount_point": VAULT_MOUNT_PATH},
+            "vault": {
+                "address": VAULT_ADDR,
+                "token": VAULT_TOKEN,
+                "mount_point": VAULT_MOUNT_PATH,
+                "kv_version": 2,
+            },
         }
     }
 
@@ -208,7 +216,9 @@ async def vault_encryption_config():
 @pytest_asyncio.fixture(scope="function")
 async def vault_file_encryptor():
     """Fixture that provides a FileEncryptor instance with Vault provider for testing"""
-    provider = VaultProvider(addr=VAULT_ADDR, token=VAULT_TOKEN, mount_path=VAULT_MOUNT_PATH)
+    provider = VaultProvider(
+        addr=VAULT_ADDR, token=VAULT_TOKEN, mount_path=VAULT_MOUNT_PATH, kv_version=2
+    )
     return FileEncryptor(provider)
 
 

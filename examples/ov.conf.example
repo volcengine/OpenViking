@@ -14,7 +14,8 @@
       "volcengine": {
         "region": "cn-beijing",
         "ak": null,
-        "sk": null
+        "sk": null,
+        "session_token": null
       }
     },
     "agfs": {

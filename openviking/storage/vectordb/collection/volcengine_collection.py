@@ -36,7 +36,7 @@ def get_or_create_volcengine_collection(config: Dict[str, Any], meta_data: Dict[
     ak = config.get("AK")
     sk = config.get("SK")
     region = config.get("Region")
-    session_token = config.get("SecurityToken")
+    session_token = config.get("SessionToken")
     if not ak or not sk or not region:
         raise ValueError("AK, SK, and Region are required in config")
 
@@ -137,9 +137,8 @@ class VolcengineCollection(ICollection):
         params = {"Action": action, "Version": VIKING_DB_VERSION}
         response = self.console_client.do_req("POST", req_params=params, req_body=data)
         if response.status_code != 200:
-            if self._is_collection_not_found(response, action):
-                return {}
-            raise self._build_response_error(response, action)
+            logger.error(str(self._build_response_error(response, action)))
+            return {}
         try:
             result = response.json()
             if "Result" in result:
@@ -156,9 +155,8 @@ class VolcengineCollection(ICollection):
         response = self.console_client.do_req("POST", req_params=req_params, req_body=req_body)
 
         if response.status_code != 200:
-            if self._is_collection_not_found(response, action):
-                return {}
-            raise self._build_response_error(response, action)
+            logger.error(str(self._build_response_error(response, action)))
+            return {}
         try:
             result = response.json()
             return result.get("Result", {})
