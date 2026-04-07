@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from openviking.retrieve.memory_lifecycle import hotness_score
 from openviking.server.identity import RequestContext
-from openviking.storage.expr import Eq
+from openviking.storage.expr import And, Eq
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.utils import get_logger
 
@@ -228,7 +228,7 @@ class StatsAggregator:
         """
         try:
             return await self._vikingdb.query(
-                filter=Eq("context_type", "memory"),
+                filter=And([Eq("context_type", "memory"), Eq("level", 2)]),
                 limit=10000,
                 output_fields=[
                     "uri",
