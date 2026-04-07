@@ -43,6 +43,11 @@
         "dimension": 1024,
         "provider": "volcengine",
         "input": "multimodal"
+    },
+    "circuit_breaker": {
+        "failure_threshold": 5,
+        "reset_timeout": 60,
+        "max_reset_timeout": 600
     }
   },
   "embedding_ollama_example": {

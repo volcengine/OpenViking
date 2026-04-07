@@ -246,6 +246,30 @@ class EmbeddingModelConfig(BaseModel):
         return 2048
 
 
+class EmbeddingCircuitBreakerConfig(BaseModel):
+    failure_threshold: int = Field(
+        default=5,
+        ge=1,
+        description="Consecutive failures required to open the embedding circuit breaker",
+    )
+    reset_timeout: float = Field(
+        default=60.0,
+        gt=0,
+        description="Base circuit breaker reset timeout in seconds",
+    )
+    max_reset_timeout: float = Field(
+        default=600.0,
+        gt=0,
+        description="Maximum circuit breaker reset timeout in seconds",
+    )
+
+    @model_validator(mode="after")
+    def validate_bounds(self):
+        if self.max_reset_timeout < self.reset_timeout:
+            raise ValueError("embedding.circuit_breaker.max_reset_timeout must be >= reset_timeout")
+        return self
+
+
 class EmbeddingConfig(BaseModel):
     """
     Embedding configuration, supports OpenAI, VolcEngine, VikingDB, Jina, Gemini, Voyage, or LiteLLM APIs.
@@ -261,6 +285,9 @@ class EmbeddingConfig(BaseModel):
     dense: Optional[EmbeddingModelConfig] = Field(default=None)
     sparse: Optional[EmbeddingModelConfig] = Field(default=None)
     hybrid: Optional[EmbeddingModelConfig] = Field(default=None)
+    circuit_breaker: EmbeddingCircuitBreakerConfig = Field(
+        default_factory=EmbeddingCircuitBreakerConfig
+    )
 
     max_concurrent: int = Field(
         default=10, description="Maximum number of concurrent embedding requests"

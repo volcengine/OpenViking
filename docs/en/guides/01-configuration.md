@@ -130,6 +130,28 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 
 `embedding.max_retries` only applies to transient errors such as `429`, `5xx`, timeouts, and connection failures. Permanent errors such as `400`, `401`, `403`, and `AccountOverdue` are not retried automatically. The backoff strategy is exponential backoff with jitter, starting at `0.5s` and capped at `8s`.
 
+#### Embedding Circuit Breaker
+
+When the embedding provider experiences consecutive transient failures (e.g. `429`, `5xx`), OpenViking opens a circuit breaker to temporarily stop calling the provider and re-enqueue embedding tasks. After the base `reset_timeout`, it allows a probe request (HALF_OPEN). If the probe fails, the next `reset_timeout` is doubled (capped by `max_reset_timeout`).
+
+```json
+{
+  "embedding": {
+    "circuit_breaker": {
+      "failure_threshold": 5,
+      "reset_timeout": 60,
+      "max_reset_timeout": 600
+    }
+  }
+}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `circuit_breaker.failure_threshold` | int | Consecutive failures required to open the breaker (default: `5`) |
+| `circuit_breaker.reset_timeout` | float | Base reset timeout in seconds (default: `60`) |
+| `circuit_breaker.max_reset_timeout` | float | Maximum reset timeout in seconds when backing off (default: `600`) |
+
 **Available Models**
 
 | Model | Dimension | Input Type | Notes |
