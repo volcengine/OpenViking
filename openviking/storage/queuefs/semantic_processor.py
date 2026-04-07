@@ -28,6 +28,7 @@ from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecuto
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import bind_telemetry, resolve_telemetry
+from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.circuit_breaker import (
     CircuitBreaker,
     CircuitBreakerOpen,
@@ -302,6 +303,7 @@ class SemanticProcessor(DequeueHandlerBase):
                         incremental_update=is_incremental,
                         target_uri=msg.target_uri,
                         semantic_msg_id=msg.id,
+                        telemetry_id=msg.telemetry_id,
                         recursive=msg.recursive,
                         lifecycle_lock_handle_id=msg.lifecycle_lock_handle_id,
                         is_code_repo=msg.is_code_repo,
@@ -333,6 +335,9 @@ class SemanticProcessor(DequeueHandlerBase):
                 self._circuit_breaker.record_failure(e)
                 if msg is not None:
                     self._merge_request_stats(msg.telemetry_id, error_count=1)
+                    get_request_wait_tracker().mark_semantic_failed(
+                        msg.telemetry_id, msg.id, str(e)
+                    )
                 self.report_error(str(e), data)
             else:
                 # Transient or unknown — re-enqueue for retry
@@ -347,6 +352,9 @@ class SemanticProcessor(DequeueHandlerBase):
                     except Exception as requeue_err:
                         logger.error(f"Failed to re-enqueue semantic message: {requeue_err}")
                         self._merge_request_stats(msg.telemetry_id, error_count=1)
+                        get_request_wait_tracker().mark_semantic_failed(
+                            msg.telemetry_id, msg.id, str(e)
+                        )
                         self.report_error(str(e), data)
                         return None
                     self.report_success()
@@ -412,11 +420,21 @@ class SemanticProcessor(DequeueHandlerBase):
         dir_uri = msg.uri
         ctx = self._current_ctx
         llm_sem = asyncio.Semaphore(self.max_concurrent_llm)
+        request_wait_tracker = get_request_wait_tracker()
+
+        def _mark_done() -> None:
+            if msg.telemetry_id and msg.id:
+                request_wait_tracker.mark_semantic_done(msg.telemetry_id, msg.id)
+
+        def _mark_failed(message: str) -> None:
+            if msg.telemetry_id and msg.id:
+                request_wait_tracker.mark_semantic_failed(msg.telemetry_id, msg.id, message)
 
         try:
             entries = await viking_fs.ls(dir_uri, ctx=ctx)
         except Exception as e:
             logger.warning(f"Failed to list memory directory {dir_uri}: {e}")
+            _mark_failed(str(e))
             if msg.lifecycle_lock_handle_id:
                 await self._release_memory_lifecycle_lock(msg.lifecycle_lock_handle_id)
             return
@@ -432,6 +450,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
         if not file_paths:
             logger.info(f"No memory files found in {dir_uri}")
+            _mark_done()
             if msg.lifecycle_lock_handle_id:
                 await self._release_memory_lifecycle_lock(msg.lifecycle_lock_handle_id)
             return
@@ -506,11 +525,25 @@ class SemanticProcessor(DequeueHandlerBase):
             logger.info(f"Generated abstract.md and overview.md for {dir_uri}")
         except Exception as e:
             logger.error(f"Failed to write abstract/overview for {dir_uri}: {e}")
+            _mark_failed(str(e))
             if msg.lifecycle_lock_handle_id:
                 await self._release_memory_lifecycle_lock(msg.lifecycle_lock_handle_id)
             return
 
         try:
+            if msg.telemetry_id and msg.id:
+                from openviking.storage.queuefs.embedding_tracker import EmbeddingTaskTracker
+
+                async def _on_complete() -> None:
+                    get_request_wait_tracker().mark_semantic_done(msg.telemetry_id, msg.id)
+
+                tracker = EmbeddingTaskTracker.get_instance()
+                await tracker.register(
+                    semantic_msg_id=msg.id,
+                    total_count=2,
+                    on_complete=_on_complete,
+                    metadata={"uri": dir_uri},
+                )
             await self._vectorize_directory(
                 uri=dir_uri,
                 context_type="memory",

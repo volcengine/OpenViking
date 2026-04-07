@@ -22,6 +22,7 @@ from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
 from openviking.telemetry import bind_telemetry, resolve_telemetry
+from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.circuit_breaker import (
     CircuitBreaker,
     CircuitBreakerOpen,
@@ -229,6 +230,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
         collector = None
         report_success = False
         report_error_args: Optional[tuple[str, Optional[Dict[str, Any]]]] = None
+        request_failed_message: Optional[str] = None
         try:
             queue_data = json.loads(data["data"])
             # Parse EmbeddingMsg from data
@@ -241,6 +243,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 if self._vikingdb.is_closing:
                     logger.debug("Skip embedding dequeue during shutdown")
                     self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
+                    self._record_request_success(embedding_msg)
                     report_success = True
                     return None
 
@@ -248,6 +251,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 if not isinstance(embedding_msg.message, str):
                     logger.debug(f"Skipping non-string message type: {type(embedding_msg.message)}")
                     self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
+                    self._record_request_success(embedding_msg)
                     report_success = True
                     return data
 
@@ -266,6 +270,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         report_success = True
                         return None
                     # No queue manager — cannot re-enqueue, drop with error
+                    request_failed_message = "Circuit breaker open and no queue manager"
                     report_error_args = ("Circuit breaker open and no queue manager", data)
                     return None
 
@@ -306,6 +311,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                             logger.critical(error_msg)
                             self._circuit_breaker.record_failure(embed_err)
                             self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
+                            request_failed_message = error_msg
                             report_error_args = (error_msg, data)
                             return None
 
@@ -324,6 +330,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                                 logger.error(f"Failed to re-enqueue message: {requeue_err}")
 
                         self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
+                        request_failed_message = error_msg
                         report_error_args = (error_msg, data)
                         return None
 
@@ -335,6 +342,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                             error_msg = f"Dense vector dimension mismatch: expected {self._vector_dim}, got {len(result.dense_vector)}"
                             logger.error(error_msg)
                             self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
+                            request_failed_message = error_msg
                             report_error_args = (error_msg, data)
                             return None
 
@@ -348,6 +356,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     error_msg = "Embedder not initialized, skipping vector generation"
                     logger.warning(error_msg)
                     self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
+                    request_failed_message = error_msg
                     report_error_args = (error_msg, data)
                     return None
 
@@ -377,16 +386,19 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     if self._vikingdb.is_closing:
                         logger.debug(f"Skip embedding write during shutdown: {db_err}")
                         self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
+                        self._record_request_success(embedding_msg)
                         report_success = True
                         return None
                     logger.error(f"Failed to write to vector database: {db_err}")
                     self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
+                    request_failed_message = str(db_err)
                     report_error_args = (str(db_err), data)
                     return None
                 except Exception as db_err:
                     if self._vikingdb.is_closing:
                         logger.debug(f"Skip embedding write during shutdown: {db_err}")
                         self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
+                        self._record_request_success(embedding_msg)
                         report_success = True
                         return None
                     logger.error(f"Failed to write to vector database: {db_err}")
@@ -394,10 +406,12 @@ class TextEmbeddingHandler(DequeueHandlerBase):
 
                     traceback.print_exc()
                     self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
+                    request_failed_message = str(db_err)
                     report_error_args = (str(db_err), data)
                     return None
 
                 self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
+                self._record_request_success(embedding_msg)
                 report_success = True
                 self._circuit_breaker.record_success()
                 return inserted_data
@@ -409,9 +423,12 @@ class TextEmbeddingHandler(DequeueHandlerBase):
             traceback.print_exc()
             if embedding_msg is not None:
                 self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
+                request_failed_message = str(e)
             report_error_args = (str(e), data)
             return None
         finally:
+            if embedding_msg is not None and request_failed_message is not None:
+                self._record_request_failure(embedding_msg, request_failed_message)
             if embedding_msg and embedding_msg.semantic_msg_id:
                 from openviking.storage.queuefs.embedding_tracker import EmbeddingTaskTracker
 
@@ -424,3 +441,19 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 self.report_error(*report_error_args)
             elif report_success:
                 self.report_success()
+
+    @staticmethod
+    def _record_request_success(embedding_msg: EmbeddingMsg) -> None:
+        tracker = get_request_wait_tracker()
+        if embedding_msg.semantic_msg_id:
+            tracker.record_embedding_processed(embedding_msg.telemetry_id)
+        else:
+            tracker.mark_embedding_done(embedding_msg.telemetry_id, embedding_msg.id)
+
+    @staticmethod
+    def _record_request_failure(embedding_msg: EmbeddingMsg, message: str) -> None:
+        tracker = get_request_wait_tracker()
+        if embedding_msg.semantic_msg_id:
+            tracker.record_embedding_error(embedding_msg.telemetry_id, message)
+        else:
+            tracker.mark_embedding_failed(embedding_msg.telemetry_id, embedding_msg.id, message)

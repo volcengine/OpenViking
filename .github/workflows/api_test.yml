@@ -59,19 +59,12 @@ jobs:
 
       - name: Cache Go modules
         uses: actions/cache@v5
+        continue-on-error: true
         with:
           path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          key: ${{ runner.os }}-go-${{ hashFiles('third_party/agfs/**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-
-
-      - name: Cache C++ extensions
-        uses: actions/cache@v5
-        with:
-          path: openviking/pyagfs
-          key: ${{ runner.os }}-cpp-${{ hashFiles('**/CMakeLists.txt', '**/*.cpp', '**/*.h') }}
-          restore-keys: |
-            ${{ runner.os }}-cpp-
 
       - name: Cache Python dependencies (Unix)
         if: runner.os != 'Windows'
@@ -94,7 +87,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.22'
+          go-version: '1.25.1'
 
       - name: Install system dependencies (Ubuntu)
         if: runner.os == 'Linux'

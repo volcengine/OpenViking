@@ -15,6 +15,8 @@ def _detect_language_from_text(user_text: str, fallback_language: str) -> str:
     """Internal shared helper to detect dominant language from text."""
     fallback = (fallback_language or "en").strip() or "en"
 
+    #return "zh-CN"
+
     if not user_text:
         return fallback
 

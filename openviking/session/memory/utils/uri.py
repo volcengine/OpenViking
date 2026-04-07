@@ -104,12 +104,12 @@ def generate_uri(
     if not uri_template:
         raise ValueError("Memory type has neither directory nor filename_template")
 
-    # Build the context for Jinja2 rendering
+    # Build the context for Jinja2 rendering - include user_space and agent_space
     context = {
         "user_space": user_space,
         "agent_space": agent_space,
     }
-    # Add all fields to context
+    # Add all fields to context (uri_fields with actual values)
     context.update(fields)
 
     # Render using unified render_template method (same as content_template)
@@ -281,6 +281,7 @@ def is_uri_allowed_for_schema(
     schemas: List[MemoryTypeSchema],
     user_space: str = "default",
     agent_space: str = "default",
+    extract_context: Any = None,
 ) -> bool:
     """
     Check if a URI is allowed for the given activated schemas.
@@ -290,12 +291,15 @@ def is_uri_allowed_for_schema(
         schemas: List of activated memory type schemas
         user_space: User space to substitute for {{ user_space }}
         agent_space: Agent space to substitute for {{ agent_space }}
+        extract_context: ExtractContext instance for template rendering
 
     Returns:
         True if the URI is allowed
     """
     allowed_dirs = collect_allowed_directories(schemas, user_space, agent_space, extract_context)
-    allowed_patterns = collect_allowed_path_patterns(schemas, user_space, agent_space, extract_context)
+    allowed_patterns = collect_allowed_path_patterns(
+        schemas, user_space, agent_space, extract_context
+    )
     return is_uri_allowed(uri, allowed_dirs, allowed_patterns)
 
 
@@ -424,8 +428,8 @@ class ResolvedOperations:
     """Operations with resolved URIs."""
 
     def __init__(self):
-        self.write_operations: List[ResolvedOperation] = []
-        self.edit_operations: List[ResolvedOperation] = []
+        # Unified operations list - all are edit (will read existing file first)
+        self.operations: List[ResolvedOperation] = []
         self.edit_overview_operations: List[
             Tuple[Any, str]
         ] = []  # (overview_edit_model, overview_uri)
@@ -446,7 +450,9 @@ def resolve_all_operations(
     """
     Resolve URIs for all operations.
 
-    Supports both legacy format (write_uris/edit_uris) and new per-memory_type format.
+    Uses per-memory_type format (e.g., soul, identity fields).
+    All operations are unified into a single list - each will attempt to read existing
+    file first, then merge (or write new if not exists).
 
     Args:
         operations: StructuredMemoryOperations
@@ -470,67 +476,32 @@ def resolve_all_operations(
                 continue
             items = value if isinstance(value, list) else [value]
             for item in items:
-                # Determine if edit (has uri) or write
-                is_edit = False
-                if hasattr(item, "uri") and item.uri:
-                    is_edit = True
-                elif isinstance(item, dict) and item.get("uri"):
-                    is_edit = True
                 # Convert to dict for URI resolution
                 item_dict = dict(item) if hasattr(item, "model_dump") else dict(item)
                 try:
                     uri = resolve_flat_model_uri(
-                        item_dict, registry, user_space, agent_space,
-                        memory_type=field_name, extract_context=extract_context
+                        item_dict,
+                        registry,
+                        user_space,
+                        agent_space,
+                        memory_type=field_name,
+                        extract_context=extract_context,
                     )
-                    if is_edit:
-                        resolved.edit_operations.append(
-                            ResolvedOperation(model=item_dict, uri=uri, memory_type=field_name)
-                        )
-                    else:
-                        resolved.write_operations.append(
-                            ResolvedOperation(model=item_dict, uri=uri, memory_type=field_name)
-                        )
+                    # All operations go to unified list - will read existing file first
+                    resolved.operations.append(
+                        ResolvedOperation(model=item_dict, uri=uri, memory_type=field_name)
+                    )
                 except Exception as e:
                     resolved.errors.append(f"Failed to resolve {field_name} operation: {e}")
-    else:
-        # Legacy format
-        write_uris = operations.write_uris if hasattr(operations, "write_uris") else []
-        edit_uris = operations.edit_uris if hasattr(operations, "edit_uris") else []
-
-        for op in write_uris:
-            try:
-                uri = resolve_flat_model_uri(
-                    op, registry, user_space, agent_space, extract_context=extract_context
-                )
-                # Legacy format: try to get memory_type from model, otherwise empty
-                memory_type = op.get("memory_type", "") if isinstance(op, dict) else ""
-                resolved.write_operations.append(
-                    ResolvedOperation(model=op, uri=uri, memory_type=memory_type)
-                )
-            except Exception as e:
-                resolved.errors.append(f"Failed to resolve write operation: {e}")
-
-        for op in edit_uris:
-            try:
-                uri = resolve_flat_model_uri(
-                    op, registry, user_space, agent_space, extract_context=extract_context
-                )
-                memory_type = op.get("memory_type", "") if isinstance(op, dict) else ""
-                resolved.edit_operations.append(
-                    ResolvedOperation(model=op, uri=uri, memory_type=memory_type)
-                )
-            except Exception as e:
-                resolved.errors.append(f"Failed to resolve edit operation: {e}")
 
     # Resolve edit_overview operations (overview edit models)
-    if hasattr(operations, "edit_overview_uris"):
-        for op in operations.edit_overview_uris:
-            try:
-                uri = resolve_overview_edit_uri(op, registry, user_space, agent_space)
-                resolved.edit_overview_operations.append((op, uri))
-            except Exception as e:
-                resolved.errors.append(f"Failed to resolve edit_overview operation: {e}")
+    # if hasattr(operations, "edit_overview_uris"):
+    #     for op in operations.edit_overview_uris:
+    #         try:
+    #             uri = resolve_overview_edit_uri(op, registry, user_space, agent_space)
+    #             resolved.edit_overview_operations.append((op, uri))
+    #         except Exception as e:
+    #             resolved.errors.append(f"Failed to resolve edit_overview operation: {e}")
 
     # Resolve delete operations (already URI strings)
     if hasattr(operations, "delete_uris"):
@@ -567,24 +538,24 @@ def validate_operations_uris(
         Tuple of (is_valid, list of error messages)
     """
     allowed_dirs = collect_allowed_directories(schemas, user_space, agent_space, extract_context)
-    allowed_patterns = collect_allowed_path_patterns(schemas, user_space, agent_space, extract_context)
+    allowed_patterns = collect_allowed_path_patterns(
+        schemas, user_space, agent_space, extract_context
+    )
 
     errors = []
 
     # First resolve all URIs
-    resolved = resolve_all_operations(operations, registry, user_space, agent_space, extract_context)
+    resolved = resolve_all_operations(
+        operations, registry, user_space, agent_space, extract_context
+    )
 
     if resolved.has_errors():
         errors.extend(resolved.errors)
     else:
-        # Validate resolved URIs
-        for resolved_op in resolved.write_operations:
+        # Validate resolved URIs - all operations use unified list
+        for resolved_op in resolved.operations:
             if not is_uri_allowed(resolved_op.uri, allowed_dirs, allowed_patterns):
-                errors.append(f"Write operation URI not allowed: {resolved_op.uri}")
-
-        for resolved_op in resolved.edit_operations:
-            if not is_uri_allowed(resolved_op.uri, allowed_dirs, allowed_patterns):
-                errors.append(f"Edit operation URI not allowed: {resolved_op.uri}")
+                errors.append(f"Operation URI not allowed: {resolved_op.uri}")
 
         for _op, uri in resolved.edit_overview_operations:
             if not is_uri_allowed(uri, allowed_dirs, allowed_patterns):

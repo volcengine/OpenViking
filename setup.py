@@ -75,6 +75,7 @@ class OpenVikingBuildExt(build_ext):
     def run(self):
         self.build_agfs_artifacts()
         self.build_ov_cli_artifact()
+        self.build_ragfs_python_artifact()
         self.cmake_executable = CMAKE_PATH
 
         for ext in self.extensions:
@@ -374,6 +375,100 @@ class OpenVikingBuildExt(build_ext):
             else:
                 print("[Warning] Cargo not found. Cannot build ov CLI from source.")
 
+    def build_ragfs_python_artifact(self):
+        """Build ragfs-python (Rust AGFS binding) via maturin and copy the native
+        extension into ``openviking/lib/`` so it ships inside the openviking wheel.
+
+        This is a best-effort build — the Go binding serves as fallback,
+        so failure here is non-fatal.
+        """
+        ragfs_python_dir = Path("crates/ragfs-python").resolve()
+        ragfs_lib_dir = Path("openviking/lib").resolve()
+
+        if not ragfs_python_dir.exists():
+            print("[Info] ragfs-python source directory not found. Skipping.")
+            return
+
+        if os.environ.get("OV_SKIP_RAGFS_BUILD") == "1":
+            print("[OK] Skipping ragfs-python build (OV_SKIP_RAGFS_BUILD=1)")
+            return
+
+        maturin_cmd = shutil.which("maturin")
+        if not maturin_cmd:
+            print(
+                "[SKIP] maturin not found. ragfs-python (Rust binding) will not be built.\n"
+                "       Install maturin to enable: pip install maturin\n"
+                "       The Go binding will be used as fallback."
+            )
+            return
+
+        import tempfile
+        import zipfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            try:
+                print("Building ragfs-python (Rust AGFS binding) via maturin...")
+                env = os.environ.copy()
+                build_args = [maturin_cmd, "build", "--release", "--out", tmpdir]
+                # Respect CARGO_BUILD_TARGET for cross-compilation
+                target = env.get("CARGO_BUILD_TARGET")
+                if target:
+                    build_args.extend(["--target", target])
+
+                result = subprocess.run(
+                    build_args,
+                    cwd=str(ragfs_python_dir),
+                    env=env,
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                if result.stdout:
+                    print(result.stdout.decode("utf-8", errors="replace"))
+                if result.stderr:
+                    print(result.stderr.decode("utf-8", errors="replace"))
+
+                # Extract the native .so/.pyd from the built wheel.
+                whl_files = list(Path(tmpdir).glob("ragfs_python-*.whl"))
+                if not whl_files:
+                    print("[Warning] maturin produced no wheel. Skipping ragfs-python.")
+                    return
+
+                ragfs_lib_dir.mkdir(parents=True, exist_ok=True)
+                extracted = False
+                with zipfile.ZipFile(str(whl_files[0])) as zf:
+                    for name in zf.namelist():
+                        basename = Path(name).name
+                        # Match: ragfs_python.cpython-312-darwin.so, ragfs_python.cp312-win_amd64.pyd, etc.
+                        if basename.startswith("ragfs_python") and (
+                            basename.endswith(".so") or basename.endswith(".pyd")
+                        ):
+                            target_path = ragfs_lib_dir / basename
+                            with zf.open(name) as src, open(target_path, "wb") as dst:
+                                dst.write(src.read())
+                            if sys.platform != "win32":
+                                os.chmod(str(target_path), 0o755)
+                            print(f"[OK] ragfs-python: extracted {basename} -> {target_path}")
+                            extracted = True
+                            break
+
+                if not extracted:
+                    print("[Warning] Could not find ragfs_python .so/.pyd in built wheel.")
+                else:
+                    self._copy_artifacts_to_build_lib(target_lib=target_path)
+
+            except Exception as exc:
+                error_detail = ""
+                if isinstance(exc, subprocess.CalledProcessError):
+                    if exc.stdout:
+                        error_detail += exc.stdout.decode("utf-8", errors="replace")
+                    if exc.stderr:
+                        error_detail += exc.stderr.decode("utf-8", errors="replace")
+                print(f"[Warning] Failed to build ragfs-python: {exc}")
+                if error_detail:
+                    print(error_detail)
+                print("          The Go binding will be used as fallback.")
+
     def build_extension(self, ext):
         """Build a single Python native extension artifact using CMake."""
         if getattr(self, "_engine_extensions_built", False):
@@ -478,6 +573,8 @@ setup(
             "lib/libagfsbinding.so",
             "lib/libagfsbinding.dylib",
             "lib/libagfsbinding.dll",
+            "lib/ragfs_python*.so",
+            "lib/ragfs_python*.pyd",
             "bin/ov",
             "bin/ov.exe",
             "console/static/**/*",

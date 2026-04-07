@@ -218,6 +218,7 @@ async def add_resource(
             timeout=request.timeout,
             tags=canonicalize_user_tags(request.tags),
             allow_local_path_resolution=allow_local_path_resolution,
+            enforce_public_remote_targets=True,
             **kwargs,
         ),
     )

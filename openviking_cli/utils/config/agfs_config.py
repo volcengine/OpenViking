@@ -103,6 +103,13 @@ class AGFSConfig(BaseModel):
         description="AGFS client mode: 'http-client' | 'binding-client'",
     )
 
+    impl: str = Field(
+        default="auto",
+        description="Binding implementation to use when mode is 'binding-client'. "
+        "'auto' = Rust first with Go fallback, 'rust' = Rust only, 'go' = Go only. "
+        "Can be overridden by the RAGFS_IMPL environment variable.",
+    )
+
     backend: str = Field(
         default="local", description="AGFS storage backend: 'local' | 's3' | 'memory'"
     )
@@ -135,6 +142,11 @@ class AGFSConfig(BaseModel):
         if self.mode not in ["http-client", "binding-client"]:
             raise ValueError(
                 f"Invalid AGFS mode: '{self.mode}'. Must be one of: 'http-client', 'binding-client'"
+            )
+
+        if self.impl not in ["auto", "rust", "go"]:
+            raise ValueError(
+                f"Invalid AGFS impl: '{self.impl}'. Must be one of: 'auto', 'rust', 'go'"
             )
 
         if self.backend not in ["local", "s3", "memory"]:

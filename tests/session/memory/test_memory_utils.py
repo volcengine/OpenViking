@@ -33,8 +33,8 @@ class TestUriGeneration:
         memory_type = MemoryTypeSchema(
             memory_type="preferences",
             description="User preference memory",
-            directory="viking://user/{user_space}/memories/preferences",
-            filename_template="{topic}.md",
+            directory="viking://user/{{ user_space }}/memories/preferences",
+            filename_template="{{ topic }}.md",
             fields=[
                 MemoryField(
                     name="topic",
@@ -64,8 +64,8 @@ class TestUriGeneration:
         memory_type = MemoryTypeSchema(
             memory_type="tools",
             description="Tool usage memory",
-            directory="viking://agent/{agent_space}/memories/tools",
-            filename_template="{tool_name}.md",
+            directory="viking://agent/{{ agent_space }}/memories/tools",
+            filename_template="{{ tool_name }}.md",
             fields=[
                 MemoryField(
                     name="tool_name",
@@ -89,7 +89,7 @@ class TestUriGeneration:
         memory_type = MemoryTypeSchema(
             memory_type="test",
             description="Test memory",
-            directory="viking://user/{user_space}/memories/test",
+            directory="viking://user/{{ user_space }}/memories/test",
             filename_template="",
             fields=[],
         )
@@ -104,7 +104,7 @@ class TestUriGeneration:
             memory_type="test",
             description="Test memory",
             directory="",
-            filename_template="{name}.md",
+            filename_template="{{ name }}.md",
             fields=[
                 MemoryField(
                     name="name",
@@ -124,8 +124,8 @@ class TestUriGeneration:
         memory_type = MemoryTypeSchema(
             memory_type="preferences",
             description="User preference memory",
-            directory="viking://user/{user_space}/memories/preferences",
-            filename_template="{topic}.md",
+            directory="viking://user/{{ user_space }}/memories/preferences",
+            filename_template="{{ topic }}.md",
             fields=[],
         )
 
@@ -137,8 +137,8 @@ class TestUriGeneration:
         memory_type = MemoryTypeSchema(
             memory_type="preferences",
             description="User preference memory",
-            directory="viking://user/{user_space}/memories/preferences",
-            filename_template="{topic}.md",
+            directory="viking://user/{{ user_space }}/memories/preferences",
+            filename_template="{{ topic }}.md",
             fields=[],
         )
 
@@ -150,8 +150,8 @@ class TestUriGeneration:
         memory_type = MemoryTypeSchema(
             memory_type="preferences",
             description="User preference memory",
-            directory="viking://user/{user_space}/memories/preferences",
-            filename_template="{topic}.md",
+            directory="viking://user/{{ user_space }}/memories/preferences",
+            filename_template="{{ topic }}.md",
             fields=[
                 MemoryField(
                     name="topic",
@@ -169,8 +169,8 @@ class TestUriGeneration:
         memory_type = MemoryTypeSchema(
             memory_type="preferences",
             description="User preference memory",
-            directory="viking://user/{user_space}/memories/preferences",
-            filename_template="{missing_field}.md",
+            directory="viking://user/{{ user_space }}/memories/preferences",
+            filename_template="{{ missing_field }}.md",
             fields=[
                 MemoryField(
                     name="topic",
@@ -205,15 +205,15 @@ class TestUriValidation:
             MemoryTypeSchema(
                 memory_type="preferences",
                 description="Preferences",
-                directory="viking://user/{user_space}/memories/preferences",
-                filename_template="{topic}.md",
+                directory="viking://user/{{ user_space }}/memories/preferences",
+                filename_template="{{ topic }}.md",
                 fields=[],
             ),
             MemoryTypeSchema(
                 memory_type="tools",
                 description="Tools",
-                directory="viking://agent/{agent_space}/memories/tools",
-                filename_template="{tool_name}.md",
+                directory="viking://agent/{{ agent_space }}/memories/tools",
+                filename_template="{{ tool_name }}.md",
                 fields=[],
             ),
             MemoryTypeSchema(
@@ -241,8 +241,8 @@ class TestUriValidation:
             MemoryTypeSchema(
                 memory_type="preferences",
                 description="Preferences",
-                directory="viking://user/{user_space}/memories/preferences",
-                filename_template="{topic}.md",
+                directory="viking://user/{{ user_space }}/memories/preferences",
+                filename_template="{{ topic }}.md",
                 fields=[],
             ),
         ]
@@ -252,7 +252,7 @@ class TestUriValidation:
         )
 
         assert patterns == {
-            "viking://user/default/memories/preferences/{topic}.md",
+            "viking://user/default/memories/preferences/{{ topic }}.md",
         }
 
     def test_is_uri_allowed_by_directory(self):
@@ -294,7 +294,7 @@ class TestUriValidation:
         """Test URI allowed by matching pattern."""
         allowed_dirs = set()
         allowed_patterns = {
-            "viking://user/default/memories/preferences/{topic}.md",
+            "viking://user/default/memories/preferences/{{ topic }}.md",
         }
 
         assert (
@@ -337,8 +337,8 @@ class TestUriValidation:
             MemoryTypeSchema(
                 memory_type="preferences",
                 description="Preferences",
-                directory="viking://user/{user_space}/memories/preferences",
-                filename_template="{topic}.md",
+                directory="viking://user/{{ user_space }}/memories/preferences",
+                filename_template="{{ topic }}.md",
                 fields=[],
             ),
         ]
@@ -373,8 +373,8 @@ class TestUriResolution:
             MemoryTypeSchema(
                 memory_type="preferences",
                 description="User preferences",
-                directory="viking://user/{user_space}/memories/preferences",
-                filename_template="{topic}.md",
+                directory="viking://user/{{ user_space }}/memories/preferences",
+                filename_template="{{ topic }}.md",
                 fields=[
                     MemoryField(name="topic", field_type=FieldType.STRING, description="Topic"),
                 ],
@@ -386,8 +386,8 @@ class TestUriResolution:
             MemoryTypeSchema(
                 memory_type="tools",
                 description="Tool memories",
-                directory="viking://agent/{agent_space}/memories/tools",
-                filename_template="{tool_name}.md",
+                directory="viking://agent/{{ agent_space }}/memories/tools",
+                filename_template="{{ tool_name }}.md",
                 fields=[
                     MemoryField(
                         name="tool_name", field_type=FieldType.STRING, description="Tool name"
@@ -398,88 +398,39 @@ class TestUriResolution:
 
         return registry
 
-    def test_resolve_write_uri(self, test_registry):
-        """Test resolving URI for WriteOp."""
-        write_op = WriteOp(
-            memory_type="preferences",
-            fields={"topic": "Python code style"},
-            content="Test content",
-        )
-
-        uri = resolve_write_uri(write_op, test_registry)
-
-        assert uri == "viking://user/default/memories/preferences/Python code style.md"
-
-    def test_resolve_write_uri_unknown_type(self, test_registry):
-        """Test resolving WriteOp with unknown memory type."""
-        write_op = WriteOp(
-            memory_type="unknown_type",
-            fields={},
-        )
-
-        with pytest.raises(ValueError, match="Unknown memory type"):
-            resolve_write_uri(write_op, test_registry)
-
-    def test_resolve_edit_target(self, test_registry):
-        """Test resolving target URI for EditOp."""
-        uri = resolve_edit_target(
-            "tools",
-            {"tool_name": "web_search"},
-            test_registry,
-        )
-
-        assert uri == "viking://agent/default/memories/tools/web_search.md"
-
-    def test_resolve_delete_target(self, test_registry):
-        """Test resolving target URI for DeleteOp."""
-        uri = resolve_delete_target(
-            "preferences",
-            {"topic": "Test topic"},
-            test_registry,
-        )
-
-        assert uri == "viking://user/default/memories/preferences/Test topic.md"
-
     def test_resolve_all_operations(self, test_registry):
         """Test resolving all operations at once."""
         operations = MemoryOperations(
             write_uris=[
-                WriteOp(
-                    memory_type="preferences",
-                    fields={"topic": "Write test"},
-                    content="Write content",
-                ),
+                {
+                    "memory_type": "preferences",
+                    "topic": "Write test",
+                    "content": "Write content",
+                },
             ],
             edit_uris=[
-                EditOp(
-                    memory_type="tools",
-                    fields={"tool_name": "edit_tool"},
-                    patches={"content": "Updated"},
-                ),
+                {
+                    "memory_type": "tools",
+                    "tool_name": "edit_tool",
+                    "content": "Updated",
+                },
             ],
             delete_uris=[
-                DeleteOp(
-                    memory_type="preferences",
-                    fields={"topic": "Delete me"},
-                ),
+                "viking://user/default/memories/preferences/Delete me.md",
             ],
         )
 
         resolved = resolve_all_operations(operations, test_registry)
 
         assert resolved.has_errors() is False
-        assert len(resolved.write_operations) == 1
-        assert len(resolved.edit_operations) == 1
+        # All operations are now unified into operations list
+        assert len(resolved.operations) == 2
         assert len(resolved.delete_operations) == 1
 
-        # Verify resolved URIs
-        assert (
-            resolved.write_operations[0].uri
-            == "viking://user/default/memories/preferences/Write test.md"
-        )
-        assert (
-            resolved.edit_operations[0].uri == "viking://agent/default/memories/tools/edit_tool.md"
-        )
+        # Verify resolved URIs - both write and edit go to operations list
+        uris = [op.uri for op in resolved.operations]
+        assert "viking://user/default/memories/preferences/Write test.md" in uris
+        assert "viking://agent/default/memories/tools/edit_tool.md" in uris
         assert (
             resolved.delete_operations[0][1]
             == "viking://user/default/memories/preferences/Delete me.md"
@@ -489,10 +440,9 @@ class TestUriResolution:
         """Test resolving operations with errors."""
         operations = MemoryOperations(
             write_uris=[
-                WriteOp(
-                    memory_type="unknown",
-                    fields={},
-                ),
+                {
+                    "memory_type": "unknown",
+                },
             ],
         )
 
@@ -500,7 +450,7 @@ class TestUriResolution:
 
         assert resolved.has_errors() is True
         assert len(resolved.errors) == 1
-        assert "Failed to resolve write operation" in resolved.errors[0]
+        assert "Failed to resolve" in resolved.errors[0]
 
 
 class TestParseMemoryFileWithFields:
@@ -519,25 +469,23 @@ class TestParseMemoryFileWithFields:
 Here is the actual file content.
 It has multiple lines."""
         result = parse_memory_file_with_fields(content)
-        assert result["fields"] is not None
-        assert result["fields"]["tool_name"] == "web_search"
-        assert result["fields"]["static_desc"] == "Searches the web for information"
-        assert result["fields"]["total_calls"] == 100
-        assert result["fields"]["success_count"] == 92
+        assert result["tool_name"] == "web_search"
+        assert result["static_desc"] == "Searches the web for information"
+        assert result["total_calls"] == 100
+        assert result["success_count"] == 92
         assert "Here is the actual file content" in result["content"]
         assert "<!-- MEMORY_FIELDS" not in result["content"]
 
-    def test_returns_null_fields_when_no_comment(self):
-        """Test returns null fields when no MEMORY_FIELDS comment."""
+    def test_returns_only_content_when_no_comment(self):
+        """Test returns only content when no MEMORY_FIELDS comment."""
         content = "Just plain file content\nwithout any special comments"
         result = parse_memory_file_with_fields(content)
-        assert result["fields"] is None
+        assert list(result.keys()) == ["content"]
         assert result["content"] == content
 
     def test_handles_empty_content(self):
         """Test handles empty string input."""
         result = parse_memory_file_with_fields("")
-        assert result["fields"] is None
         assert result["content"] == ""
 
     def test_handles_invalid_json_in_comment(self):
@@ -550,8 +498,9 @@ It has multiple lines."""
 -->
 File content"""
         result = parse_memory_file_with_fields(content)
-        assert result["fields"] is None
         assert "File content" in result["content"]
+        # No extra fields added
+        assert "not" not in result
 
     def test_removes_comment_from_content(self):
         """Test that the comment is completely removed from content."""
@@ -562,15 +511,13 @@ After comment"""
         assert "<!-- MEMORY_FIELDS" not in result["content"]
         assert "Before comment" in result["content"]
         assert "After comment" in result["content"]
-        # The comment should be removed, leaving the surrounding content
-        assert "Before comment" in result["content"]
-        assert "After comment" in result["content"]
+        assert result["test"] == "value"
 
     def test_fields_on_same_line(self):
         """Test MEMORY_FIELDS on single line."""
         content = """<!-- MEMORY_FIELDS {"tool_name": "test", "value": 42} -->
 Content"""
         result = parse_memory_file_with_fields(content)
-        assert result["fields"] is not None
-        assert result["fields"]["tool_name"] == "test"
-        assert result["fields"]["value"] == 42
+        assert result["tool_name"] == "test"
+        assert result["value"] == 42
+        assert result["content"] == "Content"

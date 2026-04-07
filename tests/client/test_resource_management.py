@@ -4,9 +4,14 @@
 """Resource management tests"""
 
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from openviking import AsyncOpenViking
+from openviking.client import LocalClient
+from openviking.server.identity import RequestContext, Role
+from openviking.telemetry import get_current_telemetry
+from openviking_cli.session.user_id import UserIdentifier
 
 
 class TestAddResource:
@@ -32,6 +37,44 @@ class TestAddResource:
         print(result)
         assert "root_uri" in result
         assert "queue_status" in result
+
+    async def test_local_client_add_resource_with_wait_preserves_queue_status(self):
+        """Local SDK add_resource(wait=True) should keep queue_status and internal telemetry."""
+        queue_status = {
+            "Semantic": {"processed": 1, "error_count": 0, "errors": []},
+            "Embedding": {"processed": 2, "error_count": 0, "errors": []},
+        }
+        seen: dict[str, object] = {}
+
+        async def _fake_add_resource(**kwargs):
+            telemetry = get_current_telemetry()
+            seen["enabled"] = telemetry.enabled
+            seen["telemetry_id"] = telemetry.telemetry_id
+            seen["kwargs"] = kwargs
+            return {
+                "root_uri": "viking://resources/demo",
+                "queue_status": queue_status,
+            }
+
+        client = LocalClient.__new__(LocalClient)
+        client._ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+        client._service = SimpleNamespace(
+            resources=SimpleNamespace(add_resource=_fake_add_resource)
+        )
+
+        result = await LocalClient.add_resource(
+            client,
+            path="/tmp/demo.md",
+            reason="Test resource",
+            wait=True,
+            telemetry=False,
+        )
+
+        assert result["root_uri"] == "viking://resources/demo"
+        assert result["queue_status"] == queue_status
+        assert seen["enabled"] is True
+        assert str(seen["telemetry_id"]).startswith("tm_")
+        assert seen["kwargs"]["wait"] is True
 
     async def test_add_resource_without_wait(
         self, client: AsyncOpenViking, sample_markdown_file: Path

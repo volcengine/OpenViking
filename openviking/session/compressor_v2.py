@@ -18,6 +18,7 @@ from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
+from openviking.telemetry import tracer
 from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
@@ -98,7 +99,13 @@ class SessionCompressorV2:
             logger.warning("No RequestContext provided, skipping memory extraction")
             return []
 
-        logger.info("Starting v2 memory extraction from conversation")
+        tracer.info("Starting v2 memory extraction from conversation")
+
+        # Initialize default memory files (soul.md, identity.md) if not exist
+        from openviking.session.memory.memory_type_registry import create_default_registry
+
+        registry = create_default_registry()
+        await registry.initialize_memory_files(ctx)
 
         # Initialize telemetry to 0 (matching v1 pattern)
         telemetry = get_current_telemetry()
@@ -142,6 +149,7 @@ class SessionCompressorV2:
                     agent_space = ctx.user.agent_space_name() if ctx and ctx.user else "default"
                     # 使用 Jinja2 渲染 directory
                     import jinja2
+
                     env = jinja2.Environment(autoescape=False)
                     template = env.from_string(schema.directory)
                     dir_path = template.render(user_space=user_space, agent_space=agent_space)
@@ -168,7 +176,7 @@ class SessionCompressorV2:
             operations, tools_used = await orchestrator.run()
 
             if operations is None:
-                logger.info("No memory operations generated")
+                tracer.info("No memory operations generated")
                 return []
 
             # Convert to legacy format for logging and apply_operations
@@ -185,9 +193,9 @@ class SessionCompressorV2:
             registry = orchestrator.context_provider._get_registry()
             updater = self._get_or_create_updater(registry, transaction_handle)
 
-            logger.info(
+            tracer.info(
                 f"Generated memory operations: write={len(write_uris)}, "
-                f"edit={len(edit_uris)}, edit_overview={len(operations.edit_overview_uris)}, "
+                f"edit={len(edit_uris)} "
                 f"delete={len(operations.delete_uris)}"
             )
 
@@ -201,7 +209,7 @@ class SessionCompressorV2:
                 operations, ctx, registry=registry, extract_context=extract_context
             )
 
-            logger.info(
+            tracer.info(
                 f"Applied memory operations: written={len(result.written_uris)}, "
                 f"edited={len(result.edited_uris)}, deleted={len(result.deleted_uris)}, "
                 f"errors={len(result.errors)}"

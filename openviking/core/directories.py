@@ -204,6 +204,7 @@ class DirectoryInitializer:
         count += await self._initialize_children(
             "agent", agent_tree.children, agent_space_root, ctx=ctx
         )
+
         return count
 
     async def _ensure_directory(

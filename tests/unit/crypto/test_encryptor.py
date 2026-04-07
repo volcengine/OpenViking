@@ -61,6 +61,16 @@ async def test_decrypt_unencrypted_data(encryptor):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("plaintext", [b"", b"a", b"ab", b"abc"])
+async def test_decrypt_unencrypted_short_plaintext(encryptor, plaintext):
+    """Test decrypting unencrypted plaintext shorter than the magic header."""
+    account_id = "test_account"
+
+    decrypted = await encryptor.decrypt(account_id, plaintext)
+    assert decrypted == plaintext
+
+
+@pytest.mark.asyncio
 async def test_decrypt_corrupted_ciphertext(encryptor):
     """Test decrypting corrupted ciphertext."""
     account_id = "test_account"
@@ -83,6 +93,45 @@ async def test_encrypt_empty_data(encryptor):
 
     decrypted = await encryptor.decrypt(account_id, ciphertext)
     assert decrypted == b""
+
+
+@pytest.mark.asyncio
+async def test_decrypt_empty_plaintext(encryptor):
+    """Test decrypting empty plaintext bytes (not encrypted-empty, but raw b'').
+
+    Regression test: decrypt() used to raise 'Ciphertext too short' on empty
+    files because it checked length before the magic header.
+    """
+    account_id = "test_account"
+    decrypted = await encryptor.decrypt(account_id, b"")
+    assert decrypted == b""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("data", [b"X", b"AB", b"ABC"])
+async def test_decrypt_short_plaintext_less_than_4_bytes(encryptor, data):
+    """Test decrypting plaintext shorter than 4 bytes (magic length).
+
+    Regression test: these used to raise InvalidMagicError('Ciphertext too short')
+    because length was checked before the magic prefix.
+    """
+    account_id = "test_account"
+    decrypted = await encryptor.decrypt(account_id, data)
+    assert decrypted == data
+
+
+@pytest.mark.asyncio
+async def test_decrypt_magic_prefix_without_full_header(encryptor):
+    """Test decrypting data that starts with 'OVE1' but has no valid envelope.
+
+    Should raise CorruptedCiphertextError because the envelope header is
+    incomplete (needs at least 12 bytes).
+    """
+    account_id = "test_account"
+    from openviking.crypto.exceptions import CorruptedCiphertextError
+
+    with pytest.raises(CorruptedCiphertextError):
+        await encryptor.decrypt(account_id, b"OVE1")
 
 
 @pytest.mark.asyncio

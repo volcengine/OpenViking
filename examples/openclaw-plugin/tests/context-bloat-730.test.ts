@@ -115,7 +115,7 @@ describe("Slice D: recallMaxContentChars truncation", () => {
   it("should have recallMaxContentChars and recallPreferAbstract in parsed config", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({});
     expect(cfg.recallMaxContentChars).toBe(500);
-    expect(cfg.recallPreferAbstract).toBe(true);
+    expect(cfg.recallPreferAbstract).toBe(false);
   });
 });
 

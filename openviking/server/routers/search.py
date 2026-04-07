@@ -70,6 +70,7 @@ class GrepRequest(BaseModel):
     pattern: str
     case_insensitive: bool = False
     node_limit: Optional[int] = None
+    level_limit: int = 5
 
 
 class GlobRequest(BaseModel):
@@ -167,6 +168,7 @@ async def grep(
         exclude_uri=request.exclude_uri,
         case_insensitive=request.case_insensitive,
         node_limit=request.node_limit,
+        level_limit=request.level_limit,
     )
     return Response(status="ok", result=result)
 

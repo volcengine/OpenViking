@@ -1,4 +1,4 @@
-import json
+import os
 import uuid
 
 
@@ -27,16 +27,17 @@ class TestPack:
             response = api_client.export_ovpack(uri=test_uri, to=test_export_path)
             print(f"\nExport ovpack API status code: {response.status_code}")
 
-            data = response.json()
-            print("\n" + "=" * 80)
-            print("Export OVPack API Response:")
-            print("=" * 80)
-            print(json.dumps(data, indent=2, ensure_ascii=False))
-            print("=" * 80 + "\n")
+            # The response is now a file stream, not JSON
+            assert response.status_code == 200, f"Expected status 200, got {response.status_code}"
 
-            assert data.get("status") == "ok", f"Expected status 'ok', got {data.get('status')}"
-            assert data.get("error") is None, f"Expected error to be null, got {data.get('error')}"
-            assert "result" in data, "'result' field should exist"
+            # Verify the file was created
+            assert os.path.exists(test_export_path), (
+                f"Export file not created at {test_export_path}"
+            )
+            assert os.path.getsize(test_export_path) > 0, "Export file is empty"
+
+            print(f"\nSuccessfully exported to {test_export_path}")
+            print(f"File size: {os.path.getsize(test_export_path)} bytes")
 
         except Exception as e:
             print(f"Error: {e}")

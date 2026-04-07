@@ -72,6 +72,19 @@ class StrPatch(BaseModel):
         description="List of SEARCH/REPLACE blocks to apply. PREFER direct string replacement over SEARCH/REPLACE when possible. When using SEARCH/REPLACE, only include the specific line(s) to change, never the entire section.",
     )
 
+    def get_first_replace(self) -> Optional[str]:
+        """Get the replace content from the first block.
+
+        Useful when there's no original content to match against,
+        so we use the replace content directly.
+
+        Returns:
+            The replace content from first block, or None if no blocks
+        """
+        if self.blocks:
+            return self.blocks[0].replace
+        return None
+
 
 class MergeOp(str, Enum):
     """Merge operation enumeration."""

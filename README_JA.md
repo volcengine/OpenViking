@@ -495,6 +495,8 @@ OpenViking統合後：
 
 👉 **[参照: OpenCodeメモリプラグインの例](examples/opencode-memory-plugin/README.md)**
 
+👉 **[参照: Claude Codeメモリプラグインの例](examples/claude-code-memory-plugin/README.md)**
+
 --
 
 ## コアコンセプト

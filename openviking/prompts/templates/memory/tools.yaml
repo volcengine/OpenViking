@@ -1,6 +1,17 @@
 memory_type: tools
 description: |
-  Record all tool calls
+  Record all tool calls, and extract tool usage patterns, execution results, and learnings from tool calls.
+
+  What to extract:
+  - Successful tool usage patterns with context
+  - Failed tool attempts with lessons learned
+  - Tool combinations that work well together
+  - Performance insights: which tools are fast/slow for different tasks
+
+  What NOT to extract:
+  - Trivial tool calls without learning value
+  - Duplicate patterns already captured
+  - Tool calls with no meaningful outcome
 directory: "viking://agent/{{ agent_space }}/memories/tools"
 filename_template: "{{ tool_name }}.md"
 enabled: true
@@ -11,7 +22,7 @@ content_template: |
   "{{ static_desc|default('N/A') }}"
 
   - Success rate: {{ ((success_time|default(0) / (call_count|default(1) if call_count|default(0) > 0 else 1)) * 100)|round|int }}% ({{ success_time|default(0) }}/{{ call_count|default(0) }})
-  - Best for: {{ best_for|default('N/A') }}
+  - When to use: {{ when_to_use|default('N/A') }}
   - Optimal params: {{ optimal_params|default('N/A') }}
   - Common failures: {{ common_failures|default('N/A') }}
   - Recommendation: {{ recommendation|default('N/A') }}
@@ -47,11 +58,11 @@ fields:
       Counts calls with status "completed".
     merge_op: sum
 
-  - name: best_for
+  - name: when_to_use
     type: string
     description: |
-      Best use cases for the tool, describing in what scenarios this tool works best.
-      Examples: "Technical documentation, tutorials, API references"
+      Hint for when this tool should be retrieved and used, describing in what scenarios this tool works best.
+      Examples: "When needing to read configuration files or JSON data from filesystem; When handling file read errors or implementing robust file operations"
     merge_op: patch
 
   - name: optimal_params

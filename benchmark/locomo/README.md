@@ -10,9 +10,10 @@ benchmark/locomo/
 │   ├── run_eval.py     # 运行 QA 评估
 │   ├── judge.py        # LLM 裁判打分
 │   ├── import_to_ov.py # 导入数据到 OpenViking
-│   ├── stat_judge_result.py  # 统计评分结果
-│   ├── run_full_eval.sh      # 一键运行完整评测流程
-│   ├── test_data/      # 测试数据目录
+│   ├── import_and_eval_one.sh  # 单题/批量测试脚本
+│   ├── stat_judge_result.py    # 统计评分结果
+│   ├── run_full_eval.sh        # 一键运行完整评测流程
+│   ├── data/           # 测试数据目录
 │   └── result/         # 评测结果目录
 └── openclaw/           # OpenClaw 评测脚本
     └── eval.py         # OpenClaw 评估脚本
@@ -28,10 +29,32 @@ benchmark/locomo/
 
 ```bash
 cd benchmark/locomo/vikingbot
-bash run_full_eval.sh
+bash run_full_eval.sh        # 完整流程
+bash run_full_eval.sh --skip-import  # 跳过导入，仅评测
 ```
 
 该脚本会依次执行以下四个步骤：
+
+### 单题/批量测试
+
+使用 `import_and_eval_one.sh` 可以快速测试单个问题或批量测试某个 sample：
+
+```bash
+cd benchmark/locomo/vikingbot
+```
+
+**单题测试：**
+```bash
+./import_and_eval_one.sh 0 2          # sample 索引 0, question 2
+./import_and_eval_one.sh conv-26 2    # sample_id conv-26, question 2
+./import_and_eval_one.sh conv-26 2 --skip-import  # 跳过导入
+```
+
+**批量测试单个 sample：**
+```bash
+./import_and_eval_one.sh conv-26       # conv-26 所有问题
+./import_and_eval_one.sh conv-26 --skip-import
+```
 
 ### 分步使用说明
 
@@ -44,7 +67,7 @@ python import_to_ov.py --input <数据文件路径> [选项]
 ```
 
 **参数说明：**
-- `--input`: 输入文件路径（JSON 或 TXT 格式），默认 `./test_data/locomo10.json`
+- `--input`: 输入文件路径（JSON 或 TXT 格式），默认 `./data/locomo10.json`
 - `--sample`: 指定样本索引（0-based），默认处理所有样本
 - `--sessions`: 指定会话范围，例如 `1-4` 或 `3`，默认所有会话
 - `--parallel`: 并发导入数，默认 5
@@ -55,10 +78,10 @@ python import_to_ov.py --input <数据文件路径> [选项]
 **示例：**
 ```bash
 # 导入第一个样本的 1-4 会话
-python import_to_ov.py --input ./test_data/locomo10.json --sample 0 --sessions 1-4
+python import_to_ov.py --input ./data/locomo10.json --sample 0 --sessions 1-4
 
 # 强制重新导入所有数据
-python import_to_ov.py --input ./test_data/locomo10.json --force-ingest
+python import_to_ov.py --input ./data/locomo10.json --force-ingest
 ```
 
 #### 步骤 2: 运行 QA 评估
@@ -70,7 +93,7 @@ python run_eval.py <输入数据> [选项]
 ```
 
 **参数说明：**
-- `input`: 输入 JSON/CSV 文件路径，默认 `./test_data/locomo10.json`
+- `input`: 输入 JSON/CSV 文件路径，默认 `./data/locomo10.json`
 - `--output`: 输出 CSV 文件路径，默认 `./result/locomo_qa_result.csv`
 - `--sample`: 指定样本索引
 - `--count`: 运行的 QA 问题数量，默认全部
@@ -82,7 +105,7 @@ python run_eval.py <输入数据> [选项]
 python run_eval.py
 
 # 指定输入输出文件，使用 20 线程
-python run_eval.py ./test_data/locomo_qa_1528.csv --output ./result/my_result.csv --threads 20
+python run_eval.py ./data/locomo_qa_1528.csv --output ./result/my_result.csv --threads 20
 ```
 
 #### 步骤 3: LLM 裁判打分
