@@ -146,6 +146,9 @@ enum Commands {
         /// Watch interval in minutes for automatic resource monitoring (0 = no monitoring)
         #[arg(long, default_value = "0")]
         watch_interval: f64,
+        /// Tags for the resource (comma-separated)
+        #[arg(long)]
+        tags: Option<String>,
     },
     /// Add a skill into OpenViking
     AddSkill {
@@ -377,6 +380,9 @@ enum Commands {
         /// Score threshold
         #[arg(short, long)]
         threshold: Option<f64>,
+        /// Filter by tags (comma-separated)
+        #[arg(long)]
+        tags: Option<String>,
     },
     /// Run context-aware retrieval
     Search {
@@ -399,6 +405,9 @@ enum Commands {
         /// Score threshold
         #[arg(short, long)]
         threshold: Option<f64>,
+        /// Filter by tags (comma-separated)
+        #[arg(long)]
+        tags: Option<String>,
     },
     /// Run content pattern search
     Grep {
@@ -666,6 +675,7 @@ async fn main() {
             exclude,
             no_directly_upload_media,
             watch_interval,
+            tags,
         } => {
             handle_add_resource(
                 path,
@@ -681,6 +691,7 @@ async fn main() {
                 exclude,
                 no_directly_upload_media,
                 watch_interval,
+                tags,
                 ctx,
             )
             .await
@@ -794,14 +805,16 @@ async fn main() {
             uri,
             node_limit,
             threshold,
-        } => handle_find(query, uri, node_limit, threshold, ctx).await,
+            tags,
+        } => handle_find(query, uri, node_limit, threshold, tags, ctx).await,
         Commands::Search {
             query,
             uri,
             session_id,
             node_limit,
             threshold,
-        } => handle_search(query, uri, session_id, node_limit, threshold, ctx).await,
+            tags,
+        } => handle_search(query, uri, session_id, node_limit, threshold, tags, ctx).await,
         Commands::Grep {
             uri,
             exclude_uri,
@@ -837,6 +850,7 @@ async fn handle_add_resource(
     exclude: Option<String>,
     no_directly_upload_media: bool,
     watch_interval: f64,
+    tags: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let is_url =
@@ -910,6 +924,7 @@ async fn handle_add_resource(
         exclude,
         directly_upload_media,
         watch_interval,
+        tags,
         ctx.output_format,
         ctx.compact,
     )
@@ -1271,11 +1286,15 @@ async fn handle_find(
     uri: String,
     node_limit: i32,
     threshold: Option<f64>,
+    tags: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
     if let Some(t) = threshold {
         params.push(format!("--threshold {}", t));
+    }
+    if let Some(t) = &tags {
+        params.push(format!("--tags {}", t));
     }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov find", &params.join(" "), ctx.config.echo_command);
@@ -1286,6 +1305,7 @@ async fn handle_find(
         &uri,
         node_limit,
         threshold,
+        tags,
         ctx.output_format,
         ctx.compact,
     )
@@ -1298,6 +1318,7 @@ async fn handle_search(
     session_id: Option<String>,
     node_limit: i32,
     threshold: Option<f64>,
+    tags: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
@@ -1306,6 +1327,9 @@ async fn handle_search(
     }
     if let Some(t) = threshold {
         params.push(format!("--threshold {}", t));
+    }
+    if let Some(t) = &tags {
+        params.push(format!("--tags {}", t));
     }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov search", &params.join(" "), ctx.config.echo_command);
@@ -1317,6 +1341,7 @@ async fn handle_search(
         session_id,
         node_limit,
         threshold,
+        tags,
         ctx.output_format,
         ctx.compact,
     )

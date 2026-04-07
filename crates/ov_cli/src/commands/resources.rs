@@ -17,6 +17,7 @@ pub async fn add_resource(
     exclude: Option<String>,
     directly_upload_media: bool,
     watch_interval: f64,
+    tags: Option<String>,
     format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -35,6 +36,7 @@ pub async fn add_resource(
             exclude,
             directly_upload_media,
             watch_interval,
+            tags,
         )
         .await?;
     output_success(&result, format, compact);

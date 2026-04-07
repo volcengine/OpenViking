@@ -1,6 +1,7 @@
 use reqwest::{Client as ReqwestClient, StatusCode};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use std::collections::HashSet;
 use std::fs::File;
 use std::path::Path;
 use tempfile::{Builder, NamedTempFile};
@@ -483,14 +484,46 @@ impl HttpClient {
         uri: String,
         node_limit: i32,
         threshold: Option<f64>,
+        tags: Option<String>,
     ) -> Result<serde_json::Value> {
-        let body = serde_json::json!({
-            "query": query,
-            "target_uri": uri,
-            "limit": node_limit,
-            "score_threshold": threshold,
-        });
-        self.post("/api/v1/search/find", &body).await
+        let mut body_map = serde_json::Map::new();
+        body_map.insert("query".to_string(), serde_json::json!(query));
+        body_map.insert("target_uri".to_string(), serde_json::json!(uri));
+        body_map.insert("limit".to_string(), serde_json::json!(node_limit));
+        if let Some(t) = threshold {
+            body_map.insert("score_threshold".to_string(), serde_json::json!(t));
+        }
+        if let Some(t) = tags {
+            let mut tag_list: Vec<&str> = t
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect();
+            let mut seen = HashSet::new();
+            tag_list.retain(|s| seen.insert(*s));
+            if !tag_list.is_empty() {
+                let conds: Vec<_> = tag_list
+                    .into_iter()
+                    .map(|s| {
+                        serde_json::json!({
+                            "op": "contains",
+                            "field": "tags",
+                            "substring": s
+                        })
+                    })
+                    .collect();
+                let filter = if conds.len() == 1 {
+                    conds[0].clone()
+                } else {
+                    serde_json::json!({
+                        "op": "and",
+                        "conds": conds
+                    })
+                };
+                body_map.insert("filter".to_string(), filter);
+            }
+        }
+        self.post("/api/v1/search/find", &serde_json::Value::Object(body_map)).await
     }
 
     pub async fn search(
@@ -500,15 +533,49 @@ impl HttpClient {
         session_id: Option<String>,
         node_limit: i32,
         threshold: Option<f64>,
+        tags: Option<String>,
     ) -> Result<serde_json::Value> {
-        let body = serde_json::json!({
-            "query": query,
-            "target_uri": uri,
-            "session_id": session_id,
-            "limit": node_limit,
-            "score_threshold": threshold,
-        });
-        self.post("/api/v1/search/search", &body).await
+        let mut body_map = serde_json::Map::new();
+        body_map.insert("query".to_string(), serde_json::json!(query));
+        body_map.insert("target_uri".to_string(), serde_json::json!(uri));
+        if let Some(s) = session_id {
+            body_map.insert("session_id".to_string(), serde_json::json!(s));
+        }
+        body_map.insert("limit".to_string(), serde_json::json!(node_limit));
+        if let Some(t) = threshold {
+            body_map.insert("score_threshold".to_string(), serde_json::json!(t));
+        }
+        if let Some(t) = tags {
+            let mut tag_list: Vec<&str> = t
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect();
+            let mut seen = HashSet::new();
+            tag_list.retain(|s| seen.insert(*s));
+            if !tag_list.is_empty() {
+                let conds: Vec<_> = tag_list
+                    .into_iter()
+                    .map(|s| {
+                        serde_json::json!({
+                            "op": "contains",
+                            "field": "tags",
+                            "substring": s
+                        })
+                    })
+                    .collect();
+                let filter = if conds.len() == 1 {
+                    conds[0].clone()
+                } else {
+                    serde_json::json!({
+                        "op": "and",
+                        "conds": conds
+                    })
+                };
+                body_map.insert("filter".to_string(), filter);
+            }
+        }
+        self.post("/api/v1/search/search", &serde_json::Value::Object(body_map)).await
     }
 
     pub async fn grep(
@@ -560,6 +627,7 @@ impl HttpClient {
         exclude: Option<String>,
         directly_upload_media: bool,
         watch_interval: f64,
+        tags: Option<String>,
     ) -> Result<serde_json::Value> {
         let path_obj = Path::new(path);
 
@@ -587,6 +655,7 @@ impl HttpClient {
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
+                    "tags": tags,
                 });
 
                 self.post("/api/v1/resources", &body).await
@@ -607,6 +676,7 @@ impl HttpClient {
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
+                    "tags": tags,
                 });
 
                 self.post("/api/v1/resources", &body).await

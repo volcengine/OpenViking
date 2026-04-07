@@ -42,6 +42,7 @@ class BaseClient(ABC):
         wait: bool = False,
         timeout: Optional[float] = None,
         watch_interval: float = 0,
+        tags: Optional[str] = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
@@ -156,6 +157,7 @@ class BaseClient(ABC):
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        tags: Optional[str] = None,
         telemetry: TelemetryRequest = False,
     ) -> Any:
         """Semantic search without session context."""
@@ -170,6 +172,7 @@ class BaseClient(ABC):
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        tags: Optional[str] = None,
         telemetry: TelemetryRequest = False,
     ) -> Any:
         """Semantic search with optional session context."""
@@ -182,7 +185,7 @@ class BaseClient(ABC):
         pattern: str,
         case_insensitive: bool = False,
         exclude_uri: Optional[str] = None,
-        node_limit: Optional[int] = None
+        node_limit: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Content search with pattern."""
         ...

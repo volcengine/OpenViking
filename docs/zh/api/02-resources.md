@@ -48,6 +48,7 @@ Input -> Parser -> TreeBuilder -> AGFS -> SemanticQueue -> Vector Index
 | wait | bool | 否 | False | 等待语义处理完成 |
 | timeout | float | 否 | None | 超时时间（秒），仅在 wait=True 时生效 |
 | watch_interval | float | 否 | 0 | 定时更新间隔（分钟）。>0 开启/更新定时任务；<=0 关闭（停用）定时任务。仅在指定 target 时生效 |
+| tags | str | 否 | None | 附加到资源的标签（以逗号分隔） |
 
 **本地文件和目录如何处理**
 
@@ -75,7 +76,8 @@ Input -> Parser -> TreeBuilder -> AGFS -> SemanticQueue -> Vector Index
 ```python
 result = client.add_resource(
     "./documents/guide.md",
-    reason="User guide documentation"
+    reason="User guide documentation",
+    tags="documentation,guide"
 )
 print(f"Added: {result['root_uri']}")
 
@@ -94,14 +96,15 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -H "X-API-Key: your-key" \
   -d '{
     "path": "https://example.com/guide.md",
-    "reason": "User guide documentation"
+    "reason": "User guide documentation",
+    "tags": "documentation,guide"
   }'
 ```
 
 **CLI**
 
 ```bash
-openviking add-resource ./documents/guide.md --reason "User guide documentation"
+openviking add-resource ./documents/guide.md --reason "User guide documentation" --tags "documentation,guide"
 ```
 
 **响应**

@@ -254,7 +254,8 @@ List directory contents.
     "modTime": "2024-01-01T00:00:00Z",  # ISO timestamp
     "isDir": True,            # True if directory
     "uri": "viking://resources/docs/",  # Viking URI
-    "meta": {}                # Optional metadata
+    "meta": {},               # Optional metadata
+    "tags": "guide,api"       # Tags (if it's a resource root and has tags in .meta.json)
 }
 ```
 

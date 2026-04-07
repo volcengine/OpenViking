@@ -113,6 +113,7 @@ class TreeBuilder:
         parent_uri: Optional[str] = None,
         source_path: Optional[str] = None,
         source_format: Optional[str] = None,
+        tags: Optional[str] = None,
     ) -> "BuildingTree":
         """
         Finalize processing by moving from temp to AGFS.
@@ -182,6 +183,8 @@ class TreeBuilder:
 
         # Create a minimal Context object for the root so that tree.root is not None
         root_context = Context(uri=final_uri, temp_uri=temp_doc_uri)
+        if tags:
+            root_context.meta["tags"] = tags
         tree.add_context(root_context)
 
         return tree

@@ -254,7 +254,8 @@ openviking write viking://resources/docs/api.md \
     "modTime": "2024-01-01T00:00:00Z",  # ISO 时间戳
     "isDir": True,            # 如果是目录则为 True
     "uri": "viking://resources/docs/",  # Viking URI
-    "meta": {}                # 可选元数据
+    "meta": {},               # 可选元数据
+    "tags": "guide,api"       # 标签（如果该目录是资源根且 .meta.json 中包含标签）
 }
 ```
 

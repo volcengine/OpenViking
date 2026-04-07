@@ -1248,6 +1248,8 @@ class SemanticProcessor(DequeueHandlerBase):
         from openviking.utils.embedding_utils import vectorize_directory_meta
 
         active_ctx = ctx or self._current_ctx
+        # Read resource-level tags from .meta.json
+        tags = await self._read_resource_tags(uri, active_ctx)
         await vectorize_directory_meta(
             uri=uri,
             abstract=abstract,
@@ -1255,6 +1257,7 @@ class SemanticProcessor(DequeueHandlerBase):
             context_type=context_type,
             ctx=active_ctx,
             semantic_msg_id=semantic_msg_id,
+            tags=tags,
         )
 
     async def _vectorize_single_file(
@@ -1271,6 +1274,8 @@ class SemanticProcessor(DequeueHandlerBase):
         from openviking.utils.embedding_utils import vectorize_file
 
         active_ctx = ctx or self._current_ctx
+        # Read resource-level tags from .meta.json
+        tags = await self._read_resource_tags(file_path, active_ctx)
         await vectorize_file(
             file_path=file_path,
             summary_dict=summary_dict,
@@ -1279,4 +1284,32 @@ class SemanticProcessor(DequeueHandlerBase):
             ctx=active_ctx,
             semantic_msg_id=semantic_msg_id,
             use_summary=use_summary,
+            tags=tags,
         )
+
+    async def _read_resource_tags(
+        self, uri: str, ctx: Optional[RequestContext] = None
+    ) -> Optional[str]:
+        """Read tags from the resource root's .meta.json.
+
+        Walks up the URI hierarchy within viking://resources/ to find
+        the resource root directory containing .meta.json.
+        """
+        try:
+            viking_fs = get_viking_fs()
+            # Walk up to find the resource root (first directory under viking://resources/)
+            parts = uri.rstrip("/").split("/")
+            # viking://resources/<resource_name>/... → root is at index 2
+            if len(parts) >= 3 and parts[0] == "viking:" and parts[2] == "resources":
+                root_uri = "/".join(parts[:4])  # viking://resources/<resource_name>
+            else:
+                return None
+            meta_uri = f"{root_uri}/.meta.json"
+            content = await viking_fs.read(meta_uri, ctx=ctx)
+            if isinstance(content, bytes):
+                content = content.decode("utf-8", errors="replace")
+            import json
+            meta = json.loads(content)
+            return meta.get("tags") or None
+        except Exception:
+            return None

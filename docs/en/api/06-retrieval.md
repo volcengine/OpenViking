@@ -27,6 +27,7 @@ Basic vector similarity search.
 | limit | int | No | 10 | Maximum number of results |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filters |
+| tags | str | No | None | Comma-separated list of tags to filter by (shortcut for filter) |
 
 **FindResult Structure**
 
@@ -184,6 +185,7 @@ Search with session context and intent analysis.
 | limit | int | No | 10 | Maximum number of results |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filters |
+| tags | str | No | None | Comma-separated list of tags to filter by (shortcut for filter) |
 
 **Python SDK (Embedded / HTTP)**
 

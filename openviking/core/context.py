@@ -188,6 +188,10 @@ class Context:
             data["name"] = self.meta.get("name", "")
             data["description"] = self.meta.get("description", "")
 
+        # Hoist tags to top-level for VectorDB indexing and filtering
+        if self.meta.get("tags"):
+            data["tags"] = self.meta["tags"]
+
         return data
 
     @staticmethod

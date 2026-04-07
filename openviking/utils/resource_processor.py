@@ -106,6 +106,7 @@ class ResourceProcessor:
         to: Optional[str] = None,
         parent: Optional[str] = None,
         summarize: bool = False,
+        tags: Optional[str] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -188,6 +189,7 @@ class ResourceProcessor:
                         parent_uri=parent,
                         source_path=parse_result.source_path,
                         source_format=parse_result.source_format,
+                        tags=tags,
                     )
                     if context_tree and context_tree.root:
                         result["root_uri"] = context_tree.root.uri
@@ -261,6 +263,32 @@ class ResourceProcessor:
                     lifecycle_lock_handle_id = await self._try_acquire_lifecycle_lock(
                         lock_manager, resource_path
                     )
+
+            # ============ Phase 3.6: Write .meta.json for resource metadata ============
+            if tags and root_uri:
+                try:
+                    import json as _json
+
+                    viking_fs = get_viking_fs()
+                    meta_uri = f"{root_uri.rstrip('/')}/.meta.json"
+                    meta_data: Dict[str, Any] = {}
+
+                    try:
+                        existing = await viking_fs.read(meta_uri, ctx=ctx)
+                        if isinstance(existing, bytes):
+                            existing = existing.decode("utf-8", errors="replace")
+                        loaded = _json.loads(existing)
+                        if isinstance(loaded, dict):
+                            meta_data = loaded
+                    except Exception:
+                        # .meta.json may not exist yet; create a new one below.
+                        pass
+
+                    meta_data["tags"] = tags
+                    meta_content = _json.dumps(meta_data, ensure_ascii=False)
+                    await viking_fs.write(meta_uri, meta_content, ctx=ctx)
+                except Exception as e:
+                    logger.warning(f"[ResourceProcessor] Failed to write .meta.json: {e}")
 
             # ============ Phase 4: Optional Steps ============
             build_index = kwargs.get("build_index", True)

@@ -8,11 +8,12 @@ pub async fn find(
     uri: &str,
     node_limit: i32,
     threshold: Option<f64>,
+    tags: Option<String>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     let result = client
-        .find(query.to_string(), uri.to_string(), node_limit, threshold)
+        .find(query.to_string(), uri.to_string(), node_limit, threshold, tags)
         .await?;
     output_success(&result, output_format, compact);
     Ok(())
@@ -25,6 +26,7 @@ pub async fn search(
     session_id: Option<String>,
     node_limit: i32,
     threshold: Option<f64>,
+    tags: Option<String>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -35,6 +37,7 @@ pub async fn search(
             session_id,
             node_limit,
             threshold,
+            tags,
         )
         .await?;
     output_success(&result, output_format, compact);

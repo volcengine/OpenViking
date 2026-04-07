@@ -611,6 +611,36 @@ class VikingFS:
 
         return {"matches": results, "count": len(results)}
 
+    @staticmethod
+    def _is_resource_root_uri(uri: str) -> bool:
+        """Return True if URI is exactly viking://resources/<resource_name>."""
+        parts = uri.rstrip("/").split("/")
+        return (
+            len(parts) == 4
+            and parts[0] == "viking:"
+            and parts[1] == ""
+            and parts[2] == "resources"
+            and bool(parts[3])
+        )
+
+    async def _read_resource_meta(
+        self, uri: str, ctx: Optional[RequestContext] = None
+    ) -> Dict[str, Any]:
+        """Read .meta.json from a resource root directory.
+
+        Returns the parsed JSON dict, or empty dict if not found.
+        """
+        if not self._is_resource_root_uri(uri):
+            return {}
+        try:
+            meta_uri = f"{uri.rstrip('/')}/.meta.json"
+            content = await self.read(meta_uri, ctx=ctx)
+            if isinstance(content, bytes):
+                content = content.decode("utf-8", errors="replace")
+            return json.loads(content)
+        except Exception:
+            return {}
+
     async def stat(self, uri: str, ctx: Optional[RequestContext] = None) -> Dict[str, Any]:
         """
         File/directory information.
@@ -619,7 +649,13 @@ class VikingFS:
         """
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
-        return self.agfs.stat(path)
+        result = self.agfs.stat(path)
+        # Enrich resource-root directory stat with metadata (e.g. tags)
+        if result.get("isDir") and self._is_resource_root_uri(uri):
+            resource_meta = await self._read_resource_meta(uri, ctx=ctx)
+            if resource_meta.get("tags"):
+                result["tags"] = resource_meta["tags"]
+        return result
 
     async def exists(self, uri: str, ctx: Optional[RequestContext] = None) -> bool:
         """Check if a URI exists.
@@ -663,7 +699,7 @@ class VikingFS:
         abs_limit: int,
         ctx: Optional[RequestContext] = None,
     ) -> None:
-        """Batch fetch abstracts for entries.
+        """Batch fetch abstracts and resource metadata for directory entries.
 
         Args:
             entries: List of entries to fetch abstracts for
@@ -671,22 +707,33 @@ class VikingFS:
         """
         semaphore = asyncio.Semaphore(6)
 
-        async def fetch_abstract(index: int, entry: Dict[str, Any]) -> tuple[int, str]:
+        async def fetch_dir_meta(index: int, entry: Dict[str, Any]) -> tuple[int, str, str]:
+            """Fetch abstract and tags for a directory entry."""
             async with semaphore:
                 if not entry.get("isDir", False):
-                    return index, ""
+                    return index, "", ""
+                abstract = ""
+                tags = ""
                 try:
                     abstract = await self.abstract(entry["uri"], ctx=ctx)
-                    return index, abstract
                 except Exception:
-                    return index, "[.abstract.md is not ready]"
+                    abstract = "[.abstract.md is not ready]"
+                try:
+                    if self._is_resource_root_uri(entry["uri"]):
+                        resource_meta = await self._read_resource_meta(entry["uri"], ctx=ctx)
+                        tags = resource_meta.get("tags", "")
+                except Exception:
+                    pass
+                return index, abstract, tags
 
-        tasks = [fetch_abstract(i, entry) for i, entry in enumerate(entries)]
-        abstract_results = await asyncio.gather(*tasks)
-        for index, abstract in abstract_results:
+        tasks = [fetch_dir_meta(i, entry) for i, entry in enumerate(entries)]
+        results = await asyncio.gather(*tasks)
+        for index, abstract, tags in results:
             if len(abstract) > abs_limit:
                 abstract = abstract[: abs_limit - 3] + "..."
             entries[index]["abstract"] = abstract
+            if tags:
+                entries[index]["tags"] = tags
 
     async def tree(
         self,

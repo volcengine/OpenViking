@@ -330,6 +330,7 @@ class AsyncHTTPClient(BaseClient):
         exclude: Optional[str] = None,
         directly_upload_media: bool = True,
         preserve_structure: Optional[bool] = None,
+        tags: Optional[str] = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
@@ -353,6 +354,8 @@ class AsyncHTTPClient(BaseClient):
         }
         if preserve_structure is not None:
             request_data["preserve_structure"] = preserve_structure
+        if tags:
+            request_data["tags"] = tags
 
         path_obj = Path(path)
         if path_obj.exists():
@@ -590,6 +593,7 @@ class AsyncHTTPClient(BaseClient):
         node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
+        tags: Optional[str] = None,
         telemetry: TelemetryRequest = False,
     ) -> FindResult:
         """Semantic search without session context."""
@@ -597,16 +601,28 @@ class AsyncHTTPClient(BaseClient):
         if target_uri:
             target_uri = VikingURI.normalize(target_uri)
         actual_limit = node_limit if node_limit is not None else limit
+
+        request_data = {
+            "query": query,
+            "target_uri": target_uri,
+            "limit": actual_limit,
+            "score_threshold": score_threshold,
+            "filter": filter,
+            "telemetry": telemetry,
+        }
+        if tags:
+            if filter:
+                raise ValueError("Cannot specify both 'tags' and 'filter'")
+            tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+            tag_list = list(dict.fromkeys(tag_list))
+            if not tag_list:
+                raise ValueError("'tags' must contain at least one non-empty tag")
+            conds = [{"op": "contains", "field": "tags", "substring": t} for t in tag_list]
+            request_data["filter"] = conds[0] if len(conds) == 1 else {"op": "and", "conds": conds}
+
         response = await self._http.post(
             "/api/v1/search/find",
-            json={
-                "query": query,
-                "target_uri": target_uri,
-                "limit": actual_limit,
-                "score_threshold": score_threshold,
-                "filter": filter,
-                "telemetry": telemetry,
-            },
+            json=request_data,
         )
         response_data = self._handle_response_data(response)
         return FindResult.from_dict(response_data.get("result") or {})
@@ -621,6 +637,7 @@ class AsyncHTTPClient(BaseClient):
         node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
+        tags: Optional[str] = None,
         telemetry: TelemetryRequest = False,
     ) -> FindResult:
         """Semantic search with optional session context."""
@@ -629,17 +646,29 @@ class AsyncHTTPClient(BaseClient):
             target_uri = VikingURI.normalize(target_uri)
         actual_limit = node_limit if node_limit is not None else limit
         sid = session_id or (session.session_id if session else None)
+
+        request_data = {
+            "query": query,
+            "target_uri": target_uri,
+            "session_id": sid,
+            "limit": actual_limit,
+            "score_threshold": score_threshold,
+            "filter": filter,
+            "telemetry": telemetry,
+        }
+        if tags:
+            if filter:
+                raise ValueError("Cannot specify both 'tags' and 'filter'")
+            tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+            tag_list = list(dict.fromkeys(tag_list))
+            if not tag_list:
+                raise ValueError("'tags' must contain at least one non-empty tag")
+            conds = [{"op": "contains", "field": "tags", "substring": t} for t in tag_list]
+            request_data["filter"] = conds[0] if len(conds) == 1 else {"op": "and", "conds": conds}
+
         response = await self._http.post(
             "/api/v1/search/search",
-            json={
-                "query": query,
-                "target_uri": target_uri,
-                "session_id": sid,
-                "limit": actual_limit,
-                "score_threshold": score_threshold,
-                "filter": filter,
-                "telemetry": telemetry,
-            },
+            json=request_data,
         )
         response_data = self._handle_response_data(response)
         return FindResult.from_dict(response_data.get("result") or {})

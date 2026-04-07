@@ -82,6 +82,7 @@ class AddResourceRequest(BaseModel):
     preserve_structure: Optional[bool] = None
     telemetry: TelemetryRequest = False
     watch_interval: float = 0
+    tags: Optional[str] = None
 
     @model_validator(mode="after")
     def check_path_or_temp_file_id(self):
@@ -200,6 +201,8 @@ async def add_resource(
     }
     if request.preserve_structure is not None:
         kwargs["preserve_structure"] = request.preserve_structure
+    if request.tags:
+        kwargs["tags"] = request.tags
 
     execution = await run_operation(
         operation="resources.add_resource",

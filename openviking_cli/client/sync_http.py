@@ -156,6 +156,7 @@ class SyncHTTPClient:
         include: Optional[str] = None,
         exclude: Optional[str] = None,
         directly_upload_media: bool = True,
+        tags: Optional[str] = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
@@ -163,18 +164,19 @@ class SyncHTTPClient:
             raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
         return run_async(
             self._async_client.add_resource(
-                path,
-                to,
-                parent,
-                reason,
-                instruction,
-                wait,
-                timeout,
-                strict,
-                ignore_dirs,
-                include,
-                exclude,
-                directly_upload_media,
+                path=path,
+                to=to,
+                parent=parent,
+                reason=reason,
+                instruction=instruction,
+                wait=wait,
+                timeout=timeout,
+                strict=strict,
+                ignore_dirs=ignore_dirs,
+                include=include,
+                exclude=exclude,
+                directly_upload_media=directly_upload_media,
+                tags=tags,
                 telemetry=telemetry,
             )
         )
@@ -207,6 +209,7 @@ class SyncHTTPClient:
         node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        tags: Optional[str] = None,
         telemetry: TelemetryRequest = False,
     ):
         """Semantic search with optional session context."""
@@ -220,6 +223,7 @@ class SyncHTTPClient:
                 node_limit=node_limit,
                 score_threshold=score_threshold,
                 filter=filter,
+                tags=tags,
                 telemetry=telemetry,
             )
         )
@@ -232,6 +236,7 @@ class SyncHTTPClient:
         node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        tags: Optional[str] = None,
         telemetry: TelemetryRequest = False,
     ):
         """Semantic search without session context."""
@@ -243,6 +248,7 @@ class SyncHTTPClient:
                 node_limit,
                 score_threshold,
                 filter,
+                tags,
                 telemetry=telemetry,
             )
         )
@@ -256,7 +262,9 @@ class SyncHTTPClient:
         exclude_uri: Optional[str] = None,
     ) -> Dict:
         """Content search with pattern."""
-        return run_async(self._async_client.grep(uri, pattern, case_insensitive, node_limit, exclude_uri))
+        return run_async(
+            self._async_client.grep(uri, pattern, case_insensitive, node_limit, exclude_uri)
+        )
 
     def glob(self, pattern: str, uri: str = "viking://") -> Dict:
         """File pattern matching."""

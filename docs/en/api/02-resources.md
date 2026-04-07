@@ -48,6 +48,7 @@ Add a resource to the knowledge base.
 | wait | bool | No | False | Wait for semantic processing to complete |
 | timeout | float | No | None | Timeout in seconds (only used when wait=True) |
 | watch_interval | float | No | 0 | Watch interval (minutes). >0 enables/updates watch; <=0 disables watch. Only takes effect when target is provided |
+| tags | str | No | None | Comma-separated list of tags to attach to the resource |
 
 **How local files and directories work**
 
@@ -75,7 +76,8 @@ When you call `add_resource()` repeatedly for the same resource URI, the system 
 ```python
 result = client.add_resource(
     "./documents/guide.md",
-    reason="User guide documentation"
+    reason="User guide documentation",
+    tags="documentation,guide"
 )
 print(f"Added: {result['root_uri']}")
 
@@ -94,14 +96,15 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -H "X-API-Key: your-key" \
   -d '{
     "path": "https://example.com/guide.md",
-    "reason": "User guide documentation"
+    "reason": "User guide documentation",
+    "tags": "documentation,guide"
   }'
 ```
 
 **CLI**
 
 ```bash
-openviking add-resource ./documents/guide.md --reason "User guide documentation"
+openviking add-resource ./documents/guide.md --reason "User guide documentation" --tags "documentation,guide"
 ```
 
 **Response**

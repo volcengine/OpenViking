@@ -27,6 +27,7 @@ OpenViking 提供两种搜索方法：`find` 用于简单的语义搜索，`sear
 | limit | int | 否 | 10 | 最大返回结果数 |
 | score_threshold | float | 否 | None | 最低相关性分数阈值 |
 | filter | Dict | 否 | None | 元数据过滤器 |
+| tags | str | 否 | None | 按标签过滤（以逗号分隔，是 filter 的快捷方式） |
 
 **FindResult 结构**
 
@@ -184,6 +185,7 @@ curl -X POST http://localhost:1933/api/v1/search/find \
 | limit | int | 否 | 10 | 最大返回结果数 |
 | score_threshold | float | 否 | None | 最低相关性分数阈值 |
 | filter | Dict | 否 | None | 元数据过滤器 |
+| tags | str | 否 | None | 按标签过滤（以逗号分隔，是 filter 的快捷方式） |
 
 **Python SDK (Embedded / HTTP)**
 
