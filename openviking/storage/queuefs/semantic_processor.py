@@ -439,6 +439,7 @@ class SemanticProcessor(DequeueHandlerBase):
             return
 
         file_paths: List[str] = []
+        entry_stats: Dict[str, str] = {}  # filename -> cache_key from ls metadata
         for entry in entries:
             name = entry.get("name", "")
             if not name or name.startswith(".") or name in [".", ".."]:
@@ -446,6 +447,7 @@ class SemanticProcessor(DequeueHandlerBase):
             if not entry.get("isDir", False):
                 item_uri = VikingURI(dir_uri).join(name).uri
                 file_paths.append(item_uri)
+                entry_stats[name] = f"{entry.get('size', 0)}_{entry.get('modTime', '')}"
 
         if not file_paths:
             logger.info(f"No memory files found in {dir_uri}")
@@ -454,24 +456,17 @@ class SemanticProcessor(DequeueHandlerBase):
                 await self._release_memory_lifecycle_lock(msg.lifecycle_lock_handle_id)
             return
 
-        file_summaries: List[Dict[str, str]] = []
-        existing_summaries: Dict[str, str] = {}
-
-        if msg.changes:
-            try:
-                old_overview = await viking_fs.read_file(f"{dir_uri}/.overview.md", ctx=ctx)
-                if old_overview:
-                    existing_summaries = self._parse_overview_md(old_overview)
-                    logger.info(
-                        f"Parsed {len(existing_summaries)} existing summaries from overview.md"
-                    )
-            except Exception as e:
-                logger.debug(f"No existing overview.md found for {dir_uri}: {e}")
+        # Load sidecar cache (keyed by filename, validated by size+mtime)
+        summary_cache = await self._load_summary_cache(dir_uri, ctx)
 
         changed_files: Set[str] = set()
         if msg.changes:
             changed_files = set(msg.changes.get("added", []) + msg.changes.get("modified", []))
             deleted_files = set(msg.changes.get("deleted", []))
+            # Remove deleted files from cache
+            for deleted_uri in deleted_files:
+                deleted_name = deleted_uri.split("/")[-1]
+                summary_cache.pop(deleted_name, None)
             logger.info(
                 f"Processing memory directory {dir_uri} with changes: "
                 f"added={len(msg.changes.get('added', []))}, "
@@ -485,16 +480,22 @@ class SemanticProcessor(DequeueHandlerBase):
 
         for idx, file_path in enumerate(file_paths):
             file_name = file_path.split("/")[-1]
+            cache_key = entry_stats.get(file_name, "")
 
-            if file_path not in changed_files and file_name in existing_summaries:
-                file_summaries[idx] = {"name": file_name, "summary": existing_summaries[file_name]}
-                logger.debug(f"Reused existing summary for {file_name}")
+            cached = summary_cache.get(file_name)
+            if (
+                file_path not in changed_files
+                and cached
+                and cached.get("cache_key") == cache_key
+            ):
+                file_summaries[idx] = {"name": file_name, "summary": cached["summary"]}
+                logger.debug(f"Reused cached summary for {file_name}")
             else:
                 pending_indices.append((idx, file_path))
 
         if pending_indices:
             logger.info(
-                f"Generating summaries for {len(pending_indices)} changed files concurrently "
+                f"Generating summaries for {len(pending_indices)} files concurrently "
                 f"(reused {len(file_paths) - len(pending_indices)} cached)"
             )
 
@@ -512,16 +513,53 @@ class SemanticProcessor(DequeueHandlerBase):
 
             await asyncio.gather(*[_gen(i, fp) for i, fp in pending_indices])
 
+        # Update sidecar cache with newly generated summaries
+        for idx, file_path in pending_indices:
+            if file_summaries[idx] is not None:
+                file_name = file_path.split("/")[-1]
+                cache_key = entry_stats.get(file_name, "")
+                summary_cache[file_name] = {
+                    "cache_key": cache_key,
+                    "summary": file_summaries[idx]["summary"],
+                }
+
+        await self._save_summary_cache(dir_uri, summary_cache, ctx)
+
         file_summaries = [s for s in file_summaries if s is not None]
 
         overview = await self._generate_overview(dir_uri, file_summaries, [], llm_sem=llm_sem)
         abstract = self._extract_abstract_from_overview(overview)
         overview, abstract = self._enforce_size_limits(overview, abstract)
 
+        # Content-change detection: skip write if content is unchanged
+        overview_changed = True
+        abstract_changed = True
         try:
-            await viking_fs.write_file(f"{dir_uri}/.overview.md", overview, ctx=ctx)
-            await viking_fs.write_file(f"{dir_uri}/.abstract.md", abstract, ctx=ctx)
-            logger.info(f"Generated abstract.md and overview.md for {dir_uri}")
+            old_overview = await viking_fs.read_file(f"{dir_uri}/.overview.md", ctx=ctx)
+            if isinstance(old_overview, bytes):
+                old_overview = old_overview.decode("utf-8")
+            if old_overview and old_overview.strip() == overview.strip():
+                overview_changed = False
+        except Exception:
+            pass
+        try:
+            old_abstract = await viking_fs.read_file(f"{dir_uri}/.abstract.md", ctx=ctx)
+            if isinstance(old_abstract, bytes):
+                old_abstract = old_abstract.decode("utf-8")
+            if old_abstract and old_abstract.strip() == abstract.strip():
+                abstract_changed = False
+        except Exception:
+            pass
+
+        try:
+            if overview_changed:
+                await viking_fs.write_file(f"{dir_uri}/.overview.md", overview, ctx=ctx)
+            if abstract_changed:
+                await viking_fs.write_file(f"{dir_uri}/.abstract.md", abstract, ctx=ctx)
+            if overview_changed or abstract_changed:
+                logger.info(f"Updated overview/abstract for {dir_uri}")
+            else:
+                logger.info(f"Overview/abstract unchanged for {dir_uri}, skipped write")
         except Exception as e:
             logger.error(f"Failed to write abstract/overview for {dir_uri}: {e}")
             _mark_failed(str(e))
@@ -566,6 +604,46 @@ class SemanticProcessor(DequeueHandlerBase):
                 await get_lock_manager().release(handle)
         except Exception as e:
             logger.warning(f"[SemanticProcessor] Failed to release memory lifecycle lock: {e}")
+
+    async def _load_summary_cache(
+        self, dir_uri: str, ctx: Optional[RequestContext] = None
+    ) -> Dict[str, Dict[str, str]]:
+        """Load the sidecar summary cache for a memory directory.
+
+        Returns a dict mapping filename -> {"cache_key": ..., "summary": ...}.
+        Returns empty dict on any error.
+        """
+        import json
+
+        viking_fs = get_viking_fs()
+        try:
+            data = await viking_fs.read_file(f"{dir_uri}/.summary_cache.json", ctx=ctx)
+            if isinstance(data, bytes):
+                data = data.decode("utf-8")
+            if data:
+                return json.loads(data)
+        except Exception:
+            pass
+        return {}
+
+    async def _save_summary_cache(
+        self,
+        dir_uri: str,
+        cache: Dict[str, Dict[str, str]],
+        ctx: Optional[RequestContext] = None,
+    ) -> None:
+        """Persist the sidecar summary cache for a memory directory."""
+        import json
+
+        viking_fs = get_viking_fs()
+        try:
+            await viking_fs.write_file(
+                f"{dir_uri}/.summary_cache.json",
+                json.dumps(cache, ensure_ascii=False, indent=None, separators=(",", ":")),
+                ctx=ctx,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to save summary cache for {dir_uri}: {e}")
 
     async def _sync_topdown_recursive(
         self,
