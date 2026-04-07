@@ -10,6 +10,7 @@ and rerank-based relevance scoring.
 import heapq
 import logging
 import math
+import os
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -48,7 +49,13 @@ class HierarchicalRetriever:
     MAX_RELATIONS = 5  # Maximum relations per resource
     SCORE_PROPAGATION_ALPHA = 0.5  # Score propagation coefficient
     DIRECTORY_DOMINANCE_RATIO = 1.2  # Directory score must exceed max child score
-    GLOBAL_SEARCH_TOPK = 10  # Global retrieval count (more candidates = better rerank precision)
+    GLOBAL_SEARCH_TOPK = max(1, int(os.getenv("OPENVIKING_GLOBAL_SEARCH_TOPK", "6")))
+    RECURSIVE_PREFILTER_MULTIPLIER = max(
+        1, int(os.getenv("OPENVIKING_RECURSIVE_PREFILTER_MULTIPLIER", "2"))
+    )
+    RECURSIVE_PREFILTER_MIN = max(1, int(os.getenv("OPENVIKING_RECURSIVE_PREFILTER_MIN", "8")))
+    RERANK_MAX_DOC_CHARS = max(128, int(os.getenv("OPENVIKING_RERANK_MAX_DOC_CHARS", "600")))
+    RERANK_MAX_QUERY_CHARS = max(64, int(os.getenv("OPENVIKING_RERANK_MAX_QUERY_CHARS", "500")))
     HOTNESS_ALPHA = 0.2  # Weight for hotness score in final ranking (0 = disabled)
     LEVEL_URI_SUFFIX = {0: ".abstract.md", 1: ".overview.md"}
 
@@ -247,6 +254,13 @@ class HierarchicalRetriever:
         telemetry.count("vector.scanned", len(results))
         return results
 
+    @classmethod
+    def _truncate_rerank_text(cls, text: str, max_chars: int) -> str:
+        text = str(text or "").strip()
+        if len(text) <= max_chars:
+            return text
+        return text[:max_chars].rstrip()
+
     def _rerank_scores(
         self,
         query: str,
@@ -257,8 +271,13 @@ class HierarchicalRetriever:
         if not self._rerank_client or not documents:
             return fallback_scores
 
+        truncated_query = self._truncate_rerank_text(query, self.RERANK_MAX_QUERY_CHARS)
+        truncated_documents = [
+            self._truncate_rerank_text(doc, self.RERANK_MAX_DOC_CHARS) for doc in documents
+        ]
+
         try:
-            scores = self._rerank_client.rerank_batch(query, documents)
+            scores = self._rerank_client.rerank_batch(truncated_query, truncated_documents)
         except Exception as e:
             logger.warning(
                 "[HierarchicalRetriever] Rerank failed, fallback to vector scores: %s", e
@@ -418,7 +437,10 @@ class HierarchicalRetriever:
             visited.add(current_uri)
             logger.info(f"[RecursiveSearch] Entering URI: {current_uri}")
 
-            pre_filter_limit = max(limit * 2, 20)
+            pre_filter_limit = max(
+                limit * self.RECURSIVE_PREFILTER_MULTIPLIER,
+                self.RECURSIVE_PREFILTER_MIN,
+            )
 
             results = await vector_proxy.search_children_in_tenant(
                 parent_uri=current_uri,

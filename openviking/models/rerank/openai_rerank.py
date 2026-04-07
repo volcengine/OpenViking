@@ -9,6 +9,7 @@ via api_key + api_base configuration.
 
 # For logging, use Python's built-in logging
 import logging
+import os
 from typing import List, Optional
 
 import requests
@@ -16,6 +17,8 @@ import requests
 from openviking.models.rerank.base import RerankBase
 
 logger = logging.getLogger(__name__)
+
+OPENAI_RERANK_TIMEOUT = max(1, int(os.getenv("OPENVIKING_RERANK_TIMEOUT_SEC", "12")))
 
 
 class OpenAIRerankClient(RerankBase):
@@ -69,7 +72,7 @@ class OpenAIRerankClient(RerankBase):
                     "Content-Type": "application/json",
                 },
                 json=req_body,
-                timeout=30,
+                timeout=OPENAI_RERANK_TIMEOUT,
             )
             response.raise_for_status()
             result = response.json()
