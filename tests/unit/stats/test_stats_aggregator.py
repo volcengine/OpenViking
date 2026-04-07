@@ -167,6 +167,34 @@ class TestStatsAggregator:
         assert result["staleness"]["oldest_memory_age_days"] >= 49
 
     @pytest.mark.asyncio
+    async def test_category_filter_excludes_other_records_from_metrics(
+        self, aggregator, mock_vikingdb, mock_ctx
+    ):
+        """When a category filter is applied, hotness/staleness should only
+        count records that match the filter, even if the query returns
+        records from other categories.
+        """
+        now = datetime.now(timezone.utc)
+        records = [
+            _make_memory_record("cases", active_count=50, updated_at=now),
+            _make_memory_record(
+                "tools", active_count=0, updated_at=now - timedelta(days=60)
+            ),
+        ]
+        mock_vikingdb.query = AsyncMock(return_value=records)
+
+        result = await aggregator.get_memory_stats(mock_ctx, category="cases")
+
+        assert result["by_category"]["cases"] == 1
+        assert result["total_memories"] == 1
+        # Only the "cases" record should contribute to hotness
+        assert result["hotness_distribution"]["hot"] == 1
+        assert result["hotness_distribution"]["cold"] == 0
+        # Only the "cases" record should contribute to staleness
+        assert result["staleness"]["not_accessed_7d"] == 0
+        assert result["staleness"]["not_accessed_30d"] == 0
+
+    @pytest.mark.asyncio
     async def test_query_error_returns_zeros(self, aggregator, mock_vikingdb, mock_ctx):
         """If the vector query fails, stats should gracefully return zeros."""
         mock_vikingdb.query = AsyncMock(side_effect=Exception("db down"))
