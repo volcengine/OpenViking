@@ -784,7 +784,15 @@ def test_validate_with_key_any_host_passes():
         validate_server_config(config)  # should not raise
 
 
-def test_validate_trusted_mode_without_key_non_localhost_passes():
-    """Trusted mode should bypass the localhost-only dev-mode restriction."""
+def test_validate_trusted_mode_without_key_localhost_passes():
+    """Trusted mode without root_api_key should still be allowed on localhost only."""
+    for host in ("127.0.0.1", "localhost", "::1"):
+        config = ServerConfig(host=host, root_api_key=None, auth_mode="trusted")
+        validate_server_config(config)
+
+
+def test_validate_trusted_mode_without_key_non_localhost_raises():
+    """Trusted mode without root_api_key should be rejected off localhost."""
     config = ServerConfig(host="0.0.0.0", root_api_key=None, auth_mode="trusted")
-    validate_server_config(config)
+    with pytest.raises(SystemExit):
+        validate_server_config(config)

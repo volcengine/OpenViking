@@ -135,13 +135,22 @@ def validate_server_config(config: ServerConfig) -> None:
         sys.exit(1)
 
     if config.auth_mode == "trusted":
-        if not _is_localhost(config.host):
-            logger.warning(
-                "SECURITY: server.auth_mode='trusted' on non-localhost host '%s'. "
-                "Only use this behind a trusted network boundary or identity-injecting gateway.",
-                config.host,
-            )
-        return
+        if config.root_api_key:
+            return
+        if _is_localhost(config.host):
+            return
+        logger.error(
+            "SECURITY: server.auth_mode='trusted' requires server.root_api_key when "
+            "server.host is '%s' (non-localhost). Only localhost trusted mode may run "
+            "without an API key.",
+            config.host,
+        )
+        logger.error(
+            "To fix, either:\n"
+            "  1. Set server.root_api_key in ov.conf, or\n"
+            '  2. Bind trusted mode to localhost (server.host = "127.0.0.1")'
+        )
+        sys.exit(1)
 
     if config.root_api_key:
         return
