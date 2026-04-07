@@ -8,7 +8,7 @@
 # - ov CLI (Rust)
 #
 # Usage:
-#   ./scripts/bootstrap.sh
+#   ./scripts/bootstrap_dev.sh
 ################################################################################
 
 set -e

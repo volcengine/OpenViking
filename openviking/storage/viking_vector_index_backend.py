@@ -22,6 +22,7 @@ RETRIEVAL_OUTPUT_FIELDS = [
     "level",
     "context_type",
     "abstract",
+    "tags",
     "active_count",
     "updated_at",
 ]

@@ -585,6 +585,21 @@ class AsyncHTTPClient(BaseClient):
 
     # ============= Search =============
 
+    def _build_tags_filter(
+        self, tags: Optional[str], existing_filter: Optional[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """Build metadata filter for tags."""
+        if not tags:
+            return existing_filter
+        if existing_filter:
+            raise ValueError("Cannot specify both 'tags' and 'filter'")
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+        tag_list = list(dict.fromkeys(tag_list))
+        if not tag_list:
+            raise ValueError("'tags' must contain at least one non-empty tag")
+        conds = [{"op": "contains", "field": "tags", "substring": t} for t in tag_list]
+        return conds[0] if len(conds) == 1 else {"op": "and", "conds": conds}
+
     async def find(
         self,
         query: str,
@@ -607,18 +622,9 @@ class AsyncHTTPClient(BaseClient):
             "target_uri": target_uri,
             "limit": actual_limit,
             "score_threshold": score_threshold,
-            "filter": filter,
+            "filter": self._build_tags_filter(tags, filter),
             "telemetry": telemetry,
         }
-        if tags:
-            if filter:
-                raise ValueError("Cannot specify both 'tags' and 'filter'")
-            tag_list = [t.strip() for t in tags.split(",") if t.strip()]
-            tag_list = list(dict.fromkeys(tag_list))
-            if not tag_list:
-                raise ValueError("'tags' must contain at least one non-empty tag")
-            conds = [{"op": "contains", "field": "tags", "substring": t} for t in tag_list]
-            request_data["filter"] = conds[0] if len(conds) == 1 else {"op": "and", "conds": conds}
 
         response = await self._http.post(
             "/api/v1/search/find",
@@ -653,18 +659,9 @@ class AsyncHTTPClient(BaseClient):
             "session_id": sid,
             "limit": actual_limit,
             "score_threshold": score_threshold,
-            "filter": filter,
+            "filter": self._build_tags_filter(tags, filter),
             "telemetry": telemetry,
         }
-        if tags:
-            if filter:
-                raise ValueError("Cannot specify both 'tags' and 'filter'")
-            tag_list = [t.strip() for t in tags.split(",") if t.strip()]
-            tag_list = list(dict.fromkeys(tag_list))
-            if not tag_list:
-                raise ValueError("'tags' must contain at least one non-empty tag")
-            conds = [{"op": "contains", "field": "tags", "substring": t} for t in tag_list]
-            request_data["filter"] = conds[0] if len(conds) == 1 else {"op": "and", "conds": conds}
 
         response = await self._http.post(
             "/api/v1/search/search",

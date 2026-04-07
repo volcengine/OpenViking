@@ -289,6 +289,7 @@ class MatchedContext:
     category: str = ""
     score: float = 0.0
     match_reason: str = ""
+    tags: Optional[str] = None
 
     relations: List[RelatedContext] = field(default_factory=list)
 
@@ -372,7 +373,7 @@ class FindResult:
 
     def _context_to_dict(self, ctx: MatchedContext) -> Dict[str, Any]:
         """Convert MatchedContext to dict."""
-        return {
+        data = {
             "context_type": ctx.context_type.value,
             "uri": ctx.uri,
             "level": ctx.level,
@@ -383,6 +384,9 @@ class FindResult:
             "abstract": ctx.abstract,
             "overview": ctx.overview,
         }
+        if ctx.tags:
+            data["tags"] = ctx.tags
+        return data
 
     def _query_to_dict(self, q: TypedQuery) -> Dict[str, Any]:
         """Convert TypedQuery to dict."""
@@ -425,6 +429,7 @@ class FindResult:
                 category=d.get("category", ""),
                 score=d.get("score", 0.0),
                 match_reason=d.get("match_reason", ""),
+                tags=d.get("tags"),
                 relations=[
                     RelatedContext(uri=r.get("uri", ""), abstract=r.get("abstract", ""))
                     for r in d.get("relations", [])

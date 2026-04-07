@@ -637,7 +637,10 @@ class VikingFS:
             content = await self.read(meta_uri, ctx=ctx)
             if isinstance(content, bytes):
                 content = content.decode("utf-8", errors="replace")
-            return json.loads(content)
+            loaded = json.loads(content)
+            if isinstance(loaded, dict):
+                return loaded
+            return {}
         except Exception:
             return {}
 

@@ -553,6 +553,9 @@ class HierarchicalRetriever:
             level = c.get("level", 2)
             display_uri = self._append_level_suffix(c.get("uri", ""), level)
 
+            raw_tags = c.get("tags")
+            tags = ",".join(raw_tags) if isinstance(raw_tags, list) else raw_tags
+
             results.append(
                 MatchedContext(
                     uri=display_uri,
@@ -563,6 +566,7 @@ class HierarchicalRetriever:
                     abstract=c.get("abstract", ""),
                     category=c.get("category", ""),
                     score=final_score,
+                    tags=tags,
                     relations=relations,
                 )
             )
