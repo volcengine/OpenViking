@@ -181,7 +181,6 @@ class StatsAggregator:
                     "created_at",
                     "context_type",
                 ],
-                order_by="created_at",
                 ctx=ctx,
             )
         except Exception as e:
