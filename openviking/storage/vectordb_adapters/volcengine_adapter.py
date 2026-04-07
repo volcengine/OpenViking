@@ -68,7 +68,7 @@ class VolcengineCollectionAdapter(CollectionAdapter):
             "AK": self._ak,
             "SK": self._sk,
             "Region": self._region,
-            "SecurityToken": self._session_token,
+            "SessionToken": self._session_token,
         }
 
     def _new_collection_handle(self) -> Collection:

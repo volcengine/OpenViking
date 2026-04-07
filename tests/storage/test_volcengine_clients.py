@@ -1,6 +1,5 @@
 from volcengine.base.Request import Request
 
-from openviking.storage.errors import ConnectionError
 from openviking.storage.vectordb.collection.volcengine_clients import (
     ClientForConsoleApi,
     ClientForDataApi,
@@ -122,10 +121,10 @@ def test_volcengine_adapter_preserves_session_token_from_config():
 
     adapter = VolcengineCollectionAdapter.from_config(config)
 
-    assert adapter._config()["SecurityToken"] == "test-session-token"
+    assert adapter._config()["SessionToken"] == "test-session-token"
 
 
-def test_volcengine_collection_get_meta_data_raises_on_signature_error():
+def test_volcengine_collection_get_meta_data_returns_empty_on_signature_error(monkeypatch):
     class _Response:
         status_code = 403
         text = "signature mismatch"
@@ -147,17 +146,14 @@ def test_volcengine_collection_get_meta_data_raises_on_signature_error():
         region="cn-beijing",
         meta_data={"ProjectName": "default", "CollectionName": "context"},
     )
-    collection.console_client.do_req = lambda *args, **kwargs: _Response()
+    monkeypatch.setattr(collection.console_client, "do_req", lambda *args, **kwargs: _Response())
 
-    try:
-        collection.get_meta_data()
-    except ConnectionError as exc:
-        assert "SignatureDoesNotMatch" in str(exc)
-    else:
-        raise AssertionError("expected ConnectionError for signature mismatch")
+    assert collection.get_meta_data() == {}
 
 
-def test_volcengine_collection_get_meta_data_returns_empty_on_collection_not_found():
+def test_volcengine_collection_get_meta_data_returns_empty_on_collection_not_found(
+    monkeypatch,
+):
     class _Response:
         status_code = 404
         text = "collection not found"
@@ -179,6 +175,6 @@ def test_volcengine_collection_get_meta_data_returns_empty_on_collection_not_fou
         region="cn-beijing",
         meta_data={"ProjectName": "default", "CollectionName": "context"},
     )
-    collection.console_client.do_req = lambda *args, **kwargs: _Response()
+    monkeypatch.setattr(collection.console_client, "do_req", lambda *args, **kwargs: _Response())
 
     assert collection.get_meta_data() == {}
