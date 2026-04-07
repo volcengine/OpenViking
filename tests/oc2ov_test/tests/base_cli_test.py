@@ -1,5 +1,6 @@
 """
 测试基类 - 使用 OpenClaw CLI
+增强版：支持 Session ID 自动管理、智能等待、重试机制、测试数据管理
 """
 
 import logging
@@ -9,26 +10,59 @@ import unittest
 from config.settings import TEST_CONFIG
 from utils.assertions import AssertionHelper
 from utils.openclaw_cli_client import OpenClawCLIClient
+from utils.test_utils import (
+    SessionIdManager,
+    SmartWaiter,
+    RetryManager,
+    TestDataManager,
+    TestData,
+    get_default_data_manager,
+)
 
 
 class BaseOpenClawCLITest(unittest.TestCase):
     """
-    OpenClaw CLI 测试基类
+    OpenClaw CLI 测试基类（增强版）
+    
+    新增功能：
+    - Session ID 自动管理：每个测试类使用唯一的 session_id
+    - 智能等待策略：替代固定等待，支持轮询检查
+    - 重试机制：失败时自动重试
+    - 测试数据管理：支持数据驱动测试
     """
+
+    session_manager: SessionIdManager = SessionIdManager()
+    data_manager: TestDataManager = get_default_data_manager()
 
     @classmethod
     def setUpClass(cls):
         """
         测试类初始化
         """
-        session_id = f"test_session_{cls.__name__}"
-        cls.client = OpenClawCLIClient(session_id=session_id)
+        cls._class_session_id = SessionIdManager.generate_test_class_session_id(
+            cls.__name__
+        )
+        cls.client = OpenClawCLIClient(session_id=cls._class_session_id)
         cls.logger = logging.getLogger(cls.__name__)
         cls.wait_time = TEST_CONFIG["wait_time"]
         cls.assertion = AssertionHelper()
+        cls.smart_waiter = SmartWaiter(
+            default_timeout=cls.wait_time * 3,
+            default_poll_interval=2.0,
+        )
+        cls.retry_manager = RetryManager(
+            max_retries=3,
+            base_delay=1.0,
+        )
+
+        cls.session_manager.register_session(
+            cls._class_session_id,
+            {"test_class": cls.__name__},
+        )
+
         cls.logger.info("=" * 60)
         cls.logger.info(f"测试类 {cls.__name__} 开始")
-        cls.logger.info(f"Session ID: {session_id}")
+        cls.logger.info(f"Class Session ID: {cls._class_session_id}")
         cls.logger.info("=" * 60)
 
     def setUp(self):
@@ -38,39 +72,152 @@ class BaseOpenClawCLITest(unittest.TestCase):
         self.logger.info("\n" + "-" * 60)
         self.logger.info(f"开始测试: {self._testMethodName}")
 
+    @property
+    def current_session_id(self) -> str:
+        """
+        获取当前测试类的 session_id
+
+        Returns:
+            str: 当前 session_id
+        """
+        return self._class_session_id
+
+    def generate_unique_session_id(self, prefix: str = "test") -> str:
+        """
+        生成唯一的 session_id
+
+        Args:
+            prefix: session_id 前缀
+
+        Returns:
+            str: 唯一的 session_id
+        """
+        return SessionIdManager.generate_session_id(prefix=prefix)
+
     def wait_for_sync(self, seconds: int = None):
         """
-        等待记忆同步
+        等待记忆同步（固定等待）
+
+        Args:
+            seconds: 等待秒数，默认使用配置的 wait_time
         """
         wait_seconds = seconds or self.wait_time
         self.logger.info(f"等待 {wait_seconds} 秒，确认记忆同步...")
         time.sleep(wait_seconds)
 
-    def send_and_log(self, message: str, session_id: str = None, agent_id: str = None):
+    def smart_wait_for_sync(
+        self,
+        check_message: str = None,
+        keywords: list = None,
+        timeout: float = None,
+        poll_interval: float = 2.0,
+    ) -> bool:
+        """
+        智能等待记忆同步（轮询检查）
+
+        Args:
+            check_message: 用于检查的消息（如不提供则使用固定等待）
+            keywords: 期望响应中包含的关键词
+            timeout: 超时时间（秒）
+            poll_interval: 轮询间隔（秒）
+
+        Returns:
+            bool: 是否成功同步
+        """
+        if not check_message or not keywords:
+            self.wait_for_sync()
+            return True
+
+        timeout = timeout or self.wait_time * 3
+
+        def check_response() -> bool:
+            response = self.client.send_message(check_message, session_id=self.current_session_id)
+            return self.assertion.assert_keywords_in_response(
+                response, keywords, require_all=True, case_sensitive=False
+            )
+
+        return self.smart_waiter.wait_for_condition(
+            check_response,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            message=f"等待记忆同步 (关键词: {keywords})",
+        )
+
+    def send_and_log(
+        self,
+        message: str,
+        session_id: str = None,
+        agent_id: str = None,
+        retry_on_failure: bool = False,
+    ):
         """
         发送消息并记录日志
+
+        Args:
+            message: 消息内容
+            session_id: session ID（默认使用当前测试类的 session_id）
+            agent_id: agent ID
+            retry_on_failure: 是否在失败时重试
+
+        Returns:
+            dict: 响应结果
         """
+        target_session_id = session_id or self.current_session_id
+
         self.logger.info("\n" + "▸" * 40)
         self.logger.info("📨 测试步骤 - 发送消息")
         self.logger.info("▸" * 40)
         self.logger.info(f"消息内容: {message}")
-        if session_id:
-            self.logger.info(f"Session ID: {session_id}")
+        self.logger.info(f"Session ID: {target_session_id}")
         if agent_id:
             self.logger.info(f"Agent ID: {agent_id}")
 
-        response = self.client.send_message(message, session_id, agent_id)
+        if retry_on_failure:
+
+            @self.retry_manager.retry_on_exception(Exception)
+            def send_with_retry():
+                return self.client.send_message(message, target_session_id, agent_id)
+
+            response = send_with_retry()
+        else:
+            response = self.client.send_message(message, target_session_id, agent_id)
 
         self.logger.info("\n" + "◂" * 40)
         self.logger.info("📩 测试步骤 - 响应接收")
         self.logger.info("◂" * 40)
 
-        # 提取并显示响应文本
         response_text = self.assertion.extract_response_text(response)
         self.logger.info(f"响应文本: {response_text}")
 
         self.logger.info("◂" * 40 + "\n")
         return response
+
+    def send_with_retry(
+        self,
+        message: str,
+        session_id: str = None,
+        agent_id: str = None,
+        max_retries: int = 3,
+    ):
+        """
+        发送消息并在失败时重试
+
+        Args:
+            message: 消息内容
+            session_id: session ID
+            agent_id: agent ID
+            max_retries: 最大重试次数
+
+        Returns:
+            dict: 响应结果
+        """
+        retry_manager = RetryManager(max_retries=max_retries)
+
+        @retry_manager.retry_on_exception(Exception)
+        def send():
+            return self.send_and_log(message, session_id, agent_id)
+
+        return send()
 
     def assertKeywordsInResponse(
         self, response, keywords, require_all=True, case_sensitive=False, msg=None
@@ -99,6 +246,50 @@ class BaseOpenClawCLITest(unittest.TestCase):
         )
         self.assertTrue(success, msg or "未在任何关键词组中找到匹配")
 
+    def get_test_data(self, name: str) -> TestData:
+        """
+        获取测试数据
+
+        Args:
+            name: 数据名称
+
+        Returns:
+            TestData: 测试数据
+        """
+        return self.data_manager.get_data(name)
+
+    def run_with_test_data(self, data_name: str, query_message: str = None):
+        """
+        使用测试数据运行测试
+
+        Args:
+            data_name: 测试数据名称
+            query_message: 查询消息（可选）
+
+        Returns:
+            tuple: (写入响应, 查询响应)
+        """
+        data = self.get_test_data(data_name)
+        if not data:
+            self.fail(f"测试数据不存在: {data_name}")
+
+        message = data.input_data.get("message", "")
+        if not message:
+            self.fail(f"测试数据 {data_name} 没有消息内容")
+
+        response1 = self.send_and_log(message)
+        self.wait_for_sync()
+
+        query_response = None
+        if query_message:
+            query_response = self.send_and_log(query_message)
+
+            if data.expected_keywords:
+                for keyword_group in data.expected_keywords:
+                    self.assertAnyKeywordInResponse(query_response, keyword_group)
+
+        return response1, query_response
+
     def tearDown(self):
         """
         每个测试用例结束后
@@ -110,6 +301,7 @@ class BaseOpenClawCLITest(unittest.TestCase):
         """
         测试类结束
         """
+        cls.session_manager.cleanup_session(cls._class_session_id)
         cls.logger.info("\n" + "=" * 60)
         cls.logger.info(f"测试类 {cls.__name__} 结束")
         cls.logger.info("=" * 60)
