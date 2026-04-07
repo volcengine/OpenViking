@@ -77,6 +77,7 @@ dependencies = [
     "loguru>=0.7.3",
     "cryptography>=42.0.0",
     "argon2-cffi>=23.0.0",
+    "lark-oapi>=1.5.3",
 ]
 
 [tool.uv.sources]
