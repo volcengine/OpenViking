@@ -1,5 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
+import asyncio
 import json
 import os
 import re
@@ -89,38 +90,52 @@ def get_viking_rel_path_from_zip(zip_path: str) -> str:
     return "/".join(new_parts)
 
 
-# TODO: Consider recursive vectorization
 async def _enqueue_direct_vectorization(viking_fs, uri: str, ctx: RequestContext) -> None:
     queue_manager = get_queue_manager()
     embedding_queue = cast(
         EmbeddingQueue, queue_manager.get_queue(queue_manager.EMBEDDING, allow_create=True)
     )
 
-    parent_uri = VikingURI(uri).parent.uri
-    abstract = await viking_fs.abstract(uri, ctx=ctx)
-    resource = Context(
-        uri=uri,
-        parent_uri=parent_uri,
-        is_leaf=False,
-        abstract=abstract,
-        level=0,
-        created_at=datetime.now(),
-        active_count=0,
-        related_uri=[],
-        user=ctx.user,
-        account_id=ctx.account_id,
-        owner_space=(
-            ctx.user.agent_space_name()
-            if uri.startswith("viking://agent/")
-            else ctx.user.user_space_name()
-            if uri.startswith("viking://user/") or uri.startswith("viking://session/")
-            else ""
-        ),
-        meta={"semantic_name": uri.split("/")[-1]},
-    )
+    entries = await viking_fs.tree(uri, output="original", node_limit=65536, level_limit=1000, ctx=ctx)
+    dir_uris = {uri}
+    for entry in entries:
+        if entry.get("isDir") and entry.get("uri"):
+            dir_uris.add(entry["uri"])
 
-    embedding_msg = EmbeddingMsgConverter.from_context(resource)
-    await embedding_queue.enqueue(embedding_msg)
+    sem = asyncio.Semaphore(16)
+
+    async def process_one(target_uri: str) -> None:
+        async with sem:
+            try:
+                abstract = await viking_fs.abstract(target_uri, ctx=ctx)
+            except Exception:
+                return
+            parent_uri = VikingURI(target_uri).parent.uri
+            resource = Context(
+                uri=target_uri,
+                parent_uri=parent_uri,
+                is_leaf=False,
+                abstract=abstract,
+                level=0,
+                created_at=datetime.now(),
+                active_count=0,
+                related_uri=[],
+                user=ctx.user,
+                account_id=ctx.account_id,
+                owner_space=(
+                    ctx.user.agent_space_name()
+                    if target_uri.startswith("viking://agent/")
+                    else ctx.user.user_space_name()
+                    if target_uri.startswith("viking://user/") or target_uri.startswith("viking://session/")
+                    else ""
+                ),
+                meta={"semantic_name": target_uri.split("/")[-1]},
+            )
+            embedding_msg = EmbeddingMsgConverter.from_context(resource)
+            if embedding_msg:
+                await embedding_queue.enqueue(embedding_msg)
+
+    await asyncio.gather(*(process_one(d) for d in dir_uris))
 
 
 async def import_ovpack(
