@@ -91,9 +91,11 @@ class StatsAggregator:
             uri = record.get("uri", "")
             record_cat = _category_from_uri(uri)
 
-            # Count by category
-            if record_cat and record_cat in by_category:
-                by_category[record_cat] += 1
+            # Skip records not in the requested categories
+            if not (record_cat and record_cat in by_category):
+                continue
+
+            by_category[record_cat] += 1
 
             active_count = record.get("active_count", 0)
             updated_at_raw = record.get("updated_at")
