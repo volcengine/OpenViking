@@ -489,6 +489,8 @@ async def run_import(args: argparse.Namespace) -> None:
                         f"  [{label}] [SKIP] already imported (use --force-ingest to reprocess)",
                         file=sys.stderr,
                     )
+                    nonlocal skipped_count
+                    skipped_count += 1
                     continue
 
                 # Preview messages

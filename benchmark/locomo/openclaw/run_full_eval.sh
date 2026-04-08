@@ -11,6 +11,7 @@ OpenClaw 完整评估流程脚本
   ./run_full_eval.sh --skip-import        # 跳过导入步骤 (所有 samples)
   ./run_full_eval.sh --sample 0           # 只处理第 0 个 sample
   ./run_full_eval.sh --sample 1 --with-claw-import  # 只处理第 1 个 sample，同时导入 OpenClaw
+  ./run_full_eval.sh --force-ingest       # 强制重新导入所有数据
 '
 
 # 基于脚本所在目录计算数据文件路径
@@ -24,6 +25,7 @@ GATEWAY_TOKEN="90f2d2dc2f7b4d50cb943d3d3345e667bb3e9bcb7ec3a1fb"
 # 解析参数
 SKIP_IMPORT=false
 WITH_CLAW_IMPORT=false
+FORCE_INGEST=false
 SAMPLE_IDX=""
 
 while [[ $# -gt 0 ]]; do
@@ -34,6 +36,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --with-claw-import)
             WITH_CLAW_IMPORT=true
+            shift
+            ;;
+        --force-ingest)
+            FORCE_INGEST=true
             shift
             ;;
         --sample)
@@ -59,6 +65,12 @@ if [ -n "$SAMPLE_IDX" ]; then
     OUTPUT_CSV="$RESULT_DIR/qa_results_sample${SAMPLE_IDX}.csv"
 fi
 
+# 构建 force-ingest 参数
+FORCE_INGEST_ARG=""
+if [ "$FORCE_INGEST" = true ]; then
+    FORCE_INGEST_ARG="--force-ingest"
+fi
+
 # 确保结果目录存在
 mkdir -p "$RESULT_DIR"
 
@@ -68,18 +80,18 @@ if [ "$SKIP_IMPORT" = false ]; then
         echo "[1/5] 导入数据到 OpenViking 和 OpenClaw..."
 
         # 后台运行 OpenViking 导入
-        python "$SCRIPT_DIR/../vikingbot/import_to_ov.py" --input "$INPUT_FILE" --force-ingest $SAMPLE_ARG > "$RESULT_DIR/import_ov.log" 2>&1 &
+        python "$SCRIPT_DIR/../vikingbot/import_to_ov.py" --input "$INPUT_FILE" $FORCE_INGEST_ARG $SAMPLE_ARG > "$RESULT_DIR/import_ov.log" 2>&1 &
         PID_OV=$!
 
         # 后台运行 OpenClaw 导入
-        python "$SCRIPT_DIR/eval.py" ingest "$INPUT_FILE" --force-ingest --token "$GATEWAY_TOKEN" $SAMPLE_ARG > "$RESULT_DIR/import_claw.log" 2>&1 &
+        python "$SCRIPT_DIR/eval.py" ingest "$INPUT_FILE" $FORCE_INGEST_ARG --token "$GATEWAY_TOKEN" $SAMPLE_ARG > "$RESULT_DIR/import_claw.log" 2>&1 &
         PID_CLAW=$!
 
         # 等待两个导入任务完成
         wait $PID_OV $PID_CLAW
     else
         echo "[1/5] 导入数据到 OpenViking..."
-        python "$SCRIPT_DIR/import_to_ov.py" --no-user-agent-id --input "$INPUT_FILE" --force-ingest $SAMPLE_ARG
+        python "$SCRIPT_DIR/import_to_ov.py" --no-user-agent-id --input "$INPUT_FILE" $FORCE_INGEST_ARG $SAMPLE_ARG
     fi
 
     echo "导入完成，等待 1 分钟..."
@@ -90,7 +102,7 @@ fi
 
 # Step 2: 运行 QA 模型（默认输出到 result/qa_results.csv）
 echo "[2/5] 运行 QA 评估..."
-python "$SCRIPT_DIR/eval.py" qa "$INPUT_FILE" --token "$GATEWAY_TOKEN" $SAMPLE_ARG --output "${OUTPUT_CSV%.csv}"
+python "$SCRIPT_DIR/eval.py" qa "$INPUT_FILE" --token "$GATEWAY_TOKEN" $SAMPLE_ARG --parallel 15 --output "${OUTPUT_CSV%.csv}"
 
 # Step 3: 裁判打分
 echo "[3/5] 裁判打分..."

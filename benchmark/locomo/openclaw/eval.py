@@ -23,6 +23,7 @@ import os
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from pathlib import Path
 from threading import Lock
 
@@ -30,7 +31,7 @@ import requests
 
 # Configuration constants
 DEFAULT_BASE_URL = "http://127.0.0.1:18789"
-DEFAULT_AGENT_ID = "main"
+DEFAULT_AGENT_ID = "locomo-eval"
 DEFAULT_INGEST_RECORD_PATH = ".ingest_record.json"
 
 # CSV write lock for thread safety
@@ -182,6 +183,56 @@ def build_session_messages(
         })
 
     return sessions
+
+
+# ---------------------------------------------------------------------------
+# Question time helpers
+# ---------------------------------------------------------------------------
+
+def parse_locomo_datetime(date_str: str) -> datetime | None:
+    """解析 LoCoMo 时间格式，如 '1:56 pm on 8 May, 2023'"""
+    try:
+        # 移除时间部分，只保留日期 "8 May, 2023"
+        if " on " in date_str:
+            date_part = date_str.split(" on ")[-1]
+            return datetime.strptime(date_part.strip(), "%d %B, %Y")
+    except ValueError:
+        pass
+    return None
+
+
+def get_sample_question_time(sample: dict) -> str | None:
+    """从 sample 的 conversation 中提取最后一个有内容 session 的时间，返回 ISO 格式日期"""
+    conversation = sample.get("conversation", {})
+
+    # 找所有 session_N 字段（非 date_time）
+    session_keys = [
+        k for k in conversation.keys() if k.startswith("session_") and "date_time" not in k
+    ]
+    if not session_keys:
+        return None
+
+    # 按 session 编号排序，找到最后一个有内容的
+    def get_session_num(key):
+        try:
+            return int(key.replace("session_", ""))
+        except ValueError:
+            return 0
+
+    session_keys.sort(key=get_session_num, reverse=True)
+
+    for session_key in session_keys:
+        if conversation.get(session_key):  # 有内容
+            # 找到对应的 date_time
+            session_num = get_session_num(session_key)
+            dt_key = f"session_{session_num}_date_time"
+            date_str = conversation.get(dt_key)
+            if date_str:
+                dt = parse_locomo_datetime(date_str)
+                if dt:
+                    return dt.strftime("%Y-%m-%d")
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -615,6 +666,7 @@ def process_single_question(
     qa: dict,
     args: argparse.Namespace,
     csv_path: str,
+    question_time: str | None = None,
 ) -> dict:
     """Process a single QA question. Returns the record."""
     question = qa["question"]
@@ -627,11 +679,16 @@ def process_single_question(
     user_key = args.user or f"eval-{sample_idx}"
 
     print(f"  [{sample_idx}] Q{original_qi}: {question[:60]}{'...' if len(question) > 60 else ''}", file=sys.stderr)
+    # 如果有 question_time，注入到 prompt 中
+    if question_time:
+        input_msg = f"Current date: {question_time}. Answer the question directly: {question}"
+    else:
+        input_msg = f"Answer the question directly: {question}"
 
     jsonl_filename = ""
     try:
         response, api_usage = send_message_with_retry(
-            args.base_url, args.token, sample_id, question, 2, args.agent_id, session_key
+            args.base_url, args.token, sample_id, input_msg, 2, args.agent_id, session_key
         )
         print(f"  [{sample_idx}]   A: {response[:60]}{'...' if len(response) > 60 else ''}", file=sys.stderr)
 
@@ -695,6 +752,7 @@ def run_sample_qa(
     """Process QA for a single sample with concurrent question execution. Returns (records, sample_usage)."""
     sample_id = item["sample_id"]
     user_key = args.user or f"eval-{sample_idx}"
+    question_time = get_sample_question_time(item)
     qas = [q for q in item.get("qa", []) if str(q.get("category", "")) != "5"]
     if args.count is not None:
         qas = qas[:args.count]
@@ -714,6 +772,8 @@ def run_sample_qa(
         return [], {"input_tokens": 0, "output_tokens": 0, "cacheRead": 0, "cacheWrite": 0, "total_tokens": 0}
 
     print(f"\n=== Sample {sample_id} [{sample_idx}] (user={user_key}) ===", file=sys.stderr)
+    if question_time:
+        print(f"    Question time context: {question_time}", file=sys.stderr)
     print(f"    Running {len(qas)} QA question(s) with max {args.parallel} workers...", file=sys.stderr)
 
     records = []
@@ -725,7 +785,7 @@ def run_sample_qa(
         for original_qi, qa in qas:
             future = executor.submit(
                 process_single_question,
-                sample_id, sample_idx, original_qi, qa, args, csv_path
+                sample_id, sample_idx, original_qi, qa, args, csv_path, question_time
             )
             futures.append(future)
 
