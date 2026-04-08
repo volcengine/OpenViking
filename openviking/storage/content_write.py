@@ -23,7 +23,7 @@ from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_DERIVED_FILENAMES = frozenset({".abstract.md", ".overview.md", ".relations.json"})
+_DERIVED_FILENAMES = frozenset({".abstract.md", ".overview.md", ".relations.json", ".summary_cache.json"})
 
 
 class ContentWriteCoordinator:
