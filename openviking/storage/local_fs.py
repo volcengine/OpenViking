@@ -92,7 +92,7 @@ def get_viking_rel_path_from_zip(zip_path: str) -> str:
 
 
 async def _enqueue_direct_vectorization(viking_fs, uri: str, ctx: RequestContext) -> None:
-    entries = await viking_fs.tree(uri, output="original", node_limit=100000, level_limit=1000, ctx=ctx)
+    entries = await viking_fs.tree(uri, node_limit=100000, level_limit=1000, ctx=ctx)
     dir_uris = {uri}
     file_entries: list[tuple[str, str, str]] = []
     for entry in entries:
