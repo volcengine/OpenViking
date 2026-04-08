@@ -469,29 +469,3 @@ jobs:
         run: |
           Write-Host "API tests failed!"
           exit 1
-
-  notify-failure:
-    name: Notify on Failure
-    needs: [api-tests]
-    if: failure()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Send failure email
-        uses: dawidd6/action-send-mail@v4
-        with:
-          server_address: smtp.gmail.com
-          server_port: 465
-          username: ${{ secrets.SMTP_USERNAME }}
-          password: ${{ secrets.SMTP_PASSWORD }}
-          subject: "❌ CI Failed: ${{ github.workflow }} - ${{ github.ref_name }}"
-          to: likaisong@bytedance.com
-          from: GitHub Actions
-          body: |
-            Workflow: ${{ github.workflow }}
-            Repository: ${{ github.repository }}
-            Branch: ${{ github.ref_name }}
-            Commit: ${{ github.sha }}
-            Actor: ${{ github.actor }}
-            Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-            
-            Please check the workflow run for details.
