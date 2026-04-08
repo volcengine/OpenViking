@@ -249,23 +249,29 @@ jobs:
           --out "$TMPDIR"
         cd ../..
         mkdir -p openviking/lib
-        python3 -c "
-import zipfile, glob, os, sys
-whls = glob.glob(os.path.join('$TMPDIR', 'ragfs_python-*.whl'))
-assert whls, 'maturin produced no wheel'
-with zipfile.ZipFile(whls[0]) as zf:
-    for name in zf.namelist():
-        bn = os.path.basename(name)
-        if bn.startswith('ragfs_python') and (bn.endswith('.so') or bn.endswith('.pyd')):
-            dst = os.path.join('openviking', 'lib', bn)
-            with zf.open(name) as src, open(dst, 'wb') as f:
-                f.write(src.read())
-            os.chmod(dst, 0o755)
-            print(f'Extracted {bn} -> {dst}')
-            sys.exit(0)
-print('ERROR: No ragfs_python .so/.pyd found in wheel')
-sys.exit(1)
-        "
+        python3 <<PY
+        import glob
+        import os
+        import sys
+        import zipfile
+
+        whls = glob.glob(os.path.join("$TMPDIR", "ragfs_python-*.whl"))
+        assert whls, "maturin produced no wheel"
+
+        with zipfile.ZipFile(whls[0]) as zf:
+            for name in zf.namelist():
+                bn = os.path.basename(name)
+                if bn.startswith("ragfs_python") and (bn.endswith(".so") or bn.endswith(".pyd")):
+                    dst = os.path.join("openviking", "lib", bn)
+                    with zf.open(name) as src, open(dst, "wb") as f:
+                        f.write(src.read())
+                    os.chmod(dst, 0o755)
+                    print(f"Extracted {bn} -> {dst}")
+                    sys.exit(0)
+
+        print("ERROR: No ragfs_python .so/.pyd found in wheel")
+        sys.exit(1)
+        PY
         rm -rf "$TMPDIR"
         echo "Contents of openviking/lib/:"
         ls -la openviking/lib/
@@ -456,23 +462,29 @@ sys.exit(1)
         fi
         cd ../..
         mkdir -p openviking/lib
-        python3 -c "
-import zipfile, glob, os, sys
-whls = glob.glob(os.path.join('$TMPDIR', 'ragfs_python-*.whl'))
-assert whls, 'maturin produced no wheel'
-with zipfile.ZipFile(whls[0]) as zf:
-    for name in zf.namelist():
-        bn = os.path.basename(name)
-        if bn.startswith('ragfs_python') and (bn.endswith('.so') or bn.endswith('.pyd')):
-            dst = os.path.join('openviking', 'lib', bn)
-            with zf.open(name) as src, open(dst, 'wb') as f:
-                f.write(src.read())
-            os.chmod(dst, 0o755)
-            print(f'Extracted {bn} -> {dst}')
-            sys.exit(0)
-print('ERROR: No ragfs_python .so/.pyd found in wheel')
-sys.exit(1)
-        "
+        python3 <<PY
+        import glob
+        import os
+        import sys
+        import zipfile
+
+        whls = glob.glob(os.path.join("$TMPDIR", "ragfs_python-*.whl"))
+        assert whls, "maturin produced no wheel"
+
+        with zipfile.ZipFile(whls[0]) as zf:
+            for name in zf.namelist():
+                bn = os.path.basename(name)
+                if bn.startswith("ragfs_python") and (bn.endswith(".so") or bn.endswith(".pyd")):
+                    dst = os.path.join("openviking", "lib", bn)
+                    with zf.open(name) as src, open(dst, "wb") as f:
+                        f.write(src.read())
+                    os.chmod(dst, 0o755)
+                    print(f"Extracted {bn} -> {dst}")
+                    sys.exit(0)
+
+        print("ERROR: No ragfs_python .so/.pyd found in wheel")
+        sys.exit(1)
+        PY
         rm -rf "$TMPDIR"
         echo "Contents of openviking/lib/:"
         ls -la openviking/lib/
