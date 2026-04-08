@@ -2,7 +2,10 @@
 # SPDX-License-Identifier: AGPL-3.0
 """VikingDB Embedder Implementation via HTTP API"""
 
+import asyncio
 from typing import Any, Dict, List, Optional
+
+import httpx
 
 from openviking.models.embedder.base import (
     DenseEmbedderBase,
@@ -10,7 +13,10 @@ from openviking.models.embedder.base import (
     HybridEmbedderBase,
     SparseEmbedderBase,
 )
-from openviking.storage.vectordb.collection.volcengine_clients import ClientForDataApi
+from openviking.storage.vectordb.collection.volcengine_clients import (
+    DEFAULT_TIMEOUT,
+    ClientForDataApi,
+)
 from openviking_cli.utils.logger import default_logger as logger
 
 
@@ -33,6 +39,7 @@ class VikingDBClientMixin:
             raise ValueError("AK and SK are required for VikingDB Embedder")
 
         self.client = ClientForDataApi(self.ak, self.sk, self.region, self.host)
+        self._async_client: Optional[httpx.AsyncClient] = None
 
     def _call_api(
         self,
@@ -65,6 +72,42 @@ class VikingDBClientMixin:
         except Exception as e:
             logger.error(f"Failed to get embeddings: {e}")
             raise e
+
+    async def _call_api_async(
+        self,
+        texts: List[str],
+        dense_model: Dict[str, Any] = None,
+        sparse_model: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        path = "/api/vikingdb/embedding"
+        data_items = [{"text": text} for text in texts]
+
+        req_body = {"data": data_items}
+        if dense_model:
+            req_body["dense_model"] = dense_model
+        if sparse_model:
+            req_body["sparse_model"] = sparse_model
+
+        req = self.client.prepare_request(method="POST", path=path, data=req_body)
+        if self._async_client is None:
+            self._async_client = httpx.AsyncClient(timeout=DEFAULT_TIMEOUT)
+
+        response = await self._async_client.request(
+            method=req.method,
+            url=f"https://{self.host}{req.path}",
+            headers=req.headers,
+            content=req.body,
+        )
+        if response.status_code != 200:
+            logger.warning(
+                "VikingDB API returned bad code: %s, message: %s",
+                response.status_code,
+                response.text,
+            )
+            return []
+
+        result = response.json()
+        return result.get("result", {}).get("data", [])
 
     def _truncate_and_normalize(
         self, embedding: List[float], dimension: Optional[int]
@@ -181,6 +224,63 @@ class VikingDBDenseEmbedder(DenseEmbedderBase, VikingDBClientMixin):
         )
         return results
 
+    async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+        async def _call() -> EmbedResult:
+            results = await self._call_api_async([text], dense_model=self.dense_model)
+            if not results:
+                return EmbedResult(dense_vector=[])
+
+            item = results[0]
+            dense_vector = []
+            if "dense_embedding" in item:
+                dense_vector = self._truncate_and_normalize(item["dense_embedding"], self.dimension)
+            return EmbedResult(dense_vector=dense_vector)
+
+        result = await self._run_with_async_retry(
+            _call,
+            logger=logger,
+            operation_name="VikingDB async embedding",
+        )
+        estimated_tokens = self._estimate_tokens(text)
+        self.update_token_usage(
+            model_name=self.model_name,
+            provider="volcengine",
+            prompt_tokens=estimated_tokens,
+            completion_tokens=0,
+        )
+        return result
+
+    async def embed_batch_async(
+        self, texts: List[str], is_query: bool = False
+    ) -> List[EmbedResult]:
+        if not texts:
+            return []
+
+        async def _call() -> List[EmbedResult]:
+            raw_results = await self._call_api_async(texts, dense_model=self.dense_model)
+            return [
+                EmbedResult(
+                    dense_vector=self._truncate_and_normalize(
+                        item.get("dense_embedding", []), self.dimension
+                    )
+                )
+                for item in raw_results
+            ]
+
+        results = await self._run_with_async_retry(
+            _call,
+            logger=logger,
+            operation_name="VikingDB async batch embedding",
+        )
+        total_tokens = sum(self._estimate_tokens(text) for text in texts)
+        self.update_token_usage(
+            model_name=self.model_name,
+            provider="volcengine",
+            prompt_tokens=total_tokens,
+            completion_tokens=0,
+        )
+        return results
+
     def get_dimension(self) -> int:
         return self.dimension if self.dimension else 2048
 
@@ -253,6 +353,65 @@ class VikingDBSparseEmbedder(SparseEmbedderBase, VikingDBClientMixin):
             operation_name="VikingDB sparse batch embedding",
         )
         # Estimate token usage for batch
+        total_tokens = sum(self._estimate_tokens(text) for text in texts)
+        self.update_token_usage(
+            model_name=self.model_name,
+            provider="volcengine",
+            prompt_tokens=total_tokens,
+            completion_tokens=0,
+        )
+        return results
+
+    async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+        async def _call() -> EmbedResult:
+            results = await self._call_api_async([text], sparse_model=self.sparse_model)
+            if not results:
+                return EmbedResult(sparse_vector={})
+
+            item = results[0]
+            sparse_vector = {}
+            if "sparse" in item:
+                sparse_vector = item["sparse"]
+            elif "sparse_embedding" in item:
+                sparse_vector = self._process_sparse_embedding(item["sparse_embedding"])
+            return EmbedResult(sparse_vector=sparse_vector)
+
+        result = await self._run_with_async_retry(
+            _call,
+            logger=logger,
+            operation_name="VikingDB async sparse embedding",
+        )
+        estimated_tokens = self._estimate_tokens(text)
+        self.update_token_usage(
+            model_name=self.model_name,
+            provider="volcengine",
+            prompt_tokens=estimated_tokens,
+            completion_tokens=0,
+        )
+        return result
+
+    async def embed_batch_async(
+        self, texts: List[str], is_query: bool = False
+    ) -> List[EmbedResult]:
+        if not texts:
+            return []
+
+        async def _call() -> List[EmbedResult]:
+            raw_results = await self._call_api_async(texts, sparse_model=self.sparse_model)
+            return [
+                EmbedResult(
+                    sparse_vector=self._process_sparse_embedding(
+                        item.get("sparse_embedding", item.get("sparse", {}))
+                    )
+                )
+                for item in raw_results
+            ]
+
+        results = await self._run_with_async_retry(
+            _call,
+            logger=logger,
+            operation_name="VikingDB async sparse batch embedding",
+        )
         total_tokens = sum(self._estimate_tokens(text) for text in texts)
         self.update_token_usage(
             model_name=self.model_name,
@@ -357,5 +516,92 @@ class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
         )
         return results
 
+    async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+        async def _call() -> EmbedResult:
+            results = await self._call_api_async(
+                [text], dense_model=self.dense_model, sparse_model=self.sparse_model
+            )
+            if not results:
+                return EmbedResult(dense_vector=[], sparse_vector={})
+
+            item = results[0]
+            dense_vector = []
+            sparse_vector = {}
+            if "dense" in item:
+                dense_vector = self._truncate_and_normalize(item["dense"], self.dimension)
+            elif "dense_embedding" in item:
+                dense_vector = self._truncate_and_normalize(item["dense_embedding"], self.dimension)
+            if "sparse" in item:
+                sparse_vector = item["sparse"]
+            elif "sparse_embedding" in item:
+                sparse_vector = self._process_sparse_embedding(item["sparse_embedding"])
+            return EmbedResult(dense_vector=dense_vector, sparse_vector=sparse_vector)
+
+        result = await self._run_with_async_retry(
+            _call,
+            logger=logger,
+            operation_name="VikingDB async hybrid embedding",
+        )
+        estimated_tokens = self._estimate_tokens(text)
+        self.update_token_usage(
+            model_name=self.model_name,
+            provider="volcengine",
+            prompt_tokens=estimated_tokens,
+            completion_tokens=0,
+        )
+        return result
+
+    async def embed_batch_async(
+        self, texts: List[str], is_query: bool = False
+    ) -> List[EmbedResult]:
+        if not texts:
+            return []
+
+        async def _call() -> List[EmbedResult]:
+            raw_results = await self._call_api_async(
+                texts, dense_model=self.dense_model, sparse_model=self.sparse_model
+            )
+            results = []
+            for item in raw_results:
+                dense_vector = []
+                sparse_vector = {}
+                if "dense" in item:
+                    dense_vector = self._truncate_and_normalize(item["dense"], self.dimension)
+                elif "dense_embedding" in item:
+                    dense_vector = self._truncate_and_normalize(
+                        item["dense_embedding"], self.dimension
+                    )
+                if "sparse" in item:
+                    sparse_vector = item["sparse"]
+                elif "sparse_embedding" in item:
+                    sparse_vector = self._process_sparse_embedding(item["sparse_embedding"])
+                results.append(EmbedResult(dense_vector=dense_vector, sparse_vector=sparse_vector))
+            return results
+
+        results = await self._run_with_async_retry(
+            _call,
+            logger=logger,
+            operation_name="VikingDB async hybrid batch embedding",
+        )
+        total_tokens = sum(self._estimate_tokens(text) for text in texts)
+        self.update_token_usage(
+            model_name=self.model_name,
+            provider="volcengine",
+            prompt_tokens=total_tokens,
+            completion_tokens=0,
+        )
+        return results
+
     def get_dimension(self) -> int:
         return self.dimension if self.dimension else 2048
+
+    def close(self):
+        if getattr(self, "_async_client", None) is not None:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop and loop.is_running():
+                loop.create_task(self._async_client.aclose())
+            else:
+                asyncio.run(self._async_client.aclose())
