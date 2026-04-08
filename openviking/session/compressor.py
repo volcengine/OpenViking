@@ -250,6 +250,16 @@ class SessionCompressor:
             target_memory.set_vectorize(Vectorize(text=payload.content))
             await self._index_memory(target_memory, ctx, change_type="modified")
             return True
+        except FileNotFoundError:
+            logger.warning(
+                "Target memory %s no longer exists — removing orphaned reference", target_memory.uri
+            )
+            # Clean up vector record for the missing file so it's not retried
+            try:
+                await self.vikingdb.delete_uris(ctx, [target_memory.uri])
+            except Exception:
+                pass
+            return False
         except Exception as e:
             logger.error(f"Failed to merge memory {target_memory.uri}: {e}")
             return False

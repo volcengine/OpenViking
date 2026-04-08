@@ -446,6 +446,18 @@ class AgentLoop:
                         session_key=msg.session_key, content="🐈 Sorry, you are not authorized to use this command.",
                         metadata=msg.metadata
                     )
+                session.clear()
+                await self.sessions.save(session)
+                return OutboundMessage(
+                    session_key=msg.session_key, content="🐈 New session started. Session history droped.", metadata=msg.metadata
+                )
+            elif cmd == "/compact":
+                # Clone session for async consolidation, then immediately clear original
+                if not self._check_cmd_auth(msg):
+                    return OutboundMessage(
+                        session_key=msg.session_key, content="🐈 Sorry, you are not authorized to use this command.",
+                        metadata=msg.metadata
+                    )
                 session_clone = session.clone()
                 session.clear()
                 await self.sessions.save(session)
@@ -478,6 +490,16 @@ class AgentLoop:
                 session.add_message("user", msg.content, sender_id=msg.sender_id)
                 await self.sessions.save(session)
                 return None
+
+            if not msg.need_reply:
+                session.add_message("user", msg.content, sender_id=msg.sender_id)
+                await self.sessions.save(session)
+                return OutboundMessage(
+                    session_key=msg.session_key,
+                    content="",
+                    metadata=msg.metadata,
+                    event_type=OutboundEventType.NO_REPLY,
+                )
 
             # Consolidate memory before processing if session is too large
             if len(session.messages) > self.memory_window:

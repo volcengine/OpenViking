@@ -1,9 +1,19 @@
 memory_type: profile
 description: |
+  # Task Objective
   User profile memory - captures "who the user is" as a person.
   Extract relatively stable personal attributes that define the user's identity, work style, and preferences.
   Include: profession, experience level, technical background, communication style, work habits, etc.
   Do NOT include transient conversation content or temporary mood states.
+
+  # Rules
+  - Each item: self-contained, declarative sentence, < 30 words
+  - Extract only facts stated/confirmed by user; no guesses
+  - Focus on persistent information, not temporary situations
+  - Forbidden: events, only-assistant content, sensitive/private info, trivial updates
+  - Merge similar items; keep latest if conflicting 
+  
+
 directory: "viking://user/{{ user_space }}/memories"
 filename_template: "profile.md"
 enabled: true
@@ -13,5 +23,19 @@ fields:
     description: |
       User profile content in Markdown format describing "who the user is".
       Includes relatively stable personal attributes: profession, experience, tech stack, communication style, etc.
-      Example: "User is an AI development engineer with 3 years of LLM application development experience, mainly using Python and LangChain tech stack. Communication style is concise and direct, prefers efficient code implementation."
+      Only record objective statuses, do not record events or similar information.
+      [IMPORTANT] For changeable statuses, must include the last updated time in the format: (as of 2023-06-09) 
+      Example:
+      # Caroline
+      - Date of birth
+      - Gender: Female
+      - Age: 25 (as of 2023-06-09)
+      - Nickname
+      - Place of origin
+      - Place of residence
+      - Regular city of residence
+      - Current occupation
+      - Relationship status: Single (as of 2023-06-09)
+      - Career plan
+      etc.
     merge_op: patch

@@ -6,7 +6,7 @@ mod output;
 mod tui;
 mod utils;
 
-use clap::{Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand};
 use config::Config;
 use error::{Error, Result};
 use output::OutputFormat;
@@ -128,9 +128,9 @@ enum Commands {
         /// Wait timeout in seconds (only used with --wait)
         #[arg(long)]
         timeout: Option<f64>,
-        /// No strict mode for directory scanning
-        #[arg(long = "no-strict", default_value_t = false)]
-        no_strict: bool,
+        /// Enable strict mode for directory scanning (fail if any unsupported files found)
+        #[arg(long = "strict", action = ArgAction::SetTrue)]
+        strict_mode: bool,
         /// Ignore directories, e.g. --ignore-dirs "node_modules,dist"
         #[arg(long)]
         ignore_dirs: Option<String>,
@@ -421,6 +421,9 @@ enum Commands {
             default_value = "256"
         )]
         node_limit: i32,
+        /// Maximum depth level to traverse (default: 10)
+        #[arg(short = 'L', long = "level-limit", default_value = "10")]
+        level_limit: i32,
     },
     /// Run file glob pattern search
     Glob {
@@ -660,7 +663,7 @@ async fn main() {
             instruction,
             wait,
             timeout,
-            no_strict,
+            strict_mode,
             ignore_dirs,
             include,
             exclude,
@@ -675,7 +678,7 @@ async fn main() {
                 instruction,
                 wait,
                 timeout,
-                no_strict,
+                strict_mode,
                 ignore_dirs,
                 include,
                 exclude,
@@ -808,7 +811,8 @@ async fn main() {
             pattern,
             ignore_case,
             node_limit,
-        } => handle_grep(uri, exclude_uri, pattern, ignore_case, node_limit, ctx).await,
+            level_limit,
+        } => handle_grep(uri, exclude_uri, pattern, ignore_case, node_limit, level_limit, ctx).await,
 
         Commands::Glob {
             pattern,
@@ -831,7 +835,7 @@ async fn handle_add_resource(
     instruction: String,
     wait: bool,
     timeout: Option<f64>,
-    no_strict: bool,
+    strict_mode: bool,
     ignore_dirs: Option<String>,
     include: Option<String>,
     exclude: Option<String>,
@@ -879,7 +883,7 @@ async fn handle_add_resource(
         std::process::exit(1);
     }
 
-    let strict = !no_strict;
+    let strict = strict_mode;
     let directly_upload_media = !no_directly_upload_media;
 
     let effective_timeout = if wait {
@@ -1433,9 +1437,24 @@ async fn handle_grep(
     pattern: String,
     ignore_case: bool,
     node_limit: i32,
+    level_limit: i32,
     ctx: CliContext,
 ) -> Result<()> {
-    let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
+    // Prevent grep from root directory to avoid excessive server load and timeouts
+    if uri == "viking://" || uri == "viking:///" {
+        eprintln!(
+            "Error: Cannot grep from root directory 'viking://'.\n\
+             Grep from root would search across all scopes (resources, user, agent, session, queue, temp),\n\
+             which may cause server timeout or excessive load.\n\
+             Please specify a more specific scope, e.g.:\n\
+               ov grep --uri=viking://resources '{}'\n\
+               ov grep --uri=viking://user '{}'",
+            pattern, pattern
+        );
+        std::process::exit(1);
+    }
+
+    let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit), format!("-L {}", level_limit)];
     if let Some(excluded) = &exclude_uri {
         params.push(format!("-x {}", excluded));
     }
@@ -1452,6 +1471,7 @@ async fn handle_grep(
         &pattern,
         ignore_case,
         node_limit,
+        level_limit,
         ctx.output_format,
         ctx.compact,
     )

@@ -48,12 +48,20 @@ class PatchOp(MergeOpBase):
 
         For non-string fields:
         - Just replace with patch_value
+
+        Special case: when current_value is None (no original content),
+        use the replace value directly instead of trying to match.
         """
         # For non-string fields, just replace
         if self._field_type != FieldType.STRING:
             return patch_value
 
-        # For string fields
+        # For string fields - check if current_value is None (no original)
+        if current_value is None:
+            # No original content - extract replace value from patch
+            return self._extract_replace_when_no_original(patch_value)
+
+        # For string fields with existing content
         from openviking.session.memory.merge_op.patch_handler import apply_str_patch
 
         current_str = current_value or ""
@@ -83,3 +91,38 @@ class PatchOp(MergeOpBase):
         if patch_value is None or patch_value == "":
             return current_value
         return patch_value
+
+    def _extract_replace_when_no_original(self, patch_value: Any) -> Any:
+        """
+        Extract replace value from patch when there's no original content.
+
+        Called when current_value is None - we use the replace content
+        directly instead of trying to match against an empty string.
+
+        Args:
+            patch_value: The patch value (StrPatch, dict, or string)
+
+        Returns:
+            The replace content, or empty string if not available
+        """
+        from openviking.session.memory.merge_op.base import StrPatch
+
+        # Case 1: StrPatch object
+        if isinstance(patch_value, StrPatch):
+            replace = patch_value.get_first_replace()
+            return replace if replace is not None else ""
+
+        # Case 2: dict form
+        if isinstance(patch_value, dict) and "blocks" in patch_value:
+            blocks = patch_value.get("blocks", [])
+            if blocks:
+                first_block = blocks[0]
+                if isinstance(first_block, dict):
+                    replace = first_block.get("replace")
+                    return replace if replace is not None else ""
+
+        # Case 3: Simple string - use as is
+        if isinstance(patch_value, str):
+            return patch_value
+
+        return ""

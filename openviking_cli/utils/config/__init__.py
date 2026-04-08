@@ -43,6 +43,7 @@ from .parser_config import (
 from .prompts_config import PromptsConfig
 from .rerank_config import RerankConfig
 from .storage_config import StorageConfig
+from .telemetry_config import TelemetryConfig, TracerConfig
 from .vectordb_config import VectorDBBackendConfig
 from .vlm_config import VLMConfig
 
@@ -84,4 +85,6 @@ __all__ = [
     "resolve_config_path",
     "set_openviking_config",
     "is_valid_openviking_config",
+    "TelemetryConfig",
+    "TracerConfig",
 ]

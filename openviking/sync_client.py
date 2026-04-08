@@ -39,9 +39,14 @@ class SyncOpenViking:
         """Check whether a session exists in storage."""
         return run_async(self._async_client.session_exists(session_id))
 
-    def create_session(self) -> Dict[str, Any]:
-        """Create a new session."""
-        return run_async(self._async_client.create_session())
+    def create_session(self, session_id: Optional[str] = None) -> Dict[str, Any]:
+        """Create a new session.
+
+        Args:
+            session_id: Optional session ID. If provided, creates a session with the given ID.
+                       If None, creates a new session with auto-generated ID.
+        """
+        return run_async(self._async_client.create_session(session_id))
 
     def list_sessions(self) -> List[Any]:
         """List all sessions."""
@@ -71,6 +76,7 @@ class SyncOpenViking:
         role: str,
         content: str | None = None,
         parts: list[dict] | None = None,
+        created_at: str | None = None,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -79,10 +85,13 @@ class SyncOpenViking:
             role: Message role ("user" or "assistant")
             content: Text content (simple mode)
             parts: Parts array (full Part support: TextPart, ContextPart, ToolPart)
+            created_at: Message creation time (ISO format string). If not provided, current time is used.
 
         If both content and parts are provided, parts takes precedence.
         """
-        return run_async(self._async_client.add_message(session_id, role, content, parts))
+        return run_async(
+            self._async_client.add_message(session_id, role, content, parts, created_at)
+        )
 
     def commit_session(
         self, session_id: str, telemetry: TelemetryRequest = False

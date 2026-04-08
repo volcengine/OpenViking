@@ -12,7 +12,6 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from openviking.models.vlm.base import VLMBase
 from openviking.server.identity import RequestContext
-from openviking.session.memory.dataclass import MemoryOperations
 from openviking.session.memory.schema_model_generator import (
     SchemaModelGenerator,
     SchemaPromptGenerator,
@@ -29,6 +28,7 @@ from openviking.session.memory.utils import (
     validate_operations_uris,
 )
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
+from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -87,12 +87,12 @@ class ExtractLoop:
         # Transaction handle for file locking
         self._transaction_handle = None
 
-    async def run(self) -> Tuple[Optional[MemoryOperations], List[Dict[str, Any]]]:
+    async def run(self) -> Tuple[Optional[Any], List[Dict[str, Any]]]:
         """
         Run the simplified ReAct loop for memory updates.
 
         Returns:
-            Tuple of (final MemoryOperations, tools_used list)
+            Tuple of (final operations, tools_used list)
         """
         iteration = 0
         max_iterations = self.max_iterations
@@ -117,7 +117,8 @@ class ExtractLoop:
         ]
 
         # 预计算 expected_fields
-        self._expected_fields = ["reasoning", "edit_overview_uris", "delete_uris"]
+        # self._expected_fields = ["reasoning", "edit_overview_uris", "delete_uris"]
+        self._expected_fields = ["delete_uris"]
 
         # 获取 ExtractContext（整个流程复用）
         self._extract_context = self.context_provider.get_extract_context()
@@ -170,7 +171,7 @@ See the complete JSON Schema below:
 
         while iteration < max_iterations:
             iteration += 1
-            logger.info(f"ReAct iteration {iteration}/{max_iterations}")
+            tracer.info(f"ReAct iteration {iteration}/{max_iterations}")
 
             # Check if this is the last iteration - force final result
             is_last_iteration = iteration >= max_iterations
@@ -190,6 +191,10 @@ See the complete JSON Schema below:
 
             if tool_calls:
                 await self._execute_tool_calls(messages, tool_calls, tools_used)
+                # Allow one extra iteration for refetch
+                if iteration >= max_iterations:
+                    max_iterations += 1
+                    tracer.info(f"Extended max_iterations to {max_iterations} for tool call")
                 continue
 
             # If model returned final operations, check if refetch is needed
@@ -197,13 +202,13 @@ See the complete JSON Schema below:
                 # Check if any write_uris target existing files that weren't read
                 refetch_uris = await self._check_unread_existing_files(operations)
                 if refetch_uris:
-                    logger.info(f"Found unread existing files: {refetch_uris}, refetching...")
+                    tracer.info(f"Found unread existing files: {refetch_uris}, refetching...")
                     # Add refetch results to messages and continue loop
                     await self._add_refetch_results_to_messages(messages, refetch_uris)
                     # Allow one extra iteration for refetch
                     if iteration >= max_iterations:
                         max_iterations += 1
-                        logger.info(f"Extended max_iterations to {max_iterations} for refetch")
+                        tracer.info(f"Extended max_iterations to {max_iterations} for refetch")
 
                     continue
 
@@ -215,7 +220,7 @@ See the complete JSON Schema below:
             )
             # If it's the last iteration, use empty operations
             if is_last_iteration:
-                final_operations = MemoryOperations()
+                final_operations = self._operations_model()
                 break
             # Otherwise continue and try again
             continue
@@ -226,10 +231,11 @@ See the complete JSON Schema below:
             else:
                 raise RuntimeError("ReAct loop completed but no operations generated")
 
-        logger.info(f"final_operations={final_operations.model_dump_json(indent=4)}")
+        tracer.info(f"final_operations={final_operations.model_dump_json(indent=4)}")
 
         return final_operations, tools_used
 
+    @tracer("extract_loop.execute_tool_calls")
     async def _execute_tool_calls(self, messages, tool_calls, tools_used):
         # Execute all tool calls in parallel
         async def execute_single_tool_call(idx: int, tool_call):
@@ -269,12 +275,12 @@ See the complete JSON Schema below:
                 result=result,
             )
 
-    def _validate_operations(self, operations: MemoryOperations) -> None:
+    def _validate_operations(self, operations: Any) -> None:
         """
         Validate that all operations have allowed URIs.
 
         Args:
-            operations: The MemoryOperations to validate
+            operations: The operations to validate
 
         Raises:
             ValueError: If any operation has a disallowed URI
@@ -284,15 +290,15 @@ See the complete JSON Schema below:
         schemas = self.context_provider.get_memory_schemas(self.ctx)
 
         # Use pre-initialized extract_context
-        if not hasattr(self, '_extract_context') or self._extract_context is None:
+        if not hasattr(self, "_extract_context") or self._extract_context is None:
             raise ValueError("ExtractContext not initialized")
 
         is_valid, errors = validate_operations_uris(
             operations,
             schemas,
             registry,
-            user_space="default",
-            agent_space="default",
+            user_space=self.ctx.user.user_space_name(),
+            agent_space=self.ctx.user.agent_space_name(),
             extract_context=self._extract_context,
         )
         if not is_valid:
@@ -304,7 +310,7 @@ See the complete JSON Schema below:
         self,
         messages: List[Dict[str, Any]],
         force_final: bool = False,
-    ) -> Tuple[Optional[List], Optional[MemoryOperations]]:
+    ) -> Tuple[Optional[List], Optional[Any]]:
         """
         Call LLM with tools. Returns either tool calls OR final operations.
 
@@ -325,7 +331,6 @@ See the complete JSON Schema below:
             messages=messages,
             tools=self._tool_schemas,
             tool_choice=tool_choice,
-            max_retries=self.vlm.max_retries,
         )
         # print(f'response={response}')
         # Log cache hit info
@@ -339,11 +344,11 @@ See the complete JSON Schema below:
             )
             if prompt_tokens > 0:
                 cache_hit_rate = (cached_tokens / prompt_tokens) * 100
-                logger.info(
+                tracer.info(
                     f"[KVCache] prompt_tokens={prompt_tokens}, cached_tokens={cached_tokens}, cache_hit_rate={cache_hit_rate:.1f}%"
                 )
             else:
-                logger.info(
+                tracer.info(
                     f"[KVCache] prompt_tokens={prompt_tokens}, cached_tokens={cached_tokens}"
                 )
 
@@ -351,11 +356,11 @@ See the complete JSON Schema below:
         if response.has_tool_calls:
             # Format tool calls nicely for debug logging
             for tc in response.tool_calls:
-                logger.info(f"[assistant tool_call] (id={tc.id}, name={tc.name})")
-                logger.info(f"  {json.dumps(tc.arguments, indent=2, ensure_ascii=False)}")
+                tracer.info(f"[assistant tool_call] (id={tc.id}, name={tc.name})")
+                tracer.info(f"  {json.dumps(tc.arguments, indent=2, ensure_ascii=False)}")
             return (response.tool_calls, None)
 
-        # Case 2: Try to parse MemoryOperations from content with stability
+        # Case 2: Try to parse operations from content with stability
         content = response.content or ""
         if content:
             try:
@@ -384,6 +389,7 @@ See the complete JSON Schema below:
         print("No tool calls or operations parsed")
         return (None, None)
 
+    @tracer("extract_loop.execute_tool", ignore_result=False)
     async def _execute_tool(
         self,
         tool_call,
@@ -402,7 +408,9 @@ See the complete JSON Schema below:
         tool_ctx = ToolContext(request_ctx=self.ctx, transaction_handle=self._transaction_handle)
 
         try:
+            tracer.info(f"tool_call.arguments={tool_call.arguments}")
             result = await tool.execute(self.viking_fs, tool_ctx, **tool_call.arguments)
+
             return result
         except Exception as e:
             logger.error(f"Failed to execute {tool_call.name}: {e}")
@@ -417,7 +425,7 @@ See the complete JSON Schema below:
 
     async def _check_unread_existing_files(
         self,
-        operations: MemoryOperations,
+        operations: Any,
     ) -> List[str]:
         """Check if write operations target existing files that weren't read during ReAct."""
         memory_type_fields = getattr(operations, "_memory_type_fields", None)
@@ -439,7 +447,12 @@ See the complete JSON Schema below:
                 item_dict = dict(item) if hasattr(item, "model_dump") else dict(item)
                 try:
                     uri = resolve_flat_model_uri(
-                        item_dict, registry, "default", "default", memory_type=field_name
+                        item_dict,
+                        registry,
+                        user_space=self.ctx.user.user_space_name(),
+                        agent_space=self.ctx.user.agent_space_name(),
+                        memory_type=field_name,
+                        extract_context=self._extract_context,
                     )
                 except Exception as e:
                     logger.warning(f"Failed to resolve URI for {item}: {e}")

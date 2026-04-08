@@ -128,10 +128,15 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         return await self._client.session_exists(session_id)
 
-    async def create_session(self) -> Dict[str, Any]:
-        """Create a new session."""
+    async def create_session(self, session_id: Optional[str] = None) -> Dict[str, Any]:
+        """Create a new session.
+
+        Args:
+            session_id: Optional session ID. If provided, creates a session with the given ID.
+                       If None, creates a new session with auto-generated ID.
+        """
         await self._ensure_initialized()
-        return await self._client.create_session()
+        return await self._client.create_session(session_id)
 
     async def list_sessions(self) -> List[Any]:
         """List all sessions."""

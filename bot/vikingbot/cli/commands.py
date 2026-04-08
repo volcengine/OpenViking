@@ -440,6 +440,7 @@ def prepare_channel(
             openapi_config,
             bus,
             app=fastapi_app,  # Pass the external FastAPI app
+            global_config=config,
         )
         channels.add_channel(openapi_channel)
         logger.info(f"OpenAPI channel enabled on port {openapi_port}")

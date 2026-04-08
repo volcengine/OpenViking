@@ -249,7 +249,14 @@ async def export_ovpack(viking_fs, uri: str, to: str, ctx: RequestContext) -> st
 
     Returns:
         Exported file path
+
+    Raises:
+        ValueError: If export size exceeds limits (65536 files or 2GB total size)
     """
+    # Safety limits
+    MAX_FILES = 65536
+    MAX_TOTAL_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
+
     base_name = uri.strip().rstrip("/").split("/")[-1]
     if not base_name:
         base_name = "export"
@@ -262,6 +269,30 @@ async def export_ovpack(viking_fs, uri: str, to: str, ctx: RequestContext) -> st
     ensure_dir_exists(to)
 
     entries = await viking_fs.tree(uri, show_all_hidden=True, ctx=ctx)
+
+    # Check file count limit
+    file_count = sum(1 for entry in entries if not entry.get("isDir"))
+    if file_count > MAX_FILES:
+        raise ValueError(
+            f"Export aborted: too many files ({file_count} files, limit is {MAX_FILES}). "
+            f"Please export a smaller directory."
+        )
+
+    # Calculate total size and check limit
+    total_size = 0
+    for entry in entries:
+        if not entry.get("isDir"):
+            # Get file size from entry if available
+            size = entry.get("size", 0)
+            total_size += size
+
+    if total_size > MAX_TOTAL_SIZE:
+        size_mb = total_size / (1024 * 1024)
+        limit_mb = MAX_TOTAL_SIZE / (1024 * 1024)
+        raise ValueError(
+            f"Export aborted: total size too large ({size_mb:.1f}MB, limit is {limit_mb:.0f}MB). "
+            f"Please export a smaller directory."
+        )
 
     with zipfile.ZipFile(to, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
         # Write root directory entry

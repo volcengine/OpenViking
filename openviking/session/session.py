@@ -15,7 +15,7 @@ from uuid import uuid4
 
 from openviking.message import Message, Part
 from openviking.server.identity import RequestContext, Role
-from openviking.telemetry import get_current_telemetry
+from openviking.telemetry import get_current_telemetry, tracer
 from openviking.utils.time_utils import get_current_timestamp
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger, run_async
@@ -349,6 +349,7 @@ class Session:
         """Sync wrapper for commit_async()."""
         return run_async(self.commit_async())
 
+    @tracer("session.commit")
     async def commit_async(self) -> Dict[str, Any]:
         """Async commit session: archive immediately, extract memories in background.
 
@@ -363,6 +364,9 @@ class Session:
         from openviking.storage.transaction import LockContext, get_lock_manager
         from openviking_cli.exceptions import FailedPreconditionError
 
+        trace_id = tracer.get_trace_id()
+        logger.info(f"[TRACER] session_commit started, trace_id={trace_id}")
+
         # ===== Phase 1: Snapshot + clear (PathLock-protected) =====
         # Fast pre-check: skip lock entirely if no messages (common case avoids
         # unnecessary filesystem lock acquisition).
@@ -374,6 +378,7 @@ class Session:
                 "task_id": None,
                 "archive_uri": None,
                 "archived": False,
+                "trace_id": trace_id,
             }
 
         blocking_archive = await self._get_blocking_failed_archive_ref()
@@ -397,6 +402,7 @@ class Session:
                     "task_id": None,
                     "archive_uri": None,
                     "archived": False,
+                    "trace_id": trace_id,
                 }
 
             self._compression.compression_index += 1
@@ -441,7 +447,12 @@ class Session:
 
         # Create TaskRecord for tracking Phase 2
         tracker = get_task_tracker()
-        task = tracker.create("session_commit", resource_id=self.session_id)
+        task = tracker.create(
+            "session_commit",
+            resource_id=self.session_id,
+            owner_account_id=self.ctx.account_id,
+            owner_user_id=self.ctx.user.user_id,
+        )
 
         asyncio.create_task(
             self._run_memory_extraction(
@@ -460,8 +471,10 @@ class Session:
             "task_id": task.task_id,
             "archive_uri": archive_uri,
             "archived": True,
+            "trace_id": trace_id,
         }
 
+    @tracer("session_commit_phase2")
     async def _run_memory_extraction(
         self,
         task_id: str,

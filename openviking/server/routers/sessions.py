@@ -80,6 +80,12 @@ class UsedRequest(BaseModel):
     skill: Optional[Dict[str, Any]] = None
 
 
+class CreateSessionRequest(BaseModel):
+    """Request model for creating a session."""
+
+    session_id: Optional[str] = None
+
+
 def _to_jsonable(value: Any) -> Any:
     """Convert internal objects (e.g. Context) into JSON-serializable values."""
     to_dict = getattr(value, "to_dict", None)
@@ -94,13 +100,19 @@ def _to_jsonable(value: Any) -> Any:
 
 @router.post("")
 async def create_session(
+    request: Optional[CreateSessionRequest] = None,
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Create a new session."""
+    """Create a new session.
+
+    If session_id is provided, creates a session with the given ID.
+    If session_id is None, creates a new session with auto-generated ID.
+    """
     service = get_service()
     await service.initialize_user_directories(_ctx)
     await service.initialize_agent_directories(_ctx)
-    session = await service.sessions.create(_ctx)
+    session_id = request.session_id if request else None
+    session = await service.sessions.create(_ctx, session_id)
     return Response(
         status="ok",
         result={

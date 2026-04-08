@@ -20,6 +20,10 @@ Create a new session.
 # Create new session (auto-generated ID)
 session = client.session()
 print(f"Session URI: {session.uri}")
+
+# Create new session with specified ID
+session = client.create_session(session_id="my-custom-session-id")
+print(f"Session ID: {session['session_id']}")
 ```
 
 **HTTP API**
@@ -29,9 +33,16 @@ POST /api/v1/sessions
 ```
 
 ```bash
+# Create new session (auto-generated ID)
 curl -X POST http://localhost:1933/api/v1/sessions \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key"
+
+# Create new session with specified ID
+curl -X POST http://localhost:1933/api/v1/sessions \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{"session_id": "my-custom-session-id"}'
 ```
 
 **CLI**

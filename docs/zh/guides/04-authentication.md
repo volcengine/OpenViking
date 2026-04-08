@@ -1,6 +1,6 @@
 # 认证
 
-OpenViking Server 支持两种认证模式，并带有基于角色的访问控制：`api_key` 和 `trusted`。
+OpenViking Server 支持两种认证模式，并带有基于角色的访问控制：`api_key` 和 `trusted`。默认模式是 `api_key`。
 
 ## 概述
 
@@ -18,7 +18,9 @@ OpenViking 使用两层 API Key 体系：
 | 模式 | `server.auth_mode` | 身份来源 | 典型使用场景 |
 |------|--------------------|----------|--------------|
 | API Key 模式 | `"api_key"` | API Key，root 请求可附带租户请求头 | 标准多租户部署 |
-| Trusted 模式 | `"trusted"` | `X-OpenViking-Account` / `X-OpenViking-User` / 可选 `X-OpenViking-Agent` 请求头 | 部署在受信网关或内网边界之后 |
+| Trusted 模式 | `"trusted"` | `X-OpenViking-Account` / `X-OpenViking-User` / 可选 `X-OpenViking-Agent` 请求头；非 localhost 部署还必须配置 `root_api_key` | 部署在受信网关或内网边界之后 |
+
+`api_key` 是默认模式，也是标准生产部署方式。`trusted` 是替代模式，适合由上游网关或受信内网调用方在每个请求里显式注入身份头。在 `trusted` 模式下，只有服务绑定到 localhost 时才允许不配置 `root_api_key`；只要是非 localhost 部署，就必须配置 `root_api_key`。
 
 ## 服务端配置
 
@@ -40,6 +42,8 @@ openviking-server
 ```
 
 ## 管理账户和用户
+
+本节只适用于 `api_key` 模式。在 `trusted` 模式下，普通请求不会走 user key 的注册或查找链路。
 
 使用 root key 通过 Admin API 创建工作区和用户：
 
@@ -162,10 +166,18 @@ Trusted 模式不会查 user key，而是直接信任每个请求显式携带的
 
 Trusted 模式规则：
 
+- 普通数据访问不需要先注册 user key，也不依赖 user key 分发流程
 - 租户级请求必须包含 `X-OpenViking-Account` 和 `X-OpenViking-User`
 - `X-OpenViking-Agent` 可选，缺省为 `default`
+- 每个 trusted 请求都会被解析成 `USER`，身份完全来自请求头，而不是 root key 或 user key
 - 如果同时配置了 `root_api_key`，每个请求仍然必须带匹配的 API Key
 - 只应部署在受信网络边界之后，或由身份注入网关统一转发
+
+这意味着：
+
+- `trusted` 不是开发模式
+- `trusted` 下的普通读写、检索、会话访问不需要先走 Admin API 注册流程
+- 创建 account、注册用户、修改角色、重新生成 key 仍然属于 `api_key` 模式下的管理链路；如果服务端运行在 `trusted` 模式而你去调用这些 Admin API，服务端会返回明确错误，说明 `trusted` 不支持这类注册式管理，并提示切换到配置了 `root_api_key` 的 `api_key` 模式
 
 **curl**
 
@@ -197,9 +209,13 @@ client = ov.SyncHTTPClient(
 | ADMIN | 所属 account | 常规操作 + 管理所属 account 的用户 |
 | USER | 所属 account | 常规操作（ls、read、find、sessions 等） |
 
+在 `trusted` 模式下，请求角色会解析为 `USER`，因此普通流量不适用 ROOT/ADMIN 的注册式管理语义。
+
 ## 开发模式
 
 当 `auth_mode = "api_key"` 且未配置 `root_api_key` 时，认证禁用，所有请求以 ROOT 身份访问 default account。**此模式仅允许在服务器绑定 localhost 时使用**（`127.0.0.1`、`localhost` 或 `::1`）。如果 `host` 设置为非回环地址（如 `0.0.0.0`）且未配置 `root_api_key`，服务器将拒绝启动。
+
+开发模式只存在于 `api_key` 模式中；`trusted` 不会退化成开发模式。
 
 ```json
 {

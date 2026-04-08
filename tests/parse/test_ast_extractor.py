@@ -1092,6 +1092,118 @@ pub fn factorial(n: u64) -> u64 {
 
 
 # ---------------------------------------------------------------------------
+# Lua
+# ---------------------------------------------------------------------------
+
+
+def _lua_extractor():
+    from openviking.parse.parsers.code.ast.languages.lua import LuaExtractor
+
+    return LuaExtractor()
+
+
+class TestLuaExtractor:
+    SAMPLE = """local mathx = require("mathx")
+local util = require("util")
+
+local Calculator = {}
+
+-- Add two numbers.
+-- Returns their sum.
+function Calculator.add(a, b)
+    return a + b
+end
+
+-- Subtract b from a.
+-- Returns their difference.
+function Calculator:sub(a, b)
+    return a - b
+end
+
+-- Add two numbers at module scope.
+local function add(a, b)
+    return a + b
+end
+"""
+
+    def setup_method(self):
+        self.e = _lua_extractor()
+
+    def test_imports(self):
+        sk = self.e.extract("calculator.lua", self.SAMPLE)
+        assert "mathx" in sk.imports
+        assert "util" in sk.imports
+        # deduplicated imports should remain unique
+        assert sk.imports.count("mathx") == 1
+
+    def test_class_extracted(self):
+        sk = self.e.extract("calculator.lua", self.SAMPLE)
+        names = {c.name for c in sk.classes}
+        assert "Calculator" in names
+
+    def test_methods_extracted(self):
+        sk = self.e.extract("calculator.lua", self.SAMPLE)
+        cls = next(c for c in sk.classes if c.name == "Calculator")
+        method_names = {m.name for m in cls.methods}
+        assert "add" in method_names
+        assert "sub" in method_names
+
+    def test_method_docstring(self):
+        sk = self.e.extract("calculator.lua", self.SAMPLE)
+        cls = next(c for c in sk.classes if c.name == "Calculator")
+        methods = {m.name: m for m in cls.methods}
+        assert "Add two numbers." in methods["add"].docstring
+        assert "Returns their sum." in methods["add"].docstring
+        assert "Subtract b from a." in methods["sub"].docstring
+
+    def test_function_extracted(self):
+        sk = self.e.extract("calculator.lua", self.SAMPLE)
+        names = {f.name for f in sk.functions}
+        assert "add" in names
+
+    def test_function_docstring(self):
+        sk = self.e.extract("calculator.lua", self.SAMPLE)
+        fns = {f.name: f for f in sk.functions}
+        assert "Add two numbers at module scope." in fns["add"].docstring
+
+    def test_to_text_compact(self):
+        sk = self.e.extract("calculator.lua", self.SAMPLE)
+        text = sk.to_text(verbose=False)
+        assert "# calculator.lua [Lua]" in text
+        assert "Calculator" in text
+        assert "add" in text
+        # only first line of multi-line docstring in compact mode
+        assert "Returns their difference." not in text
+
+    def test_to_text_verbose(self):
+        sk = self.e.extract("calculator.lua", self.SAMPLE)
+        text = sk.to_text(verbose=True)
+        assert "# calculator.lua [Lua]" in text
+        assert "Returns their sum." in text
+        assert "Returns their difference." in text
+
+    def test_dot_method_params(self):
+        code = "function M.compute(x, y, z)\n    return x + y + z\nend\n"
+        sk = self.e.extract("m.lua", code)
+        cls = next(c for c in sk.classes if c.name == "M")
+        methods = {m.name: m for m in cls.methods}
+        assert "compute" in methods
+        assert "x, y, z" in methods["compute"].params
+
+    def test_colon_method_not_in_functions(self):
+        code = "function M:init()\nend\nfunction standalone()\nend\n"
+        sk = self.e.extract("m.lua", code)
+        fn_names = {f.name for f in sk.functions}
+        assert "standalone" in fn_names
+        assert "init" not in fn_names
+
+    def test_bare_require(self):
+        code = "require 'inspect'\nfunction foo()\nend\n"
+        sk = self.e.extract("m.lua", code)
+        assert "inspect" in sk.imports
+
+
+# ---------------------------------------------------------------------------
 # Skeleton.to_text() — verbose vs compact
 # ---------------------------------------------------------------------------
 
@@ -1296,9 +1408,16 @@ class TestASTExtractorDispatch:
         assert "# util.cs [C#]" in text
         assert "class Util" in text
 
+    def test_lua_dispatch(self):
+        code = "-- Say hello.\nfunction greet(name)\n    return 'Hi ' .. name\nend\n"
+        text = self.extractor.extract_skeleton("hello.lua", code)
+        assert text is not None
+        assert "# hello.lua [Lua]" in text
+        assert "greet" in text
+
     def test_unknown_extension_returns_none(self):
         code = "def foo(x): pass\nclass Bar: pass\n"
-        result = self.extractor.extract_skeleton("script.lua", code)
+        result = self.extractor.extract_skeleton("script.xyz123", code)
         assert result is None
 
     def test_never_raises(self):
@@ -1315,3 +1434,5 @@ class TestASTExtractorDispatch:
         verbose = self.extractor.extract_skeleton("m.py", code, verbose=True)
         assert "Detail here." not in compact
         assert "Detail here." in verbose
+
+

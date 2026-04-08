@@ -40,6 +40,7 @@ class Session:
         role: str,
         content: Optional[str] = None,
         parts: Optional[List[Part]] = None,
+        created_at: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Add a message to the session.
 
@@ -47,6 +48,7 @@ class Session:
             role: Message role (e.g., "user", "assistant")
             content: Text content (simple mode)
             parts: Parts list (TextPart, ContextPart, ToolPart)
+            created_at: Message creation time (ISO format string). If not provided, current time is used.
 
         If both content and parts are provided, parts takes precedence.
 
@@ -55,8 +57,12 @@ class Session:
         """
         if parts is not None:
             parts_dicts = [asdict(p) for p in parts]
-            return await self._client.add_message(self.session_id, role, parts=parts_dicts)
-        return await self._client.add_message(self.session_id, role, content=content)
+            return await self._client.add_message(
+                self.session_id, role, parts=parts_dicts, created_at=created_at
+            )
+        return await self._client.add_message(
+            self.session_id, role, content=content, created_at=created_at
+        )
 
     async def commit(self, telemetry: TelemetryRequest = False) -> Dict[str, Any]:
         """Commit the session (archive messages and extract memories).

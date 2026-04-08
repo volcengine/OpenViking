@@ -4,8 +4,13 @@
 """Skill management tests"""
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from openviking import AsyncOpenViking
+from openviking.client import LocalClient
+from openviking.server.identity import RequestContext, Role
+from openviking.telemetry import get_current_telemetry
+from openviking_cli.session.user_id import UserIdentifier
 
 
 class TestAddSkill:
@@ -62,6 +67,47 @@ This skill was created from a string.
 
         assert "uri" in result
         assert "viking://agent/skills/" in result["uri"]
+
+    async def test_add_skill_with_wait_returns_queue_status(self, client: AsyncOpenViking):
+        """Test local SDK add_skill(wait=True) preserves queue_status and binds telemetry."""
+        del client
+        queue_status = {
+            "Semantic": {"processed": 0, "error_count": 0, "errors": []},
+            "Embedding": {"processed": 1, "error_count": 0, "errors": []},
+        }
+        seen: dict[str, object] = {}
+
+        async def _fake_add_skill(**kwargs):
+            telemetry = get_current_telemetry()
+            seen["enabled"] = telemetry.enabled
+            seen["telemetry_id"] = telemetry.telemetry_id
+            seen["kwargs"] = kwargs
+            return {
+                "uri": "viking://agent/skills/waited-skill",
+                "queue_status": queue_status,
+            }
+
+        local_client = LocalClient.__new__(LocalClient)
+        local_client._ctx = RequestContext(
+            user=UserIdentifier.the_default_user(),
+            role=Role.USER,
+        )
+        local_client._service = SimpleNamespace(
+            resources=SimpleNamespace(add_skill=_fake_add_skill)
+        )
+
+        result = await LocalClient.add_skill(
+            local_client,
+            data={"name": "waited-skill", "content": "# Waited Skill"},
+            wait=True,
+            telemetry=False,
+        )
+
+        assert result["uri"] == "viking://agent/skills/waited-skill"
+        assert result["queue_status"] == queue_status
+        assert seen["enabled"] is True
+        assert str(seen["telemetry_id"]).startswith("tm_")
+        assert seen["kwargs"]["wait"] is True
 
     async def test_add_skill_from_mcp_tool(self, client: AsyncOpenViking):
         """Test adding skill from MCP Tool format"""

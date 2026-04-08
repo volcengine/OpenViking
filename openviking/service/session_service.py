@@ -14,7 +14,7 @@ from openviking.session import Session
 from openviking.session.compressor import SessionCompressor
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.exceptions import NotFoundError, NotInitializedError
+from openviking_cli.exceptions import AlreadyExistsError, NotFoundError, NotInitializedError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -68,9 +68,22 @@ class SessionService:
             session_id=session_id,
         )
 
-    async def create(self, ctx: RequestContext) -> Session:
-        """Create a session and persist its root path."""
-        session = self.session(ctx)
+    async def create(self, ctx: RequestContext, session_id: Optional[str] = None) -> Session:
+        """Create a session and persist its root path.
+
+        Args:
+            ctx: Request context
+            session_id: Optional session ID. If provided, creates a session with the given ID.
+                       If None, creates a new session with auto-generated ID.
+
+        Raises:
+            AlreadyExistsError: If a session with the given ID already exists
+        """
+        if session_id:
+            existing = self.session(ctx, session_id)
+            if await existing.exists():
+                raise AlreadyExistsError(f"Session '{session_id}' already exists")
+        session = self.session(ctx, session_id)
         await session.ensure_exists()
         return session
 
@@ -170,9 +183,13 @@ class SessionService:
         session = await self.get(session_id, ctx)
         return await session.commit_async()
 
-    async def get_commit_task(self, task_id: str) -> Optional[Dict[str, Any]]:
-        """Query background commit task status by task_id."""
-        task = get_task_tracker().get(task_id)
+    async def get_commit_task(self, task_id: str, ctx: RequestContext) -> Optional[Dict[str, Any]]:
+        """Query background commit task status by task_id for the calling owner."""
+        task = get_task_tracker().get(
+            task_id,
+            owner_account_id=ctx.account_id,
+            owner_user_id=ctx.user.user_id,
+        )
         return task.to_dict() if task else None
 
     async def extract(self, session_id: str, ctx: RequestContext) -> List[Any]:

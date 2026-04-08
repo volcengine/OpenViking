@@ -22,6 +22,7 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 
 import requests
 
@@ -570,7 +571,7 @@ def run_sample_qa(
     if not qas:
         print(f"\n=== Sample {sample_id} [{sample_idx}] (user={user_key}) ===", file=sys.stderr)
         print(f"    All QA questions already executed, skipping sample.", file=sys.stderr)
-        return [], {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+        return [], {"input_tokens": 0, "output_tokens": 0, "cacheRead": 0, "cacheWrite": 0, "total_tokens": 0}
 
     jsonl_path = f"{args.output}.{sample_idx}.jsonl" if args.output else None
 
@@ -725,7 +726,7 @@ def save_record_to_csv(csv_path: str, record: dict) -> None:
         "sample_id", "sample_idx", "qi", "question", "expected",
         "response", "category", "evidence", "input_tokens",
         "output_tokens", "cacheRead", "cacheWrite", "total_tokens",
-        "timestamp", "jsonl_filename"
+        "timestamp", "jsonl_filename", "result", "reasoning"
     ]
 
     # Flatten usage fields
@@ -738,6 +739,8 @@ def save_record_to_csv(csv_path: str, record: dict) -> None:
     flat_record["total_tokens"] = usage.get("total_tokens", 0)
     flat_record["timestamp"] = time.strftime("%Y-%m-%d %H:%M:%S")
     flat_record["jsonl_filename"] = flat_record.get("jsonl_filename", "")
+    flat_record["result"] = ""  # 默认为空，由 judge.py 填充
+    flat_record["reasoning"] = ""  # 默认为空，由 judge.py 填充
 
     try:
         with open(csv_path, "a", encoding="utf-8", newline="") as f:
@@ -765,7 +768,9 @@ def run_qa(
     print(f"    running in single-thread mode", file=sys.stderr)
 
     # Load already executed records from CSV
-    csv_path = f"{args.output}.csv" if args.output else "qa_results.csv"
+    csv_path = f"{args.output}.csv" if args.output else args.default_csv_path
+    # 确保输出目录存在
+    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
     executed_records = load_executed_records(csv_path)
     print(f"    Loaded {len(executed_records)} already executed records from {csv_path}", file=sys.stderr)
 
@@ -820,6 +825,10 @@ def parse_session_range(s: str) -> tuple[int, int]:
 
 
 def main():
+    # 基于脚本所在目录计算默认 CSV 路径
+    script_dir = Path(__file__).parent.resolve()
+    default_csv_path = str(script_dir / "result" / "qa_results.csv")
+
     parser = argparse.ArgumentParser(description="Evaluate OpenClaw responses")
     parser.add_argument("mode", choices=["ingest", "qa"], help="Mode: ingest (load conversations) or qa (run QA eval)")
     parser.add_argument("input", help="Path to test file (.txt or .json)")
@@ -901,6 +910,8 @@ def main():
         help="Clear all existing ingest records before running",
     )
     args = parser.parse_args()
+    # 添加默认 CSV 路径到 args
+    args.default_csv_path = default_csv_path
 
     if not args.token and not getattr(args, "viking", False):
         print("Error: --token or OPENCLAW_GATEWAY_TOKEN env var is required", file=sys.stderr)

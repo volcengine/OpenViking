@@ -1,38 +1,34 @@
 memory_type: entities
 description: |
-  Entity memory - manages knowledge using Zettelkasten method.
-  Each card represents an entity with relative path links to other cards.
-  Relative path format: ../entities/entity_name.md
-  - Example: [skin_itching](../entities/skin_itching.md) → see dermatologist
-  - Cards should be rich and distributed - avoid putting all info in one card.
+  Wikipedia article - manages page using Zettelkasten method.
+  Each page represents an article with relative path links to events.
+  Cards should be rich and distributed - avoid putting all info in one card.
 directory: "viking://user/{{ user_space }}/memories/entities"
-filename_template: "{{ name }}.md"
+filename_template: "{{ category }}/{{ name }}.md"
 enabled: true
 
 fields:
+  - name: category
+    type: string
+    description: |
+      - Category name in Chinese or English. If English, use lowercase with underscores, max 3 words.
+    merge_op: immutable
+
   - name: name
     type: string
     description: |
-      # Content
-      - Entity name in Chinese or English. If English, use lowercase with underscores, max 3 words. Do not include any dates.
-  
-      ### Good Examples
-      emergency_department
-      cough_symptom
-
-      ### Bad Examples
-      progressive_memory_loss_with_personality_change  // Too long, max 3 words
+      - Entity name in Chinese or English. If English, use lowercase with underscores, max 3 words.
     merge_op: immutable
 
   - name: content
     type: string
     description: |
-      # Content
       - Detailed Zettelkasten card content in markdown format
-      - Use standard markdown links to connect cards:
-          [emergency_department](../entities/{name})
-          [fever](../entities/{name})
+      Relative path format: events://{event_name} or ../events/{year}/{month}/{day}/{event_name}.md
+      - Example:  
+      # LGBTQ+ events Caroline participated in: 
+      - [Pride parade](../events/2023/03/05/Pride parade.md) 
+      - [Caroline's school LGBTQ talk](events://Caroline's school LGBTQ talk)
+      - [Support group](../events/2024/03/10/Support group.md)
 
-      - One card per topic, link to related cards; if content is too long, create new cards
-      - If retrieved content is related to current card, update content to establish connections
     merge_op: patch

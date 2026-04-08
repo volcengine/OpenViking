@@ -327,6 +327,7 @@ class LocalClient(BaseClient):
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
         exclude_uri: Optional[str] = None,
+        level_limit: int = 5,
     ) -> Dict[str, Any]:
         """Content search with pattern."""
         return await self._service.fs.grep(
@@ -336,6 +337,7 @@ class LocalClient(BaseClient):
             case_insensitive=case_insensitive,
             node_limit=node_limit,
             exclude_uri=exclude_uri,
+            level_limit=level_limit,
         )
 
     async def glob(self, pattern: str, uri: str = "viking://") -> Dict[str, Any]:
@@ -358,11 +360,16 @@ class LocalClient(BaseClient):
 
     # ============= Sessions =============
 
-    async def create_session(self) -> Dict[str, Any]:
-        """Create a new session."""
+    async def create_session(self, session_id: Optional[str] = None) -> Dict[str, Any]:
+        """Create a new session.
+
+        Args:
+            session_id: Optional session ID. If provided, creates a session with the given ID.
+                       If None, creates a new session with auto-generated ID.
+        """
         await self._service.initialize_user_directories(self._ctx)
         await self._service.initialize_agent_directories(self._ctx)
-        session = await self._service.sessions.create(self._ctx)
+        session = await self._service.sessions.create(self._ctx, session_id)
         return {
             "session_id": session.session_id,
             "user": session.user.to_dict(),
@@ -415,7 +422,7 @@ class LocalClient(BaseClient):
 
     async def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Query background task status."""
-        return await self._service.sessions.get_commit_task(task_id)
+        return await self._service.sessions.get_commit_task(task_id, self._ctx)
 
     async def add_message(
         self,

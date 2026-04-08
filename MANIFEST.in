@@ -10,6 +10,10 @@ include LICENSE
 include README.md
 include pyproject.toml
 include setup.py
+include Cargo.toml
+include Cargo.lock
+graft crates/ragfs
+graft crates/ragfs-python
 recursive-include openviking *.yaml
 
 # sdist should be source-only: never ship runtime binaries from working tree

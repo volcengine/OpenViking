@@ -165,6 +165,7 @@ class FSService:
         exclude_uri: Optional[str] = None,
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
+        level_limit: int = 5,
     ) -> Dict:
         """Content search."""
         viking_fs = self._ensure_initialized()
@@ -174,6 +175,7 @@ class FSService:
             exclude_uri=exclude_uri,
             case_insensitive=case_insensitive,
             node_limit=node_limit,
+            level_limit=level_limit,
             ctx=ctx,
         )
 

@@ -20,6 +20,10 @@
 # 创建新会话（自动生成 ID）
 session = client.session()
 print(f"Session URI: {session.uri}")
+
+# 创建指定 ID 的新会话
+session = client.create_session(session_id="my-custom-session-id")
+print(f"Session ID: {session['session_id']}")
 ```
 
 **HTTP API**
@@ -29,9 +33,16 @@ POST /api/v1/sessions
 ```
 
 ```bash
+# 创建新会话（自动生成 ID）
 curl -X POST http://localhost:1933/api/v1/sessions \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key"
+
+# 创建指定 ID 的新会话
+curl -X POST http://localhost:1933/api/v1/sessions \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{"session_id": "my-custom-session-id"}'
 ```
 
 **CLI**

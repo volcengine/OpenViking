@@ -1,3 +1,9 @@
+import {
+  buildRequestHeaders,
+  resolveRuntimeConsoleSettings,
+  saveConsoleSettings,
+} from "./console_settings.js";
+
 const API_BASE = "/console/api/v1";
 const SESSION_KEY = "ov_console_api_key";
 const THEME_MODE_KEY = "ov_console_theme_mode";
@@ -31,6 +37,12 @@ const state = {
   themeMode: "dark",
   navCollapsed: false,
   resultCollapsed: false,
+  connectionSettings: {
+    apiKey: "",
+    accountId: "",
+    userId: "",
+    agentId: "",
+  },
 };
 
 const elements = {
@@ -43,6 +55,9 @@ const elements = {
   sidebarResizer: document.getElementById("sidebarResizer"),
   outputResizer: document.getElementById("outputResizer"),
   apiKeyInput: document.getElementById("apiKeyInput"),
+  accountInput: document.getElementById("accountInput"),
+  userInput: document.getElementById("userInput"),
+  agentIdInput: document.getElementById("agentIdInput"),
   saveKeyBtn: document.getElementById("saveKeyBtn"),
   clearKeyBtn: document.getElementById("clearKeyBtn"),
   connectionHint: document.getElementById("connectionHint"),
@@ -239,14 +254,22 @@ function setActivePanel(panel) {
 }
 
 function getApiKey() {
-  return window.sessionStorage.getItem(SESSION_KEY) || "";
+  return window.sessionStorage.getItem(SESSION_KEY) || state.connectionSettings.apiKey || "";
 }
 
 function updateConnectionHint() {
   const key = getApiKey();
-  elements.connectionHint.textContent = key
-    ? `API key loaded in session (${key.length} chars).`
-    : "No API key in session.";
+  const identities = [
+    state.connectionSettings.accountId ? `account=${state.connectionSettings.accountId}` : "",
+    state.connectionSettings.userId ? `user=${state.connectionSettings.userId}` : "",
+    state.connectionSettings.agentId ? `agent=${state.connectionSettings.agentId}` : "",
+  ].filter(Boolean);
+
+  const apiKeySummary = key ? `API key loaded in session (${key.length} chars).` : "No API key in session.";
+  const identitySummary = identities.length
+    ? ` Identity headers: ${identities.join(", ")}.`
+    : " No account/user/agent id configured.";
+  elements.connectionHint.textContent = `${apiKeySummary}${identitySummary}`;
 }
 
 function truncateText(value, maxLength = 4000) {
@@ -263,18 +286,17 @@ function isJsonLikeContentType(contentType) {
 }
 
 async function callConsole(path, options = {}) {
-  const headers = {
+  const baseHeaders = {
     ...(options.headers || {}),
   };
 
   if (!(options.body instanceof FormData)) {
-    headers["Content-Type"] = headers["Content-Type"] || "application/json";
+    baseHeaders["Content-Type"] = baseHeaders["Content-Type"] || "application/json";
   }
-
-  const apiKey = getApiKey();
-  if (apiKey) {
-    headers["X-API-Key"] = apiKey;
-  }
+  const headers = buildRequestHeaders(baseHeaders, {
+    apiKey: getApiKey(),
+    ...state.connectionSettings,
+  });
 
   let response;
   try {
@@ -1462,22 +1484,33 @@ function bindTabs() {
 }
 
 function bindConnection() {
-  const saveApiKey = () => {
-    const value = elements.apiKeyInput.value.trim();
-    if (!value) {
-      setOutput("API key is empty.");
-      return false;
+  const saveConnection = () => {
+    const nextApiKey = elements.apiKeyInput.value.trim() || state.connectionSettings.apiKey;
+    state.connectionSettings = saveConsoleSettings(window.localStorage, {
+      apiKey: nextApiKey,
+      accountId: elements.accountInput.value,
+      userId: elements.userInput.value,
+      agentId: elements.agentIdInput.value,
+    });
+
+    elements.accountInput.value = state.connectionSettings.accountId;
+    elements.userInput.value = state.connectionSettings.userId;
+    elements.agentIdInput.value = state.connectionSettings.agentId;
+
+    if (state.connectionSettings.apiKey) {
+      window.sessionStorage.setItem(SESSION_KEY, state.connectionSettings.apiKey);
+      elements.apiKeyInput.value = "";
+    } else {
+      window.sessionStorage.removeItem(SESSION_KEY);
     }
 
-    window.sessionStorage.setItem(SESSION_KEY, value);
-    elements.apiKeyInput.value = "";
     updateConnectionHint();
-    setOutput("API key saved in browser session storage.");
+    setOutput(nextApiKey ? "Connection settings saved." : "Identity settings saved. API key unchanged.");
     return true;
   };
 
   elements.saveKeyBtn.addEventListener("click", () => {
-    saveApiKey();
+    saveConnection();
   });
 
   elements.apiKeyInput.addEventListener("keydown", (event) => {
@@ -1485,13 +1518,18 @@ function bindConnection() {
       return;
     }
     event.preventDefault();
-    saveApiKey();
+    saveConnection();
   });
 
   elements.clearKeyBtn.addEventListener("click", () => {
     window.sessionStorage.removeItem(SESSION_KEY);
+    state.connectionSettings = saveConsoleSettings(window.localStorage, {});
+    elements.accountInput.value = "";
+    elements.userInput.value = "";
+    elements.agentIdInput.value = "";
+    elements.apiKeyInput.value = "";
     updateConnectionHint();
-    setOutput("API key cleared from browser session.");
+    setOutput("Connection settings cleared from browser storage.");
   });
 }
 
@@ -2460,6 +2498,14 @@ function bindMonitor() {
 }
 
 async function init() {
+  state.connectionSettings = resolveRuntimeConsoleSettings(window.localStorage, getApiKey());
+  if (state.connectionSettings.apiKey) {
+    window.sessionStorage.setItem(SESSION_KEY, state.connectionSettings.apiKey);
+  }
+  elements.accountInput.value = state.connectionSettings.accountId;
+  elements.userInput.value = state.connectionSettings.userId;
+  elements.agentIdInput.value = state.connectionSettings.agentId;
+
   initShellState();
   bindShellControls();
   initResizablePanes();

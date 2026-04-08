@@ -105,7 +105,7 @@ async def test_reindex_uses_request_tenant_for_exists(monkeypatch):
             return True
 
     class FakeTracker:
-        def has_running(self, task_type, uri):
+        def has_running(self, task_type, uri, owner_account_id=None, owner_user_id=None):
             return False
 
     async def fake_do_reindex(service, uri, regenerate, ctx):

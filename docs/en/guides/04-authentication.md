@@ -1,6 +1,6 @@
 # Authentication
 
-OpenViking Server supports two authentication modes with role-based access control: `api_key` and `trusted`.
+OpenViking Server supports two authentication modes with role-based access control: `api_key` and `trusted`. The default mode is `api_key`.
 
 ## Overview
 
@@ -18,7 +18,9 @@ All API keys are plain random tokens with no embedded identity. The server resol
 | Mode | `server.auth_mode` | Identity Source | Typical Use |
 |------|--------------------|-----------------|-------------|
 | API key mode | `"api_key"` | API key, with optional tenant headers for root requests | Standard multi-tenant deployment |
-| Trusted mode | `"trusted"` | `X-OpenViking-Account` / `X-OpenViking-User` / optional `X-OpenViking-Agent` headers | Behind a trusted gateway or internal network boundary |
+| Trusted mode | `"trusted"` | `X-OpenViking-Account` / `X-OpenViking-User` / optional `X-OpenViking-Agent` headers, plus `root_api_key` on non-localhost deployments | Behind a trusted gateway or internal network boundary |
+
+`api_key` is the default and standard production mode. `trusted` is an alternative mode for deployments where an upstream gateway or trusted internal caller injects identity headers on every request. In `trusted` mode, running without `root_api_key` is allowed only when the server binds to localhost; non-localhost `trusted` deployments must configure `root_api_key`.
 
 ## Setting Up (Server Side)
 
@@ -40,6 +42,8 @@ openviking-server
 ```
 
 ## Managing Accounts and Users
+
+This section applies to `api_key` mode. In `trusted` mode, normal requests do not use user-key registration or lookup.
 
 Use the root key to create accounts (workspaces) and users via the Admin API:
 
@@ -162,10 +166,18 @@ Trusted mode skips user-key lookup and instead trusts explicit identity headers 
 
 Rules in trusted mode:
 
+- Normal data access does not require user registration or user-key provisioning first.
 - `X-OpenViking-Account` and `X-OpenViking-User` are required on tenant-scoped requests.
 - `X-OpenViking-Agent` is optional and defaults to `default`.
+- Every trusted-mode request is resolved as `USER`. Identity comes from the headers, not from a root key or user key.
 - If `root_api_key` is also configured, every request must still provide a matching API key.
 - Only expose this mode behind a trusted network boundary or an identity-injecting gateway.
+
+Implications:
+
+- Trusted mode is not development mode.
+- Trusted mode does not use the Admin API as a prerequisite for ordinary reads, writes, search, or session access.
+- Account creation, user registration, role changes, and key regeneration remain part of the `api_key` admin workflow. If you call Admin API endpoints while the server runs in `trusted` mode, the server returns a permission error explaining that admin registration is unavailable in `trusted` mode and that you should switch to `api_key` mode with `root_api_key` for account/user management.
 
 **curl**
 
@@ -197,9 +209,13 @@ client = ov.SyncHTTPClient(
 | ADMIN | Own account | Regular operations + manage users in own account |
 | USER | Own account | Regular operations (ls, read, find, sessions, etc.) |
 
+In `trusted` mode, requests are resolved as `USER`, so the usual ROOT/ADMIN registration flow does not apply to ordinary traffic.
+
 ## Development Mode
 
 When `auth_mode = "api_key"` and no `root_api_key` is configured, authentication is disabled. All requests are accepted as ROOT with the default account. **This is only allowed when the server binds to localhost** (`127.0.0.1`, `localhost`, or `::1`). If `host` is set to a non-loopback address (e.g. `0.0.0.0`) without a `root_api_key`, the server will refuse to start.
+
+Development mode only exists in `api_key` mode. `trusted` mode never falls back to development mode.
 
 ```json
 {

@@ -29,6 +29,8 @@ from openviking.parse.base import (
 )
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.constants import CODE_EXTENSIONS
+from openviking.utils.network_guard import build_httpx_request_validation_hooks
+from openviking_cli.exceptions import PermissionDeniedError
 from openviking_cli.utils.config import get_openviking_config
 
 
@@ -77,7 +79,12 @@ class URLTypeDetector:
         "application/xhtml+xml": URLType.WEBPAGE,
     }
 
-    async def detect(self, url: str, timeout: float = 10.0) -> Tuple[URLType, Dict[str, Any]]:
+    async def detect(
+        self,
+        url: str,
+        timeout: float = 10.0,
+        request_validator=None,
+    ) -> Tuple[URLType, Dict[str, Any]]:
         """
         Detect URL content type.
 
@@ -107,7 +114,16 @@ class URLTypeDetector:
         # 2. Send HEAD request to check Content-Type
         try:
             httpx = lazy_import("httpx")
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            client_kwargs = {
+                "timeout": timeout,
+                "follow_redirects": True,
+            }
+            event_hooks = build_httpx_request_validation_hooks(request_validator)
+            if event_hooks:
+                client_kwargs["event_hooks"] = event_hooks
+                client_kwargs["trust_env"] = False
+
+            async with httpx.AsyncClient(**client_kwargs) as client:
                 response = await client.head(url)
                 content_type = response.headers.get("content-type", "").lower()
 
@@ -128,6 +144,8 @@ class URLTypeDetector:
                 if "html" in content_type or "xml" in content_type:
                     return URLType.WEBPAGE, meta
 
+        except PermissionDeniedError:
+            raise
         except Exception as e:
             meta["detection_error"] = str(e)
 
@@ -271,7 +289,12 @@ class HTMLParser(BaseParser):
             ParseResult
         """
         # Detect URL type
-        url_type, meta = await self._url_detector.detect(url, timeout=self.timeout)
+        request_validator = kwargs.get("request_validator")
+        url_type, meta = await self._url_detector.detect(
+            url,
+            timeout=self.timeout,
+            request_validator=request_validator,
+        )
 
         if url_type == URLType.WEBPAGE:
             # Fetch and parse as webpage
@@ -317,7 +340,10 @@ class HTMLParser(BaseParser):
         """
         try:
             # Fetch HTML
-            html_content = await self._fetch_html(url)
+            html_content = await self._fetch_html(
+                url,
+                request_validator=kwargs.get("request_validator"),
+            )
 
             # Convert to Markdown
             markdown_content = self._html_to_markdown(html_content, base_url=url)
@@ -339,6 +365,8 @@ class HTMLParser(BaseParser):
 
             return result
 
+        except PermissionDeniedError:
+            raise
         except Exception as e:
             return create_parse_result(
                 root=ResourceNode(type=NodeType.ROOT, content_path=None),
@@ -385,7 +413,10 @@ class HTMLParser(BaseParser):
         temp_path = None
         try:
             # Download to temporary file
-            temp_path = await self._download_file(url)
+            temp_path = await self._download_file(
+                url,
+                request_validator=kwargs.get("request_validator"),
+            )
 
             # Extract original filename from URL for use as source_path,
             # so parsers use it instead of the temp file name.
@@ -422,6 +453,8 @@ class HTMLParser(BaseParser):
             result.meta["url_type"] = f"download_{file_type}"
             return result
 
+        except PermissionDeniedError:
+            raise
         except Exception as e:
             return create_parse_result(
                 root=ResourceNode(type=NodeType.ROOT, content_path=None),
@@ -457,6 +490,8 @@ class HTMLParser(BaseParser):
 
             return result
 
+        except PermissionDeniedError:
+            raise
         except Exception as e:
             return create_parse_result(
                 root=ResourceNode(type=NodeType.ROOT, content_path=None),
@@ -499,7 +534,7 @@ class HTMLParser(BaseParser):
                 warnings=[f"Failed to read HTML: {e}"],
             )
 
-    async def _fetch_html(self, url: str) -> str:
+    async def _fetch_html(self, url: str, request_validator=None) -> str:
         """
         Fetch HTML content from URL.
 
@@ -514,7 +549,16 @@ class HTMLParser(BaseParser):
         """
         httpx = lazy_import("httpx")
 
-        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
+        client_kwargs = {
+            "timeout": self.timeout,
+            "follow_redirects": True,
+        }
+        event_hooks = build_httpx_request_validation_hooks(request_validator)
+        if event_hooks:
+            client_kwargs["event_hooks"] = event_hooks
+            client_kwargs["trust_env"] = False
+
+        async with httpx.AsyncClient(**client_kwargs) as client:
             headers = {"User-Agent": self.user_agent}
             response = await client.get(url, headers=headers)
             response.raise_for_status()
@@ -591,7 +635,7 @@ class HTMLParser(BaseParser):
         result.temp_dir_path = temp_uri
         return result
 
-    async def _download_file(self, url: str) -> str:
+    async def _download_file(self, url: str, request_validator=None) -> str:
         """
         Download file from URL to temporary location.
 
@@ -619,7 +663,16 @@ class HTMLParser(BaseParser):
         temp_file.close()
 
         # Download
-        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
+        client_kwargs = {
+            "timeout": self.timeout,
+            "follow_redirects": True,
+        }
+        event_hooks = build_httpx_request_validation_hooks(request_validator)
+        if event_hooks:
+            client_kwargs["event_hooks"] = event_hooks
+            client_kwargs["trust_env"] = False
+
+        async with httpx.AsyncClient(**client_kwargs) as client:
             headers = {"User-Agent": self.user_agent}
             response = await client.get(url, headers=headers)
             response.raise_for_status()

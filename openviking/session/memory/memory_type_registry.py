@@ -5,7 +5,7 @@ Memory type registry - loads YAML configurations.
 """
 
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import yaml
 
@@ -25,8 +25,40 @@ class MemoryTypeRegistry:
     access to memory type configurations.
     """
 
-    def __init__(self):
+    def __init__(self, load_schemas: bool = True):
         self._types: Dict[str, MemoryTypeSchema] = {}
+
+        if load_schemas:
+            self._load_schemas()
+
+    def _load_schemas(self) -> None:
+        """Load schemas from built-in and custom directories. Fails on error."""
+        import os
+
+        from openviking_cli.utils.config import get_openviking_config
+
+        builtin_dir = os.path.join(
+            os.path.dirname(__file__), "..", "..", "prompts", "templates", "memory"
+        )
+        config = get_openviking_config()
+        custom_dir = config.memory.custom_templates_dir
+
+        # Load from builtin directory (must succeed)
+        if not os.path.exists(builtin_dir):
+            raise RuntimeError(f"Builtin memory templates directory not found: {builtin_dir}")
+        loaded = self.load_from_directory(builtin_dir)
+        if loaded == 0:
+            raise RuntimeError(f"No memory schemas loaded from builtin directory: {builtin_dir}")
+        logger.info(f"Loaded {loaded} memory schemas from builtin: {builtin_dir}")
+
+        # Load from custom directory (if configured)
+        if custom_dir:
+            custom_dir_expanded = os.path.expanduser(custom_dir)
+            if os.path.exists(custom_dir_expanded):
+                custom_loaded = self.load_from_directory(custom_dir_expanded)
+                logger.info(
+                    f"Loaded {custom_loaded} memory schemas from custom: {custom_dir_expanded}"
+                )
 
     def register(self, memory_type: MemoryTypeSchema) -> None:
         """Register a memory type."""
@@ -141,6 +173,7 @@ class MemoryTypeRegistry:
                 field_type=FieldType(field_data.get("type", "string")),
                 description=field_data.get("description", ""),
                 merge_op=MergeOp(field_data.get("merge_op", "patch")),
+                init_value=field_data.get("init_value"),
             )
             fields.append(field)
 
@@ -155,32 +188,97 @@ class MemoryTypeRegistry:
             operation_mode=data.get("operation_mode", "upsert"),
         )
 
+    async def initialize_memory_files(self, ctx: Any) -> None:
+        """
+        Initialize memory files with init_value for fields that have it.
 
-def create_default_registry(schemas_dir: Optional[str] = None) -> MemoryTypeRegistry:
+        Only initializes single-file templates (filename_template doesn't require external fields).
+        Skip templates like entities.yaml where filename requires external parameters.
+
+        Args:
+            ctx: Request context (must have user with user_space_name and agent_space_name)
+        """
+        import jinja2
+
+        from openviking.storage.viking_fs import get_viking_fs
+
+        logger = get_logger(__name__)
+
+        user_space = ctx.user.user_space_name() if ctx and ctx.user else "default"
+        agent_space = ctx.user.agent_space_name() if ctx and ctx.user else "default"
+
+        logger.info(
+            f"[MemoryTypeRegistry] Starting memory files initialization for user={user_space}, agent={agent_space}"
+        )
+
+        env = jinja2.Environment(autoescape=False)
+        viking_fs = get_viking_fs()
+
+        for schema in self.list_all(include_disabled=False):
+            # Must be enabled, have filename_template and content_template
+            if not schema.enabled or not schema.filename_template or not schema.content_template:
+                continue
+
+            # Skip multi-file templates (filename requires external parameters like {{ name }})
+            if "{{" in schema.filename_template:
+                continue
+
+            # Check if any field has init_value
+            fields_with_init = {
+                f.name: f.init_value for f in schema.fields if f.init_value is not None
+            }
+            if not fields_with_init:
+                continue
+
+            # Render directory and filename from schema
+            try:
+                directory = env.from_string(schema.directory).render(
+                    user_space=user_space,
+                    agent_space=agent_space,
+                )
+                filename = env.from_string(schema.filename_template).render(
+                    user_space=user_space,
+                    agent_space=agent_space,
+                )
+            except Exception:
+                continue
+
+            file_uri = f"{directory}/{filename}"
+
+            # Check if file already exists
+            try:
+                await viking_fs.read_file(file_uri, ctx=ctx)
+                continue
+            except Exception:
+                pass
+
+            # Add MEMORY_FIELDS comment with field metadata
+            # Template rendering is handled inside serialize_with_metadata
+            from openviking.session.memory.utils.content import serialize_with_metadata
+
+            metadata = {
+                "memory_type": schema.memory_type,
+                **fields_with_init,
+                "content": "",  # content will come from content_template rendering
+            }
+            full_content = serialize_with_metadata(
+                metadata,
+                content_template=schema.content_template,
+            )
+
+            # Write the file
+            try:
+                await viking_fs.write_file(file_uri, full_content, ctx=ctx)
+                logger.info(f"[MemoryTypeRegistry] Initialized memory file: {file_uri}")
+            except Exception:
+                pass
+
+
+def create_default_registry() -> MemoryTypeRegistry:
     """
-    Create a registry with built-in memory types.
-
-    Args:
-        schemas_dir: Optional directory to load schemas from
+    Create a registry with memory types loaded at initialization.
 
     Returns:
-        MemoryTypeRegistry with built-in types
+        MemoryTypeRegistry with built-in types (loaded in __init__)
     """
-    registry = MemoryTypeRegistry()
-
-    # Register built-in types
-    # These can also be loaded from YAML files
-    _register_builtin_types(registry)
-
-    # Load from schemas directory if provided
-    if schemas_dir:
-        registry.load_from_directory(schemas_dir)
-
-    return registry
-
-
-def _register_builtin_types(registry: MemoryTypeRegistry) -> None:
-    """Register built-in memory types."""
-    # Note: In production, these should be loaded from YAML files
-    # This is just a placeholder for reference
-    pass
+    return MemoryTypeRegistry(load_schemas=True)

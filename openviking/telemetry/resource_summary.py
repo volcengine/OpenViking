@@ -41,9 +41,10 @@ def _consume_semantic_dag_stats(telemetry_id: str, root_uri: str | None):
 def register_wait_telemetry(wait: bool) -> str:
     """Register current telemetry collector for async queue consumers when needed."""
     handle = get_current_telemetry()
-    if not wait or not handle.enabled:
+    if not wait or not handle.telemetry_id:
         return ""
-    register_telemetry(handle)
+    if handle.enabled:
+        register_telemetry(handle)
     return handle.telemetry_id
 
 
@@ -76,6 +77,11 @@ def _resolve_queue_group(
         }
     if fallback_status is None:
         return {"processed": 0, "error_count": 0}
+    if isinstance(fallback_status, dict):
+        return {
+            "processed": int(fallback_status.get("processed", 0) or 0),
+            "error_count": int(fallback_status.get("error_count", 0) or 0),
+        }
     return {
         "processed": fallback_status.processed,
         "error_count": fallback_status.error_count,

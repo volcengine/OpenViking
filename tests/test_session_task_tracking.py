@@ -66,7 +66,12 @@ def _make_tracked_commit(behavior="instant", result_overrides=None, gate=None, s
 
     async def mock_commit(_sid, _ctx):
         tracker = get_task_tracker()
-        task = tracker.create("session_commit", resource_id=_sid)
+        task = tracker.create(
+            "session_commit",
+            resource_id=_sid,
+            owner_account_id=_ctx.account_id,
+            owner_user_id=_ctx.user.user_id,
+        )
         archive_uri = f"viking://session/test/{_sid}/history/archive_001"
 
         async def _background():

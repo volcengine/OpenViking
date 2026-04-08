@@ -222,13 +222,15 @@ async function searchScope(query, targetUri, limit) {
 }
 
 async function searchBothScopes(query, limit) {
-  const [userMems, agentMems] = await Promise.all([
+  const [userMems, agentMems, agentSkills] = await Promise.all([
     searchScope(query, "viking://user/memories", limit),
     searchScope(query, "viking://agent/memories", limit),
+    searchScope(query, "viking://agent/skills", limit),
   ]);
   log("search_complete", { scope: "user", rawCount: userMems.length, topScores: userMems.slice(0, 3).map(m => m.score) });
   log("search_complete", { scope: "agent", rawCount: agentMems.length, topScores: agentMems.slice(0, 3).map(m => m.score) });
-  const all = [...userMems, ...agentMems];
+  log("search_complete", { scope: "skills", rawCount: agentSkills.length, topScores: agentSkills.slice(0, 3).map(m => m.score) });
+  const all = [...userMems, ...agentMems, ...agentSkills];
   const uriSet = new Set();
   return all.filter(m => {
     if (uriSet.has(m.uri)) return false;

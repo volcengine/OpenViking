@@ -7,6 +7,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from openviking.utils.network_guard import ensure_public_remote_target
 from openviking_cli.exceptions import PermissionDeniedError
 
 _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
@@ -37,6 +38,7 @@ def require_remote_resource_source(source: str) -> str:
             "HTTP server only accepts remote resource URLs or temp-uploaded files; "
             "direct host filesystem paths are not allowed."
         )
+    ensure_public_remote_target(source)
     return source
 
 

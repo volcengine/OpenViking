@@ -281,7 +281,7 @@ class OperationTelemetry:
     ):
         self.operation = operation
         self.enabled = enabled
-        self.telemetry_id = f"tm_{uuid4().hex}" if enabled else ""
+        self.telemetry_id = f"tm_{uuid4().hex}"
         self._start_time = time.perf_counter()
         self._counters: Dict[str, float] = defaultdict(float)
         self._gauges: Dict[str, Any] = {}

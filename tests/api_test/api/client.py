@@ -377,9 +377,29 @@ class OpenVikingAPIClient:
         return self.session.get(url)
 
     def export_ovpack(self, uri: str, to: str) -> requests.Response:
+        """Export ovpack and save to local file path.
+
+        Args:
+            uri: Viking URI to export
+            to: Local file path where to save the .ovpack file
+
+        Returns:
+            Response object with the downloaded file saved to 'to' path
+        """
         endpoint = "/api/v1/pack/export"
         url = self._build_url(self.server_url, endpoint)
-        return self.session.post(url, json={"uri": uri, "to": to})
+
+        # Request export (server streams the file)
+        response = self._request_with_retry("POST", url, json={"uri": uri})
+
+        # Save streamed content to local file
+        if response.status_code == 200:
+            to_path = Path(to)
+            to_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(to_path, "wb") as f:
+                f.write(response.content)
+
+        return response
 
     def import_ovpack(
         self, file_path: str, parent: str, force: bool = False, vectorize: bool = True

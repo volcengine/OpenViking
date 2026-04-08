@@ -237,7 +237,7 @@ describe("plugin normal flow with healthy backend", () => {
       afterTurn: (params: {
         sessionId: string;
         sessionFile: string;
-        messages: Array<{ role: string; content: unknown }>;
+        messages: Array<{ role: string; content: unknown; timestamp?: number }>;
         prePromptMessageCount: number;
       }) => Promise<void>;
     };
@@ -260,8 +260,8 @@ describe("plugin normal flow with healthy backend", () => {
       sessionId: "session-normal",
       sessionFile: "",
       messages: [
-        { role: "user", content: "Please keep using Rust." },
-        { role: "assistant", content: [{ type: "text", text: "Understood." }] },
+        { role: "user", content: "Please keep using Rust.", timestamp: Date.parse("2026-04-07T08:00:00Z") },
+        { role: "assistant", content: [{ type: "text", text: "Understood." }], timestamp: Date.parse("2026-04-07T08:00:01Z") },
       ],
       prePromptMessageCount: 0,
     });
@@ -276,6 +276,14 @@ describe("plugin normal flow with healthy backend", () => {
     expect(
       requests.some((entry) => entry.method === "POST" && entry.path === "/api/v1/sessions/session-normal/messages"),
     ).toBe(true);
+    const addMessageRequest = requests.find(
+      (entry) => entry.method === "POST" && entry.path === "/api/v1/sessions/session-normal/messages",
+    );
+    expect(addMessageRequest).toBeTruthy();
+    expect(JSON.parse(addMessageRequest!.body ?? "{}")).toMatchObject({
+      role: "user",
+      created_at: "2026-04-07T08:00:01.000Z",
+    });
     expect(
       requests.some((entry) => entry.method === "POST" && entry.path === "/api/v1/sessions/session-normal/commit"),
     ).toBe(true);

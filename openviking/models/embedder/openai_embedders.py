@@ -85,7 +85,9 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
                        non-symmetric mode with query_param/document_param.
             api_key: API key, if None will read from env vars (OPENVIKING_EMBEDDING_API_KEY or OPENAI_API_KEY)
             api_base: API base URL, optional. Required for third-party OpenAI-compatible APIs.
-            dimension: Dimension (if model supports), optional
+            dimension: Target dimension for output vectors. If specified and the model returns vectors
+                      with a different dimension, the output will be truncated to this dimension.
+                      If None, uses the model's default dimension without truncation.
             query_param: Parameter for query-side embeddings. Supports simple values (e.g., 'query')
                          or key=value format (e.g., 'input_type=query,task=search'). Defaults to None.
                          Setting this (or document_param) activates non-symmetric mode.
@@ -140,6 +142,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
 
         # Auto-detect dimension
         self._dimension = dimension
+        self._actual_model_dimension = None
         if self._dimension is None:
             self._dimension = self._detect_dimension()
 
@@ -147,10 +150,25 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         """Detect dimension by making an actual API call"""
         try:
             result = self.embed("test")
-            return len(result.dense_vector) if result.dense_vector else 1536
+            detected_dim = len(result.dense_vector) if result.dense_vector else 1536
+            self._actual_model_dimension = detected_dim
+            return detected_dim
         except Exception:
             # Use default value, text-embedding-3-small defaults to 1536
             return 1536
+
+    def _truncate_vector(self, vector: List[float]) -> List[float]:
+        """Truncate vector to target dimension if needed.
+
+        Args:
+            vector: Input vector from API
+
+        Returns:
+            Truncated vector if dimension is set and smaller than input, otherwise original vector
+        """
+        if self.dimension is not None and len(vector) > self.dimension:
+            return vector[: self.dimension]
+        return vector
 
     def _update_telemetry_token_usage(self, response) -> None:
         usage = getattr(response, "usage", None)
@@ -278,6 +296,9 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             self._update_telemetry_token_usage(response)
             vector = response.data[0].embedding
 
+            # Truncate vector if needed
+            vector = self._truncate_vector(vector)
+
             return EmbedResult(dense_vector=vector)
 
         try:
@@ -297,7 +318,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         async def _call() -> EmbedResult:
             response = await client.embeddings.create(**self._build_kwargs(text, is_query=is_query))
             self._update_telemetry_token_usage(response)
-            return EmbedResult(dense_vector=response.data[0].embedding)
+            return EmbedResult(dense_vector=self._truncate_vector(response.data[0].embedding))
 
         try:
             return await self._run_with_async_retry(
@@ -330,7 +351,11 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             response = self.client.embeddings.create(**self._build_kwargs(texts, is_query=is_query))
             self._update_telemetry_token_usage(response)
 
-            return [EmbedResult(dense_vector=item.embedding) for item in response.data]
+            # Truncate vectors if needed
+            return [
+                EmbedResult(dense_vector=self._truncate_vector(item.embedding))
+                for item in response.data
+            ]
 
         try:
             return self._run_with_retry(
@@ -356,7 +381,10 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
                 **self._build_kwargs(texts, is_query=is_query)
             )
             self._update_telemetry_token_usage(response)
-            return [EmbedResult(dense_vector=item.embedding) for item in response.data]
+            return [
+                EmbedResult(dense_vector=self._truncate_vector(item.embedding))
+                for item in response.data
+            ]
 
         try:
             return await self._run_with_async_retry(

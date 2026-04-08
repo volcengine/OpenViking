@@ -178,7 +178,12 @@ async def reindex(
 
     if request.wait:
         # Synchronous path: block until reindex completes
-        if tracker.has_running(REINDEX_TASK_TYPE, uri):
+        if tracker.has_running(
+            REINDEX_TASK_TYPE,
+            uri,
+            owner_account_id=_ctx.account_id,
+            owner_user_id=_ctx.user.user_id,
+        ):
             return Response(
                 status="error",
                 error=ErrorInfo(
@@ -190,7 +195,12 @@ async def reindex(
         return Response(status="ok", result=result)
     else:
         # Async path: run in background, return task_id for polling
-        task = tracker.create_if_no_running(REINDEX_TASK_TYPE, uri)
+        task = tracker.create_if_no_running(
+            REINDEX_TASK_TYPE,
+            uri,
+            owner_account_id=_ctx.account_id,
+            owner_user_id=_ctx.user.user_id,
+        )
         if task is None:
             return Response(
                 status="error",
