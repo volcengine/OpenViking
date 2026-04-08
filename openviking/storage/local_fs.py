@@ -129,32 +129,13 @@ async def _enqueue_direct_vectorization(viking_fs, uri: str, ctx: RequestContext
             file_path=file_uri, summary_dict={"name": name}, parent_uri=parent_uri, ctx=ctx
         )
 
-    work_queue: asyncio.Queue[tuple[str, tuple]] = asyncio.Queue()
-    for dir_uri in dir_uris:
-        work_queue.put_nowait(("dir", (dir_uri,)))
-    for file_uri, parent_uri, file_name in file_entries:
-        work_queue.put_nowait(("file", (file_uri, parent_uri, file_name)))
-
-    worker_count = 10
-    for _ in range(worker_count):
-        work_queue.put_nowait(("stop", ()))
-
-    async def worker() -> None:
-        while True:
-            kind, payload = await work_queue.get()
-            try:
-                if kind == "stop":
-                    return
-                if kind == "dir":
-                    (dir_uri,) = payload
-                    await index_dir(dir_uri)
-                elif kind == "file":
-                    file_uri, parent_uri, file_name = payload
-                    await index_file(file_uri, parent_uri, file_name)
-            finally:
-                work_queue.task_done()
-
-    await asyncio.gather(*(worker() for _ in range(worker_count)))
+    await asyncio.gather(*(index_dir(dir_uri) for dir_uri in dir_uris))
+    await asyncio.gather(
+        *(
+            index_file(file_uri, parent_uri, file_name)
+            for file_uri, parent_uri, file_name in file_entries
+        )
+    )
 
 
 async def import_ovpack(
