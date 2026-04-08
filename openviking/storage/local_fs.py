@@ -108,28 +108,26 @@ async def _enqueue_direct_vectorization(viking_fs, uri: str, ctx: RequestContext
         parent_uri = VikingURI(entry_uri).parent.uri
         file_entries.append((entry_uri, parent_uri, name))
 
-    sem = asyncio.Semaphore(16)
-
     async def index_dir(dir_uri: str) -> None:
-        async with sem:
-            abstract_uri = f"{dir_uri}/.abstract.md"
-            overview_uri = f"{dir_uri}/.overview.md"
-            abstract = ""
-            overview = ""
-            try:
-                if await viking_fs.exists(abstract_uri, ctx=ctx):
-                    content = await viking_fs.read_file(abstract_uri, ctx=ctx)
-                    abstract = content.decode("utf-8") if isinstance(content, bytes) else content
-                if await viking_fs.exists(overview_uri, ctx=ctx):
-                    content = await viking_fs.read_file(overview_uri, ctx=ctx)
-                    overview = content.decode("utf-8") if isinstance(content, bytes) else content
-            except Exception:
-                return
-            await vectorize_directory_meta(dir_uri, abstract, overview, ctx=ctx)
+        abstract_uri = f"{dir_uri}/.abstract.md"
+        overview_uri = f"{dir_uri}/.overview.md"
+        abstract = ""
+        overview = ""
+        try:
+            if await viking_fs.exists(abstract_uri, ctx=ctx):
+                content = await viking_fs.read_file(abstract_uri, ctx=ctx)
+                abstract = content.decode("utf-8") if isinstance(content, bytes) else content
+            if await viking_fs.exists(overview_uri, ctx=ctx):
+                content = await viking_fs.read_file(overview_uri, ctx=ctx)
+                overview = content.decode("utf-8") if isinstance(content, bytes) else content
+        except Exception:
+            return
+        await vectorize_directory_meta(dir_uri, abstract, overview, ctx=ctx)
 
     async def index_file(file_uri: str, parent_uri: str, name: str) -> None:
-        async with sem:
-            await vectorize_file(file_path=file_uri, summary_dict={"name": name}, parent_uri=parent_uri, ctx=ctx)
+        await vectorize_file(
+            file_path=file_uri, summary_dict={"name": name}, parent_uri=parent_uri, ctx=ctx
+        )
 
     work_queue: asyncio.Queue[tuple[str, tuple]] = asyncio.Queue()
     for dir_uri in dir_uris:
