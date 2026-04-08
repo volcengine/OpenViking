@@ -45,6 +45,12 @@ type CommitSessionResult = {
   error?: unknown;
 };
 
+type TaskResult = {
+  status?: string;
+  result?: Record<string, unknown>;
+  error?: unknown;
+};
+
 type ScopeName = "user" | "agent";
 
 // ---------------------------------------------------------------------------
@@ -120,6 +126,10 @@ function md5Short(input: string): string {
 
 function isMemoryUri(uri: string): boolean {
   return MEMORY_URI_PATTERNS.some((p) => p.test(uri));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 class OpenVikingClient {
@@ -285,13 +295,6 @@ class OpenVikingClient {
     });
   }
 
-  async extractSessionMemories(sessionId: string): Promise<Array<Record<string, unknown>>> {
-    return this.request<Array<Record<string, unknown>>>(
-      `/api/v1/sessions/${encodeURIComponent(sessionId)}/extract`,
-      { method: "POST", body: JSON.stringify({}) },
-    );
-  }
-
   async sessionUsed(sessionId: string, contexts: string[]): Promise<void> {
     if (contexts.length === 0) return;
     await this.request(`/api/v1/sessions/${encodeURIComponent(sessionId)}/used`, {
@@ -300,11 +303,45 @@ class OpenVikingClient {
     });
   }
 
-  async commitSession(sessionId: string): Promise<CommitSessionResult> {
-    return this.request<CommitSessionResult>(
+  async commitSession(
+    sessionId: string,
+    options?: { wait?: boolean; timeoutMs?: number },
+  ): Promise<CommitSessionResult> {
+    const result = await this.request<CommitSessionResult>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`,
       { method: "POST", body: JSON.stringify({}) },
     );
+
+    if (!options?.wait || !result.task_id) {
+      return result;
+    }
+
+    const deadline = Date.now() + (options.timeoutMs ?? 120_000);
+    while (Date.now() < deadline) {
+      await sleep(500);
+      const task = await this.getTask(result.task_id).catch(() => null);
+      if (!task) break;
+      if (task.status === "completed") {
+        const taskResult = (task.result ?? {}) as Record<string, unknown>;
+        result.status = "completed";
+        result.memories_extracted = (taskResult.memories_extracted ?? {}) as Record<string, number>;
+        return result;
+      }
+      if (task.status === "failed") {
+        result.status = "failed";
+        result.error = task.error;
+        return result;
+      }
+    }
+
+    result.status = "timeout";
+    return result;
+  }
+
+  async getTask(taskId: string): Promise<TaskResult> {
+    return this.request<TaskResult>(`/api/v1/tasks/${encodeURIComponent(taskId)}`, {
+      method: "GET",
+    });
   }
 
   async deleteSession(sessionId: string): Promise<void> {
@@ -345,6 +382,10 @@ async function waitForMemoryDeletion(
   }
 
   throw new Error(`OpenViking delete for ${uri} did not settle within ${timeoutMs}ms`);
+}
+
+function totalCommitMemories(result: CommitSessionResult): number {
+  return Object.values(result.memories_extracted ?? {}).reduce((sum, count) => sum + count, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -590,9 +631,31 @@ server.tool(
     try {
       sessionId = await client.createSession();
       await client.addSessionMessage(sessionId, msgRole, text);
-      const extracted = await client.extractSessionMemories(sessionId);
+      const commitResult = await client.commitSession(sessionId, {
+        wait: true,
+        timeoutMs: 180_000,
+      });
+      const memoriesCount = totalCommitMemories(commitResult);
 
-      if (extracted.length === 0) {
+      if (commitResult.status === "failed") {
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Memory extraction failed: ${String(commitResult.error ?? "unknown error")}`,
+          }],
+        };
+      }
+
+      if (commitResult.status === "timeout") {
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Memory extraction timed out. It may still complete in the background (task_id=${commitResult.task_id ?? "none"}).`,
+          }],
+        };
+      }
+
+      if (memoriesCount === 0) {
         return {
           content: [{
             type: "text" as const,
@@ -604,7 +667,7 @@ server.tool(
       return {
         content: [{
           type: "text" as const,
-          text: `Successfully extracted ${extracted.length} memory/memories from the provided text and stored them in OpenViking.`,
+          text: `Successfully extracted ${memoriesCount} memory/memories from the provided text and stored them in OpenViking.`,
         }],
       };
     } finally {
