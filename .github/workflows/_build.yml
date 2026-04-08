@@ -244,12 +244,12 @@ jobs:
         uv pip install maturin
         TMPDIR=$(mktemp -d)
         cd crates/ragfs-python
-        maturin build --release \
+        uv run python -m maturin build --release \
           --target ${{ matrix.arch == 'aarch64' && 'aarch64-unknown-linux-gnu' || 'x86_64-unknown-linux-gnu' }} \
           --out "$TMPDIR"
         cd ../..
         mkdir -p openviking/lib
-        python3 <<PY
+        uv run python <<PY
         import glob
         import os
         import sys
@@ -456,13 +456,13 @@ jobs:
         TMPDIR=$(mktemp -d)
         cd crates/ragfs-python
         if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-          maturin build --release --target x86_64-pc-windows-msvc --out "$TMPDIR"
+          uv run python -m maturin build --release --target x86_64-pc-windows-msvc --out "$TMPDIR"
         else
-          maturin build --release --out "$TMPDIR"
+          uv run python -m maturin build --release --out "$TMPDIR"
         fi
         cd ../..
         mkdir -p openviking/lib
-        python3 <<PY
+        uv run python <<PY
         import glob
         import os
         import sys
