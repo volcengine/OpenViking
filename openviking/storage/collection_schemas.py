@@ -11,11 +11,12 @@ import asyncio
 import hashlib
 import json
 import threading
+import time
 from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from openviking.models.embedder.base import EmbedResult
+from openviking.models.embedder.base import EmbedResult, embed_compat
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.errors import CollectionNotFoundError
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
@@ -175,11 +176,34 @@ class TextEmbeddingHandler(DequeueHandlerBase):
         self._collection_name = config.storage.vectordb.name
         self._vector_dim = config.embedding.dimension
         self._initialize_embedder(config)
-        self._circuit_breaker = CircuitBreaker()
+        breaker_cfg = config.embedding.circuit_breaker
+        self._circuit_breaker = CircuitBreaker(
+            failure_threshold=breaker_cfg.failure_threshold,
+            reset_timeout=breaker_cfg.reset_timeout,
+            max_reset_timeout=breaker_cfg.max_reset_timeout,
+        )
+        self._breaker_open_last_log_at = 0.0
+        self._breaker_open_suppressed_count = 0
+        self._breaker_open_log_interval = 30.0
 
     def _initialize_embedder(self, config: "OpenVikingConfig"):
         """Initialize the embedder instance from config."""
         self._embedder = config.embedding.get_embedder()
+
+    def _log_breaker_open_reenqueue_summary(self) -> None:
+        """Log a throttled warning when embeddings are re-enqueued due to an open circuit breaker."""
+        now = time.monotonic()
+        if self._breaker_open_last_log_at == 0.0:
+            logger.warning("Embedding circuit breaker is open; re-enqueueing messages")
+            self._breaker_open_last_log_at = now
+            self._breaker_open_suppressed_count = 0
+            return
+
+        self._breaker_open_suppressed_count += 1
+        if now - self._breaker_open_last_log_at >= self._breaker_open_log_interval:
+            logger.warning("Embedding circuit breaker is open; re-enqueueing messages")
+            self._breaker_open_last_log_at = now
+            self._breaker_open_suppressed_count = 0
 
     @classmethod
     def _merge_request_stats(
@@ -258,10 +282,10 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 # Circuit breaker: if API is known-broken, re-enqueue and wait
                 try:
                     self._circuit_breaker.check()
+                    self._breaker_open_last_log_at = 0.0
+                    self._breaker_open_suppressed_count = 0
                 except CircuitBreakerOpen:
-                    logger.warning(
-                        f"Circuit breaker is open, re-enqueueing embedding: {embedding_msg.id}"
-                    )
+                    self._log_breaker_open_reenqueue_summary()
                     if self._vikingdb.has_queue_manager:
                         wait = self._circuit_breaker.retry_after
                         if wait > 0:
@@ -284,13 +308,11 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 # Generate embedding vector(s)
                 if self._embedder:
                     try:
-                        # embed() is a blocking HTTP call; offload to thread pool to avoid
-                        # blocking the event loop and allow real concurrency.
                         import time as _time
 
                         _embed_t0 = _time.monotonic()
-                        result: EmbedResult = await asyncio.to_thread(
-                            self._embedder.embed, embedding_msg.message
+                        result: EmbedResult = await embed_compat(
+                            self._embedder, embedding_msg.message
                         )
                         _embed_elapsed = _time.monotonic() - _embed_t0
                         try:

@@ -69,6 +69,7 @@ dependencies = [
     "tree-sitter-go>=0.23.0",
     "tree-sitter-c-sharp>=0.23.0",
     "tree-sitter-php>=0.23.0",
+    "tree-sitter-lua>=0.1.0",
     # OpenTelemetry
     "opentelemetry-api>=1.14",
     "opentelemetry-sdk>=1.14",
@@ -77,6 +78,7 @@ dependencies = [
     "loguru>=0.7.3",
     "cryptography>=42.0.0",
     "argon2-cffi>=23.0.0",
+    "lark-oapi>=1.5.3",
 ]
 
 [tool.uv.sources]

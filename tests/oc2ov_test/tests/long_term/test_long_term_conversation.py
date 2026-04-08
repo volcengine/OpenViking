@@ -17,10 +17,15 @@ class TestLongTermMemoryTarget(BaseOpenClawCLITest):
         """测试组A：记住关键信息，多轮对话后验证"""
         self.logger.info("[1/3] 测试组A - 步骤1：记住关键信息")
         message1 = "请记住：我的名字是张三，我的工号是1001，我的部门是技术部"
-        session_a = "long_term_a"
+        session_a = self.generate_unique_session_id(prefix="long_term_a")
 
         self.send_and_log(message1, session_id=session_a)
-        self.wait_for_sync()
+
+        self.smart_wait_for_sync(
+            check_message="我叫什么名字",
+            keywords=["张三"],
+            timeout=30.0,
+        )
 
         self.logger.info("[2/3] 步骤2：插入多轮简单对话")
         simple_messages = [
@@ -49,10 +54,15 @@ class TestLongTermMemoryTarget(BaseOpenClawCLITest):
         """测试组B：记住关键信息，多轮对话后验证"""
         self.logger.info("[1/3] 测试组B - 步骤1：记住关键信息")
         message1 = "请记住：我的名字是李四，我的工号是1002，我的部门是产品部"
-        session_b = "long_term_b"
+        session_b = self.generate_unique_session_id(prefix="long_term_b")
 
         self.send_and_log(message1, session_id=session_b)
-        self.wait_for_sync()
+
+        self.smart_wait_for_sync(
+            check_message="我叫什么名字",
+            keywords=["李四"],
+            timeout=30.0,
+        )
 
         self.logger.info("[2/3] 步骤2：插入多轮简单对话")
         simple_messages = [
@@ -81,10 +91,15 @@ class TestLongTermMemoryTarget(BaseOpenClawCLITest):
         """测试组C：记住关键信息，多轮对话后验证"""
         self.logger.info("[1/3] 测试组C - 步骤1：记住关键信息")
         message1 = "请记住：我的名字是王五，我的工号是1003，我的部门是设计部"
-        session_c = "long_term_c"
+        session_c = self.generate_unique_session_id(prefix="long_term_c")
 
         self.send_and_log(message1, session_id=session_c)
-        self.wait_for_sync()
+
+        self.smart_wait_for_sync(
+            check_message="我叫什么名字",
+            keywords=["王五"],
+            timeout=30.0,
+        )
 
         self.logger.info("[2/3] 步骤2：插入多轮简单对话")
         simple_messages = [
@@ -120,25 +135,21 @@ class TestLongTermSummaryGeneration(BaseOpenClawCLITest):
     def test_summary_generation_group_a(self):
         """测试组A：记住多条个人信息，然后复述"""
         self.logger.info("[1/4] 测试组A - 步骤1：记住第一条信息")
-        message1 = "请记住：我的名字叫测试A，今年28岁"
-        session_a = "summary_a"
+        session_a = self.generate_unique_session_id(prefix="summary_a")
 
-        self.send_and_log(message1, session_id=session_a)
+        self.send_and_log("请记住：我的名字叫测试A，今年28岁", session_id=session_a)
         self.wait_for_sync()
 
         self.logger.info("[2/4] 步骤2：记住第二条信息")
-        message2 = "请记住：我住在北京，职业是工程师"
-        self.send_and_log(message2, session_id=session_a)
+        self.send_and_log("请记住：我住在北京，职业是工程师", session_id=session_a)
         self.wait_for_sync()
 
         self.logger.info("[3/4] 步骤3：记住第三条信息")
-        message3 = "请记住：我喜欢编程，喜欢阅读"
-        self.send_and_log(message3, session_id=session_a)
+        self.send_and_log("请记住：我喜欢编程，喜欢阅读", session_id=session_a)
         self.wait_for_sync()
 
         self.logger.info("[4/4] 步骤4：要求复述所有信息")
         response = self.send_and_log("请复述一下刚才记住的所有关于我的信息", session_id=session_a)
-        self.wait_for_sync()
 
         self.assertAnyKeywordInResponse(
             response, [["测试A", "28", "北京", "工程师", "编程", "阅读"]], case_sensitive=False
@@ -149,25 +160,21 @@ class TestLongTermSummaryGeneration(BaseOpenClawCLITest):
     def test_summary_generation_group_b(self):
         """测试组B：记住多条个人信息，然后复述"""
         self.logger.info("[1/4] 测试组B - 步骤1：记住第一条信息")
-        message1 = "请记住：我的名字叫测试B，今年30岁"
-        session_b = "summary_b"
+        session_b = self.generate_unique_session_id(prefix="summary_b")
 
-        self.send_and_log(message1, session_id=session_b)
+        self.send_and_log("请记住：我的名字叫测试B，今年30岁", session_id=session_b)
         self.wait_for_sync()
 
         self.logger.info("[2/4] 步骤2：记住第二条信息")
-        message2 = "请记住：我住在上海，职业是设计师"
-        self.send_and_log(message2, session_id=session_b)
+        self.send_and_log("请记住：我住在上海，职业是设计师", session_id=session_b)
         self.wait_for_sync()
 
         self.logger.info("[3/4] 步骤3：记住第三条信息")
-        message3 = "请记住：我喜欢画画，喜欢旅行"
-        self.send_and_log(message3, session_id=session_b)
+        self.send_and_log("请记住：我喜欢画画，喜欢旅行", session_id=session_b)
         self.wait_for_sync()
 
         self.logger.info("[4/4] 步骤4：要求复述所有信息")
         response = self.send_and_log("请复述一下刚才记住的所有关于我的信息", session_id=session_b)
-        self.wait_for_sync()
 
         self.assertAnyKeywordInResponse(
             response, [["测试B", "30", "上海", "设计师", "画画", "旅行"]], case_sensitive=False
@@ -178,25 +185,21 @@ class TestLongTermSummaryGeneration(BaseOpenClawCLITest):
     def test_summary_generation_group_c(self):
         """测试组C：记住多条个人信息，然后复述"""
         self.logger.info("[1/4] 测试组C - 步骤1：记住第一条信息")
-        message1 = "请记住：我的名字叫测试C，今年32岁"
-        session_c = "summary_c"
+        session_c = self.generate_unique_session_id(prefix="summary_c")
 
-        self.send_and_log(message1, session_id=session_c)
+        self.send_and_log("请记住：我的名字叫测试C，今年32岁", session_id=session_c)
         self.wait_for_sync()
 
         self.logger.info("[2/4] 步骤2：记住第二条信息")
-        message2 = "请记住：我住在广州，职业是产品经理"
-        self.send_and_log(message2, session_id=session_c)
+        self.send_and_log("请记住：我住在广州，职业是产品经理", session_id=session_c)
         self.wait_for_sync()
 
         self.logger.info("[3/4] 步骤3：记住第三条信息")
-        message3 = "请记住：我喜欢音乐，喜欢运动"
-        self.send_and_log(message3, session_id=session_c)
+        self.send_and_log("请记住：我喜欢音乐，喜欢运动", session_id=session_c)
         self.wait_for_sync()
 
         self.logger.info("[4/4] 步骤4：要求复述所有信息")
         response = self.send_and_log("请复述一下刚才记住的所有关于我的信息", session_id=session_c)
-        self.wait_for_sync()
 
         self.assertAnyKeywordInResponse(
             response, [["测试C", "32", "广州", "产品经理", "音乐", "运动"]], case_sensitive=False

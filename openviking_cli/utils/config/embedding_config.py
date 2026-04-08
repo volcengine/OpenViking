@@ -246,6 +246,30 @@ class EmbeddingModelConfig(BaseModel):
         return 2048
 
 
+class EmbeddingCircuitBreakerConfig(BaseModel):
+    failure_threshold: int = Field(
+        default=5,
+        ge=1,
+        description="Consecutive failures required to open the embedding circuit breaker",
+    )
+    reset_timeout: float = Field(
+        default=60.0,
+        gt=0,
+        description="Base circuit breaker reset timeout in seconds",
+    )
+    max_reset_timeout: float = Field(
+        default=600.0,
+        gt=0,
+        description="Maximum circuit breaker reset timeout in seconds",
+    )
+
+    @model_validator(mode="after")
+    def validate_bounds(self):
+        if self.max_reset_timeout < self.reset_timeout:
+            raise ValueError("embedding.circuit_breaker.max_reset_timeout must be >= reset_timeout")
+        return self
+
+
 class EmbeddingConfig(BaseModel):
     """
     Embedding configuration, supports OpenAI, VolcEngine, VikingDB, Jina, Gemini, Voyage, or LiteLLM APIs.
@@ -261,6 +285,9 @@ class EmbeddingConfig(BaseModel):
     dense: Optional[EmbeddingModelConfig] = Field(default=None)
     sparse: Optional[EmbeddingModelConfig] = Field(default=None)
     hybrid: Optional[EmbeddingModelConfig] = Field(default=None)
+    circuit_breaker: EmbeddingCircuitBreakerConfig = Field(
+        default_factory=EmbeddingCircuitBreakerConfig
+    )
 
     max_concurrent: int = Field(
         default=10, description="Maximum number of concurrent embedding requests"
@@ -333,6 +360,11 @@ class EmbeddingConfig(BaseModel):
             raise ValueError("LiteLLM is not installed. Install it with: pip install litellm")
 
         # Factory registry: (provider, type) -> (embedder_class, param_builder)
+        runtime_config = {
+            "max_retries": self.max_retries,
+            "max_concurrent": self.max_concurrent,
+        }
+
         factory_registry = {
             ("openai", "dense"): (
                 OpenAIDenseEmbedder,
@@ -344,7 +376,7 @@ class EmbeddingConfig(BaseModel):
                     "api_version": cfg.api_version,
                     "dimension": cfg.dimension,
                     "provider": "openai",
-                    "config": {"max_retries": self.max_retries},
+                    "config": dict(runtime_config),
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                     **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
@@ -359,7 +391,7 @@ class EmbeddingConfig(BaseModel):
                     "api_version": cfg.api_version,
                     "dimension": cfg.dimension,
                     "provider": "azure",
-                    "config": {"max_retries": self.max_retries},
+                    "config": dict(runtime_config),
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                     **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
@@ -373,7 +405,7 @@ class EmbeddingConfig(BaseModel):
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
                     "input_type": cfg.input,
-                    "config": {"max_retries": self.max_retries},
+                    "config": dict(runtime_config),
                 },
             ),
             ("volcengine", "sparse"): (
@@ -382,7 +414,7 @@ class EmbeddingConfig(BaseModel):
                     "model_name": cfg.model,
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
-                    "config": {"max_retries": self.max_retries},
+                    "config": dict(runtime_config),
                 },
             ),
             ("volcengine", "hybrid"): (
@@ -393,7 +425,7 @@ class EmbeddingConfig(BaseModel):
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
                     "input_type": cfg.input,
-                    "config": {"max_retries": self.max_retries},
+                    "config": dict(runtime_config),
                 },
             ),
             ("vikingdb", "dense"): (
@@ -407,7 +439,7 @@ class EmbeddingConfig(BaseModel):
                     "host": cfg.host,
                     "dimension": cfg.dimension,
                     "input_type": cfg.input,
-                    "config": {"max_retries": self.max_retries},
+                    "config": dict(runtime_config),
                 },
             ),
             ("vikingdb", "sparse"): (
@@ -419,7 +451,7 @@ class EmbeddingConfig(BaseModel):
                     "sk": cfg.sk,
                     "region": cfg.region,
                     "host": cfg.host,
-                    "config": {"max_retries": self.max_retries},
+                    "config": dict(runtime_config),
                 },
             ),
             ("vikingdb", "hybrid"): (
@@ -433,7 +465,7 @@ class EmbeddingConfig(BaseModel):
                     "host": cfg.host,
                     "dimension": cfg.dimension,
                     "input_type": cfg.input,
-                    "config": {"max_retries": self.max_retries},
+                    "config": dict(runtime_config),
                 },
             ),
             ("jina", "dense"): (
@@ -443,7 +475,7 @@ class EmbeddingConfig(BaseModel):
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
-                    "config": {"max_retries": self.max_retries},
+                    "config": dict(runtime_config),
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                 },
@@ -454,7 +486,7 @@ class EmbeddingConfig(BaseModel):
                     "model_name": cfg.model,
                     "api_key": cfg.api_key,
                     "dimension": cfg.dimension,
-                    "config": {"max_retries": self.max_retries},
+                    "config": dict(runtime_config),
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                 },
@@ -468,7 +500,7 @@ class EmbeddingConfig(BaseModel):
                     or "no-key",  # Ollama ignores the key, but client requires non-empty
                     "api_base": cfg.api_base or "http://localhost:11434/v1",
                     "dimension": cfg.dimension,
-                    "config": {"max_retries": self.max_retries},
+                    "config": dict(runtime_config),
                 },
             ),
             ("voyage", "dense"): (
@@ -478,7 +510,7 @@ class EmbeddingConfig(BaseModel):
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
-                    "config": {"max_retries": self.max_retries},
+                    "config": dict(runtime_config),
                 },
             ),
             ("minimax", "dense"): (
@@ -488,7 +520,7 @@ class EmbeddingConfig(BaseModel):
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
-                    "config": {"max_retries": self.max_retries},
+                    "config": dict(runtime_config),
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                     **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
@@ -501,6 +533,7 @@ class EmbeddingConfig(BaseModel):
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
+                    "config": dict(runtime_config),
                 },
             ),
             ("litellm", "dense"): (
@@ -510,7 +543,7 @@ class EmbeddingConfig(BaseModel):
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
-                    "config": {"max_retries": self.max_retries},
+                    "config": dict(runtime_config),
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                     **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
