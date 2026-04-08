@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 
 class EmbeddingModelConfig(BaseModel):
@@ -111,6 +111,8 @@ class EmbeddingConfig(BaseModel):
     max_concurrent: int = Field(
         default=10, description="Maximum number of concurrent embedding requests"
     )
+
+    _resolved_dimension: Optional[int] = PrivateAttr(default=None)
 
     model_config = {"extra": "forbid"}
 
@@ -279,9 +281,20 @@ class EmbeddingConfig(BaseModel):
         return self.get_dimension()
 
     def get_dimension(self) -> int:
-        """Helper to get dimension from active config"""
-        if self.hybrid:
-            return self.hybrid.dimension or 2048
-        if self.dense:
-            return self.dense.dimension or 2048
+        """Helper to get dimension from active config."""
+        if self._resolved_dimension is not None:
+            return self._resolved_dimension
+
+        if self.hybrid and self.hybrid.dimension is not None:
+            self._resolved_dimension = self.hybrid.dimension
+            return self._resolved_dimension
+
+        if self.dense and self.dense.dimension is not None:
+            self._resolved_dimension = self.dense.dimension
+            return self._resolved_dimension
+
+        if self.hybrid or self.dense:
+            self._resolved_dimension = self.get_embedder().get_dimension()
+            return self._resolved_dimension
+
         return 2048
