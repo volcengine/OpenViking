@@ -108,7 +108,12 @@ class ExtractContext:
         # elements 可以是 Message 或 str ("...")
         elements: List[Message | str] = []
         for i, (start, end) in enumerate(ranges):
-            if start < 0 or end >= len(self.messages):
+            # 兼容 LLM 提取的 range 越界情况
+            if start < 0:
+                start = 0
+            if end >= len(self.messages):
+                end = len(self.messages) - 1
+            if start > end:
                 continue
             range_msgs = self.messages[start : end + 1]
 
