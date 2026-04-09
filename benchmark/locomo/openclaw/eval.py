@@ -31,7 +31,7 @@ import requests
 
 # Configuration constants
 DEFAULT_BASE_URL = "http://127.0.0.1:18789"
-DEFAULT_AGENT_ID = "main"
+DEFAULT_AGENT_ID = "locomo-eval"
 DEFAULT_INGEST_RECORD_PATH = ".ingest_record.json"
 
 # CSV write lock for thread safety
