@@ -3,6 +3,8 @@
 
 """Tests for resource management endpoints."""
 
+import zipfile
+
 import httpx
 
 from openviking.telemetry import get_current_telemetry
@@ -205,6 +207,94 @@ async def test_add_resource_with_to(
     body = resp.json()
     assert body["status"] == "ok"
     assert "custom" in body["result"]["root_uri"]
+
+
+async def test_add_resource_with_resources_root_to_uses_child_uri(
+    client: httpx.AsyncClient,
+    upload_temp_dir,
+):
+    archive_path = upload_temp_dir / "tt_b.zip"
+    with zipfile.ZipFile(archive_path, "w") as zf:
+        zf.writestr("tt_b/bb/readme.md", "# hello\n")
+
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": archive_path.name,
+            "to": "viking://resources",
+            "reason": "test resource root import",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["root_uri"] == "viking://resources/tt_b"
+
+
+async def test_add_resource_with_resources_root_to_trailing_slash_uses_child_uri(
+    client: httpx.AsyncClient,
+    upload_temp_dir,
+):
+    archive_path = upload_temp_dir / "tt_b.zip"
+    with zipfile.ZipFile(archive_path, "w") as zf:
+        zf.writestr("tt_b/bb/readme.md", "# hello\n")
+
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": archive_path.name,
+            "to": "viking://resources/",
+            "reason": "test resource root import trailing slash",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["root_uri"] == "viking://resources/tt_b"
+
+
+async def test_add_resource_with_resources_root_to_keeps_single_file_directory(
+    client: httpx.AsyncClient,
+    upload_temp_dir,
+):
+    file_path = upload_temp_dir / "upload_temp.txt"
+    file_path.write_text("hello world\n")
+
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": file_path.name,
+            "source_name": "aa.txt",
+            "to": "viking://resources",
+            "reason": "test resource root file import",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["root_uri"] == "viking://resources/aa"
+
+
+async def test_add_resource_with_resources_root_to_trailing_slash_keeps_single_file_directory(
+    client: httpx.AsyncClient,
+    upload_temp_dir,
+):
+    file_path = upload_temp_dir / "upload_temp.txt"
+    file_path.write_text("hello world\n")
+
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": file_path.name,
+            "source_name": "aa.txt",
+            "to": "viking://resources/",
+            "reason": "test resource root file import trailing slash",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["root_uri"] == "viking://resources/aa"
 
 
 async def test_wait_processed_empty_queue(client: httpx.AsyncClient):
