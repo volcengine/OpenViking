@@ -176,6 +176,82 @@ describe("plugin normal flow with healthy backend", () => {
     await once(server, "close");
   });
 
+  it("skips hook recall after the context-engine is instantiated but still assembles context", async () => {
+    const handlers = new Map<string, (event: unknown, ctx?: unknown) => unknown>();
+    let service:
+      | {
+          start: () => Promise<void>;
+          stop?: () => Promise<void> | void;
+        }
+      | null = null;
+    let contextEngineFactory: (() => unknown) | null = null;
+
+    plugin.register({
+      logger: {
+        debug: () => {},
+        error: () => {},
+        info: () => {},
+        warn: () => {},
+      },
+      on: (name, handler) => {
+        handlers.set(name, handler);
+      },
+      pluginConfig: {
+        autoCapture: true,
+        autoRecall: true,
+        baseUrl,
+        commitTokenThreshold: 20000,
+        ingestReplyAssist: false,
+        mode: "remote",
+      },
+      registerContextEngine: (_id, factory) => {
+        contextEngineFactory = factory as () => unknown;
+      },
+      registerService: (entry) => {
+        service = entry;
+      },
+      registerTool: () => {},
+    });
+
+    expect(service).toBeTruthy();
+    expect(contextEngineFactory).toBeTruthy();
+
+    await service!.start();
+
+    const contextEngine = contextEngineFactory!() as {
+      assemble: (params: {
+        sessionId: string;
+        messages: Array<{ role: string; content: string }>;
+      }) => Promise<{ messages: Array<{ role: string; content: unknown }> }>;
+    };
+
+    const beforePromptBuild = handlers.get("before_prompt_build");
+    expect(beforePromptBuild).toBeTruthy();
+    const hookResult = await beforePromptBuild!(
+      { messages: [{ role: "user", content: "what backend language should we use?" }] },
+      { agentId: "main", sessionId: "session-normal", sessionKey: "agent:main:normal" },
+    );
+
+    expect(hookResult).toBeUndefined();
+
+    const assembled = await contextEngine.assemble({
+      sessionId: "session-normal",
+      messages: [{ role: "user", content: "fallback" }],
+    });
+
+    expect(assembled.messages[0]).toEqual({
+      role: "user",
+      content: "[Session History Summary]
+Earlier work focused on backend stack choices.",
+    });
+    expect(assembled.messages[1]).toEqual({
+      role: "assistant",
+      content: [{ type: "text", text: "Stored answer from OpenViking." }],
+    });
+
+    await service?.stop?.();
+  });
+
   it("keeps normal prompt-build and context-engine flow working", async () => {
     const handlers = new Map<string, (event: unknown, ctx?: unknown) => unknown>();
     let service:
