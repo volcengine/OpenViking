@@ -58,6 +58,7 @@ def build_queue_status_payload(status: Dict[str, Any]) -> Dict[str, Dict[str, An
     return {
         name: {
             "processed": s.processed,
+            "requeue_count": getattr(s, "requeue_count", 0),
             "error_count": s.error_count,
             "errors": [{"message": e.message} for e in s.errors],
         }
@@ -73,17 +74,20 @@ def _resolve_queue_group(
     if explicit_stats is not None:
         return {
             "processed": explicit_stats.processed,
+            "requeue_count": getattr(explicit_stats, "requeue_count", 0),
             "error_count": explicit_stats.error_count,
         }
     if fallback_status is None:
-        return {"processed": 0, "error_count": 0}
+        return {"processed": 0, "requeue_count": 0, "error_count": 0}
     if isinstance(fallback_status, dict):
         return {
             "processed": int(fallback_status.get("processed", 0) or 0),
+            "requeue_count": int(fallback_status.get("requeue_count", 0) or 0),
             "error_count": int(fallback_status.get("error_count", 0) or 0),
         }
     return {
         "processed": fallback_status.processed,
+        "requeue_count": getattr(fallback_status, "requeue_count", 0),
         "error_count": fallback_status.error_count,
     }
 
@@ -99,8 +103,8 @@ def record_resource_wait_metrics(
     telemetry = telemetry or get_current_telemetry()
     if not telemetry.enabled:
         return {
-            "semantic": {"processed": 0, "error_count": 0},
-            "embedding": {"processed": 0, "error_count": 0},
+            "semantic": {"processed": 0, "requeue_count": 0, "error_count": 0},
+            "embedding": {"processed": 0, "requeue_count": 0, "error_count": 0},
         }
 
     semantic = _resolve_queue_group(
@@ -113,8 +117,10 @@ def record_resource_wait_metrics(
     )
 
     telemetry.set("queue.semantic.processed", semantic["processed"])
+    telemetry.set("queue.semantic.requeue_count", semantic["requeue_count"])
     telemetry.set("queue.semantic.error_count", semantic["error_count"])
     telemetry.set("queue.embedding.processed", embedding["processed"])
+    telemetry.set("queue.embedding.requeue_count", embedding["requeue_count"])
     telemetry.set("queue.embedding.error_count", embedding["error_count"])
 
     dag_stats = _consume_semantic_dag_stats(telemetry_id, root_uri)

@@ -39,6 +39,7 @@ logger = get_logger(__name__)
 @dataclass
 class RequestQueueStats:
     processed: int = 0
+    requeue_count: int = 0
     error_count: int = 0
 
 
@@ -207,13 +208,18 @@ class TextEmbeddingHandler(DequeueHandlerBase):
 
     @classmethod
     def _merge_request_stats(
-        cls, telemetry_id: str, processed: int = 0, error_count: int = 0
+        cls,
+        telemetry_id: str,
+        processed: int = 0,
+        requeue_count: int = 0,
+        error_count: int = 0,
     ) -> None:
         if not telemetry_id:
             return
         with cls._request_stats_lock:
             stats = cls._request_stats_by_telemetry_id.setdefault(telemetry_id, RequestQueueStats())
             stats.processed += processed
+            stats.requeue_count += requeue_count
             stats.error_count += error_count
             cls._request_stats_order.append(telemetry_id)
             if len(cls._request_stats_order) > cls._max_cached_stats:
@@ -291,6 +297,14 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         if wait > 0:
                             await asyncio.sleep(wait)
                         await self._vikingdb.enqueue_embedding_msg(embedding_msg)
+                        self._merge_request_stats(
+                            embedding_msg.telemetry_id,
+                            requeue_count=1,
+                        )
+                        get_request_wait_tracker().record_embedding_requeue(
+                            embedding_msg.telemetry_id
+                        )
+                        self.report_requeue()
                         report_success = True
                         return None
                     # No queue manager — cannot re-enqueue, drop with error
@@ -343,6 +357,14 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         if self._vikingdb.has_queue_manager:
                             try:
                                 await self._vikingdb.enqueue_embedding_msg(embedding_msg)
+                                self._merge_request_stats(
+                                    embedding_msg.telemetry_id,
+                                    requeue_count=1,
+                                )
+                                get_request_wait_tracker().record_embedding_requeue(
+                                    embedding_msg.telemetry_id
+                                )
+                                self.report_requeue()
                                 logger.info(
                                     f"Re-enqueued embedding message after transient error: {embedding_msg.id}"
                                 )
