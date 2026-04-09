@@ -14,7 +14,7 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from openviking.models.embedder.base import EmbedResult
+from openviking.models.embedder.base import EmbedResult, embed_compat
 from openviking.models.rerank import RerankClient
 from openviking.retrieve.memory_lifecycle import hotness_score
 from openviking.retrieve.retrieval_stats import get_stats_collector
@@ -129,7 +129,7 @@ class HierarchicalRetriever:
         query_vector = None
         sparse_query_vector = None
         if self.embedder:
-            result: EmbedResult = self.embedder.embed(query.query, is_query=True)
+            result: EmbedResult = await embed_compat(self.embedder, query.query, is_query=True)
             query_vector = result.dense_vector
             sparse_query_vector = result.sparse_vector
 

@@ -186,14 +186,14 @@ def create_app(
     # Catch-all for unhandled exceptions so clients always get JSON
     @app.exception_handler(Exception)
     async def general_error_handler(request: Request, exc: Exception):
-        logger.warning("Unhandled exception: %s", exc)
+        logger.exception("Unhandled exception")
         return JSONResponse(
             status_code=500,
             content=Response(
                 status="error",
                 error=ErrorInfo(
                     code="INTERNAL",
-                    message=str(exc),
+                    message="Internal server error",
                 ),
             ).model_dump(),
         )

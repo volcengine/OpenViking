@@ -22,16 +22,20 @@ import json
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from pathlib import Path
+from threading import Lock
 
 import requests
 
 # Configuration constants
 DEFAULT_BASE_URL = "http://127.0.0.1:18789"
-DEFAULT_SESSION_KEY = "eval-test-2"
-DEFAULT_AGENT_ID = "locomo-eval"
+DEFAULT_AGENT_ID = "main"
 DEFAULT_INGEST_RECORD_PATH = ".ingest_record.json"
-DEFAULT_OV_COMMAND = ["ov", "add-memory"]
+
+# CSV write lock for thread safety
+csv_lock = Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +186,56 @@ def build_session_messages(
 
 
 # ---------------------------------------------------------------------------
+# Question time helpers
+# ---------------------------------------------------------------------------
+
+def parse_locomo_datetime(date_str: str) -> datetime | None:
+    """解析 LoCoMo 时间格式，如 '1:56 pm on 8 May, 2023'"""
+    try:
+        # 移除时间部分，只保留日期 "8 May, 2023"
+        if " on " in date_str:
+            date_part = date_str.split(" on ")[-1]
+            return datetime.strptime(date_part.strip(), "%d %B, %Y")
+    except ValueError:
+        pass
+    return None
+
+
+def get_sample_question_time(sample: dict) -> str | None:
+    """从 sample 的 conversation 中提取最后一个有内容 session 的时间，返回 ISO 格式日期"""
+    conversation = sample.get("conversation", {})
+
+    # 找所有 session_N 字段（非 date_time）
+    session_keys = [
+        k for k in conversation.keys() if k.startswith("session_") and "date_time" not in k
+    ]
+    if not session_keys:
+        return None
+
+    # 按 session 编号排序，找到最后一个有内容的
+    def get_session_num(key):
+        try:
+            return int(key.replace("session_", ""))
+        except ValueError:
+            return 0
+
+    session_keys.sort(key=get_session_num, reverse=True)
+
+    for session_key in session_keys:
+        if conversation.get(session_key):  # 有内容
+            # 找到对应的 date_time
+            session_num = get_session_num(session_key)
+            dt_key = f"session_{session_num}_date_time"
+            date_str = conversation.get(dt_key)
+            if date_str:
+                dt = parse_locomo_datetime(date_str)
+                if dt:
+                    return dt.strftime("%Y-%m-%d")
+
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Ingest record helpers (avoid duplicate ingestion)
 # ---------------------------------------------------------------------------
 
@@ -261,6 +315,51 @@ def extract_response_text(response_json: dict) -> str:
     return f"[ERROR: could not extract text from response: {response_json}]"
 
 
+def get_session_id_from_key(session_key: str, user: str, agent_id: str = "main") -> str | None:
+    """Search all agents' sessions.json files for the session_key and return sessionFile path.
+    Returns the full path to the session JSONL file if found, None otherwise.
+    """
+    agents_base_dir = os.path.expanduser("~/.openclaw/agents")
+
+    if not os.path.exists(agents_base_dir):
+        print(f"    [session] Agents directory not found: {agents_base_dir}", file=sys.stderr)
+        return None
+
+    # Iterate through all agent directories
+    for agent_name in os.listdir(agents_base_dir):
+        agent_dir = os.path.join(agents_base_dir, agent_name)
+        if not os.path.isdir(agent_dir):
+            continue
+
+        sessions_dir = os.path.join(agent_dir, "sessions")
+        sessions_file = os.path.join(sessions_dir, "sessions.json")
+
+        if not os.path.exists(sessions_file):
+            continue
+
+        try:
+            with open(sessions_file, "r") as f:
+                data = json.load(f)
+
+            # Search for the session_key in this sessions.json
+            for key, value in data.items():
+                if session_key in key and isinstance(value, dict):
+                    session_file = value.get("sessionFile")
+                    if session_file:
+                        print(f"    [session] Found sessionFile in agent '{agent_name}': {session_file}", file=sys.stderr)
+                        return session_file
+
+        except json.JSONDecodeError as e:
+            print(f"    [session] Error parsing {sessions_file}: {e}", file=sys.stderr)
+            continue
+        except IOError as e:
+            print(f"    [session] Error reading {sessions_file}: {e}", file=sys.stderr)
+            continue
+
+    print(f"    [session] session_key '{session_key}' not found in any agent's sessions.json", file=sys.stderr)
+    return None
+
+
 def get_session_id(user: str, agent_id: str = "main") -> str | None:
     """Read the current session ID for the given user from sessions.json."""
     sessions_file = os.path.expanduser(f"~/.openclaw/agents/{agent_id}/sessions/sessions.json")
@@ -280,46 +379,85 @@ def get_session_id(user: str, agent_id: str = "main") -> str | None:
         return None
 
 
-def reset_session(session_id: str, agent_id: str = "main") -> str | None:
-    """Archive the session .jsonl file by renaming it with a timestamp suffix.
+def reset_session(session_path: str, agent_id: str = "main") -> str | None:
+    """Rename the session .jsonl file with a timestamp suffix.
+    Accepts either a session_id or a full path to the session file.
     Returns the new filename if successful, None otherwise.
     """
-    sessions_dir = os.path.expanduser(f"~/.openclaw/agents/{agent_id}/sessions")
-    src = os.path.join(sessions_dir, f"{session_id}.jsonl")
-    dst = f"{src}.{int(time.time())}"
+    # Check if session_path is already a full path
+    if os.path.isabs(session_path) and os.path.exists(session_path):
+        src = session_path
+    else:
+        # Treat as session_id
+        sessions_dir = os.path.expanduser(f"~/.openclaw/agents/{agent_id}/sessions")
+        src = os.path.join(sessions_dir, f"{session_path}.jsonl")
+
+    if not os.path.exists(src):
+        print(f"    [backup] Session file not found: {src}", file=sys.stderr)
+        return None
+
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    dst = f"{src}.{timestamp}"
     try:
         os.rename(src, dst)
         new_filename = os.path.basename(dst)
-        print(f"    [reset] archived {session_id}.jsonl -> {new_filename}", file=sys.stderr)
+        print(f"    [backup] renamed {os.path.basename(src)} -> {new_filename}", file=sys.stderr)
         return new_filename
-    except FileNotFoundError:
-        print(f"    [reset] Session file not found: {src}", file=sys.stderr)
-        return None
     except IOError as e:
-        print(f"    [reset] could not archive session file: {e}", file=sys.stderr)
+        print(f"    [backup] could not rename session file: {e}", file=sys.stderr)
         return None
 
 
-def viking_ingest(msg: str) -> None:
-    """Save a message to OpenViking via `ov add-memory`."""
-    import subprocess
-    result = subprocess.run(
-        DEFAULT_OV_COMMAND + [msg],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or f"ov exited with code {result.returncode}")
+def calculate_usage_from_jsonl(jsonl_filename: str, agent_id: str = "main") -> dict:
+    """Calculate token usage from archived JSONL file."""
+    # Check if jsonl_filename is already a full path
+    if os.path.isabs(jsonl_filename) and os.path.exists(jsonl_filename):
+        jsonl_full_path = jsonl_filename
+    else:
+        sessions_dir = os.path.expanduser(f"~/.openclaw/agents/{agent_id}/sessions")
+        jsonl_full_path = os.path.join(sessions_dir, jsonl_filename)
+
+    usage = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "total_tokens": 0,
+    }
+
+    if not os.path.exists(jsonl_full_path):
+        return usage
+
+    try:
+        with open(jsonl_full_path, "r", encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                entry = json.loads(line)
+                if entry.get("type") == "message" and entry.get("message", {}).get("role") == "assistant":
+                    entry_usage = entry.get("message", {}).get("usage", {})
+                    usage["input_tokens"] += entry_usage.get("input", 0)
+                    usage["output_tokens"] += entry_usage.get("output", 0)
+                    usage["cacheRead"] += entry_usage.get("cacheRead", 0)
+                    usage["cacheWrite"] += entry_usage.get("cacheWrite", 0)
+                    usage["total_tokens"] += entry_usage.get("totalTokens", 0)
+    except json.JSONDecodeError as e:
+        print(f"    [usage] Error parsing JSONL file: {e}", file=sys.stderr)
+    except IOError as e:
+        print(f"    [usage] Error reading JSONL file: {e}", file=sys.stderr)
+
+    return usage
 
 
 def send_message_with_retry(
-    base_url: str, token: str, user: str, message: str, retries: int = 2, agent_id: str = DEFAULT_AGENT_ID
+    base_url: str, token: str, user: str, message: str, retries: int = 2,
+    agent_id: str = DEFAULT_AGENT_ID, session_key: str | None = None
 ) -> tuple[str, dict]:
     """Call send_message with up to `retries` retries on failure."""
     last_exc = None
     for attempt in range(retries + 1):
         try:
-            return send_message(base_url, token, user, message, agent_id)
+            return send_message(base_url, token, user, message, agent_id, session_key)
         except Exception as e:
             last_exc = e
             if attempt < retries:
@@ -328,7 +466,8 @@ def send_message_with_retry(
 
 
 def send_message(
-    base_url: str, token: str, user: str, message: str, agent_id: str = DEFAULT_AGENT_ID
+    base_url: str, token: str, user: str, message: str,
+    agent_id: str = DEFAULT_AGENT_ID, session_key: str | None = None
 ) -> tuple[str, dict]:
     """Send a single message to the OpenClaw responses API.
 
@@ -338,9 +477,10 @@ def send_message(
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {token}",
-        "X-OpenClaw-Agent-ID": agent_id,
-        "X-OpenClaw-Session-Key": DEFAULT_SESSION_KEY
+        "X-OpenClaw-Agent-ID": agent_id
     }
+    if session_key:
+        headers["X-OpenClaw-Session-Key"] = session_key
     payload = {
         "model": "openclaw",
         "input": message,
@@ -414,62 +554,36 @@ def run_ingest(
                 preview = msg.replace("\n", " | ")[:80]
                 print(f"  [{label}] {preview}...", file=sys.stderr)
 
-                if args.viking:
-                    try:
-                        viking_ingest(msg)
-                        print(f"    -> [viking] saved", file=sys.stderr)
-                        results.append({
-                            "sample_id": sample_id,
-                            "session": meta["session_key"],
-                            "user": user_key,
-                            "reply": "[viking] saved",
-                            "usage": {},
-                        })
-                        # Mark as successfully ingested
-                        mark_ingested(args.agent_id, user_key, sample_id, meta['session_key'], ingest_record, {
-                            "mode": "viking",
-                            "date_time": meta['date_time']
-                        })
-                    except Exception as e:
-                        print(f"    -> [ERROR] {e}", file=sys.stderr)
-                        results.append({
-                            "sample_id": sample_id,
-                            "session": meta["session_key"],
-                            "user": user_key,
-                            "reply": f"[ERROR] {e}",
-                            "usage": {},
-                        })
-                else:
-                    try:
-                        reply, usage = send_message(args.base_url, args.token, user_key, msg, args.agent_id)
-                        print(f"    -> {reply[:80]}{'...' if len(reply) > 80 else ''}", file=sys.stderr)
-                        results.append({
-                            "sample_id": sample_id,
-                            "session": meta["session_key"],
-                            "user": user_key,
-                            "reply": reply,
-                            "usage": usage,
-                        })
-                        # Mark as successfully ingested
-                        mark_ingested(args.agent_id, user_key, sample_id, meta['session_key'], ingest_record, {
-                            "mode": "openclaw",
-                            "date_time": meta['date_time'],
-                            "usage": usage
-                        })
-                    except Exception as e:
-                        print(f"    -> [ERROR] {e}", file=sys.stderr)
-                        results.append({
-                            "sample_id": sample_id,
-                            "session": meta["session_key"],
-                            "user": user_key,
-                            "reply": f"[ERROR] {e}",
-                            "usage": {},
-                        })
+                try:
+                    reply, usage = send_message(args.base_url, args.token, user_key, msg, args.agent_id)
+                    print(f"    -> {reply[:80]}{'...' if len(reply) > 80 else ''}", file=sys.stderr)
+                    results.append({
+                        "sample_id": sample_id,
+                        "session": meta["session_key"],
+                        "user": user_key,
+                        "reply": reply,
+                        "usage": usage,
+                    })
+                    # Mark as successfully ingested
+                    mark_ingested(args.agent_id, user_key, sample_id, meta['session_key'], ingest_record, {
+                        "mode": "openclaw",
+                        "date_time": meta['date_time'],
+                        "usage": usage
+                    })
+                except Exception as e:
+                    print(f"    -> [ERROR] {e}", file=sys.stderr)
+                    results.append({
+                        "sample_id": sample_id,
+                        "session": meta["session_key"],
+                        "user": user_key,
+                        "reply": f"[ERROR] {e}",
+                        "usage": {},
+                    })
 
-                    if session_id is None:
-                        session_id = get_session_id(user_key, args.agent_id)
-                    if session_id:
-                        reset_session(session_id, args.agent_id)
+                if session_id is None:
+                    session_id = get_session_id(user_key, args.agent_id)
+                if session_id:
+                    reset_session(session_id, args.agent_id)
 
         if args.output:
             try:
@@ -545,6 +659,89 @@ def run_ingest(
 # QA: run QA questions and compare with expected answers
 # ---------------------------------------------------------------------------
 
+def process_single_question(
+    sample_id: str,
+    sample_idx: int,
+    original_qi: int,
+    qa: dict,
+    args: argparse.Namespace,
+    csv_path: str,
+    question_time: str | None = None,
+) -> dict:
+    """Process a single QA question. Returns the record."""
+    question = qa["question"]
+    expected = str(qa["answer"])
+    category = qa.get("category", "")
+    evidence = qa.get("evidence", [])
+
+    # Generate unique session_key based on sample_id + question_index
+    session_key = f"qa-{sample_id}-q{original_qi}"
+    user_key = args.user or f"eval-{sample_idx}"
+
+    print(f"  [{sample_idx}] Q{original_qi}: {question[:60]}{'...' if len(question) > 60 else ''}", file=sys.stderr)
+    # 如果有 question_time，注入到 prompt 中
+    if question_time:
+        input_msg = f"Current date: {question_time}. Answer the question directly: {question}"
+    else:
+        input_msg = f"Answer the question directly: {question}"
+
+    jsonl_filename = ""
+    try:
+        response, api_usage = send_message_with_retry(
+            args.base_url, args.token, sample_id, input_msg, 2, args.agent_id, session_key
+        )
+        print(f"  [{sample_idx}]   A: {response[:60]}{'...' if len(response) > 60 else ''}", file=sys.stderr)
+
+        # Get sessionFile path from sessions.json using session_key
+        session_file_path = get_session_id_from_key(session_key, user_key, args.agent_id)
+        jsonl_filename = ""
+
+        # Archive the session file if we found it
+        if session_file_path:
+            jsonl_filename = reset_session(session_file_path, args.agent_id)
+
+        # Calculate usage from JSONL file if available, otherwise use API usage
+        if jsonl_filename and session_file_path:
+            # Use the directory from session_file_path and the archived filename
+            usage = calculate_usage_from_jsonl(os.path.join(os.path.dirname(session_file_path), jsonl_filename), args.agent_id)
+            print(f"  [{sample_idx}]   tokens (from JSONL): in={usage['input_tokens']} out={usage['output_tokens']} cacheRead={usage['cacheRead']} cacheWrite={usage['cacheWrite']} total={usage['total_tokens']}", file=sys.stderr)
+        else:
+            usage = {
+                "input_tokens": api_usage.get("input_tokens", 0),
+                "output_tokens": api_usage.get("output_tokens", 0),
+                "cacheRead": api_usage.get("cacheRead", 0),
+                "cacheWrite": api_usage.get("cacheWrite", 0),
+                "total_tokens": api_usage.get("total_tokens", 0),
+            }
+            print(f"  [{sample_idx}]   tokens (from API): in={usage['input_tokens']} out={usage['output_tokens']} cacheRead={usage['cacheRead']} cacheWrite={usage['cacheWrite']} total={usage['total_tokens']}", file=sys.stderr)
+
+    except Exception as e:
+        response = f"[ERROR] {e}"
+        usage = {}
+        jsonl_filename = ""
+        print(f"  [{sample_idx}]   A: {response}", file=sys.stderr)
+
+    record = {
+        "sample_id": sample_id,
+        "sample_idx": sample_idx,
+        "qi": original_qi,
+        "question": question,
+        "expected": expected,
+        "response": response,
+        "category": category,
+        "evidence": evidence,
+        "usage": usage,
+        "jsonl_filename": jsonl_filename,
+    }
+
+    # Save to CSV with lock for thread safety
+    with csv_lock:
+        save_record_to_csv(csv_path, record)
+    print(f"  [{sample_idx}]   Saved to CSV: Q{original_qi}", file=sys.stderr)
+
+    return record
+
+
 def run_sample_qa(
     item: dict,
     sample_idx: int,
@@ -552,9 +749,10 @@ def run_sample_qa(
     executed_records: set,
     csv_path: str,
 ) -> tuple[list[dict], dict]:
-    """Process QA for a single sample. Returns (records, sample_usage)."""
+    """Process QA for a single sample with concurrent question execution. Returns (records, sample_usage)."""
     sample_id = item["sample_id"]
     user_key = args.user or f"eval-{sample_idx}"
+    question_time = get_sample_question_time(item)
     qas = [q for q in item.get("qa", []) if str(q.get("category", "")) != "5"]
     if args.count is not None:
         qas = qas[:args.count]
@@ -573,131 +771,35 @@ def run_sample_qa(
         print(f"    All QA questions already executed, skipping sample.", file=sys.stderr)
         return [], {"input_tokens": 0, "output_tokens": 0, "cacheRead": 0, "cacheWrite": 0, "total_tokens": 0}
 
-    jsonl_path = f"{args.output}.{sample_idx}.jsonl" if args.output else None
-
-    sample_usage = {"input_tokens": 0, "output_tokens": 0, "cacheRead": 0, "cacheWrite": 0, "total_tokens": 0}
-    records = []
-    session_id = None
-
     print(f"\n=== Sample {sample_id} [{sample_idx}] (user={user_key}) ===", file=sys.stderr)
-    print(f"    Running {len(qas)} QA question(s)...", file=sys.stderr)
+    if question_time:
+        print(f"    Question time context: {question_time}", file=sys.stderr)
+    print(f"    Running {len(qas)} QA question(s) with max {args.parallel} workers...", file=sys.stderr)
 
-    jsonl_file = None
-    if jsonl_path:
-        try:
-            jsonl_file = open(jsonl_path, "w", encoding="utf-8")
-        except IOError as e:
-            print(f"Warning: Could not open JSONL file {jsonl_path}: {e}", file=sys.stderr)
+    records = []
+    sample_usage = {"input_tokens": 0, "output_tokens": 0, "cacheRead": 0, "cacheWrite": 0, "total_tokens": 0}
 
-    try:
+    # Use ThreadPoolExecutor for concurrent question execution
+    with ThreadPoolExecutor(max_workers=args.parallel) as executor:
+        futures = []
         for original_qi, qa in qas:
-            question = qa["question"]
-            expected = str(qa["answer"])
-            category = qa.get("category", "")
-            evidence = qa.get("evidence", [])
+            future = executor.submit(
+                process_single_question,
+                sample_id, sample_idx, original_qi, qa, args, csv_path, question_time
+            )
+            futures.append(future)
 
-            print(f"  [{sample_idx}] Q{original_qi}: {question[:60]}{'...' if len(question) > 60 else ''}", file=sys.stderr)
-
-            jsonl_filename = ""
+        # Collect results
+        for future in as_completed(futures):
             try:
-                response, api_usage = send_message_with_retry(
-                    args.base_url, args.token, user_key, question, 2, args.agent_id,
-                )
-                print(f"  [{sample_idx}]   A: {response[:60]}{'...' if len(response) > 60 else ''}", file=sys.stderr)
-
-                # Use provided session_id if available, otherwise get from system
-                if args.session_id:
-                    session_id = args.session_id
-                elif session_id is None:
-                    session_id = get_session_id(user_key, args.agent_id)
-
-                # Reset session and get archived filename
-                if session_id:
-                    jsonl_filename = reset_session(session_id, args.agent_id)
-
-                # Use API usage by default
-                usage = api_usage
-                # Calculate usage from JSONL file if session_id is provided and we have the archived file
-                if args.session_id and jsonl_filename:
-                    # Parse the archived JSONL file to calculate usage
-                    sessions_dir = os.path.expanduser(f"~/.openclaw/agents/{args.agent_id}/sessions")
-                    jsonl_full_path = os.path.join(sessions_dir, jsonl_filename)
-                    if os.path.exists(jsonl_full_path):
-                        total_input = 0
-                        total_output = 0
-                        total_cache_read = 0
-                        total_cache_write = 0
-                        total_total_tokens = 0
-                        try:
-                            with open(jsonl_full_path, "r", encoding="utf-8") as f:
-                                for line in f:
-                                    if not line.strip():
-                                        continue
-                                    entry = json.loads(line)
-                                    if entry.get("type") == "message" and entry.get("message", {}).get("role") == "assistant":
-                                        entry_usage = entry.get("message", {}).get("usage", {})
-                                        total_input += entry_usage.get("input", 0)
-                                        total_output += entry_usage.get("output", 0)
-                                        total_cache_read += entry_usage.get("cacheRead", 0)
-                                        total_cache_write += entry_usage.get("cacheWrite", 0)
-                                        total_total_tokens += entry_usage.get("totalTokens", 0)
-                            usage = {
-                                "input_tokens": total_input,
-                                "output_tokens": total_output,
-                                "cacheRead": total_cache_read,
-                                "cacheWrite": total_cache_write,
-                                "total_tokens": total_total_tokens,
-                            }
-                            print(f"  [{sample_idx}]   tokens (from JSONL): in={total_input} out={total_output} cacheRead={total_cache_read} cacheWrite={total_cache_write} total={total_total_tokens}", file=sys.stderr)
-                        except json.JSONDecodeError as e:
-                            print(f"  [{sample_idx}]   Error parsing JSONL file: {e}, using API usage", file=sys.stderr)
-                            print(f"  [{sample_idx}]   tokens (from API): in={usage.get('input_tokens',0)} out={usage.get('output_tokens',0)} cacheRead={usage.get('cacheRead',0)} cacheWrite={usage.get('cacheWrite',0)} total={usage.get('total_tokens',0)}", file=sys.stderr)
-                        except IOError as e:
-                            print(f"  [{sample_idx}]   Error reading JSONL file: {e}, using API usage", file=sys.stderr)
-                            print(f"  [{sample_idx}]   tokens (from API): in={usage.get('input_tokens',0)} out={usage.get('output_tokens',0)} cacheRead={usage.get('cacheRead',0)} cacheWrite={usage.get('cacheWrite',0)} total={usage.get('total_tokens',0)}", file=sys.stderr)
-                    else:
-                        print(f"  [{sample_idx}]   JSONL file not found: {jsonl_full_path}, using API usage", file=sys.stderr)
-                        print(f"  [{sample_idx}]   tokens (from API): in={usage.get('input_tokens',0)} out={usage.get('output_tokens',0)} cacheRead={usage.get('cacheRead',0)} cacheWrite={usage.get('cacheWrite',0)} total={usage.get('total_tokens',0)}", file=sys.stderr)
-                else:
-                    print(f"  [{sample_idx}]   tokens (from API): in={usage.get('input_tokens',0)} out={usage.get('output_tokens',0)} cacheRead={usage.get('cacheRead',0)} cacheWrite={usage.get('cacheWrite',0)} total={usage.get('total_tokens',0)}", file=sys.stderr)
-
+                record = future.result()
+                records.append(record)
+                # Accumulate usage
+                usage = record.get("usage", {})
                 for k in sample_usage:
                     sample_usage[k] += usage.get(k, 0)
             except Exception as e:
-                response = f"[ERROR] {e}"
-                usage = {}
-                jsonl_filename = ""
-                print(f"  [{sample_idx}]   A: {response}", file=sys.stderr)
-
-            record = {
-                "sample_id": sample_id,
-                "sample_idx": sample_idx,
-                "qi": original_qi,
-                "question": question,
-                "expected": expected,
-                "response": response,
-                "category": category,
-                "evidence": evidence,
-                "usage": usage,
-                "jsonl_filename": jsonl_filename,
-            }
-            records.append(record)
-
-            # Save to CSV immediately after successful execution
-            save_record_to_csv(csv_path, record)
-            print(f"  [{sample_idx}]   Saved to CSV: Q{original_qi}", file=sys.stderr)
-
-            if jsonl_file:
-                try:
-                    jsonl_file.write(json.dumps(record, ensure_ascii=False) + "\n")
-                    jsonl_file.flush()
-                except IOError as e:
-                    print(f"Warning: Error writing to JSONL file: {e}", file=sys.stderr)
-
-    finally:
-        if jsonl_file:
-            jsonl_file.close()
-            print(f"    [{sample_idx}] written to {jsonl_path}", file=sys.stderr)
+                print(f"  [{sample_idx}] Error in question task: {e}", file=sys.stderr)
 
     return records, sample_usage
 
@@ -763,9 +865,12 @@ def run_qa(
         print("Error: QA mode only works with LoCoMo JSON files", file=sys.stderr)
         sys.exit(1)
 
+    # Ensure parallel is within reasonable bounds (1-40)
+    args.parallel = max(1, min(40, args.parallel))
+
     samples = load_locomo_data(args.input, args.sample)
     print(f"    user: {args.user or 'eval-{sample_idx}'}", file=sys.stderr)
-    print(f"    running in single-thread mode", file=sys.stderr)
+    print(f"    running with {args.parallel} concurrent workers", file=sys.stderr)
 
     # Load already executed records from CSV
     csv_path = f"{args.output}.csv" if args.output else args.default_csv_path
@@ -773,17 +878,6 @@ def run_qa(
     os.makedirs(os.path.dirname(csv_path), exist_ok=True)
     executed_records = load_executed_records(csv_path)
     print(f"    Loaded {len(executed_records)} already executed records from {csv_path}", file=sys.stderr)
-
-    # Clean up existing session file if session_id is provided
-    if args.session_id:
-        sessions_dir = os.path.expanduser(f"~/.openclaw/agents/{args.agent_id}/sessions")
-        session_file = os.path.join(sessions_dir, f"{args.session_id}.jsonl")
-        if os.path.exists(session_file):
-            try:
-                os.remove(session_file)
-                print(f"    Cleaned up existing session file: {os.path.basename(session_file)}", file=sys.stderr)
-            except Exception as e:
-                print(f"    Warning: Could not remove existing session file: {e}", file=sys.stderr)
 
     results_list = []
     for idx, item in enumerate(samples):
@@ -797,7 +891,31 @@ def run_qa(
 
     print(f"\n    total tokens: in={total_usage['input_tokens']} out={total_usage['output_tokens']} total={total_usage['total_tokens']}", file=sys.stderr)
 
+    # Generate timestamp once for all backups
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    import shutil
+
+    # Backup CSV file with timestamp
+    if os.path.exists(csv_path):
+        csv_path_obj = Path(csv_path)
+        backup_csv_path = csv_path_obj.parent / f"{csv_path_obj.stem}_{timestamp}{csv_path_obj.suffix}"
+        try:
+            shutil.copy2(csv_path, backup_csv_path)
+            print(f"    CSV backed up to: {backup_csv_path}", file=sys.stderr)
+        except Exception as e:
+            print(f"Warning: Failed to backup CSV file: {e}", file=sys.stderr)
+
     if args.output:
+        # Backup output summary file too
+        if os.path.exists(args.output):
+            output_path_obj = Path(args.output)
+            backup_output_path = output_path_obj.parent / f"{output_path_obj.stem}_{timestamp}{output_path_obj.suffix}"
+            try:
+                shutil.copy2(args.output, backup_output_path)
+                print(f"    Summary backed up to: {backup_output_path}", file=sys.stderr)
+            except Exception as e:
+                print(f"Warning: Failed to backup summary file: {e}", file=sys.stderr)
+
         try:
             with open(args.output, "w", encoding="utf-8") as f:
                 f.write("=== TOTAL USAGE ===\n")
@@ -877,15 +995,9 @@ def main():
     parser.add_argument(
         "-p", "--parallel",
         type=int,
-        default=1,
+        default=10,
         metavar="N",
-        help="QA mode: number of samples to process concurrently (max 10, default 1).",
-    )
-    parser.add_argument(
-        "--viking",
-        action="store_true",
-        default=False,
-        help="Ingest mode: save to OpenViking via `ov add-memory` instead of OpenClaw.",
+        help="QA mode: number of questions to process concurrently (max 40, default 10).",
     )
     parser.add_argument(
         "--agent-id",
@@ -895,7 +1007,7 @@ def main():
     parser.add_argument(
         "--session-id",
         default=None,
-        help="Session ID for API requests. If provided, will use this session ID and calculate token usage from corresponding JSONL file.",
+        help="Session ID for API requests (ingest mode only).",
     )
     parser.add_argument(
         "--force-ingest",
@@ -913,7 +1025,7 @@ def main():
     # 添加默认 CSV 路径到 args
     args.default_csv_path = default_csv_path
 
-    if not args.token and not getattr(args, "viking", False):
+    if not args.token:
         print("Error: --token or OPENCLAW_GATEWAY_TOKEN env var is required", file=sys.stderr)
         sys.exit(1)
 

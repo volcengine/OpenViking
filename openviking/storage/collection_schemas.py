@@ -16,7 +16,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from openviking.models.embedder.base import EmbedResult
+from openviking.models.embedder.base import EmbedResult, embed_compat
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.errors import CollectionNotFoundError
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
@@ -308,13 +308,11 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 # Generate embedding vector(s)
                 if self._embedder:
                     try:
-                        # embed() is a blocking HTTP call; offload to thread pool to avoid
-                        # blocking the event loop and allow real concurrency.
                         import time as _time
 
                         _embed_t0 = _time.monotonic()
-                        result: EmbedResult = await asyncio.to_thread(
-                            self._embedder.embed, embedding_msg.message
+                        result: EmbedResult = await embed_compat(
+                            self._embedder, embedding_msg.message
                         )
                         _embed_elapsed = _time.monotonic() - _embed_t0
                         try:

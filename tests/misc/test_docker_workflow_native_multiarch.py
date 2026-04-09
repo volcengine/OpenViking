@@ -48,3 +48,33 @@ def test_docker_workflows_normalize_image_names_to_lowercase():
     assert "steps.image-name.outputs.image" in build_workflow
     assert "tr '[:upper:]' '[:lower:]'" in release_workflow
     assert "steps.image-name.outputs.image" in release_workflow
+
+
+def test_build_docker_workflow_tracks_registry_specific_digests_for_manifests():
+    workflow = _read_text(".github/workflows/build-docker-image.yml")
+
+    assert "docker-digests-ghcr-${{ matrix.arch }}" in workflow
+    assert "docker-digests-dockerhub-${{ matrix.arch }}" in workflow
+    assert 'ghcr_digest="${{ steps.push-ghcr.outputs.digest }}"' in workflow
+    assert 'dockerhub_digest="${{ steps.push-dockerhub.outputs.digest }}"' in workflow
+    assert "pattern: docker-digests-ghcr-*" in workflow
+    assert "pattern: docker-digests-dockerhub-*" in workflow
+    assert (
+        'ghcr_image_refs+=("${{ env.REGISTRY }}/${{ steps.image-name.outputs.image }}@${digest}")'
+        in workflow
+    )
+    assert (
+        'dockerhub_image_refs+=("docker.io/${{ secrets.DOCKERHUB_USERNAME }}/openviking@${digest}")'
+        in workflow
+    )
+
+
+def test_release_workflow_tracks_registry_specific_digests_for_manifests():
+    workflow = _read_text(".github/workflows/release.yml")
+
+    assert "docker-digests-ghcr-${{ matrix.arch }}" in workflow
+    assert "docker-digests-dockerhub-${{ matrix.arch }}" in workflow
+    assert 'ghcr_digest="${{ steps.push-ghcr.outputs.digest }}"' in workflow
+    assert 'dockerhub_digest="${{ steps.push-dockerhub.outputs.digest }}"' in workflow
+    assert "pattern: docker-digests-ghcr-*" in workflow
+    assert "pattern: docker-digests-dockerhub-*" in workflow
