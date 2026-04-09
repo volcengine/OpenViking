@@ -3,9 +3,18 @@
 
 """Tests for resource management endpoints."""
 
+import zipfile
+from pathlib import Path
+
 import httpx
 
 from openviking.telemetry import get_current_telemetry
+
+
+def _write_zip(zip_path: Path, files: dict[str, str]) -> None:
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for arcname, content in files.items():
+            zf.writestr(arcname, content)
 
 
 async def test_add_resource_success(
@@ -205,6 +214,170 @@ async def test_add_resource_with_to(
     body = resp.json()
     assert body["status"] == "ok"
     assert "custom" in body["result"]["root_uri"]
+
+
+async def test_add_resource_file_to_trailing_slash_rule_1(
+    client: httpx.AsyncClient,
+    sample_markdown_file,
+    upload_temp_dir,
+):
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": sample_markdown_file.name,
+            "to": "viking://resources/custom_dir/",
+            "reason": "rule 1",
+            "wait": True,
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    root_uri = body["result"]["root_uri"]
+    assert root_uri == "viking://resources/custom_dir/sample.md"
+
+    stat_resp = await client.get("/api/v1/fs/stat", params={"uri": root_uri})
+    assert stat_resp.status_code == 200
+    assert stat_resp.json()["result"]["isDir"] is False
+
+
+async def test_add_resource_file_to_no_trailing_slash_rule_2(
+    client: httpx.AsyncClient,
+    sample_markdown_file,
+    upload_temp_dir,
+):
+    target = "viking://resources/custom_dir/renamed.md"
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": sample_markdown_file.name,
+            "to": target,
+            "reason": "rule 2",
+            "wait": True,
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    root_uri = body["result"]["root_uri"]
+    assert root_uri == target
+
+    stat_resp = await client.get("/api/v1/fs/stat", params={"uri": root_uri})
+    assert stat_resp.status_code == 200
+    assert stat_resp.json()["result"]["isDir"] is False
+
+
+async def test_add_resource_dir_to_trailing_slash_rule_3(
+    client: httpx.AsyncClient,
+    upload_temp_dir,
+):
+    zip_path = upload_temp_dir / "demo_dir.zip"
+    _write_zip(
+        zip_path,
+        {
+            "demo_dir/a.md": "# a\n",
+            "demo_dir/b.md": "# b\n",
+        },
+    )
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": zip_path.name,
+            "to": "viking://resources/custom_dir/",
+            "reason": "rule 3",
+            "wait": True,
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    root_uri = body["result"]["root_uri"]
+    assert root_uri == "viking://resources/custom_dir/demo_dir/"
+
+    stat_resp = await client.get("/api/v1/fs/stat", params={"uri": root_uri})
+    assert stat_resp.status_code == 200
+    assert stat_resp.json()["result"]["isDir"] is True
+
+
+async def test_add_resource_dir_to_no_trailing_slash_rule_4(
+    client: httpx.AsyncClient,
+    upload_temp_dir,
+):
+    zip_path = upload_temp_dir / "demo_dir.zip"
+    _write_zip(
+        zip_path,
+        {
+            "demo_dir/a.md": "# a\n",
+            "demo_dir/b.md": "# b\n",
+        },
+    )
+    target = "viking://resources/custom_dir/explicit_root"
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": zip_path.name,
+            "to": target,
+            "reason": "rule 4",
+            "wait": True,
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    root_uri = body["result"]["root_uri"]
+    assert root_uri == target
+
+    stat_resp = await client.get("/api/v1/fs/stat", params={"uri": root_uri})
+    assert stat_resp.status_code == 200
+    assert stat_resp.json()["result"]["isDir"] is True
+
+
+async def test_add_resource_zip_single_file_follows_rules_rule_5(
+    client: httpx.AsyncClient,
+    upload_temp_dir,
+):
+    zip_path = upload_temp_dir / "single_file.zip"
+    _write_zip(zip_path, {"hello.md": "# hello\n"})
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": zip_path.name,
+            "to": "viking://resources/custom_dir/",
+            "reason": "rule 5",
+            "wait": True,
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    root_uri = body["result"]["root_uri"]
+    assert root_uri == "viking://resources/custom_dir/hello.md"
+
+    stat_resp = await client.get("/api/v1/fs/stat", params={"uri": root_uri})
+    assert stat_resp.status_code == 200
+    assert stat_resp.json()["result"]["isDir"] is False
+
+
+async def test_add_resource_to_resources_root_is_rejected_rule_6(
+    client: httpx.AsyncClient,
+    sample_markdown_file,
+    upload_temp_dir,
+):
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": sample_markdown_file.name,
+            "to": "viking://resources",
+            "reason": "rule 6",
+            "wait": True,
+        },
+    )
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
+    assert "viking://resources" in body["error"]["message"]
+    assert "viking://resources/" in body["error"]["message"]
 
 
 async def test_wait_processed_empty_queue(client: httpx.AsyncClient):

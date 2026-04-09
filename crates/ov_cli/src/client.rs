@@ -61,6 +61,12 @@ impl HttpClient {
             FileOptions::default().compression_method(CompressionMethod::Deflated);
 
         let walkdir = walkdir::WalkDir::new(dir_path);
+        let base_name = dir_path.file_name().and_then(|n| n.to_str()).ok_or_else(|| {
+            Error::InvalidPath(format!(
+                "Non-UTF-8 directory name: {}",
+                dir_path.to_string_lossy()
+            ))
+        })?;
         for entry in walkdir.into_iter().filter_map(|e| e.ok()) {
             let path = entry.path();
             if path.is_file() {
@@ -68,7 +74,12 @@ impl HttpClient {
                 let name_str = name.to_str().ok_or_else(|| {
                     Error::InvalidPath(format!("Non-UTF-8 path: {}", name.to_string_lossy()))
                 })?;
-                zip.start_file(name_str, options)?;
+                let zip_name = if name_str.is_empty() {
+                    base_name.to_string()
+                } else {
+                    format!("{}/{}", base_name, name_str)
+                };
+                zip.start_file(zip_name, options)?;
                 let mut file = File::open(path)?;
                 std::io::copy(&mut file, &mut zip)?;
             }
@@ -596,10 +607,15 @@ impl HttpClient {
 
                 self.post("/api/v1/resources", &body).await
             } else if path_obj.is_file() {
+                let source_name = path_obj
+                    .file_stem()
+                    .and_then(|n| n.to_str())
+                    .map(|s| s.to_string());
                 let temp_file_id = self.upload_temp_file(path_obj).await?;
 
                 let body = serde_json::json!({
                     "temp_file_id": temp_file_id,
+                    "source_name": source_name,
                     "to": to,
                     "parent": parent,
                     "reason": reason,

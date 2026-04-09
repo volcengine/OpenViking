@@ -167,7 +167,25 @@ class UnifiedResourceProcessor:
             try:
                 with zipfile.ZipFile(file_path, "r") as zipf:
                     safe_extract_zip(zipf, temp_dir)
-                return await self._process_directory(temp_dir, instruction, **kwargs)
+                visible = [
+                    p
+                    for p in temp_dir.iterdir()
+                    if p.name not in {".", ".."} and not p.name.startswith(".")
+                ]
+                dirs = [p for p in visible if p.is_dir()]
+                files = [p for p in visible if p.is_file()]
+
+                if len(dirs) == 1 and not files:
+                    inferred_root = dirs[0]
+                    kwargs_for_dir = dict(kwargs)
+                    kwargs_for_dir.pop("source_name", None)
+                    return await self._process_directory(inferred_root, instruction, **kwargs_for_dir)
+                if len(files) == 1 and not dirs:
+                    return await self._process_file(files[0], instruction, **kwargs)
+
+                kwargs_for_dir = dict(kwargs)
+                kwargs_for_dir["source_name"] = kwargs_for_dir.get("source_name") or file_path.stem
+                return await self._process_directory(temp_dir, instruction, **kwargs_for_dir)
             finally:
                 pass  # Don't delete temp_dir yet, it will be used by TreeBuilder
         return await parse(
@@ -175,5 +193,5 @@ class UnifiedResourceProcessor:
             instruction=instruction,
             vlm_processor=self._get_vlm_processor(),
             storage=self.storage,
-            resource_name=file_path.stem,
+            resource_name=kwargs.get("source_name") or kwargs.get("resource_name") or file_path.stem,
         )

@@ -110,7 +110,10 @@ enum Commands {
     AddResource {
         /// Local path or URL to import
         path: String,
-        /// Exact target URI (must not exist yet) (cannot be used with --parent)
+        /// Target URI (cannot be used with --parent).
+        /// - If ends with '/': treated as a directory; preserves original file/dir name under it.
+        /// - Otherwise: treated as exact root URI (file path or directory root).
+        /// Note: 'viking://resources' (no trailing slash) is not allowed; use 'viking://resources/'.
         #[arg(long)]
         to: Option<String>,
         /// Target parent URI (must already exist and be a directory) (cannot be used with --to)

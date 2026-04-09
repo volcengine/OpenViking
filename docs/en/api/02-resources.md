@@ -42,12 +42,23 @@ Add a resource to the knowledge base.
 |-----------|------|----------|---------|-------------|
 | path | str | Yes | - | SDK/CLI: local path, directory path, or URL. Raw HTTP: remote URL only |
 | temp_file_id | str | No | None | Upload ID returned by `POST /api/v1/resources/temp_upload` for raw HTTP local file ingestion |
-| target | str | No | None | Target Viking URI (must be in `resources` scope) |
+| to | str | No | None | Target Viking URI (must be in `resources` scope; cannot be used with `parent`) |
+| parent | str | No | None | Target parent URI (must exist and be a directory; cannot be used with `to`) |
 | reason | str | No | "" | Why this resource is being added (improves search relevance) |
 | instruction | str | No | "" | Special processing instructions |
 | wait | bool | No | False | Wait for semantic processing to complete |
 | timeout | float | No | None | Timeout in seconds (only used when wait=True) |
-| watch_interval | float | No | 0 | Watch interval (minutes). >0 enables/updates watch; <=0 disables watch. Only takes effect when target is provided |
+| watch_interval | float | No | 0 | Watch interval (minutes). >0 enables/updates watch; <=0 disables watch. Only takes effect when `to` is provided |
+
+**Trailing slash semantics of `to` (applies after the resource is fetched; archives are extracted first)**
+
+- If the resource is a **file**:
+  - `to` ends with `/`: treat `to` as a directory; final location is `to/<source filename>`
+  - `to` does not end with `/`: treat `to` as a file; final location is `to`
+- If the resource is a **directory**:
+  - `to` ends with `/`: treat `to` as a directory; final location is `to/<source directory name>/`
+  - `to` does not end with `/`: treat `to` as a directory; map the directory contents into `to` (no extra directory layer)
+- If `to == viking://resources` and the request would map a file to a file or map directory contents into `viking://resources` (no trailing slash), the server returns an error and asks you to change `to` (e.g. add `/` or use a more specific path).
 
 **How local files and directories work**
 
@@ -62,7 +73,7 @@ Add a resource to the knowledge base.
 
 When you call `add_resource()` repeatedly for the same resource URI, the system performs an incremental update instead of rebuilding everything from scratch:
 
-- **Trigger**: `target` is provided and already exists in the knowledge base.
+- **Trigger**: `to` is provided and already exists in the knowledge base.
 - **High-level idea**: each ingestion first builds a temporary resource tree from the new input. During asynchronous semantic processing, the temporary tree is compared against the existing tree at `target`, and only the changed parts are re-processed and synchronized.
 - **Incremental behavior in the semantic stage**:
   - **Unchanged files**: reuse existing L0 summaries and vector index records; skip vectorization.
@@ -126,7 +137,7 @@ openviking add-resource ./documents/guide.md --reason "User guide documentation"
 ```python
 result = client.add_resource(
     "https://example.com/api-docs.md",
-    target="viking://resources/external/",
+    to="viking://resources/external/",
     reason="External API documentation"
 )
 client.wait_processed()
@@ -140,7 +151,7 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -H "X-API-Key: your-key" \
   -d '{
     "path": "https://example.com/api-docs.md",
-    "target": "viking://resources/external/",
+    "to": "viking://resources/external/",
     "reason": "External API documentation",
     "wait": true
   }'

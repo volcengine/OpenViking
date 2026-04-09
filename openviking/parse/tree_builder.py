@@ -29,6 +29,7 @@ from openviking.parse.parsers.media.utils import get_media_base_uri, get_media_t
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.utils import parse_code_hosting_url
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils.uri import VikingURI
 
 logger = logging.getLogger(__name__)
@@ -153,9 +154,59 @@ class TreeBuilder:
         # 2. Determine base_uri and final document name with org/repo for GitHub/GitLab
         auto_base_uri = self._get_base_uri(scope, source_path, source_format)
         base_uri = parent_uri or auto_base_uri
-        # 3. Determine candidate_uri
+        temp_artifact_uri = temp_doc_uri
+        artifact_kind = "dir"
+
+        # 3. Determine candidate_uri / final_uri
         if to_uri:
-            candidate_uri = to_uri
+            candidate_uri = VikingURI.normalize(to_uri)
+            to_is_dir_semantics = candidate_uri.endswith("/")
+            to_is_protected_resources_root = candidate_uri == "viking://resources"
+
+            entries = await viking_fs.ls(temp_doc_uri, ctx=ctx)
+            visible_entries = [
+                e
+                for e in entries
+                if e.get("name") not in (".", "..") and not str(e.get("name", "")).startswith(".")
+            ]
+            force_directory_resource = source_format in ("directory", "repository")
+            is_single_file_resource = (
+                not force_directory_resource
+                and len(visible_entries) == 1
+                and not visible_entries[0].get("isDir", False)
+            )
+
+            if is_single_file_resource:
+                artifact_kind = "file"
+                source_filename = str(visible_entries[0].get("name", "")).strip()
+                if not source_filename:
+                    raise ValueError(f"[TreeBuilder] Empty filename in {temp_doc_uri}")
+                temp_artifact_uri = f"{temp_doc_uri.rstrip('/')}/{source_filename}"
+
+                if to_is_dir_semantics:
+                    final_uri = VikingURI(candidate_uri).join(source_filename).uri
+                else:
+                    if to_is_protected_resources_root:
+                        raise InvalidArgumentError(
+                            "`to` 不允许为 viking://resources（无尾斜杠）用于文件资源。"
+                            "请修改 to：例如使用 viking://resources/ 以保留原文件名，"
+                            "或使用 viking://resources/<目录>/ 或 viking://resources/<目录>/<文件名>。"
+                        )
+                    final_uri = candidate_uri
+            else:
+                artifact_kind = "dir"
+                temp_artifact_uri = temp_doc_uri
+
+                if to_is_dir_semantics:
+                    final_uri = VikingURI(candidate_uri).join(final_doc_name).uri.rstrip("/") + "/"
+                else:
+                    if to_is_protected_resources_root:
+                        raise InvalidArgumentError(
+                            "`to` 不允许为 viking://resources（无尾斜杠）用于目录资源。"
+                            "请修改 to：例如使用 viking://resources/ 以保留目录名，"
+                            "或使用 viking://resources/<目录名>/ 或 viking://resources/<目标目录>。"
+                        )
+                    final_uri = candidate_uri
         else:
             if parent_uri:
                 # Parent URI must exist and be a directory
@@ -166,10 +217,6 @@ class TreeBuilder:
                 if not stat_result.get("isDir"):
                     raise ValueError(f"Parent URI is not a directory: {parent_uri}")
             candidate_uri = VikingURI(base_uri).join(final_doc_name).uri
-
-        if to_uri:
-            final_uri = candidate_uri
-        else:
             final_uri = await self._resolve_unique_uri(candidate_uri)
 
         tree = BuildingTree(
@@ -181,7 +228,11 @@ class TreeBuilder:
             tree._candidate_uri = candidate_uri
 
         # Create a minimal Context object for the root so that tree.root is not None
-        root_context = Context(uri=final_uri, temp_uri=temp_doc_uri)
+        root_context = Context(
+            uri=final_uri,
+            temp_uri=temp_artifact_uri,
+            meta={"artifact_kind": artifact_kind},
+        )
         tree.add_context(root_context)
 
         return tree

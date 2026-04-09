@@ -42,12 +42,23 @@ Input -> Parser -> TreeBuilder -> AGFS -> SemanticQueue -> Vector Index
 |------|------|------|--------|------|
 | path | str | 是 | - | SDK/CLI 可传本地路径、目录路径或 URL；裸 HTTP 仅支持远端 URL |
 | temp_file_id | str | 否 | None | `POST /api/v1/resources/temp_upload` 返回的上传 ID，用于裸 HTTP 导入本地文件 |
-| target | str | 否 | None | 目标 Viking URI（必须在 `resources` 作用域内） |
+| to | str | 否 | None | 目标 Viking URI（必须在 `resources` 作用域内；不可与 `parent` 同时使用） |
+| parent | str | 否 | None | 目标父目录 URI（必须存在且为目录；不可与 `to` 同时使用） |
 | reason | str | 否 | "" | 添加该资源的原因（可提升搜索相关性） |
 | instruction | str | 否 | "" | 特殊处理指令 |
 | wait | bool | 否 | False | 等待语义处理完成 |
 | timeout | float | 否 | None | 超时时间（秒），仅在 wait=True 时生效 |
-| watch_interval | float | 否 | 0 | 定时更新间隔（分钟）。>0 开启/更新定时任务；<=0 关闭（停用）定时任务。仅在指定 target 时生效 |
+| watch_interval | float | 否 | 0 | 定时更新间隔（分钟）。>0 开启/更新定时任务；<=0 关闭（停用）定时任务。仅在指定 `to` 时生效 |
+
+**`to` 的尾斜杠语义（资源获取完成后适用；压缩内容先解压）**
+
+- 资源为**文件**：
+  - `to` 以 `/` 结尾：`to` 视为目录，最终落点为 `to/<源文件名>`
+  - `to` 不以 `/` 结尾：`to` 视为文件，最终落点为 `to`
+- 资源为**目录**：
+  - `to` 以 `/` 结尾：`to` 视为目录，最终落点为 `to/<源目录名>/`
+  - `to` 不以 `/` 结尾：`to` 视为目录，目录内容映射到 `to`（不额外新增一层目录）
+- 当 `to == viking://resources` 且命中“文件映射到文件”或“目录内容映射到目录（无尾斜杠）”语义时，服务端会直接报错并提示修改 `to`（例如加 `/` 或指定更具体路径）。
 
 **本地文件和目录如何处理**
 
@@ -62,7 +73,7 @@ Input -> Parser -> TreeBuilder -> AGFS -> SemanticQueue -> Vector Index
 
 当你为同一个资源 URI 反复调用 `add_resource()` 时，系统会走“增量更新”而不是每次全量重建：
 
-- **触发条件**：请求里显式指定 `target`，且该 `target` 在知识库中已存在。
+- **触发条件**：请求里显式指定 `to`，且该 `to` 在知识库中已存在。
 - **总体思路**：每次导入都会先把新内容解析/构建成一棵“临时资源树”，随后在异步语义处理阶段，将临时树与 `target` 对应的现有资源树进行对比，只对发生变化的部分做重算与同步。
 - **语义阶段的增量**：
   - 对**未变化的文件**：复用已有 L0（摘要）与向量索引记录，跳过向量化。
@@ -126,7 +137,7 @@ openviking add-resource ./documents/guide.md --reason "User guide documentation"
 ```python
 result = client.add_resource(
     "https://example.com/api-docs.md",
-    target="viking://resources/external/",
+    to="viking://resources/external/",
     reason="External API documentation"
 )
 client.wait_processed()
@@ -140,7 +151,7 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -H "X-API-Key: your-key" \
   -d '{
     "path": "https://example.com/api-docs.md",
-    "target": "viking://resources/external/",
+    "to": "viking://resources/external/",
     "reason": "External API documentation",
     "wait": true
   }'

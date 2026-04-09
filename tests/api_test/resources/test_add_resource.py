@@ -1,6 +1,8 @@
 import json
 import os
 import tempfile
+import uuid
+import zipfile
 
 
 class TestAddResource:
@@ -72,3 +74,130 @@ class TestAddResource:
         except Exception as e:
             print(f"Error: {e}")
             raise
+
+    def test_add_resource_to_dir_semantics_rule1_file(self, api_client):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            test_file_path = os.path.join(temp_dir, "a.txt")
+            with open(test_file_path, "w", encoding="utf-8") as f:
+                f.write("rule1")
+
+            to_dir = f"viking://resources/test-add-resource-{uuid.uuid4().hex}/"
+            response = api_client.add_resource(path=test_file_path, to=to_dir, wait=True)
+            assert response.status_code == 200
+            data = response.json()
+            assert data.get("status") == "ok"
+            root_uri = data["result"]["root_uri"]
+            assert root_uri == f"{to_dir}a.txt"
+
+            stat_resp = api_client.fs_stat(root_uri)
+            assert stat_resp.status_code == 200
+            stat = stat_resp.json()
+            assert stat.get("status") == "ok"
+
+    def test_add_resource_to_file_semantics_rule2_file(self, api_client):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            test_file_path = os.path.join(temp_dir, "a.txt")
+            with open(test_file_path, "w", encoding="utf-8") as f:
+                f.write("rule2")
+
+            to_file = f"viking://resources/test-add-resource-{uuid.uuid4().hex}/b.txt"
+            response = api_client.add_resource(path=test_file_path, to=to_file, wait=True)
+            assert response.status_code == 200
+            data = response.json()
+            assert data.get("status") == "ok"
+            root_uri = data["result"]["root_uri"]
+            assert root_uri == to_file
+
+            stat_resp = api_client.fs_stat(root_uri)
+            assert stat_resp.status_code == 200
+            stat = stat_resp.json()
+            assert stat.get("status") == "ok"
+
+    def test_add_resource_to_dir_semantics_rule3_directory(self, api_client):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            myproj = os.path.join(temp_dir, "myproj")
+            os.makedirs(myproj, exist_ok=True)
+            with open(os.path.join(myproj, "README.md"), "w", encoding="utf-8") as f:
+                f.write("# myproj\n")
+
+            to_dir = f"viking://resources/test-add-resource-{uuid.uuid4().hex}/"
+            response = api_client.add_resource(path=myproj, to=to_dir, wait=True)
+            assert response.status_code == 200
+            data = response.json()
+            assert data.get("status") == "ok"
+            root_uri = data["result"]["root_uri"]
+            assert root_uri == f"{to_dir}myproj/"
+
+            tree_resp = api_client.fs_tree(root_uri)
+            assert tree_resp.status_code == 200
+            tree = tree_resp.json()
+            assert tree.get("status") == "ok"
+
+    def test_add_resource_to_no_trailing_slash_rule4_directory(self, api_client):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            myproj = os.path.join(temp_dir, "myproj")
+            os.makedirs(myproj, exist_ok=True)
+            with open(os.path.join(myproj, "README.md"), "w", encoding="utf-8") as f:
+                f.write("# myproj\n")
+
+            to_dir = f"viking://resources/test-add-resource-{uuid.uuid4().hex}"
+            response = api_client.add_resource(path=myproj, to=to_dir, wait=True)
+            assert response.status_code == 200
+            data = response.json()
+            assert data.get("status") == "ok"
+            root_uri = data["result"]["root_uri"]
+            assert root_uri == to_dir
+
+            tree_resp = api_client.fs_tree(root_uri)
+            assert tree_resp.status_code == 200
+            tree = tree_resp.json()
+            assert tree.get("status") == "ok"
+
+    def test_add_resource_zip_then_apply_rules_rule5(self, api_client):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            proj = os.path.join(temp_dir, "myproj")
+            os.makedirs(proj, exist_ok=True)
+            with open(os.path.join(proj, "README.md"), "w", encoding="utf-8") as f:
+                f.write("# zip\n")
+
+            zip_path = os.path.join(temp_dir, "myproj.zip")
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                zf.write(os.path.join(proj, "README.md"), arcname="myproj/README.md")
+
+            to_dir = f"viking://resources/test-add-resource-{uuid.uuid4().hex}/"
+            response = api_client.add_resource(path=zip_path, to=to_dir, wait=True)
+            assert response.status_code == 200
+            data = response.json()
+            assert data.get("status") == "ok"
+            root_uri = data["result"]["root_uri"]
+            assert root_uri == f"{to_dir}myproj/"
+
+            tree_resp = api_client.fs_tree(root_uri)
+            assert tree_resp.status_code == 200
+            tree = tree_resp.json()
+            assert tree.get("status") == "ok"
+
+    def test_add_resource_protect_resources_root_rule6_file(self, api_client):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            test_file_path = os.path.join(temp_dir, "a.txt")
+            with open(test_file_path, "w", encoding="utf-8") as f:
+                f.write("rule6-file")
+
+            response = api_client.add_resource(path=test_file_path, to="viking://resources", wait=True)
+            assert response.status_code == 400
+            data = response.json()
+            assert data.get("status") == "error"
+            assert data.get("error", {}).get("code") == "INVALID_ARGUMENT"
+
+    def test_add_resource_protect_resources_root_rule6_dir(self, api_client):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            myproj = os.path.join(temp_dir, "myproj")
+            os.makedirs(myproj, exist_ok=True)
+            with open(os.path.join(myproj, "README.md"), "w", encoding="utf-8") as f:
+                f.write("# myproj\n")
+
+            response = api_client.add_resource(path=myproj, to="viking://resources", wait=True)
+            assert response.status_code == 400
+            data = response.json()
+            assert data.get("status") == "error"
+            assert data.get("error", {}).get("code") == "INVALID_ARGUMENT"
