@@ -175,6 +175,16 @@ OpenViking service log, default local path:
 cat ~/.openviking/data/log/openviking.log
 ```
 
+### Pipeline Health Check (Optional)
+
+If the checks above all pass and you want to further verify the full Gateway → OpenViking pipeline, run the health check script:
+
+```bash
+python examples/openclaw-plugin/health_check_tools/ov-healthcheck.py
+```
+
+This injects a real conversation through Gateway and verifies from the OpenViking side that the session was captured, committed, archived, and had memories extracted. See [health_check_tools/HEALTHCHECK.md](./health_check_tools/HEALTHCHECK.md) for full details.
+
 ### Start commands
 
 Local mode:
