@@ -8,7 +8,7 @@
 #include <algorithm>
 #include <cmath>
 
-#if defined(OV_SIMD_AVX) || defined(OV_SIMD_AVX512_VNNI) || defined(OV_SIMD_AMX)
+#if defined(OV_SIMD_AVX) || defined(OV_SIMD_AMX)
 #include <immintrin.h>
 #endif
 #if defined(OV_SIMD_AMX)
@@ -111,54 +111,6 @@ static int32_t inner_product_int8_avx(const void* v1, const void* v2,
   }
 
   return sum;
-}
-#endif
-
-#if defined(OV_SIMD_AVX512_VNNI)
-// AVX-512 VNNI kernel: uses vpdpbusd (uint8 × int8 → int32)
-// Processes 64 int8 pairs per iteration via 512-bit VNNI dot-product.
-// Since vpdpbusd treats src1 as unsigned, we XOR with 0x80 to convert
-// signed int8 to unsigned, then correct: result -= 128 * sum(pv2).
-static int32_t inner_product_int8_avx512_vnni(const void* v1, const void* v2,
-                                               const void* params) {
-  const int8_t* pv1 = static_cast<const int8_t*>(v1);
-  const int8_t* pv2 = static_cast<const int8_t*>(v2);
-  size_t dim = *static_cast<const size_t*>(params);
-
-  const __m512i sign_flip = _mm512_set1_epi8(static_cast<char>(0x80));
-  const __m512i ones_u8 = _mm512_set1_epi8(1);
-
-  __m512i acc = _mm512_setzero_si512();
-  __m512i sum_b = _mm512_setzero_si512();
-
-  size_t i = 0;
-  const size_t dim64 = (dim / 64) * 64;
-
-  for (; i < dim64; i += 64) {
-    __m512i a = _mm512_loadu_si512(pv1 + i);
-    __m512i b = _mm512_loadu_si512(pv2 + i);
-
-    // Convert a from signed to unsigned: a_u = a_s ^ 0x80 (== a_s + 128)
-    __m512i a_u = _mm512_xor_si512(a, sign_flip);
-
-    // acc += a_u * b  (unsigned × signed → int32, 4-way within each lane)
-    acc = _mm512_dpbusd_epi32(acc, a_u, b);
-
-    // Track sum(b) for correction: ones_u8 * b sums groups of 4 signed bytes
-    sum_b = _mm512_dpbusd_epi32(sum_b, ones_u8, b);
-  }
-
-  // Horizontal reductions
-  int32_t result = _mm512_reduce_add_epi32(acc);
-  int32_t corr = _mm512_reduce_add_epi32(sum_b);
-  result -= 128 * corr;
-
-  // Process remaining elements
-  for (; i < dim; ++i) {
-    result += static_cast<int32_t>(pv1[i]) * static_cast<int32_t>(pv2[i]);
-  }
-
-  return result;
 }
 #endif
 
@@ -338,8 +290,11 @@ static float inner_product_distance_int8(const void* v1, const void* v2,
   float scale2 = *scale2_ptr;
 
   int32_t ip;
-#if defined(OV_SIMD_AVX512_VNNI)
-  ip = inner_product_int8_avx512_vnni(v1, v2, params);
+#if defined(OV_SIMD_AMX)
+  batch_inner_product_int8_amx(
+      static_cast<const char*>(v1), dim,
+      static_cast<const int8_t*>(v2),
+      &ip, 1, dim);
 #elif defined(OV_SIMD_AVX)
   if (dim >= 32) {
     ip = inner_product_int8_avx(v1, v2, params);
@@ -372,8 +327,11 @@ static float l2_distance_int8(const void* v1, const void* v2,
   float norm_sq2 = meta2[1];
 
   int32_t ip;
-#if defined(OV_SIMD_AVX512_VNNI)
-  ip = inner_product_int8_avx512_vnni(v1, v2, params);
+#if defined(OV_SIMD_AMX)
+  batch_inner_product_int8_amx(
+      static_cast<const char*>(v1), dim,
+      static_cast<const int8_t*>(v2),
+      &ip, 1, dim);
 #elif defined(OV_SIMD_AVX)
   if (dim >= 32) {
     ip = inner_product_int8_avx(v1, v2, params);

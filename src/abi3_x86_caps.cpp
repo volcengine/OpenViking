@@ -123,7 +123,6 @@ std::vector<std::string> get_supported_variants_impl() {
       features.avx512bw && features.avx512vl) {
     variants.emplace_back("x86_avx512");
     if (features.avx512_vnni) {
-      variants.emplace_back("x86_avx512_vnni");
       if (features.amx_tile && features.amx_int8) {
         variants.emplace_back("x86_amx");
       }
