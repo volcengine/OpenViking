@@ -1,4 +1,4 @@
-name: 03. API Integration Tests
+name: 06. API Integration Tests
 
 on:
   workflow_dispatch:
@@ -42,10 +42,11 @@ jobs:
   api-tests:
     name: API Integration Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-14, macos-15-intel, windows-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     
     steps:
       - uses: actions/checkout@v6
@@ -59,19 +60,12 @@ jobs:
 
       - name: Cache Go modules
         uses: actions/cache@v5
+        continue-on-error: true
         with:
           path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          key: ${{ runner.os }}-go-${{ hashFiles('third_party/agfs/**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-
-
-      - name: Cache C++ extensions
-        uses: actions/cache@v5
-        with:
-          path: openviking/pyagfs
-          key: ${{ runner.os }}-cpp-${{ hashFiles('**/CMakeLists.txt', '**/*.cpp', '**/*.h') }}
-          restore-keys: |
-            ${{ runner.os }}-cpp-
 
       - name: Cache Python dependencies (Unix)
         if: runner.os != 'Windows'
@@ -94,7 +88,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.22'
+          go-version: '1.25.1'
 
       - name: Install system dependencies (Ubuntu)
         if: runner.os == 'Linux'
@@ -415,7 +409,8 @@ jobs:
             echo "Running basic tests only (no VLM/Embedding)"
             uv run python -m pytest . -v --html=api-test-report.html --self-contained-html \
               --ignore=retrieval/ --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py \
-              --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py -k "not test_observer"
+              --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py \
+              --ignore=scenarios/ -k "not test_observer"
           fi
         continue-on-error: true
 
@@ -433,7 +428,7 @@ jobs:
             uv run python -m pytest . -v --html=api-test-report.html --self-contained-html --ignore=filesystem/
           } else {
             Write-Host "Running basic tests only (no VLM/Embedding, Windows: skipping filesystem tests)"
-            uv run python -m pytest . -v --html=api-test-report.html --self-contained-html --ignore=retrieval/ --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py --ignore=filesystem/ -k "not test_observer"
+            uv run python -m pytest . -v --html=api-test-report.html --self-contained-html --ignore=retrieval/ --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py --ignore=filesystem/ --ignore=scenarios/ -k "not test_observer"
           }
         continue-on-error: true
 

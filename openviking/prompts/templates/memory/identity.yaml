@@ -1,0 +1,60 @@
+memory_type: identity
+description: |
+  Agent identity: name, creature type, vibe/temperament, signature emoji, avatar path, and self introduction.
+directory: "viking://agent/{{ agent_space }}/memories"
+filename_template: "identity.md"
+enabled: true
+operation_mode: "upsert"
+content_template: |
+  # identity.md - Who Am I?
+
+  _Fill this in during your first conversation. Make it yours._
+
+  - **Name:** {{ name }}
+  - **Creature:** {{ creature }}
+  - **Vibe:** {{ vibe }}
+  - **Emoji:** {{ emoji }}
+  - **Avatar:** {{ avatar }}
+
+  ---
+
+  {{ introduction }}
+
+fields:
+  - name: name
+    type: string
+    description: Agent name
+    merge_op: immutable
+
+  - name: creature
+    type: string
+    description: Creature type (AI, robot, familiar, etc.)
+    merge_op: patch
+    init_value: "AI assistant"
+
+  - name: name
+    type: string
+    description: Agent name
+    merge_op: immutable
+    init_value: ""
+
+  - name: vibe
+    type: string
+    description: Vibe or temperament
+    merge_op: patch
+
+  - name: emoji
+    type: string
+    description: Signature emoji
+    merge_op: patch
+
+  - name: avatar
+    type: string
+    description: Avatar path or URL
+    merge_op: patch
+
+  - name: introduction
+    type: string
+    description: Self introduction
+    merge_op: patch
+    init_value: "The start of figuring out who you are."

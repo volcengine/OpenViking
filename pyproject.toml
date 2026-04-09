@@ -3,6 +3,7 @@ requires = [
     "setuptools>=61.0",
     "setuptools-scm>=8.0",
     "cmake>=3.15",
+    "maturin>=1.0,<2.0",
     "wheel",
 ]
 build-backend = "setuptools.build_meta"
@@ -69,9 +70,16 @@ dependencies = [
     "tree-sitter-go>=0.23.0",
     "tree-sitter-c-sharp>=0.23.0",
     "tree-sitter-php>=0.23.0",
+    "tree-sitter-lua>=0.1.0",
+    # OpenTelemetry
+    "opentelemetry-api>=1.14",
+    "opentelemetry-sdk>=1.14",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.14",
+    "opentelemetry-instrumentation-asyncio>=0.61b0",
     "loguru>=0.7.3",
     "cryptography>=42.0.0",
     "argon2-cffi>=23.0.0",
+    "lark-oapi>=1.5.3",
 ]
 
 [tool.uv.sources]
@@ -200,6 +208,8 @@ openviking = [
     "lib/libagfsbinding.so",
     "lib/libagfsbinding.dylib",
     "lib/libagfsbinding.dll",
+    "lib/ragfs_python*.so",
+    "lib/ragfs_python*.pyd",
     "bin/ov",
     "bin/ov.exe",
     "storage/vectordb/engine/*.abi3.so",

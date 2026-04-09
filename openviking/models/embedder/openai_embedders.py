@@ -85,7 +85,9 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
                        non-symmetric mode with query_param/document_param.
             api_key: API key, if None will read from env vars (OPENVIKING_EMBEDDING_API_KEY or OPENAI_API_KEY)
             api_base: API base URL, optional. Required for third-party OpenAI-compatible APIs.
-            dimension: Dimension (if model supports), optional
+            dimension: Target dimension for output vectors. If specified and the model returns vectors
+                      with a different dimension, the output will be truncated to this dimension.
+                      If None, uses the model's default dimension without truncation.
             query_param: Parameter for query-side embeddings. Supports simple values (e.g., 'query')
                          or key=value format (e.g., 'input_type=query,task=search'). Defaults to None.
                          Setting this (or document_param) activates non-symmetric mode.
@@ -116,29 +118,31 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         self.query_param = query_param
         self.document_param = document_param
         self._provider = provider.lower()
+        self._client_kwargs: Dict[str, Any] = {"api_key": self.api_key or "no-key"}
 
         # Allow missing api_key when api_base is set (e.g. local OpenAI-compatible servers)
         if not self.api_key and not self.api_base:
             raise ValueError("api_key is required")
 
-        client_kwargs: Dict[str, Any] = {"api_key": self.api_key or "no-key"}
         if self._provider == "azure":
             if not self.api_base:
                 raise ValueError("api_base (Azure endpoint) is required for Azure provider")
-            client_kwargs["azure_endpoint"] = self.api_base
-            client_kwargs["api_version"] = self.api_version or DEFAULT_AZURE_API_VERSION
+            self._client_kwargs["azure_endpoint"] = self.api_base
+            self._client_kwargs["api_version"] = self.api_version or DEFAULT_AZURE_API_VERSION
             if extra_headers:
-                client_kwargs["default_headers"] = extra_headers
-            self.client = openai.AzureOpenAI(**client_kwargs)
+                self._client_kwargs["default_headers"] = extra_headers
+            self.client = openai.AzureOpenAI(**self._client_kwargs)
         else:
             if self.api_base:
-                client_kwargs["base_url"] = self.api_base
+                self._client_kwargs["base_url"] = self.api_base
             if extra_headers:
-                client_kwargs["default_headers"] = extra_headers
-            self.client = openai.OpenAI(**client_kwargs)
+                self._client_kwargs["default_headers"] = extra_headers
+            self.client = openai.OpenAI(**self._client_kwargs)
+        self._async_client = None
 
         # Auto-detect dimension
         self._dimension = dimension
+        self._actual_model_dimension = None
         if self._dimension is None:
             self._dimension = self._detect_dimension()
 
@@ -146,10 +150,25 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         """Detect dimension by making an actual API call"""
         try:
             result = self.embed("test")
-            return len(result.dense_vector) if result.dense_vector else 1536
+            detected_dim = len(result.dense_vector) if result.dense_vector else 1536
+            self._actual_model_dimension = detected_dim
+            return detected_dim
         except Exception:
             # Use default value, text-embedding-3-small defaults to 1536
             return 1536
+
+    def _truncate_vector(self, vector: List[float]) -> List[float]:
+        """Truncate vector to target dimension if needed.
+
+        Args:
+            vector: Input vector from API
+
+        Returns:
+            Truncated vector if dimension is set and smaller than input, otherwise original vector
+        """
+        if self.dimension is not None and len(vector) > self.dimension:
+            return vector[: self.dimension]
+        return vector
 
     def _update_telemetry_token_usage(self, response) -> None:
         usage = getattr(response, "usage", None)
@@ -235,6 +254,29 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
 
         return extra_body if extra_body else None
 
+    def _build_kwargs(self, text_input: str | List[str], is_query: bool = False) -> Dict[str, Any]:
+        kwargs: Dict[str, Any] = {"input": text_input, "model": self.model_name}
+        if self.dimension and self._should_send_dimensions():
+            kwargs["dimensions"] = self.dimension
+
+        extra_body = self._build_extra_body(is_query=is_query)
+        if extra_body:
+            kwargs["extra_body"] = extra_body
+        return kwargs
+
+    def _should_send_dimensions(self) -> bool:
+        # Preserve existing behavior for official OpenAI embeddings: only custom
+        # OpenAI-compatible backends and Azure send explicit dimensions.
+        return self._provider != "openai" or bool(self.api_base)
+
+    def _get_async_client(self):
+        if self._async_client is None:
+            if self._provider == "azure":
+                self._async_client = openai.AsyncAzureOpenAI(**self._client_kwargs)
+            else:
+                self._async_client = openai.AsyncOpenAI(**self._client_kwargs)
+        return self._async_client
+
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform dense embedding on text
 
@@ -250,17 +292,12 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         """
 
         def _call() -> EmbedResult:
-            kwargs: Dict[str, Any] = {"input": text, "model": self.model_name}
-            if self.dimension:
-                kwargs["dimensions"] = self.dimension
-
-            extra_body = self._build_extra_body(is_query=is_query)
-            if extra_body:
-                kwargs["extra_body"] = extra_body
-
-            response = self.client.embeddings.create(**kwargs)
+            response = self.client.embeddings.create(**self._build_kwargs(text, is_query=is_query))
             self._update_telemetry_token_usage(response)
             vector = response.data[0].embedding
+
+            # Truncate vector if needed
+            vector = self._truncate_vector(vector)
 
             return EmbedResult(dense_vector=vector)
 
@@ -269,6 +306,25 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
                 _call,
                 logger=logger,
                 operation_name="OpenAI embedding",
+            )
+        except openai.APIError as e:
+            raise RuntimeError(f"OpenAI API error: {e.message}") from e
+        except Exception as e:
+            raise RuntimeError(f"Embedding failed: {str(e)}") from e
+
+    async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+        client = self._get_async_client()
+
+        async def _call() -> EmbedResult:
+            response = await client.embeddings.create(**self._build_kwargs(text, is_query=is_query))
+            self._update_telemetry_token_usage(response)
+            return EmbedResult(dense_vector=self._truncate_vector(response.data[0].embedding))
+
+        try:
+            return await self._run_with_async_retry(
+                _call,
+                logger=logger,
+                operation_name="OpenAI async embedding",
             )
         except openai.APIError as e:
             raise RuntimeError(f"OpenAI API error: {e.message}") from e
@@ -292,24 +348,49 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             return []
 
         def _call() -> List[EmbedResult]:
-            kwargs: Dict[str, Any] = {"input": texts, "model": self.model_name}
-            if self.dimension:
-                kwargs["dimensions"] = self.dimension
-
-            extra_body = self._build_extra_body(is_query=is_query)
-            if extra_body:
-                kwargs["extra_body"] = extra_body
-
-            response = self.client.embeddings.create(**kwargs)
+            response = self.client.embeddings.create(**self._build_kwargs(texts, is_query=is_query))
             self._update_telemetry_token_usage(response)
 
-            return [EmbedResult(dense_vector=item.embedding) for item in response.data]
+            # Truncate vectors if needed
+            return [
+                EmbedResult(dense_vector=self._truncate_vector(item.embedding))
+                for item in response.data
+            ]
 
         try:
             return self._run_with_retry(
                 _call,
                 logger=logger,
                 operation_name="OpenAI batch embedding",
+            )
+        except openai.APIError as e:
+            raise RuntimeError(f"OpenAI API error: {e.message}") from e
+        except Exception as e:
+            raise RuntimeError(f"Batch embedding failed: {str(e)}") from e
+
+    async def embed_batch_async(
+        self, texts: List[str], is_query: bool = False
+    ) -> List[EmbedResult]:
+        if not texts:
+            return []
+
+        client = self._get_async_client()
+
+        async def _call() -> List[EmbedResult]:
+            response = await client.embeddings.create(
+                **self._build_kwargs(texts, is_query=is_query)
+            )
+            self._update_telemetry_token_usage(response)
+            return [
+                EmbedResult(dense_vector=self._truncate_vector(item.embedding))
+                for item in response.data
+            ]
+
+        try:
+            return await self._run_with_async_retry(
+                _call,
+                logger=logger,
+                operation_name="OpenAI async batch embedding",
             )
         except openai.APIError as e:
             raise RuntimeError(f"OpenAI API error: {e.message}") from e

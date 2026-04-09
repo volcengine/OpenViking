@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Dict, List
 from openviking.core.directories import get_context_type_for_uri
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.telemetry import get_current_telemetry
+from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking_cli.utils import get_logger
 
 if TYPE_CHECKING:
@@ -56,7 +57,7 @@ class Summarizer:
         enqueued_count = 0
 
         telemetry = get_current_telemetry()
-        for uri, temp_uri in zip(resource_uris, temp_uris, strict=False):
+        for uri, temp_uri in zip(resource_uris, temp_uris, strict=True):
             # Determine context_type based on URI
             context_type = get_context_type_for_uri(uri)
 
@@ -68,12 +69,14 @@ class Summarizer:
                 agent_id=ctx.user.agent_id,
                 role=ctx.role.value,
                 skip_vectorization=skip_vectorization,
-                telemetry_id=telemetry.telemetry_id if telemetry.enabled else "",
+                telemetry_id=telemetry.telemetry_id,
                 target_uri=uri if uri != temp_uri else None,
                 lifecycle_lock_handle_id=lifecycle_lock_handle_id,
                 is_code_repo=kwargs.get("is_code_repo", False),
             )
             await semantic_queue.enqueue(msg)
+            if msg.telemetry_id:
+                get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)
             enqueued_count += 1
             logger.info(
                 f"Enqueued semantic generation for: {uri} (skip_vectorization={skip_vectorization})"

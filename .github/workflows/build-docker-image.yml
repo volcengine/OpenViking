@@ -8,6 +8,7 @@ on:
         required: true
         type: string
   push:
+    branches: [ main ]
     tags: [ "v*.*.*" ]
 
 env:
@@ -52,41 +53,79 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Extract metadata (tags, labels) for Docker
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image }}
+          images: |
+            ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image }}
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/openviking
           tags: |
             type=raw,value=${{ github.event.inputs.version }},enable=${{ github.event_name == 'workflow_dispatch' }}
             type=ref,event=tag,enable=${{ github.ref_type == 'tag' }}
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Build and push Docker image
-        id: push
+      - name: Build and push Docker image to GHCR
+        id: push-ghcr
         uses: docker/build-push-action@v7
         with:
           context: .
           platforms: ${{ matrix.platform }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          outputs: |
+            type=image,name=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image }},push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             # fallback to 0.0.0 if no version is provided
             OPENVIKING_VERSION=${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.version) || (github.ref_type == 'tag' && github.ref_name) || '0.0.0' }}
 
-      - name: Export image digest
-        run: |
-          mkdir -p /tmp/digests
-          digest="${{ steps.push.outputs.digest }}"
-          touch "/tmp/digests/${digest#sha256:}"
+      - name: Build and push Docker image to Docker Hub
+        id: push-dockerhub
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          outputs: |
+            type=image,name=docker.io/${{ secrets.DOCKERHUB_USERNAME }}/openviking,push-by-digest=true,name-canonical=true,push=true
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            # fallback to 0.0.0 if no version is provided
+            OPENVIKING_VERSION=${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.version) || (github.ref_type == 'tag' && github.ref_name) || '0.0.0' }}
 
-      - name: Upload image digest
+      - name: Export GHCR image digest
+        run: |
+          mkdir -p /tmp/digests-ghcr
+          ghcr_digest="${{ steps.push-ghcr.outputs.digest }}"
+          touch "/tmp/digests-ghcr/${ghcr_digest#sha256:}"
+
+      - name: Upload GHCR image digest
         uses: actions/upload-artifact@v7
         with:
-          name: docker-digests-${{ matrix.arch }}
-          path: /tmp/digests/*
+          name: docker-digests-ghcr-${{ matrix.arch }}
+          path: /tmp/digests-ghcr/*
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Export Docker Hub image digest
+        run: |
+          mkdir -p /tmp/digests-dockerhub
+          dockerhub_digest="${{ steps.push-dockerhub.outputs.digest }}"
+          touch "/tmp/digests-dockerhub/${dockerhub_digest#sha256:}"
+
+      - name: Upload Docker Hub image digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: docker-digests-dockerhub-${{ matrix.arch }}
+          path: /tmp/digests-dockerhub/*
           if-no-files-found: error
           retention-days: 1
 
@@ -117,43 +156,81 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Extract metadata (tags, labels) for Docker
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image }}
+          images: |
+            ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image }}
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/openviking
           tags: |
             type=raw,value=${{ github.event.inputs.version }},enable=${{ github.event_name == 'workflow_dispatch' }}
             type=ref,event=tag,enable=${{ github.ref_type == 'tag' }}
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Download image digests
+      - name: Download GHCR image digests
         uses: actions/download-artifact@v8
         with:
-          pattern: docker-digests-*
-          path: /tmp/digests
+          pattern: docker-digests-ghcr-*
+          path: /tmp/digests-ghcr
+          merge-multiple: true
+
+      - name: Download Docker Hub image digests
+        uses: actions/download-artifact@v8
+        with:
+          pattern: docker-digests-dockerhub-*
+          path: /tmp/digests-dockerhub
           merge-multiple: true
 
       - name: Create multi-arch manifests
         env:
           SOURCE_TAGS: ${{ steps.meta.outputs.tags }}
         run: |
-          image_refs=()
-          for digest_file in /tmp/digests/*; do
+          # Collect image references for both registries
+          ghcr_image_refs=()
+          dockerhub_image_refs=()
+          for digest_file in /tmp/digests-ghcr/*; do
             [ -e "$digest_file" ] || continue
-            image_refs+=("${{ env.REGISTRY }}/${{ steps.image-name.outputs.image }}@sha256:$(basename "$digest_file")")
+            digest="sha256:$(basename "$digest_file")"
+            ghcr_image_refs+=("${{ env.REGISTRY }}/${{ steps.image-name.outputs.image }}@${digest}")
+          done
+          for digest_file in /tmp/digests-dockerhub/*; do
+            [ -e "$digest_file" ] || continue
+            digest="sha256:$(basename "$digest_file")"
+            dockerhub_image_refs+=("docker.io/${{ secrets.DOCKERHUB_USERNAME }}/openviking@${digest}")
           done
 
-          [ ${#image_refs[@]} -gt 0 ] || {
-            echo "No image digests found" >&2
+          [ ${#ghcr_image_refs[@]} -gt 0 ] || {
+            echo "No GHCR image digests found" >&2
+            exit 1
+          }
+          [ ${#dockerhub_image_refs[@]} -gt 0 ] || {
+            echo "No Docker Hub image digests found" >&2
             exit 1
           }
 
+          # Create manifests for all tags
           while IFS= read -r tag; do
             [ -n "$tag" ] || continue
-            docker buildx imagetools create \
-              --tag "$tag" \
-              "${image_refs[@]}"
+
+            # Determine which registry this tag belongs to
+            if [[ "$tag" == ghcr.io/* ]]; then
+              docker buildx imagetools create \
+                --tag "$tag" \
+                "${ghcr_image_refs[@]}"
+            elif [[ "$tag" == docker.io/* ]]; then
+              docker buildx imagetools create \
+                --tag "$tag" \
+                "${dockerhub_image_refs[@]}"
+            fi
           done <<< "$SOURCE_TAGS"

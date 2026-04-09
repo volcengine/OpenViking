@@ -10,16 +10,19 @@ from typing import Iterator
 
 from .operation import OperationTelemetry
 
-_NOOP_TELEMETRY = OperationTelemetry(operation="noop", enabled=False)
-_CURRENT_TELEMETRY: contextvars.ContextVar[OperationTelemetry] = contextvars.ContextVar(
+_CURRENT_TELEMETRY: contextvars.ContextVar[OperationTelemetry | None] = contextvars.ContextVar(
     "openviking_operation_telemetry",
-    default=_NOOP_TELEMETRY,
+    default=None,
 )
 
 
 def get_current_telemetry() -> OperationTelemetry:
-    """Get current operation telemetry or disabled no-op collector."""
-    return _CURRENT_TELEMETRY.get()
+    """Get current operation telemetry or create a request-local disabled collector."""
+    telemetry = _CURRENT_TELEMETRY.get()
+    if telemetry is None:
+        telemetry = OperationTelemetry(operation="noop", enabled=False)
+        _CURRENT_TELEMETRY.set(telemetry)
+    return telemetry
 
 
 @contextmanager

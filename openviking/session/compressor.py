@@ -12,6 +12,7 @@ from typing import Dict, List, Optional
 
 from openviking.core.context import Context, Vectorize
 from openviking.message import Message
+from openviking.models.embedder.base import embed_compat
 from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import get_viking_fs
@@ -482,8 +483,9 @@ class SessionCompressor:
                                             merged_text = (
                                                 f"{action.memory.abstract} {candidate.content}"
                                             )
-                                            merged_embed = self.deduplicator.embedder.embed(
-                                                merged_text
+                                            merged_embed = await embed_compat(
+                                                self.deduplicator.embedder,
+                                                merged_text,
                                             )
                                             batch_memories.append(
                                                 (merged_embed.dense_vector, action.memory)

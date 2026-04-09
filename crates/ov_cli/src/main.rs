@@ -421,6 +421,9 @@ enum Commands {
             default_value = "256"
         )]
         node_limit: i32,
+        /// Maximum depth level to traverse (default: 10)
+        #[arg(short = 'L', long = "level-limit", default_value = "10")]
+        level_limit: i32,
     },
     /// Run file glob pattern search
     Glob {
@@ -808,7 +811,8 @@ async fn main() {
             pattern,
             ignore_case,
             node_limit,
-        } => handle_grep(uri, exclude_uri, pattern, ignore_case, node_limit, ctx).await,
+            level_limit,
+        } => handle_grep(uri, exclude_uri, pattern, ignore_case, node_limit, level_limit, ctx).await,
 
         Commands::Glob {
             pattern,
@@ -1433,9 +1437,24 @@ async fn handle_grep(
     pattern: String,
     ignore_case: bool,
     node_limit: i32,
+    level_limit: i32,
     ctx: CliContext,
 ) -> Result<()> {
-    let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
+    // Prevent grep from root directory to avoid excessive server load and timeouts
+    if uri == "viking://" || uri == "viking:///" {
+        eprintln!(
+            "Error: Cannot grep from root directory 'viking://'.\n\
+             Grep from root would search across all scopes (resources, user, agent, session, queue, temp),\n\
+             which may cause server timeout or excessive load.\n\
+             Please specify a more specific scope, e.g.:\n\
+               ov grep --uri=viking://resources '{}'\n\
+               ov grep --uri=viking://user '{}'",
+            pattern, pattern
+        );
+        std::process::exit(1);
+    }
+
+    let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit), format!("-L {}", level_limit)];
     if let Some(excluded) = &exclude_uri {
         params.push(format!("-x {}", excluded));
     }
@@ -1452,6 +1471,7 @@ async fn handle_grep(
         &pattern,
         ignore_case,
         node_limit,
+        level_limit,
         ctx.output_format,
         ctx.compact,
     )

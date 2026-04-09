@@ -39,27 +39,47 @@ def _deserialize_datetime(metadata: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
-def serialize_with_metadata(content: str, metadata: Dict[str, Any]) -> str:
+def serialize_with_metadata(
+    metadata: Dict[str, Any],
+    content_template: str = None,
+    extract_context: Any = None,
+) -> str:
     """
     Serialize content and metadata into a single string.
 
     The metadata is stored in an HTML comment at the end of the content.
 
     Args:
-        content: The main memory content (Markdown)
-        metadata: Dictionary containing metadata fields:
-            - memory_type: Type of memory (NOT included in output)
-            - fields: Structured fields (for template mode)
-            - name: Memory name
-            - tags: List of tags
-            - created_at: Creation datetime
-            - updated_at: Update datetime
-            - abstract: L0 abstract
-            - overview: L1 overview
+        metadata: Dictionary containing all fields including "content".
+                  content is extracted and used as the main body.
+        content_template: Optional Jinja2 template to render content.
+        extract_context: Optional context for template rendering.
 
     Returns:
         Combined string with content followed by metadata in HTML comment
     """
+    # Extract content from metadata (default to empty string)
+    content = metadata.pop("content", "") or ""
+
+    # Render template if provided
+    if content_template:
+        try:
+            import jinja2
+            from jinja2 import Environment
+
+            env = Environment(autoescape=False, undefined=jinja2.DebugUndefined)
+            template_vars = metadata.copy()
+            template_vars["extract_context"] = extract_context
+
+            jinja_template = env.from_string(content_template)
+            content = jinja_template.render(**template_vars).strip()
+        except Exception:
+            # If template rendering fails, use content as-is
+            pass
+
+    # Restore metadata (we popped content earlier)
+    # Note: metadata dict is modified in place, caller should be aware
+
     # Clean metadata - remove None values and memory_type
     clean_metadata = {k: v for k, v in metadata.items() if v is not None and k != "memory_type"}
 

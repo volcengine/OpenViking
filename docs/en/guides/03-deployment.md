@@ -194,6 +194,7 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 ### Docker
 
 OpenViking provides pre-built Docker images published to GitHub Container Registry:
+> ~/.openviking/ov.conf need to be configured correctly first.
 
 ```bash
 docker run -d \
@@ -203,7 +204,7 @@ docker run -d \
   -v ~/.openviking/ov.conf:/app/ov.conf \
   -v /var/lib/openviking/data:/app/data \
   --restart unless-stopped \
-  ghcr.io/volcengine/openviking:main
+  ghcr.io/volcengine/openviking:latest
 ```
 
 By default, the Docker image starts:
@@ -221,7 +222,7 @@ docker run -d \
   -v ~/.openviking/ov.conf:/app/ov.conf \
   -v /var/lib/openviking/data:/app/data \
   --restart unless-stopped \
-  ghcr.io/volcengine/openviking:main \
+  ghcr.io/volcengine/openviking:latest \
   --without-bot
 ```
 

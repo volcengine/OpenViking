@@ -29,6 +29,7 @@ _EXT_MAP: Dict[str, str] = {
     ".go": "go",
     ".cs": "csharp",
     ".php": "php",
+    ".lua": "lua",
 }
 
 # Language key → (module path, class name, constructor kwargs)
@@ -50,6 +51,7 @@ _EXTRACTOR_REGISTRY: Dict[str, tuple] = {
     "go": ("openviking.parse.parsers.code.ast.languages.go", "GoExtractor", {}),
     "csharp": ("openviking.parse.parsers.code.ast.languages.csharp", "CSharpExtractor", {}),
     "php": ("openviking.parse.parsers.code.ast.languages.php", "PhpExtractor", {}),
+    "lua": ("openviking.parse.parsers.code.ast.languages.lua", "LuaExtractor", {}),
 }
 
 

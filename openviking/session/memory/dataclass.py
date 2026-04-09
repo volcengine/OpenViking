@@ -41,6 +41,7 @@ class MemoryField(BaseModel):
     field_type: FieldType = Field(..., description="Field type")
     description: str = Field("", description="Field description")
     merge_op: MergeOp = Field(MergeOp.PATCH, description="Merge strategy")
+    init_value: Optional[str] = Field(None, description="Initial value for this field")
 
 
 class MemoryTypeSchema(BaseModel):

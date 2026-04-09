@@ -21,6 +21,7 @@ from .consts import (
 from .custom_parser_config import CustomParserConfig
 from .embedding_config import EmbeddingConfig
 from .encryption_config import EncryptionConfig
+from .telemetry_config import TelemetryConfig
 from .log_config import LogConfig
 from .memory_config import MemoryConfig
 from .parser_config import (
@@ -152,6 +153,9 @@ class OpenVikingConfig(BaseModel):
         default_factory=lambda: MemoryConfig(), description="Memory configuration"
     )
 
+    telemetry: "TelemetryConfig" = Field(
+        default_factory=lambda: TelemetryConfig(), description="Telemetry configuration"
+    )
     prompts: PromptsConfig = Field(
         default_factory=lambda: PromptsConfig(),
         description="Prompt template configuration",

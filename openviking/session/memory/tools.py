@@ -8,11 +8,17 @@ Reference: bot/vikingbot/agent/tools/base.py design pattern
 
 import json
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from openviking.session.memory.utils import parse_memory_file_with_fields
+from openviking.session.memory.utils.content import truncate_content
 from openviking.storage.viking_fs import VikingFS
+from openviking.telemetry import tracer
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
+
+if TYPE_CHECKING:
+    from openviking.server.identity import ToolContext
 
 logger = get_logger(__name__)
 
@@ -178,8 +184,8 @@ class MemoryReadTool(MemoryTool):
         ctx: Optional["ToolContext"],
         **kwargs: Any,
     ) -> Any:
+        uri = kwargs.get("uri", "")
         try:
-            uri = kwargs.get("uri", "")
             content = await viking_fs.read_file(
                 uri,
                 ctx=ctx.request_ctx,
@@ -187,8 +193,11 @@ class MemoryReadTool(MemoryTool):
             # Parse MEMORY_FIELDS from comment and return dict directly
             parsed = parse_memory_file_with_fields(content)
             return parsed
+        except NotFoundError as e:
+            tracer.info(f"read not found: {uri}")
+            return {"error": str(e)}
         except Exception as e:
-            logger.error(f"Failed to execute read: {e}")
+            tracer.error(f"Failed to execute read: {e}")
             return {"error": str(e)}
 
 
@@ -243,7 +252,7 @@ class MemorySearchTool(MemoryTool):
             )
             return optimize_search_result(search_result.to_dict(), limit=limit)
         except Exception as e:
-            logger.error(f"Failed to execute search: {e}")
+            tracer.error(f"Failed to execute search: {e}")
             return {"error": str(e)}
 
 
@@ -312,7 +321,7 @@ class MemoryLsTool(MemoryTool):
                 return "Directory is empty. You can write new files to create memory content."
             return "\n".join(result_lines)
         except Exception as e:
-            logger.error(f"Failed to execute ls: {e}")
+            tracer.info(f"Failed to execute ls: {e}")
             return {"error": str(e)}
 
 
@@ -323,7 +332,6 @@ MEMORY_TOOLS_REGISTRY: Dict[str, MemoryTool] = {}
 def register_tool(tool: MemoryTool) -> None:
     """Register a memory tool."""
     MEMORY_TOOLS_REGISTRY[tool.name] = tool
-    logger.debug(f"Registered memory tool: {tool.name}")
 
 
 def get_tool(name: str) -> Optional[MemoryTool]:

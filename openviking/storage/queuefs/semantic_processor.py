@@ -28,6 +28,7 @@ from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecuto
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import bind_telemetry, resolve_telemetry
+from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.circuit_breaker import (
     CircuitBreaker,
     CircuitBreakerOpen,
@@ -302,6 +303,7 @@ class SemanticProcessor(DequeueHandlerBase):
                         incremental_update=is_incremental,
                         target_uri=msg.target_uri,
                         semantic_msg_id=msg.id,
+                        telemetry_id=msg.telemetry_id,
                         recursive=msg.recursive,
                         lifecycle_lock_handle_id=msg.lifecycle_lock_handle_id,
                         is_code_repo=msg.is_code_repo,
@@ -332,6 +334,9 @@ class SemanticProcessor(DequeueHandlerBase):
                 self._circuit_breaker.record_failure(e)
                 if msg is not None:
                     self._merge_request_stats(msg.telemetry_id, error_count=1)
+                    get_request_wait_tracker().mark_semantic_failed(
+                        msg.telemetry_id, msg.id, str(e)
+                    )
                 self.report_error(str(e), data)
             else:
                 # Transient or unknown — re-enqueue for retry
@@ -346,6 +351,9 @@ class SemanticProcessor(DequeueHandlerBase):
                     except Exception as requeue_err:
                         logger.error(f"Failed to re-enqueue semantic message: {requeue_err}")
                         self._merge_request_stats(msg.telemetry_id, error_count=1)
+                        get_request_wait_tracker().mark_semantic_failed(
+                            msg.telemetry_id, msg.id, str(e)
+                        )
                         self.report_error(str(e), data)
                         return None
                     self.report_success()
@@ -411,11 +419,21 @@ class SemanticProcessor(DequeueHandlerBase):
         dir_uri = msg.uri
         ctx = self._current_ctx
         llm_sem = asyncio.Semaphore(self.max_concurrent_llm)
+        request_wait_tracker = get_request_wait_tracker()
+
+        def _mark_done() -> None:
+            if msg.telemetry_id and msg.id:
+                request_wait_tracker.mark_semantic_done(msg.telemetry_id, msg.id)
+
+        def _mark_failed(message: str) -> None:
+            if msg.telemetry_id and msg.id:
+                request_wait_tracker.mark_semantic_failed(msg.telemetry_id, msg.id, message)
 
         try:
             entries = await viking_fs.ls(dir_uri, ctx=ctx)
         except Exception as e:
             logger.warning(f"Failed to list memory directory {dir_uri}: {e}")
+            _mark_failed(str(e))
             if msg.lifecycle_lock_handle_id:
                 await self._release_memory_lifecycle_lock(msg.lifecycle_lock_handle_id)
             return
@@ -431,6 +449,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
         if not file_paths:
             logger.info(f"No memory files found in {dir_uri}")
+            _mark_done()
             if msg.lifecycle_lock_handle_id:
                 await self._release_memory_lifecycle_lock(msg.lifecycle_lock_handle_id)
             return
@@ -475,7 +494,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
         if pending_indices:
             logger.info(
-                f"Generating summaries for {len(pending_indices)} changed files concurrently "
+                f"Generating summaries for {len(pending_indices)} changed files "
                 f"(reused {len(file_paths) - len(pending_indices)} cached)"
             )
 
@@ -491,7 +510,17 @@ class SemanticProcessor(DequeueHandlerBase):
                     logger.warning(f"Failed to generate summary for {file_path}: {e}")
                     file_summaries[idx] = {"name": file_name, "summary": ""}
 
-            await asyncio.gather(*[_gen(i, fp) for i, fp in pending_indices])
+            # Fix for Issue #1245: Batch processing to prevent coroutine scheduling storms
+            # Use a reasonable batch size (min of semaphore and 10) to keep event loop responsive
+            batch_size = max(1, min(self.max_concurrent_llm, 10))
+            for batch_start in range(0, len(pending_indices), batch_size):
+                batch = pending_indices[batch_start : batch_start + batch_size]
+                logger.info(
+                    f"[MemorySemantic] Processing batch {batch_start // batch_size + 1}/"
+                    f"{(len(pending_indices) + batch_size - 1) // batch_size} "
+                    f"({len(batch)} files)"
+                )
+                await asyncio.gather(*[_gen(i, fp) for i, fp in batch])
 
         file_summaries = [s for s in file_summaries if s is not None]
 
@@ -505,11 +534,25 @@ class SemanticProcessor(DequeueHandlerBase):
             logger.info(f"Generated abstract.md and overview.md for {dir_uri}")
         except Exception as e:
             logger.error(f"Failed to write abstract/overview for {dir_uri}: {e}")
+            _mark_failed(str(e))
             if msg.lifecycle_lock_handle_id:
                 await self._release_memory_lifecycle_lock(msg.lifecycle_lock_handle_id)
             return
 
         try:
+            if msg.telemetry_id and msg.id:
+                from openviking.storage.queuefs.embedding_tracker import EmbeddingTaskTracker
+
+                async def _on_complete() -> None:
+                    get_request_wait_tracker().mark_semantic_done(msg.telemetry_id, msg.id)
+
+                tracker = EmbeddingTaskTracker.get_instance()
+                await tracker.register(
+                    semantic_msg_id=msg.id,
+                    total_count=2,
+                    on_complete=_on_complete,
+                    metadata={"uri": dir_uri},
+                )
             await self._vectorize_directory(
                 uri=dir_uri,
                 context_type="memory",

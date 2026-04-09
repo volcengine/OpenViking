@@ -105,19 +105,19 @@ class UnifiedResourceProcessor:
                     "FeishuParser not available. "
                     "Install lark-oapi: pip install 'openviking[bot-feishu]'"
                 )
-            return await parser.parse(url, instruction=instruction)
+            return await parser.parse(url, instruction=instruction, **kwargs)
 
         # Route git protocols and repo URLs to CodeRepositoryParser
         if url.startswith(("git@", "git://", "ssh://")) or is_git_repo_url(url):
             from openviking.parse.parsers.code.code import CodeRepositoryParser
 
             parser = CodeRepositoryParser()
-            return await parser.parse(url, instruction=instruction)
+            return await parser.parse(url, instruction=instruction, **kwargs)
 
         from openviking.parse.parsers.html import HTMLParser
 
         parser = HTMLParser()
-        return await parser.parse(url, instruction=instruction)
+        return await parser.parse(url, instruction=instruction, **kwargs)
 
     @staticmethod
     def _is_feishu_url(url: str) -> bool:

@@ -55,17 +55,9 @@ fi
 mkdir -p "$TEST_DATA_DIR"
 echo "  ✓ Created clean $TEST_DATA_DIR"
 
-# Step 1: Kill existing vikingbot processes
+# Step 1: Clean up test data directory (skip vikingbot kill)
 echo ""
-echo "Step 1: Stopping existing vikingbot processes..."
-if pgrep -f "vikingbot.*openapi" > /dev/null 2>&1 || pgrep -f "vikingbot.*gateway" > /dev/null 2>&1; then
-    pkill -f "vikingbot.*openapi" 2>/dev/null || true
-    pkill -f "vikingbot.*gateway" 2>/dev/null || true
-    sleep 2
-    echo "  ✓ Stopped existing vikingbot processes"
-else
-    echo "  ✓ No existing vikingbot processes found"
-fi
+echo "Step 1: Skipping vikingbot kill (will only kill by port)..."
 
 # Step 2: Kill existing openviking-server on specific port
 echo ""
@@ -73,8 +65,6 @@ echo "Step 2: Stopping openviking-server on port $PORT..."
 PID=$(lsof -ti :$PORT 2>/dev/null || true)
 if [ -n "$PID" ]; then
     echo "  Found PID: $PID"
-    pkill -f "vikingbot.*openapi" 2>/dev/null || true
-    pkill -f "vikingbot.*gateway" 2>/dev/null || true
     kill $PID 2>/dev/null || true
     sleep 2
     # Force kill if still running
@@ -124,10 +114,7 @@ echo ""
 export OPENVIKING_CONFIG_FILE="$TEST_CONFIG"
 
 # Start server
-openviking-server \
-    --with-bot \
-    --port "$PORT" \
-    --bot-url "$BOT_URL"
+openviking-server --port "$PORT" 
 
 SERVER_PID=$!
 echo "  Server PID: $SERVER_PID"

@@ -8,8 +8,9 @@ description: |
   - Use a third-person perspective.
   - If possible, combine the user's current behavior and reactions to speculate on the user's possible thoughts or actions.
   - Describe the complete content of an event within a single event as much as possible; do not split one event into multiple parts.
+  - Record content that mentions time.
 directory: "viking://user/{{ user_space }}/memories/events"
-filename_template: "{{ extract_context.get_first_message_time_from_ranges(ranges) }}_{{ event_name }}.md"
+filename_template: "{{ extract_context.get_year(ranges) }}/{{ extract_context.get_month(ranges) }}/{{ extract_context.get_day(ranges) }}/{{ event_name }}.md"
 enabled: true
 # 操作模式：add_only 表示只新增记忆，不需要查看之前的记忆列表
 # upsert 表示新增或更新（默认行为）
@@ -40,5 +41,5 @@ fields:
     type: string
     description: |
       Conversation message index ranges to extract, format: "start-end,start-end,..."
-      Example: "0-10,50-60" means extract messages 0-10 and 50-60.
+      Example: "0-3,40-45" means extract messages 0-3 and 40-45.
     merge_op: immutable

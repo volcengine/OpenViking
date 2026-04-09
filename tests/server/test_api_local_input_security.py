@@ -4,9 +4,16 @@
 """Security tests for HTTP server local input handling."""
 
 import io
+import threading
 import zipfile
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import httpx
+import pytest
+
+from openviking.parse.parsers.html import HTMLParser, URLTypeDetector
+from openviking.utils.network_guard import ensure_public_remote_target
+from openviking_cli.exceptions import PermissionDeniedError
 
 
 async def test_add_skill_accepts_temp_uploaded_file(
@@ -78,6 +85,40 @@ def _build_ovpack_bytes() -> bytes:
         zf.writestr("pkg/_._meta.json", '{"uri": "viking://resources/pkg"}')
         zf.writestr("pkg/content.md", "# Demo\n")
     return buffer.getvalue()
+
+
+@pytest.fixture
+def loopback_http_url():
+    body = b"<html><body>loopback secret</body></html>"
+
+    class Handler(BaseHTTPRequestHandler):
+        def _write_headers(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+
+        def do_HEAD(self):
+            self._write_headers()
+
+        def do_GET(self):
+            self._write_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format, *args):
+            return
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        host, port = server.server_address
+        yield f"http://{host}:{port}/"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
 
 
 async def test_import_ovpack_accepts_temp_uploaded_file(
@@ -152,3 +193,47 @@ async def test_add_resource_rejects_legacy_temp_path_field(client: httpx.AsyncCl
         json={"temp_path": "upload_resource.md", "reason": "legacy field"},
     )
     assert resp.status_code == 422
+
+
+async def test_add_resource_rejects_loopback_remote_url(client: httpx.AsyncClient):
+    resp = await client.post(
+        "/api/v1/resources",
+        json={"path": "http://127.0.0.1:8765/", "reason": "ssrf probe"},
+    )
+    assert resp.status_code == 403
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "PERMISSION_DENIED"
+    assert "public remote resource targets" in body["error"]["message"]
+
+
+async def test_add_resource_rejects_private_git_ssh_url(client: httpx.AsyncClient):
+    resp = await client.post(
+        "/api/v1/resources",
+        json={"path": "git@127.0.0.1:org/repo.git", "reason": "internal git"},
+    )
+    assert resp.status_code == 403
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "PERMISSION_DENIED"
+
+
+async def test_url_detector_request_validator_blocks_loopback_head(loopback_http_url: str):
+    detector = URLTypeDetector()
+
+    with pytest.raises(PermissionDeniedError):
+        await detector.detect(
+            loopback_http_url,
+            timeout=2.0,
+            request_validator=ensure_public_remote_target,
+        )
+
+
+async def test_html_parser_request_validator_blocks_loopback_fetch(loopback_http_url: str):
+    parser = HTMLParser(timeout=2.0)
+
+    with pytest.raises(PermissionDeniedError):
+        await parser._fetch_html(
+            loopback_http_url,
+            request_validator=ensure_public_remote_target,
+        )

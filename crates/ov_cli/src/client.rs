@@ -65,7 +65,10 @@ impl HttpClient {
             let path = entry.path();
             if path.is_file() {
                 let name = path.strip_prefix(dir_path).unwrap_or(path);
-                zip.start_file(name.to_string_lossy(), options)?;
+                let name_str = name.to_str().ok_or_else(|| {
+                    Error::InvalidPath(format!("Non-UTF-8 path: {}", name.to_string_lossy()))
+                })?;
+                zip.start_file(name_str, options)?;
                 let mut file = File::open(path)?;
                 std::io::copy(&mut file, &mut zip)?;
             }
@@ -518,6 +521,7 @@ impl HttpClient {
         pattern: &str,
         ignore_case: bool,
         node_limit: i32,
+        level_limit: i32,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "uri": uri,
@@ -525,6 +529,7 @@ impl HttpClient {
             "pattern": pattern,
             "case_insensitive": ignore_case,
             "node_limit": node_limit,
+            "level_limit": level_limit,
         });
         self.post("/api/v1/search/grep", &body).await
     }
@@ -727,12 +732,73 @@ impl HttpClient {
 
     // ============ Pack Methods ============
 
-    pub async fn export_ovpack(&self, uri: &str, to: &str) -> Result<serde_json::Value> {
+    pub async fn export_ovpack(&self, uri: &str, to: &str) -> Result<String> {
         let body = serde_json::json!({
             "uri": uri,
-            "to": to,
         });
-        self.post("/api/v1/pack/export", &body).await
+
+        let url = format!("{}/api/v1/pack/export", self.base_url);
+        let response = self
+            .http
+            .post(&url)
+            .headers(self.build_headers())
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            // Try to parse error message as JSON
+            let json_result: Result<serde_json::Value> = response
+                .json()
+                .await
+                .map_err(|e| Error::Network(format!("Failed to parse error response: {}", e)));
+
+            let error_msg = match json_result {
+                Ok(json) => json
+                    .get("error")
+                    .and_then(|e| e.get("message"))
+                    .and_then(|m| m.as_str())
+                    .map(|s| s.to_string())
+                    .or_else(|| {
+                        json.get("detail")
+                            .and_then(|d| d.as_str())
+                            .map(|s| s.to_string())
+                    })
+                    .unwrap_or_else(|| format!("HTTP error {}", status)),
+                Err(_) => format!("HTTP error {}", status),
+            };
+
+            return Err(Error::Api(error_msg));
+        }
+
+        // Download the file content
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| Error::Network(format!("Failed to read response bytes: {}", e)))?;
+
+        // Determine target path
+        let to_path = Path::new(to);
+        let final_path = if to_path.is_dir() {
+            let base_name = uri.trim_end_matches('/').split('/').last().unwrap_or("export");
+            to_path.join(format!("{}.ovpack", base_name))
+        } else if !to.ends_with(".ovpack") {
+            Path::new(&format!("{}.ovpack", to)).to_path_buf()
+        } else {
+            to_path.to_path_buf()
+        };
+
+        // Ensure parent directory exists
+        if let Some(parent) = final_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        // Write file
+        std::fs::write(&final_path, bytes)?;
+
+        Ok(final_path.to_string_lossy().to_string())
     }
 
     pub async fn import_ovpack(

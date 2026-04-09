@@ -50,7 +50,6 @@ async def health_check(request: Request):
 
     try:
         async with httpx.AsyncClient() as client:
-            print(f"url={f'{bot_url}/bot/v1/health'}")
             # Forward to Vikingbot OpenAPIChannel health endpoint
             response = await client.get(
                 f"{bot_url}/bot/v1/health",

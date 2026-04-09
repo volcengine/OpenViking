@@ -30,6 +30,7 @@ class OpenVikingAPIClient:
         self.max_retries = 3
         self.retry_delay = 0.5
         self.last_request_info = None
+        self.last_response = None
 
     def _filter_sensitive_headers(self, headers: Dict[str, str]) -> Dict[str, str]:
         """过滤敏感头信息"""
@@ -70,6 +71,7 @@ class OpenVikingAPIClient:
         for attempt in range(self.max_retries):
             try:
                 response = self.session.request(method, url, **kwargs)
+                self.last_response = response
                 return response
             except (
                 requests.exceptions.ConnectionError,
@@ -299,6 +301,12 @@ class OpenVikingAPIClient:
         url = self._build_url(self.server_url, endpoint)
         return self._request_with_retry("GET", url)
 
+    def get_session_context(self, session_id: str, token_budget: int = 128000) -> requests.Response:
+        endpoint = f"/api/v1/sessions/{session_id}/context"
+        params = {"token_budget": token_budget}
+        url = self._build_url(self.server_url, endpoint, params)
+        return self._request_with_retry("GET", url)
+
     def delete_session(self, session_id: str) -> requests.Response:
         endpoint = f"/api/v1/sessions/{session_id}"
         url = self._build_url(self.server_url, endpoint)
@@ -377,9 +385,29 @@ class OpenVikingAPIClient:
         return self.session.get(url)
 
     def export_ovpack(self, uri: str, to: str) -> requests.Response:
+        """Export ovpack and save to local file path.
+
+        Args:
+            uri: Viking URI to export
+            to: Local file path where to save the .ovpack file
+
+        Returns:
+            Response object with the downloaded file saved to 'to' path
+        """
         endpoint = "/api/v1/pack/export"
         url = self._build_url(self.server_url, endpoint)
-        return self.session.post(url, json={"uri": uri, "to": to})
+
+        # Request export (server streams the file)
+        response = self._request_with_retry("POST", url, json={"uri": uri})
+
+        # Save streamed content to local file
+        if response.status_code == 200:
+            to_path = Path(to)
+            to_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(to_path, "wb") as f:
+                f.write(response.content)
+
+        return response
 
     def import_ovpack(
         self, file_path: str, parent: str, force: bool = False, vectorize: bool = True
@@ -476,6 +504,26 @@ class OpenVikingAPIClient:
         endpoint = "/api/v1/debug/health"
         url = self._build_url(self.server_url, endpoint)
         return self._request_with_retry("GET", url)
+
+    def get_task(self, task_id: str) -> requests.Response:
+        endpoint = f"/api/v1/tasks/{task_id}"
+        url = self._build_url(self.server_url, endpoint)
+        return self._request_with_retry("GET", url)
+
+    def wait_for_task(self, task_id: str, timeout: float = 60.0, poll_interval: float = 1.0) -> dict:
+        import time
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            response = self.get_task(task_id)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('status') == 'ok':
+                    result = data.get('result', {})
+                    task_status = result.get('status')
+                    if task_status in ['completed', 'failed']:
+                        return result
+            time.sleep(poll_interval)
+        return {'status': 'timeout', 'task_id': task_id}
 
     def admin_create_account(self, account_id: str, admin_user_id: str) -> requests.Response:
         endpoint = "/api/v1/admin/accounts"

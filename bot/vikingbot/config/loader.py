@@ -4,10 +4,13 @@ import json
 import os
 from pathlib import Path
 from typing import Any
+
 from loguru import logger
+
 from vikingbot.config.schema import Config
 
 CONFIG_PATH = None
+
 
 def get_config_path() -> Path:
     """Get the path to ov.conf config file.
@@ -24,9 +27,7 @@ def _resolve_ov_conf_path() -> Path:
     # Check environment variable first
     env_path = os.environ.get("OPENVIKING_CONFIG_FILE")
     if env_path:
-        path = Path(env_path).expanduser()
-        if path.exists():
-            return path
+        return Path(env_path).expanduser()
 
     # Default path
     return Path.home() / ".openviking" / "ov.conf"

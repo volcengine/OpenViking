@@ -829,14 +829,45 @@ class AsyncHTTPClient(BaseClient):
     # ============= Pack =============
 
     async def export_ovpack(self, uri: str, to: str) -> str:
-        """Export context as .ovpack file."""
+        """Export context as .ovpack file and save to local path.
+
+        Args:
+            uri: Viking URI to export
+            to: Local file path where to save the .ovpack file
+
+        Returns:
+            Local file path where the .ovpack was saved
+        """
         uri = VikingURI.normalize(uri)
+
+        # Determine target path
+        to_path = Path(to)
+        if to_path.is_dir():
+            base_name = uri.strip().rstrip("/").split("/")[-1]
+            if not base_name:
+                base_name = "export"
+            to_path = to_path / f"{base_name}.ovpack"
+        elif not str(to_path).endswith(".ovpack"):
+            to_path = Path(str(to_path) + ".ovpack")
+
+        # Ensure parent directory exists
+        to_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Request export and stream response
         response = await self._http.post(
             "/api/v1/pack/export",
-            json={"uri": uri, "to": to},
+            json={"uri": uri},
         )
-        result = self._handle_response(response)
-        return result.get("file", "")
+
+        # Check for errors
+        if not response.is_success:
+            self._handle_response(response)
+
+        # Save streamed content to local file
+        with open(to_path, "wb") as f:
+            f.write(response.content)
+
+        return str(to_path)
 
     async def import_ovpack(
         self,

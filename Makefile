@@ -99,6 +99,40 @@ build: check-deps check-pip
 		echo "  [OK] pip found, use pip to install..."; \
 		$(PYTHON) -m pip install -e .; \
 	fi
+	@echo "Building ragfs-python (Rust AGFS binding) into openviking/lib/..."
+	@MATURIN_CMD=""; \
+	if command -v maturin > /dev/null 2>&1; then \
+		MATURIN_CMD=maturin; \
+	elif command -v uv > /dev/null 2>&1 && uv pip --help > /dev/null 2>&1; then \
+		uv pip install maturin && MATURIN_CMD=maturin; \
+	fi; \
+	if [ -n "$$MATURIN_CMD" ]; then \
+		TMPDIR=$$(mktemp -d); \
+		cd crates/ragfs-python && $$MATURIN_CMD build --release --out "$$TMPDIR" 2>&1; \
+		cd ../..; \
+		mkdir -p openviking/lib; \
+		echo "import zipfile, glob, shutil, os, sys" > /tmp/extract_ragfs.py; \
+		echo "whls = glob.glob(os.path.join('$$TMPDIR', 'ragfs_python-*.whl'))" >> /tmp/extract_ragfs.py; \
+		echo "assert whls, 'maturin produced no wheel'" >> /tmp/extract_ragfs.py; \
+		echo "with zipfile.ZipFile(whls[0]) as zf:" >> /tmp/extract_ragfs.py; \
+		echo "    for name in zf.namelist():" >> /tmp/extract_ragfs.py; \
+		echo "        bn = os.path.basename(name)" >> /tmp/extract_ragfs.py; \
+		echo "        if bn.startswith('ragfs_python') and (bn.endswith('.so') or bn.endswith('.pyd')):" >> /tmp/extract_ragfs.py; \
+		echo "            dst = os.path.join('openviking', 'lib', bn)" >> /tmp/extract_ragfs.py; \
+		echo "            with zf.open(name) as src, open(dst, 'wb') as f: f.write(src.read())" >> /tmp/extract_ragfs.py; \
+		echo "            os.chmod(dst, 0o755)" >> /tmp/extract_ragfs.py; \
+		echo "            print(f'  [OK] ragfs-python: extracted {bn} -> {dst}')" >> /tmp/extract_ragfs.py; \
+		echo "            sys.exit(0)" >> /tmp/extract_ragfs.py; \
+		echo "print('[Warning] No ragfs_python .so/.pyd found in wheel')" >> /tmp/extract_ragfs.py; \
+		echo "sys.exit(1)" >> /tmp/extract_ragfs.py; \
+		$(PYTHON) /tmp/extract_ragfs.py; \
+		rm -f /tmp/extract_ragfs.py; \
+		rm -rf "$$TMPDIR"; \
+	else \
+		echo "  [SKIP] maturin not found, ragfs-python (Rust binding) will not be built."; \
+		echo "         Install maturin to enable: uv pip install maturin"; \
+		echo "         The Go binding will be used as fallback."; \
+	fi
 	@echo "Build completed successfully."
 
 clean:

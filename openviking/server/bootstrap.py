@@ -33,6 +33,15 @@ def _get_version() -> str:
         return "unknown"
 
 
+def _normalize_host_arg(host: Optional[str]) -> Optional[str]:
+    """Normalize special CLI host values."""
+    if host is None:
+        return None
+    if host.strip().lower() == "all":
+        return None
+    return host
+
+
 def main():
     """Main entry point for openviking-server command."""
     parser = argparse.ArgumentParser(
@@ -124,7 +133,7 @@ def main():
 
     # Override with command line arguments
     if args.host is not None:
-        config.host = args.host
+        config.host = _normalize_host_arg(args.host)
     if args.port is not None:
         config.port = args.port
     if args.workers is not None:

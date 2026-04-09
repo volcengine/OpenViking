@@ -5,8 +5,11 @@ import os
 import asyncio
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
+from pathlib import Path
 
-load_dotenv()
+# 加载本地环境变量文件
+env_file = Path.home() / ".openviking_benchmark_env"
+load_dotenv(env_file)
 
 
 async def grade_answer(
@@ -112,7 +115,12 @@ async def main():
     args = parser.parse_args()
 
     if not args.token:
-        print("Error: API token is required, set ARK_API_KEY env var or pass via --token")
+        print("Error: API token is required")
+        print("\n请通过以下方式设置 API key:")
+        print("  1. 创建 ~/.openviking_benchmark_env 文件，内容如下:")
+        print("     ARK_API_KEY=你的key")
+        print("  2. 或者通过 --token 参数传入")
+        print("  3. 或者设置环境变量: export ARK_API_KEY=你的key")
         exit(1)
 
     # 加载数据

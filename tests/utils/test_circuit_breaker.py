@@ -74,6 +74,43 @@ def test_circuit_breaker_half_open_failure_reopens(monkeypatch):
         cb.check()
 
 
+def test_half_open_failure_doubles_reset_timeout(monkeypatch):
+    from openviking.utils.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
+
+    base = time.monotonic()
+    cb = CircuitBreaker(failure_threshold=1, reset_timeout=60, max_reset_timeout=240)
+    cb.record_failure(RuntimeError("429 TooManyRequests"))
+
+    monkeypatch.setattr(time, "monotonic", lambda: base + 61)
+    cb.check()
+    cb.record_failure(RuntimeError("429 TooManyRequests"))
+
+    assert cb._current_reset_timeout == 120
+
+    monkeypatch.setattr(time, "monotonic", lambda: base + 61 + 119)
+    with pytest.raises(CircuitBreakerOpen):
+        cb.check()
+
+
+def test_half_open_success_resets_backoff(monkeypatch):
+    from openviking.utils.circuit_breaker import CircuitBreaker
+
+    base = time.monotonic()
+    cb = CircuitBreaker(failure_threshold=1, reset_timeout=60, max_reset_timeout=240)
+    cb.record_failure(RuntimeError("500"))
+
+    monkeypatch.setattr(time, "monotonic", lambda: base + 61)
+    cb.check()
+    cb.record_failure(RuntimeError("500 again"))
+    assert cb._current_reset_timeout == 120
+
+    monkeypatch.setattr(time, "monotonic", lambda: base + 61 + 121)
+    cb.check()
+    cb.record_success()
+
+    assert cb._current_reset_timeout == 60
+
+
 def test_permanent_error_trips_immediately():
     from openviking.utils.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
 

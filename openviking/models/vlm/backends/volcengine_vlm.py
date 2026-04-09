@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
+from openviking.telemetry import tracer
 from ..base import ToolCall, VLMResponse
 from .openai_vlm import OpenAIVLM
 
@@ -48,7 +49,7 @@ class VolcEngineVLM(OpenAIVLM):
         """Build response from Chat Completions response. Returns str or VLMResponse based on has_tools."""
         choice = response.choices[0]
         message = choice.message
-
+        tracer.info(f"message.content={message.content}")
         if has_tools:
             usage = {}
             if hasattr(response, "usage") and response.usage:
@@ -129,6 +130,7 @@ class VolcEngineVLM(OpenAIVLM):
             return result
         return self._clean_response(str(result))
 
+    @tracer("vlm.call")
     async def get_completion_async(
         self,
         prompt: str = "",
@@ -136,7 +138,6 @@ class VolcEngineVLM(OpenAIVLM):
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
-        max_retries: int = 0,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously via Chat Completions API."""
         kwargs_messages = messages or [{"role": "user", "content": prompt}]
@@ -152,10 +153,13 @@ class VolcEngineVLM(OpenAIVLM):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
 
+        # 用 tracer.info 打印请求
+        tracer.info(f"request: {json.dumps(kwargs_messages, ensure_ascii=False, indent=2)}")
+
         client = self.get_async_client()
 
         last_error = None
-        for attempt in range(max_retries + 1):
+        for attempt in range(self.max_retries + 1):
             try:
                 t0 = time.perf_counter()
                 response = await client.chat.completions.create(**kwargs)
@@ -167,7 +171,7 @@ class VolcEngineVLM(OpenAIVLM):
                 return self._clean_response(str(result))
             except Exception as e:
                 last_error = e
-                if attempt < max_retries:
+                if attempt < self.max_retries:
                     await asyncio.sleep(2**attempt)
 
         if last_error:

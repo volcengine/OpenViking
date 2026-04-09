@@ -21,6 +21,7 @@ from openviking.storage import VikingDBManager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
+from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.zip_safe import safe_extract_zip
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
@@ -266,4 +267,8 @@ class SkillProcessor:
         context.set_vectorize(Vectorize(text=context.abstract))
         embedding_msg = EmbeddingMsgConverter.from_context(context)
         if embedding_msg:
-            await self.vikingdb.enqueue_embedding_msg(embedding_msg)
+            enqueued = await self.vikingdb.enqueue_embedding_msg(embedding_msg)
+            if enqueued and embedding_msg.telemetry_id:
+                get_request_wait_tracker().register_embedding_root(
+                    embedding_msg.telemetry_id, embedding_msg.id
+                )

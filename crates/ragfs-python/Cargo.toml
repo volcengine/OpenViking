@@ -1,0 +1,16 @@
+[package]
+name = "ragfs-python"
+version = "0.1.0"
+edition = "2021"
+description = "Python bindings for RAGFS - Rust AGFS filesystem"
+publish = false
+
+[lib]
+name = "ragfs_python"
+crate-type = ["cdylib"]
+
+[dependencies]
+ragfs = { path = "../ragfs" }
+pyo3 = { version = "0.27", features = ["extension-module"] }
+tokio = { version = "1", features = ["full"] }
+serde_json = "1.0"

@@ -18,6 +18,7 @@ from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.embedding_utils import index_resource
 from openviking.utils.summarizer import Summarizer
+from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.storage import StoragePath
 
@@ -161,6 +162,8 @@ class ResourceProcessor:
                 )
                 telemetry.set("resource.parse.warnings_count", len(parse_result.warnings or []))
 
+            except OpenVikingError:
+                raise
             except Exception as e:
                 result["status"] = "error"
                 result["errors"].append(f"Parse error: {e}")

@@ -16,7 +16,7 @@ COPY --from=rust-toolchain /usr/local/cargo /usr/local/cargo
 COPY --from=rust-toolchain /usr/local/rustup /usr/local/rustup
 ENV CARGO_HOME=/usr/local/cargo
 ENV RUSTUP_HOME=/usr/local/rustup
-ENV PATH="/usr/local/cargo/bin:/usr/local/go/bin:${PATH}"
+ENV PATH="/app/.venv/bin:/usr/local/cargo/bin:/usr/local/go/bin:${PATH}"
 ARG OPENVIKING_VERSION=0.0.0
 ARG TARGETPLATFORM
 ARG UV_LOCK_STRATEGY=auto
@@ -51,19 +51,57 @@ COPY third_party/ third_party/
 RUN --mount=type=cache,target=/root/.cache/uv,id=uv-${TARGETPLATFORM} \
     case "${UV_LOCK_STRATEGY}" in \
         locked) \
-            uv sync --locked --no-editable --extra bot \
+            uv sync --locked --no-editable --extra bot --extra gemini \
             ;; \
         auto) \
             if ! uv lock --check; then \
                 uv lock; \
             fi; \
-            uv sync --locked --no-editable --extra bot \
+            uv sync --locked --no-editable --extra bot --extra gemini \
             ;; \
         *) \
             echo "Unsupported UV_LOCK_STRATEGY: ${UV_LOCK_STRATEGY}" >&2; \
             exit 2 \
             ;; \
     esac
+
+# Build ragfs-python (Rust AGFS binding) and extract the native extension
+# into the installed openviking package so it ships alongside the Go binding.
+# Selection at runtime via RAGFS_IMPL env var (auto/rust/go).
+RUN --mount=type=cache,target=/root/.cache/uv,id=uv-${TARGETPLATFORM} \
+    uv pip install maturin && \
+    export _TMPDIR=$(mktemp -d) && \
+    trap 'rm -rf "$_TMPDIR"' EXIT && \
+    cd crates/ragfs-python && \
+    python -m maturin build --release --out "$_TMPDIR" && \
+    cd ../.. && \
+    export _OV_LIB=$(python -c "import openviking; from pathlib import Path; print(Path(openviking.__file__).resolve().parent / 'lib')") && \
+    mkdir -p "$_OV_LIB" && \
+    python - <<'PY'
+import glob
+import os
+import sys
+import zipfile
+
+tmpdir = os.environ["_TMPDIR"]
+ov_lib = os.environ["_OV_LIB"]
+whls = glob.glob(os.path.join(tmpdir, "ragfs_python-*.whl"))
+assert whls, "maturin produced no wheel"
+
+with zipfile.ZipFile(whls[0]) as zf:
+    for name in zf.namelist():
+        bn = os.path.basename(name)
+        if bn.startswith("ragfs_python") and (bn.endswith(".so") or bn.endswith(".pyd")):
+            dst = os.path.join(ov_lib, bn)
+            with zf.open(name) as src, open(dst, "wb") as f:
+                f.write(src.read())
+            os.chmod(dst, 0o755)
+            print(f"ragfs-python: extracted {bn} -> {dst}")
+            sys.exit(0)
+
+print("WARNING: No ragfs_python .so/.pyd in wheel")
+sys.exit(1)
+PY
 
 # Stage 4: runtime
 FROM python:3.13-slim-trixie

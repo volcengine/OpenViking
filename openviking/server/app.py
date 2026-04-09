@@ -96,8 +96,9 @@ def create_app(
             else:
                 logger.warning(
                     "Trusted mode enabled: authentication uses X-OpenViking-Account/User/Agent "
-                    "headers without API keys. Only expose this server behind a trusted "
-                    "network boundary or identity-injecting gateway."
+                    "headers without API keys. This is only allowed on localhost. "
+                    "Only expose this server behind a trusted network boundary or "
+                    "identity-injecting gateway after configuring server.root_api_key."
                 )
         else:
             app.state.api_key_manager = None
@@ -119,6 +120,11 @@ def create_app(
         # Start TaskTracker cleanup loop
         task_tracker = get_task_tracker()
         task_tracker.start_cleanup_loop()
+
+        # Initialize tracer
+        from openviking.telemetry import tracer_module
+
+        tracer_module.init_tracer_from_config()
 
         yield
 
@@ -180,14 +186,14 @@ def create_app(
     # Catch-all for unhandled exceptions so clients always get JSON
     @app.exception_handler(Exception)
     async def general_error_handler(request: Request, exc: Exception):
-        logger.warning("Unhandled exception: %s", exc)
+        logger.exception("Unhandled exception")
         return JSONResponse(
             status_code=500,
             content=Response(
                 status="error",
                 error=ErrorInfo(
                     code="INTERNAL",
-                    message=str(exc),
+                    message="Internal server error",
                 ),
             ).model_dump(),
         )

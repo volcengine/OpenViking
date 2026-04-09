@@ -444,7 +444,9 @@ class VikingClient:
 
             if not parts:
                 continue
-            await session.add_message(role=role, parts=parts)
+            # 获取消息的时间戳，如果没有则使用当前时间
+            created_at = message.get("timestamp")
+            await session.add_message(role=role, parts=parts, created_at=created_at)
 
         result = await session.commit_async()
         if client is not self.client:
