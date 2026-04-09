@@ -7,11 +7,15 @@ Supports embed-v4.0 and embed-english-v3.0 models with input_type
 for asymmetric retrieval.
 """
 
+import asyncio
+import logging
 from typing import Any, Dict, List, Optional
 
 import httpx
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult, truncate_and_normalize
+
+logger = logging.getLogger(__name__)
 
 COHERE_MODEL_DIMENSIONS = {
     "embed-v4.0": 1536,
@@ -86,8 +90,9 @@ class CohereDenseEmbedder(DenseEmbedderBase):
             },
             timeout=60.0,
         )
+        self._async_client: Optional[httpx.AsyncClient] = None
 
-    def _call_api(self, texts: List[str], input_type: str) -> List[List[float]]:
+    def _build_payload(self, texts: List[str], input_type: str) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
             "model": self.model_name,
             "texts": texts,
@@ -96,7 +101,27 @@ class CohereDenseEmbedder(DenseEmbedderBase):
         }
         if self._use_server_dim:
             payload["output_dimension"] = self._dimension
-        resp = self._client.post("/v2/embed", json=payload)
+        return payload
+
+    def _call_api(self, texts: List[str], input_type: str) -> List[List[float]]:
+        resp = self._client.post("/v2/embed", json=self._build_payload(texts, input_type))
+        resp.raise_for_status()
+        data = resp.json()
+        return data["embeddings"]["float"]
+
+    async def _call_api_async(self, texts: List[str], input_type: str) -> List[List[float]]:
+        if self._async_client is None:
+            self._async_client = httpx.AsyncClient(
+                base_url=self.api_base,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                timeout=60.0,
+            )
+        resp = await self._async_client.post(
+            "/v2/embed", json=self._build_payload(texts, input_type)
+        )
         resp.raise_for_status()
         data = resp.json()
         return data["embeddings"]["float"]
@@ -113,6 +138,34 @@ class CohereDenseEmbedder(DenseEmbedderBase):
             vectors = self._call_api([text], input_type)
             result = EmbedResult(dense_vector=self._normalize_vector(vectors[0]))
             # Estimate token usage
+            estimated_tokens = self._estimate_tokens(text)
+            self.update_token_usage(
+                model_name=self.model_name,
+                provider="cohere",
+                prompt_tokens=estimated_tokens,
+                completion_tokens=0,
+            )
+            return result
+        except httpx.HTTPStatusError as e:
+            raise RuntimeError(
+                f"Cohere API error: {e.response.status_code} {e.response.text}"
+            ) from e
+        except Exception as e:
+            raise RuntimeError(f"Cohere embedding failed: {e}") from e
+
+    async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+        input_type = "search_query" if is_query else "search_document"
+
+        async def _call() -> EmbedResult:
+            vectors = await self._call_api_async([text], input_type)
+            return EmbedResult(dense_vector=self._normalize_vector(vectors[0]))
+
+        try:
+            result = await self._run_with_async_retry(
+                _call,
+                logger=logger,
+                operation_name="Cohere async embedding",
+            )
             estimated_tokens = self._estimate_tokens(text)
             self.update_token_usage(
                 model_name=self.model_name,
@@ -154,9 +207,55 @@ class CohereDenseEmbedder(DenseEmbedderBase):
         except Exception as e:
             raise RuntimeError(f"Cohere batch embedding failed: {e}") from e
 
+    async def embed_batch_async(
+        self, texts: List[str], is_query: bool = False
+    ) -> List[EmbedResult]:
+        if not texts:
+            return []
+
+        input_type = "search_query" if is_query else "search_document"
+
+        async def _call() -> List[EmbedResult]:
+            results: List[EmbedResult] = []
+            for i in range(0, len(texts), 96):
+                batch = texts[i : i + 96]
+                vectors = await self._call_api_async(batch, input_type)
+                results.extend(EmbedResult(dense_vector=self._normalize_vector(v)) for v in vectors)
+            return results
+
+        try:
+            results = await self._run_with_async_retry(
+                _call,
+                logger=logger,
+                operation_name="Cohere async batch embedding",
+            )
+            total_tokens = sum(self._estimate_tokens(text) for text in texts)
+            self.update_token_usage(
+                model_name=self.model_name,
+                provider="cohere",
+                prompt_tokens=total_tokens,
+                completion_tokens=0,
+            )
+            return results
+        except httpx.HTTPStatusError as e:
+            raise RuntimeError(
+                f"Cohere API error: {e.response.status_code} {e.response.text}"
+            ) from e
+        except Exception as e:
+            raise RuntimeError(f"Cohere batch embedding failed: {e}") from e
+
     def close(self):
         """Close the httpx client connection pool."""
         self._client.close()
+        if self._async_client is not None:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop and loop.is_running():
+                loop.create_task(self._async_client.aclose())
+            else:
+                asyncio.run(self._async_client.aclose())
 
     def get_dimension(self) -> int:
         return self._dimension

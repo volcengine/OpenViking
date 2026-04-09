@@ -95,18 +95,6 @@ class ContextBuilder:
                 f"## Sandbox Environment\n\nYou are running in a sandboxed environment. All file operations and command execution are restricted to the sandbox directory.\nThe sandbox root directory is `{sandbox_cwd}` (use relative paths for all operations)."
             )
 
-        # Add session context
-        session_context = "## Current Session"
-        if session_key and session_key.type:
-            session_context += f"\nChannel: {session_key.type}"
-            if self._is_group_chat:
-                session_context += (
-                    f"\n**Group chat session.** Current user ID: {self._sender_id}\n"
-                    f"Multiple users can participate in this conversation. Each user message is prefixed with the user ID in brackets like @<user_id>. "
-                    f"You should pay attention to who is speaking to understand the context. "
-                )
-        parts.append(session_context)
-
         # Bootstrap files
         bootstrap = self._load_bootstrap_files()
         if bootstrap:
@@ -166,6 +154,18 @@ Skills with available="false" need dependencies installed first - you can try in
         tz = _time.strftime("%Z") or "UTC"
         parts.append(f"## Current Time: {now} ({tz})")
 
+        # Add session context
+        session_context = "## Current Session"
+        if session_key and session_key.type:
+            session_context += f"\nChannel: {session_key.type}"
+            if self._is_group_chat:
+                session_context += (
+                    f"\n**Group chat session.** Current user ID: {self._sender_id}\n"
+                    f"Multiple users can participate in this conversation. Each user message is prefixed with the user ID in brackets like @<user_id>. "
+                    f"You should pay attention to who is speaking to understand the context. "
+                )
+        parts.append(session_context)
+
         workspace_id = self.sandbox_manager.to_workspace_id(session_key)
 
         # Viking agent memory
@@ -183,6 +183,8 @@ Skills with available="false" need dependencies installed first - you can try in
                 f"## openviking_search(query=[user_query])\n"
                 f"{viking_memory}"
             )
+
+        parts.append("Reply in the same language as the user's query, ignoring the language of the reference materials. User's query:")
 
         return "\n\n---\n\n".join(parts)
 
@@ -220,11 +222,10 @@ You have two workspaces:
 2. OpenViking workspace: managed via OpenViking tools
 - Custom skills: {workspace_display}/skills/{{skill-name}}/SKILL.md
 
-IMPORTANT: When responding to direct questions or conversations, reply directly with your text response.
-Please keep your reply in the same language as the user's message.
-Only use the 'message' tool when you need to send a message to a specific chat channel (like WhatsApp).
-For normal conversation, just respond with text - do not call the message tool.
-Always be helpful, accurate, and concise. When using tools, think step by step: what you know, what you need, and why you chose this tool.
+IMPORTANT: 
+- When responding to direct questions or conversations, reply directly with your text response.
+- Only use the 'message' tool when you need to send a message to a specific chat channel (like WhatsApp).For normal conversation, just respond with text - do not call the message tool.
+- Always be helpful, accurate, and concise. When using tools, think step by step: what you know, what you need, and why you chose this tool.
 
 ## Memory
 - Remember important facts: using openviking_memory_commit tool to commit"""

@@ -187,27 +187,36 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
   -H "X-API-Key: your-key"
 ```
 
-## 云上部署
+## 云原生部署
 
 ### Docker
 
 OpenViking 提供预构建的 Docker 镜像，发布在 GitHub Container Registry：
 
 ```bash
+# 注意 ov.conf 需要指定 storage.workspace 为 /app/data 以确保数据持久化
 docker run -d \
   --name openviking \
   -p 1933:1933 \
   -p 8020:8020 \
   -v ~/.openviking/ov.conf:/app/ov.conf \
-  -v /var/lib/openviking/data:/app/data \
+  -v ~/.openviking/data:/app/data \
   --restart unless-stopped \
-  ghcr.io/volcengine/openviking:main
+  ghcr.io/volcengine/openviking:latest
 ```
 
 Docker 镜像默认会同时启动：
 - OpenViking HTTP 服务，端口 `1933`
 - OpenViking Console，端口 `8020`
 - `vikingbot` gateway
+
+升级容器的方式
+```bash
+docker stop openviking
+docker pull ghcr.io/volcengine/openviking:latest
+docker rm -f openviking
+# 然后重新 docker run ...
+```
 
 如果你希望本次容器启动时关闭 `vikingbot`，可以使用下面任一方式：
 
@@ -217,9 +226,9 @@ docker run -d \
   -p 1933:1933 \
   -p 8020:8020 \
   -v ~/.openviking/ov.conf:/app/ov.conf \
-  -v /var/lib/openviking/data:/app/data \
+  -v ~/.openviking/data:/app/data \
   --restart unless-stopped \
-  ghcr.io/volcengine/openviking:main \
+  ghcr.io/volcengine/openviking:latest \
   --without-bot
 ```
 
@@ -230,7 +239,7 @@ docker run -d \
   -p 1933:1933 \
   -p 8020:8020 \
   -v ~/.openviking/ov.conf:/app/ov.conf \
-  -v /var/lib/openviking/data:/app/data \
+  -v ~/.openviking/data:/app/data \
   --restart unless-stopped \
   ghcr.io/volcengine/openviking:latest
 ```

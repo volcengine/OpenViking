@@ -152,6 +152,8 @@ def pytest_html_results_table_row(report, cells):
         "test_summary_generation_group_a": "长程总结生成-组A：OpenViking自动化测试平台项目，整合背景+讨论+闲聊生成完整总结",
         "test_summary_generation_group_b": "长程总结生成-组B：OpenClaw跨平台适配项目，整合背景+讨论+闲聊生成完整总结",
         "test_summary_generation_group_c": "长程总结生成-组C：OpenViking记忆优化项目，整合背景+讨论+闲聊生成完整总结",
+        "test_auto_session_basic": "自动Session ID测试：使用自动生成的session_id进行基本记忆写入和读取，验证Session ID自动管理功能",
+        "test_custom_session_prefix": "自定义Session ID测试：使用自定义前缀的session_id进行记忆写入和读取，验证自定义Session功能",
     }
 
     for test_name, desc in test_descriptions.items():

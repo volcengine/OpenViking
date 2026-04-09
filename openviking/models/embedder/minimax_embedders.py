@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: AGPL-3.0
 """MiniMax Embedder Implementation via HTTP API"""
 
+import asyncio
 from typing import Any, Dict, List, Optional
 
+import httpx
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -77,6 +79,7 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
 
         # Initialize session with retry logic
         self.session = self._create_session()
+        self._async_client: Optional[httpx.AsyncClient] = None
 
         # Auto-detect dimension if not provided
         if self._dimension is None:
@@ -107,32 +110,9 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
 
     def _call_api(self, texts: List[str], is_query: bool = False) -> List[List[float]]:
         """Call MiniMax API"""
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-
-        # Merge extra headers
-        if self.extra_headers:
-            for k, v in self.extra_headers.items():
-                if k.lower() not in ["authorization", "content-type", "groupid", "group_id"]:
-                    headers[k] = v
-
-        params = {}
-        if self.group_id:
-            params["GroupId"] = self.group_id
-
-        embed_type = "db"
-        if is_query:
-            embed_type = self.query_param if self.query_param is not None else "query"
-        else:
-            embed_type = self.document_param if self.document_param is not None else "db"
-
-        payload = {
-            "model": self.model_name,
-            "type": embed_type,
-            "texts": texts,
-        }
+        headers = self._build_headers()
+        params = self._build_params()
+        payload = self._build_payload(texts, is_query=is_query)
 
         try:
             response = self.session.post(
@@ -161,11 +141,87 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
         except Exception as e:
             raise RuntimeError(f"MiniMax embedding failed: {str(e)}") from e
 
+    def _build_headers(self) -> Dict[str, str]:
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        if self.extra_headers:
+            for k, v in self.extra_headers.items():
+                if k.lower() not in ["authorization", "content-type", "groupid", "group_id"]:
+                    headers[k] = v
+        return headers
+
+    def _build_params(self) -> Dict[str, str]:
+        params: Dict[str, str] = {}
+        if self.group_id:
+            params["GroupId"] = self.group_id
+        return params
+
+    def _build_payload(self, texts: List[str], is_query: bool = False) -> Dict[str, Any]:
+        embed_type = "db"
+        if is_query:
+            embed_type = self.query_param if self.query_param is not None else "query"
+        else:
+            embed_type = self.document_param if self.document_param is not None else "db"
+        return {
+            "model": self.model_name,
+            "type": embed_type,
+            "texts": texts,
+        }
+
+    async def _call_api_async(self, texts: List[str], is_query: bool = False) -> List[List[float]]:
+        if self._async_client is None:
+            self._async_client = httpx.AsyncClient(timeout=60.0)
+
+        try:
+            response = await self._async_client.post(
+                self.api_base,
+                headers=self._build_headers(),
+                params=self._build_params(),
+                json=self._build_payload(texts, is_query=is_query),
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            base_resp = data.get("base_resp", {})
+            if base_resp.get("status_code") != 0:
+                raise RuntimeError(f"MiniMax API error: {base_resp.get('status_msg')}")
+
+            vectors = data.get("vectors", [])
+            if not vectors:
+                raise RuntimeError("MiniMax API returned empty vectors")
+
+            return vectors
+        except httpx.HTTPError as e:
+            raise RuntimeError(f"MiniMax network error: {str(e)}") from e
+        except Exception as e:
+            raise RuntimeError(f"MiniMax embedding failed: {str(e)}") from e
+
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform dense embedding on text"""
         vectors = self._call_api([text], is_query=is_query)
         result = EmbedResult(dense_vector=vectors[0])
         # Estimate token usage
+        estimated_tokens = self._estimate_tokens(text)
+        self.update_token_usage(
+            model_name=self.model_name,
+            provider="minimax",
+            prompt_tokens=estimated_tokens,
+            completion_tokens=0,
+        )
+        return result
+
+    async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+        async def _call() -> EmbedResult:
+            vectors = await self._call_api_async([text], is_query=is_query)
+            return EmbedResult(dense_vector=vectors[0])
+
+        result = await self._run_with_async_retry(
+            _call,
+            logger=logger,
+            operation_name="MiniMax async embedding",
+        )
         estimated_tokens = self._estimate_tokens(text)
         self.update_token_usage(
             model_name=self.model_name,
@@ -194,6 +250,42 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
         )
         return results
 
+    async def embed_batch_async(
+        self, texts: List[str], is_query: bool = False
+    ) -> List[EmbedResult]:
+        if not texts:
+            return []
+
+        async def _call() -> List[EmbedResult]:
+            vectors = await self._call_api_async(texts, is_query=is_query)
+            return [EmbedResult(dense_vector=v) for v in vectors]
+
+        results = await self._run_with_async_retry(
+            _call,
+            logger=logger,
+            operation_name="MiniMax async batch embedding",
+        )
+        total_tokens = sum(self._estimate_tokens(text) for text in texts)
+        self.update_token_usage(
+            model_name=self.model_name,
+            provider="minimax",
+            prompt_tokens=total_tokens,
+            completion_tokens=0,
+        )
+        return results
+
     def get_dimension(self) -> int:
         """Get embedding dimension"""
         return self._dimension
+
+    def close(self):
+        self.session.close()
+        if self._async_client is not None:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop and loop.is_running():
+                loop.create_task(self._async_client.aclose())
+            else:
+                asyncio.run(self._async_client.aclose())
