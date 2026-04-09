@@ -1,0 +1,16 @@
+# Packaging-only project for the repo-root flake.
+# This intentionally resolves the published OpenViking wheel for service use;
+# it does not build the local checkout in this repository.
+[project]
+name = "openviking-env"
+version = "0.1.0"
+requires-python = "==3.11.*"
+dependencies = [
+  # Keep this pinned to the published wheel consumed by the service package.
+  "openviking==0.2.10",
+]
+
+[tool.uv]
+environments = [
+  "platform_system == 'Linux' and platform_machine == 'x86_64'",
+]
