@@ -208,6 +208,16 @@ describe("Plugin registration", () => {
     );
   });
 
+  it("registers the context engine exactly once", () => {
+    const { api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    expect(api.registerContextEngine).toHaveBeenCalledTimes(1);
+    expect(api.registerContextEngine).toHaveBeenCalledWith(
+      "openviking",
+      expect.any(Function),
+    );
+  });
+
   it("registers context engine when api.registerContextEngine is available", () => {
     const { api } = setupPlugin();
     contextEnginePlugin.register(api as any);
