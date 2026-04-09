@@ -140,15 +140,20 @@ class MessageRange:
 
     def _first_message_time(self) -> str | None:
         """获取第一条消息的时间（内部方法）"""
+        from datetime import datetime
+
         for elem in self.elements:
             if isinstance(elem, str):
                 continue
             if hasattr(elem, "created_at") and elem.created_at:
-                return elem.created_at.strftime("%Y-%m-%d")
+                dt = datetime.fromisoformat(elem.created_at)
+                return dt.strftime("%Y-%m-%d")
         return None
 
     def _first_message_time_with_weekday(self) -> str | None:
         """获取第一条消息的时间，带周几（内部方法）"""
+        from datetime import datetime
+
         for elem in self.elements:
             if isinstance(elem, str):
                 continue
@@ -163,8 +168,9 @@ class MessageRange:
                     "Saturday",
                     "Sunday",
                 ]
-                weekday = weekday_en[elem.created_at.weekday()]
-                return f"{elem.created_at.strftime('%Y-%m-%d')} ({weekday})"
+                dt = datetime.fromisoformat(elem.created_at)
+                weekday = weekday_en[dt.weekday()]
+                return f"{dt.strftime('%Y-%m-%d')} ({weekday})"
         return None
 
 

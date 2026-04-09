@@ -244,7 +244,8 @@ The final output of the model must strictly follow the JSON Schema format shown 
             if is_last_iteration:
                 final_operations = self._operations_model()
                 break
-            # Otherwise continue and try again
+            # Otherwise disable_tools and try again
+            self._disable_tools_for_iteration = True
             continue
 
         if final_operations is None:

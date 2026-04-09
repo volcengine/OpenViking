@@ -13,6 +13,7 @@ from openviking.core.context import Context
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater
+from openviking.session.memory.utils.json_parser import JsonUtils
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
@@ -78,6 +79,7 @@ class SessionCompressorV2:
             registry=registry, vikingdb=self.vikingdb, transaction_handle=transaction_handle
         )
 
+    @tracer()
     async def extract_long_term_memories(
         self,
         messages: List[Message],
@@ -92,6 +94,7 @@ class SessionCompressorV2:
         Note: Returns empty List[Context] because v2 directly writes to storage.
         The list length is used for stats in session.py.
         """
+
         if not messages:
             return []
 
@@ -100,7 +103,7 @@ class SessionCompressorV2:
             return []
 
         tracer.info("Starting v2 memory extraction from conversation")
-
+        tracer.info(f"messages={JsonUtils.dumps(messages)}")
         # Initialize default memory files (soul.md, identity.md) if not exist
         from openviking.session.memory.memory_type_registry import create_default_registry
 

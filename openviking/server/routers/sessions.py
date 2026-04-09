@@ -259,15 +259,8 @@ async def add_message(
     else:
         parts = [TextPart(text=request.content or "")]
 
-    # 解析 created_at
-    created_at = None
-    if request.created_at:
-        try:
-            created_at = datetime.fromisoformat(request.created_at)
-        except ValueError:
-            logger.warning(f"Invalid created_at format: {request.created_at}")
-
-    session.add_message(request.role, parts, created_at=created_at)
+    # created_at 直接传递给 session (ISO string)
+    session.add_message(request.role, parts, created_at=request.created_at)
     return Response(
         status="ok",
         result={

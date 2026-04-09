@@ -322,6 +322,7 @@ class LiteLLMVLMProvider(VLMBase):
             response = completion(**kwargs)
             elapsed = time.perf_counter() - t0
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
+            tracer.info(f'response={response}')
             if tools:
                 return self._build_vlm_response(response, has_tools=True)
             return self._clean_response(self._extract_content_from_response(response))
@@ -333,7 +334,7 @@ class LiteLLMVLMProvider(VLMBase):
             operation_name="LiteLLM VLM completion",
         )
 
-    @tracer("vlm.call", ignore_result=False, ignore_args=["messages"])
+    @tracer("litellm.vlm.call", ignore_result=True, ignore_args=["messages"])
     async def get_completion_async(
         self,
         prompt: str = "",
@@ -352,6 +353,7 @@ class LiteLLMVLMProvider(VLMBase):
             response = await acompletion(**kwargs)
             elapsed = time.perf_counter() - t0
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
+            tracer.info(f'response={response}')
             if tools:
                 return self._build_vlm_response(response, has_tools=True)
             return self._clean_response(self._extract_content_from_response(response))
