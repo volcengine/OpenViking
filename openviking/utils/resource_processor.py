@@ -18,7 +18,6 @@ from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.embedding_utils import index_resource
 from openviking.utils.summarizer import Summarizer
-from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.storage import StoragePath
@@ -200,14 +199,6 @@ class ResourceProcessor:
                     "resource.finalize.duration_ms",
                     round((time.perf_counter() - finalize_start) * 1000, 3),
                 )
-            except InvalidArgumentError as e:
-                telemetry.set_error("resource_processor.finalize", "INVALID_ARGUMENT", str(e))
-                try:
-                    if parse_result.temp_dir_path:
-                        await get_viking_fs().delete_temp(parse_result.temp_dir_path, ctx=ctx)
-                except Exception:
-                    pass
-                raise
             except Exception as e:
                 result["status"] = "error"
                 result["errors"].append(f"Finalize from temp error: {e}")
@@ -234,12 +225,6 @@ class ResourceProcessor:
                 viking_fs = get_viking_fs()
                 lock_manager = get_lock_manager()
                 target_exists = await viking_fs.exists(root_uri, ctx=ctx)
-                temp_is_dir = False
-                try:
-                    temp_stat = await viking_fs.stat(temp_uri, ctx=ctx)
-                    temp_is_dir = bool(temp_stat.get("isDir", False)) if isinstance(temp_stat, dict) else False
-                except Exception:
-                    temp_is_dir = False
 
                 if not target_exists:
                     # 第一次添加：锁保护下将 temp 移到 final
@@ -264,7 +249,7 @@ class ResourceProcessor:
 
                         # 在 POINT 锁内获取 SUBTREE 锁（消除竞态窗口）
                         lifecycle_lock_handle_id = await self._try_acquire_lifecycle_lock(
-                            lock_manager, dst_path, is_dir=temp_is_dir
+                            lock_manager, dst_path
                         )
 
                     try:
@@ -274,19 +259,10 @@ class ResourceProcessor:
 
                     result["temp_uri"] = root_uri
                 else:
-                    try:
-                        existing_stat = await viking_fs.stat(root_uri, ctx=ctx)
-                        existing_is_dir = (
-                            bool(existing_stat.get("isDir", False))
-                            if isinstance(existing_stat, dict)
-                            else False
-                        )
-                    except Exception:
-                        existing_is_dir = True
-
+                    # 增量更新：对目标目录加 SUBTREE 锁
                     resource_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
                     lifecycle_lock_handle_id = await self._try_acquire_lifecycle_lock(
-                        lock_manager, resource_path, is_dir=existing_is_dir
+                        lock_manager, resource_path
                     )
 
             # ============ Phase 4: Optional Steps ============
@@ -298,43 +274,15 @@ class ResourceProcessor:
                 is_code_repo = parse_result.source_format == "repository"
                 try:
                     with telemetry.measure("resource.summarize"):
-                        viking_fs = get_viking_fs()
-                        root_stat = await viking_fs.stat(result["root_uri"], ctx=ctx)
-                        root_is_dir = (
-                            bool(root_stat.get("isDir", False)) if isinstance(root_stat, dict) else False
+                        await self._get_summarizer().summarize(
+                            resource_uris=[result["root_uri"]],
+                            ctx=ctx,
+                            skip_vectorization=skip_vec,
+                            lifecycle_lock_handle_id=lifecycle_lock_handle_id,
+                            temp_uris=[temp_uri_for_summarize],
+                            is_code_repo=is_code_repo,
+                            **kwargs,
                         )
-
-                        if root_is_dir:
-                            await self._get_summarizer().summarize(
-                                resource_uris=[result["root_uri"]],
-                                ctx=ctx,
-                                skip_vectorization=skip_vec,
-                                lifecycle_lock_handle_id=lifecycle_lock_handle_id,
-                                temp_uris=[temp_uri_for_summarize],
-                                is_code_repo=is_code_repo,
-                                **kwargs,
-                            )
-                        else:
-                            if build_index:
-                                from openviking.utils.embedding_utils import vectorize_file
-                                from openviking_cli.utils.uri import VikingURI
-
-                                parent = VikingURI(result["root_uri"]).parent
-                                parent_uri = parent.uri if parent else "viking://resources"
-                                await vectorize_file(
-                                    file_path=result["root_uri"],
-                                    summary_dict={"name": result["root_uri"].split("/")[-1]},
-                                    parent_uri=parent_uri,
-                                    ctx=ctx,
-                                    context_type="resource",
-                                )
-                            if lifecycle_lock_handle_id:
-                                from openviking.storage.transaction import get_lock_manager
-
-                                handle = get_lock_manager().get_handle(lifecycle_lock_handle_id)
-                                if handle:
-                                    await get_lock_manager().release(handle)
-                                lifecycle_lock_handle_id = ""
                 except Exception as e:
                     logger.error(f"Summarization failed: {e}")
                     result["warnings"] = result.get("warnings", []) + [f"Summarization failed: {e}"]
@@ -349,15 +297,10 @@ class ResourceProcessor:
             return result
 
     @staticmethod
-    async def _try_acquire_lifecycle_lock(lock_manager, path: str, is_dir: bool = True) -> str:
+    async def _try_acquire_lifecycle_lock(lock_manager, path: str) -> str:
         """尝试获取 SUBTREE 生命周期锁，失败时优雅降级返回空字符串。"""
         handle = lock_manager.create_handle()
-        acquired = (
-            await lock_manager.acquire_subtree(handle, path)
-            if is_dir
-            else await lock_manager.acquire_point(handle, path.rsplit("/", 1)[0] if "/" in path else path)
-        )
-        if acquired:
+        if await lock_manager.acquire_subtree(handle, path):
             return handle.id
         logger.warning(f"[ResourceProcessor] Failed to acquire lifecycle lock on {path}")
         await lock_manager.release(handle)

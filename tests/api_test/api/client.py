@@ -146,7 +146,7 @@ class OpenVikingAPIClient:
                 base_path = Path(directory_path)
                 for file_path in base_path.rglob("*"):
                     if file_path.is_file():
-                        zf.write(file_path, arcname=Path(base_path.name) / file_path.relative_to(base_path))
+                        zf.write(file_path, arcname=file_path.relative_to(base_path))
             return temp_zip_path
         except Exception:
             Path(temp_zip_path).unlink(missing_ok=True)
@@ -261,11 +261,9 @@ class OpenVikingAPIClient:
         cleanup_path = None
         if os.path.isfile(path):
             payload["temp_file_id"] = self._upload_temp_file(path)
-            payload["source_name"] = Path(path).stem
         elif os.path.isdir(path):
             cleanup_path = self._zip_directory_for_upload(path)
             payload["temp_file_id"] = self._upload_temp_file(cleanup_path)
-            payload["source_name"] = Path(path).name
         else:
             payload["path"] = path
         if to:
