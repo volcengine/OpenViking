@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "openviking-memory": {
+      "command": "node",
+      "args": [
+        "scripts/start-memory-server.mjs"
+      ],
+      "cwd": ".",
+      "env": {
+        "OPENVIKING_CONFIG_FILE": "${OPENVIKING_CONFIG_FILE:-}"
+      }
+    }
+  }
+}

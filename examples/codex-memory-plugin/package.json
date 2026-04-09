@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "install:hooks": "node ./scripts/install-codex-hooks.mjs",
+    "uninstall:hooks": "node ./scripts/uninstall-codex-hooks.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",

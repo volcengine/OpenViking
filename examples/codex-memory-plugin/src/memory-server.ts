@@ -1,11 +1,11 @@
 /**
  * OpenViking Memory MCP Server for Codex
  *
- * Exposes OpenViking long-term memory as MCP tools:
- *   - memory_recall  : semantic search across memories
- *   - memory_store   : extract and persist new memories
- *   - memory_forget  : delete memories by URI or query
- *   - memory_health  : connectivity and config checks
+ * Exposes explicit OpenViking long-term memory tools for Codex:
+ *   - openviking_recall : inspect persisted OpenViking memories on demand
+ *   - openviking_store  : persist new memories into OpenViking explicitly
+ *   - openviking_forget : delete memories by URI or query
+ *   - openviking_health : connectivity and config checks
  *
  * Ported from the OpenClaw context-engine plugin (openclaw-plugin/).
  * Adapted for Codex's MCP server interface (stdio transport).
@@ -63,6 +63,8 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 
+const DEFAULT_PLUGIN_CONFIG_PATH = join(homedir(), ".openviking", "codex-memory-plugin", "config.json");
+
 function loadOvConf(): Record<string, unknown> {
   const defaultPath = join(homedir(), ".openviking", "ov.conf");
   const configPath = resolvePath(
@@ -76,6 +78,20 @@ function loadOvConf(): Record<string, unknown> {
       ? `Config file not found: ${configPath}`
       : `Failed to read config: ${configPath}`;
     process.stderr.write(`[openviking-memory] ${msg}\n`);
+    process.exit(1);
+  }
+}
+
+function loadPluginConf(): Record<string, unknown> {
+  const configPath = resolvePath(
+    (process.env.OPENVIKING_CODEX_CONFIG_FILE || DEFAULT_PLUGIN_CONFIG_PATH).replace(/^~/, homedir()),
+  );
+  try {
+    return JSON.parse(readFileSync(configPath, "utf-8"));
+  } catch (err: unknown) {
+    const code = (err as { code?: string })?.code;
+    if (code === "ENOENT") return {};
+    process.stderr.write(`[openviking-memory] Invalid Codex plugin config: ${configPath}\n`);
     process.exit(1);
   }
 }
@@ -94,8 +110,14 @@ function str(val: unknown, fallback: string): string {
   return fallback;
 }
 
+function normalizeMode(val: unknown): "full" | "recall_only" {
+  return str(val, "full") === "recall_only" ? "recall_only" : "full";
+}
+
 const file = loadOvConf();
+const pluginFile = loadPluginConf();
 const serverCfg = (file.server ?? {}) as Record<string, unknown>;
+const codexCfg = pluginFile as Record<string, unknown>;
 
 const host = str(serverCfg.host, "127.0.0.1").replace("0.0.0.0", "127.0.0.1");
 const port = Math.floor(num(serverCfg.port, 1933));
@@ -103,11 +125,16 @@ const port = Math.floor(num(serverCfg.port, 1933));
 const config = {
   baseUrl: `http://${host}:${port}`,
   apiKey: str(serverCfg.root_api_key, ""),
-  agentId: str(process.env.OPENVIKING_AGENT_ID, "codex"),
-  timeoutMs: Math.max(1000, Math.floor(num(process.env.OPENVIKING_TIMEOUT_MS, 15000))),
-  recallLimit: Math.max(1, Math.floor(num(process.env.OPENVIKING_RECALL_LIMIT, 6))),
-  scoreThreshold: Math.min(1, Math.max(0, num(process.env.OPENVIKING_SCORE_THRESHOLD, 0.01))),
+  agentId: str(process.env.OPENVIKING_AGENT_ID, str(codexCfg.agentId, "codex")),
+  timeoutMs: Math.max(1000, Math.floor(num(process.env.OPENVIKING_TIMEOUT_MS, num(codexCfg.timeoutMs, 15000)))),
+  recallLimit: Math.max(1, Math.floor(num(process.env.OPENVIKING_RECALL_LIMIT, num(codexCfg.recallLimit, 6)))),
+  scoreThreshold: Math.min(1, Math.max(0, num(process.env.OPENVIKING_SCORE_THRESHOLD, num(codexCfg.scoreThreshold, 0.01)))),
+  mode: normalizeMode(process.env.OPENVIKING_CODEX_MODE || codexCfg.mode),
 };
+
+function storeAndForgetDisabledMessage(): string {
+  return `OpenViking Codex plugin is in ${config.mode} mode. Manual store/delete operations are disabled.`;
+}
 
 // ---------------------------------------------------------------------------
 // OpenViking HTTP Client (ported from openclaw-plugin/client.ts)
@@ -438,6 +465,26 @@ function formatMemoryLines(items: FindResultItem[]): string {
     .join("\n");
 }
 
+function formatStoredMemoryMatches(items: FindResultItem[]): string {
+  return items
+    .map((item) => {
+      const summary = item.abstract?.trim() || item.overview?.trim() || item.uri;
+      return `- ${item.uri} — ${summary}`;
+    })
+    .join("\n");
+}
+
+function filterNearTopMatches(
+  items: FindResultItem[],
+  relativeGap: number,
+  minimumScore: number,
+): FindResultItem[] {
+  if (items.length === 0) return [];
+  const topScore = clampScore(items[0]!.score);
+  const cutoff = Math.max(minimumScore, topScore >= 0.5 ? topScore - relativeGap : topScore * 0.8);
+  return items.filter((item) => clampScore(item.score) >= cutoff);
+}
+
 // Query-aware ranking (ported from openclaw-plugin/memory-ranking.ts)
 const PREFERENCE_QUERY_RE = /prefer|preference|favorite|favourite|like|偏好|喜欢|爱好|更倾向/i;
 const TEMPORAL_QUERY_RE =
@@ -530,6 +577,24 @@ async function searchBothScopes(
   return unique.filter((m) => m.level === 2);
 }
 
+async function findStoredMemories(
+  client: OpenVikingClient,
+  text: string,
+  displayLimit = 6,
+): Promise<FindResultItem[]> {
+  const candidateLimit = Math.max(displayLimit * 4, 12);
+  const leafMemories = await searchBothScopes(client, text.slice(0, 500), candidateLimit);
+  const processed = postProcessMemories(leafMemories, {
+    limit: candidateLimit,
+    scoreThreshold: 0,
+    leafOnly: true,
+  });
+  const picked = pickMemoriesForInjection(processed, candidateLimit, text);
+  const overlapping = picked.filter((item) =>
+    lexicalOverlapBoost(buildQueryProfile(text).tokens, `${item.uri} ${item.abstract ?? item.overview ?? ""}`) > 0);
+  return filterNearTopMatches(overlapping, 0.15, 0);
+}
+
 function markRecalledMemoriesUsed(client: OpenVikingClient, contexts: string[]): void {
   const uniqueContexts = [...new Set(contexts.filter((uri) => typeof uri === "string" && uri.length > 0))];
   if (uniqueContexts.length === 0) return;
@@ -564,8 +629,8 @@ const server = new McpServer({
 // -- Tool: memory_recall --------------------------------------------------
 
 server.tool(
-  "memory_recall",
-  "Search long-term memories from OpenViking. Use when you need past user preferences, facts, decisions, or any previously stored information.",
+  "openviking_recall",
+  "Manually inspect OpenViking long-term memory. Use only for explicit OpenViking recall or inspection requests. Normal background recall is handled by hooks, not this tool.",
   {
     query: z.string().describe("Search query — describe what you want to recall"),
     limit: z.number().optional().describe("Max results to return (default: 6)"),
@@ -619,13 +684,19 @@ server.tool(
 // -- Tool: memory_store ---------------------------------------------------
 
 server.tool(
-  "memory_store",
-  "Store information into OpenViking long-term memory. Use when the user says 'remember this', shares preferences, important facts, decisions, or any information worth persisting across sessions.",
+  "openviking_store",
+  "Manually persist information into OpenViking long-term memory. Use only for explicit OpenViking save requests or direct memory control. Normal background capture is handled by hooks, not this tool.",
   {
     text: z.string().describe("The information to store as memory"),
     role: z.string().optional().describe("Message role: 'user' (default) or 'assistant'"),
   },
   async ({ text, role }) => {
+    if (config.mode === "recall_only") {
+      return {
+        content: [{ type: "text" as const, text: storeAndForgetDisabledMessage() }],
+      };
+    }
+
     const msgRole = role || "user";
     let sessionId: string | undefined;
     try {
@@ -664,10 +735,15 @@ server.tool(
         };
       }
 
+      const storedMemories = await findStoredMemories(client, text).catch(() => []);
+      const storedSuffix = storedMemories.length > 0
+        ? `\n\nLikely stored memories:\n${formatStoredMemoryMatches(storedMemories)}`
+        : "";
+
       return {
         content: [{
           type: "text" as const,
-          text: `Successfully extracted ${memoriesCount} memory/memories from the provided text and stored them in OpenViking.`,
+          text: `OpenViking reported ${memoriesCount} extracted memory item(s).${storedSuffix}`,
         }],
       };
     } finally {
@@ -681,14 +757,20 @@ server.tool(
 // -- Tool: memory_forget --------------------------------------------------
 
 server.tool(
-  "memory_forget",
-  "Delete a memory from OpenViking. Provide an exact URI for direct deletion, or a search query to find and delete matching memories.",
+  "openviking_forget",
+  "Manually delete OpenViking long-term memories. Use for explicit correction or deletion requests. Provide an exact URI for direct deletion, or a search query to find matching memories.",
   {
     uri: z.string().optional().describe("Exact viking:// memory URI to delete"),
     query: z.string().optional().describe("Search query to find the memory to delete"),
     target_uri: z.string().optional().describe("Search scope URI (default: viking://user/memories)"),
   },
   async ({ uri, query, target_uri }) => {
+    if (config.mode === "recall_only") {
+      return {
+        content: [{ type: "text" as const, text: storeAndForgetDisabledMessage() }],
+      };
+    }
+
     // Direct URI deletion
     if (uri) {
       if (!isMemoryUri(uri)) {
@@ -723,13 +805,15 @@ server.tool(
       }).filter((item) => isMemoryUri(item.uri));
     }
 
+    candidates = filterNearTopMatches(candidates, 0.15, config.scoreThreshold);
+
     if (candidates.length === 0) {
       return { content: [{ type: "text" as const, text: "No matching memories found. Try a more specific query." }] };
     }
 
     // Auto-delete if single strong match
     const top = candidates[0]!;
-    if (candidates.length === 1 && clampScore(top.score) >= 0.85) {
+    if (candidates.length === 1 && clampScore(top.score) >= 0.7) {
       await client.deleteUri(top.uri);
       await waitForMemoryDeletion(client, top.uri);
       return { content: [{ type: "text" as const, text: `Deleted memory: ${top.uri}` }] };
@@ -752,7 +836,7 @@ server.tool(
 // -- Tool: memory_health --------------------------------------------------
 
 server.tool(
-  "memory_health",
+  "openviking_health",
   "Check whether the OpenViking memory server is reachable and healthy.",
   {},
   async () => {

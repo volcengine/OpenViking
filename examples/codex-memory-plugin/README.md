@@ -1,54 +1,103 @@
 # OpenViking Memory Plugin for Codex
 
-Codex MCP server example that exposes OpenViking memories as explicit tools.
+OpenViking wants long-term memory to feel automatic.
 
-This example is repo-only. It does not edit `~/.codex/config.toml` for you.
+This Codex example now follows that model:
 
-## What It Does
+- transparent recall on `UserPromptSubmit`
+- transparent capture on `Stop`
+- explicit MCP tools only for optional manual OpenViking control
 
-- Exposes four MCP tools for Codex:
-  - `memory_recall`
-  - `memory_store`
-  - `memory_forget`
-  - `memory_health`
-- Reads OpenViking connection details from `~/.openviking/ov.conf`
-- Marks recalled memory URIs as `used()` before a fire-and-forget `commit()`
-- Contributes retrieval feedback to OpenViking's hotness ranking without blocking Codex
+The default mode is `full`. A configurable `recall_only` mode is also
+supported for setups where another system populates OpenViking and the Codex
+plugin should act only as the recall/query layer.
 
-## Prerequisites
+This is still a repo example, not a fully auto-installed Codex marketplace
+plugin. Codex currently discovers lifecycle hooks from `hooks.json`, not from a
+plugin manifest, so this example ships both the plugin bundle shape and a
+one-time hook installer.
 
-- Codex CLI installed
-- OpenViking HTTP server running
+## Architecture
+
+- `.codex-plugin/plugin.json`
+  - plugin metadata for future Codex plugin flows
+- `.mcp.json`
+  - optional explicit OpenViking MCP server wiring
+- `scripts/auto-recall.mjs`
+  - transparent recall hook
+- `scripts/auto-capture.mjs`
+  - transparent capture hook that enqueues background writes
+- `scripts/capture-worker.mjs`
+  - background worker for OpenViking writes
+- `scripts/start-memory-server.mjs`
+  - launches the built MCP server from the bootstrapped runtime
+- `scripts/install-codex-hooks.mjs`
+  - writes managed hook entries into `~/.codex/hooks.json`
+- `src/memory-server.ts`
+  - explicit/manual OpenViking tools for store, recall, forget, and health
+
+## How It Works
+
+### 1. Transparent recall
+
+On every `UserPromptSubmit`, the hook:
+
+- skips obvious write/update prompts
+- checks the local latest-fact index first
+- checks OpenViking health
+- searches `viking://user/memories` and `viking://agent/memories`
+- optionally searches `viking://agent/skills`
+- reranks and dedupes results
+- injects at most one compact memory sentence into Codex context
+- marks returned URIs as `used()` and commits that feedback asynchronously
+
+### 2. Transparent capture
+
+In `full` mode, on every `Stop`, the hook:
+
+- parses the Codex transcript
+- captures only new turns since the last successful pass
+- captures user turns only by default
+- strips previously injected memory context
+- keeps only durable-fact style captures by default
+- updates a local latest-fact index immediately
+- enqueues the OpenViking write into a background worker
+- fails open if OpenViking is down or slow
+
+### 3. Manual MCP tools
+
+The MCP server remains available for explicit/manual operations, but it is not
+part of the default happy path:
+
+- `openviking_recall`
+- `openviking_store`
+- `openviking_forget`
+- `openviking_health`
+
+These are explicitly OpenViking operations. They are not Codex-native local
+memory.
+
+### 4. Plugin modes
+
+- `full`
+  - transparent recall enabled
+  - transparent capture enabled
+  - manual store/delete tools enabled
+- `recall_only`
+  - transparent recall enabled
+  - transparent capture disabled
+  - manual `openviking_store` and `openviking_forget` disabled
+  - manual `openviking_recall` and `openviking_health` still available
+
+## Install
+
+Prerequisites:
+
+- Codex CLI
+- OpenViking server
 - Node.js 22+
 
-Start OpenViking first if needed:
-
-```bash
-openviking-server --config ~/.openviking/ov.conf
-```
-
-## Build
-
-From this directory:
-
-```bash
-npm ci
-npm run build
-```
-
-That produces `servers/memory-server.js`, the MCP entrypoint Codex will launch.
-
-## End-to-End Verification (macOS)
-
-The example was manually verified against a running OpenViking server on macOS.
-
-1. Confirm OpenViking is healthy:
-
-```bash
-curl -fsS http://127.0.0.1:1933/health
-```
-
-2. Build the MCP server:
+Build the example:
 
 ```bash
 cd examples/codex-memory-plugin
@@ -56,180 +105,315 @@ npm ci
 npm run build
 ```
 
-3. Register the server in Codex and verify the config:
+Install the lifecycle hooks:
 
 ```bash
-codex mcp add openviking-memory -- \
-  node /ABS/PATH/TO/OpenViking/examples/codex-memory-plugin/servers/memory-server.js
-codex mcp list
+cd examples/codex-memory-plugin
+npm run install:hooks
 ```
 
-4. Exercise the read-only tool path through Codex itself:
+The installer writes managed entries into the active `CODEX_HOME`. Set
+`CODEX_HOME=/path/to/test-home` first if you want to test without touching your
+default Codex home. Rerun the installer after changing plugin mode so the
+managed hook set matches the current config.
+
+Verify the hook-first path in a new Codex session:
 
 ```bash
-codex exec --dangerously-bypass-approvals-and-sandbox --json --skip-git-repo-check -C /tmp \
-  'Use the MCP tool `memory_health` exactly once. After the tool call, reply with only the final health text you received from the tool.'
+codex --no-alt-screen -C /tmp
 ```
 
-Expected result:
+Then say something like:
 
 ```text
-OpenViking is healthy (http://127.0.0.1:1933)
+For future reference, my weird constellation codeword is comet-saffron-demo-20260408.
 ```
 
-5. Exercise semantic recall through Codex:
+Exit, start a fresh session, and ask:
 
-```bash
-codex exec --dangerously-bypass-approvals-and-sandbox --json --skip-git-repo-check -C /tmp \
-  'Use the MCP tool `memory_recall` exactly once with a query that should match existing indexed memories. After the tool call, reply with only the final tool text.'
+```text
+what is my weird constellation codeword?
 ```
 
-6. Exercise the write path directly against the MCP server:
+The second session should answer with the stored codeword directly.
 
-```bash
-node --input-type=module <<'EOF'
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
-
-const transport = new StdioClientTransport({
-  command: 'node',
-  args: ['/ABS/PATH/TO/OpenViking/examples/codex-memory-plugin/servers/memory-server.js'],
-  env: { ...process.env, OPENVIKING_TIMEOUT_MS: '60000' },
-})
-
-const client = new Client({ name: 'qa', version: '0.0.1' }, { capabilities: {} })
-await client.connect(transport)
-const result = await client.callTool(
-  {
-    name: 'memory_store',
-    arguments: {
-      text: 'Remember this preference for QA token 20260408T195200Z: Brian prefers mango sorbet after dinner.',
-    },
-  },
-  undefined,
-  { timeout: 240000 },
-)
-console.log(JSON.stringify(result, null, 2))
-await transport.close()
-EOF
-```
-
-On the macOS QA host used for this PR, the patched adapter returned a background
-task ID after timing out, which confirms the async commit path runs but also
-shows that the memory extraction pipeline can outlast the local verification
-window.
-
-## Functional Status
-
-| Tool | macOS status | Notes |
-| --- | --- | --- |
-| `memory_health` | Verified with Codex | Successful MCP invocation via `codex exec --dangerously-bypass-approvals-and-sandbox` |
-| `memory_recall` | Verified with Codex | Successful MCP invocation via `codex exec --dangerously-bypass-approvals-and-sandbox`; returned indexed memories |
-| `memory_store` | Exercised, not fully completed during QA | Patched to use `session commit` plus task polling; local QA returned a timeout with background `task_id`, not a completed extraction |
-| `memory_forget` | Exercised partially | Query path executed and returned candidate URIs; exact delete success path was not deterministically proven on this host |
-
-## Add To Codex
-
-Add the MCP server with the verified Codex CLI shape:
+Optional manual MCP install:
 
 ```bash
 codex mcp add openviking-memory -- \
-  node /ABS/PATH/TO/OpenViking/examples/codex-memory-plugin/servers/memory-server.js
+  node /ABS/PATH/TO/OpenViking/examples/codex-memory-plugin/scripts/start-memory-server.mjs
 ```
 
-Example using your local repository checkout:
+Remove the example later if needed:
 
 ```bash
-codex mcp add openviking-memory -- \
-  node /path/to/OpenViking/examples/codex-memory-plugin/servers/memory-server.js
+cd examples/codex-memory-plugin
+npm run uninstall:hooks
 ```
 
-List configured MCP servers:
-
-```bash
-codex mcp list
-```
-
-Remove it later if needed:
+If you installed the optional manual MCP layer, also remove it:
 
 ```bash
 codex mcp remove openviking-memory
 ```
 
-## Optional Environment Overrides
+## Current Codex Limitation
 
-The server defaults to `~/.openviking/ov.conf`. You can override behavior with env vars when adding the MCP server:
+The repo now includes a real Codex plugin bundle shape:
 
-```bash
-codex mcp add openviking-memory \
-  --env OPENVIKING_AGENT_ID=codex-local \
-  --env OPENVIKING_TIMEOUT_MS=20000 \
-  -- node /ABS/PATH/TO/OpenViking/examples/codex-memory-plugin/servers/memory-server.js
+- `.codex-plugin/plugin.json`
+- `.mcp.json`
+- `hooks/hooks.json`
+
+But Codex does not yet auto-discover lifecycle hooks from the plugin manifest in
+this example flow. Hook discovery still happens from `~/.codex/hooks.json`, so
+the hook installer is the practical bridge today.
+
+That means setup is currently:
+
+1. install the hooks for the default experience
+2. optionally add the MCP server for manual inspection/control
+
+The product intent is still transparent memory first.
+
+## Config
+
+The example reads OpenViking connection details from `~/.openviking/ov.conf`.
+Codex-specific overrides live in a sidecar plugin config file at:
+
+`~/.openviking/codex-memory-plugin/config.json`
+
+Example:
+
+```json
+{
+  "mode": "full",
+  "agentId": "codex",
+  "timeoutMs": 15000,
+  "autoRecall": true,
+  "recallLimit": 1,
+  "scoreThreshold": 0.01,
+  "minQueryLength": 3,
+  "searchAgentSkills": false,
+  "skipRecallOnWritePrompts": true,
+  "maxInjectedMemories": 1,
+  "preferPromptLanguage": true,
+  "autoCapture": true,
+  "captureMode": "durable-facts",
+  "captureDispatch": "background",
+  "captureMaxLength": 24000,
+  "captureTimeoutMs": 30000,
+  "captureAssistantTurns": false,
+  "debug": false,
+  "logRankingDetails": false
+}
 ```
 
-Supported overrides:
+`mode` is the canonical lifecycle setting:
+
+- `full`
+  - installs `UserPromptSubmit` and, when capture is enabled, `Stop`
+  - allows plugin-originated capture and manual store/delete
+- `recall_only`
+  - installs `UserPromptSubmit` only
+  - disables plugin-originated capture and manual store/delete
+
+`autoCapture` can still be used as an extra local override inside `full`, but
+`recall_only` always disables write paths.
+
+This is separate from `ov.conf` because the current OpenViking server config
+schema rejects unknown top-level plugin sections.
+
+Useful env overrides:
 
 - `OPENVIKING_CONFIG_FILE`
+- `OPENVIKING_CODEX_CONFIG_FILE`
 - `OPENVIKING_AGENT_ID`
 - `OPENVIKING_TIMEOUT_MS`
 - `OPENVIKING_RECALL_LIMIT`
 - `OPENVIKING_SCORE_THRESHOLD`
+- `OPENVIKING_CODEX_PLUGIN_HOME`
+- `OPENVIKING_DEBUG`
+- `OPENVIKING_DEBUG_LOG`
 
-## How Recall Feedback Works
+Keep the `UserPromptSubmit` hook timeout above your effective OpenViking recall
+budget. With `thinking` plus rerank enabled, a 30 second hook timeout is a
+safer default than a single-digit timeout.
 
-`memory_recall` searches OpenViking, returns the selected memories to Codex, and also starts a background sequence:
+Runtime and state paths:
 
-1. `POST /api/v1/sessions`
-2. `POST /api/v1/sessions/{id}/used` with recalled `viking://` URIs
-3. `POST /api/v1/sessions/{id}/commit`
-4. `DELETE /api/v1/sessions/{id}`
+- runtime: `~/.openviking/codex-memory-plugin/runtime`
+- queue: `~/.openviking/codex-memory-plugin/queue`
+- capture state: `~/.openviking/codex-memory-plugin/state`
+- debug log: `~/.openviking/logs/codex-hooks.log`
 
-This is fire-and-forget. Tool responses do not wait on the feedback loop.
+## Flow
 
 ```mermaid
 sequenceDiagram
     participant C as Codex
-    participant M as MCP server
+    participant H as Codex hooks
     participant O as OpenViking
+    participant W as Capture worker
 
-    C->>M: memory_recall(query)
-    M->>O: POST /api/v1/search/find
-    M->>O: GET /api/v1/content/read (per selected memory)
-    M-->>C: recalled memories
+    rect rgb(245, 248, 255)
+        Note over C,H: default path
+        C->>H: UserPromptSubmit
+        H->>H: skip recall on write/update prompts
+        H->>H: check latest local fact index
+        H->>O: search memories
+        O-->>H: ranked candidates
+        H-->>C: compact additional_context sentence
+    end
 
-    Note over M,O: async fire-and-forget feedback path
-    M->>O: POST /api/v1/sessions
-    M->>O: POST /api/v1/sessions/{id}/used
-    M->>O: POST /api/v1/sessions/{id}/commit
-    M->>O: DELETE /api/v1/sessions/{id}
+    Note over H,O: fire-and-forget recall feedback
+    H->>O: create session
+    H->>O: used(context URIs)
+    H->>O: commit
+    H->>O: delete session
+
+    C->>H: Stop
+    H->>H: parse transcript incrementally
+    H->>H: durable-fact capture check
+    H->>H: update local latest-fact index
+    H->>W: enqueue background job
+    W->>O: create session
+    W->>O: add messages
+    W->>O: commit with task polling
+    W->>O: delete session
+
+    participant M as Optional MCP server
+    C->>M: openviking_store / recall / forget / health
+    M->>O: explicit manual OpenViking operations
 ```
 
-## Testing Note
+## Manual Tool Semantics
 
-No automated tests were added for this example in this PR.
+`openviking_recall`
 
-This example is a live integration across Codex CLI, stdio MCP transport,
-Node.js, and a running OpenViking server. The repository does not currently
-provide a stable automated harness that can authenticate Codex and exercise MCP
-tools end to end inside CI, so this PR uses execution-backed manual validation
-on macOS instead.
+- manual inspection or forced recall
+- returns compact recalled memory text plus scored summaries
 
-## Notes
+`openviking_store`
 
-- This example gives Codex explicit tools only. It does not implement transparent auto-recall hooks.
-- `memory_recall` only marks the memories it actually returns as used, which is higher-signal than broad auto-recall marking.
-- If your OpenViking server requires auth, the MCP server reads `root_api_key` from `ov.conf`.
+- explicit durable write into OpenViking
+- uses `session.commit()` plus task polling
+- returns extracted count and, when recoverable, likely stored memory URIs
+- disabled in `recall_only`
 
-## Known Limitations / Untested Paths
+`openviking_forget`
 
-- Non-interactive Codex QA on this host required `--dangerously-bypass-approvals-and-sandbox` for successful MCP tool execution. `--full-auto` cancelled the same tool call during verification.
-- `memory_store` now uses OpenViking session commit plus task polling, but long-running extraction can still outlast the local QA timeout window.
-- In non-interactive Codex QA, the model may decline memory-writing tool calls on policy grounds, so write-path verification was performed directly against the MCP server.
-- `memory_forget` query mode only auto-deletes when there is a single strong match. Otherwise it returns candidate URIs and requires a follow-up exact delete.
-- Linux and Windows were not verified in this PR.
+- explicit deletion or correction path
+- direct URI delete is supported
+- query mode auto-deletes only a single strong match
+- otherwise it returns candidate URIs for confirmation
+- disabled in `recall_only`
+
+`openviking_health`
+
+- direct connectivity probe for the OpenViking server
+
+## Native Codex Memory
+
+This example is compatible with Codex native memory staying enabled.
+
+The intended boundary is:
+
+- Codex native memory: local implicit adaptation
+- OpenViking plugin: transparent long-term recall/capture plus explicit manual memory control
+
+If the model needs to inspect, store, or delete persistent OpenViking memory
+explicitly, it should use the OpenViking MCP tools, not rely on ambiguous
+native-memory phrasing.
+
+## Current UX Limitation
+
+This plugin-only example can remove plugin-branded labels and raw memory dumps,
+but Codex still shows generic hook start/completion rows in the TUI. That is a
+Codex UI constraint, not an OpenViking plugin choice.
+
+## Verification
+
+Minimum end-to-end check:
+
+```bash
+codex --no-alt-screen -C /tmp
+```
+
+Inside Codex:
+
+```text
+For future reference, my weird constellation codeword is opal-squid-radar-demo-20260408.
+```
+
+Exit, start a fresh session, and ask:
+
+```text
+what is my weird constellation codeword?
+```
+
+Expected result:
+
+1. the first session stores the codeword without showing raw hook context
+2. the second session answers `opal-squid-radar-demo-20260408`
+3. Codex may still show generic `hook: UserPromptSubmit` and `hook: Stop` rows
+4. Codex should not show plugin-branded labels, XML memory wrappers, or raw memory dumps
+
+For deterministic QA, prefer a unique nonsense phrase such as
+`opal-squid-radar-demo-20260408` over broad phrases like "amber tea".
+
+`recall_only` verification:
+
+1. set `"mode": "recall_only"` in `~/.openviking/codex-memory-plugin/config.json`
+2. rerun `npm run install:hooks`
+3. confirm `~/.codex/hooks.json` contains `UserPromptSubmit` but not `Stop`
+4. verify a preexisting OpenViking memory is recalled in a fresh Codex session
+5. verify `openviking_store` and `openviking_forget` return a mode-based rejection
+
+Optional manual MCP verification:
+
+```bash
+codex mcp add openviking-memory -- \
+  node /ABS/PATH/TO/OpenViking/examples/codex-memory-plugin/scripts/start-memory-server.mjs
+```
+
+Then in Codex:
+
+```text
+Use the external MCP tool `openviking_health` exactly once right now, then return only the tool result.
+```
+
+If `openviking_store` returns `0` extracted memories or times out, the MCP and
+hook wiring may still be correct. That result usually means the backing
+OpenViking extraction pipeline is unhealthy, overloaded, or misconfigured.
+
+## Known Limitations
+
+- Hook install is still explicit because Codex currently reads lifecycle hooks
+  from `~/.codex/hooks.json`, not from the plugin manifest in this example flow.
+- The MCP server install is still explicit via `codex mcp add`.
+- `recall_only` is intentionally strict: the plugin will not create, mutate, or
+  delete OpenViking memory in that mode, even through manual store/delete tools.
+- `openviking_store` returns likely stored URIs when it can recover them from a
+  follow-up search, but OpenViking does not currently return created memory URIs
+  directly from `session.commit()`.
+- Successful extraction still depends on the backing OpenViking server. On a
+  slow or unhealthy server, explicit store can return `0` extracted memories or
+  a timeout even when the Codex integration itself is working.
+- `openviking_forget` query mode intentionally falls back to candidate URIs when
+  there is not exactly one strong match.
+- If OpenViking is unavailable, the hooks fail open and Codex remains usable,
+  but automatic memory behavior is skipped for that turn.
 
 ## Troubleshooting
 
-- MCP server not starting: run `npm ci && npm run build` in this directory first
-- OpenViking request failures: verify `openviking-server` is reachable at the host and port in `ov.conf`
-- No memories returned: confirm you have indexed data under `viking://user/memories` or `viking://agent/memories`
+- `OpenViking is unreachable`
+  - verify `openviking-server` is running at the host and port in `ov.conf`
+- transparent recall/capture not happening
+  - run `npm run install:hooks` again
+  - inspect `~/.codex/hooks.json`
+  - enable `OPENVIKING_DEBUG=1` or `codex.debug: true`
+  - inspect `~/.openviking/logs/codex-hooks.log`
+- MCP server startup fails
+  - rebuild with `npm ci && npm run build`
+  - remove and re-add the optional MCP server

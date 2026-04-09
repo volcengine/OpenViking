@@ -1,0 +1,17 @@
+{
+  "name": "openviking-memory",
+  "description": "Long-term OpenViking memory for Codex. Transparent recall and capture via hooks, plus explicit OpenViking memory tools via MCP.",
+  "interface": {
+    "displayName": "OpenViking Memory",
+    "shortDescription": "Transparent long-term memory for Codex",
+    "longDescription": "Adds transparent OpenViking recall and capture hooks for Codex, plus explicit OpenViking memory tools for manual store, recall, forget, and health operations.",
+    "developerName": "OpenViking",
+    "category": "productivity",
+    "capabilities": [
+      "Long-term memory recall",
+      "Automatic memory capture",
+      "Manual memory inspection and deletion"
+    ],
+    "websiteURL": "https://github.com/volcengine/OpenViking"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node '__OPENVIKING_CODEX_PLUGIN_ROOT__/scripts/auto-recall.mjs'",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node '__OPENVIKING_CODEX_PLUGIN_ROOT__/scripts/auto-capture.mjs'",
+            "timeout": 45
+          }
+        ]
+      }
+    ]
+  }
+}
