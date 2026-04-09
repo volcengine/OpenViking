@@ -795,7 +795,10 @@ class VikingFS:
         if not info.get("isDir"):
             raise ValueError(f"{uri} is not a directory")
         file_path = f"{path}/.abstract.md"
-        content_bytes = self._handle_agfs_read(self.agfs.read(file_path))
+        try:
+            content_bytes = self._handle_agfs_read(self.agfs.read(file_path))
+        except Exception:
+            raise NotFoundError(f"{uri}/.abstract.md", "file")
 
         if self._encryptor:
             real_ctx = self._ctx_or_default(ctx)
@@ -815,7 +818,10 @@ class VikingFS:
         if not info.get("isDir"):
             raise ValueError(f"{uri} is not a directory")
         file_path = f"{path}/.overview.md"
-        content_bytes = self._handle_agfs_read(self.agfs.read(file_path))
+        try:
+            content_bytes = self._handle_agfs_read(self.agfs.read(file_path))
+        except Exception:
+            raise NotFoundError(f"{uri}/.overview.md", "file")
 
         if self._encryptor:
             real_ctx = self._ctx_or_default(ctx)
