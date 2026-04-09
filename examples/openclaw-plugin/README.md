@@ -55,7 +55,7 @@ This matters because the plugin is built to support multi-agent and multi-sessio
 
 ![Automatic recall flow before prompt build](./images/openclaw-plugin-recall-flow.png)
 
-Today the main recall path still lives in `before_prompt_build`:
+Today there are two recall-related paths: legacy hook injection in `before_prompt_build`, and context reconstruction in `assemble()`. They should not both inject prompt context for the same run:
 
 1. Extract the latest user text from `messages` or `prompt`.
 2. Resolve the agent routing for the current `sessionId/sessionKey`.
@@ -182,7 +182,7 @@ The repo also contains a more future-looking design draft at `docs/design/opencl
 
 - this README describes current implemented behavior
 - the older draft discusses a stronger future move into context-engine-owned lifecycle control
-- in the current version, the main automatic recall path still lives in `before_prompt_build`, not fully in `assemble()`
+- in the current version, hook-based auto-recall still exists in `before_prompt_build`, but when the context-engine path is active it should not run alongside `assemble()`
 - in the current version, `afterTurn()` already appends to the OpenViking session, but commit remains threshold-triggered and asynchronous on that path
 - in the current version, `compact()` already uses `commit(wait=true)`, but it is still focused on synchronous commit plus readback rather than owning every orchestration concern
 
