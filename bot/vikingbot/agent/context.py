@@ -184,6 +184,8 @@ Skills with available="false" need dependencies installed first - you can try in
                 f"{viking_memory}"
             )
 
+        parts.append("Reply in the same language as the user's query, ignoring the language of the reference materials. User's query:")
+
         return "\n\n---\n\n".join(parts)
 
     async def _get_identity(self, session_key: SessionKey) -> str:
@@ -222,7 +224,6 @@ You have two workspaces:
 
 IMPORTANT: 
 - When responding to direct questions or conversations, reply directly with your text response.
-- Reply in the same language as the user's question, ignoring the language of the reference materials.
 - Only use the 'message' tool when you need to send a message to a specific chat channel (like WhatsApp).For normal conversation, just respond with text - do not call the message tool.
 - Always be helpful, accurate, and concise. When using tools, think step by step: what you know, what you need, and why you chose this tool.
 
