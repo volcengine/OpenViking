@@ -59,6 +59,7 @@ class QueueObserver(BaseObserver):
         total_pending = 0
         total_in_progress = 0
         total_processed = 0
+        total_requeues = 0
         total_errors = 0
 
         for queue_name, status in statuses.items():
@@ -69,6 +70,7 @@ class QueueObserver(BaseObserver):
                     "Pending": status.pending,
                     "In Progress": status.in_progress,
                     "Processed": status.processed,
+                    "Requeued": status.requeue_count,
                     "Errors": status.error_count,
                     "Total": total,
                 }
@@ -76,6 +78,7 @@ class QueueObserver(BaseObserver):
             total_pending += status.pending
             total_in_progress += status.in_progress
             total_processed += status.processed
+            total_requeues += status.requeue_count
             total_errors += status.error_count
 
         data.append(
@@ -84,6 +87,7 @@ class QueueObserver(BaseObserver):
                 "Pending": getattr(dag_stats, "pending_nodes", 0) if dag_stats else 0,
                 "In Progress": getattr(dag_stats, "in_progress_nodes", 0) if dag_stats else 0,
                 "Processed": getattr(dag_stats, "done_nodes", 0) if dag_stats else 0,
+                "Requeued": 0,
                 "Errors": 0,
                 "Total": getattr(dag_stats, "total_nodes", 0) if dag_stats else 0,
             }
@@ -97,6 +101,7 @@ class QueueObserver(BaseObserver):
                 "Pending": total_pending,
                 "In Progress": total_in_progress,
                 "Processed": total_processed,
+                "Requeued": total_requeues,
                 "Errors": total_errors,
                 "Total": total_total,
             }

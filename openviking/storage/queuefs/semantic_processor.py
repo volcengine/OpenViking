@@ -55,6 +55,7 @@ class DiffResult:
 
 class RequestQueueStats:
     processed: int = 0
+    requeue_count: int = 0
     error_count: int = 0
 
 
@@ -124,6 +125,7 @@ class SemanticProcessor(DequeueHandlerBase):
         cls,
         telemetry_id: str,
         processed: int = 0,
+        requeue_count: int = 0,
         error_count: int = 0,
     ) -> None:
         if not telemetry_id:
@@ -131,6 +133,7 @@ class SemanticProcessor(DequeueHandlerBase):
         with cls._stats_lock:
             stats = cls._request_stats_by_telemetry_id.setdefault(telemetry_id, RequestQueueStats())
             stats.processed += processed
+            stats.requeue_count += requeue_count
             stats.error_count += error_count
             cls._request_stats_order.append(telemetry_id)
             if len(cls._request_stats_order) > cls._max_cached_stats:
@@ -258,6 +261,9 @@ class SemanticProcessor(DequeueHandlerBase):
                     f"Circuit breaker is open, re-enqueueing semantic message: {msg.uri}"
                 )
                 await self._reenqueue_semantic_msg(msg)
+                self._merge_request_stats(msg.telemetry_id, requeue_count=1)
+                get_request_wait_tracker().record_semantic_requeue(msg.telemetry_id)
+                self.report_requeue()
                 self.report_success()
                 return None
             collector = resolve_telemetry(msg.telemetry_id)
@@ -348,6 +354,9 @@ class SemanticProcessor(DequeueHandlerBase):
                 if msg is not None:
                     try:
                         await self._reenqueue_semantic_msg(msg)
+                        self._merge_request_stats(msg.telemetry_id, requeue_count=1)
+                        get_request_wait_tracker().record_semantic_requeue(msg.telemetry_id)
+                        self.report_requeue()
                     except Exception as requeue_err:
                         logger.error(f"Failed to re-enqueue semantic message: {requeue_err}")
                         self._merge_request_stats(msg.telemetry_id, error_count=1)

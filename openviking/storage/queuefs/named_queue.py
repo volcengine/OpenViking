@@ -31,6 +31,7 @@ class QueueStatus:
     pending: int = 0
     in_progress: int = 0
     processed: int = 0
+    requeue_count: int = 0
     error_count: int = 0
     errors: List[QueueError] = field(default_factory=list)
 
@@ -60,21 +61,29 @@ class DequeueHandlerBase(abc.ABC):
     """Dequeue handler base class, supports callback mechanism to report processing results."""
 
     _success_callback: Optional[Callable[[], None]] = None
+    _requeue_callback: Optional[Callable[[], None]] = None
     _error_callback: Optional[Callable[[str, Optional[Dict[str, Any]]], None]] = None
 
     def set_callbacks(
         self,
         on_success: Callable[[], None],
+        on_requeue: Callable[[], None],
         on_error: Callable[[str, Optional[Dict[str, Any]]], None],
     ) -> None:
         """Set callback functions."""
         self._success_callback = on_success
+        self._requeue_callback = on_requeue
         self._error_callback = on_error
 
     def report_success(self) -> None:
         """Report processing success."""
         if self._success_callback:
             self._success_callback()
+
+    def report_requeue(self) -> None:
+        """Report that the current message was re-enqueued for later retry."""
+        if self._requeue_callback:
+            self._requeue_callback()
 
     def report_error(self, error_msg: str, data: Optional[Dict[str, Any]] = None) -> None:
         """Report processing error."""
@@ -113,6 +122,7 @@ class NamedQueue:
         self._lock = threading.Lock()
         self._in_progress = 0
         self._processed = 0
+        self._requeue_count = 0
         self._error_count = 0
         self._errors: List[QueueError] = []
 
@@ -120,6 +130,7 @@ class NamedQueue:
         if self._dequeue_handler:
             self._dequeue_handler.set_callbacks(
                 on_success=self._on_process_success,
+                on_requeue=self._on_process_requeue,
                 on_error=self._on_process_error,
             )
 
@@ -133,6 +144,11 @@ class NamedQueue:
         with self._lock:
             self._in_progress -= 1
             self._processed += 1
+
+    def _on_process_requeue(self) -> None:
+        """Called when a dequeued message is re-enqueued for later retry."""
+        with self._lock:
+            self._requeue_count += 1
 
     def _on_process_error(self, error_msg: str, data: Optional[Dict[str, Any]] = None) -> None:
         """Called on processing failure."""
@@ -157,6 +173,7 @@ class NamedQueue:
                 pending=pending,
                 in_progress=self._in_progress,
                 processed=self._processed,
+                requeue_count=self._requeue_count,
                 error_count=self._error_count,
                 errors=list(self._errors),
             )
@@ -166,6 +183,7 @@ class NamedQueue:
         with self._lock:
             self._in_progress = 0
             self._processed = 0
+            self._requeue_count = 0
             self._error_count = 0
             self._errors = []
 
