@@ -589,7 +589,7 @@ func (p *S3FSPlugin) Validate(cfg map[string]interface{}) error {
 	allowedKeys := []string{
 		"bucket", "region", "access_key_id", "secret_access_key", "endpoint", "prefix", "disable_ssl", "mount_path",
 		"cache_enabled", "cache_ttl", "stat_cache_ttl", "cache_max_size", "use_path_style",
-		"directory_marker_mode",
+		"directory_marker_mode", "disable_batch_delete",
 	}
 	if err := config.ValidateOnlyKnownKeys(cfg, allowedKeys); err != nil {
 		return err
@@ -651,6 +651,7 @@ func (p *S3FSPlugin) Initialize(config map[string]interface{}) error {
 		DisableSSL:          getBoolConfig(config, "disable_ssl", false),
 		UsePathStyle:        getBoolConfig(config, "use_path_style", true),
 		DirectoryMarkerMode: directoryMarkerMode,
+		DisableBatchDelete:  getBoolConfig(config, "disable_batch_delete", false),
 	}
 
 	if cfg.Bucket == "" {

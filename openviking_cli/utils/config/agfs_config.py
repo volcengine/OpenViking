@@ -60,6 +60,13 @@ class S3Config(BaseModel):
         description="How to persist S3 directory markers: 'none' skips marker creation, 'empty' writes a zero-byte marker, and 'nonempty' writes a non-empty marker payload. Defaults to 'empty'.",
     )
 
+    disable_batch_delete: bool = Field(
+        default=False,
+        description="Disable batch delete (DeleteObjects) and use sequential single-object deletes instead. "
+        "Required for S3-compatible services like Alibaba Cloud OSS that require a Content-MD5 header "
+        "for DeleteObjects but AWS SDK v2 does not send it by default. Defaults to False.",
+    )
+
     model_config = {"extra": "forbid"}
 
     def validate_config(self):

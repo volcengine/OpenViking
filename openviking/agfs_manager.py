@@ -176,6 +176,7 @@ class AGFSManager:
                 "disable_ssl": not self.s3_config.use_ssl,
                 "use_path_style": self.s3_config.use_path_style,
                 "directory_marker_mode": self.s3_config.directory_marker_mode.value,
+                "disable_batch_delete": self.s3_config.disable_batch_delete,
             }
 
             config["plugins"]["s3fs"] = {

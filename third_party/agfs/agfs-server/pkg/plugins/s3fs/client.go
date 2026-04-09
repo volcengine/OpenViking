@@ -32,6 +32,7 @@ type S3Client struct {
 	region              string // AWS region
 	prefix              string // Optional prefix for all keys
 	directoryMarkerMode DirectoryMarkerMode
+	disableBatchDelete  bool // Disable batch delete for OSS compatibility
 }
 
 // S3Config holds S3 client configuration
@@ -45,6 +46,7 @@ type S3Config struct {
 	DisableSSL          bool   // For testing with local S3
 	UsePathStyle        bool   // Whether to use path-style addressing (true) or virtual-host-style (false)
 	DirectoryMarkerMode DirectoryMarkerMode
+	DisableBatchDelete  bool // Disable batch delete (DeleteObjects) for S3-compatible services
 }
 
 var nonEmptyDirectoryMarkerPayload = []byte{'\n'}
@@ -134,6 +136,7 @@ func NewS3Client(cfg S3Config) (*S3Client, error) {
 		region:              cfg.Region,
 		prefix:              prefix,
 		directoryMarkerMode: normalizeDirectoryMarkerMode(cfg.DirectoryMarkerMode),
+		disableBatchDelete:  cfg.DisableBatchDelete,
 	}, nil
 }
 
@@ -412,14 +415,28 @@ func (c *S3Client) DeleteDirectory(ctx context.Context, path string) error {
 			end = len(objectsToDelete)
 		}
 
-		_, err := c.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
-			Bucket: aws.String(c.bucket),
-			Delete: &types.Delete{
-				Objects: objectsToDelete[i:end],
-			},
-		})
-		if err != nil {
-			return fmt.Errorf("failed to delete objects: %w", err)
+		if c.disableBatchDelete {
+			// Sequential single-object delete for S3-compatible services (e.g., Alibaba Cloud OSS)
+			// that require Content-MD5 for DeleteObjects but AWS SDK v2 does not send it by default.
+			for _, obj := range objectsToDelete[i:end] {
+				_, err := c.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+					Bucket: aws.String(c.bucket),
+					Key:    obj.Key,
+				})
+				if err != nil {
+					return fmt.Errorf("failed to delete objects: %w", err)
+				}
+			}
+		} else {
+			_, err := c.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+				Bucket: aws.String(c.bucket),
+				Delete: &types.Delete{
+					Objects: objectsToDelete[i:end],
+				},
+			})
+			if err != nil {
+				return fmt.Errorf("failed to delete objects: %w", err)
+			}
 		}
 	}
 
