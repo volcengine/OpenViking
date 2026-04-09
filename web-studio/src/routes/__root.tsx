@@ -1,4 +1,4 @@
-import { Outlet, createRootRoute, useLocation } from '@tanstack/react-router'
+import { Outlet, createRootRoute, useLocation, useNavigate } from '@tanstack/react-router'
 import { TanStackRouterDevtoolsPanel } from '@tanstack/react-router-devtools'
 import { TanStackDevtools } from '@tanstack/react-devtools'
 import { GlobeIcon, MoonIcon, PanelLeftIcon, SunIcon } from 'lucide-react'
@@ -15,6 +15,7 @@ import {
 } from '#/components/ui/dropdown-menu'
 import { SidebarInset, SidebarProvider, useSidebar } from '#/components/ui/sidebar'
 import { routeItems } from '#/lib/legacy/routes'
+import { normalizeDirUri } from '#/lib/viking-fm'
 
 import '../styles.css'
 
@@ -27,13 +28,40 @@ const languages = [
   { code: 'en', label: 'English' },
 ] as const
 
+function getUriSegments(uri: string): Array<{ label: string; uri: string }> {
+  const normalized = normalizeDirUri(uri)
+  if (normalized === 'viking://') {
+    return [{ label: 'viking://', uri: 'viking://' }]
+  }
+
+  const body = normalized.slice('viking://'.length, -1)
+  const parts = body.split('/').filter(Boolean)
+
+  const segments: Array<{ label: string; uri: string }> = [{ label: 'viking://', uri: 'viking://' }]
+  let running = 'viking://'
+
+  for (const part of parts) {
+    running = `${running}${part}/`
+    segments.push({ label: part, uri: running })
+  }
+
+  return segments
+}
+
 function AppHeader() {
   const { toggleSidebar } = useSidebar()
   const { t, i18n } = useTranslation()
   const { setTheme, resolvedTheme } = useTheme()
   const location = useLocation()
+  const navigate = useNavigate()
   const currentRoute = routeItems.find((item) => location.pathname.startsWith(item.to))
   const currentLabel = currentRoute ? t(`sidebar.${currentRoute.key}`) : ''
+
+  const isFileManager = location.pathname.startsWith('/data/filesystem')
+  const uriFromSearch = isFileManager
+    ? new URLSearchParams(location.search).get('uri') || 'viking://'
+    : ''
+  const uriSegments = isFileManager ? getUriSegments(uriFromSearch) : []
 
   return (
     <header className="flex h-14 shrink-0 items-center justify-between border-b px-4">
@@ -44,6 +72,27 @@ function AppHeader() {
         <span className="text-base font-semibold tracking-tight">{t('app.title')}</span>
         {currentLabel ? (
           <span className="text-sm text-muted-foreground">/ {currentLabel}</span>
+        ) : null}
+        {isFileManager ? (
+          <div className="ml-3 flex items-center gap-1 overflow-x-auto text-sm text-muted-foreground">
+            {uriSegments.map((segment, index) => (
+              <button
+                key={segment.uri}
+                className="shrink-0 rounded px-1 hover:bg-muted hover:text-foreground"
+                type="button"
+                onClick={() => {
+                  navigate({
+                    to: '/data/filesystem',
+                    search: { uri: segment.uri },
+                    replace: true,
+                  })
+                }}
+              >
+                {segment.label}
+                {index < uriSegments.length - 1 ? ' /' : ''}
+              </button>
+            ))}
+          </div>
         ) : null}
       </div>
       <div className="flex items-center gap-1">
