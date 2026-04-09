@@ -92,6 +92,29 @@ describe("plugin bypass session patterns", () => {
     );
   });
 
+  it("does not try to commit on before_reset when the context-engine was never instantiated", async () => {
+    const { handlers, logger, registerContextEngine } = setupPlugin();
+
+    expect(registerContextEngine).toHaveBeenCalledTimes(1);
+
+    const hook = handlers.get("before_reset");
+    expect(hook).toBeTruthy();
+
+    await expect(
+      hook!(
+        {},
+        {
+          sessionId: "runtime-session",
+          sessionKey: "agent:main:test:1",
+        },
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("failed to commit OV session on reset"),
+    );
+  });
+
   it("bypasses before_reset without calling commitOVSession", async () => {
     const { handlers, registerContextEngine } = setupPlugin({
       bypassSessionPatterns: ["agent:*:cron:**"],
