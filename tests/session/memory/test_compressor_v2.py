@@ -9,7 +9,7 @@ Uses MockVikingFS and real VLM (from config).
 import logging
 from types import SimpleNamespace
 from typing import Any, Dict, List
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -420,3 +420,65 @@ class TestCompressorV2:
         assert isinstance(memories, list)
 
         logger.info("Test completed successfully!")
+
+    @pytest.mark.asyncio
+    async def test_v2_lock_acquire_respects_max_retries(self):
+        """v2 memory extraction should stop after configured lock retry limit."""
+        compressor = SessionCompressorV2(vikingdb=None)
+        user = UserIdentifier.the_default_user()
+        ctx = RequestContext(user=user, role=Role.ROOT)
+        messages = [Message.create_user("test")]
+
+        class DummySchema:
+            directory = "viking://user/{{ user_space }}/memories/events"
+
+        class DummyProvider:
+            def get_memory_schemas(self, _ctx):
+                return [DummySchema()]
+
+            def _get_registry(self):
+                return object()
+
+        class DummyOrchestrator:
+            context_provider = DummyProvider()
+
+            async def run(self):
+                return (
+                    SimpleNamespace(
+                        write_uris=[],
+                        edit_uris=[],
+                        edit_overview_uris=[],
+                        delete_uris=[],
+                    ),
+                    [],
+                )
+
+        lock_manager = SimpleNamespace(
+            create_handle=lambda: object(),
+            acquire_subtree_batch=AsyncMock(return_value=False),
+            release=AsyncMock(),
+        )
+
+        with (
+            patch("openviking.session.compressor_v2.get_viking_fs", return_value=MockVikingFS()),
+            patch("openviking.storage.transaction.init_lock_manager"),
+            patch("openviking.storage.transaction.get_lock_manager", return_value=lock_manager),
+            patch(
+                "openviking.session.memory.memory_type_registry.create_default_registry",
+                return_value=SimpleNamespace(initialize_memory_files=AsyncMock()),
+            ),
+            patch.object(compressor, "_get_or_create_react", return_value=DummyOrchestrator()),
+            patch("openviking.session.compressor_v2.asyncio.sleep", new=AsyncMock()),
+        ):
+            initialize_openviking_config()
+            config = get_openviking_config()
+            config.memory.v2_lock_max_retries = 2
+            config.memory.v2_lock_retry_interval_seconds = 0.0
+            result = await compressor.extract_long_term_memories(
+                messages=messages,
+                ctx=ctx,
+                strict_extract_errors=False,
+            )
+
+        assert result == []
+        assert lock_manager.acquire_subtree_batch.await_count == 2

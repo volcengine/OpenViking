@@ -182,6 +182,24 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
         except Exception as e:
             raise RuntimeError(f"LiteLLM embedding failed: {e}") from e
 
+    async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+        async def _call() -> EmbedResult:
+            kwargs = self._build_kwargs(is_query=is_query)
+            kwargs["input"] = [text]
+            response = await litellm.aembedding(**kwargs)
+            self._update_telemetry_token_usage(response)
+            vector = response.data[0]["embedding"]
+            return EmbedResult(dense_vector=vector)
+
+        try:
+            return await self._run_with_async_retry(
+                _call,
+                logger=logger,
+                operation_name="LiteLLM async embedding",
+            )
+        except Exception as e:
+            raise RuntimeError(f"LiteLLM embedding failed: {e}") from e
+
     def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         """Batch embedding via litellm.
 
@@ -210,6 +228,28 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
                 _call,
                 logger=logger,
                 operation_name="LiteLLM batch embedding",
+            )
+        except Exception as e:
+            raise RuntimeError(f"LiteLLM batch embedding failed: {e}") from e
+
+    async def embed_batch_async(
+        self, texts: List[str], is_query: bool = False
+    ) -> List[EmbedResult]:
+        if not texts:
+            return []
+
+        async def _call() -> List[EmbedResult]:
+            kwargs = self._build_kwargs(is_query=is_query)
+            kwargs["input"] = texts
+            response = await litellm.aembedding(**kwargs)
+            self._update_telemetry_token_usage(response)
+            return [EmbedResult(dense_vector=item["embedding"]) for item in response.data]
+
+        try:
+            return await self._run_with_async_retry(
+                _call,
+                logger=logger,
+                operation_name="LiteLLM async batch embedding",
             )
         except Exception as e:
             raise RuntimeError(f"LiteLLM batch embedding failed: {e}") from e

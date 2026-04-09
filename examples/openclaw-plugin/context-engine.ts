@@ -16,6 +16,7 @@ import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
 type AgentMessage = {
   role?: string;
   content?: unknown;
+  timestamp?: unknown;
 };
 
 type ContextEngineInfo = {
@@ -114,6 +115,29 @@ function msgTokenEstimate(msg: AgentMessage): number {
   if (typeof raw === "string") return Math.ceil(raw.length / 4);
   if (Array.isArray(raw)) return Math.ceil(JSON.stringify(raw).length / 4);
   return 1;
+}
+
+function normalizeTimestamp(value: unknown): string | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const timestampMs = Math.abs(value) < 100_000_000_000 ? value * 1000 : value;
+    return new Date(timestampMs).toISOString();
+  }
+  return undefined;
+}
+
+function pickLatestCreatedAt(messages: AgentMessage[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i] as Record<string, unknown>;
+    const role = typeof message.role === "string" ? message.role : "";
+    if (!role || role === "system") {
+      continue;
+    }
+    const normalized = normalizeTimestamp(message.timestamp);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return undefined;
 }
 
 function messageDigest(messages: AgentMessage[], maxCharsPerMsg = 2000): Array<{role: string; content: string; tokens: number; truncated: boolean}> {
@@ -817,7 +841,8 @@ export function createMemoryOpenVikingContextEngine(params: {
           return;
         }
 
-        const newMessages = messages.slice(start).filter((m: any) => {
+        const turnMessages = messages.slice(start) as AgentMessage[];
+        const newMessages = turnMessages.filter((m: any) => {
           const r = (m as Record<string, unknown>).role as string;
           return r === "user" || r === "assistant";
         }) as AgentMessage[];
@@ -842,9 +867,10 @@ export function createMemoryOpenVikingContextEngine(params: {
         const client = await getClient();
         const turnText = newTexts.join("\n");
         const sanitized = turnText.replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>/gi, " ").replace(/\s+/g, " ").trim();
+        const createdAt = pickLatestCreatedAt(turnMessages);
 
         if (sanitized) {
-          await client.addSessionMessage(OVSessionId, "user", sanitized, agentId);
+          await client.addSessionMessage(OVSessionId, "user", sanitized, agentId, createdAt);
         } else {
           diag("afterTurn_skip", OVSessionId, {
             reason: "sanitized_empty",

@@ -360,17 +360,6 @@ async def viking_ingest(
         await client.close()
 
 
-def sync_viking_ingest(
-    messages: List[Dict[str, Any]], openviking_url: str, session_time: Optional[str] = None
-) -> Dict[str, int]:
-    """Synchronous wrapper for viking_ingest to maintain existing API."""
-    return asyncio.run(viking_ingest(messages, openviking_url, session_time))
-
-# ---------------------------------------------------------------------------
-# Main import logic
-# ---------------------------------------------------------------------------
-
-
 def parse_session_range(s: str) -> Tuple[int, int]:
     """Parse '1-4' or '3' into (lo, hi) inclusive tuple."""
     if "-" in s:
@@ -613,7 +602,7 @@ async def run_import(args: argparse.Namespace) -> None:
 
     # 等待所有 sample 处理完成
     print(
-        f"\n[INFO] Starting import with {args.parallel} concurrent workers, {len(tasks)} tasks to process",
+        f"\n[INFO] Starting import with {len(tasks)} tasks to process",
         file=sys.stderr,
     )
     await asyncio.gather(*tasks, return_exceptions=True)
@@ -678,12 +667,6 @@ def main():
         "--openviking-url",
         default="http://localhost:1933",
         help="OpenViking service URL (default: http://localhost:1933)",
-    )
-    parser.add_argument(
-        "--parallel",
-        type=int,
-        default=5,
-        help="Number of concurrent import workers (default: 5)",
     )
     parser.add_argument(
         "--sample",

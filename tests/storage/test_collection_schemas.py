@@ -4,6 +4,7 @@
 import asyncio
 import inspect
 import json
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -34,6 +35,11 @@ class _DummyConfig:
         self.embedding = SimpleNamespace(
             dimension=2,
             get_embedder=lambda: embedder,
+            circuit_breaker=SimpleNamespace(
+                failure_threshold=5,
+                reset_timeout=60.0,
+                max_reset_timeout=600.0,
+            ),
         )
 
 
@@ -48,6 +54,29 @@ def _build_queue_payload() -> dict:
         },
     )
     return {"data": json.dumps(msg.to_dict())}
+
+
+def test_embedding_handler_builds_circuit_breaker_from_config(monkeypatch):
+    class _DummyVikingDB:
+        is_closing = False
+
+    embedder = _DummyEmbedder()
+    config = _DummyConfig(embedder)
+    config.embedding.circuit_breaker = SimpleNamespace(
+        failure_threshold=7,
+        reset_timeout=60.0,
+        max_reset_timeout=600.0,
+    )
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: config,
+    )
+
+    handler = TextEmbeddingHandler(_DummyVikingDB())
+
+    assert handler._circuit_breaker._failure_threshold == 7
+    assert handler._circuit_breaker._base_reset_timeout == 60.0
+    assert handler._circuit_breaker._max_reset_timeout == 600.0
 
 
 @pytest.mark.asyncio
@@ -77,6 +106,51 @@ async def test_embedding_handler_skip_all_work_when_manager_is_closing(monkeypat
     assert embedder.calls == 0
     assert status["success"] == 1
     assert status["error"] == 0
+
+
+@pytest.mark.asyncio
+async def test_embedding_handler_open_breaker_logs_summary_instead_of_per_item_warning(
+    monkeypatch, caplog
+):
+    from openviking.utils.circuit_breaker import CircuitBreakerOpen
+
+    class _QueueingVikingDB:
+        is_closing = False
+        has_queue_manager = True
+
+        def __init__(self):
+            self.enqueued = []
+
+        async def enqueue_embedding_msg(self, msg):
+            self.enqueued.append(msg.id)
+            return None
+
+    embedder = _DummyEmbedder()
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(embedder),
+    )
+
+    handler = TextEmbeddingHandler(_QueueingVikingDB())
+    monkeypatch.setattr(
+        handler._circuit_breaker,
+        "check",
+        lambda: (_ for _ in ()).throw(CircuitBreakerOpen("open")),
+    )
+
+    import openviking.storage.collection_schemas as collection_schemas
+
+    collection_schemas.logger.addHandler(caplog.handler)
+    collection_schemas.logger.setLevel(logging.WARNING)
+    try:
+        with caplog.at_level(logging.WARNING):
+            await handler.on_dequeue(_build_queue_payload())
+            await handler.on_dequeue(_build_queue_payload())
+    finally:
+        collection_schemas.logger.removeHandler(caplog.handler)
+
+    warnings = [record.message for record in caplog.records if record.levelno == logging.WARNING]
+    assert warnings.count("Embedding circuit breaker is open; re-enqueueing messages") == 1
 
 
 @pytest.mark.asyncio

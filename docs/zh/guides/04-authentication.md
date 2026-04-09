@@ -18,9 +18,9 @@ OpenViking 使用两层 API Key 体系：
 | 模式 | `server.auth_mode` | 身份来源 | 典型使用场景 |
 |------|--------------------|----------|--------------|
 | API Key 模式 | `"api_key"` | API Key，root 请求可附带租户请求头 | 标准多租户部署 |
-| Trusted 模式 | `"trusted"` | `X-OpenViking-Account` / `X-OpenViking-User` / 可选 `X-OpenViking-Agent` 请求头 | 部署在受信网关或内网边界之后 |
+| Trusted 模式 | `"trusted"` | `X-OpenViking-Account` / `X-OpenViking-User` / 可选 `X-OpenViking-Agent` 请求头；非 localhost 部署还必须配置 `root_api_key` | 部署在受信网关或内网边界之后 |
 
-`api_key` 是默认模式，也是标准生产部署方式。`trusted` 是替代模式，适合由上游网关或受信内网调用方在每个请求里显式注入身份头。
+`api_key` 是默认模式，也是标准生产部署方式。`trusted` 是替代模式，适合由上游网关或受信内网调用方在每个请求里显式注入身份头。在 `trusted` 模式下，只有服务绑定到 localhost 时才允许不配置 `root_api_key`；只要是非 localhost 部署，就必须配置 `root_api_key`。
 
 ## 服务端配置
 

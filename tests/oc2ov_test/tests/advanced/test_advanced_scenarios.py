@@ -4,6 +4,7 @@
 """
 
 from tests.base_cli_test import BaseOpenClawCLITest
+from utils.test_utils import TestData
 
 
 class TestComplexScenarioMultiUsers(BaseOpenClawCLITest):
@@ -21,19 +22,16 @@ class TestComplexScenarioMultiUsers(BaseOpenClawCLITest):
         ]
 
         for user in users:
-            self.logger.info(f"写入用户信息: {user}")
+            session_id = self.generate_unique_session_id(prefix=f"user_{user['name']}")
+            self.logger.info(f"写入用户信息: {user} (session: {session_id})")
             msg = f"我叫{user['name']}，今年{user['age']}岁，住在{user['region']}，职业是{user['job']}"
-            self.send_and_log(msg)
-            self.wait_for_sync()
+            self.send_and_log(msg, session_id=session_id)
 
-            self.logger.info("  验证信息:")
-            resp = self.send_and_log("请介绍一下我自己")
-            self.assertAnyKeywordInResponse(
-                resp,
-                [[user["name"]], [str(user["age"])], [user["region"]], [user["job"]]],
-                case_sensitive=False,
+            self.smart_wait_for_sync(
+                check_message="请介绍一下我自己",
+                keywords=[user["name"], str(user["age"]), user["region"], user["job"]],
+                timeout=30.0,
             )
-            self.wait_for_sync(2)
 
 
 class TestComplexScenarioIncrementalInfo(BaseOpenClawCLITest):
@@ -58,7 +56,7 @@ class TestComplexScenarioIncrementalInfo(BaseOpenClawCLITest):
         for i, step in enumerate(steps, 1):
             self.logger.info(f"[{i}/{len(steps)}] 添加: {step}")
             self.send_and_log(step)
-            self.wait_for_sync()
+            self.wait_for_sync(3)
 
         self.logger.info("\n[最终验证] 汇总所有信息")
         resp = self.send_and_log(
@@ -106,3 +104,29 @@ class TestComplexScenarioSpecialCharacters(BaseOpenClawCLITest):
         self.assertAnyKeywordInResponse(
             resp, [["测试-特殊字符"], ["音乐", "绘画", "阅读"], ["测试换行"]], case_sensitive=False
         )
+
+
+class TestComplexScenarioDataDriven(BaseOpenClawCLITest):
+    """
+    复杂场景4：数据驱动测试
+    测试目标：使用测试数据管理运行多个测试
+    """
+
+    def test_data_driven_users(self):
+        """数据驱动用户测试"""
+        test_data_names = ["user_xiaoming", "user_xiaohong"]
+
+        for data_name in test_data_names:
+            self.logger.info(f"测试数据: {data_name}")
+            session_id = self.generate_unique_session_id(prefix=data_name)
+            data = self.get_test_data(data_name)
+
+            if data:
+                message = data.input_data.get("message", "")
+                self.send_and_log(message, session_id=session_id)
+
+                self.smart_wait_for_sync(
+                    check_message="我是谁",
+                    keywords=data.expected_keywords[0] if data.expected_keywords else [],
+                    timeout=30.0,
+                )

@@ -496,7 +496,7 @@ class AgentLoop:
                 await self.sessions.save(session)
                 return OutboundMessage(
                     session_key=msg.session_key,
-                    content=None,
+                    content="",
                     metadata=msg.metadata,
                     event_type=OutboundEventType.NO_REPLY,
                 )

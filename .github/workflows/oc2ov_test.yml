@@ -30,6 +30,7 @@ jobs:
   p0-tests:
     name: P0 Memory Tests
     runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 50
     if: inputs.skip_tests != true
     
     steps:
@@ -185,14 +186,3 @@ jobs:
         if: success()
         run: |
           echo "::notice::P0 tests passed successfully! Ready for release."
-
-  release-approval:
-    name: Release Approval Gate
-    needs: [p0-tests]
-    if: github.event_name == 'release' && github.event.action == 'prereleased'
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Approve release
-        run: |
-          echo "::notice::P0 tests passed. Release can proceed."
-          echo "Release ${{ github.event.release.tag_name }} has been validated by P0 tests."

@@ -204,6 +204,27 @@ describe("context-engine afterTurn()", () => {
     expect(storedContent).toContain("hi there");
   });
 
+  it("passes the latest non-system message timestamp to addSessionMessage as ISO string", async () => {
+    const { engine, client } = makeEngine();
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages: [
+        { role: "user", content: "old message", timestamp: 1775037600000 },
+        { role: "user", content: "new message", timestamp: 1775037660000 },
+        { role: "assistant", content: "new reply", timestamp: 1775037720000 },
+        { role: "toolResult", toolName: "bash", content: "exit 0", timestamp: 1775037780000 },
+        { role: "system", content: "ignored system message", timestamp: 1775037840000 },
+      ],
+      prePromptMessageCount: 1,
+    });
+
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
+    const createdAt = client.addSessionMessage.mock.calls[0][4] as string;
+    expect(createdAt).toBe("2026-04-01T10:03:00.000Z");
+  });
+
   it("sanitizes <relevant-memories> from stored content", async () => {
     const { engine, client } = makeEngine();
 

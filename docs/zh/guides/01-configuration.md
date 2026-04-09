@@ -132,6 +132,28 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 
 `embedding.max_retries` 仅对瞬时错误生效，例如 `429`、`5xx`、超时和连接错误；`400`、`401`、`403`、`AccountOverdue` 这类永久错误不会自动重试。退避策略为指数退避，初始延迟 `0.5s`，上限 `8s`，并带随机抖动。
 
+#### Embedding 熔断（Circuit Breaker）
+
+当 embedding provider 出现连续瞬时错误（如 `429`、`5xx`）时，OpenViking 会触发熔断，在一段时间内暂停调用 provider，并将 embedding 任务重新入队。超过基础 `reset_timeout` 后进入 HALF_OPEN，允许一次探测请求；如果探测失败，则下一次 `reset_timeout` 翻倍（上限为 `max_reset_timeout`）。
+
+```json
+{
+  "embedding": {
+    "circuit_breaker": {
+      "failure_threshold": 5,
+      "reset_timeout": 60,
+      "max_reset_timeout": 600
+    }
+  }
+}
+```
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `circuit_breaker.failure_threshold` | int | 连续失败多少次后熔断（默认：`5`） |
+| `circuit_breaker.reset_timeout` | float | 基础恢复等待时间（秒，默认：`60`） |
+| `circuit_breaker.max_reset_timeout` | float | 指数退避后的最大恢复等待时间（秒，默认：`600`） |
+
 **可用模型**
 
 | 模型 | 维度 | 输入类型 | 说明 |
