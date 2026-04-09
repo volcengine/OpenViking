@@ -138,8 +138,8 @@ impl RAGFSBindingClient {
     }
 
     /// Get client capabilities.
-    fn get_capabilities(&self) -> PyResult<HashMap<String, PyObject>> {
-        Python::with_gil(|py| {
+    fn get_capabilities(&self) -> PyResult<HashMap<String, Py<PyAny>>> {
+        Python::attach(|py| {
             let mut m = HashMap::new();
             m.insert("version".to_string(), "ragfs-python".into_pyobject(py)?.into_any().unbind());
             let features = vec!["memfs", "kvfs", "queuefs", "sqlfs"];
@@ -152,13 +152,13 @@ impl RAGFSBindingClient {
     ///
     /// Returns a list of file info dicts with keys:
     /// name, size, mode, modTime, isDir
-    fn ls(&self, path: String) -> PyResult<PyObject> {
+    fn ls(&self, path: String) -> PyResult<Py<PyAny>> {
         let fs = self.fs.clone();
         let entries = self.rt.block_on(async move {
             fs.read_dir(&path).await
         }).map_err(to_py_err)?;
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let list = PyList::empty(py);
             for entry in &entries {
                 let dict = file_info_to_py_dict(py, entry)?;
@@ -176,7 +176,7 @@ impl RAGFSBindingClient {
     ///     size: Number of bytes to read (default: -1, read all)
     ///     stream: Not supported in binding mode
     #[pyo3(signature = (path, offset=0, size=-1, stream=false))]
-    fn read(&self, path: String, offset: i64, size: i64, stream: bool) -> PyResult<PyObject> {
+    fn read(&self, path: String, offset: i64, size: i64, stream: bool) -> PyResult<Py<PyAny>> {
         if stream {
             return Err(PyRuntimeError::new_err(
                 "Streaming not supported in binding mode",
@@ -191,14 +191,14 @@ impl RAGFSBindingClient {
             fs.read(&path, off, sz).await
         }).map_err(to_py_err)?;
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             Ok(PyBytes::new(py, &data).into())
         })
     }
 
     /// Read file content (alias for read).
     #[pyo3(signature = (path, offset=0, size=-1, stream=false))]
-    fn cat(&self, path: String, offset: i64, size: i64, stream: bool) -> PyResult<PyObject> {
+    fn cat(&self, path: String, offset: i64, size: i64, stream: bool) -> PyResult<Py<PyAny>> {
         self.read(path, offset, size, stream)
     }
 
@@ -265,13 +265,13 @@ impl RAGFSBindingClient {
     }
 
     /// Get file/directory information.
-    fn stat(&self, path: String) -> PyResult<PyObject> {
+    fn stat(&self, path: String) -> PyResult<Py<PyAny>> {
         let fs = self.fs.clone();
         let info = self.rt.block_on(async move {
             fs.stat(&path).await
         }).map_err(to_py_err)?;
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let dict = file_info_to_py_dict(py, &info)?;
             Ok(dict.into())
         })
@@ -432,7 +432,7 @@ impl RAGFSBindingClient {
         case_insensitive: bool,
         stream: bool,
         node_limit: Option<i32>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         let _ = (path, pattern, recursive, case_insensitive, stream, node_limit);
         Err(PyRuntimeError::new_err(
             "grep not yet implemented in ragfs-python",

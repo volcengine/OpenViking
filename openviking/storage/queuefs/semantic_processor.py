@@ -494,7 +494,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
         if pending_indices:
             logger.info(
-                f"Generating summaries for {len(pending_indices)} changed files concurrently "
+                f"Generating summaries for {len(pending_indices)} changed files "
                 f"(reused {len(file_paths) - len(pending_indices)} cached)"
             )
 
@@ -510,7 +510,17 @@ class SemanticProcessor(DequeueHandlerBase):
                     logger.warning(f"Failed to generate summary for {file_path}: {e}")
                     file_summaries[idx] = {"name": file_name, "summary": ""}
 
-            await asyncio.gather(*[_gen(i, fp) for i, fp in pending_indices])
+            # Fix for Issue #1245: Batch processing to prevent coroutine scheduling storms
+            # Use a reasonable batch size (min of semaphore and 10) to keep event loop responsive
+            batch_size = max(1, min(self.max_concurrent_llm, 10))
+            for batch_start in range(0, len(pending_indices), batch_size):
+                batch = pending_indices[batch_start : batch_start + batch_size]
+                logger.info(
+                    f"[MemorySemantic] Processing batch {batch_start // batch_size + 1}/"
+                    f"{(len(pending_indices) + batch_size - 1) // batch_size} "
+                    f"({len(batch)} files)"
+                )
+                await asyncio.gather(*[_gen(i, fp) for i, fp in batch])
 
         file_summaries = [s for s in file_summaries if s is not None]
 

@@ -393,8 +393,7 @@ class OpenVikingBuildExt(build_ext):
             print("[OK] Skipping ragfs-python build (OV_SKIP_RAGFS_BUILD=1)")
             return
 
-        maturin_cmd = shutil.which("maturin")
-        if not maturin_cmd:
+        if importlib.util.find_spec("maturin") is None:
             print(
                 "[SKIP] maturin not found. ragfs-python (Rust binding) will not be built.\n"
                 "       Install maturin to enable: pip install maturin\n"
@@ -409,7 +408,15 @@ class OpenVikingBuildExt(build_ext):
             try:
                 print("Building ragfs-python (Rust AGFS binding) via maturin...")
                 env = os.environ.copy()
-                build_args = [maturin_cmd, "build", "--release", "--out", tmpdir]
+                build_args = [
+                    sys.executable,
+                    "-m",
+                    "maturin",
+                    "build",
+                    "--release",
+                    "--out",
+                    tmpdir,
+                ]
                 # Respect CARGO_BUILD_TARGET for cross-compilation
                 target = env.get("CARGO_BUILD_TARGET")
                 if target:
