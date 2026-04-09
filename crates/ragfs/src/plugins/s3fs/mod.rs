@@ -533,6 +533,12 @@ impl S3FSPlugin {
                     "Directory marker mode: none, empty, nonempty",
                 ),
                 ConfigParameter::optional(
+                    "disable_batch_delete",
+                    "bool",
+                    "false",
+                    "Disable batch delete (DeleteObjects) for S3-compatible services like OSS",
+                ),
+                ConfigParameter::optional(
                     "cache_enabled",
                     "bool",
                     "true",
@@ -634,6 +640,19 @@ plugins:
       endpoint: https://tos-cn-beijing.volces.com
       use_path_style: false
       directory_marker_mode: nonempty
+```
+
+### Alibaba Cloud OSS
+```yaml
+plugins:
+  s3fs:
+    enabled: true
+    path: /s3
+    config:
+      bucket: my-oss-bucket
+      region: cn-beijing
+      endpoint: http://s3.oss-cn-beijing.aliyuncs.com
+      disable_batch_delete: true
 ```
 
 ## Directory Marker Modes
