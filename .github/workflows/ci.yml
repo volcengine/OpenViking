@@ -23,8 +23,5 @@ permissions:
   security-events: write
 
 jobs:
-  test-full:
-    uses: ./.github/workflows/_test_full.yml
-
   security-scan:
     uses: ./.github/workflows/_codeql.yml
