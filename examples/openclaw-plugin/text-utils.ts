@@ -412,6 +412,39 @@ function formatToolResultContent(content: unknown): string {
 }
 
 /**
+ * Extract text from a single message without a `[role]:` prefix.
+ * Used by afterTurn to send messages with their actual role.
+ */
+export function extractSingleMessageText(msg: unknown): string {
+  if (!msg || typeof msg !== "object") return "";
+  const m = msg as Record<string, unknown>;
+  const role = m.role as string;
+  if (!role || role === "system") return "";
+
+  if (role === "toolResult") {
+    const toolName = typeof m.toolName === "string" ? m.toolName : "tool";
+    const resultText = formatToolResultContent(m.content);
+    return resultText ? `[${toolName} result]: ${resultText}` : "";
+  }
+
+  const content = m.content;
+  if (typeof content === "string") return content.trim();
+  if (Array.isArray(content)) {
+    const parts: string[] = [];
+    for (const block of content) {
+      const b = block as Record<string, unknown>;
+      if (b?.type === "text" && typeof b.text === "string") {
+        parts.push((b.text as string).trim());
+      } else if (b?.type === "toolUse") {
+        parts.push(formatToolUseBlock(b));
+      }
+    }
+    return parts.join("\n");
+  }
+  return "";
+}
+
+/**
  * 提取从 startIndex 开始的新消息（user + assistant + toolResult），返回格式化的文本。
  * 保留 toolUse 完整内容（tool name + input）和 toolResult 完整内容，
  * 跳过 system 消息（框架注入的元数据）。

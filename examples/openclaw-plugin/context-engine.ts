@@ -5,6 +5,7 @@ import {
   compileSessionPatterns,
   getCaptureDecision,
   extractNewTurnTexts,
+  extractSingleMessageText,
   shouldBypassSession,
 } from "./text-utils.js";
 import {
@@ -786,6 +787,10 @@ export function createMemoryOpenVikingContextEngine(params: {
         return;
       }
 
+      if (afterTurnParams.isHeartbeat) {
+        return;
+      }
+
       try {
         const sessionKey =
           (typeof afterTurnParams.sessionKey === "string" && afterTurnParams.sessionKey.trim()) ||
@@ -865,17 +870,36 @@ export function createMemoryOpenVikingContextEngine(params: {
           return;
         }
         const client = await getClient();
-        const turnText = newTexts.join("\n");
-        const sanitized = turnText.replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>/gi, " ").replace(/\s+/g, " ").trim();
         const createdAt = pickLatestCreatedAt(turnMessages);
 
-        if (sanitized) {
-          await client.addSessionMessage(OVSessionId, "user", sanitized, agentId, createdAt);
-        } else {
-          diag("afterTurn_skip", OVSessionId, {
-            reason: "sanitized_empty",
-          });
+        // Group by OV role (user|assistant), merge adjacent same-role
+        const HEARTBEAT_RE = /\bHEARTBEAT(?:\.md|_OK)\b/;
+        const groups: Array<{ role: "user" | "assistant"; texts: string[] }> = [];
+        for (const msg of turnMessages) {
+          const text = extractSingleMessageText(msg);
+          if (!text) continue;
+          if (HEARTBEAT_RE.test(text)) continue;
+          const role = (msg as Record<string, unknown>).role as string;
+          const ovRole: "user" | "assistant" = role === "assistant" ? "assistant" : "user";
+          const content = ovRole === "user"
+            ? text.replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>/gi, " ").replace(/\s+/g, " ").trim()
+            : text;
+          if (!content) continue;
+          const last = groups[groups.length - 1];
+          if (last && last.role === ovRole) {
+            last.texts.push(content);
+          } else {
+            groups.push({ role: ovRole, texts: [content] });
+          }
+        }
+
+        if (groups.length === 0) {
+          diag("afterTurn_skip", OVSessionId, { reason: "sanitized_empty" });
           return;
+        }
+
+        for (const group of groups) {
+          await client.addSessionMessage(OVSessionId, group.role, group.texts.join("\n"), agentId, createdAt);
         }
 
         const session = await client.getSession(OVSessionId, agentId);
@@ -891,8 +915,9 @@ export function createMemoryOpenVikingContextEngine(params: {
         }
 
         const commitResult = await client.commitSession(OVSessionId, { wait: false, agentId });
+        const allTexts = groups.flatMap((g) => g.texts).join("\n");
         const commitExtra = cfg.logFindRequests
-          ? ` ${toJsonLog({ captured: [trimForLog(turnText, 260)] })}`
+          ? ` ${toJsonLog({ captured: [trimForLog(allTexts, 260)] })}`
           : "";
         logger.info(
           `openviking: committed session=${OVSessionId}, ` +
