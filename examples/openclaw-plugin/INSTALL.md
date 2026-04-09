@@ -186,6 +186,16 @@ Check installed versions:
 ov-install --current-version
 ```
 
+### Pipeline Health Check (Optional)
+
+If the steps above all look good and you want to further verify the full Gateway → OpenViking pipeline, run the plugin's health check script:
+
+```bash
+python examples/openclaw-plugin/health_check_tools/ov-healthcheck.py
+```
+
+This script injects a real conversation through Gateway and then verifies from the OpenViking side that the session was captured, committed, archived, and had memories extracted. See [health_check_tools/HEALTHCHECK.md](./health_check_tools/HEALTHCHECK.md) for full details.
+
 ## Uninstall
 
 To remove only the OpenClaw plugin and keep the OpenViking runtime:
