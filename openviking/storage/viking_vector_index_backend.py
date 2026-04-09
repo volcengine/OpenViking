@@ -12,6 +12,7 @@ from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, RawD
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.utils.logging_init import init_cpp_logging
 from openviking.storage.vectordb_adapters import create_collection_adapter
+from openviking.utils.tag_utils import serialize_tags
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.vectordb_config import DEFAULT_INDEX_NAME, VectorDBBackendConfig
 
@@ -19,8 +20,10 @@ logger = get_logger(__name__)
 
 RETRIEVAL_OUTPUT_FIELDS = [
     "uri",
+    "parent_uri",
     "level",
     "context_type",
+    "tags",
     "abstract",
     "active_count",
     "updated_at",
@@ -136,10 +139,29 @@ class _SingleAccountBackend:
         except Exception:
             return data
 
+    def _get_field_type(self, field_name: str) -> Optional[str]:
+        try:
+            coll = self._get_collection()
+            fields = self._get_meta_data(coll).get("Fields", [])
+        except Exception:
+            return None
+
+        for field in fields:
+            if field.get("FieldName") != field_name:
+                continue
+            field_type = field.get("FieldType")
+            if hasattr(field_type, "value"):
+                return field_type.value
+            return str(field_type) if field_type is not None else None
+        return None
+
     def _prepare_upsert_payload(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Drop runtime-only or stale legacy fields before writing back to the current schema."""
         payload = {k: v for k, v in data.items() if v is not None}
         filtered = self._filter_known_fields(payload)
+        tags_field_type = self._get_field_type("tags")
+        if tags_field_type == "string" and "tags" in filtered:
+            filtered["tags"] = serialize_tags(filtered.get("tags"))
         return {k: v for k, v in filtered.items() if v is not None}
 
     # =========================================================================
@@ -777,6 +799,7 @@ class VikingVectorIndexBackend:
             ctx=ctx,
             context_type=context_type,
             target_directories=target_directories,
+            tags=None,
             extra_filter=extra_filter,
         )
         return await self.search(
@@ -796,6 +819,7 @@ class VikingVectorIndexBackend:
         sparse_query_vector: Optional[Dict[str, float]] = None,
         context_type: Optional[str] = None,
         target_directories: Optional[List[str]] = None,
+        tags: Optional[List[str]] = None,
         extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
         limit: int = 10,
     ) -> List[Dict[str, Any]]:
@@ -807,6 +831,7 @@ class VikingVectorIndexBackend:
                 ctx=ctx,
                 context_type=context_type,
                 target_directories=target_directories,
+                tags=tags,
                 extra_filter=extra_filter,
             ),
             In("level", [0, 1, 2]),  # TODO: smj fix this
@@ -837,6 +862,7 @@ class VikingVectorIndexBackend:
                 ctx=ctx,
                 context_type=context_type,
                 target_directories=target_directories,
+                tags=None,
                 extra_filter=extra_filter,
             ),
         )
@@ -846,6 +872,38 @@ class VikingVectorIndexBackend:
             filter=merged_filter,
             limit=limit,
             output_fields=RETRIEVAL_OUTPUT_FIELDS,
+            ctx=ctx,
+        )
+
+    async def search_by_tags_in_tenant(
+        self,
+        ctx: RequestContext,
+        tags: List[str],
+        context_type: Optional[str] = None,
+        target_directories: Optional[List[str]] = None,
+        extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
+        levels: Optional[List[int]] = None,
+        limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        if not tags:
+            return []
+
+        merged_filter = self._build_scope_filter(
+            ctx=ctx,
+            context_type=context_type,
+            target_directories=target_directories,
+            tags=tags,
+            extra_filter=extra_filter,
+        )
+        if levels:
+            merged_filter = self._merge_filters(merged_filter, In("level", levels))
+
+        return await self.filter(
+            filter=merged_filter,
+            limit=limit,
+            output_fields=RETRIEVAL_OUTPUT_FIELDS,
+            order_by="active_count",
+            order_desc=True,
             ctx=ctx,
         )
 
@@ -1014,6 +1072,7 @@ class VikingVectorIndexBackend:
         ctx: RequestContext,
         context_type: Optional[str],
         target_directories: Optional[List[str]],
+        tags: Optional[List[str]],
         extra_filter: Optional[FilterExpr | Dict[str, Any]],
     ) -> Optional[FilterExpr]:
         filters: List[FilterExpr] = []
@@ -1033,6 +1092,10 @@ class VikingVectorIndexBackend:
             if uri_conds:
                 filters.append(Or(uri_conds))
 
+        tag_filter = self._build_tag_filter(tags)
+        if tag_filter:
+            filters.append(tag_filter)
+
         if extra_filter:
             if isinstance(extra_filter, dict):
                 filters.append(RawDSL(extra_filter))
@@ -1041,6 +1104,17 @@ class VikingVectorIndexBackend:
 
         merged = self._merge_filters(*filters)
         return merged
+
+    @staticmethod
+    def _build_tag_filter(tags: Optional[List[str]]) -> Optional[FilterExpr]:
+        normalized = [tag for tag in tags or [] if tag]
+        if not normalized:
+            return None
+
+        tag_filters = [In("tags", [tag]) for tag in normalized]
+        if len(tag_filters) == 1:
+            return tag_filters[0]
+        return Or(tag_filters)
 
     @staticmethod
     def _tenant_filter(

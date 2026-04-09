@@ -6,7 +6,7 @@ Synchronous OpenViking client implementation.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 if TYPE_CHECKING:
     from openviking.session import Session
@@ -114,6 +114,7 @@ class SyncOpenViking:
         timeout: float = None,
         build_index: bool = True,
         summarize: bool = False,
+        tags: Optional[Union[str, List[str]]] = None,
         telemetry: TelemetryRequest = False,
         **kwargs,
     ) -> Dict[str, Any]:
@@ -138,6 +139,7 @@ class SyncOpenViking:
                 timeout=timeout,
                 build_index=build_index,
                 summarize=summarize,
+                tags=tags,
                 telemetry=telemetry,
                 **kwargs,
             )
@@ -164,12 +166,21 @@ class SyncOpenViking:
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        tags: Optional[Union[str, List[str]]] = None,
         telemetry: TelemetryRequest = False,
     ):
         """Execute complex retrieval (intent analysis, hierarchical retrieval)."""
         return run_async(
             self._async_client.search(
-                query, target_uri, session, session_id, limit, score_threshold, filter, telemetry
+                query=query,
+                target_uri=target_uri,
+                session=session,
+                session_id=session_id,
+                limit=limit,
+                score_threshold=score_threshold,
+                filter=filter,
+                tags=tags,
+                telemetry=telemetry,
             )
         )
 
@@ -180,17 +191,19 @@ class SyncOpenViking:
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        tags: Optional[Union[str, List[str]]] = None,
         telemetry: TelemetryRequest = False,
     ):
         """Quick retrieval"""
         return run_async(
             self._async_client.find(
-                query,
-                target_uri,
-                limit,
-                score_threshold,
-                filter,
-                telemetry,
+                query=query,
+                target_uri=target_uri,
+                limit=limit,
+                score_threshold=score_threshold,
+                filter=filter,
+                tags=tags,
+                telemetry=telemetry,
             )
         )
 
@@ -282,9 +295,7 @@ class SyncOpenViking:
     ) -> Dict:
         """Content search"""
         return run_async(
-            self._async_client.grep(
-                uri, pattern, case_insensitive, node_limit, exclude_uri
-            )
+            self._async_client.grep(uri, pattern, case_insensitive, node_limit, exclude_uri)
         )
 
     def glob(self, pattern: str, uri: str = "viking://") -> Dict:

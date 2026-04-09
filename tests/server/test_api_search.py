@@ -65,6 +65,63 @@ async def test_find_no_results(client: httpx.AsyncClient):
     assert resp.json()["status"] == "ok"
 
 
+async def test_find_forwards_tags_to_service(client_with_resource, service, monkeypatch):
+    client, _ = client_with_resource
+    captured = {}
+
+    async def fake_find(**kwargs):
+        captured.update(kwargs)
+
+        class _Result:
+            def to_dict(self, include_provenance: bool = False):
+                return {"resources": [], "memories": [], "skills": []}
+
+        return _Result()
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+
+    resp = await client.post(
+        "/api/v1/search/find",
+        json={"query": "sample", "tags": "machine-learning;feature-store"},
+    )
+
+    assert resp.status_code == 200
+    assert captured["tags"] == [
+        "user:machine-learning",
+        "auto:machine-learning",
+        "user:feature-store",
+        "auto:feature-store",
+    ]
+
+
+async def test_search_forwards_tags_to_service(client, service, monkeypatch):
+    captured = {}
+
+    async def fake_search(**kwargs):
+        captured.update(kwargs)
+
+        class _Result:
+            def to_dict(self, include_provenance: bool = False):
+                return {"resources": [], "memories": [], "skills": []}
+
+        return _Result()
+
+    monkeypatch.setattr(service.search, "search", fake_search)
+
+    resp = await client.post(
+        "/api/v1/search/search",
+        json={"query": "sample", "tags": "machine-learning;feature-store"},
+    )
+
+    assert resp.status_code == 200
+    assert captured["tags"] == [
+        "user:machine-learning",
+        "auto:machine-learning",
+        "user:feature-store",
+        "auto:feature-store",
+    ]
+
+
 async def test_search_basic(client_with_resource):
     client, uri = client_with_resource
     resp = await client.post(
@@ -195,8 +252,6 @@ async def test_grep_case_insensitive(client_with_resource):
     assert resp.json()["status"] == "ok"
 
 
-
-
 async def test_grep_exclude_uri_excludes_specific_uri_range(
     client: httpx.AsyncClient,
     upload_temp_dir,
@@ -231,7 +286,7 @@ async def test_grep_exclude_uri_excludes_specific_uri_range(
     assert body["status"] == "ok"
     matches = body["result"]["matches"]
     assert matches
-    assert all(not m["uri"].startswith(exclude_uri.rstrip('/')) for m in matches)
+    assert all(not m["uri"].startswith(exclude_uri.rstrip("/")) for m in matches)
 
 
 async def test_grep_exclude_uri_does_not_exclude_same_named_sibling_dirs(
@@ -274,6 +329,7 @@ async def test_grep_exclude_uri_does_not_exclude_same_named_sibling_dirs(
     uris = {m["uri"] for m in matches}
     assert any(uri.startswith("viking://resources/group_b/cache/") for uri in uris)
     assert all(not uri.startswith("viking://resources/group_a/cache/") for uri in uris)
+
 
 async def test_glob(client_with_resource):
     client, _ = client_with_resource

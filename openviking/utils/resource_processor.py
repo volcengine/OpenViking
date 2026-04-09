@@ -124,6 +124,7 @@ class ResourceProcessor:
             "source_path": None,
         }
         telemetry = get_current_telemetry()
+        resource_tags = kwargs.pop("tags", None)
 
         with telemetry.measure("resource.process"):
             # ============ Phase 1: Parse source and writes to temp viking fs ============
@@ -281,6 +282,7 @@ class ResourceProcessor:
                             lifecycle_lock_handle_id=lifecycle_lock_handle_id,
                             temp_uris=[temp_uri_for_summarize],
                             is_code_repo=is_code_repo,
+                            tags=resource_tags,
                             **kwargs,
                         )
                 except Exception as e:

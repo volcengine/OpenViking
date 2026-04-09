@@ -86,3 +86,13 @@ async def test_semantic_processor_does_not_release_lock_owned_by_dag(monkeypatch
     )
 
     assert lock_manager.release_calls == []
+
+
+def test_semantic_msg_normalizes_missing_tags_to_empty_list():
+    msg = SemanticMsg(
+        uri="viking://resources/demo",
+        context_type="resource",
+        recursive=False,
+    )
+
+    assert msg.tags == []

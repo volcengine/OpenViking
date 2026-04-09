@@ -92,7 +92,7 @@ class CollectionSchemas:
                 {"FieldName": "level", "FieldType": "int64"},
                 {"FieldName": "name", "FieldType": "string"},
                 {"FieldName": "description", "FieldType": "string"},
-                {"FieldName": "tags", "FieldType": "string"},
+                {"FieldName": "tags", "FieldType": "list<string>"},
                 {"FieldName": "abstract", "FieldType": "string"},
                 {"FieldName": "account_id", "FieldType": "string"},
                 {"FieldName": "owner_space", "FieldType": "string"},
