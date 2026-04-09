@@ -31,7 +31,8 @@
         "secret_key": null,
         "endpoint": null,
         "prefix": "",
-        "use_ssl": true
+        "use_ssl": true,
+        "disable_batch_delete": false
       }
     }
   },
