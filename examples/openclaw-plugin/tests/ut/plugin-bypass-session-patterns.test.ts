@@ -65,6 +65,33 @@ describe("plugin bypass session patterns", () => {
     );
   });
 
+  it("skips before_prompt_build auto-recall once context-engine is active", async () => {
+    const { handlers, logger, registerContextEngine } = setupPlugin();
+
+    const factory = registerContextEngine.mock.calls[0]?.[1] as (() => unknown) | undefined;
+    expect(factory).toBeTruthy();
+    factory!();
+
+    const hook = handlers.get("before_prompt_build");
+    expect(hook).toBeTruthy();
+
+    const result = await hook!(
+      {
+        messages: [{ role: "user", content: "remember the launch checklist" }],
+        prompt: "remember the launch checklist",
+      },
+      {
+        sessionId: "runtime-session",
+        sessionKey: "agent:main:test:1",
+      },
+    );
+
+    expect(result).toBeUndefined();
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("failed to get client"),
+    );
+  });
+
   it("bypasses before_reset without calling commitOVSession", async () => {
     const { handlers, registerContextEngine } = setupPlugin({
       bypassSessionPatterns: ["agent:*:cron:**"],

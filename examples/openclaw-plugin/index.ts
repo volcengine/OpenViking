@@ -903,6 +903,12 @@ const contextEnginePlugin = {
         );
         return;
       }
+      if (contextEngineRef) {
+        verboseRoutingInfo(
+          `openviking: skipping before_prompt_build auto-recall because context-engine is active (sessionKey=${ctx?.sessionKey ?? "none"}, sessionId=${ctx?.sessionId ?? "none"})`,
+        );
+        return;
+      }
       const agentId = resolveAgentId(ctx?.sessionId, ctx?.sessionKey);
       let client: OpenVikingClient;
       try {
