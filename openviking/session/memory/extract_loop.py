@@ -216,6 +216,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 # Allow one extra iteration for refetch
                 if iteration >= max_iterations:
                     max_iterations += 1
+                    self._disable_tools_for_iteration = True
                     tracer.info(f"Extended max_iterations to {max_iterations} for tool call")
                 continue
 
