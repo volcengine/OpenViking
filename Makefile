@@ -3,12 +3,10 @@
 # Variables
 PYTHON ?= python3
 SETUP_PY := setup.py
-AGFS_SERVER_DIR := third_party/agfs/agfs-server
 OV_CLI_DIR := crates/ov_cli
 
 # Dependency Versions
 MIN_PYTHON_VERSION := 3.10
-MIN_GO_VERSION := 1.22
 MIN_CMAKE_VERSION := 3.12
 MIN_RUST_VERSION := 1.88
 MIN_GCC_VERSION := 9
@@ -21,7 +19,6 @@ CLEAN_DIRS := \
 	*.egg-info/ \
 	openviking/bin/ \
 	openviking/lib/ \
-	$(AGFS_SERVER_DIR)/build/ \
 	$(OV_CLI_DIR)/target/ \
 	src/cmake_build/ \
 	.pytest_cache/ \
@@ -35,9 +32,9 @@ all: build
 
 help:
 	@echo "Available targets:"
-	@echo "  build       - Build AGFS, ov CLI, and C++ extensions using setup.py"
+	@echo "  build       - Build ragfs-python and C++ extensions using setup.py"
 	@echo "  clean       - Remove build artifacts and temporary files"
-	@echo "  check-deps  - Check if required dependencies (Go, Rust, CMake, etc.) are installed"
+	@echo "  check-deps  - Check if required dependencies (Rust, CMake, etc.) are installed"
 	@echo "  help        - Show this help message"
 
 check-pip:
@@ -59,11 +56,6 @@ check-deps:
 	@# Python check
 	@$(PYTHON) -c "import sys; v=sys.version_info; exit(0 if v.major > 3 or (v.major == 3 and v.minor >= 10) else 1)" || (echo "Error: Python >= $(MIN_PYTHON_VERSION) is required."; exit 1)
 	@echo "  [OK] Python $$( $(PYTHON) -V | cut -d' ' -f2 )"
-	@# Go check
-	@command -v go > /dev/null 2>&1 || (echo "Error: Go is not installed."; exit 1)
-	@GO_VER=$$(go version | awk '{print $$3}' | sed 's/go//'); \
-	$(PYTHON) -c "v='$$GO_VER'.split('.'); exit(0 if int(v[0]) > 1 or (int(v[0]) == 1 and int(v[1]) >= 22) else 1)" || (echo "Error: Go >= $(MIN_GO_VERSION) is required. Found $$GO_VER"; exit 1); \
-	echo "  [OK] Go $$GO_VER"
 	@# CMake check
 	@command -v cmake > /dev/null 2>&1 || (echo "Error: CMake is not installed."; exit 1)
 	@CMAKE_VER=$$(cmake --version | head -n1 | awk '{print $$3}'); \
@@ -99,7 +91,7 @@ build: check-deps check-pip
 		echo "  [OK] pip found, use pip to install..."; \
 		$(PYTHON) -m pip install -e .; \
 	fi
-	@echo "Building ragfs-python (Rust AGFS binding) into openviking/lib/..."
+	@echo "Building ragfs-python (Rust RAGFS binding) into openviking/lib/..."
 	@MATURIN_CMD=""; \
 	if command -v maturin > /dev/null 2>&1; then \
 		MATURIN_CMD=maturin; \
@@ -131,7 +123,6 @@ build: check-deps check-pip
 	else \
 		echo "  [SKIP] maturin not found, ragfs-python (Rust binding) will not be built."; \
 		echo "         Install maturin to enable: uv pip install maturin"; \
-		echo "         The Go binding will be used as fallback."; \
 	fi
 	@echo "Build completed successfully."
 

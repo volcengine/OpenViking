@@ -3,9 +3,6 @@ graft third_party/leveldb-1.23
 graft third_party/spdlog-1.14.1
 graft third_party/croaring
 graft third_party/rapidjson
-recursive-include third_party/agfs/agfs-server *.go go.mod go.sum Makefile
-recursive-include third_party/agfs/agfs-sdk/go *.go go.mod
-include third_party/agfs/bin/agfs-server
 include LICENSE
 include README.md
 include pyproject.toml

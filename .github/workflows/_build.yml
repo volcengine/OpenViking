@@ -80,9 +80,6 @@ jobs:
         git reset --hard HEAD
         git clean -fd
         # For sdist, ensure local runtime binaries are not packaged even if present
-        rm -rf openviking/bin openviking/lib third_party/agfs/bin || true
-        rm -f openviking/storage/vectordb/*.so openviking/storage/vectordb/*.dylib openviking/storage/vectordb/*.dll openviking/storage/vectordb/*.exe || true
-        rm -rf openviking/_version.py openviking.egg-info
         # Ignore uv.lock changes to avoid dirty state in setuptools_scm
         git update-index --assume-unchanged uv.lock || true
 
@@ -193,11 +190,6 @@ jobs:
         echo "LD_LIBRARY_PATH=${PYTHON_PREFIX}/lib:${LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
         export LD_LIBRARY_PATH="${PYTHON_PREFIX}/lib:${LD_LIBRARY_PATH}"
         "$PYTHON_BIN" -V
-    - name: Set up Go
-      uses: actions/setup-go@v6
-      with:
-        go-version: '1.25.1'
-
     - name: Set up Rust
       uses: dtolnay/rust-toolchain@v1
       with:
@@ -350,11 +342,6 @@ jobs:
         echo "CMAKE_OSX_ARCHITECTURES=${TARGET_ARCH}" >> "$GITHUB_ENV"
         echo "_PYTHON_HOST_PLATFORM=macosx-${MACOS_VERSION}-${TARGET_ARCH}" >> "$GITHUB_ENV"
         echo "Configured macOS wheel platform: macosx-${MACOS_VERSION}-${TARGET_ARCH}"
-
-    - name: Set up Go
-      uses: actions/setup-go@v6
-      with:
-        go-version: '1.25.1'
 
     - name: Set up Rust
       uses: dtolnay/rust-toolchain@v1

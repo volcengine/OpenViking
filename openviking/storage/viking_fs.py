@@ -153,15 +153,13 @@ def get_viking_fs() -> "VikingFS":
 
 
 class VikingFS:
-    """AGFS-based OpenViking file system.
+    """RAGFS-based OpenViking file system.
 
     APIs are divided into two categories:
-    - AGFS basic commands (direct forwarding): read, ls, write, mkdir, rm, mv, grep, stat
+    - RAGFS basic commands (direct forwarding): read, ls, write, mkdir, rm, mv, grep, stat
     - VikingFS specific capabilities: abstract, overview, find, search, relations, link, unlink
 
-    Supports two modes:
-    - HTTP mode: Use AGFSClient to connect to AGFS server via HTTP
-    - Binding mode: Use AGFSBindingClient to directly use AGFS implementation
+    Uses Rust binding mode: Use RAGFSBindingClient to directly use RAGFS implementation
     """
 
     def __init__(

@@ -9,7 +9,6 @@ Main service class that composes all sub-services and manages infrastructure lif
 import os
 from typing import Any, Optional
 
-from openviking.agfs_manager import AGFSManager
 from openviking.core.directories import DirectoryInitializer
 from openviking.crypto.config import bootstrap_encryption
 from openviking.resource.watch_scheduler import WatchScheduler
@@ -68,7 +67,6 @@ class OpenVikingService:
         )
 
         # Infrastructure
-        self._agfs_manager: Optional[AGFSManager] = None
         self._agfs_client: Optional[Any] = None
         self._queue_manager: Optional[QueueManager] = None
         self._vikingdb_manager: Optional[VikingDBManager] = None
@@ -114,14 +112,7 @@ class OpenVikingService:
         """Initialize storage resources."""
         from openviking.utils.agfs_utils import create_agfs_client
 
-        mode = getattr(config.agfs, "mode", "http-client")
-        if mode == "http-client":
-            self._agfs_manager = AGFSManager(config=config.agfs)
-            self._agfs_manager.start()
-            agfs_url = self._agfs_manager.url
-            config.agfs.url = agfs_url
-
-        # Create AGFS client using utility
+        # Create RAGFS client using utility
         self._agfs_client = create_agfs_client(config.agfs)
 
         # Initialize QueueManager with agfs_client
@@ -133,7 +124,7 @@ class OpenVikingService:
                 max_concurrent_semantic=max_concurrent_semantic,
             )
         else:
-            logger.warning("AGFS client not initialized, skipping queue manager")
+            logger.warning("RAGFS client not initialized, skipping queue manager")
 
         # Initialize VikingDBManager with QueueManager
         self._vikingdb_manager = VikingDBManager(
@@ -146,9 +137,9 @@ class OpenVikingService:
         if self._queue_manager:
             self._queue_manager.setup_standard_queues(self._vikingdb_manager, start=False)
 
-        # Initialize LockManager (fail-fast if AGFS missing)
+        # Initialize LockManager (fail-fast if RAGFS missing)
         if self._agfs_client is None:
-            raise RuntimeError("AGFS client not initialized for LockManager")
+            raise RuntimeError("RAGFS client not initialized for LockManager")
         tx_cfg = config.transaction
         self._lock_manager = init_lock_manager(
             agfs=self._agfs_client,
@@ -368,10 +359,6 @@ class OpenVikingService:
         if self._vikingdb_manager:
             await self._vikingdb_manager.close()
             self._vikingdb_manager = None
-
-        if self._agfs_manager:
-            self._agfs_manager.stop()
-            self._agfs_manager = None
 
         self._viking_fs = None
         self._resource_processor = None
