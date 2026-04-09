@@ -65,7 +65,9 @@ async def test_resources_root_is_split_into_children():
             "openviking.utils.summarizer.get_current_telemetry",
             return_value=SimpleNamespace(telemetry_id="tid"),
         ),
-        patch("openviking.utils.summarizer.get_request_wait_tracker", return_value=_DummyWaitTracker()),
+        patch(
+            "openviking.utils.summarizer.get_request_wait_tracker", return_value=_DummyWaitTracker()
+        ),
         patch("openviking.utils.summarizer.get_viking_fs", return_value=vfs),
     ):
         summarizer = Summarizer(vlm_processor=None)
@@ -91,9 +93,7 @@ async def test_resources_root_is_split_into_children():
 async def test_resources_root_single_file_child():
     queue = _DummyQueue()
     qm = _DummyQueueManager(queue)
-    vfs = _DummyVikingFS(
-        {"viking://temp/import_root": [{"name": "file.txt", "isDir": False}]}
-    )
+    vfs = _DummyVikingFS({"viking://temp/import_root": [{"name": "file.txt", "isDir": False}]})
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
 
     with (
@@ -102,7 +102,9 @@ async def test_resources_root_single_file_child():
             "openviking.utils.summarizer.get_current_telemetry",
             return_value=SimpleNamespace(telemetry_id="tid"),
         ),
-        patch("openviking.utils.summarizer.get_request_wait_tracker", return_value=_DummyWaitTracker()),
+        patch(
+            "openviking.utils.summarizer.get_request_wait_tracker", return_value=_DummyWaitTracker()
+        ),
         patch("openviking.utils.summarizer.get_viking_fs", return_value=vfs),
     ):
         summarizer = Summarizer(vlm_processor=None)
@@ -131,7 +133,9 @@ async def test_explicit_subpath_not_split():
             "openviking.utils.summarizer.get_current_telemetry",
             return_value=SimpleNamespace(telemetry_id="tid"),
         ),
-        patch("openviking.utils.summarizer.get_request_wait_tracker", return_value=_DummyWaitTracker()),
+        patch(
+            "openviking.utils.summarizer.get_request_wait_tracker", return_value=_DummyWaitTracker()
+        ),
         patch("openviking.utils.summarizer.get_viking_fs", return_value=vfs),
     ):
         summarizer = Summarizer(vlm_processor=None)
@@ -160,7 +164,9 @@ async def test_resources_root_empty_import_is_error():
             "openviking.utils.summarizer.get_current_telemetry",
             return_value=SimpleNamespace(telemetry_id="tid"),
         ),
-        patch("openviking.utils.summarizer.get_request_wait_tracker", return_value=_DummyWaitTracker()),
+        patch(
+            "openviking.utils.summarizer.get_request_wait_tracker", return_value=_DummyWaitTracker()
+        ),
         patch("openviking.utils.summarizer.get_viking_fs", return_value=vfs),
     ):
         summarizer = Summarizer(vlm_processor=None)
@@ -172,4 +178,3 @@ async def test_resources_root_empty_import_is_error():
 
     assert res["status"] == "error"
     assert queue.msgs == []
-
