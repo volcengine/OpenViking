@@ -174,9 +174,17 @@ class MarkdownParser(BaseParser):
             await viking_fs.mkdir(temp_uri)
             logger.debug(f"[MarkdownParser] Created temp directory: {temp_uri}")
 
-            # Get document title
+            explicit_name = kwargs.get("resource_name") or kwargs.get("source_name")
+
+            # Preserve the original uploaded filename when available instead of
+            # the temp upload name (e.g. upload_<uuid>.txt).
             doc_title = meta.get("frontmatter", {}).get(
-                "title", Path(source_path).stem if source_path else "Document"
+                "title",
+                Path(explicit_name).stem
+                if explicit_name
+                else Path(source_path).stem
+                if source_path
+                else "Document",
             )
 
             # Create root directory
@@ -187,7 +195,13 @@ class MarkdownParser(BaseParser):
             logger.info(f"[MarkdownParser] Found {len(headings)} headings")
 
             # Parse and create directory structure
-            await self._parse_and_create_structure(content, headings, root_dir, source_path)
+            await self._parse_and_create_structure(
+                content,
+                headings,
+                root_dir,
+                source_path,
+                doc_name=self._sanitize_for_path(Path(doc_title).stem),
+            )
 
             parse_time = time.time() - start_time
             logger.info(f"[MarkdownParser] Parse completed in {parse_time:.2f}s")
@@ -365,6 +379,7 @@ class MarkdownParser(BaseParser):
         headings: List[Tuple[int, int, str, int]],
         root_dir: str,
         source_path: Optional[str] = None,
+        doc_name: Optional[str] = None,
     ) -> None:
         """
         Parse markdown and create directory structure directly in VikingFS.
@@ -395,7 +410,9 @@ class MarkdownParser(BaseParser):
         await viking_fs.mkdir(root_dir)
 
         # Get document name
-        doc_name = self._sanitize_for_path(Path(source_path).stem if source_path else "content")
+        doc_name = doc_name or self._sanitize_for_path(
+            Path(source_path).stem if source_path else "content"
+        )
 
         # Small document: save as single file (check both token and char limits)
         if estimated_tokens <= max_size and len(content) <= max_chars:

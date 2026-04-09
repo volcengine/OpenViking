@@ -596,10 +596,15 @@ impl HttpClient {
 
                 self.post("/api/v1/resources", &body).await
             } else if path_obj.is_file() {
+                let source_name = path_obj
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|s| s.to_string());
                 let temp_file_id = self.upload_temp_file(path_obj).await?;
 
                 let body = serde_json::json!({
                     "temp_file_id": temp_file_id,
+                    "source_name": source_name,
                     "to": to,
                     "parent": parent,
                     "reason": reason,
