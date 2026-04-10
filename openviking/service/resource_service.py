@@ -502,6 +502,7 @@ class ResourceService:
         return {
             name: {
                 "processed": s.processed,
+                "requeue_count": getattr(s, "requeue_count", 0),
                 "error_count": s.error_count,
                 "errors": [{"message": e.message} for e in s.errors],
             }

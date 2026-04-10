@@ -125,6 +125,9 @@ class TreeBuilder:
         viking_fs = get_viking_fs()
         temp_uri = temp_dir_path
 
+        def is_resources_root(uri: Optional[str]) -> bool:
+            return (uri or "").rstrip("/") == "viking://resources"
+
         # 1. Find document root directory
         entries = await viking_fs.ls(temp_uri, ctx=ctx)
         doc_dirs = [e for e in entries if e.get("isDir") and e["name"] not in [".", ".."]]
@@ -153,21 +156,31 @@ class TreeBuilder:
         # 2. Determine base_uri and final document name with org/repo for GitHub/GitLab
         auto_base_uri = self._get_base_uri(scope, source_path, source_format)
         base_uri = parent_uri or auto_base_uri
+        use_to_as_parent = is_resources_root(to_uri)
         # 3. Determine candidate_uri
-        if to_uri:
+        if to_uri and not use_to_as_parent:
             candidate_uri = to_uri
         else:
-            if parent_uri:
+            effective_parent_uri = parent_uri or to_uri if use_to_as_parent else parent_uri
+            if effective_parent_uri:
                 # Parent URI must exist and be a directory
                 try:
-                    stat_result = await viking_fs.stat(parent_uri, ctx=ctx)
+                    stat_result = await viking_fs.stat(effective_parent_uri, ctx=ctx)
                 except Exception as e:
-                    raise FileNotFoundError(f"Parent URI does not exist: {parent_uri}") from e
+                    raise FileNotFoundError(
+                        f"Parent URI does not exist: {effective_parent_uri}"
+                    ) from e
                 if not stat_result.get("isDir"):
-                    raise ValueError(f"Parent URI is not a directory: {parent_uri}")
+                    raise ValueError(f"Parent URI is not a directory: {effective_parent_uri}")
+                base_uri = effective_parent_uri
             candidate_uri = VikingURI(base_uri).join(final_doc_name).uri
 
-        if to_uri:
+        if to_uri and not use_to_as_parent:
+            final_uri = candidate_uri
+        elif use_to_as_parent:
+            # Treat an explicit resources root target as "import under this
+            # directory" while preserving the child URI so downstream logic can
+            # incrementally update viking://resources/<child> when it exists.
             final_uri = candidate_uri
         else:
             final_uri = await self._resolve_unique_uri(candidate_uri)
@@ -177,7 +190,7 @@ class TreeBuilder:
             source_format=source_format,
         )
         tree._root_uri = final_uri
-        if not to_uri:
+        if not to_uri or use_to_as_parent:
             tree._candidate_uri = candidate_uri
 
         # Create a minimal Context object for the root so that tree.root is not None

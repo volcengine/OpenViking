@@ -197,6 +197,11 @@ async def test_embedding_handler_binds_registered_operation_telemetry(monkeypatc
             self.embedding = SimpleNamespace(
                 dimension=2,
                 get_embedder=lambda: _TelemetryAwareEmbedder(),
+                circuit_breaker=SimpleNamespace(
+                    failure_threshold=5,
+                    reset_timeout=300.0,
+                    max_reset_timeout=300.0,
+                ),
             )
 
     class _DummyVikingDB:
@@ -240,6 +245,20 @@ async def test_embedding_handler_binds_registered_operation_telemetry(monkeypatc
 @pytest.mark.asyncio
 async def test_resource_service_add_resource_reports_queue_summary(monkeypatch):
     telemetry = MemoryOperationTelemetry(operation="resources.add_resource", enabled=True)
+    queue_status = {
+        "Semantic": {
+            "processed": 2,
+            "requeue_count": 0,
+            "error_count": 1,
+            "errors": [],
+        },
+        "Embedding": {
+            "processed": 5,
+            "requeue_count": 0,
+            "error_count": 0,
+            "errors": [],
+        },
+    }
 
     class _DummyProcessor:
         async def process_resource(self, **kwargs):
@@ -248,16 +267,24 @@ async def test_resource_service_add_resource_reports_queue_summary(monkeypatch):
                 "root_uri": "viking://resources/demo",
             }
 
-    class _DummyQueueManager:
-        async def wait_complete(self, timeout=None):
-            return {
-                "Semantic": SimpleNamespace(processed=2, error_count=1, errors=[]),
-                "Embedding": SimpleNamespace(processed=5, error_count=0, errors=[]),
-            }
+    class _DummyRequestWaitTracker:
+        def register_request(self, telemetry_id: str) -> None:
+            del telemetry_id
+
+        async def wait_for_request(self, telemetry_id: str, timeout=None) -> None:
+            del telemetry_id, timeout
+
+        def build_queue_status(self, telemetry_id: str):
+            del telemetry_id
+            return queue_status
+
+        def cleanup(self, telemetry_id: str) -> None:
+            del telemetry_id
 
     monkeypatch.setattr(
-        "openviking.service.resource_service.get_queue_manager",
-        lambda: _DummyQueueManager(),
+        "openviking.service.resource_service.get_request_wait_tracker",
+        lambda: _DummyRequestWaitTracker(),
+        raising=False,
     )
 
     class _DagStats:

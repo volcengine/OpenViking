@@ -16,8 +16,8 @@ def test_request_wait_tracker_cleanup_prevents_state_recreation():
     tracker.mark_embedding_done(telemetry_id, "embedding-1")
 
     assert tracker.build_queue_status(telemetry_id) == {
-        "Semantic": {"processed": 0, "error_count": 0, "errors": []},
-        "Embedding": {"processed": 0, "error_count": 0, "errors": []},
+        "Semantic": {"processed": 0, "requeue_count": 0, "error_count": 0, "errors": []},
+        "Embedding": {"processed": 0, "requeue_count": 0, "error_count": 0, "errors": []},
     }
 
 
@@ -33,6 +33,20 @@ def test_request_wait_tracker_cleanup_prevents_root_recreation():
 
     assert tracker.is_complete(telemetry_id) is True
     assert tracker.build_queue_status(telemetry_id) == {
-        "Semantic": {"processed": 0, "error_count": 0, "errors": []},
-        "Embedding": {"processed": 0, "error_count": 0, "errors": []},
+        "Semantic": {"processed": 0, "requeue_count": 0, "error_count": 0, "errors": []},
+        "Embedding": {"processed": 0, "requeue_count": 0, "error_count": 0, "errors": []},
+    }
+
+
+def test_request_wait_tracker_records_requeues():
+    tracker = RequestWaitTracker()
+    telemetry_id = "tm_requeue"
+
+    tracker.register_request(telemetry_id)
+    tracker.record_semantic_requeue(telemetry_id)
+    tracker.record_embedding_requeue(telemetry_id, delta=2)
+
+    assert tracker.build_queue_status(telemetry_id) == {
+        "Semantic": {"processed": 0, "requeue_count": 1, "error_count": 0, "errors": []},
+        "Embedding": {"processed": 0, "requeue_count": 2, "error_count": 0, "errors": []},
     }

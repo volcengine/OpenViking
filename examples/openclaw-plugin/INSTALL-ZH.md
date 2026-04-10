@@ -179,6 +179,16 @@ cat ~/.openviking/data/log/openviking.log
 ov-install --current-version
 ```
 
+### 链路检查（可选）
+
+如果上述验证都正常，还想进一步确认从 Gateway 到 OpenViking 的完整链路是否通畅，可以使用插件自带的健康检查脚本：
+
+```bash
+python examples/openclaw-plugin/health_check_tools/ov-healthcheck.py
+```
+
+该脚本会进行一次真实的对话注入，然后从 OpenViking 侧验证会话是否被正确捕获、提交、归档并提取出记忆。详细说明见 [health_check_tools/HEALTHCHECK-ZH.md](./health_check_tools/HEALTHCHECK-ZH.md)。
+
 ## 卸载
 
 只卸载 OpenClaw 插件、保留 OpenViking 运行时：

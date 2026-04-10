@@ -55,6 +55,7 @@ class DiffResult:
 
 class RequestQueueStats:
     processed: int = 0
+    requeue_count: int = 0
     error_count: int = 0
 
 
@@ -124,6 +125,7 @@ class SemanticProcessor(DequeueHandlerBase):
         cls,
         telemetry_id: str,
         processed: int = 0,
+        requeue_count: int = 0,
         error_count: int = 0,
     ) -> None:
         if not telemetry_id:
@@ -131,6 +133,7 @@ class SemanticProcessor(DequeueHandlerBase):
         with cls._stats_lock:
             stats = cls._request_stats_by_telemetry_id.setdefault(telemetry_id, RequestQueueStats())
             stats.processed += processed
+            stats.requeue_count += requeue_count
             stats.error_count += error_count
             cls._request_stats_order.append(telemetry_id)
             if len(cls._request_stats_order) > cls._max_cached_stats:
@@ -258,6 +261,9 @@ class SemanticProcessor(DequeueHandlerBase):
                     f"Circuit breaker is open, re-enqueueing semantic message: {msg.uri}"
                 )
                 await self._reenqueue_semantic_msg(msg)
+                self._merge_request_stats(msg.telemetry_id, requeue_count=1)
+                get_request_wait_tracker().record_semantic_requeue(msg.telemetry_id)
+                self.report_requeue()
                 self.report_success()
                 return None
             collector = resolve_telemetry(msg.telemetry_id)
@@ -348,6 +354,9 @@ class SemanticProcessor(DequeueHandlerBase):
                 if msg is not None:
                     try:
                         await self._reenqueue_semantic_msg(msg)
+                        self._merge_request_stats(msg.telemetry_id, requeue_count=1)
+                        get_request_wait_tracker().record_semantic_requeue(msg.telemetry_id)
+                        self.report_requeue()
                     except Exception as requeue_err:
                         logger.error(f"Failed to re-enqueue semantic message: {requeue_err}")
                         self._merge_request_stats(msg.telemetry_id, error_count=1)
@@ -494,7 +503,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
         if pending_indices:
             logger.info(
-                f"Generating summaries for {len(pending_indices)} changed files concurrently "
+                f"Generating summaries for {len(pending_indices)} changed files "
                 f"(reused {len(file_paths) - len(pending_indices)} cached)"
             )
 
@@ -510,7 +519,17 @@ class SemanticProcessor(DequeueHandlerBase):
                     logger.warning(f"Failed to generate summary for {file_path}: {e}")
                     file_summaries[idx] = {"name": file_name, "summary": ""}
 
-            await asyncio.gather(*[_gen(i, fp) for i, fp in pending_indices])
+            # Fix for Issue #1245: Batch processing to prevent coroutine scheduling storms
+            # Use a reasonable batch size (min of semaphore and 10) to keep event loop responsive
+            batch_size = max(1, min(self.max_concurrent_llm, 10))
+            for batch_start in range(0, len(pending_indices), batch_size):
+                batch = pending_indices[batch_start : batch_start + batch_size]
+                logger.info(
+                    f"[MemorySemantic] Processing batch {batch_start // batch_size + 1}/"
+                    f"{(len(pending_indices) + batch_size - 1) // batch_size} "
+                    f"({len(batch)} files)"
+                )
+                await asyncio.gather(*[_gen(i, fp) for i, fp in batch])
 
         file_summaries = [s for s in file_summaries if s is not None]
 

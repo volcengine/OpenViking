@@ -11,6 +11,7 @@ import {
   compileSessionPatterns,
   isTranscriptLikeIngest,
   extractLatestUserText,
+  sanitizeUserTextForCapture,
   shouldBypassSession,
 } from "./text-utils.js";
 import {
@@ -110,6 +111,7 @@ type OpenClawPluginApi = {
 const MAX_OPENVIKING_STDERR_LINES = 200;
 const MAX_OPENVIKING_STDERR_CHARS = 256_000;
 const AUTO_RECALL_TIMEOUT_MS = 5_000;
+const RECALL_QUERY_MAX_CHARS = 4_000;
 
 /**
  * OpenViking `UserIdentifier` allows only [a-zA-Z0-9_-] for agent_id
@@ -126,6 +128,39 @@ export function sanitizeOpenVikingAgentIdHeader(raw: string): string {
     .replace(/_+/g, "_")
     .replace(/^_|_$/g, "");
   return normalized.length > 0 ? normalized : "ov_agent";
+}
+
+export type PreparedRecallQuery = {
+  query: string;
+  truncated: boolean;
+  originalChars: number;
+  finalChars: number;
+};
+
+export function prepareRecallQuery(rawText: string): PreparedRecallQuery {
+  const sanitized = sanitizeUserTextForCapture(rawText).trim();
+  const originalChars = sanitized.length;
+
+  if (!sanitized) {
+    return {
+      query: "",
+      truncated: false,
+      originalChars: 0,
+      finalChars: 0,
+    };
+  }
+
+  const query =
+    sanitized.length > RECALL_QUERY_MAX_CHARS
+      ? sanitized.slice(0, RECALL_QUERY_MAX_CHARS).trim()
+      : sanitized;
+
+  return {
+    query,
+    truncated: sanitized.length > RECALL_QUERY_MAX_CHARS,
+    originalChars,
+    finalChars: query.length,
+  };
 }
 
 function extractAgentIdFromSessionKey(sessionKey?: string): string | undefined {
@@ -882,11 +917,20 @@ const contextEnginePlugin = {
       }
 
       const eventObj = (event ?? {}) as { messages?: unknown[]; prompt?: string };
-      const queryText =
-        extractLatestUserText(eventObj.messages) ||
+      const latestUserText = extractLatestUserText(eventObj.messages);
+      const rawRecallQuery =
+        latestUserText ||
         (typeof eventObj.prompt === "string" ? eventObj.prompt.trim() : "");
+      const recallQuery = prepareRecallQuery(rawRecallQuery);
+      const queryText = recallQuery.query;
       if (!queryText) {
         return;
+      }
+      if (recallQuery.truncated) {
+        verboseRoutingInfo(
+          `openviking: recall query truncated (` +
+            `chars=${recallQuery.originalChars}->${recallQuery.finalChars})`,
+        );
       }
 
       const prependContextParts: string[] = [];

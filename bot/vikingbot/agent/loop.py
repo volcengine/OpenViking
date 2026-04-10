@@ -396,7 +396,7 @@ class AgentLoop:
             max_ticks = 7
 
             while not long_running_notified and tick_count < max_ticks:
-                await asyncio.sleep(40)
+                await asyncio.sleep(60)
                 if long_running_notified:
                     break
                 if msg.metadata:
@@ -496,7 +496,7 @@ class AgentLoop:
                 await self.sessions.save(session)
                 return OutboundMessage(
                     session_key=msg.session_key,
-                    content=None,
+                    content="",
                     metadata=msg.metadata,
                     event_type=OutboundEventType.NO_REPLY,
                 )

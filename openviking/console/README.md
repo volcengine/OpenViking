@@ -30,7 +30,7 @@ http://127.0.0.1:8020/
 ```
 
 4. In **Settings**, configure headers for your upstream auth mode.
-`api_key` is the default server mode, so in that mode you normally paste `X-API-Key` and click **Save** (or press Enter). If the upstream server runs in `trusted` mode, you usually do not need `X-API-Key` for ordinary requests; instead set `X-OpenViking-Account` and `X-OpenViking-User` (and optionally `X-OpenViking-Agent`).
+`api_key` is the default server mode, so in that mode you normally paste `X-API-Key` and click **Save** (or press Enter). If the upstream server runs in `trusted` mode, you can omit `X-API-Key` for ordinary requests only when that server is localhost-only and has no `root_api_key`; otherwise you still need `X-API-Key`, and you should also set `X-OpenViking-Account` and `X-OpenViking-User` (and optionally `X-OpenViking-Agent`).
 `X-API-Key` is stored locally in the browser and restored into the current tab.
 
 When the upstream server runs in `trusted` mode, ordinary access does not require user registration first. If you try account or user management actions against Admin API endpoints in `trusted` mode, the server now returns an explicit error explaining that `trusted` mode resolves requests as `USER` and that account/user management requires `api_key` mode with `root_api_key`.

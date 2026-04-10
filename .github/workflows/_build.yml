@@ -238,49 +238,16 @@ jobs:
         cp target/${{ matrix.arch == 'aarch64' && 'aarch64-unknown-linux-gnu' || 'x86_64-unknown-linux-gnu' }}/release/ov openviking/bin/
         chmod +x openviking/bin/ov
 
-    - name: Build ragfs-python and extract into openviking/lib/ (Linux)
-      shell: bash
-      run: |
-        uv pip install maturin
-        TMPDIR=$(mktemp -d)
-        cd crates/ragfs-python
-        maturin build --release \
-          --target ${{ matrix.arch == 'aarch64' && 'aarch64-unknown-linux-gnu' || 'x86_64-unknown-linux-gnu' }} \
-          --out "$TMPDIR"
-        cd ../..
-        mkdir -p openviking/lib
-        python3 -c "
-import zipfile, glob, os, sys
-whls = glob.glob(os.path.join('$TMPDIR', 'ragfs_python-*.whl'))
-assert whls, 'maturin produced no wheel'
-with zipfile.ZipFile(whls[0]) as zf:
-    for name in zf.namelist():
-        bn = os.path.basename(name)
-        if bn.startswith('ragfs_python') and (bn.endswith('.so') or bn.endswith('.pyd')):
-            dst = os.path.join('openviking', 'lib', bn)
-            with zf.open(name) as src, open(dst, 'wb') as f:
-                f.write(src.read())
-            os.chmod(dst, 0o755)
-            print(f'Extracted {bn} -> {dst}')
-            sys.exit(0)
-print('ERROR: No ragfs_python .so/.pyd found in wheel')
-sys.exit(1)
-        "
-        rm -rf "$TMPDIR"
-        echo "Contents of openviking/lib/:"
-        ls -la openviking/lib/
     - name: Clean workspace (force ignore dirty)
       shell: bash
       run: |
         # Back up pre-built artifacts before cleaning
         cp -a openviking/bin /tmp/_ov_bin || true
-        cp -a openviking/lib /tmp/_ov_lib || true
         git reset --hard HEAD
         git clean -fd
         rm -rf openviking/_version.py openviking.egg-info
         # Restore pre-built artifacts
         cp -a /tmp/_ov_bin openviking/bin || true
-        cp -a /tmp/_ov_lib openviking/lib || true
         # Ignore uv.lock changes to avoid dirty state in setuptools_scm
         git update-index --assume-unchanged uv.lock || true
 
@@ -296,7 +263,7 @@ sys.exit(1)
         echo "=== Check openviking/_version.py ==="
         if [ -f openviking/_version.py ]; then cat openviking/_version.py; else echo "Not found"; fi
         echo "=== Verify pre-built artifacts survived clean ==="
-        ls -la openviking/bin/ openviking/lib/ || true
+        ls -la openviking/bin/ || true
 
     - name: Build package (Wheel Only)
       run: uv build --wheel
@@ -443,51 +410,16 @@ sys.exit(1)
           chmod +x openviking/bin/ov
         fi
 
-    - name: Build ragfs-python and extract into openviking/lib/ (macOS/Windows)
-      shell: bash
-      run: |
-        uv pip install maturin
-        TMPDIR=$(mktemp -d)
-        cd crates/ragfs-python
-        if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-          maturin build --release --target x86_64-pc-windows-msvc --out "$TMPDIR"
-        else
-          maturin build --release --out "$TMPDIR"
-        fi
-        cd ../..
-        mkdir -p openviking/lib
-        python3 -c "
-import zipfile, glob, os, sys
-whls = glob.glob(os.path.join('$TMPDIR', 'ragfs_python-*.whl'))
-assert whls, 'maturin produced no wheel'
-with zipfile.ZipFile(whls[0]) as zf:
-    for name in zf.namelist():
-        bn = os.path.basename(name)
-        if bn.startswith('ragfs_python') and (bn.endswith('.so') or bn.endswith('.pyd')):
-            dst = os.path.join('openviking', 'lib', bn)
-            with zf.open(name) as src, open(dst, 'wb') as f:
-                f.write(src.read())
-            os.chmod(dst, 0o755)
-            print(f'Extracted {bn} -> {dst}')
-            sys.exit(0)
-print('ERROR: No ragfs_python .so/.pyd found in wheel')
-sys.exit(1)
-        "
-        rm -rf "$TMPDIR"
-        echo "Contents of openviking/lib/:"
-        ls -la openviking/lib/
     - name: Clean workspace (force ignore dirty)
       shell: bash
       run: |
         # Back up pre-built artifacts before cleaning
         cp -a openviking/bin /tmp/_ov_bin || true
-        cp -a openviking/lib /tmp/_ov_lib || true
         git reset --hard HEAD
         git clean -fd
         rm -rf openviking/_version.py openviking.egg-info
         # Restore pre-built artifacts
         cp -a /tmp/_ov_bin openviking/bin || true
-        cp -a /tmp/_ov_lib openviking/lib || true
         # Ignore uv.lock changes to avoid dirty state in setuptools_scm
         git update-index --assume-unchanged uv.lock || true
 
@@ -503,7 +435,7 @@ sys.exit(1)
         echo "=== Check openviking/_version.py ==="
         if [ -f openviking/_version.py ]; then cat openviking/_version.py; else echo "Not found"; fi
         echo "=== Verify pre-built artifacts survived clean ==="
-        ls -la openviking/bin/ openviking/lib/ || true
+        ls -la openviking/bin/ || true
 
     - name: Build package (Wheel Only)
       run: uv build --wheel

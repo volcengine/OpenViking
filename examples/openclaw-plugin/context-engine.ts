@@ -5,6 +5,7 @@ import {
   compileSessionPatterns,
   getCaptureDecision,
   extractNewTurnTexts,
+  extractSingleMessageText,
   shouldBypassSession,
 } from "./text-utils.js";
 import {
@@ -16,6 +17,7 @@ import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
 type AgentMessage = {
   role?: string;
   content?: unknown;
+  timestamp?: unknown;
 };
 
 type ContextEngineInfo = {
@@ -114,6 +116,29 @@ function msgTokenEstimate(msg: AgentMessage): number {
   if (typeof raw === "string") return Math.ceil(raw.length / 4);
   if (Array.isArray(raw)) return Math.ceil(JSON.stringify(raw).length / 4);
   return 1;
+}
+
+function normalizeTimestamp(value: unknown): string | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const timestampMs = Math.abs(value) < 100_000_000_000 ? value * 1000 : value;
+    return new Date(timestampMs).toISOString();
+  }
+  return undefined;
+}
+
+function pickLatestCreatedAt(messages: AgentMessage[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i] as Record<string, unknown>;
+    const role = typeof message.role === "string" ? message.role : "";
+    if (!role || role === "system") {
+      continue;
+    }
+    const normalized = normalizeTimestamp(message.timestamp);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return undefined;
 }
 
 function messageDigest(messages: AgentMessage[], maxCharsPerMsg = 2000): Array<{role: string; content: string; tokens: number; truncated: boolean}> {
@@ -762,6 +787,10 @@ export function createMemoryOpenVikingContextEngine(params: {
         return;
       }
 
+      if (afterTurnParams.isHeartbeat) {
+        return;
+      }
+
       try {
         const sessionKey =
           (typeof afterTurnParams.sessionKey === "string" && afterTurnParams.sessionKey.trim()) ||
@@ -817,7 +846,8 @@ export function createMemoryOpenVikingContextEngine(params: {
           return;
         }
 
-        const newMessages = messages.slice(start).filter((m: any) => {
+        const turnMessages = messages.slice(start) as AgentMessage[];
+        const newMessages = turnMessages.filter((m: any) => {
           const r = (m as Record<string, unknown>).role as string;
           return r === "user" || r === "assistant";
         }) as AgentMessage[];
@@ -840,16 +870,36 @@ export function createMemoryOpenVikingContextEngine(params: {
           return;
         }
         const client = await getClient();
-        const turnText = newTexts.join("\n");
-        const sanitized = turnText.replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>/gi, " ").replace(/\s+/g, " ").trim();
+        const createdAt = pickLatestCreatedAt(turnMessages);
 
-        if (sanitized) {
-          await client.addSessionMessage(OVSessionId, "user", sanitized, agentId);
-        } else {
-          diag("afterTurn_skip", OVSessionId, {
-            reason: "sanitized_empty",
-          });
+        // Group by OV role (user|assistant), merge adjacent same-role
+        const HEARTBEAT_RE = /\bHEARTBEAT(?:\.md|_OK)\b/;
+        const groups: Array<{ role: "user" | "assistant"; texts: string[] }> = [];
+        for (const msg of turnMessages) {
+          const text = extractSingleMessageText(msg);
+          if (!text) continue;
+          if (HEARTBEAT_RE.test(text)) continue;
+          const role = (msg as Record<string, unknown>).role as string;
+          const ovRole: "user" | "assistant" = role === "assistant" ? "assistant" : "user";
+          const content = ovRole === "user"
+            ? text.replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>/gi, " ").replace(/\s+/g, " ").trim()
+            : text;
+          if (!content) continue;
+          const last = groups[groups.length - 1];
+          if (last && last.role === ovRole) {
+            last.texts.push(content);
+          } else {
+            groups.push({ role: ovRole, texts: [content] });
+          }
+        }
+
+        if (groups.length === 0) {
+          diag("afterTurn_skip", OVSessionId, { reason: "sanitized_empty" });
           return;
+        }
+
+        for (const group of groups) {
+          await client.addSessionMessage(OVSessionId, group.role, group.texts.join("\n"), agentId, createdAt);
         }
 
         const session = await client.getSession(OVSessionId, agentId);
@@ -865,8 +915,9 @@ export function createMemoryOpenVikingContextEngine(params: {
         }
 
         const commitResult = await client.commitSession(OVSessionId, { wait: false, agentId });
+        const allTexts = groups.flatMap((g) => g.texts).join("\n");
         const commitExtra = cfg.logFindRequests
-          ? ` ${toJsonLog({ captured: [trimForLog(turnText, 260)] })}`
+          ? ` ${toJsonLog({ captured: [trimForLog(allTexts, 260)] })}`
           : "";
         logger.info(
           `openviking: committed session=${OVSessionId}, ` +

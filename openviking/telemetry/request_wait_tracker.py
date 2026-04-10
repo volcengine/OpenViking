@@ -16,9 +16,11 @@ class _RequestWaitState:
     pending_semantic_roots: Set[str] = field(default_factory=set)
     pending_embedding_roots: Set[str] = field(default_factory=set)
     semantic_processed: int = 0
+    semantic_requeue_count: int = 0
     semantic_error_count: int = 0
     semantic_errors: List[str] = field(default_factory=list)
     embedding_processed: int = 0
+    embedding_requeue_count: int = 0
     embedding_error_count: int = 0
     embedding_errors: List[str] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
@@ -80,6 +82,15 @@ class RequestWaitTracker:
                 return
             state.embedding_processed += max(delta, 0)
 
+    def record_embedding_requeue(self, telemetry_id: str, delta: int = 1) -> None:
+        if not telemetry_id:
+            return
+        with self._lock:
+            state = self._states.get(telemetry_id)
+            if state is None:
+                return
+            state.embedding_requeue_count += max(delta, 0)
+
     def record_embedding_error(self, telemetry_id: str, message: str) -> None:
         if not telemetry_id:
             return
@@ -105,6 +116,15 @@ class RequestWaitTracker:
                 return
             state.pending_semantic_roots.discard(semantic_msg_id)
             state.semantic_processed += max(processed_delta, 0)
+
+    def record_semantic_requeue(self, telemetry_id: str, delta: int = 1) -> None:
+        if not telemetry_id:
+            return
+        with self._lock:
+            state = self._states.get(telemetry_id)
+            if state is None:
+                return
+            state.semantic_requeue_count += max(delta, 0)
 
     def mark_semantic_failed(self, telemetry_id: str, semantic_msg_id: str, message: str) -> None:
         if not telemetry_id:
@@ -176,11 +196,13 @@ class RequestWaitTracker:
             return {
                 "Semantic": {
                     "processed": state.semantic_processed,
+                    "requeue_count": state.semantic_requeue_count,
                     "error_count": state.semantic_error_count,
                     "errors": [{"message": msg} for msg in state.semantic_errors],
                 },
                 "Embedding": {
                     "processed": state.embedding_processed,
+                    "requeue_count": state.embedding_requeue_count,
                     "error_count": state.embedding_error_count,
                     "errors": [{"message": msg} for msg in state.embedding_errors],
                 },

@@ -1,4 +1,4 @@
-name: 03. API Integration Tests
+name: 06. API Integration Tests
 
 on:
   workflow_dispatch:
@@ -42,10 +42,12 @@ jobs:
   api-tests:
     name: API Integration Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 50
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-14, macos-15-intel, windows-latest]
+        os: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && fromJSON('["ubuntu-24.04", "macos-14", "windows-latest"]') || fromJSON('["ubuntu-24.04"]') }}
     
     steps:
       - uses: actions/checkout@v6
@@ -408,7 +410,8 @@ jobs:
             echo "Running basic tests only (no VLM/Embedding)"
             uv run python -m pytest . -v --html=api-test-report.html --self-contained-html \
               --ignore=retrieval/ --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py \
-              --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py -k "not test_observer"
+              --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py \
+              --ignore=scenarios/ -k "not test_observer"
           fi
         continue-on-error: true
 
@@ -426,7 +429,7 @@ jobs:
             uv run python -m pytest . -v --html=api-test-report.html --self-contained-html --ignore=filesystem/
           } else {
             Write-Host "Running basic tests only (no VLM/Embedding, Windows: skipping filesystem tests)"
-            uv run python -m pytest . -v --html=api-test-report.html --self-contained-html --ignore=retrieval/ --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py --ignore=filesystem/ -k "not test_observer"
+            uv run python -m pytest . -v --html=api-test-report.html --self-contained-html --ignore=retrieval/ --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py --ignore=filesystem/ --ignore=scenarios/ -k "not test_observer"
           }
         continue-on-error: true
 

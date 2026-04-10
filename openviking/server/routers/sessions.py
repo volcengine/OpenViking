@@ -249,10 +249,10 @@ async def add_message(
        ]}
 
     If both `content` and `parts` are provided, `parts` takes precedence.
+    Missing sessions are auto-created on first add.
     """
     service = get_service()
-    session = service.sessions.session(_ctx, session_id)
-    await session.load()
+    session = await service.sessions.get(session_id, _ctx, auto_create=True)
 
     if request.parts is not None:
         parts = [part_from_dict(p) for p in request.parts]

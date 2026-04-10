@@ -10,6 +10,41 @@ python examples/openclaw-plugin/ov-healthcheck.py
 
 只依赖 Python 标准库。地址和 token 会从 `openclaw.json` 自动读取。
 
+## 前置要求
+
+### 必须启用 Gateway HTTP 端点
+
+Phase 1 对话注入依赖 Gateway 的 `/v1/responses` 接口，该接口**默认关闭**，需要在 `openclaw.json` 中启用：
+
+```json
+{
+  "gateway": {
+    "http": {
+      "endpoints": {
+        "chatCompletions": {
+          "enabled": true
+        },
+        "responses": {
+          "enabled": true
+        }
+      }
+    }
+  }
+}
+```
+
+启用后重启 Gateway 使配置生效：
+
+```bash
+openclaw gateway restart
+```
+
+若未启用，Phase 1 会失败并报错：
+
+```
+[FAIL] Chat turn 1 failed (POST http://127.0.0.1:18789/v1/responses failed with HTTP 404: Not Found)
+```
+
 ## 期望输出
 
 正常运行结果如下：
@@ -127,6 +162,29 @@ cat ~/.openviking/ov.conf
 
 检查 `storage.workspace/log/openviking.log`。
 
+### `Chat turn 1 failed (POST /v1/responses failed with HTTP 404: Not Found)`
+
+这是最常见的 Phase 1 失败原因。Gateway 的 `/v1/responses` 和 `/v1/chat/completions` 接口**默认关闭**，需要在 `openclaw.json` 的 `gateway.http.endpoints` 下启用：
+
+```json
+{
+  "gateway": {
+    "http": {
+      "endpoints": {
+        "chatCompletions": { "enabled": true },
+        "responses": { "enabled": true }
+      }
+    }
+  }
+}
+```
+
+重启 Gateway：
+
+```bash
+openclaw gateway restart
+```
+
 ### `Probe session not found in OpenViking`
 
 会话已发出但插件未写入 OpenViking。
@@ -168,9 +226,10 @@ curl "http://127.0.0.1:<端口>/api/v1/sessions/<session_id>/context?token_budge
 
 ## 建议排查顺序
 
-1. 检查 `plugins.slots.contextEngine` 是否为 `openviking`
-2. 检查 Gateway `/health`
-3. 检查 OpenViking `/health`
-4. 看 `openclaw logs --follow`
-5. 看 OpenViking 日志
-6. 看脚本输出里失败的具体阶段
+1. 确认已按前置要求启用 `gateway.http.endpoints`
+2. 检查 `plugins.slots.contextEngine` 是否为 `openviking`
+3. 检查 Gateway `/health`
+4. 检查 OpenViking `/health`
+5. 看 `openclaw logs --follow`
+6. 看 OpenViking 日志
+7. 看脚本输出里失败的具体阶段

@@ -366,6 +366,7 @@ class AsyncHTTPClient(BaseClient):
                 finally:
                     Path(zip_path).unlink(missing_ok=True)
             elif path_obj.is_file():
+                request_data["source_name"] = path_obj.name
                 temp_file_id = await self._upload_temp_file(path)
                 request_data["temp_file_id"] = temp_file_id
             else:

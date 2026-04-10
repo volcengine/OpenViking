@@ -18,9 +18,9 @@ All API keys are plain random tokens with no embedded identity. The server resol
 | Mode | `server.auth_mode` | Identity Source | Typical Use |
 |------|--------------------|-----------------|-------------|
 | API key mode | `"api_key"` | API key, with optional tenant headers for root requests | Standard multi-tenant deployment |
-| Trusted mode | `"trusted"` | `X-OpenViking-Account` / `X-OpenViking-User` / optional `X-OpenViking-Agent` headers | Behind a trusted gateway or internal network boundary |
+| Trusted mode | `"trusted"` | `X-OpenViking-Account` / `X-OpenViking-User` / optional `X-OpenViking-Agent` headers, plus `root_api_key` on non-localhost deployments | Behind a trusted gateway or internal network boundary |
 
-`api_key` is the default and standard production mode. `trusted` is an alternative mode for deployments where an upstream gateway or trusted internal caller injects identity headers on every request.
+`api_key` is the default and standard production mode. `trusted` is an alternative mode for deployments where an upstream gateway or trusted internal caller injects identity headers on every request. In `trusted` mode, running without `root_api_key` is allowed only when the server binds to localhost; non-localhost `trusted` deployments must configure `root_api_key`.
 
 ## Setting Up (Server Side)
 

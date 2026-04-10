@@ -182,7 +182,7 @@ describe("context-engine afterTurn()", () => {
     );
   });
 
-  it("stores new messages via addSessionMessage", async () => {
+  it("stores new messages via addSessionMessage with proper roles", async () => {
     const { engine, client } = makeEngine();
 
     const messages = [
@@ -198,13 +198,39 @@ describe("context-engine afterTurn()", () => {
       prePromptMessageCount: 1,
     });
 
-    expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
-    const storedContent = client.addSessionMessage.mock.calls[0][2] as string;
-    expect(storedContent).toContain("hello world");
-    expect(storedContent).toContain("hi there");
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
+    // First call: user message
+    expect(client.addSessionMessage.mock.calls[0][1]).toBe("user");
+    expect(client.addSessionMessage.mock.calls[0][2]).toContain("hello world");
+    // Second call: assistant message
+    expect(client.addSessionMessage.mock.calls[1][1]).toBe("assistant");
+    expect(client.addSessionMessage.mock.calls[1][2]).toContain("hi there");
   });
 
-  it("sanitizes <relevant-memories> from stored content", async () => {
+  it("passes the latest non-system message timestamp to addSessionMessage as ISO string", async () => {
+    const { engine, client } = makeEngine();
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages: [
+        { role: "user", content: "old message", timestamp: 1775037600000 },
+        { role: "user", content: "new message", timestamp: 1775037660000 },
+        { role: "assistant", content: "new reply", timestamp: 1775037720000 },
+        { role: "toolResult", toolName: "bash", content: "exit 0", timestamp: 1775037780000 },
+        { role: "system", content: "ignored system message", timestamp: 1775037840000 },
+      ],
+      prePromptMessageCount: 1,
+    });
+
+    // user + assistant + toolResult(→user) = 3 calls (toolResult merges with no adjacent user)
+    expect(client.addSessionMessage).toHaveBeenCalled();
+    const lastCallIdx = client.addSessionMessage.mock.calls.length - 1;
+    const createdAt = client.addSessionMessage.mock.calls[lastCallIdx][4] as string;
+    expect(createdAt).toBe("2026-04-01T10:03:00.000Z");
+  });
+
+  it("sanitizes <relevant-memories> from user content but not from assistant", async () => {
     const { engine, client } = makeEngine();
 
     const messages = [
@@ -222,6 +248,7 @@ describe("context-engine afterTurn()", () => {
     });
 
     expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
+    expect(client.addSessionMessage.mock.calls[0][1]).toBe("user");
     const storedContent = client.addSessionMessage.mock.calls[0][2] as string;
     expect(storedContent).not.toContain("relevant-memories");
     expect(storedContent).not.toContain("injected memory data");
@@ -370,10 +397,12 @@ describe("context-engine afterTurn()", () => {
       prePromptMessageCount: 0,
     });
 
-    const storedContent = client.addSessionMessage.mock.calls[0][2] as string;
-    expect(storedContent).toContain("src/app.ts");
-    expect(storedContent).toContain("npm install");
-    expect(storedContent).toContain("export const x = 1");
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
+    const userContent = client.addSessionMessage.mock.calls[0][2] as string;
+    const assistantContent = client.addSessionMessage.mock.calls[1][2] as string;
+    expect(userContent).toContain("src/app.ts");
+    expect(userContent).toContain("npm install");
+    expect(assistantContent).toContain("export const x = 1");
   });
 
   it("passes agentId to addSessionMessage", async () => {
@@ -405,6 +434,143 @@ describe("context-engine afterTurn()", () => {
 
     expect(client.addSessionMessage).toHaveBeenCalled();
     expect(client.getSession).toHaveBeenCalled();
+  });
+
+  it("maps toolResult to user role", async () => {
+    const { engine, client } = makeEngine();
+
+    const messages = [
+      { role: "assistant", content: [
+        { type: "text", text: "running tool" },
+        { type: "toolUse", name: "bash", input: { cmd: "ls" } },
+      ] },
+      { role: "toolResult", toolName: "bash", content: "file1.txt\nfile2.txt" },
+      { role: "assistant", content: "done" },
+    ];
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages,
+      prePromptMessageCount: 0,
+    });
+
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(3);
+    // assistant → user(toolResult) → assistant
+    expect(client.addSessionMessage.mock.calls[0][1]).toBe("assistant");
+    expect(client.addSessionMessage.mock.calls[1][1]).toBe("user");
+    expect(client.addSessionMessage.mock.calls[1][2]).toContain("[bash result]:");
+    expect(client.addSessionMessage.mock.calls[1][2]).toContain("file1.txt");
+    expect(client.addSessionMessage.mock.calls[2][1]).toBe("assistant");
+  });
+
+  it("merges adjacent same-role messages", async () => {
+    const { engine, client } = makeEngine();
+
+    const messages = [
+      { role: "user", content: "first question" },
+      { role: "user", content: "second question" },
+      { role: "assistant", content: "answer" },
+    ];
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages,
+      prePromptMessageCount: 0,
+    });
+
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
+    expect(client.addSessionMessage.mock.calls[0][1]).toBe("user");
+    expect(client.addSessionMessage.mock.calls[0][2]).toContain("first question");
+    expect(client.addSessionMessage.mock.calls[0][2]).toContain("second question");
+    expect(client.addSessionMessage.mock.calls[1][1]).toBe("assistant");
+  });
+
+  it("merges adjacent toolResults into one user group", async () => {
+    const { engine, client } = makeEngine();
+
+    const messages = [
+      { role: "assistant", content: [
+        { type: "text", text: "calling tools" },
+        { type: "toolUse", name: "read", input: { path: "a.txt" } },
+      ] },
+      { role: "toolResult", toolName: "read", content: "content of a" },
+      { role: "toolResult", toolName: "write", content: "ok" },
+      { role: "assistant", content: "all done" },
+    ];
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages,
+      prePromptMessageCount: 0,
+    });
+
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(3);
+    expect(client.addSessionMessage.mock.calls[0][1]).toBe("assistant");
+    // Two toolResults merged into one user call
+    expect(client.addSessionMessage.mock.calls[1][1]).toBe("user");
+    expect(client.addSessionMessage.mock.calls[1][2]).toContain("[read result]:");
+    expect(client.addSessionMessage.mock.calls[1][2]).toContain("[write result]:");
+    expect(client.addSessionMessage.mock.calls[2][1]).toBe("assistant");
+  });
+
+  it("does not sanitize <relevant-memories> from assistant content", async () => {
+    const { engine, client } = makeEngine();
+
+    const messages = [
+      { role: "user", content: "question" },
+      { role: "assistant", content: "Here is context <relevant-memories>data</relevant-memories> end" },
+    ];
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages,
+      prePromptMessageCount: 0,
+    });
+
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
+    const assistantContent = client.addSessionMessage.mock.calls[1][2] as string;
+    expect(assistantContent).toContain("relevant-memories");
+  });
+
+  it("skips heartbeat messages from being stored", async () => {
+    const { engine, client } = makeEngine();
+
+    const messages = [
+      { role: "user", content: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK." },
+      { role: "assistant", content: "HEARTBEAT_OK" },
+    ];
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages,
+      prePromptMessageCount: 0,
+    });
+
+    expect(client.addSessionMessage).not.toHaveBeenCalled();
+  });
+
+  it("skips heartbeat via isHeartbeat flag", async () => {
+    const { engine, client } = makeEngine();
+
+    const messages = [
+      { role: "user", content: "regular message" },
+      { role: "assistant", content: "reply" },
+    ];
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages,
+      prePromptMessageCount: 0,
+      isHeartbeat: true,
+    });
+
+    expect(client.addSessionMessage).not.toHaveBeenCalled();
   });
 
   it("skips store when all new messages are system only", async () => {

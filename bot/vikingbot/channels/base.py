@@ -145,6 +145,7 @@ class BaseChannel(ABC):
         sender_id: str,
         chat_id: str,
         content: str,
+        need_reply: bool = True,
         media: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> None:
@@ -174,6 +175,7 @@ class BaseChannel(ABC):
                 chat_id=chat_id,
             ),
             sender_id=str(sender_id),
+            need_reply=need_reply,
             content=content,
             media=media or [],
             metadata=metadata or {},
