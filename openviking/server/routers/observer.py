@@ -92,6 +92,16 @@ async def observer_retrieval(
     return Response(status="ok", result=_component_to_dict(component))
 
 
+@router.get("/usage")
+async def observer_usage(
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Get context usage metrics (vector count, breakdowns)."""
+    service = get_service()
+    component = service.debug.observer.usage(ctx=ctx)
+    return Response(status="ok", result=_component_to_dict(component))
+
+
 @router.get("/system")
 async def observer_system(
     ctx: RequestContext = Depends(get_request_context),

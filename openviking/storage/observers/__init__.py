@@ -10,6 +10,7 @@ from .prometheus_observer import (
 )
 from .queue_observer import QueueObserver
 from .retrieval_observer import RetrievalObserver
+from .usage_observer import UsageObserver
 from .vikingdb_observer import VikingDBObserver
 
 __all__ = [
@@ -21,5 +22,6 @@ __all__ = [
     "set_prometheus_observer",
     "QueueObserver",
     "RetrievalObserver",
+    "UsageObserver",
     "VikingDBObserver",
 ]
