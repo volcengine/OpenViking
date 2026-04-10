@@ -22,6 +22,24 @@ def test_registry_label_keys_must_match_definition():
         c.inc(labels={"a": "1", "b": "2", "c": "3"})
 
 
+def test_registry_canonicalizes_label_name_order_for_same_family(render_prometheus):
+    registry = MetricRegistry()
+
+    registry.inc_counter(
+        "openviking_ordered_total",
+        labels={"status": "ok", "provider": "local"},
+        label_names=("status", "provider"),
+    )
+    registry.inc_counter(
+        "openviking_ordered_total",
+        labels={"provider": "local", "status": "ok"},
+        label_names=("provider", "status"),
+    )
+
+    text = render_prometheus(registry)
+    assert 'openviking_ordered_total{provider="local",status="ok"} 2' in text
+
+
 def test_counter_only_increases():
     registry = MetricRegistry()
     c = registry.counter("openviking_counter_total")

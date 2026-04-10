@@ -7,7 +7,9 @@ from openviking.metrics.core.base import MetricCollector
 
 
 def test_metric_collector_metric_name_includes_namespace_and_optional_unit():
-    assert MetricCollector.metric_name("cache", "hits", unit="total") == "openviking_cache_hits_total"
+    assert (
+        MetricCollector.metric_name("cache", "hits", unit="total") == "openviking_cache_hits_total"
+    )
     assert (
         MetricCollector.metric_name("resource", "stage_duration", unit="seconds")
         == "openviking_resource_stage_duration_seconds"

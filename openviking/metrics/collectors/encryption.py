@@ -90,17 +90,19 @@ class EncryptionCollector(EventMetricCollector):
         DOMAIN, "key_version_usage", unit="total"
     )
 
-    SUPPORTED_EVENTS: ClassVar[frozenset[str]] = frozenset({
-        "encryption.operation",
-        "encryption.bytes",
-        "encryption.payload_size",
-        "encryption.auth_failed",
-        "encryption.key_derivation",
-        "encryption.key_load",
-        "encryption.key_cache_hit",
-        "encryption.key_cache_miss",
-        "encryption.key_version_usage",
-    })
+    SUPPORTED_EVENTS: ClassVar[frozenset[str]] = frozenset(
+        {
+            "encryption.operation",
+            "encryption.bytes",
+            "encryption.payload_size",
+            "encryption.auth_failed",
+            "encryption.key_derivation",
+            "encryption.key_load",
+            "encryption.key_cache_hit",
+            "encryption.key_cache_miss",
+            "encryption.key_version_usage",
+        }
+    )
 
     def collect(self, registry=None) -> None:
         """Implement the collector interface as a no-op because encryption metrics are event-driven."""

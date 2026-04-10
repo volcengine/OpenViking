@@ -85,7 +85,9 @@ class FileEncryptor:
         try:
             from openviking.metrics.datasources.encryption import EncryptionEventDataSource
 
-            EncryptionEventDataSource.record_payload_size(operation="encrypt", size_bytes=len(plaintext))
+            EncryptionEventDataSource.record_payload_size(
+                operation="encrypt", size_bytes=len(plaintext)
+            )
             EncryptionEventDataSource.record_bytes(operation="encrypt", size_bytes=len(plaintext))
         except Exception:
             pass
@@ -163,8 +165,12 @@ class FileEncryptor:
             try:
                 from openviking.metrics.datasources.encryption import EncryptionEventDataSource
 
-                EncryptionEventDataSource.record_payload_size(operation="decrypt", size_bytes=len(ciphertext))
-                EncryptionEventDataSource.record_bytes(operation="decrypt", size_bytes=len(ciphertext))
+                EncryptionEventDataSource.record_payload_size(
+                    operation="decrypt", size_bytes=len(ciphertext)
+                )
+                EncryptionEventDataSource.record_bytes(
+                    operation="decrypt", size_bytes=len(ciphertext)
+                )
             except Exception:
                 pass
             return plaintext

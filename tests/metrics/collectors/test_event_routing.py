@@ -12,11 +12,13 @@ class _DummyEventCollector(EventMetricCollector):
         self.seen: list[tuple[str, str]] = []
 
     def receive_hook(self, event_name: str, payload: dict, registry) -> None:
-        self.seen.append((
-            str(event_name),
-            str(payload["value"]),
-            registry.collector_name() if hasattr(registry, "collector_name") else "registry",
-        ))
+        self.seen.append(
+            (
+                str(event_name),
+                str(payload["value"]),
+                registry.collector_name() if hasattr(registry, "collector_name") else "registry",
+            )
+        )
 
 
 def test_event_metric_collector_uses_supported_events_and_receive_hook(registry):
@@ -29,7 +31,9 @@ def test_event_metric_collector_uses_supported_events_and_receive_hook(registry)
     assert collector.seen == [("demo.hit", "ok", "registry")]
 
 
-def test_cache_collector_uses_supported_events_and_receive_hook_routing(registry, render_prometheus):
+def test_cache_collector_uses_supported_events_and_receive_hook_routing(
+    registry, render_prometheus
+):
     collector = CacheCollector()
 
     collector.receive("cache.hit", {"level": "L0"}, registry)

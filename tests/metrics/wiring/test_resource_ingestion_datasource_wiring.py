@@ -17,9 +17,7 @@ def test_resource_ingestion_event_datasource_can_drive_resource_ingestion_collec
 
     monkeypatch.setattr(EventMetricDataSource, "_emit", staticmethod(_emit), raising=False)
 
-    ResourceIngestionEventDataSource.record_stage(
-        stage="parse", status="ok", duration_seconds=0.01
-    )
+    ResourceIngestionEventDataSource.record_stage(stage="parse", status="ok", duration_seconds=0.01)
     ResourceIngestionEventDataSource.record_stage(
         stage="parse", status="error", duration_seconds=0.02
     )

@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+
 def test_observer_state_collector_valid_and_failure_keeps_last_values(registry, render_prometheus):
     from openviking.metrics.collectors.observer_state import ObserverStateCollector
 
@@ -53,7 +54,7 @@ def test_model_usage_collector_delta_and_available_gauge(registry, render_promet
                                 }
                             }
                         }
-                    }
+                    },
                 },
                 "embedding": {
                     "available": False,
@@ -76,10 +77,7 @@ def test_model_usage_collector_delta_and_available_gauge(registry, render_promet
     assert 'openviking_model_usage_available{model_type="embedding",valid="1"} 0.0' in text
     assert 'openviking_model_usage_available{model_type="rerank",valid="1"} 0.0' in text
     assert "openviking_model_usage_valid" not in text
-    assert (
-        'openviking_model_calls_total{model_name="m1",model_type="vlm",provider="p1"} 1'
-        in text
-    )
+    assert 'openviking_model_calls_total{model_name="m1",model_type="vlm",provider="p1"} 1' in text
     assert (
         'openviking_model_tokens_total{model_name="m1",model_type="vlm",provider="p1",token_type="total"} 5'
         in text

@@ -29,6 +29,17 @@ from .types import normalize_labels
 DEFAULT_LATENCY_BUCKETS: tuple[float, ...] = (0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0)
 
 
+def _canonicalize_label_names(label_names: Sequence[str]) -> tuple[str, ...]:
+    """
+    Return the canonical family label order used by the in-process registry.
+
+    The registry normalizes concrete label mappings into key-sorted tuples, so family-level
+    `label_names` must follow the same stable order to avoid false mismatches between writers
+    that provide the same key set with different input ordering.
+    """
+    return tuple(sorted(str(name) for name in label_names))
+
+
 def _labels_contains(
     labels: tuple[tuple[str, str], ...],
     match: tuple[tuple[str, str], ...],
@@ -148,7 +159,7 @@ class MetricRegistry:
         Returns:
             A lightweight `_Counter` wrapper bound to the requested family.
         """
-        ln = tuple(label_names)
+        ln = _canonicalize_label_names(label_names)
         with self._lock:
             if name in self._gauges or name in self._histograms:
                 raise ValueError(f"metric {name} already registered with a different type")
@@ -176,7 +187,7 @@ class MetricRegistry:
         Returns:
             A lightweight `_Gauge` wrapper bound to the requested family.
         """
-        ln = tuple(label_names)
+        ln = _canonicalize_label_names(label_names)
         with self._lock:
             if name in self._counters or name in self._histograms:
                 raise ValueError(f"metric {name} already registered with a different type")
@@ -211,7 +222,7 @@ class MetricRegistry:
         Returns:
             A lightweight `_Histogram` wrapper bound to the requested family.
         """
-        ln = tuple(label_names)
+        ln = _canonicalize_label_names(label_names)
         b = tuple(float(x) for x in buckets)
         with self._lock:
             if name in self._counters or name in self._gauges:

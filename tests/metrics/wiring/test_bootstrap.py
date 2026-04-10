@@ -42,4 +42,3 @@ def test_create_default_collector_manager_propagates_construction_failures(monke
     monkeypatch.setattr(bootstrap, "QueuePipelineStateDataSource", _boom)
     with pytest.raises(RuntimeError, match="cannot init datasource"):
         bootstrap.create_default_collector_manager(app=None, service=None)
-

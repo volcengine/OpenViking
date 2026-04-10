@@ -13,25 +13,27 @@ def test_telemetry_bridge_records_operation_and_resource_metrics(registry, rende
         registry=registry,
     )
     try:
-        TelemetryBridgeEventDataSource.record_summary({
-            "operation": "resource.process",
-            "status": "ok",
-            "duration_ms": 1200,
-            "tokens": {"total": 10, "llm": {"input": 3, "output": 7}},
-            "vector": {"searches": 1, "scored": 2, "passed": 2, "returned": 1, "scanned": 9},
-            "memory": {"extracted": 4},
-            "semantic_nodes": {"OK": 12},
-            "resource": {
-                "process": {
-                    "parse": {"duration_ms": 10, "warnings_count": 1},
-                    "finalize": {"duration_ms": 20},
-                    "summarize": {"duration_ms": 30},
-                    "duration_ms": 80,
+        TelemetryBridgeEventDataSource.record_summary(
+            {
+                "operation": "resource.process",
+                "status": "ok",
+                "duration_ms": 1200,
+                "tokens": {"total": 10, "llm": {"input": 3, "output": 7}},
+                "vector": {"searches": 1, "scored": 2, "passed": 2, "returned": 1, "scanned": 9},
+                "memory": {"extracted": 4},
+                "semantic_nodes": {"OK": 12},
+                "resource": {
+                    "process": {
+                        "parse": {"duration_ms": 10, "warnings_count": 1},
+                        "finalize": {"duration_ms": 20},
+                        "summarize": {"duration_ms": 30},
+                        "duration_ms": 80,
+                    },
+                    "wait": {"duration_ms": 40},
+                    "watch": {"duration_ms": 50},
                 },
-                "wait": {"duration_ms": 40},
-                "watch": {"duration_ms": 50},
-            },
-        })
+            }
+        )
         text = render_prometheus(registry)
         assert (
             'openviking_operation_requests_total{account_id="__unknown__",operation="resource.process",status="ok"} 1'

@@ -35,9 +35,13 @@ class _ProbeDataSource:
         return ReadEnvelope(ok=self.ok, value=self.value, error_type="probe", error_message="fail")
 
 
-def test_service_probe_collector_emits_valid_on_success_and_invalid_on_failure(registry, render_prometheus):
+def test_service_probe_collector_emits_valid_on_success_and_invalid_on_failure(
+    registry, render_prometheus
+):
     """ServiceProbeCollector must export readiness as `valid=1` on success and `valid=0` on failure."""
-    ds = _ProbeDataSource(value={"service_readiness": True, "api_key_manager_readiness": False}, ok=True)
+    ds = _ProbeDataSource(
+        value={"service_readiness": True, "api_key_manager_readiness": False}, ok=True
+    )
     c = ServiceProbeCollector(data_source=ds)
     c.collect(registry)
     text = render_prometheus(registry)
@@ -52,7 +56,9 @@ def test_service_probe_collector_emits_valid_on_success_and_invalid_on_failure(r
     assert 'openviking_api_key_manager_readiness{valid="0"} 0.0' in text2
 
 
-def test_storage_probe_collector_preserves_last_probe_set_and_marks_invalid(registry, render_prometheus):
+def test_storage_probe_collector_preserves_last_probe_set_and_marks_invalid(
+    registry, render_prometheus
+):
     """StorageProbeCollector must re-publish last-known probe set under `valid=0` on failure."""
     ds = _ProbeDataSource(value={"agfs": True, "other": False}, ok=True)
     c = StorageProbeCollector(data_source=ds)
@@ -130,4 +136,3 @@ def test_async_system_probe_collector_marks_invalid_on_failure(registry, render_
     c.collect(registry)
     text2 = render_prometheus(registry)
     assert 'openviking_async_system_readiness{probe="queue",valid="0"} 0.0' in text2
-

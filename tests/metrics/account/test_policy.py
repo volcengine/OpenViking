@@ -30,7 +30,10 @@ def test_account_dimension_non_allowlisted_metric_emits_unknown():
         max_active_accounts=2,
     )
 
-    assert policy.resolve(metric_name="openviking_task_pending", account_id="acct-1") == UNKNOWN_ACCOUNT_ID
+    assert (
+        policy.resolve(metric_name="openviking_task_pending", account_id="acct-1")
+        == UNKNOWN_ACCOUNT_ID
+    )
 
 
 def test_account_dimension_overflow_after_limit():
@@ -40,7 +43,10 @@ def test_account_dimension_overflow_after_limit():
         max_active_accounts=1,
     )
 
-    assert policy.resolve(metric_name="openviking_http_requests_total", account_id="acct-1") == "acct-1"
+    assert (
+        policy.resolve(metric_name="openviking_http_requests_total", account_id="acct-1")
+        == "acct-1"
+    )
     assert (
         policy.resolve(metric_name="openviking_http_requests_total", account_id="acct-2")
         == OVERFLOW_ACCOUNT_ID

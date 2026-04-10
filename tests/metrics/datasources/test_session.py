@@ -32,4 +32,3 @@ def test_session_lifecycle_datasource_emits_archive_event(patch_event_emit):
 
     session.SessionLifecycleDataSource.record_archive(status="ok")
     assert ("session.archive", {"status": "ok"}) in patch_event_emit
-

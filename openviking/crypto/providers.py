@@ -102,7 +102,10 @@ class RootKeyProvider(ABC):
                     status=status, duration_seconds=elapsed
                 )
             except Exception:
-                pass
+                logger.debug(
+                    "Failed to record encryption key derivation metrics",
+                    exc_info=True,
+                )
 
 
 class BaseProvider(RootKeyProvider):
@@ -211,7 +214,11 @@ class LocalFileProvider(BaseProvider):
                 )
                 EncryptionEventDataSource.record_key_version_usage(key_version="local")
             except Exception:
-                pass
+                logger.debug(
+                    "Failed to record encryption key metrics for provider=%s",
+                    "local",
+                    exc_info=True,
+                )
 
     async def _load_or_create_root_key(self) -> bytes:
         """Load or create Root Key."""
@@ -509,7 +516,11 @@ class VaultProvider(BaseProvider):
                     key_version=str(self.root_key_name)
                 )
             except Exception:
-                pass
+                logger.debug(
+                    "Failed to record encryption key metrics for provider=%s",
+                    "vault",
+                    exc_info=True,
+                )
 
     async def derive_account_key(self, account_id: str) -> bytes:
         """
@@ -770,7 +781,11 @@ class VolcengineKMSProvider(BaseProvider):
                 )
                 EncryptionEventDataSource.record_key_version_usage(key_version=str(self.key_id))
             except Exception:
-                pass
+                logger.debug(
+                    "Failed to record encryption key metrics for provider=%s",
+                    "volcengine_kms",
+                    exc_info=True,
+                )
 
     async def derive_account_key(self, account_id: str) -> bytes:
         """

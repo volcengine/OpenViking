@@ -153,4 +153,3 @@ def test_async_system_probe_datasource_returns_default_on_exception(monkeypatch)
     assert env.ok is False
     assert env.value == {"queue": False}
     assert env.error_type == "RuntimeError"
-

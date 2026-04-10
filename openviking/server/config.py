@@ -60,9 +60,7 @@ class MetricsConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
-
 class ServerConfig(BaseModel):
-
     host: str = "127.0.0.1"
     port: int = 1933
     workers: int = 1

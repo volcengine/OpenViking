@@ -158,11 +158,13 @@ class SessionService:
                 name = entry.get("name", "")
                 if name in [".", ".."]:
                     continue
-                sessions.append({
-                    "session_id": name,
-                    "uri": f"{session_base_uri}/{name}",
-                    "is_dir": entry.get("isDir", False),
-                })
+                sessions.append(
+                    {
+                        "session_id": name,
+                        "uri": f"{session_base_uri}/{name}",
+                        "is_dir": entry.get("isDir", False),
+                    }
+                )
             return sessions
         except Exception:
             return []

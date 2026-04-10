@@ -16,4 +16,3 @@ def test_runtime_code_has_no_prometheus_observer_references():
         text = path.read_text(encoding="utf-8")
         for needle in banned:
             assert needle not in text, f"{needle} still found in {path}"
-

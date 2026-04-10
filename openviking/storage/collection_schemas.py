@@ -79,24 +79,26 @@ class CollectionSchemas:
             {"FieldName": "updated_at", "FieldType": "date_time"},
             {"FieldName": "active_count", "FieldType": "int64"},
         ]
-        fields.extend([
-            # level 字段：区分 L0/L1/L2 层级
-            # 枚举值：
-            #   - 0 = L0（abstract，摘要）
-            #   - 1 = L1（overview，概览）
-            #   - 2 = L2（detail/content，详情/内容，默认）
-            # URI 命名规则：
-            #   - level=0: {目录}/.abstract.md
-            #   - level=1: {目录}/.overview.md
-            #   - level=2: {文件路径}
-            {"FieldName": "level", "FieldType": "int64"},
-            {"FieldName": "name", "FieldType": "string"},
-            {"FieldName": "description", "FieldType": "string"},
-            {"FieldName": "tags", "FieldType": "string"},
-            {"FieldName": "abstract", "FieldType": "string"},
-            {"FieldName": "account_id", "FieldType": "string"},
-            {"FieldName": "owner_space", "FieldType": "string"},
-        ])
+        fields.extend(
+            [
+                # level 字段：区分 L0/L1/L2 层级
+                # 枚举值：
+                #   - 0 = L0（abstract，摘要）
+                #   - 1 = L1（overview，概览）
+                #   - 2 = L2（detail/content，详情/内容，默认）
+                # URI 命名规则：
+                #   - level=0: {目录}/.abstract.md
+                #   - level=1: {目录}/.overview.md
+                #   - level=2: {文件路径}
+                {"FieldName": "level", "FieldType": "int64"},
+                {"FieldName": "name", "FieldType": "string"},
+                {"FieldName": "description", "FieldType": "string"},
+                {"FieldName": "tags", "FieldType": "string"},
+                {"FieldName": "abstract", "FieldType": "string"},
+                {"FieldName": "account_id", "FieldType": "string"},
+                {"FieldName": "owner_space", "FieldType": "string"},
+            ]
+        )
         scalar_index = [
             "uri",
             "type",
@@ -105,13 +107,15 @@ class CollectionSchemas:
             "updated_at",
             "active_count",
         ]
-        scalar_index.extend([
-            "level",
-            "name",
-            "tags",
-            "account_id",
-            "owner_space",
-        ])
+        scalar_index.extend(
+            [
+                "level",
+                "name",
+                "tags",
+                "account_id",
+                "owner_space",
+            ]
+        )
         return {
             "CollectionName": name,
             "Description": "Unified context collection",

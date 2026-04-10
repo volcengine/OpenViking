@@ -221,26 +221,30 @@ def test_embedding_collector_uses_explicit_account_id_from_payload():
 
 
 def test_extract_request_account_id_prefers_authenticated_request_state():
-    request = Request({
-        "type": "http",
-        "method": "GET",
-        "path": "/api/v1/resources",
-        "headers": [(b"x-openviking-account", b"header-account")],
-        "state": {},
-    })
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/v1/resources",
+            "headers": [(b"x-openviking-account", b"header-account")],
+            "state": {},
+        }
+    )
     request.state.metric_account_id = "state-account"
 
     assert _extract_request_account_id(request) == "state-account"
 
 
 def test_get_route_template_uses_low_cardinality_fallback_for_unmatched_route():
-    request = Request({
-        "type": "http",
-        "method": "GET",
-        "path": "/api/v1/resources/123e4567-e89b-12d3-a456-426614174000",
-        "headers": [],
-        "state": {},
-    })
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/v1/resources/123e4567-e89b-12d3-a456-426614174000",
+            "headers": [],
+            "state": {},
+        }
+    )
 
     assert _get_route_template(request) == "/__unmatched__"
 
@@ -269,14 +273,16 @@ async def test_http_metrics_middleware_emits_authenticated_account_id(monkeypatc
         request.state.metric_account_id = "acct-real"
         return SimpleNamespace(status_code=200)
 
-    request = Request({
-        "type": "http",
-        "method": "POST",
-        "path": "/api/v1/resources",
-        "route": SimpleNamespace(path="/api/v1/resources"),
-        "headers": [],
-        "state": {},
-    })
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/v1/resources",
+            "route": SimpleNamespace(path="/api/v1/resources"),
+            "headers": [],
+            "state": {},
+        }
+    )
 
     await middleware(request, _call_next)
 
@@ -310,13 +316,15 @@ async def test_http_metrics_middleware_ignores_internal_metrics_route(monkeypatc
     async def _call_next(_request: Request):
         return SimpleNamespace(status_code=200)
 
-    request = Request({
-        "type": "http",
-        "method": "GET",
-        "path": "/metrics",
-        "headers": [],
-        "state": {},
-    })
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/metrics",
+            "headers": [],
+            "state": {},
+        }
+    )
 
     await middleware(request, _call_next)
 
@@ -337,14 +345,16 @@ async def test_http_metrics_middleware_still_records_business_route(monkeypatch)
         request.state.metric_account_id = "acct-real"
         return SimpleNamespace(status_code=200)
 
-    request = Request({
-        "type": "http",
-        "method": "POST",
-        "path": "/api/v1/resources",
-        "route": SimpleNamespace(path="/api/v1/resources"),
-        "headers": [],
-        "state": {},
-    })
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/v1/resources",
+            "route": SimpleNamespace(path="/api/v1/resources"),
+            "headers": [],
+            "state": {},
+        }
+    )
 
     await middleware(request, _call_next)
 
@@ -365,13 +375,15 @@ async def test_http_metrics_middleware_uses_route_bound_during_call_next(monkeyp
         request.scope["route"] = SimpleNamespace(path="/api/v1/sessions/{session_id}")
         return SimpleNamespace(status_code=200)
 
-    request = Request({
-        "type": "http",
-        "method": "GET",
-        "path": "/api/v1/sessions/session_123",
-        "headers": [],
-        "state": {},
-    })
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/v1/sessions/session_123",
+            "headers": [],
+            "state": {},
+        }
+    )
 
     await middleware(request, _call_next)
 
@@ -399,13 +411,15 @@ async def test_http_metrics_middleware_logs_debug_when_metrics_write_fails(monke
         request.state.metric_account_id = "acct-real"
         return SimpleNamespace(status_code=200)
 
-    request = Request({
-        "type": "http",
-        "method": "POST",
-        "path": "/api/v1/resources",
-        "headers": [],
-        "state": {},
-    })
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/v1/resources",
+            "headers": [],
+            "state": {},
+        }
+    )
 
     await middleware(request, _call_next)
 

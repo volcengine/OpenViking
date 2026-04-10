@@ -18,7 +18,10 @@ def test_encryption_event_datasource_emits_operation_event(patch_event_emit):
         duration_seconds=0.25,
     )
 
-    assert ("encryption.operation", {"operation": "encrypt", "status": "ok", "duration_seconds": 0.25}) in patch_event_emit
+    assert (
+        "encryption.operation",
+        {"operation": "encrypt", "status": "ok", "duration_seconds": 0.25},
+    ) in patch_event_emit
 
 
 def test_encryption_event_datasource_ignores_non_positive_bytes(monkeypatch):
@@ -67,4 +70,3 @@ def test_encryption_probe_datasource_returns_default_on_exception(monkeypatch):
     assert env.ok is False
     assert env.value == (False, "volcengine")
     assert env.error_type == "RuntimeError"
-

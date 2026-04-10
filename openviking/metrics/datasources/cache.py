@@ -14,6 +14,7 @@ from .base import EventMetricDataSource
 
 _LEVELS = ("L0", "L1", "L2")
 
+
 class CacheEventDataSource(EventMetricDataSource):
     """Emit bounded cache hit/miss events for later translation by `CacheCollector`."""
 

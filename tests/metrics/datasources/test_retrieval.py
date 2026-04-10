@@ -41,4 +41,3 @@ def test_retrieval_stats_datasource_normalizes_unknown_context_type(patch_event_
         event_name == "retrieval.completed" and payload.get("context_type") == "unknown"
         for event_name, payload in patch_event_emit
     )
-

@@ -46,11 +46,13 @@ class SessionCollector(EventMetricCollector):
     # e.g.: openviking_session_archive_total
     ARCHIVE_TOTAL: ClassVar[str] = MetricCollector.metric_name(DOMAIN, "archive", unit="total")
 
-    SUPPORTED_EVENTS: ClassVar[frozenset[str]] = frozenset({
-        "session.lifecycle",
-        "session.contexts_used",
-        "session.archive",
-    })
+    SUPPORTED_EVENTS: ClassVar[frozenset[str]] = frozenset(
+        {
+            "session.lifecycle",
+            "session.contexts_used",
+            "session.archive",
+        }
+    )
 
     def collect(self, registry=None) -> None:
         """Implement the collector interface as a no-op because session metrics are push-driven."""

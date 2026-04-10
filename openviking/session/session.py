@@ -488,7 +488,6 @@ class Session:
             "trace_id": trace_id,
         }
 
-
     async def _run_memory_extraction(
         self,
         task_id: str,
@@ -571,10 +570,12 @@ class Session:
                     )
                     await self._viking_fs.write_file(
                         uri=f"{archive_uri}/.meta.json",
-                        content=json.dumps({
-                            "overview_tokens": -(-len(summary) // 4),
-                            "abstract_tokens": -(-len(abstract) // 4),
-                        }),
+                        content=json.dumps(
+                            {
+                                "overview_tokens": -(-len(summary) // 4),
+                                "abstract_tokens": -(-len(abstract) // 4),
+                            }
+                        ),
                         ctx=self.ctx,
                     )
 
@@ -758,10 +759,12 @@ class Session:
         for item in context["pre_archive_abstracts"]:
             if item["tokens"] > remaining_budget:
                 break
-            included_pre_archive_abstracts.append({
-                "archive_id": item["archive_id"],
-                "abstract": item["abstract"],
-            })
+            included_pre_archive_abstracts.append(
+                {
+                    "archive_id": item["archive_id"],
+                    "abstract": item["abstract"],
+                }
+            )
             pre_archive_tokens += item["tokens"]
             remaining_budget -= item["tokens"]
 
@@ -860,11 +863,13 @@ class Session:
                 }
             abstract = await self._read_archive_abstract(archive["archive_uri"])
             if abstract:
-                pre_archive_abstracts.append({
-                    "archive_id": archive["archive_id"],
-                    "abstract": abstract,
-                    "tokens": -(-len(abstract) // 4),
-                })
+                pre_archive_abstracts.append(
+                    {
+                        "archive_id": archive["archive_id"],
+                        "abstract": abstract,
+                        "tokens": -(-len(abstract) // 4),
+                    }
+                )
             else:
                 failed_archives += 1
 
@@ -896,11 +901,13 @@ class Session:
             except Exception:
                 continue
 
-            refs.append({
-                "archive_id": name,
-                "archive_uri": f"{self._session_uri}/history/{name}",
-                "index": index,
-            })
+            refs.append(
+                {
+                    "archive_id": name,
+                    "archive_uri": f"{self._session_uri}/history/{name}",
+                    "index": index,
+                }
+            )
 
         return sorted(refs, key=lambda item: item["index"], reverse=True)
 
@@ -1379,11 +1386,13 @@ class Session:
             parts.append(
                 f"- `history/` - Historical archives ({self._compression.compression_index} total)"
             )
-        parts.extend([
-            "",
-            "## Access Methods",
-            f"- Full conversation: `{self._session_uri}`",
-        ])
+        parts.extend(
+            [
+                "",
+                "## Access Methods",
+                f"- Full conversation: `{self._session_uri}`",
+            ]
+        )
         if self._compression.compression_index > 0:
             parts.append(f"- Historical archives: `{self._session_uri}/history/`")
         return "\n".join(parts)

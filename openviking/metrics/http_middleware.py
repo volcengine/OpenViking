@@ -32,11 +32,13 @@ from openviking.metrics.datasources import HttpRequestLifecycleDataSource
 
 logger = logging.getLogger(__name__)
 
-_HTTP_IGNORE_ROUTES = frozenset({
-    "/metrics",
-    "/health",
-    "/ready",
-})
+_HTTP_IGNORE_ROUTES = frozenset(
+    {
+        "/metrics",
+        "/health",
+        "/ready",
+    }
+)
 
 
 def create_http_metrics_middleware() -> Callable[[Request, Callable], Response]:
