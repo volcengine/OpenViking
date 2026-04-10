@@ -13,10 +13,10 @@ from typing import Any
 
 import pytest
 
+from openviking.metrics.core.registry import MetricRegistry
 from openviking.metrics.datasources import EventMetricDataSource
 from openviking.metrics.exporters.prometheus import PrometheusExporter
 from openviking.metrics.global_api import configure_metric_account_dimension, shutdown_metrics
-from openviking.metrics.core.registry import MetricRegistry
 
 
 @pytest.fixture()

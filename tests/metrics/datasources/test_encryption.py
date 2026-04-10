@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pytest
-
 import openviking.metrics.datasources.encryption as enc
 
 

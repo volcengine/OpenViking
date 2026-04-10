@@ -22,7 +22,6 @@ import pytest
 
 import openviking.crypto.providers as providers_module
 from openviking.crypto.encryptor import FileEncryptor
-from openviking.metrics.datasources.encryption import EncryptionEventDataSource
 from openviking.crypto.providers import (
     PROVIDER_LOCAL,
     PROVIDER_VAULT,
@@ -31,6 +30,7 @@ from openviking.crypto.providers import (
     VaultProvider,
     VolcengineKMSProvider,
 )
+from openviking.metrics.datasources.encryption import EncryptionEventDataSource
 
 
 @pytest.fixture
