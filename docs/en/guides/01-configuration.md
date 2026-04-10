@@ -566,6 +566,7 @@ Reranking model for search result refinement. Supports VikingDB (Volcengine), Co
 | `api_base` | str | Endpoint URL (for `openai` provider) |
 | `model` | str | Model name (for `openai` or `litellm` providers) |
 | `threshold` | float | Score threshold between `0.0` and `1.0`; results below this are filtered out. Default: `0.1` |
+| `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
 
 **Supported providers:**
 - `vikingdb`: Volcengine VikingDB Rerank API (uses AK/SK)
@@ -990,7 +991,8 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
     "api_key": "string",
     "model": "string",
     "api_base": "string",
-    "threshold": 0.1
+    "threshold": 0.1,
+    "extra_headers": {}
   },
   "encryption": {
     "enabled": false,
