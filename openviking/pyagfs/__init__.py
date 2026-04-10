@@ -86,16 +86,20 @@ def get_binding_client():
 # Ensure module import never fails, even if bindings are unavailable
 try:
     RAGFSBindingClient, BindingFileHandle = get_binding_client()
+    # Backward compatibility alias
+    AGFSBindingClient = RAGFSBindingClient
 except Exception:
     _logger.warning(
         "Failed to initialize RAGFSBindingClient during module import; "
         "RAGFSBindingClient will be None. Use get_binding_client() for explicit handling."
     )
     RAGFSBindingClient = None
+    AGFSBindingClient = None
     BindingFileHandle = None
 
 __all__ = [
     "AGFSClient",
+    "AGFSBindingClient",
     "RAGFSBindingClient",
     "FileHandle",
     "BindingFileHandle",

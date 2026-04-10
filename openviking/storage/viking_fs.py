@@ -842,10 +842,14 @@ class VikingFS:
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         info = self.agfs.stat(path)
-        if not info.get("isDir"):
+        if not info.get("isDir", info.get("is_dir")):
             raise ValueError(f"{uri} is not a directory")
         file_path = f"{path}/.abstract.md"
-        content_bytes = self._handle_agfs_read(self.agfs.read(file_path))
+        try:
+            content_bytes = self._handle_agfs_read(self.agfs.read(file_path))
+        except Exception:
+            # Fallback to default if .abstract.md doesn't exist
+            return f"# {uri}\n\n[Directory abstract is not ready]"
 
         if self._encryptor:
             real_ctx = self._ctx_or_default(ctx)
@@ -862,10 +866,14 @@ class VikingFS:
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         info = self.agfs.stat(path)
-        if not info.get("isDir"):
+        if not info.get("isDir", info.get("is_dir")):
             raise ValueError(f"{uri} is not a directory")
         file_path = f"{path}/.overview.md"
-        content_bytes = self._handle_agfs_read(self.agfs.read(file_path))
+        try:
+            content_bytes = self._handle_agfs_read(self.agfs.read(file_path))
+        except Exception:
+            # Fallback to default if .overview.md doesn't exist
+            return f"# {uri}\n\n[Directory overview is not ready]"
 
         if self._encryptor:
             real_ctx = self._ctx_or_default(ctx)
