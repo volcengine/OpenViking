@@ -18,4 +18,6 @@ todos.json
 
 !src/components/legacy/data
 
+!AGENTS.md
+
 script/gen-server-client/generate
