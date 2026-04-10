@@ -267,7 +267,9 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
     def _should_send_dimensions(self) -> bool:
         # Preserve existing behavior for official OpenAI embeddings: only custom
         # OpenAI-compatible backends and Azure send explicit dimensions.
-        return self._provider != "openai" or bool(self.api_base)
+        if self._provider == "openai":
+            return False
+        return bool(self.api_base)
 
     def _get_async_client(self):
         if self._async_client is None:
