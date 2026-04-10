@@ -13,6 +13,7 @@ import abc
 import asyncio
 import os
 import secrets
+import time
 from abc import ABC
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -73,6 +74,8 @@ class RootKeyProvider(ABC):
         Returns:
             Derived key
         """
+        start = time.perf_counter()
+        status = "ok"
         try:
             from cryptography.hazmat.primitives import hashes
             from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -85,7 +88,21 @@ class RootKeyProvider(ABC):
             )
             return hkdf.derive(root_key)
         except ImportError:
+            status = "error"
             raise ConfigError("cryptography library is required for encryption")
+        except Exception:
+            status = "error"
+            raise
+        finally:
+            elapsed = time.perf_counter() - start
+            try:
+                from openviking.metrics.datasources.encryption import EncryptionEventDataSource
+
+                EncryptionEventDataSource.record_key_derivation(
+                    status=status, duration_seconds=elapsed
+                )
+            except Exception:
+                pass
 
 
 class BaseProvider(RootKeyProvider):
@@ -160,9 +177,41 @@ class LocalFileProvider(BaseProvider):
 
     async def get_root_key(self) -> bytes:
         """Get Root Key."""
-        if self._root_key is None:
+        if self._root_key is not None:
+            try:
+                from openviking.metrics.datasources.encryption import EncryptionEventDataSource
+
+                EncryptionEventDataSource.record_key_cache_hit(provider="local")
+            except Exception:
+                pass
+            return self._root_key
+
+        try:
+            from openviking.metrics.datasources.encryption import EncryptionEventDataSource
+
+            EncryptionEventDataSource.record_key_cache_miss(provider="local")
+        except Exception:
+            pass
+
+        start = time.perf_counter()
+        status = "ok"
+        try:
             self._root_key = await self._load_or_create_root_key()
-        return self._root_key
+            return self._root_key
+        except Exception:
+            status = "error"
+            raise
+        finally:
+            elapsed = time.perf_counter() - start
+            try:
+                from openviking.metrics.datasources.encryption import EncryptionEventDataSource
+
+                EncryptionEventDataSource.record_key_load(
+                    status=status, provider="local", duration_seconds=elapsed
+                )
+                EncryptionEventDataSource.record_key_version_usage(key_version="local")
+            except Exception:
+                pass
 
     async def _load_or_create_root_key(self) -> bytes:
         """Load or create Root Key."""
@@ -232,7 +281,7 @@ class VaultProvider(BaseProvider):
         self.kv_version = kv_version
         self.root_key_name = root_key_name
         self.encrypted_root_key_key = encrypted_root_key_key
-        self._client = None
+        self._client: Any = None
         self._root_key: Optional[bytes] = None
 
     async def _get_client(self):
@@ -424,7 +473,43 @@ class VaultProvider(BaseProvider):
         Returns:
             Root key
         """
-        return await self._get_or_create_root_key()
+        if self._root_key is not None:
+            try:
+                from openviking.metrics.datasources.encryption import EncryptionEventDataSource
+
+                EncryptionEventDataSource.record_key_cache_hit(provider="vault")
+            except Exception:
+                pass
+            return self._root_key
+
+        try:
+            from openviking.metrics.datasources.encryption import EncryptionEventDataSource
+
+            EncryptionEventDataSource.record_key_cache_miss(provider="vault")
+        except Exception:
+            pass
+
+        start = time.perf_counter()
+        status = "ok"
+        try:
+            self._root_key = await self._get_or_create_root_key()
+            return self._root_key
+        except Exception:
+            status = "error"
+            raise
+        finally:
+            elapsed = time.perf_counter() - start
+            try:
+                from openviking.metrics.datasources.encryption import EncryptionEventDataSource
+
+                EncryptionEventDataSource.record_key_load(
+                    status=status, provider="vault", duration_seconds=elapsed
+                )
+                EncryptionEventDataSource.record_key_version_usage(
+                    key_version=str(self.root_key_name)
+                )
+            except Exception:
+                pass
 
     async def derive_account_key(self, account_id: str) -> bytes:
         """
@@ -481,7 +566,7 @@ class VolcengineKMSProvider(BaseProvider):
             self.key_file = Path(key_file).expanduser()
         else:
             self.key_file = Path.home() / ".openviking" / self.ROOT_KEY_FILENAME
-        self._kms_client = None
+        self._kms_client: Any = None
         self._root_key: Optional[bytes] = None
 
     async def _get_kms_client(self):
@@ -651,7 +736,41 @@ class VolcengineKMSProvider(BaseProvider):
         Returns:
             Root key
         """
-        return await self._get_or_create_root_key()
+        if self._root_key is not None:
+            try:
+                from openviking.metrics.datasources.encryption import EncryptionEventDataSource
+
+                EncryptionEventDataSource.record_key_cache_hit(provider="volcengine_kms")
+            except Exception:
+                pass
+            return self._root_key
+
+        try:
+            from openviking.metrics.datasources.encryption import EncryptionEventDataSource
+
+            EncryptionEventDataSource.record_key_cache_miss(provider="volcengine_kms")
+        except Exception:
+            pass
+
+        start = time.perf_counter()
+        status = "ok"
+        try:
+            self._root_key = await self._get_or_create_root_key()
+            return self._root_key
+        except Exception:
+            status = "error"
+            raise
+        finally:
+            elapsed = time.perf_counter() - start
+            try:
+                from openviking.metrics.datasources.encryption import EncryptionEventDataSource
+
+                EncryptionEventDataSource.record_key_load(
+                    status=status, provider="volcengine_kms", duration_seconds=elapsed
+                )
+                EncryptionEventDataSource.record_key_version_usage(key_version=str(self.key_id))
+            except Exception:
+                pass
 
     async def derive_account_key(self, account_id: str) -> bytes:
         """

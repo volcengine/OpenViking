@@ -281,6 +281,7 @@ openviking -o json ls viking://resources/
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/health` | 健康检查（无需认证） |
+| GET | `/metrics` | Prometheus 指标导出 |
 | GET | `/api/v1/system/status` | 系统状态 |
 | POST | `/api/v1/system/wait` | 等待处理完成 |
 
@@ -373,4 +374,5 @@ openviking -o json ls viking://resources/
 - [会话管理](05-sessions.md) - 会话管理
 - [技能](04-skills.md) - 技能管理
 - [系统](07-system.md) - 系统和监控 API
+- [指标与 Metrics](09-metrics.md) - Prometheus 指标导出与抓取说明
 - [管理员](08-admin.md) - 多租户管理 API

@@ -356,3 +356,14 @@ class TaskTracker:
         """Return total task count."""
         with self._lock:
             return len(self._tasks)
+
+    def snapshot_counts_by_type(self) -> Dict[str, Dict[str, int]]:
+        """Return a snapshot of task counts grouped by task_type and status."""
+        from collections import defaultdict
+
+        grouped: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))  # type: ignore[assignment]
+        with self._lock:
+            tasks = list(self._tasks.values())
+        for t in tasks:
+            grouped[t.task_type][t.status.value] += 1
+        return {k: dict(v) for k, v in grouped.items()}

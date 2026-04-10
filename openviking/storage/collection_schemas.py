@@ -79,26 +79,24 @@ class CollectionSchemas:
             {"FieldName": "updated_at", "FieldType": "date_time"},
             {"FieldName": "active_count", "FieldType": "int64"},
         ]
-        fields.extend(
-            [
-                # level 字段：区分 L0/L1/L2 层级
-                # 枚举值：
-                #   - 0 = L0（abstract，摘要）
-                #   - 1 = L1（overview，概览）
-                #   - 2 = L2（detail/content，详情/内容，默认）
-                # URI 命名规则：
-                #   - level=0: {目录}/.abstract.md
-                #   - level=1: {目录}/.overview.md
-                #   - level=2: {文件路径}
-                {"FieldName": "level", "FieldType": "int64"},
-                {"FieldName": "name", "FieldType": "string"},
-                {"FieldName": "description", "FieldType": "string"},
-                {"FieldName": "tags", "FieldType": "string"},
-                {"FieldName": "abstract", "FieldType": "string"},
-                {"FieldName": "account_id", "FieldType": "string"},
-                {"FieldName": "owner_space", "FieldType": "string"},
-            ]
-        )
+        fields.extend([
+            # level 字段：区分 L0/L1/L2 层级
+            # 枚举值：
+            #   - 0 = L0（abstract，摘要）
+            #   - 1 = L1（overview，概览）
+            #   - 2 = L2（detail/content，详情/内容，默认）
+            # URI 命名规则：
+            #   - level=0: {目录}/.abstract.md
+            #   - level=1: {目录}/.overview.md
+            #   - level=2: {文件路径}
+            {"FieldName": "level", "FieldType": "int64"},
+            {"FieldName": "name", "FieldType": "string"},
+            {"FieldName": "description", "FieldType": "string"},
+            {"FieldName": "tags", "FieldType": "string"},
+            {"FieldName": "abstract", "FieldType": "string"},
+            {"FieldName": "account_id", "FieldType": "string"},
+            {"FieldName": "owner_space", "FieldType": "string"},
+        ])
         scalar_index = [
             "uri",
             "type",
@@ -107,15 +105,13 @@ class CollectionSchemas:
             "updated_at",
             "active_count",
         ]
-        scalar_index.extend(
-            [
-                "level",
-                "name",
-                "tags",
-                "account_id",
-                "owner_space",
-            ]
-        )
+        scalar_index.extend([
+            "level",
+            "name",
+            "tags",
+            "account_id",
+            "owner_space",
+        ])
         return {
             "CollectionName": name,
             "Description": "Unified context collection",
@@ -330,18 +326,26 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         )
                         _embed_elapsed = _time.monotonic() - _embed_t0
                         try:
-                            from openviking.storage.observers.prometheus_observer import (
-                                get_prometheus_observer,
-                            )
+                            from openviking.metrics.datasources import EmbeddingEventDataSource
 
-                            _prom = get_prometheus_observer()
-                            if _prom is not None:
-                                _prom.record_embedding(_embed_elapsed)
+                            EmbeddingEventDataSource.record_success(
+                                latency_seconds=float(_embed_elapsed),
+                                account_id=embedding_msg.context_data.get("account_id"),
+                            )
                         except Exception:
                             pass
                     except Exception as embed_err:
                         error_msg = f"Failed to generate embedding: {embed_err}"
                         error_class = classify_api_error(embed_err)
+                        try:
+                            from openviking.metrics.datasources import EmbeddingEventDataSource
+
+                            EmbeddingEventDataSource.record_error(
+                                error_code=str(error_class or "unknown"),
+                                account_id=embedding_msg.context_data.get("account_id"),
+                            )
+                        except Exception:
+                            pass
 
                         if error_class == "permanent":
                             logger.critical(error_msg)
@@ -399,6 +403,12 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 else:
                     error_msg = "Embedder not initialized, skipping vector generation"
                     logger.warning(error_msg)
+                    try:
+                        from openviking.metrics.datasources import EmbeddingEventDataSource
+
+                        EmbeddingEventDataSource.record_error(error_code="not_initialized")
+                    except Exception:
+                        pass
                     self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
                     request_failed_message = error_msg
                     report_error_args = (error_msg, data)

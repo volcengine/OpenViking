@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from openviking.metrics.account_context import get_metric_account_context
 from openviking.models.embedder.base import EmbedResult
 from openviking.server.identity import RequestContext, Role
 from openviking.service.resource_service import ResourceService
@@ -181,6 +182,46 @@ async def test_semantic_processor_binds_registered_operation_telemetry(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_semantic_processor_binds_metric_account_context(monkeypatch):
+    processor = SemanticProcessor()
+    ran = {"value": False}
+
+    class FakeVikingFS:
+        async def ls(self, uri, ctx=None):
+            return []
+
+    class _FakeDagExecutor:
+        def __init__(self, **kwargs):
+            pass
+
+        async def run(self, root_uri):
+            ran["value"] = True
+            assert get_metric_account_context().http_account_id == "acct-semantic"
+
+        def get_stats(self):
+            return DagStats()
+
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: FakeVikingFS(),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticDagExecutor",
+        lambda **kwargs: _FakeDagExecutor(**kwargs),
+    )
+
+    await processor.on_dequeue(
+        SemanticMsg(
+            uri="viking://resources/demo",
+            context_type="resource",
+            recursive=False,
+            account_id="acct-semantic",
+        ).to_dict()
+    )
+    assert ran["value"] is True
+
+
+@pytest.mark.asyncio
 async def test_embedding_handler_binds_registered_operation_telemetry(monkeypatch):
     telemetry = MemoryOperationTelemetry(operation="resources.add_resource", enabled=True)
     register_telemetry(telemetry)
@@ -217,19 +258,17 @@ async def test_embedding_handler_binds_registered_operation_telemetry(monkeypatc
 
     handler = TextEmbeddingHandler(_DummyVikingDB())
     payload = {
-        "data": json.dumps(
-            {
-                "id": "msg-1",
-                "message": "hello",
-                "telemetry_id": telemetry.telemetry_id,
-                "context_data": {
-                    "id": "id-1",
-                    "uri": "viking://resources/sample",
-                    "account_id": "default",
-                    "abstract": "sample",
-                },
-            }
-        )
+        "data": json.dumps({
+            "id": "msg-1",
+            "message": "hello",
+            "telemetry_id": telemetry.telemetry_id,
+            "context_data": {
+                "id": "id-1",
+                "uri": "viking://resources/sample",
+                "account_id": "default",
+                "abstract": "sample",
+            },
+        })
     }
 
     try:

@@ -39,8 +39,29 @@ class TelemetryConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class MetricsAccountDimensionConfig(BaseModel):
+    """Account-dimension configuration for metrics label injection."""
+
+    enabled: bool = False
+    max_active_accounts: int = 0
+    metric_allowlist: List[str] = Field(default_factory=list)
+
+    model_config = {"extra": "forbid"}
+
+
+class MetricsConfig(BaseModel):
+    """Metrics subsystem configuration."""
+
+    enabled: bool = False
+    account_dimension: MetricsAccountDimensionConfig = Field(
+        default_factory=MetricsAccountDimensionConfig
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+
 class ServerConfig(BaseModel):
-    """Server configuration (from the ``server`` section of ov.conf)."""
 
     host: str = "127.0.0.1"
     port: int = 1933
@@ -52,6 +73,7 @@ class ServerConfig(BaseModel):
     bot_api_url: str = "http://localhost:18790"  # Vikingbot OpenAPIChannel URL (default port)
     encryption_enabled: bool = False  # Whether API key hashing is enabled
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
+    metrics: MetricsConfig = Field(default_factory=MetricsConfig)
 
     model_config = {"extra": "forbid"}
 
