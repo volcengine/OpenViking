@@ -1,17 +1,6 @@
 # Web Studio
 
-Web Studio 是 OpenViking 当前的前端工作区，用来承接旧控制台能力的迁移与整理。当前实现不是 TanStack Start SSR 项目，而是一个基于 Vite 的 React 单页应用，默认入口会跳转到遗留控制台页面集合。
-
-## 当前状态
-
-当前已落地的页面都位于 legacy 路由下：
-
-- / 会重定向到 /legacy/data
-- /legacy/access 用于配置连接信息和身份请求头
-- /legacy/data 用于文件系统浏览、内容读取、资源导入、检索与会话相关操作
-- /legacy/ops 用于租户、用户、密钥与系统状态相关的管理操作
-
-这套界面保留了旧控制台的入口形态，但请求链路已经切到新的 ov-client 适配层，直接访问真实 OpenViking HTTP Server。
+Web Studio 是 OpenViking 前端工作台，一个基于 Vite 的 React 单页应用。
 
 ## 技术栈
 
@@ -135,40 +124,6 @@ npm run gen-server-client
 
 业务代码应优先从 #/lib/ov-client 导入，而不是直接从 #/gen/ov-client 导入。
 
-## 页面与目录
-
-当前核心目录如下：
-
-```text
-web-studio/
-├── public/                        # 静态资源
-├── script/gen-server-client/      # OpenAPI 客户端生成脚本
-├── src/
-│   ├── components/
-│   │   ├── legacy/                # 旧控制台迁移页面组件
-│   │   └── ui/                    # shadcn/ui 基础组件
-│   ├── gen/ov-client/             # OpenAPI 生成代码，禁止手改
-│   ├── hooks/                     # 通用 hooks
-│   ├── lib/
-│   │   ├── legacy/                # legacy 页面所需连接与路由工具
-│   │   └── ov-client/             # 生成 SDK 上方的前端适配层
-│   ├── routes/                    # TanStack Router 文件路由
-│   ├── main.tsx                   # 应用入口，接入 Router 和 QueryClient
-│   ├── routeTree.gen.ts           # 路由生成文件，禁止手改
-│   ├── router.tsx                 # Router 工厂
-│   └── styles.css                 # 全局样式与主题变量
-├── AGENTS.md                      # 本工作区内的 agent 约束
-└── README.md
-```
-
-## 路由约定
-
-- 路由文件放在 src/routes
-- src/routes/__root.tsx 提供全局样式入口与 devtools 容器
-- src/routes/index.tsx 当前只负责重定向到 /legacy/data
-- 遗留页面路由保持轻量，复杂逻辑应下沉到 src/components/legacy
-- src/routeTree.gen.ts 由路由工具生成，不要手动编辑
-
 ## UI 与样式约定
 
 - 基础组件放在 src/components/ui
@@ -181,14 +136,6 @@ web-studio/
 ```bash
 npx shadcn@latest add button card dialog
 ```
-
-## 开发建议
-
-- 新功能优先判断是继续承接 legacy 页面，还是抽成新的共享业务组件
-- 路由文件尽量只保留参数解析、数据装配和页面入口
-- 页面逻辑里需要请求后端时，统一走 #/lib/ov-client
-- 生成代码变更后，优先运行 npm run build 至少验证一次
-- 如果接口签名变化，先重新执行 npm run gen-server-client，不要手工补丁生成文件
 
 ## 常见维护动作
 
