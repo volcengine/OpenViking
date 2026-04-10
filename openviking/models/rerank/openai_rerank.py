@@ -70,12 +70,16 @@ class OpenAIRerankClient(RerankBase):
         }
 
         try:
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            }
+            if self.extra_headers:
+                headers.update(self.extra_headers)
+
             response = requests.post(
                 url=self.api_base,
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
+                headers=headers,
                 json=req_body,
                 timeout=30,
             )
