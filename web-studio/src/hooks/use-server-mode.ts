@@ -1,7 +1,7 @@
 export type ServerMode = 'checking' | 'dev-implicit' | 'explicit-auth' | 'offline'
 
 export type ServerModeBadge = {
-  label: string
+  labelKey: string
   variant: 'default' | 'secondary' | 'outline' | 'destructive'
 }
 
@@ -38,12 +38,12 @@ export async function detectServerMode(baseUrl: string): Promise<ServerMode> {
 export function describeServerMode(serverMode: ServerMode): ServerModeBadge {
   switch (serverMode) {
     case 'dev-implicit':
-      return { label: '开发模式', variant: 'secondary' }
+      return { labelKey: 'serverMode.devImplicit', variant: 'secondary' }
     case 'explicit-auth':
-      return { label: '显式鉴权', variant: 'outline' }
+      return { labelKey: 'serverMode.explicitAuth', variant: 'outline' }
     case 'offline':
-      return { label: '未连接', variant: 'destructive' }
+      return { labelKey: 'serverMode.offline', variant: 'destructive' }
     default:
-      return { label: '检测中', variant: 'outline' }
+      return { labelKey: 'serverMode.checking', variant: 'outline' }
   }
 }

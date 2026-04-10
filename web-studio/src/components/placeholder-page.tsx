@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { ArrowRightIcon } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 import { Badge } from '#/components/ui/badge'
 import {
@@ -19,6 +20,8 @@ type PlaceholderPageProps = {
 }
 
 export function PlaceholderPage({ aside, description, highlights, kicker, title }: PlaceholderPageProps) {
+  const { t } = useTranslation('common', { keyPrefix: 'placeholder' })
+
   return (
     <div className='grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]'>
       <div className='grid gap-6'>
@@ -43,7 +46,7 @@ export function PlaceholderPage({ aside, description, highlights, kicker, title 
               </CardHeader>
               <CardContent className='flex items-center gap-2 text-xs text-muted-foreground'>
                 <ArrowRightIcon className='size-3.5' />
-                这一版先提供布局占位，后续接入具体功能。
+                {t('layoutNote')}
               </CardContent>
             </Card>
           ))}
@@ -54,9 +57,9 @@ export function PlaceholderPage({ aside, description, highlights, kicker, title 
         {aside ?? (
           <Card size='sm' className='bg-background/80'>
             <CardHeader>
-              <CardTitle className='text-sm'>当前状态</CardTitle>
+              <CardTitle className='text-sm'>{t('defaultState.title')}</CardTitle>
               <CardDescription>
-                页面骨架已经落位，功能区在后续迭代中逐步填充。
+                {t('defaultState.description')}
               </CardDescription>
             </CardHeader>
           </Card>

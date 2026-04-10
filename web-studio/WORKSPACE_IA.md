@@ -121,6 +121,198 @@ sidebar | main
 - 文档、页面文案和导航显示都应保留“检查服务端模式”的意识。
 - 尤其是“管理”入口，不能默认假设所有模式都应该展示。
 
+## 服务端能力与接口映射
+
+当前 Web Studio 对接的是 OpenViking HTTP Server。按服务端路由注册结果，后端主要暴露以下能力域：
+
+- system
+- admin
+- resources
+- filesystem
+- content
+- search
+- relations
+- sessions
+- stats
+- pack
+- debug
+- observer
+- metrics
+- tasks
+- bot（可选开启）
+
+前端现阶段主要依赖生成 client 中已经稳定暴露出来的接口集合。
+
+### 公共与全局接口
+
+这些接口不直接对应某个一级页面，但会影响全局连接、模式判断和系统状态展示。
+
+- `GET /health`
+	- 用途：健康检查。
+	- 当前前端用途：最佳努力判断服务端模式；若返回 `user_id`，前端倾向视为开发模式或隐式身份模式。
+- `GET /ready`
+	- 用途：检查 AGFS、VectorDB、APIKeyManager 的 readiness。
+	- 当前前端用途：适合后续放到运维页中展示基础依赖状态。
+- `GET /api/v1/system/status`
+	- 用途：返回系统初始化状态与当前请求解析出来的 user。
+	- 当前前端用途：可作为连接成功后的系统上下文确认接口。
+- `POST /api/v1/system/wait`
+	- 用途：等待服务端处理队列完成。
+	- 当前前端用途：暂未接入 UI，但适合作为运维或调试辅助能力。
+
+### 资源入口对应的服务端能力
+
+资源页后续会承接以下服务端接口域：
+
+- `POST /api/v1/resources/temp-upload`
+	- 临时上传资源。
+- `POST /api/v1/resources`
+	- 创建资源记录或导入资源。
+- `GET /api/v1/fs/ls`
+	- 列目录。
+- `GET /api/v1/fs/tree`
+	- 目录树。
+- `GET /api/v1/fs/stat`
+	- 文件或目录元信息。
+- `GET /api/v1/content/read`
+	- 读取内容。
+- `GET /api/v1/content/abstract`
+	- 内容摘要。
+- `GET /api/v1/content/overview`
+	- 内容总览。
+- `GET /api/v1/content/download`
+	- 下载内容。
+- `POST /api/v1/content/write`
+	- 写入内容。
+- `POST /api/v1/content/reindex`
+	- 重建内容索引。
+- `POST /api/v1/search/find`
+	- 语义/混合检索。
+- `POST /api/v1/search/search`
+	- 检索接口。
+- `POST /api/v1/search/grep`
+	- 文本 grep。
+- `POST /api/v1/search/glob`
+	- 文件匹配。
+- `GET /api/v1/relations`
+	- 查询关系。
+- `POST /api/v1/relations/link`
+	- 新建关系。
+- `DELETE /api/v1/relations/link`
+	- 删除关系。
+- `POST /api/v1/pack/export`
+	- 导出 pack。
+- `POST /api/v1/pack/import`
+	- 导入 pack。
+
+对应关系说明：
+
+- 资源树、目录浏览主要依赖 `fs.*`。
+- 预览、摘要、下载、写入主要依赖 `content.*`。
+- 检索 modal 主要依赖 `search.*`。
+- 关系视图主要依赖 `relations.*`。
+- 导入导出能力主要依赖 `resources.*` 与 `pack.*`。
+
+### 会话入口对应的服务端能力
+
+会话页后续会承接以下服务端接口域：
+
+- `GET /api/v1/sessions`
+	- 列出会话。
+- `POST /api/v1/sessions`
+	- 创建会话。
+- `GET /api/v1/sessions/{session_id}`
+	- 获取会话详情。
+- `DELETE /api/v1/sessions/{session_id}`
+	- 删除会话。
+- `GET /api/v1/sessions/{session_id}/context`
+	- 获取会话上下文装配结果。
+- `GET /api/v1/sessions/{session_id}/archive/{archive_id}`
+	- 获取历史 archive。
+- `POST /api/v1/sessions/{session_id}/messages`
+	- 写入消息。
+- `POST /api/v1/sessions/{session_id}/used`
+	- 记录已使用上下文。
+- `POST /api/v1/sessions/{session_id}/commit`
+	- 触发异步 commit。
+- `POST /api/v1/sessions/{session_id}/extract`
+	- 触发抽取或记忆提炼。
+- `GET /api/v1/stats/session/{session_id}`
+	- 会话统计。
+- `GET /api/v1/stats/memories`
+	- 记忆统计汇总。
+
+对应关系说明：
+
+- Session 列表与切换依赖 `sessions list/get/create/delete`。
+- 上下文面板依赖 `context` 与 `archive`。
+- 写消息与记录引用依赖 `messages` 和 `used`。
+- 记忆沉淀结果依赖 `commit`、`extract`、`stats`。
+
+### 运维入口对应的服务端能力
+
+运维页后续会承接以下服务端接口域：
+
+- `GET /health`
+- `GET /ready`
+- `GET /api/v1/observer/queue`
+- `GET /api/v1/observer/vikingdb`
+- `GET /api/v1/observer/models`
+- `GET /api/v1/observer/lock`
+- `GET /api/v1/observer/retrieval`
+- `GET /api/v1/observer/system`
+- `GET /api/v1/tasks`
+- `GET /api/v1/tasks/{task_id}`
+- `GET /metrics`
+
+对应关系说明：
+
+- 服务 readiness、系统总览、依赖健康放在运维总览。
+- `tasks` 负责后台任务列表和单任务追踪。
+- `observer.*` 负责模型、向量库、锁、检索质量等运行态观察。
+- `metrics` 适合后续扩展为 Prometheus 或系统指标视图。
+
+### 管理入口对应的服务端能力
+
+管理页后续会承接以下服务端接口域：
+
+- `GET /api/v1/admin/accounts`
+	- 列账号。
+- `POST /api/v1/admin/accounts`
+	- 创建账号。
+- `DELETE /api/v1/admin/accounts/{account_id}`
+	- 删除账号。
+- `GET /api/v1/admin/accounts/{account_id}/users`
+	- 列用户。
+- `POST /api/v1/admin/accounts/{account_id}/users`
+	- 创建用户。
+- `DELETE /api/v1/admin/accounts/{account_id}/users/{user_id}`
+	- 删除用户。
+- `POST /api/v1/admin/accounts/{account_id}/users/{user_id}/key`
+	- 轮换或生成用户密钥。
+
+管理能力的额外提醒：
+
+- 这些接口天然依赖更严格的权限与服务端模式前提。
+- 当前前端为了开发调试，可能在开发模式下临时暴露管理入口，但这不应被视为最终产品规则。
+- 在继续实现管理页前，仍应优先确认服务端模式、权限模型以及 header 约束是否稳定。
+
+### 可选与暂未前置到一级入口的能力
+
+- `bot` 路由是可选开启能力，不是当前一级入口成立的前提。
+- `debug` 路由目前更适合作为运维页内部的调试分区，而不是独立一级入口。
+- `pack` 路由虽然在概念上可独立，但当前更适合作为资源工作区中的导入导出能力。
+
+### 文档与实现的关系
+
+本节的目标是补充“前端规划背后对应的服务端能力”，而不是把前端一级入口机械映射为后端 router。
+
+因此应保持以下原则：
+
+- 一级入口由用户工作流决定，不由 router 数量决定。
+- 一个一级入口可以汇聚多个服务端能力域。
+- 一个服务端能力域也可以只作为某个页面的局部能力存在。
+
 ## 当前代码映射
 
 - 一级入口壳层：`src/components/app-shell.tsx`
