@@ -320,11 +320,8 @@ openviking:
           ak: "AKLTxxxxxxxxxxxx"
           sk: "T1dYxxxxxxxxxxxx"
       agfs:
-        port: 1833
-        log_level: warn
         backend: s3
         timeout: 10
-        retry_times: 3
         s3:
           bucket: "openvikingdata"
           region: cn-beijing
