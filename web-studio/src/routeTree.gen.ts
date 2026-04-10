@@ -10,102 +10,33 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as LegacyOpsRouteImport } from './routes/legacy/ops'
-import { Route as DataMemoryRouteImport } from './routes/data/memory'
-import { Route as DataFindRouteImport } from './routes/data/find'
-import { Route as DataFilesystemRouteImport } from './routes/data/filesystem'
-import { Route as AccessSettingsRouteImport } from './routes/access/settings'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const LegacyOpsRoute = LegacyOpsRouteImport.update({
-  id: '/legacy/ops',
-  path: '/legacy/ops',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const DataMemoryRoute = DataMemoryRouteImport.update({
-  id: '/data/memory',
-  path: '/data/memory',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const DataFindRoute = DataFindRouteImport.update({
-  id: '/data/find',
-  path: '/data/find',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const DataFilesystemRoute = DataFilesystemRouteImport.update({
-  id: '/data/filesystem',
-  path: '/data/filesystem',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AccessSettingsRoute = AccessSettingsRouteImport.update({
-  id: '/access/settings',
-  path: '/access/settings',
-  getParentRoute: () => rootRouteImport,
-} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/access/settings': typeof AccessSettingsRoute
-  '/data/filesystem': typeof DataFilesystemRoute
-  '/data/find': typeof DataFindRoute
-  '/data/memory': typeof DataMemoryRoute
-  '/legacy/ops': typeof LegacyOpsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/access/settings': typeof AccessSettingsRoute
-  '/data/filesystem': typeof DataFilesystemRoute
-  '/data/find': typeof DataFindRoute
-  '/data/memory': typeof DataMemoryRoute
-  '/legacy/ops': typeof LegacyOpsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/access/settings': typeof AccessSettingsRoute
-  '/data/filesystem': typeof DataFilesystemRoute
-  '/data/find': typeof DataFindRoute
-  '/data/memory': typeof DataMemoryRoute
-  '/legacy/ops': typeof LegacyOpsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths:
-    | '/'
-    | '/access/settings'
-    | '/data/filesystem'
-    | '/data/find'
-    | '/data/memory'
-    | '/legacy/ops'
+  fullPaths: '/'
   fileRoutesByTo: FileRoutesByTo
-  to:
-    | '/'
-    | '/access/settings'
-    | '/data/filesystem'
-    | '/data/find'
-    | '/data/memory'
-    | '/legacy/ops'
-  id:
-    | '__root__'
-    | '/'
-    | '/access/settings'
-    | '/data/filesystem'
-    | '/data/find'
-    | '/data/memory'
-    | '/legacy/ops'
+  to: '/'
+  id: '__root__' | '/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  AccessSettingsRoute: typeof AccessSettingsRoute
-  DataFilesystemRoute: typeof DataFilesystemRoute
-  DataFindRoute: typeof DataFindRoute
-  DataMemoryRoute: typeof DataMemoryRoute
-  LegacyOpsRoute: typeof LegacyOpsRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -117,51 +48,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/legacy/ops': {
-      id: '/legacy/ops'
-      path: '/legacy/ops'
-      fullPath: '/legacy/ops'
-      preLoaderRoute: typeof LegacyOpsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/data/memory': {
-      id: '/data/memory'
-      path: '/data/memory'
-      fullPath: '/data/memory'
-      preLoaderRoute: typeof DataMemoryRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/data/find': {
-      id: '/data/find'
-      path: '/data/find'
-      fullPath: '/data/find'
-      preLoaderRoute: typeof DataFindRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/data/filesystem': {
-      id: '/data/filesystem'
-      path: '/data/filesystem'
-      fullPath: '/data/filesystem'
-      preLoaderRoute: typeof DataFilesystemRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/access/settings': {
-      id: '/access/settings'
-      path: '/access/settings'
-      fullPath: '/access/settings'
-      preLoaderRoute: typeof AccessSettingsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  AccessSettingsRoute: AccessSettingsRoute,
-  DataFilesystemRoute: DataFilesystemRoute,
-  DataFindRoute: DataFindRoute,
-  DataMemoryRoute: DataMemoryRoute,
-  LegacyOpsRoute: LegacyOpsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

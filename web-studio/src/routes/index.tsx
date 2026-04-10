@@ -5,5 +5,5 @@ export const Route = createFileRoute('/')({
 })
 
 function IndexRoute() {
-  return <Navigate replace to="/data/filesystem" />
+  return <Navigate replace to="/" />
 }
