@@ -16,6 +16,8 @@ from openviking.models.embedder.base import EmbedResult  # noqa: E402
 
 class _FakeEmbedder:
     def __init__(self, dimension: int):
+        if dimension < 2:
+            raise ValueError("dimension must be at least 2 for pseudo-embedding features")
         self._dimension = dimension
         self.is_sparse = False
         self.is_hybrid = False
