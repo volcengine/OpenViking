@@ -14,6 +14,7 @@ import {
 
 const DEFAULT_TELEMETRY_PATHS = new Set(['/api/v1/search/find', '/api/v1/resources'])
 const SESSION_COMMIT_PATH = /^\/api\/v1\/sessions\/[^/]+\/commit$/
+const WEB_STUDIO_AGENT_ID = 'web-studio'
 
 function isBrowser(): boolean {
   return typeof window !== 'undefined'
@@ -122,7 +123,6 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
     apiKey: options.connection?.apiKey ?? readSessionStorage(runtimeOptions.apiKeyStorageKey),
     accountId: options.connection?.accountId ?? '',
     userId: options.connection?.userId ?? '',
-    agentId: options.connection?.agentId ?? '',
   }
 
   const instance = options.axios ?? axios.create()
@@ -144,7 +144,7 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
     setOptionalHeader(headers, 'X-API-Key', connection.apiKey)
     setOptionalHeader(headers, 'X-OpenViking-Account', connection.accountId)
     setOptionalHeader(headers, 'X-OpenViking-User', connection.userId)
-    setOptionalHeader(headers, 'X-OpenViking-Agent', connection.agentId)
+    headers.set('X-OpenViking-Agent', WEB_STUDIO_AGENT_ID)
 
     config.headers = headers
     maybeInjectTelemetry(config, runtimeOptions.defaultTelemetry)
@@ -212,7 +212,6 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
       apiKey: '',
       accountId: '',
       userId: '',
-      agentId: '',
     }
     persistApiKey()
     return { ...connection }

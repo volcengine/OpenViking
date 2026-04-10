@@ -8,7 +8,6 @@ export interface OvConnectionState {
   apiKey: string
   accountId: string
   userId: string
-  agentId: string
 }
 
 export interface OvClientOptions {

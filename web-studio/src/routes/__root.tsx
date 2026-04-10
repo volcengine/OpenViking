@@ -1,7 +1,8 @@
-import { createRootRoute } from '@tanstack/react-router'
+import { Outlet, createRootRoute } from '@tanstack/react-router'
 import { TanStackRouterDevtoolsPanel } from '@tanstack/react-router-devtools'
 import { TanStackDevtools } from '@tanstack/react-devtools'
 
+import { AppShell } from '#/components/app-shell'
 import '../styles.css'
 
 export const Route = createRootRoute({
@@ -11,7 +12,9 @@ export const Route = createRootRoute({
 function RootComponent() {
   return (
     <>
-      <div className="flex">hello</div>
+      <AppShell>
+        <Outlet />
+      </AppShell>
       <TanStackDevtools
         config={{
           position: 'bottom-right',
