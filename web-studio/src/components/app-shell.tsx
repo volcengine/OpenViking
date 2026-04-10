@@ -72,7 +72,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
   const pathname = useRouterState({ select: (state) => state.location.pathname })
   const { openConnectionDialog, serverMode } = useAppConnection()
   const currentItem = NAV_ITEMS.find((item) => pathname === item.to || pathname.startsWith(`${item.to}/`))
-  const visibleItems = NAV_ITEMS.filter((item) => !(item.id === 'admin' && serverMode === 'dev-implicit'))
+  const visibleItems = NAV_ITEMS.filter((item) => item.id !== 'admin' || serverMode === 'explicit-auth' || serverMode === 'dev-implicit')
 
   return (
     <SidebarProvider
