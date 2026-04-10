@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { useTranslation } from 'react-i18next'
 
 import { useAppConnection } from '#/hooks/use-app-connection'
 
@@ -27,6 +28,7 @@ import {
 import { Input } from '#/components/ui/input'
 
 export function ConnectionDialog() {
+    const { t } = useTranslation(['connection', 'common'])
     const {
         connection,
         isConnectionDialogOpen,
@@ -51,17 +53,17 @@ export function ConnectionDialog() {
         <Dialog open={isConnectionDialogOpen} onOpenChange={setConnectionDialogOpen}>
             <DialogContent className='max-w-2xl'>
                 <DialogHeader>
-                    <DialogTitle>连接与身份</DialogTitle>
+                    <DialogTitle>{t('dialog.title', { ns: 'connection' })}</DialogTitle>
                 </DialogHeader>
 
                 <FieldSet>
                     <FieldGroup>
                         <Field>
-                            <FieldLabel htmlFor='ov-base-url'>服务地址</FieldLabel>
+                            <FieldLabel htmlFor='ov-base-url'>{t('fields.baseUrl.label', { ns: 'connection' })}</FieldLabel>
                             <FieldContent>
                                 <Input
                                     id='ov-base-url'
-                                    placeholder='http://127.0.0.1:1933'
+                                    placeholder={t('fields.baseUrl.placeholder', { ns: 'connection' })}
                                     value={draft.baseUrl}
                                     onChange={(event) => setDraft((current) => ({ ...current, baseUrl: event.target.value }))}
                                 />
@@ -75,27 +77,27 @@ export function ConnectionDialog() {
                             {showIdentityFields ? (
                                 <>
                                     <CardHeader className='gap-1.5'>
-                                        <CardTitle className='text-sm'>身份与凭证</CardTitle>
+                                        <CardTitle className='text-sm'>{t('fields.credentials.title', { ns: 'connection' })}</CardTitle>
                                     </CardHeader>
                                     <CardContent className='grid flex-1 content-start gap-3'>
                                         <div className='grid gap-3 md:grid-cols-2'>
                                             <Field>
-                                                <FieldLabel htmlFor='ov-account-id'>Account</FieldLabel>
+                                                <FieldLabel htmlFor='ov-account-id'>{t('fields.accountId.label', { ns: 'connection' })}</FieldLabel>
                                                 <FieldContent>
                                                     <Input
                                                         id='ov-account-id'
-                                                        placeholder='default'
+                                                        placeholder={t('fields.accountId.placeholder', { ns: 'connection' })}
                                                         value={draft.accountId}
                                                         onChange={(event) => setDraft((current) => ({ ...current, accountId: event.target.value }))}
                                                     />
                                                 </FieldContent>
                                             </Field>
                                             <Field>
-                                                <FieldLabel htmlFor='ov-user-id'>User</FieldLabel>
+                                                <FieldLabel htmlFor='ov-user-id'>{t('fields.userId.label', { ns: 'connection' })}</FieldLabel>
                                                 <FieldContent>
                                                     <Input
                                                         id='ov-user-id'
-                                                        placeholder='default'
+                                                        placeholder={t('fields.userId.placeholder', { ns: 'connection' })}
                                                         value={draft.userId}
                                                         onChange={(event) => setDraft((current) => ({ ...current, userId: event.target.value }))}
                                                     />
@@ -104,12 +106,12 @@ export function ConnectionDialog() {
                                         </div>
 
                                         <Field>
-                                            <FieldLabel htmlFor='ov-api-key'>API Key</FieldLabel>
+                                            <FieldLabel htmlFor='ov-api-key'>{t('fields.apiKey.label', { ns: 'connection' })}</FieldLabel>
                                             <FieldContent>
                                                 <Input
                                                     id='ov-api-key'
                                                     type='password'
-                                                    placeholder='输入 X-API-Key 或 Bearer token'
+                                                    placeholder={t('fields.apiKey.placeholder', { ns: 'connection' })}
                                                     value={draft.apiKey}
                                                     onChange={(event) => setDraft((current) => ({ ...current, apiKey: event.target.value }))}
                                                 />
@@ -120,14 +122,14 @@ export function ConnectionDialog() {
                             ) : (
                                 <>
                                     <CardHeader className='gap-2'>
-                                        <CardTitle className='text-sm'>已检测到开发模式</CardTitle>
+                                        <CardTitle className='text-sm'>{t('devMode.title', { ns: 'connection' })}</CardTitle>
                                         <CardDescription>
-                                            当前环境下服务端会使用隐式身份，通常不需要填写 API Key、Account 或 User 字段。
+                                            {t('devMode.description', { ns: 'connection' })}
                                         </CardDescription>
                                     </CardHeader>
                                     <CardContent className='flex flex-1 items-end'>
                                         <Button variant='outline' size='sm' onClick={() => setShowAdvancedInDevMode(true)}>
-                                            显示高级身份字段
+                                            {t('showAdvancedIdentityFields', { ns: 'common', keyPrefix: 'action' })}
                                         </Button>
                                     </CardContent>
                                 </>
@@ -137,14 +139,14 @@ export function ConnectionDialog() {
                 </FieldSet>
 
                 <DialogFooter>
-                    <Button variant='outline' onClick={() => setConnectionDialogOpen(false)}>取消</Button>
+                    <Button variant='outline' onClick={() => setConnectionDialogOpen(false)}>{t('cancel', { ns: 'common', keyPrefix: 'action' })}</Button>
                     <Button
                         onClick={() => {
                             saveConnection(draft)
                             setConnectionDialogOpen(false)
                         }}
                     >
-                        保存连接
+                        {t('saveConnection', { ns: 'common', keyPrefix: 'action' })}
                     </Button>
                 </DialogFooter>
             </DialogContent>

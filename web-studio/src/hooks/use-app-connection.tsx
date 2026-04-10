@@ -2,13 +2,21 @@ import * as React from 'react'
 
 import { isOvClientError, ovClient } from '#/lib/ov-client'
 
-import { detectServerMode, normalizeBaseUrl, type ServerMode } from './use-server-mode'
+import { detectServerMode, normalizeBaseUrl } from './use-server-mode'
+import type { ServerMode } from './use-server-mode'
 
 export type ConnectionDraft = {
   accountId: string
   apiKey: string
   baseUrl: string
   userId: string
+}
+
+export type ConnectionIdentitySummary = {
+  labelKey: string
+  values?: {
+    identity?: string
+  }
 }
 
 type AppConnectionContextValue = {
@@ -45,8 +53,8 @@ function readStoredConnection(): Partial<ConnectionDraft> {
     if (!raw) {
       return {}
     }
-    const parsed = JSON.parse(raw) as Partial<ConnectionDraft>
-    return typeof parsed === 'object' && parsed !== null ? parsed : {}
+    const parsed: unknown = JSON.parse(raw)
+    return typeof parsed === 'object' && parsed !== null ? (parsed as Partial<ConnectionDraft>) : {}
   } catch {
     return {}
   }
@@ -64,17 +72,25 @@ function persistConnection(connection: ConnectionDraft): void {
   }
 }
 
-export function summarizeConnectionIdentity(connection: ConnectionDraft, serverMode: ServerMode): string {
+export function summarizeConnectionIdentity(
+  connection: ConnectionDraft,
+  serverMode: ServerMode,
+): ConnectionIdentitySummary {
   if (serverMode === 'dev-implicit') {
-    return '服务端隐式身份'
+    return { labelKey: 'identitySummary.devImplicit' }
   }
 
   const segments = [connection.accountId, connection.userId].filter(Boolean)
   if (!segments.length) {
-    return '未设置身份'
+    return { labelKey: 'identitySummary.unset' }
   }
 
-  return segments.join(' / ')
+  return {
+    labelKey: 'identitySummary.named',
+    values: {
+      identity: segments.join(' / '),
+    },
+  }
 }
 
 export function useAppConnection(): AppConnectionContextValue {

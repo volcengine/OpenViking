@@ -28,6 +28,15 @@ function getEnvelope(value: unknown): OvErrorEnvelope | undefined {
   return isRecord(value) ? (value as OvErrorEnvelope) : undefined
 }
 
+function getRequestId(headers: unknown): string | undefined {
+  if (!isRecord(headers)) {
+    return undefined
+  }
+
+  const requestId = headers['x-request-id']
+  return typeof requestId === 'string' ? requestId : undefined
+}
+
 function hasResult(value: unknown): value is { result: unknown } {
   return isRecord(value) && 'result' in value
 }
@@ -82,10 +91,7 @@ export function normalizeOvClientError(error: unknown): OvClientError {
           message:
             envelope.error.message ||
             `Request failed with status ${statusCode ?? 'unknown'}`,
-          requestId:
-            typeof axiosError.response?.headers?.['x-request-id'] === 'string'
-              ? axiosError.response.headers['x-request-id']
-              : undefined,
+          requestId: getRequestId(axiosError.response?.headers),
           responseBody: rawBody,
           statusCode,
         },
@@ -100,10 +106,7 @@ export function normalizeOvClientError(error: unknown): OvClientError {
         {
           code: 'HTTP_ERROR',
           message: truncateText(rawBody),
-          requestId:
-            typeof axiosError.response?.headers?.['x-request-id'] === 'string'
-              ? axiosError.response.headers['x-request-id']
-              : undefined,
+          requestId: getRequestId(axiosError.response?.headers),
           responseBody: rawBody,
           statusCode,
         },
@@ -119,10 +122,7 @@ export function normalizeOvClientError(error: unknown): OvClientError {
         message:
           axiosError.message ||
           `Request failed with status ${statusCode ?? 'unknown'}`,
-        requestId:
-          typeof axiosError.response?.headers?.['x-request-id'] === 'string'
-            ? axiosError.response.headers['x-request-id']
-            : undefined,
+        requestId: getRequestId(axiosError.response?.headers),
         responseBody: rawBody,
         statusCode,
       },
@@ -160,13 +160,10 @@ export function unwrapOvResponse<TResult>(response: unknown): TResult {
 
   if (envelope?.status === 'error') {
     throw new OvClientError({
-      code: envelope.error?.code || 'ERROR',
-      details: envelope.error?.details ?? envelope.error?.detail,
-      message: envelope.error?.message || 'OpenViking request failed',
-      requestId:
-        typeof response.headers['x-request-id'] === 'string'
-          ? response.headers['x-request-id']
-          : undefined,
+      code: envelope.error.code || 'ERROR',
+      details: envelope.error.details ?? envelope.error.detail,
+      message: envelope.error.message || 'OpenViking request failed',
+      requestId: getRequestId(response.headers),
       responseBody: payload,
       statusCode: response.status,
     })

@@ -7,6 +7,7 @@ import {
   PlugZapIcon,
   ShieldIcon,
 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 import { ConnectionDialog } from '#/components/connection-dialog'
 import { Badge } from '#/components/ui/badge'
@@ -31,31 +32,31 @@ import { describeServerMode } from '#/hooks/use-server-mode'
 
 const NAV_ITEMS = [
   {
-    description: '浏览资源树、预览内容，并通过检索 modal 快速定位上下文。',
+    descriptionKey: 'navigation.resources.description',
     icon: FolderTreeIcon,
     id: 'resources',
-    title: '资源',
+    titleKey: 'navigation.resources.title',
     to: '/resources',
   },
   {
-    description: '围绕 session 组织消息、上下文、archive、记忆和异步任务。',
+    descriptionKey: 'navigation.sessions.description',
     icon: BlocksIcon,
     id: 'sessions',
-    title: '会话',
+    titleKey: 'navigation.sessions.title',
     to: '/sessions',
   },
   {
-    description: '查看服务状态、后台任务、调试信息与运行时指标。',
+    descriptionKey: 'navigation.operations.description',
     icon: ActivityIcon,
     id: 'operations',
-    title: '运维',
+    titleKey: 'navigation.operations.title',
     to: '/operations',
   },
   {
-    description: '账号、用户与密钥管理，仅在具备管理能力时使用。',
+    descriptionKey: 'navigation.admin.description',
     icon: ShieldIcon,
     id: 'admin',
-    title: '管理',
+    titleKey: 'navigation.admin.title',
     to: '/admin',
   },
 ] as const
@@ -69,10 +70,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 }
 
 function AppShellInner({ children }: { children: React.ReactNode }) {
+  const { t } = useTranslation(['appShell', 'common'])
   const pathname = useRouterState({ select: (state) => state.location.pathname })
   const { openConnectionDialog, serverMode } = useAppConnection()
   const currentItem = NAV_ITEMS.find((item) => pathname === item.to || pathname.startsWith(`${item.to}/`))
   const visibleItems = NAV_ITEMS.filter((item) => item.id !== 'admin' || serverMode === 'explicit-auth' || serverMode === 'dev-implicit')
+  const serverModeBadge = describeServerMode(serverMode)
 
   return (
     <SidebarProvider
@@ -84,13 +87,15 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
         <div className='flex min-w-0 items-center gap-4'>
           <SidebarTrigger className='shrink-0' />
           <div className='min-w-0'>
-            <div className='truncate text-sm font-medium'>{currentItem?.title || 'OpenViking Studio'}</div>
+            <div className='truncate text-sm font-medium'>
+              {currentItem ? t(currentItem.titleKey, { ns: 'appShell' }) : t('header.defaultTitle', { ns: 'appShell' })}
+            </div>
           </div>
         </div>
 
         <div className='flex items-center'>
-          <Badge variant={describeServerMode(serverMode).variant}>
-            {describeServerMode(serverMode).label}
+          <Badge variant={serverModeBadge.variant}>
+            {t(serverModeBadge.labelKey, { ns: 'common' })}
           </Badge>
         </div>
       </header>
@@ -99,22 +104,23 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
         <Sidebar variant='sidebar' collapsible='icon'>
           <SidebarContent>
             <SidebarGroup>
-              <SidebarGroupLabel>工作区</SidebarGroupLabel>
+              <SidebarGroupLabel>{t('sidebar.workspaceGroupLabel', { ns: 'appShell' })}</SidebarGroupLabel>
               <SidebarGroupContent>
                 <SidebarMenu>
                   {visibleItems.map((item) => {
                     const Icon = item.icon
                     const isActive = pathname === item.to || pathname.startsWith(`${item.to}/`)
+                    const title = t(item.titleKey, { ns: 'appShell' })
 
                     return (
                       <SidebarMenuItem key={item.id}>
                         <SidebarMenuButton
                           render={<Link to={item.to} />}
                           isActive={isActive}
-                          tooltip={item.title}
+                          tooltip={title}
                         >
                           <Icon />
-                          <span>{item.title}</span>
+                          <span>{title}</span>
                         </SidebarMenuButton>
                       </SidebarMenuItem>
                     )
@@ -127,9 +133,9 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
           <SidebarFooter>
             <SidebarMenu>
               <SidebarMenuItem>
-                <SidebarMenuButton onClick={openConnectionDialog} tooltip='连接与身份'>
+                <SidebarMenuButton onClick={openConnectionDialog} tooltip={t('footer.connection', { ns: 'appShell' })}>
                   <PlugZapIcon />
-                  <span>连接与身份</span>
+                  <span>{t('footer.connection', { ns: 'appShell' })}</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>
