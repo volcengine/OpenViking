@@ -24,6 +24,10 @@ export type MemoryOpenVikingConfig = {
   recallPreferAbstract?: boolean;
   recallTokenBudget?: number;
   commitTokenThreshold?: number;
+  /** Ratio of model context window to use as commit threshold (0.0-1.0 exclusive).
+   *  When set with a known context window, overrides commitTokenThreshold.
+   *  Example: 0.38 with a 1M token model = ~380K threshold. */
+  commitTokenThresholdRatio?: number;
   bypassSessionPatterns?: string[];
   ingestReplyAssist?: boolean;
   ingestReplyAssistMinSpeakerTurns?: number;
@@ -160,6 +164,7 @@ export const memoryOpenVikingConfigSchema = {
         "recallPreferAbstract",
         "recallTokenBudget",
         "commitTokenThreshold",
+        "commitTokenThresholdRatio",
         "bypassSessionPatterns",
         "ingestReplyAssist",
         "ingestReplyAssistMinSpeakerTurns",
@@ -231,6 +236,14 @@ export const memoryOpenVikingConfigSchema = {
         0,
         Math.min(100_000, Math.floor(toNumber(cfg.commitTokenThreshold, DEFAULT_COMMIT_TOKEN_THRESHOLD))),
       ),
+      commitTokenThresholdRatio: (() => {
+        const raw = toNumber(cfg.commitTokenThresholdRatio, 0);
+        if (raw > 0 && raw < 1) return raw;
+        if (raw !== 0) {
+          throw new Error("commitTokenThresholdRatio must be between 0 and 1 (exclusive)");
+        }
+        return 0;
+      })(),
       bypassSessionPatterns: toStringArray(
         cfg.bypassSessionPatterns,
         toStringArray(
@@ -372,6 +385,12 @@ export const memoryOpenVikingConfigSchema = {
       placeholder: String(DEFAULT_COMMIT_TOKEN_THRESHOLD),
       advanced: true,
       help: "Minimum estimated pending tokens before auto-commit triggers. Set to 0 to commit every turn.",
+    },
+    commitTokenThresholdRatio: {
+      label: "Commit Threshold Ratio",
+      placeholder: "0.38",
+      advanced: true,
+      help: "Ratio of model context window (0-1) to use as commit threshold. Overrides commitTokenThreshold when set. Example: 0.38 with 1M context = ~380K token threshold.",
     },
     ingestReplyAssist: {
       label: "Ingest Reply Assist",
