@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 from typing import List, Literal, Optional
 
 from openviking.message.part import ContextPart, Part, TextPart, ToolPart
-from openviking.utils.time_utils import format_iso8601, parse_iso_datetime
 
 
 @dataclass
@@ -108,7 +107,15 @@ class Message:
     def from_dict(cls, data: dict) -> "Message":
         """Deserialize from JSONL."""
         parts = []
-        for p in data.get("parts", []):
+        raw_parts = data.get("parts")
+        if raw_parts is None:
+            legacy_content = data.get("content")
+            if legacy_content is not None:
+                raw_parts = [{"type": "text", "text": legacy_content}]
+            else:
+                raw_parts = []
+
+        for p in raw_parts:
             if p["type"] == "text":
                 parts.append(TextPart(text=p.get("text", "")))
             elif p["type"] == "context":
@@ -193,7 +200,7 @@ class Message:
             id=msg_id or f"msg_{uuid4().hex}",
             role="assistant",
             parts=parts,
-            created_at=datetime.now(timezone.utc).isoformat()
+            created_at=datetime.now(timezone.utc).isoformat(),
         )
 
     def get_context_parts(self) -> List[ContextPart]:
