@@ -91,7 +91,7 @@ const en = {
   },
   sessions: {
     page: {
-      placeholder: 'Sessions workspace is under construction.',
+      placeholder: 'Sessions and Bot workspace is under construction.',
     },
   },
 } as const
