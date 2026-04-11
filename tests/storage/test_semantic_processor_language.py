@@ -60,14 +60,17 @@ class TestLanguageDetection:
 class TestLanguageFlow:
     """语言检测 + 模板渲染流程测试。"""
 
-    @pytest.mark.parametrize("lang,content,file_name", [
-        ("zh-CN", "这是一个中文Python文件，包含测试代码", "chinese_code.py"),
-        ("en", "This is an English Python file for testing", "english_code.py"),
-        ("ja", "これは日本語のPythonコードテストファイルです", "japanese_code.py"),
-        ("ko", "이것은 한국어 Python 코드 테스트 파일입니다", "korean_code.py"),
-        ("ru", "Это русский тестовый файл Python кода", "russian_code.py"),
-        ("ar", "هذا ملف اختبار كود بايثون عربي", "arabic_code.py"),
-    ])
+    @pytest.mark.parametrize(
+        "lang,content,file_name",
+        [
+            ("zh-CN", "这是一个中文Python文件，包含测试代码", "chinese_code.py"),
+            ("en", "This is an English Python file for testing", "english_code.py"),
+            ("ja", "これは日本語のPythonコードテストファイルです", "japanese_code.py"),
+            ("ko", "이것은 한국어 Python 코드 테스트 파일입니다", "korean_code.py"),
+            ("ru", "Это русский тестовый файл Python кода", "russian_code.py"),
+            ("ar", "هذا ملف اختبار كود بايثون عربي", "arabic_code.py"),
+        ],
+    )
     def test_language_detection_to_template_flow(self, lang, content, file_name):
         """语言检测 -> output_language 注入模板 -> prompt 包含语言指令"""
         detected_lang = _detect_language_from_text(content, fallback_language="en")
@@ -83,11 +86,14 @@ class TestLanguageFlow:
 class TestOverviewGenerationFlow:
     """目录概述生成流程测试。"""
 
-    @pytest.mark.parametrize("lang,file_summaries", [
-        ("zh-CN", "[1] file1.py: 这是一个Python文件\n[2] file2.py: 这是另一个文件"),
-        ("en", "[1] file1.py: This is a Python file\n[2] file2.py: Another file"),
-        ("ja", "[1] file1.py: それはPythonファイルです\n[2] file2.py: これもPython"),
-    ])
+    @pytest.mark.parametrize(
+        "lang,file_summaries",
+        [
+            ("zh-CN", "[1] file1.py: 这是一个Python文件\n[2] file2.py: 这是另一个文件"),
+            ("en", "[1] file1.py: This is a Python file\n[2] file2.py: Another file"),
+            ("ja", "[1] file1.py: それはPythonファイルです\n[2] file2.py: これもPython"),
+        ],
+    )
     def test_overview_generation_language_flow(self, lang, file_summaries):
         """目录摘要 -> 语言检测 -> overview 模板"""
         detected_lang = _detect_language_from_text(file_summaries, fallback_language="en")
@@ -103,6 +109,31 @@ class TestOverviewGenerationFlow:
             },
         )
         assert f"Output Language: {lang}" in prompt
+
+    def test_overview_generation_prompt_preserves_repository_hierarchy(self):
+        prompt = render_prompt(
+            "semantic.overview_generation",
+            {
+                "dir_name": "repo-root",
+                "file_summaries": "[1] pyproject.toml: Python project config",
+                "children_abstracts": "- backend/: API service\n- frontend/: web UI",
+                "output_language": "en",
+            },
+        )
+
+        assert "Relationship rules:" in prompt
+        assert (
+            "- Treat child directories as parts of the same repository unless the summaries clearly show they are independent projects."
+            in prompt
+        )
+        assert (
+            "- Do not describe every child directory as an independent project by default."
+            in prompt
+        )
+        assert (
+            "- When the summaries suggest a code repository, explain how subdirectories relate to the whole repo, such as services, libraries, apps, modules, or support folders."
+            in prompt
+        )
 
 
 class LanguageAwareMockVLM:
@@ -161,19 +192,27 @@ class TestGenerateTextSummaryOutputLanguage:
             files["chinese_py"].write_text("# 中文Python文件\ndef 你好():\n    print('你好世界')\n")
 
             files["english_py"] = tmppath / "english_code.py"
-            files["english_py"].write_text("# English Python file\ndef hello():\n    print('Hello World')\n")
+            files["english_py"].write_text(
+                "# English Python file\ndef hello():\n    print('Hello World')\n"
+            )
 
             files["japanese_py"] = tmppath / "japanese_code.py"
-            files["japanese_py"].write_text("# 日本語Pythonファイル\ndef こんにちは():\n    print('こんにちは世界')\n")
+            files["japanese_py"].write_text(
+                "# 日本語Pythonファイル\ndef こんにちは():\n    print('こんにちは世界')\n"
+            )
 
             files["korean_py"] = tmppath / "korean_code.py"
-            files["korean_py"].write_text("# 한국어 Python 파일\ndef 안녕하세요():\n    print('안녕하세요')\n")
+            files["korean_py"].write_text(
+                "# 한국어 Python 파일\ndef 안녕하세요():\n    print('안녕하세요')\n"
+            )
 
             files["chinese_md"] = tmppath / "chinese_doc.md"
             files["chinese_md"].write_text("# 中文文档\n\n这是一个测试文档，包含中文技术内容。\n")
 
             files["english_md"] = tmppath / "english_doc.md"
-            files["english_md"].write_text("# English Documentation\n\nThis is a test document with English content.\n")
+            files["english_md"].write_text(
+                "# English Documentation\n\nThis is a test document with English content.\n"
+            )
 
             yield files
 
@@ -191,14 +230,17 @@ class TestGenerateTextSummaryOutputLanguage:
         return mock_config
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("file_key,file_name,expected_lang", [
-        ("chinese_py", "chinese_code.py", "zh-CN"),
-        ("english_py", "english_code.py", "en"),
-        ("japanese_py", "japanese_code.py", "ja"),
-        ("korean_py", "korean_code.py", "ko"),
-        ("chinese_md", "chinese_doc.md", "zh-CN"),
-        ("english_md", "english_doc.md", "en"),
-    ])
+    @pytest.mark.parametrize(
+        "file_key,file_name,expected_lang",
+        [
+            ("chinese_py", "chinese_code.py", "zh-CN"),
+            ("english_py", "english_code.py", "en"),
+            ("japanese_py", "japanese_code.py", "ja"),
+            ("korean_py", "korean_code.py", "ko"),
+            ("chinese_md", "chinese_doc.md", "zh-CN"),
+            ("english_md", "english_doc.md", "en"),
+        ],
+    )
     async def test_e2e_code_output_language(
         self, temp_multilang_files, file_key, file_name, expected_lang
     ):
@@ -210,8 +252,14 @@ class TestGenerateTextSummaryOutputLanguage:
         mock_viking_fs = self._create_mock_viking_fs(content)
         mock_config = self._create_mock_config(mock_vlm)
 
-        with patch("openviking.storage.queuefs.semantic_processor.get_viking_fs", return_value=mock_viking_fs):
-            with patch("openviking.storage.queuefs.semantic_processor.get_openviking_config", return_value=mock_config):
+        with patch(
+            "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+            return_value=mock_viking_fs,
+        ):
+            with patch(
+                "openviking.storage.queuefs.semantic_processor.get_openviking_config",
+                return_value=mock_config,
+            ):
                 processor = SemanticProcessor()
                 processor._current_ctx = MagicMock()
 
@@ -222,17 +270,22 @@ class TestGenerateTextSummaryOutputLanguage:
                 )
 
                 prompt_sent = mock_vlm.prompts_received[0]
-                assert f"Output Language: {expected_lang}" in prompt_sent, \
+                assert f"Output Language: {expected_lang}" in prompt_sent, (
                     f"{file_name}: Prompt missing Output Language: {expected_lang}"
+                )
 
-                assert _verify_content_language(result["summary"], expected_lang), \
+                assert _verify_content_language(result["summary"], expected_lang), (
                     f"{file_name}: Content language mismatch. Expected {expected_lang}, got: {result['summary']}"
+                )
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("content,file_name,expected_lang", [
-        ("Это русский тестовый файл Python", "russian_code.py", "ru"),
-        ("هذا ملف اختبار كود بايثون عربي", "arabic_code.py", "ar"),
-    ])
+    @pytest.mark.parametrize(
+        "content,file_name,expected_lang",
+        [
+            ("Это русский тестовый файл Python", "russian_code.py", "ru"),
+            ("هذا ملف اختبار كود بايثون عربي", "arabic_code.py", "ar"),
+        ],
+    )
     async def test_e2e_russian_arabic_output_language(self, content, file_name, expected_lang):
         """端到端测试：俄文和阿拉伯文内容"""
         from openviking.storage.queuefs.semantic_processor import SemanticProcessor
@@ -241,8 +294,14 @@ class TestGenerateTextSummaryOutputLanguage:
         mock_viking_fs = self._create_mock_viking_fs(content)
         mock_config = self._create_mock_config(mock_vlm)
 
-        with patch("openviking.storage.queuefs.semantic_processor.get_viking_fs", return_value=mock_viking_fs):
-            with patch("openviking.storage.queuefs.semantic_processor.get_openviking_config", return_value=mock_config):
+        with patch(
+            "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+            return_value=mock_viking_fs,
+        ):
+            with patch(
+                "openviking.storage.queuefs.semantic_processor.get_openviking_config",
+                return_value=mock_config,
+            ):
                 processor = SemanticProcessor()
                 processor._current_ctx = MagicMock()
 
@@ -255,5 +314,6 @@ class TestGenerateTextSummaryOutputLanguage:
                 prompt_sent = mock_vlm.prompts_received[0]
                 assert f"Output Language: {expected_lang}" in prompt_sent
 
-                assert _verify_content_language(result["summary"], expected_lang), \
+                assert _verify_content_language(result["summary"], expected_lang), (
                     f"{file_name}: Content language mismatch. Expected {expected_lang}, got: {result['summary']}"
+                )

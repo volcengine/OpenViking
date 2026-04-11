@@ -45,6 +45,11 @@ template: |
   [Subdirectories and Their Summaries]
   {{ children_abstracts }}
 
+  Relationship rules:
+  - Treat child directories as parts of the same repository unless the summaries clearly show they are independent projects.
+  - Do not describe every child directory as an independent project by default.
+  - When the summaries suggest a code repository, explain how subdirectories relate to the whole repo, such as services, libraries, apps, modules, or support folders.
+
   Output in Markdown format, strictly following this structure:
 
   1. **Title** (H1): Directory name
