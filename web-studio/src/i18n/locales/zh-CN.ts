@@ -91,7 +91,7 @@ const zhCN = {
   },
   sessions: {
     page: {
-      placeholder: '会话工作区能力尚未接入。',
+      placeholder: '会话与 Bot 工作区能力尚未接入。',
     },
   },
 } as const

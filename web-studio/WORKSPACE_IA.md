@@ -54,21 +54,23 @@ sidebar | main
 
 ### 会话
 
-定位：会话、上下文与记忆沉淀工作区。
+定位：会话、Bot 交互、上下文与记忆沉淀工作区。
 
 后续承载内容：
 
 - Session 列表与切换。
-- 消息与操作主区。
+- Bot 对话、消息与操作主区。
 - 上下文装配与 archive 展示。
 - commit、extract、session stats。
 - 与记忆相关的沉淀结果。
+- Bot 可用性检查与流式响应承接。
 
 设计约束：
 
 - 会话页不是看板，也不是只读监控大屏。
-- 会话页本体成立，不依赖 bot 才能存在。
-- 记忆在当前版本不单列一级入口，收纳在会话页内部。
+- 当前版本先把 Bot 交互绑定在会话页内部，不单独拆出独立入口。
+- 提前把会话和 Bot 解耦，会增加用户在会话创建、上下文组织和对话执行之间来回切换的成本。
+- 记忆在当前版本不单列一级入口，继续收纳在会话页内部。
 
 ### 运维
 
@@ -99,6 +101,14 @@ sidebar | main
 
 - 文档、页面文案和导航显示都应保留“检查服务端模式”的意识。
 
+服务端已确认的判断边界：
+
+- `GET /health` 是无鉴权接口，可以直接探活。
+- 当前服务端没有单独暴露稳定的 `auth_mode` 查询接口，因此前端仍只能做启发式判断。
+- `/health` 只有在服务端没有挂载 `api_key_manager` 时，才会稳定回填 `result.user_id`；此时通常对应本地开发式的隐式身份场景。
+- 在显式鉴权链路下，即使服务端处于 `api_key` 或 `trusted` 模式，未携带有效鉴权信息的 `/health` 响应也不保证返回 `user_id`。
+- 因此“`/health` 是否带 `user_id`”只能作为前端交互分支的最佳努力信号，不能作为严格产品契约。
+
 ## 服务端能力与接口映射
 
 当前 Web Studio 对接的是 OpenViking HTTP Server。按服务端路由注册结果，后端主要暴露以下能力域：
@@ -116,7 +126,7 @@ sidebar | main
 - observer
 - metrics
 - tasks
-- bot（可选开启）
+- bot
 
 前端现阶段主要依赖生成 client 中已经稳定暴露出来的接口集合。
 
@@ -136,6 +146,11 @@ sidebar | main
 - `POST /api/v1/system/wait`
 	- 用途：等待服务端处理队列完成。
 	- 当前前端用途：暂未接入 UI，但适合作为运维或调试辅助能力。
+
+服务端实现补充：
+
+- `GET /api/v1/system/status` 依赖标准鉴权链路，返回的是当前请求解析出来的 `ctx.user.user_id`，比 `/health` 更适合在连接建立后确认真实身份上下文。
+- `POST /api/v1/system/wait` 也走标准鉴权链路，因此前端不能把它当成匿名探测接口。
 
 ### 资源入口对应的服务端能力
 
@@ -204,27 +219,45 @@ sidebar | main
 	- 删除会话。
 - `GET /api/v1/sessions/{session_id}/context`
 	- 获取会话上下文装配结果。
-- `GET /api/v1/sessions/{session_id}/archive/{archive_id}`
+- `GET /api/v1/sessions/{session_id}/archives/{archive_id}`
 	- 获取历史 archive。
 - `POST /api/v1/sessions/{session_id}/messages`
 	- 写入消息。
 - `POST /api/v1/sessions/{session_id}/used`
 	- 记录已使用上下文。
 - `POST /api/v1/sessions/{session_id}/commit`
-	- 触发异步 commit。
+	- 归档在返回前完成，记忆提炼在后台继续执行。
 - `POST /api/v1/sessions/{session_id}/extract`
-	- 触发抽取或记忆提炼。
+	- 直接触发记忆提炼。
 - `GET /api/v1/stats/session/{session_id}`
 	- 会话统计。
 - `GET /api/v1/stats/memories`
 	- 记忆统计汇总。
+- `GET /bot/v1/health`
+	- 检查 Bot 代理是否可用。
+- `POST /bot/v1/chat`
+	- 发起 Bot 对话请求。
+- `POST /bot/v1/chat/stream`
+	- 发起 Bot 流式对话请求。
 
 对应关系说明：
 
 - Session 列表与切换依赖 `sessions list/get/create/delete`。
+- Bot 对话主区依赖 `bot health/chat/chat-stream`。
 - 上下文面板依赖 `context` 与 `archive`。
-- 写消息与记录引用依赖 `messages` 和 `used`。
+- 写消息、记录引用与 Bot 结果沉淀依赖 `messages`、`used` 和 `bot.*`。
 - 记忆沉淀结果依赖 `commit`、`extract`、`stats`。
+
+会话与 Bot 的服务端已确认约束：
+
+- `POST /api/v1/sessions/{session_id}/commit` 不是纯后台触发器。服务端会先完成 archive 阶段，再返回包含 `task_id` 的结果；后续记忆抽取在后台继续执行，适合前端接入任务轮询而不是简单 fire-and-forget。
+- `POST /api/v1/sessions/{session_id}/extract` 是直接提炼入口，适合会话页内显式操作，不必强制走 commit。
+- `POST /api/v1/sessions/{session_id}/messages` 既支持简单 `content`，也支持 `parts` 数组；若两者同时提供，服务端以 `parts` 为准。这意味着会话/Bot UI 设计上可以直接面向结构化消息，而不必被纯字符串输入绑定。
+- Bot 路由会始终注册在 `/bot/v1` 前缀下，但只有在服务端以 `--with-bot` 或等效配置开启代理时才真正可用。
+- 当 Bot 代理未开启时，`GET /bot/v1/health`、`POST /bot/v1/chat`、`POST /bot/v1/chat/stream` 会返回 `503`，这应被前端视为“会话页中的 Bot 区域不可用”而不是“页面不存在”。
+- 当 Bot 上游不可达时，health/chat 接口会转成 `502`；`chat` 对上游 `4xx` 会原样透传，`chat/stream` 则会通过 SSE 错误事件回传失败信息。前端规划上要为同步请求和流式请求分别准备错误呈现。
+- Bot chat 和 chat stream 都依赖服务端标准 `get_request_context`。在 `api_key` 模式且使用 root key 时，请求 tenant-scoped 数据接口仍需要显式携带 `X-OpenViking-Account` 和 `X-OpenViking-User`，否则本地鉴权会先失败。
+- 当前 Bot 代理向上游转发时只显式透传 API key，不转发 `X-OpenViking-Account` / `X-OpenViking-User`。因此前端仍应在自身请求层维护 account/user 上下文，用于通过本地鉴权和组织会话态，而不是假设 Bot 代理会代管全部租户上下文。
 
 ### 运维入口对应的服务端能力
 
@@ -251,9 +284,14 @@ sidebar | main
 
 ### 可选与暂未前置到一级入口的能力
 
-- `bot` 路由是可选开启能力，不是当前一级入口成立的前提。
+- `bot` 路由在服务端仍是可选开启能力，但前端交互上优先并入会话工作区，不单独作为一级入口。
 - `debug` 路由目前更适合作为运维页内部的调试分区，而不是独立一级入口。
 - `pack` 路由虽然在概念上可独立，但当前更适合作为资源工作区中的导入导出能力。
+
+规划含义：
+
+- 前端可以继续把 Bot 绑定在会话页内，但需要把“Bot 代理未开启”当成常见部署态，而不是异常边缘情况。
+- 会话页应同时覆盖三种状态：Bot 可用、Bot 未开启、Bot 上游异常；否则页面虽然结构正确，但无法支撑实际部署判断。
 
 ### 文档与实现的关系
 
