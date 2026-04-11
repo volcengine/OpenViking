@@ -3,10 +3,29 @@
 """Unit tests for GitAccessor."""
 
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
 from openviking.parse.accessors import GitAccessor
+from openviking.utils import code_hosting_utils
+
+
+def _mock_config():
+    return SimpleNamespace(
+        code=SimpleNamespace(
+            github_domains=["github.com", "www.github.com"],
+            gitlab_domains=["gitlab.com", "www.gitlab.com"],
+            code_hosting_domains=["github.com", "gitlab.com"],
+        )
+    )
+
+
+@pytest.fixture(autouse=True)
+def _patch_config():
+    with patch.object(code_hosting_utils, "get_openviking_config", side_effect=_mock_config):
+        yield
 
 
 class TestGitAccessor:
@@ -59,6 +78,13 @@ class TestGitAccessor:
     def test_can_handle_git_protocol_url(self, accessor: GitAccessor) -> None:
         """GitAccessor should handle git:// URLs."""
         assert accessor.can_handle("git://github.com/volcengine/OpenViking.git") is True
+
+    def test_normalize_repo_url_ssh_with_userinfo_and_ref(self, accessor: GitAccessor) -> None:
+        """GitAccessor should normalize ssh URLs with userinfo using the shared host matcher."""
+        assert (
+            accessor._normalize_repo_url("ssh://git@github.com:443/volcengine/OpenViking/tree/main")
+            == "ssh://git@github.com:443/volcengine/OpenViking"
+        )
 
     @pytest.mark.parametrize(
         "source",

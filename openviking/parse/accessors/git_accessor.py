@@ -20,6 +20,7 @@ from urllib.parse import unquote, urlparse
 
 from openviking.utils import is_github_url, is_gitlab_url, parse_code_hosting_url
 from openviking.utils.code_hosting_utils import (
+    _domain_matches,
     is_code_hosting_url,
     is_git_repo_url,
     validate_git_ssh_uri,
@@ -275,10 +276,7 @@ class GitAccessor(DataAccessor):
                 base_parts = path_parts[: git_index + 1]
 
             config = get_openviking_config()
-            if (
-                parsed.netloc in config.code.github_domains + config.code.gitlab_domains
-                and len(path_parts) >= 2
-            ):
+            if _domain_matches(parsed, config.code.github_domains + config.code.gitlab_domains):
                 base_parts = path_parts[:2]
             base_path = "/" + "/".join(base_parts)
             return parsed._replace(path=base_path, query="", fragment="").geturl()

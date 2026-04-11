@@ -43,6 +43,8 @@ sys.modules["openviking.utils.code_hosting_utils"] = _module
 _spec.loader.exec_module(_module)
 
 parse_code_hosting_url = _module.parse_code_hosting_url
+is_github_url = _module.is_github_url
+is_gitlab_url = _module.is_gitlab_url
 is_code_hosting_url = _module.is_code_hosting_url
 is_git_repo_url = _module.is_git_repo_url
 validate_git_ssh_uri = _module.validate_git_ssh_uri
@@ -81,12 +83,16 @@ def test_parse_code_hosting_url_https_dotgit():
     assert parse_code_hosting_url("https://github.com/org/repo.git") == "org/repo"
 
 
-def test_parse_code_hosting_url_ssh_with_userinfo():
+def test_parse_code_hosting_url_ssh_url_with_userinfo():
     assert parse_code_hosting_url("ssh://git@github.com/org/repo.git") == "org/repo"
 
 
-def test_parse_code_hosting_url_https_with_explicit_port():
-    assert parse_code_hosting_url("https://github.com:443/org/repo.git") == "org/repo"
+def test_parse_code_hosting_url_gitlab_ssh_url_with_userinfo():
+    assert parse_code_hosting_url("ssh://git@gitlab.com/group/repo.git") == "group/repo"
+
+
+def test_parse_code_hosting_url_https_with_port():
+    assert parse_code_hosting_url("https://github.com:443/org/repo") == "org/repo"
 
 
 # --- validate_git_ssh_uri ---
@@ -126,12 +132,23 @@ def test_is_code_hosting_url_https():
     assert is_code_hosting_url("https://github.com/org/repo") is True
 
 
-def test_is_code_hosting_url_ssh_with_userinfo():
+def test_is_code_hosting_url_ssh_url_with_userinfo():
     assert is_code_hosting_url("ssh://git@github.com/org/repo.git") is True
 
 
-def test_is_code_hosting_url_https_with_explicit_port():
+def test_is_code_hosting_url_https_with_port():
     assert is_code_hosting_url("https://github.com:443/org/repo") is True
+
+
+# --- is_github_url / is_gitlab_url ---
+
+
+def test_is_github_url_ssh_url_with_userinfo():
+    assert is_github_url("ssh://git@github.com/org/repo.git") is True
+
+
+def test_is_gitlab_url_ssh_url_with_userinfo():
+    assert is_gitlab_url("ssh://git@gitlab.com/group/repo.git") is True
 
 
 # --- is_git_repo_url ---
@@ -145,11 +162,11 @@ def test_is_git_repo_url_https_repo():
     assert is_git_repo_url("https://github.com/org/repo") is True
 
 
-def test_is_git_repo_url_ssh_with_userinfo():
+def test_is_git_repo_url_ssh_url_with_userinfo():
     assert is_git_repo_url("ssh://git@github.com/org/repo.git") is True
 
 
-def test_is_git_repo_url_https_with_explicit_port():
+def test_is_git_repo_url_https_with_port():
     assert is_git_repo_url("https://github.com:443/org/repo") is True
 
 

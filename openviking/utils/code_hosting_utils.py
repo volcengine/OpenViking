@@ -8,9 +8,35 @@ platforms like GitHub and GitLab.
 """
 
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import ParseResult, urlparse
 
 from openviking_cli.utils.config import get_openviking_config
+
+
+def _domain_matches(parsed: ParseResult, domains: list[str]) -> bool:
+    """Return True when parsed URL host matches configured domains.
+
+    ``urlparse().netloc`` includes optional userinfo and port values. Repository
+    clone URLs commonly use forms like ``ssh://git@github.com/org/repo.git``,
+    where the netloc is ``git@github.com`` but the actual host is
+    ``github.com``.
+    """
+    hostname = parsed.hostname
+    if not hostname:
+        return False
+
+    normalized_domains = {domain.lower() for domain in domains}
+    host = hostname.lower()
+    candidates = {host}
+
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    if port is not None:
+        candidates.add(f"{host}:{port}")
+
+    return any(candidate in normalized_domains for candidate in candidates)
 
 
 def _extract_host(url: str) -> str:
@@ -44,7 +70,6 @@ def parse_code_hosting_url(url: str) -> Optional[str]:
             + config.code.code_hosting_domains
         )
     )
-    host = _extract_host(url)
 
     # Handle git@ SSH URLs: git@host:org/repo.git
     if url.startswith("git@"):
@@ -73,7 +98,7 @@ def parse_code_hosting_url(url: str) -> Optional[str]:
 
     # For GitHub/GitLab URLs with org/repo structure
     if (
-        host in config.code.github_domains + config.code.gitlab_domains
+        _domain_matches(parsed, config.code.github_domains + config.code.gitlab_domains)
         and len(path_parts) >= 2
     ):
         # Take first two parts: org/repo
@@ -140,7 +165,7 @@ def is_code_hosting_url(url: str) -> bool:
         host_part = url[4:].split(":", 1)[0]
         return host_part in all_domains
 
-    return _extract_host(url) in all_domains
+    return _domain_matches(urlparse(url), all_domains)
 
 
 def validate_git_ssh_uri(url: str) -> None:
@@ -186,7 +211,7 @@ def is_git_repo_url(url: str) -> bool:
             )
         )
         parsed = urlparse(url)
-        if _extract_host(url) not in all_domains:
+        if not _domain_matches(parsed, all_domains):
             return False
         path_parts = [p for p in parsed.path.split("/") if p]
         # Strip .git suffix from last part for counting
