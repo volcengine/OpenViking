@@ -32,28 +32,24 @@ import { describeServerMode } from '#/hooks/use-server-mode'
 
 const NAV_ITEMS = [
   {
-    descriptionKey: 'navigation.resources.description',
     icon: FolderTreeIcon,
     id: 'resources',
     titleKey: 'navigation.resources.title',
     to: '/resources',
   },
   {
-    descriptionKey: 'navigation.sessions.description',
     icon: BlocksIcon,
     id: 'sessions',
     titleKey: 'navigation.sessions.title',
     to: '/sessions',
   },
   {
-    descriptionKey: 'navigation.operations.description',
     icon: ActivityIcon,
     id: 'operations',
     titleKey: 'navigation.operations.title',
     to: '/operations',
   },
   {
-    descriptionKey: 'navigation.admin.description',
     icon: ShieldIcon,
     id: 'admin',
     titleKey: 'navigation.admin.title',
