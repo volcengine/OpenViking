@@ -218,3 +218,19 @@ def test_openviking_config_singleton_missing_message_uses_openviking_ai_docs(tmp
             OpenVikingConfigSingleton.get_instance()
     finally:
         OpenVikingConfigSingleton.reset_instance()
+
+
+def test_openviking_config_singleton_initialize_missing_message_uses_openviking_ai_docs(tmp_path, monkeypatch):
+    import openviking_cli.utils.config.open_viking_config as config_module
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+
+    monkeypatch.delenv("OPENVIKING_CONFIG_FILE", raising=False)
+    monkeypatch.setattr(config_module, "DEFAULT_CONFIG_DIR", tmp_path / "user")
+    monkeypatch.setattr(config_module, "SYSTEM_CONFIG_DIR", tmp_path / "system")
+
+    OpenVikingConfigSingleton.reset_instance()
+    try:
+        with pytest.raises(FileNotFoundError, match=r"https://openviking\.ai/docs"):
+            OpenVikingConfigSingleton.initialize()
+    finally:
+        OpenVikingConfigSingleton.reset_instance()
