@@ -152,6 +152,56 @@ class StatsAggregator:
             "skills_used": stats.skills_used,
         }
 
+    async def get_token_stats(
+        self,
+        service,
+        ctx: RequestContext,
+    ) -> Dict[str, Any]:
+        """Get aggregate token usage statistics across all sessions.
+
+        Args:
+            service: OpenVikingService instance.
+            ctx: Request context for tenant scoping.
+
+        Returns:
+            Dictionary with total token usage broken down by LLM and embedding.
+        """
+        sessions_list = await service.sessions.sessions(ctx)
+
+        total_llm_prompt = 0
+        total_llm_completion = 0
+        total_llm = 0
+        total_embedding = 0
+
+        for s in sessions_list:
+            session_id = s.get("session_id", "")
+            if not session_id:
+                continue
+            try:
+                session = service.sessions.session(ctx, session_id)
+                await session.load()
+                meta = session.meta
+                llm = meta.llm_token_usage
+                emb = meta.embedding_token_usage
+                total_llm_prompt += llm.get("prompt_tokens", 0)
+                total_llm_completion += llm.get("completion_tokens", 0)
+                total_llm += llm.get("total_tokens", 0)
+                total_embedding += emb.get("total_tokens", 0)
+            except Exception as e:
+                logger.error("Failed to load session %s for token stats: %s", session_id, e, exc_info=True)
+
+        return {
+            "total_tokens": total_llm + total_embedding,
+            "llm": {
+                "prompt_tokens": total_llm_prompt,
+                "completion_tokens": total_llm_completion,
+                "total_tokens": total_llm,
+            },
+            "embedding": {
+                "total_tokens": total_embedding,
+            },
+        }
+
     async def _query_all_memories(
         self,
         ctx: RequestContext,
