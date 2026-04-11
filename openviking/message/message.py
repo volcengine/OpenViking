@@ -64,6 +64,12 @@ class Message:
     def to_dict(self) -> dict:
         """Serialize to JSONL."""
         created_at_val = self.created_at or datetime.now(timezone.utc).isoformat()
+        if isinstance(created_at_val, datetime):
+            created_at_val = (
+                created_at_val.astimezone(timezone.utc)
+                .isoformat(timespec="milliseconds")
+                .replace("+00:00", "Z")
+            )
         return {
             "id": self.id,
             "role": self.role,
@@ -145,7 +151,7 @@ class Message:
             id=data["id"],
             role=data["role"],
             parts=parts,
-            created_at=data["created_at"],
+            created_at=data.get("created_at"),
         )
 
     @classmethod

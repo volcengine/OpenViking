@@ -520,7 +520,6 @@ class TestMessageFromDict:
             "id": "msg-legacy",
             "role": "user",
             "content": "Hello from legacy storage",
-            "created_at": "2026-03-26T10:30:00Z",
         }
 
         msg = Message.from_dict(d)
@@ -531,6 +530,7 @@ class TestMessageFromDict:
         assert isinstance(msg.parts[0], TextPart)
         assert msg.parts[0].text == "Hello from legacy storage"
         assert msg.content == "Hello from legacy storage"
+        assert msg.created_at is None
 
     def test_roundtrip(self):
         """Test to_dict -> from_dict roundtrip."""
