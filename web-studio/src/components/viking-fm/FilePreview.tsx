@@ -321,7 +321,7 @@ export function FilePreview({ file, onClose, showCloseButton = true }: FilePrevi
         ) : null}
 
         {!previewQuery.isLoading && preview?.fileType === 'markdown' && preview.shouldAutoRead && markdownMode === 'preview' ? (
-          <article className="prose prose-sm max-w-none break-words dark:prose-invert">
+          <article className="prose prose-sm max-w-none break-words dark:prose-invert dark:prose-pre:bg-muted-foreground/20">
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               components={{
