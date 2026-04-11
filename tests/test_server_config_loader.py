@@ -12,7 +12,7 @@ def test_load_server_config_missing_file_points_to_current_docs(tmp_path, monkey
     missing_config_path = tmp_path / "missing-config.json"
     monkeypatch.setenv("OPENVIKING_CONFIG_FILE", str(missing_config_path))
 
-    with pytest.raises(FileNotFoundError, match=r"https://www\.openviking\.ai/docs"):
+    with pytest.raises(FileNotFoundError, match=r"https://openviking\.ai/docs"):
         load_server_config()
 
 
