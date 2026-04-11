@@ -4,6 +4,7 @@ import {
   ActivityIcon,
   BlocksIcon,
   FolderTreeIcon,
+  HomeIcon,
   LanguagesIcon,
   PlugZapIcon,
 } from 'lucide-react'
@@ -40,6 +41,12 @@ import { AppConnectionProvider, useAppConnection } from '#/hooks/use-app-connect
 import { describeServerMode } from '#/hooks/use-server-mode'
 
 const NAV_ITEMS = [
+  {
+    icon: HomeIcon,
+    id: 'home',
+    titleKey: 'navigation.home.title',
+    to: '/home',
+  },
   {
     icon: FolderTreeIcon,
     id: 'resources',
