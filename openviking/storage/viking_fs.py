@@ -17,7 +17,7 @@ import contextvars
 import hashlib
 import json
 import re
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import PurePath
@@ -38,6 +38,17 @@ if TYPE_CHECKING:
     from openviking_cli.utils.config import RerankConfig
 
 logger = get_logger(__name__)
+
+
+@asynccontextmanager
+async def _noop_async_lock() -> Any:
+    yield
+
+
+@asynccontextmanager
+async def _asyncio_lock_context(lock: asyncio.Lock) -> Any:
+    async with lock:
+        yield
 
 
 # ========== Dataclass ==========
@@ -179,6 +190,19 @@ class VikingFS:
         self._bound_ctx: contextvars.ContextVar[Optional[RequestContext]] = contextvars.ContextVar(
             "vikingfs_bound_ctx", default=None
         )
+        self._append_fallback_locks: Dict[str, asyncio.Lock] = {}
+
+    def _append_lock_context(self, path: str):
+        try:
+            from openviking.storage.transaction import LockContext, get_lock_manager
+
+            return LockContext(get_lock_manager(), [path], lock_mode="point")
+        except RuntimeError:
+            lock = self._append_fallback_locks.get(path)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._append_fallback_locks[path] = lock
+            return _asyncio_lock_context(lock)
 
     @staticmethod
     def _default_ctx() -> RequestContext:
@@ -1716,26 +1740,37 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Append content to file."""
+        from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
+        lock_path = path.rsplit("/", 1)[0] or path
 
         try:
-            existing = ""
-            try:
-                existing_bytes = self._handle_agfs_read(self.agfs.read(path))
-                existing_bytes = await self._decrypt_content(existing_bytes, ctx=ctx)
-                existing = self._decode_bytes(existing_bytes)
-            except AGFSHTTPError as e:
-                if e.status_code != 404:
+            async with self._append_lock_context(lock_path):
+                existing = ""
+                try:
+                    existing_bytes = self._handle_agfs_read(self.agfs.read(path))
+                    existing_bytes = await self._decrypt_content(existing_bytes, ctx=ctx)
+                    existing = self._decode_bytes(existing_bytes)
+                except AGFSHTTPError as e:
+                    if e.status_code != 404:
+                        raise
+                except (FileNotFoundError, RuntimeError) as e:
+                    if not any(
+                        msg in str(e).lower() for msg in ["not found", "no such file or directory"]
+                    ):
+                        raise
+                except AGFSClientError:
                     raise
-            except AGFSClientError:
-                raise
 
-            await self._ensure_parent_dirs(path)
-            final_content = (existing + content).encode("utf-8")
-            final_content = await self._encrypt_content(final_content, ctx=ctx)
-            self.agfs.write(path, final_content)
+                await self._ensure_parent_dirs(path)
+                final_content = (existing + content).encode("utf-8")
+                final_content = await self._encrypt_content(final_content, ctx=ctx)
+                self.agfs.write(path, final_content)
 
+        except LockAcquisitionError as e:
+            raise ResourceBusyError(f"Resource is being processed: {uri}") from e
         except Exception as e:
             logger.error(f"[VikingFS] Failed to append to file {uri}: {e}")
             raise IOError(f"Failed to append to file {uri}: {e}")
