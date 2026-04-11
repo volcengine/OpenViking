@@ -1,9 +1,4 @@
 const zhCN = {
-  admin: {
-    page: {
-      placeholder: '管理页能力尚未接入。',
-    },
-  },
   appShell: {
     footer: {
       connection: '连接与身份',

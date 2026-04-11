@@ -12,7 +12,6 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as SessionsRouteRouteImport } from './routes/sessions/route'
 import { Route as ResourcesRouteRouteImport } from './routes/resources/route'
 import { Route as OperationsRouteRouteImport } from './routes/operations/route'
-import { Route as AdminRouteRouteImport } from './routes/admin/route'
 import { Route as IndexRouteImport } from './routes/index'
 
 const SessionsRouteRoute = SessionsRouteRouteImport.update({
@@ -30,11 +29,6 @@ const OperationsRouteRoute = OperationsRouteRouteImport.update({
   path: '/operations',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AdminRouteRoute = AdminRouteRouteImport.update({
-  id: '/admin',
-  path: '/admin',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -43,14 +37,12 @@ const IndexRoute = IndexRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/admin': typeof AdminRouteRoute
   '/operations': typeof OperationsRouteRoute
   '/resources': typeof ResourcesRouteRoute
   '/sessions': typeof SessionsRouteRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/admin': typeof AdminRouteRoute
   '/operations': typeof OperationsRouteRoute
   '/resources': typeof ResourcesRouteRoute
   '/sessions': typeof SessionsRouteRoute
@@ -58,22 +50,20 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/admin': typeof AdminRouteRoute
   '/operations': typeof OperationsRouteRoute
   '/resources': typeof ResourcesRouteRoute
   '/sessions': typeof SessionsRouteRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/admin' | '/operations' | '/resources' | '/sessions'
+  fullPaths: '/' | '/operations' | '/resources' | '/sessions'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/admin' | '/operations' | '/resources' | '/sessions'
-  id: '__root__' | '/' | '/admin' | '/operations' | '/resources' | '/sessions'
+  to: '/' | '/operations' | '/resources' | '/sessions'
+  id: '__root__' | '/' | '/operations' | '/resources' | '/sessions'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  AdminRouteRoute: typeof AdminRouteRoute
   OperationsRouteRoute: typeof OperationsRouteRoute
   ResourcesRouteRoute: typeof ResourcesRouteRoute
   SessionsRouteRoute: typeof SessionsRouteRoute
@@ -102,13 +92,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OperationsRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/admin': {
-      id: '/admin'
-      path: '/admin'
-      fullPath: '/admin'
-      preLoaderRoute: typeof AdminRouteRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/': {
       id: '/'
       path: '/'
@@ -121,7 +104,6 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  AdminRouteRoute: AdminRouteRoute,
   OperationsRouteRoute: OperationsRouteRoute,
   ResourcesRouteRoute: ResourcesRouteRoute,
   SessionsRouteRoute: SessionsRouteRoute,

@@ -1,9 +1,4 @@
 const en = {
-  admin: {
-    page: {
-      placeholder: 'Admin tools are not wired in yet.',
-    },
-  },
   appShell: {
     footer: {
       connection: 'Connection & Identity',

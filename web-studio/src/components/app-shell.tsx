@@ -6,7 +6,6 @@ import {
   FolderTreeIcon,
   LanguagesIcon,
   PlugZapIcon,
-  ShieldIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
@@ -59,12 +58,6 @@ const NAV_ITEMS = [
     titleKey: 'navigation.operations.title',
     to: '/operations',
   },
-  {
-    icon: ShieldIcon,
-    id: 'admin',
-    titleKey: 'navigation.admin.title',
-    to: '/admin',
-  },
 ] as const
 
 const LANGUAGE_OPTIONS = [
@@ -101,7 +94,6 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
   const pathname = useRouterState({ select: (state) => state.location.pathname })
   const { openConnectionDialog, serverMode } = useAppConnection()
   const currentItem = NAV_ITEMS.find((item) => pathname === item.to || pathname.startsWith(`${item.to}/`))
-  const visibleItems = NAV_ITEMS.filter((item) => item.id !== 'admin' || serverMode === 'explicit-auth' || serverMode === 'dev-implicit')
   const serverModeBadge = describeServerMode(serverMode)
   const currentLanguage = resolveLanguage(i18n.resolvedLanguage ?? i18n.language)
   const currentLanguageOption = LANGUAGE_OPTIONS.find((item) => item.value === currentLanguage) ?? LANGUAGE_OPTIONS[0]
@@ -169,7 +161,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
               <SidebarGroupLabel>{t('sidebar.workspaceGroupLabel', { ns: 'appShell' })}</SidebarGroupLabel>
               <SidebarGroupContent>
                 <SidebarMenu>
-                  {visibleItems.map((item) => {
+                  {NAV_ITEMS.map((item) => {
                     const Icon = item.icon
                     const isActive = pathname === item.to || pathname.startsWith(`${item.to}/`)
                     const title = t(item.titleKey, { ns: 'appShell' })
