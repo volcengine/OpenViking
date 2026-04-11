@@ -105,7 +105,10 @@ class TestRequireConfig:
 
     def test_raises_on_missing(self, monkeypatch):
         monkeypatch.delenv("TEST_MISSING_ENV", raising=False)
-        with pytest.raises(FileNotFoundError, match="configuration file not found"):
+        with pytest.raises(
+            FileNotFoundError,
+            match=r"(?s)configuration file not found.*https://www\.openviking\.ai/docs",
+        ):
             require_config(None, "TEST_MISSING_ENV", "nonexistent_file.conf", "test")
 
 

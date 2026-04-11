@@ -8,6 +8,14 @@ import pytest
 from openviking.server.config import load_server_config
 
 
+def test_load_server_config_missing_file_points_to_current_docs(tmp_path, monkeypatch):
+    missing_config_path = tmp_path / "missing-config.json"
+    monkeypatch.setenv("OPENVIKING_CONFIG_FILE", str(missing_config_path))
+
+    with pytest.raises(FileNotFoundError, match=r"https://www\.openviking\.ai/docs"):
+        load_server_config()
+
+
 def test_load_server_config_rejects_unknown_field(tmp_path):
     config_path = tmp_path / "ov.conf"
     config_path.write_text(json.dumps({"server": {"host": "0.0.0.0", "prt": 9999}}))
