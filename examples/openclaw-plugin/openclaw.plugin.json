@@ -33,6 +33,16 @@
       "placeholder": "${OPENVIKING_API_KEY}",
       "help": "Optional API key for OpenViking server"
     },
+    "accountId": {
+      "label": "Account ID",
+      "placeholder": "acct-prod",
+      "help": "Optional tenant account for X-OpenViking-Account when routing to a non-default tenant."
+    },
+    "userId": {
+      "label": "User ID",
+      "placeholder": "user-42",
+      "help": "Optional tenant user for X-OpenViking-User when routing to a non-default tenant."
+    },
     "targetUri": {
       "label": "Search Target URI",
       "placeholder": "viking://user/memories",
@@ -155,12 +165,18 @@
       "agentId": {
         "type": "string"
       },
-      "apiKey": {
-        "type": "string"
-      },
-      "targetUri": {
-        "type": "string"
-      },
+        "apiKey": {
+          "type": "string"
+        },
+        "accountId": {
+          "type": "string"
+        },
+        "userId": {
+          "type": "string"
+        },
+        "targetUri": {
+          "type": "string"
+        },
       "timeoutMs": {
         "type": "number"
       },

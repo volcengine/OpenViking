@@ -336,8 +336,8 @@ const contextEnginePlugin = {
           api.logger.info(msg);
         }
       : undefined;
-    const tenantAccount = "";
-    const tenantUser = "";
+    const tenantAccount = cfg.accountId;
+    const tenantUser = cfg.userId;
     const localCacheKey = `${cfg.mode}:${cfg.baseUrl}:${cfg.configPath}:${cfg.apiKey}:${tenantAccount}:${tenantUser}:${cfg.agentId}:${cfg.logFindRequests ? "1" : "0"}`;
 
     let clientPromise: Promise<OpenVikingClient>;
@@ -1259,7 +1259,15 @@ const contextEnginePlugin = {
               });
               try {
                 await waitForHealthOrExit(baseUrl, timeoutMs, intervalMs, child);
-                const client = new OpenVikingClient(baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs);
+                const client = new OpenVikingClient(
+                  baseUrl,
+                  cfg.apiKey,
+                  cfg.agentId,
+                  cfg.timeoutMs,
+                  tenantAccount,
+                  tenantUser,
+                  routingDebugLog,
+                );
                 localClientCache.set(localCacheKey, { client, process: child });
                 if (resolveLocalClient) {
                   resolveLocalClient(client);

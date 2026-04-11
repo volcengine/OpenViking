@@ -160,6 +160,43 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.agentId).toBe("my-agent");
   });
 
+  it("accepts tenant account and user ids", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      accountId: "acct-prod",
+      userId: "user-42",
+    });
+    expect(cfg.accountId).toBe("acct-prod");
+    expect(cfg.userId).toBe("user-42");
+  });
+
+  it("trims tenant account and user ids", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      accountId: "  acct-prod  ",
+      userId: "  user-42  ",
+    });
+    expect(cfg.accountId).toBe("acct-prod");
+    expect(cfg.userId).toBe("user-42");
+  });
+
+  it("resolves environment variables in tenant account and user ids", () => {
+    process.env.TEST_OV_ACCOUNT_ID = "acct-env";
+    process.env.TEST_OV_USER_ID = "user-env";
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      accountId: "${TEST_OV_ACCOUNT_ID}",
+      userId: "${TEST_OV_USER_ID}",
+    });
+    expect(cfg.accountId).toBe("acct-env");
+    expect(cfg.userId).toBe("user-env");
+    delete process.env.TEST_OV_ACCOUNT_ID;
+    delete process.env.TEST_OV_USER_ID;
+  });
+
+  it("defaults tenant account and user ids to empty strings", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({});
+    expect(cfg.accountId).toBe("");
+    expect(cfg.userId).toBe("");
+  });
+
   it("falls back to 'default' for empty agentId", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({ agentId: "  " });
     expect(cfg.agentId).toBe("default");

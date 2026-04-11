@@ -8,6 +8,10 @@ import plugin from "../../index.js";
 
 type RequestRecord = {
   body?: string;
+  headers: {
+    account?: string;
+    user?: string;
+  };
   method: string;
   path: string;
 };
@@ -51,7 +55,15 @@ describe("plugin normal flow with healthy backend", () => {
       const method = req.method ?? "GET";
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
       const body = method === "POST" ? await readBody(req) : undefined;
-      requests.push({ body, method, path: `${url.pathname}${url.search}` });
+      requests.push({
+        body,
+        headers: {
+          account: typeof req.headers["x-openviking-account"] === "string" ? req.headers["x-openviking-account"] : undefined,
+          user: typeof req.headers["x-openviking-user"] === "string" ? req.headers["x-openviking-user"] : undefined,
+        },
+        method,
+        path: `${url.pathname}${url.search}`,
+      });
 
       if (method === "GET" && url.pathname === "/health") {
         json(res, 200, { status: "ok" });
@@ -197,12 +209,14 @@ describe("plugin normal flow with healthy backend", () => {
         handlers.set(name, handler);
       },
       pluginConfig: {
+        accountId: "acct-prod",
         autoCapture: true,
         autoRecall: true,
         baseUrl,
         commitTokenThreshold: 20000,
         ingestReplyAssist: false,
         mode: "remote",
+        userId: "user-42",
       },
       registerContextEngine: (_id, factory) => {
         contextEngineFactory = factory as () => unknown;
@@ -270,6 +284,13 @@ describe("plugin normal flow with healthy backend", () => {
     expect(
       requests.some((entry) => entry.method === "POST" && entry.path === "/api/v1/search/find"),
     ).toBe(true);
+    const searchRequest = requests.find(
+      (entry) => entry.method === "POST" && entry.path === "/api/v1/search/find",
+    );
+    expect(searchRequest?.headers).toEqual({
+      account: "acct-prod",
+      user: "user-42",
+    });
     expect(
       requests.some((entry) => entry.method === "GET" && entry.path.startsWith("/api/v1/sessions/session-normal/context")),
     ).toBe(true);
@@ -280,6 +301,10 @@ describe("plugin normal flow with healthy backend", () => {
       (entry) => entry.method === "POST" && entry.path === "/api/v1/sessions/session-normal/messages",
     );
     expect(addMessageRequest).toBeTruthy();
+    expect(addMessageRequest?.headers).toEqual({
+      account: "acct-prod",
+      user: "user-42",
+    });
     expect(JSON.parse(addMessageRequest!.body ?? "{}")).toMatchObject({
       role: "user",
       created_at: "2026-04-07T08:00:01.000Z",

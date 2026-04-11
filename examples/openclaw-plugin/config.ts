@@ -12,6 +12,8 @@ export type MemoryOpenVikingConfig = {
   baseUrl?: string;
   agentId?: string;
   apiKey?: string;
+  accountId?: string;
+  userId?: string;
   targetUri?: string;
   timeoutMs?: number;
   autoCapture?: boolean;
@@ -148,6 +150,8 @@ export const memoryOpenVikingConfigSchema = {
         "baseUrl",
         "agentId",
         "apiKey",
+        "accountId",
+        "userId",
         "targetUri",
         "timeoutMs",
         "autoCapture",
@@ -204,6 +208,8 @@ export const memoryOpenVikingConfigSchema = {
       baseUrl: resolvedBaseUrl,
       agentId: resolveAgentId(cfg.agentId),
       apiKey: rawApiKey ? resolveEnvVars(rawApiKey) : "",
+      accountId: typeof cfg.accountId === "string" ? resolveEnvVars(cfg.accountId).trim() : "",
+      userId: typeof cfg.userId === "string" ? resolveEnvVars(cfg.userId).trim() : "",
       targetUri: typeof cfg.targetUri === "string" ? cfg.targetUri : DEFAULT_TARGET_URI,
       timeoutMs: Math.max(1000, Math.floor(toNumber(cfg.timeoutMs, DEFAULT_TIMEOUT_MS))),
       autoCapture: cfg.autoCapture !== false,
@@ -303,6 +309,16 @@ export const memoryOpenVikingConfigSchema = {
       sensitive: true,
       placeholder: "${OPENVIKING_API_KEY}",
       help: "Optional API key for OpenViking server",
+    },
+    accountId: {
+      label: "Account ID",
+      placeholder: "acct-prod",
+      help: "Optional tenant account for X-OpenViking-Account. Required for non-default tenant routing with root_api_key.",
+    },
+    userId: {
+      label: "User ID",
+      placeholder: "user-42",
+      help: "Optional tenant user for X-OpenViking-User. Required for non-default tenant routing with root_api_key.",
     },
     targetUri: {
       label: "Search Target URI",
