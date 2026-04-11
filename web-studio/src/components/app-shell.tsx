@@ -4,6 +4,7 @@ import {
   ActivityIcon,
   BlocksIcon,
   FolderTreeIcon,
+  LanguagesIcon,
   PlugZapIcon,
   ShieldIcon,
 } from 'lucide-react'
@@ -11,6 +12,15 @@ import { useTranslation } from 'react-i18next'
 
 import { ConnectionDialog } from '#/components/connection-dialog'
 import { Badge } from '#/components/ui/badge'
+import { buttonVariants } from '#/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from '#/components/ui/dropdown-menu'
 import { ScrollArea } from '#/components/ui/scroll-area'
 import {
   Sidebar,
@@ -57,6 +67,27 @@ const NAV_ITEMS = [
   },
 ] as const
 
+const LANGUAGE_OPTIONS = [
+  {
+    shortLabel: 'EN',
+    title: 'English',
+    value: 'en',
+  },
+  {
+    shortLabel: '中文',
+    title: '中文',
+    value: 'zh-CN',
+  },
+] as const
+
+function resolveLanguage(value: string | undefined): (typeof LANGUAGE_OPTIONS)[number]['value'] {
+  if (value?.toLowerCase().startsWith('zh')) {
+    return 'zh-CN'
+  }
+
+  return 'en'
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <AppConnectionProvider>
@@ -66,12 +97,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 }
 
 function AppShellInner({ children }: { children: React.ReactNode }) {
-  const { t } = useTranslation(['appShell', 'common'])
+  const { i18n, t } = useTranslation(['appShell', 'common'])
   const pathname = useRouterState({ select: (state) => state.location.pathname })
   const { openConnectionDialog, serverMode } = useAppConnection()
   const currentItem = NAV_ITEMS.find((item) => pathname === item.to || pathname.startsWith(`${item.to}/`))
   const visibleItems = NAV_ITEMS.filter((item) => item.id !== 'admin' || serverMode === 'explicit-auth' || serverMode === 'dev-implicit')
   const serverModeBadge = describeServerMode(serverMode)
+  const currentLanguage = resolveLanguage(i18n.resolvedLanguage ?? i18n.language)
+  const currentLanguageOption = LANGUAGE_OPTIONS.find((item) => item.value === currentLanguage) ?? LANGUAGE_OPTIONS[0]
 
   return (
     <SidebarProvider
@@ -89,10 +122,43 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
           </div>
         </div>
 
-        <div className='flex items-center'>
+        <div className='flex items-center gap-2'>
           <Badge variant={serverModeBadge.variant}>
             {t(serverModeBadge.labelKey, { ns: 'common' })}
           </Badge>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              aria-label={t('language.label', { ns: 'common' })}
+              className={buttonVariants({ size: 'sm', variant: 'outline' })}
+            >
+              <LanguagesIcon />
+              <span className='hidden sm:inline'>{currentLanguageOption.shortLabel}</span>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align='end' className='w-32 min-w-32'>
+              <DropdownMenuGroup>
+                <DropdownMenuLabel>{t('language.label', { ns: 'common' })}</DropdownMenuLabel>
+                {LANGUAGE_OPTIONS.map((item) => {
+                  const isActive = item.value === currentLanguage
+
+                  return (
+                    <DropdownMenuItem
+                      key={item.value}
+                      className='justify-between'
+                      onClick={() => {
+                        if (!isActive) {
+                          void i18n.changeLanguage(item.value)
+                        }
+                      }}
+                    >
+                      <span>{item.title}</span>
+                      {isActive ? <span className='text-xs text-muted-foreground'>{t('language.current', { ns: 'common' })}</span> : null}
+                    </DropdownMenuItem>
+                  )
+                })}
+              </DropdownMenuGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </header>
 

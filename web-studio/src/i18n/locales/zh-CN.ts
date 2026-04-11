@@ -35,6 +35,16 @@ const zhCN = {
       saveConnection: '保存连接',
       showAdvancedIdentityFields: '显示高级身份字段',
     },
+    errorBoundary: {
+      description: '路由渲染过程中出现未处理异常。可以先重试一次；如果问题持续，查看下方错误信息继续排查。',
+      reload: '刷新页面',
+      retry: '重试',
+      title: '页面发生错误',
+    },
+    language: {
+      current: '当前',
+      label: '语言',
+    },
     serverMode: {
       checking: '检测中',
       devImplicit: '开发模式',

@@ -35,6 +35,16 @@ const en = {
       saveConnection: 'Save Connection',
       showAdvancedIdentityFields: 'Show Advanced Identity Fields',
     },
+    errorBoundary: {
+      description: 'An unhandled exception occurred while rendering the route. Try again first; if it persists, inspect the error details below.',
+      reload: 'Reload Page',
+      retry: 'Retry',
+      title: 'Something went wrong',
+    },
+    language: {
+      current: 'Current',
+      label: 'Language',
+    },
     serverMode: {
       checking: 'Detecting',
       devImplicit: 'Development Mode',
