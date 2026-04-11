@@ -337,6 +337,8 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
         if self.api_base:
             ark_kwargs["base_url"] = self.api_base
         self.client = volcenginesdkarkruntime.Ark(**ark_kwargs)
+        self._ark_kwargs = ark_kwargs
+        self._async_client = None
 
     def _update_telemetry_token_usage(self, response) -> None:
         usage = getattr(response, "usage", None)
