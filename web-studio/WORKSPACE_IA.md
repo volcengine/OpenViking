@@ -86,27 +86,6 @@ sidebar | main
 - 运维入口只放系统运行态信息。
 - 不与资源页、会话页的业务操作面混合。
 
-### 管理
-
-定位：账号、用户与密钥管理。
-
-后续承载内容：
-
-- 账号管理。
-- 用户管理。
-- 角色与密钥管理。
-
-设计约束：
-
-- 正常情况下，管理入口应只在适合的服务端模式下显示。
-- 需要明确检查服务端模式，再决定是否展示管理入口。
-
-当前临时实现说明：
-
-- 当前代码为了开发调试，在开发模式下也临时展示了“管理”入口。
-- 这不是最终产品规则，只是为了便于联调 admin 路由和页面骨架。
-- 后续如果服务端模式判断与权限模型稳定下来，应重新收紧这个显示条件。
-
 ## 服务端模式提醒
 
 当前前端没有拿到服务端显式返回的 `auth_mode` 能力，因此采用启发式判断。
@@ -119,14 +98,12 @@ sidebar | main
 这意味着：
 
 - 文档、页面文案和导航显示都应保留“检查服务端模式”的意识。
-- 尤其是“管理”入口，不能默认假设所有模式都应该展示。
 
 ## 服务端能力与接口映射
 
 当前 Web Studio 对接的是 OpenViking HTTP Server。按服务端路由注册结果，后端主要暴露以下能力域：
 
 - system
-- admin
 - resources
 - filesystem
 - content
@@ -272,31 +249,6 @@ sidebar | main
 - `observer.*` 负责模型、向量库、锁、检索质量等运行态观察。
 - `metrics` 适合后续扩展为 Prometheus 或系统指标视图。
 
-### 管理入口对应的服务端能力
-
-管理页后续会承接以下服务端接口域：
-
-- `GET /api/v1/admin/accounts`
-	- 列账号。
-- `POST /api/v1/admin/accounts`
-	- 创建账号。
-- `DELETE /api/v1/admin/accounts/{account_id}`
-	- 删除账号。
-- `GET /api/v1/admin/accounts/{account_id}/users`
-	- 列用户。
-- `POST /api/v1/admin/accounts/{account_id}/users`
-	- 创建用户。
-- `DELETE /api/v1/admin/accounts/{account_id}/users/{user_id}`
-	- 删除用户。
-- `POST /api/v1/admin/accounts/{account_id}/users/{user_id}/key`
-	- 轮换或生成用户密钥。
-
-管理能力的额外提醒：
-
-- 这些接口天然依赖更严格的权限与服务端模式前提。
-- 当前前端为了开发调试，可能在开发模式下临时暴露管理入口，但这不应被视为最终产品规则。
-- 在继续实现管理页前，仍应优先确认服务端模式、权限模型以及 header 约束是否稳定。
-
 ### 可选与暂未前置到一级入口的能力
 
 - `bot` 路由是可选开启能力，不是当前一级入口成立的前提。
@@ -319,13 +271,12 @@ sidebar | main
 - 连接 modal：`src/components/connection-dialog.tsx`
 - 连接状态与 provider：`src/hooks/use-app-connection.tsx`
 - 服务端模式探测：`src/hooks/use-server-mode.ts`
-- 资源页占位：`src/routes/resources.tsx`
-- 会话页占位：`src/routes/sessions.tsx`
-- 运维页占位：`src/routes/operations.tsx`
-- 管理页占位：`src/routes/admin.tsx`
+- 资源页占位：`src/routes/resources/route.tsx`
+- 会话页占位：`src/routes/sessions/route.tsx`
+- 运维页占位：`src/routes/operations/route.tsx`
 
 ## 后续建议
 
 1. 把导航配置从 `app-shell` 中继续拆成独立常量模块。
 2. 在服务端补一个稳定的模式或 capability 探测接口，替代当前 `/health` 启发式判断。
-3. 在具体页面实现时，继续保持“资源 / 会话 / 运维 / 管理”四个一级入口的边界，不让功能再次回流混杂。
+3. 在具体页面实现时，继续保持“资源 / 会话 / 运维”三个一级入口的边界，不让功能再次回流混杂。

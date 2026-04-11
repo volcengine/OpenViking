@@ -2,19 +2,17 @@
 
 Web Studio 是 OpenViking 的前端工作台，基于 Vite 和 React 19 构建，当前以单页应用形式运行。
 
-它用于承接 OpenViking 的资源、会话、运维和管理工作区，并逐步把现有能力收敛到统一的前端界面中。
+它用于承接 OpenViking 的资源、会话和运维工作区，并逐步把现有能力收敛到统一的前端界面中。
 
 ## 当前状态
 
 - 应用首页会重定向到 /resources。
-- 当前顶层工作区包括 resources、sessions、operations、admin。
-- 这四个页面目前仍是占位页：
+- 当前顶层工作区包括 resources、sessions、operations。
+- 这三个页面目前仍是占位页：
   - src/routes/resources/route.tsx
   - src/routes/sessions/route.tsx
   - src/routes/operations/route.tsx
-  - src/routes/admin/route.tsx
-- 这些占位页当前共用 src/components/placeholder-page.tsx 作为占位实现基础设施。
-- 对应的翻译资源在 src/i18n/resources.ts 中也仍然包含占位说明，用于表达当前页面骨架和后续接入方向。
+- 对应的翻译资源在 src/i18n/locales/en.ts 和 src/i18n/locales/zh-CN.ts 中也仍然包含占位说明，用于表达当前页面骨架和后续接入方向。
 
 产品入口与功能区规划见 [WORKSPACE_IA.md](WORKSPACE_IA.md)。
 
@@ -102,10 +100,9 @@ npm run gen-server-client
 
 - src/routes：TanStack Router 路由入口
 - src/components/ui：可复用基础 UI 组件
-- src/components/placeholder-page.tsx：占位页基础设施
 - src/lib/ov-client：前端请求适配层
 - src/gen/ov-client：OpenAPI 生成客户端
-- src/i18n/resources.ts：当前中英文翻译资源
+- src/i18n/locales：当前中英文翻译资源
 - src/styles.css：全局样式与设计 token
 
 当前顶层页面已迁移为目录式路由，例如：
@@ -164,11 +161,11 @@ src/routes/resources/
 
 ## i18n 说明
 
-当前前端已经接入 i18next，翻译资源集中在 src/i18n/resources.ts。
+当前前端已经接入 i18next，翻译资源集中在 src/i18n/locales。
 
 现阶段需要注意两点：
 
-- 当前 resources、sessions、operations、admin 相关翻译中仍有占位文案。
+- 当前 resources、sessions、operations 相关翻译中仍有占位文案。
 - 当这些页面进入真实实现时，应同步改写对应翻译资源，而不是保留“后续接入”类说明。
 
 ## 文档分工

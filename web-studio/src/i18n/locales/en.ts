@@ -7,9 +7,6 @@ const en = {
       defaultTitle: 'OpenViking Studio',
     },
     navigation: {
-      admin: {
-        title: 'Admin',
-      },
       operations: {
         title: 'Operations',
       },

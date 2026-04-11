@@ -7,9 +7,6 @@ const zhCN = {
       defaultTitle: 'OpenViking Studio',
     },
     navigation: {
-      admin: {
-        title: '管理',
-      },
       operations: {
         title: '运维',
       },
