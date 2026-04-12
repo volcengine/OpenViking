@@ -206,7 +206,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
 
         <SidebarInset className='min-h-0 flex-1 overflow-hidden rounded-none shadow-none md:m-0 md:ml-0'>
           <ScrollArea className='min-h-0 flex-1'>
-            <div className='mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 md:px-6'>
+            <div className='mx-auto flex w-full flex-col gap-6 px-4 py-6 md:px-6'>
               {children}
             </div>
           </ScrollArea>
