@@ -173,6 +173,16 @@ export function parseModTimeToTs(value: unknown): number | null {
   return null
 }
 
+export function formatModTime(value: unknown): string {
+  const text = String(value ?? '').trim()
+  if (!text) return ''
+  const ts = parseModTimeToTs(text)
+  if (ts === null) return text
+  const d = new Date(ts)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
 export function detectFileType(uri: string): VikingFileType {
   const name = fileNameFromUri(uri).toLowerCase()
   const ext = name.includes('.') ? name.split('.').pop() || '' : ''
@@ -276,7 +286,7 @@ export function normalizeFsEntry(item: unknown, currentUri: string): VikingFsEnt
       isDir,
       size: String(sizeRaw ?? ''),
       sizeBytes: parseSizeToBytes(sizeRaw),
-      modTime: String(modRaw ?? ''),
+      modTime: formatModTime(modRaw),
       modTimestamp: parseModTimeToTs(modRaw),
       abstract: String(pickFirstNonEmpty([item.abstract, item.summary, item.description])),
       tags: String(pickFirstNonEmpty([item.tags, item.tag, ''])) || undefined,

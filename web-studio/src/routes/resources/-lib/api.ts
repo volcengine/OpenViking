@@ -1,6 +1,6 @@
 import { getContentRead, getFsLs, getFsStat, getFsTree, getOvResult, normalizeOvClientError, postSearchFind } from '#/lib/ov-client'
 
-import { fileNameFromUri, normalizeDirUri, normalizeFsEntries, normalizeReadContent } from './normalize'
+import { fileNameFromUri, formatModTime, normalizeDirUri, normalizeFsEntries, normalizeReadContent } from './normalize'
 import type {
   GroupedFindResult,
   VikingApiError,
@@ -105,16 +105,6 @@ export async function fetchFileContent(uri: string, options: VikingReadQueryOpti
   } catch (error) {
     throw toVikingApiError(error)
   }
-}
-
-function formatModTime(raw: unknown): string {
-  const text = String(raw ?? '').trim()
-  if (!text) return ''
-  const ts = Date.parse(text)
-  if (!Number.isFinite(ts)) return text
-  const d = new Date(ts)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
 export async function fetchFsStat(uri: string): Promise<VikingFsEntry> {
