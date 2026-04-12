@@ -83,9 +83,13 @@ function TreeNode({
         <div className={`flex cursor-pointer items-center rounded-md px-2 py-1.5 transition-colors ${isSelected ? 'bg-gray-200 dark:bg-gray-700 text-foreground' : 'hover:bg-gray-100 dark:hover:bg-gray-800'}`}
           onClick={handleSelect} onMouseEnter={handleMouseEnter}>
           <div className="flex min-w-0 flex-grow items-center">
-            <button type="button" className="inline-flex" onClick={(e) => { e.stopPropagation(); handleToggle() }} aria-label={isOpen ? '收起' : '展开'}>
-              <ChevronIcon isOpen={isOpen} />
-            </button>
+            {(!data || children.length > 0) ? (
+              <button type="button" className="inline-flex" onClick={(e) => { e.stopPropagation(); handleToggle() }} aria-label={isOpen ? '收起' : '展开'}>
+                <ChevronIcon isOpen={isOpen} />
+              </button>
+            ) : (
+              <span className="inline-flex size-4 shrink-0" />
+            )}
             <div className="ml-1 flex min-w-0 items-center">
               <FolderIcon isOpen={isOpen} />
               <span className="ml-1.5 truncate text-sm">{item.name}</span>
