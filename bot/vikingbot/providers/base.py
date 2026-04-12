@@ -188,6 +188,8 @@ async def consume_stream(
             args = json.loads(args_str) if args_str else {}
         except json.JSONDecodeError:
             args = {"raw": args_str}
+        if not isinstance(args, dict):
+            args = {"raw": args_str}
         tool_calls.append(
             ToolCallRequest(
                 id=slot.get("id") or f"tool_{idx}",

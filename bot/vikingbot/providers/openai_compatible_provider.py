@@ -289,11 +289,14 @@ class OpenAICompatibleProvider(LLMProvider):
                 args = tc.function.arguments
                 tokens = cal_str_tokens(tc.function.name, text_type="en")
                 if isinstance(args, str):
+                    raw_args = args
                     try:
-                        tokens += cal_str_tokens(args, text_type="mixed")
-                        args = json.loads(args)
+                        tokens += cal_str_tokens(raw_args, text_type="mixed")
+                        args = json.loads(raw_args)
                     except json.JSONDecodeError:
-                        args = {"raw": args}
+                        args = {"raw": raw_args}
+                    if not isinstance(args, dict):
+                        args = {"raw": raw_args}
 
                 tool_calls.append(
                     ToolCallRequest(id=tc.id, name=tc.function.name, arguments=args, tokens=tokens)
