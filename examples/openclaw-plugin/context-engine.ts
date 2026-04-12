@@ -418,14 +418,6 @@ function buildSystemPromptAddition(): string {
   ].join("\n");
 }
 
-function warnOrInfo(logger: Logger, message: string): void {
-  if (typeof logger.warn === "function") {
-    logger.warn(message);
-    return;
-  }
-  logger.info(message);
-}
-
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -450,7 +442,7 @@ async function pollPhase2ExtractionOutcome(
     while (Date.now() < deadline) {
       await sleep(PHASE2_POLL_INTERVAL_MS);
       const task = await client.getTask(taskId, agentId).catch((e) => {
-        warnOrInfo(logger, `openviking: phase2 getTask failed task_id=${taskId}: ${String(e)}`);
+        logger.warn(`openviking: phase2 getTask failed task_id=${taskId}: ${String(e)}`);
         return null;
       });
       if (!task) {
@@ -465,20 +457,18 @@ async function pollPhase2ExtractionOutcome(
         return;
       }
       if (status === "failed") {
-        warnOrInfo(
-          logger,
+        logger.warn(
           `openviking: phase2 failed task_id=${taskId} session=${sessionLabel} error=${task.error ?? "unknown"}`,
         );
         return;
       }
     }
-    warnOrInfo(
-      logger,
+    logger.warn(
       `openviking: phase2 poll timeout (${PHASE2_POLL_MAX_MS / 1000}s) task_id=${taskId} session=${sessionLabel} — ` +
         `check GET /api/v1/tasks/${taskId}`,
     );
   } catch (e) {
-    warnOrInfo(logger, `openviking: phase2 poll exception task_id=${taskId}: ${String(e)}`);
+    logger.warn(`openviking: phase2 poll exception task_id=${taskId}: ${String(e)}`);
   }
 }
 
@@ -521,8 +511,7 @@ export function createMemoryOpenVikingContextEngine(params: {
 
   async function doCommitOVSession(sessionId: string, sessionKey?: string): Promise<boolean> {
     if (isBypassedSession({ sessionId, sessionKey })) {
-      warnOrInfo(
-        logger,
+      logger.warn(
         `openviking: commit skipped because session is bypassed (sessionId=${sessionId}, sessionKey=${sessionKey ?? "none"})`,
       );
       return false;
@@ -539,11 +528,11 @@ export function createMemoryOpenVikingContextEngine(params: {
       const commitResult = await client.commitSession(ovId, { wait: true, agentId });
       const memCount = totalExtractedMemories(commitResult.memories_extracted);
       if (commitResult.status === "failed") {
-        warnOrInfo(logger, `openviking: commit Phase 2 failed for session=${sessionId}: ${commitResult.error ?? "unknown"}`);
+        logger.warn(`openviking: commit Phase 2 failed for session=${sessionId}: ${commitResult.error ?? "unknown"}`);
         return false;
       }
       if (commitResult.status === "timeout") {
-        warnOrInfo(logger, `openviking: commit Phase 2 timed out for session=${sessionId}, task_id=${commitResult.task_id ?? "none"}`);
+        logger.warn(`openviking: commit Phase 2 timed out for session=${sessionId}, task_id=${commitResult.task_id ?? "none"}`);
         return false;
       }
       logger.info(
@@ -551,7 +540,7 @@ export function createMemoryOpenVikingContextEngine(params: {
       );
       return true;
     } catch (err) {
-      warnOrInfo(logger, `openviking: commit failed for session=${sessionId}: ${String(err)}`);
+      logger.warn(`openviking: commit failed for session=${sessionId}: ${String(err)}`);
       return false;
     }
   }
@@ -597,8 +586,7 @@ export function createMemoryOpenVikingContextEngine(params: {
     if (result.ok) {
       return true;
     }
-    warnOrInfo(
-      logger,
+    logger.warn(
       `openviking: ${stage} precheck failed for session=${sessionId}: ${result.reason}`,
     );
     diag(`${stage}_skip`, sessionId, {
@@ -779,8 +767,7 @@ export function createMemoryOpenVikingContextEngine(params: {
             : {}),
         };
       } catch (err) {
-        warnOrInfo(
-          logger,
+        logger.warn(
           `openviking: assemble failed for session=${OVSessionId}, ` +
             `tokenBudget=${tokenBudget}, agentId=${resolveAgentId(OVSessionId)}: ${String(err)}`,
         );
@@ -957,7 +944,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           }
         }
       } catch (err) {
-        warnOrInfo(logger, `openviking: afterTurn failed: ${String(err)}`);
+        logger.warn(`openviking: afterTurn failed: ${String(err)}`);
         diag("afterTurn_error", afterTurnParams.sessionId ?? "(unknown)", {
           error: String(err),
         });
@@ -1021,8 +1008,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         const memCount = totalExtractedMemories(commitResult.memories_extracted);
 
         if (commitResult.status === "failed") {
-          warnOrInfo(
-            logger,
+          logger.warn(
             `openviking: compact commit Phase 2 failed for session=${OVSessionId}: ${commitResult.error ?? "unknown"}`,
           );
           diag("compact_result", OVSessionId, {
@@ -1051,8 +1037,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         }
 
         if (commitResult.status === "timeout") {
-          warnOrInfo(
-            logger,
+          logger.warn(
             `openviking: compact commit Phase 2 timed out for session=${OVSessionId}, task_id=${commitResult.task_id ?? "none"}`,
           );
           diag("compact_result", OVSessionId, {
@@ -1213,7 +1198,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           },
         };
       } catch (err) {
-        warnOrInfo(logger, `openviking: compact commit failed for session=${OVSessionId}: ${String(err)}`);
+        logger.warn(`openviking: compact commit failed for session=${OVSessionId}: ${String(err)}`);
         diag("compact_error", OVSessionId, {
           error: String(err),
         });
