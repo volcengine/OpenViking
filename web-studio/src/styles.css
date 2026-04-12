@@ -145,6 +145,62 @@
   }
 }
 
+/* ---- FindPalette animations ---- */
+
+@keyframes palette-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes palette-in {
+  from {
+    opacity: 0;
+    transform: translateY(-12px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes palette-slide-right {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes palette-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-palette-backdrop {
+  animation: palette-backdrop-in 0.18s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-palette-in {
+  animation: palette-in 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-palette-preview {
+  animation: palette-slide-right 0.18s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-palette-row {
+  animation: palette-row-in 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
 /* Offset sidebar below the top header bar */
 [data-slot="sidebar-container"] {
   top: var(--header-height, 3.5rem);

@@ -6,6 +6,7 @@ import { cn } from '#/lib/utils'
 import { fileNameFromUri, parentUri as getParentUri } from '../-lib/normalize'
 import { useVikingFind } from '../-hooks/viking-fm'
 import type { FindContextType, FindResultItem, GroupedFindResult } from '../-types/viking-fm'
+import { FilePreview } from './file-preview'
 
 interface FindPaletteProps {
   open: boolean
@@ -22,9 +23,9 @@ interface FlatItem {
 }
 
 const TYPE_META: Record<FindContextType, { label: string; icon: typeof Brain; color: string; bgColor: string }> = {
-  resource: { label: 'Resources', icon: FileText, color: 'text-blue-500', bgColor: 'bg-blue-500/8' },
-  memory: { label: 'Memories', icon: Brain, color: 'text-amber-500', bgColor: 'bg-amber-500/8' },
-  skill: { label: 'Skills', icon: Wrench, color: 'text-emerald-500', bgColor: 'bg-emerald-500/8' },
+  resource: { label: 'Resources', icon: FileText, color: 'text-blue-500', bgColor: 'bg-blue-500/15' },
+  memory: { label: 'Memories', icon: Brain, color: 'text-amber-500', bgColor: 'bg-amber-500/15' },
+  skill: { label: 'Skills', icon: Wrench, color: 'text-emerald-500', bgColor: 'bg-emerald-500/15' },
 }
 
 const COLUMNS: Array<{ key: keyof Pick<GroupedFindResult, 'resources' | 'memories' | 'skills'>; type: FindContextType }> = [
@@ -50,11 +51,25 @@ function displayName(uri: string): { name: string; parent: string } {
   return { name, parent }
 }
 
+function toFsEntry(item: FindResultItem): { uri: string; name: string; isDir: boolean; size: string; sizeBytes: null; modTime: string; modTimestamp: null; abstract: string } {
+  return {
+    uri: item.uri,
+    name: fileNameFromUri(item.uri),
+    isDir: item.uri.endsWith('/'),
+    size: '',
+    sizeBytes: null,
+    modTime: '',
+    modTimestamp: null,
+    abstract: item.abstract,
+  }
+}
+
 export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri }: FindPaletteProps) {
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const resultsRef = useRef<HTMLDivElement>(null)
+  const composingRef = useRef(false)
 
   const isRoot = !scopeUri || scopeUri === 'viking://'
   const findQuery = useVikingFind(query, !isRoot ? scopeUri : undefined)
@@ -114,6 +129,7 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if (composingRef.current) return
       switch (e.key) {
         case 'ArrowDown': {
           e.preventDefault()
@@ -192,10 +208,10 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center pt-[12vh]">
-      <div className="absolute inset-0 bg-background/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="animate-palette-backdrop absolute inset-0 bg-background/60 backdrop-blur-sm" onClick={onClose} />
 
       <div
-        className={cn('relative flex w-full flex-col overflow-hidden rounded-xl border bg-background shadow-2xl shadow-black/20 transition-all', paletteMaxWidth)}
+        className={cn('animate-palette-in relative flex w-full flex-col overflow-hidden rounded-xl border bg-background shadow-2xl shadow-black/20 transition-[max-width] duration-300', paletteMaxWidth)}
         onKeyDown={handleKeyDown}
       >
         {/* Search input */}
@@ -207,6 +223,8 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
             placeholder="搜索..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            onCompositionStart={() => { composingRef.current = true }}
+            onCompositionEnd={() => { composingRef.current = false }}
             className="h-12 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/70"
           />
           {query && (
@@ -275,8 +293,12 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
 
           {/* Preview pane */}
           {showPreview && (
-            <div className="flex h-80 w-72 flex-col overflow-hidden">
-              <PreviewPane item={activeItem.item} type={activeItem.type} />
+            <div className="animate-palette-preview flex h-80 w-80 flex-col overflow-hidden">
+              <FilePreview
+                file={toFsEntry(activeItem.item)}
+                onClose={() => setActiveIndex(-1)}
+                showCloseButton={false}
+              />
             </div>
           )}
         </div>
@@ -284,12 +306,12 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
         {/* Footer */}
         {hasResults && (
           <div className="flex items-center gap-3 border-t px-4 py-2 text-xs text-muted-foreground/70">
-            <span><kbd className="rounded border px-1 py-0.5 font-mono text-[11px]">↑↓</kbd> 导航</span>
+            <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">↑↓</kbd> 导航</span>
             {visibleColumns.length > 1 && (
-              <span><kbd className="rounded border px-1 py-0.5 font-mono text-[11px]">←→</kbd> 切栏</span>
+              <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">←→</kbd> 切栏</span>
             )}
-            <span><kbd className="rounded border px-1 py-0.5 font-mono text-[11px]">↵</kbd> 打开</span>
-            <span><kbd className="rounded border px-1 py-0.5 font-mono text-[11px]">esc</kbd> 关闭</span>
+            <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">↵</kbd> 打开</span>
+            <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">esc</kbd> 关闭</span>
             <span className="ml-auto tabular-nums">{data!.total} 个结果</span>
           </div>
         )}
@@ -330,7 +352,7 @@ function ResultColumn({
         </div>
       )}
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-        {items.map((fi) => {
+        {items.map((fi, i) => {
           const { name, parent } = displayName(fi.item.uri)
           const isActive = fi.flatIndex === activeIndex
 
@@ -340,9 +362,10 @@ function ResultColumn({
               type="button"
               data-active={isActive}
               className={cn(
-                'group flex w-full items-start gap-2 px-3 py-2 text-left text-sm transition-colors',
+                'animate-palette-row group flex w-full items-start gap-2 px-3 py-2 text-left text-sm transition-colors',
                 isActive ? 'bg-primary/8 text-foreground' : 'text-foreground/80 hover:bg-muted/40',
               )}
+              style={{ animationDelay: `${i * 30}ms` }}
               onClick={() => onSelect(fi)}
               onMouseEnter={() => onHover(fi)}
             >
@@ -369,42 +392,3 @@ function ResultColumn({
   )
 }
 
-/* ---- Preview Pane ---- */
-
-function PreviewPane({ item, type }: { item: FindResultItem; type: FindContextType }) {
-  const { name } = displayName(item.uri)
-  const meta = TYPE_META[type]
-  const Icon = meta.icon
-  const content = item.overview || item.abstract
-
-  return (
-    <div className="flex h-full flex-col">
-      <div className="border-b px-4 py-3">
-        <div className="flex items-center gap-1.5">
-          <Icon className={cn('size-3.5', meta.color)} />
-          <span className="truncate text-sm font-medium">{name}</span>
-        </div>
-        <div className="mt-1 truncate text-xs text-muted-foreground/80" title={item.uri}>
-          {item.uri}
-        </div>
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-        {content ? (
-          <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{content}</p>
-        ) : (
-          <p className="text-sm text-muted-foreground/70">无摘要</p>
-        )}
-      </div>
-
-      <div className="flex items-center gap-2 border-t px-4 py-2">
-        {item.tags && (
-          <span className="truncate text-xs text-muted-foreground/80">{item.tags}</span>
-        )}
-        <span className="ml-auto text-xs tabular-nums text-muted-foreground">
-          {(item.score * 100).toFixed(0)}% 相关
-        </span>
-      </div>
-    </div>
-  )
-}
