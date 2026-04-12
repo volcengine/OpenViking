@@ -53,7 +53,14 @@ pub async fn grep(
     compact: bool,
 ) -> Result<()> {
     let result = client
-        .grep(uri, exclude_uri, pattern, ignore_case, node_limit, level_limit)
+        .grep(
+            uri,
+            exclude_uri,
+            pattern,
+            ignore_case,
+            node_limit,
+            level_limit,
+        )
         .await?;
     output_success(&result, output_format, compact);
     Ok(())

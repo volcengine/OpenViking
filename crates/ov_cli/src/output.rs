@@ -392,19 +392,22 @@ fn render_session_context(
         ));
         lines.push(format!(
             "total_archives         {}",
-            stats.get("totalArchives")
+            stats
+                .get("totalArchives")
                 .map(format_value)
                 .unwrap_or_else(|| "0".to_string())
         ));
         lines.push(format!(
             "included_archives      {}",
-            stats.get("includedArchives")
+            stats
+                .get("includedArchives")
                 .map(format_value)
                 .unwrap_or_else(|| "0".to_string())
         ));
         lines.push(format!(
             "dropped_archives       {}",
-            stats.get("droppedArchives")
+            stats
+                .get("droppedArchives")
                 .map(format_value)
                 .unwrap_or_else(|| "0".to_string())
         ));
@@ -457,7 +460,9 @@ fn render_session_archive(
     obj: &serde_json::Map<String, serde_json::Value>,
     compact: bool,
 ) -> Option<String> {
-    if !(obj.contains_key("archive_id") && obj.contains_key("overview") && obj.contains_key("messages"))
+    if !(obj.contains_key("archive_id")
+        && obj.contains_key("overview")
+        && obj.contains_key("messages"))
     {
         return None;
     }
@@ -571,8 +576,14 @@ fn summarize_message_content(parts: Option<&Vec<serde_json::Value>>) -> String {
                 });
             }
             "tool" => {
-                let name = obj.get("tool_name").and_then(|v| v.as_str()).unwrap_or("tool");
-                let status = obj.get("tool_status").and_then(|v| v.as_str()).unwrap_or("");
+                let name = obj
+                    .get("tool_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("tool");
+                let status = obj
+                    .get("tool_status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 chunks.push(if status.is_empty() {
                     format!("[tool:{}]", name)
                 } else {

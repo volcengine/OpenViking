@@ -794,7 +794,12 @@ Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI t
   "account": "acme",
   "user": "alice",
   "agent_id": "my-agent",
-  "output": "table"
+  "output": "table",
+  "upload": {
+    "ignore_dirs": "node_modules,.cache,.nx",
+    "include": "*.md,*.pdf",
+    "exclude": "*.tmp,*.log"
+  }
 }
 ```
 
@@ -806,11 +811,22 @@ Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI t
 | `user` | Default user sent as `X-OpenViking-User` | `null` |
 | `agent_id` | Agent identifier for agent space isolation | `null` |
 | `output` | Default output format: `"table"` or `"json"` | `"table"` |
+| `upload.ignore_dirs` | Default directory ignore list for `add-resource` (CSV) | `null` |
+| `upload.include` | Default include patterns for `add-resource` (CSV) | `null` |
+| `upload.exclude` | Default exclude patterns for `add-resource` (CSV) | `null` |
 
 CLI flags can override these identity fields per command:
 
 ```bash
 openviking --account acme --user alice --agent-id assistant-2 ls viking://
+```
+
+For `add-resource`, upload filter flags are merged additively with `ovcli.conf` defaults:
+
+```bash
+# ovcli.conf: upload.exclude="*.log"
+openviking add-resource ./docs --exclude "*.tmp"
+# effective exclude sent to server: "*.log,*.tmp"
 ```
 
 See [Deployment](./03-deployment.md) for details.

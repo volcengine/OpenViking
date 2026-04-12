@@ -787,7 +787,11 @@ impl HttpClient {
         // Determine target path
         let to_path = Path::new(to);
         let final_path = if to_path.is_dir() {
-            let base_name = uri.trim_end_matches('/').split('/').last().unwrap_or("export");
+            let base_name = uri
+                .trim_end_matches('/')
+                .split('/')
+                .last()
+                .unwrap_or("export");
             to_path.join(format!("{}.ovpack", base_name))
         } else if !to.ends_with(".ovpack") {
             Path::new(&format!("{}.ovpack", to)).to_path_buf()
@@ -822,10 +826,7 @@ impl HttpClient {
             )));
         }
         if !file_path_obj.is_file() {
-            return Err(Error::Client(format!(
-                "Path is not a file: {}",
-                file_path
-            )));
+            return Err(Error::Client(format!("Path is not a file: {}", file_path)));
         }
 
         let temp_file_id = self.upload_temp_file(file_path_obj).await?;
