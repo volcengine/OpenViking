@@ -201,15 +201,6 @@
   animation: palette-row-in 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-@keyframes pulse-once {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
-
-.animate-scope-flash {
-  animation: pulse-once 0.6s ease-out;
-}
-
 /* Offset sidebar below the top header bar */
 [data-slot="sidebar-container"] {
   top: var(--header-height, 3.5rem);

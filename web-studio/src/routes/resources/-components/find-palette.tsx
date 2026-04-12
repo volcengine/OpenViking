@@ -77,18 +77,6 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, onScopeC
   const isRoot = !scopeUri || scopeUri === 'viking://'
   const findQuery = useVikingFind(query, !isRoot ? scopeUri : undefined)
   const data = findQuery.data
-  const [scopeFlash, setScopeFlash] = useState(false)
-  const prevScopeRef = useRef(scopeUri)
-
-  // Flash scope badge when scope changes
-  useEffect(() => {
-    if (prevScopeRef.current !== scopeUri) {
-      prevScopeRef.current = scopeUri
-      setScopeFlash(true)
-      const t = setTimeout(() => setScopeFlash(false), 600)
-      return () => clearTimeout(t)
-    }
-  }, [scopeUri])
 
   const hasResults = data && data.total > 0
   const flatItems = useMemo(() => (data ? flattenResults(data) : []), [data])
@@ -244,7 +232,7 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, onScopeC
               <X className="size-3.5" />
             </button>
           )}
-          <span className={cn('flex items-center gap-1 text-xs text-muted-foreground/70', scopeFlash && 'animate-scope-flash')}>
+          <span className="flex items-center gap-1 text-xs text-muted-foreground/70">
             {isRoot ? '全局' : (
               <><FolderOpen className="size-3" />{scopeUri?.split('/').filter(Boolean).pop()}</>
             )}
@@ -298,7 +286,6 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, onScopeC
                           activeIndex={activeIndex}
                           onSelect={(fi) => { onNavigate(fi.item.uri); onClose() }}
                           onOpenDir={(fi) => { onNavigateDir(getParentUri(fi.item.uri)); onClose() }}
-                          onHover={(fi) => setActiveIndex(fi.flatIndex)}
                         />
                       )
                     })}
@@ -311,7 +298,6 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, onScopeC
                       activeIndex={activeIndex}
                       onSelect={(fi) => { onNavigate(fi.item.uri); onClose() }}
                       onOpenDir={(fi) => { onNavigateDir(getParentUri(fi.item.uri)); onClose() }}
-                      onHover={(fi) => setActiveIndex(fi.flatIndex)}
                       hideHeader
                     />
                   </div>
@@ -391,7 +377,6 @@ function ResultColumn({
   activeIndex,
   onSelect,
   onOpenDir,
-  onHover,
   hideHeader,
 }: {
   type: FindContextType
@@ -399,7 +384,6 @@ function ResultColumn({
   activeIndex: number
   onSelect: (fi: FlatItem) => void
   onOpenDir: (fi: FlatItem) => void
-  onHover: (fi: FlatItem) => void
   hideHeader?: boolean
 }) {
   const meta = TYPE_META[type]
@@ -430,7 +414,6 @@ function ResultColumn({
               )}
               style={{ animationDelay: `${i * 30}ms` }}
               onClick={() => onSelect(fi)}
-              onMouseEnter={() => onHover(fi)}
             >
               {isActive && (
                 <span className="absolute inset-y-0 left-0 w-0.5 rounded-r bg-primary" />
