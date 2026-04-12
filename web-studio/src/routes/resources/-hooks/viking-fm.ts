@@ -1,4 +1,4 @@
-import { useMemo, useRef, useCallback } from 'react'
+import { useMemo, useRef, useCallback, useState, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { fetchFileContent, fetchFind, fetchFindAllTypes, fetchFsList, fetchFsTree } from '../-lib/api'
@@ -149,15 +149,27 @@ export function useInvalidateVikingFs() {
   }
 }
 
+function useDebouncedValue<T>(value: T, delay: number): T {
+  const [debounced, setDebounced] = useState(value)
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delay)
+    return () => clearTimeout(timer)
+  }, [value, delay])
+  return debounced
+}
+
 export function useVikingFind(query: string, targetUri?: string) {
+  const debouncedQuery = useDebouncedValue(query, 300)
   const isRoot = !targetUri || targetUri === 'viking://'
   return useQuery<GroupedFindResult>({
-    queryKey: ['viking-find', query, targetUri],
+    queryKey: ['viking-find', debouncedQuery, targetUri],
     queryFn: () =>
       isRoot
-        ? fetchFindAllTypes(query)
-        : fetchFind(query, { targetUri }),
-    enabled: query.trim().length > 0,
+        ? fetchFindAllTypes(debouncedQuery)
+        : fetchFind(debouncedQuery, { targetUri }),
+    enabled: debouncedQuery.trim().length > 0,
     staleTime: 60_000,
+    gcTime: 5 * 60_000,
+    placeholderData: (prev) => prev,
   })
 }
