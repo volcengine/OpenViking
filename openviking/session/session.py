@@ -1334,14 +1334,6 @@ class Session:
         lines = [m.to_jsonl() for m in messages]
         content = "\n".join(lines) + "\n" if lines else ""
 
-        # Workaround: RAGFSBindingClient.write is not truncating, so delete file first
-        # Use AGFS directly to avoid lock issues with viking_fs.rm
-        try:
-            path = viking_fs._uri_to_path(f"{self._session_uri}/messages.jsonl", ctx=self.ctx)
-            viking_fs.agfs.rm(path)
-        except Exception as e:
-            logger.warning(f"[_write_to_agfs_async] Failed to delete messages.jsonl: {e}")
-
         await viking_fs.write_file(
             uri=f"{self._session_uri}/messages.jsonl",
             content=content,
