@@ -37,7 +37,6 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
-  SidebarRail,
   SidebarTrigger,
 } from '#/components/ui/sidebar'
 import { AppConnectionProvider, useAppConnection } from '#/hooks/use-app-connection'
@@ -112,17 +111,12 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
   return (
     <SidebarProvider
       defaultOpen
-      className='flex h-svh flex-col overflow-hidden bg-[radial-gradient(circle_at_top_left,rgba(71,126,255,0.12),transparent_32%),linear-gradient(180deg,rgba(245,248,255,0.9)_0%,rgba(255,255,255,1)_28%)]'
+      className='flex h-svh flex-col overflow-hidden bg-sidebar'
       style={{ '--header-height': '3rem' } as React.CSSProperties}
     >
-      <header className='flex h-12 shrink-0 items-center justify-between border-b border-border/70 bg-background/85 pl-2 pr-4 backdrop-blur-md md:pr-6'>
+      <header className='flex h-12 shrink-0 items-center justify-between border-b border-border/70 bg-sidebar pl-2 pr-4 backdrop-blur-md md:pr-6'>
         <div className='flex min-w-0 items-center gap-4'>
           <SidebarTrigger className='shrink-0' />
-          <div className='min-w-0'>
-            <div className='truncate text-sm font-medium'>
-              {currentItem ? t(currentItem.titleKey, { ns: 'appShell' }) : t('header.defaultTitle', { ns: 'appShell' })}
-            </div>
-          </div>
         </div>
 
         <div className='flex items-center gap-2'>
@@ -133,7 +127,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
           <button
             type='button'
             aria-label='Toggle theme'
-            className={buttonVariants({ size: 'sm', variant: 'outline' })}
+            className={buttonVariants({ size: 'sm', variant: 'ghost' })}
             onClick={() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}
           >
             <SunIcon className='size-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0' />
@@ -143,10 +137,9 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
           <DropdownMenu>
             <DropdownMenuTrigger
               aria-label={t('language.label', { ns: 'common' })}
-              className={buttonVariants({ size: 'sm', variant: 'outline' })}
+              className={buttonVariants({ size: 'sm', variant: 'ghost' })}
             >
               <LanguagesIcon />
-              <span className='hidden sm:inline'>{currentLanguageOption.shortLabel}</span>
             </DropdownMenuTrigger>
             <DropdownMenuContent align='end' className='w-32 min-w-32'>
               <DropdownMenuGroup>
@@ -176,10 +169,10 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
       </header>
 
       <div className='flex min-h-0 flex-1 overflow-hidden'>
-        <Sidebar variant='sidebar' collapsible='icon'>
+        <Sidebar variant='sidebar' collapsible='icon' className='!border-r-0'>
           <SidebarContent>
             <SidebarGroup>
-              <SidebarGroupLabel>{t('sidebar.workspaceGroupLabel', { ns: 'appShell' })}</SidebarGroupLabel>
+              <SidebarGroupLabel className='text-base justify-center'>{t('sidebar.workspaceGroupLabel', { ns: 'appShell' })}</SidebarGroupLabel>
               <SidebarGroupContent>
                 <SidebarMenu>
                   {NAV_ITEMS.map((item) => {
@@ -193,8 +186,9 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
                           render={<Link to={item.to} />}
                           isActive={isActive}
                           tooltip={title}
+                          className='text-base'
                         >
-                          <Icon />
+                          <Icon className='size-5' />
                           <span>{title}</span>
                         </SidebarMenuButton>
                       </SidebarMenuItem>
@@ -208,17 +202,16 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
           <SidebarFooter>
             <SidebarMenu>
               <SidebarMenuItem>
-                <SidebarMenuButton onClick={openConnectionDialog} tooltip={t('footer.connection', { ns: 'appShell' })}>
-                  <PlugZapIcon />
+                <SidebarMenuButton onClick={openConnectionDialog} tooltip={t('footer.connection', { ns: 'appShell' })} className='text-base'>
+                  <PlugZapIcon className='size-5' />
                   <span>{t('footer.connection', { ns: 'appShell' })}</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>
           </SidebarFooter>
-          <SidebarRail />
         </Sidebar>
 
-        <SidebarInset className='min-h-0 flex-1 overflow-hidden rounded-none shadow-none md:m-0 md:ml-0'>
+        <SidebarInset className='min-h-0 flex-1 overflow-hidden rounded-none border-0 bg-sidebar shadow-none ring-0 md:m-0 md:ml-0'>
           <ScrollArea className='min-h-0 flex-1'>
             <div className='mx-auto flex w-full flex-col gap-6 px-4 py-6 md:px-6'>
               {children}

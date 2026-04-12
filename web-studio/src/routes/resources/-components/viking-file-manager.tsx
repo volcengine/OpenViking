@@ -133,7 +133,7 @@ export function VikingFileManager({
   }, [treeWidth])
 
   return (
-    <div className="-m-4 flex h-[calc(100vh-3.5rem)] flex-col">
+    <div className="-mx-4 -mt-6 -mb-4 md:-mx-6 flex h-[calc(100vh-3.5rem)] flex-col">
       <div className="flex min-h-0 flex-1">
         {showTree && (
           <>
@@ -156,7 +156,7 @@ export function VikingFileManager({
               </div>
             </section>
             <div
-              className="w-1 shrink-0 cursor-col-resize border-l bg-transparent transition-colors hover:bg-primary/20 active:bg-primary/30"
+              className="w-1 shrink-0 cursor-col-resize bg-transparent transition-colors hover:bg-primary/20 active:bg-primary/30"
               onMouseDown={handleResizeStart}
             />
           </>
