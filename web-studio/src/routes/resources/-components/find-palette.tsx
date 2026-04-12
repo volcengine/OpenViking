@@ -1,0 +1,410 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Brain, FileText, FolderOpen, Loader2, Search, Wrench, X } from 'lucide-react'
+
+import { cn } from '#/lib/utils'
+
+import { fileNameFromUri, parentUri as getParentUri } from '../-lib/normalize'
+import { useVikingFind } from '../-hooks/viking-fm'
+import type { FindContextType, FindResultItem, GroupedFindResult } from '../-types/viking-fm'
+
+interface FindPaletteProps {
+  open: boolean
+  onClose: () => void
+  onNavigate: (uri: string) => void
+  onNavigateDir: (uri: string) => void
+  scopeUri?: string
+}
+
+interface FlatItem {
+  type: FindContextType
+  item: FindResultItem
+  flatIndex: number
+}
+
+const TYPE_META: Record<FindContextType, { label: string; icon: typeof Brain; color: string; bgColor: string }> = {
+  resource: { label: 'Resources', icon: FileText, color: 'text-blue-500', bgColor: 'bg-blue-500/8' },
+  memory: { label: 'Memories', icon: Brain, color: 'text-amber-500', bgColor: 'bg-amber-500/8' },
+  skill: { label: 'Skills', icon: Wrench, color: 'text-emerald-500', bgColor: 'bg-emerald-500/8' },
+}
+
+const COLUMNS: Array<{ key: keyof Pick<GroupedFindResult, 'resources' | 'memories' | 'skills'>; type: FindContextType }> = [
+  { key: 'resources', type: 'resource' },
+  { key: 'memories', type: 'memory' },
+  { key: 'skills', type: 'skill' },
+]
+
+function flattenResults(data: GroupedFindResult): FlatItem[] {
+  const items: FlatItem[] = []
+  let idx = 0
+  for (const r of data.resources) items.push({ type: 'resource', item: r, flatIndex: idx++ })
+  for (const m of data.memories) items.push({ type: 'memory', item: m, flatIndex: idx++ })
+  for (const s of data.skills) items.push({ type: 'skill', item: s, flatIndex: idx++ })
+  return items
+}
+
+function displayName(uri: string): { name: string; parent: string } {
+  const name = fileNameFromUri(uri)
+  const dir = getParentUri(uri)
+  const segments = dir.replace(/\/$/, '').split('/').filter(Boolean)
+  const parent = segments.length > 1 ? segments.slice(-1)[0] : dir
+  return { name, parent }
+}
+
+export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri }: FindPaletteProps) {
+  const [query, setQuery] = useState('')
+  const [activeIndex, setActiveIndex] = useState(0)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const resultsRef = useRef<HTMLDivElement>(null)
+
+  const isRoot = !scopeUri || scopeUri === 'viking://'
+  const findQuery = useVikingFind(query, !isRoot ? scopeUri : undefined)
+  const data = findQuery.data
+
+  const hasResults = data && data.total > 0
+  const flatItems = useMemo(() => (data ? flattenResults(data) : []), [data])
+  const activeItem = flatItems[activeIndex] ?? null
+
+  const visibleColumns = useMemo(() => {
+    if (!data) return []
+    return COLUMNS.filter((col) => data[col.key].length > 0)
+  }, [data])
+
+  // Focus input when opened, preserve last query
+  useEffect(() => {
+    if (open) {
+      setActiveIndex(0)
+      requestAnimationFrame(() => {
+        inputRef.current?.focus()
+        inputRef.current?.select()
+      })
+    }
+  }, [open])
+
+  // Reset index when results change
+  useEffect(() => {
+    setActiveIndex(0)
+  }, [flatItems.length])
+
+  // Scroll active item into view
+  useEffect(() => {
+    if (!resultsRef.current) return
+    const el = resultsRef.current.querySelector('[data-active="true"]')
+    el?.scrollIntoView({ block: 'nearest' })
+  }, [activeIndex])
+
+  // Global Cmd+K handler
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault()
+        if (open) onClose()
+      }
+    }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [open, onClose])
+
+  // Build column-grouped index for left/right navigation
+  const columnGroups = useMemo(() => {
+    if (visibleColumns.length <= 1) return null
+    return visibleColumns.map((col) =>
+      flatItems.filter((fi) => fi.type === col.type).map((fi) => fi.flatIndex),
+    )
+  }, [visibleColumns, flatItems])
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      switch (e.key) {
+        case 'ArrowDown': {
+          e.preventDefault()
+          if (columnGroups && activeItem) {
+            // Move within current column
+            const colIdx = columnGroups.findIndex((g) => g.includes(activeIndex))
+            if (colIdx >= 0) {
+              const col = columnGroups[colIdx]
+              const posInCol = col.indexOf(activeIndex)
+              if (posInCol < col.length - 1) setActiveIndex(col[posInCol + 1])
+            }
+          } else {
+            setActiveIndex((i) => Math.min(i + 1, flatItems.length - 1))
+          }
+          break
+        }
+        case 'ArrowUp': {
+          e.preventDefault()
+          if (columnGroups && activeItem) {
+            const colIdx = columnGroups.findIndex((g) => g.includes(activeIndex))
+            if (colIdx >= 0) {
+              const col = columnGroups[colIdx]
+              const posInCol = col.indexOf(activeIndex)
+              if (posInCol > 0) setActiveIndex(col[posInCol - 1])
+            }
+          } else {
+            setActiveIndex((i) => Math.max(i - 1, 0))
+          }
+          break
+        }
+        case 'ArrowRight': {
+          e.preventDefault()
+          if (columnGroups) {
+            const colIdx = columnGroups.findIndex((g) => g.includes(activeIndex))
+            if (colIdx >= 0 && colIdx < columnGroups.length - 1) {
+              // Jump to same row position in next column, or last item
+              const posInCol = columnGroups[colIdx].indexOf(activeIndex)
+              const nextCol = columnGroups[colIdx + 1]
+              setActiveIndex(nextCol[Math.min(posInCol, nextCol.length - 1)])
+            }
+          }
+          break
+        }
+        case 'ArrowLeft': {
+          e.preventDefault()
+          if (columnGroups) {
+            const colIdx = columnGroups.findIndex((g) => g.includes(activeIndex))
+            if (colIdx > 0) {
+              const posInCol = columnGroups[colIdx].indexOf(activeIndex)
+              const prevCol = columnGroups[colIdx - 1]
+              setActiveIndex(prevCol[Math.min(posInCol, prevCol.length - 1)])
+            }
+          }
+          break
+        }
+        case 'Enter':
+          e.preventDefault()
+          if (activeItem) {
+            onNavigate(activeItem.item.uri)
+            onClose()
+          }
+          break
+        case 'Escape':
+          e.preventDefault()
+          onClose()
+          break
+      }
+    },
+    [flatItems, activeItem, activeIndex, columnGroups, onNavigate, onClose],
+  )
+
+  if (!open) return null
+
+  const showPreview = activeItem !== null
+  const paletteMaxWidth = showPreview ? 'max-w-4xl' : visibleColumns.length > 1 ? 'max-w-3xl' : 'max-w-lg'
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center pt-[12vh]">
+      <div className="absolute inset-0 bg-background/60 backdrop-blur-sm" onClick={onClose} />
+
+      <div
+        className={cn('relative flex w-full flex-col overflow-hidden rounded-xl border bg-background shadow-2xl shadow-black/20 transition-all', paletteMaxWidth)}
+        onKeyDown={handleKeyDown}
+      >
+        {/* Search input */}
+        <div className="flex items-center gap-3 border-b px-4">
+          <Search className="size-4 shrink-0 text-muted-foreground" />
+          <input
+            ref={inputRef}
+            type="text"
+            placeholder="搜索..."
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="h-12 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/70"
+          />
+          {query && (
+            <button
+              type="button"
+              className="rounded-md p-1 text-muted-foreground/70 transition-colors hover:text-foreground"
+              onClick={() => setQuery('')}
+            >
+              <X className="size-3.5" />
+            </button>
+          )}
+          <span className="flex items-center gap-1 text-xs text-muted-foreground/70">
+            {isRoot ? '全局' : (
+              <><FolderOpen className="size-3" />{scopeUri?.split('/').filter(Boolean).pop()}</>
+            )}
+          </span>
+        </div>
+
+        {/* Body */}
+        <div className="flex min-h-0" ref={resultsRef}>
+          {/* Results area */}
+          <div className={cn('min-h-0 flex-1 overflow-hidden', showPreview && 'border-r')}>
+            {!query.trim() ? (
+              <div className="px-4 py-8 text-center text-xs text-muted-foreground/80">
+                输入关键词开始语义搜索
+              </div>
+            ) : findQuery.isLoading ? (
+              <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
+                <Loader2 className="size-4 animate-spin" />
+              </div>
+            ) : findQuery.error ? (
+              <div className="px-4 py-6 text-center text-xs text-destructive">搜索出错</div>
+            ) : !hasResults ? (
+              <div className="px-4 py-8 text-center text-xs text-muted-foreground/80">未找到相关结果</div>
+            ) : visibleColumns.length > 1 ? (
+              <div className="flex h-80 divide-x overflow-hidden">
+                {visibleColumns.map((col) => {
+                  const colItems = flatItems.filter((fi) => fi.type === col.type)
+                  return (
+                    <ResultColumn
+                      key={col.key}
+                      type={col.type}
+                      items={colItems}
+                      activeIndex={activeIndex}
+                      onSelect={(fi) => { onNavigate(fi.item.uri); onClose() }}
+                      onOpenDir={(fi) => { onNavigateDir(getParentUri(fi.item.uri)); onClose() }}
+                      onHover={(fi) => setActiveIndex(fi.flatIndex)}
+                    />
+                  )
+                })}
+              </div>
+            ) : (
+              <div className="max-h-80 overflow-y-auto overscroll-contain">
+                <ResultColumn
+                  type={visibleColumns[0]?.type ?? 'resource'}
+                  items={flatItems}
+                  activeIndex={activeIndex}
+                  onSelect={(fi) => { onNavigate(fi.item.uri); onClose() }}
+                  onOpenDir={(fi) => { onNavigateDir(getParentUri(fi.item.uri)); onClose() }}
+                  onHover={(fi) => setActiveIndex(fi.flatIndex)}
+                  hideHeader
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Preview pane */}
+          {showPreview && (
+            <div className="flex h-80 w-72 flex-col overflow-hidden">
+              <PreviewPane item={activeItem.item} type={activeItem.type} />
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        {hasResults && (
+          <div className="flex items-center gap-3 border-t px-4 py-2 text-xs text-muted-foreground/70">
+            <span><kbd className="rounded border px-1 py-0.5 font-mono text-[11px]">↑↓</kbd> 导航</span>
+            {visibleColumns.length > 1 && (
+              <span><kbd className="rounded border px-1 py-0.5 font-mono text-[11px]">←→</kbd> 切栏</span>
+            )}
+            <span><kbd className="rounded border px-1 py-0.5 font-mono text-[11px]">↵</kbd> 打开</span>
+            <span><kbd className="rounded border px-1 py-0.5 font-mono text-[11px]">esc</kbd> 关闭</span>
+            <span className="ml-auto tabular-nums">{data!.total} 个结果</span>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/* ---- Result Column ---- */
+
+function ResultColumn({
+  type,
+  items,
+  activeIndex,
+  onSelect,
+  onOpenDir,
+  onHover,
+  hideHeader,
+}: {
+  type: FindContextType
+  items: FlatItem[]
+  activeIndex: number
+  onSelect: (fi: FlatItem) => void
+  onOpenDir: (fi: FlatItem) => void
+  onHover: (fi: FlatItem) => void
+  hideHeader?: boolean
+}) {
+  const meta = TYPE_META[type]
+  const Icon = meta.icon
+
+  return (
+    <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+      {!hideHeader && (
+        <div className={cn('flex items-center gap-1.5 px-3 py-2 text-xs font-semibold uppercase tracking-wider', meta.bgColor)}>
+          <Icon className={cn('size-3', meta.color)} />
+          <span className={meta.color}>{meta.label}</span>
+          <span className="ml-auto tabular-nums text-muted-foreground/70">{items.length}</span>
+        </div>
+      )}
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+        {items.map((fi) => {
+          const { name, parent } = displayName(fi.item.uri)
+          const isActive = fi.flatIndex === activeIndex
+
+          return (
+            <button
+              key={`${fi.item.uri}-${fi.flatIndex}`}
+              type="button"
+              data-active={isActive}
+              className={cn(
+                'group flex w-full items-start gap-2 px-3 py-2 text-left text-sm transition-colors',
+                isActive ? 'bg-primary/8 text-foreground' : 'text-foreground/80 hover:bg-muted/40',
+              )}
+              onClick={() => onSelect(fi)}
+              onMouseEnter={() => onHover(fi)}
+            >
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-medium">{name}</div>
+                <div className="mt-0.5 truncate text-xs text-muted-foreground/80">{parent}</div>
+              </div>
+              <span
+                role="button"
+                tabIndex={-1}
+                title="打开所在目录"
+                className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100 data-[active=true]:opacity-100"
+                data-active={isActive}
+                onClick={(e) => { e.stopPropagation(); onOpenDir(fi) }}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); onOpenDir(fi) } }}
+              >
+                <FolderOpen className="size-3.5" />
+              </span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+/* ---- Preview Pane ---- */
+
+function PreviewPane({ item, type }: { item: FindResultItem; type: FindContextType }) {
+  const { name } = displayName(item.uri)
+  const meta = TYPE_META[type]
+  const Icon = meta.icon
+  const content = item.overview || item.abstract
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="border-b px-4 py-3">
+        <div className="flex items-center gap-1.5">
+          <Icon className={cn('size-3.5', meta.color)} />
+          <span className="truncate text-sm font-medium">{name}</span>
+        </div>
+        <div className="mt-1 truncate text-xs text-muted-foreground/80" title={item.uri}>
+          {item.uri}
+        </div>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+        {content ? (
+          <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{content}</p>
+        ) : (
+          <p className="text-sm text-muted-foreground/70">无摘要</p>
+        )}
+      </div>
+
+      <div className="flex items-center gap-2 border-t px-4 py-2">
+        {item.tags && (
+          <span className="truncate text-xs text-muted-foreground/80">{item.tags}</span>
+        )}
+        <span className="ml-auto text-xs tabular-nums text-muted-foreground">
+          {(item.score * 100).toFixed(0)}% 相关
+        </span>
+      </div>
+    </div>
+  )
+}
