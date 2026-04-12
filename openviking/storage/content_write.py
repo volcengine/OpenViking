@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Optional
 
+from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
 from openviking.session.memory.utils.content import deserialize_full, serialize_with_metadata
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
@@ -135,6 +136,8 @@ class ContentWriteCoordinator:
         name = uri.rstrip("/").split("/")[-1]
         if name in _DERIVED_FILENAMES:
             raise InvalidArgumentError(f"cannot write derived semantic file directly: {uri}")
+        if is_watch_task_control_uri(uri):
+            raise InvalidArgumentError(f"cannot write watch task control file directly: {uri}")
 
         parsed = VikingURI(uri)
         if parsed.scope not in {"resources", "user", "agent"}:
