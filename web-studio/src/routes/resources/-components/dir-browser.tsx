@@ -139,12 +139,6 @@ export function DirBrowser({ startUri, onSelect, onCancel }: DirBrowserProps) {
               setFocusUri(uri)
               setActiveCol('left')
             }}
-            onHover={(entry) => {
-              const uri = normalizeDirUri(entry.uri)
-              setFocusUri(uri)
-              const idx = leftDirs.findIndex((e) => normalizeDirUri(e.uri) === uri)
-              if (idx >= 0) setLeftIndex(idx)
-            }}
           />
           <DirColumn
             label={fileNameFromUri(focusUri.replace(/\/$/, ''))}
@@ -153,10 +147,6 @@ export function DirBrowser({ startUri, onSelect, onCancel }: DirBrowserProps) {
             isLoading={rightQuery.isLoading}
             onSelect={(entry) => {
               onSelect(normalizeDirUri(entry.uri))
-            }}
-            onHover={(_, i) => {
-              setRightIndex(i)
-              setActiveCol('right')
             }}
           />
         </>
@@ -172,7 +162,6 @@ function DirColumn({
   focusedUri,
   isLoading,
   onSelect,
-  onHover,
 }: {
   label: string
   dirs: VikingFsEntry[]
@@ -180,7 +169,6 @@ function DirColumn({
   focusedUri?: string
   isLoading?: boolean
   onSelect: (entry: VikingFsEntry) => void
-  onHover: (entry: VikingFsEntry, index: number) => void
 }) {
   return (
     <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -214,7 +202,6 @@ function DirColumn({
                       : 'text-foreground/80 hover:bg-muted/40',
                 )}
                 onClick={() => onSelect(entry)}
-                onMouseEnter={() => onHover(entry, i)}
               >
                 <Folder className="size-3.5 shrink-0 text-muted-foreground" />
                 <span className="truncate">{entry.name}</span>

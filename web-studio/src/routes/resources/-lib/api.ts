@@ -107,12 +107,23 @@ export async function fetchFileContent(uri: string, options: VikingReadQueryOpti
   }
 }
 
+function formatModTime(raw: unknown): string {
+  const text = String(raw ?? '').trim()
+  if (!text) return ''
+  const ts = Date.parse(text)
+  if (!Number.isFinite(ts)) return text
+  const d = new Date(ts)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
 export async function fetchFsStat(uri: string): Promise<VikingFsEntry> {
   try {
     const result = await getOvResult(
       getFsStat({ query: { uri } }),
     )
     const data = result as Record<string, unknown>
+    const rawModTime = data.mod_time ?? data.modTime ?? data.modified_at ?? ''
     return {
       uri,
       name: fileNameFromUri(uri),
@@ -120,7 +131,7 @@ export async function fetchFsStat(uri: string): Promise<VikingFsEntry> {
       size: String(data.size ?? ''),
       sizeBytes: typeof data.size_bytes === 'number' ? data.size_bytes
         : typeof data.size === 'number' ? data.size : null,
-      modTime: String(data.mod_time ?? data.modTime ?? data.modified_at ?? ''),
+      modTime: formatModTime(rawModTime),
       modTimestamp: null,
       abstract: String(data.abstract ?? ''),
     }
