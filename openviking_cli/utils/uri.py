@@ -286,10 +286,23 @@ class VikingURI:
         return f"{VikingURI.SCHEME}://{uri}"
 
     @classmethod
-    def create_temp_uri(cls) -> str:
-        """Create temp directory URI like viking://temp/MMDDHHMM_XXXXXX"""
+    def create_temp_uri(cls, space: Optional[str] = None) -> str:
+        """Create temp directory URI.
+
+        When ``space`` is provided, generate a user-scoped temp URI like
+        ``viking://temp/<space>/MMDDHHMM_XXXXXX``. This preserves isolation
+        between users sharing the same account while keeping temp data in the
+        temp scope.
+
+        When ``space`` is omitted, fall back to the legacy shape
+        ``viking://temp/MMDDHHMM_XXXXXX`` for compatibility with callers that
+        do not have a user context.
+        """
         import datetime
         import uuid
 
         temp_id = uuid.uuid4().hex[:6]
-        return f"viking://temp/{datetime.datetime.now().strftime('%m%d%H%M')}_{temp_id}"
+        temp_leaf = f"{datetime.datetime.now().strftime('%m%d%H%M')}_{temp_id}"
+        if space:
+            return f"viking://temp/{space}/{temp_leaf}"
+        return f"viking://temp/{temp_leaf}"

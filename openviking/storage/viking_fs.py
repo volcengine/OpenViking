@@ -1309,8 +1309,12 @@ class VikingFS:
             return True
 
         scope = parts[0]
-        if scope in {"resources", "temp"}:
+        if scope == "resources":
             return True
+        if scope == "temp":
+            if len(parts) == 1:
+                return True
+            return parts[1] == ctx.user.user_space_name()
         if scope == "_system":
             return False
 
@@ -1870,9 +1874,10 @@ class VikingFS:
 
     # ========== Temp File Operations (backward compatible) ==========
 
-    def create_temp_uri(self) -> str:
-        """Create temp directory URI."""
-        return VikingURI.create_temp_uri()
+    def create_temp_uri(self, ctx: Optional[RequestContext] = None) -> str:
+        """Create a user-scoped temp directory URI when request context is available."""
+        real_ctx = self._ctx_or_default(ctx)
+        return VikingURI.create_temp_uri(space=real_ctx.user.user_space_name())
 
     async def delete_temp(self, temp_uri: str, ctx: Optional[RequestContext] = None) -> None:
         """Delete temp directory and its contents."""
