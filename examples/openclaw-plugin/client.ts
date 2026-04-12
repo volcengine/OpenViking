@@ -1,10 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { spawn } from "node:child_process";
-import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { once } from "node:events";
+import { createWriteStream } from "node:fs";
+import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
 
-import { zipSync } from "fflate";
+import { Zip, ZipDeflate } from "fflate";
 
 export type FindResultItem = {
   uri: string;
@@ -184,10 +186,6 @@ export function isMemoryUri(uri: string): boolean {
 
 function isRemoteResourceSource(source: string): boolean {
   return REMOTE_RESOURCE_PREFIXES.some((prefix) => source.startsWith(prefix));
-}
-
-function toUploadBytes(value: Buffer): Uint8Array {
-  return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
 }
 
 function toBlobPart(value: Buffer): ArrayBuffer {
@@ -483,7 +481,24 @@ export class OpenVikingClient {
       throw new Error(`Not a directory: ${dirPath}`);
     }
 
-    const files: Record<string, Uint8Array> = {};
+    const zipDir = await mkdtemp(join(tmpdir(), "openviking-openclaw-upload-"));
+    const zipPath = join(zipDir, `${basename(dirPath).replace(/[^a-zA-Z0-9._-]/g, "_")}-${randomUUID()}.zip`);
+    const output = createWriteStream(zipPath);
+    const outputClosed = once(output, "close");
+    const outputErrored = once(output, "error").then(([err]) => Promise.reject(err));
+    const zip = new Zip((err, chunk, final) => {
+      if (err) {
+        output.destroy(err);
+        return;
+      }
+      if (chunk?.length) {
+        output.write(Buffer.from(chunk));
+      }
+      if (final) {
+        output.end();
+      }
+    });
+
     const walk = async (currentDir: string) => {
       const entries = await readdir(currentDir, { withFileTypes: true });
       for (const entry of entries) {
@@ -499,14 +514,21 @@ export class OpenVikingClient {
         if (!relPath || relPath.startsWith("../") || relPath.includes("/../")) {
           throw new Error(`Unsafe relative path while zipping: ${relPath}`);
         }
-        files[relPath] = toUploadBytes(await readFile(fullPath));
+        const file = new ZipDeflate(relPath);
+        zip.add(file);
+        file.push(new Uint8Array(await readFile(fullPath)), true);
       }
     };
-    await walk(dirPath);
-
-    const zipDir = await mkdtemp(join(tmpdir(), "openviking-openclaw-upload-"));
-    const zipPath = join(zipDir, `${basename(dirPath).replace(/[^a-zA-Z0-9._-]/g, "_")}-${randomUUID()}.zip`);
-    await writeFile(zipPath, zipSync(files));
+    try {
+      await walk(dirPath);
+      zip.end();
+      await Promise.race([outputClosed, outputErrored]);
+    } catch (err) {
+      zip.terminate();
+      output.destroy(err as Error);
+      await cleanupUploadTempPath(zipPath);
+      throw err;
+    }
     return zipPath;
   }
 
