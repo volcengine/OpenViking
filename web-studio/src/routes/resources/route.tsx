@@ -1,31 +1,9 @@
-import { createFileRoute, useNavigate } from '@tanstack/react-router'
-
-import { VikingFileManager } from './-components/viking-file-manager'
-
-type ResourcesSearch = {
-  uri?: string
-}
+import { createFileRoute, Outlet } from '@tanstack/react-router'
 
 export const Route = createFileRoute('/resources')({
-  validateSearch: (search: Record<string, unknown>): ResourcesSearch => ({
-    uri: typeof search.uri === 'string' ? search.uri : undefined,
-  }),
-  component: ResourcesRoute,
+  component: ResourcesLayout,
 })
 
-function ResourcesRoute() {
-  const search = Route.useSearch()
-  const navigate = useNavigate({ from: Route.fullPath })
-
-  return (
-    <VikingFileManager
-      initialUri={search.uri}
-      onUriChange={(uri) => {
-        navigate({
-          search: (prev) => ({ ...prev, uri }),
-          replace: true,
-        })
-      }}
-    />
-  )
+function ResourcesLayout() {
+  return <Outlet />
 }

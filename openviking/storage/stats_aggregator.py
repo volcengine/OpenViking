@@ -6,6 +6,8 @@ Queries VikingDB indexes and the hotness_score function to produce
 aggregate memory health metrics without introducing new storage.
 """
 
+import asyncio
+import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -150,6 +152,68 @@ class StatsAggregator:
             "memories_extracted": stats.memories_extracted,
             "contexts_used": stats.contexts_used,
             "skills_used": stats.skills_used,
+        }
+
+    async def get_token_stats(
+        self,
+        service,
+        ctx: RequestContext,
+    ) -> Dict[str, Any]:
+        """Get aggregate token usage statistics across all sessions.
+
+        Reads .meta.json files in parallel (bounded concurrency) to avoid
+        the N+1 sequential load pattern.
+
+        Args:
+            service: OpenVikingService instance.
+            ctx: Request context for tenant scoping.
+
+        Returns:
+            Dictionary with total token usage broken down by LLM and embedding.
+        """
+        sessions_list = await service.sessions.sessions(ctx)
+        viking_fs = service.viking_fs
+        user_space = ctx.user.user_space_name()
+        semaphore = asyncio.Semaphore(8)
+
+        async def read_meta(session_id: str) -> Optional[Dict[str, Any]]:
+            meta_uri = f"viking://session/{user_space}/{session_id}/.meta.json"
+            async with semaphore:
+                try:
+                    content = await viking_fs.read_file(meta_uri, ctx=ctx)
+                    return json.loads(content) if content else None
+                except Exception as e:
+                    logger.warning("Failed to read meta for session %s: %s", session_id, e)
+                    return None
+
+        session_ids = [s.get("session_id", "") for s in sessions_list if s.get("session_id")]
+        metas = await asyncio.gather(*[read_meta(sid) for sid in session_ids])
+
+        total_llm_prompt = 0
+        total_llm_completion = 0
+        total_llm = 0
+        total_embedding = 0
+
+        for meta in metas:
+            if meta is None:
+                continue
+            llm = meta.get("llm_token_usage", {})
+            emb = meta.get("embedding_token_usage", {})
+            total_llm_prompt += llm.get("prompt_tokens", 0)
+            total_llm_completion += llm.get("completion_tokens", 0)
+            total_llm += llm.get("total_tokens", 0)
+            total_embedding += emb.get("total_tokens", 0)
+
+        return {
+            "total_tokens": total_llm + total_embedding,
+            "llm": {
+                "prompt_tokens": total_llm_prompt,
+                "completion_tokens": total_llm_completion,
+                "total_tokens": total_llm,
+            },
+            "embedding": {
+                "total_tokens": total_embedding,
+            },
         }
 
     async def _query_all_memories(

@@ -78,3 +78,28 @@ async def get_session_stats(
                 message=f"Failed to retrieve session stats: {type(e).__name__}",
             ),
         )
+
+
+@router.get("/tokens")
+async def get_token_stats(
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Get aggregate token usage statistics.
+
+    Returns total token usage across all sessions, broken down by LLM
+    (prompt/completion) and embedding tokens.
+    """
+    service = get_service()
+    aggregator = _get_aggregator()
+    try:
+        result = await aggregator.get_token_stats(service, _ctx)
+        return Response(status="ok", result=result)
+    except Exception as e:
+        logger.error("Failed to get token stats: %s", e)
+        return Response(
+            status="error",
+            error=ErrorInfo(
+                code="INTERNAL_ERROR",
+                message=f"Failed to retrieve token stats: {type(e).__name__}",
+            ),
+        )

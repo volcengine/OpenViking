@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
 from openviking.parse.base import ParseResult
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking.parse.parsers.upload_utils import is_text_file
 from openviking.parse.parsers.code import CodeRepositoryParser
 from openviking.parse.parsers.directory import DirectoryParser
 from openviking.parse.parsers.epub import EPubParser
@@ -218,7 +219,7 @@ class ParserRegistry:
         Parse a file or content string.
 
         Automatically selects parser based on file extension.
-        Falls back to text parser for unknown types.
+        Raises ValueError for unsupported file types.
 
         Args:
             source: File path or content string
@@ -226,6 +227,9 @@ class ParserRegistry:
 
         Returns:
             ParseResult with document tree
+
+        Raises:
+            ValueError: If the file type is not supported
         """
         source_str = str(source)
 
@@ -261,8 +265,12 @@ class ParserRegistry:
                 parser = self.get_parser_for_file(path)
                 if parser:
                     return await parser.parse(path, **kwargs)
-                else:
+                elif is_text_file(path):
                     return await self._parsers["text"].parse(path, **kwargs)
+                else:
+                    raise ValueError(
+                        f"Unsupported file type: {path.suffix!r} ({path.name})"
+                    )
 
         # Content string - use text parser
         return await self._parsers["text"].parse_content(source_str, **kwargs)

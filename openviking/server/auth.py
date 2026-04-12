@@ -22,6 +22,7 @@ _ROOT_IMPLICIT_TENANT_ALLOWED_PATHS = {
 }
 _ROOT_IMPLICIT_TENANT_ALLOWED_PREFIXES = (
     "/api/v1/admin",
+    "/api/v1/config",
     "/api/v1/observer",
 )
 
