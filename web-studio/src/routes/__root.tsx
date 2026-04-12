@@ -8,6 +8,7 @@ import { useTranslation } from 'react-i18next'
 import { AppShell } from '#/components/app-shell'
 import { Button } from '#/components/ui/button'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '#/components/ui/card'
+import { Toaster } from '#/components/ui/sonner'
 import '../styles.css'
 
 export const Route = createRootRoute({
@@ -21,6 +22,7 @@ function RootComponent() {
       <AppShell>
         <Outlet />
       </AppShell>
+      <Toaster />
       <TanStackDevtools
         config={{
           position: 'bottom-right',

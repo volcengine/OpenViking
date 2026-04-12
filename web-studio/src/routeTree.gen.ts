@@ -14,6 +14,8 @@ import { Route as SessionsRouteRouteImport } from './routes/sessions/route'
 import { Route as ResourcesRouteRouteImport } from './routes/resources/route'
 import { Route as OperationsRouteRouteImport } from './routes/operations/route'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ResourcesIndexRouteImport } from './routes/resources/index'
+import { Route as ResourcesAddResourceRouteImport } from './routes/resources/add-resource'
 
 const HomeRoute = HomeRouteImport.update({
   id: '/home',
@@ -40,41 +42,77 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ResourcesIndexRoute = ResourcesIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => ResourcesRouteRoute,
+} as any)
+const ResourcesAddResourceRoute = ResourcesAddResourceRouteImport.update({
+  id: '/add-resource',
+  path: '/add-resource',
+  getParentRoute: () => ResourcesRouteRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/operations': typeof OperationsRouteRoute
-  '/resources': typeof ResourcesRouteRoute
+  '/resources': typeof ResourcesRouteRouteWithChildren
   '/sessions': typeof SessionsRouteRoute
   '/home': typeof HomeRoute
+  '/resources/add-resource': typeof ResourcesAddResourceRoute
+  '/resources/': typeof ResourcesIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/operations': typeof OperationsRouteRoute
-  '/resources': typeof ResourcesRouteRoute
   '/sessions': typeof SessionsRouteRoute
   '/home': typeof HomeRoute
+  '/resources/add-resource': typeof ResourcesAddResourceRoute
+  '/resources': typeof ResourcesIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/operations': typeof OperationsRouteRoute
-  '/resources': typeof ResourcesRouteRoute
+  '/resources': typeof ResourcesRouteRouteWithChildren
   '/sessions': typeof SessionsRouteRoute
   '/home': typeof HomeRoute
+  '/resources/add-resource': typeof ResourcesAddResourceRoute
+  '/resources/': typeof ResourcesIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/operations' | '/resources' | '/sessions' | '/home'
+  fullPaths:
+    | '/'
+    | '/operations'
+    | '/resources'
+    | '/sessions'
+    | '/home'
+    | '/resources/add-resource'
+    | '/resources/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/operations' | '/resources' | '/sessions' | '/home'
-  id: '__root__' | '/' | '/operations' | '/resources' | '/sessions' | '/home'
+  to:
+    | '/'
+    | '/operations'
+    | '/sessions'
+    | '/home'
+    | '/resources/add-resource'
+    | '/resources'
+  id:
+    | '__root__'
+    | '/'
+    | '/operations'
+    | '/resources'
+    | '/sessions'
+    | '/home'
+    | '/resources/add-resource'
+    | '/resources/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   OperationsRouteRoute: typeof OperationsRouteRoute
-  ResourcesRouteRoute: typeof ResourcesRouteRoute
+  ResourcesRouteRoute: typeof ResourcesRouteRouteWithChildren
   SessionsRouteRoute: typeof SessionsRouteRoute
   HomeRoute: typeof HomeRoute
 }
@@ -116,13 +154,41 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/resources/': {
+      id: '/resources/'
+      path: '/'
+      fullPath: '/resources/'
+      preLoaderRoute: typeof ResourcesIndexRouteImport
+      parentRoute: typeof ResourcesRouteRoute
+    }
+    '/resources/add-resource': {
+      id: '/resources/add-resource'
+      path: '/add-resource'
+      fullPath: '/resources/add-resource'
+      preLoaderRoute: typeof ResourcesAddResourceRouteImport
+      parentRoute: typeof ResourcesRouteRoute
+    }
   }
 }
+
+interface ResourcesRouteRouteChildren {
+  ResourcesAddResourceRoute: typeof ResourcesAddResourceRoute
+  ResourcesIndexRoute: typeof ResourcesIndexRoute
+}
+
+const ResourcesRouteRouteChildren: ResourcesRouteRouteChildren = {
+  ResourcesAddResourceRoute: ResourcesAddResourceRoute,
+  ResourcesIndexRoute: ResourcesIndexRoute,
+}
+
+const ResourcesRouteRouteWithChildren = ResourcesRouteRoute._addFileChildren(
+  ResourcesRouteRouteChildren,
+)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   OperationsRouteRoute: OperationsRouteRoute,
-  ResourcesRouteRoute: ResourcesRouteRoute,
+  ResourcesRouteRoute: ResourcesRouteRouteWithChildren,
   SessionsRouteRoute: SessionsRouteRoute,
   HomeRoute: HomeRoute,
 }
