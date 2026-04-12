@@ -1,7 +1,7 @@
 import { useMemo, useRef, useCallback, useState, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { fetchFileContent, fetchFind, fetchFindAllTypes, fetchFsList, fetchFsTree } from '../-lib/api'
+import { fetchFileContent, fetchFind, fetchFindAllTypes, fetchFsList, fetchFsStat, fetchFsTree } from '../-lib/api'
 import { detectFileType, normalizeDirUri, shouldAutoRead } from '../-lib/normalize'
 import type {
   GroupedFindResult,
@@ -171,5 +171,14 @@ export function useVikingFind(query: string, targetUri?: string) {
     staleTime: 60_000,
     gcTime: 5 * 60_000,
     placeholderData: (prev) => prev,
+  })
+}
+
+export function useVikingFsStat(uri: string | undefined) {
+  return useQuery<VikingFsEntry>({
+    queryKey: ['viking-fs-stat', uri],
+    queryFn: () => fetchFsStat(uri!),
+    enabled: Boolean(uri),
+    staleTime: 60_000,
   })
 }

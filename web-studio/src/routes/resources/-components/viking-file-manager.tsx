@@ -204,6 +204,9 @@ export function VikingFileManager({
           <Button variant="ghost" size="icon" className="size-7" title="刷新目录" onClick={() => void handleRefresh()}>
             <RefreshCcw className="size-4" />
           </Button>
+          <Button variant="ghost" size="icon" className="size-7" title="搜索 ⌘K" onClick={() => setPaletteOpen(true)}>
+            <Search className="size-4" />
+          </Button>
           <div className="mx-1 h-4 w-px bg-border" />
         </>
       )}
@@ -221,16 +224,6 @@ export function VikingFileManager({
           </span>
         ))}
       </nav>
-
-      <button
-        type="button"
-        className="ml-auto flex items-center gap-2 rounded-md border border-border/60 bg-muted/30 px-2.5 py-1 text-xs text-muted-foreground/60 transition-all hover:-translate-y-px hover:bg-muted hover:text-muted-foreground hover:shadow-sm active:translate-y-0 active:shadow-none"
-        onClick={() => setPaletteOpen(true)}
-      >
-        <Search className="size-3.5" />
-        <span>搜索</span>
-        <kbd className="rounded border border-border/80 px-1 py-0.5 font-mono text-[10px] leading-none">⌘K</kbd>
-      </button>
     </div>
   )
 
@@ -246,6 +239,15 @@ export function VikingFileManager({
                 </Button>
                 <Button variant="ghost" size="icon" className="size-7" title="刷新目录" onClick={() => void handleRefresh()}>
                   <RefreshCcw className="size-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="ml-auto size-7"
+                  title="搜索 ⌘K"
+                  onClick={() => setPaletteOpen(true)}
+                >
+                  <Search className="size-4" />
                 </Button>
               </div>
               <div className="min-h-0 flex-1">

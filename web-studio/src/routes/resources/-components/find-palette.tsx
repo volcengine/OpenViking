@@ -4,7 +4,7 @@ import { Brain, FileText, FolderOpen, Loader2, Search, Wrench, X } from 'lucide-
 import { cn } from '#/lib/utils'
 
 import { fileNameFromUri, parentUri as getParentUri } from '../-lib/normalize'
-import { useVikingFind } from '../-hooks/viking-fm'
+import { useVikingFind, useVikingFsStat } from '../-hooks/viking-fm'
 import type { FindContextType, FindResultItem, GroupedFindResult } from '../-types/viking-fm'
 import { FilePreview } from './file-preview'
 import { DirBrowser } from './dir-browser'
@@ -81,6 +81,16 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, onScopeC
   const hasResults = data && data.total > 0
   const flatItems = useMemo(() => (data ? flattenResults(data) : []), [data])
   const activeItem = flatItems[activeIndex] ?? null
+  const statQuery = useVikingFsStat(activeItem?.item.uri)
+
+  const previewEntry = useMemo(() => {
+    if (!activeItem) return null
+    const base = toFsEntry(activeItem.item)
+    if (statQuery.data) {
+      return { ...base, size: statQuery.data.size, sizeBytes: statQuery.data.sizeBytes, modTime: statQuery.data.modTime }
+    }
+    return base
+  }, [activeItem, statQuery.data])
 
   const visibleColumns = useMemo(() => {
     if (!data) return []
@@ -308,7 +318,7 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, onScopeC
               {showPreview && (
                 <div className="animate-palette-preview flex h-80 w-80 flex-col overflow-hidden">
                   <FilePreview
-                    file={toFsEntry(activeItem.item)}
+                    file={previewEntry}
                     onClose={() => setActiveIndex(-1)}
                     showCloseButton={false}
                   />

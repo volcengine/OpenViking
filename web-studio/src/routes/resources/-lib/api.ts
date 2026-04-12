@@ -1,9 +1,10 @@
-import { getContentRead, getFsLs, getFsTree, getOvResult, normalizeOvClientError, postSearchFind } from '#/lib/ov-client'
+import { getContentRead, getFsLs, getFsStat, getFsTree, getOvResult, normalizeOvClientError, postSearchFind } from '#/lib/ov-client'
 
-import { normalizeDirUri, normalizeFsEntries, normalizeReadContent } from './normalize'
+import { fileNameFromUri, normalizeDirUri, normalizeFsEntries, normalizeReadContent } from './normalize'
 import type {
   GroupedFindResult,
   VikingApiError,
+  VikingFsEntry,
   VikingListQueryOptions,
   VikingListResult,
   VikingReadQueryOptions,
@@ -103,6 +104,37 @@ export async function fetchFileContent(uri: string, options: VikingReadQueryOpti
     }
   } catch (error) {
     throw toVikingApiError(error)
+  }
+}
+
+export async function fetchFsStat(uri: string): Promise<VikingFsEntry> {
+  try {
+    const result = await getOvResult(
+      getFsStat({ query: { uri } }),
+    )
+    const data = result as Record<string, unknown>
+    return {
+      uri,
+      name: fileNameFromUri(uri),
+      isDir: Boolean(data.is_dir ?? data.isDir ?? uri.endsWith('/')),
+      size: String(data.size ?? ''),
+      sizeBytes: typeof data.size_bytes === 'number' ? data.size_bytes
+        : typeof data.size === 'number' ? data.size : null,
+      modTime: String(data.mod_time ?? data.modTime ?? data.modified_at ?? ''),
+      modTimestamp: null,
+      abstract: String(data.abstract ?? ''),
+    }
+  } catch {
+    return {
+      uri,
+      name: fileNameFromUri(uri),
+      isDir: uri.endsWith('/'),
+      size: '',
+      sizeBytes: null,
+      modTime: '',
+      modTimestamp: null,
+      abstract: '',
+    }
   }
 }
 
