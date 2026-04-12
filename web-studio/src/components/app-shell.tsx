@@ -119,8 +119,8 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
           <SidebarTrigger className='shrink-0' />
         </div>
 
-        <div className='flex items-center gap-2'>
-          <Badge variant={serverModeBadge.variant}>
+        <div className='flex items-center gap-1'>
+          <Badge variant={serverModeBadge.variant} className='mr-1'>
             {t(serverModeBadge.labelKey, { ns: 'common' })}
           </Badge>
 
@@ -140,6 +140,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
               className={buttonVariants({ size: 'sm', variant: 'ghost' })}
             >
               <LanguagesIcon />
+              <span className='hidden sm:inline'>{currentLanguageOption.shortLabel}</span>
             </DropdownMenuTrigger>
             <DropdownMenuContent align='end' className='w-32 min-w-32'>
               <DropdownMenuGroup>
@@ -213,7 +214,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
 
         <SidebarInset className='min-h-0 flex-1 overflow-hidden rounded-none border-0 bg-sidebar shadow-none ring-0 md:m-0 md:ml-0'>
           <ScrollArea className='min-h-0 flex-1'>
-            <div className='mx-auto flex w-full flex-col gap-6 px-4 py-6 md:px-6'>
+            <div className='flex w-full flex-col gap-6 px-4 py-6 md:px-6'>
               {children}
             </div>
           </ScrollArea>
