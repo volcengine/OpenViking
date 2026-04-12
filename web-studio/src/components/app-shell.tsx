@@ -113,10 +113,6 @@ const NAV_ITEMS: readonly NavItem[] = [
   },
 ] as const
 
-const ALL_NAV_ITEMS: readonly (NavItem | NavSubItem)[] = NAV_ITEMS.flatMap((item) =>
-  item.children ? [...item.children, item] : [item],
-)
-
 const LANGUAGE_OPTIONS = [
   {
     shortLabel: 'EN',
@@ -202,7 +198,6 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
   const pathname = useRouterState({ select: (state) => state.location.pathname })
   const { openConnectionDialog, serverMode } = useAppConnection()
   const { setTheme, resolvedTheme } = useTheme()
-  const currentItem = ALL_NAV_ITEMS.find((item) => pathname === item.to || pathname.startsWith(`${item.to}/`))
   const serverModeBadge = describeServerMode(serverMode)
   const currentLanguage = resolveLanguage(i18n.resolvedLanguage ?? i18n.language)
   const currentLanguageOption = LANGUAGE_OPTIONS.find((item) => item.value === currentLanguage) ?? LANGUAGE_OPTIONS[0]
