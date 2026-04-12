@@ -164,6 +164,22 @@ def test_embedding_validation():
     else:
         print(f"   Fail (provider='volcengine' should have priority, got '{config_b.provider}')")
 
+    # Test 5: VLM legacy base_url alias
+    print("\n5. Test VLM base_url alias...")
+    try:
+        config_c = VLMConfig(
+            base_url="https://example.com/api",
+            model="gpt-4",
+            api_key="test-key",
+            provider="openai",
+        )
+        if config_c.api_base == "https://example.com/api":
+            print("   Pass (base_url accepted as api_base)")
+        else:
+            print("   Fail (base_url not mapped to api_base)")
+    except ValueError as e:
+        print(f"   Fail: {e}")
+
     # Test 5: Ollama provider (no API key required)
     print("\n5. Test Ollama provider (no API key required)...")
     try:
