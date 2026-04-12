@@ -251,7 +251,16 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
   }
 }
 
+const DEFAULT_LOCAL_BASE_URL = 'http://127.0.0.1:1933'
+
+function resolveDefaultBaseUrl(): string {
+  const envBaseUrl = typeof import.meta.env.VITE_OV_BASE_URL === 'string'
+    ? import.meta.env.VITE_OV_BASE_URL.trim()
+    : ''
+  return envBaseUrl || DEFAULT_LOCAL_BASE_URL
+}
+
 export const ovClient = createOvClient({
-  baseUrl: 'http://127.0.0.1:1933',
+  baseUrl: resolveDefaultBaseUrl(),
   bindSdkClient: true,
 })
