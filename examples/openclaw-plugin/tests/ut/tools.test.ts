@@ -428,6 +428,16 @@ describe("OpenViking import command parsing", () => {
     ]);
   });
 
+  it("preserves Windows path backslashes in slash-command args", () => {
+    expect(
+      parseOvImportCommandArgs(String.raw`C:\Users\alice\skill-dir --kind skill --wait`),
+    ).toMatchObject({
+      kind: "skill",
+      source: String.raw`C:\Users\alice\skill-dir`,
+      wait: true,
+    });
+  });
+
   it("parses ov-import resource flags with resource default", () => {
     expect(
       parseOvImportCommandArgs(
@@ -552,6 +562,27 @@ describe("Plugin registration", () => {
     const [, init] = fetchMock.mock.calls.find((call) => String(call[0]).endsWith("/api/v1/search/find")) as [string, RequestInit];
     const headers = new Headers(init.headers);
     expect(headers.get("X-OpenViking-Agent")).toBe("worker");
+  });
+
+  it("slash commands honor bypassSessionPatterns", async () => {
+    const fetchMock = vi.fn(async () => okResponse({}));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { commands, api } = setupPlugin();
+    api.pluginConfig = {
+      ...api.pluginConfig,
+      bypassSessionPatterns: ["agent:bypass:*"],
+    };
+    contextEnginePlugin.register(api as any);
+
+    const search = await commands.get("ov-search")!.handler({
+      args: "test query --uri viking://resources",
+      commandBody: "/ov-search",
+      sessionKey: "agent:bypass:session-1",
+    });
+
+    expect(search.text).toContain("bypassed for this session");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("registers service with id 'openviking'", () => {

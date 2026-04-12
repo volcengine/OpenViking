@@ -222,14 +222,24 @@ export function tokenizeCommandArgs(args: string): string[] {
   let quote: "'" | '"' | null = null;
   let escaping = false;
 
-  for (const ch of args) {
+  for (let i = 0; i < args.length; i += 1) {
+    const ch = args[i]!;
+    const next = args[i + 1];
     if (escaping) {
       current += ch;
       escaping = false;
       continue;
     }
-    if (ch === "\\" && quote !== "'") {
-      escaping = true;
+    if (ch === "\\") {
+      const shouldEscape =
+        quote === '"'
+          ? next === '"' || next === "\\"
+          : !quote && Boolean(next && (/\s/.test(next) || next === '"' || next === "'"));
+      if (shouldEscape) {
+        escaping = true;
+        continue;
+      }
+      current += ch;
       continue;
     }
     if ((ch === '"' || ch === "'") && (!quote || quote === ch)) {
@@ -882,6 +892,10 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
       acceptsArgs: true,
       handler: async (ctx: PluginCommandContext) => {
         try {
+          if (isBypassedSession(ctx)) {
+            const bypassed = makeBypassedToolResult("ov_import");
+            return { text: bypassed.content[0]!.text, details: bypassed.details };
+          }
           rememberSessionAgentId(ctx);
           const agentId = resolveAgentId(ctx.sessionId, ctx.sessionKey, ctx.ovSessionId);
           const input = parseOvImportCommandArgs(ctx.args ?? "");
@@ -899,6 +913,10 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
       acceptsArgs: true,
       handler: async (ctx: PluginCommandContext) => {
         try {
+          if (isBypassedSession(ctx)) {
+            const bypassed = makeBypassedToolResult("ov_search");
+            return { text: bypassed.content[0]!.text, details: bypassed.details };
+          }
           rememberSessionAgentId(ctx);
           const agentId = resolveAgentId(ctx.sessionId, ctx.sessionKey, ctx.ovSessionId);
           const input = parseOvSearchCommandArgs(ctx.args ?? "");
