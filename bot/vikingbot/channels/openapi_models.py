@@ -24,6 +24,9 @@ class EventType(str, Enum):
     TOOL_RESULT = "tool_result"
     REASONING = "reasoning"
     ITERATION = "iteration"
+    CONTENT_DELTA = "content_delta"
+    REASONING_DELTA = "reasoning_delta"
+    DONE = "done"
 
 
 class ChatMessage(BaseModel):

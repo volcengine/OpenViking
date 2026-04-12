@@ -192,6 +192,10 @@ class OpenAPIChannel(BaseChannel):
                 await pending.add_event("tool_call", msg.content)
             elif msg.event_type == OutboundEventType.TOOL_RESULT:
                 await pending.add_event("tool_result", msg.content)
+            elif msg.event_type == OutboundEventType.CONTENT_DELTA:
+                await pending.add_event("content_delta", msg.content)
+            elif msg.event_type == OutboundEventType.REASONING_DELTA:
+                await pending.add_event("reasoning_delta", msg.content)
             return
 
         # Handle as normal OpenAPIChannel message
@@ -213,6 +217,10 @@ class OpenAPIChannel(BaseChannel):
             await pending.add_event("tool_call", msg.content)
         elif msg.event_type == OutboundEventType.TOOL_RESULT:
             await pending.add_event("tool_result", msg.content)
+        elif msg.event_type == OutboundEventType.CONTENT_DELTA:
+            await pending.add_event("content_delta", msg.content)
+        elif msg.event_type == OutboundEventType.REASONING_DELTA:
+            await pending.add_event("reasoning_delta", msg.content)
 
     def get_router(self) -> APIRouter:
         """Get or create the FastAPI router."""
@@ -516,10 +524,14 @@ class OpenAPIChannel(BaseChannel):
                         yield f"data: {ChatStreamEvent(event=EventType.RESPONSE, data={'error': 'timeout'}).model_dump_json()}\n\n"
                         break
 
+                # Signal end of stream so clients can close cleanly.
+                yield f"data: {ChatStreamEvent(event=EventType.DONE, data={}).model_dump_json()}\n\n"
+
             except Exception as e:
                 logger.exception(f"Error in stream generator: {e}")
                 error_event = ChatStreamEvent(event=EventType.RESPONSE, data={"error": str(e)})
                 yield f"data: {error_event.model_dump_json()}\n\n"
+                yield f"data: {ChatStreamEvent(event=EventType.DONE, data={}).model_dump_json()}\n\n"
             finally:
                 self._pending.pop(session_id, None)
 
@@ -662,10 +674,14 @@ class OpenAPIChannel(BaseChannel):
                         yield f"data: {ChatStreamEvent(event=EventType.RESPONSE, data={'error': 'timeout'}).model_dump_json()}\n\n"
                         break
 
+                # Signal end of stream so clients can close cleanly.
+                yield f"data: {ChatStreamEvent(event=EventType.DONE, data={}).model_dump_json()}\n\n"
+
             except Exception as e:
                 logger.exception(f"Error in bot stream generator for channel {channel_id}: {e}")
                 error_event = ChatStreamEvent(event=EventType.RESPONSE, data={"error": str(e)})
                 yield f"data: {error_event.model_dump_json()}\n\n"
+                yield f"data: {ChatStreamEvent(event=EventType.DONE, data={}).model_dump_json()}\n\n"
             finally:
                 # Clean up pending
                 if channel_id in self._bot_pending:

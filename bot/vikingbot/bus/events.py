@@ -14,9 +14,12 @@ class OutboundEventType(str, Enum):
     RESPONSE = "response"  # Normal response message
     TOOL_CALL = "tool_call"  # Tool being called
     TOOL_RESULT = "tool_result"  # Result from tool execution
-    REASONING = "reasoning"  # Reasoning content
+    REASONING = "reasoning"  # Reasoning content (complete block)
     ITERATION = "iteration"  # Iteration marker
     NO_REPLY = "no_reply"  # No reply required
+    CONTENT_DELTA = "content_delta"  # Incremental content chunk from streaming LLM
+    REASONING_DELTA = "reasoning_delta"  # Incremental reasoning chunk from streaming LLM
+    DONE = "done"  # Stream terminator
 
 
 @dataclass

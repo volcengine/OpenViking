@@ -252,11 +252,35 @@ class AgentLoop:
                     )
                 )
 
+            on_content_delta = None
+            on_reasoning_delta = None
+            if publish_events:
+
+                async def on_content_delta(piece: str) -> None:
+                    await self.bus.publish_outbound(
+                        OutboundMessage(
+                            session_key=session_key,
+                            content=piece,
+                            event_type=OutboundEventType.CONTENT_DELTA,
+                        )
+                    )
+
+                async def on_reasoning_delta(piece: str) -> None:
+                    await self.bus.publish_outbound(
+                        OutboundMessage(
+                            session_key=session_key,
+                            content=piece,
+                            event_type=OutboundEventType.REASONING_DELTA,
+                        )
+                    )
+
             response = await self.provider.chat(
                 messages=messages,
                 tools=self.tools.get_definitions(ov_tools_enable=ov_tools_enable),
                 model=self.model,
                 session_id=session_key.safe_name(),
+                on_content_delta=on_content_delta,
+                on_reasoning_delta=on_reasoning_delta,
             )
             if response.usage:
                 cur_token = response.usage

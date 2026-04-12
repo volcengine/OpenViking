@@ -13,7 +13,13 @@ from openai import AsyncOpenAI
 from loguru import logger
 
 from vikingbot.integrations.langfuse import LangfuseClient
-from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from vikingbot.providers.base import (
+    DeltaCallback,
+    LLMProvider,
+    LLMResponse,
+    ToolCallRequest,
+    consume_stream,
+)
 from vikingbot.utils.helpers import cal_str_tokens
 
 
@@ -112,9 +118,15 @@ class OpenAICompatibleProvider(LLMProvider):
         max_tokens: int = 4096,
         temperature: float = 0.7,
         session_id: str | None = None,
+        on_content_delta: DeltaCallback | None = None,
+        on_reasoning_delta: DeltaCallback | None = None,
     ) -> LLMResponse:
         """
         Send a chat completion request to OpenAI-compatible API.
+
+        When either delta callback is provided, the request is sent with
+        stream=True and chunks are forwarded through the callbacks while being
+        accumulated into the final LLMResponse.
 
         Args:
             messages: List of message dicts with 'role' and 'content'.
@@ -123,9 +135,13 @@ class OpenAICompatibleProvider(LLMProvider):
             max_tokens: Maximum tokens in response.
             temperature: Sampling temperature.
             session_id: Optional session ID for tracing.
+            on_content_delta: Optional async callback invoked with each
+                incremental content chunk.
+            on_reasoning_delta: Optional async callback invoked with each
+                incremental reasoning chunk.
 
         Returns:
-            LLMResponse with content and/or tool calls.
+            LLMResponse with accumulated content and/or tool calls.
         """
         model = model or self.default_model
 
@@ -159,8 +175,33 @@ class OpenAICompatibleProvider(LLMProvider):
                         metadata=metadata,
                     )
 
-            response = await self.client.chat.completions.create(**kwargs)
-            llm_response = self._parse_response(response)
+            streaming = on_content_delta is not None or on_reasoning_delta is not None
+            if streaming:
+                kwargs["stream"] = True
+                kwargs["stream_options"] = {"include_usage": True}
+                try:
+                    stream_iter = await self.client.chat.completions.create(**kwargs)
+                except Exception as stream_err:
+                    # Some OpenAI-compatible gateways reject unknown params with
+                    # a 4xx. Retry once without stream_options so usage tracking
+                    # degrades gracefully instead of failing the whole request.
+                    err_text = str(stream_err).lower()
+                    if "stream_options" in err_text or "include_usage" in err_text:
+                        logger.info(
+                            "Gateway rejected stream_options; retrying without usage tracking"
+                        )
+                        kwargs.pop("stream_options", None)
+                        stream_iter = await self.client.chat.completions.create(**kwargs)
+                    else:
+                        raise
+                llm_response = await consume_stream(
+                    stream_iter,
+                    on_content_delta=on_content_delta,
+                    on_reasoning_delta=on_reasoning_delta,
+                )
+            else:
+                response = await self.client.chat.completions.create(**kwargs)
+                llm_response = self._parse_response(response)
 
             # Update and end Langfuse observation
             if langfuse_observation:
