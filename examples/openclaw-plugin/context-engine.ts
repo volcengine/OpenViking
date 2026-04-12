@@ -536,7 +536,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         return false;
       }
       logger.info(
-        `openviking: committed OV session=${sessionId} ovId=${ovId}, archived=${commitResult.archived ?? false}, memories=${memCount}, task_id=${commitResult.task_id ?? "none"}`,
+        `openviking: committed OV session=${sessionId} ovId=${ovId}, archived=${commitResult.archived ?? false}, memories=${memCount}, task_id=${commitResult.task_id ?? "none"}, trace_id=${commitResult.trace_id ?? "none"}`,
       );
       return true;
     } catch (err) {
@@ -917,7 +917,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         logger.info(
           `openviking: committed session=${OVSessionId}, ` +
             `status=${commitResult.status}, archived=${commitResult.archived ?? false}, ` +
-            `task_id=${commitResult.task_id ?? "none"}`,
+            `task_id=${commitResult.task_id ?? "none"}, trace_id=${commitResult.trace_id ?? "none"}`,
         );
 
         diag("afterTurn_commit", OVSessionId, {
@@ -1065,7 +1065,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         }
 
         logger.info(
-          `openviking: compact committed session=${OVSessionId}, archived=${commitResult.archived ?? false}, memories=${memCount}, task_id=${commitResult.task_id ?? "none"}`,
+          `openviking: compact committed session=${OVSessionId}, archived=${commitResult.archived ?? false}, memories=${memCount}, task_id=${commitResult.task_id ?? "none"}, trace_id=${commitResult.trace_id ?? "none"}`,
         );
 
         if (!commitResult.archived) {

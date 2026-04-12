@@ -45,6 +45,7 @@ export type CommitSessionResult = {
   /** Present when wait=true and extraction completed. Keyed by category. */
   memories_extracted?: Record<string, number>;
   error?: string;
+  trace_id?: string;
 };
 
 export type TaskResult = {
