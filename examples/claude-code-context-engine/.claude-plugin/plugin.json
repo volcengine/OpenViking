@@ -1,0 +1,20 @@
+{
+  "name": "openviking-context-engine",
+  "version": "0.2.0",
+  "description": "Full OpenViking context pipeline for Claude Code: persistent sessions, archive compression, auto-recall, context assembly, and memory extraction.",
+  "author": {
+    "name": "OpenViking",
+    "url": "https://github.com/volcengine/OpenViking"
+  },
+  "repository": "https://github.com/volcengine/OpenViking",
+  "license": "Apache-2.0",
+  "keywords": [
+    "context-engine",
+    "memory",
+    "openviking",
+    "session",
+    "archive",
+    "compaction"
+  ],
+  "mcpServers": "./.mcp.json"
+}

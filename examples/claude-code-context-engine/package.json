@@ -1,0 +1,18 @@
+{
+  "name": "claude-code-openviking-context-engine",
+  "version": "0.2.0",
+  "description": "OpenViking context engine plugin for Claude Code — full session pipeline with archive compression and memory extraction",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}

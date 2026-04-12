@@ -1,0 +1,9 @@
+{
+  "openviking-context-engine": {
+    "command": "node",
+    "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/start-context-server.mjs"],
+    "env": {
+      "OPENVIKING_CONFIG_FILE": "${OPENVIKING_CONFIG_FILE:-}"
+    }
+  }
+}
