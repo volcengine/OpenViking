@@ -168,7 +168,11 @@ class TestNormalizeZipFilenames:
             assert member.filename == cp437_name
             normalize_zip_filenames(zf)
             # After normalization, the name should be repaired to CJK
-            # (only if all heuristic conditions are met)
+            repaired = zf.infolist()[0]
+            assert repaired.filename == cjk_name, (
+                f"Expected filename to be repaired to {cjk_name!r}, "
+                f"got {repaired.filename!r}"
+            )
 
 
 # ── safe_extract_zip ─────────────────────────────────────────────────────────
