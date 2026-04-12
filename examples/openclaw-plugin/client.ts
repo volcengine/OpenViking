@@ -152,6 +152,9 @@ export type AddSkillResult = {
   queue_status?: unknown;
 };
 
+const DEFAULT_WAIT_REQUEST_TIMEOUT_MS = 120_000;
+const WAIT_REQUEST_TIMEOUT_BUFFER_MS = 5_000;
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -189,6 +192,14 @@ function toUploadBytes(value: Buffer): Uint8Array {
 
 function toBlobPart(value: Buffer): ArrayBuffer {
   return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength) as ArrayBuffer;
+}
+
+function resolveWaitRequestTimeoutMs(defaultTimeoutMs: number, waitTimeoutSeconds?: number): number {
+  const requestedMs =
+    typeof waitTimeoutSeconds === "number" && Number.isFinite(waitTimeoutSeconds) && waitTimeoutSeconds > 0
+      ? Math.ceil(waitTimeoutSeconds * 1000) + WAIT_REQUEST_TIMEOUT_BUFFER_MS
+      : DEFAULT_WAIT_REQUEST_TIMEOUT_MS;
+  return Math.max(defaultTimeoutMs, requestedMs);
 }
 
 export class OpenVikingClient {
@@ -236,10 +247,15 @@ export class OpenVikingClient {
     );
   }
 
-  private async request<T>(path: string, init: RequestInit = {}, agentId?: string): Promise<T> {
+  private async request<T>(
+    path: string,
+    init: RequestInit = {},
+    agentId?: string,
+    requestTimeoutMs?: number,
+  ): Promise<T> {
     const effectiveAgentId = agentId ?? this.defaultAgentId;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timer = setTimeout(() => controller.abort(), requestTimeoutMs ?? this.timeoutMs);
     try {
       const headers = new Headers(init.headers ?? {});
       if (this.apiKey) {
@@ -513,6 +529,8 @@ export class OpenVikingClient {
     }
 
     let cleanupPath: string | undefined;
+    const requestTimeoutMs =
+      input.wait ? resolveWaitRequestTimeoutMs(this.timeoutMs, input.timeout) : undefined;
     try {
       if (isRemoteResourceSource(pathOrUrl)) {
         body.path = pathOrUrl;
@@ -532,6 +550,7 @@ export class OpenVikingClient {
         "/api/v1/resources",
         { method: "POST", body: JSON.stringify(body) },
         agentId,
+        requestTimeoutMs,
       );
     } finally {
       if (cleanupPath) {
@@ -552,6 +571,8 @@ export class OpenVikingClient {
       timeout: input.timeout,
     };
     let cleanupPath: string | undefined;
+    const requestTimeoutMs =
+      input.wait ? resolveWaitRequestTimeoutMs(this.timeoutMs, input.timeout) : undefined;
     try {
       if (hasPath) {
         const skillPath = input.path!.trim();
@@ -571,6 +592,7 @@ export class OpenVikingClient {
         "/api/v1/skills",
         { method: "POST", body: JSON.stringify(body) },
         agentId,
+        requestTimeoutMs,
       );
     } finally {
       if (cleanupPath) {

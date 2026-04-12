@@ -706,8 +706,11 @@ const contextEnginePlugin = {
         title,
         ...items.map((item, index) => {
           const score = typeof item.score === "number" ? `\n   score: ${item.score.toFixed(2)}` : "";
-          const summary = item.abstract || item.overview || "(no summary)";
-          return `${index + 1}. ${item.uri}\n   ${summary}${score}`;
+          const summary = (item.abstract || item.overview || "(no summary)")
+            .split("\n")
+            .map((line) => `   ${line}`)
+            .join("\n");
+          return `${index + 1}. ${item.uri}\n${summary}${score}`;
         }),
       ];
     };
