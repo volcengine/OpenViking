@@ -6,9 +6,12 @@ import {
   FolderTreeIcon,
   HomeIcon,
   LanguagesIcon,
+  MoonIcon,
   PlugZapIcon,
+  SunIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { useTheme } from 'next-themes'
 
 import { ConnectionDialog } from '#/components/connection-dialog'
 import { Badge } from '#/components/ui/badge'
@@ -100,6 +103,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
   const { i18n, t } = useTranslation(['appShell', 'common'])
   const pathname = useRouterState({ select: (state) => state.location.pathname })
   const { openConnectionDialog, serverMode } = useAppConnection()
+  const { setTheme, resolvedTheme } = useTheme()
   const currentItem = NAV_ITEMS.find((item) => pathname === item.to || pathname.startsWith(`${item.to}/`))
   const serverModeBadge = describeServerMode(serverMode)
   const currentLanguage = resolveLanguage(i18n.resolvedLanguage ?? i18n.language)
@@ -125,6 +129,16 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
           <Badge variant={serverModeBadge.variant}>
             {t(serverModeBadge.labelKey, { ns: 'common' })}
           </Badge>
+
+          <button
+            type='button'
+            aria-label='Toggle theme'
+            className={buttonVariants({ size: 'sm', variant: 'outline' })}
+            onClick={() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}
+          >
+            <SunIcon className='size-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0' />
+            <MoonIcon className='absolute size-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100' />
+          </button>
 
           <DropdownMenu>
             <DropdownMenuTrigger
