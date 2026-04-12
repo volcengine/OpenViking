@@ -7,12 +7,14 @@ import { fileNameFromUri, parentUri as getParentUri } from '../-lib/normalize'
 import { useVikingFind } from '../-hooks/viking-fm'
 import type { FindContextType, FindResultItem, GroupedFindResult } from '../-types/viking-fm'
 import { FilePreview } from './file-preview'
+import { DirBrowser } from './dir-browser'
 
 interface FindPaletteProps {
   open: boolean
   onClose: () => void
   onNavigate: (uri: string) => void
   onNavigateDir: (uri: string) => void
+  onScopeChange: (uri: string) => void
   scopeUri?: string
 }
 
@@ -64,13 +66,14 @@ function toFsEntry(item: FindResultItem): { uri: string; name: string; isDir: bo
   }
 }
 
-export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri }: FindPaletteProps) {
+export function FindPalette({ open, onClose, onNavigate, onNavigateDir, onScopeChange, scopeUri }: FindPaletteProps) {
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const resultsRef = useRef<HTMLDivElement>(null)
   const composingRef = useRef(false)
 
+  const isDirMode = query === '/'
   const isRoot = !scopeUri || scopeUri === 'viking://'
   const findQuery = useVikingFind(query, !isRoot ? scopeUri : undefined)
   const data = findQuery.data
@@ -130,6 +133,11 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (composingRef.current) return
+      if (isDirMode) {
+        // Dir mode handles its own keys via DirBrowser
+        if (e.key === 'Escape') { e.preventDefault(); onClose() }
+        return
+      }
       switch (e.key) {
         case 'ArrowDown': {
           e.preventDefault()
@@ -220,7 +228,7 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
           <input
             ref={inputRef}
             type="text"
-            placeholder="搜索..."
+            placeholder="搜索... 输入 / 浏览目录"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onCompositionStart={() => { composingRef.current = true }}
@@ -245,66 +253,86 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
 
         {/* Body */}
         <div className="flex min-h-0" ref={resultsRef}>
-          {/* Results area */}
-          <div className={cn('min-h-0 flex-1 overflow-hidden', showPreview && 'border-r')}>
-            {!query.trim() ? (
-              <div className="px-4 py-8 text-center text-xs text-muted-foreground/80">
-                输入关键词开始语义搜索
-              </div>
-            ) : findQuery.isLoading ? (
-              <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
-                <Loader2 className="size-4 animate-spin" />
-              </div>
-            ) : findQuery.error ? (
-              <div className="px-4 py-6 text-center text-xs text-destructive">搜索出错</div>
-            ) : !hasResults ? (
-              <div className="px-4 py-8 text-center text-xs text-muted-foreground/80">未找到相关结果</div>
-            ) : visibleColumns.length > 1 ? (
-              <div className="flex h-80 divide-x overflow-hidden">
-                {visibleColumns.map((col) => {
-                  const colItems = flatItems.filter((fi) => fi.type === col.type)
-                  return (
+          {isDirMode ? (
+            <DirBrowser
+              startUri={scopeUri || 'viking://'}
+              onSelect={(uri) => {
+                onScopeChange(uri)
+                setQuery('')
+              }}
+              onCancel={() => setQuery('')}
+            />
+          ) : (
+            <>
+              {/* Results area */}
+              <div className={cn('min-h-0 flex-1 overflow-hidden', showPreview && 'border-r')}>
+                {!query.trim() ? (
+                  <div className="px-4 py-8 text-center text-xs text-muted-foreground/80">
+                    输入关键词搜索，输入 <kbd className="rounded border border-border bg-muted/50 px-1 py-0.5 font-mono text-[11px] text-foreground/70">/</kbd> 浏览目录
+                  </div>
+                ) : findQuery.isLoading ? (
+                  <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
+                    <Loader2 className="size-4 animate-spin" />
+                  </div>
+                ) : findQuery.error ? (
+                  <div className="px-4 py-6 text-center text-xs text-destructive">搜索出错</div>
+                ) : !hasResults ? (
+                  <div className="px-4 py-8 text-center text-xs text-muted-foreground/80">未找到相关结果</div>
+                ) : visibleColumns.length > 1 ? (
+                  <div className="flex h-80 divide-x overflow-hidden">
+                    {visibleColumns.map((col) => {
+                      const colItems = flatItems.filter((fi) => fi.type === col.type)
+                      return (
+                        <ResultColumn
+                          key={col.key}
+                          type={col.type}
+                          items={colItems}
+                          activeIndex={activeIndex}
+                          onSelect={(fi) => { onNavigate(fi.item.uri); onClose() }}
+                          onOpenDir={(fi) => { onNavigateDir(getParentUri(fi.item.uri)); onClose() }}
+                          onHover={(fi) => setActiveIndex(fi.flatIndex)}
+                        />
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <div className="max-h-80 overflow-y-auto overscroll-contain">
                     <ResultColumn
-                      key={col.key}
-                      type={col.type}
-                      items={colItems}
+                      type={visibleColumns[0]?.type ?? 'resource'}
+                      items={flatItems}
                       activeIndex={activeIndex}
                       onSelect={(fi) => { onNavigate(fi.item.uri); onClose() }}
                       onOpenDir={(fi) => { onNavigateDir(getParentUri(fi.item.uri)); onClose() }}
                       onHover={(fi) => setActiveIndex(fi.flatIndex)}
+                      hideHeader
                     />
-                  )
-                })}
+                  </div>
+                )}
               </div>
-            ) : (
-              <div className="max-h-80 overflow-y-auto overscroll-contain">
-                <ResultColumn
-                  type={visibleColumns[0]?.type ?? 'resource'}
-                  items={flatItems}
-                  activeIndex={activeIndex}
-                  onSelect={(fi) => { onNavigate(fi.item.uri); onClose() }}
-                  onOpenDir={(fi) => { onNavigateDir(getParentUri(fi.item.uri)); onClose() }}
-                  onHover={(fi) => setActiveIndex(fi.flatIndex)}
-                  hideHeader
-                />
-              </div>
-            )}
-          </div>
 
-          {/* Preview pane */}
-          {showPreview && (
-            <div className="animate-palette-preview flex h-80 w-80 flex-col overflow-hidden">
-              <FilePreview
-                file={toFsEntry(activeItem.item)}
-                onClose={() => setActiveIndex(-1)}
-                showCloseButton={false}
-              />
-            </div>
+              {/* Preview pane */}
+              {showPreview && (
+                <div className="animate-palette-preview flex h-80 w-80 flex-col overflow-hidden">
+                  <FilePreview
+                    file={toFsEntry(activeItem.item)}
+                    onClose={() => setActiveIndex(-1)}
+                    showCloseButton={false}
+                  />
+                </div>
+              )}
+            </>
           )}
         </div>
 
         {/* Footer */}
-        {hasResults && (
+        {isDirMode ? (
+          <div className="flex items-center gap-3 border-t px-4 py-2 text-xs text-muted-foreground/70">
+            <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">↑↓</kbd> 选择</span>
+            <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">←→</kbd> 层级</span>
+            <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">↵</kbd> 确定</span>
+            <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">esc</kbd> 取消</span>
+          </div>
+        ) : hasResults && (
           <div className="flex items-center gap-3 border-t px-4 py-2 text-xs text-muted-foreground/70">
             <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">↑↓</kbd> 导航</span>
             {visibleColumns.length > 1 && (
