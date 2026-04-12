@@ -95,18 +95,20 @@ export function VikingFileManager({
     return () => document.removeEventListener('keydown', handler)
   }, [])
 
-  const updateUri = (uri: string) => {
+  const updateUri = useCallback((uri: string) => {
     const normalized = normalizeDirUri(uri)
     setCurrentUri(normalized)
     setSelectedFile(null)
-  }
+  }, [])
 
-  const handleNavigateFromSearch = (uri: string) => {
+  const handleNavigateFromSearch = useCallback((uri: string) => {
     if (isDirectoryUri(uri)) {
-      updateUri(uri)
+      const normalized = normalizeDirUri(uri)
+      setCurrentUri(normalized)
+      setSelectedFile(null)
     } else {
       const dirUri = parentUri(uri)
-      updateUri(dirUri)
+      setCurrentUri(normalizeDirUri(dirUri))
       const name = uri.split('/').pop() || uri
       setSelectedFile({
         uri: normalizeFileUri(uri),
@@ -119,7 +121,7 @@ export function VikingFileManager({
         abstract: '',
       })
     }
-  }
+  }, [])
 
   const listQuery = useVikingFsList(currentUri, {
     output: 'agent',
@@ -165,12 +167,14 @@ export function VikingFileManager({
 
   const [treeWidth, setTreeWidth] = useState(280)
   const dragging = useRef(false)
+  const treeWidthRef = useRef(treeWidth)
+  treeWidthRef.current = treeWidth
 
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
     dragging.current = true
     const startX = e.clientX
-    const startWidth = treeWidth
+    const startWidth = treeWidthRef.current
 
     const onMove = (ev: MouseEvent) => {
       const newWidth = Math.min(Math.max(startWidth + ev.clientX - startX, 160), 600)
@@ -187,7 +191,7 @@ export function VikingFileManager({
     document.body.style.userSelect = 'none'
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
-  }, [treeWidth])
+  }, [])
 
   // --- Toolbar ---
   const toolbar = (

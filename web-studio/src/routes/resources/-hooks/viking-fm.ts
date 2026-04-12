@@ -62,10 +62,10 @@ export function useVikingFilePreview(
 ) {
   const maxAutoReadBytes = policy.maxAutoReadBytes ?? 2 * 1024 * 1024
   const defaultReadLimit = policy.defaultReadLimit ?? 500
-  const effectiveReadOptions = {
+  const effectiveReadOptions = useMemo(() => ({
     offset: readOptions.offset ?? 0,
     limit: readOptions.limit ?? defaultReadLimit,
-  }
+  }), [readOptions.offset, readOptions.limit, defaultReadLimit])
 
   const autoRead = useMemo(
     () =>

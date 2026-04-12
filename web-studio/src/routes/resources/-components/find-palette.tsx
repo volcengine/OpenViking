@@ -101,7 +101,7 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, onScopeC
   // Reset index when results change
   useEffect(() => {
     setActiveIndex(0)
-  }, [flatItems.length])
+  }, [data])
 
   // Scroll active item into view
   useEffect(() => {
@@ -109,18 +109,6 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, onScopeC
     const el = resultsRef.current.querySelector('[data-active="true"]')
     el?.scrollIntoView({ block: 'nearest' })
   }, [activeIndex])
-
-  // Global Cmd+K handler
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-        e.preventDefault()
-        if (open) onClose()
-      }
-    }
-    document.addEventListener('keydown', handler)
-    return () => document.removeEventListener('keydown', handler)
-  }, [open, onClose])
 
   // Build column-grouped index for left/right navigation
   const columnGroups = useMemo(() => {
@@ -215,8 +203,8 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, onScopeC
   const paletteMaxWidth = showPreview ? 'max-w-4xl' : visibleColumns.length > 1 ? 'max-w-3xl' : 'max-w-lg'
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-[12vh]">
-      <div className="animate-palette-backdrop absolute inset-0 bg-background/60 backdrop-blur-sm" onClick={onClose} />
+    <div className="fixed inset-0 z-50 flex items-start justify-center pt-[12vh]" role="dialog" aria-modal="true" aria-label="搜索">
+      <div className="animate-palette-backdrop absolute inset-0 bg-background/60 backdrop-blur-sm" role="presentation" onClick={onClose} />
 
       <div
         className={cn('animate-palette-in relative flex w-full flex-col overflow-hidden rounded-xl border bg-background shadow-2xl shadow-black/20 transition-[max-width] duration-300', paletteMaxWidth)}

@@ -8,20 +8,12 @@ import { useVikingFsList } from '../-hooks/viking-fm'
 import type { VikingFsEntry } from '../-types/viking-fm'
 
 interface DirBrowserProps {
-  /** The directory to start browsing from */
   startUri: string
   onSelect: (uri: string) => void
   onCancel: () => void
 }
 
-/**
- * Two-column directory browser.
- * Left column = siblings of current dir (parent's children).
- * Right column = children of the selected dir in left column.
- * ← goes up one level, → drills into selected child.
- */
 export function DirBrowser({ startUri, onSelect, onCancel }: DirBrowserProps) {
-  // Left column shows contents of `parentUri`, with `focusUri` highlighted
   const [focusUri, setFocusUri] = useState(() => normalizeDirUri(startUri))
   const [activeCol, setActiveCol] = useState<'left' | 'right'>('left')
   const [leftIndex, setLeftIndex] = useState(0)
@@ -41,89 +33,91 @@ export function DirBrowser({ startUri, onSelect, onCancel }: DirBrowserProps) {
     [rightQuery.data],
   )
 
-  // Sync leftIndex when focusUri changes
   useEffect(() => {
     const idx = leftDirs.findIndex((e) => normalizeDirUri(e.uri) === focusUri)
     if (idx >= 0) setLeftIndex(idx)
   }, [leftDirs, focusUri])
 
-  // Reset right index when focus changes
   useEffect(() => {
     setRightIndex(0)
   }, [focusUri])
 
-  // Scroll active into view
   useEffect(() => {
     if (!containerRef.current) return
     const el = containerRef.current.querySelector('[data-active="true"]')
     el?.scrollIntoView({ block: 'nearest' })
   }, [leftIndex, rightIndex, activeCol])
 
-  // Keyboard navigation via document listener (input keeps focus)
+  /** Called by parent (FindPalette) via onKeyDown forwarding */
+  const handleKey = (key: string): boolean => {
+    switch (key) {
+      case 'ArrowDown': {
+        if (activeCol === 'left') {
+          const next = Math.min(leftIndex + 1, leftDirs.length - 1)
+          setLeftIndex(next)
+          if (leftDirs[next]) setFocusUri(normalizeDirUri(leftDirs[next].uri))
+        } else {
+          setRightIndex((i) => Math.min(i + 1, rightDirs.length - 1))
+        }
+        return true
+      }
+      case 'ArrowUp': {
+        if (activeCol === 'left') {
+          const next = Math.max(leftIndex - 1, 0)
+          setLeftIndex(next)
+          if (leftDirs[next]) setFocusUri(normalizeDirUri(leftDirs[next].uri))
+        } else {
+          setRightIndex((i) => Math.max(i - 1, 0))
+        }
+        return true
+      }
+      case 'ArrowRight': {
+        if (activeCol === 'left' && rightDirs.length > 0) {
+          setActiveCol('right')
+        } else if (activeCol === 'right' && rightDirs[rightIndex]?.isDir) {
+          setFocusUri(normalizeDirUri(rightDirs[rightIndex].uri))
+          setActiveCol('left')
+        }
+        return true
+      }
+      case 'ArrowLeft': {
+        if (activeCol === 'right') {
+          setActiveCol('left')
+        } else if (leftParent !== focusUri) {
+          setFocusUri(leftParent)
+          setActiveCol('left')
+        }
+        return true
+      }
+      case 'Enter': {
+        const selectedUri = activeCol === 'left'
+          ? focusUri
+          : rightDirs[rightIndex]
+            ? normalizeDirUri(rightDirs[rightIndex].uri)
+            : focusUri
+        onSelect(selectedUri)
+        return true
+      }
+      case 'Escape': {
+        onCancel()
+        return true
+      }
+      default:
+        return false
+    }
+  }
+
+  // Expose handleKey to parent via ref-like pattern using a stable callback
+  // We use a useEffect + document listener approach but scoped to when component is mounted
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      switch (e.key) {
-        case 'ArrowDown': {
-          e.preventDefault()
-          if (activeCol === 'left') {
-            const next = Math.min(leftIndex + 1, leftDirs.length - 1)
-            setLeftIndex(next)
-            if (leftDirs[next]) setFocusUri(normalizeDirUri(leftDirs[next].uri))
-          } else {
-            setRightIndex((i) => Math.min(i + 1, rightDirs.length - 1))
-          }
-          break
-        }
-        case 'ArrowUp': {
-          e.preventDefault()
-          if (activeCol === 'left') {
-            const next = Math.max(leftIndex - 1, 0)
-            setLeftIndex(next)
-            if (leftDirs[next]) setFocusUri(normalizeDirUri(leftDirs[next].uri))
-          } else {
-            setRightIndex((i) => Math.max(i - 1, 0))
-          }
-          break
-        }
-        case 'ArrowRight': {
-          e.preventDefault()
-          if (activeCol === 'left' && rightDirs.length > 0) {
-            setActiveCol('right')
-          } else if (activeCol === 'right' && rightDirs[rightIndex]?.isDir) {
-            setFocusUri(normalizeDirUri(rightDirs[rightIndex].uri))
-            setActiveCol('left')
-          }
-          break
-        }
-        case 'ArrowLeft': {
-          e.preventDefault()
-          if (activeCol === 'right') {
-            setActiveCol('left')
-          } else if (leftParent !== focusUri) {
-            setFocusUri(leftParent)
-            setActiveCol('left')
-          }
-          break
-        }
-        case 'Enter': {
-          e.preventDefault()
-          const selectedUri = activeCol === 'left'
-            ? focusUri
-            : rightDirs[rightIndex]
-              ? normalizeDirUri(rightDirs[rightIndex].uri)
-              : focusUri
-          onSelect(selectedUri)
-          break
-        }
-        case 'Escape':
-          e.preventDefault()
-          onCancel()
-          break
+      if (handleKey(e.key)) {
+        e.preventDefault()
       }
     }
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
-  }, [activeCol, leftIndex, rightIndex, leftDirs, rightDirs, focusUri, leftParent, onSelect, onCancel])
+  })
 
   const isLoading = leftQuery.isLoading
 
@@ -135,7 +129,6 @@ export function DirBrowser({ startUri, onSelect, onCancel }: DirBrowserProps) {
         </div>
       ) : (
         <>
-          {/* Left column: parent's children */}
           <DirColumn
             label={leftParent === 'viking://' ? 'viking://' : fileNameFromUri(leftParent.replace(/\/$/, ''))}
             dirs={leftDirs}
@@ -153,8 +146,6 @@ export function DirBrowser({ startUri, onSelect, onCancel }: DirBrowserProps) {
               if (idx >= 0) setLeftIndex(idx)
             }}
           />
-
-          {/* Right column: focusUri's children */}
           <DirColumn
             label={fileNameFromUri(focusUri.replace(/\/$/, ''))}
             dirs={rightDirs}
