@@ -224,7 +224,7 @@ export function VikingFileManager({
 
       <button
         type="button"
-        className="ml-auto flex items-center gap-2 rounded-md border border-border/60 bg-muted/30 px-2.5 py-1 text-xs text-muted-foreground/60 transition-colors hover:bg-muted hover:text-muted-foreground"
+        className="ml-auto flex items-center gap-2 rounded-md border border-border/60 bg-muted/30 px-2.5 py-1 text-xs text-muted-foreground/60 transition-all hover:-translate-y-px hover:bg-muted hover:text-muted-foreground hover:shadow-sm active:translate-y-0 active:shadow-none"
         onClick={() => setPaletteOpen(true)}
       >
         <Search className="size-3.5" />

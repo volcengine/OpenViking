@@ -77,6 +77,18 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, onScopeC
   const isRoot = !scopeUri || scopeUri === 'viking://'
   const findQuery = useVikingFind(query, !isRoot ? scopeUri : undefined)
   const data = findQuery.data
+  const [scopeFlash, setScopeFlash] = useState(false)
+  const prevScopeRef = useRef(scopeUri)
+
+  // Flash scope badge when scope changes
+  useEffect(() => {
+    if (prevScopeRef.current !== scopeUri) {
+      prevScopeRef.current = scopeUri
+      setScopeFlash(true)
+      const t = setTimeout(() => setScopeFlash(false), 600)
+      return () => clearTimeout(t)
+    }
+  }, [scopeUri])
 
   const hasResults = data && data.total > 0
   const flatItems = useMemo(() => (data ? flattenResults(data) : []), [data])
@@ -232,7 +244,7 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, onScopeC
               <X className="size-3.5" />
             </button>
           )}
-          <span className="flex items-center gap-1 text-xs text-muted-foreground/70">
+          <span className={cn('flex items-center gap-1 text-xs text-muted-foreground/70', scopeFlash && 'animate-scope-flash')}>
             {isRoot ? '全局' : (
               <><FolderOpen className="size-3" />{scopeUri?.split('/').filter(Boolean).pop()}</>
             )}
@@ -255,17 +267,25 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, onScopeC
               {/* Results area */}
               <div className={cn('min-h-0 flex-1 overflow-hidden', showPreview && 'border-r')}>
                 {!query.trim() ? (
-                  <div className="px-4 py-8 text-center text-xs text-muted-foreground/80">
-                    输入关键词搜索，输入 <kbd className="rounded border border-border bg-muted/50 px-1 py-0.5 font-mono text-[11px] text-foreground/70">/</kbd> 浏览目录
+                  <div className="animate-palette-in flex flex-col items-center gap-3 px-4 py-12 text-center">
+                    <Search className="size-6 text-muted-foreground/30" />
+                    <div>
+                      <p className="text-sm text-muted-foreground/70">语义搜索知识库</p>
+                      <p className="mt-1 text-xs text-muted-foreground/50">
+                        输入 <kbd className="rounded border border-border bg-muted/50 px-1 py-0.5 font-mono text-[11px] text-foreground/70">/</kbd> 浏览目录结构
+                      </p>
+                    </div>
                   </div>
                 ) : findQuery.isLoading ? (
-                  <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
-                    <Loader2 className="size-4 animate-spin" />
-                  </div>
+                  <LoadingHint />
                 ) : findQuery.error ? (
                   <div className="px-4 py-6 text-center text-xs text-destructive">搜索出错</div>
                 ) : !hasResults ? (
-                  <div className="px-4 py-8 text-center text-xs text-muted-foreground/80">未找到相关结果</div>
+                  <div className="flex flex-col items-center gap-2 px-4 py-12 text-center">
+                    <Search className="size-5 text-muted-foreground/25" />
+                    <p className="text-sm text-muted-foreground/60">没有找到匹配的内容</p>
+                    <p className="text-xs text-muted-foreground/40">试试换个关键词？</p>
+                  </div>
                 ) : visibleColumns.length > 1 ? (
                   <div className="flex h-80 divide-x overflow-hidden">
                     {visibleColumns.map((col) => {
@@ -336,7 +356,34 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, onScopeC
   )
 }
 
-/* ---- Result Column ---- */
+/* ---- Loading Hint ---- */
+
+const LOADING_HINTS = [
+  '正在检索向量索引...',
+  '扫描知识库层级结构...',
+  '匹配语义相关内容...',
+  '对结果重排序...',
+]
+
+function LoadingHint() {
+  const [hintIndex, setHintIndex] = useState(0)
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setHintIndex((i) => (i + 1) % LOADING_HINTS.length)
+    }, 1500)
+    return () => clearInterval(timer)
+  }, [])
+
+  return (
+    <div className="flex flex-col items-center gap-3 py-12">
+      <Loader2 className="size-5 animate-spin text-muted-foreground/50" />
+      <p key={hintIndex} className="animate-palette-in text-xs text-muted-foreground/60">
+        {LOADING_HINTS[hintIndex]}
+      </p>
+    </div>
+  )
+}
 
 function ResultColumn({
   type,
@@ -378,13 +425,16 @@ function ResultColumn({
               type="button"
               data-active={isActive}
               className={cn(
-                'animate-palette-row group flex w-full items-start gap-2 px-3 py-2 text-left text-sm transition-colors',
+                'animate-palette-row group relative flex w-full items-start gap-2 px-3 py-2 text-left text-sm transition-colors',
                 isActive ? 'bg-primary/8 text-foreground' : 'text-foreground/80 hover:bg-muted/40',
               )}
               style={{ animationDelay: `${i * 30}ms` }}
               onClick={() => onSelect(fi)}
               onMouseEnter={() => onHover(fi)}
             >
+              {isActive && (
+                <span className="absolute inset-y-0 left-0 w-0.5 rounded-r bg-primary" />
+              )}
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-medium">{name}</div>
                 <div className="mt-0.5 truncate text-xs text-muted-foreground/80">{parent}</div>
