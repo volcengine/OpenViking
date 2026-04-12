@@ -286,11 +286,12 @@ export function AddResourcePage() {
             {/* Upload Progress / Processing / Result */}
             {phase === 'uploading' && (
               <div className="space-y-2">
-                <Progress value={uploadState.progress}>
-                  <span className="text-sm text-muted-foreground">
+                <div className="space-y-1">
+                  <Progress value={uploadState.progress} />
+                  <p className="text-right text-xs text-muted-foreground">
                     {t('upload.progress', { progress: uploadState.progress })}
-                  </span>
-                </Progress>
+                  </p>
+                </div>
                 <Button variant="outline" size="sm" onClick={handleReset}>
                   {t('cancelUpload')}
                 </Button>

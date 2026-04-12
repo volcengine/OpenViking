@@ -99,7 +99,7 @@ const en = {
     dropzone: {
       title: 'Drag & drop a file here, or click to select',
       hint: 'Only one file at a time.',
-      supportedFormats: 'Supports PDF, Word, PPT, Excel, Markdown, code files, images, and more',
+      supportedFormats: 'Supports PDF, Word, PPTX, Excel, Markdown, code files, images, and more',
     },
     fileInfo: {
       name: 'File',

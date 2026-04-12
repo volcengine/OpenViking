@@ -99,7 +99,7 @@ const zhCN = {
     dropzone: {
       title: '拖拽文件到此处，或点击选择文件',
       hint: '每次只能上传一个文件。',
-      supportedFormats: '支持 PDF、Word、PPT、Excel、Markdown、代码文件、图片等',
+      supportedFormats: '支持 PDF、Word、PPTX、Excel、Markdown、代码文件、图片等',
     },
     fileInfo: {
       name: '文件',
