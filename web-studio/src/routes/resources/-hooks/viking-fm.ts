@@ -1,9 +1,10 @@
 import { useMemo, useRef, useCallback } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { fetchFileContent, fetchFsList, fetchFsTree } from '../-lib/api'
+import { fetchFileContent, fetchFind, fetchFindAllTypes, fetchFsList, fetchFsTree } from '../-lib/api'
 import { detectFileType, normalizeDirUri, shouldAutoRead } from '../-lib/normalize'
 import type {
+  GroupedFindResult,
   VikingFsEntry,
   VikingListQueryOptions,
   VikingPreviewPolicy,
@@ -146,4 +147,17 @@ export function useInvalidateVikingFs() {
         queryKey: uri ? ['viking-file-read', uri] : ['viking-file-read'],
       }),
   }
+}
+
+export function useVikingFind(query: string, targetUri?: string) {
+  const isRoot = !targetUri || targetUri === 'viking://'
+  return useQuery<GroupedFindResult>({
+    queryKey: ['viking-find', query, targetUri],
+    queryFn: () =>
+      isRoot
+        ? fetchFindAllTypes(query)
+        : fetchFind(query, { targetUri }),
+    enabled: query.trim().length > 0,
+    staleTime: 60_000,
+  })
 }

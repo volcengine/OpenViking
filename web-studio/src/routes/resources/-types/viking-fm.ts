@@ -76,3 +76,27 @@ export interface VikingApiError {
   statusCode?: number
   details?: unknown
 }
+
+// --- Find / Search types ---
+
+export type FindContextType = 'memory' | 'resource' | 'skill'
+
+export interface FindResultItem {
+  uri: string
+  context_type: FindContextType
+  level: number
+  score: number
+  abstract: string
+  overview?: string | null
+  category: string
+  match_reason: string
+  tags?: string
+  relations: Array<{ uri: string; abstract: string }>
+}
+
+export interface GroupedFindResult {
+  memories: FindResultItem[]
+  resources: FindResultItem[]
+  skills: FindResultItem[]
+  total: number
+}
