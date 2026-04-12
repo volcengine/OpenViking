@@ -153,7 +153,7 @@ export async function fetchFind(query: string, options: FetchFindOptions = {}): 
         body: {
           query,
           target_uri: options.targetUri,
-          limit: options.limit ?? 50,
+          limit: options.limit ?? 10,
           score_threshold: options.scoreThreshold,
           filter: options.filter,
         },

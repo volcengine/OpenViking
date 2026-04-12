@@ -201,6 +201,36 @@
   animation: palette-row-in 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
+.scrollbar-fade {
+  scrollbar-width: none;
+  scrollbar-color: color-mix(in oklch, var(--foreground) 22%, transparent) transparent;
+}
+
+.scrollbar-fade::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.scrollbar-fade:is(:hover, :focus-within, [data-scrolling="true"]) {
+  scrollbar-width: thin;
+}
+
+.scrollbar-fade:is(:hover, :focus-within, [data-scrolling="true"])::-webkit-scrollbar {
+  width: 0.5rem;
+  height: 0.5rem;
+}
+
+.scrollbar-fade:is(:hover, :focus-within, [data-scrolling="true"])::-webkit-scrollbar-thumb {
+  background: color-mix(in oklch, var(--foreground) 20%, transparent);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+
+.scrollbar-fade:is(:hover, :focus-within, [data-scrolling="true"])::-webkit-scrollbar-track {
+  background: transparent;
+}
+
 /* Offset sidebar below the top header bar */
 [data-slot="sidebar-container"] {
   top: var(--header-height, 3.5rem);

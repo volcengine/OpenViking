@@ -297,7 +297,6 @@ export function VikingFileManager({
         onClose={() => setPaletteOpen(false)}
         onNavigate={handleNavigateFromSearch}
         onNavigateDir={(uri) => { updateUri(uri); setPaletteOpen(false) }}
-        onScopeChange={(uri) => updateUri(uri)}
         scopeUri={currentUri}
       />
     </div>

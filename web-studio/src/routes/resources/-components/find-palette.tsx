@@ -2,9 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Brain, FileText, FolderOpen, Loader2, Search, Wrench, X } from 'lucide-react'
 
 import { cn } from '#/lib/utils'
+import { useTransientScrollbar } from '#/hooks/use-transient-scrollbar'
 
-import { fileNameFromUri, parentUri as getParentUri } from '../-lib/normalize'
-import { useVikingFind, useVikingFsStat } from '../-hooks/viking-fm'
+import { fileNameFromUri, normalizeDirUri, parentUri as getParentUri } from '../-lib/normalize'
+import { useVikingFind, useVikingFsList, useVikingFsStat } from '../-hooks/viking-fm'
 import type { FindContextType, FindResultItem, GroupedFindResult } from '../-types/viking-fm'
 import { FilePreview } from './file-preview'
 import { DirBrowser } from './dir-browser'
@@ -14,7 +15,6 @@ interface FindPaletteProps {
   onClose: () => void
   onNavigate: (uri: string) => void
   onNavigateDir: (uri: string) => void
-  onScopeChange: (uri: string) => void
   scopeUri?: string
 }
 
@@ -35,6 +35,30 @@ const COLUMNS: Array<{ key: keyof Pick<GroupedFindResult, 'resources' | 'memorie
   { key: 'memories', type: 'memory' },
   { key: 'skills', type: 'skill' },
 ]
+
+const findPaletteSession = {
+  inputQuery: '',
+  submittedQuery: '',
+  targetUri: undefined as string | undefined,
+}
+
+function parseScopeCommand(query: string): string | null {
+  const trimmed = query.trim()
+  if (!trimmed.startsWith('/')) return null
+
+  const rawPath = trimmed.slice(1).trim()
+  if (!rawPath) return null
+
+  const normalizedPath = rawPath
+    .split('/')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join('/')
+
+  if (!normalizedPath) return 'viking://'
+
+  return normalizeDirUri(`viking://${normalizedPath}`)
+}
 
 function flattenResults(data: GroupedFindResult): FlatItem[] {
   const items: FlatItem[] = []
@@ -66,17 +90,31 @@ function toFsEntry(item: FindResultItem): { uri: string; name: string; isDir: bo
   }
 }
 
-export function FindPalette({ open, onClose, onNavigate, onNavigateDir, onScopeChange, scopeUri }: FindPaletteProps) {
-  const [query, setQuery] = useState('')
+export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri }: FindPaletteProps) {
+  const [query, setQuery] = useState(() => findPaletteSession.inputQuery)
+  const [submittedQuery, setSubmittedQuery] = useState(() => findPaletteSession.submittedQuery)
+  const [findTargetUri, setFindTargetUri] = useState(() =>
+    normalizeDirUri(findPaletteSession.targetUri || scopeUri || 'viking://'),
+  )
   const [activeIndex, setActiveIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const resultsRef = useRef<HTMLDivElement>(null)
   const composingRef = useRef(false)
 
   const isDirMode = query === '/'
-  const isRoot = !scopeUri || scopeUri === 'viking://'
-  const findQuery = useVikingFind(query, !isRoot ? scopeUri : undefined)
-  const data = findQuery.data
+  const scopeCommandUri = isDirMode ? null : parseScopeCommand(query)
+  const hasQuery = submittedQuery.trim().length > 0
+  const isRoot = findTargetUri === 'viking://'
+  const scopeValidationQuery = useVikingFsList(
+    scopeCommandUri || 'viking://',
+    { output: 'agent', showAllHidden: true, nodeLimit: 1 },
+    Boolean(scopeCommandUri && scopeCommandUri !== 'viking://'),
+  )
+  const isScopeCommandValid = Boolean(scopeCommandUri) && (
+    scopeCommandUri === 'viking://' || scopeValidationQuery.isSuccess
+  )
+  const findQuery = useVikingFind(submittedQuery, !isRoot ? findTargetUri : undefined)
+  const data = hasQuery && !scopeCommandUri ? findQuery.data : undefined
 
   const hasResults = data && data.total > 0
   const flatItems = useMemo(() => (data ? flattenResults(data) : []), [data])
@@ -113,20 +151,24 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, onScopeC
     setActiveIndex(0)
   }, [data])
 
+  useEffect(() => {
+    findPaletteSession.inputQuery = query
+  }, [query])
+
+  useEffect(() => {
+    findPaletteSession.submittedQuery = submittedQuery
+  }, [submittedQuery])
+
+  useEffect(() => {
+    findPaletteSession.targetUri = findTargetUri
+  }, [findTargetUri])
+
   // Scroll active item into view
   useEffect(() => {
     if (!resultsRef.current) return
     const el = resultsRef.current.querySelector('[data-active="true"]')
     el?.scrollIntoView({ block: 'nearest' })
   }, [activeIndex])
-
-  // Build column-grouped index for left/right navigation
-  const columnGroups = useMemo(() => {
-    if (visibleColumns.length <= 1) return null
-    return visibleColumns.map((col) =>
-      flatItems.filter((fi) => fi.type === col.type).map((fi) => fi.flatIndex),
-    )
-  }, [visibleColumns, flatItems])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -136,64 +178,48 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, onScopeC
         if (e.key === 'Escape') { e.preventDefault(); onClose() }
         return
       }
+      if (scopeCommandUri) {
+        switch (e.key) {
+          case 'Enter':
+            e.preventDefault()
+            if (!isScopeCommandValid) return
+            setFindTargetUri(scopeCommandUri)
+            setActiveIndex(0)
+            setQuery('')
+            setSubmittedQuery('')
+            return
+          case 'Escape':
+            e.preventDefault()
+            onClose()
+            return
+        }
+      }
+      if (!hasQuery || flatItems.length === 0) {
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          onClose()
+        }
+        return
+      }
       switch (e.key) {
         case 'ArrowDown': {
+          if (!hasQuery || flatItems.length === 0) return
           e.preventDefault()
-          if (columnGroups && activeItem) {
-            // Move within current column
-            const colIdx = columnGroups.findIndex((g) => g.includes(activeIndex))
-            if (colIdx >= 0) {
-              const col = columnGroups[colIdx]
-              const posInCol = col.indexOf(activeIndex)
-              if (posInCol < col.length - 1) setActiveIndex(col[posInCol + 1])
-            }
-          } else {
-            setActiveIndex((i) => Math.min(i + 1, flatItems.length - 1))
-          }
+          setActiveIndex((i) => Math.min(i + 1, flatItems.length - 1))
           break
         }
         case 'ArrowUp': {
+          if (!hasQuery || flatItems.length === 0) return
           e.preventDefault()
-          if (columnGroups && activeItem) {
-            const colIdx = columnGroups.findIndex((g) => g.includes(activeIndex))
-            if (colIdx >= 0) {
-              const col = columnGroups[colIdx]
-              const posInCol = col.indexOf(activeIndex)
-              if (posInCol > 0) setActiveIndex(col[posInCol - 1])
-            }
-          } else {
-            setActiveIndex((i) => Math.max(i - 1, 0))
-          }
-          break
-        }
-        case 'ArrowRight': {
-          e.preventDefault()
-          if (columnGroups) {
-            const colIdx = columnGroups.findIndex((g) => g.includes(activeIndex))
-            if (colIdx >= 0 && colIdx < columnGroups.length - 1) {
-              // Jump to same row position in next column, or last item
-              const posInCol = columnGroups[colIdx].indexOf(activeIndex)
-              const nextCol = columnGroups[colIdx + 1]
-              setActiveIndex(nextCol[Math.min(posInCol, nextCol.length - 1)])
-            }
-          }
-          break
-        }
-        case 'ArrowLeft': {
-          e.preventDefault()
-          if (columnGroups) {
-            const colIdx = columnGroups.findIndex((g) => g.includes(activeIndex))
-            if (colIdx > 0) {
-              const posInCol = columnGroups[colIdx].indexOf(activeIndex)
-              const prevCol = columnGroups[colIdx - 1]
-              setActiveIndex(prevCol[Math.min(posInCol, prevCol.length - 1)])
-            }
-          }
+          setActiveIndex((i) => Math.max(i - 1, 0))
           break
         }
         case 'Enter':
           e.preventDefault()
-          if (activeItem) {
+          if (query.trim().length > 0 && submittedQuery !== query.trim()) {
+            setSubmittedQuery(query.trim())
+            setActiveIndex(0)
+          } else if (activeItem) {
             onNavigate(activeItem.item.uri)
             onClose()
           }
@@ -204,20 +230,25 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, onScopeC
           break
       }
     },
-    [flatItems, activeItem, activeIndex, columnGroups, onNavigate, onClose],
+    [hasQuery, flatItems, activeItem, onNavigate, onClose, scopeCommandUri, isScopeCommandValid],
   )
 
   if (!open) return null
 
-  const showPreview = activeItem !== null
-  const paletteMaxWidth = showPreview ? 'max-w-4xl' : visibleColumns.length > 1 ? 'max-w-3xl' : 'max-w-lg'
+  const showPreview = hasQuery && activeItem !== null
+  const paletteWidth = showPreview
+    ? 'w-[min(92vw,67rem)]'
+    : 'w-[min(90vw,45rem)]'
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-[12vh]" role="dialog" aria-modal="true" aria-label="搜索">
+    <div className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-[12vh] sm:px-6" role="dialog" aria-modal="true" aria-label="搜索">
       <div className="animate-palette-backdrop absolute inset-0 bg-background/60 backdrop-blur-sm" role="presentation" onClick={onClose} />
 
       <div
-        className={cn('animate-palette-in relative flex w-full flex-col overflow-hidden rounded-xl border bg-background shadow-2xl shadow-black/20 transition-[max-width] duration-300', paletteMaxWidth)}
+        className={cn(
+          'animate-palette-in relative flex h-[46rem] max-h-[84vh] max-w-full flex-col overflow-hidden rounded-xl border bg-background shadow-2xl shadow-black/20 transition-[width] duration-300',
+          paletteWidth,
+        )}
         onKeyDown={handleKeyDown}
       >
         {/* Search input */}
@@ -237,34 +268,78 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, onScopeC
             <button
               type="button"
               className="rounded-md p-1 text-muted-foreground/70 transition-colors hover:text-foreground"
-              onClick={() => setQuery('')}
+              onClick={() => {
+                setActiveIndex(0)
+                setQuery('')
+                setSubmittedQuery('')
+              }}
             >
               <X className="size-3.5" />
             </button>
           )}
           <span className="flex items-center gap-1 text-xs text-muted-foreground/70">
-            {isRoot ? '全局' : (
-              <><FolderOpen className="size-3" />{scopeUri?.split('/').filter(Boolean).pop()}</>
+            {isRoot ? '搜索范围: 全局' : (
+              <><FolderOpen className="size-3" />搜索范围: {findTargetUri.split('/').filter(Boolean).pop()}</>
             )}
           </span>
         </div>
 
         {/* Body */}
-        <div className="flex min-h-0" ref={resultsRef}>
+        <div className="flex min-h-0 flex-1" ref={resultsRef}>
           {isDirMode ? (
             <DirBrowser
-              startUri={scopeUri || 'viking://'}
-              onSelect={(uri) => {
-                onScopeChange(uri)
+              startUri={findTargetUri}
+              onConfirm={(uri) => {
+                setFindTargetUri(normalizeDirUri(uri))
+                setActiveIndex(0)
                 setQuery('')
               }}
-              onCancel={() => setQuery('')}
+              onCancel={() => {
+                setActiveIndex(0)
+                setQuery('')
+              }}
             />
           ) : (
             <>
               {/* Results area */}
               <div className={cn('min-h-0 flex-1 overflow-hidden', showPreview && 'border-r')}>
-                {!query.trim() ? (
+                {scopeCommandUri ? (
+                  <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+                    <FolderOpen className={cn('size-6', isScopeCommandValid ? 'text-blue-500/50' : 'text-destructive/60')} />
+                    {scopeValidationQuery.isLoading ? (
+                      <div>
+                        <p className="text-sm font-medium text-foreground/80">正在校验搜索范围</p>
+                        <p className="mt-1 text-xs text-muted-foreground/75">
+                          正在检查
+                          {' '}
+                          <span className="font-medium text-foreground/80">{scopeCommandUri}</span>
+                          {' '}
+                          是否存在
+                        </p>
+                      </div>
+                    ) : isScopeCommandValid ? (
+                      <div>
+                        <p className="text-sm font-medium text-foreground/80">切换搜索范围</p>
+                        <p className="mt-1 text-xs text-muted-foreground/75">
+                          按 <kbd className="rounded border border-border bg-muted/50 px-1 py-0.5 font-mono text-[11px] text-foreground/70">Enter</kbd> 切换到
+                          {' '}
+                          <span className="font-medium text-foreground/80">{scopeCommandUri}</span>
+                        </p>
+                      </div>
+                    ) : (
+                      <div>
+                        <p className="text-sm font-medium text-destructive">搜索范围不存在</p>
+                        <p className="mt-1 text-xs text-muted-foreground/75">
+                          路径
+                          {' '}
+                          <span className="font-medium text-foreground/80">{scopeCommandUri}</span>
+                          {' '}
+                          无法访问，不能切换
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                ) : !submittedQuery.trim() ? (
                   <div className="animate-palette-in flex flex-col items-center gap-3 px-4 py-12 text-center">
                     <Search className="size-6 text-muted-foreground/30" />
                     <div>
@@ -284,39 +359,20 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, onScopeC
                     <p className="text-sm text-muted-foreground/60">没有找到匹配的内容</p>
                     <p className="text-xs text-muted-foreground/40">试试换个关键词？</p>
                   </div>
-                ) : visibleColumns.length > 1 ? (
-                  <div className="flex h-80 divide-x overflow-hidden">
-                    {visibleColumns.map((col) => {
-                      const colItems = flatItems.filter((fi) => fi.type === col.type)
-                      return (
-                        <ResultColumn
-                          key={col.key}
-                          type={col.type}
-                          items={colItems}
-                          activeIndex={activeIndex}
-                          onSelect={(fi) => { onNavigate(fi.item.uri); onClose() }}
-                          onOpenDir={(fi) => { onNavigateDir(getParentUri(fi.item.uri)); onClose() }}
-                        />
-                      )
-                    })}
-                  </div>
                 ) : (
-                  <div className="max-h-80 overflow-y-auto overscroll-contain">
-                    <ResultColumn
-                      type={visibleColumns[0]?.type ?? 'resource'}
-                      items={flatItems}
-                      activeIndex={activeIndex}
-                      onSelect={(fi) => { onNavigate(fi.item.uri); onClose() }}
-                      onOpenDir={(fi) => { onNavigateDir(getParentUri(fi.item.uri)); onClose() }}
-                      hideHeader
-                    />
-                  </div>
+                  <ResultList
+                    className="h-full"
+                    items={flatItems}
+                    activeIndex={activeIndex}
+                    onSelect={(fi) => { onNavigate(fi.item.uri); onClose() }}
+                    onOpenDir={(fi) => { onNavigateDir(getParentUri(fi.item.uri)); onClose() }}
+                  />
                 )}
               </div>
 
               {/* Preview pane */}
               {showPreview && (
-                <div className="animate-palette-preview flex h-80 w-80 flex-col overflow-hidden">
+                <div className="animate-palette-preview flex h-full w-[32rem] flex-col overflow-hidden">
                   <FilePreview
                     file={previewEntry}
                     onClose={() => setActiveIndex(-1)}
@@ -339,12 +395,9 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, onScopeC
         ) : hasResults && (
           <div className="flex items-center gap-3 border-t px-4 py-2 text-xs text-muted-foreground/70">
             <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">↑↓</kbd> 导航</span>
-            {visibleColumns.length > 1 && (
-              <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">←→</kbd> 切栏</span>
-            )}
             <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">↵</kbd> 打开</span>
             <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">esc</kbd> 关闭</span>
-            <span className="ml-auto tabular-nums">{data!.total} 个结果</span>
+            <span className="ml-auto tabular-nums">{data.total} 个结果</span>
           </div>
         )}
       </div>
@@ -381,73 +434,70 @@ function LoadingHint() {
   )
 }
 
-function ResultColumn({
-  type,
+function ResultList({
+  className,
   items,
   activeIndex,
   onSelect,
   onOpenDir,
-  hideHeader,
 }: {
-  type: FindContextType
+  className?: string
   items: FlatItem[]
   activeIndex: number
   onSelect: (fi: FlatItem) => void
   onOpenDir: (fi: FlatItem) => void
-  hideHeader?: boolean
 }) {
-  const meta = TYPE_META[type]
-  const Icon = meta.icon
+  const { isScrolling, onScroll } = useTransientScrollbar()
 
   return (
-    <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-      {!hideHeader && (
-        <div className={cn('flex items-center gap-1.5 px-3 py-2 text-xs font-semibold uppercase tracking-wider', meta.bgColor)}>
-          <Icon className={cn('size-3', meta.color)} />
-          <span className={meta.color}>{meta.label}</span>
-          <span className="ml-auto tabular-nums text-muted-foreground/70">{items.length}</span>
-        </div>
-      )}
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-        {items.map((fi, i) => {
-          const { name, parent } = displayName(fi.item.uri)
-          const isActive = fi.flatIndex === activeIndex
+    <div
+      className={cn('scrollbar-fade min-h-0 flex-1 overflow-y-auto overscroll-contain', className)}
+      data-scrolling={isScrolling || undefined}
+      onScroll={onScroll}
+    >
+      {items.map((fi, i) => {
+        const { name, parent } = displayName(fi.item.uri)
+        const isActive = fi.flatIndex === activeIndex
+        const meta = TYPE_META[fi.type]
+        const Icon = meta.icon
 
-          return (
-            <button
-              key={`${fi.item.uri}-${fi.flatIndex}`}
-              type="button"
+        return (
+          <button
+            key={`${fi.item.uri}-${fi.flatIndex}`}
+            type="button"
+            data-active={isActive}
+            className={cn(
+              'animate-palette-row group relative flex w-full items-start gap-3 border-b border-border/50 px-4 py-3 text-left transition-colors last:border-b-0',
+              isActive ? 'bg-primary/8 text-foreground' : 'text-foreground/80 hover:bg-muted/40',
+            )}
+            style={{ animationDelay: `${i * 24}ms` }}
+            onClick={() => onSelect(fi)}
+          >
+            {isActive && (
+              <span className="absolute inset-y-0 left-0 w-0.5 rounded-r bg-primary" />
+            )}
+            <div className={cn('mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold uppercase tracking-wide', meta.bgColor, meta.color)}>
+              <Icon className="size-3" />
+              <span>{meta.label}</span>
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm font-medium">{name}</div>
+              <div className="mt-0.5 truncate text-xs text-muted-foreground/80">{parent}</div>
+            </div>
+            <span
+              role="button"
+              tabIndex={-1}
+              title="打开所在目录"
+              className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100 data-[active=true]:opacity-100"
               data-active={isActive}
-              className={cn(
-                'animate-palette-row group relative flex w-full items-start gap-2 px-3 py-2 text-left text-sm transition-colors',
-                isActive ? 'bg-primary/8 text-foreground' : 'text-foreground/80 hover:bg-muted/40',
-              )}
-              style={{ animationDelay: `${i * 30}ms` }}
-              onClick={() => onSelect(fi)}
+              onClick={(e) => { e.stopPropagation(); onOpenDir(fi) }}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); onOpenDir(fi) } }}
             >
-              {isActive && (
-                <span className="absolute inset-y-0 left-0 w-0.5 rounded-r bg-primary" />
-              )}
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium">{name}</div>
-                <div className="mt-0.5 truncate text-xs text-muted-foreground/80">{parent}</div>
-              </div>
-              <span
-                role="button"
-                tabIndex={-1}
-                title="打开所在目录"
-                className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100 data-[active=true]:opacity-100"
-                data-active={isActive}
-                onClick={(e) => { e.stopPropagation(); onOpenDir(fi) }}
-                onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); onOpenDir(fi) } }}
-              >
-                <FolderOpen className="size-3.5" />
-              </span>
-            </button>
-          )
-        })}
-      </div>
+              <FolderOpen className="size-3.5" />
+            </span>
+          </button>
+        )
+      })}
     </div>
   )
 }
-

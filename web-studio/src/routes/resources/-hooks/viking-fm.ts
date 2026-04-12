@@ -18,10 +18,11 @@ const DEFAULT_QUERY_OPTS = { staleTime: 30_000 }
 const PREFETCH_OPTS = { output: 'agent' as const, showAllHidden: true, nodeLimit: 200 }
 const PREFETCH_STALE = 60_000
 
-export function useVikingFsList(uri: string, options: VikingListQueryOptions = {}) {
+export function useVikingFsList(uri: string, options: VikingListQueryOptions = {}, enabled = true) {
   return useQuery({
     queryKey: ['viking-fs-ls', normalizeDirUri(uri), options],
     queryFn: () => fetchFsList(normalizeDirUri(uri), options),
+    enabled,
     ...DEFAULT_QUERY_OPTS,
   })
 }
