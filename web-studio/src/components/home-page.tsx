@@ -128,7 +128,7 @@ function Panel({
   className?: string
 }) {
   return (
-    <div className={`rounded-2xl bg-muted/50 p-6 transition-all duration-200 hover:-translate-y-0.5 hover:bg-muted/70 hover:shadow-sm dark:bg-white/[0.08] dark:hover:bg-white/[0.12] ${className}`}>
+    <div className={`rounded-2xl bg-muted/80 p-6 transition-all duration-200 hover:-translate-y-0.5 hover:bg-muted hover:shadow-sm dark:bg-white/[0.12] dark:hover:bg-white/[0.16] ${className}`}>
       {children}
     </div>
   )
@@ -215,7 +215,7 @@ function StatCard({
     const el = valueRef.current
     if (!el) return
     const target = typeof value === 'number' ? value : Number(String(value).replace(/,/g, ''))
-    if (Number.isNaN(target) || target === 0) return
+    if (Number.isNaN(target)) return
     hasAnimated.current = true
     const obj = { val: 0 }
     gsap.to(obj, {
@@ -230,7 +230,7 @@ function StatCard({
 
   return (
     <div
-      className="relative flex flex-col justify-between gap-4 overflow-hidden rounded-2xl bg-muted/50 p-6 transition-all duration-200 hover:-translate-y-0.5 hover:bg-muted/70 hover:shadow-md dark:bg-white/[0.08] dark:hover:bg-white/[0.12]"
+      className="relative flex flex-col justify-between gap-4 overflow-hidden rounded-2xl bg-muted/80 p-6 transition-all duration-200 hover:-translate-y-0.5 hover:bg-muted hover:shadow-md dark:bg-white/[0.12] dark:hover:bg-white/[0.16]"
     >
       <div className="flex items-center justify-between">
         <span className="text-sm tracking-wide text-muted-foreground">{title}</span>
