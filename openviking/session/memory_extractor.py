@@ -222,6 +222,64 @@ class MemoryExtractor:
 
         return "\n".join(lines) if lines else ""
 
+    @staticmethod
+    def _normalize_extraction_payload(data) -> dict:
+        """Normalize common LLM response shapes into ``{"memories": [...]}``.
+
+        Some smaller or OpenAI-compatible local models do not reliably return the
+        exact outer schema requested by the prompt. In practice we may see:
+        - a bare list of memory objects
+        - a single memory object
+        - ``{"memories": {...}}`` with one object instead of a list
+        - wrapper keys such as ``items`` / ``results`` / ``data``
+
+        This method keeps the accepted shapes intentionally narrow: a payload is
+        only treated as a single memory when it has a ``category`` plus at least
+        one memory content field.
+        """
+
+        def _is_memory_item(value) -> bool:
+            if not isinstance(value, dict):
+                return False
+            if not value.get("category"):
+                return False
+            return any(
+                bool(value.get(field))
+                for field in ("abstract", "overview", "content", "tool_name", "skill_name")
+            )
+
+        def _coerce_sequence(value) -> list:
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+            if _is_memory_item(value):
+                return [value]
+            return []
+
+        if isinstance(data, list):
+            return {"memories": _coerce_sequence(data)}
+
+        if not isinstance(data, dict):
+            return {}
+
+        if _is_memory_item(data):
+            return {"memories": [data]}
+
+        memories = data.get("memories")
+        if memories is not None:
+            return {"memories": _coerce_sequence(memories)}
+
+        for key in ("items", "results", "data"):
+            wrapped = data.get(key)
+            if wrapped is None:
+                continue
+            if isinstance(wrapped, dict) and "memories" in wrapped:
+                return MemoryExtractor._normalize_extraction_payload(wrapped)
+            coerced = _coerce_sequence(wrapped)
+            if coerced:
+                return {"memories": coerced}
+
+        return {}
+
     async def extract(
         self,
         context: dict,
@@ -301,6 +359,7 @@ class MemoryExtractor:
 
         try:
             from openviking_cli.utils.llm import parse_json_from_response
+            from openviking.session.memory.utils import parse_json_with_stability
 
             request_summary = {
                 "user": user._user_id,
@@ -315,18 +374,17 @@ class MemoryExtractor:
                 response = await vlm.get_completion_async(prompt)
             logger.debug("Memory extraction LLM raw response: %s", response)
             with telemetry.measure("memory.extract.stage.normalize_candidates"):
-                data = parse_json_from_response(response) or {}
-                if isinstance(data, list):
-                    logger.warning(
-                        "Memory extraction received list instead of dict; wrapping as memories"
-                    )
-                    data = {"memories": data}
-                elif not isinstance(data, dict):
-                    logger.warning(
-                        "Memory extraction received unexpected type %s; skipping",
-                        type(data).__name__,
-                    )
-                    data = {}
+                data = parse_json_from_response(response)
+                if data is None:
+                    stable_data, stable_error = parse_json_with_stability(response)
+                    if stable_data is not None:
+                        data = stable_data
+                    else:
+                        logger.warning(
+                            "Memory extraction stable parse failed: %s",
+                            stable_error,
+                        )
+                data = self._normalize_extraction_payload(data)
             logger.debug("Memory extraction LLM parsed payload: %s", data)
 
             candidates = []
