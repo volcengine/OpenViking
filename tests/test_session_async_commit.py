@@ -18,6 +18,7 @@ from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import TaskStatus, get_task_tracker, reset_task_tracker
 
 
+
 @pytest_asyncio.fixture
 async def api_client(temp_dir) -> AsyncGenerator[Tuple[httpx.AsyncClient, OpenVikingService], None]:
     """Create in-process HTTP client for API endpoint tests."""
