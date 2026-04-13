@@ -119,7 +119,6 @@ class ExtractLoop:
         ]
 
         # 预计算 expected_fields
-        # self._expected_fields = ["reasoning", "edit_overview_uris", "delete_uris"]
         self._expected_fields = ["delete_uris"]
 
         # 获取 ExtractContext（整个流程复用）
