@@ -44,9 +44,11 @@ function json(res: ServerResponse, statusCode: number, payload: unknown): void {
 describe("plugin normal flow with healthy backend", () => {
   let server: ReturnType<typeof createServer>;
   let baseUrl = "";
+  let logs: string[] = [];
   let requests: RequestRecord[] = [];
 
   beforeEach(async () => {
+    logs = [];
     requests = [];
     localClientCache.clear();
     localClientPendingPromises.clear();
@@ -200,10 +202,10 @@ describe("plugin normal flow with healthy backend", () => {
 
     plugin.register({
       logger: {
-        debug: () => {},
-        error: () => {},
-        info: () => {},
-        warn: () => {},
+        debug: (message) => logs.push(message),
+        error: (message) => logs.push(message),
+        info: (message) => logs.push(message),
+        warn: (message) => logs.push(message),
       },
       on: (name, handler) => {
         handlers.set(name, handler);
@@ -284,6 +286,9 @@ describe("plugin normal flow with healthy backend", () => {
     expect(
       requests.some((entry) => entry.method === "POST" && entry.path === "/api/v1/search/find"),
     ).toBe(true);
+    expect(
+      requests.some((entry) => entry.method === "GET" && entry.path === "/api/v1/system/status"),
+    ).toBe(true);
     const searchRequest = requests.find(
       (entry) => entry.method === "POST" && entry.path === "/api/v1/search/find",
     );
@@ -291,6 +296,12 @@ describe("plugin normal flow with healthy backend", () => {
       account: "acct-prod",
       user: "user-42",
     });
+    expect(JSON.parse(searchRequest?.body ?? "{}")).toMatchObject({
+      target_uri: "viking://user/user-42/memories",
+    });
+    const identityMismatchWarning = logs.find((entry) => entry.includes("WARNING user identity mismatch"));
+    expect(identityMismatchWarning).toContain('"resolved_user_id":"user-42"');
+    expect(identityMismatchWarning).toContain('"server_reported_user_id":"default"');
     expect(
       requests.some((entry) => entry.method === "GET" && entry.path.startsWith("/api/v1/sessions/session-normal/context")),
     ).toBe(true);

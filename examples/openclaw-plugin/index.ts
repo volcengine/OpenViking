@@ -336,6 +336,9 @@ const contextEnginePlugin = {
           api.logger.info(msg);
         }
       : undefined;
+    const identityWarningLog = (msg: string) => {
+      api.logger.warn(msg);
+    };
     const tenantAccount = cfg.accountId;
     const tenantUser = cfg.userId;
     const localCacheKey = `${cfg.mode}:${cfg.baseUrl}:${cfg.configPath}:${cfg.apiKey}:${tenantAccount}:${tenantUser}:${cfg.agentId}:${cfg.logFindRequests ? "1" : "0"}`;
@@ -394,6 +397,7 @@ const contextEnginePlugin = {
           tenantAccount,
           tenantUser,
           routingDebugLog,
+          identityWarningLog,
         ),
       );
     }
@@ -1190,6 +1194,7 @@ const contextEnginePlugin = {
               tenantAccount,
               tenantUser,
               routingDebugLog,
+              identityWarningLog,
             );
             localClientCache.set(localCacheKey, { client, process: child });
             resolveLocalClient!(client);
@@ -1267,6 +1272,7 @@ const contextEnginePlugin = {
                   tenantAccount,
                   tenantUser,
                   routingDebugLog,
+                  identityWarningLog,
                 );
                 localClientCache.set(localCacheKey, { client, process: child });
                 if (resolveLocalClient) {

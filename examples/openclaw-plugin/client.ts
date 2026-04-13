@@ -23,6 +23,7 @@ export type ScopeName = "user" | "agent";
 export type RuntimeIdentity = {
   userId: string;
   agentId: string;
+  serverReportedUserId?: string;
 };
 export type LocalClientCacheEntry = {
   client: OpenVikingClient;
@@ -135,6 +136,7 @@ export function isMemoryUri(uri: string): boolean {
 export class OpenVikingClient {
   private spaceCache = new Map<string, Partial<Record<ScopeName, string>>>();
   private identityCache = new Map<string, RuntimeIdentity>();
+  private warnedIdentityMismatches = new Set<string>();
 
   constructor(
     private readonly baseUrl: string,
@@ -146,6 +148,8 @@ export class OpenVikingClient {
     private readonly userId: string = "",
     /** When set, logs routing for find + session writes (tenant headers + paths; never apiKey). */
     private readonly routingDebugLog?: (message: string) => void,
+    /** Emits identity mismatch warning regardless of verbose routing debug setting. */
+    private readonly identityWarningLog?: (message: string) => void,
   ) {}
 
   getDefaultAgentId(): string {
@@ -170,9 +174,32 @@ export class OpenVikingClient {
           X_OpenViking_Account: this.accountId.trim() || "default",
           X_OpenViking_User: this.userId.trim() || "default",
           resolved_user_id: identity.userId,
+          server_reported_user_id: identity.serverReportedUserId ?? null,
           session_vfs_hint: detail.sessionId
             ? `viking://session/${identity.userId}/${String(detail.sessionId)}`
             : undefined,
+        }),
+    );
+  }
+
+  private emitIdentityMismatchWarning(
+    effectiveAgentId: string,
+    configuredUserId: string,
+    serverReportedUserId: string,
+  ): void {
+    const log = this.identityWarningLog ?? this.routingDebugLog;
+    if (!log || this.warnedIdentityMismatches.has(effectiveAgentId)) {
+      return;
+    }
+    this.warnedIdentityMismatches.add(effectiveAgentId);
+    log(
+      "openviking: WARNING user identity mismatch " +
+        JSON.stringify({
+          X_OpenViking_Agent: effectiveAgentId,
+          X_OpenViking_Account: this.accountId.trim() || "default",
+          X_OpenViking_User: this.userId.trim() || "default",
+          resolved_user_id: configuredUserId,
+          server_reported_user_id: serverReportedUserId,
         }),
     );
   }
@@ -237,13 +264,25 @@ export class OpenVikingClient {
     if (cached) {
       return cached;
     }
-    const fallback: RuntimeIdentity = { userId: "default", agentId: effectiveAgentId || "default" };
+    const configuredUserId = this.userId.trim();
+    const fallback: RuntimeIdentity = {
+      userId: configuredUserId || "default",
+      agentId: effectiveAgentId || "default",
+    };
     try {
       const status = await this.request<{ user?: unknown }>("/api/v1/system/status", {}, agentId);
-      const userId =
+      const serverReportedUserId =
         typeof status.user === "string" && status.user.trim() ? status.user.trim() : "default";
-      const identity: RuntimeIdentity = { userId, agentId: effectiveAgentId || "default" };
+      const userId = configuredUserId || serverReportedUserId;
+      const identity: RuntimeIdentity = {
+        userId,
+        agentId: effectiveAgentId || "default",
+        serverReportedUserId,
+      };
       this.identityCache.set(effectiveAgentId, identity);
+      if (configuredUserId && configuredUserId !== serverReportedUserId) {
+        this.emitIdentityMismatchWarning(effectiveAgentId, configuredUserId, serverReportedUserId);
+      }
       return identity;
     } catch {
       this.identityCache.set(effectiveAgentId, fallback);
@@ -351,6 +390,7 @@ export class OpenVikingClient {
           X_OpenViking_Account: this.accountId.trim() || "default",
           X_OpenViking_User: this.userId.trim() || "default",
           resolved_user_id: identity.userId,
+          server_reported_user_id: identity.serverReportedUserId ?? null,
           target_uri: normalizedTargetUri,
           target_uri_input: options.targetUri,
           query:
