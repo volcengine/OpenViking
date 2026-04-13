@@ -200,8 +200,9 @@ function NavSessionsItem({ pathname, title }: { pathname: string; title: string 
   const createSession = useCreateSession()
   const deleteSession = useDeleteSession()
 
-  const searchParams = useRouterState({ select: (s) => s.location.search })
-  const activeSessionId = (searchParams as Record<string, string>)?.s ?? null
+  const activeSessionId = useRouterState({
+    select: (s) => (s.location.search as Record<string, string>)?.s ?? null,
+  })
 
   React.useEffect(() => {
     if (isActive) setOpen(true)

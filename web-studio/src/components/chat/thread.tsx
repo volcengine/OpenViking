@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { CompassIcon } from 'lucide-react'
 
 import { useChat } from '#/routes/sessions/-hooks/use-chat'
@@ -30,6 +30,7 @@ export function Thread({ sessionId }: ThreadProps) {
 
   // ---- File attachment ----
   const { attachment, attach, clear: clearAttachment } = useFileAttachment()
+  const attachmentPreviewsRef = useRef<Map<string, string>>(new Map())
 
   const handleSend = useCallback(
     (message: string) => {
@@ -37,6 +38,10 @@ export function Thread({ sessionId }: ThreadProps) {
       if (attachment.phase === 'ready' && attachment.tempFileId) {
         const prefix = `[uploaded_file: ${attachment.fileName}, temp_file_id: ${attachment.tempFileId}]`
         text = text ? `${prefix}\n${text}` : prefix
+        // Store preview URL for this temp_file_id (survives attachment clear)
+        if (attachment.previewUrl) {
+          attachmentPreviewsRef.current.set(attachment.tempFileId, attachment.previewUrl)
+        }
         clearAttachment()
       }
       if (text.trim()) chat.send(text)
@@ -48,6 +53,7 @@ export function Thread({ sessionId }: ThreadProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const isNearBottomRef = useRef(true)
+  const scrollRafRef = useRef(0)
 
   const handleScroll = useCallback(() => {
     const el = scrollRef.current
@@ -56,27 +62,43 @@ export function Thread({ sessionId }: ThreadProps) {
   }, [])
 
   useEffect(() => {
-    if (isNearBottomRef.current) {
+    if (!isNearBottomRef.current) return
+    cancelAnimationFrame(scrollRafRef.current)
+    scrollRafRef.current = requestAnimationFrame(() => {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-    }
+    })
   }, [chat.messages.length, chat.streamingContent, chat.streamingToolCalls, chat.streamingReasoning])
+
+  const [showBackground, setShowBackground] = useState(false)
+
+  useEffect(() => {
+    const id = 'requestIdleCallback' in window
+      ? window.requestIdleCallback(() => setShowBackground(true))
+      : window.setTimeout(() => setShowBackground(true), 200)
+    return () => {
+      if ('requestIdleCallback' in window) window.cancelIdleCallback(id as number)
+      else clearTimeout(id)
+    }
+  }, [])
 
   const isEmpty = chat.messages.length === 0 && !isStreaming
 
   return (
     <div className="relative flex h-full flex-col">
-      {/* PixelBlast background */}
-      <div className="pointer-events-none absolute inset-0 z-0 opacity-40">
-        <Suspense fallback={null}>
-          <PixelBlast
-            color="#008bad"
-            pixelSize={1}
-            edgeFade={0.2}
-            speed={1.55}
-            enableRipples={false}
-          />
-        </Suspense>
-      </div>
+      {/* PixelBlast background — deferred until idle */}
+      {showBackground && (
+        <div className="pointer-events-none absolute inset-0 z-0 opacity-40">
+          <Suspense fallback={null}>
+            <PixelBlast
+              color="#008bad"
+              pixelSize={1}
+              edgeFade={0.2}
+              speed={1.55}
+              enableRipples={false}
+            />
+          </Suspense>
+        </div>
+      )}
 
       {title && (
         <div className="relative z-10 flex h-12 items-center border-b border-border/50 bg-background/80 backdrop-blur-sm px-6">
@@ -94,6 +116,7 @@ export function Thread({ sessionId }: ThreadProps) {
         ) : (
           <MessageList
             messages={chat.messages}
+            attachmentPreviews={attachmentPreviewsRef.current}
             streaming={
               isStreaming
                 ? {
