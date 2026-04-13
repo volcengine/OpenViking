@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
 import { Cell, Label, Pie, PieChart } from 'recharts'
 import gsap from 'gsap'
-import { AlertCircle, Brain, Coins, ChevronDown, Copy, Check, Database, ListTodo, Users } from 'lucide-react'
+import { Brain, Coins, ChevronDown, Copy, Check, Database, ListTodo, Users } from 'lucide-react'
 
 import { Button } from '#/components/ui/button'
 import {
@@ -275,7 +275,7 @@ function ComponentHealthBar({
   sysLoading: boolean
   isError: boolean
   error: Error | null
-  t: (key: string) => string
+  t: (key: string, options?: Record<string, unknown>) => string
 }) {
   const [selectedComponent, setSelectedComponent] = useState<{
     name: string
@@ -350,19 +350,40 @@ function ComponentHealthBar({
       <Panel>
         <div className="mb-5 flex items-center justify-between">
           <h2 className="text-lg font-semibold tracking-tight">{t('systemHealth.title')}</h2>
-        {!isLoading && !sysLoading && !isError && (
-          <div className="flex items-center gap-2">
-              {overallHealthy && displaySystemHealthy
-                ? <span className="inline-block size-2.5 rounded-full" style={{ backgroundColor: '#7e9e7e' }} />
-                : <BreathingDot color="#b07e7e" />
+          {!isLoading && !sysLoading && !isError && (
+            <span
+              className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium"
+              style={
+                overallHealthy && displaySystemHealthy
+                  ? { backgroundColor: 'rgba(126,158,126,0.15)', color: '#7e9e7e' }
+                  : { backgroundColor: 'rgba(176,126,126,0.15)', color: '#b07e7e' }
               }
-              <span className="text-sm text-muted-foreground">{overallHealthy && displaySystemHealthy ? t('systemHealth.allOperational') : t('systemHealth.issuesDetected')}</span>
-            </div>
+            >
+              {overallHealthy && displaySystemHealthy
+                ? (
+                  <>
+                    <span className="inline-block size-2 rounded-full" style={{ backgroundColor: '#7e9e7e' }} />
+                    {t('systemHealth.allOperational')}
+                  </>
+                )
+                : (
+                  <>
+                    <BreathingDot color="#b07e7e" size="size-2" />
+                    {t('systemHealth.nIssues', {
+                      count: names.filter((n) => {
+                        const c = asRecord(components[n])
+                        return c.has_errors === true || c.is_healthy !== true
+                      }).length,
+                    })}
+                  </>
+                )
+              }
+            </span>
           )}
         </div>
         {isLoading || sysLoading ? (
-          <div className="flex gap-4">
-            {names.map((n) => <Skeleton key={n} className="h-10 w-32" />)}
+          <div className="space-y-3">
+            {names.map((n) => <Skeleton key={n} className="h-12 w-full" />)}
           </div>
         ) : isError ? (
           <div className="space-y-1">
@@ -372,14 +393,21 @@ function ComponentHealthBar({
             )}
           </div>
         ) : (
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-            <div className="flex items-center gap-2.5 rounded-xl bg-foreground/[0.03] px-4 py-3 dark:bg-foreground/[0.06]">
-              {displaySystemHealthy
-                ? <span className="inline-block size-2.5 rounded-full" style={{ backgroundColor: '#7e9e7e' }} />
-                : <BreathingDot color="#b07e7e" />
-              }
-              <span className="text-sm font-medium">System</span>
+          <div className="divide-y divide-foreground/5">
+            {/* System row */}
+            <div className="flex items-center justify-between py-3 first:pt-0 last:pb-0">
+              <div className="flex items-center gap-3">
+                {displaySystemHealthy
+                  ? <span className="inline-block size-2.5 rounded-full" style={{ backgroundColor: '#7e9e7e' }} />
+                  : <BreathingDot color="#b07e7e" />
+                }
+                <span className="text-sm font-medium">System</span>
+              </div>
+              <span className="text-xs text-muted-foreground">
+                {displaySystemHealthy ? 'operational' : 'degraded'}
+              </span>
             </div>
+            {/* Component rows */}
             {names.map((name) => {
               const comp = asRecord(components[name])
               const healthy = comp.is_healthy === true
@@ -387,25 +415,30 @@ function ComponentHealthBar({
               return (
                 <div
                   key={name}
-                  className="flex items-center justify-between gap-2.5 rounded-xl bg-foreground/[0.03] px-4 py-3 dark:bg-foreground/[0.06]"
+                  className={`flex items-center justify-between py-3 first:pt-0 last:pb-0 ${hasIssues ? 'rounded-lg bg-destructive/5 px-3' : ''}`}
                 >
-                  <div className="flex min-w-0 items-center gap-2.5">
+                  <div className="flex items-center gap-3">
                     {healthy
                       ? <span className="inline-block size-2.5 rounded-full" style={{ backgroundColor: '#7e9e7e' }} />
                       : <BreathingDot color="#b07e7e" />
                     }
-                    <span className="truncate text-sm font-medium capitalize">{name}</span>
+                    <span className="text-sm font-medium capitalize">{name}</span>
                   </div>
-                  {hasIssues && (
-                    <button
-                      type="button"
-                      aria-label={`${t('systemHealth.viewErrorAria')} ${name}`}
-                      className="inline-flex size-6 shrink-0 items-center justify-center rounded-full text-[#b07e7e] transition hover:text-[#9d6767]"
-                      onClick={() => openComponentDetails(name, comp)}
-                    >
-                      <AlertCircle className="size-3.5" />
-                    </button>
-                  )}
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs text-muted-foreground">
+                      {healthy ? 'operational' : 'error'}
+                    </span>
+                    {hasIssues && (
+                      <button
+                        type="button"
+                        aria-label={`${t('systemHealth.viewErrorAria')} ${name}`}
+                        className="text-xs font-medium text-[#b07e7e] transition hover:text-[#9d6767]"
+                        onClick={() => openComponentDetails(name, comp)}
+                      >
+                        {t('systemHealth.viewDetails')}
+                      </button>
+                    )}
+                  </div>
                 </div>
               )
             })}
