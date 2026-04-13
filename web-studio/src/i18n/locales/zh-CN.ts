@@ -282,6 +282,18 @@ const zhCN = {
     page: {
       placeholder: '会话与 Bot 工作区能力尚未接入。',
     },
+    threadList: {
+      title: '会话',
+      newSession: '新建会话',
+    },
+    chat: {
+      placeholder: '输入消息...',
+      emptyState: '选择或创建一个会话开始聊天。',
+      thinking: '思考中...',
+      toolCall: '工具调用',
+      send: '发送',
+      cancel: '停止',
+    },
   },
 } as const
 

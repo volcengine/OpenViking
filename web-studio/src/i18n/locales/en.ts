@@ -282,6 +282,18 @@ const en = {
     page: {
       placeholder: 'Sessions and Bot workspace is under construction.',
     },
+    threadList: {
+      title: 'Sessions',
+      newSession: 'New Session',
+    },
+    chat: {
+      placeholder: 'Type a message...',
+      emptyState: 'Select or create a session to start chatting.',
+      thinking: 'Thinking...',
+      toolCall: 'Tool call',
+      send: 'Send',
+      cancel: 'Stop',
+    },
   },
 } as const
 
