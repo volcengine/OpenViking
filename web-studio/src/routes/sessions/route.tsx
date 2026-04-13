@@ -1,16 +1,9 @@
-import { createFileRoute } from '@tanstack/react-router'
-import { useTranslation } from 'react-i18next'
+import { createFileRoute, Outlet } from '@tanstack/react-router'
 
 export const Route = createFileRoute('/sessions')({
-  component: SessionsRoute,
+  component: SessionsLayout,
 })
 
-function SessionsRoute() {
-  const { t } = useTranslation('sessions')
-
-  return (
-    <div className="flex items-center justify-center w-full h-full">
-      <p>{t('page.placeholder')}</p>
-    </div>
-  )
+function SessionsLayout() {
+  return <Outlet />
 }
