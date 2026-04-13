@@ -88,6 +88,43 @@ const en = {
       },
     },
   },
+  home: {
+    memoryStats: {
+      category: {
+        cases: 'Cases',
+        entities: 'Entities',
+        events: 'Events',
+        patterns: 'Patterns',
+        preferences: 'Preferences',
+        profile: 'Profile',
+        skills: 'Skills',
+        tools: 'Tools',
+      },
+      subtitle: 'Memory category distribution',
+      title: 'Memory Stats',
+    },
+    recentTasks: {
+      empty: 'No tasks',
+      subtitle: 'Background tasks',
+      title: 'Recent Tasks',
+    },
+    requestFailed: 'Request failed',
+    sessions: {
+      empty: 'No sessions',
+      subtitle: 'Session list',
+      title: 'Sessions',
+    },
+    statCard: {
+      memoryTotal: 'Memory Total',
+      tokenUsage: 'Token Usage',
+      vectorCount: 'Vector Count',
+    },
+    systemHealth: {
+      allOperational: 'All systems operational',
+      issuesDetected: 'Issues detected',
+      title: 'System Health',
+    },
+  },
   operations: {
     page: {
       placeholder: 'Operations dashboard is under construction.',

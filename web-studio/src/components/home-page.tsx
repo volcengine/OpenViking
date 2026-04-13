@@ -1,6 +1,8 @@
-import { useSyncExternalStore } from 'react'
+import { useLayoutEffect, useRef, useSyncExternalStore } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
 import { Cell, Label, Pie, PieChart } from 'recharts'
+import gsap from 'gsap'
 
 import { Skeleton } from '#/components/ui/skeleton'
 import {
@@ -175,15 +177,15 @@ function BreathingDot({ color, size = 'size-2.5' }: { color: string; size?: stri
 function StatCard({
   title,
   value,
-  subtitle,
   isLoading,
   isError,
+  errorText,
 }: {
   title: string
   value?: string | number
-  subtitle?: string
   isLoading: boolean
   isError: boolean
+  errorText: string
 }) {
   return (
     <div className="flex flex-col justify-between gap-4 rounded-2xl bg-muted/50 p-6 transition-colors duration-200 hover:bg-muted/70 dark:bg-white/[0.08] dark:hover:bg-white/[0.12]">
@@ -191,14 +193,9 @@ function StatCard({
       {isLoading ? (
         <Skeleton className="h-12 w-28" />
       ) : isError ? (
-        <span className="text-sm text-destructive">请求失败</span>
+        <span className="text-sm text-destructive">{errorText}</span>
       ) : (
-        <>
-          <span className="text-5xl font-bold tracking-tighter tabular-nums">{value}</span>
-          {subtitle && (
-            <span className="text-sm text-muted-foreground">{subtitle}</span>
-          )}
-        </>
+        <span className="text-5xl font-bold tracking-tighter tabular-nums">{value}</span>
       )}
     </div>
   )
@@ -211,6 +208,7 @@ function ComponentHealthBar({
   sysLoading,
   isError,
   error,
+  t,
 }: {
   data: unknown
   sysData: unknown
@@ -218,6 +216,7 @@ function ComponentHealthBar({
   sysLoading: boolean
   isError: boolean
   error: Error | null
+  t: (key: string) => string
 }) {
   const record = asRecord(data)
   const sys = asRecord(sysData)
@@ -229,14 +228,14 @@ function ComponentHealthBar({
   return (
     <Panel>
       <div className="mb-5 flex items-center justify-between">
-        <h2 className="text-lg font-semibold tracking-tight">System Health</h2>
+        <h2 className="text-lg font-semibold tracking-tight">{t('systemHealth.title')}</h2>
         {!isLoading && !sysLoading && !isError && (
           <div className="flex items-center gap-2">
             {overallHealthy && systemHealthy
               ? <BreathingDot color="#7e9e7e" />
               : <span className="inline-block size-2.5 rounded-full" style={{ backgroundColor: '#b07e7e' }} />
             }
-            <span className="text-sm text-muted-foreground">{overallHealthy && systemHealthy ? 'All systems operational' : 'Issues detected'}</span>
+            <span className="text-sm text-muted-foreground">{overallHealthy && systemHealthy ? t('systemHealth.allOperational') : t('systemHealth.issuesDetected')}</span>
           </div>
         )}
       </div>
@@ -246,7 +245,7 @@ function ComponentHealthBar({
         </div>
       ) : isError ? (
         <div className="space-y-1">
-          <span className="text-sm text-destructive">请求失败</span>
+          <span className="text-sm text-destructive">{t('requestFailed')}</span>
           {error?.message && (
             <pre className="max-h-24 overflow-auto rounded-lg bg-foreground/[0.03] p-3 text-xs text-muted-foreground">{error.message}</pre>
           )}
@@ -286,10 +285,12 @@ function MemoryStatsCard({
   data,
   isLoading,
   isError,
+  t,
 }: {
   data: unknown
   isLoading: boolean
   isError: boolean
+  t: (key: string) => string
 }) {
   const isDark = useIsDark()
   const record = asRecord(data)
@@ -305,12 +306,12 @@ function MemoryStatsCard({
 
   return (
     <Panel>
-      <h2 className="mb-1 text-lg font-semibold tracking-tight">Memory Stats</h2>
-      <p className="mb-5 text-sm text-muted-foreground">记忆分类分布</p>
+      <h2 className="mb-1 text-lg font-semibold tracking-tight">{t('memoryStats.title')}</h2>
+      <p className="mb-5 text-sm text-muted-foreground">{t('memoryStats.subtitle')}</p>
       {isLoading ? (
         <Skeleton className="h-48 w-full" />
       ) : isError ? (
-        <span className="text-sm text-destructive">请求失败</span>
+        <span className="text-sm text-destructive">{t('requestFailed')}</span>
       ) : (
         <div className="flex items-start gap-8">
           {hasData && (
@@ -346,7 +347,7 @@ function MemoryStatsCard({
                     className="inline-block size-3 shrink-0 rounded-full"
                     style={{ backgroundColor: colors[cat] }}
                   />
-                  <span className="font-medium capitalize">{cat}</span>
+                  <span className="font-medium">{t(`memoryStats.category.${cat}`)}</span>
                   <span className="ml-auto tabular-nums text-muted-foreground">{count}</span>
                 </div>
               )
@@ -362,23 +363,25 @@ function RecentTasksCard({
   data,
   isLoading,
   isError,
+  t,
 }: {
   data: unknown
   isLoading: boolean
   isError: boolean
+  t: (key: string) => string
 }) {
   const tasks = asArray(data).slice(0, 10)
 
   return (
     <Panel>
-      <h2 className="mb-1 text-lg font-semibold tracking-tight">Recent Tasks</h2>
-      <p className="mb-5 text-sm text-muted-foreground">后台任务</p>
+      <h2 className="mb-1 text-lg font-semibold tracking-tight">{t('recentTasks.title')}</h2>
+      <p className="mb-5 text-sm text-muted-foreground">{t('recentTasks.subtitle')}</p>
       {isLoading ? (
         <Skeleton className="h-40 w-full" />
       ) : isError ? (
-        <span className="text-sm text-destructive">请求失败</span>
+        <span className="text-sm text-destructive">{t('requestFailed')}</span>
       ) : tasks.length === 0 ? (
-        <p className="text-sm text-muted-foreground">暂无任务</p>
+        <p className="text-sm text-muted-foreground">{t('recentTasks.empty')}</p>
       ) : (
         <Table>
           <TableHeader>
@@ -417,24 +420,26 @@ function SessionsCard({
   data,
   isLoading,
   isError,
+  t,
 }: {
   data: unknown
   isLoading: boolean
   isError: boolean
+  t: (key: string) => string
 }) {
   const isDark = useIsDark()
   const sessions = asArray(data).slice(0, 10)
 
   return (
     <Panel>
-      <h2 className="mb-1 text-lg font-semibold tracking-tight">Sessions</h2>
-      <p className="mb-5 text-sm text-muted-foreground">会话列表</p>
+      <h2 className="mb-1 text-lg font-semibold tracking-tight">{t('sessions.title')}</h2>
+      <p className="mb-5 text-sm text-muted-foreground">{t('sessions.subtitle')}</p>
       {isLoading ? (
         <Skeleton className="h-40 w-full" />
       ) : isError ? (
-        <span className="text-sm text-destructive">请求失败</span>
+        <span className="text-sm text-destructive">{t('requestFailed')}</span>
       ) : sessions.length === 0 ? (
-        <p className="text-sm text-muted-foreground">暂无会话</p>
+        <p className="text-sm text-muted-foreground">{t('sessions.empty')}</p>
       ) : (
         <Table>
           <TableHeader>
@@ -481,6 +486,8 @@ function SessionsCard({
 // ---------- main ----------
 
 export function HomePage() {
+  const { t } = useTranslation('home')
+
   const systemStatus = useQuery({
     queryKey: ['system-status'],
     queryFn: () => getOvResult(getSystemStatus()),
@@ -519,33 +526,47 @@ export function HomePage() {
   const memRecord = asRecord(memoryStats.data)
   const vecRecord = asRecord(vectorCount.data)
   const tokenRecord = asRecord(tokenStats.data)
-  const tokenLlm = asRecord(tokenRecord.llm)
-  const tokenEmb = asRecord(tokenRecord.embedding)
+
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useLayoutEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const children = el.children
+    gsap.set(children, { opacity: 0, y: 30 })
+    gsap.to(children, {
+      opacity: 1,
+      y: 0,
+      duration: 0.5,
+      stagger: 0.1,
+      ease: 'power2.out',
+    })
+  }, [])
 
   return (
-    <div className="flex flex-col gap-6 pb-8">
+    <div ref={containerRef} className="flex flex-col gap-6 pb-8">
       {/* Row 1: Summary cards */}
       <div className="grid gap-4 md:grid-cols-3">
         <StatCard
-          title="Vector Count"
+          title={t('statCard.vectorCount')}
           value={asNumber(vecRecord.count).toLocaleString()}
-          subtitle="向量记录"
           isLoading={vectorCount.isLoading}
           isError={vectorCount.isError}
+          errorText={t('requestFailed')}
         />
         <StatCard
-          title="Memory Total"
+          title={t('statCard.memoryTotal')}
           value={asNumber(memRecord.total_memories).toLocaleString()}
-          subtitle="记忆总数"
           isLoading={memoryStats.isLoading}
           isError={memoryStats.isError}
+          errorText={t('requestFailed')}
         />
         <StatCard
-          title="Token Usage"
+          title={t('statCard.tokenUsage')}
           value={asNumber(tokenRecord.total_tokens).toLocaleString()}
-          subtitle={`LLM ${asNumber(tokenLlm.total_tokens).toLocaleString()} · Embedding ${asNumber(tokenEmb.total_tokens).toLocaleString()}`}
           isLoading={tokenStats.isLoading}
           isError={tokenStats.isError}
+          errorText={t('requestFailed')}
         />
       </div>
 
@@ -557,6 +578,7 @@ export function HomePage() {
         sysLoading={systemStatus.isLoading}
         isError={observerSystem.isError}
         error={observerSystem.error}
+        t={t}
       />
 
       {/* Row 3: Memory stats + Tasks */}
@@ -565,11 +587,13 @@ export function HomePage() {
           data={memoryStats.data}
           isLoading={memoryStats.isLoading}
           isError={memoryStats.isError}
+          t={t}
         />
         <RecentTasksCard
           data={tasks.data}
           isLoading={tasks.isLoading}
           isError={tasks.isError}
+          t={t}
         />
       </div>
 
@@ -578,6 +602,7 @@ export function HomePage() {
         data={sessions.data}
         isLoading={sessions.isLoading}
         isError={sessions.isError}
+        t={t}
       />
     </div>
   )

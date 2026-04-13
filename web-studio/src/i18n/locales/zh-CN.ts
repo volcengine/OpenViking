@@ -88,6 +88,43 @@ const zhCN = {
       },
     },
   },
+  home: {
+    memoryStats: {
+      category: {
+        cases: '案例',
+        entities: '实体',
+        events: '事件',
+        patterns: '模式',
+        preferences: '偏好',
+        profile: '档案',
+        skills: '技能',
+        tools: '工具',
+      },
+      subtitle: '记忆分类分布',
+      title: '记忆统计',
+    },
+    recentTasks: {
+      empty: '暂无任务',
+      subtitle: '后台任务',
+      title: '近期任务',
+    },
+    requestFailed: '请求失败',
+    sessions: {
+      empty: '暂无会话',
+      subtitle: '会话列表',
+      title: '会话',
+    },
+    statCard: {
+      memoryTotal: '记忆总数',
+      tokenUsage: 'Token 用量',
+      vectorCount: '向量数量',
+    },
+    systemHealth: {
+      allOperational: '所有系统正常运行',
+      issuesDetected: '检测到异常',
+      title: '系统健康',
+    },
+  },
   operations: {
     page: {
       placeholder: '运维面板能力尚未接入。',
