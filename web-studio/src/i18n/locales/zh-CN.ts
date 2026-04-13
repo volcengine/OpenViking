@@ -137,6 +137,12 @@ const zhCN = {
       copied: '已复制',
       statusDetail: '状态详情',
       rawJson: 'Raw JSON',
+      operational: '正常',
+      degraded: '降级',
+      error: '异常',
+      healthy: '健康',
+      unhealthy: '异常',
+      errors: '错误列表',
     },
   },
   operations: {

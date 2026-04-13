@@ -137,6 +137,12 @@ const en = {
       copied: 'Copied',
       statusDetail: 'Status Detail',
       rawJson: 'Raw JSON',
+      operational: 'operational',
+      degraded: 'degraded',
+      error: 'error',
+      healthy: 'Healthy',
+      unhealthy: 'Unhealthy',
+      errors: 'errors',
     },
   },
   operations: {

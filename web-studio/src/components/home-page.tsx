@@ -71,7 +71,7 @@ function truncate(s: string, len: number): string {
   return s.length > len ? `${s.slice(0, len)}...` : s
 }
 
-// ---------- category colors (monochrome shades) ----------
+// ---------- category colors ----------
 
 const CATEGORY_COLORS: Record<string, string> = {
   profile: '#4a7c9b',
@@ -205,7 +205,7 @@ function StatCard({
   isError: boolean
   errorText: string
   accentColor: string
-  icon: React.ComponentType<{ className?: string }>
+  icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>
 }) {
   const valueRef = useRef<HTMLSpanElement>(null)
   const hasAnimated = useRef(false)
@@ -314,12 +314,16 @@ function ComponentHealthBar({
   }
 
   const copyErrors = async () => {
-    const errors = asStringArray(selectedComponent?.payload.errors)
-    const status = asString(selectedComponent?.payload.status)
-    const text = [status, ...errors].filter(Boolean).join('\n\n')
-    await navigator.clipboard.writeText(text)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+    try {
+      const errors = asStringArray(selectedComponent?.payload.errors)
+      const status = asString(selectedComponent?.payload.status)
+      const text = [status, ...errors].filter(Boolean).join('\n\n')
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // clipboard API not available
+    }
   }
 
   useEffect(() => {
@@ -416,7 +420,7 @@ function ComponentHealthBar({
                 <span className="text-sm font-medium">System</span>
               </div>
               <span className="text-xs text-muted-foreground">
-                {displaySystemHealthy ? 'operational' : 'degraded'}
+                {displaySystemHealthy ? t('systemHealth.operational') : t('systemHealth.degraded')}
               </span>
             </div>
             {/* Component rows */}
@@ -438,7 +442,7 @@ function ComponentHealthBar({
                   </div>
                   <div className="flex items-center gap-3">
                     <span className="text-xs text-muted-foreground">
-                      {healthy ? 'operational' : 'error'}
+                      {healthy ? t('systemHealth.operational') : t('systemHealth.error')}
                     </span>
                     {hasIssues && (
                       <button
@@ -497,7 +501,7 @@ function ComponentHealthBar({
                         : { backgroundColor: 'rgba(176,126,126,0.15)', color: '#b07e7e' }
                     }
                   >
-                    {selectedComponent.payload.is_healthy ? 'Healthy' : 'Unhealthy'}
+                    {selectedComponent.payload.is_healthy ? t('systemHealth.healthy') : t('systemHealth.unhealthy')}
                   </span>
                 </div>
               )}
@@ -520,7 +524,7 @@ function ComponentHealthBar({
               {/* Errors section */}
               {asStringArray(selectedComponent?.payload.errors).length > 0 && (
                 <div>
-                  <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">errors</div>
+                  <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">{t('systemHealth.errors')}</div>
                   <div className="space-y-2">
                     {asStringArray(selectedComponent?.payload.errors).map((item, index) => (
                       <div
