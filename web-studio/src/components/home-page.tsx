@@ -282,6 +282,9 @@ function ComponentHealthBar({
     payload: Record<string, unknown>
   } | null>(null)
   const [showDialogScrollbar, setShowDialogScrollbar] = useState(false)
+  const [statusExpanded, setStatusExpanded] = useState(true)
+  const [jsonExpanded, setJsonExpanded] = useState(false)
+  const [copied, setCopied] = useState(false)
   const dialogScrollRef = useRef<HTMLDivElement | null>(null)
   const hideScrollbarTimerRef = useRef<number | null>(null)
   const record = asRecord(data)
@@ -308,6 +311,15 @@ function ComponentHealthBar({
         errors: asStringArray(component.errors),
       },
     })
+  }
+
+  const copyErrors = async () => {
+    const errors = asStringArray(selectedComponent?.payload.errors)
+    const status = asString(selectedComponent?.payload.status)
+    const text = [status, ...errors].filter(Boolean).join('\n\n')
+    await navigator.clipboard.writeText(text)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
   }
 
   useEffect(() => {
@@ -446,25 +458,57 @@ function ComponentHealthBar({
         )}
       </Panel>
 
-      <Dialog open={selectedComponent !== null} onOpenChange={(open) => !open && setSelectedComponent(null)}>
+      <Dialog open={selectedComponent !== null} onOpenChange={(open) => {
+        if (!open) {
+          setSelectedComponent(null)
+          setStatusExpanded(true)
+          setJsonExpanded(false)
+          setCopied(false)
+        }
+      }}>
         <DialogContent className="max-h-[min(88vh,720px)] max-w-lg gap-0 overflow-hidden p-0">
+          {/* Top gradient status bar */}
+          <div
+            className="h-1 w-full"
+            style={{
+              background: selectedComponent?.payload.is_healthy
+                ? 'linear-gradient(90deg, #7e9e7e, #a4c4a4)'
+                : 'linear-gradient(90deg, #b07e7e, #d0a0a0)',
+            }}
+          />
+
           <DialogHeader>
-            <div className="border-b border-border/60 px-6 pt-6 pb-4">
-              <div className="pt-3">
-                <DialogTitle>
+            <div className="border-b border-border/60 px-6 pt-5 pb-4">
+              <DialogTitle>
                 {selectedComponent ? `${selectedComponent.name} ${t('systemHealth.dialogTitle')}` : t('systemHealth.dialogTitle')}
-                </DialogTitle>
-                <DialogDescription className="mt-1">
+              </DialogTitle>
+              <DialogDescription className="mt-1">
                 {t('systemHealth.dialogDescription')}
-                </DialogDescription>
-              </div>
+              </DialogDescription>
+              {/* Status summary row */}
+              {selectedComponent && (
+                <div className="mt-3 flex items-center justify-between">
+                  <span className="text-sm font-medium capitalize">{asString(selectedComponent.payload.name)}</span>
+                  <span
+                    className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium"
+                    style={
+                      selectedComponent.payload.is_healthy
+                        ? { backgroundColor: 'rgba(126,158,126,0.15)', color: '#7e9e7e' }
+                        : { backgroundColor: 'rgba(176,126,126,0.15)', color: '#b07e7e' }
+                    }
+                  >
+                    {selectedComponent.payload.is_healthy ? 'Healthy' : 'Unhealthy'}
+                  </span>
+                </div>
+              )}
             </div>
           </DialogHeader>
+
           <div
             ref={dialogScrollRef}
             className={[
               'overflow-y-auto px-6 py-5',
-              'max-h-[calc(min(88vh,720px)-172px)]',
+              'max-h-[calc(min(88vh,720px)-200px)]',
               '[scrollbar-width:none]',
               '[&::-webkit-scrollbar]:w-0',
               showDialogScrollbar
@@ -472,57 +516,80 @@ function ComponentHealthBar({
                 : '',
             ].join(' ')}
           >
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
-              <div className="rounded-xl bg-muted/60 p-4 text-sm dark:bg-white/[0.06]">
-                <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">name</div>
-                <div className="font-medium">{asString(selectedComponent?.payload.name)}</div>
-              </div>
-              <div className="rounded-xl bg-muted/60 p-4 text-sm dark:bg-white/[0.06]">
-                <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">is_healthy</div>
-                <div className="font-medium">{String(selectedComponent?.payload.is_healthy === true)}</div>
-              </div>
-              <div className="rounded-xl bg-muted/60 p-4 text-sm dark:bg-white/[0.06]">
-                <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">has_errors</div>
-                <div className="font-medium">{String(selectedComponent?.payload.has_errors === true)}</div>
-              </div>
-              <div className="rounded-xl bg-muted/60 p-4 text-sm dark:bg-white/[0.06]">
-                <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">errors.length</div>
-                <div className="font-medium">{asStringArray(selectedComponent?.payload.errors).length}</div>
-              </div>
-            </div>
-            <div className="rounded-xl bg-muted/60 p-4 text-sm leading-6 text-muted-foreground dark:bg-white/[0.06]">
-              <div className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">status</div>
-              <div className="whitespace-pre-wrap break-words">
-                {asString(selectedComponent?.payload.status) || t('systemHealth.noDetails')}
-              </div>
-            </div>
-            <div className="rounded-xl bg-muted/60 p-4 text-sm leading-6 text-muted-foreground dark:bg-white/[0.06]">
-              <div className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">errors</div>
-              {asStringArray(selectedComponent?.payload.errors).length > 0 ? (
-                <div className="space-y-2">
-                  {asStringArray(selectedComponent?.payload.errors).map((item, index) => (
-                    <div key={`${selectedComponent?.name}-error-${index}`} className="whitespace-pre-wrap break-words">
-                      {item}
-                    </div>
-                  ))}
+            <div className="space-y-4">
+              {/* Errors section */}
+              {asStringArray(selectedComponent?.payload.errors).length > 0 && (
+                <div>
+                  <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">errors</div>
+                  <div className="space-y-2">
+                    {asStringArray(selectedComponent?.payload.errors).map((item, index) => (
+                      <div
+                        key={`${selectedComponent?.name}-error-${index}`}
+                        className="rounded-lg border-l-2 border-destructive bg-destructive/5 py-2.5 pr-3 pl-4 text-sm leading-6 dark:bg-destructive/10"
+                      >
+                        <span className="whitespace-pre-wrap break-words">{item}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              ) : (
-                <div>{t('systemHealth.noDetails')}</div>
               )}
-            </div>
-            <div className="rounded-xl bg-muted/60 p-4 text-sm leading-6 text-muted-foreground dark:bg-white/[0.06]">
-              <div className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">raw json</div>
-              <pre className="overflow-auto whitespace-pre-wrap break-words text-xs">
-                {JSON.stringify(selectedComponent?.payload ?? {}, null, 2)}
-              </pre>
+
+              {/* Status detail — collapsible */}
+              <div>
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between text-xs font-medium uppercase tracking-wide text-muted-foreground"
+                  onClick={() => setStatusExpanded((v) => !v)}
+                >
+                  {t('systemHealth.statusDetail')}
+                  <ChevronDown className={`size-4 transition-transform duration-200 ${statusExpanded ? '' : '-rotate-90'}`} />
+                </button>
+                {statusExpanded && (
+                  <div className="mt-2 rounded-xl bg-muted/60 p-4 text-sm leading-6 text-muted-foreground dark:bg-white/[0.06]">
+                    <div className="whitespace-pre-wrap break-words">
+                      {asString(selectedComponent?.payload.status) || t('systemHealth.noDetails')}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Raw JSON — collapsed by default */}
+              <div>
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between text-xs font-medium uppercase tracking-wide text-muted-foreground"
+                  onClick={() => setJsonExpanded((v) => !v)}
+                >
+                  {t('systemHealth.rawJson')}
+                  <ChevronDown className={`size-4 transition-transform duration-200 ${jsonExpanded ? '' : '-rotate-90'}`} />
+                </button>
+                {jsonExpanded && (
+                  <div className="mt-2 rounded-xl border border-border/40 bg-muted/60 p-4 dark:bg-white/[0.06]">
+                    <pre className="overflow-auto whitespace-pre-wrap break-words font-mono text-xs text-muted-foreground">
+                      {JSON.stringify(selectedComponent?.payload ?? {}, null, 2)}
+                    </pre>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-          </div>
-          <DialogFooter className="border-t border-border/60 px-6 py-5">
-            <Button variant="outline" onClick={() => setSelectedComponent(null)}>
-              {t('systemHealth.close')}
-            </Button>
+
+          <DialogFooter className="border-t border-border/60 px-6 py-4">
+            <div className="flex w-full items-center justify-between">
+              <div>
+                {asStringArray(selectedComponent?.payload.errors).length > 0 && (
+                  <Button variant="outline" size="sm" onClick={copyErrors}>
+                    {copied
+                      ? <><Check className="mr-1.5 size-3.5" />{t('systemHealth.copied')}</>
+                      : <><Copy className="mr-1.5 size-3.5" />{t('systemHealth.copyError')}</>
+                    }
+                  </Button>
+                )}
+              </div>
+              <Button variant="outline" onClick={() => setSelectedComponent(null)}>
+                {t('systemHealth.close')}
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>
