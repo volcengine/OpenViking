@@ -430,7 +430,7 @@ function ComponentHealthBar({
               return (
                 <div
                   key={name}
-                  className={`flex items-center justify-between py-3 first:pt-0 last:pb-0 ${hasIssues ? 'rounded-lg bg-destructive/5 px-3' : ''}`}
+                  className={`flex items-center justify-between px-3 py-3 first:pt-0 last:pb-0 ${hasIssues ? 'rounded-lg bg-destructive/5' : ''}`}
                 >
                   <div className="flex items-center gap-3">
                     {healthy
