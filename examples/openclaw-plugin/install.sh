@@ -70,7 +70,6 @@ OPENCLAW_DIR="${DEFAULT_OPENCLAW_DIR}"
 OPENVIKING_DIR="${HOME_DIR}/.openviking"
 PLUGIN_DEST=""  # Will be set after resolving plugin config
 DEFAULT_SERVER_PORT=1933
-DEFAULT_AGFS_PORT=1833
 DEFAULT_VLM_MODEL="doubao-seed-2-0-pro-260215"
 DEFAULT_EMBED_MODEL="doubao-embedding-vision-251215"
 SELECTED_SERVER_PORT="${DEFAULT_SERVER_PORT}"
@@ -1662,7 +1661,6 @@ configure_openviking_conf() {
 
   local workspace="${OPENVIKING_DIR}/data"
   local server_port="${DEFAULT_SERVER_PORT}"
-  local agfs_port="${DEFAULT_AGFS_PORT}"
   local vlm_model="${DEFAULT_VLM_MODEL}"
   local embedding_model="${DEFAULT_EMBED_MODEL}"
   local vlm_api_key="${OPENVIKING_VLM_API_KEY:-${OPENVIKING_ARK_API_KEY:-}}"
@@ -1681,7 +1679,6 @@ configure_openviking_conf() {
     echo ""
     read -r -p "$(tr "OpenViking workspace path [${workspace}]: " "OpenViking 数据目录 [${workspace}]: ")" _workspace < /dev/tty || true
     read -r -p "OpenViking HTTP port [${server_port}]: " _server_port < /dev/tty || true
-    read -r -p "AGFS port [${agfs_port}]: " _agfs_port < /dev/tty || true
     read -r -p "VLM model [${vlm_model}]: " _vlm_model < /dev/tty || true
     read -r -p "Embedding model [${embedding_model}]: " _embedding_model < /dev/tty || true
     echo "VLM and Embedding API keys can differ. You can leave either empty and edit ov.conf later."
@@ -1690,7 +1687,6 @@ configure_openviking_conf() {
 
     workspace="${_workspace:-$workspace}"
     server_port="${_server_port:-$server_port}"
-    agfs_port="${_agfs_port:-$agfs_port}"
     vlm_model="${_vlm_model:-$vlm_model}"
     embedding_model="${_embedding_model:-$embedding_model}"
     vlm_api_key="${_vlm_api_key:-$vlm_api_key}"
@@ -1698,14 +1694,12 @@ configure_openviking_conf() {
   fi
 
   server_port="$(normalize_port "${server_port}" "${DEFAULT_SERVER_PORT}" "OpenViking HTTP port")"
-  agfs_port="$(normalize_port "${agfs_port}" "${DEFAULT_AGFS_PORT}" "AGFS port")"
   mkdir -p "${workspace}"
   local py_json="${OPENVIKING_PYTHON_PATH:-${OPENVIKING_PYTHON:-}}"
   [[ -z "$py_json" ]] && py_json="$(command -v python3 || command -v python || true)"
   [[ -z "$py_json" ]] && py_json="python3"
   WORKSPACE="${workspace}" \
   SERVER_PORT="${server_port}" \
-  AGFS_PORT="${agfs_port}" \
   VLM_MODEL="${vlm_model}" \
   EMBEDDING_MODEL="${embedding_model}" \
   VLM_API_KEY="${vlm_api_key}" \
@@ -1729,11 +1723,8 @@ config = {
         "workspace": os.environ["WORKSPACE"],
         "vectordb": {"name": "context", "backend": "local", "project": "default"},
         "agfs": {
-            "port": int(os.environ["AGFS_PORT"]),
-            "log_level": "warn",
             "backend": "local",
             "timeout": 10,
-            "retry_times": 3,
         },
     },
     "embedding": {

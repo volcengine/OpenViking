@@ -19,11 +19,8 @@
       }
     },
     "agfs": {
-      "port": 1833,
-      "log_level": "warn",
       "backend": "local",
       "timeout": 10,
-      "retry_times": 3,
       "s3": {
         "bucket": null,
         "region": null,
@@ -31,7 +28,8 @@
         "secret_key": null,
         "endpoint": null,
         "prefix": "",
-        "use_ssl": true
+        "use_ssl": true,
+        "disable_batch_delete": false
       }
     }
   },

@@ -63,7 +63,7 @@ The `server` section in `ov.conf` controls server behavior:
 
 ### Standalone (Embedded Storage)
 
-Server manages local AGFS and VectorDB. Configure the storage path in `ov.conf`:
+Server manages local RAGFS and VectorDB. Configure the storage path in `ov.conf`:
 
 ```json
 {
@@ -71,23 +71,6 @@ Server manages local AGFS and VectorDB. Configure the storage path in `ov.conf`:
     "workspace": "./data",
     "agfs": { "backend": "local" },
     "vectordb": { "backend": "local" }
-  }
-}
-```
-
-```bash
-openviking-server
-```
-
-### Hybrid (Remote Storage)
-
-Server connects to remote AGFS and VectorDB services. Configure remote URLs in `ov.conf`:
-
-```json
-{
-  "storage": {
-    "agfs": { "backend": "remote", "url": "http://agfs:1833" },
-    "vectordb": { "backend": "remote", "url": "http://vectordb:8000" }
   }
 }
 ```

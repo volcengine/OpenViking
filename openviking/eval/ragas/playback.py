@@ -212,7 +212,6 @@ class IOPlayback:
 
             os.environ["OPENVIKING_CONFIG_FILE"] = self.config_file
 
-        from openviking.agfs_manager import AGFSManager
         from openviking.storage.viking_fs import init_viking_fs
         from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
         from openviking.utils.agfs_utils import create_agfs_client
@@ -221,19 +220,8 @@ class IOPlayback:
 
         config = get_openviking_config()
         agfs_config = config.storage.agfs
-        agfs_manager = None
 
-        # Determine if we need to start AGFSManager for HTTP mode
-        mode = getattr(agfs_config, "mode", "http-client")
-        if mode == "http-client":
-            agfs_manager = AGFSManager(config=agfs_config)
-            agfs_manager.start()
-            logger.info(
-                f"[IOPlayback] Started AGFS manager in HTTP mode at {agfs_manager.url} "
-                f"with {agfs_config.backend} backend"
-            )
-
-        # Create AGFS client using utility
+        # Create RAGFS client using utility
         agfs_client = create_agfs_client(agfs_config)
 
         vector_store = None
@@ -347,7 +335,7 @@ class IOPlayback:
             )
             return False
 
-        for recorded_call, actual_call in zip(recorded_calls, actual_calls):
+        for recorded_call, actual_call in zip(recorded_calls, actual_calls, strict=True):
             if isinstance(recorded_call, dict):
                 recorded_op = recorded_call.get("operation")
                 recorded_req = recorded_call.get("request")

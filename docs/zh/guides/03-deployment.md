@@ -63,7 +63,7 @@ openviking-server --config /path/to/ov.conf --host 127.0.0.1 --port 8000
 
 ### 独立模式（嵌入存储）
 
-服务器管理本地 AGFS 和 VectorDB。在 `ov.conf` 中配置本地存储路径：
+服务器管理本地 RAGFS 和 VectorDB。在 `ov.conf` 中配置本地存储路径：
 
 ```json
 {
@@ -71,23 +71,6 @@ openviking-server --config /path/to/ov.conf --host 127.0.0.1 --port 8000
     "workspace": "./data",
     "agfs": { "backend": "local" },
     "vectordb": { "backend": "local" }
-  }
-}
-```
-
-```bash
-openviking-server
-```
-
-### 混合模式（远程存储）
-
-服务器连接到远程 AGFS 和 VectorDB 服务。在 `ov.conf` 中配置远程地址：
-
-```json
-{
-  "storage": {
-    "agfs": { "backend": "remote", "url": "http://agfs:1833" },
-    "vectordb": { "backend": "remote", "url": "http://vectordb:8000" }
   }
 }
 ```

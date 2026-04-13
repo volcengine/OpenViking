@@ -45,7 +45,7 @@ jobs:
     timeout-minutes: 50
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 1
       matrix:
         os: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && fromJSON('["ubuntu-24.04", "macos-14", "windows-latest"]') || fromJSON('["ubuntu-24.04"]') }}
     
@@ -58,15 +58,6 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: '3.10'
-
-      - name: Cache Go modules
-        uses: actions/cache@v5
-        continue-on-error: true
-        with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('third_party/agfs/**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
 
       - name: Cache Python dependencies (Unix)
         if: runner.os != 'Windows'
@@ -85,11 +76,6 @@ jobs:
           key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt', '**/pyproject.toml') }}
           restore-keys: |
             ${{ runner.os }}-pip-
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: '1.25.1'
 
       - name: Install system dependencies (Ubuntu)
         if: runner.os == 'Linux'

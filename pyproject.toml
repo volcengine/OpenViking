@@ -82,8 +82,6 @@ dependencies = [
     "lark-oapi>=1.5.3",
 ]
 
-[tool.uv.sources]
-pyagfs = { path = "third_party/agfs/agfs-sdk/python" }
 
 [project.optional-dependencies]
 test = [
@@ -150,6 +148,7 @@ bot = [
     "tavily-python>=0.5.0",
     "gradio>=6.6.0",
     "py-machineid>=1.0.0",
+    "mcp>=1.0.0",
 ]
 # vikingbot optional features
 bot-langfuse = ["langfuse>=3.0.0"]
@@ -203,11 +202,6 @@ exclude = ["tests*", "docs*", "examples*"]
 openviking = [
     "prompts/templates/**/*.yaml",
     "console/static/**/*",
-    "bin/agfs-server",
-    "bin/agfs-server.exe",
-    "lib/libagfsbinding.so",
-    "lib/libagfsbinding.dylib",
-    "lib/libagfsbinding.dll",
     "lib/ragfs_python*.so",
     "lib/ragfs_python*.pyd",
     "bin/ov",

@@ -18,11 +18,8 @@
       }
     },
     "agfs": {
-      "port": 1833,
-      "log_level": "warn",
       "backend": "s3",
       "timeout": 10,
-      "retry_times": 3,
       "s3": {
         "bucket": "<your-tos-bucket>",
         "region": "cn-beijing",

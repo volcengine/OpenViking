@@ -12,8 +12,6 @@
       "path": "./data"
     },
     "agfs": {
-      "port": 1833,
-      "log_level": "warn",
       "path": "./data",
       "backend": "local"
     }

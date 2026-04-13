@@ -9,7 +9,7 @@ import asyncio
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import uuid4
 
@@ -169,7 +169,7 @@ class Session:
         self.user = user or UserIdentifier.the_default_user()
         self.ctx = ctx or RequestContext(user=self.user, role=Role.ROOT)
         self.session_id = session_id or str(uuid4())
-        self.created_at = datetime.now()
+        self.created_at = int(datetime.now(timezone.utc).timestamp() * 1000)
         self._auto_commit_threshold = auto_commit_threshold
         self._session_uri = f"viking://session/{self.user.user_space_name()}/{self.session_id}"
 
@@ -301,14 +301,14 @@ class Session:
         self,
         role: str,
         parts: List[Part],
-        created_at: datetime = None,
+        created_at: str = None,
     ) -> Message:
         """Add a message."""
         msg = Message(
             id=f"msg_{uuid4().hex}",
             role=role,
             parts=parts,
-            created_at=created_at or datetime.now(),
+            created_at=created_at or datetime.now(timezone.utc).isoformat(),
         )
         self._messages.append(msg)
 
@@ -474,7 +474,7 @@ class Session:
             "trace_id": trace_id,
         }
 
-    @tracer("session_commit_phase2")
+
     async def _run_memory_extraction(
         self,
         task_id: str,

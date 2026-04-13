@@ -1,7 +1,6 @@
 {
   "storage": {
     "agfs": {
-      "port": 1876
     }
   },
   "log": {

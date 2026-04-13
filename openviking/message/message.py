@@ -21,7 +21,7 @@ class Message:
     id: str
     role: Literal["user", "assistant"]
     parts: List[Part]
-    created_at: datetime = None
+    created_at: str = None
 
     @property
     def content(self) -> str:
@@ -64,13 +64,12 @@ class Message:
 
     def to_dict(self) -> dict:
         """Serialize to JSONL."""
-        created_at_val = self.created_at or datetime.now(timezone.utc)
-        created_at_str = format_iso8601(created_at_val)
+        created_at_val = self.created_at or datetime.now(timezone.utc).isoformat()
         return {
             "id": self.id,
             "role": self.role,
             "parts": [self._part_to_dict(p) for p in self.parts],
-            "created_at": created_at_str,
+            "created_at": created_at_val,
         }
 
     def _part_to_dict(self, part: Part) -> dict:
@@ -139,7 +138,7 @@ class Message:
             id=data["id"],
             role=data["role"],
             parts=parts,
-            created_at=parse_iso_datetime(data["created_at"]),
+            created_at=data["created_at"],
         )
 
     @classmethod
@@ -151,7 +150,7 @@ class Message:
             id=msg_id or f"msg_{uuid4().hex}",
             role="user",
             parts=[TextPart(text=content)],
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(timezone.utc).isoformat(),
         )
 
     @classmethod
@@ -194,7 +193,7 @@ class Message:
             id=msg_id or f"msg_{uuid4().hex}",
             role="assistant",
             parts=parts,
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(timezone.utc).isoformat()
         )
 
     def get_context_parts(self) -> List[ContextPart]:

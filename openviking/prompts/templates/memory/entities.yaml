@@ -2,7 +2,7 @@ memory_type: entities
 description: |
   Wikipedia article - manages page using Zettelkasten method.
   Each page represents an article with relative path links to events.
-  Cards should be rich and distributed - avoid putting all info in one card.
+  Entity should be rich and distributed - avoid putting all info in one entity.
 directory: "viking://user/{{ user_space }}/memories/entities"
 filename_template: "{{ category }}/{{ name }}.md"
 enabled: true
@@ -25,10 +25,10 @@ fields:
     description: |
       - Detailed Zettelkasten card content in markdown format
       Relative path format: events://{event_name} or ../events/{year}/{month}/{day}/{event_name}.md
-      - Example:  
-      # LGBTQ+ events Caroline participated in: 
-      - [Pride parade](../events/2023/03/05/Pride parade.md) 
-      - [Caroline's school LGBTQ talk](events://Caroline's school LGBTQ talk)
-      - [Support group](../events/2024/03/10/Support group.md)
+      - Example:
+      # Book club events Caroline participated in:
+      - [Monthly book discussion](../events/2023/03/05/Monthly book discussion.md)
+      - [Author meetup](events://Author meetup)
+      - [Summer reading challenge](../events/2024/03/10/Summer reading challenge.md)
 
     merge_op: patch

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -61,6 +62,7 @@ class AgentLoop:
         sandbox_manager: SandboxManager | None = None,
         config: Config = None,
         eval: bool = False,
+        mcp_servers: dict | None = None,
     ):
         """
         Initialize the AgentLoop with all required dependencies and configuration.
@@ -128,7 +130,47 @@ class AgentLoop:
         )
 
         self._running = False
+        self._mcp_servers = mcp_servers or {}
+        self._mcp_stack: AsyncExitStack | None = None
+        self._mcp_connected = False
+        self._mcp_connecting = False
         self._register_default_tools()
+
+    async def _connect_mcp(self) -> None:
+        """Connect to configured MCP servers (one-time, lazy, retryable on failure).
+
+        Ported from HKUDS/nanobot v0.1.5.
+        """
+        if self._mcp_connected or self._mcp_connecting or not self._mcp_servers:
+            return
+        self._mcp_connecting = True
+        try:
+            from vikingbot.agent.tools.mcp import connect_mcp_servers
+
+            self._mcp_stack = AsyncExitStack()
+            await self._mcp_stack.__aenter__()
+            await connect_mcp_servers(self._mcp_servers, self.tools, self._mcp_stack)
+            self._mcp_connected = True
+        except Exception as e:
+            logger.error(f"Failed to connect MCP servers (will retry next message): {e}")
+            if self._mcp_stack:
+                try:
+                    await self._mcp_stack.aclose()
+                except Exception:
+                    pass
+                self._mcp_stack = None
+        finally:
+            self._mcp_connecting = False
+
+    async def close_mcp(self) -> None:
+        """Close MCP server connections. Ported from HKUDS/nanobot v0.1.5."""
+        if self._mcp_stack:
+            try:
+                await self._mcp_stack.aclose()
+            except (RuntimeError, BaseExceptionGroup):
+                pass  # MCP SDK cancel scope cleanup is noisy but harmless
+            self._mcp_stack = None
+        self._mcp_connected = False
 
     async def _publish_thinking_event(
         self, session_key: SessionKey, event_type: OutboundEventType, content: str
@@ -181,6 +223,7 @@ class AgentLoop:
     async def run(self) -> None:
         """Run the agent loop, processing messages from the bus."""
         self._running = True
+        await self._connect_mcp()
         logger.info("Agent loop started")
 
         while self._running:
@@ -816,6 +859,7 @@ Respond with ONLY valid JSON, no markdown fences."""
         Returns:
             The agent's response.
         """
+        await self._connect_mcp()
         msg = InboundMessage(session_key=session_key, sender_id="user", content=content)
 
         response = await self._process_message(msg)

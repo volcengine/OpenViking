@@ -15,8 +15,6 @@ Create `~/.openviking/ov.conf` in your project directory:
       "backend": "local"
     },
     "agfs": {
-      "port": 1833,
-      "log_level": "warn",
       "backend": "local"
     }
   },
@@ -579,14 +577,14 @@ If rerank is not configured, search uses vector similarity only.
 
 ### storage
 
-Storage configuration for context data, including file storage (AGFS) and vector database storage (VectorDB).
+Storage configuration for context data, including file storage (RAGFS) and vector database storage (VectorDB).
 
 #### Root Configuration
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `workspace` | str | Local data storage path (main configuration) | "./data" |
-| `agfs` | object | AGFS configuration | {} |
+| `agfs` | object | RAGFS (Rust-based AGFS) configuration | {} |
 | `vectordb` | object | Vector database storage configuration | {} |
 
 
@@ -605,55 +603,17 @@ Storage configuration for context data, including file storage (AGFS) and vector
 }
 ```
 
-#### agfs
+#### agfs (RAGFS)
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `mode` | str | `"http-client"` or `"binding-client"` | `"http-client"` |
 | `backend` | str | `"local"`, `"s3"`, or `"memory"` | `"local"` |
-| `url` | str | AGFS service URL for `http-client` mode | `"http://localhost:1833"` |
 | `timeout` | float | Request timeout in seconds | `10.0` |
 | `s3` | object | S3 backend configuration (when backend is 's3') | - |
 
 **Configuration Examples**
 
-<details>
-<summary><b>HTTP Client (Default)</b></summary>
-
-Connects to a remote or local AGFS service via HTTP.
-
-```json
-{
-  "storage": {
-    "agfs": {
-      "mode": "http-client",
-      "url": "http://localhost:1833",
-      "timeout": 10.0
-    }
-  }
-}
-```
-
-</details>
-
-<details>
-<summary><b>Binding Client (High Performance)</b></summary>
-
-Directly uses the AGFS Go implementation through a shared library. 
-
-**Config**:
-```json
-{
-  "storage": {
-    "agfs": {
-      "mode": "binding-client",
-      "backend": "local"
-    }
-  }
-}
-```
-
-</details>
+RAGFS uses Rust binding mode by default, directly accessing the file system through the Rust implementation.
 
 
 ##### S3 Backend Configuration
@@ -670,11 +630,11 @@ Directly uses the AGFS Go implementation through a shared library.
 | `use_path_style` | bool | true for PathStyle used by MinIO and some S3-compatible services; false for VirtualHostStyle used by TOS and some S3-compatible services | true |
 | `directory_marker_mode` | str | How to persist directory markers: `none`, `empty`, or `nonempty` | `"empty"` |
 
-`directory_marker_mode` controls how AGFS materializes directory objects in S3:
+`directory_marker_mode` controls how RAGFS materializes directory objects in S3:
 
-- `empty` is the default. AGFS writes a zero-byte directory marker and preserves empty-directory semantics.
+- `empty` is the default. RAGFS writes a zero-byte directory marker and preserves empty-directory semantics.
 - `nonempty` writes a non-empty marker payload. Use this for S3-compatible services such as TOS that reject zero-byte directory markers.
-- `none` switches AGFS to prefix-style S3 semantics. AGFS does not create directory marker objects, so empty directories are not persisted and may not be discoverable until they contain at least one child object.
+- `none` switches RAGFS to prefix-style S3 semantics. RAGFS does not create directory marker objects, so empty directories are not persisted and may not be discoverable until they contain at least one child object.
 
 Typical choices:
 
@@ -1055,7 +1015,6 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
     "workspace": "string",
     "agfs": {
       "backend": "local|s3|memory",
-      "url": "string",
       "timeout": 10
     },
     "transaction": {

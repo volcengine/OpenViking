@@ -32,6 +32,7 @@ OpenViking uses a dual-layer storage architecture that separates content storage
 2. **Memory optimization**: Vector index doesn't store file content, saving memory
 3. **Single data source**: All content read from AGFS; vector index only stores references
 4. **Independent scaling**: Vector index and AGFS can scale separately
+Note: AGFS has been rewritten as a Rust implementation (RAGFS)
 
 ## VikingFS Virtual Filesystem
 

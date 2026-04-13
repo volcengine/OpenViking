@@ -153,15 +153,13 @@ def get_viking_fs() -> "VikingFS":
 
 
 class VikingFS:
-    """AGFS-based OpenViking file system.
+    """RAGFS-based OpenViking file system.
 
     APIs are divided into two categories:
-    - AGFS basic commands (direct forwarding): read, ls, write, mkdir, rm, mv, grep, stat
+    - RAGFS basic commands (direct forwarding): read, ls, write, mkdir, rm, mv, grep, stat
     - VikingFS specific capabilities: abstract, overview, find, search, relations, link, unlink
 
-    Supports two modes:
-    - HTTP mode: Use AGFSClient to connect to AGFS server via HTTP
-    - Binding mode: Use AGFSBindingClient to directly use AGFS implementation
+    Uses Rust binding mode: Use RAGFSBindingClient to directly use RAGFS implementation
     """
 
     def __init__(
@@ -844,10 +842,14 @@ class VikingFS:
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         info = self.agfs.stat(path)
-        if not info.get("isDir"):
+        if not info.get("isDir", info.get("is_dir")):
             raise ValueError(f"{uri} is not a directory")
         file_path = f"{path}/.abstract.md"
-        content_bytes = self._handle_agfs_read(self.agfs.read(file_path))
+        try:
+            content_bytes = self._handle_agfs_read(self.agfs.read(file_path))
+        except Exception:
+            # Fallback to default if .abstract.md doesn't exist
+            return f"# {uri}\n\n[Directory abstract is not ready]"
 
         if self._encryptor:
             real_ctx = self._ctx_or_default(ctx)
@@ -864,10 +866,14 @@ class VikingFS:
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         info = self.agfs.stat(path)
-        if not info.get("isDir"):
+        if not info.get("isDir", info.get("is_dir")):
             raise ValueError(f"{uri} is not a directory")
         file_path = f"{path}/.overview.md"
-        content_bytes = self._handle_agfs_read(self.agfs.read(file_path))
+        try:
+            content_bytes = self._handle_agfs_read(self.agfs.read(file_path))
+        except Exception:
+            # Fallback to default if .overview.md doesn't exist
+            return f"# {uri}\n\n[Directory overview is not ready]"
 
         if self._encryptor:
             real_ctx = self._ctx_or_default(ctx)

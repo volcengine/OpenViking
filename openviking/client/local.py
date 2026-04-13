@@ -443,7 +443,7 @@ class LocalClient(BaseClient):
 
         If both content and parts are provided, parts takes precedence.
         """
-        from datetime import datetime
+        from datetime import datetime, timezone
 
         from openviking.message.part import Part, TextPart, part_from_dict
 
@@ -458,15 +458,8 @@ class LocalClient(BaseClient):
         else:
             raise ValueError("Either content or parts must be provided")
 
-        # 解析 created_at
-        msg_created_at = None
-        if created_at:
-            try:
-                msg_created_at = datetime.fromisoformat(created_at)
-            except ValueError:
-                pass
-
-        session.add_message(role, message_parts, created_at=msg_created_at)
+        # created_at 直接传递给 session (毫秒时间戳)
+        session.add_message(role, message_parts, created_at=created_at)
         return {
             "session_id": session_id,
             "message_count": len(session.messages),

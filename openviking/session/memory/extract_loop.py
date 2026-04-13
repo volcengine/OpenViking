@@ -86,6 +86,8 @@ class ExtractLoop:
         self._read_files: Set[str] = set()
         # Transaction handle for file locking
         self._transaction_handle = None
+        # Flag to disable tools in next iteration after unknown tool error
+        self._disable_tools_for_iteration = False
 
     async def run(self) -> Tuple[Optional[Any], List[Dict[str, Any]]]:
         """
@@ -151,7 +153,7 @@ class ExtractLoop:
                 "role": "system",
                 "content": f"""
 ## Output Format
-See the complete JSON Schema below:
+The final output of the model must strictly follow the JSON Schema format shown below:
 ```json
 {schema_str}
 ```
@@ -168,6 +170,19 @@ See the complete JSON Schema below:
             vlm=self.vlm,
         )
         messages.extend(tool_call_messages)
+
+        # Track prefetched files in _read_files to avoid unnecessary refetch
+        for msg in tool_call_messages:
+            if msg.get("role") == "user" and "tool_call_name" in msg.get("content", ""):
+                import json
+                try:
+                    content = json.loads(msg.get("content", "{}"))
+                    if content.get("tool_call_name") == "read":
+                        uri = content.get("args", {}).get("uri")
+                        if uri:
+                            self._read_files.add(uri)
+                except (json.JSONDecodeError, AttributeError):
+                    pass
 
         while iteration < max_iterations:
             iteration += 1
@@ -187,13 +202,21 @@ See the complete JSON Schema below:
 
             # Call LLM with tools - model decides: tool calls OR final operations
             pretty_print_messages(messages)
-            tool_calls, operations = await self._call_llm(messages, force_final=is_last_iteration)
+
+            tool_calls, operations = await self._call_llm(
+                messages
+            )
 
             if tool_calls:
-                await self._execute_tool_calls(messages, tool_calls, tools_used)
+                has_unknown_tool = await self._execute_tool_calls(messages, tool_calls, tools_used)
+                # If model called an unknown tool, disable tools in next iteration
+                if has_unknown_tool:
+                    self._disable_tools_for_iteration = True
+                    tracer.info("Unknown tool called, will disable tools in next iteration")
                 # Allow one extra iteration for refetch
                 if iteration >= max_iterations:
                     max_iterations += 1
+                    self._disable_tools_for_iteration = True
                     tracer.info(f"Extended max_iterations to {max_iterations} for tool call")
                 continue
 
@@ -222,7 +245,8 @@ See the complete JSON Schema below:
             if is_last_iteration:
                 final_operations = self._operations_model()
                 break
-            # Otherwise continue and try again
+            # Otherwise disable_tools and try again
+            self._disable_tools_for_iteration = True
             continue
 
         if final_operations is None:
@@ -236,7 +260,14 @@ See the complete JSON Schema below:
         return final_operations, tools_used
 
     @tracer("extract_loop.execute_tool_calls")
-    async def _execute_tool_calls(self, messages, tool_calls, tools_used):
+    async def _execute_tool_calls(self, messages, tool_calls, tools_used) -> bool:
+        """
+        Execute tool calls in parallel.
+
+        Returns:
+            True if any tool call returned "Unknown tool" error, indicating
+            the model should not receive tools in the next iteration.
+        """
         # Execute all tool calls in parallel
         async def execute_single_tool_call(idx: int, tool_call):
             """Execute a single tool call."""
@@ -248,8 +279,13 @@ See the complete JSON Schema below:
         ]
         results = await self._execute_in_parallel(action_tasks)
 
+        has_unknown_tool = False
+
         # Process results and add to messages
         for _idx, tool_call, result in results:
+            # Check for unknown tool error
+            if isinstance(result, dict) and result.get("error", "").startswith("Unknown tool:"):
+                has_unknown_tool = True
             # Skip if arguments is None
             if tool_call.arguments is None:
                 logger.warning(f"Tool call {tool_call.name} has no arguments, skipping")
@@ -265,7 +301,8 @@ See the complete JSON Schema below:
 
             # Track read tool calls for refetch detection
             if tool_call.name == "read" and tool_call.arguments.get("uri"):
-                self._read_files.add(tool_call.arguments["uri"])
+                uri = tool_call.arguments["uri"]
+                self._read_files.add(uri)
 
             add_tool_call_pair_to_messages(
                 messages,
@@ -274,6 +311,8 @@ See the complete JSON Schema below:
                 params=tool_call.arguments,
                 result=result,
             )
+
+        return has_unknown_tool
 
     def _validate_operations(self, operations: Any) -> None:
         """
@@ -308,8 +347,7 @@ See the complete JSON Schema below:
 
     async def _call_llm(
         self,
-        messages: List[Dict[str, Any]],
-        force_final: bool = False,
+        messages: List[Dict[str, Any]]
     ) -> Tuple[Optional[List], Optional[Any]]:
         """
         Call LLM with tools. Returns either tool calls OR final operations.
@@ -325,13 +363,17 @@ See the complete JSON Schema below:
         await self._mark_cache_breakpoint(messages)
 
         # Call LLM with tools - use tools from strategy
-        tool_choice = "none" if force_final else None
-
+        tools = None
+        tool_choice = None
+        if not self._disable_tools_for_iteration:
+            tools = self._tool_schemas
+            tool_choice = "auto"
         response = await self.vlm.get_completion_async(
             messages=messages,
-            tools=self._tool_schemas,
+            tools=tools,
             tool_choice=tool_choice,
         )
+        tracer.info(f"response={response}")
         # print(f'response={response}')
         # Log cache hit info
         if hasattr(response, "usage") and response.usage:
@@ -352,16 +394,24 @@ See the complete JSON Schema below:
                     f"[KVCache] prompt_tokens={prompt_tokens}, cached_tokens={cached_tokens}"
                 )
 
+        # Case 0: Handle string response (when tools are not provided) or None
+        if response is None:
+            content = ""
+        elif isinstance(response, str):
+            # When tools=None, VLM returns string instead of VLMResponse
+            content = response
         # Case 1: LLM returned tool calls
-        if response.has_tool_calls:
+        elif response.has_tool_calls:
             # Format tool calls nicely for debug logging
             for tc in response.tool_calls:
                 tracer.info(f"[assistant tool_call] (id={tc.id}, name={tc.name})")
                 tracer.info(f"  {json.dumps(tc.arguments, indent=2, ensure_ascii=False)}")
             return (response.tool_calls, None)
+        else:
+            # Case 2: VLMResponse without tool calls - get content from response
+            content = response.content or ""
 
-        # Case 2: Try to parse operations from content with stability
-        content = response.content or ""
+        # Parse operations from content
         if content:
             try:
                 # print(f'LLM response content: {content}')

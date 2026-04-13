@@ -20,7 +20,7 @@ In the current implementation, the plugin plays four roles at once:
 
 - `context-engine`: implements `assemble`, `afterTurn`, and `compact`
 - hook layer: handles `before_prompt_build`, `session_start`, `session_end`, `agent_end`, and `before_reset`
-- tool provider: registers `memory_recall`, `memory_store`, `memory_forget`, and `ov_archive_expand`
+- tool provider: registers memory/archive tools plus OpenViking resource and skill import tools
 - runtime manager: starts and monitors an OpenViking subprocess in `local` mode
 
 ## Overall Architecture
@@ -131,12 +131,14 @@ So `afterTurn()` is closer to “incremental append plus threshold-triggered asy
 
 ## Tools and Expandability
 
-Beyond automatic behavior, the plugin exposes four tools directly:
+Beyond automatic behavior, the plugin exposes six tools directly:
 
 - `memory_recall`: explicit long-term memory search
 - `memory_store`: write text into an OpenViking session and trigger commit
 - `memory_forget`: delete by URI, or search first and remove a single strong match
 - `ov_archive_expand`: expand a concrete archive back into raw messages
+- `ov_import`: import a resource or skill; defaults to resource and uses `kind: "skill"` for skills
+- `ov_search`: search OpenViking resources and skills, especially after importing them
 
 They serve different roles:
 
@@ -144,8 +146,30 @@ They serve different roles:
 - `memory_recall` gives the model an explicit follow-up search path
 - `memory_store` is for immediately persisting clearly important information
 - `ov_archive_expand` is the “go back to archive detail” escape hatch when summaries are not enough
+- `ov_import` lets the agent complete explicit import requests without asking the user to remember slash commands
+- `ov_search` closes the loop after import by letting the user or agent confirm and consume resources and skills
 
 `ov_archive_expand` is especially important because `assemble()` normally returns archive summaries and indexes, not the full raw transcript.
+
+### Resource and Skill Import
+
+Resource and skill imports are intentionally separate because they land in different OpenViking namespaces and use different server APIs:
+
+- resources go through `/api/v1/resources` and land under `viking://resources/...`
+- skills go through `/api/v1/skills` and land under `viking://agent/skills/...`
+
+The plugin also registers explicit slash commands for manual imports:
+
+```text
+/ov-import ./README.md --to viking://resources/openviking-readme --wait
+/ov-import ./skills/install-openviking-memory --kind skill --wait
+/ov-search "OpenViking install" --uri viking://resources/openviking-readme
+/ov-search "memory install skill" --uri viking://agent/skills
+```
+
+Resource import supports remote URLs, Git URLs, local files, local directories, and uploaded zip files. OpenViking's built-in parsers cover common documents and media such as Markdown, text, PDF, HTML, Word, PowerPoint, Excel, EPUB, images, audio, and video. Directory imports also accept common code, documentation, and config file extensions such as `.py`, `.js`, `.ts`, `.go`, `.rs`, `.java`, `.cpp`, `.json`, `.yaml`, `.toml`, `.csv`, `.rst`, `.proto`, `.tf`, and `.vue`.
+
+For HTTP safety, the plugin never sends a direct local filesystem path to the OpenViking server. Local files and directories are first uploaded through `/api/v1/resources/temp_upload`; directories are zipped locally with a pure JavaScript zip implementation before upload.
 
 ## Local / Remote Runtime Modes
 

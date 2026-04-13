@@ -472,8 +472,10 @@ class tracer:
                 if hasattr(current_span, "end_time") and current_span.end_time:
                     return  # span 已结束，不添加 event
                 current_span.add_event(line)
-        except Exception:
-            pass
+        except Exception as e:
+
+            import traceback
+            traceback.print_stack()
 
     @staticmethod
     def info_span(line: str, console: bool = False) -> None:

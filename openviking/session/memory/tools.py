@@ -163,7 +163,7 @@ class MemoryReadTool(MemoryTool):
 
     @property
     def description(self) -> str:
-        return "Read single file, offset is start line number (0-indexed), limit is number of lines to read, -1 means read to end"
+        return "Read single file"
 
     @property
     def parameters(self) -> Dict[str, Any]:

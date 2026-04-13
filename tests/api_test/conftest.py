@@ -287,6 +287,7 @@ def pytest_report_teststatus(report, config):
         return (report.outcome, f"{category} - {description}", "")
 
 
+@pytest.hookimpl(optionalhook=True)
 def pytest_html_results_table_header(cells):
     cells.insert(2, "<th>分类</th>")
     cells.insert(3, "<th>描述</th>")
@@ -311,6 +312,7 @@ def pytest_html_results_table_header(cells):
     cells.append(test)
 
 
+@pytest.hookimpl(optionalhook=True)
 def pytest_html_results_table_row(report, cells):
     if hasattr(report, "nodeid"):
         category = get_test_category(report.nodeid)
@@ -352,10 +354,12 @@ def pytest_html_results_table_row(report, cells):
     cells.append(test)
 
 
+@pytest.hookimpl(optionalhook=True)
 def pytest_html_report_title(report):
     report.title = "OpenViking API测试报告"
 
 
+@pytest.hookimpl(optionalhook=True)
 def pytest_html_results_summary(prefix, summary, postfix):
     prefix.extend(
         [

@@ -1,126 +1,146 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 """
-AGFS Client utilities for creating and configuring AGFS clients.
+RAGFS Client utilities for creating and configuring RAGFS clients.
 """
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict
 
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
+def _generate_plugin_config(agfs_config: Any, data_path: Path) -> Dict[str, Any]:
+    """Dynamically generate RAGFS plugin configuration based on backend type."""
+    config = {
+        "serverinfofs": {
+            "enabled": True,
+            "path": "/serverinfo",
+            "config": {
+                "version": "1.0.0",
+            },
+        },
+        "queuefs": {
+            "enabled": True,
+            "path": "/queue",
+            "config": {
+                "backend": "sqlite",
+                "db_path": str(data_path / "_system" / "queue" / "queue.db"),
+            },
+        },
+    }
+
+    backend = getattr(agfs_config, "backend", "local")
+    s3_config = getattr(agfs_config, "s3", None)
+    vikingfs_path = data_path / "viking"
+
+    if backend == "local":
+        config["localfs"] = {
+            "enabled": True,
+            "path": "/local",
+            "config": {
+                "local_dir": str(vikingfs_path),
+            },
+        }
+    elif backend == "s3" and s3_config:
+        s3_plugin_config = {
+            "bucket": s3_config.bucket,
+            "region": s3_config.region,
+            "access_key_id": s3_config.access_key,
+            "secret_access_key": s3_config.secret_key,
+            "endpoint": s3_config.endpoint,
+            "prefix": s3_config.prefix,
+            "disable_ssl": not s3_config.use_ssl,
+            "use_path_style": s3_config.use_path_style,
+            "directory_marker_mode": s3_config.directory_marker_mode.value
+            if hasattr(s3_config.directory_marker_mode, "value")
+            else s3_config.directory_marker_mode,
+            "disable_batch_delete": s3_config.disable_batch_delete,
+        }
+
+        config["s3fs"] = {
+            "enabled": True,
+            "path": "/local",
+            "config": s3_plugin_config,
+        }
+    elif backend == "memory":
+        config["memfs"] = {
+            "enabled": True,
+            "path": "/local",
+        }
+    return config
+
+
 def create_agfs_client(agfs_config: Any) -> Any:
     """
-    Create an AGFS client based on the provided configuration.
+    Create a RAGFS client based on the provided configuration.
 
     Args:
-        agfs_config: AGFS configuration object containing mode and other settings.
+        agfs_config: RAGFS configuration object.
 
     Returns:
-        An AGFSClient or AGFSBindingClient instance.
+        A RAGFSBindingClient instance.
     """
     # Ensure agfs_config is not None
     if agfs_config is None:
         raise ValueError("agfs_config cannot be None")
-    mode = getattr(agfs_config, "mode", "http-client")
 
-    if mode == "binding-client":
-        # Import binding client if mode is binding-client
-        # Use get_binding_client() to respect RAGFS_IMPL env var > config.impl > "auto"
-        from openviking.pyagfs import get_binding_client
+    # Import binding client
+    from openviking.pyagfs import get_binding_client
 
-        config_impl = getattr(agfs_config, "impl", "auto")
-        env_impl = os.environ.get("RAGFS_IMPL", "").lower() or None
-        effective_impl = env_impl or config_impl or "auto"
-        AGFSBindingClient, _ = get_binding_client(config_impl)
+    RAGFSBindingClient, _ = get_binding_client()
 
-        if AGFSBindingClient is None:
-            raise ImportError(
-                "AGFS binding client is not available. The native library (libagfsbinding) "
-                "could not be loaded. Please run 'pip install -e .' in the project root "
-                "to build and install the AGFS SDK with native bindings."
-            )
-
-        # Go ctypes binding needs AGFS_LIB_PATH and a shared library on disk.
-        # Rust PyO3 binding is compiled into ragfs_python — skip library checks.
-        try:
-            from openviking.pyagfs.binding_client import (
-                AGFSBindingClient as _GoBindingClient,
-            )
-
-            is_go_binding = AGFSBindingClient is _GoBindingClient
-        except (ImportError, OSError):
-            is_go_binding = False
-
-        if is_go_binding:
-            lib_path = getattr(agfs_config, "lib_path", None)
-            if lib_path and lib_path not in ["1", "default"]:
-                os.environ["AGFS_LIB_PATH"] = lib_path
-            else:
-                os.environ["AGFS_LIB_PATH"] = str(Path(__file__).parent.parent / "lib")
-
-            try:
-                from openviking.pyagfs.binding_client import _find_library
-
-                _find_library()
-            except Exception:
-                raise ImportError(
-                    "AGFS binding library not found. Please run 'pip install -e .' in the project root to build and install the AGFS SDK."
-                )
-
-        client = AGFSBindingClient()
-        binding_type = "Rust (ragfs-python)" if not is_go_binding else "Go (libagfsbinding)"
-        logger.warning(
-            f"[AGFS] Binding impl selected: {binding_type} "
-            f"(RAGFS_IMPL={effective_impl}, env={env_impl}, config={config_impl})"
+    if RAGFSBindingClient is None:
+        raise ImportError(
+            "RAGFS binding client is not available. The native library (ragfs_python) "
+            "could not be loaded. Please run 'pip install -e .' in the project root "
+            "to build and install the RAGFS SDK with native bindings."
         )
 
-        # Automatically mount backend for binding client
-        mount_agfs_backend(client, agfs_config)
+    client = RAGFSBindingClient()
+    logger.warning("[RAGFS] Using Rust binding (ragfs-python)")
 
-        return client
-    else:
-        # Default to http-client
-        from openviking.pyagfs import AGFSClient
+    # Automatically mount backend for binding client
+    mount_agfs_backend(client, agfs_config)
 
-        url = getattr(agfs_config, "url", "http://localhost:8080")
-        timeout = getattr(agfs_config, "timeout", 10)
-        client = AGFSClient(api_base_url=url, timeout=timeout)
-        logger.info(f"[AGFSUtils] Created AGFSClient at {url}")
-        return client
+    return client
 
 
 def mount_agfs_backend(agfs: Any, agfs_config: Any) -> None:
     """
-    Mount backend filesystem for an AGFS client based on configuration.
+    Mount backend filesystem for a RAGFS client based on configuration.
 
     Args:
-        agfs: AGFS client instance (HTTP or Binding).
-        agfs_config: AGFS configuration object containing backend settings.
+        agfs: RAGFS client instance.
+        agfs_config: RAGFS configuration object containing backend settings.
     """
-    from openviking.agfs_manager import AGFSManager
-
-    # Only binding-client needs manual mounting. HTTP server handles its own mounting.
-    # Check for the presence of a `mount` method as the duck-type indicator for
-    # binding clients (works for both Rust and Go implementations).
+    # Check for the presence of a `mount` method
     if not callable(getattr(agfs, "mount", None)):
         return
 
-    # 1. Mount standard plugins to align with HTTP server behavior
-    agfs_manager = AGFSManager(agfs_config)
-    config = agfs_manager._generate_config()
+    path_str = getattr(agfs_config, "path", None)
+    if path_str is None:
+        raise ValueError("agfs_config.path is required for mounting backend")
 
-    for plugin_name, plugin_config in config["plugins"].items():
+    data_path = Path(path_str).resolve()
+    vikingfs_path = data_path / "viking"
+
+    vikingfs_path.mkdir(parents=True, exist_ok=True)
+    (data_path / "_system" / "queue").mkdir(parents=True, exist_ok=True)
+
+    # 1. Mount standard plugins
+    config = _generate_plugin_config(agfs_config, data_path)
+
+    for plugin_name, plugin_config in config.items():
         mount_path = plugin_config["path"]
         # Ensure localfs directory exists before mounting
         if plugin_name == "localfs" and "local_dir" in plugin_config.get("config", {}):
             local_dir = plugin_config["config"]["local_dir"]
             os.makedirs(local_dir, exist_ok=True)
-            logger.debug(f"[AGFSUtils] Ensured local directory exists: {local_dir}")
+            logger.debug(f"[RAGFSUtils] Ensured local directory exists: {local_dir}")
         # Ensure queuefs db_path parent directory exists before mounting
         if plugin_name == "queuefs" and "db_path" in plugin_config.get("config", {}):
             db_path = plugin_config["config"]["db_path"]
@@ -132,6 +152,6 @@ def mount_agfs_backend(agfs: Any, agfs_config: Any) -> None:
             pass
         try:
             agfs.mount(plugin_name, mount_path, plugin_config.get("config", {}))
-            logger.debug(f"[AGFSUtils] Successfully mounted {plugin_name} at {mount_path}")
+            logger.debug(f"[RAGFSUtils] Successfully mounted {plugin_name} at {mount_path}")
         except Exception as e:
-            logger.error(f"[AGFSUtils] Failed to mount {plugin_name} at {mount_path}: {e}")
+            logger.error(f"[RAGFSUtils] Failed to mount {plugin_name} at {mount_path}: {e}")

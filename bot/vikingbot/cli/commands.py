@@ -297,7 +297,10 @@ def gateway(
         # if enable_console:
         #     tasks.append(start_console(console_port))
 
-        await asyncio.gather(*tasks)
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            await agent_loop.close_mcp()
 
     asyncio.run(run())
 
@@ -348,6 +351,7 @@ def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False, 
         sandbox_manager=sandbox_manager,
         config=config,
         eval=eval,
+        mcp_servers=config.tools.mcp_servers,
     )
     # Set the agent reference in cron if it uses the holder pattern
     if hasattr(cron, "_agent_holder"):
@@ -615,31 +619,36 @@ def chat(
     )
 
     async def run():
-        if is_single_turn:
-            # Single-turn mode: run channels and agent, exit after response
-            task_cron = asyncio.create_task(cron.start())
-            task_channels = asyncio.create_task(channels.start_all())
-            task_agent = asyncio.create_task(agent_loop.run())
+        try:
+            if is_single_turn:
+                # Single-turn mode: run channels and agent, exit after response
+                task_cron = asyncio.create_task(cron.start())
+                task_channels = asyncio.create_task(channels.start_all())
+                task_agent = asyncio.create_task(agent_loop.run())
 
-            # Wait for channels to complete (it will complete after getting response)
-            done, pending = await asyncio.wait([task_channels], return_when=asyncio.FIRST_COMPLETED)
+                # Wait for channels to complete (it will complete after getting response)
+                done, pending = await asyncio.wait(
+                    [task_channels], return_when=asyncio.FIRST_COMPLETED
+                )
 
-            # Cancel all other tasks
-            for task in pending:
-                task.cancel()
-            task_cron.cancel()
-            task_agent.cancel()
+                # Cancel all other tasks
+                for task in pending:
+                    task.cancel()
+                task_cron.cancel()
+                task_agent.cancel()
 
-            # Wait for cancellation
-            await asyncio.gather(task_cron, task_agent, return_exceptions=True)
-        else:
-            # Interactive mode: run forever
-            tasks = []
-            tasks.append(cron.start())
-            tasks.append(channels.start_all())
-            tasks.append(agent_loop.run())
+                # Wait for cancellation
+                await asyncio.gather(task_cron, task_agent, return_exceptions=True)
+            else:
+                # Interactive mode: run forever
+                tasks = []
+                tasks.append(cron.start())
+                tasks.append(channels.start_all())
+                tasks.append(agent_loop.run())
 
-            await asyncio.gather(*tasks)
+                await asyncio.gather(*tasks)
+        finally:
+            await agent_loop.close_mcp()
 
     try:
         asyncio.run(run())
