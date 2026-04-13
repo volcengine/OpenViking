@@ -155,6 +155,7 @@ export type AddSkillResult = {
 };
 
 const DEFAULT_WAIT_REQUEST_TIMEOUT_MS = 120_000;
+export const DEFAULT_PHASE2_POLL_TIMEOUT_MS = 300_000;
 const WAIT_REQUEST_TIMEOUT_BUFFER_MS = 5_000;
 
 function sleep(ms: number): Promise<void> {
@@ -714,7 +715,7 @@ export class OpenVikingClient {
     }
 
     // Client-side poll until Phase 2 finishes
-    const deadline = Date.now() + (options.timeoutMs ?? 120_000);
+    const deadline = Date.now() + (options.timeoutMs ?? DEFAULT_PHASE2_POLL_TIMEOUT_MS);
     const pollInterval = 500;
     while (Date.now() < deadline) {
       await sleep(pollInterval);

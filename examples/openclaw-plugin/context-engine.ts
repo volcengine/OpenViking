@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { DEFAULT_PHASE2_POLL_TIMEOUT_MS } from "./client.js";
 import type { OpenVikingClient, OVMessage } from "./client.js";
 import type { MemoryOpenVikingConfig } from "./config.js";
 import {
@@ -431,7 +432,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 const PHASE2_POLL_INTERVAL_MS = 800;
-const PHASE2_POLL_MAX_MS = 120_000;
+const PHASE2_POLL_MAX_MS = DEFAULT_PHASE2_POLL_TIMEOUT_MS;
 
 /**
  * After wait=false commit, Phase2 runs on the server. Poll task until completed/failed/timeout
