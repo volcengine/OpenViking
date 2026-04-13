@@ -503,7 +503,8 @@ def _wizard_cloud() -> dict[str, Any] | None:
 def _wizard_custom() -> dict[str, Any] | None:
     """Custom configuration - point user to example config."""
     example = Path(__file__).parent.parent / "examples" / "ov.conf.example"
-    print(f"\n  Example config: {_cyan(str(example))}")
+    if example.exists():
+        print(f"\n  Example config: {_cyan(str(example))}")
     print(f"  Config path:    {_cyan(str(_DEFAULT_CONFIG_PATH))}")
 
     editor = os.environ.get("EDITOR", os.environ.get("VISUAL", ""))
