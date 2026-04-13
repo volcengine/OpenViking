@@ -128,7 +128,7 @@ function Panel({
   className?: string
 }) {
   return (
-    <div className={`rounded-2xl bg-muted/50 p-6 transition-colors duration-200 hover:bg-muted/70 dark:bg-white/[0.08] dark:hover:bg-white/[0.12] ${className}`}>
+    <div className={`rounded-2xl bg-muted/50 p-6 transition-all duration-200 hover:-translate-y-0.5 hover:bg-muted/70 hover:shadow-sm dark:bg-white/[0.08] dark:hover:bg-white/[0.12] ${className}`}>
       {children}
     </div>
   )
@@ -697,7 +697,10 @@ function RecentTasksCard({
       ) : isError ? (
         <span className="text-sm text-destructive">{t('requestFailed')}</span>
       ) : tasks.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{t('recentTasks.empty')}</p>
+        <div className="flex flex-col items-center justify-center gap-2 py-8 text-muted-foreground">
+          <ListTodo className="size-8 opacity-40" />
+          <p className="text-sm">{t('recentTasks.empty')}</p>
+        </div>
       ) : (
         <Table>
           <TableHeader>
@@ -711,7 +714,7 @@ function RecentTasksCard({
             {tasks.map((t, i) => {
               const task = asRecord(t)
               return (
-                <TableRow key={asString(task.task_id) || i} className="border-foreground/5 hover:bg-foreground/[0.02]">
+                <TableRow key={asString(task.task_id) || i} className="border-foreground/5 transition-colors hover:bg-muted/40">
                   <TableCell className="font-mono text-sm">{truncate(asString(task.task_id), 12)}</TableCell>
                   <TableCell className="text-sm">{asString(task.task_type)}</TableCell>
                   <TableCell><TaskStatusDot status={asString(task.status)} /></TableCell>
@@ -755,7 +758,10 @@ function SessionsCard({
       ) : isError ? (
         <span className="text-sm text-destructive">{t('requestFailed')}</span>
       ) : sessions.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{t('sessions.empty')}</p>
+        <div className="flex flex-col items-center justify-center gap-2 py-8 text-muted-foreground">
+          <Users className="size-8 opacity-40" />
+          <p className="text-sm">{t('sessions.empty')}</p>
+        </div>
       ) : (
         <Table>
           <TableHeader>
@@ -769,8 +775,8 @@ function SessionsCard({
             {sessions.map((s, i) => {
               const session = asRecord(s)
               return (
-                <TableRow key={asString(session.session_id) || i} className="border-foreground/5 hover:bg-foreground/[0.02]">
-                  <TableCell className="font-mono text-sm">{truncate(asString(session.session_id), 24)}</TableCell>
+                <TableRow key={asString(session.session_id) || i} className="border-foreground/5 transition-colors hover:bg-muted/40">
+                  <TableCell className="font-mono text-sm" title={asString(session.session_id)}>{truncate(asString(session.session_id), 8)}</TableCell>
                   <TableCell>
                     {(() => {
                       const status = asString(session.status) || 'active'
