@@ -22,7 +22,7 @@ function CopyButton({ text }: { text: string }) {
     <button
       type="button"
       onClick={handleCopy}
-      className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity group-hover/msg:opacity-100 hover:bg-accent hover:text-accent-foreground"
+      className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground/50 opacity-0 transition-all group-hover/msg:opacity-100 hover:bg-accent hover:text-accent-foreground"
       title="复制"
     >
       {copied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
@@ -36,6 +36,46 @@ function getTextFromParts(message: Message): string {
     .filter((p) => p.type === 'text')
     .map((p) => (p as { text: string }).text)
     .join('\n')
+}
+
+/** Format relative time */
+function formatRelativeTime(iso: string): string {
+  const now = Date.now()
+  const then = new Date(iso).getTime()
+  const diff = Math.max(0, now - then)
+  const minutes = Math.floor(diff / 60000)
+  if (minutes < 1) return '刚刚'
+  if (minutes < 60) return `${minutes} 分钟前`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours} 小时前`
+  const days = Math.floor(hours / 24)
+  return `${days} 天前`
+}
+
+// ---------------------------------------------------------------------------
+// TypingIndicator
+// ---------------------------------------------------------------------------
+
+function TypingIndicator() {
+  return (
+    <div className="flex items-center gap-1 py-1">
+      <span className="size-1.5 rounded-full bg-muted-foreground/40 animate-bounce [animation-delay:0ms]" />
+      <span className="size-1.5 rounded-full bg-muted-foreground/40 animate-bounce [animation-delay:150ms]" />
+      <span className="size-1.5 rounded-full bg-muted-foreground/40 animate-bounce [animation-delay:300ms]" />
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// BotAvatar — product brand avatar
+// ---------------------------------------------------------------------------
+
+function BotAvatar() {
+  return (
+    <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary/20 to-primary/5 ring-1 ring-primary/10">
+      <BotIcon className="size-3.5 text-primary" />
+    </div>
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -76,13 +116,15 @@ interface MessageListProps {
 export function MessageList({ messages, attachmentPreviews, streaming }: MessageListProps) {
   return (
     <>
-      {messages.map((msg) =>
-        msg.role === 'user' ? (
-          <UserMessage key={msg.id} message={msg} attachmentPreviews={attachmentPreviews} />
+      {messages.map((msg, idx) => {
+        const prev = idx > 0 ? messages[idx - 1] : null
+        const sameRole = prev?.role === msg.role
+        return msg.role === 'user' ? (
+          <UserMessage key={msg.id} message={msg} compact={sameRole} attachmentPreviews={attachmentPreviews} />
         ) : (
-          <AssistantMessage key={msg.id} message={msg} />
-        ),
-      )}
+          <AssistantMessage key={msg.id} message={msg} compact={sameRole} />
+        )
+      })}
       {streaming && <StreamingAssistantMessage {...streaming} />}
     </>
   )
@@ -94,9 +136,11 @@ export function MessageList({ messages, attachmentPreviews, streaming }: Message
 
 const UserMessage = memo(function UserMessage({
   message,
+  compact,
   attachmentPreviews,
 }: {
   message: Message
+  compact?: boolean
   attachmentPreviews?: Map<string, string>
 }) {
   const rawText = getTextFromParts(message)
@@ -106,10 +150,14 @@ const UserMessage = memo(function UserMessage({
   const previewUrl = parsed ? attachmentPreviews?.get(parsed.tempFileId) : undefined
 
   return (
-    <div className="group/msg mb-6 flex w-full max-w-3xl gap-3 justify-end">
-      <CopyButton text={text || rawText} />
-      <div className="max-w-[75%] space-y-2">
-        {/* Attachment card */}
+    <div className={`group/msg flex w-full max-w-3xl gap-3 justify-end ${compact ? 'mb-1.5' : 'mb-5'}`}>
+      <div className="flex items-end gap-1.5 self-end">
+        <span className="text-[10px] text-muted-foreground/40 opacity-0 transition-opacity group-hover/msg:opacity-100 select-none">
+          {formatRelativeTime(message.created_at)}
+        </span>
+        <CopyButton text={text || rawText} />
+      </div>
+      <div className="max-w-[75%] space-y-1.5">
         {parsed && (
           <div className="overflow-hidden rounded-2xl rounded-br-md border border-primary/20 bg-primary/90 shadow-sm">
             {previewUrl && isImageFile(parsed.fileName) ? (
@@ -129,16 +177,18 @@ const UserMessage = memo(function UserMessage({
             </div>
           </div>
         )}
-        {/* Text bubble */}
         {text && (
-          <div className="rounded-2xl rounded-br-md bg-primary/90 backdrop-blur-sm px-4 py-2.5 text-sm text-primary-foreground whitespace-pre-wrap shadow-sm">
+          <div className="rounded-2xl rounded-br-sm bg-primary px-4 py-2.5 text-sm text-primary-foreground whitespace-pre-wrap shadow-sm">
             {text}
           </div>
         )}
       </div>
-      <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/15 backdrop-blur-sm">
-        <UserIcon className="size-3.5 text-primary" />
-      </div>
+      {!compact && (
+        <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/10">
+          <UserIcon className="size-3.5 text-primary" />
+        </div>
+      )}
+      {compact && <div className="w-7 shrink-0" />}
     </div>
   )
 })
@@ -147,15 +197,19 @@ const UserMessage = memo(function UserMessage({
 // AssistantMessage (completed)
 // ---------------------------------------------------------------------------
 
-const AssistantMessage = memo(function AssistantMessage({ message }: { message: Message }) {
+const AssistantMessage = memo(function AssistantMessage({
+  message,
+  compact,
+}: {
+  message: Message
+  compact?: boolean
+}) {
   const textContent = getTextFromParts(message)
 
   return (
-    <div className="group/msg mb-6 flex w-full max-w-3xl gap-3 items-start">
-      <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-background/60 backdrop-blur-sm">
-        <BotIcon className="size-3.5 text-muted-foreground" />
-      </div>
-      <div className="max-w-full min-w-0 flex-1 rounded-2xl rounded-tl-md bg-background/70 backdrop-blur-xl px-4 py-3 text-sm shadow-sm">
+    <div className={`group/msg flex w-full max-w-3xl gap-3 items-start ${compact ? 'mb-1.5' : 'mb-5'}`}>
+      {!compact ? <BotAvatar /> : <div className="w-7 shrink-0" />}
+      <div className="max-w-full min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-background/70 backdrop-blur-xl px-4 py-3 text-sm shadow-sm ring-1 ring-border/30">
         {message.parts.map((part, i) => {
           switch (part.type) {
             case 'text':
@@ -176,7 +230,12 @@ const AssistantMessage = memo(function AssistantMessage({ message }: { message: 
           }
         })}
       </div>
-      <CopyButton text={textContent} />
+      <div className="flex items-end gap-1.5 self-end">
+        <CopyButton text={textContent} />
+        <span className="text-[10px] text-muted-foreground/40 opacity-0 transition-opacity group-hover/msg:opacity-100 select-none">
+          {formatRelativeTime(message.created_at)}
+        </span>
+      </div>
     </div>
   )
 })
@@ -196,16 +255,16 @@ function StreamingAssistantMessage({
   reasoning: string
   iteration: number
 }) {
+  const hasContent = content || toolCalls.length > 0 || reasoning
+
   return (
-    <div className="mb-6 flex w-full max-w-3xl gap-3 items-start">
-      <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-background/60 backdrop-blur-sm">
-        <BotIcon className="size-3.5 text-muted-foreground" />
-      </div>
-      <div className="max-w-full min-w-0 flex-1 rounded-2xl rounded-tl-md bg-background/70 backdrop-blur-xl px-4 py-3 text-sm shadow-sm">
+    <div className="mb-5 flex w-full max-w-3xl gap-3 items-start">
+      <BotAvatar />
+      <div className="max-w-full min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-background/70 backdrop-blur-xl px-4 py-3 text-sm shadow-sm ring-1 ring-border/30">
         {iteration > 1 && (
           <div className="mb-2">
-            <span className="inline-flex items-center rounded-md bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-              Iteration {iteration}
+            <span className="inline-flex items-center rounded-full bg-primary/10 px-2.5 py-0.5 text-[11px] font-medium text-primary">
+              第 {iteration} 轮
             </span>
           </div>
         )}
@@ -230,7 +289,11 @@ function StreamingAssistantMessage({
           )
         })}
 
-        <MarkdownContent content={content} isStreaming />
+        {content ? (
+          <MarkdownContent content={content} isStreaming />
+        ) : !hasContent ? (
+          <TypingIndicator />
+        ) : null}
       </div>
     </div>
   )
