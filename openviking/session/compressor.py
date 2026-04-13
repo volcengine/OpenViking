@@ -554,6 +554,28 @@ class SessionCompressor:
                 self._pending_semantic_changes.clear()
                 raise
 
+    async def preview_long_term_memories(
+        self,
+        messages: List[Message],
+        user: Optional["UserIdentifier"] = None,
+        session_id: Optional[str] = None,
+        latest_archive_overview: str = "",
+    ) -> List[CandidateMemory]:
+        """Preview extracted memory candidates without writing any memory files.
+
+        This mirrors the extraction stage used by session commit, but stops
+        before deduplication, merge, indexing, or persistence so callers can
+        inspect the candidate memories that the LLM produced.
+        """
+        if not messages or not user or not session_id:
+            return []
+
+        context = {
+            "messages": messages,
+            "summary": latest_archive_overview or "",
+        }
+        return await self.extractor.extract(context, user, session_id)
+
     def _extract_tool_parts(self, messages: List[Message]) -> List:
         """Extract all ToolPart from messages."""
         from openviking.message.part import ToolPart

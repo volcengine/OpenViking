@@ -12,6 +12,7 @@ import pytest
 
 from openviking.message import Message
 from openviking.server.identity import RequestContext, Role
+from openviking.session import CandidateMemory, MemoryCategory, ToolSkillCandidateMemory
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 from tests.utils.mock_agfs import MockLocalAGFS
@@ -370,6 +371,66 @@ async def test_get_session_archive_endpoint_returns_archive_details(client: http
         "archived question",
         "archived answer",
     ]
+
+
+async def test_extract_preview_endpoint_returns_candidates_and_summary(
+    client: httpx.AsyncClient,
+    service,
+):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={"role": "user", "content": "我的狗叫旺财，我喜欢手冲咖啡。"},
+    )
+
+    async def fake_preview(*args, **kwargs):
+        del args, kwargs
+        return [
+            CandidateMemory(
+                category=MemoryCategory.ENTITIES,
+                abstract="用户有一只叫旺财的狗",
+                overview="旺财是一只狗。",
+                content="用户提到自己的狗叫旺财。",
+                source_session=session_id,
+                user="test_user",
+                language="zh-CN",
+            ),
+            ToolSkillCandidateMemory(
+                category=MemoryCategory.TOOLS,
+                abstract="search_web tool works well for web lookup",
+                overview="Use search_web for lightweight web lookups.",
+                content="search_web performs well on short factual searches.",
+                source_session=session_id,
+                user="test_user",
+                language="en",
+                tool_name="search_web",
+                call_time=2,
+                success_time=2,
+                duration_ms=120,
+                prompt_tokens=30,
+                completion_tokens=10,
+            ),
+        ]
+
+    service.sessions._session_compressor.preview_long_term_memories = fake_preview
+
+    resp = await client.post(f"/api/v1/sessions/{session_id}/extract-preview")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["status"] == "ok"
+    assert body["result"]["session_id"] == session_id
+    assert body["result"]["message_count"] == 1
+    assert body["result"]["estimated_message_tokens"] > 0
+    assert body["result"]["archive_summary_preview"]
+    assert body["result"]["counts_by_category"]["entities"] == 1
+    assert body["result"]["counts_by_category"]["tools"] == 1
+    assert body["result"]["counts_by_category"]["total"] == 2
+    assert body["result"]["candidates"][0]["category"] == "entities"
+    assert body["result"]["candidates"][1]["tool_name"] == "search_web"
+    assert body["result"]["candidates"][1]["call_time"] == 2
 
 
 async def test_commit_endpoint_rejects_after_failed_archive(
