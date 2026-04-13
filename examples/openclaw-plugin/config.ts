@@ -10,6 +10,8 @@ export type MemoryOpenVikingConfig = {
   /** Port for local server when mode is "local". Ignored when mode is "remote". */
   port?: number;
   baseUrl?: string;
+  accountId?: string;
+  userId?: string;
   agentId?: string;
   apiKey?: string;
   targetUri?: string;
@@ -60,6 +62,22 @@ const DEFAULT_EMIT_STANDARD_DIAGNOSTICS = false;
 const DEFAULT_LOCAL_CONFIG_PATH = join(homedir(), ".openviking", "ov.conf");
 
 const DEFAULT_AGENT_ID = "default";
+
+function resolveOptionalIdentity(
+  configured: unknown,
+  envNames: string[],
+): string {
+  if (typeof configured === "string" && configured.trim()) {
+    return resolveEnvVars(configured.trim());
+  }
+  for (const envName of envNames) {
+    const envValue = process.env[envName];
+    if (typeof envValue === "string" && envValue.trim()) {
+      return envValue.trim();
+    }
+  }
+  return "";
+}
 
 function resolveAgentId(configured: unknown): string {
   if (typeof configured === "string" && configured.trim()) {
@@ -146,6 +164,8 @@ export const memoryOpenVikingConfigSchema = {
         "configPath",
         "port",
         "baseUrl",
+        "accountId",
+        "userId",
         "agentId",
         "apiKey",
         "targetUri",
@@ -202,6 +222,8 @@ export const memoryOpenVikingConfigSchema = {
       configPath,
       port,
       baseUrl: resolvedBaseUrl,
+      accountId: resolveOptionalIdentity(cfg.accountId, ["OPENVIKING_ACCOUNT", "OPENVIKING_ACCOUNT_ID"]),
+      userId: resolveOptionalIdentity(cfg.userId, ["OPENVIKING_USER", "OPENVIKING_USER_ID"]),
       agentId: resolveAgentId(cfg.agentId),
       apiKey: rawApiKey ? resolveEnvVars(rawApiKey) : "",
       targetUri: typeof cfg.targetUri === "string" ? cfg.targetUri : DEFAULT_TARGET_URI,
@@ -292,6 +314,16 @@ export const memoryOpenVikingConfigSchema = {
       label: "OpenViking Base URL (remote)",
       placeholder: DEFAULT_BASE_URL,
       help: "HTTP URL when mode is remote (or use ${OPENVIKING_BASE_URL})",
+    },
+    accountId: {
+      label: "Account ID",
+      placeholder: "${OPENVIKING_ACCOUNT}",
+      help: "Optional OpenViking account header. Needed for tenant-scoped production routing with root_api_key.",
+    },
+    userId: {
+      label: "User ID",
+      placeholder: "${OPENVIKING_USER}",
+      help: "Optional OpenViking user header. Needed for tenant-scoped production routing with root_api_key.",
     },
     agentId: {
       label: "Agent ID",

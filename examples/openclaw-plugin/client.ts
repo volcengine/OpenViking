@@ -320,7 +320,10 @@ export class OpenVikingClient {
     if (cached) {
       return cached;
     }
-    const fallback: RuntimeIdentity = { userId: "default", agentId: effectiveAgentId || "default" };
+    const fallback: RuntimeIdentity = {
+      userId: this.userId.trim() || "default",
+      agentId: effectiveAgentId || "default",
+    };
     try {
       const status = await this.request<{ user?: unknown }>("/api/v1/system/status", {}, agentId);
       const userId =

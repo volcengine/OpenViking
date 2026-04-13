@@ -529,6 +529,8 @@ const contextEnginePlugin = {
     const cfg = memoryOpenVikingConfigSchema.parse(api.pluginConfig);
     const bypassSessionPatterns = compileSessionPatterns(cfg.bypassSessionPatterns);
     const rawAgentId = rawCfg.agentId;
+    const rawAccountId = rawCfg.accountId;
+    const rawUserId = rawCfg.userId;
     if (cfg.logFindRequests) {
       api.logger.info(
         "openviking: routing debug logging enabled (config logFindRequests, or env OPENVIKING_LOG_ROUTING=1 / OPENVIKING_DEBUG=1)",
@@ -540,8 +542,8 @@ const contextEnginePlugin = {
       }
     };
     verboseRoutingInfo(
-      `openviking: loaded plugin config agentId="${cfg.agentId}" ` +
-        `(raw plugins.entries.openviking.config.agentId=${JSON.stringify(rawAgentId ?? "(missing)")}; ` +
+      `openviking: loaded plugin config accountId="${cfg.accountId || "(default)"}" userId="${cfg.userId || "(default)"}" agentId="${cfg.agentId}" ` +
+        `(raw accountId=${JSON.stringify(rawAccountId ?? "(missing)")}; raw userId=${JSON.stringify(rawUserId ?? "(missing)")}; raw plugins.entries.openviking.config.agentId=${JSON.stringify(rawAgentId ?? "(missing)")}; ` +
         `${
           cfg.agentId !== "default"
             ? "non-default → X-OpenViking-Agent is <configAgentId>_<ctx.agentId> (sanitized to [a-zA-Z0-9_-]) when hooks expose session agent; config-only if ctx.agentId unknown"
@@ -553,8 +555,8 @@ const contextEnginePlugin = {
           api.logger.info(msg);
         }
       : undefined;
-    const tenantAccount = "";
-    const tenantUser = "";
+    const tenantAccount = cfg.accountId;
+    const tenantUser = cfg.userId;
     const localCacheKey = `${cfg.mode}:${cfg.baseUrl}:${cfg.configPath}:${cfg.apiKey}:${tenantAccount}:${tenantUser}:${cfg.agentId}:${cfg.logFindRequests ? "1" : "0"}`;
 
     let clientPromise: Promise<OpenVikingClient>;

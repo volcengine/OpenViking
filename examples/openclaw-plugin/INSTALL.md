@@ -99,6 +99,8 @@ Use this mode when the OpenClaw plugin should start and manage a local OpenVikin
 | Parameter | Default | Meaning |
 | --- | --- | --- |
 | `mode` | `local` | Start a local OpenViking process |
+| `accountId` | empty | Optional tenant account header for production routing |
+| `userId` | empty | Optional tenant user header for production routing |
 | `agentId` | `default` | Logical identifier used by this OpenClaw instance in OpenViking |
 | `configPath` | `~/.openviking/ov.conf` | Path to the local OpenViking config file |
 | `port` | `1933` | Local OpenViking HTTP port |
@@ -128,6 +130,8 @@ Use this mode when you already have a running OpenViking server and want OpenCla
 | `mode` | `remote` | Connect to an existing OpenViking server |
 | `baseUrl` | `http://127.0.0.1:1933` | Remote OpenViking HTTP endpoint |
 | `apiKey` | empty | Optional OpenViking API key |
+| `accountId` | empty | Optional tenant account header for root-key production routing |
+| `userId` | empty | Optional tenant user header for root-key production routing |
 | `agentId` | `default` | Logical identifier used by this OpenClaw instance on the remote server |
 
 Common remote-mode settings:
@@ -136,6 +140,8 @@ Common remote-mode settings:
 openclaw config set plugins.entries.openviking.config.mode remote
 openclaw config set plugins.entries.openviking.config.baseUrl http://your-server:1933
 openclaw config set plugins.entries.openviking.config.apiKey your-api-key
+openclaw config set plugins.entries.openviking.config.accountId your-account-id
+openclaw config set plugins.entries.openviking.config.userId your-user-id
 openclaw config set plugins.entries.openviking.config.agentId your-agent-id
 ```
 

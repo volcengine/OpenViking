@@ -72,6 +72,32 @@ describe("isMemoryUri", () => {
 });
 
 describe("OpenVikingClient resource and skill import", () => {
+  it("sends configured account and user headers on requests", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      okResponse({ root_uri: "viking://resources/site", status: "success" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenVikingClient(
+      "http://127.0.0.1:1933",
+      "",
+      "agent",
+      5000,
+      "acme",
+      "alice",
+    );
+    await client.addResource({
+      pathOrUrl: "https://example.com/docs",
+      to: "viking://resources/site",
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.get("X-OpenViking-Account")).toBe("acme");
+    expect(headers.get("X-OpenViking-User")).toBe("alice");
+    expect(headers.get("X-OpenViking-Agent")).toBe("agent");
+  });
+
   it("addResource posts remote URL as path", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       okResponse({ root_uri: "viking://resources/site", status: "success" }),
