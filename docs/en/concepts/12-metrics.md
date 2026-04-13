@@ -302,13 +302,6 @@ Recommended mental model:
 - do not turn `user_id`, `session_id`, or `resource_uri` into labels
 - only enable tenant dimensions on a small set of critical dashboard and alert metrics
 
-## Grafana Dashboard Demo
-
-OpenViking provides an Grafana dashboard demo at
-[`examples/grafana/openviking_demo_dashboard.json`](../../../examples/grafana/openviking_demo_dashboard.json).
-You can import this file into Grafana as a ready-to-use demo dashboard for `/metrics` based
-visualization and integration testing.
-
 ## Related Documentation
 
 - [Architecture Overview](./01-architecture.md) - overall OpenViking architecture

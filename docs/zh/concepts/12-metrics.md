@@ -302,11 +302,6 @@ scrape_configs:
 - 不要把 `user_id`、`session_id`、`resource_uri` 这类高基数字段做成标签
 - 对于看板和告警，只对少量关键指标族打开租户维度
 
-## Grafana Dashboard Demo
-
-OpenViking 提供了一个 Grafana Dashboard Demo：
-[`examples/grafana/openviking_demo_dashboard.json`](../../../examples/grafana/openviking_demo_dashboard.json)。
-可以将该文件直接导入 Grafana，作为基于 `/metrics` 的可视化展示与联调示例。
 
 ## 相关文档
 
