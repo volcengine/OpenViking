@@ -448,7 +448,7 @@ const PixelBlast: React.FC<PixelBlastProps> = ({
       });
       renderer.domElement.style.width = '100%';
       renderer.domElement.style.height = '100%';
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.setPixelRatio(1);
       container.appendChild(renderer.domElement);
       if (transparent) renderer.setClearAlpha(0);
       else renderer.setClearColor(0x000000, 1);
@@ -582,11 +582,18 @@ const PixelBlast: React.FC<PixelBlastProps> = ({
         passive: true
       });
       let raf = 0;
-      const animate = () => {
+      let lastFrameTime = 0;
+      const frameBudget = 1000 / 30; // cap at 30fps
+      const animate = (now: number) => {
         if (autoPauseOffscreen && !visibilityRef.current.visible) {
           raf = requestAnimationFrame(animate);
           return;
         }
+        if (now - lastFrameTime < frameBudget) {
+          raf = requestAnimationFrame(animate);
+          return;
+        }
+        lastFrameTime = now;
         uniforms.uTime.value = timeOffset + clock.getElapsedTime() * speedRef.current;
         if (liquidEffect) {
           const liqEffect = liquidEffect as Effect & { uniforms: Map<string, THREE.Uniform> };

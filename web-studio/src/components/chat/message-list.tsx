@@ -209,7 +209,7 @@ const AssistantMessage = memo(function AssistantMessage({
   return (
     <div className={`group/msg flex w-full max-w-3xl gap-3 items-start ${compact ? 'mb-1.5' : 'mb-5'}`}>
       {!compact ? <BotAvatar /> : <div className="w-7 shrink-0" />}
-      <div className="max-w-full min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-background/70 backdrop-blur-xl px-4 py-3 text-sm shadow-sm ring-1 ring-border/30">
+      <div className="max-w-full min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-background/95 px-4 py-3 text-sm shadow-sm ring-1 ring-border/30">
         {message.parts.map((part, i) => {
           switch (part.type) {
             case 'text':
@@ -260,7 +260,7 @@ function StreamingAssistantMessage({
   return (
     <div className="mb-5 flex w-full max-w-3xl gap-3 items-start">
       <BotAvatar />
-      <div className="max-w-full min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-background/70 backdrop-blur-xl px-4 py-3 text-sm shadow-sm ring-1 ring-border/30">
+      <div className="max-w-full min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-background/95 px-4 py-3 text-sm shadow-sm ring-1 ring-border/30">
         {iteration > 1 && (
           <div className="mb-2">
             <span className="inline-flex items-center rounded-full bg-primary/10 px-2.5 py-0.5 text-[11px] font-medium text-primary">

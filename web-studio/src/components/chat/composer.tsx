@@ -60,7 +60,7 @@ export function Composer({
     <div className="px-4 pb-4 pt-2">
       <div
         className={cn(
-          'mx-auto w-full max-w-3xl rounded-2xl border border-border/50 bg-background/50 backdrop-blur-xl',
+          'mx-auto w-full max-w-3xl rounded-2xl border border-border/50 bg-background/95',
           'shadow-lg shadow-black/8 dark:shadow-black/25',
         )}
       >

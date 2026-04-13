@@ -101,7 +101,7 @@ export function Thread({ sessionId }: ThreadProps) {
       )}
 
       {title && (
-        <div className="relative z-10 flex h-12 items-center border-b border-border/50 bg-background/80 backdrop-blur-sm px-6">
+        <div className="relative z-10 flex h-12 items-center border-b border-border/50 bg-background/95 px-6">
           <h2 className="text-sm font-medium truncate text-foreground">{title}</h2>
         </div>
       )}
@@ -109,7 +109,7 @@ export function Thread({ sessionId }: ThreadProps) {
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="relative z-10 flex flex-1 flex-col items-center overflow-y-auto scroll-smooth px-4 pt-12 pb-24"
+        className="relative z-10 flex flex-1 flex-col items-center overflow-y-auto px-4 pt-12 pb-24"
       >
         {isEmpty ? (
           <ThreadEmpty />
