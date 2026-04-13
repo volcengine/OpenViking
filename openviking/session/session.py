@@ -585,6 +585,26 @@ class Session:
                     self._stats.memories_extracted += len(extracted)
                     get_current_telemetry().set("memory.extracted", len(extracted))
 
+                    # Agent-scope memory extraction (trajectory + experience).
+                    # Gated by memory.agent_memory_enabled; returns [] when disabled.
+                    if hasattr(self._session_compressor, "extract_agent_memories"):
+                        agent_extracted = (
+                            await self._session_compressor.extract_agent_memories(
+                                messages=messages,
+                                ctx=self.ctx,
+                            )
+                        )
+                        if agent_extracted:
+                            logger.info(
+                                f"Extracted {len(agent_extracted)} agent memories"
+                            )
+                            for ctx_item in agent_extracted:
+                                cat = getattr(ctx_item, "category", "") or "unknown"
+                                memories_extracted[cat] = (
+                                    memories_extracted.get(cat, 0) + 1
+                                )
+                            self._stats.memories_extracted += len(agent_extracted)
+
                 # Write relations (using snapshot, not self._usage_records)
                 if self._viking_fs:
                     for usage in usage_records:
