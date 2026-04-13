@@ -203,9 +203,13 @@ async def chat_stream(
             yield f"data: {json.dumps(error_event)}\n\n".encode()
         except httpx.HTTPStatusError as e:
             logger.error(f"Bot service returned error: {e}")
+            # Note: e.response.text would raise httpx.ResponseNotRead here
+            # because the stream client has already exited its context and
+            # the underlying connection is closed. str(e) contains the
+            # status code and URL, which is sufficient for diagnostics.
             error_event = {
                 "event": "error",
-                "data": json.dumps({"error": f"Bot service error: {e.response.text}"}),
+                "data": json.dumps({"error": f"Bot service error: {str(e)}"}),
             }
             yield f"data: {json.dumps(error_event)}\n\n".encode()
 
