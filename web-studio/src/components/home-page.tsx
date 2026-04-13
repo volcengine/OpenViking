@@ -515,7 +515,7 @@ function ComponentHealthBar({
                     {asStringArray(selectedComponent?.payload.errors).map((item, index) => (
                       <div
                         key={`${selectedComponent?.name}-error-${index}`}
-                        className="rounded-lg border-l-2 border-destructive bg-destructive/5 py-2.5 pr-3 pl-4 text-sm leading-6 dark:bg-destructive/10"
+                        className="rounded-lg bg-destructive/5 px-4 py-2.5 text-sm leading-6 dark:bg-destructive/10"
                       >
                         <span className="whitespace-pre-wrap break-words">{item}</span>
                       </div>
