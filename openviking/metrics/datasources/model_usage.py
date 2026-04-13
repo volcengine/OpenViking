@@ -98,12 +98,14 @@ class ModelUsageDataSource(DomainStatsMetricDataSource):
         try:
             rerank_cfg = getattr(config, "rerank", None)
             if rerank_cfg is not None and rerank_cfg.is_available():
-                from openviking.models.rerank import RerankClient
+                from openviking.models.rerank.base import get_shared_rerank_token_usage
 
-                rerank = RerankClient.from_config(rerank_cfg)
                 result["rerank"] = {
                     "available": True,
-                    "usage_by_model": _extract_usage_by_model(rerank.get_token_usage(), self),
+                    "usage_by_model": _extract_usage_by_model(
+                        get_shared_rerank_token_usage(),
+                        self,
+                    ),
                 }
         except Exception:
             pass

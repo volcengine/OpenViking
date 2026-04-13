@@ -235,6 +235,19 @@ def test_extract_request_account_id_prefers_authenticated_request_state():
     assert _extract_request_account_id(request) == "state-account"
 
 
+def test_extract_request_account_id_does_not_trust_raw_header_when_unauthenticated():
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/v1/resources",
+            "headers": [(b"x-openviking-account", b"header-account")],
+            "state": {},
+        }
+    )
+    assert _extract_request_account_id(request) is None
+
+
 def test_get_route_template_uses_low_cardinality_fallback_for_unmatched_route():
     request = Request(
         {

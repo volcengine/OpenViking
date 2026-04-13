@@ -181,15 +181,15 @@ def _extract_request_account_id(request: Request) -> str | None:
     """
     Return the best request-scoped account id currently available for metrics labeling.
 
-    The function prefers authenticated request state because it reflects the final identity
-    resolution result, then falls back to the raw account header for early middleware stages.
+    Only trust the authenticated request state (`request.state.metric_account_id`).
+
+    The `/metrics` endpoint is intentionally best-effort and must not let unauthenticated or
+    rejected traffic control tenant labels via raw headers. When the authenticated account id
+    is not available yet, return `None` so collector-side policy can map it to `__unknown__`.
     """
     state_account_id = getattr(request.state, "metric_account_id", None)
     if state_account_id:
         return str(state_account_id)
-    header_value = request.headers.get("X-OpenViking-Account")
-    if header_value:
-        return str(header_value)
     return None
 
 

@@ -101,7 +101,10 @@ class CollectorManager:
             timeout_seconds = float(getattr(cast(Refreshable, c).config, "timeout_seconds", 0.5))
             if gate is None:
                 tasks.append(
-                    asyncio.create_task(self._run_collector(c, registry, timeout=timeout_seconds))
+                    asyncio.create_task(
+                        self._run_collector(c, registry, timeout=timeout_seconds),
+                        name=collector_name,
+                    )
                 )
                 continue
 
@@ -128,7 +131,8 @@ class CollectorManager:
                 continue
             if decision.reason == "ttl_expired" and decision.last_success_at is not None:
                 task = asyncio.create_task(
-                    self._run_collector_with_gate(c, registry, gate=gate, timeout=timeout_seconds)
+                    self._run_collector_with_gate(c, registry, gate=gate, timeout=timeout_seconds),
+                    name=collector_name,
                 )
                 self._track_background(task)
                 results.append(
@@ -143,7 +147,8 @@ class CollectorManager:
 
             tasks.append(
                 asyncio.create_task(
-                    self._run_collector_with_gate(c, registry, gate=gate, timeout=timeout_seconds)
+                    self._run_collector_with_gate(c, registry, gate=gate, timeout=timeout_seconds),
+                    name=collector_name,
                 )
             )
 
@@ -155,10 +160,14 @@ class CollectorManager:
         for t in done:
             results.append(t.result())
         for t in pending:
-            t.cancel()
+            # Deadline means we stop waiting for refresh; we do NOT cancel because collectors run
+            # in a thread and cancellation would not stop that work anyway. Keeping the task alive
+            # avoids leaving gates stuck in inflight state while also preventing overlapping
+            # refresh attempts across scrapes.
+            self._track_background(t)
             results.append(
                 RefreshResult(
-                    collector="unknown",
+                    collector=t.get_name() or "unknown",
                     attempted=True,
                     success=False,
                     reason="deadline_exceeded",
@@ -190,18 +199,13 @@ class CollectorManager:
         The gate is marked complete on both success and failure so future refresh decisions do
         not remain stuck in the inflight state.
         """
+        success = False
         try:
             res = await self._run_collector(collector, registry, timeout=timeout)
-            gate.mark_complete(success=res.success)
+            success = bool(res.success)
             return res
-        except Exception:
-            gate.mark_complete(success=False)
-            return RefreshResult(
-                collector=self._collector_name(collector),
-                attempted=True,
-                success=False,
-                reason="exception",
-            )
+        finally:
+            gate.mark_complete(success=success)
 
     async def _run_collector(
         self, collector: MetricCollector, registry, *, timeout: float

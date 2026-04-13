@@ -6,7 +6,7 @@ import asyncio
 import pytest
 
 from openviking.metrics.collectors.base import CollectorConfig, Refreshable
-from openviking.metrics.collectors.manager import CollectorManager
+from openviking.metrics.collectors.manager import CollectorManager, RefreshResult
 from openviking.metrics.core.refresh import RefreshGate
 from openviking.metrics.core.registry import MetricRegistry
 
@@ -109,3 +109,52 @@ async def test_collector_manager_swr_when_ttl_expired_and_has_last_success():
     r3 = await mgr.refresh_all(registry, deadline_seconds=1.0)
     assert r3[0].attempted is False
     assert r3[0].reason == "swr_triggered"
+
+
+@pytest.mark.asyncio
+async def test_collector_manager_deadline_exceeded_does_not_stick_inflight(monkeypatch):
+    class DummyCollector(Refreshable):
+        name = "dummy"
+        config = CollectorConfig(ttl_seconds=10.0, timeout_seconds=10.0)
+
+        def collect(self, registry) -> None:
+            raise AssertionError("collect should not be called in this test")
+
+    registry = MetricRegistry()
+    mgr = CollectorManager()
+    mgr.register(DummyCollector())
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _fake_run_collector(self, collector, registry, *, timeout: float):
+        started.set()
+        await release.wait()
+        return RefreshResult(
+            collector="dummy",
+            attempted=True,
+            success=True,
+            reason="ok",
+        )
+
+    monkeypatch.setattr(CollectorManager, "_run_collector", _fake_run_collector)
+
+    refresh_task = asyncio.create_task(mgr.refresh_all(registry, deadline_seconds=0.01))
+    await asyncio.wait_for(started.wait(), timeout=0.5)
+    r1 = await refresh_task
+    assert r1
+    assert any(item.collector == "dummy" and item.reason == "deadline_exceeded" for item in r1)
+
+    # While the long refresh is still running, we should see inflight but it must not be permanent.
+    r2 = await mgr.refresh_all(registry, deadline_seconds=1.0)
+    assert r2 and r2[0].collector == "dummy"
+    assert r2[0].attempted is False
+    assert r2[0].reason == "inflight"
+
+    # Let the background refresh finish and confirm the next scrape recovers to ttl_valid.
+    release.set()
+    await asyncio.wait_for(asyncio.sleep(0), timeout=0.5)
+    r3 = await mgr.refresh_all(registry, deadline_seconds=1.0)
+    assert r3 and r3[0].collector == "dummy"
+    assert r3[0].attempted is False
+    assert r3[0].reason == "ttl_valid"
