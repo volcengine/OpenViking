@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, ChevronRight, FileText, Folder, Loader2 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 import { cn } from '#/lib/utils'
 import { useTransientScrollbar } from '#/hooks/use-transient-scrollbar'
@@ -16,6 +17,7 @@ interface DirBrowserProps {
 }
 
 export function DirBrowser({ startUri, onConfirm, onCancel }: DirBrowserProps) {
+  const { t } = useTranslation('resources')
   const [focusUri, setFocusUri] = useState(() => normalizeDirUri(startUri))
   const [activeCol, setActiveCol] = useState<'left' | 'right'>('left')
   const [leftIndex, setLeftIndex] = useState(0)
@@ -207,7 +209,7 @@ export function DirBrowser({ startUri, onConfirm, onCancel }: DirBrowserProps) {
           )}
         >
           <ArrowLeft className="size-3.5" />
-          <span>返回上一级</span>
+          <span>{t('dirBrowser.back')}</span>
         </button>
         <div className="max-w-[55%] truncate rounded-md bg-blue-500/10 px-2.5 py-1 text-sm font-semibold text-blue-700 dark:text-blue-300">
           {focusUri}
@@ -228,6 +230,7 @@ export function DirBrowser({ startUri, onConfirm, onCancel }: DirBrowserProps) {
             label="viking://"
             dirs={rightDirs}
             activeIndex={leftIndex}
+            t={t}
             onSelect={(entry) => {
               setFocusUri(normalizeDirUri(entry.uri))
               setActiveCol('left')
@@ -242,6 +245,7 @@ export function DirBrowser({ startUri, onConfirm, onCancel }: DirBrowserProps) {
               dirs={leftDirs}
               activeIndex={activeCol === 'left' ? leftIndex : -1}
               focusedUri={focusUri}
+              t={t}
               onSelect={(entry) => {
                 const uri = normalizeDirUri(entry.uri)
                 setFocusUri(uri)
@@ -256,6 +260,7 @@ export function DirBrowser({ startUri, onConfirm, onCancel }: DirBrowserProps) {
               files={rightFiles}
               activeIndex={activeCol === 'right' ? rightIndex : -1}
               isLoading={rightQuery.isLoading}
+              t={t}
               onSelect={(entry) => {
                 setFocusUri(normalizeDirUri(entry.uri))
                 setActiveCol('right')
@@ -293,6 +298,7 @@ function DirColumn({
   focusedUri,
   isLoading,
   selectedFileUri,
+  t,
   onSelect,
   onSelectFile,
 }: {
@@ -304,6 +310,7 @@ function DirColumn({
   focusedUri?: string
   isLoading?: boolean
   selectedFileUri?: string
+  t: (key: string) => string
   onSelect: (entry: VikingFsEntry) => void
   onSelectFile?: (entry: VikingFsEntry) => void
 }) {
@@ -324,7 +331,7 @@ function DirColumn({
           <div className="flex h-full items-center justify-center px-4 py-10">
             <div className="inline-flex items-center gap-2 rounded-full border bg-background/70 px-3 py-1.5 text-xs text-muted-foreground shadow-sm">
               <Loader2 className="size-3.5 animate-spin" />
-              <span>正在加载目录</span>
+              <span>{t('dirBrowser.loading')}</span>
             </div>
           </div>
         ) : dirs.length === 0 && files.length === 0 ? (
@@ -333,9 +340,9 @@ function DirColumn({
               <div className="mx-auto mb-3 flex size-10 items-center justify-center rounded-2xl bg-muted/60 text-muted-foreground/70 shadow-inner">
                 <Folder className="size-4" />
               </div>
-              <p className="text-sm font-medium text-foreground/70">空目录</p>
+              <p className="text-sm font-medium text-foreground/70">{t('dirBrowser.empty.title')}</p>
               <p className="mt-1 text-xs leading-5 text-muted-foreground/75">
-                这一层目前没有可继续展开的子目录
+                {t('dirBrowser.empty.subtitle')}
               </p>
             </div>
           </div>
@@ -375,7 +382,7 @@ function DirColumn({
             })}
             {files.length > 0 && (
               <div className="border-t border-border/50 bg-muted/10 px-3 py-2 text-[11px] font-medium text-muted-foreground/70">
-                文件
+                {t('dirBrowser.filesSection')}
               </div>
             )}
             {files.map((entry) => {

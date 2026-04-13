@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Brain, FileText, FolderOpen, Loader2, Search, Wrench, X } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 import { cn } from '#/lib/utils'
 import { useTransientScrollbar } from '#/hooks/use-transient-scrollbar'
@@ -91,6 +92,7 @@ function toFsEntry(item: FindResultItem): { uri: string; name: string; isDir: bo
 }
 
 export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri }: FindPaletteProps) {
+  const { t } = useTranslation('resources')
   const [query, setQuery] = useState(() => findPaletteSession.inputQuery)
   const [submittedQuery, setSubmittedQuery] = useState(() => findPaletteSession.submittedQuery)
   const [findTargetUri, setFindTargetUri] = useState(() =>
@@ -266,7 +268,7 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
           <input
             ref={inputRef}
             type="text"
-            placeholder="搜索... 输入 / 浏览目录"
+            placeholder={t('searchPalette.placeholder')}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onCompositionStart={() => { composingRef.current = true }}
@@ -287,8 +289,8 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
             </button>
           )}
           <span className="flex items-center gap-1 text-xs text-muted-foreground/70">
-            {isRoot ? '搜索范围: 全局' : (
-              <><FolderOpen className="size-3" />搜索范围: {findTargetUri.split('/').filter(Boolean).pop()}</>
+            {isRoot ? t('searchPalette.scope.global') : (
+              <><FolderOpen className="size-3" />{t('searchPalette.scope.current', { name: findTargetUri.split('/').filter(Boolean).pop() })}</>
             )}
           </span>
         </div>
@@ -317,33 +319,37 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
                     <FolderOpen className={cn('size-6', isScopeCommandValid ? 'text-blue-500/50' : 'text-destructive/60')} />
                     {scopeValidationQuery.isLoading ? (
                       <div>
-                        <p className="text-sm font-medium text-foreground/80">正在校验搜索范围</p>
+                        <p className="text-sm font-medium text-foreground/80">{t('searchPalette.scopeState.validatingTitle')}</p>
                         <p className="mt-1 text-xs text-muted-foreground/75">
-                          正在检查
+                          {t('searchPalette.scopeState.validatingPrefix')}
                           {' '}
                           <span className="font-medium text-foreground/80">{scopeCommandUri}</span>
                           {' '}
-                          是否存在
+                          {t('searchPalette.scopeState.validatingSuffix')}
                         </p>
                       </div>
                     ) : isScopeCommandValid ? (
                       <div>
-                        <p className="text-sm font-medium text-foreground/80">切换搜索范围</p>
+                        <p className="text-sm font-medium text-foreground/80">{t('searchPalette.scopeState.switchTitle')}</p>
                         <p className="mt-1 text-xs text-muted-foreground/75">
-                          按 <kbd className="rounded border border-border bg-muted/50 px-1 py-0.5 font-mono text-[11px] text-foreground/70">Enter</kbd> 切换到
+                          {t('searchPalette.scopeState.switchPrefix')}
+                          {' '}
+                          <kbd className="rounded border border-border bg-muted/50 px-1 py-0.5 font-mono text-[11px] text-foreground/70">Enter</kbd>
+                          {' '}
+                          {t('searchPalette.scopeState.switchMiddle')}
                           {' '}
                           <span className="font-medium text-foreground/80">{scopeCommandUri}</span>
                         </p>
                       </div>
                     ) : (
                       <div>
-                        <p className="text-sm font-medium text-destructive">搜索范围不存在</p>
+                        <p className="text-sm font-medium text-destructive">{t('searchPalette.scopeState.invalidTitle')}</p>
                         <p className="mt-1 text-xs text-muted-foreground/75">
-                          路径
+                          {t('searchPalette.scopeState.invalidPrefix')}
                           {' '}
                           <span className="font-medium text-foreground/80">{scopeCommandUri}</span>
                           {' '}
-                          无法访问，不能切换
+                          {t('searchPalette.scopeState.invalidSuffix')}
                         </p>
                       </div>
                     )}
@@ -352,24 +358,32 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
                   <div className="animate-palette-in flex flex-col items-center gap-3 px-4 py-12 text-center">
                     <Search className="size-6 text-muted-foreground/30" />
                     <div>
-                      <p className="text-sm text-muted-foreground/70">语义搜索知识库</p>
+                      <p className="text-sm text-muted-foreground/70">{t('searchPalette.empty.title')}</p>
                       <p className="mt-1 text-xs text-muted-foreground/50">
-                        输入 <kbd className="rounded border border-border bg-muted/50 px-1 py-0.5 font-mono text-[11px] text-foreground/70">/</kbd> 浏览目录结构
+                        {t('searchPalette.browseDirHint.before')}
+                        {' '}
+                        <kbd className="rounded border border-border bg-muted/50 px-1 py-0.5 font-mono text-[11px] text-foreground/70">/</kbd>
+                        {' '}
+                        {t('searchPalette.browseDirHint.after')}
                       </p>
                       <p className="mt-1 text-xs text-muted-foreground/50">
-                        输入 <kbd className="rounded border border-border bg-muted/50 px-1 py-0.5 font-mono text-[11px] text-foreground/70">//</kbd> 切换搜索范围到全局
+                        {t('searchPalette.globalScopeHint.before')}
+                        {' '}
+                        <kbd className="rounded border border-border bg-muted/50 px-1 py-0.5 font-mono text-[11px] text-foreground/70">//</kbd>
+                        {' '}
+                        {t('searchPalette.globalScopeHint.after')}
                       </p>
                     </div>
                   </div>
                 ) : findQuery.isLoading ? (
                   <LoadingHint />
                 ) : findQuery.error ? (
-                  <div className="px-4 py-6 text-center text-xs text-destructive">搜索出错</div>
+                  <div className="px-4 py-6 text-center text-xs text-destructive">{t('searchPalette.error')}</div>
                 ) : !hasResults ? (
                   <div className="flex flex-col items-center gap-2 px-4 py-12 text-center">
                     <Search className="size-5 text-muted-foreground/25" />
-                    <p className="text-sm text-muted-foreground/60">没有找到匹配的内容</p>
-                    <p className="text-xs text-muted-foreground/40">试试换个关键词？</p>
+                    <p className="text-sm text-muted-foreground/60">{t('searchPalette.emptyResults.title')}</p>
+                    <p className="text-xs text-muted-foreground/40">{t('searchPalette.emptyResults.subtitle')}</p>
                   </div>
                 ) : (
                   <ResultList
@@ -399,17 +413,17 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
         {/* Footer */}
         {isDirMode ? (
           <div className="flex items-center gap-3 border-t px-4 py-2 text-xs text-muted-foreground/70">
-            <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">↑↓</kbd> 选择</span>
-            <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">←→</kbd> 层级</span>
-            <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">↵</kbd> 确定</span>
-            <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">esc</kbd> 取消</span>
+            <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">↑↓</kbd> {t('searchPalette.footer.dirMode.select')}</span>
+            <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">←→</kbd> {t('searchPalette.footer.dirMode.level')}</span>
+            <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">↵</kbd> {t('searchPalette.footer.dirMode.confirm')}</span>
+            <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">esc</kbd> {t('searchPalette.footer.dirMode.cancel')}</span>
           </div>
         ) : hasResults && (
           <div className="flex items-center gap-3 border-t px-4 py-2 text-xs text-muted-foreground/70">
-            <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">↑↓</kbd> 导航</span>
-            <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">↵</kbd> 打开</span>
-            <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">esc</kbd> 关闭</span>
-            <span className="ml-auto tabular-nums">{data.total} 个结果</span>
+            <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">↑↓</kbd> {t('searchPalette.footer.resultMode.navigate')}</span>
+            <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">↵</kbd> {t('searchPalette.footer.resultMode.open')}</span>
+            <span><kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">esc</kbd> {t('searchPalette.footer.resultMode.close')}</span>
+            <span className="ml-auto tabular-nums">{t('searchPalette.footer.resultMode.count', { count: data.total })}</span>
           </div>
         )}
       </div>

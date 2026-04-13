@@ -200,6 +200,63 @@ const en = {
     page: {
       placeholder: 'Resources workspace is under construction.',
     },
+    searchPalette: {
+      placeholder: 'Search... Enter / to browse directories',
+      scope: {
+        global: 'Search scope: Global',
+        current: 'Search scope: {{name}}',
+      },
+      scopeState: {
+        validatingTitle: 'Validating search scope',
+        validatingPrefix: 'Checking whether',
+        validatingSuffix: 'exists',
+        switchTitle: 'Switch search scope',
+        switchPrefix: 'Press',
+        switchMiddle: 'to switch to',
+        invalidTitle: 'Search scope not found',
+        invalidPrefix: 'Path',
+        invalidSuffix: 'is inaccessible and cannot be switched to',
+      },
+      empty: {
+        title: 'Semantic knowledge search',
+      },
+      browseDirHint: {
+        before: 'Enter',
+        after: 'to browse directories',
+      },
+      globalScopeHint: {
+        before: 'Enter',
+        after: 'to switch search scope to global',
+      },
+      error: 'Search failed',
+      emptyResults: {
+        title: 'No matching content found',
+        subtitle: 'Try another keyword?',
+      },
+      footer: {
+        dirMode: {
+          select: 'Select',
+          level: 'Level',
+          confirm: 'Confirm',
+          cancel: 'Cancel',
+        },
+        resultMode: {
+          navigate: 'Navigate',
+          open: 'Open',
+          close: 'Close',
+          count: '{{count}} results',
+        },
+      },
+    },
+    dirBrowser: {
+      back: 'Back',
+      loading: 'Loading directory',
+      filesSection: 'Files',
+      empty: {
+        title: 'Empty directory',
+        subtitle: 'There are currently no subdirectories to expand at this level',
+      },
+    },
   },
   sessions: {
     page: {

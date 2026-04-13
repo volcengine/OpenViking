@@ -200,6 +200,63 @@ const zhCN = {
     page: {
       placeholder: '资源工作区能力尚未接入。',
     },
+    searchPalette: {
+      placeholder: '搜索... 输入 / 浏览目录',
+      scope: {
+        global: '搜索范围: 全局',
+        current: '搜索范围: {{name}}',
+      },
+      scopeState: {
+        validatingTitle: '正在校验搜索范围',
+        validatingPrefix: '正在检查',
+        validatingSuffix: '是否存在',
+        switchTitle: '切换搜索范围',
+        switchPrefix: '按',
+        switchMiddle: '切换到',
+        invalidTitle: '搜索范围不存在',
+        invalidPrefix: '路径',
+        invalidSuffix: '无法访问，不能切换',
+      },
+      empty: {
+        title: '语义搜索知识库',
+      },
+      browseDirHint: {
+        before: '输入',
+        after: '浏览目录结构',
+      },
+      globalScopeHint: {
+        before: '输入',
+        after: '切换搜索范围到全局',
+      },
+      error: '搜索出错',
+      emptyResults: {
+        title: '没有找到匹配的内容',
+        subtitle: '试试换个关键词？',
+      },
+      footer: {
+        dirMode: {
+          select: '选择',
+          level: '层级',
+          confirm: '确定',
+          cancel: '取消',
+        },
+        resultMode: {
+          navigate: '导航',
+          open: '打开',
+          close: '关闭',
+          count: '{{count}} 个结果',
+        },
+      },
+    },
+    dirBrowser: {
+      back: '返回上一级',
+      loading: '正在加载目录',
+      filesSection: '文件',
+      empty: {
+        title: '空目录',
+        subtitle: '这一层目前没有可继续展开的子目录',
+      },
+    },
   },
   sessions: {
     page: {
