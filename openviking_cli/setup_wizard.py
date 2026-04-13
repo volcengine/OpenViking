@@ -585,7 +585,7 @@ def run_init() -> int:
     # Post-init tips
     print(f"  {_bold('Next steps:')}")
     print(f"    Start the server:  {_cyan('openviking-server')}")
-    print(f"    Validate setup:    {_cyan('ov doctor')}")
+    print(f"    Validate setup:    {_cyan('openviking-server doctor')}")
     print()
 
     return 0

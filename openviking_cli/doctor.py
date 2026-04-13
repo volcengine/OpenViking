@@ -1,8 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""ov doctor - validate OpenViking subsystems and report actionable diagnostics.
+"""openviking-server doctor - validate OpenViking subsystems and report actionable diagnostics.
 
-Unlike ``ov health`` (which pings a running server), ``ov doctor`` checks
+Unlike ``ov health`` (which pings a running server), ``openviking-server doctor`` checks
 local prerequisites without requiring a server: config file, Python version,
 native vector engine, AGFS, embedding provider, VLM provider, and disk space.
 """
@@ -325,5 +325,5 @@ def run_doctor() -> int:
 
 
 def main() -> int:
-    """Entry point for ``ov doctor``."""
+    """Entry point for ``openviking-server doctor``."""
     return run_doctor()
