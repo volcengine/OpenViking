@@ -1,5 +1,5 @@
 import { memo, useCallback, useState } from 'react'
-import { BotIcon, CheckIcon, CopyIcon, FileIcon, ImageIcon, UserIcon } from 'lucide-react'
+import { CheckIcon, CopyIcon, FileIcon, ImageIcon, UserIcon } from 'lucide-react'
 
 import type { Message } from '#/routes/sessions/-types/message'
 import type { StreamToolCall } from '#/routes/sessions/-types/chat'
@@ -72,8 +72,8 @@ function TypingIndicator() {
 
 function BotAvatar() {
   return (
-    <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary/20 to-primary/5 ring-1 ring-primary/10">
-      <BotIcon className="size-3.5 text-primary" />
+    <div className="flex size-7 shrink-0 items-center justify-center rounded-full ring-1 ring-border/20 overflow-hidden">
+      <img src="/ov-logo.png" alt="OpenViking" className="size-7" />
     </div>
   )
 }
