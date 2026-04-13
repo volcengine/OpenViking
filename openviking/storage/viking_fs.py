@@ -276,6 +276,13 @@ class VikingFS:
         if not self._is_accessible(normalized_uri, real_ctx):
             raise PermissionError(f"Access denied for {uri}")
 
+    def _ensure_mutable_access(self, uri: str, ctx: Optional[RequestContext]) -> None:
+        self._ensure_access(uri, ctx)
+        real_ctx = self._ctx_or_default(ctx)
+        normalized_uri, _ = self._normalized_uri_parts(uri)
+        if real_ctx.role != Role.ROOT and normalized_uri.rstrip("/") == "viking://temp":
+            raise PermissionError("Temp root is read-only for non-root users")
+
     # ========== AGFS Basic Commands ==========
 
     async def read(
@@ -326,7 +333,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> str:
         """Write file"""
-        self._ensure_access(uri, ctx)
+        self._ensure_mutable_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         if isinstance(data, str):
             data = data.encode("utf-8")
@@ -342,7 +349,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Create directory."""
-        self._ensure_access(uri, ctx)
+        self._ensure_mutable_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         # Always ensure parent directories exist before creating this directory
         await self._ensure_parent_dirs(path)
@@ -375,7 +382,7 @@ class VikingFS:
         from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
         from openviking.storage.transaction import LockContext, get_lock_manager
 
-        self._ensure_access(uri, ctx)
+        self._ensure_mutable_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         target_uri = self._path_to_uri(path, ctx=ctx)
 
@@ -429,8 +436,8 @@ class VikingFS:
         from openviking.pyagfs.helpers import cp as agfs_cp
         from openviking.storage.transaction import LockContext, get_lock_manager
 
-        self._ensure_access(old_uri, ctx)
-        self._ensure_access(new_uri, ctx)
+        self._ensure_mutable_access(old_uri, ctx)
+        self._ensure_mutable_access(new_uri, ctx)
         old_path = self._uri_to_path(old_uri, ctx=ctx)
         new_path = self._uri_to_path(new_uri, ctx=ctx)
         target_uri = self._path_to_uri(old_path, ctx=ctx)
@@ -1314,7 +1321,9 @@ class VikingFS:
         if scope == "temp":
             if len(parts) == 1:
                 return True
-            return parts[1] == ctx.user.user_space_name()
+            if parts[1] == ctx.user.user_space_name():
+                return True
+            return bool(re.fullmatch(r"\d{8}_[0-9a-f]{6}", parts[1]))
         if scope == "_system":
             return False
 
@@ -1864,8 +1873,8 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Move file."""
-        self._ensure_access(from_uri, ctx)
-        self._ensure_access(to_uri, ctx)
+        self._ensure_mutable_access(from_uri, ctx)
+        self._ensure_mutable_access(to_uri, ctx)
         from_path = self._uri_to_path(from_uri, ctx=ctx)
 
         content_bytes = await self.read_file_bytes(from_uri, ctx=ctx)
@@ -1881,6 +1890,7 @@ class VikingFS:
 
     async def delete_temp(self, temp_uri: str, ctx: Optional[RequestContext] = None) -> None:
         """Delete temp directory and its contents."""
+        self._ensure_mutable_access(temp_uri, ctx)
         path = self._uri_to_path(temp_uri, ctx=ctx)
         try:
             for entry in self._ls_entries(path):
