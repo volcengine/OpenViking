@@ -348,4 +348,4 @@ The most common labels you will use while investigating dashboards are:
 - [Authentication](04-authentication.md) - API key setup
 - [Operation Telemetry Reference](07-operation-telemetry.md) - request-level structured tracing
 - [System API](../api/07-system.md) - system and observer API reference
-- [Metrics](../concepts/12-metrics.md)
+- [Metrics](../concepts/12-metrics.md) - time-series metrics and configuration
