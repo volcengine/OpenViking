@@ -410,7 +410,7 @@ function ComponentHealthBar({
         ) : (
           <div className="divide-y divide-foreground/5">
             {/* System row */}
-            <div className="flex items-center justify-between py-3 first:pt-0 last:pb-0">
+            <div className="flex items-center justify-between px-3 py-3 first:pt-0 last:pb-0">
               <div className="flex items-center gap-3">
                 {displaySystemHealthy
                   ? <span className="inline-block size-2.5 rounded-full" style={{ backgroundColor: '#7e9e7e' }} />
@@ -418,9 +418,11 @@ function ComponentHealthBar({
                 }
                 <span className="text-sm font-medium">System</span>
               </div>
-              <span className="text-xs text-muted-foreground">
-                {displaySystemHealthy ? t('systemHealth.operational') : t('systemHealth.degraded')}
-              </span>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-muted-foreground">
+                  {displaySystemHealthy ? t('systemHealth.operational') : t('systemHealth.degraded')}
+                </span>
+              </div>
             </div>
             {/* Component rows */}
             {names.map((name) => {
