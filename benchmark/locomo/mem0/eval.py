@@ -96,7 +96,7 @@ def _restart_openclaw_gateway(base_url: str, sample_id: str, startup_timeout: in
         raise RuntimeError(f"Failed to start openclaw gateway: {e}")
 
     # Wait for process to fully start before checking health
-    time.sleep(3)
+    time.sleep(5)
 
     # Wait until gateway is ready
     health_url = f"{base_url.rstrip('/')}/health"

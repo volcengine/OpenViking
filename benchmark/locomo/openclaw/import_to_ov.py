@@ -303,7 +303,7 @@ async def viking_ingest(
         task_id = result.get("task_id")
         if task_id:
             # 轮询任务状态直到完成
-            max_attempts = 1200  # 最多等待20分钟
+            max_attempts = 3600  # 最多等待1小时
             for attempt in range(max_attempts):
                 task = await client.get_task(task_id)
                 status = task.get("status") if task else "unknown"

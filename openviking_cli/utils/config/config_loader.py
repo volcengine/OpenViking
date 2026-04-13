@@ -121,6 +121,6 @@ def require_config(
         raise FileNotFoundError(
             f"OpenViking {purpose} configuration file not found.\n"
             f"Please create {default_path_user} or {default_path_system}, or set {env_var}.\n"
-            f"See: https://openviking.dev/docs/guides/configuration"
+            f"See: https://openviking.ai/docs"
         )
     return load_json_config(path)

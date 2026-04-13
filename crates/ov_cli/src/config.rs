@@ -6,6 +6,23 @@ use crate::error::{Error, Result};
 const OPENVIKING_CLI_CONFIG_ENV: &str = "OPENVIKING_CLI_CONFIG_FILE";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UploadConfig {
+    pub ignore_dirs: Option<String>,
+    pub include: Option<String>,
+    pub exclude: Option<String>,
+}
+
+impl Default for UploadConfig {
+    fn default() -> Self {
+        Self {
+            ignore_dirs: None,
+            include: None,
+            exclude: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default = "default_url")]
     pub url: String,
@@ -19,6 +36,8 @@ pub struct Config {
     pub output: String,
     #[serde(default = "default_echo_command")]
     pub echo_command: bool,
+    #[serde(default)]
+    pub upload: UploadConfig,
 }
 
 fn default_url() -> String {
@@ -48,7 +67,32 @@ impl Default for Config {
             timeout: 60.0,
             output: "table".to_string(),
             echo_command: true,
+            upload: UploadConfig::default(),
         }
+    }
+}
+
+fn normalize_csv_option(value: Option<String>) -> Vec<String> {
+    value
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+pub fn merge_csv_options(
+    config_value: Option<String>,
+    cli_value: Option<String>,
+) -> Option<String> {
+    let mut merged = normalize_csv_option(config_value);
+    merged.extend(normalize_csv_option(cli_value));
+
+    if merged.is_empty() {
+        None
+    } else {
+        Some(merged.join(","))
     }
 }
 
@@ -115,7 +159,7 @@ pub fn get_or_create_machine_id() -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::Config;
+    use super::{Config, merge_csv_options};
 
     #[test]
     fn config_deserializes_account_and_user_fields() {
@@ -133,5 +177,77 @@ mod tests {
         assert_eq!(config.account.as_deref(), Some("acme"));
         assert_eq!(config.user.as_deref(), Some("alice"));
         assert_eq!(config.agent_id.as_deref(), Some("assistant-1"));
+        assert!(config.upload.ignore_dirs.is_none());
+        assert!(config.upload.include.is_none());
+        assert!(config.upload.exclude.is_none());
+    }
+
+    #[test]
+    fn config_deserializes_upload_fields() {
+        let config: Config = serde_json::from_str(
+            r#"{
+                "url": "http://localhost:1933",
+                "upload": {
+                    "ignore_dirs": "node_modules,dist",
+                    "include": "*.md,*.pdf",
+                    "exclude": "*.tmp,*.log"
+                }
+            }"#,
+        )
+        .expect("config should deserialize");
+
+        assert_eq!(
+            config.upload.ignore_dirs.as_deref(),
+            Some("node_modules,dist")
+        );
+        assert_eq!(config.upload.include.as_deref(), Some("*.md,*.pdf"));
+        assert_eq!(config.upload.exclude.as_deref(), Some("*.tmp,*.log"));
+    }
+
+    #[test]
+    fn merge_csv_options_config_only() {
+        assert_eq!(
+            merge_csv_options(Some("node_modules,dist".to_string()), None),
+            Some("node_modules,dist".to_string())
+        );
+    }
+
+    #[test]
+    fn merge_csv_options_cli_only() {
+        assert_eq!(
+            merge_csv_options(None, Some("*.md,*.pdf".to_string())),
+            Some("*.md,*.pdf".to_string())
+        );
+    }
+
+    #[test]
+    fn merge_csv_options_additive_merge() {
+        assert_eq!(
+            merge_csv_options(
+                Some("node_modules,dist".to_string()),
+                Some("build,out".to_string())
+            ),
+            Some("node_modules,dist,build,out".to_string())
+        );
+    }
+
+    #[test]
+    fn merge_csv_options_trims_and_drops_empty_tokens() {
+        assert_eq!(
+            merge_csv_options(
+                Some(" node_modules , , dist ,".to_string()),
+                Some(" ,*.tmp,  *.log  ,".to_string())
+            ),
+            Some("node_modules,dist,*.tmp,*.log".to_string())
+        );
+    }
+
+    #[test]
+    fn merge_csv_options_returns_none_when_empty() {
+        assert_eq!(
+            merge_csv_options(Some("  ,  , ".to_string()), Some("".to_string())),
+            None
+        );
+        assert_eq!(merge_csv_options(None, None), None);
     }
 }

@@ -81,6 +81,7 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
             ValueError: If api_key is not provided
         """
         super().__init__(model_name, config)
+        self.provider = "volcengine"
 
         self.api_key = api_key
         self.api_base = api_base or "https://ark.cn-beijing.volces.com/api/v3"
@@ -326,6 +327,7 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
             ValueError: If api_key is not provided
         """
         super().__init__(model_name, config)
+        self.provider = "volcengine"
 
         self.api_key = api_key
         self.api_base = api_base
@@ -337,6 +339,8 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
         if self.api_base:
             ark_kwargs["base_url"] = self.api_base
         self.client = volcenginesdkarkruntime.Ark(**ark_kwargs)
+        self._ark_kwargs = ark_kwargs
+        self._async_client = None
 
     def _update_telemetry_token_usage(self, response) -> None:
         usage = getattr(response, "usage", None)
@@ -510,6 +514,7 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
             ValueError: If api_key is not provided
         """
         super().__init__(model_name, config)
+        self.provider = "volcengine"
         self.api_key = api_key
         self.api_base = api_base
         self.dimension = dimension

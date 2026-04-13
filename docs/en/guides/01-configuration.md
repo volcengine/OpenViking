@@ -566,6 +566,7 @@ Reranking model for search result refinement. Supports VikingDB (Volcengine), Co
 | `api_base` | str | Endpoint URL (for `openai` provider) |
 | `model` | str | Model name (for `openai` or `litellm` providers) |
 | `threshold` | float | Score threshold between `0.0` and `1.0`; results below this are filtered out. Default: `0.1` |
+| `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
 
 **Supported providers:**
 - `vikingdb`: Volcengine VikingDB Rerank API (uses AK/SK)
@@ -794,7 +795,12 @@ Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI t
   "account": "acme",
   "user": "alice",
   "agent_id": "my-agent",
-  "output": "table"
+  "output": "table",
+  "upload": {
+    "ignore_dirs": "node_modules,.cache,.nx",
+    "include": "*.md,*.pdf",
+    "exclude": "*.tmp,*.log"
+  }
 }
 ```
 
@@ -806,11 +812,22 @@ Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI t
 | `user` | Default user sent as `X-OpenViking-User` | `null` |
 | `agent_id` | Agent identifier for agent space isolation | `null` |
 | `output` | Default output format: `"table"` or `"json"` | `"table"` |
+| `upload.ignore_dirs` | Default directory ignore list for `add-resource` (CSV) | `null` |
+| `upload.include` | Default include patterns for `add-resource` (CSV) | `null` |
+| `upload.exclude` | Default exclude patterns for `add-resource` (CSV) | `null` |
 
 CLI flags can override these identity fields per command:
 
 ```bash
 openviking --account acme --user alice --agent-id assistant-2 ls viking://
+```
+
+For `add-resource`, upload filter flags are merged additively with `ovcli.conf` defaults:
+
+```bash
+# ovcli.conf: upload.exclude="*.log"
+openviking add-resource ./docs --exclude "*.tmp"
+# effective exclude sent to server: "*.log,*.tmp"
 ```
 
 See [Deployment](./03-deployment.md) for details.
@@ -990,7 +1007,8 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
     "api_key": "string",
     "model": "string",
     "api_base": "string",
-    "threshold": 0.1
+    "threshold": 0.1,
+    "extra_headers": {}
   },
   "encryption": {
     "enabled": false,

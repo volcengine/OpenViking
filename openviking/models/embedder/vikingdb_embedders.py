@@ -160,6 +160,7 @@ class VikingDBDenseEmbedder(DenseEmbedderBase, VikingDBClientMixin):
         config: Optional[Dict[str, Any]] = None,
     ):
         DenseEmbedderBase.__init__(self, model_name, config)
+        self.provider = "vikingdb"
         self._init_vikingdb_client(ak, sk, region, host)
         self.model_version = model_version
         self.dimension = dimension
@@ -299,6 +300,7 @@ class VikingDBSparseEmbedder(SparseEmbedderBase, VikingDBClientMixin):
         config: Optional[Dict[str, Any]] = None,
     ):
         SparseEmbedderBase.__init__(self, model_name, config)
+        self.provider = "vikingdb"
         self._init_vikingdb_client(ak, sk, region, host)
         self.model_version = model_version
         self.sparse_model = {
@@ -438,6 +440,7 @@ class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
         config: Optional[Dict[str, Any]] = None,
     ):
         HybridEmbedderBase.__init__(self, model_name, config)
+        self.provider = "vikingdb"
         self._init_vikingdb_client(ak, sk, region, host)
         self.model_version = model_version
         self.dimension = dimension

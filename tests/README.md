@@ -31,7 +31,7 @@ See [docs/en/guides/configuration.md](../docs/en/guides/configuration.md) for th
 ### Dependencies
 
 ```bash
-pip install pytest pytest-asyncio
+pip install pytest pytest-asyncio pytest-cov
 ```
 
 ## Running Tests
@@ -43,7 +43,7 @@ pip install pytest pytest-asyncio
 pytest tests/client tests/server tests/session tests/vectordb tests/misc tests/integration -v
 
 # Run with coverage
-pytest tests/client tests/server tests/session tests/vectordb tests/misc tests/integration --cov=openviking --cov-report=html
+pytest tests/client tests/server tests/session tests/vectordb tests/misc tests/integration -v --cov=openviking --cov-report=term-missing
 ```
 
 ### Running Specific Tests

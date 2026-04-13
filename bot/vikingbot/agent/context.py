@@ -68,7 +68,7 @@ class ContextBuilder:
             self._templates_ensured = True
 
     async def build_system_prompt(
-        self, session_key: SessionKey, current_message: str, history: list[dict[str, Any]]
+        self, session_key: SessionKey, current_message: str, history: list[dict[str, Any]], ov_tools_enable: bool = True
     ) -> str:
         """
         Build the system prompt from bootstrap files, memory, and skills.
@@ -123,22 +123,23 @@ Skills with available="false" need dependencies installed first - you can try in
 
 {skills_summary}""")
 
-        # Viking user profile
-        start = _time.time()
-        profile = await self.memory.get_viking_user_profile(
-            workspace_id=workspace_id, user_id=self._sender_id
-        )
-        cost = round(_time.time() - start, 2)
-        logger.info(
-            f"[READ_USER_PROFILE]: cost {cost}s, profile={profile[:50] if profile else 'None'}"
-        )
-        if profile:
-            parts.append(f"## Current user's information\n{profile}")
+        # Viking user profile (only if ov tools are enabled)
+        if ov_tools_enable:
+            start = _time.time()
+            profile = await self.memory.get_viking_user_profile(
+                workspace_id=workspace_id, user_id=self._sender_id
+            )
+            cost = round(_time.time() - start, 2)
+            logger.info(
+                f"[READ_USER_PROFILE]: cost {cost}s, profile={profile[:50] if profile else 'None'}"
+            )
+            if profile:
+                parts.append(f"## Current user's information\n{profile}")
 
         return "\n\n---\n\n".join(parts)
 
     async def _build_user_memory(
-        self, session_key: SessionKey, current_message: str, sender_id: str
+        self, session_key: SessionKey, current_message: str, sender_id: str, ov_tools_enable: bool = True
     ) -> str:
         """
         Build the system prompt from bootstrap files, memory, and skills.
@@ -168,21 +169,22 @@ Skills with available="false" need dependencies installed first - you can try in
 
         workspace_id = self.sandbox_manager.to_workspace_id(session_key)
 
-        # Viking agent memory
-        start = _time.time()
-        viking_memory = await self.memory.get_viking_memory_context(
-            current_message=current_message, workspace_id=workspace_id, sender_id=sender_id
-        )
-        logger.info(f'viking_memory={viking_memory}')
-        cost = round(_time.time() - start, 2)
-        logger.info(
-            f"[READ_USER_MEMORY]: cost {cost}s, memory={viking_memory[:50] if viking_memory else 'None'}"
-        )
-        if viking_memory:
-            parts.append(
-                f"## openviking_search(query=[user_query])\n"
-                f"{viking_memory}"
+        # Viking agent memory (only if ov tools are enabled)
+        if ov_tools_enable:
+            start = _time.time()
+            viking_memory = await self.memory.get_viking_memory_context(
+                current_message=current_message, workspace_id=workspace_id, sender_id=sender_id
             )
+            logger.info(f'viking_memory={viking_memory}')
+            cost = round(_time.time() - start, 2)
+            logger.info(
+                f"[READ_USER_MEMORY]: cost {cost}s, memory={viking_memory[:50] if viking_memory else 'None'}"
+            )
+            if viking_memory:
+                parts.append(
+                    f"## openviking_search(query=[user_query])\n"
+                    f"{viking_memory}"
+                )
 
         parts.append("Reply in the same language as the user's query, ignoring the language of the reference materials. User's query:")
 
@@ -249,6 +251,7 @@ IMPORTANT:
         current_message: str,
         media: list[str] | None = None,
         session_key: SessionKey | None = None,
+        ov_tools_enable: bool = True,
     ) -> list[dict[str, Any]]:
         """
         Build the complete message list for an LLM call.
@@ -258,6 +261,7 @@ IMPORTANT:
             current_message: The new user message.
             media: Optional list of local file paths for images/media.
             session_key: Optional session key.
+            ov_tools_enable: Whether to enable OpenViking tools and memory.
 
         Returns:
             List of messages including system prompt.
@@ -265,7 +269,7 @@ IMPORTANT:
         messages = []
 
         # System prompt
-        system_prompt = await self.build_system_prompt(session_key, current_message, history)
+        system_prompt = await self.build_system_prompt(session_key, current_message, history, ov_tools_enable=ov_tools_enable)
         messages.append({"role": "system", "content": system_prompt})
         # logger.debug(f"system_prompt: {system_prompt}")
 
@@ -274,7 +278,7 @@ IMPORTANT:
             messages.extend(history)
 
         # User
-        user_info = await self._build_user_memory(session_key, current_message, self._sender_id)
+        user_info = await self._build_user_memory(session_key, current_message, self._sender_id, ov_tools_enable=ov_tools_enable)
         messages.append({"role": "user", "content": user_info})
 
         # Current message (with optional image attachments)

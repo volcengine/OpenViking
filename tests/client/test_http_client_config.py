@@ -77,3 +77,44 @@ def test_async_http_client_reports_invalid_ovcli_value_path(tmp_path, monkeypatc
 
     with pytest.raises(ValueError, match=r"Invalid value for 'ovcli\.timeout'"):
         AsyncHTTPClient()
+
+
+def test_async_http_client_accepts_ovcli_upload_section(tmp_path, monkeypatch):
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "url": "http://config-host:1933",
+                "api_key": "config-key",
+                "upload": {
+                    "ignore_dirs": "node_modules,.cache",
+                    "include": "*.md,*.pdf",
+                    "exclude": "*.tmp,*.log",
+                },
+            }
+        )
+    )
+    monkeypatch.setenv("OPENVIKING_CLI_CONFIG_FILE", str(config_path))
+
+    client = AsyncHTTPClient()
+
+    assert client._url == "http://config-host:1933"
+    assert client._api_key == "config-key"
+
+
+def test_async_http_client_rejects_unknown_ovcli_upload_field(tmp_path, monkeypatch):
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "url": "http://localhost:1933",
+                "upload": {
+                    "unknown": "value",
+                },
+            }
+        )
+    )
+    monkeypatch.setenv("OPENVIKING_CLI_CONFIG_FILE", str(config_path))
+
+    with pytest.raises(ValueError, match=r"ovcli\.upload\.unknown"):
+        AsyncHTTPClient()

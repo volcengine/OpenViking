@@ -2,7 +2,7 @@
 
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -60,6 +60,7 @@ class BaseChannelConfig(BaseModel):
 
     type: Any = ChannelType.TELEGRAM  # Default for backwards compatibility
     enabled: bool = True
+    ov_tools_enable: bool = True
 
     def channel_id(self) -> str:
         return "default"
@@ -403,6 +404,20 @@ class ChannelsConfig(BaseModel):
                 result.append(item)
         return result
 
+    def get_channel_by_key(self, channel_key: str) -> BaseChannelConfig | None:
+        """Get channel config by channel key.
+
+        Args:
+            channel_key: Channel key in format "type__channel_id"
+
+        Returns:
+            Channel config if found, None otherwise
+        """
+        for channel_config in self.get_all_channels():
+            if channel_config.channel_key() == channel_key:
+                return channel_config
+        return None
+
 
 class AgentsConfig(BaseModel):
     """Agent configuration."""
@@ -490,11 +505,30 @@ class ExecToolConfig(BaseModel):
     timeout: int = 60
 
 
+class MCPServerConfig(BaseModel):
+    """MCP server connection configuration (stdio / sse / streamableHttp).
+
+    Ported from HKUDS/nanobot v0.1.5.
+    """
+
+    type: Optional[Literal["stdio", "sse", "streamableHttp"]] = None  # auto-detected if omitted
+    command: str = ""  # Stdio: command to run (e.g. "npx")
+    args: list[str] = Field(default_factory=list)  # Stdio: command arguments
+    env: dict[str, str] = Field(default_factory=dict)  # Stdio: extra env vars
+    url: str = ""  # HTTP/SSE endpoint URL
+    headers: dict[str, str] = Field(default_factory=dict)  # HTTP/SSE custom headers
+    tool_timeout: int = 30  # seconds before a tool call is cancelled
+    enabled_tools: list[str] = Field(
+        default_factory=lambda: ["*"]
+    )  # Only register these tools; accepts raw MCP names or wrapped mcp_<server>_<tool>; ["*"] = all
+
+
 class ToolsConfig(BaseModel):
     """Tools configuration."""
 
     web: WebToolsConfig = Field(default_factory=WebToolsConfig)
     exec: ExecToolConfig = Field(default_factory=ExecToolConfig)
+    mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
 
 
 class SandboxNetworkConfig(BaseModel):

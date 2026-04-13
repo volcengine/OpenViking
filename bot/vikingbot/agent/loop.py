@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -61,6 +62,7 @@ class AgentLoop:
         sandbox_manager: SandboxManager | None = None,
         config: Config = None,
         eval: bool = False,
+        mcp_servers: dict | None = None,
     ):
         """
         Initialize the AgentLoop with all required dependencies and configuration.
@@ -128,7 +130,47 @@ class AgentLoop:
         )
 
         self._running = False
+        self._mcp_servers = mcp_servers or {}
+        self._mcp_stack: AsyncExitStack | None = None
+        self._mcp_connected = False
+        self._mcp_connecting = False
         self._register_default_tools()
+
+    async def _connect_mcp(self) -> None:
+        """Connect to configured MCP servers (one-time, lazy, retryable on failure).
+
+        Ported from HKUDS/nanobot v0.1.5.
+        """
+        if self._mcp_connected or self._mcp_connecting or not self._mcp_servers:
+            return
+        self._mcp_connecting = True
+        try:
+            from vikingbot.agent.tools.mcp import connect_mcp_servers
+
+            self._mcp_stack = AsyncExitStack()
+            await self._mcp_stack.__aenter__()
+            await connect_mcp_servers(self._mcp_servers, self.tools, self._mcp_stack)
+            self._mcp_connected = True
+        except Exception as e:
+            logger.error(f"Failed to connect MCP servers (will retry next message): {e}")
+            if self._mcp_stack:
+                try:
+                    await self._mcp_stack.aclose()
+                except Exception:
+                    pass
+                self._mcp_stack = None
+        finally:
+            self._mcp_connecting = False
+
+    async def close_mcp(self) -> None:
+        """Close MCP server connections. Ported from HKUDS/nanobot v0.1.5."""
+        if self._mcp_stack:
+            try:
+                await self._mcp_stack.aclose()
+            except (RuntimeError, BaseExceptionGroup):
+                pass  # MCP SDK cancel scope cleanup is noisy but harmless
+            self._mcp_stack = None
+        self._mcp_connected = False
 
     async def _publish_thinking_event(
         self, session_key: SessionKey, event_type: OutboundEventType, content: str
@@ -181,6 +223,7 @@ class AgentLoop:
     async def run(self) -> None:
         """Run the agent loop, processing messages from the bus."""
         self._running = True
+        await self._connect_mcp()
         logger.info("Agent loop started")
 
         while self._running:
@@ -217,6 +260,7 @@ class AgentLoop:
         session_key: SessionKey,
         publish_events: bool = True,
         sender_id: str | None = None,
+        ov_tools_enable: bool = True,
     ) -> tuple[str | None, list[dict], dict[str, int], int]:
         """
         Run the core agent loop: call LLM, execute tools, repeat until done.
@@ -225,6 +269,7 @@ class AgentLoop:
             messages: Initial message list
             session_key: Session key for tool execution context
             publish_events: Whether to publish ITERATION/REASONING/TOOL_CALL events to the bus
+            ov_tools_enable: Whether to enable OpenViking tools for this session
 
         Returns:
             tuple of (final_content, tools_used)
@@ -252,7 +297,7 @@ class AgentLoop:
 
             response = await self.provider.chat(
                 messages=messages,
-                tools=self.tools.get_definitions(),
+                tools=self.tools.get_definitions(ov_tools_enable=ov_tools_enable),
                 model=self.model,
                 session_id=session_key.safe_name(),
             )
@@ -526,14 +571,16 @@ class AgentLoop:
                 eval=self._eval,
             )
 
+            ov_tools_enable = self._get_ov_tools_enable(session_key)
             # Build initial messages (use get_history for LLM-formatted messages)
             messages = await message_context.build_messages(
                 history=session.get_history(),
                 current_message=msg.content,
                 media=msg.media if msg.media else None,
                 session_key=msg.session_key,
+                ov_tools_enable=ov_tools_enable,
             )
-            # logger.info(f"New messages: {messages}")
+            logger.info(f"New messages: {messages}")
 
             # Run agent loop
             final_content, tools_used, token_usage, iteration = await self._run_agent_loop(
@@ -541,6 +588,7 @@ class AgentLoop:
                 session_key=session_key,
                 publish_events=True,
                 sender_id=msg.sender_id,
+                ov_tools_enable=ov_tools_enable,
             )
 
             # Log response preview
@@ -577,6 +625,29 @@ class AgentLoop:
             except asyncio.CancelledError:
                 pass
 
+    def _get_channel_config(self, session_key: SessionKey):
+        """Get channel config for a session key.
+
+        Args:
+            session_key: Session key to get channel config for
+
+        Returns:
+            Channel config object if found, None otherwise
+        """
+        return self.config.channels_config.get_channel_by_key(session_key.channel_key())
+
+    def _get_ov_tools_enable(self, session_key: SessionKey) -> bool:
+        """Get ov_tools_enable setting from channel config.
+
+        Args:
+            session_key: Session key to get channel config for
+
+        Returns:
+            True if ov tools should be enabled, False otherwise
+        """
+        channel_config = self._get_channel_config(session_key)
+        return getattr(channel_config, "ov_tools_enable", True) if channel_config else True
+
     async def _process_system_message(self, msg: InboundMessage) -> OutboundMessage | None:
         """
         Process a system message (e.g., subagent announce).
@@ -589,15 +660,23 @@ class AgentLoop:
         session = self.sessions.get_or_create(msg.session_key)
 
         # Build messages with the announce content
+        ov_tools_enable = self._get_ov_tools_enable(msg.session_key)
         messages = await self.context.build_messages(
-            history=session.get_history(), current_message=msg.content, session_key=msg.session_key
+            history=session.get_history(),
+            current_message=msg.content,
+            session_key=msg.session_key,
+            ov_tools_enable=ov_tools_enable,
         )
+
+        # Check channel config for ov_tools_enable setting
+        ov_tools_enable = self._get_ov_tools_enable(msg.session_key)
 
         # Run agent loop (no events published)
         final_content, tools_used, token_usage, iteration = await self._run_agent_loop(
             messages=messages,
             session_key=msg.session_key,
             publish_events=False,
+            ov_tools_enable=ov_tools_enable,
         )
 
         if final_content is None or (
@@ -753,12 +832,11 @@ Respond with ONLY valid JSON, no markdown fences."""
         allow_from = []
         if self.config.ov_server and self.config.ov_server.admin_user_id:
             allow_from.append(self.config.ov_server.admin_user_id)
-        for channel in self.config.channels_config.get_all_channels():
-            if channel.channel_key() == msg.session_key.channel_key():
-                allow_cmd = getattr(channel, 'allow_cmd_from', [])
-                if allow_cmd:
-                    allow_from.extend(allow_cmd)
-                break
+        channel_config = self._get_channel_config(msg.session_key)
+        if channel_config:
+            allow_cmd = getattr(channel_config, 'allow_cmd_from', [])
+            if allow_cmd:
+                allow_from.extend(allow_cmd)
 
         # If channel not found or sender not in allow_from list, ignore message
         if msg.sender_id not in allow_from:
@@ -781,6 +859,7 @@ Respond with ONLY valid JSON, no markdown fences."""
         Returns:
             The agent's response.
         """
+        await self._connect_mcp()
         msg = InboundMessage(session_key=session_key, sender_id="user", content=content)
 
         response = await self._process_message(msg)

@@ -403,3 +403,68 @@ A: 使用 `--force-ingest`（导入）或删除结果 CSV 文件。
 
 ### Q: 评测速度慢怎么办？
 A: 增加 `--threads`（run_eval.py）或 `--parallel`（其他脚本）参数值。
+
+---
+
+## 常见问题排查
+
+### 1. 检查 OpenViking 数据导入是否成功
+
+导入完成后，查看 `import_success.csv`：
+
+```bash
+cd benchmark/locomo/openclaw
+wc -l result/import_success.csv
+```
+
+- **预期结果**：总共约 270+ session（包含表头）
+- **如果数量不符**：
+  - 检查 `result/import_errors.log` 查看错误日志
+  - 使用 `--force-ingest` 重新导入
+
+### 2. 检查 QA 回答是否正常
+
+查看 `qa_results.csv` 的 `response` 列：
+
+```bash
+cd benchmark/locomo/openclaw
+# 查看前几行
+head -n 5 result/qa_results.csv
+
+# 查看是否有 ERROR
+grep -i "error" result/qa_results.csv
+```
+
+**检查内容：**
+- `response` 列不应为空或报错信息
+- `result` 列（judge 后）应有 `CORRECT` 或 `WRONG`
+
+### 3. 验证 OpenViking 记忆是否被正确加载
+
+如果 QA 回答不正常，可以检查 session 文件确认记忆是否被加载：
+
+1. 从 `qa_results.csv` 的 `jsonl_filename` 列获取 session 文件名：
+   ```
+   jsonl_filename
+   5d497c96-9fb6-480c-be06-0c0849e193e9.jsonl.20260408_181433
+   ```
+
+2. 在 OpenClaw 工作目录查看对应的 session 文件：
+   ```bash
+   ls ~/.openclaw/agents/locomo-eval/sessions/
+   ```
+
+3. 查看 session 文件内容，确认 query 前是否有记忆内容：
+   ```bash
+   cat ~/.openclaw/agents/locomo-eval/sessions/<jsonl_filename> | grep -A 20 "type.*message"
+   ```
+
+**预期结果**：在用户提问（query）之前，应该有从 OpenViking 加载的记忆内容。
+
+### 4. Token 统计异常
+
+如果 `stat_judge_result.py` 输出的 token 数量异常：
+
+- **Import token 为 0**：检查 `import_success.csv` 是否存在且有数据
+- **QA token 为 0**：检查 `qa_results.csv` 的 `input_tokens`/`output_tokens` 列
+- **CacheRead 很高**：说明多次运行相同问题，命中了缓存
