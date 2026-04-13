@@ -74,25 +74,25 @@ function truncate(s: string, len: number): string {
 // ---------- category colors (monochrome shades) ----------
 
 const CATEGORY_COLORS: Record<string, string> = {
-  profile: '#18181b',
-  preferences: '#3f3f46',
-  entities: '#52525b',
-  events: '#71717a',
-  cases: '#a1a1aa',
-  patterns: '#d4d4d8',
-  tools: '#e4e4e7',
-  skills: '#f4f4f5',
+  profile: '#4a7c9b',
+  preferences: '#6b8cce',
+  entities: '#7e9e7e',
+  events: '#c4a882',
+  cases: '#b07e7e',
+  patterns: '#9b8bb5',
+  tools: '#8b9dad',
+  skills: '#a8917a',
 }
 
 const CATEGORY_COLORS_DARK: Record<string, string> = {
-  profile: '#fafafa',
-  preferences: '#d4d4d8',
-  entities: '#a1a1aa',
-  events: '#71717a',
-  cases: '#52525b',
-  patterns: '#3f3f46',
-  tools: '#27272a',
-  skills: '#18181b',
+  profile: '#6ba0c2',
+  preferences: '#8eaadc',
+  entities: '#a4c4a4',
+  events: '#dcc4a0',
+  cases: '#d0a0a0',
+  patterns: '#b8a8d0',
+  tools: '#a8bcc8',
+  skills: '#c4ad96',
 }
 
 const CATEGORY_ORDER = ['profile', 'preferences', 'entities', 'events', 'cases', 'patterns', 'tools', 'skills']
@@ -660,7 +660,7 @@ function MemoryStatsCard({
               return (
                 <div key={cat} className="flex items-center gap-3 text-sm">
                   <span
-                    className="inline-block size-3 shrink-0 rounded-full"
+                    className="inline-block size-3 shrink-0 rounded-sm"
                     style={{ backgroundColor: colors[cat] }}
                   />
                   <span className="font-medium">{t(`memoryStats.category.${cat}`)}</span>
