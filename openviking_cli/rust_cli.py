@@ -44,21 +44,10 @@ def main():
     极简入口点：查找 ov 二进制并执行
 
     按优先级查找：
-    0. Python-native 子命令（doctor）
     1. ./target/release/ov（开发环境）
     2. Wheel 自带：{package_dir}/openviking/bin/ov
     3. PATH 查找：系统全局安装的 ov
     """
-    # 0. Python-native subcommands (no Rust binary needed)
-    if len(sys.argv) > 1 and sys.argv[1] == "doctor":
-        from openviking_cli.doctor import main as doctor_main
-
-        sys.exit(doctor_main())
-
-    if len(sys.argv) > 1 and sys.argv[1] == "init":
-        from openviking_cli.setup_wizard import main as init_main
-
-        sys.exit(init_main())
     # 1. 检查开发环境（仅在直接运行脚本时有效）
     try:
         # __file__ is openviking_cli/rust_cli.py, so parent is openviking_cli directory
