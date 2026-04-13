@@ -190,6 +190,102 @@ function validTokenBudget(raw: unknown): number | undefined {
   return undefined;
 }
 
+function pickNumericField(record: Record<string, unknown>, keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = validTokenBudget(record[key]);
+    if (typeof value === "number") {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function extractCommitContextWindow(runtimeContext: Record<string, unknown> | undefined): number | undefined {
+  if (!runtimeContext) {
+    return undefined;
+  }
+
+  const direct = pickNumericField(runtimeContext, [
+    "contextWindow",
+    "context_window",
+    "maxInputTokens",
+    "max_input_tokens",
+    "modelContextWindow",
+    "model_context_window",
+  ]);
+  if (typeof direct === "number") {
+    return direct;
+  }
+
+  const nestedCandidates = [
+    runtimeContext.model,
+    runtimeContext.activeModel,
+    runtimeContext.gatewayModel,
+    runtimeContext.modelInfo,
+  ];
+  for (const candidate of nestedCandidates) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      continue;
+    }
+    const nested = pickNumericField(candidate as Record<string, unknown>, [
+      "contextWindow",
+      "context_window",
+      "maxInputTokens",
+      "max_input_tokens",
+    ]);
+    if (typeof nested === "number") {
+      return nested;
+    }
+  }
+
+  return undefined;
+}
+
+function resolveCommitTokenThreshold(
+  cfg: Required<MemoryOpenVikingConfig>,
+  tokenBudget: unknown,
+  runtimeContext?: Record<string, unknown>,
+): {
+  value: number;
+  source: "fixed" | "ratio_runtime_context" | "ratio_token_budget" | "fixed_fallback";
+  ratio?: number;
+  basis?: number;
+} {
+  const ratio = cfg.commitTokenThresholdRatio;
+  if (typeof ratio !== "number") {
+    return {
+      value: cfg.commitTokenThreshold,
+      source: "fixed",
+    };
+  }
+
+  const runtimeContextWindow = extractCommitContextWindow(runtimeContext);
+  if (typeof runtimeContextWindow === "number") {
+    return {
+      value: Math.max(0, Math.floor(runtimeContextWindow * ratio)),
+      source: "ratio_runtime_context",
+      ratio,
+      basis: runtimeContextWindow,
+    };
+  }
+
+  const resolvedTokenBudget = validTokenBudget(tokenBudget);
+  if (typeof resolvedTokenBudget === "number") {
+    return {
+      value: Math.max(0, Math.floor(resolvedTokenBudget * ratio)),
+      source: "ratio_token_budget",
+      ratio,
+      basis: resolvedTokenBudget,
+    };
+  }
+
+  return {
+    value: cfg.commitTokenThreshold,
+    source: "fixed_fallback",
+    ratio,
+  };
+}
+
 /** OpenClaw session UUID (path-safe on Windows). */
 const OPENVIKING_OV_SESSION_UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -904,12 +1000,20 @@ export function createMemoryOpenVikingContextEngine(params: {
 
         const session = await client.getSession(OVSessionId, agentId);
         const pendingTokens = session.pending_tokens ?? 0;
+        const commitThreshold = resolveCommitTokenThreshold(
+          cfg,
+          afterTurnParams.tokenBudget,
+          afterTurnParams.runtimeContext,
+        );
 
-        if (pendingTokens < cfg.commitTokenThreshold) {
+        if (pendingTokens < commitThreshold.value) {
           diag("afterTurn_skip", OVSessionId, {
             reason: "below_threshold",
             pendingTokens,
-            commitTokenThreshold: cfg.commitTokenThreshold,
+            commitTokenThreshold: commitThreshold.value,
+            commitTokenThresholdSource: commitThreshold.source,
+            commitTokenThresholdRatio: commitThreshold.ratio ?? null,
+            commitTokenThresholdBasis: commitThreshold.basis ?? null,
           });
           return;
         }
@@ -927,7 +1031,10 @@ export function createMemoryOpenVikingContextEngine(params: {
 
         diag("afterTurn_commit", OVSessionId, {
           pendingTokens,
-          commitTokenThreshold: cfg.commitTokenThreshold,
+          commitTokenThreshold: commitThreshold.value,
+          commitTokenThresholdSource: commitThreshold.source,
+          commitTokenThresholdRatio: commitThreshold.ratio ?? null,
+          commitTokenThresholdBasis: commitThreshold.basis ?? null,
           status: commitResult.status,
           archived: commitResult.archived ?? false,
           taskId: commitResult.task_id ?? null,

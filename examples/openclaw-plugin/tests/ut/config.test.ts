@@ -21,6 +21,7 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.autoRecall).toBe(true);
     expect(cfg.recallPreferAbstract).toBe(false);
     expect(cfg.recallTokenBudget).toBe(2000);
+    expect(cfg.commitTokenThresholdRatio).toBeUndefined();
     expect(cfg.commitTokenThreshold).toBe(20000);
     expect(cfg.ingestReplyAssist).toBe(false);
     expect(cfg.captureMode).toBe("semantic");
@@ -153,6 +154,19 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfgLow.recallMaxContentChars).toBe(50);
     const cfgHigh = memoryOpenVikingConfigSchema.parse({ recallMaxContentChars: 99999 });
     expect(cfgHigh.recallMaxContentChars).toBe(10000);
+  });
+
+  it("accepts commitTokenThresholdRatio within bounds", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ commitTokenThresholdRatio: 0.38 });
+    expect(cfg.commitTokenThresholdRatio).toBe(0.38);
+  });
+
+  it("clamps commitTokenThresholdRatio to the supported range", () => {
+    const cfgLow = memoryOpenVikingConfigSchema.parse({ commitTokenThresholdRatio: -1 });
+    expect(cfgLow.commitTokenThresholdRatio).toBe(0);
+
+    const cfgHigh = memoryOpenVikingConfigSchema.parse({ commitTokenThresholdRatio: 0.9 });
+    expect(cfgHigh.commitTokenThresholdRatio).toBe(0.49);
   });
 
   it("resolves agentId from configured value", () => {

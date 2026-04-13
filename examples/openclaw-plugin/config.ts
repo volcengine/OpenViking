@@ -23,6 +23,7 @@ export type MemoryOpenVikingConfig = {
   recallMaxContentChars?: number;
   recallPreferAbstract?: boolean;
   recallTokenBudget?: number;
+  commitTokenThresholdRatio?: number;
   commitTokenThreshold?: number;
   bypassSessionPatterns?: string[];
   ingestReplyAssist?: boolean;
@@ -51,6 +52,7 @@ const DEFAULT_RECALL_MAX_CONTENT_CHARS = 500;
 const DEFAULT_RECALL_PREFER_ABSTRACT = true;
 const DEFAULT_RECALL_TOKEN_BUDGET = 2000;
 const DEFAULT_COMMIT_TOKEN_THRESHOLD = 20000;
+const MAX_COMMIT_TOKEN_THRESHOLD_RATIO = 0.49;
 const DEFAULT_BYPASS_SESSION_PATTERNS: string[] = [];
 const DEFAULT_INGEST_REPLY_ASSIST = true;
 const DEFAULT_INGEST_REPLY_ASSIST_MIN_SPEAKER_TURNS = 2;
@@ -89,6 +91,17 @@ function toNumber(value: unknown, fallback: number): number {
     }
   }
   return fallback;
+}
+
+function toOptionalRatio(value: unknown): number | undefined {
+  if (typeof value === "undefined" || value === null || value === "") {
+    return undefined;
+  }
+  const parsed = toNumber(value, Number.NaN);
+  if (!Number.isFinite(parsed)) {
+    return undefined;
+  }
+  return Math.max(0, Math.min(MAX_COMMIT_TOKEN_THRESHOLD_RATIO, parsed));
 }
 
 function toStringArray(value: unknown, fallback: string[]): string[] {
@@ -159,6 +172,7 @@ export const memoryOpenVikingConfigSchema = {
         "recallMaxContentChars",
         "recallPreferAbstract",
         "recallTokenBudget",
+        "commitTokenThresholdRatio",
         "commitTokenThreshold",
         "bypassSessionPatterns",
         "ingestReplyAssist",
@@ -227,6 +241,7 @@ export const memoryOpenVikingConfigSchema = {
         100,
         Math.min(50000, Math.floor(toNumber(cfg.recallTokenBudget, DEFAULT_RECALL_TOKEN_BUDGET))),
       ),
+      commitTokenThresholdRatio: toOptionalRatio(cfg.commitTokenThresholdRatio),
       commitTokenThreshold: Math.max(
         0,
         Math.min(100_000, Math.floor(toNumber(cfg.commitTokenThreshold, DEFAULT_COMMIT_TOKEN_THRESHOLD))),
@@ -360,6 +375,13 @@ export const memoryOpenVikingConfigSchema = {
       placeholder: String(DEFAULT_RECALL_TOKEN_BUDGET),
       advanced: true,
       help: "Maximum estimated tokens for auto-recall memory injection. Injection stops when budget is exhausted.",
+    },
+    commitTokenThresholdRatio: {
+      label: "Commit Threshold Ratio",
+      placeholder: "0.38",
+      advanced: true,
+      help:
+        "Preferred over Commit Token Threshold when set. Uses up to 49% of the current token budget/context window to decide when auto-commit should trigger.",
     },
     bypassSessionPatterns: {
       label: "Bypass Session Patterns",

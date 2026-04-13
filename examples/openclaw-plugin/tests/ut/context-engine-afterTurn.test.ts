@@ -15,6 +15,7 @@ function makeLogger() {
 function makeEngine(opts?: {
   autoCapture?: boolean;
   commitTokenThreshold?: number;
+  commitTokenThresholdRatio?: number;
   getSession?: Record<string, unknown>;
   addSessionMessageError?: Error;
   cfgOverrides?: Record<string, unknown>;
@@ -26,6 +27,7 @@ function makeEngine(opts?: {
     autoCapture: opts?.autoCapture ?? true,
     autoRecall: false,
     ingestReplyAssist: false,
+    commitTokenThresholdRatio: opts?.commitTokenThresholdRatio,
     commitTokenThreshold: opts?.commitTokenThreshold ?? 20000,
     emitStandardDiagnostics: true,
     ...(opts?.cfgOverrides ?? {}),
@@ -297,6 +299,70 @@ describe("context-engine afterTurn()", () => {
     expect(client.commitSession).toHaveBeenCalledTimes(1);
     const commitCall = client.commitSession.mock.calls[0];
     expect(commitCall[1]).toMatchObject({ wait: false });
+  });
+
+  it("uses commitTokenThresholdRatio with tokenBudget when configured", async () => {
+    const { engine, client } = makeEngine({
+      commitTokenThresholdRatio: 0.38,
+      commitTokenThreshold: 20000,
+      getSession: { pending_tokens: 300000 },
+    });
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      tokenBudget: 1_000_000,
+      messages: [{ role: "user", content: "long-context model turn" }],
+      prePromptMessageCount: 0,
+    });
+
+    expect(client.commitSession).not.toHaveBeenCalled();
+  });
+
+  it("prefers runtimeContext contextWindow over tokenBudget for ratio threshold", async () => {
+    const { engine, client, logger } = makeEngine({
+      commitTokenThresholdRatio: 0.38,
+      commitTokenThreshold: 20000,
+      getSession: { pending_tokens: 300000 },
+    });
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      tokenBudget: 200000,
+      runtimeContext: {
+        model: {
+          contextWindow: 1_000_000,
+        },
+      },
+      messages: [{ role: "user", content: "prefer model context window over token budget" }],
+      prePromptMessageCount: 0,
+    });
+
+    expect(client.commitSession).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("\"commitTokenThresholdSource\":\"ratio_runtime_context\""),
+    );
+  });
+
+  it("falls back to fixed threshold when ratio is set but no budget signal is available", async () => {
+    const { engine, client, logger } = makeEngine({
+      commitTokenThresholdRatio: 0.38,
+      commitTokenThreshold: 20000,
+      getSession: { pending_tokens: 25000 },
+    });
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages: [{ role: "user", content: "fallback to fixed threshold" }],
+      prePromptMessageCount: 0,
+    });
+
+    expect(client.commitSession).toHaveBeenCalledTimes(1);
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("\"commitTokenThresholdSource\":\"fixed_fallback\""),
+    );
   });
 
   it("catches errors without throwing", async () => {
