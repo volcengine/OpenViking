@@ -1284,12 +1284,17 @@ class VikingFS:
         else:
             return f"viking://{path}"
 
+    def _looks_like_legacy_temp_leaf(self, value: str) -> bool:
+        return bool(re.match(r"^\d{8}_[0-9a-f]{6}$", value or ""))
+
     def _extract_space_from_uri(self, uri: str) -> Optional[str]:
         """Extract space segment from URI if present.
 
         URIs are WYSIWYG: viking://{scope}/{space}/...
         For user/agent, the second segment is space unless it's a known structure dir.
         For session, the second segment is always space (when 3+ parts).
+        Legacy temp URIs keep the historical shape viking://temp/<temp-id> and therefore
+        intentionally have no space segment.
         """
         _, parts = self._normalized_uri_parts(uri)
         if len(parts) < 2:
@@ -1298,6 +1303,8 @@ class VikingFS:
         second = parts[1]
         # Treat scope-root metadata files as not having a tenant space segment.
         if len(parts) == 2 and second in {".abstract.md", ".overview.md"}:
+            return None
+        if scope == "temp" and self._looks_like_legacy_temp_leaf(second):
             return None
         if scope == "user" and second not in self._USER_STRUCTURE_DIRS:
             return second
@@ -1884,8 +1891,14 @@ class VikingFS:
     # ========== Temp File Operations (backward compatible) ==========
 
     def create_temp_uri(self, ctx: Optional[RequestContext] = None) -> str:
-        """Create a user-scoped temp directory URI when request context is available."""
-        real_ctx = self._ctx_or_default(ctx)
+        """Create a temp directory URI.
+
+        - explicit ctx or bound request context -> user-scoped temp URI
+        - no explicit/bound context -> legacy temp URI shape for backward compatibility
+        """
+        real_ctx = ctx if ctx is not None else self._bound_ctx.get()
+        if real_ctx is None:
+            return VikingURI.create_temp_uri()
         return VikingURI.create_temp_uri(space=real_ctx.user.user_space_name())
 
     async def delete_temp(self, temp_uri: str, ctx: Optional[RequestContext] = None) -> None:

@@ -217,3 +217,55 @@ def test_create_temp_uri_uses_user_scope_segment(viking_fs):
     temp_uri = viking_fs.create_temp_uri(ctx=ctx)
 
     assert temp_uri.startswith(f"viking://temp/{ctx.user.user_space_name()}/")
+
+
+def test_create_temp_uri_without_context_preserves_legacy_shape(viking_fs):
+    temp_uri = viking_fs.create_temp_uri()
+
+    assert temp_uri.startswith("viking://temp/")
+    assert temp_uri.count("/") == 3
+
+
+@pytest.mark.asyncio
+async def test_legacy_temp_uri_remains_accessible_to_same_account_users(viking_fs):
+    alice_ctx = RequestContext(
+        user=UserIdentifier(account_id="acct1", user_id="alice", agent_id="agent1"),
+        role=Role.USER,
+    )
+    bob_ctx = RequestContext(
+        user=UserIdentifier(account_id="acct1", user_id="bob", agent_id="agent2"),
+        role=Role.USER,
+    )
+
+    legacy_temp_uri = viking_fs.create_temp_uri()
+    secret_uri = f"{legacy_temp_uri}/shared.txt"
+
+    await viking_fs.mkdir(legacy_temp_uri, exist_ok=True, ctx=alice_ctx)
+    await viking_fs.write(secret_uri, "legacy temp", ctx=alice_ctx)
+
+    assert (await viking_fs.read(secret_uri, ctx=bob_ctx)).decode("utf-8") == "legacy temp"
+
+
+@pytest.mark.asyncio
+async def test_non_root_cannot_delete_temp_root_recursively(viking_fs):
+    alice_ctx = RequestContext(
+        user=UserIdentifier(account_id="acct1", user_id="alice", agent_id="agent1"),
+        role=Role.USER,
+    )
+    bob_ctx = RequestContext(
+        user=UserIdentifier(account_id="acct1", user_id="bob", agent_id="agent2"),
+        role=Role.USER,
+    )
+
+    alice_temp_uri = viking_fs.create_temp_uri(ctx=alice_ctx)
+    bob_temp_uri = viking_fs.create_temp_uri(ctx=bob_ctx)
+    bob_secret_uri = f"{bob_temp_uri}/bob.txt"
+
+    await viking_fs.mkdir(alice_temp_uri, exist_ok=True, ctx=alice_ctx)
+    await viking_fs.mkdir(bob_temp_uri, exist_ok=True, ctx=bob_ctx)
+    await viking_fs.write(bob_secret_uri, "bob secret", ctx=bob_ctx)
+
+    with pytest.raises(PermissionError):
+        await viking_fs.rm("viking://temp", recursive=True, ctx=alice_ctx)
+
+    assert (await viking_fs.read(bob_secret_uri, ctx=bob_ctx)).decode("utf-8") == "bob secret"
