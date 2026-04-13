@@ -237,7 +237,7 @@ function NavSessionsItem({ pathname, title }: { pathname: string; title: string 
       <SidebarMenuItem>
         <CollapsibleTrigger
           render={
-            <SidebarMenuButton tooltip={title}>
+            <SidebarMenuButton tooltip={title} className='text-base'>
               <BlocksIcon />
               <span>{title}</span>
               <ChevronRightIcon className='ml-auto transition-transform duration-200 group-data-[open]/collapsible:rotate-90' />
