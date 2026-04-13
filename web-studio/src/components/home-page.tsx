@@ -457,15 +457,7 @@ function ComponentHealthBar({
         }
       }}>
         <DialogContent className="max-h-[min(88vh,720px)] max-w-lg gap-0 overflow-hidden p-0">
-          {/* Top gradient status bar */}
-          <div
-            className="h-1 w-full"
-            style={{
-              background: selectedComponent?.payload.is_healthy
-                ? 'linear-gradient(90deg, #7e9e7e, #a4c4a4)'
-                : 'linear-gradient(90deg, #b07e7e, #d0a0a0)',
-            }}
-          />
+
 
           <DialogHeader>
             <div className="border-b border-border/60 px-6 pt-5 pb-4">
