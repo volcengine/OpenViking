@@ -9,6 +9,7 @@ to the storage system.
 
 from typing import Any, Dict, List, Optional, Tuple
 
+import jinja2
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryField
@@ -333,6 +334,18 @@ class MemoryUpdater:
         await self._vectorize_memories(result, ctx)
 
         tracer.info(f"Memory operations applied: {result.summary()}")
+
+        # Generate overview files if overview_template is configured
+        for schema in registry.list_all():
+            if schema.overview_template and schema.directory:
+                # Render directory path
+                env = jinja2.Environment(autoescape=False)
+                directory = env.from_string(schema.directory).render(
+                    user_space=ctx.user.user_space_name(),
+                    agent_space=ctx.user.agent_space_name(),
+                )
+                await self.generate_overview(schema.memory_type, directory, ctx)
+
         return result
 
     async def _apply_edit(
@@ -528,3 +541,86 @@ class MemoryUpdater:
 
             except Exception as e:
                 logger.warning(f"Failed to vectorize memory {uri}: {e}")
+
+    async def generate_overview(
+        self,
+        memory_type: str,
+        directory: str,
+        ctx: RequestContext,
+    ) -> None:
+        """
+        Generate .overview.md file for a directory based on overview_template.
+
+        Args:
+            memory_type: Memory type name (e.g., 'events')
+            directory: Directory path containing memory files
+            ctx: Request context
+        """
+        from openviking.session.memory.utils.content import parse_memory_file_with_fields
+
+        # Get the schema for this memory type
+        registry = self._registry
+        schema = registry.get(memory_type)
+        if not schema or not schema.overview_template:
+            logger.debug(f"No overview_template for memory type: {memory_type}")
+            return
+
+        viking_fs = self._get_viking_fs()
+
+        # List all .md files in the directory (excluding .overview.md and .abstract.md)
+        try:
+            files = await viking_fs.list_files(directory, ctx=ctx)
+        except Exception as e:
+            logger.warning(f"Failed to list files in {directory}: {e}")
+            return
+
+        md_files = [
+            f for f in files
+            if f.endswith(".md") and not f.endswith(".overview.md") and not f.endswith(".abstract.md")
+        ]
+
+        if not md_files:
+            logger.debug(f"No memory files in {directory}, skipping overview generation")
+            return
+
+        # Parse each file and collect items
+        items = []
+        for file_path in md_files:
+            try:
+                content = await viking_fs.read_file(file_path, ctx=ctx)
+                parsed = parse_memory_file_with_fields(content)
+
+                # Extract filename from path
+                filename = file_path.split("/")[-1]
+
+                items.append({
+                    "file_name": filename,
+                    "file_content": parsed,
+                })
+            except Exception as e:
+                logger.warning(f"Failed to parse {file_path}: {e}")
+                continue
+
+        if not items:
+            logger.debug(f"No valid memory files parsed in {directory}")
+            return
+
+        # Render the template
+        try:
+            env = jinja2.Environment(autoescape=False)
+            template = env.from_string(schema.overview_template)
+            rendered = template.render(
+                memory_type=memory_type,
+                items=items,
+            )
+        except Exception as e:
+            logger.error(f"Failed to render overview template for {memory_type}: {e}")
+            return
+
+        # Write .overview.md to the directory
+        overview_path = f"{directory.rstrip('/')}/.overview.md"
+        try:
+            await viking_fs.write_file(overview_path, rendered, ctx=ctx)
+            logger.info(f"Generated overview: {overview_path}")
+        except Exception as e:
+            logger.error(f"Failed to write overview {overview_path}: {e}")
