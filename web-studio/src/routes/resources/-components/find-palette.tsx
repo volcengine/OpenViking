@@ -356,6 +356,9 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
                       <p className="mt-1 text-xs text-muted-foreground/50">
                         输入 <kbd className="rounded border border-border bg-muted/50 px-1 py-0.5 font-mono text-[11px] text-foreground/70">/</kbd> 浏览目录结构
                       </p>
+                      <p className="mt-1 text-xs text-muted-foreground/50">
+                        输入 <kbd className="rounded border border-border bg-muted/50 px-1 py-0.5 font-mono text-[11px] text-foreground/70">//</kbd> 切换搜索范围到全局
+                      </p>
                     </div>
                   </div>
                 ) : findQuery.isLoading ? (
