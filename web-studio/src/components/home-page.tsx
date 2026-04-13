@@ -128,7 +128,7 @@ function Panel({
   className?: string
 }) {
   return (
-    <div className={`rounded-2xl bg-muted/80 p-6 transition-all duration-200 hover:-translate-y-0.5 hover:bg-muted hover:shadow-sm dark:bg-white/[0.12] dark:hover:bg-white/[0.16] ${className}`}>
+    <div className={`rounded-2xl bg-muted/80 p-6 transition-all duration-200 hover:-translate-y-0.5 hover:bg-muted hover:shadow-md dark:bg-white/[0.12] dark:hover:bg-white/[0.16] ${className}`}>
       {children}
     </div>
   )
