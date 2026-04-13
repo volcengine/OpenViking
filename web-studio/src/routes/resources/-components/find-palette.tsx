@@ -195,9 +195,18 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
         }
       }
       if (!hasQuery || flatItems.length === 0) {
-        if (e.key === 'Escape') {
-          e.preventDefault()
-          onClose()
+        switch (e.key) {
+          case 'Enter':
+            e.preventDefault()
+            if (query.trim().length > 0 && submittedQuery !== query.trim()) {
+              setSubmittedQuery(query.trim())
+              setActiveIndex(0)
+            }
+            return
+          case 'Escape':
+            e.preventDefault()
+            onClose()
+            return
         }
         return
       }
@@ -230,7 +239,7 @@ export function FindPalette({ open, onClose, onNavigate, onNavigateDir, scopeUri
           break
       }
     },
-    [hasQuery, flatItems, activeItem, onNavigate, onClose, scopeCommandUri, isScopeCommandValid],
+    [query, submittedQuery, hasQuery, flatItems, activeItem, onNavigate, onClose, isDirMode, scopeCommandUri, isScopeCommandValid],
   )
 
   if (!open) return null
