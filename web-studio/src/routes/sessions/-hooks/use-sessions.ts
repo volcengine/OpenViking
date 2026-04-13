@@ -34,7 +34,7 @@ export function useSessionMessages(sessionId: string | undefined) {
     queryKey: [...SESSIONS_KEY, sessionId, 'messages'],
     queryFn: () => fetchSessionMessages(sessionId!),
     enabled: Boolean(sessionId),
-    staleTime: 0, // always refetch when session changes
+    staleTime: 30_000, // cache for 30s to avoid flash on session switch
   })
 }
 

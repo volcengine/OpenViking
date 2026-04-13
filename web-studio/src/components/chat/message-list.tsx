@@ -1,9 +1,42 @@
-import { memo } from 'react'
-import { BotIcon, FileIcon, ImageIcon, UserIcon } from 'lucide-react'
+import { memo, useCallback, useState } from 'react'
+import { BotIcon, CheckIcon, CopyIcon, FileIcon, ImageIcon, UserIcon } from 'lucide-react'
 
 import type { Message } from '#/routes/sessions/-types/message'
 import type { StreamToolCall } from '#/routes/sessions/-types/chat'
 import { MarkdownContent, ReasoningBlock, ToolCallBlock } from './message-parts'
+
+// ---------------------------------------------------------------------------
+// CopyButton
+// ---------------------------------------------------------------------------
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = useCallback(async () => {
+    await navigator.clipboard.writeText(text)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }, [text])
+
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity group-hover/msg:opacity-100 hover:bg-accent hover:text-accent-foreground"
+      title="复制"
+    >
+      {copied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
+    </button>
+  )
+}
+
+/** Extract all text content from a message's parts. */
+function getTextFromParts(message: Message): string {
+  return message.parts
+    .filter((p) => p.type === 'text')
+    .map((p) => (p as { text: string }).text)
+    .join('\n')
+}
 
 // ---------------------------------------------------------------------------
 // Attachment tag parsing
@@ -66,17 +99,15 @@ const UserMessage = memo(function UserMessage({
   message: Message
   attachmentPreviews?: Map<string, string>
 }) {
-  const rawText = message.parts
-    .filter((p) => p.type === 'text')
-    .map((p) => (p as { text: string }).text)
-    .join('\n')
+  const rawText = getTextFromParts(message)
 
   const parsed = parseAttachment(rawText)
   const text = parsed ? parsed.rest : rawText
   const previewUrl = parsed ? attachmentPreviews?.get(parsed.tempFileId) : undefined
 
   return (
-    <div className="mb-6 flex w-full max-w-3xl gap-3 justify-end">
+    <div className="group/msg mb-6 flex w-full max-w-3xl gap-3 justify-end">
+      <CopyButton text={text || rawText} />
       <div className="max-w-[75%] space-y-2">
         {/* Attachment card */}
         {parsed && (
@@ -117,8 +148,10 @@ const UserMessage = memo(function UserMessage({
 // ---------------------------------------------------------------------------
 
 const AssistantMessage = memo(function AssistantMessage({ message }: { message: Message }) {
+  const textContent = getTextFromParts(message)
+
   return (
-    <div className="mb-6 flex w-full max-w-3xl gap-3 items-start">
+    <div className="group/msg mb-6 flex w-full max-w-3xl gap-3 items-start">
       <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-background/60 backdrop-blur-sm">
         <BotIcon className="size-3.5 text-muted-foreground" />
       </div>
@@ -143,6 +176,7 @@ const AssistantMessage = memo(function AssistantMessage({ message }: { message: 
           }
         })}
       </div>
+      <CopyButton text={textContent} />
     </div>
   )
 })
