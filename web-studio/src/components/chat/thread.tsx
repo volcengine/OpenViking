@@ -148,28 +148,15 @@ export function Thread({ sessionId }: ThreadProps) {
 
 function ThreadEmpty() {
   return (
-    <div className="flex grow flex-col items-center justify-center gap-6">
-      <div className="flex flex-col items-center gap-3">
-        <div className="flex size-14 items-center justify-center rounded-2xl bg-gradient-to-br from-primary/15 to-primary/5 ring-1 ring-primary/10">
-          <CompassIcon className="size-7 text-primary/70" />
-        </div>
-        <div className="text-center">
-          <h3 className="text-base font-medium text-foreground">OpenViking</h3>
-          <p className="mt-1 text-sm text-muted-foreground">
-            探索你的知识库，开始一段对话。
-          </p>
-        </div>
+    <div className="flex grow flex-col items-center justify-center gap-3">
+      <div className="flex size-14 items-center justify-center rounded-2xl bg-gradient-to-br from-primary/15 to-primary/5 ring-1 ring-primary/10">
+        <CompassIcon className="size-7 text-primary/70" />
       </div>
-      <div className="flex flex-wrap justify-center gap-2">
-        {['帮我总结这个文档', '最近有什么更新？', '搜索相关资料'].map((q) => (
-          <button
-            key={q}
-            type="button"
-            className="rounded-full border border-border/50 bg-background/60 backdrop-blur-sm px-4 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-          >
-            {q}
-          </button>
-        ))}
+      <div className="text-center">
+        <h3 className="text-base font-medium text-foreground">OpenViking</h3>
+        <p className="mt-1 text-sm text-muted-foreground">
+          探索你的知识库，开始一段对话。
+        </p>
       </div>
     </div>
   )

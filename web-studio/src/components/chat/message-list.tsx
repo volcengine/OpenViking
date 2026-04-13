@@ -159,7 +159,7 @@ const UserMessage = memo(function UserMessage({
       </div>
       <div className="max-w-[75%] space-y-1.5">
         {parsed && (
-          <div className="overflow-hidden rounded-2xl rounded-br-md border border-primary/20 bg-primary/90 shadow-sm">
+          <div className="overflow-hidden rounded-2xl rounded-tr-sm border border-primary/20 bg-primary/90 shadow-sm">
             {previewUrl && isImageFile(parsed.fileName) ? (
               <img
                 src={previewUrl}
@@ -178,7 +178,7 @@ const UserMessage = memo(function UserMessage({
           </div>
         )}
         {text && (
-          <div className="rounded-2xl rounded-br-sm bg-primary px-4 py-2.5 text-sm text-primary-foreground whitespace-pre-wrap shadow-sm">
+          <div className="rounded-2xl rounded-tr-sm bg-primary px-4 py-2.5 text-sm text-primary-foreground whitespace-pre-wrap shadow-sm">
             {text}
           </div>
         )}
