@@ -452,6 +452,7 @@ export function extractSingleMessageText(msg: unknown): string {
 export function extractNewTurnTexts(
   messages: unknown[],
   startIndex: number,
+  ensureLastUserMessage?: boolean,
 ): { texts: string[]; newCount: number } {
   const texts: string[] = [];
   let count = 0;
@@ -485,6 +486,36 @@ export function extractNewTurnTexts(
       }
     }
   }
+  // Defensive fix: ensure the last user message is included even if
+  // startIndex skipped it (OpenClaw prePromptMessageCount off-by-one)
+  // See: https://github.com/volcengine/OpenViking/issues/1248
+  if (ensureLastUserMessage && messages.length > 0) {
+    let lastUserText: string | null = null;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i] as Record<string, unknown>;
+      if (!msg || typeof msg !== "object") continue;
+      if (msg.role === "user") {
+        const content = msg.content;
+        if (typeof content === "string" && content.trim()) {
+          lastUserText = `[user]: ${content.trim()}`;
+        } else if (Array.isArray(content)) {
+          for (const block of content) {
+            const b = block as Record<string, unknown>;
+            if (b?.type === "text" && typeof b.text === "string" && b.text.trim()) {
+              lastUserText = `[user]: ${b.text.trim()}`;
+              break;
+            }
+          }
+        }
+        break;
+      }
+    }
+    if (lastUserText && !texts.some((t) => t.startsWith("[user]:"))) {
+      texts.unshift(lastUserText);
+      count++;
+    }
+  }
+
   return { texts, newCount: count };
 }
 

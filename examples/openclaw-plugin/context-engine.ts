@@ -835,7 +835,7 @@ export function createMemoryOpenVikingContextEngine(params: {
             ? afterTurnParams.prePromptMessageCount
             : 0;
 
-        const { texts: newTexts, newCount } = extractNewTurnTexts(messages, start);
+        const { texts: newTexts, newCount } = extractNewTurnTexts(messages, start, true);
 
         if (newTexts.length === 0) {
           diag("afterTurn_skip", OVSessionId, {
