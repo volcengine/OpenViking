@@ -249,3 +249,45 @@ class FSService:
             wait=wait,
             timeout=timeout,
         )
+
+    async def create_agent_content(
+        self,
+        uri: str,
+        content: str,
+        ctx: RequestContext,
+        create_mode: str = "create_if_missing",
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Create an agent-scoped stable memory carrier file."""
+        viking_fs = self._ensure_initialized()
+        coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
+        return await coordinator.create_agent_memory_carrier(
+            uri=uri,
+            content=content,
+            ctx=ctx,
+            create_mode=create_mode,
+            wait=wait,
+            timeout=timeout,
+        )
+
+    async def write_agent_content(
+        self,
+        uri: str,
+        content: str,
+        ctx: RequestContext,
+        mode: str = "replace",
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Write an agent-scoped stable memory carrier file."""
+        viking_fs = self._ensure_initialized()
+        coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
+        return await coordinator.write_agent_memory_carrier(
+            uri=uri,
+            content=content,
+            ctx=ctx,
+            mode=mode,
+            wait=wait,
+            timeout=timeout,
+        )
