@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import json
 import re
 from unittest.mock import AsyncMock, MagicMock
 
@@ -163,6 +164,45 @@ async def test_incremental_missing_summary_triggers_overview_regen(monkeypatch):
     assert len(processor.summarized_files) == first_run_calls
 
 
+@pytest.mark.asyncio
+async def test_incremental_uses_summary_cache_when_overview_titles_are_descriptive(monkeypatch):
+    _mock_transaction_layer(monkeypatch)
+
+    root_uri = "viking://resources/root"
+    target_uri = "viking://resources/target"
+    tree = {
+        root_uri: [{"name": "a.txt", "isDir": False}],
+        target_uri: [{"name": "a.txt", "isDir": False}],
+    }
+
+    fake_fs = _FakeVikingFS(
+        tree=tree,
+        file_contents={
+            f"{root_uri}/a.txt": "hello",
+            f"{target_uri}/a.txt": "hello",
+            f"{target_uri}/.overview.md": "# root\n\n## Detailed Description\n### Session Context Management\nCached summary",
+            f"{target_uri}/.abstract.md": "old-abstract",
+            f"{target_uri}/.summary_cache.json": json.dumps({"a.txt": "Cached summary"}),
+        },
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+
+    processor = _FakeProcessor(fake_fs)
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
+
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=ctx,
+        incremental_update=True,
+        target_uri=target_uri,
+    )
+    monkeypatch.setattr(executor, "_add_vectorize_task", AsyncMock())
+    await executor.run(root_uri)
+
+    assert processor.summarized_files == []
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
-

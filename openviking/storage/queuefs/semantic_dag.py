@@ -7,6 +7,11 @@ from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Dict, List, Optional
 
 from openviking.server.identity import RequestContext
+from openviking.storage.queuefs.semantic_cache import (
+    SUMMARY_CACHE_FILENAME,
+    parse_summary_cache,
+    serialize_summary_cache,
+)
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking_cli.utils import VikingURI
@@ -360,16 +365,27 @@ class SemanticDagExecutor:
                     pass
                 async with self._overview_cache_lock:
                     if parent_uri not in self._overview_cache:
-                        overview_path = f"{parent_uri}/.overview.md"
-                        overview_content = await self._viking_fs.read_file(
-                            overview_path, ctx=self._ctx
-                        )
-                        if overview_content:
-                            self._overview_cache[parent_uri] = self._processor._parse_overview_md(
-                                overview_content
+                        summary_cache: Dict[str, str] = {}
+                        try:
+                            cache_content = await self._viking_fs.read_file(
+                                f"{parent_uri}/{SUMMARY_CACHE_FILENAME}",
+                                ctx=self._ctx,
                             )
-                        else:
-                            self._overview_cache[parent_uri] = {}
+                            summary_cache = parse_summary_cache(cache_content)
+                        except Exception as e:
+                            logger.debug(
+                                f"Failed to read {SUMMARY_CACHE_FILENAME} for {parent_uri}: {e}"
+                            )
+
+                        if not summary_cache:
+                            overview_path = f"{parent_uri}/.overview.md"
+                            overview_content = await self._viking_fs.read_file(
+                                overview_path, ctx=self._ctx
+                            )
+                            if overview_content:
+                                summary_cache = self._processor._parse_overview_md(overview_content)
+
+                        self._overview_cache[parent_uri] = summary_cache
             else:
                 try:
                     from openviking.metrics.datasources.cache import CacheEventDataSource
@@ -578,6 +594,19 @@ class SemanticDagExecutor:
                 await self._viking_fs.write_file(f"{dir_uri}/.abstract.md", abstract, ctx=self._ctx)
             except Exception:
                 logger.info(f"[SemanticDag] {dir_uri} write failed, skipping")
+
+            try:
+                async with node.lock:
+                    file_summaries = self._finalize_file_summaries(node)
+                await self._viking_fs.write_file(
+                    f"{dir_uri}/{SUMMARY_CACHE_FILENAME}",
+                    serialize_summary_cache(file_summaries),
+                    ctx=self._ctx,
+                )
+            except Exception as e:
+                logger.info(
+                    f"[SemanticDag] Failed to write {SUMMARY_CACHE_FILENAME} for {dir_uri}: {e}"
+                )
 
             try:
                 if need_vectorize:
