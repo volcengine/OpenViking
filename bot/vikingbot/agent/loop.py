@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -12,6 +13,7 @@ from loguru import logger
 
 from vikingbot.agent.context import ContextBuilder
 from vikingbot.agent.memory import MemoryStore
+from vikingbot.heartbeat.service import HEARTBEAT_METADATA_KEY, is_heartbeat_noop_response
 from vikingbot.agent.subagent import SubagentManager
 from vikingbot.agent.tools import register_default_tools
 from vikingbot.agent.tools.registry import ToolRegistry
@@ -61,6 +63,7 @@ class AgentLoop:
         sandbox_manager: SandboxManager | None = None,
         config: Config = None,
         eval: bool = False,
+        mcp_servers: dict | None = None,
     ):
         """
         Initialize the AgentLoop with all required dependencies and configuration.
@@ -128,7 +131,47 @@ class AgentLoop:
         )
 
         self._running = False
+        self._mcp_servers = mcp_servers or {}
+        self._mcp_stack: AsyncExitStack | None = None
+        self._mcp_connected = False
+        self._mcp_connecting = False
         self._register_default_tools()
+
+    async def _connect_mcp(self) -> None:
+        """Connect to configured MCP servers (one-time, lazy, retryable on failure).
+
+        Ported from HKUDS/nanobot v0.1.5.
+        """
+        if self._mcp_connected or self._mcp_connecting or not self._mcp_servers:
+            return
+        self._mcp_connecting = True
+        try:
+            from vikingbot.agent.tools.mcp import connect_mcp_servers
+
+            self._mcp_stack = AsyncExitStack()
+            await self._mcp_stack.__aenter__()
+            await connect_mcp_servers(self._mcp_servers, self.tools, self._mcp_stack)
+            self._mcp_connected = True
+        except Exception as e:
+            logger.error(f"Failed to connect MCP servers (will retry next message): {e}")
+            if self._mcp_stack:
+                try:
+                    await self._mcp_stack.aclose()
+                except Exception:
+                    pass
+                self._mcp_stack = None
+        finally:
+            self._mcp_connecting = False
+
+    async def close_mcp(self) -> None:
+        """Close MCP server connections. Ported from HKUDS/nanobot v0.1.5."""
+        if self._mcp_stack:
+            try:
+                await self._mcp_stack.aclose()
+            except (RuntimeError, BaseExceptionGroup):
+                pass  # MCP SDK cancel scope cleanup is noisy but harmless
+            self._mcp_stack = None
+        self._mcp_connected = False
 
     async def _publish_thinking_event(
         self, session_key: SessionKey, event_type: OutboundEventType, content: str
@@ -181,6 +224,7 @@ class AgentLoop:
     async def run(self) -> None:
         """Run the agent loop, processing messages from the bus."""
         self._running = True
+        await self._connect_mcp()
         logger.info("Agent loop started")
 
         while self._running:
@@ -552,13 +596,14 @@ class AgentLoop:
             preview = final_content[:300] + "..." if len(final_content) > 300 else final_content
             logger.info(f"Response to {msg.session_key}: {preview}")
 
-            # Save to session (include tool names so consolidation sees what happened)
-            session.add_message("user", msg.content, sender_id=msg.sender_id)
-            session.add_message(
-                "assistant", final_content, tools_used=tools_used if tools_used else None, token_usage=token_usage,
-                sender_id=msg.sender_id,
-            )
-            await self.sessions.save(session)
+            is_heartbeat = bool(msg.metadata.get(HEARTBEAT_METADATA_KEY))
+            if not (is_heartbeat and is_heartbeat_noop_response(final_content)):
+                session.add_message("user", msg.content, sender_id=msg.sender_id)
+                session.add_message(
+                    "assistant", final_content, tools_used=tools_used if tools_used else None, token_usage=token_usage,
+                    sender_id=msg.sender_id,
+                )
+                await self.sessions.save(session)
 
             time_cost = round(time.time() - start_time, 2)
             if tools_used is not None:
@@ -805,6 +850,7 @@ Respond with ONLY valid JSON, no markdown fences."""
         self,
         content: str,
         session_key: SessionKey = SessionKey(type="cli", channel_id="default", chat_id="direct"),
+        metadata: dict[str, object] | None = None,
     ) -> str:
         """
         Process a message directly (for CLI or cron usage).
@@ -816,7 +862,13 @@ Respond with ONLY valid JSON, no markdown fences."""
         Returns:
             The agent's response.
         """
-        msg = InboundMessage(session_key=session_key, sender_id="user", content=content)
+        await self._connect_mcp()
+        msg = InboundMessage(
+            session_key=session_key,
+            sender_id="user",
+            content=content,
+            metadata=metadata or {},
+        )
 
         response = await self._process_message(msg)
         return response.content if response else ""

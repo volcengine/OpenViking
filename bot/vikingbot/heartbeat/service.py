@@ -1,8 +1,9 @@
 """Heartbeat service - periodic agent wake-up to check for tasks."""
 
 import asyncio
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable, Coroutine, TYPE_CHECKING, Dict, List
+from typing import Any, Callable, Coroutine
 
 from loguru import logger
 
@@ -22,6 +23,8 @@ If nothing needs attention, reply with just: HEARTBEAT_OK"""
 
 # Token that indicates "nothing to do"
 HEARTBEAT_OK_TOKEN = "HEARTBEAT_OK"
+HEARTBEAT_METADATA_KEY = "heartbeat"
+STALE_SESSION_THRESHOLD = timedelta(days=2)
 
 
 def _is_heartbeat_empty(content: str | None) -> bool:
@@ -52,6 +55,31 @@ def _read_heartbeat_file(workspace: Path) -> str | None:
     return None
 
 
+def normalize_heartbeat_response(content: str | None) -> str:
+    """Normalize a heartbeat response for no-op matching."""
+    if not content:
+        return ""
+    return content.strip().upper().replace("_", "").replace(" ", "")
+
+
+def is_heartbeat_noop_response(content: str | None) -> bool:
+    """Return True when the agent response means heartbeat has nothing to do."""
+    response_clean = normalize_heartbeat_response(content)
+    heartbeat_ok_clean = HEARTBEAT_OK_TOKEN.replace("_", "")
+    return response_clean == heartbeat_ok_clean
+
+
+def _parse_session_timestamp(value: str | None) -> datetime | None:
+    """Parse persisted session timestamps."""
+    if not value:
+        return None
+    try:
+        normalized = value.replace("Z", "+00:00")
+        return datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+
+
 class HeartbeatService:
     """
     Periodic heartbeat service that wakes the agent to check for tasks.
@@ -63,7 +91,7 @@ class HeartbeatService:
     def __init__(
         self,
         workspace: Path,
-        on_heartbeat: Callable[[str, str | None], Coroutine[Any, Any, str]] | None = None,
+        on_heartbeat: Callable[[str, str | None, dict[str, Any] | None], Coroutine[Any, Any, str]] | None = None,
         interval_s: int = DEFAULT_HEARTBEAT_INTERVAL_S,
         enabled: bool = True,
         sandbox_mode: str = "shared",
@@ -78,17 +106,31 @@ class HeartbeatService:
         self._running = False
         self._task: asyncio.Task | None = None
 
+    def _is_session_stale(self, session_info: dict[str, Any]) -> bool:
+        """Check whether a session has been inactive for too long."""
+        reference = _parse_session_timestamp(session_info.get("updated_at")) or _parse_session_timestamp(
+            session_info.get("created_at")
+        )
+        if reference is None:
+            return False
+
+        now = datetime.now(reference.tzinfo) if reference.tzinfo else datetime.now()
+        return now - reference > STALE_SESSION_THRESHOLD
+
     def _get_all_workspaces(self) -> dict[Path, list[SessionKey]] | None:
         workspaces: dict[Path, list[SessionKey]] = {}
         for session_info in self.session_manager.list_sessions():
             session_key: SessionKey = session_info.get("key")
 
-            # Check if session should skip heartbeat from metadata
             metadata = session_info.get("metadata", {})
             if metadata.get("skip_heartbeat"):
                 logger.debug(
                     f"Heartbeat: skipping session {session_key} (marked as skip_heartbeat)"
                 )
+                continue
+
+            if self._is_session_stale(session_info):
+                logger.debug(f"Heartbeat: skipping session {session_key} (inactive > 2 days)")
                 continue
 
             if self.sandbox_mode == "shared":
@@ -156,17 +198,17 @@ class HeartbeatService:
                         f"Heartbeat: calling on_heartbeat for {workspace_path} with prompt: {HEARTBEAT_PROMPT[:100]}..."
                     )
                     for session_key in session_key_list:
-                        response = await self.on_heartbeat(HEARTBEAT_PROMPT, session_key)
+                        response = await self.on_heartbeat(
+                            HEARTBEAT_PROMPT,
+                            session_key,
+                            {HEARTBEAT_METADATA_KEY: True},
+                        )
+                        response_preview = (response or "")[:200]
                         logger.debug(
-                            f"Heartbeat: received response from agent: {response[:200]}..."
+                            f"Heartbeat: received response from agent: {response_preview}..."
                         )
 
-                        # Check if agent said "nothing to do" - only if response is exactly or almost exactly HEARTBEAT_OK
-                        response_clean = response.strip().upper().replace("_", "").replace(" ", "")
-                        heartbeat_ok_clean = HEARTBEAT_OK_TOKEN.replace("_", "")
-                        if response_clean == heartbeat_ok_clean or response_clean.startswith(
-                            heartbeat_ok_clean
-                        ):
+                        if is_heartbeat_noop_response(response):
                             logger.info(f"Heartbeat: {workspace_path} OK (no action needed)")
                         else:
                             logger.info(f"Heartbeat: {workspace_path} completed task")
@@ -180,5 +222,9 @@ class HeartbeatService:
     async def trigger_now(self, session_key: SessionKey | None = None) -> str | None:
         """Manually trigger a heartbeat."""
         if self.on_heartbeat:
-            return await self.on_heartbeat(HEARTBEAT_PROMPT, session_key)
+            return await self.on_heartbeat(
+                HEARTBEAT_PROMPT,
+                session_key,
+                {HEARTBEAT_METADATA_KEY: True},
+            )
         return None

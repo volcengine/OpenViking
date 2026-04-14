@@ -180,7 +180,7 @@ impl FileSystem for LocalFileSystem {
         }
     }
 
-    async fn write(&self, path: &str, data: &[u8], offset: u64, _flags: WriteFlag) -> Result<u64> {
+    async fn write(&self, path: &str, data: &[u8], offset: u64, flags: WriteFlag) -> Result<u64> {
         let local_path = self.resolve_path(path);
 
         // Check if it's a directory
@@ -195,19 +195,16 @@ impl FileSystem for LocalFileSystem {
             }
         }
 
-        // Open or create file
-        let mut file = if local_path.exists() {
-            fs::OpenOptions::new()
-                .write(true)
-                .open(&local_path)
-                .map_err(|e| Error::plugin(format!("failed to open file: {}", e)))?
-        } else {
-            fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .open(&local_path)
-                .map_err(|e| Error::plugin(format!("failed to create file: {}", e)))?
-        };
+        // Determine if we should truncate based on flags
+        let should_truncate = matches!(flags, WriteFlag::Create | WriteFlag::Truncate);
+
+        // Open or create file with truncate support
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(should_truncate)
+            .open(&local_path)
+            .map_err(|e| Error::plugin(format!("failed to open file: {}", e)))?;
 
         // Write data
         use std::io::{Seek, SeekFrom, Write};

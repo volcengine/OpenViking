@@ -131,6 +131,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
         config: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(model_name, config)
+        self.provider = "gemini"
         if not api_key:
             raise ValueError("Gemini provider requires api_key")
         if task_type and task_type not in _VALID_TASK_TYPES:

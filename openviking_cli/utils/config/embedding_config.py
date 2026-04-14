@@ -232,6 +232,12 @@ class EmbeddingModelConfig(BaseModel):
                 "all-minilm-l6-v2": 384,
                 "snowflake-arctic-embed": 1024,
                 "snowflake-arctic-embed-l": 1024,
+                "qwen3-embedding": 1024,
+                "qwen3-embedding:0.6b": 1024,
+                "qwen3-embedding:4b": 1024,
+                "qwen3-embedding:8b": 1024,
+                "embeddinggemma": 768,
+                "embeddinggemma:300m": 768,
             }
             model_lower = (self.model or "").lower()
             if model_lower in ollama_model_dimensions:
@@ -376,6 +382,7 @@ class EmbeddingConfig(BaseModel):
                     "api_version": cfg.api_version,
                     "dimension": cfg.dimension,
                     "provider": "openai",
+                    "configured_provider": "openai",
                     "config": dict(runtime_config),
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
@@ -391,6 +398,7 @@ class EmbeddingConfig(BaseModel):
                     "api_version": cfg.api_version,
                     "dimension": cfg.dimension,
                     "provider": "azure",
+                    "configured_provider": "azure",
                     "config": dict(runtime_config),
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
@@ -500,6 +508,7 @@ class EmbeddingConfig(BaseModel):
                     or "no-key",  # Ollama ignores the key, but client requires non-empty
                     "api_base": cfg.api_base or "http://localhost:11434/v1",
                     "dimension": cfg.dimension,
+                    "configured_provider": "ollama",
                     "config": dict(runtime_config),
                 },
             ),

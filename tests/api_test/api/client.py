@@ -490,8 +490,8 @@ class OpenVikingAPIClient:
         url = self._build_url(self.server_url, endpoint)
         return self._request_with_retry("GET", url)
 
-    def observer_vlm(self) -> requests.Response:
-        endpoint = "/api/v1/observer/vlm"
+    def observer_models(self) -> requests.Response:
+        endpoint = "/api/v1/observer/models"
         url = self._build_url(self.server_url, endpoint)
         return self._request_with_retry("GET", url)
 
@@ -510,20 +510,23 @@ class OpenVikingAPIClient:
         url = self._build_url(self.server_url, endpoint)
         return self._request_with_retry("GET", url)
 
-    def wait_for_task(self, task_id: str, timeout: float = 60.0, poll_interval: float = 1.0) -> dict:
+    def wait_for_task(
+        self, task_id: str, timeout: float = 60.0, poll_interval: float = 1.0
+    ) -> dict:
         import time
+
         start_time = time.time()
         while time.time() - start_time < timeout:
             response = self.get_task(task_id)
             if response.status_code == 200:
                 data = response.json()
-                if data.get('status') == 'ok':
-                    result = data.get('result', {})
-                    task_status = result.get('status')
-                    if task_status in ['completed', 'failed']:
+                if data.get("status") == "ok":
+                    result = data.get("result", {})
+                    task_status = result.get("status")
+                    if task_status in ["completed", "failed"]:
                         return result
             time.sleep(poll_interval)
-        return {'status': 'timeout', 'task_id': task_id}
+        return {"status": "timeout", "task_id": task_id}
 
     def admin_create_account(self, account_id: str, admin_user_id: str) -> requests.Response:
         endpoint = "/api/v1/admin/accounts"

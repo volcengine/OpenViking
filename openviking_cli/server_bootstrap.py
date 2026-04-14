@@ -9,6 +9,9 @@ and initialises the config singleton via module-level loggers).
 The real bootstrap logic stays in ``openviking.server.bootstrap``; we just
 pre-parse ``--config`` and set the environment variable before that module
 is ever imported.
+
+Subcommands ``init`` and ``doctor`` are handled here directly (they don't
+need a running server).
 """
 
 import os
@@ -16,6 +19,17 @@ import sys
 
 
 def main():
+    # Intercept subcommands that don't need the server.
+    if len(sys.argv) > 1 and sys.argv[1] == "init":
+        from openviking_cli.setup_wizard import main as init_main
+
+        sys.exit(init_main())
+
+    if len(sys.argv) > 1 and sys.argv[1] == "doctor":
+        from openviking_cli.doctor import main as doctor_main
+
+        sys.exit(doctor_main())
+
     # Pre-parse --config from sys.argv before any openviking imports,
     # so the env var is visible when the config singleton first initialises.
     for i, arg in enumerate(sys.argv):

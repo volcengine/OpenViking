@@ -9,6 +9,10 @@ publish = false
 name = "ragfs_python"
 crate-type = ["cdylib"]
 
+[features]
+default = ["s3"]
+s3 = ["ragfs/s3"]
+
 [dependencies]
 ragfs = { path = "../ragfs" }
 pyo3 = { version = "0.27", features = ["extension-module"] }

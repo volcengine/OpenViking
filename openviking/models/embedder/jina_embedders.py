@@ -99,6 +99,7 @@ class JinaDenseEmbedder(DenseEmbedderBase):
             ValueError: If api_key is not provided
         """
         super().__init__(model_name, config)
+        self.provider = "jina"
 
         self.api_key = api_key
         self.api_base = api_base or "https://api.jina.ai/v1"

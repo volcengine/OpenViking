@@ -195,3 +195,5 @@ examples/data/
 openviking/_version.py
 specs/
 .trae/
+.codex/
+.ttadk/

@@ -18,7 +18,7 @@ from openviking.storage.viking_fs import init_viking_fs
 from openviking_cli.utils.config.agfs_config import AGFSConfig
 
 # Direct configuration for testing
-AGFS_CONF = AGFSConfig(path="/tmp/ov-test", backend="local", mode="binding-client")
+AGFS_CONF = AGFSConfig(path="/tmp/ov-test", backend="local")
 
 # clean up test directory if it exists
 if os.path.exists(AGFS_CONF.path):

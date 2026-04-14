@@ -5,7 +5,17 @@ import { Type } from "@sinclair/typebox";
 import { memoryOpenVikingConfigSchema } from "./config.js";
 
 import { OpenVikingClient, localClientCache, localClientPendingPromises, isMemoryUri } from "./client.js";
-import type { FindResultItem, PendingClientEntry, CommitSessionResult, OVMessage } from "./client.js";
+import type {
+  AddResourceInput,
+  AddResourceResult,
+  AddSkillInput,
+  AddSkillResult,
+  FindResult,
+  FindResultItem,
+  PendingClientEntry,
+  CommitSessionResult,
+  OVMessage,
+} from "./client.js";
 import { formatMessageFaithful } from "./context-engine.js";
 import {
   compileSessionPatterns,
@@ -13,6 +23,7 @@ import {
   extractLatestUserText,
   sanitizeUserTextForCapture,
   shouldBypassSession,
+  extractNewTurnMessages,
 } from "./text-utils.js";
 import {
   clampScore,
@@ -85,6 +96,48 @@ type ToolContext = {
   agentId?: string;
 };
 
+type PluginCommandContext = {
+  args?: string;
+  commandBody: string;
+  sessionKey?: string;
+  sessionId?: string;
+  agentId?: string;
+  ovSessionId?: string;
+};
+
+type CommandResult = {
+  text: string;
+  details?: Record<string, unknown>;
+};
+
+type CommandDefinition = {
+  name: string;
+  description: string;
+  acceptsArgs?: boolean;
+  requireAuth?: boolean;
+  handler: (ctx: PluginCommandContext) => CommandResult | Promise<CommandResult>;
+};
+
+type OvImportKind = "resource" | "skill";
+
+type OvImportInput = {
+  kind?: OvImportKind;
+  source?: string;
+  data?: unknown;
+  to?: string;
+  parent?: string;
+  reason?: string;
+  instruction?: string;
+  wait?: boolean;
+  timeout?: number;
+};
+
+type OvSearchInput = {
+  query: string;
+  uri?: string;
+  limit?: number;
+};
+
 type OpenClawPluginApi = {
   pluginConfig?: unknown;
   logger: PluginLogger;
@@ -95,6 +148,7 @@ type OpenClawPluginApi = {
       opts?: { name?: string; names?: string[] },
     ): void;
   };
+  registerCommand?: (command: CommandDefinition) => void;
   registerService: (service: {
     id: string;
     start: (ctx?: unknown) => void | Promise<void>;
@@ -160,6 +214,169 @@ export function prepareRecallQuery(rawText: string): PreparedRecallQuery {
     truncated: sanitized.length > RECALL_QUERY_MAX_CHARS,
     originalChars,
     finalChars: query.length,
+  };
+}
+
+export function tokenizeCommandArgs(args: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+  let escaping = false;
+
+  for (let i = 0; i < args.length; i += 1) {
+    const ch = args[i]!;
+    const next = args[i + 1];
+    if (escaping) {
+      current += ch;
+      escaping = false;
+      continue;
+    }
+    if (ch === "\\") {
+      const shouldEscape =
+        quote === '"'
+          ? next === '"' || next === "\\"
+          : !quote && Boolean(next && (/\s/.test(next) || next === '"' || next === "'"));
+      if (shouldEscape) {
+        escaping = true;
+        continue;
+      }
+      current += ch;
+      continue;
+    }
+    if ((ch === '"' || ch === "'") && (!quote || quote === ch)) {
+      quote = quote ? null : ch;
+      continue;
+    }
+    if (!quote && /\s/.test(ch)) {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += ch;
+  }
+
+  if (escaping) {
+    current += "\\";
+  }
+  if (quote) {
+    throw new Error("Unterminated quoted argument");
+  }
+  if (current) {
+    tokens.push(current);
+  }
+  return tokens;
+}
+
+type ParsedFlagArgs = {
+  positionals: string[];
+  flags: Map<string, string | boolean>;
+};
+
+function parseFlagArgs(args: string): ParsedFlagArgs {
+  const tokens = tokenizeCommandArgs(args);
+  const positionals: string[] = [];
+  const flags = new Map<string, string | boolean>();
+
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i]!;
+    if (!token.startsWith("--")) {
+      positionals.push(token);
+      continue;
+    }
+    const raw = token.slice(2);
+    if (!raw) {
+      continue;
+    }
+    const eqIndex = raw.indexOf("=");
+    if (eqIndex >= 0) {
+      flags.set(raw.slice(0, eqIndex), raw.slice(eqIndex + 1));
+      continue;
+    }
+    const next = tokens[i + 1];
+    if (next && !next.startsWith("--")) {
+      flags.set(raw, next);
+      i += 1;
+    } else {
+      flags.set(raw, true);
+    }
+  }
+
+  return { positionals, flags };
+}
+
+function getStringFlag(flags: Map<string, string | boolean>, name: string): string | undefined {
+  const value = flags.get(name);
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function getNumberFlag(flags: Map<string, string | boolean>, name: string): number | undefined {
+  const raw = getStringFlag(flags, name);
+  if (!raw) {
+    return undefined;
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value)) {
+    throw new Error(`--${name} must be a number`);
+  }
+  return value;
+}
+
+function getBoolFlag(flags: Map<string, string | boolean>, name: string): boolean {
+  return flags.get(name) === true;
+}
+
+function parseImportKind(value: string | undefined): OvImportKind {
+  if (!value) {
+    return "resource";
+  }
+  if (value === "resource" || value === "skill") {
+    return value;
+  }
+  throw new Error("--kind must be resource or skill");
+}
+
+export function parseOvImportCommandArgs(args: string): OvImportInput {
+  const parsed = parseFlagArgs(args);
+  const kind = parseImportKind(getStringFlag(parsed.flags, "kind"));
+  const source =
+    parsed.positionals.length <= 1 ? parsed.positionals[0] : parsed.positionals.join(" ").trim();
+  if (!source) {
+    throw new Error("Usage: /ov-import <source> [--kind resource|skill] [--to URI] [--parent URI] [--wait]");
+  }
+  const to = getStringFlag(parsed.flags, "to");
+  const parent = getStringFlag(parsed.flags, "parent");
+  if (to && parent) {
+    throw new Error("Cannot specify both --to and --parent.");
+  }
+  if (kind === "skill" && (to || parent || parsed.flags.has("reason") || parsed.flags.has("instruction"))) {
+    throw new Error("--to, --parent, --reason, and --instruction are resource-only options.");
+  }
+  return {
+    kind,
+    source,
+    to,
+    parent,
+    reason: getStringFlag(parsed.flags, "reason"),
+    instruction: getStringFlag(parsed.flags, "instruction"),
+    wait: getBoolFlag(parsed.flags, "wait"),
+    timeout: getNumberFlag(parsed.flags, "timeout"),
+  };
+}
+
+export function parseOvSearchCommandArgs(args: string): OvSearchInput {
+  const parsed = parseFlagArgs(args);
+  // `/ov-search` only accepts a single query string, so positional segments are
+  // always re-joined to preserve unquoted multi-word searches.
+  const query = parsed.positionals.join(" ").trim();
+  if (!query) {
+    throw new Error('Usage: /ov-search "<query>" [--uri URI] [--limit N]');
+  }
+  return {
+    query,
+    uri: getStringFlag(parsed.flags, "uri"),
+    limit: getNumberFlag(parsed.flags, "limit"),
   };
 }
 
@@ -419,6 +636,307 @@ const contextEnginePlugin = {
       },
     });
 
+    const formatResourceImportText = (result: AddResourceResult): string => {
+      const root = result.root_uri ? ` ${result.root_uri}` : "";
+      const warnings = result.warnings?.length ? ` Warnings: ${result.warnings.join("; ")}` : "";
+      return `Imported OpenViking resource.${root}${warnings}`.trim();
+    };
+
+    const formatSkillImportText = (result: AddSkillResult): string => {
+      const uri = result.uri ? ` ${result.uri}` : "";
+      const name = result.name ? ` (${result.name})` : "";
+      return `Imported OpenViking skill${name}.${uri}`.trim();
+    };
+
+    const importResource = async (input: AddResourceInput, agentId?: string) => {
+      const client = await getClient();
+      const result = await client.addResource(input, agentId);
+      return {
+        content: [{ type: "text" as const, text: formatResourceImportText(result) }],
+        details: {
+          action: "resource_imported",
+          ...result,
+        },
+      };
+    };
+
+    const importSkill = async (input: AddSkillInput, agentId?: string) => {
+      const client = await getClient();
+      const result = await client.addSkill(input, agentId);
+      return {
+        content: [{ type: "text" as const, text: formatSkillImportText(result) }],
+        details: {
+          action: "skill_imported",
+          ...result,
+        },
+      };
+    };
+
+    const executeImport = async (input: OvImportInput, agentId?: string) => {
+      const kind = input.kind ?? "resource";
+      if (kind === "skill") {
+        if (input.to || input.parent || input.reason || input.instruction) {
+          throw new Error("to, parent, reason, and instruction are resource-only options.");
+        }
+        return importSkill({
+          path: input.source,
+          data: input.data,
+          wait: input.wait,
+          timeout: input.timeout,
+        }, agentId);
+      }
+      if (input.data !== undefined && input.data !== null) {
+        throw new Error("data is only supported for skill imports.");
+      }
+      return importResource({
+        pathOrUrl: input.source ?? "",
+        to: input.to,
+        parent: input.parent,
+        reason: input.reason,
+        instruction: input.instruction,
+        wait: input.wait,
+        timeout: input.timeout,
+      }, agentId);
+    };
+
+const mergeFindResults = (results: FindResult[]): FindResult => {
+  const deduplicate = (items: FindResultItem[]): FindResultItem[] => {
+    const seen = new Map<string, FindResultItem>();
+    for (const item of items) {
+      if (!seen.has(item.uri)) {
+        seen.set(item.uri, item);
+      }
+    }
+    return Array.from(seen.values());
+  };
+  const memories = deduplicate(results.flatMap((result) => result.memories ?? []));
+  const resources = deduplicate(results.flatMap((result) => result.resources ?? []));
+  const skills = deduplicate(results.flatMap((result) => result.skills ?? []));
+  return {
+    memories,
+    resources,
+        skills,
+        total: memories.length + resources.length + skills.length,
+      };
+    };
+
+    const formatSearchRows = (result: FindResult): string[] => {
+      const truncateSummary = (value: string, maxChars = 220): string => {
+        const collapsed = value.replace(/\s+/g, " ").trim();
+        if (collapsed.length <= maxChars) {
+          return collapsed;
+        }
+        return `${collapsed.slice(0, maxChars - 3)}...`;
+      };
+      const truncateUri = (value: string, maxChars = 84): string => {
+        if (value.length <= maxChars) {
+          return value;
+        }
+        return `${value.slice(0, maxChars - 3)}...`;
+      };
+      const items = [
+        ...(result.memories ?? []).map((item) => ({ contextType: "memory", item })),
+        ...(result.resources ?? []).map((item) => ({ contextType: "resource", item })),
+        ...(result.skills ?? []).map((item) => ({ contextType: "skill", item })),
+      ];
+      if (items.length === 0) {
+        return [];
+      }
+      const numberHeader = "no";
+      const numberWidth = Math.max(numberHeader.length, String(items.length).length);
+      const typeWidth = Math.max("type".length, ...items.map(({ contextType }) => contextType.length));
+      const uriWidth = Math.max("uri".length, ...items.map(({ item }) => truncateUri(item.uri).length));
+      const levelWidth = Math.max("level".length, ...items.map(({ item }) => String(item.level ?? "").length));
+      const scoreWidth = Math.max(
+        "score".length,
+        ...items.map(({ item }) => (typeof item.score === "number" ? item.score.toFixed(2).length : 0)),
+      );
+      return [
+        `${numberHeader.padEnd(numberWidth)}  ${"type".padEnd(typeWidth)}  ${"uri".padEnd(uriWidth)}  ${"level".padEnd(levelWidth)}  ${"score".padEnd(scoreWidth)}  abstract`,
+        ...items.map(({ contextType, item }, index) => {
+          const score = typeof item.score === "number" ? item.score.toFixed(2) : "";
+          const summary = truncateSummary(item.abstract || item.overview || "(no summary)");
+          return `${String(index + 1).padEnd(numberWidth)}  ${contextType.padEnd(typeWidth)}  ${truncateUri(item.uri).padEnd(uriWidth)}  ${String(item.level ?? "").padEnd(levelWidth)}  ${score.padEnd(scoreWidth)}  ${summary}`;
+        }),
+      ];
+    };
+
+    const formatSearchText = (query: string, uri: string | undefined, result: FindResult): string => {
+      if ((result.total ?? 0) <= 0) {
+        const scope = uri ? ` under ${uri}` : "";
+        return `No OpenViking resource or skill results found for "${query}"${scope}.`;
+      }
+      const scope = uri ? ` under ${uri}` : "";
+      const lines = [
+        `Found ${result.total ?? 0} OpenViking results for "${query}"${scope}`,
+        "",
+        ...formatSearchRows(result),
+      ].filter((line, index, all) => line || (all[index - 1] && all[index + 1]));
+      return lines.join("\n");
+    };
+
+    const searchOpenViking = async (input: OvSearchInput, agentId?: string) => {
+      const query = input.query.trim();
+      if (!query) {
+        throw new Error("query is required");
+      }
+      const limit = Math.max(1, Math.floor(input.limit ?? 10));
+      const client = await getClient();
+      let result: FindResult;
+      if (input.uri) {
+        result = await client.find(query, { targetUri: input.uri, limit }, agentId);
+      } else {
+        const [resourcesSettled, skillsSettled] = await Promise.allSettled([
+          client.find(query, { targetUri: "viking://resources", limit }, agentId),
+          client.find(query, { targetUri: "viking://agent/skills", limit }, agentId),
+        ]);
+        const successful: FindResult[] = [];
+        if (resourcesSettled.status === "fulfilled") {
+          successful.push(resourcesSettled.value);
+        }
+        if (skillsSettled.status === "fulfilled") {
+          successful.push(skillsSettled.value);
+        }
+        if (successful.length === 0) {
+          const firstError =
+            resourcesSettled.status === "rejected"
+              ? resourcesSettled.reason
+              : skillsSettled.status === "rejected"
+                ? skillsSettled.reason
+                : "Both searches failed";
+          throw firstError instanceof Error ? firstError : new Error(String(firstError));
+        }
+        if (resourcesSettled.status === "rejected") {
+          api.logger.warn?.(`openviking: resource search failed: ${String(resourcesSettled.reason)}`);
+        }
+        if (skillsSettled.status === "rejected") {
+          api.logger.warn?.(`openviking: skill search failed: ${String(skillsSettled.reason)}`);
+        }
+        result = mergeFindResults(successful);
+      }
+      return {
+        content: [{ type: "text" as const, text: formatSearchText(query, input.uri, result) }],
+        details: {
+          action: "searched",
+          query,
+          uri: input.uri,
+          memories: result.memories ?? [],
+          resources: result.resources ?? [],
+          skills: result.skills ?? [],
+          total: result.total ?? 0,
+        },
+      };
+    };
+
+    api.registerTool(
+      (ctx: ToolContext) => ({
+        name: "ov_import",
+        label: "Import (OpenViking)",
+        description:
+          "Import an OpenViking resource or skill only when the user explicitly asks to import, add, or index one. " +
+          "Defaults to resource; set kind=skill for SKILL.md, skill directories, raw skill content, or MCP tool dicts.",
+        parameters: Type.Object({
+          kind: Type.Optional(Type.Union([Type.Literal("resource"), Type.Literal("skill")], { description: "Import kind. Default: resource" })),
+          source: Type.Optional(Type.String({ description: "Local path, directory path, public URL, or Git URL" })),
+          data: Type.Optional(Type.Any({ description: "Skill only: raw SKILL.md content or MCP tool dict" })),
+          to: Type.Optional(Type.String({ description: "Resource only: exact target URI, e.g. viking://resources/project-docs" })),
+          parent: Type.Optional(Type.String({ description: "Resource only: parent URI under viking://resources" })),
+          reason: Type.Optional(Type.String({ description: "Resource only: reason or note for adding this resource" })),
+          instruction: Type.Optional(Type.String({ description: "Resource only: processing instruction for semantic extraction" })),
+          wait: Type.Optional(Type.Boolean({ description: "Wait for processing to complete" })),
+          timeout: Type.Optional(Type.Number({ description: "Timeout in seconds when wait is true" })),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          if (isBypassedSession(ctx)) {
+            return makeBypassedToolResult("ov_import");
+          }
+          rememberSessionAgentId(ctx);
+          const agentId = resolveAgentId(ctx.sessionId, ctx.sessionKey);
+          return executeImport({
+            kind: params.kind === "skill" ? "skill" : "resource",
+            source: typeof params.source === "string" ? params.source : undefined,
+            data: params.data,
+            to: typeof params.to === "string" ? params.to : undefined,
+            parent: typeof params.parent === "string" ? params.parent : undefined,
+            reason: typeof params.reason === "string" ? params.reason : undefined,
+            instruction: typeof params.instruction === "string" ? params.instruction : undefined,
+            wait: typeof params.wait === "boolean" ? params.wait : undefined,
+            timeout: typeof params.timeout === "number" ? params.timeout : undefined,
+          }, agentId);
+        },
+      }),
+      { name: "ov_import" },
+    );
+
+    api.registerTool(
+      (ctx: ToolContext) => ({
+        name: "ov_search",
+        label: "Search (OpenViking)",
+        description:
+          "Search OpenViking resources and skills. Use after importing, or when the user asks to search OpenViking resources or skills.",
+        parameters: Type.Object({
+          query: Type.String({ description: "Search query" }),
+          uri: Type.Optional(Type.String({ description: "Optional search URI. Defaults to resources plus agent skills." })),
+          limit: Type.Optional(Type.Number({ description: "Max results per search scope. Default: 10" })),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          if (isBypassedSession(ctx)) {
+            return makeBypassedToolResult("ov_search");
+          }
+          rememberSessionAgentId(ctx);
+          const agentId = resolveAgentId(ctx.sessionId, ctx.sessionKey);
+          return searchOpenViking({
+            query: String((params as { query?: unknown }).query ?? ""),
+            uri: typeof params.uri === "string" ? params.uri : undefined,
+            limit: typeof params.limit === "number" ? params.limit : undefined,
+          }, agentId);
+        },
+      }),
+      { name: "ov_search" },
+    );
+
+    api.registerCommand?.({
+      name: "ov-import",
+      description: "Import a resource or skill into OpenViking.",
+      acceptsArgs: true,
+      handler: async (ctx: PluginCommandContext) => {
+        try {
+          if (isBypassedSession(ctx)) {
+            const bypassed = makeBypassedToolResult("ov_import");
+            return { text: bypassed.content[0]!.text, details: bypassed.details };
+          }
+          rememberSessionAgentId(ctx);
+          const agentId = resolveAgentId(ctx.sessionId, ctx.sessionKey, ctx.ovSessionId);
+          const input = parseOvImportCommandArgs(ctx.args ?? "");
+          const result = await executeImport(input, agentId);
+          return { text: result.content[0]!.text, details: result.details };
+        } catch (err) {
+          return { text: `OpenViking import failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    });
+
+    api.registerCommand?.({
+      name: "ov-search",
+      description: "Search OpenViking resources and skills.",
+      acceptsArgs: true,
+      handler: async (ctx: PluginCommandContext) => {
+        try {
+          if (isBypassedSession(ctx)) {
+            const bypassed = makeBypassedToolResult("ov_search");
+            return { text: bypassed.content[0]!.text, details: bypassed.details };
+          }
+          rememberSessionAgentId(ctx);
+          const agentId = resolveAgentId(ctx.sessionId, ctx.sessionKey, ctx.ovSessionId);
+          const input = parseOvSearchCommandArgs(ctx.args ?? "");
+          const result = await searchOpenViking(input, agentId);
+          return { text: result.content[0]!.text, details: result.details };
+        } catch (err) {
+          return { text: `OpenViking search failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    });
+
     api.registerTool(
       (ctx: ToolContext) => ({
         name: "memory_recall",
@@ -583,7 +1101,12 @@ const contextEnginePlugin = {
               usedTempSession = true;
             }
             sessionId = openClawSessionToOvStorageId(sessionId, ctx.sessionKey);
-            await c.addSessionMessage(sessionId, role, text, storeAgentId);
+            await c.addSessionMessage(
+              sessionId,
+              role,
+              [{ type: "text" as const, text }],
+              storeAgentId,
+            );
             const commitResult = await c.commitSession(sessionId, { wait: true, agentId: storeAgentId });
             const memoriesCount = totalCommitMemories(commitResult);
             if (commitResult.status === "failed") {

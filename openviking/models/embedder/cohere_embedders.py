@@ -53,6 +53,7 @@ class CohereDenseEmbedder(DenseEmbedderBase):
         config: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(model_name, config)
+        self.provider = "cohere"
 
         self.api_key = api_key
         self.api_base = (api_base or "https://api.cohere.com").rstrip("/")

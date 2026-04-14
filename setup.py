@@ -259,6 +259,8 @@ class OpenVikingBuildExt(build_ext):
                     "maturin",
                     "build",
                     "--release",
+                    "--features",
+                    "s3",
                     "--out",
                     tmpdir,
                 ]

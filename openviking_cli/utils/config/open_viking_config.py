@@ -291,7 +291,7 @@ class OpenVikingConfigSingleton:
                         raise FileNotFoundError(
                             f"OpenViking configuration file not found.\n"
                             f"Please create {default_path_user} or {default_path_system}, or set {OPENVIKING_CONFIG_ENV}.\n"
-                            f"See: https://openviking.dev/docs/guides/configuration"
+                            f"See: https://openviking.ai/docs"
                         )
         return cls._instance
 
@@ -320,7 +320,7 @@ class OpenVikingConfigSingleton:
                     raise FileNotFoundError(
                         f"OpenViking configuration file not found.\n"
                         f"Please create {default_path_user} or {default_path_system}, or set {OPENVIKING_CONFIG_ENV}.\n"
-                        f"See: https://openviking.dev/docs/guides/configuration"
+                        f"See: https://openviking.ai/docs"
                     )
         return cls._instance
 

@@ -56,6 +56,7 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
             extra_headers: Extra headers, useful for passing GroupId for MiniMax API
         """
         super().__init__(model_name, config)
+        self.provider = "minimax"
 
         self.api_key = api_key
         self.api_base = api_base or self.DEFAULT_API_BASE

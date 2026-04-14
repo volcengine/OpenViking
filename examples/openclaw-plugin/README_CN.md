@@ -20,7 +20,7 @@
 
 - `context-engine`：实现 `assemble`、`afterTurn`、`compact`
 - Hook 层：接管 `before_prompt_build`、`session_start`、`session_end`、`agent_end`、`before_reset`
-- Tool 提供者：注册 `memory_recall`、`memory_store`、`memory_forget`、`ov_archive_expand`
+- Tool 提供者：注册 memory/archive 工具，以及 OpenViking resource 和 skill 导入工具
 - 运行时管理器：在 `local` 模式下拉起并监控 OpenViking 子进程
 
 ## 总体架构
@@ -131,12 +131,14 @@ Session 是这套设计的主轴。当前实现里，它覆盖了“历史组装
 
 ## 工具层与可展开能力
 
-这套插件除了自动行为，还直接暴露了 4 个工具：
+这套插件除了自动行为，还直接暴露了 6 个工具：
 
 - `memory_recall`：显式检索长期记忆
 - `memory_store`：把文本写入 OpenViking session 并立即触发 commit
 - `memory_forget`：按 URI 删除，或先搜索再删除唯一高置信候选
 - `ov_archive_expand`：展开某个 archive 的原始消息
+- `ov_import`：导入 resource 或 skill；默认 resource，导入 skill 时使用 `kind: "skill"`
+- `ov_search`：检索 OpenViking resources 和 skills，尤其用于导入后的确认和消费
 
 它们各自的作用不同：
 
@@ -144,8 +146,30 @@ Session 是这套设计的主轴。当前实现里，它覆盖了“历史组装
 - `memory_recall` 给模型一个显式补查入口。
 - `memory_store` 适合把一段明确的重要信息立刻落入记忆管线。
 - `ov_archive_expand` 负责在 summary 不够细时回到 archive 级原文。
+- `ov_import` 让 agent 在用户明确提出导入需求时直接完成操作，不要求用户记住 slash command。
+- `ov_search` 补齐导入后的使用闭环，让用户或 agent 可以确认并消费 resources 和 skills。
 
 其中 `ov_archive_expand` 是 `assemble()` 的重要补充，因为 `assemble()` 默认给的是压缩后的索引和摘要，而不是完整历史正文。
+
+### Resource 与 Skill 导入
+
+Resource 和 skill 保持两个入口，因为它们落在不同 OpenViking 命名空间，并使用不同服务端 API：
+
+- resource 走 `/api/v1/resources`，落到 `viking://resources/...`
+- skill 走 `/api/v1/skills`，落到 `viking://agent/skills/...`
+
+插件也提供显式 slash command，方便手动导入：
+
+```text
+/ov-import ./README.md --to viking://resources/openviking-readme --wait
+/ov-import ./skills/install-openviking-memory --kind skill --wait
+/ov-search "OpenViking install" --uri viking://resources/openviking-readme
+/ov-search "memory install skill" --uri viking://agent/skills
+```
+
+Resource 导入支持远程 URL、Git URL、本地文件、本地目录和 zip。OpenViking 内置 parser 覆盖常见文档和媒体类型，例如 Markdown、纯文本、PDF、HTML、Word、PowerPoint、Excel、EPUB、图片、音频和视频。目录导入还支持常见代码、文档和配置扩展名，例如 `.py`、`.js`、`.ts`、`.go`、`.rs`、`.java`、`.cpp`、`.json`、`.yaml`、`.toml`、`.csv`、`.rst`、`.proto`、`.tf`、`.vue`。
+
+出于 HTTP 安全边界，插件不会把本地文件系统路径直接发送给 OpenViking 服务端。本地文件和目录会先通过 `/api/v1/resources/temp_upload` 上传；目录会先在本地使用纯 JavaScript zip 实现打包后再上传。
 
 ## Local / Remote 运行模式
 

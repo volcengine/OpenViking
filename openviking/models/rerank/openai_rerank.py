@@ -9,7 +9,7 @@ via api_key + api_base configuration.
 
 # For logging, use Python's built-in logging
 import logging
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import requests
 
@@ -25,7 +25,13 @@ class OpenAIRerankClient(RerankBase):
     Compatible with services like Alibaba Cloud DashScope.
     """
 
-    def __init__(self, api_key: str, api_base: str, model_name: str):
+    def __init__(
+        self,
+        api_key: str,
+        api_base: str,
+        model_name: str,
+        extra_headers: Optional[Dict[str, str]] = None,
+    ) -> None:
         """
         Initialize OpenAI-compatible rerank client.
 
@@ -33,11 +39,13 @@ class OpenAIRerankClient(RerankBase):
             api_key: Bearer token for authentication
             api_base: Full endpoint URL for the rerank API
             model_name: Model name to use for reranking
+            extra_headers: Optional extra headers for API requests
         """
         super().__init__()
         self.api_key = api_key
         self.api_base = api_base
         self.model_name = model_name
+        self.extra_headers = extra_headers or {}
         self.provider = "openai"
 
     def rerank_batch(self, query: str, documents: List[str]) -> Optional[List[float]]:
@@ -62,12 +70,16 @@ class OpenAIRerankClient(RerankBase):
         }
 
         try:
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            }
+            if self.extra_headers:
+                headers.update(self.extra_headers)
+
             response = requests.post(
                 url=self.api_base,
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
+                headers=headers,
                 json=req_body,
                 timeout=30,
             )
@@ -126,4 +138,5 @@ class OpenAIRerankClient(RerankBase):
             api_key=config.api_key,
             api_base=config.api_base,
             model_name=config.model or "qwen3-rerank",
+            extra_headers=config.extra_headers,
         )

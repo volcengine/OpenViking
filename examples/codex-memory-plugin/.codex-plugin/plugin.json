@@ -1,0 +1,17 @@
+{
+  "name": "openviking-memory",
+  "description": "Explicit OpenViking memory tools for Codex via MCP.",
+  "interface": {
+    "displayName": "OpenViking Memory",
+    "shortDescription": "OpenViking memory tools for Codex",
+    "longDescription": "Adds explicit OpenViking MCP tools for manual memory recall, store, forget, and health checks.",
+    "developerName": "OpenViking",
+    "category": "productivity",
+    "capabilities": [
+      "Memory recall",
+      "Manual memory storage",
+      "Manual memory deletion"
+    ],
+    "websiteURL": "https://github.com/volcengine/OpenViking"
+  }
+}

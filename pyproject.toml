@@ -148,6 +148,7 @@ bot = [
     "tavily-python>=0.5.0",
     "gradio>=6.6.0",
     "py-machineid>=1.0.0",
+    "mcp>=1.0.0",
 ]
 # vikingbot optional features
 bot-langfuse = ["langfuse>=3.0.0"]
