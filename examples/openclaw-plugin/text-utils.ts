@@ -58,9 +58,10 @@ export function sanitizeUserTextForCapture(text: string): string {
   // 格式: "System: [时间] Compacted ... Context ... [时间] 实际内容"
   if (COMPACTED_SYSTEM_MSG_RE.test(text)) {
     // 提取最后一个 ] 之后的内容（即实际用户输入）
-    const match = text.match(/\]\s*(.+)$/);
-    if (match && match[1]) {
-      return match[1].replace(/\s+/g, " ").trim();
+    const lastBracketIndex = text.lastIndexOf("]");
+    if (lastBracketIndex !== -1) {
+      const content = text.slice(lastBracketIndex + 1);
+      return content.replace(/\s+/g, " ").trim();
     }
     return "";
   }
