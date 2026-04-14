@@ -45,7 +45,10 @@ def test_telemetry_bridge_records_operation_and_resource_metrics(registry, rende
         )
         assert 'openviking_vector_searches_total{operation="resource.process"} 1' in text
         assert 'openviking_memory_extracted_total{operation="resource.process"} 4' in text
-        assert 'openviking_semantic_nodes_total{status="OK"} 12.0' in text
+        assert (
+            'openviking_semantic_nodes_total{status="OK"} 12' in text
+            or 'openviking_semantic_nodes_total{status="OK"} 12.0' in text
+        )
         assert (
             'openviking_resource_stage_total{account_id="__unknown__",stage="parse",status="warning"} 1'
             in text
@@ -53,6 +56,40 @@ def test_telemetry_bridge_records_operation_and_resource_metrics(registry, rende
         assert (
             'openviking_resource_wait_duration_seconds_count{account_id="__unknown__",operation="resource.process"} 1'
             in text
+        )
+    finally:
+        shutdown_metrics(app=None)
+
+
+def test_telemetry_bridge_semantic_nodes_total_is_cumulative(registry, render_prometheus):
+    init_metrics_from_server_config(
+        ServerConfig(telemetry=TelemetryConfig(prometheus=PrometheusConfig(enabled=True))),
+        app=None,
+        registry=registry,
+    )
+    try:
+        TelemetryBridgeEventDataSource.record_summary(
+            {
+                "operation": "resource.process",
+                "status": "ok",
+                "duration_ms": 1,
+                "tokens": {"total": 1, "llm": {"input": 1, "output": 0}},
+                "semantic_nodes": {"OK": 12},
+            }
+        )
+        TelemetryBridgeEventDataSource.record_summary(
+            {
+                "operation": "resource.process",
+                "status": "ok",
+                "duration_ms": 1,
+                "tokens": {"total": 1, "llm": {"input": 1, "output": 0}},
+                "semantic_nodes": {"OK": 12},
+            }
+        )
+        text = render_prometheus(registry)
+        assert (
+            'openviking_semantic_nodes_total{status="OK"} 24' in text
+            or 'openviking_semantic_nodes_total{status="OK"} 24.0' in text
         )
     finally:
         shutdown_metrics(app=None)

@@ -5,7 +5,8 @@ from pathlib import Path
 
 
 def test_runtime_code_has_no_prometheus_observer_references():
-    root = Path(__file__).resolve().parents[2] / "openviking"
+    # tests/metrics/contracts -> repo_root/openviking
+    root = Path(__file__).resolve().parents[3] / "openviking"
     banned = (
         "PrometheusObserver",
         "get_prometheus_observer",

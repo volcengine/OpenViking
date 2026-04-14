@@ -298,9 +298,11 @@ scrape_configs:
 
 ### `account_id` 标签的使用建议
 
-- 默认关闭或仅对白名单指标启用
+- 默认开启，但仅对白名单指标启用（`metric_allowlist` 为空时仍会输出为 `__unknown__`）
 - 不要把 `user_id`、`session_id`、`resource_uri` 这类高基数字段做成标签
 - 对于看板和告警，只对少量关键指标族打开租户维度
+- `metric_allowlist` 支持有限通配符：仅支持**末尾 `*` 的前缀匹配**（例如 `openviking_rerank_*`、`openviking_embedding_*`）
+- 不支持单独的 `*`（空前缀），也不支持中间通配、完整 glob 或正则
 
 
 ## 相关文档

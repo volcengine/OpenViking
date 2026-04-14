@@ -12,16 +12,10 @@
     "metrics": {
       "enabled": true,
       "account_dimension": {
-        "enabled": false,
+        "enabled": true,
         "max_active_accounts": 100,
         "metric_allowlist": [
-          "openviking_http_requests_total",
-          "openviking_http_request_duration_seconds",
-          "openviking_http_inflight_requests",
-          "openviking_operation_requests_total",
-          "openviking_operation_duration_seconds",
-          "openviking_vlm_calls_total",
-          "openviking_vlm_call_duration_seconds"
+          "openviking_*"
         ]
       }
     }

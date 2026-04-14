@@ -204,11 +204,11 @@ class TelemetryBridgeCollector(EventMetricCollector):
             value = int(v or 0)
             if value < 0:
                 continue
-            registry.set_gauge(
+            registry.inc_counter(
                 self.SEMANTIC_NODES_TOTAL,
-                value,
                 labels={"status": str(k)},
                 label_names=("status",),
+                amount=value,
             )
 
         memory = summary.get("memory") or {}

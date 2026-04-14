@@ -188,6 +188,7 @@ class ResourceProcessor:
                         stage="parse",
                         status=str(stage_status),
                         duration_seconds=float(time.perf_counter() - stage_start),
+                        account_id=getattr(ctx, "account_id", None),
                     )
                 except Exception:
                     pass
@@ -239,6 +240,7 @@ class ResourceProcessor:
                         stage="finalize",
                         status=str(stage_status),
                         duration_seconds=float(time.perf_counter() - stage_start),
+                        account_id=getattr(ctx, "account_id", None),
                     )
                 except Exception:
                     pass
@@ -303,6 +305,7 @@ class ResourceProcessor:
                             stage="persist",
                             status=str(stage_status),
                             duration_seconds=float(time.perf_counter() - stage_start),
+                            account_id=getattr(ctx, "account_id", None),
                         )
                     except Exception:
                         pass
@@ -337,6 +340,7 @@ class ResourceProcessor:
                             stage="summarize",
                             status=str(stage_status),
                             duration_seconds=float(time.perf_counter() - stage_start),
+                            account_id=getattr(ctx, "account_id", None),
                         )
                     except Exception:
                         pass

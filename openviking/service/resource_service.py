@@ -238,6 +238,7 @@ class ResourceService:
                     ResourceIngestionEventDataSource.record_wait(
                         operation="queue_processing",
                         duration_seconds=float(queue_wait_duration_ms) / 1000.0,
+                        account_id=getattr(ctx, "account_id", None),
                     )
                 except Exception:
                     pass

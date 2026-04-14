@@ -58,8 +58,9 @@ class MetricAccountDimensionConfig:
     account cap that protects Prometheus from unbounded tenant cardinality.
     """
 
-    enabled: bool = False
-    max_active_accounts: int = 0
+    # Enabled by default, but still allowlist-gated at write time.
+    enabled: bool = True
+    max_active_accounts: int = 100
     metric_allowlist: frozenset[str] = frozenset()
 
 
@@ -118,10 +119,35 @@ class MetricAccountDimensionPolicy:
         resolve account labels concurrently from request threads and exporter refresh paths.
         """
         self._enabled = bool(enabled)
-        self._metric_allowlist = frozenset(str(item) for item in metric_allowlist)
+        exact: set[str] = set()
+        prefixes: set[str] = set()
+        for item in metric_allowlist:
+            normalized = str(item).strip()
+            if not normalized:
+                continue
+            if normalized.endswith("*"):
+                # Limited wildcard syntax: trailing '*' means prefix match.
+                # '*' alone (empty prefix) is ignored to reduce accidental broad exposure.
+                prefix = normalized[:-1].strip()
+                if prefix:
+                    prefixes.add(prefix)
+                continue
+            exact.add(normalized)
+        self._metric_allowlist_exact = frozenset(exact)
+        # Tuple keeps iteration deterministic and slightly faster than set in hot path.
+        self._metric_allowlist_prefixes = tuple(sorted(prefixes))
         self._max_active_accounts = max(0, int(max_active_accounts))
         self._lock = threading.Lock()
         self._active_accounts: set[str] = set()
+
+    def _is_metric_allowlisted(self, metric_name: str) -> bool:
+        name = str(metric_name)
+        if name in self._metric_allowlist_exact:
+            return True
+        for prefix in self._metric_allowlist_prefixes:
+            if name.startswith(prefix):
+                return True
+        return False
 
     def resolve(self, *, metric_name: str, account_id: str | None) -> str:
         """
@@ -132,7 +158,7 @@ class MetricAccountDimensionPolicy:
         """
         if not self._enabled:
             return UNKNOWN_ACCOUNT_ID
-        if str(metric_name) not in self._metric_allowlist:
+        if not self._is_metric_allowlisted(metric_name):
             return UNKNOWN_ACCOUNT_ID
 
         normalized = str(account_id or "").strip()

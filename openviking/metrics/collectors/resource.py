@@ -66,6 +66,7 @@ class ResourceIngestionCollector(EventMetricCollector):
                 stage=str(payload["stage"]),
                 status=str(payload["status"]),
                 duration_seconds=float(payload["duration_seconds"]),
+                account_id=payload.get("account_id"),
             )
             return
         if event_name == "resource.wait":
@@ -73,28 +74,42 @@ class ResourceIngestionCollector(EventMetricCollector):
                 registry,
                 operation=str(payload["operation"]),
                 duration_seconds=float(payload["duration_seconds"]),
+                account_id=payload.get("account_id"),
             )
 
-    def record_stage(self, registry, *, stage: str, status: str, duration_seconds: float) -> None:
+    def record_stage(
+        self,
+        registry,
+        *,
+        stage: str,
+        status: str,
+        duration_seconds: float,
+        account_id: str | None = None,
+    ) -> None:
         """Record one named resource stage outcome together with its execution latency."""
         labels = {"stage": str(stage), "status": str(status)}
         registry.inc_counter(
             self.STAGE_TOTAL,
             labels=labels,
             label_names=("stage", "status"),
+            account_id=None if account_id is None else str(account_id),
         )
         registry.observe_histogram(
             self.STAGE_DURATION_SECONDS,
             float(duration_seconds),
             labels=labels,
             label_names=("stage", "status"),
+            account_id=None if account_id is None else str(account_id),
         )
 
-    def record_wait(self, registry, *, operation: str, duration_seconds: float) -> None:
+    def record_wait(
+        self, registry, *, operation: str, duration_seconds: float, account_id: str | None = None
+    ) -> None:
         """Record one wait-duration sample for a resource-ingestion operation."""
         registry.observe_histogram(
             self.WAIT_DURATION_SECONDS,
             float(duration_seconds),
             labels={"operation": str(operation)},
             label_names=("operation",),
+            account_id=None if account_id is None else str(account_id),
         )

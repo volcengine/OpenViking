@@ -298,9 +298,11 @@ Recommended mental model:
 
 ### Recommended `account_id` Usage
 
-- keep it disabled by default, or enable it only for allowlisted metric families
+- enabled by default, but only allowlisted metric families will receive tenant ids (empty allowlist still yields `__unknown__`)
 - do not turn `user_id`, `session_id`, or `resource_uri` into labels
 - only enable tenant dimensions on a small set of critical dashboard and alert metrics
+- `metric_allowlist` supports a limited wildcard syntax: only trailing `*` prefix matches (e.g. `openviking_rerank_*`)
+- a standalone `*` is not supported, nor full glob/regex patterns
 
 ## Related Documentation
 

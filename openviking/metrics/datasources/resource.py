@@ -15,34 +15,48 @@ class ResourceIngestionEventDataSource(EventMetricDataSource):
     """
 
     @staticmethod
-    def record_stage(*, stage: str, status: str, duration_seconds: float) -> None:
+    def record_stage(
+        *,
+        stage: str,
+        status: str,
+        duration_seconds: float,
+        account_id: str | None = None,
+    ) -> None:
         """
         Emit the outcome and latency of one named resource-processing stage.
 
         The event represents a completed stage execution, not a streaming update while the stage
         is still in progress.
         """
+        payload = {
+            "stage": str(stage),
+            "status": str(status),
+            "duration_seconds": float(duration_seconds),
+        }
+        if account_id and str(account_id).strip():
+            payload["account_id"] = str(account_id).strip()
         EventMetricDataSource._emit(
             "resource.stage",
-            {
-                "stage": str(stage),
-                "status": str(status),
-                "duration_seconds": float(duration_seconds),
-            },
+            payload,
         )
 
     @staticmethod
-    def record_wait(*, operation: str, duration_seconds: float) -> None:
+    def record_wait(
+        *, operation: str, duration_seconds: float, account_id: str | None = None
+    ) -> None:
         """
         Emit the wait time spent on a named resource-ingestion operation.
 
         This is typically used for queueing or dependency wait segments that are operationally
         useful but distinct from active resource-processing stages.
         """
+        payload = {
+            "operation": str(operation),
+            "duration_seconds": float(duration_seconds),
+        }
+        if account_id and str(account_id).strip():
+            payload["account_id"] = str(account_id).strip()
         EventMetricDataSource._emit(
             "resource.wait",
-            {
-                "operation": str(operation),
-                "duration_seconds": float(duration_seconds),
-            },
+            payload,
         )

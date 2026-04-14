@@ -45,6 +45,10 @@ class TaskTrackerCollector(StateMetricCollector):
     def collect_hook(self, registry, metric_input) -> None:
         """Translate the task-count snapshot into pending, running, completed, and failed gauges."""
         counts_by_type = metric_input
+        # Snapshot semantics: types can disappear entirely, so clear previous series to avoid
+        # exporting stale non-zero gauges forever.
+        for metric_name in (self.PENDING, self.RUNNING, self.COMPLETED, self.FAILED):
+            registry.gauge_delete_matching(metric_name, match_labels={})
         for task_type, counts in counts_by_type.items():
             labels = {"task_type": str(task_type)}
             registry.set_gauge(

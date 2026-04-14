@@ -480,8 +480,6 @@ class Session:
 
         # Snapshot mutable state for Phase 2
         usage_snapshot = self._usage_records.copy()
-        first_message_id = messages_to_archive[0].id if messages_to_archive else ""
-        last_message_id = messages_to_archive[-1].id if messages_to_archive else ""
 
         # Create TaskRecord for tracking Phase 2
         tracker = get_task_tracker()

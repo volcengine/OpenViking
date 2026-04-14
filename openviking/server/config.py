@@ -42,8 +42,9 @@ class TelemetryConfig(BaseModel):
 class MetricsAccountDimensionConfig(BaseModel):
     """Account-dimension configuration for metrics label injection."""
 
-    enabled: bool = False
-    max_active_accounts: int = 0
+    # Enabled by default, but still allowlist-gated to avoid accidental high-cardinality exposure.
+    enabled: bool = True
+    max_active_accounts: int = 100
     metric_allowlist: List[str] = Field(default_factory=list)
 
     model_config = {"extra": "forbid"}
