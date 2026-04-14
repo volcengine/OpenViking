@@ -254,6 +254,12 @@ python run.py --config config/bot/locomo_bot_config.yaml --step eval --resume
 ```
 
 >&gt; **注意**：断点续传功能适用于 `--step gen` 和 `--step eval` 阶段。框架会自动保存执行进度到 `output_dir` 目录下的 `benchmark_checkpoint.json` 文件中。
+&gt; 
+&gt; **Checkpoint 工作原理**：
+&gt; - 框架会计算当前配置的哈希值，并保存到 checkpoint 中
+&gt; - 当使用 `--resume` 时，会比较当前配置和 checkpoint 中保存的配置哈希
+&gt; - 如果配置不匹配，将不会加载 checkpoint，以防止覆盖错误的实验结果
+&gt; - 任何配置的变化（包括 `use_vikingbot`、`retrieval_topk`、`llm.model` 等）都会导致配置哈希变化
 
 ### 支持的数据集
 

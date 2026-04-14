@@ -238,7 +238,7 @@ python run.py --config config/bot/locomo_bot_config.yaml --step del
 
 #### Resume from Checkpoint
 
-The framework supports resuming from checkpoint in the generation stage (`--step gen`), which works for both bot and non-bot modes:
+The framework supports resuming from checkpoint in both generation stage (`--step gen`) and evaluation stage (`--step eval`), which works for both bot and non-bot modes:
 
 ```bash
 # Resume from where you left off
@@ -249,6 +249,12 @@ python run.py --config config/bot/locomo_bot_config.yaml --step gen --resume
 ```
 
 >&gt; **Note**: The resume feature works in both `--step gen` and `--step eval` stages. The framework automatically saves progress to the `benchmark_checkpoint.json` file in the `output_dir` directory.
+&gt; 
+&gt; **How Checkpoint Works**:
+&gt; - The framework computes a hash of the current configuration and saves it to the checkpoint
+&gt; - When using `--resume`, it compares the current config hash with the one saved in the checkpoint
+&gt; - If the configs don't match, the checkpoint won't be loaded to prevent overwriting incorrect experimental results
+&gt; - Any configuration change (including `use_vikingbot`, `retrieval_topk`, `llm.model`, etc.) will cause the config hash to change
 
 ### Supported Datasets
 
