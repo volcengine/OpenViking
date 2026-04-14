@@ -34,8 +34,6 @@ from openviking.server.routers import (
 )
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
-from openviking.storage.observers import PrometheusObserver
-from openviking.storage.observers.prometheus_observer import set_prometheus_observer
 from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.utils import get_logger
 
@@ -70,6 +68,7 @@ def create_app(
             await service.initialize()
             logger.info("OpenVikingService initialized")
 
+        assert service is not None
         set_service(service)
 
         # Initialize APIKeyManager after service (needs VikingFS)
@@ -110,11 +109,13 @@ def create_app(
                 config.host,
             )
 
-        app.state.prometheus_observer = None
-        if config.telemetry.prometheus.enabled:
-            observer = PrometheusObserver()
-            app.state.prometheus_observer = observer
-            set_prometheus_observer(observer)
+        from openviking.metrics.global_api import (
+            init_metrics_from_server_config,
+            is_metrics_enabled_from_server_config,
+        )
+
+        init_metrics_from_server_config(config, app=app, service=service)
+        if is_metrics_enabled_from_server_config(config):
             logger.info("Prometheus metrics enabled at /metrics")
 
         # Start TaskTracker cleanup loop
@@ -129,7 +130,9 @@ def create_app(
         yield
 
         # Cleanup
-        set_prometheus_observer(None)
+        from openviking.metrics.global_api import shutdown_metrics
+
+        shutdown_metrics(app=app)
         task_tracker.stop_cleanup_loop()
         if owns_service and service:
             try:
@@ -166,6 +169,14 @@ def create_app(
         process_time = time.time() - start_time
         response.headers["X-Process-Time"] = str(process_time)
         return response
+
+    from openviking.metrics.http_middleware import create_http_metrics_middleware
+
+    http_metrics_middleware = create_http_metrics_middleware()
+
+    @app.middleware("http")
+    async def add_http_metrics(request: Request, call_next: Callable):
+        return await http_metrics_middleware(request, call_next)
 
     # Add exception handler for OpenVikingError
     @app.exception_handler(OpenVikingError)

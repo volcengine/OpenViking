@@ -302,6 +302,14 @@ class Session:
                 self._usage_records.append(usage)
                 self._stats.contexts_used += 1
                 logger.debug(f"Tracked context usage: {uri}")
+            try:
+                from openviking.metrics.datasources.session import SessionLifecycleDataSource
+
+                SessionLifecycleDataSource.record_contexts_used(
+                    action="context", delta=len(contexts)
+                )
+            except Exception:
+                pass
 
         if skill:
             usage = Usage(
@@ -314,6 +322,12 @@ class Session:
             self._usage_records.append(usage)
             self._stats.skills_used += 1
             logger.debug(f"Tracked skill usage: {skill.get('uri')}")
+            try:
+                from openviking.metrics.datasources.session import SessionLifecycleDataSource
+
+                SessionLifecycleDataSource.record_contexts_used(action="skill", delta=1)
+            except Exception:
+                pass
 
     def add_message(
         self,
@@ -466,8 +480,6 @@ class Session:
 
         # Snapshot mutable state for Phase 2
         usage_snapshot = self._usage_records.copy()
-        first_message_id = messages_to_archive[0].id if messages_to_archive else ""
-        last_message_id = messages_to_archive[-1].id if messages_to_archive else ""
 
         # Create TaskRecord for tracking Phase 2
         tracker = get_task_tracker()

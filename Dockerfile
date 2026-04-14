@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1.9
 
 # Stage 1: provide Rust toolchain (required by setup.py -> build_ov_cli_artifact -> cargo build)
-FROM rust:1.88-trixie AS rust-toolchain
+# ragfs-python's default S3-enabled dependency set currently requires rustc >= 1.91.1.
+FROM rust:1.91.1-trixie AS rust-toolchain
 
 # Stage 2: build Python environment with uv (builds Rust CLI + C++ extension from source)
 FROM ghcr.io/astral-sh/uv:python3.13-trixie-slim AS py-builder

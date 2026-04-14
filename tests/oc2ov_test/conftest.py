@@ -154,6 +154,12 @@ def pytest_html_results_table_row(report, cells):
         "test_summary_generation_group_c": "长程总结生成-组C：OpenViking记忆优化项目，整合背景+讨论+闲聊生成完整总结",
         "test_auto_session_basic": "自动Session ID测试：使用自动生成的session_id进行基本记忆写入和读取，验证Session ID自动管理功能",
         "test_custom_session_prefix": "自定义Session ID测试：使用自定义前缀的session_id进行记忆写入和读取，验证自定义Session功能",
+        "test_memory_v2_preferences": "Memory V2偏好设置记忆：对话写入编程语言/编辑器/咖啡偏好→commit→验证preferences目录下新增记忆文件",
+        "test_memory_v2_entities": "Memory V2实体信息记忆：对话写入姓名/年龄/职业/公司/住址→commit→验证entities目录下新增记忆文件",
+        "test_memory_v2_events": "Memory V2事件记录记忆：对话写入技术分享会事件→commit→验证events目录下新增记忆文件",
+        "test_memory_v2_profile": "Memory V2用户画像记忆：对话写入技术负责人画像→commit→验证profile.md文件新增或更新",
+        "test_memory_v2_skills": "Memory V2技能记忆(Agent scope)：对话写入Docker/K8s/CI-CD技能→commit→验证agent memories/skills目录下新增记忆文件",
+        "test_memory_v2_tools": "Memory V2工具记忆(Agent scope)：对话写入Git/Jenkins/Prometheus工具使用→commit→验证agent memories/tools目录下新增记忆文件",
     }
 
     for test_name, desc in test_descriptions.items():

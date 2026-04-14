@@ -110,7 +110,7 @@ describe("context-engine assemble()", () => {
 
     expect(resolveAgentId).toHaveBeenCalledWith("session-1", undefined, "session-1");
     expect(client.getSessionContext).toHaveBeenCalledWith("session-1", 4096, "agent:session-1");
-    expect(result.estimatedTokens).toBe(321);
+    expect(result.estimatedTokens).toBe(roughEstimate(result.messages));
     expect(result.systemPromptAddition).toContain("Session Context Guide");
     expect(result.messages).toEqual([
       {

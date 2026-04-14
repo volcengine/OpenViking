@@ -60,7 +60,7 @@ For `provider: "openai-codex"`, `vlm.api_key` is optional when Codex OAuth is al
       "api_key"  : "your-volcengine-api-key",
       "provider" : "volcengine",
       "dimension": 1024,
-      "model"    : "doubao-embedding-vision-250615",
+      "model"    : "doubao-embedding-vision-251215",
       "input": "multimodal"
     }
   },
@@ -148,7 +148,7 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
     "dense": {
       "provider": "volcengine",
       "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-250615",
+      "model": "doubao-embedding-vision-251215",
       "dimension": 1024,
       "input": "multimodal"
     }
@@ -197,7 +197,7 @@ When the embedding provider experiences consecutive transient failures (e.g. `42
 
 | Model | Dimension | Input Type | Notes |
 |-------|-----------|------------|-------|
-| `doubao-embedding-vision-250615` | 1024 | multimodal | Recommended |
+| `doubao-embedding-vision-251215` | 1024 | multimodal | Recommended |
 | `doubao-embedding-250615` | 1024 | text | Text only |
 
 With `input: "multimodal"`, OpenViking can embed text, images (PNG, JPG, etc.), and mixed content.
@@ -364,7 +364,7 @@ Supported task types: `RETRIEVAL_QUERY`, `RETRIEVAL_DOCUMENT`, `SEMANTIC_SIMILAR
 
 #### Sparse Embedding
 
-> **Note:** Volcengine sparse embedding is supported starting from model `doubao-embedding-vision-250615`.
+> **Note:** Volcengine sparse embedding is supported starting from model `doubao-embedding-vision-251215`.
 
 ```json
 {
@@ -372,7 +372,7 @@ Supported task types: `RETRIEVAL_QUERY`, `RETRIEVAL_DOCUMENT`, `SEMANTIC_SIMILAR
     "sparse": {
       "provider": "volcengine",
       "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-250615"
+      "model": "doubao-embedding-vision-251215"
     }
   }
 }
@@ -405,13 +405,13 @@ Two approaches are supported:
     "dense": {
       "provider": "volcengine",
       "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-250615",
+      "model": "doubao-embedding-vision-251215",
       "dimension": 1024
     },
     "sparse": {
       "provider": "volcengine",
       "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-250615"
+      "model": "doubao-embedding-vision-251215"
     }
   }
 }

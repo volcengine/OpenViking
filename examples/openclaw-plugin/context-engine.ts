@@ -104,6 +104,26 @@ type Logger = {
   error: (msg: string) => void;
 };
 
+interface ContextBudgets {
+  archiveMemory: number;
+  sessionContext: number;
+  reserved: number;
+}
+
+const BUDGET_UNLIMITED = -1;
+const ARCHIVE_BUDGET_RATIO = 0.15;
+const ARCHIVE_BUDGET_CAP = 8_000;
+const RESERVED_MIN = 20_000;
+const RESERVED_RATIO = 0.15;
+const ARCHIVE_INDEX_TRIM_LIMIT = 10;
+
+function allocateContextBudget(totalBudget: number): ContextBudgets {
+  const reserved = Math.max(totalBudget * RESERVED_RATIO, RESERVED_MIN);
+  const archiveMemory = Math.min(totalBudget * ARCHIVE_BUDGET_RATIO, ARCHIVE_BUDGET_CAP);
+  const sessionContext = Math.max(totalBudget - archiveMemory - reserved, 0);
+  return { archiveMemory, sessionContext, reserved };
+}
+
 function estimateTokens(messages: AgentMessage[]): number {
   return Math.max(1, messages.length * 80);
 }
@@ -419,6 +439,70 @@ function buildSystemPromptAddition(): string {
   ].join("\n");
 }
 
+function buildInstructionPrompt(): { text: string; tokens: number } {
+  const text = buildSystemPromptAddition();
+  return { text, tokens: Math.ceil(text.length / 4) };
+}
+
+function buildArchiveMemory(
+  archiveOverview: string | undefined,
+  preAbstracts: Array<{ archive_id: string; abstract: string }>,
+  budget: number,
+): { messages: AgentMessage[]; tokens: number } {
+  const messages: AgentMessage[] = [];
+
+  if (archiveOverview) {
+    messages.push({
+      role: "user",
+      content: `[Session History Summary]\n${archiveOverview}`,
+    });
+  }
+
+  if (preAbstracts.length > 0) {
+    const lines = preAbstracts.map((a) => `${a.archive_id}: ${a.abstract}`);
+    messages.push({
+      role: "user",
+      content: `[Archive Index]\n${lines.join("\n")}`,
+    });
+  }
+
+  let tokens = roughEstimate(messages);
+  if (budget === BUDGET_UNLIMITED || tokens <= budget || preAbstracts.length <= ARCHIVE_INDEX_TRIM_LIMIT) {
+    return { messages, tokens };
+  }
+
+  const trimmed = preAbstracts.slice(-ARCHIVE_INDEX_TRIM_LIMIT);
+  const trimmedMessages: AgentMessage[] = [];
+  if (archiveOverview) {
+    trimmedMessages.push({
+      role: "user",
+      content: `[Session History Summary]\n${archiveOverview}`,
+    });
+  }
+  trimmedMessages.push({
+    role: "user",
+    content: `[Archive Index]\n${trimmed.map((a) => `${a.archive_id}: ${a.abstract}`).join("\n")}`,
+  });
+  tokens = roughEstimate(trimmedMessages);
+  return { messages: trimmedMessages, tokens };
+}
+
+function buildSessionContext(
+  ovMessages: OVMessage[],
+  budget: number,
+): { messages: AgentMessage[]; tokens: number } {
+  const messages = ovMessages.flatMap((m) => convertToAgentMessages(m));
+  const tokens = roughEstimate(messages);
+  if (budget === BUDGET_UNLIMITED || tokens <= budget) {
+    return { messages, tokens };
+  }
+  const trimmed = [...messages];
+  while (trimmed.length > 0 && roughEstimate(trimmed) > budget) {
+    trimmed.shift();
+  }
+  return { messages: trimmed, tokens: roughEstimate(trimmed) };
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -598,6 +682,64 @@ export function createMemoryOpenVikingContextEngine(params: {
     return false;
   }
 
+  function assemblePassthrough(
+    ovSessionId: string,
+    reason: string,
+    liveMessages: AgentMessage[],
+    originalTokens: number,
+    extra?: Record<string, unknown>,
+  ): AssembleResult {
+    diag("assemble_result", ovSessionId, {
+      passthrough: true,
+      reason,
+      outputMessagesCount: liveMessages.length,
+      inputTokenEstimate: originalTokens,
+      estimatedTokens: originalTokens,
+      tokensSaved: 0,
+      savingPct: 0,
+      ...extra,
+    });
+    return { messages: liveMessages, estimatedTokens: originalTokens };
+  }
+
+  function buildAssembledContext(
+    overview: string | undefined,
+    preAbstracts: Array<{ archive_id: string; abstract: string }>,
+    ovMessages: OVMessage[],
+    tokenBudget: number,
+    ovSessionId: string,
+  ): {
+    sanitized: AgentMessage[];
+    archive: { messages: AgentMessage[]; tokens: number };
+    session: { messages: AgentMessage[]; tokens: number };
+    budgets: ContextBudgets;
+    instruction: { text: string; tokens: number };
+  } {
+    // 4-layer context partitioning (budget computed for diag; BUDGET_UNLIMITED bypasses limits):
+    //   Instruction — system prompt guide (Archive Index / Session History usage)
+    //   Archive     — session history summary + per-archive one-line abstracts
+    //   Session     — active OV messages converted to AgentMessage format
+    //   Reserved    — headroom for model output (not consumed here)
+    const budgets = allocateContextBudget(tokenBudget);
+    const instruction = buildInstructionPrompt();
+    const archive = buildArchiveMemory(overview, preAbstracts, BUDGET_UNLIMITED);
+    const session = buildSessionContext(ovMessages, BUDGET_UNLIMITED);
+    const assembled = [...archive.messages, ...session.messages];
+
+    logger.info(
+      `openviking: assemble entering session content for ${ovSessionId}: ` +
+        JSON.stringify(assembled.map((m) => ({
+          role: m.role,
+          content: typeof m.content === "string" ? m.content.substring(0, 100) : "[complex]",
+        })), null, 2),
+    );
+
+    normalizeAssistantContent(assembled);
+    const sanitized = sanitizeToolUseResultPairing(assembled as never[]) as AgentMessage[];
+
+    return { sanitized, archive, session, budgets, instruction };
+  }
+
   return {
     info: {
       id,
@@ -641,131 +783,72 @@ export function createMemoryOpenVikingContextEngine(params: {
       });
 
       if (isBypassedSession({ sessionId: assembleParams.sessionId, sessionKey })) {
-        diag("assemble_result", OVSessionId, {
-          passthrough: true,
-          reason: "session_bypassed",
-          outputMessagesCount: messages.length,
-          inputTokenEstimate: originalTokens,
-          estimatedTokens: originalTokens,
-          tokensSaved: 0,
-          savingPct: 0,
-        });
-        return { messages, estimatedTokens: originalTokens };
+        return assemblePassthrough(OVSessionId, "session_bypassed", messages, originalTokens);
       }
 
       try {
-        if (!(await runLocalPrecheck("assemble", OVSessionId, {
-          tokenBudget,
-        }))) {
+        if (!(await runLocalPrecheck("assemble", OVSessionId, { tokenBudget }))) {
           return { messages, estimatedTokens: roughEstimate(messages) };
         }
         const client = await getClient();
-        const routingRef =
-          assembleParams.sessionId ?? sessionKey ?? OVSessionId;
+        const routingRef = assembleParams.sessionId ?? sessionKey ?? OVSessionId;
         const agentId = resolveAgentId(routingRef, sessionKey, OVSessionId);
-        const ctx = await client.getSessionContext(
-          OVSessionId,
-          tokenBudget,
-          agentId,
-        );
+        const ctx = await client.getSessionContext(OVSessionId, tokenBudget, agentId);
 
         const preAbstracts = ctx?.pre_archive_abstracts ?? [];
         const hasArchives = !!ctx?.latest_archive_overview || preAbstracts.length > 0;
         const activeCount = ctx?.messages?.length ?? 0;
 
         if (!ctx || (!hasArchives && activeCount === 0)) {
-          diag("assemble_result", OVSessionId, {
-            passthrough: true, reason: "no_ov_data",
+          return assemblePassthrough(OVSessionId, "no_ov_data", messages, originalTokens, {
             archiveCount: 0, activeCount: 0,
-            outputMessagesCount: messages.length,
-            inputTokenEstimate: originalTokens,
-            estimatedTokens: originalTokens,
-            tokensSaved: 0, savingPct: 0,
           });
-          return { messages, estimatedTokens: roughEstimate(messages) };
         }
-
         if (!hasArchives && ctx.messages.length < messages.length) {
-          diag("assemble_result", OVSessionId, {
-            passthrough: true, reason: "ov_msgs_fewer_than_input",
+          return assemblePassthrough(OVSessionId, "ov_msgs_fewer_than_input", messages, originalTokens, {
             archiveCount: 0, activeCount,
-            outputMessagesCount: messages.length,
-            inputTokenEstimate: originalTokens,
-            estimatedTokens: originalTokens,
-            tokensSaved: 0, savingPct: 0,
-          });
-          return { messages, estimatedTokens: roughEstimate(messages) };
-        }
-
-        const assembled: AgentMessage[] = [];
-
-        if (ctx.latest_archive_overview) {
-          assembled.push({
-            role: "user" as const,
-            content: `[Session History Summary]\n${ctx.latest_archive_overview}`,
           });
         }
 
-        if (preAbstracts.length > 0) {
-          const lines: string[] = preAbstracts.map(
-            (a) => `${a.archive_id}: ${a.abstract}`,
-          );
-          assembled.push({
-            role: "user" as const,
-            content: `[Archive Index]\n${lines.join("\n")}`,
-          });
-        }
-
-        assembled.push(...ctx.messages.flatMap((m) => convertToAgentMessages(m)));
-
-        // 打印进入 session 的完整内容
-        logger.info(
-          `openviking: assemble entering session content for ${OVSessionId}: ` +
-            JSON.stringify(assembled.map((m) => ({
-              role: m.role,
-              content: typeof m.content === "string" ? m.content.substring(0, 100) : "[complex]",
-            })), null, 2),
+        const { sanitized, archive, session, budgets, instruction } = buildAssembledContext(
+          ctx.latest_archive_overview,
+          preAbstracts,
+          ctx.messages,
+          tokenBudget,
+          OVSessionId,
         );
 
-        normalizeAssistantContent(assembled);
-        const sanitized = sanitizeToolUseResultPairing(assembled as never[]) as AgentMessage[];
-
         if (sanitized.length === 0 && messages.length > 0) {
-          diag("assemble_result", OVSessionId, {
-            passthrough: true, reason: "sanitized_empty",
-            archiveCount: preAbstracts.length,
-            activeCount,
-            outputMessagesCount: messages.length,
-            inputTokenEstimate: originalTokens,
-            estimatedTokens: originalTokens,
-            tokensSaved: 0, savingPct: 0,
+          return assemblePassthrough(OVSessionId, "sanitized_empty", messages, originalTokens, {
+            archiveCount: preAbstracts.length, activeCount,
           });
-          return { messages, estimatedTokens: roughEstimate(messages) };
         }
 
         const assembledTokens = roughEstimate(sanitized);
-        const archiveCount = preAbstracts.length;
         const tokensSaved = originalTokens - assembledTokens;
         const savingPct = originalTokens > 0 ? Math.round((tokensSaved / originalTokens) * 100) : 0;
 
         diag("assemble_result", OVSessionId, {
           passthrough: false,
-          archiveCount,
+          archiveCount: preAbstracts.length,
           activeCount,
           outputMessagesCount: sanitized.length,
           inputTokenEstimate: originalTokens,
           estimatedTokens: assembledTokens,
           tokensSaved,
           savingPct,
+          archiveTokens: archive.tokens,
+          archiveBudget: budgets.archiveMemory,
+          sessionTokens: session.tokens,
+          sessionBudget: budgets.sessionContext,
+          reservedBudget: budgets.reserved,
           messages: messageDigest(sanitized),
         });
 
         return {
           messages: sanitized,
-          estimatedTokens: ctx.estimatedTokens,
-          ...(hasArchives
-            ? { systemPromptAddition: buildSystemPromptAddition() }
-            : {}),
+          estimatedTokens: assembledTokens,
+          ...(hasArchives ? { systemPromptAddition: instruction.text } : {}),
         };
       } catch (err) {
         logger.warn?.(

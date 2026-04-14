@@ -310,7 +310,7 @@ If you prefer manual configuration, create `~/.openviking/ov.conf`, remove the c
       "api_key"  : "<your-api-key>",   // Model service API Key
       "provider" : "<provider-type>",  // Provider type: "volcengine" or "openai" (currently supported)
       "dimension": 1024,               // Vector dimension
-      "model"    : "<model-name>"      // Embedding model name (e.g., doubao-embedding-vision-250615 or text-embedding-3-large)
+      "model"    : "<model-name>"      // Embedding model name (e.g., doubao-embedding-vision-251215 or text-embedding-3-large)
     },
     "max_concurrent": 10               // Max concurrent embedding requests (default: 10)
   },
@@ -348,7 +348,7 @@ If you prefer manual configuration, create `~/.openviking/ov.conf`, remove the c
       "api_key"  : "your-volcengine-api-key",
       "provider" : "volcengine",
       "dimension": 1024,
-      "model"    : "doubao-embedding-vision-250615"
+      "model"    : "doubao-embedding-vision-251215"
     },
     "max_concurrent": 10
   },

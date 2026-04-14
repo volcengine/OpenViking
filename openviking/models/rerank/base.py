@@ -21,6 +21,17 @@ def _get_token_tracker():
     return _token_tracker_instance
 
 
+def get_shared_rerank_token_usage() -> Dict[str, Any]:
+    """
+    Return the process-wide rerank token usage snapshot.
+
+    This reads the shared singleton `TokenUsageTracker` used by all rerank clients.
+    It exists so observability paths (e.g. Prometheus scrape) can access rerank usage
+    without constructing provider clients that may allocate network resources.
+    """
+    return _get_token_tracker().to_dict()
+
+
 class RerankBase:
     """Base class for all rerank clients
 

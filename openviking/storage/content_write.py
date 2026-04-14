@@ -188,7 +188,7 @@ class ContentWriteCoordinator:
         mode: str,
         ctx: RequestContext,
     ) -> tuple[str, str]:
-        temp_base = self._viking_fs.create_temp_uri()
+        temp_base = self._viking_fs.create_temp_uri(ctx=ctx)
         await self._viking_fs.mkdir(temp_base, exist_ok=True, ctx=ctx)
         root_name = root_uri.rstrip("/").split("/")[-1]
         temp_root_uri = f"{temp_base.rstrip('/')}/{root_name}"

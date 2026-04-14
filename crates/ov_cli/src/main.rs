@@ -283,6 +283,9 @@ enum Commands {
     Mkdir {
         /// Directory URI to create
         uri: String,
+        /// Initial directory description
+        #[arg(long)]
+        description: Option<String>,
     },
     /// Remove resource
     #[command(alias = "del", alias = "delete")]
@@ -735,7 +738,7 @@ async fn main() {
             node_limit,
             level_limit,
         } => handle_tree(uri, abs_limit, all, node_limit, level_limit, ctx).await,
-        Commands::Mkdir { uri } => handle_mkdir(uri, ctx).await,
+        Commands::Mkdir { uri, description } => handle_mkdir(uri, description, ctx).await,
         Commands::Rm { uri, recursive } => handle_rm(uri, recursive, ctx).await,
         Commands::Mv { from_uri, to_uri } => handle_mv(from_uri, to_uri, ctx).await,
         Commands::Stat { uri } => handle_stat(uri, ctx).await,
@@ -1430,9 +1433,16 @@ async fn handle_tree(
     .await
 }
 
-async fn handle_mkdir(uri: String, ctx: CliContext) -> Result<()> {
+async fn handle_mkdir(uri: String, description: Option<String>, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
-    commands::filesystem::mkdir(&client, &uri, ctx.output_format, ctx.compact).await
+    commands::filesystem::mkdir(
+        &client,
+        &uri,
+        description.as_deref(),
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
 }
 
 async fn handle_rm(uri: String, recursive: bool, ctx: CliContext) -> Result<()> {

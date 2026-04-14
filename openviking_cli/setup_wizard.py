@@ -322,12 +322,20 @@ class CloudProvider:
 
 CLOUD_PROVIDERS: list[CloudProvider] = [
     CloudProvider(
-        "OpenAI", "openai", "https://api.openai.com/v1",
-        "text-embedding-3-small", 1536, "gpt-4o-mini",
+        "OpenAI",
+        "openai",
+        "https://api.openai.com/v1",
+        "text-embedding-3-small",
+        1536,
+        "gpt-4o-mini",
     ),
     CloudProvider(
-        "Volcengine (Doubao)", "volcengine", "https://ark.cn-beijing.volces.com/api/v3",
-        "doubao-embedding-vision-250615", 1024, "doubao-seed-2-0-pro-260215",
+        "Volcengine (Doubao)",
+        "volcengine",
+        "https://ark.cn-beijing.volces.com/api/v3",
+        "doubao-embedding-vision-251215",
+        1024,
+        "doubao-seed-2-0-pro-260215",
     ),
 ]
 
@@ -420,8 +428,9 @@ def _write_config(config_dict: dict[str, Any], config_path: Path) -> bool:
             backup = config_path.with_suffix(".conf.bak")
             config_path.rename(backup)
             print(f"  {_dim('Existing config backed up to ' + str(backup))}")
-        config_path.write_text(json.dumps(config_dict, indent=2, ensure_ascii=False) + "\n",
-                               encoding="utf-8")
+        config_path.write_text(
+            json.dumps(config_dict, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
         return True
     except OSError as exc:
         print(f"  {_red(f'Failed to write config: {exc}')}")
@@ -460,10 +469,12 @@ def _wizard_ollama() -> dict[str, Any] | None:
         avail = ""
         if ollama_running and is_model_available(p.model, available_models):
             avail = _green(" [downloaded]")
-        embed_options.append((
-            f"{p.label}",
-            f"({p.dimension}d, {p.size_hint}){avail}{rec}",
-        ))
+        embed_options.append(
+            (
+                f"{p.label}",
+                f"({p.dimension}d, {p.size_hint}){avail}{rec}",
+            )
+        )
 
     embed_choice = _prompt_choice("Embedding model:", embed_options, default=rec_embed_idx + 1)
     embedding = EMBEDDING_PRESETS[embed_choice - 1]
@@ -473,7 +484,9 @@ def _wizard_ollama() -> dict[str, Any] | None:
         if _prompt_confirm(f"'{embedding.model}' not found locally. Pull now?"):
             print()
             if not ollama_pull_model(embedding.model):
-                print(f"  {_yellow('Pull failed. You can pull it later: ollama pull ' + embedding.model)}")
+                print(
+                    f"  {_yellow('Pull failed. You can pull it later: ollama pull ' + embedding.model)}"
+                )
             else:
                 print(f"  {_green('OK')} {embedding.model} pulled successfully")
 
@@ -484,10 +497,12 @@ def _wizard_ollama() -> dict[str, Any] | None:
         avail = ""
         if ollama_running and is_model_available(p.ollama_model, available_models):
             avail = _green(" [downloaded]")
-        vlm_options.append((
-            f"{p.label}",
-            f"({p.size_hint}){avail}{rec}",
-        ))
+        vlm_options.append(
+            (
+                f"{p.label}",
+                f"({p.size_hint}){avail}{rec}",
+            )
+        )
 
     vlm_choice = _prompt_choice("Language model (VLM):", vlm_options, default=rec_vlm_idx + 1)
     vlm = VLM_PRESETS[vlm_choice - 1]
@@ -497,7 +512,9 @@ def _wizard_ollama() -> dict[str, Any] | None:
         if _prompt_confirm(f"'{vlm.ollama_model}' not found locally. Pull now?"):
             print()
             if not ollama_pull_model(vlm.ollama_model):
-                print(f"  {_yellow('Pull failed. You can pull it later: ollama pull ' + vlm.ollama_model)}")
+                print(
+                    f"  {_yellow('Pull failed. You can pull it later: ollama pull ' + vlm.ollama_model)}"
+                )
             else:
                 print(f"  {_green('OK')} {vlm.ollama_model} pulled successfully")
 
@@ -590,8 +607,9 @@ def _wizard_custom() -> dict[str, Any] | None:
             if not _DEFAULT_CONFIG_PATH.exists():
                 # Copy example as starting point
                 try:
-                    _DEFAULT_CONFIG_PATH.write_text(example.read_text(encoding="utf-8"),
-                                                     encoding="utf-8")
+                    _DEFAULT_CONFIG_PATH.write_text(
+                        example.read_text(encoding="utf-8"), encoding="utf-8"
+                    )
                 except OSError:
                     pass
             subprocess.run([editor, str(_DEFAULT_CONFIG_PATH)], check=False)
@@ -644,7 +662,9 @@ def run_init() -> int:
     ws = config_dict.get("storage", {}).get("workspace", _DEFAULT_WORKSPACE)
 
     print(f"\n  {_bold('Summary:')}")
-    print(f"    Embedding:  {emb.get('provider', '')} / {emb.get('model', '')} ({emb.get('dimension', '')}d)")
+    print(
+        f"    Embedding:  {emb.get('provider', '')} / {emb.get('model', '')} ({emb.get('dimension', '')}d)"
+    )
     print(f"    VLM:        {vlm.get('provider', '')} / {vlm.get('model', '')}")
     print(f"    Workspace:  {ws}")
     print(f"    Config:     {_DEFAULT_CONFIG_PATH}")

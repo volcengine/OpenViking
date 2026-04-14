@@ -282,9 +282,7 @@ class SyncOpenViking:
     ) -> Dict:
         """Content search"""
         return run_async(
-            self._async_client.grep(
-                uri, pattern, case_insensitive, node_limit, exclude_uri
-            )
+            self._async_client.grep(uri, pattern, case_insensitive, node_limit, exclude_uri)
         )
 
     def glob(self, pattern: str, uri: str = "viking://") -> Dict:
@@ -303,9 +301,9 @@ class SyncOpenViking:
         """Get resource status"""
         return run_async(self._async_client.stat(uri))
 
-    def mkdir(self, uri: str) -> None:
+    def mkdir(self, uri: str, description: Optional[str] = None) -> None:
         """Create directory"""
-        return run_async(self._async_client.mkdir(uri))
+        return run_async(self._async_client.mkdir(uri, description=description))
 
     def get_status(self):
         """Get system status.

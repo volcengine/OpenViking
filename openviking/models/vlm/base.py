@@ -205,11 +205,17 @@ class VLMBase(ABC):
 
         # Record the VLM call in Prometheus metrics (if enabled).
         try:
-            from openviking.storage.observers.prometheus_observer import get_prometheus_observer
+            from openviking.metrics.account_context import get_metric_account_context
+            from openviking.metrics.datasources import VLMEventDataSource
 
-            prom = get_prometheus_observer()
-            if prom is not None:
-                prom.record_vlm_call(duration_seconds)
+            VLMEventDataSource.record_call(
+                provider=str(provider),
+                model_name=str(model_name),
+                duration_seconds=float(duration_seconds),
+                prompt_tokens=int(prompt_tokens),
+                completion_tokens=int(completion_tokens),
+                account_id=get_metric_account_context().http_account_id,
+            )
         except Exception:
             pass
 

@@ -449,8 +449,11 @@ impl HttpClient {
         self.get("/api/v1/fs/tree", &params).await
     }
 
-    pub async fn mkdir(&self, uri: &str) -> Result<()> {
-        let body = serde_json::json!({ "uri": uri });
+    pub async fn mkdir(&self, uri: &str, description: Option<&str>) -> Result<()> {
+        let body = match description {
+            Some(description) => serde_json::json!({ "uri": uri, "description": description }),
+            None => serde_json::json!({ "uri": uri }),
+        };
         let _: serde_json::Value = self.post("/api/v1/fs/mkdir", &body).await?;
         Ok(())
     }

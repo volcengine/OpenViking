@@ -440,11 +440,13 @@ Create a directory.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI for the new directory |
+| description | str | No | `null` | Initial directory description. When provided, it is written to `.abstract.md` and queued for L0 vectorization. |
 
 **Python SDK (Embedded / HTTP)**
 
 ```python
 client.mkdir("viking://resources/new-project/")
+client.mkdir("viking://resources/new-project/", description="API docs directory")
 ```
 
 **HTTP API**
@@ -458,7 +460,8 @@ curl -X POST http://localhost:1933/api/v1/fs/mkdir \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
   -d '{
-    "uri": "viking://resources/new-project/"
+    "uri": "viking://resources/new-project/",
+    "description": "API docs directory"
   }'
 ```
 
@@ -466,6 +469,7 @@ curl -X POST http://localhost:1933/api/v1/fs/mkdir \
 
 ```bash
 openviking mkdir viking://resources/new-project/
+openviking mkdir viking://resources/new-project/ --description "API docs directory"
 ```
 
 **Response**

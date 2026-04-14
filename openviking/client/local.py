@@ -195,9 +195,9 @@ class LocalClient(BaseClient):
         """Get resource status."""
         return await self._service.fs.stat(uri, ctx=self._ctx)
 
-    async def mkdir(self, uri: str) -> None:
+    async def mkdir(self, uri: str, description: Optional[str] = None) -> None:
         """Create directory."""
-        await self._service.fs.mkdir(uri, ctx=self._ctx)
+        await self._service.fs.mkdir(uri, ctx=self._ctx, description=description)
 
     async def rm(self, uri: str, recursive: bool = False) -> None:
         """Remove resource."""
@@ -443,7 +443,6 @@ class LocalClient(BaseClient):
 
         If both content and parts are provided, parts takes precedence.
         """
-        from datetime import datetime, timezone
 
         from openviking.message.part import Part, TextPart, part_from_dict
 
