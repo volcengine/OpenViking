@@ -248,7 +248,7 @@ python run.py --config config/locomo_config.yaml --step gen --resume
 python run.py --config config/bot/locomo_bot_config.yaml --step gen --resume
 ```
 
-> **Note**: The resume feature only works in the `--step gen` stage. The framework automatically saves progress to the `benchmark_checkpoint.json` file in the `output_dir` directory.
+>&gt; **Note**: The resume feature works in both `--step gen` and `--step eval` stages. The framework automatically saves progress to the `benchmark_checkpoint.json` file in the `output_dir` directory.
 
 ### Supported Datasets
 
