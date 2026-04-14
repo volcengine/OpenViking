@@ -56,7 +56,9 @@ def load_embedding_metadata(vectordb_config: Any) -> Optional[dict[str, Any]]:
     return json.loads(meta_path.read_text(encoding="utf-8"))
 
 
-def persist_embedding_metadata(config: Any, payload: Optional[dict[str, Any]] = None) -> Optional[Path]:
+def persist_embedding_metadata(
+    config: Any, payload: Optional[dict[str, Any]] = None
+) -> Optional[Path]:
     """Persist embedding metadata for the active config when backend supports it."""
     meta_path = resolve_embedding_meta_path(config.storage.vectordb)
     if meta_path is None:

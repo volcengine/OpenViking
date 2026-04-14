@@ -21,7 +21,9 @@ class _FakeStorage:
         return self._collection_info
 
 
-def _make_config(tmp_path, *, model: str, dimension: int = 2048, text_source: str = "summary_first"):
+def _make_config(
+    tmp_path, *, model: str, dimension: int = 2048, text_source: str = "summary_first"
+):
     vectordb = SimpleNamespace(
         backend="local",
         path=str(tmp_path),

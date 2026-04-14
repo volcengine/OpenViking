@@ -50,15 +50,9 @@ class VectorRebuildService:
         if viking_fs is None:
             raise RuntimeError("VikingFS not initialized")
 
-        try:
-            entries = await viking_fs.list_account_roots()
-        except AttributeError:
-            entries = viking_fs.agfs.ls("/local")
-
+        entries = await viking_fs.list_account_roots()
         accounts = [
-            entry.get("name", "")
-            for entry in entries
-            if entry.get("isDir") and entry.get("name")
+            entry.get("name", "") for entry in entries if entry.get("isDir") and entry.get("name")
         ]
         return sorted(set(accounts))
 

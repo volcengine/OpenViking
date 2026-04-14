@@ -281,7 +281,7 @@ class OpenVikingService:
         if not self._embedding_compat_check_disabled():
             await ensure_embedding_collection_compatibility(
                 self._vikingdb_manager,
-                config,
+                self._config,
                 config_path=os.environ.get("OPENVIKING_CONFIG_FILE"),
             )
 

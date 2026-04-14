@@ -606,7 +606,9 @@ class EmbeddingConfig(BaseModel):
         raise ValueError("No embedding configuration found (dense, sparse, or hybrid)")
 
     @staticmethod
-    def _identity_dict_for_model(config: Optional[EmbeddingModelConfig]) -> Optional[dict[str, Any]]:
+    def _identity_dict_for_model(
+        config: Optional[EmbeddingModelConfig],
+    ) -> Optional[dict[str, Any]]:
         if config is None:
             return None
         data: dict[str, Any] = {
