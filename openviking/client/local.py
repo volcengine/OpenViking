@@ -497,7 +497,6 @@ class LocalClient(BaseClient):
 
         If both content and parts are provided, parts takes precedence.
         """
-
         from openviking.message.part import Part, TextPart, part_from_dict
 
         session = self._service.sessions.session(self._ctx, session_id)
