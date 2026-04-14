@@ -103,8 +103,10 @@ impl HttpClient {
         headers.remove(reqwest::header::CONTENT_TYPE);
 
         // Use a separate HTTP client with a long timeout for large file uploads
-        // Long but finite timeout (30 minutes) to prevent hanging indefinitely
+        // - Connect timeout: 30 seconds (to fail fast if server is unreachable)
+        // - Total request timeout: 30 minutes (to allow large file transfers)
         let long_timeout_client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(30))
             .timeout(std::time::Duration::from_secs(1800))
             .build()
             .map_err(|e| Error::Network(format!("Failed to build long-timeout HTTP client: {}", e)))?;
