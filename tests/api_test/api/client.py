@@ -335,10 +335,13 @@ class OpenVikingAPIClient:
         url = self._build_url(self.server_url, endpoint, params)
         return self._request_with_retry("GET", url)
 
-    def fs_mkdir(self, uri: str) -> requests.Response:
+    def fs_mkdir(self, uri: str, description: Optional[str] = None) -> requests.Response:
         endpoint = "/api/v1/fs/mkdir"
         url = self._build_url(self.server_url, endpoint)
-        return self._request_with_retry("POST", url, json={"uri": uri})
+        payload = {"uri": uri}
+        if description is not None:
+            payload["description"] = description
+        return self._request_with_retry("POST", url, json=payload)
 
     def fs_read(self, uri: str) -> requests.Response:
         endpoint = "/api/v1/content/read"
