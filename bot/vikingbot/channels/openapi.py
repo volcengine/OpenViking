@@ -179,10 +179,15 @@ class OpenAPIChannel(BaseChannel):
 
             pending = self._bot_pending[channel_id].get(session_id)
             if not pending:
-                logger.warning(f"No pending request for BotChannel {channel_id} session: {session_id}")
+                logger.warning(
+                    f"No pending request for BotChannel {channel_id} session: {session_id}"
+                )
                 return
 
-            if msg.event_type == OutboundEventType.RESPONSE or msg.event_type == OutboundEventType.NO_REPLY:
+            if (
+                msg.event_type == OutboundEventType.RESPONSE
+                or msg.event_type == OutboundEventType.NO_REPLY
+            ):
                 await pending.add_event("response", msg.content or "")
                 pending.set_final(msg.content or "")
                 await pending.close_stream()
@@ -335,7 +340,9 @@ class OpenAPIChannel(BaseChannel):
 
         # ========== Bot Channel Routes ==========
 
-        async def verify_bot_channel_api_key(x_api_key: Optional[str] = Header(None)) -> Optional[str]:
+        async def verify_bot_channel_api_key(
+            x_api_key: Optional[str] = Header(None),
+        ) -> Optional[str]:
             """Capture the raw bot-channel API key header for per-channel verification."""
             return x_api_key
 
@@ -613,7 +620,9 @@ class OpenAPIChannel(BaseChannel):
             if channel_id in self._bot_pending:
                 self._bot_pending[channel_id].pop(session_id, None)
 
-    async def _handle_bot_chat_stream(self, channel_id: str, request: ChatRequest) -> StreamingResponse:
+    async def _handle_bot_chat_stream(
+        self, channel_id: str, request: ChatRequest
+    ) -> StreamingResponse:
         """Handle a BotChannel streaming chat request."""
         session_id = request.session_id or str(uuid.uuid4())
         user_id = request.user_id or "anonymous"

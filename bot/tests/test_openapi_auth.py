@@ -67,7 +67,9 @@ class TestOpenAPIAuth:
         )
 
         async def fake_handle_chat(request):
-            return ChatResponse(session_id=request.session_id or "default", message="ok", events=None)
+            return ChatResponse(
+                session_id=request.session_id or "default", message="ok", events=None
+            )
 
         monkeypatch.setattr(channel, "_handle_chat", fake_handle_chat)
         client = _make_client(channel)
@@ -111,7 +113,9 @@ class TestOpenAPIAuth:
         channel._bot_configs["alpha"] = BotChannelConfig(id="alpha", api_key="bot-secret")
 
         async def fake_handle_bot_chat(channel_id, request):
-            return ChatResponse(session_id=request.session_id or "default", message=f"ok:{channel_id}")
+            return ChatResponse(
+                session_id=request.session_id or "default", message=f"ok:{channel_id}"
+            )
 
         monkeypatch.setattr(channel, "_handle_bot_chat", fake_handle_bot_chat)
         client = _make_client(channel)
