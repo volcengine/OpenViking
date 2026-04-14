@@ -58,7 +58,9 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--dry-run", action="store_true", help="Preview planned imports only")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing OV targets")
-    parser.add_argument("--no-wait", action="store_true", help="Do not wait for async queue/task completion")
+    parser.add_argument(
+        "--no-wait", action="store_true", help="Do not wait for async queue/task completion"
+    )
     parser.add_argument(
         "--timeout",
         type=float,

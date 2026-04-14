@@ -26,10 +26,7 @@ def test_discover_openclaw_memory_artifacts(temp_dir: Path):
     assert [artifact.category for artifact in artifacts] == ["entities", "events", "cases"]
     assert artifacts[0].uri == "viking://user/memories/entities/openclaw-memory.md"
     assert artifacts[1].uri == "viking://user/memories/events/openclaw-2026-04-01.md"
-    assert (
-        artifacts[2].uri
-        == "viking://agent/memories/cases/openclaw-2026-04-01-project-alpha.md"
-    )
+    assert artifacts[2].uri == "viking://agent/memories/cases/openclaw-2026-04-01-project-alpha.md"
 
 
 def test_discover_openclaw_transcript_sessions_includes_index_and_orphans(temp_dir: Path):

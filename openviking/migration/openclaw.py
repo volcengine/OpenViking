@@ -203,7 +203,9 @@ def discover_openclaw_transcript_sessions(
             if not session_id:
                 continue
 
-            transcript_path = Path(session_file) if session_file else sessions_dir / f"{session_id}.jsonl"
+            transcript_path = (
+                Path(session_file) if session_file else sessions_dir / f"{session_id}.jsonl"
+            )
             if not transcript_path.is_absolute():
                 transcript_path = sessions_dir / transcript_path
             if not transcript_path.is_file():
@@ -322,9 +324,7 @@ def parse_openclaw_transcript(path: str | Path) -> list[OpenClawTranscriptMessag
             if created_at:
                 break
 
-        messages.append(
-            OpenClawTranscriptMessage(role=role, content=text, created_at=created_at)
-        )
+        messages.append(OpenClawTranscriptMessage(role=role, content=text, created_at=created_at))
 
     return messages
 
