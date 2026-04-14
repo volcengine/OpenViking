@@ -85,6 +85,30 @@ class FailedPreconditionError(OpenVikingError):
         super().__init__(message, code="FAILED_PRECONDITION", details=details)
 
 
+class EmbeddingCompatibilityError(FailedPreconditionError):
+    """Vector index metadata is incompatible with the current embedding config."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        previous: Optional[dict] = None,
+        current: Optional[dict] = None,
+        metadata_path: Optional[str] = None,
+        rebuild_command: Optional[str] = None,
+    ):
+        details = {}
+        if previous is not None:
+            details["previous"] = previous
+        if current is not None:
+            details["current"] = current
+        if metadata_path is not None:
+            details["metadata_path"] = metadata_path
+        if rebuild_command is not None:
+            details["rebuild_command"] = rebuild_command
+        super().__init__(message, details=details)
+
+
 # ============= Authentication Errors =============
 
 

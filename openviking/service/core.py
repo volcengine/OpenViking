@@ -20,9 +20,11 @@ from openviking.service.relation_service import RelationService
 from openviking.service.resource_service import ResourceService
 from openviking.service.search_service import SearchService
 from openviking.service.session_service import SessionService
+from openviking.service.vector_rebuild import VectorRebuildService
 from openviking.session import SessionCompressor, create_session_compressor
 from openviking.storage import VikingDBManager
 from openviking.storage.collection_schemas import init_context_collection
+from openviking.storage.embedding_compat import ensure_embedding_collection_compatibility
 from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
 from openviking.storage.transaction import LockManager, init_lock_manager
 from openviking.storage.viking_fs import VikingFS, init_viking_fs
@@ -49,6 +51,7 @@ class OpenVikingService:
         self,
         path: Optional[str] = None,
         user: Optional[UserIdentifier] = None,
+        skip_embedding_compat_check: bool = False,
     ):
         """Initialize OpenViking service.
 
@@ -91,6 +94,7 @@ class OpenVikingService:
 
         # State
         self._initialized = False
+        self._skip_embedding_compat_check = skip_embedding_compat_check
 
         # Initialize storage
         self._init_storage(
@@ -163,6 +167,11 @@ class OpenVikingService:
         return self._vikingdb_manager
 
     @property
+    def config(self):
+        """Get the resolved OpenViking config."""
+        return self._config
+
+    @property
     def lock_manager(self) -> Optional[LockManager]:
         """Get LockManager instance."""
         return self._lock_manager
@@ -217,6 +226,19 @@ class OpenVikingService:
         """Get DebugService instance."""
         return self._debug_service
 
+    def create_vector_rebuild_service(self) -> VectorRebuildService:
+        """Build a helper for full vector rebuild operations."""
+        return VectorRebuildService(self)
+
+    def _embedding_compat_check_disabled(self) -> bool:
+        if self._skip_embedding_compat_check:
+            return True
+        return os.environ.get("OPENVIKING_SKIP_EMBEDDING_COMPAT_CHECK", "").lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+
     async def initialize(self) -> None:
         """Initialize OpenViking storage and indexes."""
         if self._initialized:
@@ -256,6 +278,12 @@ class OpenVikingService:
         if self._vikingdb_manager is None:
             raise RuntimeError("VikingDBManager not initialized")
         await init_context_collection(self._vikingdb_manager)
+        if not self._embedding_compat_check_disabled():
+            await ensure_embedding_collection_compatibility(
+                self._vikingdb_manager,
+                config,
+                config_path=os.environ.get("OPENVIKING_CONFIG_FILE"),
+            )
 
         if self._agfs_client is None:
             raise RuntimeError("AGFS client not initialized")

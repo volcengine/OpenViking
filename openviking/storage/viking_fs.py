@@ -1254,6 +1254,13 @@ class VikingFS:
             return [e for e in entries if e.get("name") in VikingURI.VALID_SCOPES]
         return [e for e in entries if e.get("name") not in self._INTERNAL_NAMES]
 
+    async def list_account_roots(self) -> List[Dict[str, Any]]:
+        """List account directories under the local AGFS root."""
+        try:
+            return self.agfs.ls(self._ROOT_PATH)
+        except Exception:
+            return []
+
     def _path_to_uri(self, path: str, ctx: Optional[RequestContext] = None) -> str:
         """/local/{account}/... -> viking://...
 

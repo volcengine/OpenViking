@@ -605,6 +605,49 @@ class EmbeddingConfig(BaseModel):
 
         raise ValueError("No embedding configuration found (dense, sparse, or hybrid)")
 
+    @staticmethod
+    def _identity_dict_for_model(config: Optional[EmbeddingModelConfig]) -> Optional[dict[str, Any]]:
+        if config is None:
+            return None
+        data: dict[str, Any] = {
+            "provider": EmbeddingConfig._require_provider(config.provider),
+            "model": config.model,
+        }
+        if config.dimension is not None:
+            data["dimension"] = config.get_effective_dimension()
+        elif config.model:
+            try:
+                data["dimension"] = config.get_effective_dimension()
+            except Exception:
+                pass
+        if config.input:
+            data["input"] = config.input
+        if config.query_param:
+            data["query_param"] = config.query_param
+        if config.document_param:
+            data["document_param"] = config.document_param
+        if config.version:
+            data["version"] = config.version
+        return data
+
+    def compatibility_identity(self) -> dict[str, Any]:
+        """Build a stable identity for vector compatibility checks."""
+        mode = "dense"
+        if self.hybrid:
+            mode = "hybrid"
+        elif self.dense and self.sparse:
+            mode = "dense+sparse"
+        elif self.sparse and not self.dense:
+            mode = "sparse"
+
+        return {
+            "mode": mode,
+            "text_source": self.text_source,
+            "dense": self._identity_dict_for_model(self.dense),
+            "sparse": self._identity_dict_for_model(self.sparse),
+            "hybrid": self._identity_dict_for_model(self.hybrid),
+        }
+
     @property
     def dimension(self) -> int:
         """Get dimension from active config."""
