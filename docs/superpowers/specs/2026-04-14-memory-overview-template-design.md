@@ -26,7 +26,7 @@ overview_template: |
   # {{ memory_type|capitalize }} Overview
 
   {% for item in items %}
-  - [{{ item.event_name }}]({{ item.filename }}) - {{ item.summary }}
+  - [{{ item.file_content.event_name }}]({{ item.file_name }}) - {{ item.file_content.summary }}
   {% endfor %}
 ```
 
@@ -34,11 +34,12 @@ overview_template: |
 
 ### 2. 数据结构
 
-**传递到模板的items包含：**
-- frontmatter所有字段（如event_name, summary, time等）
-- filename（包含后缀，如`event1.md`）
-
-uri在模板中根据需求重新渲染生成，不包含在meta dict中。
+遍历目录下所有.md文件时：
+- 读取文件内容，使用现有`parse_memory_file_with_fields`解析frontmatter得到字段
+- 从文件路径中提取filename（如`event1.md`）
+- 传递到模板的item包含两个字段：
+  - `file_name`: 文件名（包含后缀）
+  - `file_content`: frontmatter解析出的所有字段
 
 ### 3. 渲染时机
 
@@ -70,7 +71,8 @@ uri在模板中根据需求重新渲染生成，不包含在meta dict中。
 
 ### 6. 删除原有机制
 
-移除以下代码：
+因为`overview_template`未配置时不生成overview，所以需要完全移除原有的LLM生成机制：
+
 - `dataclass.py`中的`edit_overview_uris`字段
 - `schema_model_generator.py`中的`_generic_overview_edit_model`和`create_overview_edit_model`
 - `extract_loop.py`中的`edit_overview_uris`相关逻辑
@@ -78,15 +80,16 @@ uri在模板中根据需求重新渲染生成，不包含在meta dict中。
 
 ## 迁移方案
 
-1. 先实现新机制（基于模板生成overview）
-2. 移除`edit_overview_uris`相关代码
-3. 测试验证功能正常
+1. 为需要overview的memory类型添加`overview_template`配置
+2. 实现新机制（基于模板生成overview）
+3. 移除`edit_overview_uris`相关代码
+4. 测试验证功能正常
 
 ## 风险与错误处理
 
 - 如果目录下没有memory文件，不生成overview
 - 如果模板渲染失败，记录日志并跳过该目录
-- 如果`overview_template`未配置，则不执行自动生成（该memory类型保持原有行为）
+- 如果`overview_template`未配置，则不生成overview文件（移除原有的LLM生成机制）
 
 ## 测试计划
 

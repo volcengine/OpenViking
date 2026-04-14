@@ -19,6 +19,14 @@ content_template: |
   time: {{extract_context.get_first_message_time_with_weekday_from_ranges(ranges|default(''))|default('N/A')}}
   {{ extract_context.read_message_ranges(ranges|default('')).pretty_print() if ranges else '' }}
 
+
+overview_template: |
+  # Events Overview
+
+  {% for item in items %}
+  - [{{ item.file_content.summary }}](./{{ item.file_name }})
+  {% endfor %}
+
 fields:
   - name: event_name
     type: string
@@ -44,9 +52,3 @@ fields:
       Example: "0-3,40-45" means extract messages 0-3 and 40-45.
     merge_op: immutable
 
-overview_template: |
-  # Events Overview
-
-  {% for item in items %}
-  - [{{ item.file_content.event_name }}]({{ item.file_name }}) - {{ item.file_content.summary }}
-  {% endfor %}
