@@ -20,7 +20,7 @@ const FENCED_JSON_BLOCK_RE = /```json\s*([\s\S]*?)```/gi;
 const METADATA_JSON_KEY_RE =
   /"(session|sessionid|sessionkey|conversationid|channel|sender|userid|agentid|timestamp|timezone)"\s*:/gi;
 const LEADING_TIMESTAMP_PREFIX_RE = /^\s*(?!\[\[)\[(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*\s+)?(?:\d{4}[-/]\d{2}[-/]\d{2}|\d{2}[-/]\d{2}[-/]\d{2,4})(?:\s+\d{1,2}:\d{2}(?::\d{2})?(?:\s*[A-Z]{1,5}(?:[+-]\d{1,2})?)?)?\s*\]\s*/i;
-const COMPACTED_SYSTEM_MSG_RE = /^System:\s*\[.*?\]\s*Compacted/i;
+const COMPACTED_SYSTEM_MSG_RE = /^System:\s*\[.*?\]\s*Compacted\s*(.+)$/i;
 const COMMAND_TEXT_RE = /^\/[a-z0-9_-]{1,64}\b/i;
 const NON_CONTENT_TEXT_RE = /^[\p{P}\p{S}\s]+$/u;
 const SUBAGENT_CONTEXT_RE = /^\s*\[Subagent Context\]/i;
@@ -57,8 +57,7 @@ export function sanitizeUserTextForCapture(text: string): string {
   // 处理 Compactor 系统消息，提取实际用户输入
   // 格式: "System: [时间] Compacted ... Context ... [时间] 实际内容"
   if (COMPACTED_SYSTEM_MSG_RE.test(text)) {
-    // 提取最后一个 ] 之后的内容（即实际用户输入）
-    const match = text.match(/\]\s*(.+)$/);
+    const match = text.match(COMPACTED_SYSTEM_MSG_RE);
     if (match) {
       return match[1].replace(/\s+/g, " ").trim();
     }
