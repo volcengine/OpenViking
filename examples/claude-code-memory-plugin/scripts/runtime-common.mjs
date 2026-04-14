@@ -190,6 +190,7 @@ export async function ensureRuntimeInstalled(paths, expectedState) {
       cwd: paths.runtimeRoot,
       encoding: "utf8",
       stdio: "pipe",
+      shell: process.platform === "win32",
     });
 
     if (result.error) throw result.error;

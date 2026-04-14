@@ -24,6 +24,7 @@ from pathlib import PurePath
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSHTTPError
+from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext, Role
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import format_simplified, get_current_timestamp, parse_iso_datetime
@@ -1307,6 +1308,8 @@ class VikingFS:
             return True
         if not parts:
             return True
+        if is_watch_task_control_uri(normalized_uri):
+            return False
 
         scope = parts[0]
         if scope in {"resources", "temp"}:

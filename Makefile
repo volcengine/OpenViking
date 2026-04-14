@@ -100,7 +100,7 @@ build: check-deps check-pip
 	fi; \
 	if [ -n "$$MATURIN_CMD" ]; then \
 		TMPDIR=$$(mktemp -d); \
-		cd crates/ragfs-python && $$MATURIN_CMD build --release --out "$$TMPDIR" 2>&1; \
+		cd crates/ragfs-python && $$MATURIN_CMD build --release --features s3 --out "$$TMPDIR" 2>&1; \
 		cd ../..; \
 		mkdir -p openviking/lib; \
 		echo "import zipfile, glob, shutil, os, sys" > /tmp/extract_ragfs.py; \
