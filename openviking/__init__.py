@@ -14,7 +14,7 @@ from openviking_cli.client.sync_http import SyncHTTPClient
 from openviking_cli.session.user_id import UserIdentifier
 
 OpenViking = SyncOpenViking
-FORK_VERSION_SUFFIX = "-0xble.1.0.0"
+FORK_VERSION_SUFFIX = "-0xble.1.0.1"
 try:
     from ._version import version as __version__
 except ImportError:

@@ -7,7 +7,12 @@ Verifies that _extract_bookmarks correctly extracts bookmark entries
 and that _convert_local injects them as markdown headings.
 """
 
+import asyncio
+import threading
+from pathlib import Path
 from unittest.mock import MagicMock
+
+import pytest
 
 from openviking.parse.parsers.pdf import PDFParser
 
@@ -156,3 +161,29 @@ class TestExtractBookmarks:
 
         bookmarks = self.parser._extract_bookmarks(mock_pdf)
         assert bookmarks == []
+
+    @pytest.mark.asyncio
+    async def test_convert_local_offloads_sync_pdf_work(self):
+        """Local pdfplumber conversion runs outside the event loop."""
+        marker = threading.Event()
+        release = threading.Event()
+        thread_ids = []
+
+        def sync_convert(pdf_path, storage=None, resource_name=None):
+            thread_ids.append(threading.get_ident())
+            marker.set()
+            release.wait(timeout=1)
+            return (f"parsed {Path(pdf_path).name}", {"strategy": "local"})
+
+        self.parser._convert_local_sync = sync_convert
+
+        task = asyncio.create_task(self.parser._convert_local(Path("blocked.pdf")))
+        assert await asyncio.to_thread(marker.wait, 1)
+        await asyncio.sleep(0)
+        release.set()
+
+        markdown, meta = await task
+
+        assert markdown == "parsed blocked.pdf"
+        assert meta == {"strategy": "local"}
+        assert thread_ids[0] != threading.get_ident()

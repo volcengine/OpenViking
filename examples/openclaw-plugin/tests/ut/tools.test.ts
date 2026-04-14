@@ -107,6 +107,7 @@ function setupPlugin(clientOverrides?: Record<string, unknown>) {
       const cmd = command as CommandDef;
       commands.set(cmd.name, cmd);
     }),
+    registerCli: vi.fn(),
     registerService: vi.fn(),
     registerContextEngine: vi.fn(),
     on: vi.fn(),
@@ -416,6 +417,46 @@ describe("Tool: ov_search (behavioral)", () => {
     expect(result.content[0]!.text).toContain("memory");
     expect(result.content[0]!.text).toContain("User prefers dark theme");
   });
+
+  it("returns unavailable without searching when health fails", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/health")) {
+        return new Response(JSON.stringify({ status: "down" }), { status: 503 });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { tools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const search = tools.get("ov_search")!;
+    const result = await search.execute("tc1", { query: "OpenViking install" }) as ToolResult;
+
+    expect(result.content[0]!.text).toContain("temporarily unavailable");
+    expect(result.details.action).toBe("unavailable");
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).endsWith("/api/v1/search/find"))).toBe(false);
+  });
+});
+
+describe("Tool: memory_recall (behavioral)", () => {
+  it("returns unavailable without searching when health fails", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/health")) {
+        return new Response(JSON.stringify({ status: "down" }), { status: 503 });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { tools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const recall = tools.get("memory_recall")!;
+    const result = await recall.execute("tc1", { query: "preferences" }) as ToolResult;
+
+    expect(result.content[0]!.text).toContain("temporarily unavailable");
+    expect(result.details.action).toBe("unavailable");
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).endsWith("/api/v1/search/find"))).toBe(false);
+  });
 });
 
 describe("OpenViking import command parsing", () => {
@@ -522,6 +563,20 @@ describe("Plugin registration", () => {
       acceptsArgs: true,
       description: "Search OpenViking resources and skills.",
     });
+  });
+
+  it("registers import and search CLI commands", () => {
+    const { api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    expect(api.registerCli).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.objectContaining({
+        descriptors: expect.arrayContaining([
+          expect.objectContaining({ name: "ov-import" }),
+          expect.objectContaining({ name: "ov-search" }),
+        ]),
+      }),
+    );
   });
 
   it("import and search commands return usage errors when args are missing", async () => {

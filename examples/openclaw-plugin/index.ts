@@ -141,6 +141,17 @@ type OvSearchInput = {
   limit?: number;
 };
 
+type CliCommand = {
+  description(text: string): CliCommand;
+  argument(flags: string, description?: string): CliCommand;
+  option(flags: string, description?: string): CliCommand;
+  action(handler: (...args: unknown[]) => unknown): CliCommand;
+};
+
+type CliProgram = {
+  command(nameAndArgs: string): CliCommand;
+};
+
 type OpenClawPluginApi = {
   pluginConfig?: unknown;
   logger: PluginLogger;
@@ -152,6 +163,17 @@ type OpenClawPluginApi = {
     ): void;
   };
   registerCommand?: (command: CommandDefinition) => void;
+  registerCli?: (
+    registrar: (ctx: { program: CliProgram }) => void | Promise<void>,
+    opts?: {
+      commands?: string[];
+      descriptors?: Array<{
+        name: string;
+        description: string;
+        hasSubcommands?: boolean;
+      }>;
+    },
+  ) => void;
   registerService: (service: {
     id: string;
     start: (ctx?: unknown) => void | Promise<void>;
@@ -524,6 +546,16 @@ const contextEnginePlugin = {
     const tenantAccount = "";
     const tenantUser = "";
     const localCacheKey = `${cfg.mode}:${cfg.baseUrl}:${cfg.configPath}:${cfg.apiKey}:${tenantAccount}:${tenantUser}:${cfg.agentId}:${cfg.logFindRequests ? "1" : "0"}`;
+    const createConfiguredClient = () =>
+      new OpenVikingClient(
+        cfg.baseUrl,
+        cfg.apiKey,
+        cfg.agentId,
+        cfg.timeoutMs,
+        tenantAccount,
+        tenantUser,
+        routingDebugLog,
+      );
 
     let clientPromise: Promise<OpenVikingClient>;
     let localProcess: ReturnType<typeof spawn> | null = null;
@@ -570,20 +602,12 @@ const contextEnginePlugin = {
         }
       }
     } else {
-      clientPromise = Promise.resolve(
-        new OpenVikingClient(
-          cfg.baseUrl,
-          cfg.apiKey,
-          cfg.agentId,
-          cfg.timeoutMs,
-          tenantAccount,
-          tenantUser,
-          routingDebugLog,
-        ),
-      );
+      clientPromise = Promise.resolve(createConfiguredClient());
     }
 
     const getClient = (): Promise<OpenVikingClient> => clientPromise;
+    type ClientGetter = () => Promise<OpenVikingClient>;
+    type InteractiveClientGetter = (toolName: string) => Promise<OpenVikingClient>;
 
     const isBypassedSession = (ctx?: {
       sessionId?: string;
@@ -604,6 +628,47 @@ const contextEnginePlugin = {
       },
     });
 
+    const interactiveToolTimeoutMs = Math.min(cfg.timeoutMs, 5_000);
+    const interactiveHealthTimeoutMs = Math.min(interactiveToolTimeoutMs, 2_000);
+
+    const makeUnavailableToolResult = (toolName: string, reason: string) => ({
+      content: [
+        {
+          type: "text" as const,
+          text: `OpenViking is temporarily unavailable; ${toolName} was skipped. Reason: ${reason}`,
+        },
+      ],
+      details: {
+        action: "unavailable",
+        reason,
+        toolName,
+      },
+    });
+
+    const assertInteractiveClientHealthy = async (
+      client: OpenVikingClient,
+      toolName: string,
+    ): Promise<OpenVikingClient> => {
+      await withTimeout(
+        client.healthCheck(),
+        interactiveHealthTimeoutMs,
+        `OpenViking ${toolName} health check timed out`,
+      );
+      return client;
+    };
+
+    const getClientForInteractiveTool: InteractiveClientGetter = async (toolName) => {
+      const client = await withTimeout(
+        getClient(),
+        interactiveToolTimeoutMs,
+        `OpenViking ${toolName} client initialization timed out`,
+      );
+      return assertInteractiveClientHealthy(client, toolName);
+    };
+
+    const getStandaloneClientForInteractiveTool: InteractiveClientGetter = (toolName) =>
+      assertInteractiveClientHealthy(createConfiguredClient(), toolName);
+
     const formatResourceImportText = (result: AddResourceResult): string => {
       const root = result.root_uri ? ` ${result.root_uri}` : "";
       const warnings = result.warnings?.length ? ` Warnings: ${result.warnings.join("; ")}` : "";
@@ -616,8 +681,12 @@ const contextEnginePlugin = {
       return `Imported OpenViking skill${name}.${uri}`.trim();
     };
 
-    const importResource = async (input: AddResourceInput, agentId?: string) => {
-      const client = await getClient();
+    const importResource = async (
+      input: AddResourceInput,
+      agentId?: string,
+      getImportClient: ClientGetter = getClient,
+    ) => {
+      const client = await getImportClient();
       const result = await client.addResource(input, agentId);
       return {
         content: [{ type: "text" as const, text: formatResourceImportText(result) }],
@@ -628,8 +697,12 @@ const contextEnginePlugin = {
       };
     };
 
-    const importSkill = async (input: AddSkillInput, agentId?: string) => {
-      const client = await getClient();
+    const importSkill = async (
+      input: AddSkillInput,
+      agentId?: string,
+      getImportClient: ClientGetter = getClient,
+    ) => {
+      const client = await getImportClient();
       const result = await client.addSkill(input, agentId);
       return {
         content: [{ type: "text" as const, text: formatSkillImportText(result) }],
@@ -640,7 +713,11 @@ const contextEnginePlugin = {
       };
     };
 
-    const executeImport = async (input: OvImportInput, agentId?: string) => {
+    const executeImport = async (
+      input: OvImportInput,
+      agentId?: string,
+      getImportClient: ClientGetter = getClient,
+    ) => {
       const kind = input.kind ?? "resource";
       if (kind === "skill") {
         if (input.to || input.parent || input.reason || input.instruction) {
@@ -651,7 +728,7 @@ const contextEnginePlugin = {
           data: input.data,
           wait: input.wait,
           timeout: input.timeout,
-        }, agentId);
+        }, agentId, getImportClient);
       }
       if (input.data !== undefined && input.data !== null) {
         throw new Error("data is only supported for skill imports.");
@@ -664,25 +741,25 @@ const contextEnginePlugin = {
         instruction: input.instruction,
         wait: input.wait,
         timeout: input.timeout,
-      }, agentId);
+      }, agentId, getImportClient);
     };
 
-const mergeFindResults = (results: FindResult[]): FindResult => {
-  const deduplicate = (items: FindResultItem[]): FindResultItem[] => {
-    const seen = new Map<string, FindResultItem>();
-    for (const item of items) {
-      if (!seen.has(item.uri)) {
-        seen.set(item.uri, item);
-      }
-    }
-    return Array.from(seen.values());
-  };
-  const memories = deduplicate(results.flatMap((result) => result.memories ?? []));
-  const resources = deduplicate(results.flatMap((result) => result.resources ?? []));
-  const skills = deduplicate(results.flatMap((result) => result.skills ?? []));
-  return {
-    memories,
-    resources,
+    const mergeFindResults = (results: FindResult[]): FindResult => {
+      const deduplicate = (items: FindResultItem[]): FindResultItem[] => {
+        const seen = new Map<string, FindResultItem>();
+        for (const item of items) {
+          if (!seen.has(item.uri)) {
+            seen.set(item.uri, item);
+          }
+        }
+        return Array.from(seen.values());
+      };
+      const memories = deduplicate(results.flatMap((result) => result.memories ?? []));
+      const resources = deduplicate(results.flatMap((result) => result.resources ?? []));
+      const skills = deduplicate(results.flatMap((result) => result.skills ?? []));
+      return {
+        memories,
+        resources,
         skills,
         total: memories.length + resources.length + skills.length,
       };
@@ -743,36 +820,66 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
       return lines.join("\n");
     };
 
-    const searchOpenViking = async (input: OvSearchInput, agentId?: string) => {
+    const searchOpenViking = async (
+      input: OvSearchInput,
+      agentId?: string,
+      getSearchClient: InteractiveClientGetter = getClientForInteractiveTool,
+    ) => {
       const query = input.query.trim();
       if (!query) {
         throw new Error("query is required");
       }
       const limit = Math.max(1, Math.floor(input.limit ?? 10));
-      const client = await getClient();
+      let client: OpenVikingClient;
+      try {
+        client = await getSearchClient("ov_search");
+      } catch (err) {
+        return makeUnavailableToolResult("ov_search", err instanceof Error ? err.message : String(err));
+      }
       let result: FindResult;
-      if (input.uri) {
-        result = await client.find(query, { targetUri: input.uri, limit }, agentId);
-      } else {
-        const [resourcesSettled, skillsSettled] = await Promise.allSettled([
-          client.find(query, { targetUri: "viking://resources", limit }, agentId),
-          client.find(query, { targetUri: "viking://agent/skills", limit }, agentId),
-        ]);
-        const successful = [
-          resourcesSettled.status === "fulfilled" ? resourcesSettled.value : null,
-          skillsSettled.status === "fulfilled" ? skillsSettled.value : null,
-        ].filter((value): value is FindResult => value !== null);
-        if (successful.length === 0) {
-          const firstError = resourcesSettled.status === "rejected" ? resourcesSettled.reason : skillsSettled.reason;
-          throw firstError instanceof Error ? firstError : new Error(String(firstError));
+      try {
+        if (input.uri) {
+          result = await withTimeout(
+            client.find(query, { targetUri: input.uri, limit }, agentId),
+            interactiveToolTimeoutMs,
+            "OpenViking ov_search request timed out",
+          );
+        } else {
+          const [resourcesSettled, skillsSettled] = await Promise.allSettled([
+            withTimeout(
+              client.find(query, { targetUri: "viking://resources", limit }, agentId),
+              interactiveToolTimeoutMs,
+              "OpenViking resource search timed out",
+            ),
+            withTimeout(
+              client.find(query, { targetUri: "viking://agent/skills", limit }, agentId),
+              interactiveToolTimeoutMs,
+              "OpenViking skill search timed out",
+            ),
+          ]);
+          const successful = [
+            resourcesSettled.status === "fulfilled" ? resourcesSettled.value : null,
+            skillsSettled.status === "fulfilled" ? skillsSettled.value : null,
+          ].filter((value): value is FindResult => value !== null);
+          if (successful.length === 0) {
+            const firstError =
+              resourcesSettled.status === "rejected"
+                ? resourcesSettled.reason
+                : skillsSettled.status === "rejected"
+                  ? skillsSettled.reason
+                  : new Error("OpenViking search failed");
+            throw firstError instanceof Error ? firstError : new Error(String(firstError));
+          }
+          if (resourcesSettled.status === "rejected") {
+            api.logger.warn?.(`openviking: resource search failed: ${String(resourcesSettled.reason)}`);
+          }
+          if (skillsSettled.status === "rejected") {
+            api.logger.warn?.(`openviking: skill search failed: ${String(skillsSettled.reason)}`);
+          }
+          result = mergeFindResults(successful);
         }
-        if (resourcesSettled.status === "rejected") {
-          api.logger.warn?.(`openviking: resource search failed: ${String(resourcesSettled.reason)}`);
-        }
-        if (skillsSettled.status === "rejected") {
-          api.logger.warn?.(`openviking: skill search failed: ${String(skillsSettled.reason)}`);
-        }
-        result = mergeFindResults(successful);
+      } catch (err) {
+        return makeUnavailableToolResult("ov_search", err instanceof Error ? err.message : String(err));
       }
       return {
         content: [{ type: "text" as const, text: formatSearchText(query, input.uri, result) }],
@@ -787,6 +894,112 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
         },
       };
     };
+
+    const parseCliNumber = (value: unknown, flagName: string): number | undefined => {
+      if (value === undefined || value === null || value === "") {
+        return undefined;
+      }
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) {
+        throw new Error(`--${flagName} must be a number`);
+      }
+      return parsed;
+    };
+
+    const getCliStringOption = (options: unknown, name: string): string | undefined => {
+      if (!options || typeof options !== "object") {
+        return undefined;
+      }
+      const value = (options as Record<string, unknown>)[name];
+      return typeof value === "string" ? value : undefined;
+    };
+
+    const getCliBoolOption = (options: unknown, name: string): boolean | undefined => {
+      if (!options || typeof options !== "object") {
+        return undefined;
+      }
+      const value = (options as Record<string, unknown>)[name];
+      return typeof value === "boolean" ? value : undefined;
+    };
+
+    const joinCliParts = (parts: unknown): string =>
+      Array.isArray(parts) ? parts.join(" ") : String(parts ?? "");
+
+    const printCommandText = (result: { content: Array<{ text: string }> }) => {
+      const text = result.content[0]?.text;
+      if (text) {
+        console.log(text);
+      }
+    };
+
+    api.registerCli?.(
+      ({ program }: { program: CliProgram }) => {
+        program
+          .command("ov-search")
+          .description("Search OpenViking resources and skills.")
+          .argument("<query...>", "Search query")
+          .option("--uri <uri>", "Optional search URI")
+          .option("--limit <number>", "Max results per search scope")
+          .action(async (queryParts: unknown, options: unknown) => {
+            const result = await searchOpenViking(
+              {
+                query: joinCliParts(queryParts),
+                uri: getCliStringOption(options, "uri"),
+                limit: parseCliNumber(getCliStringOption(options, "limit"), "limit"),
+              },
+              resolveAgentId(),
+              getStandaloneClientForInteractiveTool,
+            );
+            printCommandText(result);
+          });
+
+        program
+          .command("ov-import")
+          .description("Import a resource or skill into OpenViking.")
+          .argument("<source...>", "Local path, public URL, Git URL, or raw skill source")
+          .option("--kind <kind>", "Import kind: resource or skill")
+          .option("--to <uri>", "Resource target URI")
+          .option("--parent <uri>", "Resource parent URI")
+          .option("--reason <text>", "Resource import reason")
+          .option("--instruction <text>", "Resource processing instruction")
+          .option("--wait", "Wait for processing to complete")
+          .option("--timeout <seconds>", "Timeout in seconds when --wait is set")
+          .action(async (sourceParts: unknown, options: unknown) => {
+            const rawKind = getCliStringOption(options, "kind");
+            const kind = rawKind === "skill" ? "skill" : "resource";
+            if (rawKind && rawKind !== "skill" && rawKind !== "resource") {
+              throw new Error("--kind must be resource or skill");
+            }
+            const result = await executeImport(
+              {
+                kind,
+                source: joinCliParts(sourceParts),
+                to: getCliStringOption(options, "to"),
+                parent: getCliStringOption(options, "parent"),
+                reason: getCliStringOption(options, "reason"),
+                instruction: getCliStringOption(options, "instruction"),
+                wait: getCliBoolOption(options, "wait"),
+                timeout: parseCliNumber(getCliStringOption(options, "timeout"), "timeout"),
+              },
+              resolveAgentId(),
+              () => getStandaloneClientForInteractiveTool("ov_import"),
+            );
+            printCommandText(result);
+          });
+      },
+      {
+        descriptors: [
+          {
+            name: "ov-search",
+            description: "Search OpenViking resources and skills",
+          },
+          {
+            name: "ov-import",
+            description: "Import a resource or skill into OpenViking",
+          },
+        ],
+      },
+    );
 
     api.registerTool(
       (ctx: ToolContext) => ({
@@ -936,7 +1149,12 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
               : undefined;
           const requestLimit = Math.max(limit * 4, 20);
 
-          const recallClient = await getClient();
+          let recallClient: OpenVikingClient;
+          try {
+            recallClient = await getClientForInteractiveTool("memory_recall");
+          } catch (err) {
+            return makeUnavailableToolResult("memory_recall", err instanceof Error ? err.message : String(err));
+          }
           if (cfg.logFindRequests) {
             api.logger.info(
               `openviking: memory_recall X-OpenViking-Agent="${agentId}" ` +
@@ -945,51 +1163,70 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
           }
 
           let result;
-          if (targetUri) {
-            // 如果指定了目标 URI，只检索该位置
-            result = await recallClient.find(
-              query,
-              {
-                targetUri,
-                limit: requestLimit,
-                scoreThreshold: 0,
-              },
-              agentId,
-            );
-          } else {
-            // 默认同时检索 user 和 agent 两个位置的记忆
-            const [userSettled, agentSettled] = await Promise.allSettled([
-              recallClient.find(
-                query,
-                {
-                  targetUri: "viking://user/memories",
-                  limit: requestLimit,
-                  scoreThreshold: 0,
-                },
-                agentId,
-              ),
-              recallClient.find(
-                query,
-                {
-                  targetUri: "viking://agent/memories",
-                  limit: requestLimit,
-                  scoreThreshold: 0,
-                },
-                agentId,
-              ),
-            ]);
-            const userResult = userSettled.status === "fulfilled" ? userSettled.value : { memories: [] };
-            const agentResult = agentSettled.status === "fulfilled" ? agentSettled.value : { memories: [] };
-            // 合并两个位置的结果，去重
-            const allMemories = [...(userResult.memories ?? []), ...(agentResult.memories ?? [])];
-            const uniqueMemories = allMemories.filter((memory, index, self) =>
-              index === self.findIndex((m) => m.uri === memory.uri)
-            );
-            const leafOnly = uniqueMemories.filter((m) => m.level === 2);
-            result = {
-              memories: leafOnly,
-              total: leafOnly.length,
-            };
+          try {
+            if (targetUri) {
+              // 如果指定了目标 URI，只检索该位置
+              result = await withTimeout(
+                recallClient.find(
+                  query,
+                  {
+                    targetUri,
+                    limit: requestLimit,
+                    scoreThreshold: 0,
+                  },
+                  agentId,
+                ),
+                interactiveToolTimeoutMs,
+                "OpenViking memory_recall request timed out",
+              );
+            } else {
+              // 默认同时检索 user 和 agent 两个位置的记忆
+              const [userSettled, agentSettled] = await Promise.allSettled([
+                withTimeout(
+                  recallClient.find(
+                    query,
+                    {
+                      targetUri: "viking://user/memories",
+                      limit: requestLimit,
+                      scoreThreshold: 0,
+                    },
+                    agentId,
+                  ),
+                  interactiveToolTimeoutMs,
+                  "OpenViking user memory search timed out",
+                ),
+                withTimeout(
+                  recallClient.find(
+                    query,
+                    {
+                      targetUri: "viking://agent/memories",
+                      limit: requestLimit,
+                      scoreThreshold: 0,
+                    },
+                    agentId,
+                  ),
+                  interactiveToolTimeoutMs,
+                  "OpenViking agent memory search timed out",
+                ),
+              ]);
+              const userResult = userSettled.status === "fulfilled" ? userSettled.value : { memories: [] };
+              const agentResult = agentSettled.status === "fulfilled" ? agentSettled.value : { memories: [] };
+              if (userSettled.status === "rejected" && agentSettled.status === "rejected") {
+                throw userSettled.reason instanceof Error ? userSettled.reason : new Error(String(userSettled.reason));
+              }
+              // 合并两个位置的结果，去重
+              const allMemories = [...(userResult.memories ?? []), ...(agentResult.memories ?? [])];
+              const uniqueMemories = allMemories.filter((memory, index, self) =>
+                index === self.findIndex((m) => m.uri === memory.uri)
+              );
+              const leafOnly = uniqueMemories.filter((m) => m.level === 2);
+              result = {
+                memories: leafOnly,
+                total: leafOnly.length,
+              };
+            }
+          } catch (err) {
+            return makeUnavailableToolResult("memory_recall", err instanceof Error ? err.message : String(err));
           }
 
           const memories = postProcessMemories(result.memories ?? [], {

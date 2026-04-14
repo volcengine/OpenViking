@@ -18,6 +18,7 @@ import {
   buildRecallPromptSection,
   prepareRecallQuery,
 } from "./recall-context.js";
+import type { RecallPromptSectionResult } from "./recall-context.js";
 import { withTimeout } from "./process-manager.js";
 import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
 
@@ -178,7 +179,7 @@ function messageDigest(messages: AgentMessage[], maxCharsPerMsg = 2000): Array<{
   });
 }
 
-function emitDiag(log: typeof logger, stage: string, sessionId: string, data: Record<string, unknown>, enabled = true): void {
+function emitDiag(log: Logger, stage: string, sessionId: string, data: Record<string, unknown>, enabled = true): void {
   if (!enabled) return;
   log.info(`openviking: diag ${JSON.stringify({ ts: Date.now(), stage, sessionId, data })}`);
 }
@@ -467,7 +468,7 @@ async function pollPhase2ExtractionOutcome(
     while (Date.now() < deadline) {
       await sleep(PHASE2_POLL_INTERVAL_MS);
       const task = await client.getTask(taskId, agentId).catch((e) => {
-        logger.warn(`openviking: phase2 getTask failed task_id=${taskId}: ${String(e)}`);
+        warnOrInfo(logger, `openviking: phase2 getTask failed task_id=${taskId}: ${String(e)}`);
         return null;
       });
       if (!task) {
@@ -482,18 +483,20 @@ async function pollPhase2ExtractionOutcome(
         return;
       }
       if (status === "failed") {
-        logger.warn(
+        warnOrInfo(
+          logger,
           `openviking: phase2 failed task_id=${taskId} session=${sessionLabel} error=${task.error ?? "unknown"}`,
         );
         return;
       }
     }
-    logger.warn(
+    warnOrInfo(
+      logger,
       `openviking: phase2 poll timeout (${PHASE2_POLL_MAX_MS / 1000}s) task_id=${taskId} session=${sessionLabel} — ` +
         `check GET /api/v1/tasks/${taskId}`,
     );
   } catch (e) {
-    logger.warn(`openviking: phase2 poll exception task_id=${taskId}: ${String(e)}`);
+    warnOrInfo(logger, `openviking: phase2 poll exception task_id=${taskId}: ${String(e)}`);
   }
 }
 
@@ -739,7 +742,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           );
         }
 
-        const recallPrompt =
+        const recallPrompt: RecallPromptSectionResult =
           recallSettled.status === "fulfilled"
             ? recallSettled.value
             : { estimatedTokens: 0, memories: [] };
@@ -962,7 +965,12 @@ export function createMemoryOpenVikingContextEngine(params: {
         }))) {
           return;
         }
-        const client = await getClient();
+        const captureTimeoutMs = Math.min(cfg.timeoutMs, 5_000);
+        const client = await withTimeout(
+          getClient(),
+          captureTimeoutMs,
+          "openviking: afterTurn client initialization timeout",
+        );
         const createdAt = pickLatestCreatedAt(turnMessages);
 
         // Group by OV role (user|assistant), merge adjacent same-role
@@ -992,10 +1000,18 @@ export function createMemoryOpenVikingContextEngine(params: {
         }
 
         for (const group of groups) {
-          await client.addSessionMessage(OVSessionId, group.role, group.texts.join("\n"), agentId, createdAt);
+          await withTimeout(
+            client.addSessionMessage(OVSessionId, group.role, group.texts.join("\n"), agentId, createdAt),
+            captureTimeoutMs,
+            "openviking: afterTurn addSessionMessage timeout",
+          );
         }
 
-        const session = await client.getSession(OVSessionId, agentId);
+        const session = await withTimeout(
+          client.getSession(OVSessionId, agentId),
+          captureTimeoutMs,
+          "openviking: afterTurn getSession timeout",
+        );
         const pendingTokens = session.pending_tokens ?? 0;
 
         if (pendingTokens < cfg.commitTokenThreshold) {
@@ -1007,7 +1023,11 @@ export function createMemoryOpenVikingContextEngine(params: {
           return;
         }
 
-        const commitResult = await client.commitSession(OVSessionId, { wait: false, agentId });
+        const commitResult = await withTimeout(
+          client.commitSession(OVSessionId, { wait: false, agentId }),
+          captureTimeoutMs,
+          "openviking: afterTurn commitSession timeout",
+        );
         const allTexts = groups.flatMap((g) => g.texts).join("\n");
         const commitExtra = cfg.logFindRequests
           ? ` ${toJsonLog({ captured: [trimForLog(allTexts, 260)] })}`
