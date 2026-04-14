@@ -312,15 +312,6 @@ class MemoryUpdater:
                     tracer.info(f"Op dump: {resolved_op.model.model_dump()}")
                 result.add_error(resolved_op.uri, e)
 
-        # Apply edit_overview operations
-        for op, uri in resolved_ops.edit_overview_operations:
-            try:
-                await self._apply_edit_overview(op, uri, ctx)
-                result.add_edited(uri)
-            except Exception as e:
-                tracer.error(f"Failed to edit overview {uri}", e)
-                result.add_error(uri, e)
-
         # Apply delete operations
         for _uri_str, uri in resolved_ops.delete_operations:
             try:
@@ -556,7 +547,7 @@ class MemoryUpdater:
             directory: Directory path containing memory files
             ctx: Request context
         """
-        from openviking.session.memory.utils.content import parse_memory_file_with_fields
+        from openviking.session.memory.utils.messages import parse_memory_file_with_fields
 
         # Get the schema for this memory type
         registry = self._registry
