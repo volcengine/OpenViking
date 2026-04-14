@@ -23,9 +23,7 @@ from openviking_cli.utils.config import get_openviking_config
 logger = get_logger(__name__)
 
 
-async def _decrement_embedding_tracker(semantic_msg_id: Optional[str], count: int,
-    preserve_existing_created_at: bool = False,
-) -> None:
+async def _decrement_embedding_tracker(semantic_msg_id: Optional[str], count: int) -> None:
     if not semantic_msg_id or count <= 0:
         return
     try:
