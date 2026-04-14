@@ -247,7 +247,7 @@ python run.py --config config/locomo_config.yaml --step gen --resume
 python run.py --config config/bot/locomo_bot_config.yaml --step gen --resume
 ```
 
-> **注意**：断点续传功能仅适用于 `--step gen` 阶段，`--step eval` 阶段不需要断点续传。框架会自动保存执行进度到 `output_dir` 目录下的 `benchmark_checkpoint.json` 文件中。
+>&gt; **注意**：断点续传功能仅适用于 `--step gen` 阶段。框架会自动保存执行进度到 `output_dir` 目录下的 `benchmark_checkpoint.json` 文件中。
 
 ### 支持的数据集
 
