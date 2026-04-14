@@ -326,19 +326,40 @@ class MemoryUpdater:
 
         tracer.info(f"Memory operations applied: {result.summary()}")
 
-        # Generate overview files if overview_template is configured
-        logger.info(f"[apply_operations] Starting overview generation, registry types: {[s.memory_type for s in resolved_registry.list_all()]}")
-        for schema in resolved_registry.list_all():
-            logger.info(f"[apply_operations] Checking schema {schema.memory_type}: overview_template={schema.overview_template is not None}, directory={schema.directory}")
-            if schema.overview_template and schema.directory:
-                # Render directory path
-                env = jinja2.Environment(autoescape=False)
-                directory = env.from_string(schema.directory).render(
-                    user_space=ctx.user.user_space_name(),
-                    agent_space=ctx.user.agent_space_name(),
-                )
-                logger.info(f"[apply_operations] Calling generate_overview for {schema.memory_type} with directory={directory}")
-                await self.generate_overview(schema.memory_type, directory, ctx)
+        # Generate overview files for directories that have modified files
+        # Get all modified file URIs
+        modified_uris = result.written_uris + result.edited_uris
+        if modified_uris:
+            # Group URIs by their parent directory
+            dir_to_memory_type = {}
+            for uri in modified_uris:
+                # Extract directory path (remove the filename)
+                if "/" in uri:
+                    dir_path = "/".join(uri.split("/")[:-1])
+                    # Find which memory type this directory belongs to
+                    for schema in resolved_registry.list_all():
+                        if schema.overview_template and schema.directory:
+                            env = jinja2.Environment(autoescape=False)
+                            base_dir = env.from_string(schema.directory).render(
+                                user_space=ctx.user.user_space_name(),
+                                agent_space=ctx.user.agent_space_name(),
+                            )
+                            # Check if this uri belongs to this memory type's directory
+                            if dir_path.startswith(base_dir.rstrip("/")):
+                                # Get the relative path from base directory
+                                rel_path = dir_path[len(base_dir.rstrip("/")):].lstrip("/")
+                                # The immediate parent directory (e.g., 2023/04/02)
+                                parts = rel_path.split("/")
+                                if len(parts) >= 3:
+                                    # Create the specific directory path for overview
+                                    specific_dir = f"{base_dir.rstrip('/')}/{'/'.join(parts[:3])}"
+                                    if specific_dir not in dir_to_memory_type:
+                                        dir_to_memory_type[specific_dir] = schema.memory_type
+
+            # Generate overview for each unique directory
+            for directory, memory_type in dir_to_memory_type.items():
+                logger.info(f"[apply_operations] Generating overview for {memory_type} at {directory}")
+                await self.generate_overview(memory_type, directory, ctx)
 
         return result
 
@@ -565,21 +586,19 @@ class MemoryUpdater:
 
         viking_fs = self._get_viking_fs()
 
-        # List all .md files in the directory (excluding .overview.md and .abstract.md)
+        # List direct .md files in the directory (excluding .overview.md and .abstract.md)
         try:
-            # Use tree to recursively list all files
-            entries = await viking_fs.tree(directory, node_limit=10000, level_limit=10, ctx=ctx)
-            logger.info(f"[generate_overview] Tree entries in {directory}: {entries}")
+            # Use ls to list direct children
+            entries = await viking_fs.ls(directory, show_all_hidden=True, ctx=ctx)
+            logger.info(f"[generate_overview] LS entries in {directory}: {entries}")
 
-            # Extract file paths from tree entries
+            # Extract file paths from ls entries
             md_files = []
             base_uri = directory.rstrip("/")
             for entry in entries:
-                if entry.get("isDir"):
-                    continue
-                rel_path = entry.get("rel_path", "")
-                if rel_path.endswith(".md") and not rel_path.endswith(".overview.md") and not rel_path.endswith(".abstract.md"):
-                    md_files.append(f"{base_uri}/{rel_path}")
+                name = entry.get("name", "")
+                if name.endswith(".md") and not name.endswith(".overview.md") and not name.endswith(".abstract.md"):
+                    md_files.append(f"{base_uri}/{name}")
 
             logger.info(f"[generate_overview] Filtered md_files: {md_files}")
         except Exception as e:
