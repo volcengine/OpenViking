@@ -292,6 +292,49 @@ async def test_extract_session_jsonable_regression(client: httpx.AsyncClient, se
     assert body["result"] == [{"uri": "viking://user/memories/mock.md"}]
 
 
+async def test_extract_preview_jsonable_regression(client: httpx.AsyncClient, service, monkeypatch):
+    """Regression: extract-preview endpoint should serialize internal objects."""
+
+    class FakePreviewResult:
+        __slots__ = ("session_id", "candidates")
+
+        def __init__(self, session_id: str):
+            self.session_id = session_id
+            self.candidates = [FakeMemory("viking://user/memories/mock.md")]
+
+        def to_dict(self):
+            return {
+                "session_id": self.session_id,
+                "candidates": [item.to_dict() for item in self.candidates],
+            }
+
+    class FakeMemory:
+        __slots__ = ("uri",)
+
+        def __init__(self, uri: str):
+            self.uri = uri
+
+        def to_dict(self):
+            return {"uri": self.uri}
+
+    async def fake_preview(_session_id: str, _ctx):
+        return FakePreviewResult(_session_id)
+
+    monkeypatch.setattr(service.sessions, "preview_extract", fake_preview)
+
+    create_resp = await client.post("/api/v1/sessions", json={"user": "test"})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    resp = await client.post(f"/api/v1/sessions/{session_id}/extract-preview")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["result"] == {
+        "session_id": session_id,
+        "candidates": [{"uri": "viking://user/memories/mock.md"}],
+    }
+
+
 async def test_get_session_context_endpoint_returns_trimmed_latest_archive_and_messages(
     client: httpx.AsyncClient,
 ):
