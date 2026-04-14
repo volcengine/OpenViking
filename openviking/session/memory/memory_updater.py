@@ -330,7 +330,7 @@ class MemoryUpdater:
         # Get all modified file URIs
         modified_uris = result.written_uris + result.edited_uris
         if modified_uris:
-            # Group URIs by their parent directory
+            # Collect unique directories with their memory types
             dir_to_memory_type = {}
             for uri in modified_uris:
                 # Extract directory path (remove the filename)
@@ -346,15 +346,9 @@ class MemoryUpdater:
                             )
                             # Check if this uri belongs to this memory type's directory
                             if dir_path.startswith(base_dir.rstrip("/")):
-                                # Get the relative path from base directory
-                                rel_path = dir_path[len(base_dir.rstrip("/")):].lstrip("/")
-                                # The immediate parent directory (e.g., 2023/04/02)
-                                parts = rel_path.split("/")
-                                if len(parts) >= 3:
-                                    # Create the specific directory path for overview
-                                    specific_dir = f"{base_dir.rstrip('/')}/{'/'.join(parts[:3])}"
-                                    if specific_dir not in dir_to_memory_type:
-                                        dir_to_memory_type[specific_dir] = schema.memory_type
+                                # Use the directory containing the file directly
+                                if dir_path not in dir_to_memory_type:
+                                    dir_to_memory_type[dir_path] = schema.memory_type
 
             # Generate overview for each unique directory
             for directory, memory_type in dir_to_memory_type.items():
