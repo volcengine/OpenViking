@@ -43,7 +43,9 @@ class FakeAGFS:
             raise FileNotFoundError(path)
 
         prefix = f"{path.rstrip('/')}/"
-        has_children = any(item.startswith(prefix) for item in self.dirs | set(self.files) if item != path)
+        has_children = any(
+            item.startswith(prefix) for item in self.dirs | set(self.files) if item != path
+        )
         if has_children and not recursive:
             raise OSError(f"directory not empty: {path}")
 
