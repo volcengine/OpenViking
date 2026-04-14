@@ -122,7 +122,13 @@ class UnifiedResourceProcessor:
                     # Use the last part of repo_name as the resource_name (e.g., "OpenViking" from "volcengine/OpenViking")
                     parse_kwargs["resource_name"] = repo_name.split("/")[-1]
                 else:
-                    parse_kwargs.setdefault("resource_name", local_resource.path.stem)
+                    # Prefer original_filename from meta for HTTP downloads
+                    original_filename = local_resource.meta.get("original_filename")
+                    if original_filename:
+                        parse_kwargs.setdefault("resource_name", Path(original_filename).stem)
+                        parse_kwargs.setdefault("source_name", original_filename)
+                    else:
+                        parse_kwargs.setdefault("resource_name", local_resource.path.stem)
 
             # If it's a directory, use DirectoryParser which will delegate to CodeRepositoryParser if it's a git repo
             if local_resource.path.is_dir():

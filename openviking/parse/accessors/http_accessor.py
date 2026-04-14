@@ -435,7 +435,12 @@ class HTTPAccessor(DataAccessor):
         temp_path = temp_file.name
         temp_file.close()
 
-        meta = {**detect_meta, "extension": ext}
+        # Get original filename from URL or Content-Disposition
+        original_filename = detect_meta.get("filename_from_disposition")
+        if not original_filename:
+            original_filename = self._extract_filename_from_url(url)
+
+        meta = {**detect_meta, "extension": ext, "original_filename": original_filename}
 
         try:
             # Download content
