@@ -35,6 +35,54 @@ async def test_write_updates_memory_file_and_parent_overview(service):
 
 
 @pytest.mark.asyncio
+async def test_import_memory_creates_missing_profile_file(service):
+    ctx = RequestContext(user=service.user, role=Role.USER)
+    profile_uri = f"viking://user/{ctx.user.user_space_name()}/memories/profile.md"
+
+    result = await service.fs.import_memory(
+        profile_uri,
+        content="# Profile\n\nUser likes tea.",
+        ctx=ctx,
+        mode="replace",
+        wait=True,
+    )
+
+    assert result["context_type"] == "memory"
+    assert await service.viking_fs.read_file(profile_uri, ctx=ctx) == "# Profile\n\nUser likes tea."
+    assert await service.viking_fs.read_file(
+        f"viking://user/{ctx.user.user_space_name()}/memories/.overview.md",
+        ctx=ctx,
+    )
+
+
+@pytest.mark.asyncio
+async def test_import_memory_without_wait_allows_back_to_back_writes(service):
+    ctx = RequestContext(user=service.user, role=Role.USER)
+    first_uri = f"viking://user/{ctx.user.user_space_name()}/memories/entities/alice.md"
+    second_uri = f"viking://user/{ctx.user.user_space_name()}/memories/entities/bob.md"
+
+    first = await service.fs.import_memory(
+        first_uri,
+        content="Alice likes tea.",
+        ctx=ctx,
+        mode="replace",
+        wait=False,
+    )
+    second = await service.fs.import_memory(
+        second_uri,
+        content="Bob likes coffee.",
+        ctx=ctx,
+        mode="replace",
+        wait=False,
+    )
+
+    assert first["uri"] == first_uri
+    assert second["uri"] == second_uri
+    assert await service.viking_fs.read_file(first_uri, ctx=ctx) == "Alice likes tea."
+    assert await service.viking_fs.read_file(second_uri, ctx=ctx) == "Bob likes coffee."
+
+
+@pytest.mark.asyncio
 async def test_write_denies_foreign_user_memory_space(service):
     owner_ctx = RequestContext(user=service.user, role=Role.USER)
     memory_uri = (
@@ -49,6 +97,13 @@ async def test_write_denies_foreign_user_memory_space(service):
 
     with pytest.raises(NotFoundError):
         await service.fs.write(
+            memory_uri,
+            content="Intruder update",
+            ctx=foreign_ctx,
+        )
+
+    with pytest.raises(NotFoundError):
+        await service.fs.import_memory(
             memory_uri,
             content="Intruder update",
             ctx=foreign_ctx,

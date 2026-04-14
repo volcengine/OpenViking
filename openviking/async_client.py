@@ -398,6 +398,26 @@ class AsyncOpenViking:
             telemetry=telemetry,
         )
 
+    async def import_memory(
+        self,
+        uri: str,
+        content: str,
+        mode: str = "replace",
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Create or update a memory file and refresh semantics/vectors."""
+        await self._ensure_initialized()
+        return await self._client.import_memory(
+            uri=uri,
+            content=content,
+            mode=mode,
+            wait=wait,
+            timeout=timeout,
+            telemetry=telemetry,
+        )
+
     async def ls(self, uri: str, **kwargs) -> List[Any]:
         """
         List directory contents.

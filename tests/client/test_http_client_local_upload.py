@@ -50,6 +50,29 @@ async def test_write_omits_removed_semantic_flags_from_http_payload(tmp_path, mo
 
 
 @pytest.mark.asyncio
+async def test_import_memory_posts_expected_payload(monkeypatch):
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = _FakeHTTPClient()
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {
+        "result": {"uri": "viking://user/memories/profile.md"}
+    }
+
+    await client.import_memory("viking://user/memories/profile.md", "imported", wait=True)
+
+    call = fake_http.calls[-1]
+    assert call["path"] == "/api/v1/content/import-memory"
+    assert call["json"] == {
+        "uri": "viking://user/memories/profile.md",
+        "content": "imported",
+        "mode": "replace",
+        "wait": True,
+        "timeout": None,
+        "telemetry": False,
+    }
+
+
+@pytest.mark.asyncio
 async def test_add_skill_uploads_local_file_even_when_url_is_localhost(tmp_path):
     skill_file = tmp_path / "SKILL.md"
     skill_file.write_text("---\nname: demo\ndescription: demo\n---\n\n# Demo\n")

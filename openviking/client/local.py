@@ -254,6 +254,33 @@ class LocalClient(BaseClient):
             execution.telemetry,
         )
 
+    async def import_memory(
+        self,
+        uri: str,
+        content: str,
+        mode: str = "replace",
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Create or update a memory file and refresh semantics/vectors."""
+        execution = await run_with_telemetry(
+            operation="content.import_memory",
+            telemetry=telemetry,
+            fn=lambda: self._service.fs.import_memory(
+                uri=uri,
+                content=content,
+                ctx=self._ctx,
+                mode=mode,
+                wait=wait,
+                timeout=timeout,
+            ),
+        )
+        return attach_telemetry_payload(
+            execution.result,
+            execution.telemetry,
+        )
+
     # ============= Search =============
 
     async def find(
@@ -443,7 +470,6 @@ class LocalClient(BaseClient):
 
         If both content and parts are provided, parts takes precedence.
         """
-
         from openviking.message.part import Part, TextPart, part_from_dict
 
         session = self._service.sessions.session(self._ctx, session_id)

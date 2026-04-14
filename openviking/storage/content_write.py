@@ -128,6 +128,40 @@ class ContentWriteCoordinator:
             if wait and telemetry_id:
                 get_request_wait_tracker().cleanup(telemetry_id)
 
+    async def import_memory(
+        self,
+        *,
+        uri: str,
+        content: str,
+        ctx: RequestContext,
+        mode: str = "replace",
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Create or update a memory file and refresh semantics/vectors."""
+        normalized_uri = VikingURI.normalize(uri)
+        self._validate_mode(mode)
+        self._validate_memory_import_uri(normalized_uri)
+
+        parent = VikingURI(normalized_uri).parent
+        if parent is None:
+            raise InvalidArgumentError(f"memory import target has no parent directory: {uri}")
+
+        await self._viking_fs.mkdir(parent.uri, exist_ok=True, ctx=ctx)
+        written_bytes = len(content.encode("utf-8"))
+        telemetry_id = get_current_telemetry().telemetry_id
+        return await self._write_memory_with_refresh(
+            uri=normalized_uri,
+            root_uri=parent.uri,
+            content=content,
+            mode=mode,
+            wait=wait,
+            timeout=timeout,
+            ctx=ctx,
+            written_bytes=written_bytes,
+            telemetry_id=telemetry_id,
+        )
+
     def _validate_mode(self, mode: str) -> None:
         if mode not in {"replace", "append"}:
             raise InvalidArgumentError(f"unsupported write mode: {mode}")
@@ -142,6 +176,49 @@ class ContentWriteCoordinator:
         parsed = VikingURI(uri)
         if parsed.scope not in {"resources", "user", "agent"}:
             raise InvalidArgumentError(f"write is not supported for scope: {parsed.scope}")
+
+    def _validate_memory_import_uri(self, uri: str) -> None:
+        self._validate_target_uri(uri)
+
+        parsed = VikingURI(uri)
+        if parsed.scope not in {"user", "agent"}:
+            raise InvalidArgumentError(f"memory import only supports user/agent memory URIs: {uri}")
+
+        parts = [part for part in parsed.full_path.split("/") if part]
+        try:
+            memories_idx = parts.index("memories")
+        except ValueError as exc:
+            raise InvalidArgumentError(f"memory import only supports memory URIs: {uri}") from exc
+
+        name = parts[-1]
+        if not name.endswith(".md"):
+            raise InvalidArgumentError(f"memory import only supports markdown files: {uri}")
+        if name.startswith("."):
+            raise InvalidArgumentError(f"memory import cannot target hidden files: {uri}")
+
+        if parsed.scope == "user":
+            if len(parts) == memories_idx + 2 and name == "profile.md":
+                return
+            if len(parts) <= memories_idx + 2:
+                raise InvalidArgumentError(
+                    f"user memory import target must be profile.md or a file inside a category: {uri}"
+                )
+            category = parts[memories_idx + 1]
+            if category not in {"preferences", "entities", "events"}:
+                raise InvalidArgumentError(
+                    f"user memory import only supports profile/preferences/entities/events: {uri}"
+                )
+            return
+
+        if len(parts) <= memories_idx + 2:
+            raise InvalidArgumentError(
+                f"agent memory import target must be a file inside an agent memory category: {uri}"
+            )
+        category = parts[memories_idx + 1]
+        if category not in {"cases", "patterns", "tools", "skills"}:
+            raise InvalidArgumentError(
+                f"agent memory import only supports cases/patterns/tools/skills: {uri}"
+            )
 
     async def _safe_stat(self, uri: str, *, ctx: RequestContext) -> Dict[str, Any]:
         try:
@@ -160,7 +237,10 @@ class ContentWriteCoordinator:
         ctx: RequestContext,
     ) -> None:
         if mode == "replace" and self._context_type_for_uri(uri) == "memory":
-            existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
+            try:
+                existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
+            except NotFoundError:
+                existing_raw = ""
             _, metadata = deserialize_full(existing_raw)
             if metadata:
                 content = serialize_with_metadata(content, metadata)
@@ -168,7 +248,10 @@ class ContentWriteCoordinator:
             return
 
         if mode == "append":
-            existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
+            try:
+                existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
+            except NotFoundError:
+                existing_raw = ""
             existing_content, metadata = deserialize_full(existing_raw)
             updated_content = existing_content + content
             if metadata:
@@ -384,9 +467,12 @@ class ContentWriteCoordinator:
                 root_uri=root_uri,
                 modified_uri=uri,
                 ctx=ctx,
-                lifecycle_lock_handle_id=handle.id,
+                lifecycle_lock_handle_id=handle.id if wait else "",
             )
-            lock_transferred = True
+            if wait:
+                lock_transferred = True
+            else:
+                await lock_manager.release(handle)
             queue_status = (
                 await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
                 if wait
