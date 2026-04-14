@@ -12,7 +12,6 @@ execution:
   ingest_workers: 8
   retrieval_topk: 5
   max_queries: 20
-  skip_ingestion: false
   ingest_mode: "directory"
   retrieval_instruction: ""  
 # ==================================  

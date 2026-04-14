@@ -63,8 +63,11 @@ def main():
     parser.add_argument("--config", default=default_config_path, 
                         help=f"Path to config file. Default: {default_config_path}")
     
-    parser.add_argument("--step", choices=["all", "gen", "eval", "del"], default="all", 
-                        help="Execution step: 'gen' (Retrieval+LLM), 'eval' (Judge), or 'all'")
+    parser.add_argument("--step", choices=["all", "ingest", "gen", "eval", "del"], default="all", 
+                        help="Execution step: 'ingest' (Data Ingestion), 'gen' (Retrieval+LLM), 'eval' (Judge), or 'all'")
+    
+    parser.add_argument("--resume", action="store_true", 
+                        help="Resume from checkpoint if available")
     
     args = parser.parse_args()
 
@@ -121,31 +124,36 @@ def main():
             logger.error(f"Class '{class_name}' not found in module '{module_path}'. Please check your config 'adapter.class_name'. Error: {e}")
             raise e
         
-        # 2. Vector Store
-        vector_store = VikingStoreWrapper(store_path=config['paths']['vector_store'])
+        # 2. Vector Store (only for ingest/gen/del steps)
+        vector_store = None
+        if args.step in ["all", "ingest", "gen", "del"]:
+            vector_store = VikingStoreWrapper(store_path=config['paths']['vector_store'])
         
         # 3. LLM Client
-        api_key = os.environ.get(
-            config['llm'].get('api_key_env_var', ''), 
-            config['llm'].get('api_key')
-        )
-        if not api_key:
-            logger.warning("No API Key found in config or environment variables!")
-            
-        llm_client = LLMClientWrapper(config=config['llm'], api_key=api_key)
+        llm_client = None
+        if args.step in ["all", "gen", "eval"]:
+            api_key = config['llm'].get('api_key', '')
+            if not api_key:
+                logger.warning("No API Key found in config or environment variables!")
+            llm_client = LLMClientWrapper(config=config['llm'], api_key=api_key)
 
         # 4. Pipeline
         pipeline = BenchmarkPipeline(
             config=config,
             adapter=adapter,
             vector_db=vector_store,
-            llm=llm_client
+            llm=llm_client,
+            resume=args.resume
         )
 
         # --- E. Execute Tasks ---
+        if args.step in ["all", "ingest"]:
+            logger.info("Stage: Data Ingestion")
+            pipeline.run_ingestion()
+        
         if args.step in ["all", "gen"]:
-            logger.info("Stage: Generation (Ingest -> Retrieve -> Generate)")
-            pipeline.run_generation()
+            logger.info("Stage: Generation (Retrieve -> Generate)")
+            pipeline.run_generation_only()
             
         if args.step in ["all", "eval"]:
             logger.info("Stage: Evaluation (Judge -> Metrics)")
