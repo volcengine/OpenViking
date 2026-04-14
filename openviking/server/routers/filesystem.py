@@ -92,6 +92,7 @@ class MkdirRequest(BaseModel):
     """Request model for mkdir."""
 
     uri: str
+    description: Optional[str] = None
 
 
 @router.post("/mkdir")
@@ -101,7 +102,7 @@ async def mkdir(
 ):
     """Create directory."""
     service = get_service()
-    await service.fs.mkdir(request.uri, ctx=_ctx)
+    await service.fs.mkdir(request.uri, ctx=_ctx, description=request.description)
     return Response(status="ok", result={"uri": request.uri})
 
 

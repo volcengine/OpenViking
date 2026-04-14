@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Tests for ``ov doctor`` diagnostic checks."""
+"""Tests for ``openviking-server doctor`` diagnostic checks."""
 
 from __future__ import annotations
 

@@ -13,6 +13,7 @@ from loguru import logger
 
 from vikingbot.agent.context import ContextBuilder
 from vikingbot.agent.memory import MemoryStore
+from vikingbot.heartbeat.service import HEARTBEAT_METADATA_KEY, is_heartbeat_noop_response
 from vikingbot.agent.subagent import SubagentManager
 from vikingbot.agent.tools import register_default_tools
 from vikingbot.agent.tools.registry import ToolRegistry
@@ -595,13 +596,14 @@ class AgentLoop:
             preview = final_content[:300] + "..." if len(final_content) > 300 else final_content
             logger.info(f"Response to {msg.session_key}: {preview}")
 
-            # Save to session (include tool names so consolidation sees what happened)
-            session.add_message("user", msg.content, sender_id=msg.sender_id)
-            session.add_message(
-                "assistant", final_content, tools_used=tools_used if tools_used else None, token_usage=token_usage,
-                sender_id=msg.sender_id,
-            )
-            await self.sessions.save(session)
+            is_heartbeat = bool(msg.metadata.get(HEARTBEAT_METADATA_KEY))
+            if not (is_heartbeat and is_heartbeat_noop_response(final_content)):
+                session.add_message("user", msg.content, sender_id=msg.sender_id)
+                session.add_message(
+                    "assistant", final_content, tools_used=tools_used if tools_used else None, token_usage=token_usage,
+                    sender_id=msg.sender_id,
+                )
+                await self.sessions.save(session)
 
             time_cost = round(time.time() - start_time, 2)
             if tools_used is not None:
@@ -848,6 +850,7 @@ Respond with ONLY valid JSON, no markdown fences."""
         self,
         content: str,
         session_key: SessionKey = SessionKey(type="cli", channel_id="default", chat_id="direct"),
+        metadata: dict[str, object] | None = None,
     ) -> str:
         """
         Process a message directly (for CLI or cron usage).
@@ -860,7 +863,12 @@ Respond with ONLY valid JSON, no markdown fences."""
             The agent's response.
         """
         await self._connect_mcp()
-        msg = InboundMessage(session_key=session_key, sender_id="user", content=content)
+        msg = InboundMessage(
+            session_key=session_key,
+            sender_id="user",
+            content=content,
+            metadata=metadata or {},
+        )
 
         response = await self._process_message(msg)
         return response.content if response else ""

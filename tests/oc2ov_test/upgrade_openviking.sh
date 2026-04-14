@@ -253,6 +253,26 @@ if [ "$BUILD_SUCCESS" = false ]; then
     exit 1
 fi
 
+log "[7.5/8] Installing OpenClaw openviking plugin dependencies..."
+PLUGIN_DIR="$PROJECT_DIR/examples/openclaw-plugin"
+
+if [ -d "$PLUGIN_DIR" ]; then
+    log "Plugin directory: $PLUGIN_DIR"
+    if command -v npm &> /dev/null; then
+        cd "$PLUGIN_DIR"
+        if npm install --omit=dev 2>&1 | tee -a "$LOG_FILE"; then
+            log "✅ Plugin npm dependencies installed"
+        else
+            log "⚠️  WARNING: npm install --omit=dev failed, continuing anyway"
+        fi
+        cd "$PROJECT_DIR"
+    else
+        log "⚠️  npm command not found, skipping plugin dependency install"
+    fi
+else
+    log "⚠️  Plugin directory not found: $PLUGIN_DIR, skipping"
+fi
+
 log "[8/8] Restarting OpenClaw service to load latest OpenViking..."
 
 # Load OpenClaw environment variables
@@ -297,6 +317,67 @@ else
     log "⚠️  WARNING: OpenViking is not in development mode!"
     log "Expected path to contain: $PROJECT_DIR"
     log "Actual path: $OV_PATH"
+fi
+
+# Step 3.5: Ensure OpenViking server is running on port 1933
+log "Step 3.5: Ensuring OpenViking server is running..."
+OV_SERVER_RUNNING=false
+
+if command -v ss &> /dev/null; then
+    if ss -tuln 2>/dev/null | grep -q ":1933 "; then
+        OV_SERVER_RUNNING=true
+        log "✅ OpenViking server is already listening on port 1933"
+    fi
+elif command -v netstat &> /dev/null; then
+    if netstat -tuln 2>/dev/null | grep -q ":1933 "; then
+        OV_SERVER_RUNNING=true
+        log "✅ OpenViking server is already listening on port 1933"
+    fi
+fi
+
+if [ "$OV_SERVER_RUNNING" = false ]; then
+    log "OpenViking server not running, starting it..."
+
+    pkill -f "openviking.server.bootstrap" 2>/dev/null || true
+    sleep 1
+
+    OV_CONF=""
+    for conf_candidate in "$PROJECT_DIR/ov.conf.temp" "$PROJECT_DIR/ov.conf" "$HOME/.openviking/ov.conf"; do
+        if [ -f "$conf_candidate" ]; then
+            OV_CONF="$conf_candidate"
+            break
+        fi
+    done
+
+    if [ -n "$OV_CONF" ]; then
+        nohup python -m openviking.server.bootstrap --config "$OV_CONF" > /tmp/openviking.log 2>&1 &
+        log "Started OpenViking server with config: $OV_CONF (PID: $!)"
+    else
+        nohup python -m openviking.server.bootstrap > /tmp/openviking.log 2>&1 &
+        log "Started OpenViking server without explicit config (PID: $!)"
+    fi
+
+    for i in $(seq 1 15); do
+        sleep 2
+        if command -v ss &> /dev/null; then
+            if ss -tuln 2>/dev/null | grep -q ":1933 "; then
+                OV_SERVER_RUNNING=true
+                log "✅ OpenViking server is listening on port 1933 (after ${i}x2s)"
+                break
+            fi
+        elif command -v netstat &> /dev/null; then
+            if netstat -tuln 2>/dev/null | grep -q ":1933 "; then
+                OV_SERVER_RUNNING=true
+                log "✅ OpenViking server is listening on port 1933 (after ${i}x2s)"
+                break
+            fi
+        fi
+    done
+
+    if [ "$OV_SERVER_RUNNING" = false ]; then
+        log "⚠️  WARNING: OpenViking server failed to start on port 1933"
+        log "   Check logs: tail -50 /tmp/openviking.log"
+    fi
 fi
 
 # Step 4: Start OpenClaw gateway

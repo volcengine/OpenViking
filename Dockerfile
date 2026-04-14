@@ -37,6 +37,7 @@ COPY crates/ crates/
 COPY openviking/ openviking/
 COPY openviking_cli/ openviking_cli/
 COPY src/ src/
+COPY third_party/ third_party/
 
 # Install project and dependencies (triggers setup.py artifact builds + build_extension).
 # Default to auto-refreshing uv.lock inside the ephemeral build context when it is

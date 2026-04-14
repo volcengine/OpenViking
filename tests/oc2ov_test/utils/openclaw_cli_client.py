@@ -20,7 +20,7 @@ class OpenClawCLIClient:
         初始化客户端
         """
         self.session_id = session_id or "test_session_default"
-        self.timeout = 300
+        self.timeout = 180
 
     def send_message(
         self, message: str, session_id: Optional[str] = None, agent_id: Optional[str] = None

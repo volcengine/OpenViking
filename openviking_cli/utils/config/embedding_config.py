@@ -232,6 +232,12 @@ class EmbeddingModelConfig(BaseModel):
                 "all-minilm-l6-v2": 384,
                 "snowflake-arctic-embed": 1024,
                 "snowflake-arctic-embed-l": 1024,
+                "qwen3-embedding": 1024,
+                "qwen3-embedding:0.6b": 1024,
+                "qwen3-embedding:4b": 1024,
+                "qwen3-embedding:8b": 1024,
+                "embeddinggemma": 768,
+                "embeddinggemma:300m": 768,
             }
             model_lower = (self.model or "").lower()
             if model_lower in ollama_model_dimensions:

@@ -3,23 +3,41 @@
 提供 Session ID 管理、智能等待、重试机制、测试数据管理等功能
 """
 
-import time
-import uuid
 import functools
 import logging
+import os
+import time
+import uuid
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, TypeVar, Union
 from datetime import datetime
+from typing import Any, Callable, Dict, List, Optional, TypeVar, Union
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+# 固定的 Session ID，用于 CI 环境避免 session 爆满
+# 使用 UUID 格式，确保 OpenClaw 直接使用，不做 SHA256 转换
+FIXED_SESSION_ID = "00000000-0000-0000-0000-000000000001"
+
+
+def _is_ci_environment() -> bool:
+    """检测是否在 CI 环境中运行"""
+    return bool(
+        os.environ.get("CI")
+        or os.environ.get("GITHUB_ACTIONS")
+        or os.environ.get("GITLAB_CI")
+        or os.environ.get("TRAVIS")
+        or os.environ.get("CIRCLECI")
+        or os.environ.get("JENKINS_URL")
+    )
 
 
 class SessionIdManager:
     """
     Session ID 管理器
     自动生成唯一的 session_id，支持前缀和后缀
+    在 CI 环境中使用固定的 session ID，避免 session 爆满
     """
 
     _instance = None
@@ -37,25 +55,28 @@ class SessionIdManager:
         include_uuid: bool = True,
     ) -> str:
         """
-        生成唯一的 session_id
+        生成唯一的 session_id (UUID 格式)
+
+        OpenClaw 会将非 UUID 格式的 session ID 转换为 SHA256 哈希，
+        使用 UUID 格式可以确保 OpenClaw 直接使用，不做转换。
 
         Args:
-            prefix: session_id 前缀
-            include_timestamp: 是否包含时间戳
-            include_uuid: 是否包含 UUID
+            prefix: session_id 前缀 (仅用于日志，不影响 UUID 格式)
+            include_timestamp: 是否包含时间戳 (已忽略，保持接口兼容)
+            include_uuid: 是否包含 UUID (已忽略，始终使用 UUID)
 
         Returns:
-            str: 唯一的 session_id
+            str: UUID 格式的 session_id
         """
-        parts = [prefix]
+        # 在 CI 环境中使用固定的 session ID
+        if _is_ci_environment():
+            logger.info(f"CI 环境检测到，使用固定 Session ID: {FIXED_SESSION_ID}")
+            return FIXED_SESSION_ID
 
-        if include_timestamp:
-            parts.append(datetime.now().strftime("%Y%m%d_%H%M%S"))
-
-        if include_uuid:
-            parts.append(uuid.uuid4().hex[:8])
-
-        return "_".join(parts)
+        # 生成 UUID 格式的 session ID
+        session_id = str(uuid.uuid4())
+        logger.info(f"生成 Session ID: {session_id} (prefix: {prefix})")
+        return session_id
 
     @staticmethod
     def generate_test_class_session_id(test_class_name: str) -> str:
@@ -68,6 +89,11 @@ class SessionIdManager:
         Returns:
             str: 唯一的 session_id
         """
+        # 在 CI 环境中使用固定的 session ID
+        if _is_ci_environment():
+            logger.info(f"CI 环境检测到，使用固定 Session ID: {FIXED_SESSION_ID}")
+            return FIXED_SESSION_ID
+
         return f"test_{test_class_name}_{uuid.uuid4().hex[:8]}"
 
     @staticmethod
@@ -82,6 +108,11 @@ class SessionIdManager:
         Returns:
             str: 唯一的 session_id
         """
+        # 在 CI 环境中使用固定的 session ID
+        if _is_ci_environment():
+            logger.info(f"CI 环境检测到，使用固定 Session ID: {FIXED_SESSION_ID}")
+            return FIXED_SESSION_ID
+
         return f"test_{test_class_name}_{test_method_name}_{uuid.uuid4().hex[:8]}"
 
     def register_session(
@@ -199,7 +230,9 @@ class SmartWaiter:
             try:
                 if condition():
                     elapsed = time.time() - start_time
-                    logger.info(f"✅ 条件满足: {message} (耗时: {elapsed:.2f}秒, 尝试次数: {attempt})")
+                    logger.info(
+                        f"✅ 条件满足: {message} (耗时: {elapsed:.2f}秒, 尝试次数: {attempt})"
+                    )
                     return True
             except Exception as e:
                 logger.warning(f"条件检查异常 (尝试 {attempt}): {e}")
@@ -326,6 +359,7 @@ class RetryManager:
         Returns:
             Callable: 装饰器函数
         """
+
         def decorator(func: Callable[..., T]) -> Callable[..., T]:
             @functools.wraps(func)
             def wrapper(*args, **kwargs) -> T:
@@ -350,14 +384,13 @@ class RetryManager:
                             if self.exponential_backoff:
                                 delay = min(delay * self.backoff_factor, self.max_delay)
                         else:
-                            logger.error(
-                                f"重试次数耗尽: {func.__name__} - {e}"
-                            )
+                            logger.error(f"重试次数耗尽: {func.__name__} - {e}")
                             raise
 
                 raise last_exception
 
             return wrapper
+
         return decorator
 
     def retry_on_result(
@@ -399,13 +432,12 @@ class RetryManager:
                         if self.exponential_backoff:
                             delay = min(delay * self.backoff_factor, self.max_delay)
                     else:
-                        logger.warning(
-                            f"重试次数耗尽，返回最后结果: {func.__name__}"
-                        )
+                        logger.warning(f"重试次数耗尽，返回最后结果: {func.__name__}")
 
                 return last_result
 
             return wrapper
+
         return decorator
 
     def execute_with_retry(
@@ -427,6 +459,7 @@ class RetryManager:
         Returns:
             T: 函数返回值
         """
+
         @self.retry_on_exception(exceptions)
         def wrapped():
             return func(*args, **kwargs)
@@ -440,6 +473,7 @@ class TestData:
     测试数据类
     用于管理测试数据
     """
+
     name: str
     description: str = ""
     input_data: Dict[str, Any] = field(default_factory=dict)
@@ -500,10 +534,7 @@ class TestDataManager:
         Returns:
             List[TestData]: 匹配的测试数据列表
         """
-        return [
-            data for data in self._data_registry.values()
-            if tag in data.tags
-        ]
+        return [data for data in self._data_registry.values() if tag in data.tags]
 
     def validate_data(self, data: TestData) -> bool:
         """

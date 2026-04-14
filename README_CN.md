@@ -287,7 +287,7 @@ ollama serve
       "provider" : "<provider-type>",  // 提供商类型："volcengine"、"openai"、"azure" 等
       "api_version": "2025-01-01-preview", // （仅 azure）API 版本，可选，默认 "2025-01-01-preview"
       "dimension": 1024,               // 向量维度
-      "model"    : "<model-name>"      // Embedding 模型名称或 Azure 部署名（如 doubao-embedding-vision-250615 或 text-embedding-3-large）
+      "model"    : "<model-name>"      // Embedding 模型名称或 Azure 部署名（如 doubao-embedding-vision-251215 或 text-embedding-3-large）
     },
     "max_concurrent": 10               // 最大并发 embedding 请求（默认：10）
   },
@@ -326,7 +326,7 @@ ollama serve
       "api_key"  : "your-volcengine-api-key",
       "provider" : "volcengine",
       "dimension": 1024,
-      "model"    : "doubao-embedding-vision-250615"
+      "model"    : "doubao-embedding-vision-251215"
     },
     "max_concurrent": 10
   },

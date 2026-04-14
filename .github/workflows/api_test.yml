@@ -42,7 +42,7 @@ jobs:
   api-tests:
     name: API Integration Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 50
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       max-parallel: 1

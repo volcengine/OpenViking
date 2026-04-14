@@ -23,6 +23,7 @@ import {
   extractLatestUserText,
   sanitizeUserTextForCapture,
   shouldBypassSession,
+  extractNewTurnMessages,
 } from "./text-utils.js";
 import {
   clampScore,
@@ -789,12 +790,20 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
           client.find(query, { targetUri: "viking://resources", limit }, agentId),
           client.find(query, { targetUri: "viking://agent/skills", limit }, agentId),
         ]);
-        const successful = [
-          resourcesSettled.status === "fulfilled" ? resourcesSettled.value : null,
-          skillsSettled.status === "fulfilled" ? skillsSettled.value : null,
-        ].filter((value): value is FindResult => value !== null);
+        const successful: FindResult[] = [];
+        if (resourcesSettled.status === "fulfilled") {
+          successful.push(resourcesSettled.value);
+        }
+        if (skillsSettled.status === "fulfilled") {
+          successful.push(skillsSettled.value);
+        }
         if (successful.length === 0) {
-          const firstError = resourcesSettled.status === "rejected" ? resourcesSettled.reason : skillsSettled.reason;
+          const firstError =
+            resourcesSettled.status === "rejected"
+              ? resourcesSettled.reason
+              : skillsSettled.status === "rejected"
+                ? skillsSettled.reason
+                : "Both searches failed";
           throw firstError instanceof Error ? firstError : new Error(String(firstError));
         }
         if (resourcesSettled.status === "rejected") {
@@ -1092,7 +1101,12 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
               usedTempSession = true;
             }
             sessionId = openClawSessionToOvStorageId(sessionId, ctx.sessionKey);
-            await c.addSessionMessage(sessionId, role, text, storeAgentId);
+            await c.addSessionMessage(
+              sessionId,
+              role,
+              [{ type: "text" as const, text }],
+              storeAgentId,
+            );
             const commitResult = await c.commitSession(sessionId, { wait: true, agentId: storeAgentId });
             const memoriesCount = totalCommitMemories(commitResult);
             if (commitResult.status === "failed") {

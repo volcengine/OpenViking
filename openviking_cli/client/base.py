@@ -96,7 +96,7 @@ class BaseClient(ABC):
         ...
 
     @abstractmethod
-    async def mkdir(self, uri: str) -> None:
+    async def mkdir(self, uri: str, description: Optional[str] = None) -> None:
         """Create directory."""
         ...
 
@@ -182,7 +182,7 @@ class BaseClient(ABC):
         pattern: str,
         case_insensitive: bool = False,
         exclude_uri: Optional[str] = None,
-        node_limit: Optional[int] = None
+        node_limit: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Content search with pattern."""
         ...

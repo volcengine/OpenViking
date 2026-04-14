@@ -263,7 +263,7 @@ ollama serve
       "api_key"  : "<your-api-key>",   // モデルサービスAPIキー
       "provider" : "<provider-type>",  // プロバイダータイプ: "volcengine" または "openai"（現在サポート済み）
       "dimension": 1024,               // ベクトル次元
-      "model"    : "<model-name>"      // Embeddingモデル名（例：doubao-embedding-vision-250615 または text-embedding-3-large）
+      "model"    : "<model-name>"      // Embeddingモデル名（例：doubao-embedding-vision-251215 または text-embedding-3-large）
     },
     "max_concurrent": 10               // 最大同時Embeddingリクエスト数（デフォルト: 10）
   },
@@ -301,7 +301,7 @@ ollama serve
       "api_key"  : "your-volcengine-api-key",
       "provider" : "volcengine",
       "dimension": 1024,
-      "model"    : "doubao-embedding-vision-250615"
+      "model"    : "doubao-embedding-vision-251215"
     },
     "max_concurrent": 10
   },

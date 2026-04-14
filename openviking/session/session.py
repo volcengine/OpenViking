@@ -182,6 +182,24 @@ class Session:
 
         logger.info(f"Session created: {self.session_id} for user {self.user}")
 
+    async def _get_latest_archive_last_msg_time(self) -> Optional[float]:
+        """获取上一次归档的最后一条消息的时间戳（毫秒），用于过滤需要提取记忆的消息。"""
+        # 使用 compression_index - 1 获取上一次归档的索引
+        if self._compression.compression_index <= 1:
+            return None
+        # 获取上一次归档的目录
+        archive_uri = (
+            f"{self._session_uri}/history/archive_{self._compression.compression_index - 1:03d}"
+        )
+        messages = await self._read_archive_messages(archive_uri)
+        if messages and messages[-1].created_at:
+            # 解析 ISO 时间戳为毫秒
+            from dateutil import parser
+
+            dt = parser.parse(messages[-1].created_at)
+            return dt.timestamp() * 1000
+        return None
+
     async def load(self):
         """Load session data from storage."""
         if self._loaded:
@@ -411,8 +429,9 @@ class Session:
 
             try:
                 await self._write_to_agfs_async(messages=[])
-            except Exception:
+            except Exception as e:
                 # Rollback: restore messages so they aren't lost
+                logger.error(f"[commit] Failed to write empty messages.jsonl: {e}")
                 self._messages.extend(messages_to_archive)
                 self._compression.compression_index -= 1
                 raise
@@ -435,6 +454,11 @@ class Session:
         await self._save_meta()
 
         self._compression.original_count += len(messages_to_archive)
+        # 从最新归档中获取上一次归档的时间戳（用于过滤需要提取记忆的消息）
+        previous_archive_time = await self._get_latest_archive_last_msg_time()
+        logger.info(
+            f"commit_async: previous_archive_time from archive={previous_archive_time}, compression_index={self._compression.compression_index}"
+        )
         logger.info(
             f"Archived: {len(messages_to_archive)} messages → "
             f"history/archive_{self._compression.compression_index:03d}/"
@@ -454,14 +478,38 @@ class Session:
             owner_user_id=self.ctx.user.user_id,
         )
 
+        # 只传递上一次归档之后的新消息给 memory extraction
+        # 使用 previous_archive_time 过滤（在设置新时间之前）
+        messages_for_extraction = messages_to_archive
+        logger.info(
+            f"Memory extraction filter: previous_archive_time={previous_archive_time}, "
+            f"messages_count={len(messages_to_archive)}"
+        )
+        if previous_archive_time:
+            archive_time_str = datetime.fromtimestamp(
+                previous_archive_time / 1000, timezone.utc
+            ).isoformat()
+            # 打印前几条消息的 created_at 用于调试
+            if messages_to_archive:
+                logger.info(
+                    f"Debug: first msg created_at={messages_to_archive[0].created_at}, "
+                    f"archive_time_str={archive_time_str}"
+                )
+            messages_for_extraction = [
+                m for m in messages_to_archive if m.created_at and m.created_at > archive_time_str
+            ]
+            logger.info(
+                f"Memory extraction: {len(messages_to_archive)} total -> {len(messages_for_extraction)} new (after {previous_archive_time})"
+            )
+
         asyncio.create_task(
             self._run_memory_extraction(
                 task_id=task.task_id,
                 archive_uri=archive_uri,
-                messages=messages_to_archive,
+                messages=messages_for_extraction,
                 usage_records=usage_snapshot,
-                first_message_id=first_message_id,
-                last_message_id=last_message_id,
+                first_message_id=messages_for_extraction[0].id if messages_for_extraction else "",
+                last_message_id=messages_for_extraction[-1].id if messages_for_extraction else "",
             )
         )
 
@@ -473,7 +521,6 @@ class Session:
             "archived": True,
             "trace_id": trace_id,
         }
-
 
     async def _run_memory_extraction(
         self,
@@ -730,7 +777,30 @@ class Session:
         """Get assembled session context with the latest summary archive and merged messages."""
         context = await self._collect_session_context_components()
         merged_messages = context["messages"]
+
+        # 过滤：只返回上一次归档之后的最新消息（从最新归档获取时间戳）
+        previous_time = await self._get_latest_archive_last_msg_time()
+        if previous_time:
+            original_count = len(merged_messages)
+            archive_time_str = datetime.fromtimestamp(
+                previous_time / 1000, timezone.utc
+            ).isoformat()
+            merged_messages = [
+                m for m in merged_messages if m.created_at and m.created_at > archive_time_str
+            ]
+            logger.info(
+                f"[get_session_context] filtered messages: {original_count} -> {len(merged_messages)}, "
+                f"after archive time={previous_time}"
+            )
+
         message_tokens = sum(m.estimated_tokens for m in merged_messages)
+
+        # 精简日志：只打印关键信息
+        logger.info(
+            f"[get_session_context] session_id={self.session_id}, "
+            f"messages={len(merged_messages)}, tokens={message_tokens}"
+        )
+
         remaining_budget = max(0, token_budget - message_tokens)
 
         latest_archive = context["latest_archive"]
@@ -741,16 +811,9 @@ class Session:
         if include_latest_overview:
             remaining_budget -= latest_archive_tokens
 
+        # 不再返回 pre_archive_abstracts（只保留 latest_archive_overview）
         included_pre_archive_abstracts: List[Dict[str, str]] = []
         pre_archive_tokens = 0
-        for item in context["pre_archive_abstracts"]:
-            if item["tokens"] > remaining_budget:
-                break
-            included_pre_archive_abstracts.append(
-                {"archive_id": item["archive_id"], "abstract": item["abstract"]}
-            )
-            pre_archive_tokens += item["tokens"]
-            remaining_budget -= item["tokens"]
 
         archive_tokens = latest_archive_tokens + pre_archive_tokens
         included_archives = len(included_pre_archive_abstracts)
@@ -762,7 +825,7 @@ class Session:
             "latest_archive_overview": (
                 latest_archive["overview"] if include_latest_overview else ""
             ),
-            "pre_archive_abstracts": included_pre_archive_abstracts,
+            # 不再返回 pre_archive_abstracts
             "messages": [m.to_dict() for m in merged_messages],
             "estimatedTokens": message_tokens + archive_tokens,
             "stats": {

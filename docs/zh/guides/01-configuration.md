@@ -50,7 +50,7 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
       "api_key"  : "your-volcengine-api-key",
       "provider" : "volcengine",
       "dimension": 1024,
-      "model"    : "doubao-embedding-vision-250615",
+      "model"    : "doubao-embedding-vision-251215",
       "input": "multimodal"
     }
   },
@@ -106,7 +106,7 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
     "dense": {
       "provider": "volcengine",
       "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-250615",
+      "model": "doubao-embedding-vision-251215",
       "dimension": 1024,
       "input": "multimodal",
       "batch_size": 32
@@ -156,7 +156,7 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 
 | 模型 | 维度 | 输入类型 | 说明 |
 |------|------|----------|------|
-| `doubao-embedding-vision-250615` | 1024 | multimodal | 推荐 |
+| `doubao-embedding-vision-251215` | 1024 | multimodal | 推荐 |
 | `doubao-embedding-250615` | 1024 | text | 仅文本 |
 
 使用 `input: "multimodal"` 时，OpenViking 可以嵌入文本、图片（PNG、JPG 等）和混合内容。
@@ -291,7 +291,7 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 
 #### Sparse Embedding
 
-> **注意：** 火山引擎的 Sparse embedding 从 `doubao-embedding-vision-250615` 模型版本起支持。
+> **注意：** 火山引擎的 Sparse embedding 从 `doubao-embedding-vision-251215` 模型版本起支持。
 
 ```json
 {
@@ -299,7 +299,7 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
     "sparse": {
       "provider": "volcengine",
       "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-250615"
+      "model": "doubao-embedding-vision-251215"
     }
   }
 }
@@ -332,13 +332,13 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
     "dense": {
       "provider": "volcengine",
       "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-250615",
+      "model": "doubao-embedding-vision-251215",
       "dimension": 1024
     },
     "sparse": {
       "provider": "volcengine",
       "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-250615"
+      "model": "doubao-embedding-vision-251215"
     }
   }
 }
