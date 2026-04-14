@@ -1,8 +1,11 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
+
 from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 try:
     import openai
@@ -145,11 +148,12 @@ async def _response_to_async_stream_chunks(response: Any):
 
 
 class _CodexCompletionsAdapter:
-    def __init__(self, real_client: Any, model: str):
-        self._client = real_client
+    def __init__(self, client_factory: Callable[[], Any], model: str):
+        self._client_factory = client_factory
         self._model = model
 
     def _create_response(self, **kwargs) -> Any:
+        client = self._client_factory()
         messages = kwargs.get("messages") or []
         model = kwargs.get("model") or self._model
         instructions_parts: List[str] = []
@@ -181,7 +185,7 @@ class _CodexCompletionsAdapter:
         collected_output_items: List[Any] = []
         collected_text_deltas: List[str] = []
         has_function_calls = False
-        with self._client.responses.stream(**response_kwargs) as stream:
+        with client.responses.stream(**response_kwargs) as stream:
             for event in stream:
                 event_type = getattr(event, "type", "")
                 if event_type == "response.output_item.done":
@@ -248,7 +252,41 @@ class CodexVLM(OpenAIVLM):
             normalized["api_base"] = DEFAULT_CODEX_BASE_URL
         super().__init__(normalized)
         self._client_signature: tuple[str, str] | None = None
-        self._async_client_signature: tuple[str, str] | None = None
+
+    def _build_responses_client(self, api_key: str, api_base: str):
+        kwargs = _build_openai_client_kwargs(
+            "openai",
+            api_key,
+            api_base,
+            self.api_version,
+            self.extra_headers,
+        )
+        return openai.OpenAI(**kwargs)
+
+    def _get_or_create_sync_responses_client(self):
+        api_key, api_base = self._resolve_runtime_credentials()
+        signature = (api_key, api_base)
+        if self._sync_client is None or self._client_signature != signature:
+            adapter = _CodexCompletionsAdapter(
+                lambda: self._build_responses_client(api_key, api_base),
+                self.model or "gpt-5.3-codex",
+            )
+            self._sync_client = SimpleNamespace(chat=_CodexChatShim(adapter))
+            self._client_signature = signature
+        return self._sync_client
+
+    def _get_or_create_async_responses_client(self):
+        # The async path uses a sync Responses client behind asyncio.to_thread so
+        # credential refresh and auth-store I/O do not block the event loop.
+        if self._async_client is None:
+            sync_adapter = _CodexCompletionsAdapter(
+                lambda: self._build_responses_client(*self._resolve_runtime_credentials()),
+                self.model or "gpt-5.3-codex",
+            )
+            self._async_client = SimpleNamespace(
+                chat=_CodexAsyncChatShim(_CodexAsyncCompletionsAdapter(sync_adapter))
+            )
+        return self._async_client
 
     def _resolve_runtime_credentials(self) -> tuple[str, str]:
         explicit_api_key = str(self.config.get("api_key", "") or "").strip()
@@ -265,43 +303,12 @@ class CodexVLM(OpenAIVLM):
     def get_client(self):
         if openai is None:
             raise ImportError("Please install openai: pip install openai")
-        api_key, api_base = self._resolve_runtime_credentials()
-        signature = (api_key, api_base)
-        if self._sync_client is None or self._client_signature != signature:
-            kwargs = _build_openai_client_kwargs(
-                "openai",
-                api_key,
-                api_base,
-                self.api_version,
-                self.extra_headers,
-            )
-            real_client = openai.OpenAI(**kwargs)
-            self._sync_client = SimpleNamespace(
-                chat=_CodexChatShim(_CodexCompletionsAdapter(real_client, self.model or "gpt-5.3-codex"))
-            )
-            self._client_signature = signature
-        return self._sync_client
+        return self._get_or_create_sync_responses_client()
 
     def get_async_client(self):
         if openai is None:
             raise ImportError("Please install openai: pip install openai")
-        api_key, api_base = self._resolve_runtime_credentials()
-        signature = (api_key, api_base)
-        if self._async_client is None or self._async_client_signature != signature:
-            kwargs = _build_openai_client_kwargs(
-                "openai",
-                api_key,
-                api_base,
-                self.api_version,
-                self.extra_headers,
-            )
-            real_client = openai.OpenAI(**kwargs)
-            sync_adapter = _CodexCompletionsAdapter(real_client, self.model or "gpt-5.3-codex")
-            self._async_client = SimpleNamespace(
-                chat=_CodexAsyncChatShim(_CodexAsyncCompletionsAdapter(sync_adapter))
-            )
-            self._async_client_signature = signature
-        return self._async_client
+        return self._get_or_create_async_responses_client()
 
     def is_available(self) -> bool:
         if str(self.config.get("api_key", "") or "").strip():

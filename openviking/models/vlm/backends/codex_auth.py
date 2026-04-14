@@ -1,14 +1,18 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
+
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import os
 import stat
+import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-import threading
 from typing import Any, Dict, Optional
 
 import httpx
@@ -18,6 +22,11 @@ try:
     import fcntl
 except ImportError:
     fcntl = None
+
+try:
+    import msvcrt
+except ImportError:
+    msvcrt = None
 
 DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 CODEX_OAUTH_ISSUER = "https://auth.openai.com"
@@ -81,6 +90,20 @@ def _auth_lock_path() -> Path:
     return get_codex_auth_store_path().with_suffix(".lock")
 
 
+def _acquire_windows_file_lock(handle) -> None:
+    handle.seek(0, os.SEEK_END)
+    if handle.tell() == 0:
+        handle.write(b"\0")
+        handle.flush()
+    handle.seek(0)
+    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+
+
+def _release_windows_file_lock(handle) -> None:
+    handle.seek(0)
+    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+
+
 @contextmanager
 def _auth_store_lock():
     if getattr(_auth_lock_holder, "depth", 0) > 0:
@@ -92,21 +115,31 @@ def _auth_store_lock():
         return
     lock_path = _auth_lock_path()
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    if fcntl is None:
+    if fcntl is None and msvcrt is None:
         _auth_lock_holder.depth = 1
         try:
             yield
         finally:
             _auth_lock_holder.depth = 0
         return
-    with open(lock_path, "a+", encoding="utf-8") as handle:
+    open_mode = "a+b" if msvcrt is not None and fcntl is None else "a+"
+    open_kwargs = {} if open_mode == "a+b" else {"encoding": "utf-8"}
+    with open(lock_path, open_mode, **open_kwargs) as handle:
         _auth_lock_holder.depth = 1
         try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            else:
+                # Windows needs an explicit byte-range lock to coordinate access
+                # across separate processes writing the shared auth store.
+                _acquire_windows_file_lock(handle)
             yield
         finally:
             try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                if fcntl is not None:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                else:
+                    _release_windows_file_lock(handle)
             except OSError:
                 pass
             _auth_lock_holder.depth = 0
@@ -482,4 +515,18 @@ def resolve_codex_runtime_credentials(
 
     raise CodexAuthError(
         "No Codex OAuth credentials found. Set OPENVIKING_CODEX_ACCESS_TOKEN, populate ~/.openviking/codex_auth.json, or bootstrap from an existing Codex CLI auth file."
+    )
+
+
+async def resolve_codex_runtime_credentials_async(
+    *,
+    force_refresh: bool = False,
+    refresh_if_expiring: bool = True,
+    refresh_skew_seconds: int = CODEX_ACCESS_TOKEN_REFRESH_SKEW_SECONDS,
+) -> Dict[str, Any]:
+    return await asyncio.to_thread(
+        resolve_codex_runtime_credentials,
+        force_refresh=force_refresh,
+        refresh_if_expiring=refresh_if_expiring,
+        refresh_skew_seconds=refresh_skew_seconds,
     )
