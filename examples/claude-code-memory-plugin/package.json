@@ -1,11 +1,12 @@
 {
   "name": "claude-code-openviking-memory",
-  "version": "0.1.0",
+  "version": "0.1.5",
   "description": "OpenViking memory plugin for Claude Code — semantic long-term memory via MCP",
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "test": "node --test tests/config.test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",

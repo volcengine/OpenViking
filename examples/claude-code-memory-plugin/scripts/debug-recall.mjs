@@ -70,6 +70,8 @@ async function fetchJSON(path, init = {}) {
     const headers = { "Content-Type": "application/json" };
     if (cfg.apiKey) headers["X-API-Key"] = cfg.apiKey;
     if (cfg.agentId) headers["X-OpenViking-Agent"] = cfg.agentId;
+    if (cfg.account) headers["X-OpenViking-Account"] = cfg.account;
+    if (cfg.user) headers["X-OpenViking-User"] = cfg.user;
     const res = await fetch(url, { ...init, headers, signal: controller.signal });
     const body = await res.json();
     if (!res.ok || body.status === "error") {
@@ -307,13 +309,20 @@ function printSearchResults(label, items) {
 async function main() {
   // ── Stage 1: Config ──
   header("Config Summary");
+  console.log(`  mode:           ${cfg.mode}`);
   console.log(`  baseUrl:        ${C.bold}${cfg.baseUrl}${C.reset}`);
   console.log(`  recallLimit:    ${cfg.recallLimit}`);
   console.log(`  scoreThreshold: ${cfg.scoreThreshold}`);
   console.log(`  timeoutMs:      ${cfg.timeoutMs}`);
   console.log(`  agentId:        ${cfg.agentId}`);
   console.log(`  debug:          ${cfg.debug}`);
-  console.log(`  configPath:     ${C.dim}${cfg.configPath}${C.reset}`);
+  console.log(`  clientConfig:   ${C.dim}${cfg.configPath}${C.reset}`);
+  if (cfg.mode === "local") {
+    console.log(`  serverConfig:   ${C.dim}${cfg.serverConfigPath}${C.reset}`);
+    if (cfg.serverConfigError) {
+      warn(`  local ov.conf fallback unavailable: ${cfg.serverConfigError}`);
+    }
+  }
   console.log(`\n  Query: ${C.bold}${query}${C.reset}`);
 
   // Query profile
