@@ -118,7 +118,9 @@ def _entry_from_stat(
     root_name: str = "resources",
 ) -> dict[str, Any]:
     is_dir = bool(stat.get("isDir", False))
-    name = stat.get("name") or (resource_path.rstrip("/").split("/")[-1] if resource_path else root_name)
+    name = stat.get("name") or (
+        resource_path.rstrip("/").split("/")[-1] if resource_path else root_name
+    )
     return {
         "href": _href_for_path(request, resource_path, is_dir=is_dir),
         "name": name,
@@ -183,7 +185,9 @@ async def _safe_stat(service, uri: str, ctx: RequestContext) -> Optional[dict[st
         return None
 
 
-async def _ensure_parent_directory(service, uri: str, ctx: RequestContext) -> Optional[dict[str, Any]]:
+async def _ensure_parent_directory(
+    service, uri: str, ctx: RequestContext
+) -> Optional[dict[str, Any]]:
     parent = VikingURI(uri).parent
     if parent is None:
         return None

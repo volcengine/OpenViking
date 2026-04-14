@@ -10,10 +10,7 @@ import httpx
 
 def _dav_display_names(xml_bytes: bytes) -> list[str]:
     root = ET.fromstring(xml_bytes)
-    return [
-        node.text or ""
-        for node in root.findall(".//{DAV:}displayname")
-    ]
+    return [node.text or "" for node in root.findall(".//{DAV:}displayname")]
 
 
 def _webdav_path_from_uri(uri: str) -> str:
