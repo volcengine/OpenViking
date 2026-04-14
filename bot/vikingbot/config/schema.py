@@ -266,7 +266,7 @@ class OpenAPIChannelConfig(BaseChannelConfig):
 
     type: ChannelType = ChannelType.OPENAPI
     enabled: bool = True
-    api_key: str = ""  # If empty, no auth required
+    api_key: str = ""  # Empty disables privileged HTTP routes until configured
     allow_from: list[str] = Field(default_factory=list)
     max_concurrent_requests: int = 100
     _channel_id: str = "default"
@@ -280,7 +280,7 @@ class BotChannelConfig(BaseChannelConfig):
 
     type: ChannelType = ChannelType.BOT_API
     enabled: bool = True
-    api_key: str = ""  # If empty, no auth required
+    api_key: str = ""  # Empty disables privileged HTTP routes until configured
     allow_from: list[str] = Field(default_factory=list)
     max_concurrent_requests: int = 100
     need_mention: bool = False

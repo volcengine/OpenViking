@@ -226,9 +226,12 @@ class OpenAPIChannel(BaseChannel):
         channel = self  # Capture for closures
 
         async def verify_api_key(x_api_key: Optional[str] = Header(None)) -> bool:
-            """Verify API key if configured."""
+            """Verify API key for privileged HTTP chat/session routes."""
             if not channel.config.api_key:
-                return True  # No auth required
+                raise HTTPException(
+                    status_code=503,
+                    detail="OpenAPI channel API key is not configured",
+                )
             if not x_api_key:
                 raise HTTPException(status_code=401, detail="X-API-Key header required")
             # Use secrets.compare_digest for timing-safe comparison
@@ -350,11 +353,15 @@ class OpenAPIChannel(BaseChannel):
 
             # Verify API key for the specific channel
             bot_config = channel._bot_configs[channel_id]
-            if bot_config.api_key:
-                if not x_api_key:
-                    raise HTTPException(status_code=401, detail="X-API-Key header required")
-                if not secrets.compare_digest(x_api_key, bot_config.api_key):
-                    raise HTTPException(status_code=403, detail="Invalid API key")
+            if not bot_config.api_key:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Bot channel '{channel_id}' API key is not configured",
+                )
+            if not x_api_key:
+                raise HTTPException(status_code=401, detail="X-API-Key header required")
+            if not secrets.compare_digest(x_api_key, bot_config.api_key):
+                raise HTTPException(status_code=403, detail="Invalid API key")
 
             return await channel._handle_bot_chat(channel_id, request)
 
@@ -372,11 +379,15 @@ class OpenAPIChannel(BaseChannel):
 
             # Verify API key for the specific channel
             bot_config = channel._bot_configs[channel_id]
-            if bot_config.api_key:
-                if not x_api_key:
-                    raise HTTPException(status_code=401, detail="X-API-Key header required")
-                if not secrets.compare_digest(x_api_key, bot_config.api_key):
-                    raise HTTPException(status_code=403, detail="Invalid API key")
+            if not bot_config.api_key:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Bot channel '{channel_id}' API key is not configured",
+                )
+            if not x_api_key:
+                raise HTTPException(status_code=401, detail="X-API-Key header required")
+            if not secrets.compare_digest(x_api_key, bot_config.api_key):
+                raise HTTPException(status_code=403, detail="Invalid API key")
 
             if not request.stream:
                 request.stream = True
