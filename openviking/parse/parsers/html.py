@@ -47,8 +47,15 @@ class HTMLParser(BaseParser):
     in the new two-layer architecture. This parser only handles local files.
     """
 
-    def __init__(self):
-        """Initialize HTML parser."""
+    def __init__(self, timeout: float = 30.0, **kwargs):
+        """
+        Initialize HTML parser.
+
+        Args:
+            timeout: [DEPRECATED] Kept for backward compatibility.
+                URL downloading has been moved to HTTPAccessor.
+            **kwargs: Additional arguments (kept for backward compatibility)
+        """
         pass
 
     @staticmethod

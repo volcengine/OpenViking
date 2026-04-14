@@ -32,22 +32,34 @@ class LocalAccessor(DataAccessor):
         """
         Check if this accessor can handle the source.
 
-        LocalAccessor accepts any source that:
-        1. Is a Path object, OR
-        2. Is a string that looks like a local path and exists, OR
-        3. Is a string that doesn't look like a URL (for fallback)
+        LocalAccessor accepts:
+        1. Any Path object, OR
+        2. Any string that looks like a local path (exists or not - we'll
+           validate in access())
 
-        Since this is a fallback accessor, it returns True for most sources.
-        The priority system ensures other accessors get a chance first.
+        Since this is a fallback accessor, it only returns True for sources
+        that appear to be local paths (not URLs). The priority system ensures
+        other accessors get a chance first.
 
         Args:
             source: Source string or Path object
 
         Returns:
-            True - this is a fallback accessor that can handle any source
+            True if source appears to be a local path
         """
-        # As the fallback accessor, we can handle anything
-        # The registry will try higher-priority accessors first
+        from openviking.server.local_input_guard import is_remote_resource_source
+
+        if isinstance(source, Path):
+            return True
+
+        source_str = str(source)
+
+        # Don't handle remote URLs - those go to HTTPAccessor/GitAccessor
+        if is_remote_resource_source(source_str):
+            return False
+
+        # For strings, accept anything that could be a local path
+        # (we'll validate existence in access())
         return True
 
     async def access(self, source: Union[str, Path], **kwargs) -> LocalResource:
@@ -63,8 +75,15 @@ class LocalAccessor(DataAccessor):
 
         Returns:
             LocalResource pointing to the local path
+
+        Raises:
+            FileNotFoundError: If the path does not exist
         """
         path = Path(source)
+
+        # Validate that the path exists - preserve original behavior
+        if not path.exists():
+            raise FileNotFoundError(f"Path does not exist: {path}")
 
         return LocalResource(
             path=path,
@@ -73,7 +92,7 @@ class LocalAccessor(DataAccessor):
             meta={
                 "filename": path.name,
                 "suffix": path.suffix.lower() if path.suffix else None,
-                "is_dir": path.is_dir() if path.exists() else None,
+                "is_dir": path.is_dir(),
             },
             is_temporary=False,
         )

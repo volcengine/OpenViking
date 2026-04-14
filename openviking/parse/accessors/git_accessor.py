@@ -57,7 +57,7 @@ class GitAccessor(DataAccessor):
         - git@ SSH URLs
         - git://, ssh:// URLs
         - GitHub/GitLab repository URLs (http/https)
-        - Local paths ending with .git or .zip
+        - Local paths ending with .git (NOT .zip - those go to ZipParser)
         """
         source_str = str(source)
 
@@ -74,14 +74,14 @@ class GitAccessor(DataAccessor):
         if source_str.startswith(("http://", "https://")):
             return is_git_repo_url(source_str)
 
-        # Local .git or .zip files
+        # Local .git files (NOT .zip - .zip goes to ZipParser via LocalAccessor)
         if isinstance(source, Path):
             path = source
         else:
             path = Path(source_str)
 
         suffix = path.suffix.lower()
-        return suffix in (".git", ".zip")
+        return suffix == ".git"
 
     async def access(self, source: Union[str, Path], **kwargs) -> LocalResource:
         """
@@ -178,8 +178,6 @@ class GitAccessor(DataAccessor):
                         branch=branch,
                         commit=commit,
                     )
-            elif str(source).endswith(".zip"):
-                repo_name = await self._extract_zip(source_str, temp_local_dir)
             else:
                 raise ValueError(f"Unsupported source for GitAccessor: {source}")
 

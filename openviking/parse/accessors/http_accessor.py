@@ -113,6 +113,7 @@ class URLTypeDetector:
     async def detect(
         self,
         url: str,
+        timeout: Optional[float] = None,
         request_validator=None,
     ) -> Tuple[URLType, Dict[str, Any]]:
         """
@@ -126,6 +127,7 @@ class URLTypeDetector:
 
         Args:
             url: URL to detect
+            timeout: HTTP request timeout in seconds (optional, overrides detector's default)
             request_validator: Optional network request validator
 
         Returns:
@@ -152,7 +154,7 @@ class URLTypeDetector:
         try:
             httpx = lazy_import("httpx")
             client_kwargs = {
-                "timeout": self.timeout,
+                "timeout": timeout if timeout is not None else self.timeout,
                 "follow_redirects": True,
             }
             event_hooks = build_httpx_request_validation_hooks(request_validator)
