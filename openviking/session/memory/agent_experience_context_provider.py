@@ -48,16 +48,24 @@ class AgentExperienceContextProvider(SessionExtractContextProvider):
 
     def instruction(self) -> str:
         output_language = self._output_language
-        return f"""You consolidate trajectory memories into experience memories.
+        return f"""You distill experience memories from agent execution trajectories.
 
-You are given one new trajectory and a few candidate existing experiences.
-If needed, call `get_source_trajectories(experience_uri)` before editing an existing experience.
+You are given one new trajectory and candidate existing experiences (searched by relevance).
+If you need the historical trajectories behind an existing experience before updating it,
+call `get_source_trajectories(experience_uri)` — call it at most ONCE per experience URI.
+If the result is already shown in the messages above, do NOT call it again.
+
+Output one of:
+1. Update an existing experience — when the pattern matches.
+2. Write a new experience — when no existing experience fits.
+3. Merge — when the new trajectory reveals an existing experience is too domain-specific:
+   - Write one new generalized experience that synthesizes both.
+   - Put the old experience's `uri` (the `uri` field from its read result) into `delete_uris`.
+4. Do nothing — only if the trajectory has no transferable lesson.
 
 Rules:
-- Prefer editing an existing experience over creating a new one when the pattern is the same.
-- Output exactly one result: edit one experience, write one experience, or do nothing.
-- Do not change the identity of an existing experience.
-- Do not output system-managed fields such as source_trajectories.
+- Do not change the name of an existing experience.
+- Follow field descriptions in the schema.
 - Output JSON only.
 
 All memory content must be written in {output_language}.
@@ -163,12 +171,28 @@ All memory content must be written in {output_language}.
                 logger.warning(f"Failed to read experience {exp_uri}: {e}")
                 continue
 
+            # Present experience to LLM as clean structured data (body + key metadata),
+            # NOT the raw file — the MEMORY_FIELDS HTML comment confuses the LLM into
+            # copying JSON fragments into content fields.
+            from openviking.session.memory.utils.content import (
+                deserialize_content,
+                deserialize_metadata,
+            )
+
+            body = deserialize_content(exp_raw)
+            meta = deserialize_metadata(exp_raw) or {}
+            result = {
+                "uri": exp_uri,
+                "experience_name": meta.get("experience_name", ""),
+                "content": body,
+            }
+
             add_tool_call_pair_to_messages(
                 messages=pre_fetch_messages,
                 call_id=call_id_seq,
                 tool_name="read",
                 params={"uri": exp_uri},
-                result=exp_raw,
+                result=result,
             )
             call_id_seq += 1
 

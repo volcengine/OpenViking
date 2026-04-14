@@ -28,15 +28,9 @@ class AgentTrajectoryContextProvider(SessionExtractContextProvider):
 
     def instruction(self) -> str:
         output_language = self._output_language
-        return f"""You extract trajectory memories from a conversation.
+        return f"""You extract trajectory memories from agent conversations.
 
-A trajectory is one concrete end-to-end task the agent handled in this conversation.
-If two candidates are the same task with different wording, keep only one.
-
-Follow the trajectory schema exactly as provided.
-Use the field descriptions in the schema as the source of truth for what to output.
-Do not invent extra fields.
-Output JSON only.
+Follow field descriptions in the schema. Output JSON only.
 
 All memory content must be written in {output_language}.
 """

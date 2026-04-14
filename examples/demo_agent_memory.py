@@ -5,8 +5,9 @@ Demo for agent-scope memory (trajectory + experience, two-phase pipeline).
 
 What this demo does
 -------------------
-1. Runs three sessions with different conversations that contain clear agent
-   execution trajectories.
+1. Runs two sessions in the same domain (booking conflict resolution) to test
+   the EDIT path: the second conversation should UPDATE the existing experience
+   rather than create a new one, and append to source_trajectories.
 2. After each session commit, the two-phase pipeline kicks in:
      Phase 1 — extract a `trajectory` memory (summary of what the agent did).
      Phase 2 — consolidate the trajectory into an `experience` memory
@@ -51,9 +52,14 @@ from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import run_async
 from openviking_cli.utils.config import OpenVikingConfigSingleton, get_openviking_config
 
-# ── Three conversations with identifiable agent trajectories ─────────────────
+# ── Conversations for testing the EDIT path ──────────────────────────────────
+# Both conversations are in the same domain: booking conflict/duplicate resolution.
+# Round 1 creates the initial experience.
+# Round 2 covers the same domain with additional edge cases — should EDIT/UPDATE
+# the existing experience rather than create a new one.
 
-CONV_1_BOOK_FLIGHT = [
+# Round 1: Flight booking hits a duplicate; user chooses to replace the old one.
+CONV_A_FLIGHT_DUPLICATE = [
     ("user", "帮我订一张下周三北京到上海的机票，上午出发"),
     ("assistant",
      "好的，我先用 search_flights 工具查询下周三（2026-04-22）北京到上海上午的航班。"),
@@ -75,44 +81,104 @@ CONV_1_BOOK_FLIGHT = [
      "票号 MU5101-abc。已将新票号发送到你的邮箱。"),
 ]
 
-CONV_2_BOOK_HOTEL_DUPLICATE = [
-    ("user", "帮我订 4 月 25 日上海的酒店，一晚"),
+# Round 2: Same domain (booking conflict), but with more edge cases:
+#   - User wants to keep both bookings (parallel trips)
+#   - Cancellation fails due to departure-within-24h policy
+#   - Agent surfaces the policy constraint and lets user decide
+# Expectation: Phase 2 EDITS the existing booking-conflict experience to cover
+# these additional situations, and appends this trajectory to source_trajectories.
+CONV_B_FLIGHT_DUPLICATE_EXTRA = [
+    ("user", "帮我订 4 月 28 日北京到广州的机票，下午的"),
     ("assistant",
-     "[tool_call: search_hotels(city=Shanghai, checkin=2026-04-25, nights=1)]"
-     " 找到了 5 家候选酒店。"),
-    ("user", "订 Grand Central 那家"),
+     "[tool_call: search_flights(from=PEK, to=CAN, date=2026-04-28, time=afternoon)]"
+     " 找到了 CZ3101 14:00、CA1315 15:30、MF8023 16:20。"),
+    ("user", "订 CA1315"),
     ("assistant",
-     "[tool_call: book_hotel(hotel=GrandCentral, date=2026-04-25)]"
-     " 订房失败：同一日期已有一张酒店预订 (RiverView)。"),
+     "[tool_call: book_flight(flight=CA1315, passenger=user_123)]"
+     " 订票失败：同一日期已有一张预订 (CZ3101)。"),
     ("assistant",
-     "又是重复预订的情况。按上次的处理方式，我先问你：是取消 RiverView "
-     "换成 Grand Central，还是保留 RiverView？"),
-    ("user", "取消 RiverView，换 Grand Central"),
+     "检测到重复预订。这次你想取消 CZ3101 改订 CA1315，还是这两张都要保留？"),
+    ("user", "这两张都要，是不同行程"),
     ("assistant",
-     "[tool_call: cancel_booking(booking_id=RiverView-001)] 已取消。"),
+     "[tool_call: check_multi_booking_policy(date=2026-04-28)]"
+     " 确认：同一天多个预订是允许的，系统不强制合并。"),
     ("assistant",
-     "[tool_call: book_hotel(hotel=GrandCentral, date=2026-04-25)] 预订成功。"),
+     "[tool_call: book_flight(flight=CA1315, passenger=user_123, override_duplicate=true)]"
+     " 预订成功，票号 CA1315-xyz。两张机票均已生效。"),
+    ("user", "好的，另外我想取消上周订的 MF7801"),
+    ("assistant",
+     "[tool_call: cancel_booking(booking_id=MF7801-001)]"
+     " 取消失败：距出发时间不足 24 小时，航空公司不允许免费取消。"),
+    ("assistant",
+     "MF7801 的出发时间距现在不足 24 小时，按航空公司政策无法免费取消。"
+     "有两个选择：1) 支付改签费改期；2) 放弃该票（退款仅限税费）。请问你想怎么处理？"),
+    ("user", "算了，就不管了"),
+    ("assistant",
+     "好的，MF7801 保持原状，CA1315 新预订已生效。"),
 ]
 
-CONV_3_DEBUG_ASYNCIO = [
-    ("user", "我的 asyncio 任务在 cancel 之后没有退出，pytest 一直卡住"),
-    ("assistant", "先看代码，我用 read_file 读一下相关测试。"),
-    ("assistant",
-     "[tool_call: read_file(path=tests/test_worker.py)] 看到 task.cancel() "
-     "后直接 assert，没有 await 被取消的任务。"),
-    ("assistant",
-     "asyncio 里 cancel() 只是请求取消，需要 await 任务并捕获 CancelledError，"
-     "否则事件循环不会让出。建议改成 `await task` + try/except CancelledError。"),
-    ("user", "改完之后还是偶尔 hang"),
-    ("assistant",
-     "[tool_call: run_tests(path=tests/test_worker.py, timeout=10)] 复现了 hang。"
-     "查看 pytest 配置，发现没有设置 asyncio_mode = auto，同步 fixture "
-     "没有进入 event loop。"),
-    ("assistant",
-     "在 pyproject.toml 里加 `[tool.pytest.ini_options] asyncio_mode = \"auto\"` "
-     "后，测试稳定通过。"),
-    ("user", "完美，问题解决了，谢谢"),
-]
+# ── Commented-out previous conversations (kept for reference) ─────────────────
+
+# CONV_1_BOOK_FLIGHT = [
+#     ("user", "帮我订一张下周三北京到上海的机票，上午出发"),
+#     ("assistant",
+#      "好的，我先用 search_flights 工具查询下周三（2026-04-22）北京到上海上午的航班。"),
+#     ("assistant",
+#      "[tool_call: search_flights(from=PEK, to=SHA, date=2026-04-22, time=morning)]"
+#      " 返回了 3 个候选航班：CA1501 07:30、MU5101 08:00、HU7603 09:45。"),
+#     ("user", "那就订 MU5101 吧"),
+#     ("assistant",
+#      "[tool_call: book_flight(flight=MU5101, passenger=user_123)]"
+#      " 订票失败：该用户已存在一张相同日期的预订 (CA1501)。"),
+#     ("assistant",
+#      "检测到重复预订，我先询问你的偏好。你是想取消已有的 CA1501 换成 MU5101，"
+#      "还是保留现有预订？"),
+#     ("user", "那就取消 CA1501，改订 MU5101"),
+#     ("assistant",
+#      "[tool_call: cancel_booking(booking_id=CA1501-xyz)] 已取消原预订。"),
+#     ("assistant",
+#      "[tool_call: book_flight(flight=MU5101, passenger=user_123)] 预订成功，"
+#      "票号 MU5101-abc。已将新票号发送到你的邮箱。"),
+# ]
+#
+# CONV_2_BOOK_HOTEL_DUPLICATE = [
+#     ("user", "帮我订 4 月 25 日上海的酒店，一晚"),
+#     ("assistant",
+#      "[tool_call: search_hotels(city=Shanghai, checkin=2026-04-25, nights=1)]"
+#      " 找到了 5 家候选酒店。"),
+#     ("user", "订 Grand Central 那家"),
+#     ("assistant",
+#      "[tool_call: book_hotel(hotel=GrandCentral, date=2026-04-25)]"
+#      " 订房失败：同一日期已有一张酒店预订 (RiverView)。"),
+#     ("assistant",
+#      "又是重复预订的情况。按上次的处理方式，我先问你：是取消 RiverView "
+#      "换成 Grand Central，还是保留 RiverView？"),
+#     ("user", "取消 RiverView，换 Grand Central"),
+#     ("assistant",
+#      "[tool_call: cancel_booking(booking_id=RiverView-001)] 已取消。"),
+#     ("assistant",
+#      "[tool_call: book_hotel(hotel=GrandCentral, date=2026-04-25)] 预订成功。"),
+# ]
+#
+# CONV_3_DEBUG_ASYNCIO = [
+#     ("user", "我的 asyncio 任务在 cancel 之后没有退出，pytest 一直卡住"),
+#     ("assistant", "先看代码，我用 read_file 读一下相关测试。"),
+#     ("assistant",
+#      "[tool_call: read_file(path=tests/test_worker.py)] 看到 task.cancel() "
+#      "后直接 assert，没有 await 被取消的任务。"),
+#     ("assistant",
+#      "asyncio 里 cancel() 只是请求取消，需要 await 任务并捕获 CancelledError，"
+#      "否则事件循环不会让出。建议改成 `await task` + try/except CancelledError。"),
+#     ("user", "改完之后还是偶尔 hang"),
+#     ("assistant",
+#      "[tool_call: run_tests(path=tests/test_worker.py, timeout=10)] 复现了 hang。"
+#      "查看 pytest 配置，发现没有设置 asyncio_mode = auto，同步 fixture "
+#      "没有进入 event loop。"),
+#     ("assistant",
+#      "在 pyproject.toml 里加 `[tool.pytest.ini_options] asyncio_mode = \"auto\"` "
+#      "后，测试稳定通过。"),
+#     ("user", "完美，问题解决了，谢谢"),
+# ]
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -220,24 +286,21 @@ def main() -> None:
         agent_space = client.service.user.agent_space_name()
         print(f"agent_space = {agent_space}")
 
-        # Round 1: flight booking with duplicate reservation
-        section("Round 1: flight booking (duplicate reservation handling)")
-        run_conversation(client, CONV_1_BOOK_FLIGHT)
+        # Round 1: flight booking hits a duplicate; user replaces the old one.
+        # Expectation: Phase 2 should CREATE a new experience for booking-conflict handling.
+        section("Round 1: flight booking duplicate — CREATE experience")
+        run_conversation(client, CONV_A_FLIGHT_DUPLICATE)
         print_memory_snapshot(client, "Round 1", agent_space)
         wait_embeddings()  # let embedding queue index Round 1 memories before next search
 
-        # Round 2: hotel booking with same duplicate pattern
-        # Expectation: Phase 2 should UPDATE the existing experience
-        section("Round 2: hotel booking (same duplicate pattern)")
-        run_conversation(client, CONV_2_BOOK_HOTEL_DUPLICATE)
+        # Round 2: same domain (booking conflict) with extra situations:
+        #   - user wants to keep both bookings
+        #   - cancellation blocked by 24h policy
+        # Expectation: Phase 2 should EDIT/UPDATE the existing experience and
+        #              append this trajectory to source_trajectories.
+        section("Round 2: booking conflict extra cases — EDIT experience")
+        run_conversation(client, CONV_B_FLIGHT_DUPLICATE_EXTRA)
         print_memory_snapshot(client, "Round 2", agent_space)
-        wait_embeddings()  # let embedding queue index Round 2 memories before next search
-
-        # Round 3: asyncio debugging (different domain)
-        # Expectation: Phase 2 should CREATE a new experience
-        section("Round 3: asyncio debugging (different domain)")
-        run_conversation(client, CONV_3_DEBUG_ASYNCIO)
-        print_memory_snapshot(client, "Round 3", agent_space)
 
         print("\nDone.")
     finally:

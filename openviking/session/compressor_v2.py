@@ -26,6 +26,32 @@ from openviking_cli.utils.config import get_openviking_config
 logger = get_logger(__name__)
 
 
+def _stamp_trajectory_names(operations) -> None:
+    """Append a timestamp suffix to trajectory_name in all trajectory operations.
+
+    This ensures every trajectory gets a unique filename and that the embedded
+    MEMORY_FIELDS comment also records the full timestamped name.
+    Only applies to add_only trajectory writes (no existing uri).
+    """
+    from datetime import datetime
+
+    traj_field = getattr(operations, "trajectory", None)
+    if traj_field is None:
+        return
+    items = traj_field if isinstance(traj_field, list) else [traj_field]
+    now_suffix = datetime.now().strftime("%Y%m%d%H%M%S")
+    for item in items:
+        if isinstance(item, dict):
+            name = item.get("trajectory_name")
+            if name and not item.get("uri"):
+                item["trajectory_name"] = f"{name}_{now_suffix}"
+        else:
+            name = getattr(item, "trajectory_name", None)
+            uri = getattr(item, "uri", None)
+            if name and not uri:
+                item.trajectory_name = f"{name}_{now_suffix}"
+
+
 class SessionCompressorV2:
     """Session memory extractor with v2 templating system."""
 
@@ -336,7 +362,7 @@ class SessionCompressorV2:
         if traj_result is None:
             return []
 
-        written_trajectory_uris, _, traj_contexts = traj_result
+        written_trajectory_uris, _, traj_contexts, _ = traj_result
         contexts.extend(traj_contexts)
 
         if not written_trajectory_uris:
@@ -367,13 +393,15 @@ class SessionCompressorV2:
             if exp_result is None:
                 continue
 
-            exp_written_uris, exp_edited_uris, exp_contexts = exp_result
+            exp_written_uris, exp_edited_uris, exp_contexts, inherited_traj_uris = exp_result
             contexts.extend(exp_contexts)
 
             all_exp_uris = exp_written_uris + exp_edited_uris
             if all_exp_uris:
+                # Include inherited source_trajectories from any deleted (superseded) experiences
+                traj_uris_to_append = list(dict.fromkeys([traj_uri] + inherited_traj_uris))
                 await self._append_trajectories_to_experiences(
-                    all_exp_uris, [traj_uri], ctx, viking_fs
+                    all_exp_uris, traj_uris_to_append, ctx, viking_fs
                 )
 
         return contexts
@@ -456,7 +484,47 @@ class SessionCompressorV2:
 
             if operations is None:
                 tracer.info(f"[{phase_label}] No memory operations generated")
-                return [], [], []
+                return [], [], [], []
+
+            # Log raw LLM operations before applying, to diagnose URI mismatches.
+            _delete_uris_raw = getattr(operations, "delete_uris", []) or []
+            _memory_type_fields = getattr(operations, "_memory_type_fields", []) or []
+            _op_items = []
+            for _ft in _memory_type_fields:
+                _v = getattr(operations, _ft, None)
+                if _v is None:
+                    continue
+                for _item in (_v if isinstance(_v, list) else [_v]):
+                    _uri_field = _item.get("uri") if isinstance(_item, dict) else getattr(_item, "uri", None)
+                    _op_items.append(f"{_ft}(uri={_uri_field!r})")
+            tracer.info(
+                f"[{phase_label}] LLM operations: ops={_op_items}, delete_uris={_delete_uris_raw}"
+            )
+
+            # Collect source_trajectories from files about to be deleted, before apply_operations
+            # removes them. This is experience-specific: allows merge operations to inherit
+            # historical source_trajectories into the replacement experience.
+            inherited_traj_uris: List[str] = []
+            delete_uris = getattr(operations, "delete_uris", []) or []
+            if delete_uris:
+                from openviking.session.memory.utils.content import deserialize_full as _deser_full
+                for del_uri in delete_uris:
+                    try:
+                        raw = await viking_fs.read_file(del_uri, ctx=ctx) or ""
+                        _, meta = _deser_full(raw)
+                        existing = (meta or {}).get("source_trajectories", [])
+                        if isinstance(existing, list):
+                            inherited_traj_uris.extend(existing)
+                        elif isinstance(existing, str) and existing.strip():
+                            inherited_traj_uris.extend(
+                                line.strip() for line in existing.splitlines() if line.strip()
+                            )
+                    except Exception:
+                        pass
+
+            # Append timestamp suffix to trajectory_name so each trajectory gets a
+            # unique filename and MEMORY_FIELDS also records the timestamped name.
+            _stamp_trajectory_names(operations)
 
             registry = provider._get_registry()
             updater = self._get_or_create_updater(registry, transaction_handle)
@@ -485,7 +553,7 @@ class SessionCompressorV2:
                     Context(uri=uri, category="memory_delete", context_type="memory")
                 )
 
-            return list(result.written_uris), list(result.edited_uris), contexts
+            return list(result.written_uris), list(result.edited_uris), contexts, inherited_traj_uris
         except Exception as e:
             logger.error(f"[{phase_label}] Failed to extract: {e}", exc_info=True)
             if strict_extract_errors:

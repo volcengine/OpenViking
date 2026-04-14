@@ -370,13 +370,17 @@ def resolve_flat_model_uri(
 
     # Check if model already has a uri field
     if hasattr(flat_model, "uri") and flat_model.uri is not None:
+        logger.info(f"[resolve_uri] {memory_type_str}: using LLM-provided uri={flat_model.uri!r}")
         return flat_model.uri
     elif isinstance(flat_model, dict) and "uri" in flat_model and flat_model["uri"] is not None:
+        logger.info(f"[resolve_uri] {memory_type_str}: using LLM-provided uri={flat_model['uri']!r}")
         return flat_model["uri"]
 
     # Extract URI fields and generate URI
     uri_fields = extract_uri_fields_from_flat_model(flat_model, schema)
-    return generate_uri(schema, uri_fields, user_space, agent_space, extract_context)
+    generated = generate_uri(schema, uri_fields, user_space, agent_space, extract_context)
+    logger.info(f"[resolve_uri] {memory_type_str}: generated uri={generated!r} from fields={list(uri_fields.keys())}")
+    return generated
 
 
 def resolve_overview_edit_uri(

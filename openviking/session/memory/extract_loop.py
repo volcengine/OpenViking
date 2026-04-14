@@ -491,6 +491,11 @@ The final output of the model must strictly follow the JSON Schema format shown 
         refetch_uris = []
 
         for field_name in memory_type_fields:
+            # Skip add_only schemas: they never edit existing files, so no refetch needed.
+            schema = registry.get(field_name)
+            if schema and getattr(schema, "operation_mode", None) == "add_only":
+                continue
+
             value = getattr(operations, field_name, None)
             if value is None:
                 continue

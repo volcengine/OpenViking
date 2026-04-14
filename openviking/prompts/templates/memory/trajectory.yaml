@@ -1,17 +1,15 @@
 memory_type: trajectory
 description: |
-  Agent execution trajectory memory.
-  Capture one concrete execution flow the agent went through to fulfill a specific task.
-  A trajectory is a scenario-specific summary of what happened in this conversation.
+  A record of one concrete end-to-end task the agent executed.
 
-  # When to extract
-  - There is an identifiable task that the agent worked on end-to-end.
-  - The conversation contains concrete actions / tool calls / decisions that show how the task was carried out.
-  - If the conversation is pure chitchat with no execution, output NO trajectory.
+  Extract when:
+  - The agent worked through an identifiable task involving decisions, tool calls, or multi-step actions.
 
-  # Guidelines
-  - One conversation may yield 0, 1 or a few trajectories. Each trajectory covers ONE distinct task.
-  - If two candidates describe the same task, keep only one.
+  Skip when:
+  - Pure chitchat or simple Q&A with no execution trace.
+
+  One conversation may yield 0–N trajectories; each covers ONE distinct task.
+  If two candidates describe the same task, output only one.
 
 directory: "viking://agent/{{ agent_space }}/memories/trajectories"
 filename_template: "{{ trajectory_name }}.md"
@@ -22,33 +20,33 @@ fields:
   - name: trajectory_name
     type: string
     description: |
-      Lowercase snake_case only, ASCII letters only, max 5 words.
-      Use a direct, stable name for the task.
-      Do not use Chinese.
-      Do not create near-duplicate names for the same task.
+      Lowercase snake_case, ASCII only, max 5 words. Name the task directly and stably.
+      Do not use Chinese. Do not create near-duplicate names for the same task.
       Good: "flight_booking_duplicate_resolution", "pytest_asyncio_cancel_hang_fix".
     merge_op: immutable
 
   - name: outcome
     type: string
     description: |
-      Final result of the trajectory. Use exactly one of:
-      success, failure, partial, unfinished, unknown.
+      Use exactly one of: success, failure, partial, unfinished, unknown.
     merge_op: immutable
 
   - name: content
     type: string
     description: |
-      Markdown summary in EXACTLY this format:
-      - Trigger: <one sentence>
-      - Handling: <one concise sentence covering key actions, tool calls, and decisions>
-      - Result: <one sentence>
+      Execution trace in EXACTLY this format:
+      - Goal: <what the user wanted to achieve — one sentence>
+      - Process:
+        1. <first key step or decision>
+        2. <second key step or decision>
+        3. <... continue for each major step>
+      - Result: <final outcome and any important side effects — one sentence>
 
       Rules:
-      - Use exactly these 3 bullets in English.
-      - Do not use headings.
-      - Do not use numbered lists.
-      - Do not use extra bullets.
-      - Do not use free-form paragraphs.
-      - Keep it concise.
+      - Use exactly these 3 labels in this order.
+      - Goal and Result are ONE sentence each.
+      - Process lists the major steps in order as a numbered list. Each step is one concise sentence.
+      - Keep the full critical path intact — do not collapse steps that meaningfully changed the execution.
+      - Omit only noise: routine confirmations, minor retries, and setup that did not affect the outcome.
+      - No extra headings or free paragraphs.
     merge_op: patch

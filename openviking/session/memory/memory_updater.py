@@ -308,20 +308,25 @@ class MemoryUpdater:
                 result.add_error("unknown", ValueError(error))
             return result
 
-        # Apply unified operations - _apply_edit returns True if edited, False if written
-        seen_trajectory_names = set()
-        for resolved_op in resolved_ops.operations:
+        # Apply deletes first — before any writes that may trigger directory processing
+        # and cause AGFS to lock sibling files in the same directory.
+        for _uri_str, uri in resolved_ops.delete_operations:
+            tracer.info(f"[memory_updater] DELETE uri={uri}")
             try:
-                if resolved_op.memory_type == "trajectory":
-                    model_dict = flat_model_to_dict(resolved_op.model)
-                    trajectory_name = (model_dict.get("trajectory_name") or "").strip()
-                    if trajectory_name:
-                        normalized_name = trajectory_name.lower()
-                        if normalized_name in seen_trajectory_names:
-                            tracer.info(f"Skip duplicate trajectory in same batch: {trajectory_name}")
-                            continue
-                        seen_trajectory_names.add(normalized_name)
+                await self._apply_delete(uri, ctx)
+                result.add_deleted(uri)
+            except Exception as e:
+                tracer.error(f"Failed to delete memory {uri}", e)
+                result.add_error(uri, e)
 
+        # Apply unified operations - _apply_edit returns True if edited, False if written
+        for resolved_op in resolved_ops.operations:
+            tracer.info(
+                f"[memory_updater] WRITE/EDIT memory_type={resolved_op.memory_type} "
+                f"resolved_uri={resolved_op.uri} "
+                f"llm_uri={resolved_op.model.get('uri') if isinstance(resolved_op.model, dict) else getattr(resolved_op.model, 'uri', None)!r}"
+            )
+            try:
                 is_edited = await self._apply_edit(
                     resolved_op.model,
                     resolved_op.uri,
@@ -351,17 +356,11 @@ class MemoryUpdater:
                 tracer.error(f"Failed to edit overview {uri}", e)
                 result.add_error(uri, e)
 
-        # Apply delete operations
-        for _uri_str, uri in resolved_ops.delete_operations:
-            try:
-                await self._apply_delete(uri, ctx)
-                result.add_deleted(uri)
-            except Exception as e:
-                tracer.error(f"Failed to delete memory {uri}", e)
-                result.add_error(uri, e)
-
-        # Vectorize written and edited memories
-        await self._vectorize_memories(result, ctx)
+        # Vectorize written and edited memories (best-effort; errors must not abort the caller)
+        try:
+            await self._vectorize_memories(result, ctx)
+        except Exception as e:
+            logger.warning(f"Vectorization failed, continuing: {e}")
 
         tracer.info(f"Memory operations applied: {result.summary()}")
         return result
@@ -394,6 +393,7 @@ class MemoryUpdater:
             current_full_content = await viking_fs.read_file(uri, ctx=ctx) or ""
         except NotFoundError:
             file_existed = False
+        tracer.info(f"[memory_updater] _apply_edit uri={uri} file_existed={file_existed}")
 
         # Deserialize content and metadata
         current_plain_content, current_metadata = deserialize_full(current_full_content)
@@ -450,7 +450,7 @@ class MemoryUpdater:
             # Delete before rewriting to prevent stale tail bytes when new
             # content is shorter than old content (AGFS write doesn't truncate).
             try:
-                await viking_fs.rm(uri, ctx=ctx)
+                await viking_fs.rm(uri, ctx=ctx, lock_handle=self._transaction_handle)
             except Exception:
                 pass
 
@@ -462,9 +462,11 @@ class MemoryUpdater:
         viking_fs = self._get_viking_fs()
 
         # Delete from VikingFS
-        # VikingFS automatically handles vector index cleanup
+        # VikingFS automatically handles vector index cleanup.
+        # Pass transaction_handle so rm reuses the existing subtree lock instead of
+        # acquiring a new point lock that would conflict with it.
         try:
-            await viking_fs.rm(uri, recursive=False, ctx=ctx)
+            await viking_fs.rm(uri, recursive=False, ctx=ctx, lock_handle=self._transaction_handle)
         except NotFoundError:
             tracer.error(f"Memory not found for delete: {uri}")
             # Idempotent - deleting non-existent file succeeds

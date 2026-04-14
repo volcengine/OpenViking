@@ -1,18 +1,7 @@
 memory_type: experience
 description: |
-  Agent experience memory - reusable insight distilled from one or more trajectories.
-  An experience captures when a pattern applies and the key lesson or pitfall to remember.
-
-  # How it is updated
-  You will be given:
-    1. A new trajectory summary from the current conversation.
-    2. A handful of candidate existing experiences.
-    3. Historical source trajectories for a chosen experience only when needed.
-
-  Your job:
-    - If the new trajectory meaningfully extends or reinforces an existing experience -> EDIT it.
-    - If it is a genuinely new reusable pattern -> WRITE a new experience.
-    - If it is too narrow, one-off, or already fully covered -> do nothing.
+  A generalizable, reusable insight distilled from agent execution — not a process record.
+  Captures a transferable pattern: what situation triggers it, what approach works, and why.
 
 directory: "viking://agent/{{ agent_space }}/memories/experiences"
 filename_template: "{{ experience_name }}.md"
@@ -23,40 +12,29 @@ fields:
   - name: experience_name
     type: string
     description: |
-      Lowercase snake_case only, ASCII letters only, max 5 words.
-      Use a broad, reusable, domain-agnostic name when possible.
+      Lowercase snake_case, ASCII only, max 5 words. Name the generalizable pattern, not the specific instance.
       Do not use Chinese.
       Good: "booking_duplicate_handling", "pytest_asyncio_cancel_hang_fix".
     merge_op: immutable
 
-  - name: situation
+  - name: content
     type: string
     description: |
-      Markdown bullets describing when this experience applies.
+      Structured experience in EXACTLY this 3-section format:
+
+      ## Situation
+      <markdown bullets: trigger conditions and context where this pattern applies>
+
+      ## Approach
+      <markdown bullets: the effective strategy or key steps to take>
+
+      ## Reflect
+      <markdown bullets: what worked and why, what failed or what risks exist, and the core principle to carry forward>
+
       Rules:
-      - Use concise markdown bullets.
-      - No headings.
-      - No numbered lists.
-      - Keep each bullet short.
+      - Use exactly these 3 headings in this order.
+      - Each section uses concise markdown bullets (no numbered lists, no nested headings).
+      - Reflect is mandatory and must be analytical: identify what was effective, what had issues, and state a clear actionable principle for future behavior.
+      - Abstract beyond the specific case — write so the experience applies in similar future contexts.
     merge_op: patch
 
-  - name: lesson_or_pitfall
-    type: string
-    description: |
-      Markdown bullets with the key reusable guidance to remember.
-      This may include what works, what to avoid, or both.
-      Rules:
-      - Use concise markdown bullets.
-      - No headings.
-      - No numbered lists.
-      - Keep each bullet short.
-    merge_op: patch
-
-  - name: source_trajectories
-    type: string
-    description: |
-      System-managed field.
-      Newline-separated trajectory URIs that this experience was distilled from.
-      The pipeline appends and maintains this field automatically.
-      Do not generate or modify this field in LLM output.
-    merge_op: patch
