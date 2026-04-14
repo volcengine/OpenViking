@@ -190,11 +190,10 @@ class StatsAggregator:
             if isinstance(uri, str) and uri:
                 records_by_uri[uri] = record
 
-        if not records_by_uri:
-            for record in await self._scan_memory_filesystem(ctx):
-                uri = record.get("uri", "")
-                if isinstance(uri, str) and uri and uri not in records_by_uri:
-                    records_by_uri[uri] = record
+        for record in await self._scan_memory_filesystem(ctx):
+            uri = record.get("uri", "")
+            if isinstance(uri, str) and uri and uri not in records_by_uri:
+                records_by_uri[uri] = record
 
         return list(records_by_uri.values())
 
@@ -220,7 +219,8 @@ class StatsAggregator:
             seen_dirs.add(dir_uri)
             try:
                 entries = await viking_fs.ls(dir_uri, show_all_hidden=True, ctx=ctx)
-            except Exception:
+            except Exception as e:
+                logger.debug("Failed to list memory directory %s: %s", dir_uri, e)
                 return
 
             for entry in entries:
@@ -268,8 +268,8 @@ class StatsAggregator:
             created_at = metadata.get("created_at")
             updated_at = metadata.get("updated_at")
             active_count = int(metadata.get("active_count", 0) or 0)
-        except Exception:
-            metadata = {}
+        except Exception as e:
+            logger.debug("Failed to read memory metadata for %s: %s", uri, e)
 
         if created_at is None or updated_at is None:
             try:
@@ -279,7 +279,8 @@ class StatsAggregator:
                     created_at = mod_time
                 if updated_at is None:
                     updated_at = mod_time
-            except Exception:
+            except Exception as e:
+                logger.debug("Failed to stat memory file %s: %s", uri, e)
                 pass
 
         return {
