@@ -11,6 +11,20 @@ Run OpenViking as a standalone HTTP server and connect from any client.
 
 Make sure you have a config file at `~/.openviking/ov.conf` with your model and storage settings (see [Configuration](../guides/01-configuration.md)).
 
+For first-time setup, run `openviking-server init` first. If you choose `OpenAI Codex` in the wizard, it can handle Codex auth import/login for you.
+
+Before startup, validate local setup:
+
+```bash
+openviking-server doctor
+```
+
+If your VLM provider is `openai-codex` and you want to inspect auth state directly, run:
+
+```bash
+ov codex status
+```
+
 ```bash
 # Config file at default path ~/.openviking/ov.conf — just start
 openviking-server
@@ -34,6 +48,8 @@ INFO:     Uvicorn running on http://0.0.0.0:1933
 curl http://localhost:1933/health
 # {"status": "ok"}
 ```
+
+`openviking-server doctor` checks local configuration, model access, and auth readiness. `curl /health` only confirms that the server process is already running.
 
 ## Connect with Python SDK
 

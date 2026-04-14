@@ -274,6 +274,11 @@ class VLMFactory:
 
             return OpenAIVLM(config)
 
+        elif provider in ("openai-codex", "codex"):
+            from .backends.codex_vlm import CodexVLM
+
+            return CodexVLM(config)
+
         else:
             from .backends.litellm_vlm import LiteLLMVLMProvider
 

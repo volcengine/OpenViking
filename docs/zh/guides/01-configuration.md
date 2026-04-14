@@ -2,6 +2,15 @@
 
 OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支持 Embedding、VLM、Rerank、存储、解析器等多个模块的配置。
 
+首次配置推荐优先使用：
+
+```bash
+openviking-server init
+openviking-server doctor
+```
+
+如果你希望使用 Codex 作为 VLM，请在 `openviking-server init` 中选择 `OpenAI Codex`。向导会自动帮你处理已有 Codex 鉴权的导入，或直接引导你完成登录，因此不需要在 `init` 之前先执行 `ov codex login`。
+
 ## 快速开始
 
 在项目目录创建 `~/.openviking/ov.conf`：
@@ -36,6 +45,8 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 }
 
 ```
+
+如果 `provider` 是 `openai-codex`，并且 Codex OAuth 已经就绪，则 `vlm.api_key` 可以省略。
 
 ## 配置示例
 
@@ -90,6 +101,38 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 
 </details>
 
+<details>
+<summary><b>火山引擎 Embedding + Codex VLM</b></summary>
+
+```bash
+# 手动配置或排障时使用
+ov codex login
+openviking-server doctor
+```
+
+如果你已经使用 `openviking-server init` 并在向导里选择了 `OpenAI Codex`，那么登录/导入步骤已经由向导处理。
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
+      "api_key"  : "your-volcengine-api-key",
+      "provider" : "volcengine",
+      "dimension": 1024,
+      "model"    : "doubao-embedding-vision-251215"
+    }
+  },
+  "vlm": {
+    "provider" : "openai-codex",
+    "model"    : "gpt-5.3-codex",
+    "api_base" : "https://chatgpt.com/backend-api/codex"
+  }
+}
+```
+
+</details>
+
 ## 配置部分
 
 ### embedding
@@ -122,7 +165,7 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 | `max_concurrent` | int | 最大并发 Embedding 请求数（`embedding.max_concurrent`，默认：`10`） |
 | `max_retries` | int | Embedding provider 瞬时错误的最大重试次数（`embedding.max_retries`，默认：`3`；`0` 表示禁用重试） |
 | `provider` | str | `"volcengine"`、`"openai"`、`"vikingdb"`、`"jina"`、`"voyage"`、`"minimax"` 或 `"gemini"` |
-| `api_key` | str | API Key |
+| `api_key` | str | API Key；对于 `openai-codex`，当 Codex OAuth 可用时可省略 |
 | `model` | str | 模型名称 |
 | `dimension` | int | 向量维度 |
 | `input` | str | 输入类型：`"text"` 或 `"multimodal"` |
@@ -388,6 +431,21 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 2. **L1（概览）**：~2k token 概览，包含导航信息
 
 如果未配置 VLM，L0/L1 将直接从内容生成（语义性较弱），多模态资源的描述可能有限。
+
+**支持的 provider：**
+- `volcengine`：火山引擎 VLM API
+- `openai`：OpenAI 兼容 VLM API
+- `openai-codex`：通过 ChatGPT/Codex OAuth 使用 Codex VLM
+- `litellm`：统一接入 Anthropic、Gemini、DeepSeek、vLLM、Ollama 等第三方模型
+
+对于 `openai-codex`，建议使用以下命令完成鉴权与校验：
+
+```bash
+# 手动配置或排障时使用
+ov codex login
+ov codex status
+openviking-server doctor
+```
 
 **自定义 HTTP Headers**
 

@@ -97,12 +97,13 @@ OpenViking requires the following model capabilities:
 
 #### Supported VLM Providers
 
-OpenViking supports three VLM providers:
+OpenViking supports multiple VLM providers:
 
-| Provider | Description | Get API Key |
-|----------|-------------|-------------|
+| Provider | Description | Setup |
+|----------|-------------|-------|
 | `volcengine` | Volcengine Doubao Models | [Volcengine Console](https://console.volcengine.com/ark/region:ark+cn-beijing/overview?briefPage=0&briefType=introduce&type=new&utm_content=OpenViking&utm_medium=devrel&utm_source=OWO&utm_term=OpenViking) |
 | `openai` | OpenAI Official API | [OpenAI Platform](https://platform.openai.com) |
+| `openai-codex` | Codex VLM via ChatGPT/Codex OAuth | Use `openviking-server init` or run `ov codex login` manually |
 | `litellm` | Unified access to various third-party models (Anthropic, DeepSeek, Gemini, vLLM, Ollama, etc.) | See [LiteLLM Providers](https://docs.litellm.ai/docs/providers) |
 
 > 💡 **Tip**:
@@ -170,6 +171,43 @@ You can also use a custom OpenAI-compatible endpoint:
   }
 }
 ```
+
+</details>
+
+<details>
+<summary><b>OpenAI Codex (OAuth)</b></summary>
+
+Use this provider when you want OpenViking to call Codex VLM through your ChatGPT/Codex OAuth session instead of a standard OpenAI API key:
+
+```bash
+openviking-server init
+# choose OpenAI Codex when prompted
+openviking-server doctor
+```
+
+If you are configuring `ov.conf` manually instead of using `openviking-server init`, run:
+
+```bash
+ov codex login
+ov codex status
+```
+
+```json
+{
+  "vlm": {
+    "provider": "openai-codex",
+    "model": "gpt-5.3-codex",
+    "api_base": "https://chatgpt.com/backend-api/codex",
+    "temperature": 0.0,
+    "max_retries": 2
+  }
+}
+```
+
+> 💡 **Tip**:
+> - `openai-codex` does not require `vlm.api_key` when Codex OAuth is available
+> - OpenViking stores its own Codex auth state at `~/.openviking/codex_auth.json`
+> - `openviking-server doctor` validates that the current Codex auth is usable
 
 </details>
 
@@ -246,7 +284,16 @@ For complete model support, see [LiteLLM Providers Documentation](https://docs.l
 
 #### Server Configuration Template
 
-Create a configuration file `~/.openviking/ov.conf`, remove the comments before copy:
+The recommended first-time flow is:
+
+```bash
+openviking-server init
+openviking-server doctor
+```
+
+If you choose `OpenAI Codex` inside `openviking-server init`, the wizard can import existing Codex auth or start the Codex sign-in flow for you. You do not need to run `ov codex login` before `init`.
+
+If you prefer manual configuration, create `~/.openviking/ov.conf`, remove the comments before copy:
 
 ```json
 {
@@ -269,15 +316,15 @@ Create a configuration file `~/.openviking/ov.conf`, remove the comments before 
   },
   "vlm": {
     "api_base" : "<api-endpoint>",     // API endpoint address
-    "api_key"  : "<your-api-key>",     // Model service API Key
-    "provider" : "<provider-type>",    // Provider type (volcengine, openai, deepseek, anthropic, etc.)
+    "api_key"  : "<your-api-key>",     // Model service API Key (optional for openai-codex)
+    "provider" : "<provider-type>",    // Provider type (volcengine, openai, openai-codex, litellm, etc.)
     "model"    : "<model-name>",       // VLM model name (e.g., doubao-seed-2-0-pro-260215 or gpt-4-vision-preview)
     "max_concurrent": 100              // Max concurrent LLM calls for semantic processing (default: 100)
   }
 }
 ```
 
-> **Note**: For embedding models, supported providers are `volcengine` (Doubao), `openai`, `jina`, `voyage`, `minimax`, `vikingdb`, and `gemini` (requires `pip install "google-genai>=1.0.0"`). For VLM models, we support three providers: `volcengine`, `openai`, and `litellm`. The `litellm` provider supports various models including Anthropic (Claude), DeepSeek, Gemini, Moonshot, Zhipu, DashScope, MiniMax, vLLM, Ollama, and more.
+> **Note**: For embedding models, supported providers are `volcengine` (Doubao), `openai`, `jina`, `voyage`, `minimax`, `vikingdb`, and `gemini` (requires `pip install "google-genai>=1.0.0"`). For VLM models, common providers include `volcengine`, `openai`, `openai-codex`, and `litellm`. The `litellm` provider supports various models including Anthropic (Claude), DeepSeek, Gemini, Moonshot, Zhipu, DashScope, MiniMax, vLLM, Ollama, and more.
 
 #### Server Configuration Examples
 
@@ -388,6 +435,42 @@ Get your Google API key at https://aistudio.google.com/apikey
 
 </details>
 
+<details>
+<summary><b>Example 4: Using Volcengine Embedding + Codex VLM</b></summary>
+
+```bash
+# Manual setup flow
+ov codex login
+openviking-server doctor
+```
+
+If you use `openviking-server init` and choose `OpenAI Codex`, the wizard already covers the login/import step for you.
+
+```json
+{
+  "storage": {
+    "workspace": "/home/your-name/openviking_workspace"
+  },
+  "embedding": {
+    "dense": {
+      "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
+      "api_key"  : "your-volcengine-api-key",
+      "provider" : "volcengine",
+      "dimension": 1024,
+      "model"    : "doubao-embedding-vision-251215"
+    }
+  },
+  "vlm": {
+    "api_base" : "https://chatgpt.com/backend-api/codex",
+    "provider" : "openai-codex",
+    "model"    : "gpt-5.3-codex",
+    "max_concurrent": 100
+  }
+}
+```
+
+</details>
+
 #### Set Server Configuration Environment Variable
 
 After creating the configuration file, set the environment variable to point to it (Linux/macOS):
@@ -455,8 +538,11 @@ Now let's run a complete example to experience the core features of OpenViking.
 #### Launch Server
 
 ```bash
+openviking-server doctor
 openviking-server
 ```
+
+If you configured `provider=openai-codex`, `openviking-server doctor` already validates Codex auth. Run `ov codex status` only if you want to inspect the auth state directly.
 
 or you can run in background
 

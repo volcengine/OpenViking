@@ -2,6 +2,15 @@
 
 OpenViking uses a JSON configuration file (`~/.openviking/ov.conf`) for settings.
 
+For a first-time setup, the recommended flow is:
+
+```bash
+openviking-server init
+openviking-server doctor
+```
+
+If you want to use Codex as the VLM provider, choose `OpenAI Codex` inside `openviking-server init`. The wizard can import existing Codex auth or guide you through login, so you do not need to run `ov codex login` before `init`.
+
 ## Configuration File
 
 Create `~/.openviking/ov.conf` in your project directory:
@@ -35,6 +44,8 @@ Create `~/.openviking/ov.conf` in your project directory:
   }
 }
 ```
+
+For `provider: "openai-codex"`, `vlm.api_key` is optional when Codex OAuth is already available.
 
 ## Configuration Examples
 
@@ -83,6 +94,38 @@ Create `~/.openviking/ov.conf` in your project directory:
     "api_key"  : "your-openai-api-key",
     "provider" : "openai",
     "model"    : "gpt-4-vision-preview"
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><b>Volcengine Embedding + Codex VLM</b></summary>
+
+```bash
+# Manual setup or troubleshooting flow
+ov codex login
+openviking-server doctor
+```
+
+If you used `openviking-server init` and selected `OpenAI Codex`, the wizard already covered the login/import step.
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
+      "api_key"  : "your-volcengine-api-key",
+      "provider" : "volcengine",
+      "dimension": 1024,
+      "model"    : "doubao-embedding-vision-251215"
+    }
+  },
+  "vlm": {
+    "provider" : "openai-codex",
+    "model"    : "gpt-5.3-codex",
+    "api_base" : "https://chatgpt.com/backend-api/codex"
   }
 }
 ```
@@ -393,7 +436,7 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `api_key` | str | API key |
+| `api_key` | str | API key. Optional for `openai-codex` when Codex OAuth is available |
 | `model` | str | Model name |
 | `api_base` | str | API endpoint (optional) |
 | `thinking` | bool | Enable thinking mode for VolcEngine models (default: `false`) |
@@ -417,6 +460,21 @@ When resources are added, VLM generates:
 2. **L1 (Overview)**: ~2k token overview with navigation
 
 If VLM is not configured, L0/L1 will be generated from content directly (less semantic), and multimodal resources may have limited descriptions.
+
+**Supported providers:**
+- `volcengine`: Volcengine VLM API
+- `openai`: OpenAI-compatible VLM API
+- `openai-codex`: Codex VLM via ChatGPT/Codex OAuth
+- `litellm`: Unified third-party providers such as Anthropic, Gemini, DeepSeek, vLLM, and Ollama
+
+For `openai-codex`, authenticate with:
+
+```bash
+# Manual setup or troubleshooting flow
+ov codex login
+ov codex status
+openviking-server doctor
+```
 
 **Custom HTTP Headers**
 

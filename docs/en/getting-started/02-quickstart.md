@@ -82,13 +82,23 @@ OpenViking requires the following model capabilities:
 OpenViking supports multiple model services:
 - **Volcengine (Doubao Models)**: Recommended, cost-effective with good performance, free quota for new users. For purchase and activation, see: [Volcengine Purchase Guide](../guides/02-volcengine-purchase-guide.md)
 - **OpenAI Models**: Supports GPT-4V and other VLM models, plus OpenAI Embedding models
+- **OpenAI Codex**: Supports Codex as the VLM provider through ChatGPT/Codex OAuth
 - **Other Custom Model Services**: Supports model services compatible with OpenAI API format
 
 ## Configuration
 
 ### Configuration File Template
 
-Create a configuration file `~/.openviking/ov.conf`:
+Recommended first-time setup:
+
+```bash
+openviking-server init
+openviking-server doctor
+```
+
+If you want to use Codex as the VLM provider, start with `openviking-server init` and choose `OpenAI Codex` in the wizard. The wizard can import existing Codex auth or guide you through Codex sign-in, so you do not need to run `ov codex login` before `init`.
+
+If you prefer manual setup, create `~/.openviking/ov.conf`:
 
 ```json
 {
@@ -110,7 +120,18 @@ Create a configuration file `~/.openviking/ov.conf`:
 }
 ```
 
+For `provider: "openai-codex"`, `vlm.api_key` is optional after Codex OAuth is available.
+
 For complete examples for each model provider, see [Configuration Guide - Examples](../guides/01-configuration.md#configuration-examples).
+
+If you want to use Codex as the VLM provider:
+
+```bash
+# Manual setup or troubleshooting flow
+ov codex login
+ov codex status
+openviking-server doctor
+```
 
 ### Environment Variables
 

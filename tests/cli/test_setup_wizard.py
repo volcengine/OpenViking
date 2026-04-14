@@ -9,9 +9,11 @@ from openviking_cli.setup_wizard import (
     CLOUD_PROVIDERS,
     EMBEDDING_PRESETS,
     VLM_PRESETS,
+    _DEFAULT_WORKSPACE,
     _build_cloud_config,
     _build_ollama_config,
     _get_recommended_indices,
+    _wizard_cloud,
     _write_config,
 )
 from openviking_cli.utils.ollama import (
@@ -128,14 +130,59 @@ class TestConfigBuilding:
             embedding_api_key="sk-test",
             embedding_model="text-embedding-3-small",
             embedding_dim=1536,
-            vlm_api_key="sk-test",
             vlm_model="gpt-4o-mini",
             workspace="/tmp/ov_test",
+            vlm_api_key="sk-test",
         )
 
         assert config["embedding"]["dense"]["api_key"] == "sk-test"
         assert config["vlm"]["api_key"] == "sk-test"
         assert config["vlm"]["provider"] == "openai"
+
+    def test_cloud_config_supports_codex_vlm(self):
+        provider = CLOUD_PROVIDERS[1]  # Volcengine
+
+        config = _build_cloud_config(
+            provider,
+            embedding_api_key="ve-test",
+            embedding_model="doubao-embedding-vision-250615",
+            embedding_dim=1024,
+            vlm_model="gpt-5.3-codex",
+            workspace="/tmp/ov_test",
+            vlm_provider="openai-codex",
+            vlm_api_base="https://chatgpt.com/backend-api/codex",
+        )
+
+        assert config["embedding"]["dense"]["provider"] == "volcengine"
+        assert config["embedding"]["dense"]["api_key"] == "ve-test"
+        assert config["vlm"]["provider"] == "openai-codex"
+        assert config["vlm"]["model"] == "gpt-5.3-codex"
+        assert config["vlm"]["api_base"] == "https://chatgpt.com/backend-api/codex"
+        assert "api_key" not in config["vlm"]
+
+    def test_cloud_wizard_codex_uses_default_base_and_workspace(self):
+        with patch(
+            "openviking_cli.setup_wizard._prompt_choice",
+            side_effect=[2, 2],
+        ):
+            with patch(
+                "openviking_cli.setup_wizard._prompt_input",
+                side_effect=[
+                    "ve-test",
+                    "doubao-embedding-vision-250615",
+                    "1024",
+                    "https://ark.cn-beijing.volces.com/api/v3",
+                    "gpt-5.3-codex",
+                ],
+            ):
+                with patch("openviking_cli.setup_wizard._ensure_codex_auth", return_value=True):
+                    config = _wizard_cloud()
+
+        assert config is not None
+        assert config["storage"]["workspace"] == _DEFAULT_WORKSPACE
+        assert config["vlm"]["provider"] == "openai-codex"
+        assert config["vlm"]["api_base"] == "https://chatgpt.com/backend-api/codex"
+        assert "api_key" not in config["vlm"]
 
     def test_all_presets_valid(self):
         """Every preset should produce a config with required fields."""

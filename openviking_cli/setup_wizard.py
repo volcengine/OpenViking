@@ -25,6 +25,8 @@ from openviking_cli.utils.ollama import (
     start_ollama,
 )
 
+_DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
+
 # ---------------------------------------------------------------------------
 # ANSI helpers (same pattern as doctor.py)
 # ---------------------------------------------------------------------------
@@ -195,6 +197,51 @@ def _ensure_ollama() -> bool:
     return result.success
 
 
+def _ensure_codex_auth() -> bool:
+    from openviking.models.vlm.backends.codex_auth import (
+        CodexAuthError,
+        bootstrap_codex_auth,
+        get_codex_auth_status,
+        login_codex_with_device_code,
+        resolve_codex_runtime_credentials,
+    )
+
+    print("\n  Checking Codex OAuth...", end=" ", flush=True)
+    try:
+        creds = resolve_codex_runtime_credentials(refresh_if_expiring=False)
+        source = creds.get("source", "unknown")
+        print(_green(f"ready via {source}"))
+        return True
+    except Exception:
+        print(_yellow("not ready"))
+
+    status = get_codex_auth_status()
+    bootstrap_path = status.get("bootstrap_path")
+
+    if status.get("bootstrap_available") and bootstrap_path:
+        if _prompt_confirm(f"Import existing Codex CLI auth from {bootstrap_path}?"):
+            try:
+                path = bootstrap_codex_auth()
+            except CodexAuthError as exc:
+                print(f"  {_yellow(str(exc))}")
+            else:
+                if path is not None:
+                    print(f"  {_green('OK')} Imported Codex OAuth into {path}")
+                    return True
+
+    if _prompt_confirm("Sign in to Codex now?"):
+        try:
+            path = login_codex_with_device_code()
+        except CodexAuthError as exc:
+            print(f"  {_yellow(str(exc))}")
+        else:
+            print(f"  {_green('OK')} Codex OAuth stored in {path}")
+            return True
+
+    print(f"  {_dim('You can finish setup now and run `ov codex login` later.')}")
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Model presets
 # ---------------------------------------------------------------------------
@@ -323,13 +370,25 @@ def _build_cloud_config(
     embedding_api_key: str,
     embedding_model: str,
     embedding_dim: int,
-    vlm_api_key: str,
     vlm_model: str,
     workspace: str,
     embedding_api_base: str | None = None,
+    vlm_provider: str | None = None,
+    vlm_api_key: str | None = None,
     vlm_api_base: str | None = None,
 ) -> dict[str, Any]:
-    """Build ov.conf dict for cloud API setup."""
+    resolved_vlm_provider = vlm_provider or provider.provider
+    resolved_vlm_api_base = vlm_api_base or provider.default_api_base
+    vlm_config: dict[str, Any] = {
+        "provider": resolved_vlm_provider,
+        "model": vlm_model,
+        "api_base": resolved_vlm_api_base,
+        "temperature": 0.0,
+        "max_retries": 2,
+    }
+    if vlm_api_key:
+        vlm_config["api_key"] = vlm_api_key
+
     return {
         "storage": {"workspace": workspace},
         "embedding": {
@@ -341,14 +400,7 @@ def _build_cloud_config(
                 "dimension": embedding_dim,
             },
         },
-        "vlm": {
-            "provider": provider.provider,
-            "model": vlm_model,
-            "api_key": vlm_api_key,
-            "api_base": vlm_api_base or provider.default_api_base,
-            "temperature": 0.0,
-            "max_retries": 2,
-        },
+        "vlm": vlm_config,
     }
 
 
@@ -460,7 +512,7 @@ def _wizard_cloud() -> dict[str, Any] | None:
     # Provider selection
     provider_options = [(p.label, "") for p in CLOUD_PROVIDERS]
     provider_options.append(("Other (manual)", ""))
-    choice = _prompt_choice("Cloud provider:", provider_options, default=1)
+    choice = _prompt_choice("Embedding provider:", provider_options, default=1)
 
     if choice > len(CLOUD_PROVIDERS):
         # Manual / Other
@@ -484,19 +536,43 @@ def _wizard_cloud() -> dict[str, Any] | None:
         embedding_dim = provider.default_embedding_dim
     embedding_api_base = _prompt_input("API Base", default=provider.default_api_base)
 
-    # VLM config
-    print(f"\n  {_bold('VLM configuration')}")
-    vlm_api_key = _prompt_input("API Key (same as above?)", default=embedding_api_key)
-    vlm_model = _prompt_input("Model", default=provider.default_vlm_model)
-    vlm_api_base = _prompt_input("API Base", default=provider.default_api_base)
+    vlm_mode = _prompt_choice("VLM provider:", [
+        (provider.label, "(API key)"),
+        ("OpenAI Codex", "(Subscription)"),
+    ], default=1)
 
-    # Workspace
-    workspace = _prompt_input("Workspace", default=_DEFAULT_WORKSPACE)
+    if vlm_mode == 1:
+        print(f"\n  {_bold('VLM configuration')}")
+        vlm_api_key = _prompt_input("API Key (same as above?)", default=embedding_api_key)
+        if not vlm_api_key:
+            print(f"  {_red('API key is required')}")
+            return None
+        vlm_model = _prompt_input("Model", default=provider.default_vlm_model)
+        vlm_api_base = _prompt_input("API Base", default=provider.default_api_base)
+        vlm_provider = provider.provider
+        workspace = _prompt_input("Workspace", default=_DEFAULT_WORKSPACE)
+    else:
+        _ensure_codex_auth()
+        print(f"\n  {_bold('Codex VLM configuration')}")
+        vlm_model = _prompt_input("Model", default="gpt-5.3-codex")
+        vlm_api_base = _DEFAULT_CODEX_BASE_URL
+        vlm_api_key = None
+        vlm_provider = "openai-codex"
+        workspace = _DEFAULT_WORKSPACE
+        print(f"  {_dim('Using default API Base: ' + vlm_api_base)}")
+        print(f"  {_dim('Using default Workspace: ' + workspace)}")
 
     return _build_cloud_config(
-        provider, embedding_api_key, embedding_model, embedding_dim,
-        vlm_api_key, vlm_model, workspace,
-        embedding_api_base, vlm_api_base,
+        provider,
+        embedding_api_key,
+        embedding_model,
+        embedding_dim,
+        vlm_model,
+        workspace,
+        embedding_api_base=embedding_api_base,
+        vlm_provider=vlm_provider,
+        vlm_api_key=vlm_api_key,
+        vlm_api_base=vlm_api_base,
     )
 
 
@@ -544,7 +620,7 @@ def run_init() -> int:
     # Deployment mode
     mode = _prompt_choice("Choose setup mode:", [
         ("Local models via Ollama", "(recommended for macOS / Apple Silicon)"),
-        ("Cloud API", "(OpenAI, Volcengine, etc.)"),
+        ("Cloud / hosted models", "(OpenAI, Volcengine, etc.)"),
         ("Custom", "(manual editing)"),
     ], default=1)
 
@@ -587,6 +663,12 @@ def run_init() -> int:
     print(f"  {_bold('Next steps:')}")
     print(f"    Start the server:  {_cyan('openviking-server')}")
     print(f"    Validate setup:    {_cyan('openviking-server doctor')}")
+    if vlm.get("provider") == "openai-codex":
+        from openviking.models.vlm.backends.codex_auth import has_codex_auth_available
+
+        print(f"    Check Codex auth:  {_cyan('ov codex status')}")
+        if not has_codex_auth_available():
+            print(f"    Sign in to Codex: {_cyan('ov codex login')}")
     print()
 
     return 0

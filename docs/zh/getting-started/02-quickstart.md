@@ -82,13 +82,23 @@ OpenViking 需要以下模型能力：
 OpenViking 支持多种模型服务：
 - **火山引擎（豆包模型）**：推荐使用，成本低、性能好，新用户有免费额度。如需购买和开通，请参考：[火山引擎购买指南](../guides/02-volcengine-purchase-guide.md)
 - **OpenAI 模型**：支持 GPT-4V 等 VLM 模型和 OpenAI Embedding 模型
+- **OpenAI Codex**：支持通过 ChatGPT/Codex OAuth 使用 Codex 作为 VLM
 - **其他自定义模型服务**：支持兼容 OpenAI API 格式的模型服务
 
 ## 配置环境
 
 ### 配置文件模版
 
-创建配置文件 `~/.openviking/ov.conf`：
+推荐首次配置使用：
+
+```bash
+openviking-server init
+openviking-server doctor
+```
+
+如果你希望使用 Codex 作为 VLM，建议先运行 `openviking-server init`，然后在向导里选择 `OpenAI Codex`。初始化向导可以导入已有的 Codex 鉴权，或直接引导你完成登录，因此不需要在 `init` 之前先手动执行 `ov codex login`。
+
+如果你更希望手动创建，再编写 `~/.openviking/ov.conf`：
 
 ```json
 {
@@ -110,7 +120,18 @@ OpenViking 支持多种模型服务：
 }
 ```
 
+当 `provider: "openai-codex"` 时，只要 Codex OAuth 已就绪，就可以不填写 `vlm.api_key`。
+
 各模型服务的完整配置示例请参见 [配置指南 - 配置示例](../guides/01-configuration.md#配置示例)。
+
+如果你希望使用 Codex 作为 VLM：
+
+```bash
+# 手动配置或排障时使用
+ov codex login
+ov codex status
+openviking-server doctor
+```
 
 ### 设置环境变量
 

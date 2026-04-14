@@ -237,6 +237,61 @@ class TestCheckVlm:
         assert not ok
         assert "unreadable" in detail
 
+    def test_pass_with_codex_oauth(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(json.dumps({"vlm": {"provider": "openai-codex", "model": "gpt-5.3-codex"}}))
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            with patch(
+                "openviking.models.vlm.backends.codex_auth.resolve_codex_runtime_credentials",
+                return_value={"source": "openviking"},
+            ):
+                ok, detail, fix = check_vlm()
+        assert ok
+        assert "oauth via openviking" in detail
+
+    def test_fail_with_codex_oauth_missing_auth(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(json.dumps({"vlm": {"provider": "openai-codex", "model": "gpt-5.3-codex"}}))
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            with patch(
+                "openviking.models.vlm.backends.codex_auth.resolve_codex_runtime_credentials",
+                side_effect=RuntimeError("missing auth"),
+            ):
+                with patch(
+                    "openviking.models.vlm.backends.codex_auth.get_codex_auth_status",
+                    return_value={
+                        "store_path": "/tmp/ov-codex.json",
+                        "bootstrap_path": "/tmp/codex/auth.json",
+                    },
+                ):
+                    ok, detail, fix = check_vlm()
+        assert not ok
+        assert "missing auth" in detail
+        assert "ov codex login" in fix
+
+    def test_pass_with_default_provider_codex_oauth(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps(
+                {
+                    "vlm": {
+                        "model": "gpt-5.3-codex",
+                        "default_provider": "codex",
+                        "providers": {"openai": {"api_key": "sk-test"}, "codex": {}},
+                    }
+                }
+            )
+        )
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            with patch(
+                "openviking.models.vlm.backends.codex_auth.resolve_codex_runtime_credentials",
+                return_value={"source": "openviking"},
+            ):
+                ok, detail, fix = check_vlm()
+        assert ok
+        assert "openai-codex/gpt-5.3-codex" in detail
+        assert "oauth via openviking" in detail
+
 
 class TestCheckDisk:
     def test_pass_normal_disk(self):

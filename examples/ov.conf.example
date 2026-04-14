@@ -67,6 +67,14 @@
     "provider": "volcengine",
     "thinking": false
   },
+  "vlm_codex_example": {
+    "_comment": "For Codex OAuth via subscription. Run `ov codex login` first. OV stores tokens in ~/.openviking/codex_auth.json and can bootstrap from an existing Codex CLI auth file if needed.",
+    "provider": "openai-codex",
+    "model": "gpt-5.3-codex",
+    "api_base": "https://chatgpt.com/backend-api/codex",
+    "temperature": 0.0,
+    "max_retries": 2
+  },
   "rerank": {
     "provider": "vikingdb",
     "ak": "{your-ak}",

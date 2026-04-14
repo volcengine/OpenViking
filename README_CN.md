@@ -95,13 +95,14 @@ OpenViking 需要以下模型能力：
 
 #### 支持的 VLM 提供商
 
-OpenViking 支持三种 VLM 提供商：
+OpenViking 支持多种 VLM 提供商：
 
-| 提供商 | 描述 | 获取 API Key |
+| 提供商 | 描述 | 设置方式 |
 |----------|-------------|-------------|
 | `volcengine` | 火山引擎豆包模型 | [Volcengine 控制台](https://console.volcengine.com/ark/region:ark+cn-beijing/overview?briefPage=0&briefType=introduce&type=new&utm_content=OpenViking&utm_medium=devrel&utm_source=OWO&utm_term=OpenViking) |
 | `openai` | OpenAI 官方 API | [OpenAI 平台](https://platform.openai.com) |
 | `azure` | Azure OpenAI 服务 | [Azure OpenAI 服务](https://portal.azure.com) |
+| `openai-codex` | 通过 ChatGPT/Codex OAuth 使用 Codex VLM | 使用 `openviking-server init`，或手动运行 `ov codex login` |
 | `litellm` | 统一调用多种第三方模型 (Anthropic, DeepSeek, Gemini, vLLM, Ollama 等) | 参见 [LiteLLM 提供商](https://docs.litellm.ai/docs/providers) |
 
 > 💡 **提示**：
@@ -197,6 +198,43 @@ Volcengine 支持模型名称和端点 ID。为简单起见，建议使用模型
 </details>
 
 <details>
+<summary><b>OpenAI Codex（OAuth）</b></summary>
+
+如果你希望通过 ChatGPT/Codex OAuth 会话来使用 Codex VLM，而不是标准 OpenAI API Key，可以这样配置：
+
+```bash
+openviking-server init
+# 在向导中选择 OpenAI Codex
+openviking-server doctor
+```
+
+如果你是手动编辑 `ov.conf`，或者只是想单独检查/更新鉴权状态，再运行：
+
+```bash
+ov codex login
+ov codex status
+```
+
+```json
+{
+  "vlm": {
+    "provider": "openai-codex",
+    "model": "gpt-5.3-codex",
+    "api_base": "https://chatgpt.com/backend-api/codex",
+    "temperature": 0.0,
+    "max_retries": 2
+  }
+}
+```
+
+> 💡 **提示**：
+> - 当 Codex OAuth 可用时，`openai-codex` 不需要 `vlm.api_key`
+> - OpenViking 会把自己的 Codex 鉴权状态保存在 `~/.openviking/codex_auth.json`
+> - 可以通过 `openviking-server doctor` 校验当前 Codex 鉴权是否可用
+
+</details>
+
+<details>
 <summary><b>LiteLLM (Anthropic, DeepSeek, Gemini, Qwen, vLLM, Ollama 等)</b></summary>
 
 LiteLLM 提供对各种模型的统一访问。`model` 字段应遵循 LiteLLM 的命名约定。以下以 Claude 和 Qwen 为例：
@@ -269,7 +307,16 @@ ollama serve
 
 #### 服务器配置模板
 
-创建配置文件 `~/.openviking/ov.conf`，复制前请删除注释：
+推荐的首次配置流程是：
+
+```bash
+openviking-server init
+openviking-server doctor
+```
+
+如果你在 `openviking-server init` 中选择了 `OpenAI Codex`，初始化向导会帮你导入已有 Codex 鉴权，或直接引导你完成登录，因此**不需要**先手动执行 `ov codex login`。
+
+如果你更想手动配置，再创建 `~/.openviking/ov.conf`，复制前请删除注释：
 
 ```json
 {
@@ -293,8 +340,8 @@ ollama serve
   },
   "vlm": {
     "api_base" : "<api-endpoint>",     // API 端点地址
-    "api_key"  : "<your-api-key>",     // 模型服务 API Key
-    "provider" : "<provider-type>",    // 提供商类型 (volcengine, openai, azure, litellm 等)
+    "api_key"  : "<your-api-key>",     // 模型服务 API Key（openai-codex 可选）
+    "provider" : "<provider-type>",    // 提供商类型 (volcengine, openai, azure, openai-codex, litellm 等)
     "api_version": "2025-01-01-preview", // （仅 azure）API 版本，可选，默认 "2025-01-01-preview"
     "model"    : "<model-name>",       // VLM 模型名称或 Azure 部署名（如 doubao-seed-2-0-pro-260215 或 gpt-4-vision-preview）
     "max_concurrent": 100              // 语义处理的最大并发 LLM 调用（默认：100）
@@ -302,7 +349,7 @@ ollama serve
 }
 ```
 
-> **注意**：对于 embedding 模型，目前支持 `volcengine`（豆包）、`openai`、`azure`、`jina` 等提供商。对于 VLM 模型，我们支持 `volcengine`、`openai`、`azure` 和 `litellm` 提供商。`litellm` 提供商支持各种模型，包括 Anthropic (Claude)、DeepSeek、Gemini、Moonshot、Zhipu、DashScope、MiniMax、vLLM、Ollama 等。
+> **注意**：对于 embedding 模型，目前支持 `volcengine`（豆包）、`openai`、`azure`、`jina` 等提供商。对于 VLM 模型，常见提供商包括 `volcengine`、`openai`、`azure`、`openai-codex` 和 `litellm`。`litellm` 提供商支持各种模型，包括 Anthropic (Claude)、DeepSeek、Gemini、Moonshot、Zhipu、DashScope、MiniMax、vLLM、Ollama 等。
 
 #### 服务器配置示例
 
@@ -484,8 +531,11 @@ set "OPENVIKING_CLI_CONFIG_FILE=%USERPROFILE%\.openviking\ovcli.conf"
 #### 启动服务器
 
 ```bash
+openviking-server doctor
 openviking-server
 ```
+
+如果你的 `vlm.provider` 是 `openai-codex`，`openviking-server doctor` 已经会校验 Codex 鉴权。只有在你想单独查看鉴权状态时，才需要运行 `ov codex status`。
 
 或者您可以在后台运行
 
