@@ -8,15 +8,20 @@ Provides resource management operations: add_resource, add_skill, wait_processed
 
 import json
 import time
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from openviking.core.context import Context, ContextLevel
+from openviking.pyagfs.exceptions import AGFSClientError
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import (
     is_remote_resource_source,
     require_remote_resource_source,
 )
 from openviking.storage import VikingDBManager
+from openviking.storage.id_utils import compute_record_id
 from openviking.storage.queuefs import get_queue_manager
+from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -33,6 +38,7 @@ from openviking_cli.exceptions import (
     ConflictError,
     DeadlineExceededError,
     InvalidArgumentError,
+    NotFoundError,
     NotInitializedError,
 )
 from openviking_cli.utils import get_logger
@@ -484,6 +490,97 @@ class ResourceService:
         """
         self._ensure_initialized()
         return await self._resource_processor.summarize(resource_uris, ctx, **kwargs)
+
+    async def patch_resource(
+        self,
+        uri: str,
+        ctx: RequestContext,
+        meta: Optional[Dict[str, Any]] = None,
+        abstract: Optional[str] = None,
+        overview: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Patch resource metadata and/or summaries.
+
+        Args:
+            uri: Resource URI (e.g., "viking://resources/doc_name")
+            ctx: Request context
+            meta: Updated metadata dict (merged with existing)
+            abstract: New L0 abstract text (rewrites .abstract.md and re-embeds)
+            overview: New L1 overview text (rewrites .overview.md and re-embeds)
+
+        Returns:
+            Dict with uri, updated fields list, and skipped fields list.
+        """
+        self._ensure_initialized()
+
+        # Verify resource exists — only map "not found" to 404, let other errors propagate
+        try:
+            await self._viking_fs.stat(uri, ctx=ctx)
+        except AGFSClientError as e:
+            err_msg = str(e).lower()
+            if "not found" in err_msg or "no such file or directory" in err_msg:
+                raise NotFoundError(uri)
+            raise
+
+        updated: List[str] = []
+        skipped: List[str] = []
+
+        # --- Meta update: fetch → merge → upsert with existing vector ---
+        if meta is not None:
+            record_id = compute_record_id(ctx.account_id, uri, level=2)
+            records = await self._vikingdb.get(ids=[record_id], ctx=ctx)
+            if records:
+                record = dict(records[0])
+                existing_meta = record.get("meta") or {}
+                merged_meta = {**existing_meta, **meta}
+                record["meta"] = merged_meta
+                record["updated_at"] = datetime.now(timezone.utc).isoformat()
+                await self._vikingdb.upsert(record, ctx=ctx)
+                updated.append("meta")
+            else:
+                skipped.append("meta")
+
+        # --- Abstract (L0) update: write file + re-embed ---
+        if abstract is not None:
+            abstract_uri = f"{uri}/.abstract.md"
+            await self._viking_fs.write_file(abstract_uri, abstract, ctx=ctx)
+
+            context = Context(
+                uri=uri,
+                abstract=abstract,
+                level=ContextLevel.ABSTRACT,
+                context_type="resource",
+                account_id=ctx.account_id,
+                user=ctx.user,
+                owner_space="",
+            )
+            context.vectorize.text = abstract
+            embedding_msg = EmbeddingMsgConverter.from_context(context)
+            if embedding_msg:
+                await self._vikingdb.enqueue_embedding_msg(embedding_msg)
+            updated.append("abstract")
+
+        # --- Overview (L1) update: write file + re-embed ---
+        if overview is not None:
+            overview_uri = f"{uri}/.overview.md"
+            await self._viking_fs.write_file(overview_uri, overview, ctx=ctx)
+
+            context = Context(
+                uri=uri,
+                abstract=overview,
+                level=ContextLevel.OVERVIEW,
+                context_type="resource",
+                account_id=ctx.account_id,
+                user=ctx.user,
+                owner_space="",
+            )
+            context.vectorize.text = overview
+            embedding_msg = EmbeddingMsgConverter.from_context(context)
+            if embedding_msg:
+                await self._vikingdb.enqueue_embedding_msg(embedding_msg)
+            updated.append("overview")
+
+        return {"uri": uri, "updated": updated, "skipped": skipped}
 
     async def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:
         """Wait for all queued processing to complete.

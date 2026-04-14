@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, RawDSL
+from openviking.storage.id_utils import seed_uri_for_id
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.utils.logging_init import init_cpp_logging
 from openviking.storage.vectordb_adapters import create_collection_adapter
@@ -950,13 +951,6 @@ class VikingVectorIndexBackend:
         if not records:
             return False
 
-        def _seed_uri_for_id(uri: str, level: int) -> str:
-            if level == 0:
-                return uri if uri.endswith("/.abstract.md") else f"{uri}/.abstract.md"
-            if level == 1:
-                return uri if uri.endswith("/.overview.md") else f"{uri}/.overview.md"
-            return uri
-
         success = False
         ids_to_delete: List[str] = []
         for record in records:
@@ -968,7 +962,7 @@ class VikingVectorIndexBackend:
             except (TypeError, ValueError):
                 level = 2
 
-            seed_uri = _seed_uri_for_id(new_uri, level)
+            seed_uri = seed_uri_for_id(new_uri, level)
             id_seed = f"{ctx.account_id}:{seed_uri}"
             new_id = hashlib.md5(id_seed.encode("utf-8")).hexdigest()
 

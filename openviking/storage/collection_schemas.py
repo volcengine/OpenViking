@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 from openviking.models.embedder.base import EmbedResult, embed_compat
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.errors import CollectionNotFoundError
+from openviking.storage.id_utils import seed_uri_for_id
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
@@ -240,16 +241,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
     @staticmethod
     def _seed_uri_for_id(uri: str, level: Any) -> str:
         """Build deterministic id seed URI from canonical uri + hierarchy level."""
-        try:
-            level_int = int(level)
-        except (TypeError, ValueError):
-            level_int = 2
-
-        if level_int == 0:
-            return uri if uri.endswith("/.abstract.md") else f"{uri}/.abstract.md"
-        if level_int == 1:
-            return uri if uri.endswith("/.overview.md") else f"{uri}/.overview.md"
-        return uri
+        return seed_uri_for_id(uri, level)
 
     async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """Process dequeued message and add embedding vector(s)."""
