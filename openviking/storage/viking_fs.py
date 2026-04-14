@@ -1287,6 +1287,13 @@ class VikingFS:
     def _looks_like_legacy_temp_leaf(self, value: str) -> bool:
         return bool(re.match(r"^\d{8}_[0-9a-f]{6}$", value or ""))
 
+    def _is_legacy_temp_uri_parts(self, parts: List[str]) -> bool:
+        if len(parts) < 2 or parts[0] != "temp" or not self._looks_like_legacy_temp_leaf(parts[1]):
+            return False
+        if len(parts) == 2:
+            return True
+        return not self._looks_like_legacy_temp_leaf(parts[2])
+
     def _extract_space_from_uri(self, uri: str) -> Optional[str]:
         """Extract space segment from URI if present.
 
@@ -1304,7 +1311,7 @@ class VikingFS:
         # Treat scope-root metadata files as not having a tenant space segment.
         if len(parts) == 2 and second in {".abstract.md", ".overview.md"}:
             return None
-        if scope == "temp" and self._looks_like_legacy_temp_leaf(second):
+        if self._is_legacy_temp_uri_parts(parts):
             return None
         if scope == "user" and second not in self._USER_STRUCTURE_DIRS:
             return second
@@ -1330,7 +1337,7 @@ class VikingFS:
                 return True
             if parts[1] == ctx.user.user_space_name():
                 return True
-            return bool(re.fullmatch(r"\d{8}_[0-9a-f]{6}", parts[1]))
+            return self._is_legacy_temp_uri_parts(parts)
         if scope == "_system":
             return False
 

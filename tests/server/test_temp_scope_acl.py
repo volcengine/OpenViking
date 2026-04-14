@@ -137,6 +137,28 @@ async def test_temp_scope_isolated_between_users_in_same_account(viking_fs):
 
 
 @pytest.mark.asyncio
+async def test_temp_scope_user_id_matching_legacy_pattern_stays_isolated(viking_fs):
+    owner_ctx = RequestContext(
+        user=UserIdentifier(account_id="acct1", user_id="04011234_abcdef", agent_id="agent1"),
+        role=Role.USER,
+    )
+    other_ctx = RequestContext(
+        user=UserIdentifier(account_id="acct1", user_id="bob", agent_id="agent2"),
+        role=Role.USER,
+    )
+
+    temp_uri = viking_fs.create_temp_uri(ctx=owner_ctx)
+    secret_uri = f"{temp_uri}/secret.txt"
+
+    await viking_fs.mkdir(temp_uri, exist_ok=True, ctx=owner_ctx)
+    await viking_fs.write(secret_uri, "owner secret", ctx=owner_ctx)
+
+    assert temp_uri.startswith("viking://temp/04011234_abcdef/")
+    with pytest.raises(PermissionError):
+        await viking_fs.read(secret_uri, ctx=other_ctx)
+
+
+@pytest.mark.asyncio
 async def test_temp_root_listing_only_shows_callers_own_entries(viking_fs):
     alice_ctx = RequestContext(
         user=UserIdentifier(account_id="acct1", user_id="alice", agent_id="agent1"),
