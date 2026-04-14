@@ -28,9 +28,9 @@ from vikingbot.channels.openapi_models import (
 )
 from vikingbot.config.schema import (
     BaseChannelConfig,
+    BotChannelConfig,
     Config,
     SessionKey,
-    BotChannelConfig,
 )
 
 
@@ -336,8 +336,21 @@ class OpenAPIChannel(BaseChannel):
         # ========== Bot Channel Routes ==========
 
         async def verify_bot_channel_api_key(x_api_key: Optional[str] = Header(None)) -> Optional[str]:
-            """Verify API key and return it if valid."""
+            """Capture the raw bot-channel API key header for per-channel verification."""
             return x_api_key
+
+        def ensure_bot_channel_api_key(channel_id: str, x_api_key: Optional[str]) -> None:
+            """Require an explicit per-channel API key for privileged bot HTTP routes."""
+            bot_config = channel._bot_configs[channel_id]
+            if not bot_config.api_key:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Bot channel '{channel_id}' API key is not configured",
+                )
+            if not x_api_key:
+                raise HTTPException(status_code=401, detail="X-API-Key header required")
+            if not secrets.compare_digest(x_api_key, bot_config.api_key):
+                raise HTTPException(status_code=403, detail="Invalid API key")
 
         @router.post("/chat/channel", response_model=ChatResponse)
         async def chat_channel(
@@ -351,17 +364,7 @@ class OpenAPIChannel(BaseChannel):
             if channel_id not in channel._bot_configs:
                 raise HTTPException(status_code=404, detail=f"Channel '{channel_id}' not found")
 
-            # Verify API key for the specific channel
-            bot_config = channel._bot_configs[channel_id]
-            if not bot_config.api_key:
-                raise HTTPException(
-                    status_code=503,
-                    detail=f"Bot channel '{channel_id}' API key is not configured",
-                )
-            if not x_api_key:
-                raise HTTPException(status_code=401, detail="X-API-Key header required")
-            if not secrets.compare_digest(x_api_key, bot_config.api_key):
-                raise HTTPException(status_code=403, detail="Invalid API key")
+            ensure_bot_channel_api_key(channel_id, x_api_key)
 
             return await channel._handle_bot_chat(channel_id, request)
 
@@ -377,17 +380,7 @@ class OpenAPIChannel(BaseChannel):
             if channel_id not in channel._bot_configs:
                 raise HTTPException(status_code=404, detail=f"Channel '{channel_id}' not found")
 
-            # Verify API key for the specific channel
-            bot_config = channel._bot_configs[channel_id]
-            if not bot_config.api_key:
-                raise HTTPException(
-                    status_code=503,
-                    detail=f"Bot channel '{channel_id}' API key is not configured",
-                )
-            if not x_api_key:
-                raise HTTPException(status_code=401, detail="X-API-Key header required")
-            if not secrets.compare_digest(x_api_key, bot_config.api_key):
-                raise HTTPException(status_code=403, detail="Invalid API key")
+            ensure_bot_channel_api_key(channel_id, x_api_key)
 
             if not request.stream:
                 request.stream = True
