@@ -327,7 +327,9 @@ class MemoryUpdater:
         tracer.info(f"Memory operations applied: {result.summary()}")
 
         # Generate overview files if overview_template is configured
+        logger.info(f"[apply_operations] Starting overview generation, registry types: {[s.memory_type for s in resolved_registry.list_all()]}")
         for schema in resolved_registry.list_all():
+            logger.info(f"[apply_operations] Checking schema {schema.memory_type}: overview_template={schema.overview_template is not None}, directory={schema.directory}")
             if schema.overview_template and schema.directory:
                 # Render directory path
                 env = jinja2.Environment(autoescape=False)
@@ -335,6 +337,7 @@ class MemoryUpdater:
                     user_space=ctx.user.user_space_name(),
                     agent_space=ctx.user.agent_space_name(),
                 )
+                logger.info(f"[apply_operations] Calling generate_overview for {schema.memory_type} with directory={directory}")
                 await self.generate_overview(schema.memory_type, directory, ctx)
 
         return result
@@ -549,9 +552,13 @@ class MemoryUpdater:
         """
         from openviking.session.memory.utils.messages import parse_memory_file_with_fields
 
+        logger.info(f"[generate_overview] Called with memory_type={memory_type}, directory={directory}")
+
         # Get the schema for this memory type
         registry = self._registry
+        logger.info(f"[generate_overview] registry={registry}")
         schema = registry.get(memory_type)
+        logger.info(f"[generate_overview] schema={schema}, overview_template={schema.overview_template if schema else None}")
         if not schema or not schema.overview_template:
             logger.debug(f"No overview_template for memory type: {memory_type}")
             return
@@ -560,15 +567,24 @@ class MemoryUpdater:
 
         # List all .md files in the directory (excluding .overview.md and .abstract.md)
         try:
-            files = await viking_fs.list_files(directory, ctx=ctx)
+            # Use tree to recursively list all files
+            entries = await viking_fs.tree(directory, node_limit=10000, level_limit=10, ctx=ctx)
+            logger.info(f"[generate_overview] Tree entries in {directory}: {entries}")
+
+            # Extract file paths from tree entries
+            md_files = []
+            base_uri = directory.rstrip("/")
+            for entry in entries:
+                if entry.get("isDir"):
+                    continue
+                rel_path = entry.get("rel_path", "")
+                if rel_path.endswith(".md") and not rel_path.endswith(".overview.md") and not rel_path.endswith(".abstract.md"):
+                    md_files.append(f"{base_uri}/{rel_path}")
+
+            logger.info(f"[generate_overview] Filtered md_files: {md_files}")
         except Exception as e:
             logger.warning(f"Failed to list files in {directory}: {e}")
             return
-
-        md_files = [
-            f for f in files
-            if f.endswith(".md") and not f.endswith(".overview.md") and not f.endswith(".abstract.md")
-        ]
 
         if not md_files:
             logger.debug(f"No memory files in {directory}, skipping overview generation")
@@ -580,6 +596,7 @@ class MemoryUpdater:
             try:
                 content = await viking_fs.read_file(file_path, ctx=ctx)
                 parsed = parse_memory_file_with_fields(content)
+                logger.info(f"[generate_overview] Parsed {file_path}: {parsed.keys() if parsed else None}")
 
                 # Extract filename from path
                 filename = file_path.split("/")[-1]
@@ -592,6 +609,7 @@ class MemoryUpdater:
                 logger.warning(f"Failed to parse {file_path}: {e}")
                 continue
 
+        logger.info(f"[generate_overview] Total items: {len(items)}")
         if not items:
             logger.debug(f"No valid memory files parsed in {directory}")
             return
@@ -604,6 +622,7 @@ class MemoryUpdater:
                 memory_type=memory_type,
                 items=items,
             )
+            logger.info(f"[generate_overview] Rendered overview length: {len(rendered)}")
         except Exception as e:
             logger.error(f"Failed to render overview template for {memory_type}: {e}")
             return
@@ -612,6 +631,6 @@ class MemoryUpdater:
         overview_path = f"{directory.rstrip('/')}/.overview.md"
         try:
             await viking_fs.write_file(overview_path, rendered, ctx=ctx)
-            logger.info(f"Generated overview: {overview_path}")
+            logger.info(f"[generate_overview] Generated overview: {overview_path}")
         except Exception as e:
             logger.error(f"Failed to write overview {overview_path}: {e}")
