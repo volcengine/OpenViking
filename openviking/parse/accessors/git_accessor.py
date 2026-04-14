@@ -100,8 +100,8 @@ class GitAccessor(DataAccessor):
         commit = kwargs.get("commit")
 
         try:
-            # Create local temp directory
-            temp_local_dir = tempfile.mkdtemp(prefix="ov_git_")
+            # Create local temp directory (non-blocking)
+            temp_local_dir = await asyncio.to_thread(tempfile.mkdtemp, prefix="ov_git_")
             logger.info(f"[GitAccessor] Created local temp dir for git: {temp_local_dir}")
 
             # Fetch content (Clone or Extract)
@@ -410,38 +410,47 @@ class GitAccessor(DataAccessor):
         except Exception as exc:
             raise RuntimeError(f"Failed to download GitHub ZIP {zip_url}: {exc}")
 
-        # Safe extraction with Zip Slip validation
-        target = Path(extract_dir).resolve()
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            for info in zf.infolist():
-                mode = info.external_attr >> 16
-                if info.is_dir() or stat.S_ISDIR(mode):
-                    continue
-                if stat.S_ISLNK(mode):
-                    logger.warning(
-                        f"[GitAccessor] Skipping symlink entry in GitHub ZIP: {info.filename}"
-                    )
-                    continue
-                raw = info.filename.replace("\\", "/")
-                raw_parts = [p for p in raw.split("/") if p]
-                if ".." in raw_parts:
-                    raise ValueError(f"Zip Slip detected in GitHub archive: {info.filename!r}")
-                if PurePosixPath(raw).is_absolute():
-                    raise ValueError(f"Zip Slip detected in GitHub archive: {info.filename!r}")
-                extracted = Path(zf.extract(info, extract_dir)).resolve()
-                if not extracted.is_relative_to(target):
-                    extracted.unlink(missing_ok=True)
-                    raise ValueError(f"Zip Slip detected in GitHub archive: {info.filename!r}")
+        # Safe extraction with Zip Slip validation (non-blocking)
+        def _extract_zip():
+            target = Path(extract_dir).resolve()
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                for info in zf.infolist():
+                    mode = info.external_attr >> 16
+                    if info.is_dir() or stat.S_ISDIR(mode):
+                        continue
+                    if stat.S_ISLNK(mode):
+                        logger.warning(
+                            f"[GitAccessor] Skipping symlink entry in GitHub ZIP: {info.filename}"
+                        )
+                        continue
+                    raw = info.filename.replace("\\", "/")
+                    raw_parts = [p for p in raw.split("/") if p]
+                    if ".." in raw_parts:
+                        raise ValueError(f"Zip Slip detected in GitHub archive: {info.filename!r}")
+                    if PurePosixPath(raw).is_absolute():
+                        raise ValueError(f"Zip Slip detected in GitHub archive: {info.filename!r}")
+                    extracted = Path(zf.extract(info, extract_dir)).resolve()
+                    if not extracted.is_relative_to(target):
+                        extracted.unlink(missing_ok=True)
+                        raise ValueError(f"Zip Slip detected in GitHub archive: {info.filename!r}")
 
-        # Remove downloaded archive to free disk space.
-        try:
-            os.unlink(zip_path)
-        except OSError:
-            pass
+        await asyncio.to_thread(_extract_zip)
 
-        # GitHub ZIPs have a single top-level directory
-        top_level = [d for d in Path(extract_dir).iterdir() if d.is_dir()]
-        content_dir = top_level[0] if len(top_level) == 1 else Path(extract_dir)
+        # Remove downloaded archive to free disk space (non-blocking)
+        def _cleanup_archive():
+            try:
+                os.unlink(zip_path)
+            except OSError:
+                pass
+
+        await asyncio.to_thread(_cleanup_archive)
+
+        # GitHub ZIPs have a single top-level directory (non-blocking)
+        def _find_content_dir() -> Path:
+            top_level = [d for d in Path(extract_dir).iterdir() if d.is_dir()]
+            return top_level[0] if len(top_level) == 1 else Path(extract_dir)
+
+        content_dir = await asyncio.to_thread(_find_content_dir)
 
         logger.info(f"[GitAccessor] GitHub ZIP extracted to {content_dir} ({repo_name})")
         return content_dir, repo_name
@@ -487,38 +496,47 @@ class GitAccessor(DataAccessor):
         except Exception as exc:
             raise RuntimeError(f"Failed to download GitLab ZIP {zip_url}: {exc}")
 
-        # Safe extraction with Zip Slip validation
-        target = Path(extract_dir).resolve()
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            for info in zf.infolist():
-                mode = info.external_attr >> 16
-                if info.is_dir() or stat.S_ISDIR(mode):
-                    continue
-                if stat.S_ISLNK(mode):
-                    logger.warning(
-                        f"[GitAccessor] Skipping symlink entry in GitLab ZIP: {info.filename}"
-                    )
-                    continue
-                raw = info.filename.replace("\\", "/")
-                raw_parts = [p for p in raw.split("/") if p]
-                if ".." in raw_parts:
-                    raise ValueError(f"Zip Slip detected in GitLab archive: {info.filename!r}")
-                if PurePosixPath(raw).is_absolute():
-                    raise ValueError(f"Zip Slip detected in GitLab archive: {info.filename!r}")
-                extracted = Path(zf.extract(info, extract_dir)).resolve()
-                if not extracted.is_relative_to(target):
-                    extracted.unlink(missing_ok=True)
-                    raise ValueError(f"Zip Slip detected in GitLab archive: {info.filename!r}")
+        # Safe extraction with Zip Slip validation (non-blocking)
+        def _extract_zip():
+            target = Path(extract_dir).resolve()
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                for info in zf.infolist():
+                    mode = info.external_attr >> 16
+                    if info.is_dir() or stat.S_ISDIR(mode):
+                        continue
+                    if stat.S_ISLNK(mode):
+                        logger.warning(
+                            f"[GitAccessor] Skipping symlink entry in GitLab ZIP: {info.filename}"
+                        )
+                        continue
+                    raw = info.filename.replace("\\", "/")
+                    raw_parts = [p for p in raw.split("/") if p]
+                    if ".." in raw_parts:
+                        raise ValueError(f"Zip Slip detected in GitLab archive: {info.filename!r}")
+                    if PurePosixPath(raw).is_absolute():
+                        raise ValueError(f"Zip Slip detected in GitLab archive: {info.filename!r}")
+                    extracted = Path(zf.extract(info, extract_dir)).resolve()
+                    if not extracted.is_relative_to(target):
+                        extracted.unlink(missing_ok=True)
+                        raise ValueError(f"Zip Slip detected in GitLab archive: {info.filename!r}")
 
-        # Remove downloaded archive to free disk space.
-        try:
-            os.unlink(zip_path)
-        except OSError:
-            pass
+        await asyncio.to_thread(_extract_zip)
 
-        # GitLab ZIPs have a single top-level directory: {repo}-{ref}/
-        top_level = [d for d in Path(extract_dir).iterdir() if d.is_dir()]
-        content_dir = top_level[0] if len(top_level) == 1 else Path(extract_dir)
+        # Remove downloaded archive to free disk space (non-blocking)
+        def _cleanup_archive():
+            try:
+                os.unlink(zip_path)
+            except OSError:
+                pass
+
+        await asyncio.to_thread(_cleanup_archive)
+
+        # GitLab ZIPs have a single top-level directory: {repo}-{ref}/ (non-blocking)
+        def _find_content_dir() -> Path:
+            top_level = [d for d in Path(extract_dir).iterdir() if d.is_dir()]
+            return top_level[0] if len(top_level) == 1 else Path(extract_dir)
+
+        content_dir = await asyncio.to_thread(_find_content_dir)
 
         logger.info(f"[GitAccessor] GitLab ZIP extracted to {content_dir} ({repo_name})")
         return content_dir, repo_name
@@ -531,51 +549,61 @@ class GitAccessor(DataAccessor):
         path = Path(zip_path)
         name = path.stem
 
-        with zipfile.ZipFile(zip_path, "r") as zip_ref:
-            target = Path(target_dir).resolve()
-            for info in zip_ref.infolist():
-                mode = info.external_attr >> 16
-                # Skip directory entries
-                if info.is_dir() or stat.S_ISDIR(mode):
-                    continue
-                # Skip symlink entries
-                if stat.S_ISLNK(mode):
-                    logger.warning(f"[GitAccessor] Skipping symlink entry in zip: {info.filename}")
-                    continue
-                # Reject entries with suspicious raw path components
-                raw = info.filename.replace("\\", "/")
-                raw_parts = [p for p in raw.split("/") if p]
-                if ".." in raw_parts:
-                    raise ValueError(f"Zip Slip detected: entry {info.filename!r} contains '..'")
-                if PurePosixPath(raw).is_absolute() or (len(raw) >= 2 and raw[1] == ":"):
-                    raise ValueError(
-                        f"Zip Slip detected: entry {info.filename!r} is an absolute path"
-                    )
-                # Normalize and verify
-                arcname = info.filename.replace("/", os.sep)
-                if os.path.altsep:
-                    arcname = arcname.replace(os.path.altsep, os.sep)
-                arcname = os.path.splitdrive(arcname)[1]
-                arcname = os.sep.join(p for p in arcname.split(os.sep) if p not in ("", ".", ".."))
-                if not arcname:
-                    continue
-                member_path = (Path(target_dir) / arcname).resolve()
-                if not member_path.is_relative_to(target):
-                    raise ValueError(
-                        f"Zip Slip detected: entry {info.filename!r} escapes target directory"
-                    )
-                # Extract and verify
-                extracted = Path(zip_ref.extract(info, target_dir)).resolve()
-                if not extracted.is_relative_to(target):
-                    # Best-effort cleanup
-                    try:
-                        extracted.unlink(missing_ok=True)
-                    except OSError as cleanup_err:
+        # Extract zip file (non-blocking)
+        def _extract_zip_sync():
+            with zipfile.ZipFile(zip_path, "r") as zip_ref:
+                target = Path(target_dir).resolve()
+                for info in zip_ref.infolist():
+                    mode = info.external_attr >> 16
+                    # Skip directory entries
+                    if info.is_dir() or stat.S_ISDIR(mode):
+                        continue
+                    # Skip symlink entries
+                    if stat.S_ISLNK(mode):
                         logger.warning(
-                            f"[GitAccessor] Failed to clean up escaped file {extracted}: {cleanup_err}"
+                            f"[GitAccessor] Skipping symlink entry in zip: {info.filename}"
                         )
-                    raise ValueError(
-                        f"Zip Slip detected: entry {info.filename!r} escapes target directory"
+                        continue
+                    # Reject entries with suspicious raw path components
+                    raw = info.filename.replace("\\", "/")
+                    raw_parts = [p for p in raw.split("/") if p]
+                    if ".." in raw_parts:
+                        raise ValueError(
+                            f"Zip Slip detected: entry {info.filename!r} contains '..'"
+                        )
+                    if PurePosixPath(raw).is_absolute() or (len(raw) >= 2 and raw[1] == ":"):
+                        raise ValueError(
+                            f"Zip Slip detected: entry {info.filename!r} is an absolute path"
+                        )
+                    # Normalize and verify
+                    arcname = info.filename.replace("/", os.sep)
+                    if os.path.altsep:
+                        arcname = arcname.replace(os.path.altsep, os.sep)
+                    arcname = os.path.splitdrive(arcname)[1]
+                    arcname = os.sep.join(
+                        p for p in arcname.split(os.sep) if p not in ("", ".", "..")
                     )
+                    if not arcname:
+                        continue
+                    member_path = (Path(target_dir) / arcname).resolve()
+                    if not member_path.is_relative_to(target):
+                        raise ValueError(
+                            f"Zip Slip detected: entry {info.filename!r} escapes target directory"
+                        )
+                    # Extract and verify
+                    extracted = Path(zip_ref.extract(info, target_dir)).resolve()
+                    if not extracted.is_relative_to(target):
+                        # Best-effort cleanup
+                        try:
+                            extracted.unlink(missing_ok=True)
+                        except OSError as cleanup_err:
+                            logger.warning(
+                                f"[GitAccessor] Failed to clean up escaped file {extracted}: {cleanup_err}"
+                            )
+                        raise ValueError(
+                            f"Zip Slip detected: entry {info.filename!r} escapes target directory"
+                        )
+
+        await asyncio.to_thread(_extract_zip_sync)
 
         return name

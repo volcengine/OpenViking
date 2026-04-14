@@ -7,6 +7,7 @@ Extracts ZIP archives and delegates to DirectoryParser for recursive processing.
 Supports nested ZIP files via DirectoryParser's recursive parser invocation.
 """
 
+import asyncio
 import shutil
 import tempfile
 import zipfile
@@ -55,17 +56,28 @@ class ZipParser(BaseParser):
         if not path.exists():
             raise FileNotFoundError(f"ZIP file not found: {path}")
 
-        if not zipfile.is_zipfile(path):
+        # Check if it's a valid ZIP file (non-blocking)
+        def _is_zipfile() -> bool:
+            return zipfile.is_zipfile(path)
+
+        if not await asyncio.to_thread(_is_zipfile):
             raise ValueError(f"Not a valid ZIP file: {path}")
 
-        # Extract ZIP to temporary directory
-        temp_dir = Path(tempfile.mkdtemp(prefix="ov_zip_"))
+        # Extract ZIP to temporary directory (non-blocking)
+        temp_dir = Path(await asyncio.to_thread(tempfile.mkdtemp, prefix="ov_zip_"))
         try:
-            with zipfile.ZipFile(path, "r") as zipf:
-                safe_extract_zip(zipf, temp_dir)
+            # Extract zip (non-blocking)
+            def _extract_zip():
+                with zipfile.ZipFile(path, "r") as zipf:
+                    safe_extract_zip(zipf, temp_dir)
 
-            # Check if extracted content has a single root directory
-            extracted_entries = [p for p in temp_dir.iterdir() if p.name not in {".", ".."}]
+            await asyncio.to_thread(_extract_zip)
+
+            # Check if extracted content has a single root directory (non-blocking)
+            def _list_entries():
+                return [p for p in temp_dir.iterdir() if p.name not in {".", ".."}]
+
+            extracted_entries = await asyncio.to_thread(_list_entries)
 
             # Prepare kwargs for DirectoryParser
             dir_kwargs = dict(kwargs)
@@ -91,22 +103,28 @@ class ZipParser(BaseParser):
             if not result.temp_dir_path:
                 result.temp_dir_path = str(temp_dir)
             else:
-                # If DirectoryParser created its own temp, clean up our extraction dir
-                try:
-                    shutil.rmtree(temp_dir, ignore_errors=True)
-                except Exception:
-                    pass
+                # If DirectoryParser created its own temp, clean up our extraction dir (non-blocking)
+                def _cleanup_temp():
+                    try:
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+                    except Exception:
+                        pass
+
+                await asyncio.to_thread(_cleanup_temp)
 
             result.source_format = "zip"
             result.parser_name = "ZipParser"
             return result
 
         except Exception:
-            # Clean up on error
-            try:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-            except Exception:
-                pass
+            # Clean up on error (non-blocking)
+            def _cleanup_temp_on_error():
+                try:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                except Exception:
+                    pass
+
+            await asyncio.to_thread(_cleanup_temp_on_error)
             raise
 
     async def parse_content(
