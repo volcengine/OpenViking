@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from openviking.pyagfs.exceptions import AGFSClientError
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
+from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking_cli.exceptions import NotFoundError
@@ -86,6 +87,11 @@ async def stat(
         if "not found" in err_msg or "no such file or directory" in err_msg:
             raise NotFoundError(uri, "file")
         raise
+    except Exception as exc:
+        mapped = map_exception(exc, resource=uri)
+        if mapped is not None:
+            raise mapped from exc
+        raise
 
 
 class MkdirRequest(BaseModel):
@@ -114,7 +120,13 @@ async def rm(
 ):
     """Remove resource."""
     service = get_service()
-    await service.fs.rm(uri, ctx=_ctx, recursive=recursive)
+    try:
+        await service.fs.rm(uri, ctx=_ctx, recursive=recursive)
+    except Exception as exc:
+        mapped = map_exception(exc, resource=uri)
+        if mapped is not None:
+            raise mapped from exc
+        raise
     return Response(status="ok", result={"uri": uri})
 
 

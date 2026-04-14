@@ -316,12 +316,12 @@ enum Commands {
     },
     /// Read abstract content (L0)
     Abstract {
-        /// Viking URI
+        /// Directory URI
         uri: String,
     },
     /// Read overview content (L1)
     Overview {
-        /// Viking URI
+        /// Directory URI
         uri: String,
     },
     /// Write text content to an existing file
