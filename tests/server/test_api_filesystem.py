@@ -111,7 +111,7 @@ async def test_stat_not_found(client: httpx.AsyncClient):
         "/api/v1/fs/stat",
         params={"uri": "viking://nonexistent/xyz"},
     )
-    assert resp.status_code in (404, 500)
+    assert resp.status_code == 404
     body = resp.json()
     assert body["status"] == "error"
 
