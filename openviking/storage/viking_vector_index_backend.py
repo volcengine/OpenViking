@@ -831,12 +831,28 @@ class VikingVectorIndexBackend:
         extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
         limit: int = 10,
     ) -> List[Dict[str, Any]]:
+        # TODO：Better Alternative to Current Temporary Fix
+        
+        # If parent_uri is already under the requested target_directories, 
+        # adding a redundant scope prefix filter can slow down the backend. 
+        # Keep tenant/context filters but skip target_directories in that case.
+        effective_target_directories = target_directories
+        if target_directories:
+            parent_norm = parent_uri.rstrip("/")
+            for target_dir in target_directories:
+                if not target_dir:
+                    continue
+                target_norm = target_dir.rstrip("/")
+                if parent_norm == target_norm or parent_norm.startswith(target_norm + "/"):
+                    effective_target_directories = None
+                    break
+
         merged_filter = self._merge_filters(
             PathScope("uri", parent_uri, depth=1),
             self._build_scope_filter(
                 ctx=ctx,
                 context_type=context_type,
-                target_directories=target_directories,
+                target_directories=effective_target_directories,
                 extra_filter=extra_filter,
             ),
         )
