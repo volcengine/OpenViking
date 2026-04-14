@@ -11,6 +11,7 @@ Phase 1 focuses on two import paths:
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import re
 import time
@@ -328,9 +329,24 @@ def parse_openclaw_transcript(path: str | Path) -> list[OpenClawTranscriptMessag
     return messages
 
 
+def _call_sync_client_method(client: Any, method_name: str, *args: Any, **kwargs: Any) -> Any:
+    """Call a sync client method and fail fast on async clients."""
+    method = getattr(client, method_name)
+    result = method(*args, **kwargs)
+    if inspect.isawaitable(result):
+        close = getattr(result, "close", None)
+        if callable(close):
+            close()
+        raise TypeError(
+            "migrate_openclaw() requires a synchronous client such as "
+            "SyncOpenViking or SyncHTTPClient; async clients are not supported"
+        )
+    return result
+
+
 def _uri_exists(client: Any, uri: str) -> bool:
     try:
-        client.stat(uri)
+        _call_sync_client_method(client, "stat", uri)
     except NotFoundError:
         return False
     return True
@@ -338,9 +354,9 @@ def _uri_exists(client: Any, uri: str) -> bool:
 
 def _session_exists(client: Any, session_id: str) -> bool:
     if hasattr(client, "session_exists"):
-        return bool(client.session_exists(session_id))
+        return bool(_call_sync_client_method(client, "session_exists", session_id))
     try:
-        client.get_session(session_id, auto_create=False)
+        _call_sync_client_method(client, "get_session", session_id, auto_create=False)
     except NotFoundError:
         return False
     return True
@@ -364,7 +380,7 @@ def _wait_for_task(
 ) -> dict[str, Any]:
     deadline = time.monotonic() + timeout
     while time.monotonic() <= deadline:
-        task = client.get_task(task_id)
+        task = _call_sync_client_method(client, "get_task", task_id)
         if not task:
             time.sleep(poll_interval)
             continue
@@ -442,7 +458,9 @@ def migrate_openclaw(
                 memory_records.append(record)
                 continue
 
-            result = client.import_memory(
+            result = _call_sync_client_method(
+                client,
+                "import_memory",
                 artifact.uri,
                 content,
                 mode="replace",
@@ -479,17 +497,21 @@ def migrate_openclaw(
                     record["status"] = "skipped_exists"
                     transcript_records.append(record)
                     continue
-                client.delete_session(target_session_id)
+                _call_sync_client_method(client, "delete_session", target_session_id)
 
-            client.create_session(target_session_id)
+            _call_sync_client_method(client, "create_session", target_session_id)
             for message in messages:
-                client.add_message(
+                _call_sync_client_method(
+                    client,
+                    "add_message",
                     target_session_id,
                     message.role,
                     content=message.content,
                     created_at=message.created_at,
                 )
-            commit_result = client.commit_session(target_session_id, telemetry=False)
+            commit_result = _call_sync_client_method(
+                client, "commit_session", target_session_id, telemetry=False
+            )
             record["commit_result"] = commit_result
             task_id = commit_result.get("task_id")
             if wait and task_id:

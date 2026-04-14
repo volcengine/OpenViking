@@ -3,6 +3,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from openviking.migration.openclaw import (
     discover_openclaw_memory_artifacts,
     discover_openclaw_transcript_sessions,
@@ -97,3 +99,21 @@ def test_migrate_openclaw_dry_run_reports_memory_and_transcript(temp_dir: Path):
         "skipped": 0,
         "failed": 0,
     }
+
+
+def test_migrate_openclaw_rejects_async_clients(temp_dir: Path):
+    workspace = temp_dir / "workspace"
+    workspace.mkdir(parents=True)
+    (workspace / "MEMORY.md").write_text("# Durable\n")
+
+    class AsyncOnlyClient:
+        async def stat(self, uri: str):
+            del uri
+            return {}
+
+        async def import_memory(self, uri: str, content: str, **kwargs):
+            del uri, content, kwargs
+            return {"ok": True}
+
+    with pytest.raises(TypeError, match="synchronous client"):
+        migrate_openclaw(AsyncOnlyClient(), temp_dir, mode="memory", dry_run=False)
