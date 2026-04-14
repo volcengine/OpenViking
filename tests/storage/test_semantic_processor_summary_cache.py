@@ -56,7 +56,9 @@ async def test_process_memory_directory_reuses_summary_cache(monkeypatch):
     monkeypatch.setattr(processor, "_generate_single_file_summary", generate_summary)
     monkeypatch.setattr(processor, "_generate_overview", generate_overview)
     monkeypatch.setattr(processor, "_vectorize_directory", vectorize_directory)
-    monkeypatch.setattr(processor, "_enforce_size_limits", lambda overview, abstract: (overview, abstract))
+    monkeypatch.setattr(
+        processor, "_enforce_size_limits", lambda overview, abstract: (overview, abstract)
+    )
 
     msg = SemanticMsg(
         uri="viking://user/default/memories/preferences",

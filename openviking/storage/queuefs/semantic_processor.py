@@ -28,13 +28,13 @@ from openviking.parse.parsers.media.utils import (
 )
 from openviking.prompts import render_prompt
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.semantic_cache import (
     MANAGED_HIDDEN_SEMANTIC_FILES,
     SUMMARY_CACHE_FILENAME,
     parse_summary_cache,
     serialize_summary_cache,
 )
-from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecutor
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.viking_fs import get_viking_fs
@@ -231,7 +231,9 @@ class SemanticProcessor(DequeueHandlerBase):
         """Read cached file summaries for a directory."""
         viking_fs = get_viking_fs()
         try:
-            cache_content = await viking_fs.read_file(f"{dir_uri}/{SUMMARY_CACHE_FILENAME}", ctx=ctx)
+            cache_content = await viking_fs.read_file(
+                f"{dir_uri}/{SUMMARY_CACHE_FILENAME}", ctx=ctx
+            )
         except Exception as e:
             logger.debug(f"No summary cache found for {dir_uri}: {e}")
             return {}
