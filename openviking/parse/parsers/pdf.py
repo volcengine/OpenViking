@@ -93,7 +93,7 @@ class PDFParser(BaseParser):
 
         Args:
             source: Path to PDF file
-            **kwargs: Additional options (currently unused)
+            **kwargs: Additional options (resource_name/source_name for original filename)
 
         Returns:
             ParseResult with document tree
@@ -104,6 +104,9 @@ class PDFParser(BaseParser):
         """
         start_time = time.time()
         pdf_path = Path(source)
+
+        # Get resource name from kwargs, prefer original filename from upload
+        resource_name = kwargs.get("resource_name") or kwargs.get("source_name")
 
         if not pdf_path.exists():
             return create_parse_result(
@@ -117,11 +120,19 @@ class PDFParser(BaseParser):
 
         try:
             # Step 1: Convert PDF to Markdown
-            markdown_content, conversion_meta = await self._convert_to_markdown(pdf_path)
+            markdown_content, conversion_meta = await self._convert_to_markdown(
+                pdf_path,
+                resource_name=resource_name,
+            )
 
-            # Step 2: Parse Markdown using MarkdownParser
+            # Step 2: Parse Markdown using MarkdownParser, pass through resource name
             md_parser = self._get_markdown_parser()
-            result = await md_parser.parse_content(markdown_content, source_path=str(pdf_path))
+            result = await md_parser.parse_content(
+                markdown_content,
+                source_path=str(pdf_path),
+                resource_name=resource_name,
+                source_name=resource_name,
+            )
 
             # Step 3: Update metadata for PDF origin
             result.source_format = "pdf"  # Override markdown format
@@ -152,12 +163,17 @@ class PDFParser(BaseParser):
                 warnings=[f"Failed to parse PDF: {e}"],
             )
 
-    async def _convert_to_markdown(self, pdf_path: Path) -> tuple[str, Dict[str, Any]]:
+    async def _convert_to_markdown(
+        self,
+        pdf_path: Path,
+        resource_name: Optional[str] = None,
+    ) -> tuple[str, Dict[str, Any]]:
         """
         Convert PDF to Markdown using configured strategy.
 
         Args:
             pdf_path: Path to PDF file
+            resource_name: Optional resource name for organizing saved images
 
         Returns:
             Tuple of (markdown_content, metadata_dict)
@@ -166,22 +182,22 @@ class PDFParser(BaseParser):
             ValueError: If all conversion strategies fail
         """
         if self.config.strategy == "local":
-            return await self._convert_local(pdf_path)
+            return await self._convert_local(pdf_path, resource_name=resource_name)
 
         elif self.config.strategy == "mineru":
-            return await self._convert_mineru(pdf_path)
+            return await self._convert_mineru(pdf_path, resource_name=resource_name)
 
         elif self.config.strategy == "auto":
             # Try local first
             try:
-                return await self._convert_local(pdf_path)
+                return await self._convert_local(pdf_path, resource_name=resource_name)
             except Exception as e:
                 logger.warning(f"Local conversion failed: {e}")
 
                 # Fallback to MinerU if configured
                 if self.config.mineru_endpoint:
                     logger.info("Falling back to MinerU API")
-                    return await self._convert_mineru(pdf_path)
+                    return await self._convert_mineru(pdf_path, resource_name=resource_name)
                 else:
                     raise ValueError(
                         f"Local conversion failed and no MinerU endpoint configured: {e}"
@@ -594,12 +610,17 @@ class PDFParser(BaseParser):
             logger.debug(f"Image extraction error: {e}")
             return None
 
-    async def _convert_mineru(self, pdf_path: Path) -> tuple[str, Dict[str, Any]]:
+    async def _convert_mineru(
+        self,
+        pdf_path: Path,
+        resource_name: Optional[str] = None,
+    ) -> tuple[str, Dict[str, Any]]:
         """
         Convert PDF to Markdown using MinerU API.
 
         Args:
             pdf_path: Path to PDF file
+            resource_name: Optional resource name (unused in MinerU conversion)
 
         Returns:
             Tuple of (markdown_content, metadata)
