@@ -20,7 +20,6 @@ class CheckpointManager:
             os.makedirs(self.checkpoint_dir, exist_ok=True)
     
     def _compute_config_hash(self, config: Dict[str, Any]) -> str:
-        # 创建 config 的副本，忽略执行相关的开关（这些不影响实验结果）
         config_copy = config.copy()
         
         config_str = json.dumps(config_copy, sort_keys=True)
