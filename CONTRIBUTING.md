@@ -15,7 +15,7 @@ Thank you for your interest in OpenViking! We welcome contributions of all kinds
 
 - **Python**: 3.10+
 - **Go**: 1.22+ (Required for building AGFS components from source)
-- **Rust**: 1.88+ (Required for source builds because the bundled `ov` CLI is built during packaging)
+- **Rust**: 1.91.1+ (Required for source builds because the bundled `ov` CLI is built during packaging)
 - **C++ Compiler**: GCC 9+ or Clang 11+ (Required for building core extensions, must support C++17)
 - **CMake**: 3.12+
 

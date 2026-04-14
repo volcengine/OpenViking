@@ -2,6 +2,7 @@
 name = "ov_cli"
 version = "0.2.6"
 edition = "2024"
+rust-version = "1.91.1"
 authors = ["OpenViking Contributors"]
 description = "Rust CLI client for OpenViking"
 license = "MIT"

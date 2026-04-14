@@ -2,6 +2,7 @@
 name = "ragfs"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.91.1"
 authors = ["OpenViking Contributors"]
 description = "Rust implementation of AGFS - Aggregated File System for AI Agents"
 license = "Apache-2.0"
