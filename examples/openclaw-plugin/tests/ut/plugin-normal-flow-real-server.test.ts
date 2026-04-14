@@ -176,7 +176,7 @@ describe("plugin normal flow with healthy backend", () => {
     await once(server, "close");
   });
 
-  it("keeps normal prompt-build and context-engine flow working", async () => {
+  it("keeps assemble-first recall and context-engine flow working", async () => {
     const handlers = new Map<string, (event: unknown, ctx?: unknown) => unknown>();
     let service:
       | {
@@ -225,15 +225,16 @@ describe("plugin normal flow with healthy backend", () => {
       { agentId: "main", sessionId: "session-normal", sessionKey: "agent:main:normal" },
     );
 
-    expect(hookResult).toMatchObject({
-      prependContext: expect.stringContaining("User prefers Rust for backend tasks."),
-    });
+    expect(hookResult).toBeUndefined();
 
     const contextEngine = contextEngineFactory!() as {
       assemble: (params: {
         sessionId: string;
         messages: Array<{ role: string; content: string }>;
-      }) => Promise<{ messages: Array<{ role: string; content: unknown }> }>;
+      }) => Promise<{
+        messages: Array<{ role: string; content: unknown }>;
+        systemPromptAddition?: string;
+      }>;
       afterTurn: (params: {
         sessionId: string;
         sessionFile: string;
@@ -255,6 +256,8 @@ describe("plugin normal flow with healthy backend", () => {
       role: "assistant",
       content: [{ type: "text", text: "Stored answer from OpenViking." }],
     });
+    expect(assembled.systemPromptAddition).toContain("<relevant-memories>");
+    expect(assembled.systemPromptAddition).toContain("User prefers Rust for backend tasks.");
 
     await contextEngine.afterTurn({
       sessionId: "session-normal",

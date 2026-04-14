@@ -18,6 +18,7 @@ export type MemoryOpenVikingConfig = {
   captureMode?: "semantic" | "keyword";
   captureMaxLength?: number;
   autoRecall?: boolean;
+  recallPath?: "assemble" | "hook";
   recallLimit?: number;
   recallScoreThreshold?: number;
   recallMaxContentChars?: number;
@@ -46,6 +47,7 @@ const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_CAPTURE_MODE = "semantic";
 const DEFAULT_CAPTURE_MAX_LENGTH = 24000;
 const DEFAULT_RECALL_LIMIT = 6;
+const DEFAULT_RECALL_PATH = "assemble";
 const DEFAULT_RECALL_SCORE_THRESHOLD = 0.15;
 const DEFAULT_RECALL_MAX_CONTENT_CHARS = 500;
 const DEFAULT_RECALL_PREFER_ABSTRACT = true;
@@ -154,6 +156,7 @@ export const memoryOpenVikingConfigSchema = {
         "captureMode",
         "captureMaxLength",
         "autoRecall",
+        "recallPath",
         "recallLimit",
         "recallScoreThreshold",
         "recallMaxContentChars",
@@ -196,6 +199,14 @@ export const memoryOpenVikingConfigSchema = {
     ) {
       throw new Error(`openviking captureMode must be "semantic" or "keyword"`);
     }
+    const recallPath = cfg.recallPath;
+    if (
+      typeof recallPath !== "undefined" &&
+      recallPath !== "assemble" &&
+      recallPath !== "hook"
+    ) {
+      throw new Error(`openviking recallPath must be "assemble" or "hook"`);
+    }
 
     return {
       mode,
@@ -213,6 +224,7 @@ export const memoryOpenVikingConfigSchema = {
         Math.min(200_000, Math.floor(toNumber(cfg.captureMaxLength, DEFAULT_CAPTURE_MAX_LENGTH))),
       ),
       autoRecall: cfg.autoRecall !== false,
+      recallPath: recallPath ?? DEFAULT_RECALL_PATH,
       recallLimit: Math.max(1, Math.floor(toNumber(cfg.recallLimit, DEFAULT_RECALL_LIMIT))),
       recallScoreThreshold: Math.min(
         1,
@@ -333,6 +345,12 @@ export const memoryOpenVikingConfigSchema = {
     autoRecall: {
       label: "Auto-Recall",
       help: "Inject relevant OpenViking memories into agent context",
+    },
+    recallPath: {
+      label: "Recall Path",
+      placeholder: DEFAULT_RECALL_PATH,
+      advanced: true,
+      help: '"assemble" keeps memory injection inside the context-engine path; "hook" preserves legacy before_prompt_build recall.',
     },
     recallLimit: {
       label: "Recall Limit",

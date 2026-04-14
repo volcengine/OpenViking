@@ -51,18 +51,18 @@ The main rules are:
 
 This matters because the plugin is built to support multi-agent and multi-session OpenClaw usage without mixing memories across sessions.
 
-## Prompt-Front Recall Flow
+## Recall Flow
 
 ![Automatic recall flow before prompt build](./images/openclaw-plugin-recall-flow.png)
 
-Today the main recall path still lives in `before_prompt_build`:
+The default recall path now lives in `assemble()`:
 
-1. Extract the latest user text from `messages` or `prompt`.
+1. Extract the latest user text from the active messages passed into `assemble()`.
 2. Resolve the agent routing for the current `sessionId/sessionKey`.
-3. Run a quick availability precheck so prompt building does not stall when OpenViking is unavailable.
+3. Read session context from OpenViking under the configured token budget.
 4. Query both `viking://user/memories` and `viking://agent/memories` in parallel.
 5. Deduplicate, threshold-filter, rerank, and trim the results under a token budget.
-6. Prepend the selected memories as a `<relevant-memories>` block.
+6. Append the selected memories into `systemPromptAddition` as a `<relevant-memories>` block.
 
 The reranking logic is not pure vector-score sorting. The current implementation also considers:
 
@@ -79,7 +79,7 @@ When the latest user input looks like pasted multi-speaker transcript content:
 
 - metadata blocks, command text, and pure question text are filtered out
 - the cleaned text is checked against speaker-turn and length thresholds
-- if it matches, the plugin prepends a lightweight `<ingest-reply-assist>` instruction
+- if it matches, the plugin adds a lightweight `<ingest-reply-assist>` instruction to `systemPromptAddition`
 
 The goal is not to change memory logic. It is to reduce the chance that the model responds with `NO_REPLY` when the user pastes chat history, meeting notes, or conversation transcripts for ingestion.
 
@@ -100,7 +100,7 @@ Session handling is the main axis of this design. In the current implementation 
 - tool output becomes separate `toolResult`
 - the final message list goes through a tool-use/result pairing repair pass
 
-That means OpenClaw sees “compressed history summary + archive index + active messages”, not an ever-growing raw transcript.
+That means OpenClaw sees “compressed history summary + archive index + active messages”, not an ever-growing raw transcript. When recall is enabled, `assemble()` also becomes the main memory-injection surface for fresh-session questions.
 
 ### What `afterTurn()` does
 
@@ -205,8 +205,8 @@ The main difference between `local` and `remote` is who is responsible for bring
 The repo also contains a more future-looking design draft at `docs/design/openclaw-context-engine-refactor.md`. It is important not to conflate the two:
 
 - this README describes current implemented behavior
-- the older draft discusses a stronger future move into context-engine-owned lifecycle control
-- in the current version, the main automatic recall path still lives in `before_prompt_build`, not fully in `assemble()`
+- the older draft discusses a broader context-engine-owned lifecycle control plan
+- in the current version, automatic recall defaults to `assemble()` and `before_prompt_build` is a compatibility path only
 - in the current version, `afterTurn()` already appends to the OpenViking session, but commit remains threshold-triggered and asynchronous on that path
 - in the current version, `compact()` already uses `commit(wait=true)`, but it is still focused on synchronous commit plus readback rather than owning every orchestration concern
 

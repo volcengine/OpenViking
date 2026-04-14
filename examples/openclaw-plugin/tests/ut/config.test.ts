@@ -19,6 +19,7 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.recallScoreThreshold).toBe(0.15);
     expect(cfg.autoCapture).toBe(true);
     expect(cfg.autoRecall).toBe(true);
+    expect(cfg.recallPath).toBe("assemble");
     expect(cfg.recallPreferAbstract).toBe(false);
     expect(cfg.recallTokenBudget).toBe(2000);
     expect(cfg.commitTokenThreshold).toBe(20000);
@@ -99,6 +100,12 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(() =>
       memoryOpenVikingConfigSchema.parse({ captureMode: "fast" }),
     ).toThrow('captureMode must be "semantic" or "keyword"');
+  });
+
+  it("throws on invalid recallPath", () => {
+    expect(() =>
+      memoryOpenVikingConfigSchema.parse({ recallPath: "legacy" }),
+    ).toThrow('recallPath must be "assemble" or "hook"');
   });
 
   it("local mode auto-generates baseUrl from port", () => {

@@ -3,6 +3,7 @@ import type { OpenVikingClient, OVMessage } from "./client.js";
 import type { MemoryOpenVikingConfig } from "./config.js";
 import {
   compileSessionPatterns,
+  extractLatestUserText,
   getCaptureDecision,
   extractNewTurnTexts,
   extractSingleMessageText,
@@ -12,6 +13,12 @@ import {
   trimForLog,
   toJsonLog,
 } from "./memory-ranking.js";
+import {
+  buildIngestReplyAssistSection,
+  buildRecallPromptSection,
+  prepareRecallQuery,
+} from "./recall-context.js";
+import { withTimeout } from "./process-manager.js";
 import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
 
 type AgentMessage = {
@@ -418,6 +425,16 @@ function buildSystemPromptAddition(): string {
   ].join("\n");
 }
 
+function joinSystemPromptSections(sections: Array<string | undefined>): string | undefined {
+  const filtered = sections
+    .map((section) => (typeof section === "string" ? section.trim() : ""))
+    .filter(Boolean);
+  if (filtered.length === 0) {
+    return undefined;
+  }
+  return filtered.join("\n\n");
+}
+
 function warnOrInfo(logger: Logger, message: string): void {
   if (typeof logger.warn === "function") {
     logger.warn(message);
@@ -631,8 +648,11 @@ export function createMemoryOpenVikingContextEngine(params: {
       const { messages } = assembleParams;
       const tokenBudget = validTokenBudget(assembleParams.tokenBudget) ?? 128_000;
       const sessionKey = extractAssembleSessionKey(assembleParams);
+      const latestUserText = extractLatestUserText(messages as unknown[]);
+      const recallQuery = prepareRecallQuery(latestUserText);
 
       const originalTokens = roughEstimate(messages);
+      const passthroughEstimatedTokens = roughEstimate(messages);
 
       const OVSessionId = openClawSessionToOvStorageId(assembleParams.sessionId, sessionKey);
       rememberSessionAgentId?.({
@@ -666,17 +686,85 @@ export function createMemoryOpenVikingContextEngine(params: {
         if (!(await runLocalPrecheck("assemble", OVSessionId, {
           tokenBudget,
         }))) {
-          return { messages, estimatedTokens: roughEstimate(messages) };
+          return { messages, estimatedTokens: passthroughEstimatedTokens };
         }
-        const client = await getClient();
+        const client = await withTimeout(
+          getClient(),
+          cfg.timeoutMs,
+          "openviking: context engine client initialization timeout",
+        );
         const routingRef =
           assembleParams.sessionId ?? sessionKey ?? OVSessionId;
         const agentId = resolveAgentId(routingRef, sessionKey, OVSessionId);
-        const ctx = await client.getSessionContext(
-          OVSessionId,
-          tokenBudget,
-          agentId,
+        if (recallQuery.truncated) {
+          warnOrInfo(
+            logger,
+            `openviking: recall query truncated (chars=${recallQuery.originalChars}->${recallQuery.finalChars})`,
+          );
+        }
+        const runtimeLog = (message: string) => warnOrInfo(logger, message);
+
+        const ingestReplyAssist = buildIngestReplyAssistSection(
+          recallQuery.query,
+          cfg,
+          runtimeLog,
         );
+
+        const [ctxSettled, recallSettled] = await Promise.allSettled([
+          withTimeout(
+            client.getSessionContext(
+              OVSessionId,
+              tokenBudget,
+              agentId,
+            ),
+            cfg.timeoutMs,
+            "openviking: session context timeout",
+          ),
+          cfg.recallPath === "assemble"
+            ? buildRecallPromptSection({
+                cfg,
+                client,
+                logger,
+                queryText: recallQuery.query,
+                agentId,
+                verboseLog: runtimeLog,
+              })
+            : Promise.resolve({ estimatedTokens: 0, memories: [] }),
+        ]);
+
+        if (ctxSettled.status === "rejected") {
+          warnOrInfo(
+            logger,
+            `openviking: session context unavailable for session=${OVSessionId}: ${String(ctxSettled.reason)}`,
+          );
+        }
+
+        const recallPrompt =
+          recallSettled.status === "fulfilled"
+            ? recallSettled.value
+            : { estimatedTokens: 0, memories: [] };
+        if (recallSettled.status === "rejected") {
+          warnOrInfo(
+            logger,
+            `openviking: assemble recall unavailable for session=${OVSessionId}: ${String(recallSettled.reason)}`,
+          );
+        }
+
+        const ctx =
+          ctxSettled.status === "fulfilled"
+            ? ctxSettled.value
+            : null;
+        const passthroughSystemPrompt = joinSystemPromptSections([
+          recallPrompt.section,
+          ingestReplyAssist,
+        ]);
+        const passthroughResult = (): AssembleResult => ({
+          messages,
+          estimatedTokens: passthroughEstimatedTokens,
+          ...(passthroughSystemPrompt
+            ? { systemPromptAddition: passthroughSystemPrompt }
+            : {}),
+        });
 
         const preAbstracts = ctx?.pre_archive_abstracts ?? [];
         const hasArchives = !!ctx?.latest_archive_overview || preAbstracts.length > 0;
@@ -691,7 +779,7 @@ export function createMemoryOpenVikingContextEngine(params: {
             estimatedTokens: originalTokens,
             tokensSaved: 0, savingPct: 0,
           });
-          return { messages, estimatedTokens: roughEstimate(messages) };
+          return passthroughResult();
         }
 
         if (!hasArchives && ctx.messages.length < messages.length) {
@@ -703,7 +791,7 @@ export function createMemoryOpenVikingContextEngine(params: {
             estimatedTokens: originalTokens,
             tokensSaved: 0, savingPct: 0,
           });
-          return { messages, estimatedTokens: roughEstimate(messages) };
+          return passthroughResult();
         }
 
         const assembled: AgentMessage[] = [];
@@ -740,13 +828,18 @@ export function createMemoryOpenVikingContextEngine(params: {
             estimatedTokens: originalTokens,
             tokensSaved: 0, savingPct: 0,
           });
-          return { messages, estimatedTokens: roughEstimate(messages) };
+          return passthroughResult();
         }
 
         const assembledTokens = roughEstimate(sanitized);
         const archiveCount = preAbstracts.length;
         const tokensSaved = originalTokens - assembledTokens;
         const savingPct = originalTokens > 0 ? Math.round((tokensSaved / originalTokens) * 100) : 0;
+        const assembledSystemPrompt = joinSystemPromptSections([
+          hasArchives ? buildSystemPromptAddition() : undefined,
+          recallPrompt.section,
+          ingestReplyAssist,
+        ]);
 
         diag("assemble_result", OVSessionId, {
           passthrough: false,
@@ -763,8 +856,8 @@ export function createMemoryOpenVikingContextEngine(params: {
         return {
           messages: sanitized,
           estimatedTokens: ctx.estimatedTokens,
-          ...(hasArchives
-            ? { systemPromptAddition: buildSystemPromptAddition() }
+          ...(assembledSystemPrompt
+            ? { systemPromptAddition: assembledSystemPrompt }
             : {}),
         };
       } catch (err) {
@@ -778,7 +871,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           tokenBudget,
           agentId: resolveAgentId(OVSessionId),
         });
-        return { messages, estimatedTokens: roughEstimate(messages) };
+        return { messages, estimatedTokens: passthroughEstimatedTokens };
       }
     },
 

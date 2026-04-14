@@ -92,6 +92,17 @@ Get the current full plugin configuration:
 openclaw config get plugins.entries.openviking.config
 ```
 
+Recommended default for the context-engine path:
+
+```bash
+openclaw config get plugins.entries.openviking.config.recallPath
+openclaw config get plugins.entries.openviking.hooks.allowPromptInjection
+```
+
+The supported default is `recallPath = assemble` with
+`hooks.allowPromptInjection = false`, so memory recall stays inside
+`assemble()` instead of running in `before_prompt_build`.
+
 ### Local Mode
 
 Use this mode when the OpenClaw plugin should start and manage a local OpenViking process.

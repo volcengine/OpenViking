@@ -22,7 +22,7 @@
  *   OPENVIKING_ALLOW_BREAK_SYSTEM_PACKAGES (Linux)
  */
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { cp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { existsSync, readdirSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
@@ -1254,7 +1254,18 @@ async function configureOvConf() {
 }
 
 function getOpenClawConfigPath() {
-  return join(OPENCLAW_DIR, "openclaw.json");
+  const configuredPath = process.env.OPENCLAW_CONFIG_PATH?.trim();
+  if (configuredPath) return expandUserPath(configuredPath);
+
+  const cliPath = detectOpenClawConfigPathFromCli();
+  if (cliPath) return cliPath;
+
+  const candidates = [join(OPENCLAW_DIR, "openclaw.json5"), join(OPENCLAW_DIR, "openclaw.json")];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+
+  return candidates[0];
 }
 
 function getOpenClawEnv() {
@@ -1262,6 +1273,24 @@ function getOpenClawEnv() {
     return { ...process.env };
   }
   return { ...process.env, OPENCLAW_STATE_DIR: OPENCLAW_DIR };
+}
+
+function expandUserPath(filePath) {
+  if (filePath === "~") return HOME;
+  if (filePath.startsWith("~/")) return join(HOME, filePath.slice(2));
+  return filePath;
+}
+
+function detectOpenClawConfigPathFromCli() {
+  const result = spawnSync("openclaw", ["config", "file"], {
+    env: getOpenClawEnv(),
+    shell: IS_WIN,
+    encoding: "utf8",
+  });
+  if (result.status !== 0) return "";
+  const filePath = result.stdout.trim();
+  if (!filePath) return "";
+  return expandUserPath(filePath);
 }
 
 async function readJsonFileIfExists(filePath) {
@@ -2116,6 +2145,16 @@ async function configureOpenClawPlugin({
     await oc(["config", "set", `plugins.entries.${pluginId}.config.targetUri`, "viking://user/memories"]);
     await oc(["config", "set", `plugins.entries.${pluginId}.config.autoRecall`, "true", "--json"]);
     await oc(["config", "set", `plugins.entries.${pluginId}.config.autoCapture`, "true", "--json"]);
+  }
+  if (pluginId === "openviking" && resolvedPluginKind === "context-engine") {
+    await oc(["config", "set", `plugins.entries.${pluginId}.config.recallPath`, "assemble"]);
+    await oc([
+      "config",
+      "set",
+      `plugins.entries.${pluginId}.hooks.allowPromptInjection`,
+      "false",
+      "--json",
+    ]);
   }
 
   info(tr("OpenClaw plugin configured", "OpenClaw 插件配置完成"));

@@ -63,6 +63,12 @@
       "label": "Auto-Recall",
       "help": "Inject relevant OpenViking memories into agent context"
     },
+    "recallPath": {
+      "label": "Recall Path",
+      "placeholder": "assemble",
+      "advanced": true,
+      "help": "\"assemble\" keeps recall inside the context-engine path; \"hook\" preserves legacy before_prompt_build recall."
+    },
     "recallLimit": {
       "label": "Recall Limit",
       "placeholder": "6",
@@ -175,6 +181,9 @@
       },
       "autoRecall": {
         "type": "boolean"
+      },
+      "recallPath": {
+        "type": "string"
       },
       "recallLimit": {
         "type": "number"

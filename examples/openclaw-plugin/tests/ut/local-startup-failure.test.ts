@@ -136,7 +136,7 @@ describe("local OpenViking startup failure", () => {
       ]);
 
       expect(hookOutcome.kind).toBe("returned");
-      expect(logs.some((entry) => entry.message.includes("failed to get client"))).toBe(true);
+      expect(logs.some((entry) => entry.message.includes("failed to get client"))).toBe(false);
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(unhandled).toEqual([]);
     } finally {

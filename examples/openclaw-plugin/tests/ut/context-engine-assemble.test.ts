@@ -44,7 +44,9 @@ function makeEngine(
 ) {
   const logger = makeLogger();
   const client = {
+    find: vi.fn().mockResolvedValue({ memories: [], total: 0 }),
     getSessionContext: vi.fn().mockResolvedValue(contextResult),
+    read: vi.fn().mockResolvedValue("memory content"),
   } as unknown as OpenVikingClient;
   const getClient = vi.fn().mockResolvedValue(client);
   const resolveAgentId = vi.fn((sessionId: string) => `agent:${sessionId}`);
@@ -393,6 +395,54 @@ describe("context-engine assemble()", () => {
     expect(result.messages).toBe(liveMessages);
     expect(result.estimatedTokens).toBe(roughEstimate(liveMessages));
     expect(result.systemPromptAddition).toBeUndefined();
+  });
+
+  it("injects recalled memories from assemble() for fresh-session questions", async () => {
+    const { engine, client } = makeEngine(
+      {
+        latest_archive_overview: "",
+        latest_archive_id: "",
+        pre_archive_abstracts: [],
+        messages: [],
+        estimatedTokens: 0,
+        stats: makeStats(),
+      },
+      {
+        cfgOverrides: {
+          autoRecall: true,
+          recallPath: "assemble",
+        },
+      },
+    );
+
+    client.find.mockResolvedValue({
+      memories: [
+        {
+          uri: "viking://user/default/memories/rust-pref",
+          level: 2,
+          category: "preference",
+          abstract: "User prefers Rust for backend tasks.",
+          score: 0.92,
+        },
+      ],
+      total: 1,
+    });
+    client.read.mockResolvedValue("User prefers Rust for backend tasks.");
+
+    const liveMessages = [
+      { role: "user", content: "what backend language should we use?" },
+    ];
+
+    const result = await engine.assemble({
+      sessionId: "session-new-user",
+      messages: liveMessages,
+    });
+
+    expect(result.messages).toBe(liveMessages);
+    expect(result.estimatedTokens).toBe(roughEstimate(liveMessages));
+    expect(result.systemPromptAddition).toContain("<relevant-memories>");
+    expect(result.systemPromptAddition).toContain("User prefers Rust for backend tasks.");
+    expect(client.find).toHaveBeenCalledTimes(2);
   });
 
   it("still produces non-empty output when OV messages have empty parts (overview fills it)", async () => {
