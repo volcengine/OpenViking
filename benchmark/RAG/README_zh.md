@@ -235,6 +235,20 @@ python run.py --config config/bot/locomo_bot_config.yaml --step eval
 python run.py --config config/bot/locomo_bot_config.yaml --step del
 ```
 
+#### 断点续传功能
+
+框架支持在生成阶段（`--step gen`）使用断点续传功能，适用于 bot 和非 bot 模式：
+
+```bash
+# 从上次中断的地方继续执行
+python run.py --config config/locomo_config.yaml --step gen --resume
+
+# 使用 VikingBot 时也支持断点续传
+python run.py --config config/bot/locomo_bot_config.yaml --step gen --resume
+```
+
+> **注意**：断点续传功能仅适用于 `--step gen` 阶段，`--step eval` 阶段不需要断点续传。框架会自动保存执行进度到 `output_dir` 目录下的 `benchmark_checkpoint.json` 文件中。
+
 ### 支持的数据集
 
 | 数据集              | 类型   | 文档数  | 问题数  | 特点                                             |
