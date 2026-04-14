@@ -248,36 +248,64 @@ class MemoryExtractor:
                 for field in ("abstract", "overview", "content", "tool_name", "skill_name")
             )
 
-        def _coerce_sequence(value) -> list:
+        def _coerce_sequence(value, source: str) -> list:
             if isinstance(value, list):
-                return [item for item in value if isinstance(item, dict)]
+                dict_items = [item for item in value if isinstance(item, dict)]
+                dropped = len(value) - len(dict_items)
+                if dropped > 0:
+                    logger.warning(
+                        "Memory extraction ignored %d non-dict item(s) from %s",
+                        dropped,
+                        source,
+                    )
+                return dict_items
             if _is_memory_item(value):
+                logger.debug(
+                    "Memory extraction normalized single memory object from %s",
+                    source,
+                )
                 return [value]
             return []
 
         if isinstance(data, list):
-            return {"memories": _coerce_sequence(data)}
+            logger.debug("Memory extraction normalized bare list response")
+            return {"memories": _coerce_sequence(data, "root list")}
 
         if not isinstance(data, dict):
+            if data is not None:
+                logger.warning(
+                    "Memory extraction received unexpected normalized payload type %s",
+                    type(data).__name__,
+                )
             return {}
 
         if _is_memory_item(data):
+            logger.debug("Memory extraction normalized bare memory object response")
             return {"memories": [data]}
 
         memories = data.get("memories")
         if memories is not None:
-            return {"memories": _coerce_sequence(memories)}
+            if not isinstance(memories, list):
+                logger.debug("Memory extraction normalized non-list memories field")
+            return {"memories": _coerce_sequence(memories, "memories field")}
 
         for key in ("items", "results", "data"):
             wrapped = data.get(key)
             if wrapped is None:
                 continue
             if isinstance(wrapped, dict) and "memories" in wrapped:
+                logger.debug("Memory extraction normalized %s wrapper", key)
                 return MemoryExtractor._normalize_extraction_payload(wrapped)
-            coerced = _coerce_sequence(wrapped)
+            coerced = _coerce_sequence(wrapped, f"{key} wrapper")
             if coerced:
+                logger.debug("Memory extraction normalized %s wrapper sequence", key)
                 return {"memories": coerced}
 
+        if data:
+            logger.debug(
+                "Memory extraction payload dict did not match known schemas; keys=%s",
+                sorted(str(key) for key in data.keys())[:8],
+            )
         return {}
 
     async def extract(

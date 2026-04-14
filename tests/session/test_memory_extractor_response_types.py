@@ -14,6 +14,7 @@ import importlib.util
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from unittest.mock import MagicMock
 
 try:
     from openviking.session.memory_extractor import MemoryExtractor
@@ -85,6 +86,10 @@ except Exception:  # pragma: no cover - fallback for minimal local test env
 
 def _normalize_parsed_data(data):
     return MemoryExtractor._normalize_extraction_payload(data)
+
+
+def _memory_extractor_module():
+    return sys.modules[MemoryExtractor.__module__]
 
 
 def _make_memory(category="patterns", content="user prefers dark mode"):
@@ -185,3 +190,35 @@ class TestExtractResponseTypes:
 
         assert data == {"memories": []}
         assert data.get("memories", []) == []
+
+    def test_logs_when_non_dict_items_are_dropped(self, monkeypatch):
+        module = _memory_extractor_module()
+        warning = MagicMock()
+        monkeypatch.setattr(module.logger, "warning", warning)
+
+        data = _normalize_parsed_data([_make_memory(), "bad-item", 42])
+
+        assert len(data["memories"]) == 1
+        warning.assert_called_once()
+        assert "ignored" in warning.call_args.args[0]
+
+    def test_logs_when_single_memory_object_is_normalized(self, monkeypatch):
+        module = _memory_extractor_module()
+        debug = MagicMock()
+        monkeypatch.setattr(module.logger, "debug", debug)
+
+        data = _normalize_parsed_data(_make_memory(category="preferences"))
+
+        assert len(data["memories"]) == 1
+        debug.assert_called()
+
+    def test_logs_when_payload_type_is_unexpected(self, monkeypatch):
+        module = _memory_extractor_module()
+        warning = MagicMock()
+        monkeypatch.setattr(module.logger, "warning", warning)
+
+        data = _normalize_parsed_data(42)
+
+        assert data == {}
+        warning.assert_called_once()
+        assert "unexpected normalized payload type" in warning.call_args.args[0]
