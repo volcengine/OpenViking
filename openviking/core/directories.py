@@ -180,7 +180,7 @@ class DirectoryInitializer:
         """Initialize user-space tree lazily for the current user."""
         if "user" not in PRESET_DIRECTORIES:
             return 0
-        policy = self._load_namespace_policy(ctx)
+        policy = await self._load_namespace_policy(ctx)
         user_space_root = ctx.user.canonical_user_root(policy)
         user_parent = VikingURI(user_space_root).parent
         user_tree = PRESET_DIRECTORIES["user"]
@@ -201,7 +201,7 @@ class DirectoryInitializer:
         """Initialize agent-space tree lazily for the current user+agent."""
         if "agent" not in PRESET_DIRECTORIES:
             return 0
-        policy = self._load_namespace_policy(ctx)
+        policy = await self._load_namespace_policy(ctx)
         agent_space_root = ctx.user.canonical_agent_root(policy)
         agent_parent = VikingURI(agent_space_root).parent
         agent_tree = PRESET_DIRECTORIES["agent"]
@@ -358,11 +358,11 @@ class DirectoryInitializer:
         viking_fs = get_viking_fs()
         policy = self._namespace_policy_overrides.pop(ctx.account_id, None)
         if policy is None:
-            policy = viking_fs.get_namespace_resolver(ctx).policy
+            policy = (await viking_fs.get_namespace_resolver(ctx)).policy
         return await persist_namespace_policy(viking_fs, ctx.account_id, policy)
 
     @staticmethod
-    def _load_namespace_policy(ctx: RequestContext) -> NamespacePolicy:
+    async def _load_namespace_policy(ctx: RequestContext) -> NamespacePolicy:
         from openviking.storage.viking_fs import get_viking_fs
 
-        return get_viking_fs().get_namespace_resolver(ctx).policy
+        return (await get_viking_fs().get_namespace_resolver(ctx)).policy

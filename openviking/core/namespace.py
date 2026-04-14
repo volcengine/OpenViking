@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
 """Account-scoped namespace policy and canonical URI resolution helpers."""
 
 from __future__ import annotations
@@ -6,9 +8,12 @@ import json
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from openviking_cli.utils import run_async
+from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
 
 NAMESPACE_POLICY_PATH_TEMPLATE = "/local/{account_id}/_system/setting.json"
+logger = get_logger(__name__)
 
 _ROOT_METADATA_FILES = {".abstract.md", ".overview.md"}
 _USER_STRUCTURE_DIRS = {"memories", "profile.md"}
@@ -195,8 +200,10 @@ def _ensure_parent_dirs(viking_fs: Any, path: str) -> None:
         parent = "/" + "/".join(parts[:index])
         try:
             viking_fs.agfs.mkdir(parent)
-        except Exception:
-            pass
+        except FileExistsError:
+            continue
+        except Exception as exc:
+            logger.debug("Failed to create parent directory %s: %s", parent, exc)
 
 
 def _coerce_bytes(viking_fs: Any, result: Any) -> bytes:
@@ -223,7 +230,36 @@ async def load_namespace_policy(viking_fs: Any, account_id: str) -> NamespacePol
         payload = await viking_fs.decrypt_bytes(account_id, payload)
         data = json.loads(payload.decode("utf-8"))
         return NamespacePolicy.from_dict(data)
-    except Exception:
+    except Exception as exc:
+        logger.debug(
+            "Falling back to default namespace policy for account %s from %s: %s",
+            account_id,
+            path,
+            exc,
+        )
+        return NamespacePolicy()
+
+
+def load_namespace_policy_sync(viking_fs: Any, account_id: str) -> NamespacePolicy:
+    """Synchronously read the persisted account policy for sync-only call sites."""
+    path = namespace_policy_path(account_id)
+    try:
+        try:
+            raw = viking_fs.agfs.read(path, 0, -1)
+        except TypeError:
+            raw = viking_fs.agfs.read(path)
+        payload = _coerce_bytes(viking_fs, raw)
+        if getattr(viking_fs, "_encryptor", None):
+            payload = run_async(viking_fs.decrypt_bytes(account_id, payload))
+        data = json.loads(payload.decode("utf-8"))
+        return NamespacePolicy.from_dict(data)
+    except Exception as exc:
+        logger.debug(
+            "Synchronously falling back to default namespace policy for account %s from %s: %s",
+            account_id,
+            path,
+            exc,
+        )
         return NamespacePolicy()
 
 
@@ -239,7 +275,11 @@ async def persist_namespace_policy(
     content = await viking_fs.encrypt_bytes(account_id, content)
     _ensure_parent_dirs(viking_fs, path)
     viking_fs.agfs.write(path, content)
-    cache = getattr(viking_fs, "_namespace_policy_cache", None)
-    if isinstance(cache, dict):
-        cache[account_id] = resolved
+    cache_setter = getattr(viking_fs, "_set_cached_namespace_policy", None)
+    if callable(cache_setter):
+        cache_setter(account_id, resolved)
+    else:
+        cache = getattr(viking_fs, "_namespace_policy_cache", None)
+        if isinstance(cache, dict):
+            cache[account_id] = resolved
     return resolved

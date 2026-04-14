@@ -17,13 +17,19 @@ import contextvars
 import hashlib
 import json
 import re
+import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-from openviking.core.namespace import NamespaceResolver, load_namespace_policy
+from openviking.core.namespace import (
+    NamespacePolicy,
+    NamespaceResolver,
+    load_namespace_policy,
+    load_namespace_policy_sync,
+)
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSDirectoryNotEmptyError, AGFSHTTPError
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext, Role
@@ -31,7 +37,6 @@ from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import format_simplified, get_current_timestamp, parse_iso_datetime
 from openviking_cli.exceptions import FailedPreconditionError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
-from openviking_cli.utils import run_async
 from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
 
@@ -198,7 +203,8 @@ class VikingFS:
         self._bound_ctx: contextvars.ContextVar[Optional[RequestContext]] = contextvars.ContextVar(
             "vikingfs_bound_ctx", default=None
         )
-        self._namespace_policy_cache: Dict[str, Any] = {}
+        self._namespace_policy_cache: Dict[str, NamespacePolicy] = {}
+        self._namespace_policy_cache_lock = threading.Lock()
 
     @staticmethod
     def _default_ctx() -> RequestContext:
@@ -270,22 +276,38 @@ class VikingFS:
             return uri
         return VikingURI.normalize(uri)
 
+    def _get_cached_namespace_policy(self, account_id: str) -> Optional[NamespacePolicy]:
+        with self._namespace_policy_cache_lock:
+            return self._namespace_policy_cache.get(account_id)
+
+    def _set_cached_namespace_policy(self, account_id: str, policy: NamespacePolicy) -> None:
+        with self._namespace_policy_cache_lock:
+            self._namespace_policy_cache[account_id] = policy
+
+    async def _load_namespace_policy_cached(
+        self, ctx: Optional[RequestContext]
+    ) -> NamespacePolicy:
+        real_ctx = self._ctx_or_default(ctx)
+        cached = self._get_cached_namespace_policy(real_ctx.account_id)
+        if cached is not None:
+            return cached
+
+        policy = await load_namespace_policy(self, real_ctx.account_id)
+        self._set_cached_namespace_policy(real_ctx.account_id, policy)
+        return policy
+
     def _get_namespace_resolver(self, ctx: Optional[RequestContext]) -> NamespaceResolver:
         real_ctx = self._ctx_or_default(ctx)
-        cache = getattr(self, "_namespace_policy_cache", None)
-        if cache is None:
-            cache = {}
-            self._namespace_policy_cache = cache
-
-        policy = cache.get(real_ctx.account_id)
+        policy = self._get_cached_namespace_policy(real_ctx.account_id)
         if policy is None:
-            policy = run_async(load_namespace_policy(self, real_ctx.account_id))
-            cache[real_ctx.account_id] = policy
+            policy = load_namespace_policy_sync(self, real_ctx.account_id)
+            self._set_cached_namespace_policy(real_ctx.account_id, policy)
         return NamespaceResolver(policy)
 
-    def get_namespace_resolver(self, ctx: Optional[RequestContext]) -> NamespaceResolver:
+    async def get_namespace_resolver(self, ctx: Optional[RequestContext]) -> NamespaceResolver:
         """Expose the per-account namespace resolver for callers that need canonical roots."""
-        return self._get_namespace_resolver(ctx)
+        policy = await self._load_namespace_policy_cached(ctx)
+        return NamespaceResolver(policy)
 
     def _canonicalize_uri(self, uri: str, ctx: Optional[RequestContext]) -> str:
         normalized = self._normalize_uri(uri)
@@ -326,6 +348,14 @@ class VikingFS:
         if real_ctx.role != Role.ROOT and normalized_uri.rstrip("/") == "viking://temp":
             raise PermissionError("Temp root is read-only for non-root users")
 
+    async def _ensure_access_async(self, uri: str, ctx: Optional[RequestContext]) -> None:
+        await self._load_namespace_policy_cached(ctx)
+        self._ensure_access(uri, ctx)
+
+    async def _ensure_mutable_access_async(self, uri: str, ctx: Optional[RequestContext]) -> None:
+        await self._load_namespace_policy_cached(ctx)
+        self._ensure_mutable_access(uri, ctx)
+
     # ========== AGFS Basic Commands ==========
 
     async def read(
@@ -336,7 +366,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> bytes:
         """Read file"""
-        self._ensure_access(uri, ctx)
+        await self._ensure_access_async(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
 
         if self._encryptor:
@@ -376,7 +406,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> str:
         """Write file"""
-        self._ensure_mutable_access(uri, ctx)
+        await self._ensure_mutable_access_async(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         if isinstance(data, str):
             data = data.encode("utf-8")
@@ -392,7 +422,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Create directory."""
-        self._ensure_mutable_access(uri, ctx)
+        await self._ensure_mutable_access_async(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         # Always ensure parent directories exist before creating this directory
         await self._ensure_parent_dirs(path)
@@ -425,7 +455,7 @@ class VikingFS:
         from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
         from openviking.storage.transaction import LockContext, get_lock_manager
 
-        self._ensure_mutable_access(uri, ctx)
+        await self._ensure_mutable_access_async(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         target_uri = self._path_to_uri(path, ctx=ctx)
 
@@ -491,8 +521,8 @@ class VikingFS:
         from openviking.pyagfs.helpers import cp as agfs_cp
         from openviking.storage.transaction import LockContext, get_lock_manager
 
-        self._ensure_mutable_access(old_uri, ctx)
-        self._ensure_mutable_access(new_uri, ctx)
+        await self._ensure_mutable_access_async(old_uri, ctx)
+        await self._ensure_mutable_access_async(new_uri, ctx)
         old_path = self._uri_to_path(old_uri, ctx=ctx)
         new_path = self._uri_to_path(new_uri, ctx=ctx)
         target_uri = self._path_to_uri(old_path, ctx=ctx)
@@ -615,14 +645,14 @@ class VikingFS:
             level_limit: Maximum depth level to traverse (default: 5)
             ctx: Request context
         """
-        self._ensure_access(uri, ctx)
+        await self._ensure_access_async(uri, ctx)
 
         flags = re.IGNORECASE if case_insensitive else 0
         compiled_pattern = re.compile(pattern, flags)
         excluded_prefix = None
         if exclude_uri:
             excluded_prefix = self._normalize_uri(exclude_uri).rstrip("/")
-            self._ensure_access(excluded_prefix, ctx)
+            await self._ensure_access_async(excluded_prefix, ctx)
 
         results = []
         files_scanned = 0
@@ -698,7 +728,7 @@ class VikingFS:
 
         example: {'name': 'resources', 'size': 128, 'mode': 2147484141, 'modTime': '2026-02-10T21:26:02.934376379+08:00', 'isDir': True, 'meta': {'Name': 'localfs', 'Type': 'local', 'Content': {'local_path': '...'}}}
         """
-        self._ensure_access(uri, ctx)
+        await self._ensure_access_async(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         return self.agfs.stat(path)
 
@@ -796,7 +826,7 @@ class VikingFS:
         output="agent"
         [{'name': '.abstract.md', 'size': 100, 'modTime': '2026-02-11 16:52:16', 'isDir': False, 'rel_path': '.abstract.md', 'uri': 'viking://resources...', 'abstract': "..."}]
         """
-        self._ensure_access(uri, ctx)
+        await self._ensure_access_async(uri, ctx)
         if output == "original":
             return await self._tree_original(uri, show_all_hidden, node_limit, level_limit, ctx=ctx)
         elif output == "agent":
@@ -901,7 +931,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> str:
         """Read directory's L0 summary (.abstract.md)."""
-        self._ensure_access(uri, ctx)
+        await self._ensure_access_async(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         info = self.agfs.stat(path)
         if not info.get("isDir", info.get("is_dir")):
@@ -925,7 +955,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> str:
         """Read directory's L1 overview (.overview.md)."""
-        self._ensure_access(uri, ctx)
+        await self._ensure_access_async(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         info = self.agfs.stat(path)
         if not info.get("isDir", info.get("is_dir")):
@@ -952,7 +982,7 @@ class VikingFS:
 
         Returns: [{"uri": "...", "reason": "..."}, ...]
         """
-        self._ensure_access(uri, ctx)
+        await self._ensure_access_async(uri, ctx)
         entries = await self.get_relation_table(uri, ctx=ctx)
         result = []
         for entry in entries:
@@ -991,7 +1021,7 @@ class VikingFS:
         )
 
         if target_uri and target_uri not in {"/", "viking://"}:
-            self._ensure_access(target_uri, ctx)
+            await self._ensure_access_async(target_uri, ctx)
 
         storage = self._get_vector_store()
         if not storage:
@@ -1092,7 +1122,7 @@ class VikingFS:
 
         query_plan: Optional[QueryPlan] = None
         if primary_target_uri and primary_target_uri not in {"/", "viking://"}:
-            self._ensure_access(primary_target_uri, ctx)
+            await self._ensure_access_async(primary_target_uri, ctx)
 
         # When target_uri exists: read abstract, infer context_type
         target_context_type: Optional[ContextType] = None
@@ -1203,9 +1233,9 @@ class VikingFS:
         """Create relation (maintained in .relations.json)."""
         if isinstance(uris, str):
             uris = [uris]
-        self._ensure_access(from_uri, ctx)
+        await self._ensure_access_async(from_uri, ctx)
         for uri in uris:
-            self._ensure_access(uri, ctx)
+            await self._ensure_access_async(uri, ctx)
 
         from_path = self._uri_to_path(from_uri, ctx=ctx)
 
@@ -1226,8 +1256,8 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Delete relation."""
-        self._ensure_access(from_uri, ctx)
-        self._ensure_access(uri, ctx)
+        await self._ensure_access_async(from_uri, ctx)
+        await self._ensure_access_async(uri, ctx)
         from_path = self._uri_to_path(from_uri, ctx=ctx)
 
         try:
@@ -1260,7 +1290,7 @@ class VikingFS:
         self, uri: str, ctx: Optional[RequestContext] = None
     ) -> List[RelationEntry]:
         """Get relation table."""
-        self._ensure_access(uri, ctx)
+        await self._ensure_access_async(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         return await self._read_relation_table(path, ctx=ctx)
 
@@ -1552,8 +1582,8 @@ class VikingFS:
         from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
         from openviking.storage.transaction import LockContext, get_lock_manager
 
-        self._ensure_access(old_uri, ctx)
-        self._ensure_access(new_uri, ctx)
+        await self._ensure_access_async(old_uri, ctx)
+        await self._ensure_access_async(new_uri, ctx)
 
         real_ctx = self._ctx_or_default(ctx)
         old_dir = VikingURI.normalize(old_uri).rstrip("/")
@@ -1703,7 +1733,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Write file directly."""
-        self._ensure_access(uri, ctx)
+        await self._ensure_access_async(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         await self._ensure_parent_dirs(path)
 
@@ -1730,7 +1760,7 @@ class VikingFS:
         Raises:
             FileNotFoundError: If the file does not exist.
         """
-        self._ensure_access(uri, ctx)
+        await self._ensure_access_async(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         # Verify the file exists before reading, because AGFS read returns
         # empty bytes for non-existent files instead of raising an error.
@@ -1767,7 +1797,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> bytes:
         """Read single binary file."""
-        self._ensure_access(uri, ctx)
+        await self._ensure_access_async(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         try:
             raw = self._handle_agfs_read(self.agfs.read(path))
@@ -1783,7 +1813,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Write single binary file."""
-        self._ensure_access(uri, ctx)
+        await self._ensure_access_async(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         await self._ensure_parent_dirs(path)
 
@@ -1797,7 +1827,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Append content to file."""
-        self._ensure_access(uri, ctx)
+        await self._ensure_access_async(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
 
         try:
@@ -1846,7 +1876,7 @@ class VikingFS:
         output="agent"
         [{'name': '.abstract.md', 'size': 100, 'modTime': '2026-02-11(or 16:52:16 for today)', 'isDir': False, 'uri': 'viking://resources/.abstract.md', 'abstract': "..."}]
         """
-        self._ensure_access(uri, ctx)
+        await self._ensure_access_async(uri, ctx)
         if output == "original":
             return await self._ls_original(uri, show_all_hidden, node_limit, ctx=ctx)
         elif output == "agent":
@@ -1941,8 +1971,8 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Move file."""
-        self._ensure_mutable_access(from_uri, ctx)
-        self._ensure_mutable_access(to_uri, ctx)
+        await self._ensure_mutable_access_async(from_uri, ctx)
+        await self._ensure_mutable_access_async(to_uri, ctx)
         from_path = self._uri_to_path(from_uri, ctx=ctx)
 
         content_bytes = await self.read_file_bytes(from_uri, ctx=ctx)
@@ -1964,7 +1994,7 @@ class VikingFS:
 
     async def delete_temp(self, temp_uri: str, ctx: Optional[RequestContext] = None) -> None:
         """Delete temp directory and its contents."""
-        self._ensure_mutable_access(temp_uri, ctx)
+        await self._ensure_mutable_access_async(temp_uri, ctx)
         path = self._uri_to_path(temp_uri, ctx=ctx)
         try:
             for entry in self._ls_entries(path):
@@ -2031,7 +2061,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Write context to AGFS (L0/L1/L2)."""
-        self._ensure_access(uri, ctx)
+        await self._ensure_access_async(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
 
         try:
