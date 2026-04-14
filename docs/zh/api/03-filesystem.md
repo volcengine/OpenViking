@@ -2,6 +2,27 @@
 
 OpenViking 提供类 Unix 的文件系统操作来管理上下文。
 
+## WebDAV（Phase 1）
+
+OpenViking Server 也提供了一个面向资源文件的精简 WebDAV 适配层：
+
+```text
+/webdav/resources
+```
+
+Phase 1 有意把范围控制得比较小：
+
+- 仅开放 `resources` 命名空间，不暴露 memories、skills、sessions 等其他空间。
+- 以文本写入为主，当前 `PUT` 只接受 UTF-8 文本内容。
+- 只实现一小部分 WebDAV 方法：`OPTIONS`、`PROPFIND`、`GET`、`HEAD`、`PUT`、`DELETE`、`MKCOL`、`MOVE`。
+- 语义侧边文件保持内部可见。`.abstract.md`、`.overview.md`、`.relations.json`、`.path.ovlock` 这些派生文件不会出现在 WebDAV 列表中，也不能被直接访问。
+
+行为说明：
+
+- 通过 WebDAV 新建文件时，会对该文件路径触发 OpenViking 的语义生成。
+- 通过 WebDAV 覆盖已有文件时，会像 `write()` 一样刷新相关语义和向量。
+- 用户自己创建的点目录或点文件仍然可见，只有上面列出的保留内部文件名会被隐藏。
+
 ## API 参考
 
 ### abstract()
