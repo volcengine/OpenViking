@@ -219,6 +219,68 @@ async def test_user_key_access(auth_client: httpx.AsyncClient, user_key: str):
     assert resp.status_code == 200
 
 
+async def test_same_account_users_can_access_shared_session(
+    auth_client: httpx.AsyncClient, auth_app
+):
+    """Sessions should be visible across users within the same account."""
+    manager = auth_app.state.api_key_manager
+    account_id = _uid()
+    alice_key = await manager.create_account(account_id, "alice")
+    bob_key = await manager.register_user(account_id, "bob")
+
+    create_resp = await auth_client.post(
+        "/api/v1/sessions",
+        json={"session_id": "shared-session"},
+        headers={"X-API-Key": alice_key},
+    )
+    assert create_resp.status_code == 200
+
+    await auth_client.post(
+        "/api/v1/sessions/shared-session/messages",
+        json={"role": "user", "content": "hello from alice"},
+        headers={"X-API-Key": alice_key},
+    )
+
+    list_resp = await auth_client.get("/api/v1/sessions", headers={"X-API-Key": bob_key})
+    assert list_resp.status_code == 200
+    session_ids = {item["session_id"] for item in list_resp.json()["result"]}
+    assert "shared-session" in session_ids
+
+    get_resp = await auth_client.get(
+        "/api/v1/sessions/shared-session",
+        headers={"X-API-Key": bob_key},
+    )
+    assert get_resp.status_code == 200
+    assert get_resp.json()["result"]["session_id"] == "shared-session"
+
+
+async def test_user_key_cannot_delete_shared_session(auth_client: httpx.AsyncClient, auth_app):
+    """Deleting a session should require admin or root access."""
+    manager = auth_app.state.api_key_manager
+    account_id = _uid()
+    admin_key = await manager.create_account(account_id, "alice")
+    bob_key = await manager.register_user(account_id, "bob")
+
+    create_resp = await auth_client.post(
+        "/api/v1/sessions",
+        json={"session_id": "shared-session"},
+        headers={"X-API-Key": admin_key},
+    )
+    assert create_resp.status_code == 200
+
+    deny_resp = await auth_client.delete(
+        "/api/v1/sessions/shared-session",
+        headers={"X-API-Key": bob_key},
+    )
+    assert deny_resp.status_code == 403
+
+    allow_resp = await auth_client.delete(
+        "/api/v1/sessions/shared-session",
+        headers={"X-API-Key": admin_key},
+    )
+    assert allow_resp.status_code == 200
+
+
 async def test_missing_key_returns_401(auth_client: httpx.AsyncClient):
     """Request without API key should return 401."""
     resp = await auth_client.get("/api/v1/system/status")

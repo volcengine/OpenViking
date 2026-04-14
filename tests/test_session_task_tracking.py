@@ -72,7 +72,7 @@ def _make_tracked_commit(behavior="instant", result_overrides=None, gate=None, s
             owner_account_id=_ctx.account_id,
             owner_user_id=_ctx.user.user_id,
         )
-        archive_uri = f"viking://session/test/{_sid}/history/archive_001"
+        archive_uri = f"viking://session/{_sid}/history/archive_001"
 
         async def _background():
             tracker.start(task.task_id)

@@ -6,8 +6,6 @@ Verifies that the summarizer uses get_context_type_for_uri() to correctly
 classify memory, skill, and resource URIs (fixes #1060).
 """
 
-import pytest
-
 from openviking.core.directories import get_context_type_for_uri
 
 
@@ -46,7 +44,7 @@ class TestSummarizerContextType:
 
     def test_session_uri(self):
         """Session URIs should classify as 'memory'."""
-        uri = "viking://session/default/sess_001/history/archive_001"
+        uri = "viking://session/sess_001/history/archive_001"
         assert get_context_type_for_uri(uri) == "memory"
 
     def test_unknown_uri_defaults_to_resource(self):

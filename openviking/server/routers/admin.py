@@ -5,6 +5,7 @@
 from fastapi import APIRouter, Depends, Path, Request
 from pydantic import BaseModel
 
+from openviking.core.namespace import NamespacePolicy
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext, Role
@@ -33,6 +34,8 @@ _DEV_MODE_ADMIN_API_MESSAGE = (
 class CreateAccountRequest(BaseModel):
     account_id: str
     admin_user_id: str
+    isolate_user_scope_by_agent: bool = False
+    isolate_agent_scope_by_user: bool = False
 
 
 class RegisterUserRequest(BaseModel):
@@ -100,7 +103,11 @@ async def create_account(
         user=UserIdentifier(body.account_id, body.admin_user_id, "default"),
         role=Role.ADMIN,
     )
-    await service.initialize_account_directories(account_ctx)
+    namespace_policy = NamespacePolicy(
+        isolate_user_scope_by_agent=body.isolate_user_scope_by_agent,
+        isolate_agent_scope_by_user=body.isolate_agent_scope_by_user,
+    )
+    await service.initialize_account_directories(account_ctx, namespace_policy=namespace_policy)
     await service.initialize_user_directories(account_ctx)
     return Response(
         status="ok",
@@ -108,6 +115,7 @@ async def create_account(
             "account_id": body.account_id,
             "admin_user_id": body.admin_user_id,
             "user_key": user_key,
+            **namespace_policy.to_dict(),
         },
     )
 

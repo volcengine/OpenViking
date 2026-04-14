@@ -11,8 +11,10 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Dict, List, Optional
 
 from openviking.core.context import Context, ContextType, Vectorize
+from openviking.core.namespace import NamespacePolicy, persist_namespace_policy
 from openviking.server.identity import RequestContext
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
+from openviking_cli.utils.uri import VikingURI
 
 if TYPE_CHECKING:
     from openviking.storage import VikingDBManager
@@ -145,9 +147,15 @@ class DirectoryInitializer:
         vikingdb: "VikingDBManager",
     ):
         self.vikingdb = vikingdb
+        self._namespace_policy_overrides: Dict[str, NamespacePolicy] = {}
+
+    def set_namespace_policy(self, account_id: str, policy: NamespacePolicy) -> None:
+        """Pin a policy override for the next initialization pass of an account."""
+        self._namespace_policy_overrides[account_id] = policy
 
     async def initialize_account_directories(self, ctx: RequestContext) -> int:
         """Initialize account-shared scope roots."""
+        await self._ensure_namespace_policy(ctx)
         count = 0
         scope_roots = {
             "user": PRESET_DIRECTORIES["user"],
@@ -172,11 +180,13 @@ class DirectoryInitializer:
         """Initialize user-space tree lazily for the current user."""
         if "user" not in PRESET_DIRECTORIES:
             return 0
-        user_space_root = f"viking://user/{ctx.user.user_space_name()}"
+        policy = self._load_namespace_policy(ctx)
+        user_space_root = ctx.user.canonical_user_root(policy)
+        user_parent = VikingURI(user_space_root).parent
         user_tree = PRESET_DIRECTORIES["user"]
         created = await self._ensure_directory(
             uri=user_space_root,
-            parent_uri="viking://user",
+            parent_uri=user_parent.uri if user_parent else "viking://user",
             defn=user_tree,
             scope="user",
             ctx=ctx,
@@ -191,11 +201,13 @@ class DirectoryInitializer:
         """Initialize agent-space tree lazily for the current user+agent."""
         if "agent" not in PRESET_DIRECTORIES:
             return 0
-        agent_space_root = f"viking://agent/{ctx.user.agent_space_name()}"
+        policy = self._load_namespace_policy(ctx)
+        agent_space_root = ctx.user.canonical_agent_root(policy)
+        agent_parent = VikingURI(agent_space_root).parent
         agent_tree = PRESET_DIRECTORIES["agent"]
         created = await self._ensure_directory(
             uri=agent_space_root,
-            parent_uri="viking://agent",
+            parent_uri=agent_parent.uri if agent_parent else "viking://agent",
             defn=agent_tree,
             scope="agent",
             ctx=ctx,
@@ -339,3 +351,18 @@ class DirectoryInitializer:
             is_leaf=False,  # Preset directories can continue traversing downward
             ctx=ctx,
         )
+
+    async def _ensure_namespace_policy(self, ctx: RequestContext) -> NamespacePolicy:
+        from openviking.storage.viking_fs import get_viking_fs
+
+        viking_fs = get_viking_fs()
+        policy = self._namespace_policy_overrides.pop(ctx.account_id, None)
+        if policy is None:
+            policy = viking_fs.get_namespace_resolver(ctx).policy
+        return await persist_namespace_policy(viking_fs, ctx.account_id, policy)
+
+    @staticmethod
+    def _load_namespace_policy(ctx: RequestContext) -> NamespacePolicy:
+        from openviking.storage.viking_fs import get_viking_fs
+
+        return get_viking_fs().get_namespace_resolver(ctx).policy

@@ -8,13 +8,18 @@ Provides session management operations: session, sessions, add_message, commit, 
 
 from typing import Any, Dict, List, Optional
 
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
 from openviking.session.compressor import SessionCompressor
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.exceptions import AlreadyExistsError, NotFoundError, NotInitializedError
+from openviking_cli.exceptions import (
+    AlreadyExistsError,
+    NotFoundError,
+    NotInitializedError,
+    PermissionDeniedError,
+)
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -143,13 +148,13 @@ class SessionService:
             raise
 
     async def sessions(self, ctx: RequestContext) -> List[Dict[str, Any]]:
-        """Get all sessions for the current user.
+        """Get all sessions for the current account.
 
         Returns:
             List of session info dicts
         """
         self._ensure_initialized()
-        session_base_uri = f"viking://session/{ctx.user.user_space_name()}"
+        session_base_uri = "viking://session"
 
         try:
             entries = await self._viking_fs.ls(session_base_uri, ctx=ctx)
@@ -179,7 +184,10 @@ class SessionService:
             True if deleted successfully
         """
         self._ensure_initialized()
-        session_uri = f"viking://session/{ctx.user.user_space_name()}/{session_id}"
+        if ctx.role not in {Role.ROOT, Role.ADMIN}:
+            raise PermissionDeniedError("Deleting sessions requires admin or root access")
+
+        session_uri = f"viking://session/{session_id}"
 
         try:
             await self._viking_fs.rm(session_uri, recursive=True, ctx=ctx)

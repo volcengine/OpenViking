@@ -1,5 +1,9 @@
 import hashlib
 import re
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from openviking.core.namespace import NamespacePolicy
 
 
 class UserIdentifier(object):
@@ -67,6 +71,18 @@ class UserIdentifier(object):
     def agent_space_name(self) -> str:
         """Agent-level space name derived from memory.agent_scope_mode."""
         return hashlib.md5(self._agent_space_source().encode()).hexdigest()[:12]
+
+    def canonical_user_root(self, policy: "NamespacePolicy | None" = None) -> str:
+        """Canonical user-root URI under the account namespace policy."""
+        from openviking.core.namespace import NamespaceResolver
+
+        return NamespaceResolver(policy).user_root(self)
+
+    def canonical_agent_root(self, policy: "NamespacePolicy | None" = None) -> str:
+        """Canonical agent-root URI under the account namespace policy."""
+        from openviking.core.namespace import NamespaceResolver
+
+        return NamespaceResolver(policy).agent_root(self)
 
     def memory_space_uri(self) -> str:
         return f"viking://agent/{self.agent_space_name()}/memories"

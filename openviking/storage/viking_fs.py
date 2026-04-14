@@ -23,6 +23,7 @@ from datetime import datetime
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+from openviking.core.namespace import NamespaceResolver, load_namespace_policy
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSDirectoryNotEmptyError, AGFSHTTPError
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext, Role
@@ -30,6 +31,7 @@ from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import format_simplified, get_current_timestamp, parse_iso_datetime
 from openviking_cli.exceptions import FailedPreconditionError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils import run_async
 from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
 
@@ -196,6 +198,7 @@ class VikingFS:
         self._bound_ctx: contextvars.ContextVar[Optional[RequestContext]] = contextvars.ContextVar(
             "vikingfs_bound_ctx", default=None
         )
+        self._namespace_policy_cache: Dict[str, Any] = {}
 
     @staticmethod
     def _default_ctx() -> RequestContext:
@@ -266,6 +269,29 @@ class VikingFS:
         if uri.startswith("viking://"):
             return uri
         return VikingURI.normalize(uri)
+
+    def _get_namespace_resolver(self, ctx: Optional[RequestContext]) -> NamespaceResolver:
+        real_ctx = self._ctx_or_default(ctx)
+        cache = getattr(self, "_namespace_policy_cache", None)
+        if cache is None:
+            cache = {}
+            self._namespace_policy_cache = cache
+
+        policy = cache.get(real_ctx.account_id)
+        if policy is None:
+            policy = run_async(load_namespace_policy(self, real_ctx.account_id))
+            cache[real_ctx.account_id] = policy
+        return NamespaceResolver(policy)
+
+    def get_namespace_resolver(self, ctx: Optional[RequestContext]) -> NamespaceResolver:
+        """Expose the per-account namespace resolver for callers that need canonical roots."""
+        return self._get_namespace_resolver(ctx)
+
+    def _canonicalize_uri(self, uri: str, ctx: Optional[RequestContext]) -> str:
+        normalized = self._normalize_uri(uri)
+        real_ctx = self._ctx_or_default(ctx)
+        resolver = self._get_namespace_resolver(real_ctx)
+        return resolver.canonicalize_uri(normalized, real_ctx.user)
 
     @classmethod
     def _normalized_uri_parts(cls, uri: str) -> tuple[str, List[str]]:
@@ -1267,7 +1293,8 @@ class VikingFS:
         """
         real_ctx = self._ctx_or_default(ctx)
         account_id = real_ctx.account_id
-        _, parts = self._normalized_uri_parts(uri)
+        canonical_uri = self._canonicalize_uri(uri, real_ctx)
+        _, parts = self._normalized_uri_parts(canonical_uri)
         if not parts:
             return f"/local/{account_id}"
 
@@ -1295,23 +1322,23 @@ class VikingFS:
         Pure prefix replacement: strips /local/{account_id}/ and prepends viking://.
         No implicit space stripping.
         """
+        real_ctx = self._ctx_or_default(ctx)
         if path.startswith("viking://"):
-            return path
+            return self._canonicalize_uri(path, real_ctx)
         elif path.startswith("/local/"):
             inner = path[7:].strip("/")
             if not inner:
                 return "viking://"
-            real_ctx = self._ctx_or_default(ctx)
             parts = [p for p in inner.split("/") if p]
             if parts and parts[0] == real_ctx.account_id:
                 parts = parts[1:]
             if not parts:
                 return "viking://"
-            return f"viking://{'/'.join(parts)}"
+            return self._canonicalize_uri(f"viking://{'/'.join(parts)}", real_ctx)
         elif path.startswith("/"):
             return f"viking:/{path}"
         else:
-            return f"viking://{path}"
+            return self._canonicalize_uri(f"viking://{path}", real_ctx)
 
     def _looks_like_legacy_temp_leaf(self, value: str) -> bool:
         return bool(re.match(r"^\d{8}_[0-9a-f]{6}$", value or ""))
@@ -1371,15 +1398,11 @@ class VikingFS:
             return self._is_legacy_temp_uri_parts(parts)
         if scope == "_system":
             return False
-
-        space = self._extract_space_from_uri(normalized_uri)
-        if space is None:
+        if scope == "session":
             return True
-
-        if scope in {"user", "session"}:
-            return space == ctx.user.user_space_name()
-        if scope == "agent":
-            return space == ctx.user.agent_space_name()
+        if scope in {"user", "agent"}:
+            resolver = self._get_namespace_resolver(ctx)
+            return resolver.is_visible(normalized_uri, ctx.user)
         return True
 
     def _handle_agfs_read(self, result: Union[bytes, Any, None]) -> bytes:

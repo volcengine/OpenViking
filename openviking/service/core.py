@@ -10,6 +10,7 @@ import os
 from typing import Any, Optional
 
 from openviking.core.directories import DirectoryInitializer
+from openviking.core.namespace import NamespacePolicy
 from openviking.crypto.config import bootstrap_encryption
 from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.server.identity import RequestContext, Role
@@ -374,11 +375,17 @@ class OpenVikingService:
         if not self._initialized:
             raise NotInitializedError("OpenVikingService")
 
-    async def initialize_account_directories(self, ctx: RequestContext) -> int:
+    async def initialize_account_directories(
+        self,
+        ctx: RequestContext,
+        namespace_policy: NamespacePolicy | None = None,
+    ) -> int:
         """Initialize account-shared preset roots."""
         self._ensure_initialized()
         if not self._directory_initializer:
             return 0
+        if namespace_policy is not None:
+            self._directory_initializer.set_namespace_policy(ctx.account_id, namespace_policy)
         return await self._directory_initializer.initialize_account_directories(ctx)
 
     async def initialize_user_directories(self, ctx: RequestContext) -> int:

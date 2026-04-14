@@ -171,7 +171,7 @@ class Session:
         self.session_id = session_id or str(uuid4())
         self.created_at = int(datetime.now(timezone.utc).timestamp() * 1000)
         self._auto_commit_threshold = auto_commit_threshold
-        self._session_uri = f"viking://session/{self.user.user_space_name()}/{self.session_id}"
+        self._session_uri = f"viking://session/{self.session_id}"
 
         self._messages: List[Message] = []
         self._usage_records: List[Usage] = []

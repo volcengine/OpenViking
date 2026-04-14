@@ -40,7 +40,7 @@ class ToolPart:
     type: Literal["tool"] = "tool"
     tool_id: str = ""
     tool_name: str = ""
-    tool_uri: str = ""  # viking://session/{user_space_name}/{session_id}/tools/{tool_id}
+    tool_uri: str = ""  # viking://session/{session_id}/tools/{tool_id}
     skill_uri: str = ""  # viking://agent/{agent_space_name}/skills/{skill_name}
     tool_input: Optional[dict] = None
     tool_output: str = ""

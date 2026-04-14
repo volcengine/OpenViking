@@ -3,6 +3,7 @@
 
 """Tests for Admin API endpoints (openviking/server/routers/admin.py)."""
 
+import json
 import uuid
 
 import httpx
@@ -73,6 +74,34 @@ async def test_create_account(admin_client: httpx.AsyncClient):
     assert body["result"]["account_id"] == acct
     assert body["result"]["admin_user_id"] == "alice"
     assert "user_key" in body["result"]
+
+
+async def test_create_account_persists_namespace_policy(
+    admin_client: httpx.AsyncClient, admin_app
+):
+    """Account creation should persist and echo namespace policy fields."""
+    acct = _uid()
+    resp = await admin_client.post(
+        "/api/v1/admin/accounts",
+        json={
+            "account_id": acct,
+            "admin_user_id": "alice",
+            "isolate_user_scope_by_agent": True,
+            "isolate_agent_scope_by_user": True,
+        },
+        headers=root_headers(),
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["result"]["isolate_user_scope_by_agent"] is True
+    assert body["result"]["isolate_agent_scope_by_user"] is True
+
+    raw = admin_app.state.api_key_manager._viking_fs.agfs.read(f"/local/{acct}/_system/setting.json")
+    persisted = json.loads(raw.decode("utf-8"))
+    assert persisted == {
+        "isolate_user_scope_by_agent": True,
+        "isolate_agent_scope_by_user": True,
+    }
 
 
 async def test_list_accounts(admin_client: httpx.AsyncClient):
