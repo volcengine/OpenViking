@@ -1,6 +1,6 @@
 """Shared Ollama utilities for OpenViking.
 
-Used by both the ``ov init`` setup wizard and the ``openviking-server``
+Used by both the ``openviking-server init`` setup wizard and the ``openviking-server``
 bootstrap to detect, start, and health-check a local Ollama instance.
 
 Design principle: **ensure running, never stop** — Ollama is a shared

@@ -1,4 +1,4 @@
-"""Tests for the ov init setup wizard."""
+"""Tests for the openviking-server init setup wizard."""
 
 from __future__ import annotations
 

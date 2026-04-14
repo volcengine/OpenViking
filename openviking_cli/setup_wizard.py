@@ -1,4 +1,4 @@
-"""ov init - interactive setup wizard for OpenViking.
+"""openviking-server init - interactive setup wizard for OpenViking.
 
 Guides users through model selection and configuration, with a focus on
 local deployment via Ollama for macOS / Apple Silicon beginners.
@@ -593,7 +593,7 @@ def run_init() -> int:
 
 
 def main() -> int:
-    """Entry point for ``ov init``."""
+    """Entry point for ``openviking-server init``."""
     try:
         return run_init()
     except KeyboardInterrupt:
