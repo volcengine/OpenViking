@@ -13,7 +13,7 @@ Features:
 - Follows redirects
 - Network guard integration
 - Detailed error classification (network, timeout, auth, etc.)
-- Content-Type detection for URLs without file extensions
+- IANA Media Type (MIME) based content detection for URLs without file extensions
 """
 
 import tempfile
@@ -28,12 +28,13 @@ from openviking.utils.network_guard import build_httpx_request_validation_hooks
 from openviking_cli.utils.logger import get_logger
 
 from .base import DataAccessor, LocalResource, SourceType
+from .mime_types import MEDIA_TYPE_ALIASES, IANAMediaType, get_preferred_extension
 
 logger = get_logger(__name__)
 
 
 class URLType(Enum):
-    """URL content types."""
+    """URL content types for routing to appropriate parsers."""
 
     WEBPAGE = "webpage"  # HTML webpage to parse
     DOWNLOAD_PDF = "download_pdf"  # PDF file download link
@@ -47,12 +48,18 @@ class URLTypeDetector:
     """
     Detector for URL content types.
 
-    Uses extension and HTTP HEAD request to determine if a URL is:
-    - A webpage to scrape
-    - A file download link (and what type)
+    Uses IANA Media Type (MIME) standards for robust content detection:
+    1. Check file extension (fast path)
+    2. Check Content-Disposition header for filename (most reliable)
+    3. Check Content-Type header (IANA standard media types)
+    4. Fall back to default behavior
+
+    References:
+        - RFC 6838: Media Type Specifications and Registration Procedures
+        - RFC 6266: Use of the Content-Disposition Header Field in HTTP
     """
 
-    # Extension to URL type mapping
+    # === Extension to URL type mapping ===
     # CODE_EXTENSIONS spread comes first so explicit entries below override
     # (e.g., .html/.htm -> DOWNLOAD_HTML instead of DOWNLOAD_TXT)
     EXTENSION_MAP: Dict[str, URLType] = {
@@ -66,13 +73,27 @@ class URLTypeDetector:
         ".htm": URLType.DOWNLOAD_HTML,
     }
 
-    # Content-Type to URL type mapping
-    CONTENT_TYPE_MAP: Dict[str, URLType] = {
+    # === IANA Media Type to URL type mapping ===
+    # Maps IANA registered media types to our internal URLType
+    # Patterns can be:
+    #   - Exact match: "application/pdf"
+    #   - Wildcard: "text/*"
+    #   - Type only: "image" (treated as "image/*")
+    # NOTE: .html/.htm extensions are mapped to DOWNLOAD_HTML via EXTENSION_MAP,
+    #       while text/html Content-Type is mapped to WEBPAGE here for URLs
+    #       without extensions (like https://example.com/page)
+    MEDIA_TYPE_MAP: Dict[str, URLType] = {
+        # PDF
         "application/pdf": URLType.DOWNLOAD_PDF,
+        # Markdown
         "text/markdown": URLType.DOWNLOAD_MD,
-        "text/plain": URLType.DOWNLOAD_TXT,
+        "text/x-markdown": URLType.DOWNLOAD_MD,
+        # HTML/webpage (for URLs without .html extension)
         "text/html": URLType.WEBPAGE,
         "application/xhtml+xml": URLType.WEBPAGE,
+        # Plain text
+        "text/plain": URLType.DOWNLOAD_TXT,
+        "text/*": URLType.DOWNLOAD_TXT,
     }
 
     # URLType to file extension mapping
@@ -95,27 +116,39 @@ class URLTypeDetector:
         request_validator=None,
     ) -> Tuple[URLType, Dict[str, Any]]:
         """
-        Detect URL content type.
+        Detect URL content type using IANA standards.
+
+        Detection order (most reliable to least reliable):
+        1. File extension from URL path (if valid and recognized)
+        2. Filename from Content-Disposition header (RFC 6266)
+        3. IANA Media Type from Content-Type header (RFC 6838)
+        4. Default to WEBPAGE
 
         Args:
             url: URL to detect
             request_validator: Optional network request validator
 
         Returns:
-            (URLType, metadata dict)
+            (URLType, metadata dict with detection details)
         """
-        meta = {"url": url, "detected_by": "unknown"}
+        meta = {
+            "url": url,
+            "detected_by": "unknown",
+        }
         parsed = urlparse(url)
         path_lower = parsed.path.lower()
+        valid_extensions = set(self.EXTENSION_MAP.keys())
 
-        # 1. Check extension first
-        for ext, url_type in self.EXTENSION_MAP.items():
-            if path_lower.endswith(ext):
-                meta["detected_by"] = "extension"
-                meta["extension"] = ext
-                return url_type, meta
+        # === Step 1: Check extension from URL path ===
+        path_ext = Path(path_lower).suffix
+        if path_ext and path_ext in valid_extensions:
+            for ext, url_type in self.EXTENSION_MAP.items():
+                if path_lower.endswith(ext):
+                    meta["detected_by"] = "extension"
+                    meta["extension"] = ext
+                    return url_type, meta
 
-        # 2. Send HEAD request to check Content-Type
+        # === Step 2: Send HEAD request for headers ===
         try:
             httpx = lazy_import("httpx")
             client_kwargs = {
@@ -129,31 +162,137 @@ class URLTypeDetector:
 
             async with httpx.AsyncClient(**client_kwargs) as client:
                 response = await client.head(url)
-                content_type = response.headers.get("content-type", "").lower()
 
-                # Remove charset info
-                if ";" in content_type:
-                    content_type = content_type.split(";")[0].strip()
+                # Get raw headers for debugging
+                content_type_raw = response.headers.get("content-type", "")
+                content_disposition = response.headers.get("content-disposition", "")
 
-                meta["content_type"] = content_type
-                meta["detected_by"] = "content_type"
+                meta["content_type_raw"] = content_type_raw
+                meta["content_disposition_raw"] = content_disposition
                 meta["status_code"] = response.status_code
 
-                # Map content type
-                for ct_prefix, url_type in self.CONTENT_TYPE_MAP.items():
-                    if content_type.startswith(ct_prefix):
-                        return url_type, meta
+                # === Step 2a: Check Content-Disposition for filename (RFC 6266) ===
+                filename_from_disposition = self._extract_filename_from_disposition(
+                    content_disposition
+                )
+                if filename_from_disposition:
+                    meta["filename_from_disposition"] = filename_from_disposition
+                    filename_lower = filename_from_disposition.lower()
+                    for ext, url_type in self.EXTENSION_MAP.items():
+                        if filename_lower.endswith(ext):
+                            meta["detected_by"] = "content_disposition"
+                            meta["extension"] = ext
+                            return url_type, meta
 
-                # Default to webpage for HTML-like content
-                if "html" in content_type or "xml" in content_type:
-                    return URLType.WEBPAGE, meta
+                # === Step 2b: Check Content-Type (RFC 6838) ===
+                if content_type_raw:
+                    url_type = self._detect_from_media_type(content_type_raw, meta)
+                    if url_type != URLType.UNKNOWN:
+                        return url_type, meta
 
         except Exception as e:
             meta["detection_error"] = str(e)
             logger.debug(f"[URLTypeDetector] HEAD request failed: {e}, falling back to default")
 
-        # 3. Default: assume webpage
+        # === Step 3: Default behavior ===
+        meta["detected_by"] = "default"
         return URLType.WEBPAGE, meta
+
+    def _detect_from_media_type(self, content_type: str, meta: Dict[str, Any]) -> URLType:
+        """
+        Detect URL type from IANA media type.
+
+        Args:
+            content_type: Content-Type header value
+            meta: Metadata dict to update
+
+        Returns:
+            Detected URLType, or URLType.UNKNOWN if no match
+        """
+        # Normalize and parse according to IANA standards
+        media_type_str = content_type.lower().strip()
+
+        # Handle common aliases
+        if media_type_str in MEDIA_TYPE_ALIASES:
+            meta["media_type_alias"] = media_type_str
+            media_type_str = MEDIA_TYPE_ALIASES[media_type_str]
+
+        # Parse into structured IANAMediaType
+        try:
+            media_type = IANAMediaType.parse(media_type_str)
+            meta["media_type"] = str(media_type)
+            meta["media_type_type"] = media_type.type
+            meta["media_type_subtype"] = media_type.subtype
+            if media_type.suffix:
+                meta["media_type_suffix"] = media_type.suffix
+        except Exception as e:
+            logger.debug(f"[URLTypeDetector] Failed to parse media type: {e}")
+            meta["media_type_parse_error"] = str(e)
+            return URLType.UNKNOWN
+
+        # Check for exact match first
+        media_type_key = f"{media_type.type}/{media_type.subtype}"
+        if media_type.suffix:
+            media_type_with_suffix = f"{media_type_key}+{media_type.suffix}"
+            if media_type_with_suffix in self.MEDIA_TYPE_MAP:
+                meta["detected_by"] = "media_type_suffix"
+                return self.MEDIA_TYPE_MAP[media_type_with_suffix]
+
+        if media_type_key in self.MEDIA_TYPE_MAP:
+            meta["detected_by"] = "media_type"
+            return self.MEDIA_TYPE_MAP[media_type_key]
+
+        # Check for wildcard matches
+        for pattern, url_type in self.MEDIA_TYPE_MAP.items():
+            if media_type.matches(pattern):
+                meta["detected_by"] = "media_type_pattern"
+                meta["media_type_pattern"] = pattern
+                return url_type
+
+        return URLType.UNKNOWN
+
+    @staticmethod
+    def _extract_filename_from_disposition(content_disposition: str) -> Optional[str]:
+        """
+        Extract filename from Content-Disposition header per RFC 6266.
+
+        Handles formats:
+            - inline; filename="2601.00014v1.pdf"
+            - attachment; filename=document.pdf
+            - attachment; filename*=UTF-8''encoded.pdf
+            - attachment; filename="foo.pdf"; size=12345
+
+        Args:
+            content_disposition: Content-Disposition header value
+
+        Returns:
+            Extracted filename, or None if not found
+        """
+        if not content_disposition:
+            return None
+
+        import re
+
+        content_disposition = content_disposition.strip()
+
+        # Try filename*=UTF-8''... format first (RFC 5987)
+        utf8_match = re.search(r"filename\*=UTF-8''([^;]+)", content_disposition, re.I)
+        if utf8_match:
+            from urllib.parse import unquote
+
+            return unquote(utf8_match.group(1))
+
+        # Try filename="..." format (quoted-string)
+        quoted_match = re.search(r'filename="([^"]+)"', content_disposition, re.I)
+        if quoted_match:
+            return quoted_match.group(1)
+
+        # Try filename=... format (token)
+        simple_match = re.search(r"filename=([^;]+)", content_disposition, re.I)
+        if simple_match:
+            return simple_match.group(1).strip()
+
+        return None
 
     def get_extension_for_type(self, url_type: URLType) -> str:
         """Get file extension for URL type."""
@@ -171,6 +310,7 @@ class HTTPAccessor(DataAccessor):
     - Follows redirects
     - Network guard integration
     - Detailed error classification (network, timeout, auth, etc.)
+    - IANA Media Type based detection for URLs without extensions
     """
 
     PRIORITY = 50  # Lower than GitAccessor, higher than fallback
@@ -204,8 +344,6 @@ class HTTPAccessor(DataAccessor):
         and will be checked first for their specific URL types.
         """
         source_str = str(source)
-
-        # Only handle http/https URLs
         return source_str.startswith(("http://", "https://"))
 
     async def access(self, source: Union[str, Path], **kwargs) -> LocalResource:
@@ -289,12 +427,8 @@ class HTTPAccessor(DataAccessor):
             request_validator=request_validator,
         )
 
-        # Determine file extension
-        parsed = urlparse(url)
-        decoded_path = unquote(parsed.path)
-        ext = Path(decoded_path).suffix
-        if not ext:
-            ext = self._url_detector.get_extension_for_type(url_type)
+        # Determine file extension using IANA standards
+        ext = self._determine_file_extension(url, url_type, detect_meta)
 
         # Create temp file
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
@@ -353,6 +487,55 @@ class HTTPAccessor(DataAccessor):
             except Exception:
                 pass
             raise
+
+    def _determine_file_extension(
+        self,
+        url: str,
+        url_type: URLType,
+        detect_meta: Dict[str, Any],
+    ) -> str:
+        """
+        Determine appropriate file extension using multiple strategies.
+
+        Strategy order (most reliable first):
+        1. Extension from Content-Disposition filename
+        2. Extension from URL path (if valid)
+        3. Use IANA media type mapping
+        4. Use URL type based extension
+
+        Args:
+            url: Original URL
+            url_type: Detected URL type
+            detect_meta: Detection metadata
+
+        Returns:
+            File extension including dot (e.g., ".pdf")
+        """
+        valid_extensions = set(URLTypeDetector.EXTENSION_MAP.keys())
+
+        # 1. Try extension from Content-Disposition filename
+        filename_from_disposition = detect_meta.get("filename_from_disposition")
+        if filename_from_disposition:
+            ext = Path(filename_from_disposition.lower()).suffix
+            if ext and ext in valid_extensions:
+                return ext
+
+        # 2. Try extension from URL path (if valid)
+        parsed = urlparse(url)
+        decoded_path = unquote(parsed.path)
+        ext = Path(decoded_path).suffix
+        if ext and ext.lower() in valid_extensions:
+            return ext.lower()
+
+        # 3. Try IANA media type to extension mapping
+        media_type_str = detect_meta.get("media_type") or detect_meta.get("content_type_raw")
+        if media_type_str:
+            iana_ext = get_preferred_extension(media_type_str)
+            if iana_ext:
+                return iana_ext
+
+        # 4. Fall back to URL type based extension
+        return self._url_detector.get_extension_for_type(url_type)
 
     def _convert_to_raw_url(self, url: str) -> str:
         """Convert GitHub/GitLab blob URL to raw URL."""
