@@ -1326,7 +1326,7 @@ async fn handle_find(
     if let Some(t) = threshold {
         params.push(format!("--threshold {}", t));
     }
-    append_time_filter_params(&mut params, &after, &before);
+    append_time_filter_params(&mut params, after.as_deref(), before.as_deref());
     params.push(format!("\"{}\"", query));
     print_command_echo("ov find", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
@@ -1362,7 +1362,7 @@ async fn handle_search(
     if let Some(t) = threshold {
         params.push(format!("--threshold {}", t));
     }
-    append_time_filter_params(&mut params, &after, &before);
+    append_time_filter_params(&mut params, after.as_deref(), before.as_deref());
     params.push(format!("\"{}\"", query));
     print_command_echo("ov search", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
@@ -1384,8 +1384,8 @@ async fn handle_search(
 
 fn append_time_filter_params(
     params: &mut Vec<String>,
-    after: &Option<String>,
-    before: &Option<String>,
+    after: Option<&str>,
+    before: Option<&str>,
 ) {
     if let Some(value) = after {
         params.push(format!("--after {}", value));
@@ -1665,7 +1665,7 @@ mod tests {
         let after = Some("7d".to_string());
         let before = Some("2026-03-12".to_string());
 
-        super::append_time_filter_params(&mut params, &after, &before);
+        super::append_time_filter_params(&mut params, after.as_deref(), before.as_deref());
 
         assert_eq!(params, vec!["--after 7d", "--before 2026-03-12"]);
     }
