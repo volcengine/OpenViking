@@ -59,7 +59,11 @@ def resolve_time_bounds(
     lower_label: str = "since",
     upper_label: str = "until",
 ) -> tuple[Optional[datetime], Optional[datetime]]:
-    """Resolve relative or absolute time bounds into parsed datetimes."""
+    """Resolve relative or absolute time bounds into parsed datetimes.
+
+    All returned datetimes are timezone-aware and in UTC.
+    Timezone-less input values are interpreted in the local timezone, then converted to UTC.
+    """
     normalized_since = (since or "").strip()
     normalized_until = (until or "").strip()
     if not normalized_since and not normalized_until:
@@ -115,32 +119,42 @@ def _parse_time_value(value: str, now: datetime, *, is_upper_bound: bool) -> dat
         return now - delta
 
     if _DATE_ONLY_RE.fullmatch(value):
+        # Parse YYYY-MM-DD: interpret in local timezone, then convert to UTC
         parsed_date = datetime.strptime(value, "%Y-%m-%d").date()
         if is_upper_bound:
             combined = datetime.combine(parsed_date, time.max)
         else:
             combined = datetime.combine(parsed_date, time.min)
-        if now.tzinfo is not None:
-            return combined.replace(tzinfo=now.tzinfo)
-        return combined
+        # Interpret as local time, then convert to UTC
+        local_tz = datetime.now().astimezone().tzinfo
+        if local_tz is None:
+            # Fallback to UTC if local timezone can't be determined
+            local_tz = timezone.utc
+        combined_local = combined.replace(tzinfo=local_tz)
+        return combined_local.astimezone(timezone.utc)
 
-    return parse_iso_datetime(value)
+    # ISO 8601 parsing: parse_iso_datetime returns timezone-aware datetime in UTC
+    # (it handles Z and +00:00 correctly)
+    dt = parse_iso_datetime(value)
+    # Ensure it's in UTC
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    elif dt.tzinfo != timezone.utc:
+        dt = dt.astimezone(timezone.utc)
+    return dt
 
 
 def _serialize_time_value(value: datetime) -> str:
-    if value.tzinfo is None:
-        return value.isoformat(timespec="milliseconds")
+    """Serialize datetime to ISO 8601 format, always in UTC."""
     return format_iso8601(value)
 
 
 def _comparison_datetime(value: datetime) -> datetime:
+    """Normalize datetime for comparison: always timezone-aware, in UTC."""
     if value.tzinfo is not None:
-        return value
-
-    local_tz = datetime.now().astimezone().tzinfo
-    if local_tz is None:
-        raise ValueError("Could not determine local timezone for time filter comparison")
-    return value.replace(tzinfo=local_tz)
+        return value.astimezone(timezone.utc)
+    # Naive datetime is treated as UTC for consistency with Context and time_utils
+    return value.replace(tzinfo=timezone.utc)
 
 
 def _duration_from_unit(amount: int, unit: str) -> timedelta:
