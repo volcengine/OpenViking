@@ -314,6 +314,9 @@ class AsyncOpenViking:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         telemetry: TelemetryRequest = False,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
     ):
         """
         Complex search with session context.
@@ -339,6 +342,9 @@ class AsyncOpenViking:
             score_threshold=score_threshold,
             filter=filter,
             telemetry=telemetry,
+            since=since,
+            until=until,
+            time_field=time_field,
         )
 
     async def find(
@@ -349,6 +355,9 @@ class AsyncOpenViking:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         telemetry: TelemetryRequest = False,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
     ):
         """Semantic search"""
         await self._ensure_initialized()
@@ -359,6 +368,9 @@ class AsyncOpenViking:
             score_threshold=score_threshold,
             filter=filter,
             telemetry=telemetry,
+            since=since,
+            until=until,
+            time_field=time_field,
         )
 
     # ============= FS methods =============

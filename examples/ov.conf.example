@@ -172,10 +172,7 @@
       "extract_text_only": false,
       "preserve_structure": true,
       "clean_html": true,
-      "extract_metadata": true,
-      "code_hosting_domains": ["github.com", "gitlab.com"],
-      "github_domains": ["github.com", "www.github.com"],
-      "gitlab_domains": ["gitlab.com", "www.gitlab.com"]
+      "extract_metadata": true
     },
     "text": {
       "detect_language": true,

@@ -1,11 +1,12 @@
 """openviking-server init - interactive setup wizard for OpenViking.
 
 Guides users through model selection and configuration, with a focus on
-local deployment via Ollama for macOS / Apple Silicon beginners.
+local deployment via Ollama or llama.cpp for macOS / Apple Silicon beginners.
 """
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import subprocess
@@ -294,6 +295,65 @@ CLOUD_PROVIDERS: list[CloudProvider] = [
 
 
 # ---------------------------------------------------------------------------
+# llama.cpp local embedding presets
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class LocalGGUFPreset:
+    label: str
+    model_name: str  # key in LOCAL_DENSE_MODEL_SPECS
+    dimension: int
+    size_hint: str
+
+
+LOCAL_GGUF_PRESETS: list[LocalGGUFPreset] = [
+    LocalGGUFPreset("BGE-small-zh v1.5 (f16)", "bge-small-zh-v1.5-f16", 512, "~24 MB"),
+]
+
+
+def _is_llamacpp_installed() -> bool:
+    try:
+        importlib.import_module("llama_cpp")
+        return True
+    except ImportError:
+        return False
+
+
+def _install_llamacpp() -> bool:
+    """Attempt to install llama-cpp-python via pip.
+
+    On the first attempt, uses the default build flags.  If compilation
+    fails (common on ARM with older binutils that reject advanced
+    ``-march`` extensions), retries with ``GGML_NATIVE=OFF`` to produce
+    a generic build.
+    """
+    pip_cmd = [sys.executable, "-m", "pip", "install", "openviking[local-embed]"]
+
+    try:
+        subprocess.run(pip_cmd, check=True)
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    print(f"  {_yellow('Native build failed, retrying with generic CPU flags...')}")
+    env = os.environ.copy()
+    prev = env.get("CMAKE_ARGS", "")
+    env["CMAKE_ARGS"] = f"{prev} -DGGML_NATIVE=OFF -DLLAMA_NATIVE=OFF".strip()
+    try:
+        subprocess.run(pip_cmd, check=True, env=env)
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+
+def _check_gguf_model_cached(model_name: str, cache_dir: str | None = None) -> bool:
+    from openviking.models.embedder.local_embedders import get_local_model_cache_path
+
+    return get_local_model_cache_path(model_name, cache_dir).exists()
+
+
+# ---------------------------------------------------------------------------
 # Config building
 # ---------------------------------------------------------------------------
 
@@ -324,6 +384,34 @@ def _build_ollama_config(
             "max_retries": 2,
         },
     }
+
+
+def _build_local_config(
+    model_name: str,
+    dimension: int,
+    workspace: str,
+    model_path: str | None = None,
+    cache_dir: str | None = None,
+    vlm_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build ov.conf dict for llama.cpp local embedding setup."""
+    embedding_dense: dict[str, Any] = {
+        "provider": "local",
+        "model": model_name,
+        "dimension": dimension,
+    }
+    if model_path:
+        embedding_dense["model_path"] = model_path
+    if cache_dir:
+        embedding_dense["cache_dir"] = cache_dir
+
+    config: dict[str, Any] = {
+        "storage": {"workspace": workspace},
+        "embedding": {"dense": embedding_dense},
+    }
+    if vlm_config:
+        config["vlm"] = vlm_config
+    return config
 
 
 def _build_cloud_config(
@@ -366,6 +454,7 @@ def _build_cloud_config(
 
 _DEFAULT_CONFIG_PATH = DEFAULT_CONFIG_DIR / "ov.conf"
 _DEFAULT_WORKSPACE = str(DEFAULT_CONFIG_DIR / "data")
+_PIP_LOCAL_EMBED = 'pip install "openviking[local-embed]"'
 
 
 def _write_config(config_dict: dict[str, Any], config_path: Path) -> bool:
@@ -472,6 +561,189 @@ def _wizard_ollama() -> dict[str, Any] | None:
     return _build_ollama_config(embedding, vlm, workspace)
 
 
+def _wizard_llamacpp() -> dict[str, Any] | None:
+    """llama.cpp local embedding setup flow."""
+    # --- Step 1: check / install llama-cpp-python ---
+    print("\n  Checking llama-cpp-python...", end=" ", flush=True)
+
+    if _is_llamacpp_installed():
+        print(_green("installed"))
+    else:
+        print(_yellow("not installed"))
+        print(f"\n  {_dim('llama-cpp-python is required for local CPU embedding.')}")
+        if _prompt_confirm(f"Install now? ({_PIP_LOCAL_EMBED})"):
+            print()
+            if _install_llamacpp():
+                print(f"  {_green('OK')} llama-cpp-python installed")
+            else:
+                print(f"  {_red('Installation failed.')}")
+                print(f"  {_dim('Try manually: ' + _PIP_LOCAL_EMBED)}")
+                if not _prompt_confirm(
+                    "Continue anyway? (config will be generated)", default=False
+                ):
+                    return None
+        else:
+            print(f"\n  {_dim('Install later: ' + _PIP_LOCAL_EMBED)}")
+            if not _prompt_confirm("Continue anyway? (config will be generated)", default=False):
+                return None
+
+    # --- Step 2: select embedding model ---
+    model_options: list[tuple[str, str]] = []
+    for p in LOCAL_GGUF_PRESETS:
+        cached = ""
+        try:
+            if _check_gguf_model_cached(p.model_name):
+                cached = _green(" [downloaded]")
+        except Exception:
+            pass
+        model_options.append(
+            (
+                p.label,
+                f"({p.dimension}d, {p.size_hint}){cached}",
+            )
+        )
+
+    model_choice = _prompt_choice("Embedding model:", model_options, default=1)
+
+    preset = LOCAL_GGUF_PRESETS[model_choice - 1]
+    model_name = preset.model_name
+    dimension = preset.dimension
+    custom_model_path: str | None = None
+
+    # Download if not cached
+    try:
+        if not _check_gguf_model_cached(model_name):
+            if _prompt_confirm(
+                f"Model '{model_name}' not downloaded yet. Download now? ({preset.size_hint})"
+            ):
+                print(f"\n  {_dim('Downloading...')}", end=" ", flush=True)
+                try:
+                    import requests
+
+                    from openviking.models.embedder.local_embedders import (
+                        get_local_model_cache_path,
+                        get_local_model_spec,
+                    )
+
+                    spec = get_local_model_spec(model_name)
+                    target = get_local_model_cache_path(model_name)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    tmp = target.with_suffix(target.suffix + ".part")
+                    with requests.get(spec.download_url, stream=True, timeout=(10, 300)) as resp:
+                        resp.raise_for_status()
+                        total = int(resp.headers.get("content-length", 0))
+                        downloaded = 0
+                        with tmp.open("wb") as fh:
+                            for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                                if chunk:
+                                    fh.write(chunk)
+                                    downloaded += len(chunk)
+                                    if total > 0:
+                                        pct = downloaded * 100 // total
+                                        print(
+                                            f"\r  {_dim(f'Downloading... {pct}%')}",
+                                            end=" ",
+                                            flush=True,
+                                        )
+                    os.replace(tmp, target)
+                    print(f"\r  {_green('OK')} Model downloaded to {target}         ")
+                except Exception as exc:
+                    print(f"\r  {_yellow(f'Download failed: {exc}')}")
+                    print(f"  {_dim('Model will be auto-downloaded on first server start.')}")
+            else:
+                print(f"  {_dim('Model will be auto-downloaded on first server start.')}")
+    except Exception:
+        pass
+
+    # --- Step 3: VLM selection ---
+    print()
+    vlm_mode = _prompt_choice(
+        "VLM (language model) setup:",
+        [
+            ("Use Ollama for VLM", _dim("(requires Ollama installed)")),
+            ("Use Cloud API for VLM", _dim("(OpenAI, Volcengine, etc.)")),
+            ("Skip VLM", _dim("(embedding only, add VLM later)")),
+        ],
+        default=1,
+    )
+
+    vlm_config: dict[str, Any] | None = None
+
+    if vlm_mode == 1:
+        # Ollama VLM
+        ollama_running = _ensure_ollama()
+        if not ollama_running:
+            if not _prompt_confirm("Continue without Ollama?", default=False):
+                return None
+
+        available_models = get_ollama_models() if ollama_running else []
+        ram_gb = _get_system_ram_gb()
+        _, rec_vlm_idx = _get_recommended_indices(ram_gb)
+
+        vlm_options: list[tuple[str, str]] = []
+        for i, p in enumerate(VLM_PRESETS):
+            rec = " *" if i == rec_vlm_idx else ""
+            avail = ""
+            if ollama_running and is_model_available(p.ollama_model, available_models):
+                avail = _green(" [downloaded]")
+            vlm_options.append((f"{p.label}", f"({p.size_hint}){avail}{rec}"))
+
+        vlm_choice = _prompt_choice("Language model (VLM):", vlm_options, default=rec_vlm_idx + 1)
+        vlm = VLM_PRESETS[vlm_choice - 1]
+
+        if ollama_running and not is_model_available(vlm.ollama_model, available_models):
+            if _prompt_confirm(f"'{vlm.ollama_model}' not found locally. Pull now?"):
+                print()
+                if not ollama_pull_model(vlm.ollama_model):
+                    print(
+                        f"  {_yellow('Pull failed. You can pull it later: ollama pull ' + vlm.ollama_model)}"
+                    )
+                else:
+                    print(f"  {_green('OK')} {vlm.ollama_model} pulled successfully")
+
+        vlm_config = {
+            "provider": "litellm",
+            "model": vlm.litellm_model,
+            "api_key": "no-key",
+            "api_base": "http://localhost:11434",
+            "temperature": 0.0,
+            "max_retries": 2,
+        }
+
+    elif vlm_mode == 2:
+        # Cloud VLM
+        provider_options = [(p.label, "") for p in CLOUD_PROVIDERS]
+        choice = _prompt_choice("Cloud provider for VLM:", provider_options, default=1)
+        provider = CLOUD_PROVIDERS[choice - 1]
+
+        vlm_api_key = _prompt_input("VLM API Key")
+        if not vlm_api_key:
+            print(f"  {_red('API key is required')}")
+            return None
+        vlm_model = _prompt_input("VLM Model", default=provider.default_vlm_model)
+        vlm_api_base = _prompt_input("API Base", default=provider.default_api_base)
+
+        vlm_config = {
+            "provider": provider.provider,
+            "model": vlm_model,
+            "api_key": vlm_api_key,
+            "api_base": vlm_api_base,
+            "temperature": 0.0,
+            "max_retries": 2,
+        }
+
+    # --- Step 4: workspace ---
+    workspace = _prompt_input("Workspace", default=_DEFAULT_WORKSPACE)
+
+    return _build_local_config(
+        model_name=model_name,
+        dimension=dimension,
+        workspace=workspace,
+        model_path=custom_model_path,
+        vlm_config=vlm_config,
+    )
+
+
 def _wizard_cloud() -> dict[str, Any] | None:
     """Cloud API model setup flow."""
     # Provider selection
@@ -569,6 +841,7 @@ def run_init() -> int:
     mode = _prompt_choice(
         "Choose setup mode:",
         [
+            ("Local embedding via llama.cpp", "(CPU embedding, no GPU required)"),
             ("Local models via Ollama", "(recommended for macOS / Apple Silicon)"),
             ("Cloud API", "(OpenAI, Volcengine, etc.)"),
             ("Custom", "(manual editing)"),
@@ -579,8 +852,10 @@ def run_init() -> int:
     config_dict: dict[str, Any] | None = None
 
     if mode == 1:
-        config_dict = _wizard_ollama()
+        config_dict = _wizard_llamacpp()
     elif mode == 2:
+        config_dict = _wizard_ollama()
+    elif mode == 3:
         config_dict = _wizard_cloud()
     else:
         _wizard_custom()
@@ -599,7 +874,12 @@ def run_init() -> int:
     print(
         f"    Embedding:  {emb.get('provider', '')} / {emb.get('model', '')} ({emb.get('dimension', '')}d)"
     )
-    print(f"    VLM:        {vlm.get('provider', '')} / {vlm.get('model', '')}")
+    if emb.get("model_path"):
+        print(f"    Model path: {emb['model_path']}")
+    vlm_summary = (
+        f"{vlm.get('provider', '')} / {vlm.get('model', '')}" if vlm else _dim("(not configured)")
+    )
+    print(f"    VLM:        {vlm_summary}")
     print(f"    Workspace:  {ws}")
     print(f"    Config:     {_DEFAULT_CONFIG_PATH}")
 
@@ -615,6 +895,8 @@ def run_init() -> int:
 
     # Post-init tips
     print(f"  {_bold('Next steps:')}")
+    if emb.get("provider") == "local":
+        print(f"    Install runtime:   {_cyan(_PIP_LOCAL_EMBED)}")
     print(f"    Start the server:  {_cyan('openviking-server')}")
     print(f"    Validate setup:    {_cyan('openviking-server doctor')}")
     print()

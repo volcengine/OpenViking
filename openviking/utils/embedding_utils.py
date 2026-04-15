@@ -7,7 +7,7 @@ Common logic for creating Context objects and enqueuing them to EmbeddingQueue.
 """
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Optional
 
 from openviking.core.context import Context, ContextLevel, ResourceContentType, Vectorize
@@ -16,6 +16,7 @@ from openviking.server.identity import RequestContext
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.viking_fs import get_viking_fs
+from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.utils import VikingURI, get_logger
 from openviking_cli.utils.config import get_openviking_config
 
@@ -45,6 +46,61 @@ def _owner_space_for_uri(uri: str, ctx: RequestContext) -> str:
     if uri.startswith("viking://user/") or uri.startswith("viking://session/"):
         return ctx.user.user_space_name()
     return ""
+
+
+def _coerce_datetime(value: object) -> Optional[datetime]:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str) and value:
+        try:
+            return parse_iso_datetime(value)
+        except Exception:
+            return None
+    return None
+
+
+async def _get_existing_created_at(
+    uri: str,
+    ctx: Optional[RequestContext],
+) -> Optional[datetime]:
+    if ctx is None:
+        return None
+    try:
+        from openviking.server.dependencies import get_service
+
+        service = get_service()
+        if not service or not service.vikingdb_manager:
+            return None
+        record = await service.vikingdb_manager.fetch_by_uri(uri, ctx=ctx)
+        if not record:
+            return None
+        return _coerce_datetime(record.get("created_at"))
+    except Exception:
+        return None
+
+
+async def _resolve_context_timestamps(
+    uri: str,
+    ctx: Optional[RequestContext],
+    *,
+    preserve_existing_created_at: bool = False,
+) -> tuple[datetime, datetime]:
+    updated_at = datetime.now(timezone.utc)
+    try:
+        stat_result = await get_viking_fs().stat(uri, ctx=ctx)
+        stat_mod_time = _coerce_datetime((stat_result or {}).get("modTime"))
+        if stat_mod_time is not None:
+            updated_at = stat_mod_time
+    except Exception:
+        pass
+
+    created_at = updated_at
+    if preserve_existing_created_at:
+        existing_created_at = await _get_existing_created_at(uri, ctx)
+        if existing_created_at is not None:
+            created_at = existing_created_at
+
+    return created_at, updated_at
 
 
 def get_resource_content_type(file_name: str) -> Optional[ResourceContentType]:
@@ -155,6 +211,8 @@ async def vectorize_directory_meta(
         parent_uri = VikingURI(uri).parent.uri
         owner_space = _owner_space_for_uri(uri, ctx)
 
+        created_at, updated_at = await _resolve_context_timestamps(uri, ctx)
+
         # Vectorize L0: .abstract.md (abstract)
         context_abstract = Context(
             uri=uri,
@@ -163,6 +221,8 @@ async def vectorize_directory_meta(
             abstract=abstract,
             context_type=context_type,
             level=ContextLevel.ABSTRACT,
+            created_at=created_at,
+            updated_at=updated_at,
             user=ctx.user,
             account_id=ctx.account_id,
             owner_space=owner_space,
@@ -190,6 +250,8 @@ async def vectorize_directory_meta(
                 abstract=abstract,
                 context_type=context_type,
                 level=ContextLevel.OVERVIEW,
+                created_at=created_at,
+                updated_at=updated_at,
                 user=ctx.user,
                 account_id=ctx.account_id,
                 owner_space=owner_space,
@@ -219,6 +281,7 @@ async def vectorize_file(
     ctx: Optional[RequestContext] = None,
     semantic_msg_id: Optional[str] = None,
     use_summary: bool = False,
+    preserve_existing_created_at: bool = False,
 ) -> None:
     """
     Vectorize a single file.
@@ -241,13 +304,20 @@ async def vectorize_file(
         file_name = summary_dict.get("name") or os.path.basename(file_path)
         summary = summary_dict.get("summary", "")
 
+        created_at, updated_at = await _resolve_context_timestamps(
+            file_path,
+            ctx,
+            preserve_existing_created_at=preserve_existing_created_at,
+        )
+
         context = Context(
             uri=file_path,
             parent_uri=parent_uri,
             is_leaf=True,
             abstract=summary,
             context_type=context_type,
-            created_at=datetime.now(),
+            created_at=created_at,
+            updated_at=updated_at,
             user=ctx.user,
             account_id=ctx.account_id,
             owner_space=_owner_space_for_uri(file_path, ctx),

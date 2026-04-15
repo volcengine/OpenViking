@@ -77,6 +77,7 @@ jobs:
         with:
           ref: ${{ github.ref }}
           submodules: false
+          fetch-depth: 100
 
       - name: Upgrade OpenViking to latest main
         run: |
@@ -96,19 +97,28 @@ jobs:
           
           # Health check
           echo "🏥 Performing health check..."
-          if command -v openclaw &> /dev/null; then
-            for i in {1..5}; do
-              if openclaw gateway status | grep -q "running"; then
-                echo "✅ OpenClaw gateway is running"
-                break
-              else
-                echo "⏳ Attempt $i/5: Gateway not ready, waiting..."
-                sleep 5
-              fi
-            done
-          else
-            echo "⚠️  openclaw command not found, skipping health check"
-          fi
+          
+          echo "Checking OpenViking server (port 1933)..."
+          for i in {1..10}; do
+            if curl -sf http://127.0.0.1:1933/health 2>/dev/null | grep -q "healthy"; then
+              echo "✅ OpenViking server is healthy"
+              break
+            else
+              echo "⏳ Attempt $i/10: OpenViking not ready, waiting..."
+              sleep 5
+            fi
+          done
+          
+          echo "Checking OpenClaw gateway (port 18789)..."
+          for i in {1..10}; do
+            if ss -tuln 2>/dev/null | grep -q ":18789 "; then
+              echo "✅ OpenClaw gateway is listening on port 18789"
+              break
+            else
+              echo "⏳ Attempt $i/10: Gateway not ready, waiting..."
+              sleep 5
+            fi
+          done
 
       - name: Install test dependencies
         run: |

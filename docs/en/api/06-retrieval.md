@@ -27,6 +27,9 @@ Basic vector similarity search.
 | limit | int | No | 10 | Maximum number of results |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filters |
+| since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`, timezone-less values use local time. CLI `--after` maps to this field |
+| until | str | No | None | Upper time bound, accepts `30m` or ISO 8601 / `YYYY-MM-DD`, timezone-less values use local time. CLI `--before` maps to this field |
+| time_field | `"updated_at"` or `"created_at"` | No | `"updated_at"` | Metadata time field used by `since` / `until` |
 
 **FindResult Structure**
 
@@ -59,6 +62,13 @@ class MatchedContext:
 ```python
 results = client.find("how to authenticate users")
 
+recent_emails = client.find(
+    "invoice",
+    target_uri="viking://resources/email/",
+    since="7d",
+    time_field="created_at",
+)
+
 for ctx in results.resources:
     print(f"URI: {ctx.uri}")
     print(f"Score: {ctx.score:.3f}")
@@ -87,7 +97,10 @@ curl -X POST http://localhost:1933/api/v1/search/find \
 
 ```bash
 openviking find "how to authenticate users" [--uri viking://resources/] [--limit 10]
+openviking find "invoice" --after 7d
 ```
+
+`--after` maps to API `since`, and `--before` maps to API `until`.
 
 **Response**
 
@@ -184,6 +197,9 @@ Search with session context and intent analysis.
 | limit | int | No | 10 | Maximum number of results |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filters |
+| since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`, timezone-less values use local time. CLI `--after` maps to this field |
+| until | str | No | None | Upper time bound, accepts `30m` or ISO 8601 / `YYYY-MM-DD`, timezone-less values use local time. CLI `--before` maps to this field |
+| time_field | `"updated_at"` or `"created_at"` | No | `"updated_at"` | Metadata time field used by `since` / `until` |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -202,7 +218,8 @@ session.add_message("assistant", [
 # Search understands the conversation context
 results = client.search(
     "best practices",
-    session=session
+    session=session,
+    since="2h"
 )
 
 for ctx in results.resources:
@@ -223,6 +240,8 @@ curl -X POST http://localhost:1933/api/v1/search/search \
   -d '{
     "query": "best practices",
     "session_id": "abc123",
+    "since": "2h",
+    "time_field": "updated_at",
     "limit": 10
   }'
 ```
@@ -231,7 +250,10 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 
 ```bash
 openviking search "best practices" [--session-id abc123] [--limit 10]
+openviking search "watch vs scheduled" --after 2026-03-15 --before 2026-03-15
 ```
+
+`--after` maps to API `since`, and `--before` maps to API `until`.
 
 **Response**
 

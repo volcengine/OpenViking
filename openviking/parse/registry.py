@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
 from openviking.parse.base import ParseResult
 from openviking.parse.parsers.base_parser import BaseParser
-from openviking.parse.parsers.code import CodeRepositoryParser
 from openviking.parse.parsers.directory import DirectoryParser
 from openviking.parse.parsers.epub import EPubParser
 from openviking.parse.parsers.excel import ExcelParser
@@ -67,23 +66,12 @@ class ParserRegistry:
         self.register("powerpoint", PowerPointParser())
         self.register("excel", ExcelParser())
         self.register("epub", EPubParser())
-        # CodeRepositoryParser also uses .zip; register it before ZipParser
-        # so that .zip resolves to ZipParser (file) rather than code repo.
-        self.register("code", CodeRepositoryParser())
         self.register("zip", ZipParser())
         self.register("directory", DirectoryParser())
 
         self.register("image", ImageParser())
         self.register("audio", AudioParser())
         self.register("video", VideoParser())
-
-        # Optional: Feishu/Lark document parser (requires lark-oapi)
-        try:
-            from openviking.parse.parsers.feishu import FeishuParser
-
-            self.register("feishu", FeishuParser())
-        except ImportError:
-            pass
 
     def register(self, name: str, parser: BaseParser) -> None:
         """
@@ -215,33 +203,22 @@ class ParserRegistry:
 
     async def parse(self, source: Union[str, Path], **kwargs) -> ParseResult:
         """
-        Parse a file or content string.
+        Parse a local file or content string.
 
         Automatically selects parser based on file extension.
         Falls back to text parser for unknown types.
 
+        NOTE: For URL handling, use AccessorRegistry in the two-layer architecture.
+        This registry only handles local files and raw content.
+
         Args:
-            source: File path or content string
+            source: Local file path or content string
             **kwargs: Additional arguments passed to parser
 
         Returns:
             ParseResult with document tree
         """
         source_str = str(source)
-
-        # First, check if it's a code repository URL
-        code_parser = self._parsers.get("code")
-        if code_parser:
-            # Check if the parser has the is_repository_url method
-            try:
-                if hasattr(code_parser, "is_repository_url") and code_parser.is_repository_url(
-                    source_str
-                ):
-                    logger.info(f"Detected code repository URL: {source_str}")
-                    return await code_parser.parse(source_str, **kwargs)
-            except Exception as e:
-                logger.warning(f"Error checking if source is repository URL: {e}")
-                # Continue with normal parsing flow
 
         # Check if source looks like a file path (short enough and no newlines)
         is_potential_path = len(source_str) <= 1024 and "\n" not in source_str

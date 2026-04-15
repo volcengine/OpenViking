@@ -75,6 +75,18 @@ def test_root_build_system_includes_maturin_for_isolated_builds():
     assert 'shutil.which("maturin")' not in setup_py
 
 
+def test_root_build_system_honors_ci_compiler_overrides_and_requires_ragfs_for_wheels():
+    setup_py = _read_text("setup.py")
+    build_workflow = _read_text(".github/workflows/_build.yml")
+
+    assert 'os.environ.get("CC")' in setup_py
+    assert 'os.environ.get("CXX")' in setup_py
+    assert "OV_REQUIRE_RAGFS_BUILD" in setup_py
+    assert 'echo "CC=clang" >> "$GITHUB_ENV"' in build_workflow
+    assert 'echo "CXX=clang++" >> "$GITHUB_ENV"' in build_workflow
+    assert 'echo "OV_REQUIRE_RAGFS_BUILD=1" >> "$GITHUB_ENV"' in build_workflow
+
+
 def test_rust_crates_declare_the_repo_minimum_rust_version():
     makefile = _read_text("Makefile")
     min_rust_version = _extract_rust_version(
