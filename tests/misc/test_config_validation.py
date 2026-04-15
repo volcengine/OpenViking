@@ -107,15 +107,13 @@ def test_embedding_validation():
     print("Test Embedding config validation")
     print("=" * 60)
 
-    # Test 1: no embedder config -> default local dense
+    # Test 1: no embedder config
     print("\n1. Test no embedder config...")
     try:
-        config = EmbeddingConfig()
-        print(
-            f"   Pass (default provider={config.dense.provider}, model={config.dense.model}, dim={config.dimension})"
-        )
+        _ = EmbeddingConfig()
+        print("   Should fail but passed")
     except ValueError as e:
-        print(f"   Fail: {e}")
+        print(f"   Correctly raised exception: {e}")
 
     # Test 2: OpenAI provider missing api_key
     print("\n2. Test OpenAI provider missing api_key...")

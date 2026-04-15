@@ -33,7 +33,6 @@ try:
 except ImportError:
     GeminiDenseEmbedder = None  # google-genai not installed
 from openviking.models.embedder.jina_embedders import JinaDenseEmbedder
-from openviking.models.embedder.local_embedders import LocalDenseEmbedder
 
 try:
     from openviking.models.embedder.litellm_embedders import LiteLLMDenseEmbedder
@@ -67,7 +66,6 @@ __all__ = [
     "GeminiDenseEmbedder",
     # Jina AI implementations
     "JinaDenseEmbedder",
-    "LocalDenseEmbedder",
     # LiteLLM implementations
     "LiteLLMDenseEmbedder",
     # MiniMax implementations
