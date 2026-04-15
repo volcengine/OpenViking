@@ -26,6 +26,9 @@ struct CpuFeatures {
   bool avx512dq = false;
   bool avx512bw = false;
   bool avx512vl = false;
+  bool avx512_vnni = false;
+  bool amx_tile = false;
+  bool amx_int8 = false;
 };
 
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
@@ -78,12 +81,27 @@ CpuFeatures detect_cpu_features() {
   features.avx512bw = (regs[1] & (1 << 30)) != 0;
   features.avx512vl = (regs[1] & (1u << 31)) != 0;
 
+  // AVX512-VNNI: CPUID leaf 7, subleaf 0, ECX bit 11
+  features.avx512_vnni = (regs[2] & (1 << 11)) != 0;
+
+  // AMX: CPUID leaf 7, subleaf 0, EDX bit 24 (AMX-TILE), bit 25 (AMX-INT8)
+  features.amx_tile = (regs[3] & (1 << 24)) != 0;
+  features.amx_int8 = (regs[3] & (1 << 25)) != 0;
+
   const bool avx512_os = (xcr0 & 0xe6) == 0xe6;
   if (!avx512_os) {
     features.avx512f = false;
     features.avx512dq = false;
     features.avx512bw = false;
     features.avx512vl = false;
+    features.avx512_vnni = false;
+  }
+
+  // AMX requires XCR0 bits 17 (TILECFG) and 18 (TILEDATA)
+  const bool amx_os = (xcr0 & 0x60000) == 0x60000;
+  if (!amx_os) {
+    features.amx_tile = false;
+    features.amx_int8 = false;
   }
 
   return features;
@@ -104,6 +122,12 @@ std::vector<std::string> get_supported_variants_impl() {
   if (features.avx && features.avx512f && features.avx512dq &&
       features.avx512bw && features.avx512vl) {
     variants.emplace_back("x86_avx512");
+    if (features.avx512_vnni) {
+      variants.emplace_back("x86_avx512_vnni");
+      if (features.amx_tile && features.amx_int8) {
+        variants.emplace_back("x86_amx");
+      }
+    }
   }
   return variants;
 }

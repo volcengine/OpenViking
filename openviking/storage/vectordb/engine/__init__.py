@@ -18,14 +18,18 @@ _BACKEND_MODULES = {
     "x86_sse3": "_x86_sse3",
     "x86_avx2": "_x86_avx2",
     "x86_avx512": "_x86_avx512",
+    "x86_avx512_vnni": "_x86_avx512_vnni",
+    "x86_amx": "_x86_amx",
     "native": "_native",
 }
-_X86_DISPLAY_ORDER = ("x86_sse3", "x86_avx2", "x86_avx512")
-_X86_PRIORITY = ("x86_avx512", "x86_avx2", "x86_sse3")
+_X86_DISPLAY_ORDER = ("x86_sse3", "x86_avx2", "x86_avx512", "x86_avx512_vnni", "x86_amx")
+_X86_PRIORITY = ("x86_amx", "x86_avx512_vnni", "x86_avx512", "x86_avx2", "x86_sse3")
 _REQUEST_ALIASES = {
     "sse3": "x86_sse3",
     "avx2": "x86_avx2",
     "avx512": "x86_avx512",
+    "avx512_vnni": "x86_avx512_vnni",
+    "amx": "x86_amx",
 }
 _WINDOWS_DLL_DIR_HANDLES = []
 

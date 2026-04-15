@@ -1222,6 +1222,57 @@ PyObject* py_index_engine_search(PyObject*, PyObject* args) {
   }
 }
 
+PyObject* py_index_engine_search_batch(PyObject*, PyObject* args) {
+  PyObject* capsule = nullptr;
+  PyObject* request_list = nullptr;
+  if (!PyArg_ParseTuple(args, "OO", &capsule, &request_list)) {
+    return nullptr;
+  }
+
+  auto* engine = capsule_to_ptr<vdb::IndexEngine>(capsule, kIndexCapsuleName);
+  if (engine == nullptr) {
+    return nullptr;
+  }
+
+  if (!PyList_Check(request_list)) {
+    raise_runtime_error("search_batch requires a list of SearchRequest objects");
+    return nullptr;
+  }
+
+  Py_ssize_t nq = PyList_Size(request_list);
+  std::vector<vdb::SearchRequest> requests(static_cast<size_t>(nq));
+  for (Py_ssize_t i = 0; i < nq; ++i) {
+    PyObject* req_obj = PyList_GetItem(request_list, i);
+    if (!parse_search_request(req_obj, &requests[static_cast<size_t>(i)])) {
+      return nullptr;
+    }
+  }
+
+  try {
+    auto results = call_without_gil([&]() {
+      return engine->search_batch(requests);
+    });
+
+    PyObject* result_list = PyList_New(static_cast<Py_ssize_t>(results.size()));
+    if (result_list == nullptr) {
+      return nullptr;
+    }
+
+    for (size_t i = 0; i < results.size(); ++i) {
+      PyObject* result = build_search_result(results[i]);
+      if (result == nullptr) {
+        Py_DECREF(result_list);
+        return nullptr;
+      }
+      PyList_SetItem(result_list, static_cast<Py_ssize_t>(i), result);
+    }
+    return result_list;
+  } catch (const std::exception& exc) {
+    raise_runtime_error(exc.what());
+    return nullptr;
+  }
+}
+
 PyObject* py_index_engine_dump(PyObject*, PyObject* args) {
   PyObject* capsule = nullptr;
   const char* path = nullptr;
@@ -1498,6 +1549,8 @@ PyMethodDef kModuleMethods[] = {
      "Delete data from the index engine."},
     {"_index_engine_search", py_index_engine_search, METH_VARARGS,
      "Search the index engine."},
+    {"_index_engine_search_batch", py_index_engine_search_batch, METH_VARARGS,
+     "Batch search the index engine with multiple queries."},
     {"_index_engine_dump", py_index_engine_dump, METH_VARARGS, "Dump index state to disk."},
     {"_index_engine_get_state", py_index_engine_get_state, METH_VARARGS,
      "Read index engine state."},

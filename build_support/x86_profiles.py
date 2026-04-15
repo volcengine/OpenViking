@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from typing import Iterable
 
-DEFAULT_X86_VARIANTS = ("sse3", "avx2", "avx512")
+DEFAULT_X86_VARIANTS = ("sse3", "avx2", "avx512", "avx512_vnni", "amx")
 KNOWN_X86_VARIANTS = frozenset(DEFAULT_X86_VARIANTS)
 X86_ARCHITECTURES = ("x86_64", "amd64", "x64", "i386", "i686")
 

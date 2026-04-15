@@ -14,6 +14,12 @@
 #if defined(__AVX512F__) && !defined(OV_DISABLE_AVX512)
 #define OV_SIMD_AVX512
 #endif
+#if defined(__AVX512VNNI__) && !defined(OV_DISABLE_AVX512)
+#define OV_SIMD_AVX512_VNNI
+#endif
+#if defined(__AMX_INT8__) && defined(__AMX_TILE__)
+#define OV_SIMD_AMX
+#endif
 #if defined(__AVX__)
 #define OV_SIMD_AVX
 #endif
