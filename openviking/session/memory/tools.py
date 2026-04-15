@@ -344,71 +344,6 @@ def list_tools() -> Dict[str, MemoryTool]:
     return MEMORY_TOOLS_REGISTRY.copy()
 
 
-RECENT_SOURCE_TRAJECTORIES = 5
-
-
-class GetSourceTrajectoriesTool(MemoryTool):
-    """Fetch the recent source trajectories that an experience was distilled from."""
-
-    @property
-    def name(self) -> str:
-        return "get_source_trajectories"
-
-    @property
-    def description(self) -> str:
-        return (
-            "Fetch the recent source trajectories an experience was distilled from. "
-            "Call this BEFORE deciding to EDIT an experience so you have grounding material."
-        )
-
-    @property
-    def parameters(self) -> Dict[str, Any]:
-        return {
-            "type": "object",
-            "properties": {
-                "experience_uri": {
-                    "type": "string",
-                    "description": "URI of the experience file whose source trajectories to retrieve.",
-                },
-            },
-            "required": ["experience_uri"],
-        }
-
-    async def execute(
-        self,
-        viking_fs: VikingFS,
-        ctx: Optional["ToolContext"],
-        **kwargs: Any,
-    ) -> Any:
-        experience_uri = kwargs.get("experience_uri", "")
-        request_ctx = ctx.request_ctx if ctx else None
-        try:
-            exp_content = await viking_fs.read_file(experience_uri, ctx=request_ctx)
-        except Exception as e:
-            return {"error": f"Failed to read experience: {e}"}
-
-        parsed = parse_memory_file_with_fields(exp_content or "")
-        raw = parsed.get("source_trajectories")
-
-        if isinstance(raw, list):
-            uris = [str(u).strip() for u in raw if str(u).strip()]
-        elif isinstance(raw, str):
-            uris = [line.strip() for line in raw.splitlines() if line.strip()]
-        else:
-            uris = []
-
-        recent_uris = uris[-RECENT_SOURCE_TRAJECTORIES:]
-        results = []
-        for uri in recent_uris:
-            try:
-                content = await viking_fs.read_file(uri, ctx=request_ctx)
-                results.append({"uri": uri, "content": truncate_content(content or "")})
-            except Exception as e:
-                results.append({"uri": uri, "error": str(e)})
-
-        return {"source_trajectory_count": len(uris), "trajectories": results}
-
-
 # Tools exposed to LLM (not all registered tools are exposed)
 LLM_TOOLS = ["read"]
 
@@ -422,4 +357,3 @@ def get_tool_schemas() -> List[Dict[str, Any]]:
 register_tool(MemoryReadTool())
 register_tool(MemorySearchTool())
 register_tool(MemoryLsTool())
-register_tool(GetSourceTrajectoriesTool())

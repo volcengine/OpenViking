@@ -17,10 +17,7 @@ from openviking.server.identity import RequestContext, ToolContext
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
-from openviking.session.memory.tools import (
-    add_tool_call_pair_to_messages,
-    get_tool,
-)
+from openviking.session.memory.tools import get_tool
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.utils import get_logger
 

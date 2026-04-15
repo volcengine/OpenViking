@@ -614,9 +614,10 @@ class SessionCompressorV2:
                     except Exception:
                         pass
                     await viking_fs.write_file(exp_uri, new_raw, ctx=ctx)
-                    print(f"  [source_traj] appended {len(normalized_traj_uris)} trajectories -> {exp_uri}")
+                    tracer.info(
+                        f"[source_traj] appended {len(normalized_traj_uris)} trajectories -> {exp_uri}"
+                    )
                 else:
-                    print(f"  [source_traj] already present, skip: {exp_uri}")
+                    tracer.info(f"[source_traj] already present, skip: {exp_uri}")
             except Exception as e:
-                print(f"  [source_traj] ERROR appending to {exp_uri}: {e}")
                 logger.warning(f"Failed to append source trajectories to {exp_uri}: {e}")
