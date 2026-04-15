@@ -59,11 +59,7 @@ def resolve_time_bounds(
     lower_label: str = "since",
     upper_label: str = "until",
 ) -> tuple[Optional[datetime], Optional[datetime]]:
-    """Resolve relative or absolute time bounds into parsed datetimes.
-
-    All returned datetimes are timezone-aware and in UTC.
-    Timezone-less input values are interpreted in the local timezone, then converted to UTC.
-    """
+    """Resolve relative or absolute time bounds into parsed datetimes."""
     normalized_since = (since or "").strip()
     normalized_until = (until or "").strip()
     if not normalized_since and not normalized_until:
@@ -119,24 +115,17 @@ def _parse_time_value(value: str, now: datetime, *, is_upper_bound: bool) -> dat
         return now - delta
 
     if _DATE_ONLY_RE.fullmatch(value):
-        # Parse YYYY-MM-DD: interpret in local timezone, then convert to UTC
         parsed_date = datetime.strptime(value, "%Y-%m-%d").date()
         if is_upper_bound:
             combined = datetime.combine(parsed_date, time.max)
         else:
             combined = datetime.combine(parsed_date, time.min)
-        # Interpret as local time, then convert to UTC
-        local_tz = datetime.now().astimezone().tzinfo
-        if local_tz is None:
-            # Fallback to UTC if local timezone can't be determined
-            local_tz = timezone.utc
-        combined_local = combined.replace(tzinfo=local_tz)
-        return combined_local.astimezone(timezone.utc)
+        if now.tzinfo is not None:
+            return combined.replace(tzinfo=now.tzinfo)
+        return combined
 
-    # ISO 8601 parsing: parse_iso_datetime returns timezone-aware datetime in UTC
-    # (it handles Z and +00:00 correctly)
     dt = parse_iso_datetime(value)
-    # Ensure it's in UTC
+    # Ensure it's in UTC for consistency
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     elif dt.tzinfo != timezone.utc:
