@@ -270,31 +270,52 @@ class OpenVikingConfigSingleton:
       3. ~/.openviking/ov.conf
       4. /etc/openviking/ov.conf
       5. Error with clear guidance
+
+    ``_initializing`` prevents a same-thread deadlock: loading the config
+    triggers pydantic validation which can import modules whose module-level
+    ``get_logger()`` calls ``get_instance()`` again *before* the lock is
+    released.  The flag is checked **before** ``_lock.acquire()`` so the
+    re-entrant call raises immediately, letting ``_load_log_config()``
+    fall back to default logging.
     """
 
     _instance: Optional[OpenVikingConfig] = None
     _lock: Lock = Lock()
+    _initializing: bool = False
 
     @classmethod
     def get_instance(cls) -> OpenVikingConfig:
         """Get the global singleton instance.
 
         Raises FileNotFoundError if no config file is found.
+        Raises RuntimeError if called re-entrantly during initialization.
         """
+        if cls._initializing:
+            raise RuntimeError(
+                "OpenVikingConfigSingleton is still initializing "
+                "(re-entrant call detected, falling back to defaults)"
+            )
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
-                    config_path = resolve_config_path(None, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
-                    if config_path is not None:
-                        cls._instance = cls._load_from_file(str(config_path))
-                    else:
-                        default_path_user = DEFAULT_CONFIG_DIR / DEFAULT_OV_CONF
-                        default_path_system = SYSTEM_CONFIG_DIR / DEFAULT_OV_CONF
-                        raise FileNotFoundError(
-                            f"OpenViking configuration file not found.\n"
-                            f"Please create {default_path_user} or {default_path_system}, or set {OPENVIKING_CONFIG_ENV}.\n"
-                            f"See: https://openviking.ai/docs"
+                    cls._initializing = True
+                    try:
+                        config_path = resolve_config_path(
+                            None, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF
                         )
+                        if config_path is not None:
+                            cls._instance = cls._load_from_file(str(config_path))
+                        else:
+                            default_path_user = DEFAULT_CONFIG_DIR / DEFAULT_OV_CONF
+                            default_path_system = SYSTEM_CONFIG_DIR / DEFAULT_OV_CONF
+                            raise FileNotFoundError(
+                                f"OpenViking configuration file not found.\n"
+                                f"Please create {default_path_user} or {default_path_system}, "
+                                f"or set {OPENVIKING_CONFIG_ENV}.\n"
+                                f"See: https://openviking.ai/docs"
+                            )
+                    finally:
+                        cls._initializing = False
         return cls._instance
 
     @classmethod
@@ -310,20 +331,27 @@ class OpenVikingConfigSingleton:
             config_path: Explicit path to ov.conf file.
         """
         with cls._lock:
-            if config_dict is not None:
-                cls._instance = OpenVikingConfig.from_dict(config_dict)
-            else:
-                path = resolve_config_path(config_path, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
-                if path is not None:
-                    cls._instance = cls._load_from_file(str(path))
+            cls._initializing = True
+            try:
+                if config_dict is not None:
+                    cls._instance = OpenVikingConfig.from_dict(config_dict)
                 else:
-                    default_path_user = DEFAULT_CONFIG_DIR / DEFAULT_OV_CONF
-                    default_path_system = SYSTEM_CONFIG_DIR / DEFAULT_OV_CONF
-                    raise FileNotFoundError(
-                        f"OpenViking configuration file not found.\n"
-                        f"Please create {default_path_user} or {default_path_system}, or set {OPENVIKING_CONFIG_ENV}.\n"
-                        f"See: https://openviking.ai/docs"
+                    path = resolve_config_path(
+                        config_path, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF
                     )
+                    if path is not None:
+                        cls._instance = cls._load_from_file(str(path))
+                    else:
+                        default_path_user = DEFAULT_CONFIG_DIR / DEFAULT_OV_CONF
+                        default_path_system = SYSTEM_CONFIG_DIR / DEFAULT_OV_CONF
+                        raise FileNotFoundError(
+                            f"OpenViking configuration file not found.\n"
+                            f"Please create {default_path_user} or {default_path_system}, "
+                            f"or set {OPENVIKING_CONFIG_ENV}.\n"
+                            f"See: https://openviking.ai/docs"
+                        )
+            finally:
+                cls._initializing = False
         return cls._instance
 
     @classmethod

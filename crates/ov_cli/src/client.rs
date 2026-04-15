@@ -497,12 +497,18 @@ impl HttpClient {
         uri: String,
         node_limit: i32,
         threshold: Option<f64>,
+        since: Option<String>,
+        until: Option<String>,
+        time_field: Option<String>,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "query": query,
             "target_uri": uri,
             "limit": node_limit,
             "score_threshold": threshold,
+            "since": since,
+            "until": until,
+            "time_field": time_field,
         });
         self.post("/api/v1/search/find", &body).await
     }
@@ -514,6 +520,9 @@ impl HttpClient {
         session_id: Option<String>,
         node_limit: i32,
         threshold: Option<f64>,
+        since: Option<String>,
+        until: Option<String>,
+        time_field: Option<String>,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "query": query,
@@ -521,6 +530,9 @@ impl HttpClient {
             "session_id": session_id,
             "limit": node_limit,
             "score_threshold": threshold,
+            "since": since,
+            "until": until,
+            "time_field": time_field,
         });
         self.post("/api/v1/search/search", &body).await
     }

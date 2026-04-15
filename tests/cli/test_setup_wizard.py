@@ -8,10 +8,13 @@ from unittest.mock import MagicMock, patch
 from openviking_cli.setup_wizard import (
     CLOUD_PROVIDERS,
     EMBEDDING_PRESETS,
+    LOCAL_GGUF_PRESETS,
     VLM_PRESETS,
     _build_cloud_config,
+    _build_local_config,
     _build_ollama_config,
     _get_recommended_indices,
+    _is_llamacpp_installed,
     _write_config,
 )
 from openviking_cli.utils.ollama import (
@@ -44,12 +47,14 @@ class TestOllamaDetection:
             assert check_ollama_running() is False
 
     def test_get_models(self):
-        mock_data = json.dumps({
-            "models": [
-                {"name": "qwen3-embedding:0.6b", "size": 639000000},
-                {"name": "gemma4:e4b", "size": 9600000000},
-            ]
-        }).encode()
+        mock_data = json.dumps(
+            {
+                "models": [
+                    {"name": "qwen3-embedding:0.6b", "size": 639000000},
+                    {"name": "gemma4:e4b", "size": 9600000000},
+                ]
+            }
+        ).encode()
 
         mock_resp = MagicMock()
         mock_resp.read.return_value = mock_data
@@ -205,3 +210,100 @@ class TestConfigWriting:
 
         assert _write_config(config, config_path) is True
         assert config_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# llama.cpp local embedding config
+# ---------------------------------------------------------------------------
+
+
+class TestLocalConfigBuilding:
+    def test_local_config_with_builtin_model(self):
+        preset = LOCAL_GGUF_PRESETS[0]
+        config = _build_local_config(
+            model_name=preset.model_name,
+            dimension=preset.dimension,
+            workspace="/tmp/ov_test",
+        )
+
+        assert config["storage"]["workspace"] == "/tmp/ov_test"
+
+        dense = config["embedding"]["dense"]
+        assert dense["provider"] == "local"
+        assert dense["model"] == "bge-small-zh-v1.5-f16"
+        assert dense["dimension"] == 512
+        assert "model_path" not in dense
+        assert "vlm" not in config
+
+    def test_local_config_with_ollama_vlm(self):
+        config = _build_local_config(
+            model_name="bge-small-zh-v1.5-f16",
+            dimension=512,
+            workspace="/tmp/ov_test",
+            vlm_config={
+                "provider": "litellm",
+                "model": "ollama/qwen3.5:2b",
+                "api_key": "no-key",
+                "api_base": "http://localhost:11434",
+            },
+        )
+
+        assert config["embedding"]["dense"]["provider"] == "local"
+        assert config["vlm"]["provider"] == "litellm"
+        assert config["vlm"]["model"] == "ollama/qwen3.5:2b"
+
+    def test_local_config_with_cloud_vlm(self):
+        config = _build_local_config(
+            model_name="bge-small-zh-v1.5-f16",
+            dimension=512,
+            workspace="/tmp/ov_test",
+            vlm_config={
+                "provider": "openai",
+                "model": "gpt-4o-mini",
+                "api_key": "sk-test",
+                "api_base": "https://api.openai.com/v1",
+            },
+        )
+
+        assert config["embedding"]["dense"]["provider"] == "local"
+        assert config["vlm"]["provider"] == "openai"
+        assert config["vlm"]["model"] == "gpt-4o-mini"
+
+    def test_local_config_without_vlm(self):
+        config = _build_local_config(
+            model_name="bge-small-zh-v1.5-f16",
+            dimension=512,
+            workspace="/tmp/ov_test",
+        )
+
+        assert "vlm" not in config
+
+    def test_local_config_with_cache_dir(self):
+        config = _build_local_config(
+            model_name="bge-small-zh-v1.5-f16",
+            dimension=512,
+            workspace="/tmp/ov_test",
+            cache_dir="/custom/cache",
+        )
+
+        assert config["embedding"]["dense"]["cache_dir"] == "/custom/cache"
+
+
+class TestLlamaCppDetection:
+    def test_llamacpp_installed(self):
+        with patch.dict("sys.modules", {"llama_cpp": MagicMock()}):
+            assert _is_llamacpp_installed() is True
+
+    def test_llamacpp_not_installed(self):
+        import importlib
+
+        with patch.object(importlib, "import_module", side_effect=ImportError("no module")):
+            assert _is_llamacpp_installed() is False
+
+
+class TestLocalGGUFPresets:
+    def test_presets_have_valid_dimensions(self):
+        for preset in LOCAL_GGUF_PRESETS:
+            assert preset.dimension > 0
+            assert preset.model_name
+            assert preset.label
