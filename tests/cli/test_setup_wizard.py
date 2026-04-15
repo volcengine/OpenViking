@@ -47,12 +47,14 @@ class TestOllamaDetection:
             assert check_ollama_running() is False
 
     def test_get_models(self):
-        mock_data = json.dumps({
-            "models": [
-                {"name": "qwen3-embedding:0.6b", "size": 639000000},
-                {"name": "gemma4:e4b", "size": 9600000000},
-            ]
-        }).encode()
+        mock_data = json.dumps(
+            {
+                "models": [
+                    {"name": "qwen3-embedding:0.6b", "size": 639000000},
+                    {"name": "gemma4:e4b", "size": 9600000000},
+                ]
+            }
+        ).encode()
 
         mock_resp = MagicMock()
         mock_resp.read.return_value = mock_data
@@ -232,20 +234,6 @@ class TestLocalConfigBuilding:
         assert dense["dimension"] == 512
         assert "model_path" not in dense
         assert "vlm" not in config
-
-    def test_local_config_with_custom_model_path(self):
-        config = _build_local_config(
-            model_name="my-custom-model",
-            dimension=768,
-            workspace="/tmp/ov_test",
-            model_path="/path/to/model.gguf",
-        )
-
-        dense = config["embedding"]["dense"]
-        assert dense["provider"] == "local"
-        assert dense["model"] == "my-custom-model"
-        assert dense["dimension"] == 768
-        assert dense["model_path"] == "/path/to/model.gguf"
 
     def test_local_config_with_ollama_vlm(self):
         config = _build_local_config(

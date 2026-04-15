@@ -578,7 +578,9 @@ def _wizard_llamacpp() -> dict[str, Any] | None:
             else:
                 print(f"  {_red('Installation failed.')}")
                 print(f"  {_dim('Try manually: ' + _PIP_LOCAL_EMBED)}")
-                if not _prompt_confirm("Continue anyway? (config will be generated)", default=False):
+                if not _prompt_confirm(
+                    "Continue anyway? (config will be generated)", default=False
+                ):
                     return None
         else:
             print(f"\n  {_dim('Install later: ' + _PIP_LOCAL_EMBED)}")
@@ -594,88 +596,76 @@ def _wizard_llamacpp() -> dict[str, Any] | None:
                 cached = _green(" [downloaded]")
         except Exception:
             pass
-        model_options.append((
-            p.label,
-            f"({p.dimension}d, {p.size_hint}){cached}",
-        ))
-    model_options.append(("Custom GGUF model path", _dim("(specify your own .gguf file)")))
+        model_options.append(
+            (
+                p.label,
+                f"({p.dimension}d, {p.size_hint}){cached}",
+            )
+        )
 
     model_choice = _prompt_choice("Embedding model:", model_options, default=1)
 
-    model_name: str
-    dimension: int
+    preset = LOCAL_GGUF_PRESETS[model_choice - 1]
+    model_name = preset.model_name
+    dimension = preset.dimension
     custom_model_path: str | None = None
 
-    if model_choice <= len(LOCAL_GGUF_PRESETS):
-        preset = LOCAL_GGUF_PRESETS[model_choice - 1]
-        model_name = preset.model_name
-        dimension = preset.dimension
+    # Download if not cached
+    try:
+        if not _check_gguf_model_cached(model_name):
+            if _prompt_confirm(
+                f"Model '{model_name}' not downloaded yet. Download now? ({preset.size_hint})"
+            ):
+                print(f"\n  {_dim('Downloading...')}", end=" ", flush=True)
+                try:
+                    import requests
 
-        # Download if not cached
-        try:
-            if not _check_gguf_model_cached(model_name):
-                if _prompt_confirm(f"Model '{model_name}' not downloaded yet. Download now? ({preset.size_hint})"):
-                    print(f"\n  {_dim('Downloading...')}", end=" ", flush=True)
-                    try:
-                        from openviking.models.embedder.local_embedders import (
-                            get_local_model_cache_path,
-                            get_local_model_spec,
-                        )
+                    from openviking.models.embedder.local_embedders import (
+                        get_local_model_cache_path,
+                        get_local_model_spec,
+                    )
 
-                        import requests
-
-                        spec = get_local_model_spec(model_name)
-                        target = get_local_model_cache_path(model_name)
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        tmp = target.with_suffix(target.suffix + ".part")
-                        with requests.get(spec.download_url, stream=True, timeout=(10, 300)) as resp:
-                            resp.raise_for_status()
-                            total = int(resp.headers.get("content-length", 0))
-                            downloaded = 0
-                            with tmp.open("wb") as fh:
-                                for chunk in resp.iter_content(chunk_size=1024 * 1024):
-                                    if chunk:
-                                        fh.write(chunk)
-                                        downloaded += len(chunk)
-                                        if total > 0:
-                                            pct = downloaded * 100 // total
-                                            print(f"\r  {_dim(f'Downloading... {pct}%')}", end=" ", flush=True)
-                        os.replace(tmp, target)
-                        print(f"\r  {_green('OK')} Model downloaded to {target}         ")
-                    except Exception as exc:
-                        print(f"\r  {_yellow(f'Download failed: {exc}')}")
-                        print(f"  {_dim('Model will be auto-downloaded on first server start.')}")
-                else:
+                    spec = get_local_model_spec(model_name)
+                    target = get_local_model_cache_path(model_name)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    tmp = target.with_suffix(target.suffix + ".part")
+                    with requests.get(spec.download_url, stream=True, timeout=(10, 300)) as resp:
+                        resp.raise_for_status()
+                        total = int(resp.headers.get("content-length", 0))
+                        downloaded = 0
+                        with tmp.open("wb") as fh:
+                            for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                                if chunk:
+                                    fh.write(chunk)
+                                    downloaded += len(chunk)
+                                    if total > 0:
+                                        pct = downloaded * 100 // total
+                                        print(
+                                            f"\r  {_dim(f'Downloading... {pct}%')}",
+                                            end=" ",
+                                            flush=True,
+                                        )
+                    os.replace(tmp, target)
+                    print(f"\r  {_green('OK')} Model downloaded to {target}         ")
+                except Exception as exc:
+                    print(f"\r  {_yellow(f'Download failed: {exc}')}")
                     print(f"  {_dim('Model will be auto-downloaded on first server start.')}")
-        except Exception:
-            pass
-    else:
-        # Custom GGUF path
-        custom_model_path = _prompt_input("Path to .gguf model file")
-        if not custom_model_path:
-            print(f"  {_red('Model path is required')}")
-            return None
-        resolved = Path(custom_model_path).expanduser().resolve()
-        if not resolved.exists():
-            print(f"  {_yellow(f'File not found: {resolved}')}")
-            if not _prompt_confirm("Continue anyway?", default=False):
-                return None
-        custom_model_path = str(resolved)
-
-        dim_str = _prompt_input("Embedding dimension", default="512")
-        try:
-            dimension = int(dim_str)
-        except ValueError:
-            dimension = 512
-        model_name = Path(custom_model_path).stem
+            else:
+                print(f"  {_dim('Model will be auto-downloaded on first server start.')}")
+    except Exception:
+        pass
 
     # --- Step 3: VLM selection ---
     print()
-    vlm_mode = _prompt_choice("VLM (language model) setup:", [
-        ("Use Ollama for VLM", _dim("(requires Ollama installed)")),
-        ("Use Cloud API for VLM", _dim("(OpenAI, Volcengine, etc.)")),
-        ("Skip VLM", _dim("(embedding only, add VLM later)")),
-    ], default=1)
+    vlm_mode = _prompt_choice(
+        "VLM (language model) setup:",
+        [
+            ("Use Ollama for VLM", _dim("(requires Ollama installed)")),
+            ("Use Cloud API for VLM", _dim("(OpenAI, Volcengine, etc.)")),
+            ("Skip VLM", _dim("(embedding only, add VLM later)")),
+        ],
+        default=1,
+    )
 
     vlm_config: dict[str, Any] | None = None
 
@@ -705,7 +695,9 @@ def _wizard_llamacpp() -> dict[str, Any] | None:
             if _prompt_confirm(f"'{vlm.ollama_model}' not found locally. Pull now?"):
                 print()
                 if not ollama_pull_model(vlm.ollama_model):
-                    print(f"  {_yellow('Pull failed. You can pull it later: ollama pull ' + vlm.ollama_model)}")
+                    print(
+                        f"  {_yellow('Pull failed. You can pull it later: ollama pull ' + vlm.ollama_model)}"
+                    )
                 else:
                     print(f"  {_green('OK')} {vlm.ollama_model} pulled successfully")
 
@@ -846,12 +838,16 @@ def run_init() -> int:
             return 0
 
     # Deployment mode
-    mode = _prompt_choice("Choose setup mode:", [
-        ("Local embedding via llama.cpp", "(CPU embedding, no GPU required)"),
-        ("Local models via Ollama", "(recommended for macOS / Apple Silicon)"),
-        ("Cloud API", "(OpenAI, Volcengine, etc.)"),
-        ("Custom", "(manual editing)"),
-    ], default=1)
+    mode = _prompt_choice(
+        "Choose setup mode:",
+        [
+            ("Local embedding via llama.cpp", "(CPU embedding, no GPU required)"),
+            ("Local models via Ollama", "(recommended for macOS / Apple Silicon)"),
+            ("Cloud API", "(OpenAI, Volcengine, etc.)"),
+            ("Custom", "(manual editing)"),
+        ],
+        default=1,
+    )
 
     config_dict: dict[str, Any] | None = None
 
@@ -875,10 +871,14 @@ def run_init() -> int:
     ws = config_dict.get("storage", {}).get("workspace", _DEFAULT_WORKSPACE)
 
     print(f"\n  {_bold('Summary:')}")
-    print(f"    Embedding:  {emb.get('provider', '')} / {emb.get('model', '')} ({emb.get('dimension', '')}d)")
+    print(
+        f"    Embedding:  {emb.get('provider', '')} / {emb.get('model', '')} ({emb.get('dimension', '')}d)"
+    )
     if emb.get("model_path"):
         print(f"    Model path: {emb['model_path']}")
-    vlm_summary = f"{vlm.get('provider', '')} / {vlm.get('model', '')}" if vlm else _dim("(not configured)")
+    vlm_summary = (
+        f"{vlm.get('provider', '')} / {vlm.get('model', '')}" if vlm else _dim("(not configured)")
+    )
     print(f"    VLM:        {vlm_summary}")
     print(f"    Workspace:  {ws}")
     print(f"    Config:     {_DEFAULT_CONFIG_PATH}")
