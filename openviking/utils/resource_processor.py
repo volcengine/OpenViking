@@ -313,12 +313,6 @@ class ResourceProcessor:
 
                     # 数据已移动到 root_uri，后续处理使用 root_uri
                     temp_uri = root_uri
-                else:
-                    # 增量更新：对目标目录加 SUBTREE 锁
-                    resource_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
-                    lifecycle_lock_handle_id = await self._try_acquire_lifecycle_lock(
-                        lock_manager, resource_path
-                    )
 
             # ============ Phase 4: Optional Steps ============
             build_index = kwargs.get("build_index", True)
