@@ -18,7 +18,11 @@ from typing import Any, Dict, List, Optional
 
 from openviking.models.embedder.base import EmbedResult, embed_compat
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.errors import CollectionNotFoundError
+from openviking.storage.errors import (
+    CollectionNotFoundError,
+    EmbeddingConfigurationError,
+    EmbeddingRebuildRequiredError,
+)
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
@@ -34,6 +38,7 @@ from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 
 logger = get_logger(__name__)
+EMBEDDING_META_MARKER = "\n\n[openviking.embedding]\n"
 
 
 @dataclass
@@ -49,7 +54,9 @@ class CollectionSchemas:
     """
 
     @staticmethod
-    def context_collection(name: str, vector_dim: int) -> Dict[str, Any]:
+    def context_collection(
+        name: str, vector_dim: int, description: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         Get the schema for the unified context collection.
 
@@ -118,10 +125,73 @@ class CollectionSchemas:
         )
         return {
             "CollectionName": name,
-            "Description": "Unified context collection",
+            "Description": description or "Unified context collection",
             "Fields": fields,
             "ScalarIndex": scalar_index,
         }
+
+
+def _get_active_embedding_model_config(config: "OpenVikingConfig") -> Any:
+    embedding_cfg = config.embedding
+    if embedding_cfg.hybrid is not None:
+        return embedding_cfg.hybrid
+    if embedding_cfg.dense is not None:
+        return embedding_cfg.dense
+    if embedding_cfg.sparse is not None:
+        return embedding_cfg.sparse
+    raise ValueError("No active embedding model configuration found")
+
+
+def _build_embedding_metadata(config: "OpenVikingConfig") -> Dict[str, Any]:
+    model_cfg = _get_active_embedding_model_config(config)
+    provider = (
+        getattr(model_cfg, "provider", None) or getattr(model_cfg, "backend", None) or ""
+    ).lower()
+    model = getattr(model_cfg, "model", None) or ""
+    dimension = config.embedding.dimension
+    model_path = getattr(model_cfg, "model_path", None)
+    model_identity = model
+
+    if provider == "local":
+        try:
+            from openviking.models.embedder.local_embedders import get_local_model_identity
+
+            resolved_identity = get_local_model_identity(model, model_path=model_path)
+            model_identity = str(hashlib.sha256(resolved_identity.encode("utf-8")).hexdigest())
+        except Exception:
+            model_identity = model
+
+    return {
+        "provider": provider,
+        "model": model,
+        "dimension": dimension,
+        "model_identity": model_identity,
+    }
+
+
+def _encode_collection_description(
+    base_description: str,
+    embedding_meta: Dict[str, Any],
+) -> str:
+    description = (base_description or "Unified context collection").strip()
+    meta_json = json.dumps(embedding_meta, sort_keys=True, ensure_ascii=False)
+    return f"{description}{EMBEDDING_META_MARKER}{meta_json}"
+
+
+def _decode_collection_description(
+    description: Optional[str],
+) -> tuple[str, Optional[Dict[str, Any]]]:
+    text = description or ""
+    if EMBEDDING_META_MARKER not in text:
+        return text, None
+
+    base, meta_json = text.split(EMBEDDING_META_MARKER, 1)
+    try:
+        payload = json.loads(meta_json.strip())
+    except json.JSONDecodeError:
+        logger.warning("Failed to parse collection embedding metadata from description")
+        return text, None
+    return base.strip(), payload if isinstance(payload, dict) else None
 
 
 async def init_context_collection(storage) -> bool:
@@ -142,8 +212,53 @@ async def init_context_collection(storage) -> bool:
     if not name:
         raise ValueError("Vector DB collection name is required")
     collection_name = name
-    schema = CollectionSchemas.context_collection(collection_name, vector_dim)
-    return await storage.create_collection(collection_name, schema)
+    embedding_meta = _build_embedding_metadata(config)
+    schema = CollectionSchemas.context_collection(
+        collection_name,
+        vector_dim,
+        description=_encode_collection_description("Unified context collection", embedding_meta),
+    )
+    created = await storage.create_collection(collection_name, schema)
+    if created:
+        return True
+
+    existing_meta = None
+    if hasattr(storage, "get_collection_meta"):
+        existing_meta = await storage.get_collection_meta()
+
+    if not existing_meta:
+        raise EmbeddingConfigurationError(
+            "Existing collection metadata is unavailable; cannot validate embedding compatibility"
+        )
+
+    base_description, existing_embedding_meta = _decode_collection_description(
+        existing_meta.get("Description")
+    )
+    if existing_embedding_meta == embedding_meta:
+        return False
+
+    existing_count = await storage.count() if hasattr(storage, "count") else 0
+    if existing_embedding_meta is None and existing_count == 0:
+        if hasattr(storage, "update_collection_description"):
+            await storage.update_collection_description(
+                _encode_collection_description(
+                    base_description or "Unified context collection",
+                    embedding_meta,
+                )
+            )
+            return False
+
+    if existing_embedding_meta is None:
+        raise EmbeddingRebuildRequiredError(
+            "Existing collection is missing embedding metadata and already contains vectors. "
+            "Please rebuild the collection before continuing, or switch back to the previous embedding config."
+        )
+
+    raise EmbeddingRebuildRequiredError(
+        "Existing collection embedding metadata does not match current configuration. "
+        f"existing={existing_embedding_meta}, current={embedding_meta}. "
+        "Rebuild is required before OpenViking can continue, or switch back to the previous embedding config."
+    )
 
 
 class TextEmbeddingHandler(DequeueHandlerBase):
@@ -326,7 +441,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
 
                         _embed_t0 = _time.monotonic()
                         result: EmbedResult = await embed_compat(
-                            self._embedder, embedding_msg.message
+                            self._embedder, embedding_msg.message, is_query=False
                         )
                         _embed_elapsed = _time.monotonic() - _embed_t0
                         try:

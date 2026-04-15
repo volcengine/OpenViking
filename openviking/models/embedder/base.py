@@ -157,6 +157,22 @@ class EmbedderBase(ABC):
         """
         return [self.embed(text, is_query=is_query) for text in texts]
 
+    def embed_query(self, text: str) -> EmbedResult:
+        """Embed query text with explicit retrieval-side semantics."""
+        return self.embed(text, is_query=True)
+
+    def embed_document(self, text: str) -> EmbedResult:
+        """Embed document text with explicit indexing-side semantics."""
+        return self.embed(text, is_query=False)
+
+    def embed_batch_query(self, texts: List[str]) -> List[EmbedResult]:
+        """Batch embed query texts."""
+        return self.embed_batch(texts, is_query=True)
+
+    def embed_batch_document(self, texts: List[str]) -> List[EmbedResult]:
+        """Batch embed document texts."""
+        return self.embed_batch(texts, is_query=False)
+
     async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
         """Async embed single text.
 
@@ -174,6 +190,18 @@ class EmbedderBase(ABC):
         for text in texts:
             results.append(await self.embed_async(text, is_query=is_query))
         return results
+
+    async def embed_query_async(self, text: str) -> EmbedResult:
+        return await self.embed_async(text, is_query=True)
+
+    async def embed_document_async(self, text: str) -> EmbedResult:
+        return await self.embed_async(text, is_query=False)
+
+    async def embed_batch_query_async(self, texts: List[str]) -> List[EmbedResult]:
+        return await self.embed_batch_async(texts, is_query=True)
+
+    async def embed_batch_document_async(self, texts: List[str]) -> List[EmbedResult]:
+        return await self.embed_batch_async(texts, is_query=False)
 
     def close(self):
         """Release resources, subclasses can override as needed"""

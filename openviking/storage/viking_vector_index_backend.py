@@ -202,6 +202,19 @@ class _SingleAccountBackend:
             "status": "active",
         }
 
+    async def get_collection_meta(self) -> Optional[Dict[str, Any]]:
+        if not await self.collection_exists():
+            return None
+        return self._get_collection().get_meta_data()
+
+    async def update_collection_description(self, description: str) -> bool:
+        if not await self.collection_exists():
+            return False
+        coll = self._get_collection()
+        coll.update(description=description)
+        self._refresh_meta_data(coll)
+        return True
+
     # =========================================================================
     # Data Operations (with tenant enforcement)
     # =========================================================================
@@ -586,6 +599,12 @@ class VikingVectorIndexBackend:
 
     async def get_collection_info(self) -> Optional[Dict[str, Any]]:
         return await self._get_default_backend().get_collection_info()
+
+    async def get_collection_meta(self) -> Optional[Dict[str, Any]]:
+        return await self._get_default_backend().get_collection_meta()
+
+    async def update_collection_description(self, description: str) -> bool:
+        return await self._get_default_backend().update_collection_description(description)
 
     # =========================================================================
     # 公开数据操作 API（强制要求 ctx）

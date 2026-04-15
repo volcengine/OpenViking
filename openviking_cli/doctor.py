@@ -77,7 +77,7 @@ def check_config() -> tuple[bool, str, Optional[str]]:
     except json.JSONDecodeError as exc:
         return False, f"Invalid JSON in {config_path}", f"Fix syntax error: {exc}"
 
-    missing = [key for key in ("embedding",) if key not in data]
+    missing = [key for key in () if key not in data]
     if missing:
         return (
             False,
@@ -152,13 +152,54 @@ def check_embedding() -> tuple[bool, str, Optional[str]]:
     if data is None:
         return False, "Cannot check (config unreadable)", None
 
-    embedding = data.get("embedding", {})
-    dense = embedding.get("dense", {})
-    provider = dense.get("provider", "unknown")
-    model = dense.get("model", "unknown")
+    embedding = data.get("embedding", {}) or {}
+    dense = embedding.get("dense", {}) or {}
+    provider = dense.get("provider", "local")
+    model = dense.get("model", "bge-small-zh-v1.5-f16")
 
-    if provider == "unknown":
-        return False, "No embedding provider configured", "Add embedding.dense section to ov.conf"
+    if provider == "local":
+        from openviking.models.embedder.local_embedders import (
+            get_local_model_cache_path,
+            get_local_model_spec,
+        )
+
+        try:
+            get_local_model_spec(model)
+        except ValueError as exc:
+            return (
+                False,
+                f"{provider}/{model} (unsupported local model)",
+                str(exc),
+            )
+
+        try:
+            importlib.import_module("llama_cpp")
+        except ImportError:
+            return (
+                False,
+                f"{provider}/{model} (missing llama-cpp-python)",
+                'pip install "openviking[local-embed]"',
+            )
+
+        model_path = dense.get("model_path", "")
+        cache_dir = Path(dense.get("cache_dir", "~/.cache/openviking/models")).expanduser()
+        if model_path:
+            if not Path(model_path).expanduser().exists():
+                return (
+                    False,
+                    f"{provider}/{model} (model_path missing)",
+                    f"Download the GGUF model to {Path(model_path).expanduser()} or update embedding.dense.model_path",
+                )
+            return True, f"{provider}/{model} ({Path(model_path).expanduser()})", None
+
+        cached_file = get_local_model_cache_path(model, str(cache_dir))
+        if cached_file.exists():
+            return True, f"{provider}/{model} ({cached_file})", None
+        return (
+            True,
+            f"{provider}/{model} (will auto-download during startup initialization)",
+            None,
+        )
 
     # Ollama doesn't need an API key
     if provider == "ollama":

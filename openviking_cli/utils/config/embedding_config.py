@@ -37,14 +37,14 @@ class EmbeddingModelConfig(BaseModel):
     provider: Optional[str] = Field(
         default="volcengine",
         description=(
-            "Provider type: 'openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'litellm'. "
+            "Provider type: 'openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'litellm', 'local'. "
             "For OpenRouter or other OpenAI-compatible providers, use 'litellm' with "
             "api_base and api_key, or 'openai' with api_base and extra_headers."
         ),
     )
     backend: Optional[str] = Field(
         default="volcengine",
-        description="Backend type (Deprecated, use 'provider' instead): 'openai', 'volcengine', 'vikingdb', 'voyage'",
+        description="Backend type (Deprecated, use 'provider' instead): 'openai', 'volcengine', 'vikingdb', 'voyage', 'local'",
     )
     version: Optional[str] = Field(default=None, description="Model version")
     ak: Optional[str] = Field(default=None, description="Access Key ID for VikingDB API")
@@ -62,6 +62,14 @@ class EmbeddingModelConfig(BaseModel):
     api_version: Optional[str] = Field(
         default=None,
         description="API version for Azure OpenAI (e.g., '2025-01-01-preview').",
+    )
+    model_path: Optional[str] = Field(
+        default=None,
+        description="Explicit local GGUF model path for provider='local'.",
+    )
+    cache_dir: Optional[str] = Field(
+        default=None,
+        description="Local model cache directory for provider='local'.",
     )
 
     model_config = {"extra": "forbid"}
@@ -105,10 +113,11 @@ class EmbeddingModelConfig(BaseModel):
             "minimax",
             "cohere",
             "litellm",
+            "local",
         ]:
             raise ValueError(
                 f"Invalid embedding provider: '{self.provider}'. Must be one of: "
-                "'openai', 'azure', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'minimax', 'cohere', 'litellm'"
+                "'openai', 'azure', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'minimax', 'cohere', 'litellm', 'local'"
             )
 
         # Provider-specific validation
@@ -192,6 +201,11 @@ class EmbeddingModelConfig(BaseModel):
                     "Check your embedding model's documentation for the correct dimension."
                 )
 
+        elif self.provider == "local":
+            from openviking.models.embedder.local_embedders import get_local_model_spec
+
+            get_local_model_spec(self.model)
+
         return self
 
     def get_effective_dimension(self) -> int:
@@ -248,6 +262,11 @@ class EmbeddingModelConfig(BaseModel):
                 f"Please set 'dimension' explicitly in your embedding config. "
                 f"Known models: {list(ollama_model_dimensions.keys())}"
             )
+
+        if provider == "local":
+            from openviking.models.embedder.local_embedders import get_local_model_default_dimension
+
+            return get_local_model_default_dimension(self.model)
 
         return 2048
 
@@ -314,6 +333,22 @@ class EmbeddingConfig(BaseModel):
 
     model_config = {"extra": "forbid"}
 
+    @model_validator(mode="before")
+    @classmethod
+    def apply_default_local_dense(cls, data: Any) -> Any:
+        if data is None:
+            data = {}
+        if not isinstance(data, dict):
+            return data
+
+        if not data.get("dense") and not data.get("sparse") and not data.get("hybrid"):
+            data = dict(data)
+            data["dense"] = {
+                "provider": "local",
+                "model": "bge-small-zh-v1.5-f16",
+            }
+        return data
+
     @model_validator(mode="after")
     def validate_config(self):
         """Validate configuration completeness and consistency"""
@@ -351,6 +386,7 @@ class EmbeddingConfig(BaseModel):
             GeminiDenseEmbedder,
             JinaDenseEmbedder,
             LiteLLMDenseEmbedder,
+            LocalDenseEmbedder,
             MinimaxDenseEmbedder,
             OpenAIDenseEmbedder,
             VikingDBDenseEmbedder,
@@ -556,6 +592,16 @@ class EmbeddingConfig(BaseModel):
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                     **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
+                },
+            ),
+            ("local", "dense"): (
+                LocalDenseEmbedder,
+                lambda cfg: {
+                    "model_name": cfg.model,
+                    "model_path": cfg.model_path,
+                    "cache_dir": cfg.cache_dir,
+                    "dimension": cfg.dimension,
+                    "config": dict(runtime_config),
                 },
             ),
         }
