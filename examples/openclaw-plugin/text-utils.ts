@@ -478,6 +478,9 @@ function extractPartText(content: unknown): string {
   return "";
 }
 
+/**
+ * 结构化消息类型 - 用于 afterTurn 发送到 OpenViking
+ */
 export type ExtractedMessage = {
   role: "user" | "assistant";
   parts: Array<{
@@ -508,6 +511,13 @@ function appendExtractedMessage(
   messages.push({ role, parts });
 }
 
+/**
+ * 提取从 startIndex 开始的新消息，返回结构化消息。
+ * - 用户输入 → type: "text"
+ * - 工具结果 → type: "tool"
+ * - 跳过 system 消息
+ * - 清理时间戳前缀（如 [Fri 2026-04-10 17:20 GMT+8]）
+ */
 export function extractNewTurnMessages(
   messages: unknown[],
   startIndex: number,
@@ -573,6 +583,8 @@ export function extractNewTurnMessages(
       continue;
     }
 
+    // user/assistant -> type: "text"
+    // 保留原始 user/assistant 角色，并合并相邻同角色片段
     const content = msg.content;
     const text = extractPartText(content);
 
@@ -580,8 +592,14 @@ export function extractNewTurnMessages(
       if (HEARTBEAT_RE.test(text)) {
         continue;
       }
+      // 保持原始 role，assistant 保持 assistant，user 保持 user
       const ovRole: "user" | "assistant" = role === "assistant" ? "assistant" : "user";
-      const cleanedText = ovRole === "user" ? sanitizeUserTextForCapture(text) : text.trim();
+      const cleanedText = ovRole === "user"
+        ? (
+          // 使用 sanitizeUserTextForCapture 清理所有噪音（Sender 元数据、时间戳等）
+          sanitizeUserTextForCapture(text)
+        )
+        : text.trim();
       if (cleanedText) {
         appendExtractedMessage(result, ovRole, [{
           type: "text",

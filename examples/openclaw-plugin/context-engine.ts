@@ -1074,8 +1074,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           const client = await getClient();
           const createdAt = pickLatestCreatedAt(turnMessages);
 
-          // Preserve OpenClaw tool-use/tool-result structure so OpenViking can
-          // replay turns without flattening tool outputs into assistant text.
+          // 保持 OpenClaw 的 tool-use/tool-result 结构，避免把工具输出压平为 assistant 文本。
           for (const msg of extractedMessages) {
             const ovParts = msg.parts.map((part) => {
               if (part.type === "text") {
@@ -1315,6 +1314,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           ) {
             tokensAfter = ctx.estimatedTokens;
           }
+          // 打印 compact 后重新写入 session 的完整内容
           logger.info(
             `openviking: compact restored session content for ${OVSessionId}: ` +
               `messages=${ctx.messages?.length ?? 0}, ` +
@@ -1328,6 +1328,7 @@ export function createMemoryOpenVikingContextEngine(params: {
             );
           }
           if (cfg.logFindRequests && ctx.messages && ctx.messages.length > 0) {
+            // 打印所有消息的 role 和 content 摘要
             const msgSummary = ctx.messages.map((m: { role?: string; content?: string; parts?: Array<{ type?: string; text?: string }> }) => {
               const role = m.role ?? "unknown";
               let textPreview = "";
