@@ -96,7 +96,7 @@ openviking-server init
 openviking-server doctor
 ```
 
-如果你希望使用 Codex 作为 VLM，建议先运行 `openviking-server init`，然后在向导里选择 `OpenAI Codex`。初始化向导可以导入已有的 Codex 鉴权，或直接引导你完成登录，因此不需要在 `init` 之前先手动执行 `ov codex login`。
+如果你希望使用 Codex 作为 VLM，建议先运行 `openviking-server init`，然后在向导里选择 `OpenAI Codex`。初始化向导可以导入已有的 Codex 鉴权，或直接引导你完成登录。
 
 如果你更希望手动创建，再编写 `~/.openviking/ov.conf`：
 
@@ -124,14 +124,7 @@ openviking-server doctor
 
 各模型服务的完整配置示例请参见 [配置指南 - 配置示例](../guides/01-configuration.md#配置示例)。
 
-如果你希望使用 Codex 作为 VLM：
-
-```bash
-# 手动配置或排障时使用
-ov codex login
-ov codex status
-openviking-server doctor
-```
+如果你希望使用 Codex 作为 VLM，请在 `openviking-server init` 中完成鉴权，然后执行 `openviking-server doctor`。
 
 ### 设置环境变量
 

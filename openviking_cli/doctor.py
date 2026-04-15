@@ -212,7 +212,7 @@ def check_vlm() -> tuple[bool, str, Optional[str]]:
             return (
                 False,
                 f"openai-codex/{model} ({exc})",
-                "Run `ov codex login` to create OV-owned auth state\n"
+                "Run `openviking-server init` and choose `OpenAI Codex` to create OV-owned auth state\n"
                 f"Or set OPENVIKING_CODEX_ACCESS_TOKEN\n"
                 f"Or bootstrap once from {bootstrap_path} into {store_path}",
             )

@@ -9,7 +9,7 @@ openviking-server init
 openviking-server doctor
 ```
 
-If you want to use Codex as the VLM provider, choose `OpenAI Codex` inside `openviking-server init`. The wizard can import existing Codex auth or guide you through login, so you do not need to run `ov codex login` before `init`.
+If you want to use Codex as the VLM provider, choose `OpenAI Codex` inside `openviking-server init`. The wizard can import existing Codex auth or guide you through login directly.
 
 ## Configuration File
 
@@ -103,13 +103,7 @@ For `provider: "openai-codex"`, `vlm.api_key` is optional when Codex OAuth is al
 <details>
 <summary><b>Volcengine Embedding + Codex VLM</b></summary>
 
-```bash
-# Manual setup or troubleshooting flow
-ov codex login
-openviking-server doctor
-```
-
-If you used `openviking-server init` and selected `OpenAI Codex`, the wizard already covered the login/import step.
+Use `openviking-server init` to complete the Codex login/import step, then run `openviking-server doctor`.
 
 ```json
 {
@@ -521,16 +515,8 @@ If VLM is not configured, L0/L1 will be generated from content directly (less se
 - `openai-codex`: Codex VLM via ChatGPT/Codex OAuth
 - `kimi`: Kimi Coding subscription endpoint with built-in Claude-compatible headers
 - `glm`: Z.AI GLM Coding Plan endpoint with OpenAI-compatible requests
-- `litellm`: Unified third-party providers such as Anthropic, Gemini, DeepSeek, vLLM, and Ollama
 
-For `openai-codex`, authenticate with:
-
-```bash
-# Manual setup or troubleshooting flow
-ov codex login
-ov codex status
-openviking-server doctor
-```
+For `openai-codex`, authenticate through `openviking-server init`, then verify with `openviking-server doctor`.
 
 **Custom HTTP Headers**
 
@@ -639,7 +625,7 @@ See [Code Skeleton Extraction](../concepts/06-extraction.md#code-skeleton-extrac
 
 ### rerank
 
-Reranking model for search result refinement. Supports VikingDB (Volcengine), Cohere, OpenAI-compatible APIs, and LiteLLM.
+Reranking model for search result refinement. Supports VikingDB (Volcengine), Cohere, and OpenAI-compatible APIs.
 
 **Volcengine (VikingDB):**
 
@@ -673,13 +659,13 @@ Reranking model for search result refinement. Supports VikingDB (Volcengine), Co
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `provider` | str | `"vikingdb"`, `"cohere"`, `"openai"`, or `"litellm"`. Auto-detected if omitted. |
+| `provider` | str | `"vikingdb"`, `"cohere"`, or `"openai"`. Auto-detected if omitted. |
 | `ak` | str | VikingDB Access Key (vikingdb provider only) |
 | `sk` | str | VikingDB Secret Key (vikingdb provider only) |
 | `model_name` | str | Model name (vikingdb provider only, default: `doubao-seed-rerank`) |
-| `api_key` | str | API key (for `openai`, `cohere`, or `litellm` providers) |
+| `api_key` | str | API key (for `openai` or `cohere` providers) |
 | `api_base` | str | Endpoint URL (for `openai` provider) |
-| `model` | str | Model name (for `openai` or `litellm` providers) |
+| `model` | str | Model name (for `openai` providers) |
 | `threshold` | float | Score threshold between `0.0` and `1.0`; results below this are filtered out. Default: `0.1` |
 | `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
 
@@ -687,7 +673,6 @@ Reranking model for search result refinement. Supports VikingDB (Volcengine), Co
 - `vikingdb`: Volcengine VikingDB Rerank API (uses AK/SK)
 - `cohere`: Cohere Rerank API
 - `openai`: OpenAI-compatible Rerank API
-- `litellm`: Rerank services via LiteLLM (requires `litellm` package)
 
 If rerank is not configured, search uses vector similarity only.
 

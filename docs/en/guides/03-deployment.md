@@ -13,9 +13,6 @@ openviking-server init
 # Validate local config, model access, and auth before starting
 openviking-server doctor
 
-# Optional: inspect Codex auth state directly
-ov codex status
-
 # Start server (reads ~/.openviking/ov.conf by default)
 openviking-server
 

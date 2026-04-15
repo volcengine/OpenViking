@@ -242,7 +242,7 @@ def _ensure_codex_auth() -> bool:
             print(f"  {_green('OK')} Codex OAuth stored in {path}")
             return True
 
-    print(f"  {_dim('You can finish setup now and run `ov codex login` later.')}")
+    print(f"  {_dim('You can finish setup now and re-run `openviking-server init` later to complete Codex sign-in.')}")
     return False
 
 
@@ -712,12 +712,6 @@ def run_init() -> int:
     print(f"  {_bold('Next steps:')}")
     print(f"    Start the server:  {_cyan('openviking-server')}")
     print(f"    Validate setup:    {_cyan('openviking-server doctor')}")
-    if vlm.get("provider") == "openai-codex":
-        from openviking.models.vlm.backends.codex_auth import has_codex_auth_available
-
-        print(f"    Check Codex auth:  {_cyan('ov codex status')}")
-        if not has_codex_auth_available():
-            print(f"    Sign in to Codex: {_cyan('ov codex login')}")
     print()
 
     return 0

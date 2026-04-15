@@ -184,8 +184,20 @@ def test_codex_auth_bootstraps_into_openviking_store(tmp_path, monkeypatch):
     assert ov_auth_path.exists()
     persisted = json.loads(ov_auth_path.read_text(encoding="utf-8"))
     assert persisted["provider"] == "openai-codex"
+    assert persisted["auth_owner"] == "external"
     assert persisted["tokens"]["refresh_token"] == "refresh-token"
     assert persisted["imported_from"] == str(bootstrap_path)
+
+
+def test_codex_auth_native_login_defaults_to_openviking_owner(tmp_path, monkeypatch):
+    ov_auth_path = tmp_path / "codex_auth.json"
+    monkeypatch.setenv("OPENVIKING_CODEX_AUTH_PATH", str(ov_auth_path))
+
+    codex_auth.save_codex_tokens("header.payload.signature", "refresh-token")
+
+    persisted = json.loads(ov_auth_path.read_text(encoding="utf-8"))
+    assert persisted["auth_owner"] == "openviking"
+    assert "imported_from" not in persisted
 
 
 def test_codex_auth_store_uses_windows_lock_when_fcntl_is_unavailable(tmp_path, monkeypatch):

@@ -54,14 +54,6 @@ def main():
         from openviking_cli.doctor import main as doctor_main
 
         sys.exit(doctor_main())
-    if len(sys.argv) > 1 and sys.argv[1] == "codex":
-        from openviking_cli.codex_cli import main as codex_main
-
-        sys.exit(codex_main(sys.argv[2:]))
-    if len(sys.argv) > 2 and sys.argv[1] == "auth" and sys.argv[2] == "codex":
-        from openviking_cli.codex_cli import main as codex_main
-
-        sys.exit(codex_main(sys.argv[3:]))
     # 1. 检查开发环境（仅在直接运行脚本时有效）
     try:
         # __file__ is openviking_cli/rust_cli.py, so parent is openviking_cli directory

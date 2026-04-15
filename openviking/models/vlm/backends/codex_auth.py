@@ -30,9 +30,10 @@ except ImportError:
 
 DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 CODEX_OAUTH_ISSUER = "https://auth.openai.com"
-CODEX_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
-CODEX_OAUTH_TOKEN_URL = "https://auth.openai.com/oauth/token"
+DEFAULT_CODEX_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 CODEX_ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 300
+CODEX_AUTH_OWNER_OPENVIKING = "openviking"
+CODEX_AUTH_OWNER_EXTERNAL = "external"
 _auth_lock_holder = threading.local()
 
 
@@ -45,6 +46,17 @@ def _resolve_base_url() -> str:
         os.getenv("OPENVIKING_CODEX_BASE_URL", "").strip().rstrip("/")
         or DEFAULT_CODEX_BASE_URL
     )
+
+
+def _resolve_codex_oauth_issuer() -> str:
+    return os.getenv("OPENVIKING_CODEX_OAUTH_ISSUER", "").strip().rstrip("/") or CODEX_OAUTH_ISSUER
+
+
+def _resolve_codex_oauth_token_url() -> str:
+    override = os.getenv("OPENVIKING_CODEX_OAUTH_TOKEN_URL", "").strip()
+    if override:
+        return override
+    return f"{_resolve_codex_oauth_issuer()}/oauth/token"
 
 
 def _decode_jwt_claims(token: Any) -> Dict[str, Any]:
@@ -174,10 +186,63 @@ def _format_expires_at(token: str) -> Optional[str]:
     return datetime.fromtimestamp(float(exp), tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _extract_codex_oauth_client_id(payload: Dict[str, Any]) -> Optional[str]:
+    for key in ("client_id", "oauth_client_id", "clientId"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    tokens = payload.get("tokens")
+    if isinstance(tokens, dict):
+        for token_key in ("access_token", "id_token"):
+            claims = _decode_jwt_claims(tokens.get(token_key))
+            for claim_key in ("azp", "client_id"):
+                value = claims.get(claim_key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+            audience = claims.get("aud")
+            if isinstance(audience, str) and audience.strip().startswith("app_"):
+                return audience.strip()
+            if isinstance(audience, list):
+                for item in audience:
+                    if isinstance(item, str) and item.strip().startswith("app_"):
+                        return item.strip()
+    return None
+
+
+def _extract_codex_auth_owner(payload: Dict[str, Any]) -> str:
+    owner = payload.get("auth_owner")
+    if isinstance(owner, str) and owner.strip() in {
+        CODEX_AUTH_OWNER_OPENVIKING,
+        CODEX_AUTH_OWNER_EXTERNAL,
+    }:
+        return owner.strip()
+    imported_from = payload.get("imported_from")
+    if isinstance(imported_from, str) and imported_from.strip():
+        return CODEX_AUTH_OWNER_EXTERNAL
+    return CODEX_AUTH_OWNER_OPENVIKING
+
+
+def _resolve_codex_oauth_client_id() -> str:
+    override = os.getenv("OPENVIKING_CODEX_OAUTH_CLIENT_ID", "").strip()
+    if override:
+        return override
+    for _, path in _candidate_auth_sources():
+        payload = _read_json_file(path)
+        if not payload:
+            continue
+        client_id = _extract_codex_oauth_client_id(payload)
+        if client_id:
+            return client_id
+    return DEFAULT_CODEX_OAUTH_CLIENT_ID
+
+
 def _load_tokens_from_source(source: str, path: Path) -> Optional[Dict[str, Any]]:
     payload = _read_json_file(path)
     if not payload:
         return None
+    client_id = _extract_codex_oauth_client_id(payload)
+    auth_owner = _extract_codex_auth_owner(payload)
+    imported_from = payload.get("imported_from")
     if source == "openviking":
         tokens = payload.get("tokens")
         if not isinstance(tokens, dict):
@@ -192,6 +257,9 @@ def _load_tokens_from_source(source: str, path: Path) -> Optional[Dict[str, Any]
             "last_refresh": payload.get("last_refresh"),
             "source": source,
             "path": path,
+            "client_id": client_id,
+            "auth_owner": auth_owner,
+            "imported_from": imported_from,
         }
     tokens = payload.get("tokens")
     if not isinstance(tokens, dict):
@@ -206,6 +274,9 @@ def _load_tokens_from_source(source: str, path: Path) -> Optional[Dict[str, Any]
         "last_refresh": payload.get("last_refresh"),
         "source": source,
         "path": path,
+        "client_id": client_id,
+        "auth_owner": auth_owner,
+        "imported_from": imported_from,
     }
 
 
@@ -216,11 +287,18 @@ def _write_tokens_to_ov_store(
     *,
     last_refresh: Optional[str] = None,
     imported_from: Optional[str] = None,
+    client_id: Optional[str] = None,
+    auth_owner: str = CODEX_AUTH_OWNER_OPENVIKING,
 ) -> None:
     with _auth_store_lock():
         payload = _read_json_file(path)
         payload["provider"] = "openai-codex"
         payload["auth_mode"] = "chatgpt"
+        payload["auth_owner"] = (
+            CODEX_AUTH_OWNER_EXTERNAL
+            if auth_owner == CODEX_AUTH_OWNER_EXTERNAL
+            else CODEX_AUTH_OWNER_OPENVIKING
+        )
         payload["tokens"] = {
             "access_token": access_token,
             "refresh_token": refresh_token,
@@ -229,6 +307,13 @@ def _write_tokens_to_ov_store(
             payload["last_refresh"] = last_refresh
         if imported_from:
             payload["imported_from"] = imported_from
+        else:
+            payload.pop("imported_from", None)
+        resolved_client_id = client_id or _extract_codex_oauth_client_id(
+            {"tokens": {"access_token": access_token}}
+        )
+        if resolved_client_id:
+            payload["client_id"] = resolved_client_id
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         try:
@@ -252,6 +337,8 @@ def save_codex_tokens(
     *,
     imported_from: Optional[str] = None,
     last_refresh: Optional[str] = None,
+    client_id: Optional[str] = None,
+    auth_owner: str = CODEX_AUTH_OWNER_OPENVIKING,
 ) -> Path:
     path = get_codex_auth_store_path()
     _write_tokens_to_ov_store(
@@ -260,6 +347,8 @@ def save_codex_tokens(
         refresh_token,
         imported_from=imported_from,
         last_refresh=last_refresh or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        client_id=client_id,
+        auth_owner=auth_owner,
     )
     return path
 
@@ -285,6 +374,7 @@ def get_codex_auth_status() -> Dict[str, Any]:
         status["expires_at"] = _format_expires_at(store_payload["access_token"])
         payload = _read_json_file(store_path)
         status["imported_from"] = payload.get("imported_from")
+        status["auth_owner"] = _extract_codex_auth_owner(payload)
         status["expiring"] = _codex_access_token_is_expiring(
             store_payload["access_token"],
             CODEX_ACCESS_TOKEN_REFRESH_SKEW_SECONDS,
@@ -308,6 +398,8 @@ def bootstrap_codex_auth() -> Optional[Path]:
         payload["refresh_token"],
         imported_from=str(bootstrap_path),
         last_refresh=payload.get("last_refresh"),
+        client_id=payload.get("client_id"),
+        auth_owner=CODEX_AUTH_OWNER_EXTERNAL,
     )
 
 
@@ -316,10 +408,13 @@ def login_codex_with_device_code(
     timeout_seconds: float = 15.0,
     max_wait_seconds: int = 900,
 ) -> Path:
+    issuer = _resolve_codex_oauth_issuer()
+    client_id = _resolve_codex_oauth_client_id()
+    token_url = _resolve_codex_oauth_token_url()
     with httpx.Client(timeout=httpx.Timeout(timeout_seconds)) as client:
         response = client.post(
-            f"{CODEX_OAUTH_ISSUER}/api/accounts/deviceauth/usercode",
-            json={"client_id": CODEX_OAUTH_CLIENT_ID},
+            f"{issuer}/api/accounts/deviceauth/usercode",
+            json={"client_id": client_id},
             headers={"Content-Type": "application/json"},
         )
     if response.status_code != 200:
@@ -331,7 +426,7 @@ def login_codex_with_device_code(
         raise CodexAuthError("Codex device login response is missing required fields.")
     poll_interval = max(3, int(payload.get("interval", "5")))
     print("Open this URL in your browser:")
-    print(f"  {CODEX_OAUTH_ISSUER}/codex/device")
+    print(f"  {issuer}/codex/device")
     print("Enter this code:")
     print(f"  {user_code}")
     print("Waiting for sign-in...")
@@ -342,7 +437,7 @@ def login_codex_with_device_code(
             while time.monotonic() - start < max_wait_seconds:
                 time.sleep(poll_interval)
                 poll = client.post(
-                    f"{CODEX_OAUTH_ISSUER}/api/accounts/deviceauth/token",
+                    f"{issuer}/api/accounts/deviceauth/token",
                     json={"device_auth_id": device_auth_id, "user_code": user_code},
                     headers={"Content-Type": "application/json"},
                 )
@@ -362,12 +457,12 @@ def login_codex_with_device_code(
         raise CodexAuthError("Codex device login response is missing authorization_code or code_verifier.")
     with httpx.Client(timeout=httpx.Timeout(timeout_seconds)) as client:
         token_response = client.post(
-            CODEX_OAUTH_TOKEN_URL,
+            token_url,
             data={
                 "grant_type": "authorization_code",
                 "code": authorization_code,
-                "redirect_uri": f"{CODEX_OAUTH_ISSUER}/deviceauth/callback",
-                "client_id": CODEX_OAUTH_CLIENT_ID,
+                "redirect_uri": f"{issuer}/deviceauth/callback",
+                "client_id": client_id,
                 "code_verifier": code_verifier,
             },
             headers={"Content-Type": "application/x-www-form-urlencoded"},
@@ -379,7 +474,12 @@ def login_codex_with_device_code(
     refresh_token = str(tokens.get("refresh_token", "") or "").strip()
     if not access_token or not refresh_token:
         raise CodexAuthError("Codex token exchange did not return both access_token and refresh_token.")
-    return save_codex_tokens(access_token, refresh_token)
+    return save_codex_tokens(
+        access_token,
+        refresh_token,
+        client_id=client_id,
+        auth_owner=CODEX_AUTH_OWNER_OPENVIKING,
+    )
 
 
 def refresh_codex_oauth(
@@ -388,12 +488,13 @@ def refresh_codex_oauth(
     *,
     timeout_seconds: float = 20.0,
 ) -> Dict[str, str]:
-    del access_token
+    client_id = _extract_codex_oauth_client_id({"tokens": {"access_token": access_token}})
+    client_id = client_id or _resolve_codex_oauth_client_id()
     if not isinstance(refresh_token, str) or not refresh_token.strip():
         raise CodexAuthError("Codex OAuth refresh_token is missing.")
     try:
         response = httpx.post(
-            CODEX_OAUTH_TOKEN_URL,
+            _resolve_codex_oauth_token_url(),
             headers={
                 "Content-Type": "application/x-www-form-urlencoded",
                 "Accept": "application/json",
@@ -401,7 +502,7 @@ def refresh_codex_oauth(
             data={
                 "grant_type": "refresh_token",
                 "refresh_token": refresh_token.strip(),
-                "client_id": CODEX_OAUTH_CLIENT_ID,
+                "client_id": client_id,
             },
             timeout=timeout_seconds,
         )
@@ -442,6 +543,31 @@ def has_codex_auth_available() -> bool:
     )
 
 
+def _sync_external_codex_auth(
+    external_path: Path,
+    ov_auth_path: Path,
+    *,
+    fallback_payload: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    external_payload = _load_tokens_from_source("codex-cli", external_path)
+    if external_payload is not None:
+        _write_tokens_to_ov_store(
+            ov_auth_path,
+            external_payload["access_token"],
+            external_payload["refresh_token"],
+            last_refresh=external_payload.get("last_refresh"),
+            imported_from=str(external_path),
+            client_id=external_payload.get("client_id"),
+            auth_owner=CODEX_AUTH_OWNER_EXTERNAL,
+        )
+        return external_payload
+    if fallback_payload is not None:
+        return fallback_payload
+    raise CodexAuthError(
+        f"Externally managed Codex auth is unavailable at {external_path}. Re-run Codex CLI login or openviking-server init."
+    )
+
+
 def resolve_codex_runtime_credentials(
     *,
     force_refresh: bool = False,
@@ -469,26 +595,73 @@ def resolve_codex_runtime_credentials(
             "source": "env",
         }
 
-    for source, path in _candidate_auth_sources():
-        payload = _load_tokens_from_source(source, path)
-        if payload is None:
-            continue
-        access_token = payload["access_token"]
-        refresh_token = payload["refresh_token"]
-        ov_auth_path = (
-            path if source == "openviking"
-            else Path(os.getenv("OPENVIKING_CODEX_AUTH_PATH", "").strip()).expanduser()
-            if os.getenv("OPENVIKING_CODEX_AUTH_PATH", "").strip()
-            else _default_openviking_auth_path()
-        )
-        if source != "openviking":
+    ov_auth_path = get_codex_auth_store_path()
+    payload = _load_tokens_from_source("openviking", ov_auth_path)
+    if payload is None:
+        for source, path in _candidate_auth_sources():
+            if source == "openviking":
+                continue
+            payload = _load_tokens_from_source(source, path)
+            if payload is None:
+                continue
             _write_tokens_to_ov_store(
                 ov_auth_path,
-                access_token,
-                refresh_token,
+                payload["access_token"],
+                payload["refresh_token"],
                 last_refresh=payload.get("last_refresh"),
                 imported_from=str(path),
+                client_id=payload.get("client_id"),
+                auth_owner=CODEX_AUTH_OWNER_EXTERNAL,
             )
+            payload = _load_tokens_from_source("openviking", ov_auth_path)
+            break
+    if payload is not None:
+        auth_owner = payload.get("auth_owner") or CODEX_AUTH_OWNER_OPENVIKING
+        imported_from = payload.get("imported_from")
+        access_token = payload["access_token"]
+        refresh_token = payload["refresh_token"]
+        if auth_owner == CODEX_AUTH_OWNER_EXTERNAL:
+            external_path = None
+            if isinstance(imported_from, str) and imported_from.strip():
+                external_path = Path(imported_from).expanduser()
+            elif os.getenv("OPENVIKING_CODEX_BOOTSTRAP_PATH", "").strip():
+                external_path = Path(os.getenv("OPENVIKING_CODEX_BOOTSTRAP_PATH", "").strip()).expanduser()
+            elif _default_codex_auth_path().exists():
+                external_path = _default_codex_auth_path()
+            should_resync = force_refresh or (
+                refresh_if_expiring
+                and _codex_access_token_is_expiring(access_token, refresh_skew_seconds)
+            )
+            if external_path is not None and (should_resync or force_refresh):
+                payload = _sync_external_codex_auth(
+                    external_path,
+                    ov_auth_path,
+                    fallback_payload=payload,
+                )
+                access_token = payload["access_token"]
+                refresh_token = payload["refresh_token"]
+            if refresh_if_expiring and _codex_access_token_is_expiring(access_token, refresh_skew_seconds):
+                if external_path is not None:
+                    payload = _sync_external_codex_auth(
+                        external_path,
+                        ov_auth_path,
+                        fallback_payload=payload,
+                    )
+                    access_token = payload["access_token"]
+                    refresh_token = payload["refresh_token"]
+                if _codex_access_token_is_expiring(access_token, refresh_skew_seconds):
+                    raise CodexAuthError(
+                        "Externally managed Codex auth is expiring. Refresh it via Codex CLI or re-run openviking-server init."
+                    )
+            return {
+                "provider": "openai-codex",
+                "api_key": access_token,
+                "refresh_token": refresh_token,
+                "base_url": _resolve_base_url(),
+                "source": "openviking-auth-store",
+                "path": str(ov_auth_path),
+                "auth_owner": CODEX_AUTH_OWNER_EXTERNAL,
+            }
         should_refresh = force_refresh or (
             refresh_if_expiring
             and _codex_access_token_is_expiring(access_token, refresh_skew_seconds)
@@ -502,15 +675,18 @@ def resolve_codex_runtime_credentials(
                 access_token,
                 refresh_token,
                 last_refresh=refreshed.get("last_refresh"),
-                imported_from=None if source == "openviking" else str(path),
+                imported_from=None,
+                client_id=payload.get("client_id"),
+                auth_owner=CODEX_AUTH_OWNER_OPENVIKING,
             )
         return {
             "provider": "openai-codex",
             "api_key": access_token,
             "refresh_token": refresh_token,
             "base_url": _resolve_base_url(),
-            "source": "openviking-auth-store" if source != "openviking" else source,
+            "source": "openviking",
             "path": str(ov_auth_path),
+            "auth_owner": CODEX_AUTH_OWNER_OPENVIKING,
         }
 
     raise CodexAuthError(

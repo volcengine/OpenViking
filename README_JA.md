@@ -103,11 +103,6 @@ OpenVikingは3つのVLMプロバイダーをサポートしています：
 |----------|-------------|-------------|
 | `volcengine` | Volcengine Doubaoモデル | [Volcengineコンソール](https://console.volcengine.com/ark/region:ark+cn-beijing/overview?briefPage=0&briefType=introduce&type=new&utm_content=OpenViking&utm_medium=devrel&utm_source=OWO&utm_term=OpenViking) |
 | `openai` | OpenAI公式API | [OpenAIプラットフォーム](https://platform.openai.com) |
-| `litellm` | 様々なサードパーティモデルへの統合アクセス（Anthropic、DeepSeek、Gemini、vLLM、Ollamaなど） | [LiteLLMプロバイダー](https://docs.litellm.ai/docs/providers)を参照 |
-
-> 💡 **ヒント**:
-> - `litellm`は様々なモデルへの統合アクセスをサポートしています。`model`フィールドは[LiteLLMフォーマット仕様](https://docs.litellm.ai/docs/providers)に従う必要があります
-> - システムは一般的なモデル（例：`claude-*`、`deepseek-*`、`gemini-*`、`hosted_vllm/*`、`ollama/*`など）を自動検出します。その他のモデルについては、LiteLLMフォーマットに従ったフルプレフィックスを使用してください
 
 #### プロバイダー固有の注意事項
 
@@ -173,75 +168,6 @@ OpenAIの公式APIを使用：
 
 </details>
 
-<details>
-<summary><b>LiteLLM（Anthropic、DeepSeek、Gemini、Qwen、vLLM、Ollamaなど）</b></summary>
-
-LiteLLMは様々なモデルへの統合アクセスを提供します。`model`フィールドはLiteLLMの命名規則に従う必要があります。ここではClaudeとQwenを例に説明します：
-
-**Anthropic:**
-
-```json
-{
-  "vlm": {
-    "provider": "litellm",
-    "model": "claude-3-5-sonnet-20240620",
-    "api_key": "your-anthropic-api-key"
-  }
-}
-```
-
-**Qwen（DashScope）:**
-
-```json
-{
-  "vlm": {
-    "provider": "litellm",
-    "model": "dashscope/qwen-turbo", // 詳細は https://docs.litellm.ai/docs/providers/dashscope を参照
-    "api_key": "your-dashscope-api-key",
-    "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1"
-  }
-}
-```
-
-> 💡 **Qwenのヒント**:
-> - **中国/北京**リージョンの場合、`api_base`は `https://dashscope.aliyuncs.com/compatible-mode/v1` を使用
-> - **国際**リージョンの場合、`api_base`は `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` を使用
-
-**一般的なモデルフォーマット:**
-
-| プロバイダー | モデル例 | 備考 |
-|----------|---------------|-------|
-| Anthropic | `claude-3-5-sonnet-20240620` | 自動検出、`ANTHROPIC_API_KEY`を使用 |
-| DeepSeek | `deepseek-chat` | 自動検出、`DEEPSEEK_API_KEY`を使用 |
-| Gemini | `gemini-pro` | 自動検出、`GEMINI_API_KEY`を使用 |
-| Qwen | `dashscope/qwen-turbo` | リージョンに基づいて`api_base`を設定（上記参照） |
-| OpenRouter | `openrouter/openai/gpt-4o` | フルプレフィックスが必要 |
-| vLLM | `hosted_vllm/llama-3.1-8b` | `api_base`をvLLMサーバーに設定 |
-| Ollama | `ollama/llama3.1` | `api_base`をOllamaサーバーに設定 |
-
-**ローカルモデル（vLLM / Ollama）:**
-
-```bash
-
-# Ollamaの起動
-ollama serve
-```
-
-```json
-// Ollama
-{
-  "vlm": {
-    "provider": "litellm",
-    "model": "ollama/llama3.1",
-    "api_base": "http://localhost:11434"
-  }
-}
-```
-
-完全なモデルサポートについては、[LiteLLMプロバイダードキュメント](https://docs.litellm.ai/docs/providers)を参照してください。
-
-</details>
-
 ### 3. 環境設定
 
 #### サーバー設定テンプレート
@@ -277,7 +203,7 @@ ollama serve
 }
 ```
 
-> **注意**: Embeddingモデルについては、現在`volcengine`（Doubao）、`openai`、`jina`プロバイダーがサポートされています。VLMモデルについては、`volcengine`、`openai`、`litellm`の3つのプロバイダーをサポートしています。`litellm`プロバイダーは、Anthropic（Claude）、DeepSeek、Gemini、Moonshot、Zhipu、DashScope、MiniMax、vLLM、Ollamaなど様々なモデルをサポートしています。
+> **注意**: Embeddingモデルについては、現在`volcengine`（Doubao）、`openai`、`jina`プロバイダーがサポートされています。VLMモデルについては、`volcengine`と`openai`をサポートしています。
 
 #### サーバー設定例
 

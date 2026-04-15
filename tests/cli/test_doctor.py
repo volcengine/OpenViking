@@ -267,7 +267,7 @@ class TestCheckVlm:
                     ok, detail, fix = check_vlm()
         assert not ok
         assert "missing auth" in detail
-        assert "ov codex login" in fix
+        assert "openviking-server init" in fix
 
     def test_pass_with_default_provider_codex_oauth(self, tmp_path: Path):
         config = tmp_path / "ov.conf"

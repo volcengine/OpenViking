@@ -13,9 +13,6 @@ openviking-server init
 # 启动前校验本地配置、模型访问和鉴权状态
 openviking-server doctor
 
-# 可选：单独查看 Codex 鉴权状态
-ov codex status
-
 # 配置文件在默认路径 ~/.openviking/ov.conf 时，直接启动
 openviking-server
 

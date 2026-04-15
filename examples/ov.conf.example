@@ -83,7 +83,7 @@
     "thinking": false
   },
   "vlm_codex_example": {
-    "_comment": "For Codex OAuth via subscription. Run `ov codex login` first. OV stores tokens in ~/.openviking/codex_auth.json and can bootstrap from an existing Codex CLI auth file if needed.",
+    "_comment": "For Codex OAuth via subscription. Complete sign-in from `openviking-server init`. OV stores tokens in ~/.openviking/codex_auth.json and can bootstrap from an existing Codex CLI auth file if needed.",
     "provider": "openai-codex",
     "model": "gpt-5.3-codex",
     "api_base": "https://chatgpt.com/backend-api/codex",

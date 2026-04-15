@@ -11,7 +11,7 @@
 
 确保 `ov.conf` 已配置好存储路径和模型信息（参见 [快速开始](02-quickstart.md)），然后启动服务：
 
-如果是首次配置，建议先运行 `openviking-server init`。当你在向导里选择 `OpenAI Codex` 时，向导可以直接帮你处理 Codex 鉴权导入或登录。
+如果是首次配置，建议先运行 `openviking-server init`。当你在向导里选择 `OpenAI Codex` 时，向导会直接帮你处理 Codex 鉴权导入或登录。
 
 启动前建议先做本地校验：
 
@@ -19,11 +19,7 @@
 openviking-server doctor
 ```
 
-如果你的 VLM provider 是 `openai-codex`，并且你想单独查看鉴权状态，再额外执行：
-
-```bash
-ov codex status
-```
+如果你的 VLM provider 是 `openai-codex`，`openviking-server doctor` 会校验本地鉴权状态是否可用。
 
 ```bash
 # 配置文件在默认路径 ~/.openviking/ov.conf 时，直接启动
