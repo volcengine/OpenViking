@@ -249,16 +249,28 @@ async def init_context_collection(storage) -> bool:
             return False
 
     if existing_embedding_meta is None:
-        raise EmbeddingRebuildRequiredError(
-            "Existing collection is missing embedding metadata and already contains vectors. "
-            "Please rebuild the collection before continuing, or switch back to the previous embedding config."
+        logger.warning(
+            "Existing collection has %d vector(s) but no embedding metadata "
+            "(created by an older version). Backfilling with current config and continuing.",
+            existing_count,
         )
+        if hasattr(storage, "update_collection_description"):
+            await storage.update_collection_description(
+                _encode_collection_description(
+                    base_description or "Unified context collection",
+                    embedding_meta,
+                )
+            )
+        return False
 
-    raise EmbeddingRebuildRequiredError(
+    logger.warning(
         "Existing collection embedding metadata does not match current configuration. "
-        f"existing={existing_embedding_meta}, current={embedding_meta}. "
-        "Rebuild is required before OpenViking can continue, or switch back to the previous embedding config."
+        "existing=%s, current=%s. Continuing anyway — search quality may degrade if "
+        "the embedding model actually changed.",
+        existing_embedding_meta,
+        embedding_meta,
     )
+    return False
 
 
 class TextEmbeddingHandler(DequeueHandlerBase):
