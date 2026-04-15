@@ -12,15 +12,13 @@
       "path": "./data"
     },
     "agfs": {
-      "port": 1833,
-      "log_level": "warn",
       "path": "./data",
       "backend": "local"
     }
   },
   "embedding": {
     "dense": {
-      "model": "doubao-embedding-vision-250615",
+      "model": "doubao-embedding-vision-251215",
       "api_key": "{your-api-key}",
       "api_base": "https://ark.cn-beijing.volces.com/api/v3",
       "dimension": 1024,

@@ -63,7 +63,7 @@ openviking-server --config /path/to/ov.conf --host 127.0.0.1 --port 8000
 
 ### 独立模式（嵌入存储）
 
-服务器管理本地 AGFS 和 VectorDB。在 `ov.conf` 中配置本地存储路径：
+服务器管理本地 RAGFS 和 VectorDB。在 `ov.conf` 中配置本地存储路径：
 
 ```json
 {
@@ -71,23 +71,6 @@ openviking-server --config /path/to/ov.conf --host 127.0.0.1 --port 8000
     "workspace": "./data",
     "agfs": { "backend": "local" },
     "vectordb": { "backend": "local" }
-  }
-}
-```
-
-```bash
-openviking-server
-```
-
-### 混合模式（远程存储）
-
-服务器连接到远程 AGFS 和 VectorDB 服务。在 `ov.conf` 中配置远程地址：
-
-```json
-{
-  "storage": {
-    "agfs": { "backend": "remote", "url": "http://agfs:1833" },
-    "vectordb": { "backend": "remote", "url": "http://vectordb:8000" }
   }
 }
 ```
@@ -187,20 +170,61 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
   -H "X-API-Key: your-key"
 ```
 
-## 云上部署
+## 云原生部署
 
 ### Docker
 
 OpenViking 提供预构建的 Docker 镜像，发布在 GitHub Container Registry：
 
 ```bash
+# 注意 ov.conf 需要指定 storage.workspace 为 /app/data 以确保数据持久化
 docker run -d \
   --name openviking \
   -p 1933:1933 \
+  -p 8020:8020 \
   -v ~/.openviking/ov.conf:/app/ov.conf \
-  -v /var/lib/openviking/data:/app/data \
+  -v ~/.openviking/data:/app/data \
   --restart unless-stopped \
-  ghcr.io/volcengine/openviking:main
+  ghcr.io/volcengine/openviking:latest
+```
+
+Docker 镜像默认会同时启动：
+- OpenViking HTTP 服务，端口 `1933`
+- OpenViking Console，端口 `8020`
+- `vikingbot` gateway
+
+升级容器的方式
+```bash
+docker stop openviking
+docker pull ghcr.io/volcengine/openviking:latest
+docker rm -f openviking
+# 然后重新 docker run ...
+```
+
+如果你希望本次容器启动时关闭 `vikingbot`，可以使用下面任一方式：
+
+```bash
+docker run -d \
+  --name openviking \
+  -p 1933:1933 \
+  -p 8020:8020 \
+  -v ~/.openviking/ov.conf:/app/ov.conf \
+  -v ~/.openviking/data:/app/data \
+  --restart unless-stopped \
+  ghcr.io/volcengine/openviking:latest \
+  --without-bot
+```
+
+```bash
+docker run -d \
+  --name openviking \
+  -e OPENVIKING_WITH_BOT=0 \
+  -p 1933:1933 \
+  -p 8020:8020 \
+  -v ~/.openviking/ov.conf:/app/ov.conf \
+  -v ~/.openviking/data:/app/data \
+  --restart unless-stopped \
+  ghcr.io/volcengine/openviking:latest
 ```
 
 也可以使用 Docker Compose，项目根目录提供了 `docker-compose.yml`：
@@ -208,6 +232,10 @@ docker run -d \
 ```bash
 docker compose up -d
 ```
+
+启动后可以访问：
+- API 服务：`http://localhost:1933`
+- Console 界面：`http://localhost:8020`
 
 如需自行构建镜像：`docker build -t openviking:latest .`
 
@@ -244,5 +272,5 @@ curl http://localhost:1933/ready
 ## 相关文档
 
 - [认证](04-authentication.md) - API Key 设置
-- [监控](05-monitoring.md) - 健康检查与可观测性
+- [可观测性与排障](05-observability.md) - 健康检查、追踪与排障
 - [API 概览](../api/01-overview.md) - 完整 API 参考

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Shared helpers for telemetry-wrapped operation execution."""
 
 from __future__ import annotations
@@ -8,12 +8,14 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Generic, Optional, TypeVar
 
 from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.utils import get_logger
 
 from .context import bind_telemetry
-from .operation import OperationTelemetry
+from .operation import OperationTelemetry, TelemetrySnapshot
 from .request import TelemetryRequest, TelemetrySelection, normalize_telemetry_request
 
 T = TypeVar("T")
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -34,21 +36,22 @@ def parse_telemetry_selection(telemetry: TelemetryRequest) -> TelemetrySelection
 
 
 def build_telemetry_payload(
-    collector: OperationTelemetry,
+    snapshot: TelemetrySnapshot | None,
     selection: TelemetrySelection,
-    *,
-    status: str = "ok",
 ) -> dict[str, Any] | None:
-    """Build a telemetry payload from a finished collector."""
-    snapshot = collector.finish(status=status)
+    """Build a telemetry payload from a finished snapshot."""
+    if snapshot is None or not selection.include_payload:
+        return None
+    return snapshot.to_dict(include_summary=selection.include_summary)
+
+
+def _log_telemetry_summary(snapshot: TelemetrySnapshot | None) -> None:
     if snapshot is None:
-        return None
-
-    if not selection.include_payload:
-        return None
-
-    return snapshot.to_dict(
-        include_summary=selection.include_summary,
+        return
+    logger.info(
+        "Telemetry summary (id=%s): %s",
+        snapshot.telemetry_id,
+        snapshot.summary,
     )
 
 
@@ -91,13 +94,24 @@ async def run_with_telemetry(
             result = await fn()
     except Exception as exc:
         collector.set_error(operation, type(exc).__name__, str(exc))
-        collector.finish(status=error_status)
+        snapshot = collector.finish(status=error_status)
+        _log_telemetry_summary(snapshot)
         raise
 
+    snapshot = collector.finish(status="ok")
+    _log_telemetry_summary(snapshot)
+    try:
+        if snapshot is not None:
+            from openviking.metrics.datasources.telemetry_bridge import (
+                TelemetryBridgeEventDataSource,
+            )
+
+            TelemetryBridgeEventDataSource.record_summary(snapshot.summary)
+    except Exception:
+        pass
     telemetry_payload = build_telemetry_payload(
-        collector,
+        snapshot,
         selection,
-        status="ok",
     )
     return TelemetryExecutionResult(
         result=result,

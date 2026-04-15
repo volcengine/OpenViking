@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Tests for code_hosting_utils git SSH URL support (Issue #317)."""
 
 import importlib
@@ -81,6 +81,14 @@ def test_parse_code_hosting_url_https_dotgit():
     assert parse_code_hosting_url("https://github.com/org/repo.git") == "org/repo"
 
 
+def test_parse_code_hosting_url_ssh_with_userinfo():
+    assert parse_code_hosting_url("ssh://git@github.com/org/repo.git") == "org/repo"
+
+
+def test_parse_code_hosting_url_https_with_explicit_port():
+    assert parse_code_hosting_url("https://github.com:443/org/repo.git") == "org/repo"
+
+
 # --- validate_git_ssh_uri ---
 
 
@@ -118,6 +126,14 @@ def test_is_code_hosting_url_https():
     assert is_code_hosting_url("https://github.com/org/repo") is True
 
 
+def test_is_code_hosting_url_ssh_with_userinfo():
+    assert is_code_hosting_url("ssh://git@github.com/org/repo.git") is True
+
+
+def test_is_code_hosting_url_https_with_explicit_port():
+    assert is_code_hosting_url("https://github.com:443/org/repo") is True
+
+
 # --- is_git_repo_url ---
 
 
@@ -127,6 +143,14 @@ def test_is_git_repo_url_git_ssh():
 
 def test_is_git_repo_url_https_repo():
     assert is_git_repo_url("https://github.com/org/repo") is True
+
+
+def test_is_git_repo_url_ssh_with_userinfo():
+    assert is_git_repo_url("ssh://git@github.com/org/repo.git") is True
+
+
+def test_is_git_repo_url_https_with_explicit_port():
+    assert is_git_repo_url("https://github.com:443/org/repo") is True
 
 
 def test_is_git_repo_url_https_issues():

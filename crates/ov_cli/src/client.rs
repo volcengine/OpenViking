@@ -4,7 +4,6 @@ use serde_json::Value;
 use std::fs::File;
 use std::path::Path;
 use tempfile::{Builder, NamedTempFile};
-use url::Url;
 use zip::CompressionMethod;
 use zip::write::FileOptions;
 
@@ -66,7 +65,10 @@ impl HttpClient {
             let path = entry.path();
             if path.is_file() {
                 let name = path.strip_prefix(dir_path).unwrap_or(path);
-                zip.start_file(name.to_string_lossy(), options)?;
+                let name_str = name.to_str().ok_or_else(|| {
+                    Error::InvalidPath(format!("Non-UTF-8 path: {}", name.to_string_lossy()))
+                })?;
+                zip.start_file(name_str, options)?;
                 let mut file = File::open(path)?;
                 std::io::copy(&mut file, &mut zip)?;
             }
@@ -100,14 +102,22 @@ impl HttpClient {
         // Remove Content-Type: application/json, let reqwest set multipart/form-data automatically
         headers.remove(reqwest::header::CONTENT_TYPE);
 
-        let response = self
-            .http
+        // Use a separate HTTP client with a long timeout for large file uploads
+        // - Connect timeout: 30 seconds (to fail fast if server is unreachable)
+        // - Total request timeout: 30 minutes (to allow large file transfers)
+        let long_timeout_client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(1800))
+            .build()
+            .map_err(|e| Error::Network(format!("Failed to build long-timeout HTTP client: {}", e)))?;
+
+        let response = long_timeout_client
             .post(&url)
             .headers(headers)
             .multipart(form)
             .send()
             .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+            .map_err(|e| Error::Network(format!("File upload failed: {}", e)))?;
 
         let result: Value = self.handle_response(response).await?;
         result
@@ -314,6 +324,34 @@ impl HttpClient {
         self.get("/api/v1/content/overview", &params).await
     }
 
+    pub async fn write(
+        &self,
+        uri: &str,
+        content: &str,
+        mode: &str,
+        wait: bool,
+        timeout: Option<f64>,
+    ) -> Result<serde_json::Value> {
+        let body = Self::build_write_body(uri, content, mode, wait, timeout);
+        self.post("/api/v1/content/write", &body).await
+    }
+
+    fn build_write_body(
+        uri: &str,
+        content: &str,
+        mode: &str,
+        wait: bool,
+        timeout: Option<f64>,
+    ) -> Value {
+        serde_json::json!({
+            "uri": uri,
+            "content": content,
+            "mode": mode,
+            "wait": wait,
+            "timeout": timeout,
+        })
+    }
+
     pub async fn reindex(
         &self,
         uri: &str,
@@ -419,8 +457,11 @@ impl HttpClient {
         self.get("/api/v1/fs/tree", &params).await
     }
 
-    pub async fn mkdir(&self, uri: &str) -> Result<()> {
-        let body = serde_json::json!({ "uri": uri });
+    pub async fn mkdir(&self, uri: &str, description: Option<&str>) -> Result<()> {
+        let body = match description {
+            Some(description) => serde_json::json!({ "uri": uri, "description": description }),
+            None => serde_json::json!({ "uri": uri }),
+        };
         let _: serde_json::Value = self.post("/api/v1/fs/mkdir", &body).await?;
         Ok(())
     }
@@ -456,12 +497,18 @@ impl HttpClient {
         uri: String,
         node_limit: i32,
         threshold: Option<f64>,
+        since: Option<String>,
+        until: Option<String>,
+        time_field: Option<String>,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "query": query,
             "target_uri": uri,
             "limit": node_limit,
             "score_threshold": threshold,
+            "since": since,
+            "until": until,
+            "time_field": time_field,
         });
         self.post("/api/v1/search/find", &body).await
     }
@@ -473,6 +520,9 @@ impl HttpClient {
         session_id: Option<String>,
         node_limit: i32,
         threshold: Option<f64>,
+        since: Option<String>,
+        until: Option<String>,
+        time_field: Option<String>,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "query": query,
@@ -480,6 +530,9 @@ impl HttpClient {
             "session_id": session_id,
             "limit": node_limit,
             "score_threshold": threshold,
+            "since": since,
+            "until": until,
+            "time_field": time_field,
         });
         self.post("/api/v1/search/search", &body).await
     }
@@ -487,15 +540,19 @@ impl HttpClient {
     pub async fn grep(
         &self,
         uri: &str,
+        exclude_uri: Option<String>,
         pattern: &str,
         ignore_case: bool,
         node_limit: i32,
+        level_limit: i32,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "uri": uri,
+            "exclude_uri": exclude_uri,
             "pattern": pattern,
             "case_insensitive": ignore_case,
             "node_limit": node_limit,
+            "level_limit": level_limit,
         });
         self.post("/api/v1/search/grep", &body).await
     }
@@ -536,11 +593,16 @@ impl HttpClient {
 
         if path_obj.exists() {
             if path_obj.is_dir() {
+                let source_name = path_obj
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|s| s.to_string());
                 let zip_file = self.zip_directory(path_obj)?;
                 let temp_file_id = self.upload_temp_file(zip_file.path()).await?;
 
                 let body = serde_json::json!({
                     "temp_file_id": temp_file_id,
+                    "source_name": source_name,
                     "to": to,
                     "parent": parent,
                     "reason": reason,
@@ -557,10 +619,15 @@ impl HttpClient {
 
                 self.post("/api/v1/resources", &body).await
             } else if path_obj.is_file() {
+                let source_name = path_obj
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|s| s.to_string());
                 let temp_file_id = self.upload_temp_file(path_obj).await?;
 
                 let body = serde_json::json!({
                     "temp_file_id": temp_file_id,
+                    "source_name": source_name,
                     "to": to,
                     "parent": parent,
                     "reason": reason,
@@ -693,12 +760,77 @@ impl HttpClient {
 
     // ============ Pack Methods ============
 
-    pub async fn export_ovpack(&self, uri: &str, to: &str) -> Result<serde_json::Value> {
+    pub async fn export_ovpack(&self, uri: &str, to: &str) -> Result<String> {
         let body = serde_json::json!({
             "uri": uri,
-            "to": to,
         });
-        self.post("/api/v1/pack/export", &body).await
+
+        let url = format!("{}/api/v1/pack/export", self.base_url);
+        let response = self
+            .http
+            .post(&url)
+            .headers(self.build_headers())
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            // Try to parse error message as JSON
+            let json_result: Result<serde_json::Value> = response
+                .json()
+                .await
+                .map_err(|e| Error::Network(format!("Failed to parse error response: {}", e)));
+
+            let error_msg = match json_result {
+                Ok(json) => json
+                    .get("error")
+                    .and_then(|e| e.get("message"))
+                    .and_then(|m| m.as_str())
+                    .map(|s| s.to_string())
+                    .or_else(|| {
+                        json.get("detail")
+                            .and_then(|d| d.as_str())
+                            .map(|s| s.to_string())
+                    })
+                    .unwrap_or_else(|| format!("HTTP error {}", status)),
+                Err(_) => format!("HTTP error {}", status),
+            };
+
+            return Err(Error::Api(error_msg));
+        }
+
+        // Download the file content
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| Error::Network(format!("Failed to read response bytes: {}", e)))?;
+
+        // Determine target path
+        let to_path = Path::new(to);
+        let final_path = if to_path.is_dir() {
+            let base_name = uri
+                .trim_end_matches('/')
+                .split('/')
+                .last()
+                .unwrap_or("export");
+            to_path.join(format!("{}.ovpack", base_name))
+        } else if !to.ends_with(".ovpack") {
+            Path::new(&format!("{}.ovpack", to)).to_path_buf()
+        } else {
+            to_path.to_path_buf()
+        };
+
+        // Ensure parent directory exists
+        if let Some(parent) = final_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        // Write file
+        std::fs::write(&final_path, bytes)?;
+
+        Ok(final_path.to_string_lossy().to_string())
     }
 
     pub async fn import_ovpack(
@@ -717,10 +849,7 @@ impl HttpClient {
             )));
         }
         if !file_path_obj.is_file() {
-            return Err(Error::Client(format!(
-                "Path is not a file: {}",
-                file_path
-            )));
+            return Err(Error::Client(format!("Path is not a file: {}", file_path)));
         }
 
         let temp_file_id = self.upload_temp_file(file_path_obj).await?;
@@ -858,6 +987,7 @@ impl HttpClient {
 #[cfg(test)]
 mod tests {
     use super::HttpClient;
+    use serde_json::json;
 
     #[test]
     fn build_headers_includes_tenant_identity_headers() {
@@ -896,5 +1026,29 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("alice")
         );
+    }
+
+    #[test]
+    fn build_write_body_omits_removed_semantic_flags() {
+        let body = HttpClient::build_write_body(
+            "viking://resources/demo.md",
+            "updated",
+            "replace",
+            true,
+            Some(3.0),
+        );
+
+        assert_eq!(
+            body,
+            json!({
+                "uri": "viking://resources/demo.md",
+                "content": "updated",
+                "mode": "replace",
+                "wait": true,
+                "timeout": 3.0,
+            })
+        );
+        assert!(body.get("regenerate_semantics").is_none());
+        assert!(body.get("revectorize").is_none());
     }
 }

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Tests for extra_headers support in OpenAIDenseEmbedder and EmbeddingConfig factory.
 
 Covers:
@@ -9,7 +9,7 @@ Covers:
   4. api_key dead-code bug fix: no raise when api_base is set without api_key
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -97,6 +97,66 @@ class TestExtraHeadersViaFactory:
         mock_openai_class.assert_called_once()
         call_kwargs = mock_openai_class.call_args[1]
         assert "default_headers" not in call_kwargs
+
+    @patch("openai.OpenAI")
+    def test_factory_injects_embedding_max_retries(self, mock_openai_class):
+        """Factory should inject top-level embedding.max_retries into embedder config."""
+        mock_openai_class.return_value = _make_mock_client()
+
+        cfg = EmbeddingModelConfig(
+            provider="openai",
+            model="text-embedding-3-small",
+            api_key="sk-test",
+            dimension=8,
+        )
+        embedder = EmbeddingConfig(dense=cfg, max_retries=0)._create_embedder(
+            "openai", "dense", cfg
+        )
+
+        assert embedder.max_retries == 0
+
+    @pytest.mark.asyncio
+    @patch("openviking.models.embedder.openai_embedders.openai.AsyncOpenAI")
+    @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
+    async def test_factory_uses_configured_provider_for_slow_call_logging(
+        self,
+        mock_openai_class,
+        mock_async_openai_class,
+    ):
+        """Slow-call warnings should log the configured provider, not the transport client mode."""
+        mock_openai_class.return_value = _make_mock_client()
+
+        async_response = MagicMock(
+            data=[MagicMock(embedding=[0.1] * 8)],
+            usage=None,
+        )
+        mock_async_client = MagicMock()
+        mock_async_client.embeddings.create = AsyncMock(return_value=async_response)
+        mock_async_openai_class.return_value = mock_async_client
+
+        cfg = EmbeddingModelConfig(
+            provider="ollama",
+            model="nomic-embed-text",
+            api_base="http://localhost:11434/v1",
+            dimension=8,
+        )
+        embedder = EmbeddingConfig(dense=cfg)._create_embedder("ollama", "dense", cfg)
+
+        with (
+            patch(
+                "openviking.models.embedder.openai_embedders.logger.warning"
+            ) as mock_warning,
+            patch(
+                "openviking.models.embedder.base.time.monotonic",
+                side_effect=[0.0, 0.0, 0.0, 1.2],
+            ),
+        ):
+            await embedder.embed_async("hello")
+
+        mock_warning.assert_called_once()
+        call_args = mock_warning.call_args.args
+        assert call_args[1] == "OpenAI async embedding"
+        assert call_args[2] == "ollama"
 
 
 class TestEmbeddingModelConfigExtraHeaders:

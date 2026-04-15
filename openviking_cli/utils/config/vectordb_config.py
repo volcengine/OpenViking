@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field, model_validator
@@ -17,6 +17,10 @@ class VolcengineConfig(BaseModel):
 
     ak: Optional[str] = Field(default=None, description="Volcengine Access Key")
     sk: Optional[str] = Field(default=None, description="Volcengine Secret Key")
+    session_token: Optional[str] = Field(
+        default=None,
+        description="Optional Volcengine STS security token for temporary credentials",
+    )
     region: Optional[str] = Field(
         default=None, description="Volcengine region (e.g., 'cn-beijing')"
     )

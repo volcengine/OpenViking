@@ -1,8 +1,9 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Sessions endpoints for OpenViking HTTP Server."""
 
 import logging
+from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, Path, Query
@@ -63,6 +64,7 @@ class AddMessageRequest(BaseModel):
     role: str
     content: Optional[str] = None
     parts: Optional[List[Dict[str, Any]]] = None
+    created_at: Optional[str] = None
 
     @model_validator(mode="after")
     def validate_content_or_parts(self) -> "AddMessageRequest":
@@ -76,6 +78,12 @@ class UsedRequest(BaseModel):
 
     contexts: Optional[List[str]] = None
     skill: Optional[Dict[str, Any]] = None
+
+
+class CreateSessionRequest(BaseModel):
+    """Request model for creating a session."""
+
+    session_id: Optional[str] = None
 
 
 def _to_jsonable(value: Any) -> Any:
@@ -92,13 +100,19 @@ def _to_jsonable(value: Any) -> Any:
 
 @router.post("")
 async def create_session(
+    request: Optional[CreateSessionRequest] = None,
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Create a new session."""
+    """Create a new session.
+
+    If session_id is provided, creates a session with the given ID.
+    If session_id is None, creates a new session with auto-generated ID.
+    """
     service = get_service()
     await service.initialize_user_directories(_ctx)
     await service.initialize_agent_directories(_ctx)
-    session = await service.sessions.create(_ctx)
+    session_id = request.session_id if request else None
+    session = await service.sessions.create(_ctx, session_id)
     return Response(
         status="ok",
         result={
@@ -235,17 +249,18 @@ async def add_message(
        ]}
 
     If both `content` and `parts` are provided, `parts` takes precedence.
+    Missing sessions are auto-created on first add.
     """
     service = get_service()
-    session = service.sessions.session(_ctx, session_id)
-    await session.load()
+    session = await service.sessions.get(session_id, _ctx, auto_create=True)
 
     if request.parts is not None:
         parts = [part_from_dict(p) for p in request.parts]
     else:
         parts = [TextPart(text=request.content or "")]
 
-    session.add_message(request.role, parts)
+    # created_at 直接传递给 session (ISO string)
+    session.add_message(request.role, parts, created_at=request.created_at)
     return Response(
         status="ok",
         result={

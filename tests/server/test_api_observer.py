@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 
 """Tests for observer endpoints (/api/v1/observer/*)."""
 
@@ -30,9 +30,9 @@ async def test_observer_vikingdb(client: httpx.AsyncClient):
     assert "is_healthy" in result
 
 
-async def test_observer_vlm(client: httpx.AsyncClient):
-    """GET /api/v1/observer/vlm should return VLM status."""
-    resp = await client.get("/api/v1/observer/vlm")
+async def test_observer_models(client: httpx.AsyncClient):
+    """GET /api/v1/observer/models should return models status."""
+    resp = await client.get("/api/v1/observer/models")
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"

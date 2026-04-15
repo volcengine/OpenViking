@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Tests for AST-based code skeleton extraction."""
 
 from openviking.parse.parsers.code.ast.skeleton import ClassSkeleton, CodeSkeleton, FunctionSig
@@ -37,6 +37,12 @@ def _csharp_extractor():
     from openviking.parse.parsers.code.ast.languages.csharp import CSharpExtractor
 
     return CSharpExtractor()
+
+
+def _php_extractor():
+    from openviking.parse.parsers.code.ast.languages.php import PhpExtractor
+
+    return PhpExtractor()
 
 
 # ---------------------------------------------------------------------------
@@ -467,6 +473,168 @@ public class Calculator {
         assert "simple calculator service" in text
         assert "@param a first operand" in text
         assert "@return sum of a and b" in text
+
+
+class TestPhpExtractor:
+    SAMPLE = """
+<?php
+/** Module for math utilities.
+ *
+ * Provides simple arithmetic operations.
+ */
+namespace App\\Services;
+
+use Foo\\Bar;
+use Foo\\Baz as BazAlias;
+use Foo\\Group\\{A, B as Bee};
+
+/** A simple calculator service.
+ *
+ * Supports basic arithmetic operations.
+ */
+class Calculator extends BaseCalc implements ICalc {
+    /** Add two integers.
+     *
+     * @param int $a First operand
+     * @param int $b Second operand
+     * @return int Sum
+     */
+    public function add(int $a, int $b): int {
+        return $a + $b;
+    }
+
+    // Subtract b from a.
+    public function subtract(int $a, int $b): int {
+        return $a - $b;
+    }
+}
+
+/** Multiply two integers. */
+function mul(int $a, int $b): int {
+    return $a * $b;
+}
+"""
+
+    def setup_method(self):
+        self.e = _php_extractor()
+
+    def test_module_doc(self):
+        sk = self.e.extract("math.php", self.SAMPLE)
+        print(sk.to_text(verbose=True))
+        assert "Module for math utilities" in sk.module_doc
+
+    def test_imports(self):
+        sk = self.e.extract("math.php", self.SAMPLE)
+        assert "Foo\\Bar" in sk.imports
+        assert "Foo\\Baz" in sk.imports
+        assert "Foo\\Group\\A" in sk.imports
+        assert "Foo\\Group\\B" in sk.imports
+
+    def test_class_extracted(self):
+        sk = self.e.extract("math.php", self.SAMPLE)
+        names = {c.name for c in sk.classes}
+        assert "Calculator" in names
+
+    def test_methods_extracted(self):
+        sk = self.e.extract("math.php", self.SAMPLE)
+        cls = next(c for c in sk.classes if c.name == "Calculator")
+        methods = {m.name: m for m in cls.methods}
+        assert "add" in methods
+        assert "subtract" in methods
+        assert "$a" in methods["add"].params
+        assert methods["add"].return_type == "int"
+
+    def test_method_docstring(self):
+        sk = self.e.extract("math.php", self.SAMPLE)
+        cls = next(c for c in sk.classes if c.name == "Calculator")
+        methods = {m.name: m for m in cls.methods}
+        assert "Add two integers." in methods["add"].docstring
+        assert "@param int $a" in methods["add"].docstring
+        assert "Subtract b from a." in methods["subtract"].docstring
+
+    def test_function_extracted(self):
+        sk = self.e.extract("math.php", self.SAMPLE)
+        names = {f.name for f in sk.functions}
+        assert "mul" in names
+
+    def test_to_text_compact(self):
+        sk = self.e.extract("math.php", self.SAMPLE)
+        text = sk.to_text(verbose=False)
+        assert "# math.php [PHP]" in text
+        assert "class Calculator" in text
+        assert "@param" not in text
+
+    def test_to_text_verbose(self):
+        sk = self.e.extract("math.php", self.SAMPLE)
+        text = sk.to_text(verbose=True)
+        assert "Supports basic arithmetic operations." in text
+        assert "@param int $a First operand" in text
+
+    def test_trait_use_added_to_bases(self):
+        code = """
+<?php
+trait T1 {}
+trait T2 {}
+class C {
+  use T1, T2;
+  public function m() {}
+}
+"""
+        sk = self.e.extract("traits.php", code)
+        cls = next(c for c in sk.classes if c.name == "C")
+        assert "T1" in cls.bases
+        assert "T2" in cls.bases
+
+    def test_trait_and_interface_declarations_included(self):
+        code = """
+<?php
+interface ICalc {}
+/** T doc */
+trait T { public function t() {} }
+"""
+        sk = self.e.extract("defs.php", code)
+        names = {c.name for c in sk.classes}
+        assert "interface ICalc" in names
+        assert "trait T" in names
+
+    def test_assignment_closure_extracted_as_function(self):
+        code = """
+<?php
+/** Handler doc. */
+$handler = function(int $x): int { return $x; };
+$fn = fn($x): int => $x + 1;
+"""
+        sk = self.e.extract("closures.php", code)
+        fns = {f.name: f for f in sk.functions}
+        assert "$handler" in fns
+        assert fns["$handler"].return_type == "int"
+        assert "Handler doc." in fns["$handler"].docstring
+        assert "$fn" in fns
+        assert fns["$fn"].return_type == "int"
+
+    def test_preceding_doc_prefers_phpdoc(self):
+        code = """
+<?php
+// Noise comment.
+
+/** Real doc. */
+function f() {}
+"""
+        sk = self.e.extract("doc.php", code)
+        f = next(fn for fn in sk.functions if fn.name == "f")
+        assert f.docstring == "Real doc."
+
+    def test_preceding_doc_falls_back_to_line_comments(self):
+        code = """
+<?php
+// Line 1.
+// Line 2.
+function g() {}
+"""
+        sk = self.e.extract("doc2.php", code)
+        g = next(fn for fn in sk.functions if fn.name == "g")
+        assert "Line 1." in g.docstring
+        assert "Line 2." in g.docstring
 
 
 # ---------------------------------------------------------------------------
@@ -924,6 +1092,118 @@ pub fn factorial(n: u64) -> u64 {
 
 
 # ---------------------------------------------------------------------------
+# Lua
+# ---------------------------------------------------------------------------
+
+
+def _lua_extractor():
+    from openviking.parse.parsers.code.ast.languages.lua import LuaExtractor
+
+    return LuaExtractor()
+
+
+class TestLuaExtractor:
+    SAMPLE = """local mathx = require("mathx")
+local util = require("util")
+
+local Calculator = {}
+
+-- Add two numbers.
+-- Returns their sum.
+function Calculator.add(a, b)
+    return a + b
+end
+
+-- Subtract b from a.
+-- Returns their difference.
+function Calculator:sub(a, b)
+    return a - b
+end
+
+-- Add two numbers at module scope.
+local function add(a, b)
+    return a + b
+end
+"""
+
+    def setup_method(self):
+        self.e = _lua_extractor()
+
+    def test_imports(self):
+        sk = self.e.extract("calculator.lua", self.SAMPLE)
+        assert "mathx" in sk.imports
+        assert "util" in sk.imports
+        # deduplicated imports should remain unique
+        assert sk.imports.count("mathx") == 1
+
+    def test_class_extracted(self):
+        sk = self.e.extract("calculator.lua", self.SAMPLE)
+        names = {c.name for c in sk.classes}
+        assert "Calculator" in names
+
+    def test_methods_extracted(self):
+        sk = self.e.extract("calculator.lua", self.SAMPLE)
+        cls = next(c for c in sk.classes if c.name == "Calculator")
+        method_names = {m.name for m in cls.methods}
+        assert "add" in method_names
+        assert "sub" in method_names
+
+    def test_method_docstring(self):
+        sk = self.e.extract("calculator.lua", self.SAMPLE)
+        cls = next(c for c in sk.classes if c.name == "Calculator")
+        methods = {m.name: m for m in cls.methods}
+        assert "Add two numbers." in methods["add"].docstring
+        assert "Returns their sum." in methods["add"].docstring
+        assert "Subtract b from a." in methods["sub"].docstring
+
+    def test_function_extracted(self):
+        sk = self.e.extract("calculator.lua", self.SAMPLE)
+        names = {f.name for f in sk.functions}
+        assert "add" in names
+
+    def test_function_docstring(self):
+        sk = self.e.extract("calculator.lua", self.SAMPLE)
+        fns = {f.name: f for f in sk.functions}
+        assert "Add two numbers at module scope." in fns["add"].docstring
+
+    def test_to_text_compact(self):
+        sk = self.e.extract("calculator.lua", self.SAMPLE)
+        text = sk.to_text(verbose=False)
+        assert "# calculator.lua [Lua]" in text
+        assert "Calculator" in text
+        assert "add" in text
+        # only first line of multi-line docstring in compact mode
+        assert "Returns their difference." not in text
+
+    def test_to_text_verbose(self):
+        sk = self.e.extract("calculator.lua", self.SAMPLE)
+        text = sk.to_text(verbose=True)
+        assert "# calculator.lua [Lua]" in text
+        assert "Returns their sum." in text
+        assert "Returns their difference." in text
+
+    def test_dot_method_params(self):
+        code = "function M.compute(x, y, z)\n    return x + y + z\nend\n"
+        sk = self.e.extract("m.lua", code)
+        cls = next(c for c in sk.classes if c.name == "M")
+        methods = {m.name: m for m in cls.methods}
+        assert "compute" in methods
+        assert "x, y, z" in methods["compute"].params
+
+    def test_colon_method_not_in_functions(self):
+        code = "function M:init()\nend\nfunction standalone()\nend\n"
+        sk = self.e.extract("m.lua", code)
+        fn_names = {f.name for f in sk.functions}
+        assert "standalone" in fn_names
+        assert "init" not in fn_names
+
+    def test_bare_require(self):
+        code = "require 'inspect'\nfunction foo()\nend\n"
+        sk = self.e.extract("m.lua", code)
+        assert "inspect" in sk.imports
+
+
+# ---------------------------------------------------------------------------
 # Skeleton.to_text() — verbose vs compact
 # ---------------------------------------------------------------------------
 
@@ -1128,9 +1408,16 @@ class TestASTExtractorDispatch:
         assert "# util.cs [C#]" in text
         assert "class Util" in text
 
+    def test_lua_dispatch(self):
+        code = "-- Say hello.\nfunction greet(name)\n    return 'Hi ' .. name\nend\n"
+        text = self.extractor.extract_skeleton("hello.lua", code)
+        assert text is not None
+        assert "# hello.lua [Lua]" in text
+        assert "greet" in text
+
     def test_unknown_extension_returns_none(self):
         code = "def foo(x): pass\nclass Bar: pass\n"
-        result = self.extractor.extract_skeleton("script.lua", code)
+        result = self.extractor.extract_skeleton("script.xyz123", code)
         assert result is None
 
     def test_never_raises(self):
@@ -1147,3 +1434,5 @@ class TestASTExtractorDispatch:
         verbose = self.extractor.extract_skeleton("m.py", code, verbose=True)
         assert "Detail here." not in compact
         assert "Detail here." in verbose
+
+

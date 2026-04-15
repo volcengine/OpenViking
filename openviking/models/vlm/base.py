@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """VLM base interface and abstract classes"""
 
 import re
@@ -58,7 +58,7 @@ class VLMBase(ABC):
         self.api_key = config.get("api_key")
         self.api_base = config.get("api_base")
         self.temperature = config.get("temperature", 0.0)
-        self.max_retries = config.get("max_retries", 2)
+        self.max_retries = config.get("max_retries", 3)
         self.max_tokens = config.get("max_tokens")
         self.extra_headers = config.get("extra_headers")
         self.stream = config.get("stream", False)
@@ -94,7 +94,6 @@ class VLMBase(ABC):
         self,
         prompt: str = "",
         thinking: bool = False,
-        max_retries: int = 0,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
@@ -104,7 +103,6 @@ class VLMBase(ABC):
         Args:
             prompt: Text prompt (used if messages not provided)
             thinking: Whether to enable thinking mode
-            max_retries: Maximum number of retries
             tools: Optional list of tool definitions in OpenAI function format
             tool_choice: Optional tool choice mode ("auto", "none", or specific tool name)
             messages: Optional list of message dicts (takes precedence over prompt)
@@ -207,11 +205,17 @@ class VLMBase(ABC):
 
         # Record the VLM call in Prometheus metrics (if enabled).
         try:
-            from openviking.storage.observers.prometheus_observer import get_prometheus_observer
+            from openviking.metrics.account_context import get_metric_account_context
+            from openviking.metrics.datasources import VLMEventDataSource
 
-            prom = get_prometheus_observer()
-            if prom is not None:
-                prom.record_vlm_call(duration_seconds)
+            VLMEventDataSource.record_call(
+                provider=str(provider),
+                model_name=str(model_name),
+                duration_seconds=float(duration_seconds),
+                prompt_tokens=int(prompt_tokens),
+                completion_tokens=int(completion_tokens),
+                account_id=get_metric_account_context().http_account_id,
+            )
         except Exception:
             pass
 

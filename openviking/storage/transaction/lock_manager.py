@@ -1,11 +1,11 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """LockManager — global singleton managing lock lifecycle and redo recovery."""
 
 import asyncio
 import json
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from openviking.pyagfs import AGFSClient
 from openviking.storage.transaction.lock_handle import LockHandle
@@ -14,6 +14,8 @@ from openviking.storage.transaction.redo_log import RedoLog
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+_HANDLE_CLEANUP_INTERVAL_SECONDS = 60.0
 
 
 class LockManager:
@@ -31,24 +33,40 @@ class LockManager:
         self._redo_log = RedoLog(agfs)
         self._handles: Dict[str, LockHandle] = {}
         self._cleanup_task: Optional[asyncio.Task] = None
+        self._redo_task: Optional[asyncio.Task] = None
         self._running = False
 
     @property
     def redo_log(self) -> RedoLog:
         return self._redo_log
 
+    def _mark_handle_active(self, handle: LockHandle) -> None:
+        handle.last_active_at = time.time()
+
     def get_active_handles(self) -> Dict[str, LockHandle]:
-        return dict(self._handles)
+        active_handles: Dict[str, LockHandle] = {}
+        for handle in list(self._handles.values()):
+            current = self._reconcile_handle(handle)
+            if current and current.locks:
+                active_handles[current.id] = current
+        return active_handles
 
     async def start(self) -> None:
         """Start background cleanup and redo recovery."""
         self._running = True
         self._cleanup_task = asyncio.create_task(self._stale_cleanup_loop())
-        await self._recover_pending_redo()
+        self._redo_task = asyncio.create_task(self._recover_pending_redo())
 
     async def stop(self) -> None:
         """Stop cleanup and release all active locks."""
         self._running = False
+        if self._redo_task:
+            self._redo_task.cancel()
+            try:
+                await self._redo_task
+            except asyncio.CancelledError:
+                pass
+            self._redo_task = None
         if self._cleanup_task:
             self._cleanup_task.cancel()
             try:
@@ -69,16 +87,78 @@ class LockManager:
     async def acquire_point(
         self, handle: LockHandle, path: str, timeout: Optional[float] = None
     ) -> bool:
-        return await self._path_lock.acquire_point(
+        acquired = await self._path_lock.acquire_point(
             path, handle, timeout=timeout if timeout is not None else self._lock_timeout
         )
+        if acquired:
+            self._mark_handle_active(handle)
+        return acquired
 
     async def acquire_subtree(
         self, handle: LockHandle, path: str, timeout: Optional[float] = None
     ) -> bool:
-        return await self._path_lock.acquire_subtree(
+        acquired = await self._path_lock.acquire_subtree(
             path, handle, timeout=timeout if timeout is not None else self._lock_timeout
         )
+        if acquired:
+            self._mark_handle_active(handle)
+        return acquired
+
+    async def acquire_subtree_batch(
+        self,
+        handle: LockHandle,
+        paths: List[str],
+        timeout: Optional[float] = None,
+    ) -> bool:
+        """
+        一次性对多个路径进行子树加锁，使用有序加锁法防止死锁
+
+        核心思想：
+        1. 对路径按照固定的顺序进行排序，确保所有进程获取锁的顺序一致
+        2. 防止循环等待条件，从而避免死锁
+
+        排序规则：
+        1. 路径长度升序
+        2. 长度相同的路径按照字典序升序
+
+        Args:
+            handle: 锁句柄
+            paths: 需要加锁的路径列表
+            timeout: 超时时间，None表示无限等待
+
+        Returns:
+            是否成功获取所有锁
+        """
+        if not paths:
+            self._mark_handle_active(handle)
+            return True
+
+        # 对路径进行排序，确保加锁顺序一致
+        sorted_paths = sorted(paths, key=lambda x: (len(x), x))
+        acquired = []
+
+        try:
+            for path in sorted_paths:
+                success = await self._path_lock.acquire_subtree(
+                    path,
+                    handle,
+                    timeout=timeout,
+                )
+                if not success:
+                    # 释放已获得的锁
+                    for p in acquired:
+                        await self._path_lock.release_subtree(p, handle)
+                    return False
+                acquired.append(path)
+
+            self._mark_handle_active(handle)
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to acquire subtree batch lock: {e}")
+            for p in acquired:
+                await self._path_lock.release_subtree(p, handle)
+            return False
 
     async def acquire_mv(
         self,
@@ -88,33 +168,78 @@ class LockManager:
         src_is_dir: bool = True,
         timeout: Optional[float] = None,
     ) -> bool:
-        return await self._path_lock.acquire_mv(
+        acquired = await self._path_lock.acquire_mv(
             src,
             dst_parent,
             handle,
             timeout=timeout if timeout is not None else self._lock_timeout,
             src_is_dir=src_is_dir,
         )
+        if acquired:
+            self._mark_handle_active(handle)
+        return acquired
 
     def get_handle(self, handle_id: str) -> Optional[LockHandle]:
-        return self._handles.get(handle_id)
+        handle = self._handles.get(handle_id)
+        if handle is None:
+            return None
+        current = self._reconcile_handle(handle)
+        if current is None or not current.locks:
+            return None
+        return current
 
     async def refresh_lock(self, handle: LockHandle) -> None:
-        await self._path_lock.refresh(handle)
+        current = self._reconcile_handle(handle)
+        if current is None:
+            return
+
+        result = await self._path_lock.refresh(current)
+        for lock_path in result.lost_paths:
+            current.remove_lock(lock_path)
+
+        if result.refreshed_paths:
+            self._mark_handle_active(current)
+
+        self._reconcile_handle(current)
 
     async def release(self, handle: LockHandle) -> None:
         await self._path_lock.release(handle)
         self._handles.pop(handle.id, None)
 
+    async def release_selected(self, handle: LockHandle, lock_paths: List[str]) -> None:
+        await self._path_lock.release_selected(handle, lock_paths)
+
     async def _stale_cleanup_loop(self) -> None:
         """Check and release leaked handles every 60 s (in-process safety net)."""
         while self._running:
-            await asyncio.sleep(60)
+            await asyncio.sleep(_HANDLE_CLEANUP_INTERVAL_SECONDS)
             now = time.time()
-            stale = [h for h in self._handles.values() if now - h.created_at > 3600]
+            stale = []
+            for handle in list(self._handles.values()):
+                current = self._reconcile_handle(handle)
+                if current and self._is_handle_stale(current, now):
+                    stale.append(current)
             for handle in stale:
                 logger.warning(f"Releasing stale lock handle {handle.id}")
                 await self.release(handle)
+
+    def _is_handle_stale(self, handle: LockHandle, now: Optional[float] = None) -> bool:
+        """Return True when a live lock handle has stopped refreshing for too long."""
+        if not handle.locks:
+            return False
+        if now is None:
+            now = time.time()
+        return now - handle.last_active_at > self._path_lock._lock_expire
+
+    def _reconcile_handle(self, handle: LockHandle) -> Optional[LockHandle]:
+        had_locks = bool(handle.locks)
+        lost_paths = self._path_lock.collect_lost_owner_locks(handle)
+        for lock_path in lost_paths:
+            handle.remove_lock(lock_path)
+        if had_locks and not handle.locks:
+            self._handles.pop(handle.id, None)
+            return None
+        return handle
 
     # ------------------------------------------------------------------
     # Redo recovery (session_memory only)
@@ -140,7 +265,6 @@ class LockManager:
         """
         from openviking.message import Message
         from openviking.server.identity import RequestContext, Role
-        from openviking.session.compressor import SessionCompressor
         from openviking.storage.viking_fs import get_viking_fs
         from openviking_cli.session.user_id import UserIdentifier
 
@@ -180,12 +304,17 @@ class LockManager:
         if messages:
             session_id = session_uri.rstrip("/").rsplit("/", 1)[-1]
             try:
-                compressor = SessionCompressor(vikingdb=None)
-                memories = await compressor.extract_long_term_memories(
-                    messages=messages,
-                    user=user,
-                    session_id=session_id,
-                    ctx=ctx,
+                from openviking.session import create_session_compressor
+
+                compressor = create_session_compressor(vikingdb=None)
+                memories = await asyncio.wait_for(
+                    compressor.extract_long_term_memories(
+                        messages=messages,
+                        user=user,
+                        session_id=session_id,
+                        ctx=ctx,
+                    ),
+                    timeout=60.0,
                 )
                 logger.info(f"Redo: extracted {len(memories)} memories from {archive_uri}")
             except Exception as e:

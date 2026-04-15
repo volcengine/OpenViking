@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Tests for MarkdownParser hard character limit enforcement (max_section_chars)."""
 
 from unittest.mock import AsyncMock, MagicMock, patch

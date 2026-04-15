@@ -8,28 +8,30 @@ Create `~/.openviking/ov.conf` in your project directory:
 
 ```json
 {
+  "storage": {
+    "workspace": "./data",
+    "vectordb": {
+      "name": "context",
+      "backend": "local"
+    },
+    "agfs": {
+      "backend": "local"
+    }
+  },
   "embedding": {
     "dense": {
-      "provider": "volcengine",
-      "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-250615",
-      "dimension": 1024
+      "api_base" : "<api-endpoint>",
+      "api_key"  : "<your-api-key>",
+      "provider" : "<provider-type>",
+      "dimension": 1024,
+      "model"    : "<model-name>"
     }
   },
   "vlm": {
-    "provider": "volcengine",
-    "api_key": "your-api-key",
-    "model": "doubao-seed-2-0-pro-260215"
-  },
-  "rerank": {
-    "provider": "volcengine",
-    "api_key": "your-api-key",
-    "model": "doubao-rerank-250615"
-  },
-  "storage": {
-    "workspace": "./data",
-    "agfs": { "backend": "local" },
-    "vectordb": { "backend": "local" }
+    "api_base" : "<api-endpoint>",
+    "api_key"  : "<your-api-key>",
+    "provider" : "<provider-type>",
+    "model"    : "<model-name>"
   }
 }
 ```
@@ -47,7 +49,7 @@ Create `~/.openviking/ov.conf` in your project directory:
       "api_key"  : "your-volcengine-api-key",
       "provider" : "volcengine",
       "dimension": 1024,
-      "model"    : "doubao-embedding-vision-250615",
+      "model"    : "doubao-embedding-vision-251215",
       "input": "multimodal"
     }
   },
@@ -99,10 +101,11 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 {
   "embedding": {
     "max_concurrent": 10,
+    "max_retries": 3,
     "dense": {
       "provider": "volcengine",
       "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-250615",
+      "model": "doubao-embedding-vision-251215",
       "dimension": 1024,
       "input": "multimodal"
     }
@@ -115,6 +118,7 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `max_concurrent` | int | Maximum concurrent embedding requests (`embedding.max_concurrent`, default: `10`) |
+| `max_retries` | int | Maximum retry attempts for transient embedding provider errors (`embedding.max_retries`, default: `3`; `0` disables retry) |
 | `provider` | str | `"volcengine"`, `"openai"`, `"vikingdb"`, `"jina"`, `"voyage"`, or `"gemini"` |
 | `api_key` | str | API key |
 | `model` | str | Model name |
@@ -122,11 +126,35 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 | `input` | str | Input type: `"text"` or `"multimodal"` |
 | `batch_size` | int | Batch size for embedding requests |
 
+`embedding.max_retries` only applies to transient errors such as `429`, `5xx`, timeouts, and connection failures. Permanent errors such as `400`, `401`, `403`, and `AccountOverdue` are not retried automatically. The backoff strategy is exponential backoff with jitter, starting at `0.5s` and capped at `8s`.
+
+#### Embedding Circuit Breaker
+
+When the embedding provider experiences consecutive transient failures (e.g. `429`, `5xx`), OpenViking opens a circuit breaker to temporarily stop calling the provider and re-enqueue embedding tasks. After the base `reset_timeout`, it allows a probe request (HALF_OPEN). If the probe fails, the next `reset_timeout` is doubled (capped by `max_reset_timeout`).
+
+```json
+{
+  "embedding": {
+    "circuit_breaker": {
+      "failure_threshold": 5,
+      "reset_timeout": 60,
+      "max_reset_timeout": 600
+    }
+  }
+}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `circuit_breaker.failure_threshold` | int | Consecutive failures required to open the breaker (default: `5`) |
+| `circuit_breaker.reset_timeout` | float | Base reset timeout in seconds (default: `60`) |
+| `circuit_breaker.max_reset_timeout` | float | Maximum reset timeout in seconds when backing off (default: `600`) |
+
 **Available Models**
 
 | Model | Dimension | Input Type | Notes |
 |-------|-----------|------------|-------|
-| `doubao-embedding-vision-250615` | 1024 | multimodal | Recommended |
+| `doubao-embedding-vision-251215` | 1024 | multimodal | Recommended |
 | `doubao-embedding-250615` | 1024 | text | Text only |
 
 With `input: "multimodal"`, OpenViking can embed text, images (PNG, JPG, etc.), and mixed content.
@@ -293,7 +321,7 @@ Supported task types: `RETRIEVAL_QUERY`, `RETRIEVAL_DOCUMENT`, `SEMANTIC_SIMILAR
 
 #### Sparse Embedding
 
-> **Note:** Volcengine sparse embedding is supported starting from model `doubao-embedding-vision-250615`.
+> **Note:** Volcengine sparse embedding is supported starting from model `doubao-embedding-vision-251215`.
 
 ```json
 {
@@ -301,7 +329,7 @@ Supported task types: `RETRIEVAL_QUERY`, `RETRIEVAL_DOCUMENT`, `SEMANTIC_SIMILAR
     "sparse": {
       "provider": "volcengine",
       "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-250615"
+      "model": "doubao-embedding-vision-251215"
     }
   }
 }
@@ -334,13 +362,13 @@ Two approaches are supported:
     "dense": {
       "provider": "volcengine",
       "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-250615",
+      "model": "doubao-embedding-vision-251215",
       "dimension": 1024
     },
     "sparse": {
       "provider": "volcengine",
       "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-250615"
+      "model": "doubao-embedding-vision-251215"
     }
   }
 }
@@ -355,7 +383,8 @@ Vision Language Model for semantic extraction (L0/L1 generation).
   "vlm": {
     "api_key": "your-api-key",
     "model": "doubao-seed-2-0-pro-260215",
-    "api_base": "https://ark.cn-beijing.volces.com/api/v3"
+    "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+    "max_retries": 3
   }
 }
 ```
@@ -369,8 +398,11 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 | `api_base` | str | API endpoint (optional) |
 | `thinking` | bool | Enable thinking mode for VolcEngine models (default: `false`) |
 | `max_concurrent` | int | Maximum concurrent semantic LLM calls (default: `100`) |
+| `max_retries` | int | Maximum retry attempts for transient VLM provider errors (default: `3`; `0` disables retry) |
 | `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
 | `stream` | bool | Enable streaming mode (for OpenAI-compatible providers, default: `false`) |
+
+`vlm.max_retries` only applies to transient errors such as `429`, `5xx`, timeouts, and connection failures. Permanent authentication, authorization, and billing errors are not retried automatically. The backoff strategy is exponential backoff with jitter, starting at `0.5s` and capped at `8s`.
 
 **Available Models**
 
@@ -492,19 +524,23 @@ See [Code Skeleton Extraction](../concepts/06-extraction.md#code-skeleton-extrac
 
 ### rerank
 
-Reranking model for search result refinement.
+Reranking model for search result refinement. Supports VikingDB (Volcengine), Cohere, OpenAI-compatible APIs, and LiteLLM.
+
+**Volcengine (VikingDB):**
 
 ```json
 {
   "rerank": {
-    "provider": "volcengine",
-    "api_key": "your-api-key",
-    "model": "doubao-rerank-250615"
+    "provider": "vikingdb",
+    "ak": "your-access-key",
+    "sk": "your-secret-key",
+    "model_name": "doubao-seed-rerank",
+    "model_version": "251028"
   }
 }
 ```
 
-**OpenAI-compatible provider (e.g. DashScope qwen3-rerank):**
+**OpenAI-compatible provider (e.g. DashScope):**
 
 ```json
 {
@@ -512,32 +548,44 @@ Reranking model for search result refinement.
     "provider": "openai",
     "api_key": "your-api-key",
     "api_base": "https://dashscope.aliyuncs.com/compatible-api/v1/reranks",
-    "model": "qwen3-rerank",
+    "model": "qwen3-vl-rerank",
     "threshold": 0.1
   }
 }
 ```
 
+**Parameters**
+
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `provider` | str | `"volcengine"` or `"openai"` |
-| `api_key` | str | API key |
-| `model` | str | Model name |
-| `api_base` | str | Endpoint URL (openai provider only) |
-| `threshold` | float | Score threshold; results below this are filtered out. Default: `0.1` |
+| `provider` | str | `"vikingdb"`, `"cohere"`, `"openai"`, or `"litellm"`. Auto-detected if omitted. |
+| `ak` | str | VikingDB Access Key (vikingdb provider only) |
+| `sk` | str | VikingDB Secret Key (vikingdb provider only) |
+| `model_name` | str | Model name (vikingdb provider only, default: `doubao-seed-rerank`) |
+| `api_key` | str | API key (for `openai`, `cohere`, or `litellm` providers) |
+| `api_base` | str | Endpoint URL (for `openai` provider) |
+| `model` | str | Model name (for `openai` or `litellm` providers) |
+| `threshold` | float | Score threshold between `0.0` and `1.0`; results below this are filtered out. Default: `0.1` |
+| `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
+
+**Supported providers:**
+- `vikingdb`: Volcengine VikingDB Rerank API (uses AK/SK)
+- `cohere`: Cohere Rerank API
+- `openai`: OpenAI-compatible Rerank API
+- `litellm`: Rerank services via LiteLLM (requires `litellm` package)
 
 If rerank is not configured, search uses vector similarity only.
 
 ### storage
 
-Storage configuration for context data, including file storage (AGFS) and vector database storage (VectorDB).
+Storage configuration for context data, including file storage (RAGFS) and vector database storage (VectorDB).
 
 #### Root Configuration
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `workspace` | str | Local data storage path (main configuration) | "./data" |
-| `agfs` | object | AGFS configuration | {} |
+| `agfs` | object | RAGFS (Rust-based AGFS) configuration | {} |
 | `vectordb` | object | Vector database storage configuration | {} |
 
 
@@ -556,55 +604,17 @@ Storage configuration for context data, including file storage (AGFS) and vector
 }
 ```
 
-#### agfs
+#### agfs (RAGFS)
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `mode` | str | `"http-client"` or `"binding-client"` | `"http-client"` |
 | `backend` | str | `"local"`, `"s3"`, or `"memory"` | `"local"` |
-| `url` | str | AGFS service URL for `http-client` mode | `"http://localhost:1833"` |
 | `timeout` | float | Request timeout in seconds | `10.0` |
 | `s3` | object | S3 backend configuration (when backend is 's3') | - |
 
 **Configuration Examples**
 
-<details>
-<summary><b>HTTP Client (Default)</b></summary>
-
-Connects to a remote or local AGFS service via HTTP.
-
-```json
-{
-  "storage": {
-    "agfs": {
-      "mode": "http-client",
-      "url": "http://localhost:1833",
-      "timeout": 10.0
-    }
-  }
-}
-```
-
-</details>
-
-<details>
-<summary><b>Binding Client (High Performance)</b></summary>
-
-Directly uses the AGFS Go implementation through a shared library. 
-
-**Config**:
-```json
-{
-  "storage": {
-    "agfs": {
-      "mode": "binding-client",
-      "backend": "local"
-    }
-  }
-}
-```
-
-</details>
+RAGFS uses Rust binding mode by default, directly accessing the file system through the Rust implementation.
 
 
 ##### S3 Backend Configuration
@@ -621,11 +631,11 @@ Directly uses the AGFS Go implementation through a shared library.
 | `use_path_style` | bool | true for PathStyle used by MinIO and some S3-compatible services; false for VirtualHostStyle used by TOS and some S3-compatible services | true |
 | `directory_marker_mode` | str | How to persist directory markers: `none`, `empty`, or `nonempty` | `"empty"` |
 
-`directory_marker_mode` controls how AGFS materializes directory objects in S3:
+`directory_marker_mode` controls how RAGFS materializes directory objects in S3:
 
-- `empty` is the default. AGFS writes a zero-byte directory marker and preserves empty-directory semantics.
+- `empty` is the default. RAGFS writes a zero-byte directory marker and preserves empty-directory semantics.
 - `nonempty` writes a non-empty marker payload. Use this for S3-compatible services such as TOS that reject zero-byte directory markers.
-- `none` switches AGFS to prefix-style S3 semantics. AGFS does not create directory marker objects, so empty directories are not persisted and may not be discoverable until they contain at least one child object.
+- `none` switches RAGFS to prefix-style S3 semantics. RAGFS does not create directory marker objects, so empty directories are not persisted and may not be discoverable until they contain at least one child object.
 
 Typical choices:
 
@@ -785,7 +795,12 @@ Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI t
   "account": "acme",
   "user": "alice",
   "agent_id": "my-agent",
-  "output": "table"
+  "output": "table",
+  "upload": {
+    "ignore_dirs": "node_modules,.cache,.nx",
+    "include": "*.md,*.pdf",
+    "exclude": "*.tmp,*.log"
+  }
 }
 ```
 
@@ -797,11 +812,22 @@ Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI t
 | `user` | Default user sent as `X-OpenViking-User` | `null` |
 | `agent_id` | Agent identifier for agent space isolation | `null` |
 | `output` | Default output format: `"table"` or `"json"` | `"table"` |
+| `upload.ignore_dirs` | Default directory ignore list for `add-resource` (CSV) | `null` |
+| `upload.include` | Default include patterns for `add-resource` (CSV) | `null` |
+| `upload.exclude` | Default exclude patterns for `add-resource` (CSV) | `null` |
 
 CLI flags can override these identity fields per command:
 
 ```bash
 openviking --account acme --user alice --agent-id assistant-2 ls viking://
+```
+
+For `add-resource`, upload filter flags are merged additively with `ovcli.conf` defaults:
+
+```bash
+# ovcli.conf: upload.exclude="*.log"
+openviking add-resource ./docs --exclude "*.tmp"
+# effective exclude sent to server: "*.log,*.tmp"
 ```
 
 See [Deployment](./03-deployment.md) for details.
@@ -826,13 +852,13 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 |-------|------|-------------|---------|
 | `host` | str | Bind address | `0.0.0.0` |
 | `port` | int | Bind port | `1933` |
-| `auth_mode` | str | Authentication mode: `"api_key"` or `"trusted"` | `"api_key"` |
-| `root_api_key` | str | Root API key for multi-tenant auth in `api_key` mode | `null` |
+| `auth_mode` | str | Authentication mode: `"api_key"` or `"trusted"`. Default is `"api_key"` | `"api_key"` |
+| `root_api_key` | str | Root API key for multi-tenant auth in `api_key` mode. In `trusted` mode it is optional on localhost, but required for any non-localhost deployment; it does not become the source of user identity | `null` |
 | `cors_origins` | list | Allowed CORS origins | `["*"]` |
 
-`api_key` mode uses API keys. `trusted` mode trusts `X-OpenViking-Account` / `X-OpenViking-User` headers from a trusted gateway or internal caller.
+`api_key` mode uses API keys and is the default. `trusted` mode trusts `X-OpenViking-Account` / `X-OpenViking-User` headers from a trusted gateway or internal caller.
 
-When `root_api_key` is configured, the server enables multi-tenant authentication. Use the Admin API to create accounts and user keys. Development mode only applies when `auth_mode = "api_key"` and `root_api_key` is not set.
+When `root_api_key` is configured in `api_key` mode, the server enables multi-tenant authentication. Use the Admin API to create accounts and user keys. In `trusted` mode, ordinary requests do not require user registration first; each request is resolved as `USER` from the injected identity headers. However, skipping `root_api_key` in `trusted` mode is allowed only on localhost. Development mode only applies when `auth_mode = "api_key"` and `root_api_key` is not set.
 
 For startup and deployment details see [Deployment](./03-deployment.md), for authentication see [Authentication](./04-authentication.md).
 
@@ -854,7 +880,7 @@ Path locks are enabled by default and usually require no configuration. **The de
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `lock_timeout` | float | Path lock acquisition timeout (seconds). `0` = fail immediately if locked (default). `> 0` = wait/retry up to this many seconds, then raise `LockAcquisitionError`. | `0.0` |
-| `lock_expire` | float | Stale lock expiry threshold (seconds). Locks held longer than this by a crashed process are force-released. | `300.0` |
+| `lock_expire` | float | Lock inactivity threshold (seconds). Locks not refreshed within this window are treated as stale and reclaimed. | `300.0` |
 
 For details on the lock mechanism, see [Path Locks and Crash Recovery](../concepts/09-transaction.md).
 
@@ -956,6 +982,7 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
 {
   "embedding": {
     "max_concurrent": 10,
+    "max_retries": 3,
     "dense": {
       "provider": "volcengine",
       "api_key": "string",
@@ -971,6 +998,7 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
     "api_base": "string",
     "thinking": false,
     "max_concurrent": 100,
+    "max_retries": 3,
     "extra_headers": {},
     "stream": false
   },
@@ -979,7 +1007,8 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
     "api_key": "string",
     "model": "string",
     "api_base": "string",
-    "threshold": 0.1
+    "threshold": 0.1,
+    "extra_headers": {}
   },
   "encryption": {
     "enabled": false,
@@ -1004,7 +1033,6 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
     "workspace": "string",
     "agfs": {
       "backend": "local|s3|memory",
-      "url": "string",
       "timeout": 10
     },
     "transaction": {
@@ -1058,7 +1086,9 @@ Error: VLM request timeout
 
 - Check network connectivity
 - Increase timeout in config
+- For intermittent timeouts, increase `vlm.max_retries` moderately
 - Try a smaller model
+- For bulk ingestion, consider lowering `vlm.max_concurrent`
 
 ### Rate Limiting
 
@@ -1067,6 +1097,8 @@ Error: Rate limit exceeded
 ```
 
 Volcengine has rate limits. Consider batch processing with delays or upgrading your plan.
+- Lower `embedding.max_concurrent` / `vlm.max_concurrent` first
+- Keep a small `max_retries` value for occasional `429`s; set it to `0` if you prefer fail-fast behavior
 
 ## Related Documentation
 

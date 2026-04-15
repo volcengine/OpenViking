@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Tests for VLM extra_headers support."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -210,7 +210,7 @@ class TestVLMBaseExtraHeaders:
             def get_completion(self, prompt, thinking=False):
                 return ""
 
-            async def get_completion_async(self, prompt, thinking=False, max_retries=0):
+            async def get_completion_async(self, prompt, thinking=False):
                 return ""
 
             def get_vision_completion(self, prompt, images, thinking=False):
@@ -236,7 +236,7 @@ class TestVLMBaseExtraHeaders:
             def get_completion(self, prompt, thinking=False):
                 return ""
 
-            async def get_completion_async(self, prompt, thinking=False, max_retries=0):
+            async def get_completion_async(self, prompt, thinking=False):
                 return ""
 
             def get_vision_completion(self, prompt, images, thinking=False):

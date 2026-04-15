@@ -26,21 +26,12 @@ from vikingbot.channels.openapi_models import (
     SessionInfo,
     SessionListResponse,
 )
-from vikingbot.config.schema import BaseChannelConfig, Config, SessionKey
-
-
-class OpenAPIChannelConfig(BaseChannelConfig):
-    """Configuration for OpenAPI channel."""
-
-    enabled: bool = True
-    type: str = "cli"
-    api_key: str = ""  # If empty, no auth required
-    allow_from: list[str] = []
-    max_concurrent_requests: int = 100
-    _channel_id: str = "default"
-
-    def channel_id(self) -> str:
-        return self._channel_id
+from vikingbot.config.schema import (
+    BaseChannelConfig,
+    Config,
+    SessionKey,
+    BotChannelConfig,
+)
 
 
 class PendingResponse:
@@ -68,6 +59,20 @@ class PendingResponse:
         await self.stream_queue.put(None)
 
 
+class OpenAPIChannelConfig(BaseChannelConfig):
+    """Configuration for OpenAPI channel."""
+
+    enabled: bool = True
+    type: str = "cli"
+    api_key: str = ""  # If empty, no auth required
+    allow_from: list[str] = []
+    max_concurrent_requests: int = 100
+    _channel_id: str = "default"
+
+    def channel_id(self) -> str:
+        return self._channel_id
+
+
 class OpenAPIChannel(BaseChannel):
     """
     OpenAPI channel exposing HTTP endpoints for chat API.
@@ -83,14 +88,26 @@ class OpenAPIChannel(BaseChannel):
         bus: MessageBus,
         workspace_path: Path | None = None,
         app: "FastAPI | None" = None,
+        global_config: Config | None = None,
     ):
         super().__init__(config, bus, workspace_path)
         self.config = config
+        self._global_config = global_config
+        # Regular OpenAPI pending and sessions
         self._pending: Dict[str, PendingResponse] = {}
         self._sessions: Dict[str, Dict[str, Any]] = {}
+        # BotChannel pending and sessions - key is channel_id
+        self._bot_pending: Dict[str, Dict[str, PendingResponse]] = {}
+        self._bot_sessions: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        # BotChannel configs - key is channel_id
+        self._bot_configs: Dict[str, BotChannelConfig] = {}
         self._router: Optional[APIRouter] = None
         self._app = app  # External FastAPI app to register routes on
         self._server: Optional[asyncio.Task] = None  # Server task
+
+        # Load BotChannel configurations immediately in constructor
+        # so that subscriptions are setup before ChannelManager starts
+        self._load_bot_channels()
 
     async def start(self) -> None:
         """Start the channel - register routes to external FastAPI app if provided."""
@@ -108,13 +125,76 @@ class OpenAPIChannel(BaseChannel):
         # Complete all pending responses
         for pending in self._pending.values():
             pending.set_final("")
+        # Complete all bot pending responses
+        for pending_dict in self._bot_pending.values():
+            for pending in pending_dict.values():
+                pending.set_final("")
         logger.info("OpenAPI channel stopped")
+
+    def _load_bot_channels(self) -> None:
+        """Load all BotChannel configurations from the global config."""
+        if self._global_config is None:
+            logger.warning("No global config provided, cannot load BotChannels")
+            return
+
+        # Get all channel configs
+        channels_config = self._global_config.channels_config
+        all_channel_configs = channels_config.get_all_channels()
+
+        for ch_config in all_channel_configs:
+            if isinstance(ch_config, BotChannelConfig) or (
+                hasattr(ch_config, "type") and getattr(ch_config, "type", None) == "bot_api"
+            ):
+                if isinstance(ch_config, dict):
+                    bot_config = BotChannelConfig(**ch_config)
+                else:
+                    bot_config = ch_config
+
+                if not bot_config.enabled:
+                    continue
+
+                channel_id = bot_config.channel_id()
+                self._bot_configs[channel_id] = bot_config
+                # Initialize pending and sessions for this channel
+                self._bot_pending[channel_id] = {}
+                self._bot_sessions[channel_id] = {}
+                logger.info(f"Loaded BotChannel config: {channel_id}")
+
+        # Instead of subscribing per channel, we'll check session type in send()
+        # This is simpler and avoids subscription timing issues
 
     async def send(self, msg: OutboundMessage) -> None:
         """
         Handle outbound messages - routes to pending responses.
         This is called by the message bus dispatcher.
         """
+        # Check if this message is for a BotChannel
+        if msg.session_key.type == "bot_api":
+            channel_id = msg.session_key.channel_id
+            session_id = msg.session_key.chat_id
+
+            if channel_id not in self._bot_pending:
+                logger.warning(f"Unknown BotChannel: {channel_id}")
+                return
+
+            pending = self._bot_pending[channel_id].get(session_id)
+            if not pending:
+                logger.warning(f"No pending request for BotChannel {channel_id} session: {session_id}")
+                return
+
+            if msg.event_type == OutboundEventType.RESPONSE or msg.event_type == OutboundEventType.NO_REPLY:
+                await pending.add_event("response", msg.content or "")
+                pending.set_final(msg.content or "")
+                await pending.close_stream()
+            elif msg.event_type == OutboundEventType.REASONING:
+                await pending.add_event("reasoning", msg.content)
+            elif msg.event_type == OutboundEventType.TOOL_CALL:
+                await pending.add_event("tool_call", msg.content)
+            elif msg.event_type == OutboundEventType.TOOL_RESULT:
+                await pending.add_event("tool_result", msg.content)
+            return
+
+        # Handle as normal OpenAPIChannel message
         session_id = msg.session_key.chat_id
         pending = self._pending.get(session_id)
 
@@ -249,6 +329,58 @@ class OpenAPIChannel(BaseChannel):
 
             del channel._sessions[session_id]
             return {"deleted": True}
+
+        # ========== Bot Channel Routes ==========
+
+        async def verify_bot_channel_api_key(x_api_key: Optional[str] = Header(None)) -> Optional[str]:
+            """Verify API key and return it if valid."""
+            return x_api_key
+
+        @router.post("/chat/channel", response_model=ChatResponse)
+        async def chat_channel(
+            request: ChatRequest,
+            x_api_key: Optional[str] = Depends(verify_bot_channel_api_key),
+        ):
+            """Send a chat message to a specific bot channel and get a response."""
+            channel_id = request.channel_id
+            if not channel_id:
+                raise HTTPException(status_code=400, detail="channel_id is required")
+            if channel_id not in channel._bot_configs:
+                raise HTTPException(status_code=404, detail=f"Channel '{channel_id}' not found")
+
+            # Verify API key for the specific channel
+            bot_config = channel._bot_configs[channel_id]
+            if bot_config.api_key:
+                if not x_api_key:
+                    raise HTTPException(status_code=401, detail="X-API-Key header required")
+                if not secrets.compare_digest(x_api_key, bot_config.api_key):
+                    raise HTTPException(status_code=403, detail="Invalid API key")
+
+            return await channel._handle_bot_chat(channel_id, request)
+
+        @router.post("/chat/channel/stream")
+        async def chat_channel_stream(
+            request: ChatRequest,
+            x_api_key: Optional[str] = Depends(verify_bot_channel_api_key),
+        ):
+            """Send a chat message to a specific bot channel and get a streaming response."""
+            channel_id = request.channel_id
+            if not channel_id:
+                raise HTTPException(status_code=400, detail="channel_id is required")
+            if channel_id not in channel._bot_configs:
+                raise HTTPException(status_code=404, detail=f"Channel '{channel_id}' not found")
+
+            # Verify API key for the specific channel
+            bot_config = channel._bot_configs[channel_id]
+            if bot_config.api_key:
+                if not x_api_key:
+                    raise HTTPException(status_code=401, detail="X-API-Key header required")
+                if not secrets.compare_digest(x_api_key, bot_config.api_key):
+                    raise HTTPException(status_code=403, detail="Invalid API key")
+
+            if not request.stream:
+                request.stream = True
+            return await channel._handle_bot_chat_stream(channel_id, request)
 
         return router
 
@@ -400,6 +532,154 @@ class OpenAPIChannel(BaseChannel):
             },
         )
 
+    async def _handle_bot_chat(self, channel_id: str, request: ChatRequest) -> ChatResponse:
+        """Handle a BotChannel chat request."""
+        # Generate or use provided session ID
+        session_id = request.session_id or str(uuid.uuid4())
+        user_id = request.user_id or "anonymous"
+
+        # Ensure channel has session storage
+        if channel_id not in self._bot_sessions:
+            self._bot_sessions[channel_id] = {}
+
+        # Create session if new
+        if session_id not in self._bot_sessions[channel_id]:
+            self._bot_sessions[channel_id][session_id] = {
+                "user_id": user_id,
+                "created_at": datetime.now(),
+                "last_active": datetime.now(),
+                "message_count": 0,
+                "messages": [],
+            }
+
+        # Update session activity
+        self._bot_sessions[channel_id][session_id]["last_active"] = datetime.now()
+        self._bot_sessions[channel_id][session_id]["message_count"] += 1
+
+        # Create pending response tracker
+        pending = PendingResponse()
+        self._bot_pending[channel_id][session_id] = pending
+
+        try:
+            # Build session key with bot_api type
+            session_key = SessionKey(
+                type="bot_api",
+                channel_id=channel_id,
+                chat_id=session_id,
+            )
+
+            # Build content with context if provided
+            content = request.message
+            if request.context:
+                # Context is handled separately by session manager
+                pass
+
+            # Create and publish inbound message
+            msg = InboundMessage(
+                session_key=session_key,
+                sender_id=user_id,
+                content=content,
+                need_reply=request.need_reply,
+            )
+
+            await self.bus.publish_inbound(msg)
+
+            # Wait for response with timeout
+            try:
+                await asyncio.wait_for(pending.event.wait(), timeout=300.0)
+            except asyncio.TimeoutError:
+                raise HTTPException(status_code=504, detail="Request timeout")
+
+            # Build response
+            response_content = pending.final_content or ""
+
+            return ChatResponse(
+                session_id=session_id,
+                message=response_content,
+                events=pending.events if pending.events else None,
+            )
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception(f"Error handling bot chat request for channel {channel_id}: {e}")
+            raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+        finally:
+            # Clean up pending
+            if channel_id in self._bot_pending:
+                self._bot_pending[channel_id].pop(session_id, None)
+
+    async def _handle_bot_chat_stream(self, channel_id: str, request: ChatRequest) -> StreamingResponse:
+        """Handle a BotChannel streaming chat request."""
+        session_id = request.session_id or str(uuid.uuid4())
+        user_id = request.user_id or "anonymous"
+
+        # Ensure channel has session storage
+        if channel_id not in self._bot_sessions:
+            self._bot_sessions[channel_id] = {}
+
+        # Create session if new
+        if session_id not in self._bot_sessions[channel_id]:
+            self._bot_sessions[channel_id][session_id] = {
+                "user_id": user_id,
+                "created_at": datetime.now(),
+                "last_active": datetime.now(),
+                "message_count": 0,
+                "messages": [],
+            }
+
+        self._bot_sessions[channel_id][session_id]["last_active"] = datetime.now()
+        self._bot_sessions[channel_id][session_id]["message_count"] += 1
+
+        pending = PendingResponse()
+        self._bot_pending[channel_id][session_id] = pending
+
+        async def event_generator():
+            try:
+                # Build session key with bot_api type
+                session_key = SessionKey(
+                    type="bot_api",
+                    channel_id=channel_id,
+                    chat_id=session_id,
+                )
+
+                msg = InboundMessage(
+                    session_key=session_key,
+                    sender_id=user_id,
+                    content=request.message,
+                )
+
+                await self.bus.publish_inbound(msg)
+
+                # Stream events as they arrive
+                while True:
+                    try:
+                        event = await asyncio.wait_for(pending.stream_queue.get(), timeout=300.0)
+                        if event is None:
+                            break
+                        yield f"data: {event.model_dump_json()}\n\n"
+                    except asyncio.TimeoutError:
+                        yield f"data: {ChatStreamEvent(event=EventType.RESPONSE, data={'error': 'timeout'}).model_dump_json()}\n\n"
+                        break
+
+            except Exception as e:
+                logger.exception(f"Error in bot stream generator for channel {channel_id}: {e}")
+                error_event = ChatStreamEvent(event=EventType.RESPONSE, data={"error": str(e)})
+                yield f"data: {error_event.model_dump_json()}\n\n"
+            finally:
+                # Clean up pending
+                if channel_id in self._bot_pending:
+                    self._bot_pending[channel_id].pop(session_id, None)
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+            },
+        )
+
 
 def get_openapi_router(bus: MessageBus, config: Config) -> APIRouter:
     """
@@ -410,7 +690,9 @@ def get_openapi_router(bus: MessageBus, config: Config) -> APIRouter:
     """
     # Find OpenAPI config from channels
     openapi_config = None
+
     for ch_config in config.channels:
+        # Check for OpenAPI config
         if isinstance(ch_config, dict) and ch_config.get("type") == "openapi":
             openapi_config = OpenAPIChannelConfig(**ch_config)
             break
@@ -422,17 +704,27 @@ def get_openapi_router(bus: MessageBus, config: Config) -> APIRouter:
         # Create default config
         openapi_config = OpenAPIChannelConfig()
 
-    # Create channel and get router
+    # Create channel and get router - pass global config for BotChannel loading
     channel = OpenAPIChannel(
         config=openapi_config,
         bus=bus,
         workspace_path=config.workspace_path,
+        global_config=config,
     )
 
     # Register channel's send method as subscriber for outbound messages
+    # Subscribe to cli type
     bus.subscribe_outbound(
         f"cli__{openapi_config.channel_id()}",
         channel.send,
     )
+
+    # Subscribe to all bot_api channels that were loaded
+    for channel_id in channel._bot_configs.keys():
+        bus.subscribe_outbound(
+            f"bot_api__{channel_id}",
+            channel.send,
+        )
+        logger.info(f"Subscribed to bot_api channel: {channel_id}")
 
     return channel.get_router()

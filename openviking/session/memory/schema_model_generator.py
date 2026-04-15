@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Dynamic Pydantic model generator based on YAML schemas.
 
@@ -8,17 +8,14 @@ definitions, with discriminator support for polymorphic fields.
 """
 
 import re
-from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Type, Union
 
 from pydantic import BaseModel, Field, create_model
 from pydantic.config import ConfigDict
-from typing_extensions import Annotated, Literal
 
-from openviking.session.memory.dataclass import MemoryTypeSchema
+from openviking.session.memory.dataclass import FaultTolerantBaseModel, MemoryTypeSchema
 from openviking.session.memory.merge_op import MergeOp, MergeOpFactory
 from openviking.session.memory.merge_op.base import FieldType, StrPatch, get_python_type_for_field
-from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -44,8 +41,8 @@ class SchemaModelGenerator:
     # Generic overview edit model shared by all memory types
     _generic_overview_edit_model: Optional[Type[BaseModel]] = None
 
-    def __init__(self, registry: MemoryTypeRegistry):
-        self.registry = registry
+    def __init__(self, schemas: List[MemoryTypeSchema]):
+        self.schemas = schemas
         self._model_cache: Dict[str, Type[BaseModel]] = {}
         self._flat_data_models: Dict[str, Type[BaseModel]] = {}
         self._overview_edit_models: Dict[str, Type[BaseModel]] = {}
@@ -60,10 +57,8 @@ class SchemaModelGenerator:
         """
         Create a fully flat Pydantic model for a specific memory type.
 
-        The model includes:
-        - memory_type (literal discriminator)
-        - All business fields (with Union[base_type, patch_type] for mutable fields)
-        - Standard metadata fields (uri, name, abstract, overview, content, tags, created_at, updated_at)
+        Note: memory_type field is NOT included since each type has its own
+        output field in the structured operations model.
 
         Args:
             memory_type: The memory type schema
@@ -78,14 +73,8 @@ class SchemaModelGenerator:
 
         model_name = f"{to_pascal_case(memory_type.memory_type)}Data"
 
-        # Build field definitions
+        # Build field definitions - no memory_type field needed
         field_definitions: Dict[str, Tuple[Type[Any], Any]] = {}
-
-        # Add memory_type as literal discriminator
-        field_definitions["memory_type"] = (
-            Literal[memory_type.memory_type],  # type: ignore
-            Field(..., description=f"Memory type: {memory_type.memory_type}"),
-        )
 
         # Add business fields from schema
         for field in memory_type.fields:
@@ -128,7 +117,7 @@ class SchemaModelGenerator:
             Dictionary mapping memory_type to generated model class
         """
         models: Dict[str, Type[BaseModel]] = {}
-        for memory_type in self.registry.list_all(include_disabled=include_disabled):
+        for memory_type in self.schemas:
             models[memory_type.memory_type] = self.create_flat_data_model(memory_type)
         return models
 
@@ -187,15 +176,13 @@ class SchemaModelGenerator:
         self.generate_all_models(include_disabled=True)
 
         # Build the annotated union with discriminator - only use enabled types
-        memory_types = self.registry.list_all(include_disabled=False)
-        if not memory_types:
-            raise ValueError("No memory types registered in registry")
+        if not self.schemas:
+            raise ValueError("No memory types in schemas")
 
         # Create union of flat data models
-        enabled_memory_types = self.registry.list_all(include_disabled=False)
+        enabled_memory_types = self.schemas
         flat_model_union_types = tuple(
-            self._flat_data_models[mt.memory_type]
-            for mt in enabled_memory_types
+            self._flat_data_models[mt.memory_type] for mt in enabled_memory_types
         )
 
         if flat_model_union_types:
@@ -204,12 +191,15 @@ class SchemaModelGenerator:
             # Fallback if no types are enabled
             class GenericMemoryData(BaseModel):
                 """Generic memory data (fallback)."""
+
                 memory_type: str = Field(..., description="Memory type identifier")
+
             FlatDataUnion = GenericMemoryData  # type: ignore
 
         # Wrap the union in a BaseModel for JSON schema generation
         class MemoryDataWrapper(BaseModel):
             """Wrapper model for memory data union."""
+
             data: FlatDataUnion = Field(..., description="Memory data")  # type: ignore
 
             model_config = ConfigDict(extra="forbid")
@@ -217,12 +207,24 @@ class SchemaModelGenerator:
         self._union_model = MemoryDataWrapper
         return self._union_model
 
+    def _is_single_value_schema(self, schema: MemoryTypeSchema) -> bool:
+        """
+        Determine if a schema should output as single value (not list).
+
+        Single value if filename_template does NOT contain {xxx} variable.
+        For example:
+        - "profile.md" -> single value
+        - "{skill_name}.md" -> list
+        """
+        return "{" not in schema.filename_template
+
     def create_structured_operations_model(self) -> Type[BaseModel]:
         """
         Create a structured MemoryOperations model with type-safe write operations.
 
-        This uses fully flat models for write_uris and edit_uris,
-        and simple string URIs for delete_uris.
+        Each memory_type gets its own field (mixed add + edit), with:
+        - Single value if filename_template has no variable (e.g., profile)
+        - List if filename_template has variable (e.g., {skill_name})
 
         Returns:
             Pydantic model for structured operations
@@ -234,54 +236,108 @@ class SchemaModelGenerator:
         self.generate_all_models(include_disabled=True)
 
         # Get enabled memory types
-        enabled_memory_types = self.registry.list_all(include_disabled=False)
+        enabled_memory_types = self.schemas
+        memory_type_fields = [mt.memory_type for mt in enabled_memory_types]
 
-        # Create union type for flat data models (used for both write and edit)
-        flat_models: List[Type[BaseModel]] = []
+        # Build field definitions for each memory_type
+        field_definitions: Dict[str, Tuple[Type[Any], Any]] = {}
+
+        # field_definitions["reasoning"] = (
+        #     str,
+        #     Field("", description="reasoning"),
+        # )
+
         for mt in enabled_memory_types:
             flat_model = self.create_flat_data_model(mt)
-            flat_models.append(flat_model)
+            is_single = self._is_single_value_schema(mt)
 
-        FlatDataUnion = Union[tuple(flat_models)]  # type: ignore
-
-        # Use single generic model for overview edit (same for all memory types)
-        generic_overview_edit = self.create_overview_edit_model(enabled_memory_types[0] if enabled_memory_types else None)
-
-        # Create structured operations
-        class StructuredMemoryOperations(BaseModel):
-            """Final memory operations output from LLM with type safety."""
-
-            reasoning: str = Field(
-                '',
-                description="reasoning",
-            )
-            write_uris: List[FlatDataUnion] = Field(  # type: ignore
-                default_factory=list,
-                description="Write operations with flat data format",
-            )
-            edit_uris: List[FlatDataUnion] = Field(  # type: ignore
-                default_factory=list,
-                description="Edit operations with flat data format",
-            )
-            edit_overview_uris: List[generic_overview_edit] = Field(  # type: ignore
-                default_factory=list,
-                description="Edit operations for .overview.md files using memory_type",
-            )
-            delete_uris: List[str] = Field(
-                default_factory=list,
-                description="Delete operations as URI strings",
-            )
-
-            def is_empty(self) -> bool:
-                """Check if there are any operations."""
-                return (
-                    len(self.write_uris) == 0
-                    and len(self.edit_uris) == 0
-                    and len(self.edit_overview_uris) == 0
-                    and len(self.delete_uris) == 0
+            if is_single:
+                # Single value: Optional[FlatModel] = None
+                field_definitions[mt.memory_type] = (
+                    Optional[flat_model],  # type: ignore
+                    Field(None, description=f"{mt.memory_type} memory (add or edit)"),
+                )
+            else:
+                # List: List[FlatModel] = []
+                field_definitions[mt.memory_type] = (
+                    List[flat_model],  # type: ignore
+                    Field(
+                        default_factory=list, description=f"{mt.memory_type} memories (add or edit)"
+                    ),
                 )
 
-            model_config = ConfigDict(extra='ignore')
+        # Use single generic model for overview edit (same for all memory types)
+        # generic_overview_edit = self.create_overview_edit_model(
+        #     enabled_memory_types[0] if enabled_memory_types else None
+        # )
+
+        # field_definitions["edit_overview_uris"] = (
+        #     List[generic_overview_edit],  # type: ignore
+        #     Field(
+        #         default_factory=list,
+        #         description="Edit operations for .overview.md files using memory_type",
+        #     ),
+        # )
+
+        field_definitions["delete_uris"] = (
+            List[str],
+            Field(default_factory=list, description="Delete operations as URI strings"),
+        )
+
+        # Create model using create_model
+        StructuredMemoryOperations = create_model(
+            "StructuredMemoryOperations",
+            __config__=ConfigDict(extra="ignore"),
+            __base__=FaultTolerantBaseModel,
+            **field_definitions,
+        )
+
+        # Add custom methods
+        def is_empty(self) -> bool:
+            """Check if there are any operations."""
+            for field_name in memory_type_fields:
+                value = getattr(self, field_name, None)
+                if value is not None:
+                    if isinstance(value, list):
+                        if len(value) > 0:
+                            return False
+                    else:
+                        # Single value (not None)
+                        return False
+            return len(self.edit_overview_uris) == 0 and len(self.delete_uris) == 0
+
+        def to_legacy_operations(self) -> Dict[str, Any]:
+            """Convert new per-type structure to legacy write_uris/edit_uris format."""
+            write_uris = []
+            edit_uris = []
+
+            for field_name in memory_type_fields:
+                value = getattr(self, field_name, None)
+                if value is None:
+                    continue
+                if isinstance(value, list):
+                    for item in value:
+                        if hasattr(item, "uri") and item.uri:
+                            edit_uris.append(item)
+                        else:
+                            write_uris.append(item)
+                else:
+                    if hasattr(value, "uri") and value.uri:
+                        edit_uris.append(value)
+                    else:
+                        write_uris.append(value)
+
+            return {
+                "write_uris": write_uris,
+                "edit_uris": edit_uris,
+                #"edit_overview_uris": self.edit_overview_uris,
+                "delete_uris": self.delete_uris,
+            }
+
+        # Attach methods
+        StructuredMemoryOperations.is_empty = is_empty
+        StructuredMemoryOperations.to_legacy_operations = to_legacy_operations
+        StructuredMemoryOperations._memory_type_fields = memory_type_fields  # type: ignore
 
         self._operations_model = StructuredMemoryOperations
         return self._operations_model
@@ -315,8 +371,8 @@ class SchemaPromptGenerator:
     based on the YAML schema definitions.
     """
 
-    def __init__(self, registry: MemoryTypeRegistry):
-        self.registry = registry
+    def __init__(self, schemas: List[MemoryTypeSchema]):
+        self.schemas = schemas
 
     def generate_type_descriptions(self) -> str:
         """
@@ -327,7 +383,7 @@ class SchemaPromptGenerator:
         """
         lines = ["## Available Memory Types"]
 
-        for mt in self.registry.list_all():
+        for mt in self.schemas:
             lines.append(f"\n### {mt.memory_type}")
             lines.append(f"{mt.description}")
 
@@ -343,16 +399,18 @@ class SchemaPromptGenerator:
 
                 # Add variable substitution info
                 lines.append("\n**Variable Substitution:**")
-                lines.append("- `{user_space}` → 'default'")
-                lines.append("- `{agent_space}` → 'default'")
+                lines.append("- `{{ user_space }}` → 'default'")
+                lines.append("- `{{ agent_space }}` → 'default'")
                 if mt.fields:
                     for field in mt.fields:
-                        lines.append(f"- `{field.name}` → use value from fields")
+                        lines.append(f"- `{{ {field.name} }}` → use value from fields")
 
             if mt.fields:
                 lines.append("\n**Fields:**")
                 for field in mt.fields:
-                    lines.append(f"- `{field.name}` ({field.field_type.value}): {field.description}")
+                    lines.append(
+                        f"- `{field.name}` ({field.field_type.value}): {field.description}"
+                    )
 
         return "\n".join(lines)
 
@@ -366,7 +424,7 @@ class SchemaPromptGenerator:
         Returns:
             Formatted string with field descriptions, or None if not found
         """
-        mt = self.registry.get(memory_type)
+        mt = next((s for s in self.schemas if s.memory_type == memory_type), None)
         if not mt:
             return None
 
@@ -399,6 +457,6 @@ class SchemaPromptGenerator:
                         for f in mt.fields
                     ],
                 }
-                for mt in self.registry.list_all()
+                for mt in self.schemas
             ],
         }

@@ -5,10 +5,16 @@ description: |
   Each preference should be about a specific topic (not generic).
   Topics can be: code style, communication style, tools, workflow, food, commute, etc.
   Store different topics as separate memory files, do NOT mix unrelated preferences.
-directory: "viking://user/{user_space}/memories/preferences"
-filename_template: "{topic}.md"
+directory: "viking://user/{{ user_space }}/memories/preferences"
+filename_template: "{{ user }}/{{ topic }}.md"
 enabled: true
 fields:
+  - name: user
+    type: string
+    description: |
+      Username for the preference owner
+    merge_op: immutable
+
   - name: topic
     type: string
     description: |

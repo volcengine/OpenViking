@@ -14,6 +14,58 @@ if PROJECT_ROOT not in sys.path:
 from openviking.models.embedder.base import EmbedResult  # noqa: E402
 
 
+class _FakeEmbedder:
+    def __init__(self, dimension: int):
+        if dimension < 2:
+            raise ValueError("dimension must be at least 2 for pseudo-embedding features")
+        self._dimension = dimension
+        self.is_sparse = False
+        self.is_hybrid = False
+
+    def get_dimension(self):
+        return self._dimension
+
+    def _generate_pseudo_embedding(self, text: str):
+        """
+        Generate a deterministic pseudo-embedding based on text content.
+        Features:
+        1. Deterministic: Same text -> Same vector (using hash seed)
+        2. Semantic Simulation: If text contains 'openviking', boost dimension 0.
+           This allows "what is openviking" query to match "OpenViking" docs better.
+        3. Length Feature: Encode length in dimension 1 (as requested by user).
+        """
+        import hashlib
+        import math
+        import random
+
+        text_lower = text.lower()
+        hash_object = hashlib.md5(text_lower.encode("utf-8"))
+        seed = int(hash_object.hexdigest(), 16)
+        rng = random.Random(seed)
+
+        vector = [rng.uniform(-0.1, 0.1) for _ in range(self._dimension)]
+
+        if "openviking" in text_lower:
+            vector[0] = 1.0
+
+        length_feature = min(len(text) / 10000.0, 1.0)
+        vector[1] = length_feature
+
+        norm = math.sqrt(sum(x**2 for x in vector))
+        if norm > 0:
+            vector = [x / norm for x in vector]
+        else:
+            vector = [0.0] * self._dimension
+
+        return vector
+
+    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
+        return EmbedResult(dense_vector=self._generate_pseudo_embedding(text))
+
+    def embed_batch(self, texts, is_query: bool = False):
+        return [self.embed(text, is_query=is_query) for text in texts]
+
+
 class TestQuickStartLite(unittest.TestCase):
     def setUp(self):
         # Clean up data directory if exists to ensure fresh start
@@ -27,7 +79,11 @@ class TestQuickStartLite(unittest.TestCase):
 
         # Create a dummy config structure (minimal valid config for Volcengine provider)
         config_data = {
-            "storage": {"agfs": {"port": 1833}},
+            "storage": {
+                "workspace": self.data_dir,
+                "agfs": {"backend": "local"},
+                "vectordb": {"backend": "local"},
+            },
             "embedding": {
                 "dense": {
                     "provider": "volcengine",
@@ -140,64 +196,9 @@ class TestQuickStartLite(unittest.TestCase):
         )
 
         # --- 2. Mock Embedder ---
-        mock_embedder = MagicMock()
         # Default config usually uses 2048 dimension unless overridden
         DIMENSION = 2048
-        mock_embedder.get_dimension.return_value = DIMENSION
-        mock_embedder.is_sparse = False
-        mock_embedder.is_hybrid = False
-
-        def generate_pseudo_embedding(text: str):
-            """
-            Generate a deterministic pseudo-embedding based on text content.
-            Features:
-            1. Deterministic: Same text -> Same vector (using hash seed)
-            2. Semantic Simulation: If text contains 'openviking', boost dimension 0.
-               This allows "what is openviking" query to match "OpenViking" docs better.
-            3. Length Feature: Encode length in dimension 1 (as requested by user).
-            """
-            import hashlib
-            import math
-            import random
-
-            # 1. Deterministic Randomness based on text content
-            text_lower = text.lower()
-            hash_object = hashlib.md5(text_lower.encode("utf-8"))
-            seed = int(hash_object.hexdigest(), 16)
-            rng = random.Random(seed)
-
-            # Initialize random vector [-0.1, 0.1]
-            vector = [rng.uniform(-0.1, 0.1) for _ in range(DIMENSION)]
-
-            # 2. Semantic Simulation (Keyword Boosting)
-            # If text is relevant to "openviking", boost the first dimension significantly
-            if "openviking" in text_lower:
-                vector[0] = 1.0  # Strong signal
-
-            # 3. Length Feature (as requested)
-            # Map length to [0, 1] range roughly
-            length_feature = min(len(text) / 10000.0, 1.0)
-            vector[1] = length_feature
-
-            # 4. L2 Normalization (Crucial for Cosine Similarity)
-            norm = math.sqrt(sum(x**2 for x in vector))
-            if norm > 0:
-                vector = [x / norm for x in vector]
-            else:
-                vector = [0.0] * DIMENSION
-
-            return vector
-
-        # Mock embed_batch
-        def side_effect_embed_batch(texts):
-            return [EmbedResult(dense_vector=generate_pseudo_embedding(t)) for t in texts]
-
-        # Mock single embed
-        def side_effect_embed(text):
-            return EmbedResult(dense_vector=generate_pseudo_embedding(text))
-
-        mock_embedder.embed_batch.side_effect = side_effect_embed_batch
-        mock_embedder.embed.side_effect = side_effect_embed
+        fake_embedder = _FakeEmbedder(DIMENSION)
 
         # --- 3. Patch Factories ---
         # We STILL need to patch get_embedder/get_vlm_instance because we don't want to use the REAL factories
@@ -216,7 +217,7 @@ class TestQuickStartLite(unittest.TestCase):
             patch.dict(os.environ, env_override),
             patch(
                 "openviking_cli.utils.config.EmbeddingConfig.get_embedder",
-                return_value=mock_embedder,
+                return_value=fake_embedder,
             ),
             patch("openviking_cli.utils.config.VLMConfig.get_vlm_instance", return_value=mock_vlm),
         ):

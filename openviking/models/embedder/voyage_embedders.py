@@ -1,12 +1,15 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Voyage AI dense embedder implementation."""
 
+import logging
 from typing import Any, Dict, List, Optional
 
 import openai
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
+
+logger = logging.getLogger(__name__)
 
 VOYAGE_MODEL_DIMENSIONS = {
     "voyage-3": 1024,
@@ -57,6 +60,7 @@ class VoyageDenseEmbedder(DenseEmbedderBase):
         config: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(model_name, config)
+        self.provider = "voyage"
 
         self.api_key = api_key
         self.api_base = api_base or "https://api.voyageai.com/v1"
@@ -78,19 +82,73 @@ class VoyageDenseEmbedder(DenseEmbedderBase):
             api_key=self.api_key,
             base_url=self.api_base,
         )
+        self._async_client = None
 
         self._dimension = dimension or get_voyage_model_default_dimension(normalized_model_name)
 
+    def _build_kwargs(self, text_input: str | List[str]) -> Dict[str, Any]:
+        kwargs: Dict[str, Any] = {"input": text_input, "model": self.model_name}
+        if self.dimension is not None:
+            kwargs["extra_body"] = {"output_dimension": self.dimension}
+        return kwargs
+
+    def _get_async_client(self):
+        if self._async_client is None:
+            self._async_client = openai.AsyncOpenAI(
+                api_key=self.api_key,
+                base_url=self.api_base,
+            )
+        return self._async_client
+
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform dense embedding on text."""
-        try:
-            kwargs: Dict[str, Any] = {"input": text, "model": self.model_name}
-            if self.dimension is not None:
-                kwargs["extra_body"] = {"output_dimension": self.dimension}
 
-            response = self.client.embeddings.create(**kwargs)
+        def _call() -> EmbedResult:
+            response = self.client.embeddings.create(**self._build_kwargs(text))
             vector = response.data[0].embedding
             return EmbedResult(dense_vector=vector)
+
+        try:
+            result = self._run_with_retry(
+                _call,
+                logger=logger,
+                operation_name="Voyage embedding",
+            )
+            # Estimate token usage
+            estimated_tokens = self._estimate_tokens(text)
+            self.update_token_usage(
+                model_name=self.model_name,
+                provider="voyage",
+                prompt_tokens=estimated_tokens,
+                completion_tokens=0,
+            )
+            return result
+        except openai.APIError as e:
+            raise RuntimeError(f"Voyage API error: {e.message}") from e
+        except Exception as e:
+            raise RuntimeError(f"Embedding failed: {str(e)}") from e
+
+    async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+        client = self._get_async_client()
+
+        async def _call() -> EmbedResult:
+            response = await client.embeddings.create(**self._build_kwargs(text))
+            return EmbedResult(dense_vector=response.data[0].embedding)
+
+        try:
+            result = await self._run_with_async_retry(
+                _call,
+                logger=logger,
+                operation_name="Voyage async embedding",
+            )
+            estimated_tokens = self._estimate_tokens(text)
+            self.update_token_usage(
+                model_name=self.model_name,
+                provider="voyage",
+                prompt_tokens=estimated_tokens,
+                completion_tokens=0,
+            )
+            return result
         except openai.APIError as e:
             raise RuntimeError(f"Voyage API error: {e.message}") from e
         except Exception as e:
@@ -101,13 +159,56 @@ class VoyageDenseEmbedder(DenseEmbedderBase):
         if not texts:
             return []
 
-        try:
-            kwargs: Dict[str, Any] = {"input": texts, "model": self.model_name}
-            if self.dimension is not None:
-                kwargs["extra_body"] = {"output_dimension": self.dimension}
-
-            response = self.client.embeddings.create(**kwargs)
+        def _call() -> List[EmbedResult]:
+            response = self.client.embeddings.create(**self._build_kwargs(texts))
             return [EmbedResult(dense_vector=item.embedding) for item in response.data]
+
+        try:
+            results = self._run_with_retry(
+                _call,
+                logger=logger,
+                operation_name="Voyage batch embedding",
+            )
+            # Estimate token usage for batch
+            total_tokens = sum(self._estimate_tokens(text) for text in texts)
+            self.update_token_usage(
+                model_name=self.model_name,
+                provider="voyage",
+                prompt_tokens=total_tokens,
+                completion_tokens=0,
+            )
+            return results
+        except openai.APIError as e:
+            raise RuntimeError(f"Voyage API error: {e.message}") from e
+        except Exception as e:
+            raise RuntimeError(f"Batch embedding failed: {str(e)}") from e
+
+    async def embed_batch_async(
+        self, texts: List[str], is_query: bool = False
+    ) -> List[EmbedResult]:
+        if not texts:
+            return []
+
+        client = self._get_async_client()
+
+        async def _call() -> List[EmbedResult]:
+            response = await client.embeddings.create(**self._build_kwargs(texts))
+            return [EmbedResult(dense_vector=item.embedding) for item in response.data]
+
+        try:
+            results = await self._run_with_async_retry(
+                _call,
+                logger=logger,
+                operation_name="Voyage async batch embedding",
+            )
+            total_tokens = sum(self._estimate_tokens(text) for text in texts)
+            self.update_token_usage(
+                model_name=self.model_name,
+                provider="voyage",
+                prompt_tokens=total_tokens,
+                completion_tokens=0,
+            )
+            return results
         except openai.APIError as e:
             raise RuntimeError(f"Voyage API error: {e.message}") from e
         except Exception as e:

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 
 """Integration tests for session commit task tracking via HTTP API."""
 
@@ -66,7 +66,12 @@ def _make_tracked_commit(behavior="instant", result_overrides=None, gate=None, s
 
     async def mock_commit(_sid, _ctx):
         tracker = get_task_tracker()
-        task = tracker.create("session_commit", resource_id=_sid)
+        task = tracker.create(
+            "session_commit",
+            resource_id=_sid,
+            owner_account_id=_ctx.account_id,
+            owner_user_id=_ctx.user.user_id,
+        )
         archive_uri = f"viking://session/test/{_sid}/history/archive_001"
 
         async def _background():
@@ -86,7 +91,7 @@ def _make_tracked_commit(behavior="instant", result_overrides=None, gate=None, s
                 final_result = {
                     "session_id": _sid,
                     "archive_uri": archive_uri,
-                    "memories_extracted": 0,
+                    "memories_extracted": {},
                     "active_count_updated": 0,
                 }
                 if result_overrides:
@@ -141,7 +146,7 @@ async def test_task_lifecycle_success(api_client):
 
     service.sessions.commit_async = _make_tracked_commit(
         behavior="gated",
-        result_overrides={"memories_extracted": 5},
+        result_overrides={"memories_extracted": {"profile": 3, "preferences": 2}},
         gate=commit_gate,
         started=commit_started,
     )
@@ -167,7 +172,7 @@ async def test_task_lifecycle_success(api_client):
     assert task_resp.status_code == 200
     result = task_resp.json()["result"]
     assert result["status"] == "completed"
-    assert result["result"]["memories_extracted"] == 5
+    assert result["result"]["memories_extracted"] == {"profile": 3, "preferences": 2}
 
 
 # ── Task lifecycle: pending → running → failed ──

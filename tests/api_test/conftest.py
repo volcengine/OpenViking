@@ -44,30 +44,20 @@ TEST_CASE_DESCRIPTIONS = {
     "test_admin_users.py::TestAdminUsers::test_admin_list_users": "列出账户下的用户",
     "test_admin_users.py::TestAdminUsers::test_admin_register_remove_user": "注册和删除用户",
     "test_server_health_check.py::TestServerHealthCheck::test_server_health_check": "服务器健康检查",
-    "test_tc_r01_semantic_retrieval.py::TestTCR01SemanticRetrieval::test_semantic_retrieval_end_to_end": "TC-R01 语义检索全链路验证",
-    "test_tc_r02_resource_swap.py::TestTCR02ResourceSwap::test_resource_incremental_update": "TC-R02 资源增量更新",
-    "test_tc_r03_grep_validation.py::TestTCR03GrepValidation::test_grep_pattern_match": "TC-R03 正则检索验证",
-    "test_tc_r04_delete_sync.py::TestTCR04DeleteSync::test_resource_deletion_index_sync": "TC-R04 资源删除索引同步",
-    "test_tc_r05_pack_consistency.py::TestTCR05PackConsistency::test_pack_export_import_consistency": "TC-R05 批量导入导出一致性",
-    "test_tc_r06_intent_extended_search.py::TestTCR06IntentExtendedSearch::test_intent_extended_search": "TC-R06 意图扩展搜索",
-    "test_tc_r07_relation_link.py::TestTCR07RelationLink::test_relation_link": "TC-R07 关系链接验证",
-    "test_tc_r08_watch_update.py::TestTCR08WatchUpdate::test_watch_update": "TC-R08 定时监听更新",
-    "test_tc_s01_session_commit.py::TestTCS01SessionCommit::test_session_persistence_and_commit": "TC-S01 对话持久化与Commit",
-    "test_tc_s02_reference_count.py::TestTCS02ReferenceCount::test_reference_count_used": "TC-S02 引用计数Used()",
-    "test_tc_s03_multimodal_parts.py::TestTCS03MultimodalParts::test_multimodal_parts_write": "TC-S03 多模态Parts写入",
-    "test_tc_s04_long_context_recall.py::TestTCS04LongContextRecall::test_long_context_recall": "TC-S04 长程上下文召回",
-    "test_tc_s05_session_delete_cleanup.py::TestTCS05SessionDeleteCleanup::test_session_delete_cleanup": "TC-S05 会话删除与清理",
-    "test_tc_f01_read_write_consistency.py::TestTCF01ReadWriteConsistency::test_read_write_consistency": "TC-F01 写读一致性",
-    "test_tc_f02_recursive_traversal.py::TestTCF02RecursiveTraversal::test_recursive_traversal": "TC-F02 目录层级遍历",
-    "test_tc_f03_tree_rendering.py::TestTCF03TreeRendering::test_tree_rendering": "TC-F03 复杂Tree渲染",
-    "test_tc_f04_content_abstract.py::TestTCF04ContentAbstract::test_content_abstract": "TC-F04 目录/文件摘要",
-    "test_tc_f05_vfs_stat.py::TestTCF05VFSStat::test_vfs_stat": "TC-F05 VFS空间状态检查",
-    "test_tc_sy01_system_health.py::TestTCSY01SystemHealth::test_system_health_check": "TC-SY01 系统健康检查",
-    "test_tc_sy02_system_stats.py::TestTCSY02SystemStats::test_system_stats_baseline": "TC-SY02 系统指标基线监控",
-    "test_tc_ad01_token_isolation.py::TestTCAD01TokenIsolation::test_token_isolation": "TC-AD01 Token权限隔离",
-    "test_tc_ad02_backup_restore.py::TestTCAD02BackupRestore::test_backup_restore": "TC-AD02 系统冷备份与校验",
-    "test_tc_er01_invalid_uri.py::TestTCER01InvalidURI::test_invalid_uri_exception": "TC-ER01 无效URI异常拦截",
-    "test_tc_er02_concurrent_write.py::TestTCER02ConcurrentWrite::test_concurrent_write_conflict": "TC-ER02 并发写入冲突验证",
+    "test_semantic_retrieval.py::TestSemanticRetrieval::test_semantic_retrieval_end_to_end": "语义检索全链路验证",
+    "test_resource_swap.py::TestResourceSwap::test_resource_incremental_update": "资源增量更新",
+    "test_grep_validation.py::TestGrepValidation::test_grep_pattern_match": "正则检索验证",
+    "test_delete_sync.py::TestDeleteSync::test_resource_deletion_index_sync": "资源删除索引同步",
+    "test_pack_consistency.py::TestPackConsistency::test_pack_export_import_consistency": "批量导入导出一致性",
+    "test_intent_extended_search.py::TestIntentExtendedSearch::test_intent_extended_search": "意图扩展搜索",
+    "test_relation_link.py::TestRelationLink::test_relation_link": "关系链接验证",
+    "test_watch_update.py::TestWatchUpdate::test_watch_update": "定时监听更新",
+    "test_session_commit.py::TestSessionCommit::test_session_persistence_and_commit": "对话持久化与Commit",
+    "test_long_context_recall.py::TestLongContextRecall::test_long_context_recall": "长程上下文召回",
+    "test_session_delete_cleanup.py::TestSessionDeleteCleanup::test_session_delete_cleanup": "会话删除与清理",
+    "test_concurrent_write.py::TestConcurrentWrite::test_concurrent_write_conflict": "并发写入冲突验证",
+    "test_account_isolation.py::TestAccountIsolation::test_processed_not_zero_after_resource_ops": "账户隔离完整性验证",
+    "test_account_isolation.py::TestAccountIsolation::test_consecutive_health_checks": "账户隔离连续健康检查",
 }
 
 
@@ -110,30 +100,20 @@ TEST_CASE_APIS = {
     "test_admin_users.py::TestAdminUsers::test_admin_list_users": "/api/v1/admin/users",
     "test_admin_users.py::TestAdminUsers::test_admin_register_remove_user": "/api/v1/admin/users",
     "test_server_health_check.py::TestServerHealthCheck::test_server_health_check": "/health",
-    "test_tc_r01_semantic_retrieval.py::TestTCR01SemanticRetrieval::test_semantic_retrieval_end_to_end": "/api/v1/resources,/api/v1/search/find",
-    "test_tc_r02_resource_swap.py::TestTCR02ResourceSwap::test_resource_incremental_update": "/api/v1/resources,/api/v1/search/find",
-    "test_tc_r03_grep_validation.py::TestTCR03GrepValidation::test_grep_pattern_match": "/api/v1/resources,/api/v1/search/grep",
-    "test_tc_r04_delete_sync.py::TestTCR04DeleteSync::test_resource_deletion_index_sync": "/api/v1/resources,/api/v1/fs/rm,/api/v1/search/find",
-    "test_tc_r05_pack_consistency.py::TestTCR05PackConsistency::test_pack_export_import_consistency": "/api/v1/resources/pack/export,/api/v1/resources/pack/import",
-    "test_tc_r06_intent_extended_search.py::TestTCR06IntentExtendedSearch::test_intent_extended_search": "/api/v1/sessions,/api/v1/search",
-    "test_tc_r07_relation_link.py::TestTCR07RelationLink::test_relation_link": "/api/v1/fs/relations/link,/api/v1/search/find",
-    "test_tc_r08_watch_update.py::TestTCR08WatchUpdate::test_watch_update": "/api/v1/resources",
-    "test_tc_s01_session_commit.py::TestTCS01SessionCommit::test_session_persistence_and_commit": "/api/v1/sessions,/api/v1/sessions/messages,/api/v1/sessions/commit",
-    "test_tc_s02_reference_count.py::TestTCS02ReferenceCount::test_reference_count_used": "/api/v1/sessions/used,/api/v1/system/status",
-    "test_tc_s03_multimodal_parts.py::TestTCS03MultimodalParts::test_multimodal_parts_write": "/api/v1/sessions/messages,/api/v1/sessions",
-    "test_tc_s04_long_context_recall.py::TestTCS04LongContextRecall::test_long_context_recall": "/api/v1/sessions/messages,/api/v1/sessions/commit,/api/v1/search",
-    "test_tc_s05_session_delete_cleanup.py::TestTCS05SessionDeleteCleanup::test_session_delete_cleanup": "/api/v1/sessions",
-    "test_tc_f01_read_write_consistency.py::TestTCF01ReadWriteConsistency::test_read_write_consistency": "/api/v1/fs/write,/api/v1/fs/read",
-    "test_tc_f02_recursive_traversal.py::TestTCF02RecursiveTraversal::test_recursive_traversal": "/api/v1/fs/ls",
-    "test_tc_f03_tree_rendering.py::TestTCF03TreeRendering::test_tree_rendering": "/api/v1/fs/tree",
-    "test_tc_f04_content_abstract.py::TestTCF04ContentAbstract::test_content_abstract": "/api/v1/fs/abstract",
-    "test_tc_f05_vfs_stat.py::TestTCF05VFSStat::test_vfs_stat": "/api/v1/fs/stat",
-    "test_tc_sy01_system_health.py::TestTCSY01SystemHealth::test_system_health_check": "/api/v1/system/healthy",
-    "test_tc_sy02_system_stats.py::TestTCSY02SystemStats::test_system_stats_baseline": "/api/v1/system/status",
-    "test_tc_ad01_token_isolation.py::TestTCAD01TokenIsolation::test_token_isolation": "/api/v1/admin/token/generate,/api/v1/search/find",
-    "test_tc_ad02_backup_restore.py::TestTCAD02BackupRestore::test_backup_restore": "/api/v1/admin/backup",
-    "test_tc_er01_invalid_uri.py::TestTCER01InvalidURI::test_invalid_uri_exception": "/api/v1/fs/read",
-    "test_tc_er02_concurrent_write.py::TestTCER02ConcurrentWrite::test_concurrent_write_conflict": "/api/v1/resources",
+    "test_semantic_retrieval.py::TestSemanticRetrieval::test_semantic_retrieval_end_to_end": "/api/v1/resources,/api/v1/search/find",
+    "test_resource_swap.py::TestResourceSwap::test_resource_incremental_update": "/api/v1/resources,/api/v1/search/find",
+    "test_grep_validation.py::TestGrepValidation::test_grep_pattern_match": "/api/v1/resources,/api/v1/search/grep",
+    "test_delete_sync.py::TestDeleteSync::test_resource_deletion_index_sync": "/api/v1/resources,/api/v1/fs/rm,/api/v1/search/find",
+    "test_pack_consistency.py::TestPackConsistency::test_pack_export_import_consistency": "/api/v1/resources/pack/export,/api/v1/resources/pack/import",
+    "test_intent_extended_search.py::TestIntentExtendedSearch::test_intent_extended_search": "/api/v1/sessions,/api/v1/search",
+    "test_relation_link.py::TestRelationLink::test_relation_link": "/api/v1/fs/relations/link,/api/v1/search/find",
+    "test_watch_update.py::TestWatchUpdate::test_watch_update": "/api/v1/resources,/api/v1/system/wait,/api/v1/search",
+    "test_session_commit.py::TestSessionCommit::test_session_persistence_and_commit": "/api/v1/sessions,/api/v1/sessions/messages,/api/v1/sessions/commit",
+    "test_long_context_recall.py::TestLongContextRecall::test_long_context_recall": "/api/v1/sessions/messages,/api/v1/sessions/commit,/api/v1/search",
+    "test_session_delete_cleanup.py::TestSessionDeleteCleanup::test_session_delete_cleanup": "/api/v1/sessions (创建/获取/删除)",
+    "test_concurrent_write.py::TestConcurrentWrite::test_concurrent_write_conflict": "/api/v1/resources (并发写入)",
+    "test_account_isolation.py::TestAccountIsolation::test_processed_not_zero_after_resource_ops": "/api/v1/resources,/api/v1/search,/api/v1/system/observer",
+    "test_account_isolation.py::TestAccountIsolation::test_consecutive_health_checks": "/api/v1/system/healthy,/api/v1/system/observer",
 }
 
 
@@ -209,9 +189,27 @@ def format_memory_delta(delta_bytes):
 
 def get_test_category(nodeid):
     parts = nodeid.split(os.sep)
+    
+    # 优先匹配更具体的路径（倒序匹配）
+    priority_categories = ["stability_error", "resources_retrieval", "filesystem", "sessions"]
+    
+    for part in parts:
+        if part in priority_categories:
+            # 特殊处理：将子目录映射到正确的分类
+            if part == "stability_error":
+                return "P3 运维与异常边界"
+            elif part == "resources_retrieval":
+                return "P1 知识中枢场景"
+            elif part == "filesystem":
+                return "文件系统API"
+            elif part == "sessions":
+                return "会话管理API"
+    
+    # 如果没有匹配到优先分类，则按原逻辑匹配
     for part in parts:
         if part in CATEGORY_NAMES:
             return CATEGORY_NAMES[part]
+    
     return "其他"
 
 
@@ -259,12 +257,26 @@ def pytest_runtest_makereport(item, call):
             report.memory_current = mem_info.rss
             report.memory_delta = delta
 
-        if report.failed:
-            for _fixture_name, fixture_value in item.funcargs.items():
-                if hasattr(fixture_value, "to_curl"):
-                    curl = fixture_value.to_curl()
-                    if curl:
-                        report.sections.append(("cURL Command", curl))
+        # 为所有测试添加 cURL 和 Response 信息
+        for _fixture_name, fixture_value in item.funcargs.items():
+            if hasattr(fixture_value, "to_curl"):
+                curl = fixture_value.to_curl()
+                if curl:
+                    report.sections.append(("cURL Command", curl))
+            
+            # 添加 Response Body 显示
+            if hasattr(fixture_value, "last_response") and fixture_value.last_response:
+                response = fixture_value.last_response
+                if hasattr(response, "text"):
+                    response_text = response.text
+                    if response_text:
+                        try:
+                            import json
+                            response_json = json.loads(response_text)
+                            formatted_response = json.dumps(response_json, indent=2, ensure_ascii=False)
+                            report.sections.append(("Response Body", f"<pre>{formatted_response}</pre>"))
+                        except Exception:
+                            report.sections.append(("Response Body", f"<pre>{response_text}</pre>"))
 
 
 def pytest_report_teststatus(report, config):
@@ -275,6 +287,7 @@ def pytest_report_teststatus(report, config):
         return (report.outcome, f"{category} - {description}", "")
 
 
+@pytest.hookimpl(optionalhook=True)
 def pytest_html_results_table_header(cells):
     cells.insert(2, "<th>分类</th>")
     cells.insert(3, "<th>描述</th>")
@@ -299,6 +312,7 @@ def pytest_html_results_table_header(cells):
     cells.append(test)
 
 
+@pytest.hookimpl(optionalhook=True)
 def pytest_html_results_table_row(report, cells):
     if hasattr(report, "nodeid"):
         category = get_test_category(report.nodeid)
@@ -340,10 +354,12 @@ def pytest_html_results_table_row(report, cells):
     cells.append(test)
 
 
+@pytest.hookimpl(optionalhook=True)
 def pytest_html_report_title(report):
     report.title = "OpenViking API测试报告"
 
 
+@pytest.hookimpl(optionalhook=True)
 def pytest_html_results_summary(prefix, summary, postfix):
     prefix.extend(
         [

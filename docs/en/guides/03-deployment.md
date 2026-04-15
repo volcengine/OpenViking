@@ -63,7 +63,7 @@ The `server` section in `ov.conf` controls server behavior:
 
 ### Standalone (Embedded Storage)
 
-Server manages local AGFS and VectorDB. Configure the storage path in `ov.conf`:
+Server manages local RAGFS and VectorDB. Configure the storage path in `ov.conf`:
 
 ```json
 {
@@ -71,23 +71,6 @@ Server manages local AGFS and VectorDB. Configure the storage path in `ov.conf`:
     "workspace": "./data",
     "agfs": { "backend": "local" },
     "vectordb": { "backend": "local" }
-  }
-}
-```
-
-```bash
-openviking-server
-```
-
-### Hybrid (Remote Storage)
-
-Server connects to remote AGFS and VectorDB services. Configure remote URLs in `ov.conf`:
-
-```json
-{
-  "storage": {
-    "agfs": { "backend": "remote", "url": "http://agfs:1833" },
-    "vectordb": { "backend": "remote", "url": "http://vectordb:8000" }
   }
 }
 ```
@@ -196,20 +179,65 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 OpenViking provides pre-built Docker images published to GitHub Container Registry:
 
 ```bash
+# Note: ov.conf needs to set storage.workspace to /app/data for data persistence
 docker run -d \
   --name openviking \
   -p 1933:1933 \
+  -p 8020:8020 \
   -v ~/.openviking/ov.conf:/app/ov.conf \
-  -v /var/lib/openviking/data:/app/data \
+  -v ~/.openviking/data:/app/data \
   --restart unless-stopped \
-  ghcr.io/volcengine/openviking:main
+  ghcr.io/volcengine/openviking:latest
 ```
 
-You can also use Docker Compose with the `docker-compose.yml` provided in the project root:
+By default, the Docker image starts:
+- OpenViking HTTP service on port `1933`
+- OpenViking Console on port `8020`
+- `vikingbot` gateway
+
+Upgrade the container:
+```bash
+docker stop openviking
+docker pull ghcr.io/volcengine/openviking:latest
+docker rm -f openviking
+# Then re-run docker run ...
+```
+
+If you want to disable `vikingbot` for a specific container run, you can use either of the following:
+
+```bash
+docker run -d \
+  --name openviking \
+  -p 1933:1933 \
+  -p 8020:8020 \
+  -v ~/.openviking/ov.conf:/app/ov.conf \
+  -v ~/.openviking/data:/app/data \
+  --restart unless-stopped \
+  ghcr.io/volcengine/openviking:latest \
+  --without-bot
+```
+
+```bash
+docker run -d \
+  --name openviking \
+  -e OPENVIKING_WITH_BOT=0 \
+  -p 1933:1933 \
+  -p 8020:8020 \
+  -v ~/.openviking/ov.conf:/app/ov.conf \
+  -v ~/.openviking/data:/app/data \
+  --restart unless-stopped \
+  ghcr.io/volcengine/openviking:latest
+```
+
+You can also use Docker Compose, which provides a `docker-compose.yml` in the project root:
 
 ```bash
 docker compose up -d
 ```
+
+After startup, you can access:
+- API service: `http://localhost:1933`
+- Console UI: `http://localhost:8020`
 
 To build the image yourself: `docker build -t openviking:latest .`
 
@@ -246,5 +274,5 @@ Use `/health` for Kubernetes liveness probes and `/ready` for readiness probes.
 ## Related Documentation
 
 - [Authentication](04-authentication.md) - API key setup
-- [Monitoring](05-monitoring.md) - Health checks and observability
+- [Observability & Diagnostics](05-observability.md) - Health checks, tracing, and debugging
 - [API Overview](../api/01-overview.md) - Complete API reference

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """LiteLLM Embedder Implementation
 
 Uses litellm to provide a unified embedding interface across many providers
@@ -68,6 +68,7 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
             config: Additional configuration dict.
         """
         super().__init__(model_name, config)
+        self.provider = "litellm"
 
         os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
@@ -85,6 +86,19 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
             )
         self._dimension = dimension
 
+    def _truncate_vector(self, vector: List[float]) -> List[float]:
+        """Truncate vector to target dimension if needed.
+
+        Args:
+            vector: Input vector from API
+
+        Returns:
+            Truncated vector if dimension is set and smaller than input, otherwise original vector
+        """
+        if self.dimension is not None and len(vector) > self.dimension:
+            return vector[: self.dimension]
+        return vector
+
     def _build_kwargs(self, is_query: bool = False) -> Dict[str, Any]:
         """Build kwargs dict for litellm.embedding() call."""
         kwargs: Dict[str, Any] = {"model": self.model_name}
@@ -95,8 +109,9 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
             kwargs["api_base"] = self.api_base
         if self.extra_headers:
             kwargs["extra_headers"] = self.extra_headers
-        if self.dimension:
-            kwargs["dimensions"] = self.dimension
+        # Don't pass dimensions parameter to API - some models don't support it
+        # (e.g., Qwen3-Embedding-4B doesn't support matryoshka representation)
+        # Instead, we'll truncate the result vector if needed
 
         # Non-symmetric embedding support
         active_param = None
@@ -122,7 +137,7 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
         return kwargs
 
     def _update_telemetry_token_usage(self, response) -> None:
-        """Update telemetry with token usage from response."""
+        """Update telemetry and token usage from response."""
         usage = getattr(response, "usage", None)
         if not usage:
             return
@@ -135,10 +150,20 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
         prompt_tokens = _usage_value("prompt_tokens", 0)
         total_tokens = _usage_value("total_tokens", prompt_tokens)
         output_tokens = max(total_tokens - prompt_tokens, 0)
+
+        # Update telemetry
         get_current_telemetry().add_token_usage_by_source(
             "embedding",
             prompt_tokens,
             output_tokens,
+        )
+
+        # Update token usage tracker
+        self.update_token_usage(
+            model_name=self.model_name,
+            provider="litellm",
+            prompt_tokens=prompt_tokens,
+            completion_tokens=output_tokens,
         )
 
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
@@ -154,13 +179,41 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
         Raises:
             RuntimeError: When embedding call fails
         """
-        try:
+
+        def _call() -> EmbedResult:
             kwargs = self._build_kwargs(is_query=is_query)
             kwargs["input"] = [text]
             response = litellm.embedding(**kwargs)
             self._update_telemetry_token_usage(response)
             vector = response.data[0]["embedding"]
+            # Truncate vector if needed
+            vector = self._truncate_vector(vector)
             return EmbedResult(dense_vector=vector)
+
+        try:
+            return self._run_with_retry(
+                _call,
+                logger=logger,
+                operation_name="LiteLLM embedding",
+            )
+        except Exception as e:
+            raise RuntimeError(f"LiteLLM embedding failed: {e}") from e
+
+    async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+        async def _call() -> EmbedResult:
+            kwargs = self._build_kwargs(is_query=is_query)
+            kwargs["input"] = [text]
+            response = await litellm.aembedding(**kwargs)
+            self._update_telemetry_token_usage(response)
+            vector = response.data[0]["embedding"]
+            return EmbedResult(dense_vector=vector)
+
+        try:
+            return await self._run_with_async_retry(
+                _call,
+                logger=logger,
+                operation_name="LiteLLM async embedding",
+            )
         except Exception as e:
             raise RuntimeError(f"LiteLLM embedding failed: {e}") from e
 
@@ -180,12 +233,45 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
         if not texts:
             return []
 
-        try:
+        def _call() -> List[EmbedResult]:
             kwargs = self._build_kwargs(is_query=is_query)
             kwargs["input"] = texts
             response = litellm.embedding(**kwargs)
             self._update_telemetry_token_usage(response)
+            # Truncate vectors if needed
+            return [
+                EmbedResult(dense_vector=self._truncate_vector(item["embedding"]))
+                for item in response.data
+            ]
+
+        try:
+            return self._run_with_retry(
+                _call,
+                logger=logger,
+                operation_name="LiteLLM batch embedding",
+            )
+        except Exception as e:
+            raise RuntimeError(f"LiteLLM batch embedding failed: {e}") from e
+
+    async def embed_batch_async(
+        self, texts: List[str], is_query: bool = False
+    ) -> List[EmbedResult]:
+        if not texts:
+            return []
+
+        async def _call() -> List[EmbedResult]:
+            kwargs = self._build_kwargs(is_query=is_query)
+            kwargs["input"] = texts
+            response = await litellm.aembedding(**kwargs)
+            self._update_telemetry_token_usage(response)
             return [EmbedResult(dense_vector=item["embedding"]) for item in response.data]
+
+        try:
+            return await self._run_with_async_retry(
+                _call,
+                logger=logger,
+                operation_name="LiteLLM async batch embedding",
+            )
         except Exception as e:
             raise RuntimeError(f"LiteLLM batch embedding failed: {e}") from e
 

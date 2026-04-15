@@ -1,7 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Gemini Embedding 2 provider using the official google-genai SDK."""
 
+import asyncio
 from typing import Any, Dict, List, Optional
 
 from google import genai
@@ -16,13 +17,6 @@ except ImportError:
     _HTTP_RETRY_AVAILABLE = False
 
 import logging
-
-try:
-    import anyio
-
-    _ANYIO_AVAILABLE = True
-except ImportError:
-    _ANYIO_AVAILABLE = False
 
 from openviking.models.embedder.base import (
     DenseEmbedderBase,
@@ -137,6 +131,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
         config: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(model_name, config)
+        self.provider = "gemini"
         if not api_key:
             raise ValueError("Gemini provider requires api_key")
         if task_type and task_type not in _VALID_TASK_TYPES:
@@ -151,9 +146,9 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
                 api_key=api_key,
                 http_options=HttpOptions(
                     retry_options=HttpRetryOptions(
-                        attempts=3,
-                        initial_delay=1.0,
-                        max_delay=30.0,
+                        attempts=max(self.max_retries + 1, 1),
+                        initial_delay=0.5,
+                        max_delay=8.0,
                         exp_base=2.0,
                     )
                 ),
@@ -182,6 +177,19 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
             kwargs["title"] = title
         return types.EmbedContentConfig(**kwargs)
 
+    def _resolve_task_type(
+        self,
+        *,
+        is_query: bool = False,
+        task_type: Optional[str] = None,
+    ) -> Optional[str]:
+        if task_type is None:
+            if is_query and self.query_param:
+                task_type = self.query_param
+            elif not is_query and self.document_param:
+                task_type = self.document_param
+        return task_type
+
     def __repr__(self) -> str:
         return (
             f"GeminiDenseEmbedder("
@@ -201,14 +209,10 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
         if not text or not text.strip():
             logger.warning("Empty text passed to embed(), returning zero vector")
             return EmbedResult(dense_vector=[0.0] * self._dimension)
-        # Resolve effective task_type from is_query when no explicit override
-        if task_type is None:
-            if is_query and self.query_param:
-                task_type = self.query_param
-            elif not is_query and self.document_param:
-                task_type = self.document_param
+        task_type = self._resolve_task_type(is_query=is_query, task_type=task_type)
+
         # SDK accepts plain str; converts to REST Parts format internally.
-        try:
+        def _call() -> EmbedResult:
             result = self.client.models.embed_content(
                 model=self.model_name,
                 contents=text,
@@ -216,6 +220,66 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
             )
             vector = truncate_and_normalize(list(result.embeddings[0].values), self._dimension)
             return EmbedResult(dense_vector=vector)
+
+        try:
+            result = (
+                _call()
+                if _HTTP_RETRY_AVAILABLE
+                else self._run_with_retry(
+                    _call,
+                    logger=logger,
+                    operation_name="Gemini embedding",
+                )
+            )
+            # Estimate token usage
+            estimated_tokens = self._estimate_tokens(text)
+            self.update_token_usage(
+                model_name=self.model_name,
+                provider="gemini",
+                prompt_tokens=estimated_tokens,
+                completion_tokens=0,
+            )
+            return result
+        except (APIError, ClientError) as e:
+            _raise_api_error(e, self.model_name)
+
+    async def embed_async(
+        self,
+        text: str,
+        is_query: bool = False,
+        *,
+        task_type: Optional[str] = None,
+        title: Optional[str] = None,
+    ) -> EmbedResult:
+        if not text or not text.strip():
+            logger.warning("Empty text passed to embed_async(), returning zero vector")
+            return EmbedResult(dense_vector=[0.0] * self._dimension)
+
+        task_type = self._resolve_task_type(is_query=is_query, task_type=task_type)
+
+        async def _call() -> EmbedResult:
+            result = await self.client.aio.models.embed_content(
+                model=self.model_name,
+                contents=text,
+                config=self._build_config(task_type=task_type, title=title),
+            )
+            vector = truncate_and_normalize(list(result.embeddings[0].values), self._dimension)
+            return EmbedResult(dense_vector=vector)
+
+        try:
+            result = await self._run_with_async_retry(
+                _call,
+                logger=logger,
+                operation_name="Gemini async embedding",
+            )
+            estimated_tokens = self._estimate_tokens(text)
+            self.update_token_usage(
+                model_name=self.model_name,
+                provider="gemini",
+                prompt_tokens=estimated_tokens,
+                completion_tokens=0,
+            )
+            return result
         except (APIError, ClientError) as e:
             _raise_api_error(e, self.model_name)
 
@@ -233,14 +297,9 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
         if titles is not None:
             return [
                 self.embed(text, is_query=is_query, task_type=task_type, title=title)
-                for text, title in zip(texts, titles)
+                for text, title in zip(texts, titles, strict=True)
             ]
-        # Resolve effective task_type from is_query when no explicit override
-        if task_type is None:
-            if is_query and self.query_param:
-                task_type = self.query_param
-            elif not is_query and self.document_param:
-                task_type = self.document_param
+        task_type = self._resolve_task_type(is_query=is_query, task_type=task_type)
         results: List[EmbedResult] = []
         config = self._build_config(task_type=task_type)
         for i in range(0, len(texts), _TEXT_BATCH_SIZE):
@@ -253,14 +312,29 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
                 continue
 
             non_empty_texts = [batch[j] for j in non_empty_indices]
-            try:
+
+            def _call_batch(
+                non_empty_texts: List[str] = non_empty_texts,
+                config: types.EmbedContentConfig = config,
+            ) -> Any:
                 response = self.client.models.embed_content(
                     model=self.model_name,
                     contents=non_empty_texts,
                     config=config,
                 )
+                return response
+
+            try:
+                if _HTTP_RETRY_AVAILABLE:
+                    response = _call_batch()
+                else:
+                    response = self._run_with_retry(
+                        _call_batch,
+                        logger=logger,
+                        operation_name="Gemini batch embedding",
+                    )
                 batch_results = [None] * len(batch)
-                for j, emb in zip(non_empty_indices, response.embeddings):
+                for j, emb in zip(non_empty_indices, response.embeddings, strict=True):
                     batch_results[j] = EmbedResult(
                         dense_vector=truncate_and_normalize(list(emb.values), self._dimension)
                     )
@@ -275,52 +349,95 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
                 )
                 for text in batch:
                     results.append(self.embed(text, is_query=is_query))
+        # Token usage is already tracked via individual embed() calls
+        # No need to track here to avoid double counting
         return results
 
-    async def async_embed_batch(self, texts: List[str]) -> List[EmbedResult]:
-        """Concurrent batch embedding via client.aio — requires anyio to be installed.
-
-        Dispatches all 100-text chunks in parallel, bounded by max_concurrent_batches.
-        Per-batch APIError falls back to individual embed() calls via thread pool.
-        Raises ImportError if anyio is not installed.
-        """
-        if not _ANYIO_AVAILABLE:
-            raise ImportError(
-                "anyio is required for async_embed_batch: pip install 'openviking[gemini-async]'"
-            )
+    async def embed_batch_async(
+        self,
+        texts: List[str],
+        is_query: bool = False,
+        *,
+        task_type: Optional[str] = None,
+        titles: Optional[List[str]] = None,
+    ) -> List[EmbedResult]:
         if not texts:
             return []
+        if titles is not None:
+            return [
+                await self.embed_async(
+                    text,
+                    is_query=is_query,
+                    task_type=task_type,
+                    title=title,
+                )
+                for text, title in zip(texts, titles, strict=True)
+            ]
+
+        task_type = self._resolve_task_type(is_query=is_query, task_type=task_type)
         batches = [texts[i : i + _TEXT_BATCH_SIZE] for i in range(0, len(texts), _TEXT_BATCH_SIZE)]
         results: List[Optional[List[EmbedResult]]] = [None] * len(batches)
-        sem = anyio.Semaphore(self._max_concurrent_batches)
+        sem = asyncio.Semaphore(self._max_concurrent_batches)
 
         async def _embed_one(idx: int, batch: List[str]) -> None:
             async with sem:
-                try:
-                    response = await self.client.aio.models.embed_content(
-                        model=self.model_name, contents=batch, config=self._build_config()
+                non_empty_indices = [j for j, t in enumerate(batch) if t and t.strip()]
+                empty_indices = [j for j, t in enumerate(batch) if not (t and t.strip())]
+                batch_results: List[Optional[EmbedResult]] = [None] * len(batch)
+                for j in empty_indices:
+                    batch_results[j] = EmbedResult(dense_vector=[0.0] * self._dimension)
+
+                if not non_empty_indices:
+                    results[idx] = [r for r in batch_results if r is not None]
+                    return
+
+                non_empty_texts = [batch[j] for j in non_empty_indices]
+
+                async def _call_batch() -> Any:
+                    return await self.client.aio.models.embed_content(
+                        model=self.model_name,
+                        contents=non_empty_texts,
+                        config=self._build_config(task_type=task_type),
                     )
-                    results[idx] = [
-                        EmbedResult(
+
+                try:
+                    response = await self._run_with_async_retry(
+                        _call_batch,
+                        logger=logger,
+                        operation_name="Gemini async batch embedding",
+                    )
+                    for j, emb in zip(non_empty_indices, response.embeddings, strict=True):
+                        batch_results[j] = EmbedResult(
                             dense_vector=truncate_and_normalize(list(emb.values), self._dimension)
                         )
-                        for emb in response.embeddings
-                    ]
+                    total_tokens = sum(self._estimate_tokens(text) for text in non_empty_texts)
+                    self.update_token_usage(
+                        model_name=self.model_name,
+                        provider="gemini",
+                        prompt_tokens=total_tokens,
+                        completion_tokens=0,
+                    )
                 except (APIError, ClientError) as e:
                     logger.warning(
-                        "Gemini async batch embed failed (HTTP %d) for batch of %d, falling back",
+                        "Gemini async batch embed failed (HTTP %d) for batch of %d, falling back to per-item async calls",
                         e.code,
                         len(batch),
                     )
-                    results[idx] = [
-                        await anyio.to_thread.run_sync(self.embed, text) for text in batch
-                    ]
+                    for j in non_empty_indices:
+                        batch_results[j] = await self.embed_async(
+                            batch[j],
+                            is_query=is_query,
+                            task_type=task_type,
+                        )
 
-        async with anyio.create_task_group() as tg:
-            for idx, batch in enumerate(batches):
-                tg.start_soon(_embed_one, idx, batch)
+                results[idx] = [r for r in batch_results if r is not None]
 
+        await asyncio.gather(*(_embed_one(idx, batch) for idx, batch in enumerate(batches)))
         return [r for batch_results in results for r in (batch_results or [])]
+
+    async def async_embed_batch(self, texts: List[str]) -> List[EmbedResult]:
+        """Backward-compatible alias for the standardized async batch API."""
+        return await self.embed_batch_async(texts)
 
     def get_dimension(self) -> int:
         return self._dimension

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 VikingDB Manager class that extends VikingVectorIndexBackend with queue management functionality.
 """
@@ -275,6 +275,12 @@ class VikingDBManagerProxy:
 
     async def get_collection_info(self) -> Optional[Dict[str, Any]]:
         return await self._manager.get_collection_info()
+
+    async def get_collection_meta(self) -> Optional[Dict[str, Any]]:
+        return await self._manager.get_collection_meta()
+
+    async def update_collection_description(self, description: str) -> bool:
+        return await self._manager.update_collection_description(description)
 
     # =========================================================================
     # 数据操作 API（自动携带 ctx）

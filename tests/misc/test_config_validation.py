@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Test if config validators work correctly"""
 
 import sys
@@ -107,13 +107,15 @@ def test_embedding_validation():
     print("Test Embedding config validation")
     print("=" * 60)
 
-    # Test 1: no embedder config
+    # Test 1: no embedder config -> default local dense
     print("\n1. Test no embedder config...")
     try:
-        _ = EmbeddingConfig()
-        print("   Should fail but passed")
+        config = EmbeddingConfig()
+        print(
+            f"   Pass (default provider={config.dense.provider}, model={config.dense.model}, dim={config.dimension})"
+        )
     except ValueError as e:
-        print(f"   Correctly raised exception: {e}")
+        print(f"   Fail: {e}")
 
     # Test 2: OpenAI provider missing api_key
     print("\n2. Test OpenAI provider missing api_key...")

@@ -280,6 +280,7 @@ Compact JSON with status wrapper (when `--compact` is true, which is the default
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/health` | Health check (no auth) |
+| GET | `/metrics` | Prometheus metrics export |
 | GET | `/api/v1/system/status` | System status |
 | POST | `/api/v1/system/wait` | Wait for processing |
 
@@ -310,6 +311,7 @@ Compact JSON with status wrapper (when `--compact` is true, which is the default
 | GET | `/api/v1/content/read` | Read full content (L2) |
 | GET | `/api/v1/content/abstract` | Read abstract (L0) |
 | GET | `/api/v1/content/overview` | Read overview (L1) |
+| POST | `/api/v1/content/write` | Update an existing file and refresh semantics/vectors |
 
 ### Search
 
@@ -371,4 +373,5 @@ Compact JSON with status wrapper (when `--compact` is true, which is the default
 - [Sessions](05-sessions.md) - Session management
 - [Skills](04-skills.md) - Skill management
 - [System](07-system.md) - System and monitoring API
+- [Metrics](09-metrics.md) - Prometheus metrics export and scraping guide
 - [Admin](08-admin.md) - Multi-tenant management API

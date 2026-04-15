@@ -334,10 +334,21 @@ class VikingClient:
             "agent_memory": agent_memory.memories if hasattr(agent_memory, "memories") else [],
         }
 
-    async def grep(self, uri: str, pattern: str, case_insensitive: bool = False) -> Dict[str, Any]:
+    async def grep(
+        self,
+        uri: str,
+        pattern: str,
+        case_insensitive: bool = False,
+        node_limit: Optional[int] = 10,
+        exclude_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """通过模式（正则表达式）搜索内容"""
         return await self.client.grep(
-            uri, pattern, case_insensitive=case_insensitive, node_limit=10
+            uri,
+            pattern,
+            case_insensitive=case_insensitive,
+            node_limit=node_limit,
+            exclude_uri=exclude_uri,
         )
 
     async def glob(self, pattern: str, uri: Optional[str] = None) -> Dict[str, Any]:
@@ -433,7 +444,9 @@ class VikingClient:
 
             if not parts:
                 continue
-            await session.add_message(role=role, parts=parts)
+            # 获取消息的时间戳，如果没有则使用当前时间
+            created_at = message.get("timestamp")
+            await session.add_message(role=role, parts=parts, created_at=created_at)
 
         result = await session.commit_async()
         if client is not self.client:

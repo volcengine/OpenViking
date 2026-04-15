@@ -2,6 +2,8 @@
 
 The Admin API manages accounts and users in a multi-tenant environment. It covers workspace (account) creation/deletion, user registration/removal, role changes, and API key regeneration.
 
+This API is for the `api_key` admin workflow. In `trusted` mode, ordinary requests do not use user-key registration, and Admin API calls return a permission error explaining that account/user management requires `api_key` mode with `root_api_key`.
+
 ## Roles and Permissions
 
 | Role | Description |

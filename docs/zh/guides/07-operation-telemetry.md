@@ -1,4 +1,4 @@
-# 操作级 Telemetry 使用指南
+# 操作级 Telemetry 参考
 
 操作级 telemetry 用来让 OpenViking 在请求结果里额外返回一份结构化摘要，帮助你了解这次操作实际发生了什么，例如耗时、token 消耗、向量检索情况、队列处理进度，以及资源导入阶段统计。
 
@@ -7,6 +7,8 @@
 - 排查请求为什么变慢
 - 观察 token 或检索行为
 - 把结构化执行摘要接入你自己的日志或观测系统
+
+更完整的观测入口说明，包括健康检查、`ov tui` 和 `OpenViking Console`，请先看 [可观测性与排障](05-observability.md)。
 
 ## 基本说明
 
@@ -297,6 +299,6 @@ print(result["telemetry"]["summary"]["duration_ms"])
 
 ## 相关文档
 
-- [监控与健康检查](05-monitoring.md)
+- [可观测性与排障](05-observability.md)
 - [认证](04-authentication.md)
 - [系统 API](../api/07-system.md)

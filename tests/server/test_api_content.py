@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 
 """Tests for content endpoints: read, abstract, overview."""
 
@@ -105,7 +105,7 @@ async def test_reindex_uses_request_tenant_for_exists(monkeypatch):
             return True
 
     class FakeTracker:
-        def has_running(self, task_type, uri):
+        def has_running(self, task_type, uri, owner_account_id=None, owner_user_id=None):
             return False
 
     async def fake_do_reindex(service, uri, regenerate, ctx):

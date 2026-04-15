@@ -1,8 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Tests for VLM stream configuration support."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -131,10 +131,7 @@ class TestVLMStreamConfig:
             for chunk in chunks:
                 yield chunk
 
-        async def mock_create(*args, **kwargs):
-            return async_generator()
-
-        mock_client.chat.completions.create = mock_create
+        mock_client.chat.completions.create = AsyncMock(return_value=async_generator())
         mock_async_openai_class.return_value = mock_client
 
         vlm = OpenAIVLM(
@@ -220,10 +217,7 @@ class TestVLMStreamConfig:
             for chunk in chunks:
                 yield chunk
 
-        async def mock_create(*args, **kwargs):
-            return async_generator()
-
-        mock_client.chat.completions.create = mock_create
+        mock_client.chat.completions.create = AsyncMock(return_value=async_generator())
         mock_async_openai_class.return_value = mock_client
 
         vlm = OpenAIVLM(
@@ -253,7 +247,7 @@ class TestVLMBaseStreamConfig:
             def get_completion(self, prompt, thinking=False):
                 return ""
 
-            async def get_completion_async(self, prompt, thinking=False, max_retries=0):
+            async def get_completion_async(self, prompt, thinking=False):
                 return ""
 
             def get_vision_completion(self, prompt, images, thinking=False):
@@ -277,7 +271,7 @@ class TestVLMBaseStreamConfig:
             def get_completion(self, prompt, thinking=False):
                 return ""
 
-            async def get_completion_async(self, prompt, thinking=False, max_retries=0):
+            async def get_completion_async(self, prompt, thinking=False):
                 return ""
 
             def get_vision_completion(self, prompt, images, thinking=False):
@@ -388,6 +382,23 @@ class TestVLMConfigStream:
 
         result = config._build_vlm_config_dict()
         assert result["stream"] is True
+
+    def test_vlm_config_max_retries_defaults_to_three(self):
+        """VLMConfig should default max_retries to 3."""
+        from openviking_cli.utils.config.vlm_config import VLMConfig
+
+        config = VLMConfig(
+            model="gpt-4o",
+            provider="openai",
+            providers={
+                "openai": {
+                    "api_key": "sk-test",
+                }
+            },
+        )
+
+        assert config.max_retries == 3
+        assert config._build_vlm_config_dict()["max_retries"] == 3
 
 
 class TestStreamingResponseProcessing:

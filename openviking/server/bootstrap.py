@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Bootstrap script for OpenViking HTTP Server."""
 
 import argparse
@@ -31,6 +31,15 @@ def _get_version() -> str:
         return __version__
     except ImportError:
         return "unknown"
+
+
+def _normalize_host_arg(host: Optional[str]) -> Optional[str]:
+    """Normalize special CLI host values."""
+    if host is None:
+        return None
+    if host.strip().lower() == "all":
+        return None
+    return host
 
 
 def main():
@@ -122,9 +131,30 @@ def main():
         print(e, file=sys.stderr)
         sys.exit(1)
 
+    # Ensure Ollama is running if configured
+    try:
+        from openviking_cli.utils.ollama import detect_ollama_in_config, ensure_ollama_for_server
+
+        ov_config = OpenVikingConfigSingleton.get_instance()
+        uses_ollama, ollama_host, ollama_port = detect_ollama_in_config(ov_config)
+        if uses_ollama:
+            result = ensure_ollama_for_server(ollama_host, ollama_port)
+            if result.success:
+                print(f"Ollama is running at {ollama_host}:{ollama_port}")
+            else:
+                print(
+                    f"Warning: Ollama not available at {ollama_host}:{ollama_port}. "
+                    f"Embedding/VLM may fail. ({result.message})",
+                    file=sys.stderr,
+                )
+                if result.stderr_output:
+                    print(f"  Ollama stderr: {result.stderr_output}", file=sys.stderr)
+    except Exception as e:
+        print(f"Warning: Ollama pre-flight check failed: {e}", file=sys.stderr)
+
     # Override with command line arguments
     if args.host is not None:
-        config.host = args.host
+        config.host = _normalize_host_arg(args.host)
     if args.port is not None:
         config.port = args.port
     if args.workers is not None:
@@ -137,22 +167,20 @@ def main():
     # Configure logging for Uvicorn
     configure_uvicorn_logging()
 
-    # Create and run app
+    bot_process: Optional[BotProcess] = None
+    if config.with_bot:
+        print(f"Bot API proxy enabled, forwarding to {config.bot_api_url}")
+        # Determine if bot logging should be enabled
+        enable_bot_logging = args.enable_bot_logging
+        if enable_bot_logging is None:
+            enable_bot_logging = args.with_bot
+        # Start vikingbot gateway if --with-bot is set
+        bot_process = _start_vikingbot_gateway(enable_bot_logging, args.bot_log_dir)
+
+    # Create and run server app
     app = create_app(config)
     workers_info = f" (workers: {config.workers})" if config.workers > 1 else ""
     print(f"OpenViking HTTP Server is running on {config.host}:{config.port}{workers_info}")
-    if config.with_bot:
-        print(f"Bot API proxy enabled, forwarding to {config.bot_api_url}")
-
-    # Determine if bot logging should be enabled
-    enable_bot_logging = args.enable_bot_logging
-    if enable_bot_logging is None:
-        enable_bot_logging = args.with_bot
-
-    # Start vikingbot gateway if --with-bot is set
-    bot_process: Optional[BotProcess] = None
-    if args.with_bot:
-        bot_process = _start_vikingbot_gateway(enable_bot_logging, args.bot_log_dir)
 
     try:
         workers = config.workers
@@ -175,6 +203,25 @@ def main():
         # Cleanup vikingbot process on shutdown
         if bot_process is not None:
             _stop_vikingbot_gateway(bot_process)
+
+
+def _handle_vikingbot_failure(output: str, returncode: int) -> None:
+    """Handle vikingbot startup failure and provide helpful error messages."""
+    print(f"\nError: vikingbot gateway exited early (code {returncode})", file=sys.stderr)
+
+    # Check for common dependency errors
+    if "ModuleNotFoundError" in output:
+        print("\nMissing dependencies detected!", file=sys.stderr)
+        print(
+            "\nTo use --with-bot, you need to install openviking with bot dependencies:",
+            file=sys.stderr,
+        )
+        print('  pip install "openviking[bot]"', file=sys.stderr)
+        print("  # Or for development:", file=sys.stderr)
+        print('  uv pip install -e ".[bot,dev]"', file=sys.stderr)
+
+    if output:
+        print(f"\nDetailed error:\n{output}", file=sys.stderr)
 
 
 def _start_vikingbot_gateway(enable_logging: bool, log_dir: str) -> Optional[BotProcess]:
@@ -247,15 +294,11 @@ def _start_vikingbot_gateway(enable_logging: bool, log_dir: str) -> Optional[Bot
                 if log_file_path:
                     with open(log_file_path, "r") as f:
                         output = f.read()
-                    print(f"Warning: vikingbot gateway exited early (code {process.returncode})")
-                    if output:
-                        print(f"Output: {output[:500]}")
+                    _handle_vikingbot_failure(output, process.returncode)
             else:
                 stdout, stderr = process.communicate(timeout=1)
-                print(f"Warning: vikingbot gateway exited early (code {process.returncode})")
-                if stderr:
-                    print(f"Error: {stderr[:500]}")
-            return None
+                _handle_vikingbot_failure(stderr, process.returncode)
+            sys.exit(1)
 
         print(f"Vikingbot gateway started (PID: {process.pid})")
 

@@ -263,7 +263,7 @@ ollama serve
       "api_key"  : "<your-api-key>",   // モデルサービスAPIキー
       "provider" : "<provider-type>",  // プロバイダータイプ: "volcengine" または "openai"（現在サポート済み）
       "dimension": 1024,               // ベクトル次元
-      "model"    : "<model-name>"      // Embeddingモデル名（例：doubao-embedding-vision-250615 または text-embedding-3-large）
+      "model"    : "<model-name>"      // Embeddingモデル名（例：doubao-embedding-vision-251215 または text-embedding-3-large）
     },
     "max_concurrent": 10               // 最大同時Embeddingリクエスト数（デフォルト: 10）
   },
@@ -301,7 +301,7 @@ ollama serve
       "api_key"  : "your-volcengine-api-key",
       "provider" : "volcengine",
       "dimension": 1024,
-      "model"    : "doubao-embedding-vision-250615"
+      "model"    : "doubao-embedding-vision-251215"
     },
     "max_concurrent": 10
   },
@@ -495,6 +495,8 @@ OpenViking統合後：
 
 👉 **[参照: OpenCodeメモリプラグインの例](examples/opencode-memory-plugin/README.md)**
 
+👉 **[参照: Claude Codeメモリプラグインの例](examples/claude-code-memory-plugin/README.md)**
+
 --
 
 ## コアコンセプト
@@ -617,14 +619,19 @@ AIエージェントのコンテキスト管理の未来を共に定義し、構
 
 ## ライセンス
 
-このプロジェクトはApache License 2.0の下でライセンスされています。詳細は[LICENSE](./LICENSE)ファイルを参照してください。
+OpenVikingプロジェクトは、コンポーネントごとに異なるライセンスを使用しています：
+
+- **メインプロジェクト**: AGPLv3 - 詳細は[LICENSE](./LICENSE)ファイルを参照してください
+- **crates/ov_cli**: Apache 2.0 - 詳細は[LICENSE](./crates/ov_cli/LICENSE)ファイルを参照してください
+- **examples**: Apache 2.0 - 詳細は[LICENSE](./examples/LICENSE)ファイルを参照してください
+- **third_party**: 各サードパーティプロジェクトの元のライセンス
 
 
 <!-- リンク定義 -->
 
 [release-shield]: https://img.shields.io/github/v/release/volcengine/OpenViking?color=369eff&labelColor=black&logo=github&style=flat-square
 [release-link]: https://github.com/volcengine/OpenViking/releases
-[license-shield]: https://img.shields.io/badge/license-apache%202.0-white?labelColor=black&style=flat-square
+[license-shield]: https://img.shields.io/badge/license-AGPLv3-white?labelColor=black&style=flat-square
 [license-shield-link]: https://github.com/volcengine/OpenViking/blob/main/LICENSE
 [last-commit-shield]: https://img.shields.io/github/last-commit/volcengine/OpenViking?color=c4f042&labelColor=black&style=flat-square
 [last-commit-shield-link]: https://github.com/volcengine/OpenViking/commits/main

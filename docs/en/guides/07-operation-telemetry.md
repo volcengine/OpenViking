@@ -1,4 +1,4 @@
-# Operation Telemetry
+# Operation Telemetry Reference
 
 Operation telemetry lets you ask OpenViking to return a compact summary of what happened during a request, such as duration, token usage, vector retrieval activity, queue progress, and resource-processing stages.
 
@@ -7,6 +7,8 @@ Use it when you want to:
 - debug a slow or unexpected request
 - inspect token or retrieval behavior
 - capture structured execution data in your own logs or observability pipeline
+
+For the broader observability entry points, including health checks, `ov tui`, and `OpenViking Console`, see [Observability & Diagnostics](05-observability.md).
 
 ## How it works
 
@@ -297,6 +299,6 @@ print(result["telemetry"]["summary"]["duration_ms"])
 
 ## Related docs
 
-- [Monitoring & Health Checks](05-monitoring.md)
+- [Observability & Diagnostics](05-observability.md)
 - [Authentication](04-authentication.md)
 - [System API](../api/07-system.md)

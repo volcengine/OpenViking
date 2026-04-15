@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Base adapter primitives for backend-specific vector collection operations."""
 
 from __future__ import annotations
@@ -114,7 +114,7 @@ class CollectionAdapter(ABC):
         self._collection_name = name
         self._index_name = index_name
         collection_meta = dict(schema)
-        scalar_index_fields = collection_meta.pop("ScalarIndex", [])
+        scalar_index_fields = collection_meta.get("ScalarIndex", [])
         if "CollectionName" not in collection_meta:
             collection_meta["CollectionName"] = name
 

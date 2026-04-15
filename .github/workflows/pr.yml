@@ -21,12 +21,6 @@ jobs:
   lint:
     uses: ./.github/workflows/_lint.yml
 
-  test-lite:
-    uses: ./.github/workflows/_test_lite.yml
-    with:
-      os_json: '["ubuntu-24.04"]'
-      python_json: '["3.10"]'
-
   check-deps:
     runs-on: ubuntu-24.04
     outputs:

@@ -267,6 +267,29 @@ ollama serve
 
 ### 3. 环境配置
 
+#### 本地模型快速配置 (Ollama)
+
+如果你想通过 [Ollama](https://ollama.ai) 使用本地模型运行 OpenViking，交互式向导会自动完成所有配置：
+
+```bash
+openviking-server init
+```
+
+向导会：
+- 检测并安装 Ollama（如需要）
+- 根据你的硬件推荐并拉取合适的 embedding 和 VLM 模型
+- 生成可直接使用的 `ov.conf` 配置文件
+
+随时验证配置是否正确：
+
+```bash
+openviking-server doctor
+```
+
+`doctor` 会检查本地环境（配置文件、Python 版本、embedding/VLM 服务连通性、磁盘空间），无需启动服务器。
+
+> 如果使用云端 API（火山引擎、OpenAI、Gemini 等），请继续下方的手动配置。
+
 #### 服务器配置模板
 
 创建配置文件 `~/.openviking/ov.conf`，复制前请删除注释：
@@ -287,7 +310,7 @@ ollama serve
       "provider" : "<provider-type>",  // 提供商类型："volcengine"、"openai"、"azure" 等
       "api_version": "2025-01-01-preview", // （仅 azure）API 版本，可选，默认 "2025-01-01-preview"
       "dimension": 1024,               // 向量维度
-      "model"    : "<model-name>"      // Embedding 模型名称或 Azure 部署名（如 doubao-embedding-vision-250615 或 text-embedding-3-large）
+      "model"    : "<model-name>"      // Embedding 模型名称或 Azure 部署名（如 doubao-embedding-vision-251215 或 text-embedding-3-large）
     },
     "max_concurrent": 10               // 最大并发 embedding 请求（默认：10）
   },
@@ -326,7 +349,7 @@ ollama serve
       "api_key"  : "your-volcengine-api-key",
       "provider" : "volcengine",
       "dimension": 1024,
-      "model"    : "doubao-embedding-vision-250615"
+      "model"    : "doubao-embedding-vision-251215"
     },
     "max_concurrent": 10
   },
@@ -559,6 +582,8 @@ ov chat
 
 👉 **[查看：OpenCode 记忆插件示例](examples/opencode-memory-plugin/README_CN.md)**
 
+👉 **[查看：Claude Code 记忆插件示例](examples/claude-code-memory-plugin/README_CN.md)**
+
 ## VikingBot 部署详情
 
 OpenViking 有一个类似 nanobot 的机器人用于交互工作，现已可用。
@@ -687,14 +712,19 @@ OpenViking 仍处于早期阶段，有许多改进和探索的空间。我们真
 
 ## 许可证
 
-本项目采用 Apache License 2.0 许可证 - 详情请参见 [LICENSE](./LICENSE) 文件。
+OpenViking 项目不同组件采用不同的开源协议：
+
+- **主项目**: AGPLv3 - 详情请参见 [LICENSE](./LICENSE) 文件
+- **crates/ov_cli**: Apache 2.0 - 详情请参见 [LICENSE](./crates/ov_cli/LICENSE) 文件
+- **examples**: Apache 2.0 - 详情请参见 [LICENSE](./examples/LICENSE) 文件
+- **third_party**: 保留各三方项目的原有协议
 
 
 <!-- Link Definitions -->
 
 [release-shield]: https://img.shields.io/github/v/release/volcengine/OpenViking?color=369eff&labelColor=black&logo=github&style=flat-square
 [release-link]: https://github.com/volcengine/OpenViking/releases
-[license-shield]: https://img.shields.io/badge/license-apache%202.0-white?labelColor=black&style=flat-square
+[license-shield]: https://img.shields.io/badge/license-AGPLv3-white?labelColor=black&style=flat-square
 [license-shield-link]: https://github.com/volcengine/OpenViking/blob/main/LICENSE
 [last-commit-shield]: https://img.shields.io/github/last-commit/volcengine/OpenViking?color=c4f042&labelColor=black&style=flat-square
 [last-commit-shield-link]: https://github.com/volcengine/OpenViking/commcommits/main

@@ -30,6 +30,7 @@ class OpenVikingAPIClient:
         self.max_retries = 3
         self.retry_delay = 0.5
         self.last_request_info = None
+        self.last_response = None
 
     def _filter_sensitive_headers(self, headers: Dict[str, str]) -> Dict[str, str]:
         """过滤敏感头信息"""
@@ -70,6 +71,7 @@ class OpenVikingAPIClient:
         for attempt in range(self.max_retries):
             try:
                 response = self.session.request(method, url, **kwargs)
+                self.last_response = response
                 return response
             except (
                 requests.exceptions.ConnectionError,
@@ -191,10 +193,21 @@ class OpenVikingAPIClient:
             payload["filter"] = filter
         return self._request_with_retry("POST", url, json=payload)
 
-    def grep(self, uri: str, pattern: str, case_insensitive: bool = False) -> requests.Response:
+    def grep(
+        self,
+        uri: str,
+        pattern: str,
+        case_insensitive: bool = False,
+        node_limit: Optional[int] = None,
+        exclude_uri: Optional[str] = None,
+    ) -> requests.Response:
         endpoint = "/api/v1/search/grep"
         url = self._build_url(self.server_url, endpoint)
         payload = {"uri": uri, "pattern": pattern, "case_insensitive": case_insensitive}
+        if node_limit is not None:
+            payload["node_limit"] = node_limit
+        if exclude_uri is not None:
+            payload["exclude_uri"] = exclude_uri
         return self._request_with_retry("POST", url, json=payload)
 
     def glob(self, pattern: str, uri: Optional[str] = None) -> requests.Response:
@@ -288,6 +301,12 @@ class OpenVikingAPIClient:
         url = self._build_url(self.server_url, endpoint)
         return self._request_with_retry("GET", url)
 
+    def get_session_context(self, session_id: str, token_budget: int = 128000) -> requests.Response:
+        endpoint = f"/api/v1/sessions/{session_id}/context"
+        params = {"token_budget": token_budget}
+        url = self._build_url(self.server_url, endpoint, params)
+        return self._request_with_retry("GET", url)
+
     def delete_session(self, session_id: str) -> requests.Response:
         endpoint = f"/api/v1/sessions/{session_id}"
         url = self._build_url(self.server_url, endpoint)
@@ -316,10 +335,13 @@ class OpenVikingAPIClient:
         url = self._build_url(self.server_url, endpoint, params)
         return self._request_with_retry("GET", url)
 
-    def fs_mkdir(self, uri: str) -> requests.Response:
+    def fs_mkdir(self, uri: str, description: Optional[str] = None) -> requests.Response:
         endpoint = "/api/v1/fs/mkdir"
         url = self._build_url(self.server_url, endpoint)
-        return self._request_with_retry("POST", url, json={"uri": uri})
+        payload = {"uri": uri}
+        if description is not None:
+            payload["description"] = description
+        return self._request_with_retry("POST", url, json=payload)
 
     def fs_read(self, uri: str) -> requests.Response:
         endpoint = "/api/v1/content/read"
@@ -327,10 +349,25 @@ class OpenVikingAPIClient:
         url = self._build_url(self.server_url, endpoint, params)
         return self._request_with_retry("GET", url)
 
-    def fs_write(self, uri: str, content: str) -> requests.Response:
+    def fs_write(
+        self,
+        uri: str,
+        content: str,
+        mode: str = "replace",
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> requests.Response:
         endpoint = "/api/v1/content/write"
         url = self._build_url(self.server_url, endpoint)
-        return self._request_with_retry("POST", url, json={"uri": uri, "content": content})
+        payload = {
+            "uri": uri,
+            "content": content,
+            "mode": mode,
+            "wait": wait,
+        }
+        if timeout is not None:
+            payload["timeout"] = timeout
+        return self._request_with_retry("POST", url, json=payload)
 
     def fs_rm(self, uri: str, recursive: bool = False) -> requests.Response:
         endpoint = "/api/v1/fs"
@@ -351,9 +388,29 @@ class OpenVikingAPIClient:
         return self.session.get(url)
 
     def export_ovpack(self, uri: str, to: str) -> requests.Response:
+        """Export ovpack and save to local file path.
+
+        Args:
+            uri: Viking URI to export
+            to: Local file path where to save the .ovpack file
+
+        Returns:
+            Response object with the downloaded file saved to 'to' path
+        """
         endpoint = "/api/v1/pack/export"
         url = self._build_url(self.server_url, endpoint)
-        return self.session.post(url, json={"uri": uri, "to": to})
+
+        # Request export (server streams the file)
+        response = self._request_with_retry("POST", url, json={"uri": uri})
+
+        # Save streamed content to local file
+        if response.status_code == 200:
+            to_path = Path(to)
+            to_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(to_path, "wb") as f:
+                f.write(response.content)
+
+        return response
 
     def import_ovpack(
         self, file_path: str, parent: str, force: bool = False, vectorize: bool = True
@@ -436,8 +493,8 @@ class OpenVikingAPIClient:
         url = self._build_url(self.server_url, endpoint)
         return self._request_with_retry("GET", url)
 
-    def observer_vlm(self) -> requests.Response:
-        endpoint = "/api/v1/observer/vlm"
+    def observer_models(self) -> requests.Response:
+        endpoint = "/api/v1/observer/models"
         url = self._build_url(self.server_url, endpoint)
         return self._request_with_retry("GET", url)
 
@@ -450,6 +507,29 @@ class OpenVikingAPIClient:
         endpoint = "/api/v1/debug/health"
         url = self._build_url(self.server_url, endpoint)
         return self._request_with_retry("GET", url)
+
+    def get_task(self, task_id: str) -> requests.Response:
+        endpoint = f"/api/v1/tasks/{task_id}"
+        url = self._build_url(self.server_url, endpoint)
+        return self._request_with_retry("GET", url)
+
+    def wait_for_task(
+        self, task_id: str, timeout: float = 60.0, poll_interval: float = 1.0
+    ) -> dict:
+        import time
+
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            response = self.get_task(task_id)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("status") == "ok":
+                    result = data.get("result", {})
+                    task_status = result.get("status")
+                    if task_status in ["completed", "failed"]:
+                        return result
+            time.sleep(poll_interval)
+        return {"status": "timeout", "task_id": task_id}
 
     def admin_create_account(self, account_id: str, admin_user_id: str) -> requests.Response:
         endpoint = "/api/v1/admin/accounts"

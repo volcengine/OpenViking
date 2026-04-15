@@ -20,6 +20,10 @@
 # 创建新会话（自动生成 ID）
 session = client.session()
 print(f"Session URI: {session.uri}")
+
+# 创建指定 ID 的新会话
+session = client.create_session(session_id="my-custom-session-id")
+print(f"Session ID: {session['session_id']}")
 ```
 
 **HTTP API**
@@ -29,9 +33,16 @@ POST /api/v1/sessions
 ```
 
 ```bash
+# 创建新会话（自动生成 ID）
 curl -X POST http://localhost:1933/api/v1/sessions \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key"
+
+# 创建指定 ID 的新会话
+curl -X POST http://localhost:1933/api/v1/sessions \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{"session_id": "my-custom-session-id"}'
 ```
 
 **CLI**
@@ -182,14 +193,12 @@ openviking session get a1b2c3d4
 
 该接口返回：
 - `latest_archive_overview`：最新一个已完成归档的 `overview` 文本，在 token budget 足够时返回
-- `latest_archive_id`：最新一个已完成归档的 ID，用于后续展开 archive 详情
-- `pre_archive_abstracts`：更早历史归档的轻量列表，每项只包含 `archive_id` 和 `abstract`
+- `pre_archive_abstracts`：已完成归档的轻量列表，每项只包含 `archive_id` 和 `abstract`
 - `messages`：最新已完成归档之后的所有未完成归档消息，再加上当前 live session 消息
 - `stats`：返回结果对应的 token 与纳入统计
 
 说明：
 - 没有可用 completed archive，或最新 overview 超出 token budget 时，`latest_archive_overview` 返回空字符串。
-- 只要存在最新 completed archive，就会返回 `latest_archive_id`；即使 `latest_archive_overview` 因 budget 被裁剪，这个 ID 仍然可用。
 - `token_budget` 会在 active `messages` 之后作用于 assembled archive payload：`latest_archive_overview` 优先级高于 `pre_archive_abstracts`，预算紧张时先淘汰最旧的 abstracts。
 - 只有最终实际返回的 archive 内容，才会计入 `estimatedTokens` 和 `stats.archiveTokens`。
 - 当前每次有消息的 session commit 都会在 Phase 2 生成 archive 摘要；只有带 `.done` 标记的 completed archive 才会被这里返回。
@@ -206,7 +215,6 @@ openviking session get a1b2c3d4
 ```python
 context = await client.get_session_context("a1b2c3d4", token_budget=128000)
 print(context["latest_archive_overview"])
-print(context["latest_archive_id"])
 print(context["pre_archive_abstracts"])
 print(len(context["messages"]))
 
@@ -238,8 +246,11 @@ ov session get-session-context a1b2c3d4 --token-budget 128000
   "status": "ok",
   "result": {
     "latest_archive_overview": "# Session Summary\n\n**Overview**: User discussed deployment and auth setup.",
-    "latest_archive_id": "archive_002",
     "pre_archive_abstracts": [
+      {
+        "archive_id": "archive_002",
+        "abstract": "用户讨论了部署和鉴权配置。"
+      },
       {
         "archive_id": "archive_001",
         "abstract": "用户之前讨论了仓库初始化和鉴权配置。"
@@ -263,14 +274,14 @@ ov session get-session-context a1b2c3d4 --token-budget 128000
         "created_at": "2026-03-24T09:10:20Z"
       }
     ],
-    "estimatedTokens": 147,
+    "estimatedTokens": 160,
     "stats": {
       "totalArchives": 2,
       "includedArchives": 2,
       "droppedArchives": 0,
       "failedArchives": 0,
       "activeTokens": 98,
-      "archiveTokens": 49
+      "archiveTokens": 62
     }
   }
 }
@@ -282,7 +293,7 @@ ov session get-session-context a1b2c3d4 --token-budget 128000
 
 获取某次已完成归档的完整内容。
 
-该接口通常配合 `get_session_context()` 返回的 `latest_archive_id` 或 `pre_archive_abstracts[*].archive_id` 使用。
+该接口通常配合 `get_session_context()` 返回的 `pre_archive_abstracts[*].archive_id` 使用。
 
 该接口返回：
 - `archive_id`：被展开的 archive ID
@@ -632,7 +643,7 @@ print(f"Task ID: {result['task_id']}")
 # 查询后台任务进度
 task = client.get_task(result["task_id"])
 if task["status"] == "completed":
-    print(f"Memories extracted: {task['result']['memories_extracted']}")
+    print(f"Memories extracted: {sum(task['result']['memories_extracted'].values())}")
 ```
 
 **HTTP API**
@@ -728,12 +739,19 @@ curl -X GET http://localhost:1933/api/v1/tasks/uuid-xxx \
     "result": {
       "session_id": "a1b2c3d4",
       "archive_uri": "viking://session/a1b2c3d4/history/archive_001",
-      "memories_extracted": 5,
+      "memories_extracted": {
+        "profile": 1,
+        "preferences": 2,
+        "entities": 1,
+        "cases": 1
+      },
       "active_count_updated": 2
     }
   }
 }
 ```
+
+完成态任务结果里的 `memories_extracted` 表示本次 commit 的分类计数；如果只需要本次 commit 的总数，请把这些值求和。
 
 ---
 
@@ -776,12 +794,14 @@ viking://session/{session_id}/
 
 | 分类 | 位置 | 说明 |
 |------|------|------|
-| profile | `user/memories/.overview.md` | 用户个人信息 |
+| profile | `user/memories/profile.md` | 用户个人信息 |
 | preferences | `user/memories/preferences/` | 按主题分类的用户偏好 |
 | entities | `user/memories/entities/` | 重要实体（人物、项目等） |
 | events | `user/memories/events/` | 重要事件 |
 | cases | `agent/memories/cases/` | 问题-解决方案案例 |
 | patterns | `agent/memories/patterns/` | 交互模式 |
+| tools | `agent/memories/tools/` | 工具使用经验与最佳实践 |
+| skills | `agent/memories/skills/` | 技能执行经验与工作流策略 |
 
 ---
 
@@ -828,7 +848,7 @@ print(f"Task ID: {result['task_id']}")
 # 可选：等待后台任务完成
 task = client.get_task(result["task_id"])
 if task and task["status"] == "completed":
-    print(f"Memories extracted: {task['result']['memories_extracted']}")
+    print(f"Memories extracted: {sum(task['result']['memories_extracted'].values())}")
 
 client.close()
 ```

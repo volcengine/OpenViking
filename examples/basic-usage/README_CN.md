@@ -1,82 +1,57 @@
-# 基础使用示例：OpenViking Python SDK 快速入门
+# 基础使用示例：OpenViking Python SDK
 
-本示例演示如何使用 Python SDK 操作 OpenViking 的核心功能，涵盖构建 AI 智能体应用所需的基本操作。
+这个示例的目标很明确：用最短路径带你理解 OpenViking Python SDK 的核心工作流。
+你会从初始化客户端开始，完成资源导入、`viking://` 文件系统浏览、上下文检索，
+以及创建一个后续可以提交为长期记忆的会话。
 
-## 你将学到什么
+它是一个典型的 SDK 入门示例。如果你要做生产部署、共享服务或者 MCP 集成，
+请把它当作基础，然后继续看下方链接到的服务端和 MCP 文档。
 
-- **初始化 OpenViking**：嵌入式模式与 HTTP 客户端模式
-- **添加资源**：URL、文件和目录
-- **浏览虚拟文件系统**：使用 `ls`、`tree`、`glob`
-- **语义搜索**：使用 `find` 和 `search` 查找相关上下文
-- **分层上下文加载**：L0（摘要）、L1（概览）、L2（完整内容）
-- **会话管理**：存储和召回对话记忆
+## 这个示例覆盖什么
+
+- 本地快速试用时的嵌入式 SDK 用法
+- 服务端模式下的 HTTP 客户端用法
+- 从远程 URL 导入资源
+- 使用 `ls`、`tree`、`read` 浏览 `viking://` 文件系统
+- 使用 `find`、`abstract`、`overview`、`grep` 做检索和加载
+- 创建 session 并追加消息，为后续记忆提取做准备
+
+## 先选对接入方式
+
+目前 OpenViking 常见有三种接入路径：
+
+| 模式 | 适合场景 | 是否推荐 |
+|------|----------|----------|
+| 嵌入式 SDK | 单进程、本地试用、快速验证 | 是，适合第一次上手 |
+| HTTP 服务端 + SDK/CLI | 共享服务、多会话、多 Agent | 是，正式使用优先 |
+| MCP | Claude Code、Cursor、Claude Desktop、OpenClaw 等 MCP 宿主 | 是，工具化集成优先 |
+
+如果不是单进程本地 demo，而是要长期运行或多端接入，优先使用 HTTP 服务端模式。  
+如果你是给 Claude Code、Cursor 这类客户端接入，请直接看 [MCP 集成指南](../../docs/zh/guides/06-mcp-integration.md)。
 
 ## 前置条件
 
-1. **Python 3.10+**
-2. **安装 OpenViking**：
-   ```bash
-   pip install openviking --upgrade
-   ```
-3. **配置文件** 位于 `~/.openviking/ov.conf`（见下方[配置说明](#配置说明)）
+1. Python 3.10+
+2. 安装 OpenViking：
+
+```bash
+pip install openviking --upgrade --force-reinstall
+```
+
+3. 准备好 `~/.openviking/ov.conf`
 
 ## 快速开始
 
 ### 1. 运行示例脚本
 
 ```bash
-# 克隆仓库
 git clone https://github.com/volcengine/OpenViking.git
 cd OpenViking/examples/basic-usage
-
-# 运行基础使用示例
 python basic_usage.py
 ```
 
-### 2. 预期输出
+脚本默认使用嵌入式模式：
 
-```
-=== OpenViking 基础使用示例 ===
-
-1. 初始化 OpenViking...
-   状态: healthy
-
-2. 添加资源 (URL)...
-   根 URI: viking://resources/raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md
-   已索引文件: 1
-
-3. 浏览虚拟文件系统...
-   viking://resources/raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/
-   └── README.md
-
-4. 等待语义处理...
-
-5. 分层上下文加载:
-   L0 (摘要): OpenViking 是专为 AI 智能体设计的开源上下文数据库...
-
-   L1 (概览):
-   [包含核心要点和使用场景]
-
-6. 语义搜索:
-   查询: "what is openviking"
-   结果:
-   - viking://resources/.../README.md (得分: 0.8523)
-
-7. 内容搜索 (grep):
-   模式: "Agent"
-   找到 15 处匹配
-
-8. 关闭 OpenViking...
-   完成!
-```
-
-## 代码详解
-
-### 初始化
-
-OpenViking 支持两种模式：
-
-**嵌入式模式**（本地开发默认）：
 ```python
 import openviking as ov
 
@@ -84,117 +59,174 @@ client = ov.OpenViking(path="./data")
 client.initialize()
 ```
 
-**HTTP 客户端模式**（连接远程服务器）：
+如果你想把同样的流程切到服务端模式，改成：
+
 ```python
 import openviking as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933")
+client.initialize()
 ```
+
+服务端的推荐启动方式见 [快速开始：服务端模式](../../docs/zh/getting-started/03-quickstart-server.md)。
+
+### 2. 脚本演示了什么
+
+`basic_usage.py` 基本覆盖了大多数应用的第一条链路：
+
+1. 初始化客户端并检查健康状态。
+2. 从 URL 添加一个资源。
+3. 查看生成的 `viking://resources/...` 树。
+4. 等待语义处理完成。
+5. 用 `abstract`、`overview`、`read` 加载 L0/L1/L2 上下文。
+6. 用 `find` 做语义检索。
+7. 用 `grep` 做字面内容检索。
+8. 创建 session 并追加消息，为记忆提取做准备。
+
+## 代码说明
+
+### 初始化
+
+本地首次试用建议先用嵌入式模式：
+
+```python
+import openviking as ov
+
+client = ov.OpenViking(path="./data")
+client.initialize()
+```
+
+如果 OpenViking 作为独立服务运行，则使用 HTTP 客户端：
+
+```python
+import openviking as ov
+
+client = ov.SyncHTTPClient(url="http://localhost:1933")
+client.initialize()
+```
+
+如果服务端启用了认证，普通数据访问请优先使用 `user_key`：
+
+```python
+client = ov.SyncHTTPClient(
+    url="http://localhost:1933",
+    api_key="<user-key>",
+    agent_id="my-agent",
+)
+```
+
+`root_key` 主要用于管理操作。它不能直接调用 `add_resource`、`find`、`ls` 这类租户级 API，
+除非同时显式传入 `account` 和 `user`。详见
+[认证文档](../../docs/zh/guides/04-authentication.md) 和
+[快速开始：服务端模式](../../docs/zh/getting-started/03-quickstart-server.md)。
 
 ### 添加资源
 
-添加 URL、本地文件或目录：
+你可以添加 URL、本地文件、目录：
 
 ```python
-# 添加 URL
 result = client.add_resource(
-    path="https://example.com/documentation",
-    wait=True  # 等待语义处理完成
+    path="https://example.com/docs",
+    wait=False,
 )
 
-# 添加本地文件
-result = client.add_resource(
-    path="/path/to/your/document.pdf"
-)
+result = client.add_resource(path="/path/to/manual.pdf")
 
-# 添加目录（代码仓库）
 result = client.add_resource(
-    path="/path/to/your/project",
-    instruction="这是一个 Python Web 应用"
+    path="/path/to/repo",
+    instruction="这是一个 Python Web 应用",
 )
 ```
 
-### 浏览文件系统
+脚本和 demo 可以直接用 `wait=True`。  
+真正的服务里更常见的做法是异步导入，等到你确实需要结果时再调用 `wait_processed()`。
 
-OpenViking 使用 `viking://` URI 的虚拟文件系统范式：
+### 文件系统访问
+
+OpenViking 的上下文统一组织在虚拟文件系统里：
 
 ```python
-# 列出目录内容
 files = client.ls("viking://resources/")
-
-# 显示目录树
 tree = client.tree("viking://resources/my-project", level_limit=3)
-
-# 按模式查找文件
-matches = client.glob("**/*.md", uri="viking://resources/my-project")
+content = client.read("viking://resources/my-project/README.md")
 ```
 
-### 语义搜索
+同样的 URI 模型也适用于记忆和技能：
 
-使用自然语言查询查找上下文：
+- `viking://resources/`
+- `viking://user/memories/`
+- `viking://agent/memories/`
+- `viking://agent/skills/`
+
+### 检索
+
+`find` 适合快速语义检索，`search` 适合更复杂的高级检索：
 
 ```python
-# 快速语义搜索
 results = client.find(
-    query="如何处理 API 认证",
+    query="认证逻辑是怎么做的",
     target_uri="viking://resources/my-project",
-    limit=5
+    limit=5,
 )
 
-# 高级搜索（带意图分析）
 results = client.search(
-    query="数据库连接配置和错误处理",
+    query="数据库配置和故障处理",
     target_uri="viking://resources/",
-    limit=10
+    limit=10,
 )
 ```
 
-### 分层上下文加载
-
-OpenViking 将内容处理为三个层次，实现高效检索：
+检索命中后，再按需做分层加载：
 
 ```python
 uri = "viking://resources/my-project/docs/api.md"
 
-# L0: 快速摘要（约 100 tokens）
 abstract = client.abstract(uri)
-
-# L1: 概览（约 2k tokens，包含核心要点）
 overview = client.overview(uri)
-
-# L2: 完整内容
 content = client.read(uri)
 ```
 
-### 会话管理
-
-存储对话记忆以实现长期召回：
+如果你要的是字面匹配而不是语义检索，用 `grep`：
 
 ```python
-# 创建会话
+result = client.grep("viking://resources/my-project", "Agent", case_insensitive=True)
+matches = result.get("matches", [])
+```
+
+### Session 与长期记忆
+
+示例脚本会创建一个 session 并追加消息：
+
+```python
 session_info = client.create_session()
 session_id = session_info["session_id"]
 
-# 添加对话消息
 client.add_message(session_id, "user", "我更喜欢 TypeScript 而不是 JavaScript")
-client.add_message(session_id, "assistant", "好的！我会在你的项目中使用 TypeScript。")
+client.add_message(session_id, "assistant", "明白了，在合适场景下我会优先使用 TypeScript。")
+```
 
-# 提交会话以提取长期记忆
+如果要把这段对话真正提取成长期记忆，需要提交 session：
+
+```python
 client.commit_session(session_id)
+```
 
-# 之后召回相关记忆
+提交后，记忆可以通过正常检索接口再次找回：
+
+```python
 memories = client.find(
     query="用户编程偏好",
-    target_uri="viking://user/memories/"
+    target_uri="viking://user/memories/",
 )
 ```
 
 ## 配置说明
 
-创建 `~/.openviking/ov.conf` 配置文件：
+创建 `~/.openviking/ov.conf`，至少需要存储、Embedding、VLM 配置。一个最小本地配置示例如下：
 
 ```json
 {
+  "server": { "host": "127.0.0.1", "port": 1933 },
   "storage": {
     "workspace": "~/.openviking/data"
   },
@@ -214,87 +246,26 @@ memories = client.find(
 }
 ```
 
-> **提示**：你也可以使用火山引擎（豆包）、Azure OpenAI 或 LiteLLM（支持 Anthropic、DeepSeek、Gemini 等）。详见主 README 的提供商配置说明。
+你也可以使用火山引擎、Azure OpenAI、LiteLLM 等提供商。当前配置示例请以主 [README](../../README_CN.md) 和 [配置指南](../../docs/zh/guides/01-configuration.md) 为准。
 
-## 应用场景
+## 推荐下一步
 
-### 构建文档感知智能体
-
-```python
-import openviking as ov
-
-class DocumentationAgent:
-    def __init__(self):
-        self.ov = ov.OpenViking(path="./data")
-        self.ov.initialize()
-    
-    def ingest_docs(self, doc_path: str):
-        """将文档添加到知识库"""
-        self.ov.add_resource(doc_path, wait=True)
-    
-    def answer(self, question: str) -> str:
-        """查找相关文档并回答"""
-        results = self.ov.find(question, limit=3)
-        
-        context = []
-        for r in results.resources:
-            content = self.ov.read(r.uri)
-            context.append(content)
-        
-        # 使用上下文和 LLM 生成回答
-        return context
-
-# 使用
-agent = DocumentationAgent()
-agent.ingest_docs("https://docs.python.org/3/")
-agent.ingest_docs("/path/to/your/project/docs")
-```
-
-### 创建记忆感知助手
-
-```python
-import openviking as ov
-
-class MemoryAssistant:
-    def __init__(self, user_id: str):
-        self.ov = ov.SyncHTTPClient(url="http://localhost:1933")
-        self.user_id = user_id
-        self.session_id = None
-    
-    def start_conversation(self):
-        """开始新的对话会话"""
-        session = self.ov.create_session()
-        self.session_id = session["session_id"]
-    
-    def remember(self, user_input: str, assistant_response: str):
-        """存储对话轮次"""
-        self.ov.add_message(self.session_id, "user", user_input)
-        self.ov.add_message(self.session_id, "assistant", assistant_response)
-    
-    def recall(self, query: str) -> list:
-        """召回相关记忆"""
-        return self.ov.find(query, target_uri="viking://user/memories/")
-    
-    def end_conversation(self):
-        """从会话中提取长期记忆"""
-        self.ov.commit_session(self.session_id)
-```
-
-## 下一步
-
-- **[OpenClaw 插件](../openclaw-plugin/)**：与 OpenClaw AI 助手集成
-- **[Claude 记忆插件](../claude-memory-plugin/)**：在 Claude Code 中使用
-- **[OpenCode 记忆插件](../opencode-memory-plugin/)**：与 OpenCode 集成
-- **[技能示例](../skills/)**：基于 CLI 的搜索和管理技能
+- [配置指南](../../docs/zh/guides/01-configuration.md)：先确认当前配置模型，再过渡到共享部署。
+- [快速开始：服务端模式](../../docs/zh/getting-started/03-quickstart-server.md)：正确启动 `openviking-server`。
+- [MCP 集成指南](../../docs/zh/guides/06-mcp-integration.md)：接入 Claude Code、Cursor、Claude Desktop、OpenClaw 等 MCP 宿主。
+- [Claude Code 记忆插件](../claude-code-memory-plugin/README.md)：在 Claude Code 中使用 OpenViking 长期记忆。
+- [OpenCode 记忆插件](../opencode-memory-plugin/README_CN.md)：在 OpenCode 中使用 OpenViking 记忆工具。
+- [OpenClaw 插件](../openclaw-plugin/README_CN.md)：与 OpenClaw 集成。
 
 ## 常见问题
 
-| 问题 | 解决方案 |
-|------|---------|
-| `ImportError: pyagfs not found` | 从源码运行：`pip install -e third_party/agfs/agfs-sdk/python` |
-| `Connection refused` | 确保 OpenViking 服务器正在运行：`openviking-server` |
-| `API key error` | 检查 `~/.openviking/ov.conf` 配置 |
-| `语义处理缓慢` | 等待 `wait_processed()` 或使用 `add_resource(..., wait=True)` |
+| 问题 | 排查方向 |
+|------|----------|
+| `ImportError` 或本地扩展问题 | 重新安装 `openviking`；如果是源码开发，确认本地构建依赖齐全。 |
+| HTTP 模式下 `Connection refused` | 启动 `openviking-server`，并检查 `http://localhost:1933/health`。 |
+| 租户或认证报错 | 普通数据接口优先使用 `user_key`；`root_key` 仅在显式传入租户信息时使用。 |
+| 刚导入后检索慢或搜不到 | 等待 `wait_processed()`，或在导入时直接用 `wait=True`。 |
+| 多个客户端或会话争用本地存储 | 不要反复起独立本地进程，改用 HTTP 服务端模式。 |
 
 ## 许可证
 

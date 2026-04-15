@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Memory tools - encapsulate VikingFS read operations for ReAct loop.
 
@@ -8,67 +8,59 @@ Reference: bot/vikingbot/agent/tools/base.py design pattern
 
 import json
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
-from openviking.server.identity import RequestContext
 from openviking.session.memory.utils import parse_memory_file_with_fields
+from openviking.session.memory.utils.content import truncate_content
 from openviking.storage.viking_fs import VikingFS
+from openviking.telemetry import tracer
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
+
+if TYPE_CHECKING:
+    from openviking.server.identity import ToolContext
 
 logger = get_logger(__name__)
 
 
-def create_tool_call_message(
-    call_id: Union[str, int],
-    tool_name: str,
-    params: Dict[str, Any],
-) -> Dict[str, Any]:
-    """
-    Create an assistant role message with tool_calls.
-
-    Args:
-        call_id: Unique identifier for the tool call
-        tool_name: Name of the tool being called
-        params: Parameters for the tool call
-
-    Returns:
-        Assistant message with tool_calls field
-    """
-    return {
-        "role": "assistant",
-        "content": None,
-        "tool_calls": [
-            {
-                "id": str(call_id),
-                "type": "function",
-                "function": {
-                    "name": tool_name,
-                    "arguments": json.dumps(params),
-                },
-            }
-        ],
-    }
+def optimize_search_result(result: Any, limit: int = 10) -> Any:
+    """优化搜索结果以减少 Token 消耗，并过滤掉抽象文件。"""
+    if isinstance(result, dict) and "error" in result:
+        return {"error": extract_error_summary(result["error"])}
+    if isinstance(result, dict) and "memories" in result:
+        filtered = [
+            item
+            for item in result["memories"]
+            if not (
+                item.get("uri", "").endswith(".abstract.md")
+                or item.get("uri", "").endswith(".overview.md")
+            )
+        ]
+        return [{"uri": item["uri"], "score": item["score"]} for item in filtered[:limit]]
+    return []
 
 
-def create_tool_result_message(
-    call_id: Union[str, int],
-    result: Any,
-) -> Dict[str, Any]:
-    """
-    Create a tool role message with the tool execution result.
+def optimize_tool_result(tool_name: str, result: Any) -> Any:
+    """优化工具结果以减少 Token 消耗。"""
+    if isinstance(result, dict) and "error" in result:
+        return {"error": extract_error_summary(result["error"])}
+    if tool_name == "search" and isinstance(result, dict) and "memories" in result:
+        return optimize_search_result(result)
+    # 对 read 工具返回的 dict，如果包含 content 字段，则截断 content
+    if tool_name == "read" and isinstance(result, dict) and "content" in result:
+        result = result.copy()
+        result["content"] = truncate_content(result["content"])
+    return result
 
-    Args:
-        call_id: Unique identifier matching the tool call
-        result: Result from the tool execution
 
-    Returns:
-        Tool message with result content
-    """
-    return {
-        "role": "tool",
-        "tool_call_id": str(call_id),
-        "content": json.dumps(result, ensure_ascii=False),
-    }
+def extract_error_summary(error: str) -> str:
+    if "File not found" in error:
+        return "File not found"
+    if "Permission denied" in error:
+        return "Permission denied"
+    if "Timeout" in error:
+        return "Timeout"
+    return error[:50]
 
 
 def add_tool_call_pair_to_messages(
@@ -78,18 +70,15 @@ def add_tool_call_pair_to_messages(
     params: Dict[str, Any],
     result: Any,
 ) -> None:
-    """
-    Add a pair of tool call + tool result messages to the messages list.
-
-    Args:
-        messages: List to append messages to
-        call_id: Unique identifier for the tool call
-        tool_name: Name of the tool being called
-        params: Parameters for the tool call
-        result: Result from the tool execution
-    """
-    messages.append(create_tool_call_message(call_id, tool_name, params))
-    messages.append(create_tool_result_message(call_id, result))
+    """Add a tool call pair with optimized format to save tokens."""
+    messages.append(
+        {
+            "role": "user",
+            "content": json.dumps(
+                {"tool_call_name": tool_name, "args": params, "result": result}, ensure_ascii=False
+            ),
+        }
+    )
 
 
 def add_tool_call_items_to_messages(
@@ -137,7 +126,7 @@ class MemoryTool(ABC):
     async def execute(
         self,
         viking_fs: VikingFS,
-        ctx: Optional[RequestContext],
+        ctx: Optional["ToolContext"],
         **kwargs: Any,
     ) -> Any:
         """
@@ -145,7 +134,7 @@ class MemoryTool(ABC):
 
         Args:
             viking_fs: VikingFS instance
-            ctx: Request context
+            ctx: Tool context
             **kwargs: Tool-specific parameters
 
         Returns:
@@ -174,7 +163,7 @@ class MemoryReadTool(MemoryTool):
 
     @property
     def description(self) -> str:
-        return "Read single file, offset is start line number (0-indexed), limit is number of lines to read, -1 means read to end"
+        return "Read single file"
 
     @property
     def parameters(self) -> Dict[str, Any]:
@@ -192,20 +181,23 @@ class MemoryReadTool(MemoryTool):
     async def execute(
         self,
         viking_fs: VikingFS,
-        ctx: Optional[RequestContext],
+        ctx: Optional["ToolContext"],
         **kwargs: Any,
     ) -> Any:
+        uri = kwargs.get("uri", "")
         try:
-            uri = kwargs.get("uri", "")
             content = await viking_fs.read_file(
                 uri,
-                ctx=ctx,
+                ctx=ctx.request_ctx,
             )
             # Parse MEMORY_FIELDS from comment and return dict directly
             parsed = parse_memory_file_with_fields(content)
             return parsed
+        except NotFoundError as e:
+            tracer.info(f"read not found: {uri}")
+            return {"error": str(e)}
         except Exception as e:
-            logger.error(f"Failed to execute read: {e}")
+            tracer.error(f"Failed to execute read: {e}")
             return {"error": str(e)}
 
 
@@ -218,7 +210,7 @@ class MemorySearchTool(MemoryTool):
 
     @property
     def description(self) -> str:
-        return "Semantic search with session context, target_uri is target directory URI"
+        return "Semantic search with session context"
 
     @property
     def parameters(self) -> Dict[str, Any]:
@@ -229,27 +221,10 @@ class MemorySearchTool(MemoryTool):
                     "type": "string",
                     "description": "Search query text",
                 },
-                "target_uri": {
-                    "type": "string",
-                    "description": "Target directory URI, default empty means search all",
-                    "default": "",
-                },
-                "session_info": {
-                    "type": "object",
-                    "description": "Session information with latest_archive_overview and current_messages, optional",
-                },
                 "limit": {
                     "type": "integer",
                     "description": "Maximum results to return, default 10",
                     "default": 10,
-                },
-                "score_threshold": {
-                    "type": "number",
-                    "description": "Score threshold, optional",
-                },
-                "filter": {
-                    "type": "object",
-                    "description": "Filter conditions, optional",
                 },
             },
             "required": ["query"],
@@ -258,36 +233,26 @@ class MemorySearchTool(MemoryTool):
     async def execute(
         self,
         viking_fs: VikingFS,
-        ctx: Optional[RequestContext],
+        ctx: Optional["ToolContext"],
         **kwargs: Any,
     ) -> Any:
         try:
             query = kwargs.get("query", "")
-            target_uri = kwargs.get("target_uri", "")
-            # If target_uri is empty, use default from ctx
-            if (
-                not target_uri
-                and ctx
-                and hasattr(ctx, "default_search_uris")
-                and ctx.default_search_uris
-            ):
+            # Get target_uri from ctx.default_search_uris
+            target_uri = ""
+            if ctx and hasattr(ctx, "default_search_uris") and ctx.default_search_uris:
                 target_uri = ctx.default_search_uris
-            session_info = kwargs.get("session_info")
             limit = kwargs.get("limit", 10)
-            score_threshold = kwargs.get("score_threshold")
-            filter = kwargs.get("filter")
+            # 多搜索 10 个，过滤抽象文件后再截断
             search_result = await viking_fs.search(
                 query,
                 target_uri=target_uri,
-                session_info=session_info,
-                limit=limit,
-                score_threshold=score_threshold,
-                filter=filter,
+                limit=limit + 10,
                 ctx=ctx,
             )
-            return search_result.to_dict()
+            return optimize_search_result(search_result.to_dict(), limit=limit)
         except Exception as e:
-            logger.error(f"Failed to execute search: {e}")
+            tracer.error(f"Failed to execute search: {e}")
             return {"error": str(e)}
 
 
@@ -328,7 +293,7 @@ class MemoryLsTool(MemoryTool):
     async def execute(
         self,
         viking_fs: VikingFS,
-        ctx: Optional[RequestContext],
+        ctx: Optional["ToolContext"],
         **kwargs: Any,
     ) -> Any:
         try:
@@ -339,7 +304,7 @@ class MemoryLsTool(MemoryTool):
                 abs_limit=256,
                 show_all_hidden=False,
                 node_limit=1000,
-                ctx=ctx,
+                ctx=ctx.request_ctx,
             )
             # Format: filename size (e.g., "file.md 1.2K")
             result_lines = []
@@ -356,7 +321,7 @@ class MemoryLsTool(MemoryTool):
                 return "Directory is empty. You can write new files to create memory content."
             return "\n".join(result_lines)
         except Exception as e:
-            logger.error(f"Failed to execute ls: {e}")
+            tracer.info(f"Failed to execute ls: {e}")
             return {"error": str(e)}
 
 
@@ -367,7 +332,6 @@ MEMORY_TOOLS_REGISTRY: Dict[str, MemoryTool] = {}
 def register_tool(tool: MemoryTool) -> None:
     """Register a memory tool."""
     MEMORY_TOOLS_REGISTRY[tool.name] = tool
-    logger.debug(f"Registered memory tool: {tool.name}")
 
 
 def get_tool(name: str) -> Optional[MemoryTool]:
@@ -381,7 +345,7 @@ def list_tools() -> Dict[str, MemoryTool]:
 
 
 # Tools exposed to LLM (not all registered tools are exposed)
-LLM_TOOLS = ["read", "search"]
+LLM_TOOLS = ["read"]
 
 
 def get_tool_schemas() -> List[Dict[str, Any]]:

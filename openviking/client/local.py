@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Local Client for OpenViking.
 
 Implements BaseClient interface using direct service calls (embedded mode).
@@ -14,6 +14,7 @@ from openviking.telemetry.execution import (
     attach_telemetry_payload,
     run_with_telemetry,
 )
+from openviking.utils.search_filters import merge_time_filter
 from openviking_cli.client.base import BaseClient
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import run_async
@@ -29,6 +30,21 @@ def _to_jsonable(value: Any) -> Any:
     if isinstance(value, dict):
         return {k: _to_jsonable(v) for k, v in value.items()}
     return value
+
+
+def _resolve_search_filter(
+    filter: Optional[Dict[str, Any]],
+    since: Optional[str],
+    until: Optional[str],
+    time_field: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """Merge optional retrieval time bounds into the metadata filter."""
+    return merge_time_filter(
+        filter,
+        since=since,
+        until=until,
+        time_field=time_field,
+    )
 
 
 class LocalClient(BaseClient):
@@ -195,9 +211,9 @@ class LocalClient(BaseClient):
         """Get resource status."""
         return await self._service.fs.stat(uri, ctx=self._ctx)
 
-    async def mkdir(self, uri: str) -> None:
+    async def mkdir(self, uri: str, description: Optional[str] = None) -> None:
         """Create directory."""
-        await self._service.fs.mkdir(uri, ctx=self._ctx)
+        await self._service.fs.mkdir(uri, ctx=self._ctx, description=description)
 
     async def rm(self, uri: str, recursive: bool = False) -> None:
         """Remove resource."""
@@ -227,6 +243,33 @@ class LocalClient(BaseClient):
         """Read L1 overview."""
         return await self._service.fs.overview(uri, ctx=self._ctx)
 
+    async def write(
+        self,
+        uri: str,
+        content: str,
+        mode: str = "replace",
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Write text content to an existing file and refresh semantics/vectors."""
+        execution = await run_with_telemetry(
+            operation="content.write",
+            telemetry=telemetry,
+            fn=lambda: self._service.fs.write(
+                uri=uri,
+                content=content,
+                ctx=self._ctx,
+                mode=mode,
+                wait=wait,
+                timeout=timeout,
+            ),
+        )
+        return attach_telemetry_payload(
+            execution.result,
+            execution.telemetry,
+        )
+
     # ============= Search =============
 
     async def find(
@@ -237,8 +280,12 @@ class LocalClient(BaseClient):
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
     ) -> Any:
         """Semantic search without session context."""
+        resolved_filter = _resolve_search_filter(filter, since, until, time_field)
         execution = await run_with_telemetry(
             operation="search.find",
             telemetry=telemetry,
@@ -248,7 +295,7 @@ class LocalClient(BaseClient):
                 target_uri=target_uri,
                 limit=limit,
                 score_threshold=score_threshold,
-                filter=filter,
+                filter=resolved_filter,
             ),
         )
         return attach_telemetry_payload(
@@ -265,8 +312,12 @@ class LocalClient(BaseClient):
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
     ) -> Any:
         """Semantic search with optional session context."""
+        resolved_filter = _resolve_search_filter(filter, since, until, time_field)
 
         async def _search():
             session = None
@@ -280,7 +331,7 @@ class LocalClient(BaseClient):
                 session=session,
                 limit=limit,
                 score_threshold=score_threshold,
-                filter=filter,
+                filter=resolved_filter,
             )
 
         execution = await run_with_telemetry(
@@ -293,10 +344,24 @@ class LocalClient(BaseClient):
             execution.telemetry,
         )
 
-    async def grep(self, uri: str, pattern: str, case_insensitive: bool = False) -> Dict[str, Any]:
+    async def grep(
+        self,
+        uri: str,
+        pattern: str,
+        case_insensitive: bool = False,
+        node_limit: Optional[int] = None,
+        exclude_uri: Optional[str] = None,
+        level_limit: int = 5,
+    ) -> Dict[str, Any]:
         """Content search with pattern."""
         return await self._service.fs.grep(
-            uri, pattern, ctx=self._ctx, case_insensitive=case_insensitive
+            uri,
+            pattern,
+            ctx=self._ctx,
+            case_insensitive=case_insensitive,
+            node_limit=node_limit,
+            exclude_uri=exclude_uri,
+            level_limit=level_limit,
         )
 
     async def glob(self, pattern: str, uri: str = "viking://") -> Dict[str, Any]:
@@ -319,11 +384,16 @@ class LocalClient(BaseClient):
 
     # ============= Sessions =============
 
-    async def create_session(self) -> Dict[str, Any]:
-        """Create a new session."""
+    async def create_session(self, session_id: Optional[str] = None) -> Dict[str, Any]:
+        """Create a new session.
+
+        Args:
+            session_id: Optional session ID. If provided, creates a session with the given ID.
+                       If None, creates a new session with auto-generated ID.
+        """
         await self._service.initialize_user_directories(self._ctx)
         await self._service.initialize_agent_directories(self._ctx)
-        session = await self._service.sessions.create(self._ctx)
+        session = await self._service.sessions.create(self._ctx, session_id)
         return {
             "session_id": session.session_id,
             "user": session.user.to_dict(),
@@ -376,7 +446,7 @@ class LocalClient(BaseClient):
 
     async def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Query background task status."""
-        return await self._service.sessions.get_commit_task(task_id)
+        return await self._service.sessions.get_commit_task(task_id, self._ctx)
 
     async def add_message(
         self,
@@ -384,6 +454,7 @@ class LocalClient(BaseClient):
         role: str,
         content: Optional[str] = None,
         parts: Optional[List[Dict[str, Any]]] = None,
+        created_at: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -392,6 +463,7 @@ class LocalClient(BaseClient):
             role: Message role ("user" or "assistant")
             content: Text content (simple mode, backward compatible)
             parts: Parts array (full Part support mode)
+            created_at: Message creation time (ISO format string)
 
         If both content and parts are provided, parts takes precedence.
         """
@@ -408,7 +480,8 @@ class LocalClient(BaseClient):
         else:
             raise ValueError("Either content or parts must be provided")
 
-        session.add_message(role, message_parts)
+        # created_at 直接传递给 session (毫秒时间戳)
+        session.add_message(role, message_parts, created_at=created_at)
         return {
             "session_id": session_id,
             "message_count": len(session.messages),

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 
 """Tests for session endpoints."""
 
@@ -107,7 +107,6 @@ async def test_get_session_context(client: httpx.AsyncClient):
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"]["latest_archive_overview"] == ""
-    assert body["result"]["latest_archive_id"] == ""
     assert body["result"]["pre_archive_abstracts"] == []
     assert [m["parts"][0]["text"] for m in body["result"]["messages"]] == ["Current live message"]
 
@@ -331,7 +330,6 @@ async def test_get_session_context_endpoint_returns_trimmed_latest_archive_and_m
 
     result = body["result"]
     assert result["latest_archive_overview"] == ""
-    assert result["latest_archive_id"] == "archive_001"
     assert result["pre_archive_abstracts"] == []
     assert len(result["messages"]) == 1
     assert result["messages"][0]["role"] == "assistant"

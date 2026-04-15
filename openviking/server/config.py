@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Server configuration for OpenViking HTTP Server."""
 
 import sys
@@ -39,9 +39,29 @@ class TelemetryConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
-class ServerConfig(BaseModel):
-    """Server configuration (from the ``server`` section of ov.conf)."""
+class MetricsAccountDimensionConfig(BaseModel):
+    """Account-dimension configuration for metrics label injection."""
 
+    # Enabled by default, but still allowlist-gated to avoid accidental high-cardinality exposure.
+    enabled: bool = True
+    max_active_accounts: int = 100
+    metric_allowlist: List[str] = Field(default_factory=list)
+
+    model_config = {"extra": "forbid"}
+
+
+class MetricsConfig(BaseModel):
+    """Metrics subsystem configuration."""
+
+    enabled: bool = False
+    account_dimension: MetricsAccountDimensionConfig = Field(
+        default_factory=MetricsAccountDimensionConfig
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 1933
     workers: int = 1
@@ -52,6 +72,7 @@ class ServerConfig(BaseModel):
     bot_api_url: str = "http://localhost:18790"  # Vikingbot OpenAPIChannel URL (default port)
     encryption_enabled: bool = False  # Whether API key hashing is enabled
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
+    metrics: MetricsConfig = Field(default_factory=MetricsConfig)
 
     model_config = {"extra": "forbid"}
 
@@ -84,7 +105,7 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
         raise FileNotFoundError(
             f"OpenViking configuration file not found.\n"
             f"Please create {default_path_user} or {default_path_system}, or set {OPENVIKING_CONFIG_ENV}.\n"
-            f"See: https://openviking.dev/docs/guides/configuration"
+            f"See: https://openviking.ai/docs"
         )
 
     data = load_json_config(path)
@@ -135,13 +156,22 @@ def validate_server_config(config: ServerConfig) -> None:
         sys.exit(1)
 
     if config.auth_mode == "trusted":
-        if not _is_localhost(config.host):
-            logger.warning(
-                "SECURITY: server.auth_mode='trusted' on non-localhost host '%s'. "
-                "Only use this behind a trusted network boundary or identity-injecting gateway.",
-                config.host,
-            )
-        return
+        if config.root_api_key:
+            return
+        if _is_localhost(config.host):
+            return
+        logger.error(
+            "SECURITY: server.auth_mode='trusted' requires server.root_api_key when "
+            "server.host is '%s' (non-localhost). Only localhost trusted mode may run "
+            "without an API key.",
+            config.host,
+        )
+        logger.error(
+            "To fix, either:\n"
+            "  1. Set server.root_api_key in ov.conf, or\n"
+            '  2. Bind trusted mode to localhost (server.host = "127.0.0.1")'
+        )
+        sys.exit(1)
 
     if config.root_api_key:
         return

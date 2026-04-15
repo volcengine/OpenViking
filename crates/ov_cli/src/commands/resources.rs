@@ -37,6 +37,13 @@ pub async fn add_resource(
             watch_interval,
         )
         .await?;
+
+    // Print helpful message for async processing
+    if !wait && matches!(format, OutputFormat::Table) {
+        eprintln!("Note: Resource is being processed in the background.");
+        eprintln!("Use 'ov wait' to wait for completion, or 'ov observer queue' to check status.");
+    }
+
     output_success(&result, format, compact);
     Ok(())
 }
@@ -50,6 +57,13 @@ pub async fn add_skill(
     compact: bool,
 ) -> Result<()> {
     let result = client.add_skill(data, wait, timeout).await?;
+
+    // Print helpful message for async processing
+    if !wait && matches!(format, OutputFormat::Table) {
+        eprintln!("Note: Skill is being processed in the background.");
+        eprintln!("Use 'ov wait' to wait for completion, or 'ov observer queue' to check status.");
+    }
+
     output_success(&result, format, compact);
     Ok(())
 }

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 
 """Tests for async session commit support."""
 
@@ -16,6 +16,7 @@ from openviking.server.config import ServerConfig
 from openviking.server.dependencies import set_service
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import TaskStatus, get_task_tracker, reset_task_tracker
+
 
 
 @pytest_asyncio.fixture

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 
 """Tests for PID-based process lock utility."""
 
@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import openviking.utils.process_lock as process_lock_module
 from openviking.utils.process_lock import (
     LOCK_FILENAME,
     DataDirectoryLocked,
@@ -94,6 +95,29 @@ class TestIsPidAlive:
         """Test that negative PID is not alive."""
         assert _is_pid_alive(-1) is False
 
+    def test_windows_system_error_treated_as_stale(self, monkeypatch):
+        """Windows SystemError from os.kill(pid, 0) should be treated as stale."""
+
+        def _raise_system_error(_pid: int, _sig: int) -> None:
+            raise SystemError("win32 wrapper failure")
+
+        monkeypatch.setattr(process_lock_module.sys, "platform", "win32")
+        monkeypatch.setattr(process_lock_module.os, "kill", _raise_system_error)
+
+        assert _is_pid_alive(12345) is False
+
+    def test_non_windows_system_error_bubbles_up(self, monkeypatch):
+        """Non-Windows should not downgrade unexpected SystemError values."""
+
+        def _raise_system_error(_pid: int, _sig: int) -> None:
+            raise SystemError("unexpected failure")
+
+        monkeypatch.setattr(process_lock_module.sys, "platform", "linux")
+        monkeypatch.setattr(process_lock_module.os, "kill", _raise_system_error)
+
+        with pytest.raises(SystemError):
+            _is_pid_alive(12345)
+
 
 class TestAcquireDataDirLock:
     """Test acquire_data_dir_lock function."""
@@ -179,6 +203,23 @@ class TestAcquireDataDirLock:
 
         error_msg = str(exc_info.value)
         assert str(tmp_path) in error_msg
+
+    def test_acquire_overwrites_windows_stale_lock_on_system_error(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """Windows stale lock should be reclaimed when os.kill raises SystemError."""
+
+        def _raise_system_error(_pid: int, _sig: int) -> None:
+            raise SystemError("win32 wrapper failure")
+
+        (tmp_path / LOCK_FILENAME).write_text("12345")
+        monkeypatch.setattr(process_lock_module.sys, "platform", "win32")
+        monkeypatch.setattr(process_lock_module.os, "kill", _raise_system_error)
+
+        acquire_data_dir_lock(str(tmp_path))
+
+        stored_pid = int((tmp_path / LOCK_FILENAME).read_text().strip())
+        assert stored_pid == os.getpid()
 
 
 class TestAcquireDataDirLockEdgeCases:

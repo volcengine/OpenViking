@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Thread-safe retrieval statistics accumulator.
 
 Collects per-query metrics from the ``HierarchicalRetriever`` so that
@@ -137,13 +137,16 @@ class RetrievalStatsCollector:
             if latency_ms > self._stats.max_latency_ms:
                 self._stats.max_latency_ms = latency_ms
 
-        # Notify the Prometheus observer (if enabled) outside our lock.
         try:
-            from openviking.storage.observers.prometheus_observer import get_prometheus_observer
+            from openviking.metrics.datasources import RetrievalStatsDataSource
 
-            prom = get_prometheus_observer()
-            if prom is not None:
-                prom.record_retrieval(latency_ms / 1000.0)
+            RetrievalStatsDataSource.record_retrieval(
+                context_type=str(context_type or "unknown"),
+                result_count=int(result_count),
+                latency_seconds=latency_ms / 1000.0,
+                rerank_used=bool(rerank_used),
+                rerank_fallback=bool(rerank_fallback),
+            )
         except Exception:
             pass
 

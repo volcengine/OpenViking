@@ -1,248 +1,254 @@
-# OpenViking Memory Plugin — Agent Install Guide
+# OpenViking Plugin Agent Install Guide
 
-> For AI Agents (Claude Code, Cursor, etc.) to follow step-by-step.
-> Principle: auto-detect what you can; only ask the user when detection fails.
+This guide is for AI agents such as Claude Code, Cursor, or similar operator flows. Prefer automation. Ask the user only when detection fails or a choice materially changes the outcome.
 
----
+For user-facing installation details, see [INSTALL.md](./INSTALL.md) or [INSTALL-ZH.md](./INSTALL-ZH.md).
 
-## Step 0: Choose Target OpenClaw Instance
+## Goal
 
-Check if the user has multiple OpenClaw instances:
+Choose the smallest action that matches the user's intent:
+
+| User intent | Command |
+| --- | --- |
+| Fresh install, latest | `npm install -g openclaw-openviking-setup-helper@latest && ov-install` |
+| Upgrade plugin + OpenViking to latest | `npm install -g openclaw-openviking-setup-helper@latest && ov-install -y` |
+| Install or upgrade a specific release | `npm install -g openclaw-openviking-setup-helper@latest && ov-install -y --version 0.2.9` |
+| Upgrade only the plugin | `ov-install --update` |
+| Show installed versions | `ov-install --current-version` |
+| Operate on a specific OpenClaw instance | add `--workdir <path>` |
+
+Default rule: when upgrading, refresh the setup helper first unless the user explicitly asks to pin the helper itself.
+
+## Detection Rules
+
+### 1. Detect OpenClaw instance
+
+If the user did not specify a workdir, check for multiple OpenClaw instances:
 
 ```bash
 ls -d ~/.openclaw* 2>/dev/null
 ```
 
-If multiple directories exist (e.g. `~/.openclaw`, `~/.openclaw-openclaw-second`), ask the user which instance to install to. Pass the chosen directory via `--workdir`:
+- If only one instance exists, use it.
+- If multiple instances exist, ask which instance to operate on, or pass `--workdir`.
 
-```bash
-npx ./examples/openclaw-plugin/setup-helper --workdir ~/.openclaw-openclaw-second
-```
+### 2. Detect environment
 
-If only `~/.openclaw` exists, proceed with the default.
-
-## Step 1: Choose Deployment Mode
-
-Ask the user: "How do you want to use OpenViking?"
-
-- **A) Local** — Run OpenViking on this machine (requires Python >= 3.10)
-- **B) Remote** — Connect to an existing OpenViking server (only needs the server URL and API Key)
-
-→ A: Go to [Local Deployment Path](#local-deployment-path)
-→ B: Go to [Remote Connection Path](#remote-connection-path)
-
----
-
-## Local Deployment Path
-
-### Step L1: Check Environment
-
-Run each check. Every check must pass before continuing.
-
-**1. Python**
+Verify:
 
 ```bash
 python3 --version
-```
-
-- Pass: >= 3.10
-- Fail: Tell user "Python >= 3.10 is required. Install from https://www.python.org/downloads/"
-- Multiple versions: Ask user which Python path to use
-
-**2. Node.js**
-
-```bash
 node -v
-```
-
-- Pass: >= v22
-- Fail: Tell user "Node.js >= 22 is required. Install from https://nodejs.org/"
-
-**3. OpenClaw**
-
-```bash
 openclaw --version
 ```
 
-- Pass: Version output present
-- Fail: Tell user to run `npm install -g openclaw && openclaw onboard`
+Requirements:
 
-### Step L2: Install OpenViking
+- Python >= 3.10
+- Node.js >= 22
+- OpenClaw >= 2026.3.7
+
+If OpenClaw is missing, tell the user to run:
 
 ```bash
-python3 -m pip install openviking --upgrade
+npm install -g openclaw && openclaw onboard
 ```
 
-- Pass: Continue
-- Fail with `externally-managed`:
-  ```bash
-  python3 -m venv ~/.openviking/venv
-  ~/.openviking/venv/bin/pip install openviking --upgrade
-  ```
-  Set `OPENVIKING_PYTHON=~/.openviking/venv/bin/python` for later steps
-- Fail with `No matching distribution`: Python is below 3.10, tell user to upgrade
-- Other failure: Print full error, ask user
+### 3. Detect existing install state
 
-Verify:
+Use:
 
 ```bash
-python3 -c "import openviking; print('ok')"
+ov-install --current-version
 ```
 
-### Step L3: Configure
+This reports:
 
-Check if `~/.openviking/ov.conf` already exists:
+- installed plugin release
+- requested plugin ref
+- installed OpenViking version
+- installation time
 
-- **Exists**: Ask user "Found existing config at ~/.openviking/ov.conf. Keep it?"
-  - Yes: Skip to Step L4
-  - No: Continue with configuration below
+## Standard Workflows
 
-- **Does not exist**: Collect configuration
+### Latest Install
 
-**Ask user for API Key:**
-
-> "Please provide your Volcengine Ark API Key (used for Embedding and VLM model calls).
-> Get one at https://console.volcengine.com/ark if you don't have one."
-
-Run the setup helper:
+Use for fresh installs:
 
 ```bash
-npm install -g openclaw-openviking-setup-helper
+npm install -g openclaw-openviking-setup-helper@latest
 ov-install
 ```
 
-At the interactive prompts:
-- Workspace: Press Enter for default path
-- API Key: Enter the user's key
-- VLM model: Press Enter for default `doubao-seed-2-0-pro-260215`
-- Embedding model: Press Enter for default `doubao-embedding-vision-251215`
-- Ports: Press Enter for default 1933/1833
+Notes:
 
-Wait for `Setup complete!`
+- `ov-install` is interactive on first install.
+- In local mode, it generates `~/.openviking/ov.conf` and `~/.openclaw/openviking.env`.
+- In remote mode, it stores remote connection settings in `plugins.entries.openviking.config`.
 
-### Step L4: Start and Verify
+### Latest Upgrade
 
-```bash
-source ~/.openclaw/openviking.env && openclaw gateway
-```
-
-- Pass: Output contains `openviking: local server started`
-- Fail with `port occupied`:
-  The port is used by another process. Change port:
-  ```bash
-  openclaw config set plugins.entries.openviking.config.port 1934
-  source ~/.openclaw/openviking.env && openclaw gateway
-  ```
-- Fail with `subprocess exited`: Check stderr for Python errors — usually wrong API Key or openviking not installed properly
-
-Verify:
+Use when the user wants both the plugin and OpenViking runtime upgraded:
 
 ```bash
-openclaw status
+npm install -g openclaw-openviking-setup-helper@latest
+ov-install -y
 ```
 
-ContextEngine line should show `enabled (plugin openviking)`.
+Current behavior:
 
-Tell user: "OpenViking memory is active. I'll automatically remember important facts from our conversations and recall them when relevant."
+- plugin version defaults to the latest repo tag
+- OpenViking runtime is upgraded through pip during install
+- `-y` runs the non-interactive path; verify the resulting plugin config after upgrade if the target instance has custom settings
 
----
+### Release-Pinned Install or Upgrade
 
-## Remote Connection Path
-
-### Step R1: Collect Connection Info
-
-Ask user for:
-
-1. **OpenViking server URL** (e.g. `http://10.0.0.1:1933`)
-   > This is the OpenViking HTTP API address.
-
-2. **OpenViking API Key** (optional)
-   > Required if the server has `root_api_key` configured. This authenticates to the OpenViking server — it is NOT a Volcengine Ark API Key.
-
-### Step R2: Check Environment
-
-**1. Node.js**
+Use when the user names a release such as `0.2.9`:
 
 ```bash
-node -v
+npm install -g openclaw-openviking-setup-helper@latest
+ov-install -y --version 0.2.9
 ```
 
-- Pass: >= v22
-- Fail: Tell user to install Node.js >= 22
+This is shorthand for:
 
-**2. OpenClaw**
+- plugin version `v0.2.9`
+- OpenViking version `0.2.9`
+
+### Plugin-Only Upgrade
+
+Use only when the user explicitly wants to keep the current OpenViking runtime version unchanged:
 
 ```bash
-openclaw --version
+ov-install --update
 ```
 
-- Pass: Version output present
-- Fail: `npm install -g openclaw && openclaw onboard`
+Do not combine `--update` with `--version` or `--openviking-version`.
 
-> Remote mode does **not** require Python — OpenViking runs on the remote server.
+### Legacy Plugin Cleanup
 
-### Step R3: Install Plugin and Configure
+If the machine previously used `memory-openviking`, run the bundled cleanup script from this repository:
 
 ```bash
-npm install -g openclaw-openviking-setup-helper
-ov-install
-# Select remote mode, enter OpenViking server URL and API Key
+bash examples/openclaw-plugin/upgrade_scripts/cleanup-memory-openviking.sh
 ```
 
-Alternatively, configure manually (substitute user-provided values). If targeting a non-default instance, prefix each command with `OPENCLAW_STATE_DIR=<workdir>`:
+Then continue with install or upgrade.
+
+## Verification
+
+### Check plugin slot
 
 ```bash
-openclaw config set plugins.enabled true --json
-openclaw config set plugins.slots.contextEngine openviking
-openclaw config set plugins.entries.openviking.config.mode remote
-openclaw config set plugins.entries.openviking.config.baseUrl "<user's server URL>"
-openclaw config set plugins.entries.openviking.config.apiKey "<user's API Key>"
-openclaw config set plugins.entries.openviking.config.autoRecall true --json
-openclaw config set plugins.entries.openviking.config.autoCapture true --json
+openclaw config get plugins.slots.contextEngine
 ```
 
-If user has no API Key (server auth not enabled), skip the apiKey line.
+Expected output:
 
-### Step R4: Start and Verify
+```text
+openviking
+```
+
+### Check plugin config
 
 ```bash
-openclaw gateway
+openclaw config get plugins.entries.openviking.config
 ```
 
-- Pass: Output contains `openviking: initialized`
-- Fail with connection error: Verify server is reachable — `curl <baseUrl>/health` should return `{"status":"ok"}`
+### Check logs
+
+OpenClaw log:
 
 ```bash
-openclaw status
+openclaw logs --follow
 ```
 
-ContextEngine line should show `enabled (plugin openviking)`.
+Look for:
 
-Tell user: "OpenViking memory is connected to the remote server. I'll automatically remember important facts and recall them when relevant."
+```text
+openviking: registered context-engine
+```
 
----
+OpenViking service log, default local path:
 
-## Field Reference
+```bash
+cat ~/.openviking/data/log/openviking.log
+```
 
-| Field | Meaning | Required For |
-|-------|---------|-------------|
-| Volcengine Ark API Key | Embedding + VLM model access | Local |
-| OpenViking API Key | Server authentication key | Remote (if server has auth enabled) |
-| agentId | Identifies this agent to OpenViking | Both (auto-generated if not set) |
-| baseUrl | OpenViking HTTP address | Remote |
-| workspace | Data storage directory | Local |
-| server port | OpenViking HTTP port (default 1933) | Local |
-| VLM model | Memory extraction model | Local |
-| Embedding model | Text vectorization model | Local |
+### Pipeline Health Check (Optional)
 
----
+If the checks above all pass and you want to further verify the full Gateway → OpenViking pipeline, run the health check script:
 
-## Troubleshooting
+```bash
+python examples/openclaw-plugin/health_check_tools/ov-healthcheck.py
+```
 
-| Error | Cause | Fix |
-|-------|-------|-----|
-| `port occupied` | Port used by another process | Change port in config, e.g. `openclaw config set plugins.entries.openviking.config.port 1934` |
-| `extracted 0 memories` | Wrong API Key or model name | Check `api_key` and `model` in `~/.openviking/ov.conf` |
-| `externally-managed-environment` | Python PEP 668 restriction | Install via venv |
-| `ECONNREFUSED` | Remote server unreachable | Verify baseUrl and network connectivity |
-| Plugin not loaded | Env file not sourced | `source ~/.openclaw/openviking.env` (local mode) |
+This injects a real conversation through Gateway and verifies from the OpenViking side that the session was captured, committed, archived, and had memories extracted. See [health_check_tools/HEALTHCHECK.md](./health_check_tools/HEALTHCHECK.md) for full details.
+
+### Start commands
+
+Local mode:
+
+```bash
+source ~/.openclaw/openviking.env && openclaw gateway restart
+```
+
+Remote mode:
+
+```bash
+openclaw gateway restart
+```
+
+## Plugin Config Reference
+
+### Local Mode
+
+Check the whole config first:
+
+```bash
+openclaw config get plugins.entries.openviking.config
+```
+
+Core OpenClaw plugin fields:
+
+- `mode=local`
+- `configPath`
+- `port`
+- `agentId`
+
+Service-side model configuration is not stored in the OpenClaw plugin config. It lives in `~/.openviking/ov.conf`, especially:
+
+- `vlm.api_key`
+- `vlm.model`
+- `embedding.dense.api_key`
+- `embedding.dense.model`
+- `server.port`
+
+### Remote Mode
+
+Check the whole config first:
+
+```bash
+openclaw config get plugins.entries.openviking.config
+```
+
+Core OpenClaw plugin fields:
+
+- `mode=remote`
+- `baseUrl`
+- `apiKey`
+- `agentId`
+
+## Uninstall
+
+Plugin only:
+
+```bash
+bash examples/openclaw-plugin/upgrade_scripts/uninstall-openclaw-plugin.sh
+```
+
+Plugin + local OpenViking runtime:
+
+```bash
+python3 -m pip uninstall openviking -y && rm -rf ~/.openviking
+```

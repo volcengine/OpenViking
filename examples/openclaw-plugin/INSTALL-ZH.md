@@ -1,562 +1,212 @@
 # 为 OpenClaw 安装 OpenViking 记忆功能
 
-通过 [OpenViking](https://github.com/volcengine/OpenViking) 为 [OpenClaw](https://github.com/openclaw/openclaw) 提供长效记忆能力。安装完成后，OpenClaw 将自动**记住**对话中的重要信息，并在回复前**回忆**相关内容。OpenViking 最新版本发布了 [WebConsole](https://github.com/volcengine/OpenViking/tree/main/openviking/console)，方便调试和运维。文档方式三也提供了如何在 WebConsole 界面验证记忆写入的说明，欢迎试用和反馈。
+通过 [OpenViking](https://github.com/volcengine/OpenViking) 为 [OpenClaw](https://github.com/openclaw/openclaw) 提供长效记忆能力。安装完成后，OpenClaw 会自动记住对话中的重要信息，并在回复前回忆相关内容。
 
-> **ℹ️ 历史兼容性说明**
->
-> 旧版 OpenViking/OpenClaw 集成方案在 OpenClaw `2026.3.12` 附近曾出现过已知兼容性问题，表现为加载插件后对话卡死无响应。
-> 该问题主要影响旧版本插件链路；当前文档介绍的 context-engine 插件 2.0 已不再受此问题影响，新的安装流程无需因此回退 OpenClaw。
-> 同时，插件 2.0 与旧版 `memory-openviking` 插件及其配置不兼容，升级时需要按本文迁移步骤完成替换，不能混装。
-> 插件 2.0 也依赖 OpenClaw 的 context-engine 能力，不支持旧版 OpenClaw；请升级到当前安装助手支持的较新 OpenClaw 版本后再安装。
-> 如需排查旧版本部署，可参考 [#591](https://github.com/volcengine/OpenViking/issues/591) 以及上游修复 PR：openclaw/openclaw#34673、openclaw/openclaw#33547。
+> 当前文档介绍的是基于 `context-engine` 架构的新版 OpenViking 插件。
 
-> **🚀 插件 2.0（context-engine 架构）**
->
-> 当前文档介绍的是基于 context-engine 架构的 OpenViking 插件 2.0 方案，也是 OpenViking 接入 AI 编程助手的推荐实践。
-> 更多背景和演进讨论可见：https://github.com/volcengine/OpenViking/discussions/525
+## 前置条件
 
----
+| 组件 | 版本要求 |
+| --- | --- |
+| Python | >= 3.10 |
+| Node.js | >= 22 |
+| OpenClaw | >= 2026.3.7 |
 
-## 一键安装
+快速检查：
 
-该安装方式支持您从 安装 - 验证 - 读取 - 写入 - 查看 一站式了解OpenViking。 
-
-**前置条件：** Python >= 3.10，Node.js >= 22。安装助手会自动检查并提示安装缺少的组件。
-
-### 从旧版 `memory-openviking` 升级到新版 `openviking` 前置操作步骤
-
-- 如果当前环境里已经安装过旧版插件 `memory-openviking`，建议先完成以下前置操作，再执行新版安装。
-
-- 如果您之前没有安装过，可以跳过此步骤，直接查看 **“正式安装”** 环节。
-
-- 插件 2.0 与旧版插件/旧版配置不兼容，需避免旧版和新版插件同时存在。
-
-#### 方式 A：下载并执行旧版插件清理脚本 (推荐)
 ```bash
-curl -O https://github.com/volcengine/OpenViking/blob/main/examples/openclaw-plugin/upgrade_scripts/cleanup-memory-openviking.sh
+python3 --version
+node -v
+openclaw --version
+```
+
+## 旧版升级说明
+
+如果你之前安装过旧版 `memory-openviking`，先清理旧插件，再执行下面的安装或升级命令。
+
+- 新版 `openviking` 与旧版 `memory-openviking` 不兼容，不能混装。
+- 如果你从未安装过旧版插件，可以跳过本节。
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/upgrade_scripts/cleanup-memory-openviking.sh -o cleanup-memory-openviking.sh
 bash cleanup-memory-openviking.sh
 ```
 
-#### 方式 B：手动执行命令清理旧版本插件配置
-1. 停止 OpenClaw gateway：
+## 安装
 
-```bash
-openclaw gateway stop
-```
-
-2. 备份旧版本配置和插件目录：
-
-```bash
-cp ~/.openclaw/openclaw.json ~/.openclaw/openclaw.json.pre-openviking-upgrade.bak
-mkdir -p ~/.openclaw/disabled-extensions
-mv ~/.openclaw/extensions/memory-openviking ~/.openclaw/disabled-extensions/memory-openviking-upgrade-backup
-```
-
-3. 修改 OpenClaw 配置，移除旧版本配置参数：
-
-编辑 `~/.openclaw/openclaw.json`，删除 `plugins.allow` 中的 `"memory-openviking"`，删除 `plugins.entries.memory-openviking`，并将 `plugins.slots.memory` 改为 `"none"`，将 `plugins.load.paths`中旧版本 `memory-openviking` 插件路径修改为`openviking`。
-
-按照上述方式清理完成旧版插件配置后，参考下面安装方式A或者安装方式B的操作步骤，安装新版插件;
-
-保留并迁移旧版本运行参数到新版本配置（新版本默认可用，旧版本参数按需迁移）：
-
-如果旧版本原来使用的是 `plugins.entries.memory-openviking.config`，请将第二步备份的openclaw配置文件中的 `mode`、`configPath`、`port`、`baseUrl`、`apiKey`、`agentId` 等参数按需迁移到新版 `plugins.entries.openviking.config`。
-
-前置步骤根据您的个人情况按需执行，完成以后，即可进入2.0的安装环节，在此我们暂时不建议直接自然语言安装，推荐使用 npm 一键安装。
-
-### 正式安装
-
-#### 方式 A：npm 安装（推荐，含 Windows）
-
-**Windows** 与 macOS / Linux 相同：在 **PowerShell** 或 **cmd** 中执行下面的 `npm`、`npx`、`ov-install` 即可（需已安装 Node.js ≥ 22）。指定其它 OpenClaw 数据目录时，把 `--workdir` 换成本机路径（例如 `%USERPROFILE%\.openclaw-second`）。
+推荐使用 `npm` + `ov-install`。macOS、Linux、Windows 的流程相同。
 
 ```bash
 npm install -g openclaw-openviking-setup-helper
+
+# 安装插件
 ov-install
-```
 
-非交互模式（使用默认配置）：
-
-```bash
-ov-install -y
-```
-
-安装到指定 OpenClaw 实例：
-
-```bash
+# 安装插件到指定 OpenClaw 实例
 ov-install --workdir ~/.openclaw-second
 ```
 
-#### 指定版本（npm / `ov-install`）
+## 升级
 
-npm 上的安装助手包名为 [`openclaw-openviking-setup-helper`](https://www.npmjs.com/package/openclaw-openviking-setup-helper)。默认安装最新版；若需固定 **npm 上某一发布版本**，在包名后追加 `@VERSION`（VERSION 为 npm 上可见的 dist-tag 或版本号）：
-
-```bash
-npm install -g openclaw-openviking-setup-helper
-ov-install -y
-```
-
-不全局安装、用 npx 直接跑（同样可在包名后加 `@VERSION` 固定安装助手版本）：
+要把 OpenViking 和插件一起升级到最新版本，执行：
 
 ```bash
-npx -y -p openclaw-openviking-setup-helper ov-install -y
+npm install -g openclaw-openviking-setup-helper@latest && ov-install -y
 ```
 
-使用 **`ov-install`** 可指定 **插件代码对应的 Git 引用** 以及 **PyPI 上的 OpenViking 版本**：
+## 安装或升级到指定版本
+
+如果要安装或升级到某个正式发布版本，执行：
+
+```bash
+ov-install -y --version 0.2.9
+```
+
+## 参数说明
 
 | 参数 | 含义 |
 | --- | --- |
-| `--github-repo owner/repo` | 从哪个 GitHub 仓库拉取插件文件（默认：`volcengine/OpenViking`） |
-| `--plugin-version REF` | 分支、tag 或 commit，用于拉取插件（默认：`volcengine/OpenViking` 仓库中的最新 tag） |
-| `--openviking-version VER` | 固定为 `pip install openviking==VER`（不写则安装 PyPI 最新版） |
+| `--workdir PATH` | 指定 OpenClaw 数据目录 |
+| `--version VER` | 同时指定插件版本和 OpenViking 版本，例如 `0.2.9` 会对应插件 `v0.2.9` |
+| `--current-version` | 查看当前已安装的插件版本和 OpenViking 版本 |
+| `--plugin-version REF` | 指定插件版本，支持 tag、分支或 commit |
+| `--openviking-version VER` | 指定 PyPI 上的 OpenViking 版本 |
+| `--github-repo owner/repo` | 指定插件来源仓库，默认 `volcengine/OpenViking` |
+| `--update` | 只升级插件，不升级 OpenViking 服务版本 |
+| `-y` | 非交互模式，使用默认配置 |
 
-示例：
+## OpenClaw 插件参数说明
 
-```bash
-# 安装指定 tag 版本的插件（例如 v0.2.9）
-ov-install -y --plugin-version v0.2.9
+插件配置写在 `plugins.entries.openviking.config` 下。通常安装助手会自动写好，只有在你需要手动调整时，才需要关注下面这些参数。
 
-# 固定 PyPI 上的 OpenViking 版本，插件默认仍跟随仓库最新 tag
-ov-install -y --openviking-version 0.2.9
-
-# 同时指定插件 tag 和 OpenViking PyPI 版本
-ov-install -y --plugin-version v0.2.9 --openviking-version 0.2.9
-
-# 安装旧版插件链路（如需使用旧插件，请在 v0.2.3-v0.2.6 范围内选择版本）
-ov-install -y --plugin-version <legacy-version>
-```
-
-等价环境变量：`REPO`（同 `--github-repo`）、`PLUGIN_VERSION` / `BRANCH`、`OPENVIKING_VERSION`。
-
-#### 升级与回滚（`ov-install`）
-
-使用 `--update` / `--upgrade-plugin` 时，只会升级**插件本身**到指定 `--plugin-version`，不会升级 OpenViking 服务版本。该模式会：
-
-- 保留现有的 OpenViking 服务版本
-- 保留现有的 `~/.openviking/ov.conf`
-- 保留当前插件运行配置
-- 本地模式下保留 `configPath` 和 `port`
-- 远端模式下保留 `baseUrl`、`apiKey`、`agentId`
-- 只清理 `openclaw.json` 中 OpenViking 自己的插件配置，不影响其它插件
-- 在替换插件前备份 `openclaw.json` 和上一版插件目录
-- 在命令输出中记录升级路径和回滚审计文件位置
-
-不要把 `--update` 和 `--openviking-version` 一起使用；如果需要修改 OpenViking 服务版本，请走完整安装流程。
+查看当前插件整体配置：
 
 ```bash
-# 只升级插件到指定 tag
-ov-install --update --plugin-version v0.2.9
-
-# 只升级插件到指定分支
-ov-install --update --plugin-version dev-branch
-
-# 从指定 GitHub 仓库 + 分支升级插件
-ov-install --update --github-repo yourname/OpenViking --plugin-version dev-branch
-
-# 回滚最近一次插件升级
-ov-install --rollback
+openclaw config get plugins.entries.openviking.config
 ```
 
-升级备份默认保存在：
+### Local 模式
 
-- `~/.openclaw/.openviking-upgrade-backup/openclaw.json.bak`
-- `~/.openclaw/.openviking-upgrade-backup/last-upgrade.json`
-- `~/.openclaw/disabled-extensions/<pluginId>-upgrade-backup-*`
+适用于由 OpenClaw 插件在本机拉起 OpenViking 服务的场景。
 
-`--rollback` 会恢复最近一次 `--update` 生成的 `openclaw.json` 备份和插件目录备份。
+| 参数 | 默认值 | 含义 |
+| --- | --- | --- |
+| `mode` | `local` | `local` 表示由插件拉起本机 OpenViking；`remote` 表示连接已有远端 OpenViking 服务 |
+| `agentId` | `default` | 当前 OpenClaw 实例在 OpenViking 侧使用的标识 |
+| `configPath` | `~/.openviking/ov.conf` | 本机 OpenViking 配置文件路径 |
+| `port` | `1933` | 本机 OpenViking HTTP 端口 |
 
-**Windows：** 升级与回滚命令与上表相同，在 PowerShell / cmd 中执行即可。
+`local` 模式下，VLM、Embedding、API Key 等服务端配置写在 `~/.openviking/ov.conf`，不写在 OpenClaw 插件参数里。常见项包括：
 
-备注：在运行 `npm install -g openclaw-openviking-setup-helper` 命令时，可能会出现没有安装创建虚拟环境的工具的报错提示，可以直接复制报错提示中的解决方案执行：
-
-```bash
-apt update
-apt install -y software-properties-common
-add-apt-repository universe
-apt update
-apt install -y python3-venv
-```
-运行完上面这几行命令后，再次执行你的安装命令：
-
-```bash
-ov-install
-```
-
-这次脚本就能成功创建一个隔离的虚拟环境，并顺利把 OpenViking 安装进去了，而且不会破坏你的系统环境。
-
-出现`installation completed`即代表安装成功。
-
-#### 方式 B（可选）：curl 一键安装（Linux / macOS）
-
-**Windows** 请优先使用上文 **方式 A（`npm` / `ov-install`）**。`curl | bash` 需要 Bash 环境；若已在 **Git Bash** 或 **WSL** 中操作，可执行本节命令。
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash
-```
-
-非交互模式：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash -s -- -y
-```
-
-安装到指定 OpenClaw 实例：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash -s -- --workdir ~/.openclaw-second -y
-```
-
-#### 指定版本（`install.sh`）
-
-| 参数 / 环境变量 | 含义 |
+| 配置项 | 含义 |
 | --- | --- |
-| `--repo owner/repo`、`REPO` | 从哪个 GitHub 仓库拉取插件文件（默认：`volcengine/OpenViking`） |
-| `--plugin-version REF`、`PLUGIN_VERSION` | 分支、tag 或 commit（默认：最新 tag；兼容旧变量 `BRANCH`） |
-| `--openviking-version VER`、`OPENVIKING_VERSION` | `pip install openviking==VER`（不写则安装 PyPI 最新版） |
+| `vlm.api_key` / `vlm.model` / `vlm.api_base` | 记忆抽取使用的 VLM 模型配置 |
+| `embedding.dense.api_key` / `embedding.dense.model` / `embedding.dense.api_base` | 向量化使用的 Embedding 模型配置 |
+| `server.port` | OpenViking 服务监听端口 |
 
-示例：
-
-```bash
-# 安装指定 tag 版本的插件（例如 v0.2.9）
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash -s -- \
-  --plugin-version v0.2.9 -y
-
-# 固定 PyPI 上的 OpenViking 版本
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash -s -- \
-  --openviking-version 0.2.9 -y
-
-# 同时指定插件 tag 和 OpenViking PyPI 版本
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash -s -- \
-  --plugin-version v0.2.9 --openviking-version 0.2.9 -y
-```
-
-#### 升级与回滚（`install.sh`）
-
-`curl | bash` 入口现在直接由 `install.sh` 原生执行升级和回滚逻辑，不依赖机器上预先安装全局安装助手，也支持“只升级插件”和“回滚最近一次插件升级”：
+常见设置：
 
 ```bash
-# 只升级插件到指定 tag
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash -s -- \
-  --update --plugin-version v0.2.9
-
-# 只升级插件到指定分支
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash -s -- \
-  --update --plugin-version dev-branch
-
-# 从指定 GitHub 仓库 + 分支升级插件
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash -s -- \
-  --update --repo yourname/OpenViking --plugin-version dev-branch
-
-# 回滚最近一次插件升级
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash -s -- \
-  --rollback
+openclaw config set plugins.entries.openviking.config.mode local
+openclaw config set plugins.entries.openviking.config.configPath ~/.openviking/ov.conf
+openclaw config set plugins.entries.openviking.config.port 1933
 ```
 
-`--update` 模式只改插件，不改 OpenViking 服务版本，因此不要搭配 `--openviking-version`。
+### Remote 模式
 
-Shell 原生升级行为：
+适用于连接已有远端 OpenViking 服务的场景。
 
-- 保留当前 local / remote 模式下的插件配置
-- 不会重写 `~/.openviking/ov.conf`
-- 会把 `openclaw.json` 备份到 `~/.openclaw/.openviking-upgrade-backup/openclaw.json.bak`
-- 会把回滚审计写到 `~/.openclaw/.openviking-upgrade-backup/last-upgrade.json`
-- 每个插件只保留一份最新的目录备份，位置在 `~/.openclaw/disabled-extensions/`
-- 升级成功后会打印 `Upgrade path: <from> -> <to>`
+| 参数 | 默认值 | 含义 |
+| --- | --- | --- |
+| `mode` | `remote` | 使用已有远端 OpenViking 服务 |
+| `baseUrl` | `http://127.0.0.1:1933` | 远端 OpenViking 服务地址 |
+| `apiKey` | 空 | 远端 OpenViking API Key；服务端未开启认证时可不填 |
+| `agentId` | `default` | 当前 OpenClaw 实例在远端 OpenViking 上的标识 |
 
-`install.sh` 会检测本机多个 OpenClaw 实例并供选择；首次安装会询问 local/remote；仅升级插件时会复用现有模式与配置。
+常见设置：
 
-### 启动OpenClaw + OpenViking
+```bash
+openclaw config set plugins.entries.openviking.config.mode remote
+openclaw config set plugins.entries.openviking.config.baseUrl http://your-server:1933
+openclaw config set plugins.entries.openviking.config.apiKey your-api-key
+openclaw config set plugins.entries.openviking.config.agentId your-agent-id
+```
 
-安装成功以后，运行以下命令启动 OpenClaw + OpenViking
+## 启动
+
+安装完成后，运行：
 
 ```bash
 source ~/.openclaw/openviking.env && openclaw gateway restart
 ```
 
-Windows PowerShell 可使用：
+Windows PowerShell：
 
 ```powershell
 . "$HOME/.openclaw/openviking.env.ps1"
 openclaw gateway restart
 ```
-出现 `openviking: registered context-engine` 代表拉取成功。
 
-接着，执行
+## 验证
+
+检查插件是否已接管 `contextEngine`：
 
 ```bash
 openclaw config get plugins.slots.contextEngine
 ```
 
-出现 `openviking`，则验证启动成功。
+输出 `openviking` 即表示插件已生效。
 
-### 验证读取和写入
-
-现在可以自由和 OpenClaw 进行交互和对话，过程中，你可以通过以下命令查看 OpenViking 运行状态，验证读取和写入：
-
-验证读取：`cat 填入您的日志文件路径（如：/tmp/openclaw/openclaw-2026-03-20.log） |grep auto-capture`
-
-验证写入：`cat 填入您的日志文件路径（如：/tmp/openclaw/openclaw-2026-03-20.log） |grep inject`
-
-OpenClaw日志查看：`openclaw logs --follow`，出现 `openviking: auto-captured 2 new messages, extracted 1 memories` 说明状态正常
-
-### 通过 ov tui 查看您的记忆文件
-
-我们提供了命令行查看 OpenViking 中虚拟文件的方式，首先 `cd` 到您的 OpenViking 目录，`source venv/bin/activate`激活虚拟环境
-
-输入 `ov --help`了解 OpenViking 具体命令，输入 `ov tui`即可进入文件界面，按`.`可打开文件夹，支持方向键上下查看文件，按`q`退出。
-
----
-
-## 前置条件
-
-| 组件 | 版本要求 | 用途 |
-|------|----------|------|
-| **Python** | >= 3.10 | OpenViking 运行时 |
-| **Node.js** | >= 22 | OpenClaw 运行时 |
-| **火山引擎 Ark API Key** | — | Embedding + VLM 模型调用 |
-
-快速检查：
+查看运行日志：
 
 ```bash
-python3 --version   # >= 3.10
-node -v              # >= v22
-openclaw --version   # 已安装
+openclaw logs --follow
 ```
 
-- Python: https://www.python.org/downloads/
-- Node.js: https://nodejs.org/
-- OpenClaw: `npm install -g openclaw && openclaw onboard`
+日志中出现 `openviking: registered context-engine`，表示插件已成功加载。
 
----
+查看 OpenViking 自身日志：
 
-## 方式一：本地部署（推荐）
-
-在本机启动 OpenViking 服务，适合个人使用。
-
-### Step 1: 安装 OpenViking
+默认日志文件在你的 `workspace/data/log/openviking.log`。如果使用默认配置，通常对应：
 
 ```bash
-python3 -m pip install openviking --upgrade
+cat ~/.openviking/data/log/openviking.log
 ```
 
-验证：`python3 -c "import openviking; print('ok')"`
-
-> 遇到 `externally-managed-environment`？使用一键安装脚本（自动处理 venv）或手动创建：
-> `python3 -m venv ~/.openviking/venv && ~/.openviking/venv/bin/pip install openviking`
-
-### Step 2: 运行安装助手
+查看当前已安装版本：
 
 ```bash
-# 方式 A：npm 安装（推荐，全平台）
-npm install -g openclaw-openviking-setup-helper
-ov-install
-
-# 方式 B：curl 一键安装（Linux / macOS）
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash
+ov-install --current-version
 ```
 
-安装助手会提示输入 Ark API Key 并自动生成配置文件。
+### 链路检查（可选）
 
-### Step 3: 启动
+如果上述验证都正常，还想进一步确认从 Gateway 到 OpenViking 的完整链路是否通畅，可以使用插件自带的健康检查脚本：
 
 ```bash
-source ~/.openclaw/openviking.env && openclaw gateway
+python examples/openclaw-plugin/health_check_tools/ov-healthcheck.py
 ```
 
-看到 `openviking: local server started` 表示成功。
-
-### Step 4: 验证
-
-```bash
-openclaw status
-# Memory 行应显示：enabled (plugin openviking)
-```
-
----
-
-## 方式二：连接远端 OpenViking
-
-已有运行中的 OpenViking 服务？只需配置 OpenClaw 插件指向远端，**不需要安装 Python / OpenViking**。
-
-**前置：** 已有 OpenViking 服务地址 + API Key（如服务端启用了认证）。
-
-### Step 1: 安装插件
-
-```bash
-npm install -g openclaw-openviking-setup-helper
-ov-install
-# 选择 remote 模式，填入 OpenViking 服务地址和 API Key
-```
-
-### Step 2: 启动并验证
-
-```bash
-openclaw gateway restart
-openclaw status
-```
-
-<details>
-<summary>手动配置（不使用安装助手）</summary>
-
-```bash
-openclaw config set plugins.enabled true --json
-openclaw config set plugins.slots.contextEngine openviking
-openclaw config set plugins.entries.openviking.config.mode remote
-openclaw config set plugins.entries.openviking.config.baseUrl "http://your-server:1933"
-openclaw config set plugins.entries.openviking.config.apiKey "your-api-key"
-openclaw config set plugins.entries.openviking.config.agentId "your-agent-id"
-openclaw config set plugins.entries.openviking.config.autoRecall true --json
-openclaw config set plugins.entries.openviking.config.autoCapture true --json
-```
-
-</details>
-
-## 方式三 火山引擎 ECS 版 Openclaw 接入 OpenViking
-
-本部分主要介绍如何在火山引擎ECS上接入OpenViking，并使用WebConsole验证写入。详情可见[文档](https://www.volcengine.com/docs/6396/2249500?lang=zh)。
-
-需注意 ECS 实例为了保护系统 Python 不被弄坏，在根目录（root）部署会有限制，不能直接用 pip 装全局包，推荐先创建虚拟环境，在虚拟环境下完成以下操作步骤。
-
-**前置：** 已有 ECS OpenClaw实例。
-
-### Step 1: npm 安装
-
-```python
-npm install -g openclaw-openviking-setup-helper
-ov-install
-```
-本安装模式已经在OpenViking内置了vlm和embedding模型，若不需要修改，直接按回车，按照指引填入API key即可. 安装完成后，会自动生成配置文件，如需修改，输入 vim ~/.openviking/ov.conf，按 i 进入编辑模式，按 esc 键退出编辑模式，输入 :wq 按回车键，保存并退出文件。
-
-终端加载 OpenClaw 环境变量：
-
-```bash
-source /root/.openclaw/openviking.env
-```
-### Step 2: 启动OpenViking
-
-先启动 OpenViking Server：
-
-```python
-python -m openviking.server.bootstrap
-```
-然后启动 web 控制台，启动之前，需要确认本实例安全组是否已经在入向规则处开放 TCP 8020 端口，若没有，需先点击实例安全组配置：
-
-```python
-python -m openviking.console.bootstrap --host 0.0.0.0 --port 8020 --openviking-url http://127.0.0.1:1933
-```
-在实例中，找到你的服务器公网IP，用你的服务器公网IP访问: http://你的服务器公网IP:8020
-
-即可开始体验 web console 🎉
-
-你可以直接在web界面查询文件信息，验证OpenViking memory-plugin记忆写入是否生效；也可以可以在OpenClaw日志中验证openviking是否读取记忆，验证方式：
-
-
-```bash
-grep -i inject /tmp/openclaw/openclaw-2026-03-13.log | awk -F'"' '{for(i=1;i<=NF;i++) if($i ~ /^[0-9]{2}:[0-9]{2}:[0-9]{2}/) {time=$i; break}} /injecting [0-9]+ memories/ {print time, "openviking:", gensub(/.*(injecting [0-9]+ memories).*/, "\\1", "1")}'
-```
-
-也可以直接运行grep "inject" /tmp/openclaw/openclaw-2026-03-13.log查看全部信息。
-
-
----
-
-## 配置参考
-
-### `~/.openviking/ov.conf`（本地模式）
-
-```json
-{
-  "root_api_key": null,
-  "server": { "host": "127.0.0.1", "port": 1933 },
-  "storage": {
-    "workspace": "/home/yourname/.openviking/data",
-    "vectordb": { "backend": "local" },
-    "agfs": { "backend": "local", "port": 1833 }
-  },
-  "embedding": {
-    "dense": {
-      "provider": "volcengine",
-      "api_key": "<your-ark-api-key>",
-      "model": "doubao-embedding-vision-251215",
-      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-      "dimension": 1024,
-      "input": "multimodal"
-    }
-  },
-  "vlm": {
-    "provider": "volcengine",
-    "api_key": "<your-ark-api-key>",
-    "model": "doubao-seed-2-0-pro-260215",
-    "api_base": "https://ark.cn-beijing.volces.com/api/v3"
-  }
-}
-```
-
-> `root_api_key`：设置后，所有 HTTP 请求须携带 `X-API-Key` 头。本地模式默认为 `null`（不启用认证）。
-
-### `agentId` 配置（插件配置）
-
-通过 `X-OpenViking-Agent` header 传给服务端的 Agent 标识，用于区分不同的 OpenClaw 实例。
-
-自定义方式：
-
-```bash
-# 在插件配置中指定
-openclaw config set plugins.entries.openviking.config.agentId "my-agent"
-```
-
-如果未配置，插件会自动生成一个随机唯一的 ID（格式：`openclaw-<hostname>-<random>`）。
-
-### `~/.openclaw/openviking.env`
-
-由安装器自动生成，记录 Python 路径等环境变量：
-
-```bash
-export OPENVIKING_PYTHON='/usr/local/bin/python3'
-```
-
-在 Windows PowerShell 下，安装器会生成 `~/.openclaw/openviking.env.ps1`。
-
----
-
-## 日常使用
-
-```bash
-# 启动
-source ~/.openclaw/openviking.env && openclaw gateway
-
-# 检查当前 context-engine
-openclaw status
-openclaw config get plugins.slots.contextEngine
-
-# 关闭记忆
-openclaw config set plugins.slots.contextEngine legacy
-
-# 开启记忆
-openclaw config set plugins.slots.contextEngine openviking
-```
-
----
-
-## 常见问题
-
-| 症状 | 原因 | 修复 |
-|------|------|------|
-| `port occupied` | 端口被其他进程占用 | 换端口：`openclaw config set plugins.entries.openviking.config.port 1934` |
-| `extracted 0 memories` | API Key 或模型名配置错误 | 检查 `ov.conf` 中 `api_key` 和 `model` 字段 |
-| 插件未加载 | 未加载环境变量 | 启动前执行 `source ~/.openclaw/openviking.env` |
-| `externally-managed-environment` | Python PEP 668 限制 | 使用 venv 或一键安装脚本 |
-| `TypeError: unsupported operand type(s) for \|` | Python < 3.10 | 升级 Python 至 3.10+ |
-
----
+该脚本会进行一次真实的对话注入，然后从 OpenViking 侧验证会话是否被正确捕获、提交、归档并提取出记忆。详细说明见 [health_check_tools/HEALTHCHECK-ZH.md](./health_check_tools/HEALTHCHECK-ZH.md)。
 
 ## 卸载
 
+只卸载 OpenClaw 插件、保留 OpenViking 运行时：
+
 ```bash
-lsof -ti tcp:1933 tcp:1833 tcp:18789 | xargs kill -9
-python3 -m pip uninstall openviking -y && rm -rf ~/.openviking
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/upgrade_scripts/uninstall-openclaw-plugin.sh -o uninstall-openviking.sh
+bash uninstall-openviking.sh
 ```
 
----
+如果你的 OpenClaw 数据目录不是默认路径：
 
-**另见：** [INSTALL.md](./INSTALL.md)（English） · [INSTALL-AGENT.md](./INSTALL-AGENT.md)（Agent Install Guide）
+```bash
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/upgrade_scripts/uninstall-openclaw-plugin.sh -o uninstall-openviking.sh
+bash uninstall-openviking.sh --workdir ~/.openclaw-second
+```
+
+如果还要一并删除本机 OpenViking 运行时和数据，再执行：
+
+```bash
+python3 -m pip uninstall openviking -y && rm -rf ~/.openviking
+```

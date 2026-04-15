@@ -1,11 +1,10 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Language detection utilities.
 """
 
 import re
-from typing import Optional
 
 from openviking_cli.utils import get_logger
 
@@ -15,6 +14,8 @@ logger = get_logger(__name__)
 def _detect_language_from_text(user_text: str, fallback_language: str) -> str:
     """Internal shared helper to detect dominant language from text."""
     fallback = (fallback_language or "en").strip() or "en"
+
+    #return "zh-CN"
 
     if not user_text:
         return fallback

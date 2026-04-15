@@ -18,12 +18,6 @@ pub async fn vikingdb(
     Ok(())
 }
 
-pub async fn vlm(client: &HttpClient, output_format: OutputFormat, compact: bool) -> Result<()> {
-    let response: serde_json::Value = client.get("/api/v1/observer/vlm", &[]).await?;
-    output_success(&response, output_format, compact);
-    Ok(())
-}
-
 pub async fn transaction(
     client: &HttpClient,
     output_format: OutputFormat,
@@ -46,6 +40,12 @@ pub async fn retrieval(
 
 pub async fn system(client: &HttpClient, output_format: OutputFormat, compact: bool) -> Result<()> {
     let response: serde_json::Value = client.get("/api/v1/observer/system", &[]).await?;
+    output_success(&response, output_format, compact);
+    Ok(())
+}
+
+pub async fn models(client: &HttpClient, output_format: OutputFormat, compact: bool) -> Result<()> {
+    let response: serde_json::Value = client.get("/api/v1/observer/models", &[]).await?;
     output_success(&response, output_format, compact);
     Ok(())
 }

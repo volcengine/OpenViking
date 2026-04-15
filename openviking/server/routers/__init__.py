@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """OpenViking HTTP Server routers."""
 
 from openviking.server.routers.admin import router as admin_router
@@ -17,6 +17,7 @@ from openviking.server.routers.sessions import router as sessions_router
 from openviking.server.routers.stats import router as stats_router
 from openviking.server.routers.system import router as system_router
 from openviking.server.routers.tasks import router as tasks_router
+from openviking.server.routers.webdav import router as webdav_router
 
 __all__ = [
     "admin_router",
@@ -34,4 +35,5 @@ __all__ = [
     "metrics_router",
     "observer_router",
     "tasks_router",
+    "webdav_router",
 ]

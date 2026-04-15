@@ -1,0 +1,60 @@
+# RAG Benchmark Configuration File
+project_name: "RAG_Benchmark"
+
+# ===========Basic Configuration============
+# Dataset name to identify the current dataset being evaluated
+# Supported datasets: FinanceBench, Qasper, Locomo, SyllabusQA, etc.
+dataset_name: "choose_your_dataset_here" 
+
+# ===========Adapter Configuration============
+# Dataset adapter configuration for loading and processing dataset-specific formats
+adapter:
+  # Adapter module path (Python import path)
+  module: "src.adapters.your_dataset_adapter"  
+  # Adapter class name
+  class_name: "your_dataset_Adapter"     
+
+# ===========Execution Configuration============
+execution:
+  # Maximum number of concurrent worker threads for parallel QA task processing
+  max_workers: 10
+  # Number of concurrent worker threads for document ingestion
+  ingest_workers: 10
+  # Number of documents to retrieve (top-k)
+  retrieval_topk: 5
+  # Limit the maximum number of queries to process, null means process all queries
+  max_queries: null
+  # Whether to skip document ingestion phase (true means use existing vector index)
+  skip_ingestion: false
+  # Document ingestion mode
+  # - "directory": Unified directory ingestion mode, treats the entire directory as one document
+  # - "per_file": Per-file ingestion mode, each file is treated as a separate document
+  ingest_mode: "per_file"
+  # Instruction for retrieval, empty by default
+  retrieval_instruction: ""  
+
+# ===========Path Configuration============
+# All paths support {dataset_name} placeholder, which will be automatically replaced with the current dataset name
+paths:
+  # Dataset directory or file path
+  dataset_path: "datasets/{dataset_name}"
+  # Output directory for processed documents
+  doc_output_dir: "datasets/{dataset_name}/{dataset_name}_processed_docs"
+  # Vector index storage directory
+  vector_store: "datasets/{dataset_name}/viking_store_index_dir"
+  # Results output directory
+  output_dir: "Output/{dataset_name}/experiment_dev"
+  # Log file path
+  log_file: "Output/{dataset_name}/experiment_dev/benchmark.log"
+
+# ===========LLM Configuration============
+# Large language model configuration for answer generation and evaluation
+llm:
+  # Model name
+  model: "doubao-seed-2-0-pro-260215"
+  # Generation temperature (0 means deterministic output, higher values mean more randomness)
+  temperature: 0
+  # API base URL
+  base_url: "https://ark.cn-beijing.volces.com/api/v3"
+  # API key (keep this secure, do not commit to code repositories)
+  api_key: ""

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 
 """Context retrieval tests"""
 
@@ -364,15 +364,14 @@ class TestGetSessionContext:
         context = await session.get_session_context(token_budget=token_budget)
 
         assert context["latest_archive_overview"] == newest_summary
-        assert context["latest_archive_id"] == "archive_002"
         assert context["pre_archive_abstracts"] == []
         assert len(context["messages"]) == 1
         assert context["messages"][0]["parts"][0]["text"] == "active tail"
         assert context["estimatedTokens"] == token_budget
         assert context["stats"] == {
             "totalArchives": 2,
-            "includedArchives": 1,
-            "droppedArchives": 1,
+            "includedArchives": 0,
+            "droppedArchives": 2,
             "failedArchives": 0,
             "activeTokens": active_tokens,
             "archiveTokens": _estimate_tokens(newest_summary),
@@ -391,10 +390,10 @@ class TestGetSessionContext:
         assert context["stats"]["activeTokens"] == session.messages[0].estimated_tokens
         assert context["stats"]["activeTokens"] > _estimate_tokens("Executing tool...")
 
-    async def test_get_session_context_reads_latest_overview_and_previous_abstracts(
+    async def test_get_session_context_reads_latest_overview_and_all_archive_abstracts(
         self, client: AsyncOpenViking, monkeypatch
     ):
-        """Overview should only be read for the latest archive; older archives use abstracts."""
+        """Overview is only read for the latest archive; abstracts are returned for all archives."""
         session = client.session(session_id="assemble_lazy_read_test")
         summaries = [
             "# Summary\n\n" + ("A" * 80),
@@ -438,8 +437,8 @@ class TestGetSessionContext:
         context = await session.get_session_context(token_budget=token_budget)
 
         assert context["latest_archive_overview"] == newest_summary
-        assert context["latest_archive_id"] == "archive_003"
         assert context["pre_archive_abstracts"] == [
+            {"archive_id": "archive_003", "abstract": "# Summary"},
             {"archive_id": "archive_002", "abstract": "# Summary"},
             {"archive_id": "archive_001", "abstract": "# Summary"},
         ]
@@ -452,14 +451,10 @@ class TestGetSessionContext:
             f"Only newest archive overview should be read, got: {overview_reads}"
         )
         assert all(
-            "archive_003" not in u and ("archive_002" in u or "archive_001" in u)
-            for u in abstract_reads
-        ), f"Only previous archive abstracts should be read, got: {abstract_reads}"
+            "archive_003" in u or "archive_002" in u or "archive_001" in u for u in abstract_reads
+        ), f"Archive abstracts should be read for every returned archive, got: {abstract_reads}"
         assert not any("archive_001/.overview.md" in u for u in overview_reads), (
             "Oldest archive overview should not be read"
-        )
-        assert not any("archive_003/.abstract.md" in u for u in abstract_reads), (
-            "Latest archive abstract should not be read for context history"
         )
 
     async def test_get_session_context_drops_oldest_pre_archive_abstracts_first(
@@ -496,14 +491,13 @@ class TestGetSessionContext:
         context = await session.get_session_context(token_budget=token_budget)
 
         assert context["latest_archive_overview"] == newest_summary
-        assert context["latest_archive_id"] == "archive_003"
         assert context["pre_archive_abstracts"] == [
-            {"archive_id": "archive_002", "abstract": "# Summary"}
+            {"archive_id": "archive_003", "abstract": "# Summary"}
         ]
         assert context["estimatedTokens"] == token_budget
         assert context["stats"]["totalArchives"] == 3
-        assert context["stats"]["includedArchives"] == 2
-        assert context["stats"]["droppedArchives"] == 1
+        assert context["stats"]["includedArchives"] == 1
+        assert context["stats"]["droppedArchives"] == 2
 
     async def test_get_session_context_falls_back_to_older_completed_archive(
         self, client: AsyncOpenViking, monkeypatch
@@ -541,14 +535,15 @@ class TestGetSessionContext:
         context = await session.get_session_context(token_budget=128_000)
 
         assert context["latest_archive_overview"] == "# Session Summary\n\narchive one"
-        assert context["latest_archive_id"] == "archive_001"
-        assert context["pre_archive_abstracts"] == []
+        assert context["pre_archive_abstracts"] == [
+            {"archive_id": "archive_001", "abstract": "# Session Summary"}
+        ]
         assert context["stats"]["totalArchives"] == 2
         assert context["stats"]["includedArchives"] == 1
         assert context["stats"]["droppedArchives"] == 0
         assert context["stats"]["failedArchives"] == 1
 
-    async def test_get_session_context_budget_trim_keeps_latest_archive_id(
+    async def test_get_session_context_budget_trim_drops_latest_archive_abstract(
         self, client: AsyncOpenViking, monkeypatch
     ):
         session = client.session(session_id="assemble_trim_id_test")
@@ -566,7 +561,6 @@ class TestGetSessionContext:
         context = await session.get_session_context(token_budget=1)
 
         assert context["latest_archive_overview"] == ""
-        assert context["latest_archive_id"] == "archive_001"
         assert context["pre_archive_abstracts"] == []
         assert context["stats"]["includedArchives"] == 0
         assert context["stats"]["droppedArchives"] == 1

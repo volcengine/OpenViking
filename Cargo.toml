@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/ov_cli"]
+members = ["crates/ov_cli", "crates/ragfs", "crates/ragfs-python"]
 resolver = "2"
 
 [profile.release]

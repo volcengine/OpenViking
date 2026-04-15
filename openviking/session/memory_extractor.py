@@ -1,11 +1,11 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Memory Extractor for OpenViking.
 
-Extracts 6 categories of memories from session:
+Extracts 8 categories of memories from session:
 - UserMemory: profile, preferences, entities, events
-- AgentMemory: cases, patterns
+- AgentMemory: cases, patterns, tools, skills
 """
 
 import re
@@ -99,7 +99,7 @@ class MergedMemoryPayload:
 
 
 class MemoryExtractor:
-    """Extracts memories from session messages with 6-category classification."""
+    """Extracts memories from session messages with 8-category classification."""
 
     # Category to directory mapping
     CATEGORY_DIRS = {

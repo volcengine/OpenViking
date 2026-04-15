@@ -24,9 +24,12 @@ export type MemoryOpenVikingConfig = {
   recallPreferAbstract?: boolean;
   recallTokenBudget?: number;
   commitTokenThreshold?: number;
+  bypassSessionPatterns?: string[];
   ingestReplyAssist?: boolean;
   ingestReplyAssistMinSpeakerTurns?: number;
   ingestReplyAssistMinChars?: number;
+  /** Deprecated alias for bypassSessionPatterns. */
+  ingestReplyAssistIgnoreSessionPatterns?: string[];
   /**
    * When true (default), emit structured `openviking: diag {...}` lines (and any future
    * standard-diagnostics file writes) for assemble/afterTurn. Set false to disable.
@@ -48,9 +51,11 @@ const DEFAULT_RECALL_MAX_CONTENT_CHARS = 500;
 const DEFAULT_RECALL_PREFER_ABSTRACT = true;
 const DEFAULT_RECALL_TOKEN_BUDGET = 2000;
 const DEFAULT_COMMIT_TOKEN_THRESHOLD = 20000;
+const DEFAULT_BYPASS_SESSION_PATTERNS: string[] = [];
 const DEFAULT_INGEST_REPLY_ASSIST = true;
 const DEFAULT_INGEST_REPLY_ASSIST_MIN_SPEAKER_TURNS = 2;
 const DEFAULT_INGEST_REPLY_ASSIST_MIN_CHARS = 120;
+const DEFAULT_INGEST_REPLY_ASSIST_IGNORE_SESSION_PATTERNS: string[] = [];
 const DEFAULT_EMIT_STANDARD_DIAGNOSTICS = false;
 const DEFAULT_LOCAL_CONFIG_PATH = join(homedir(), ".openviking", "ov.conf");
 
@@ -82,6 +87,22 @@ function toNumber(value: unknown, fallback: number): number {
     if (Number.isFinite(parsed)) {
       return parsed;
     }
+  }
+  return fallback;
+}
+
+function toStringArray(value: unknown, fallback: string[]): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  }
+  if (typeof value === "string") {
+    return value
+      .split(/[,\n]/)
+      .map((entry) => entry.trim())
+      .filter(Boolean);
   }
   return fallback;
 }
@@ -139,9 +160,11 @@ export const memoryOpenVikingConfigSchema = {
         "recallPreferAbstract",
         "recallTokenBudget",
         "commitTokenThreshold",
+        "bypassSessionPatterns",
         "ingestReplyAssist",
         "ingestReplyAssistMinSpeakerTurns",
         "ingestReplyAssistMinChars",
+        "ingestReplyAssistIgnoreSessionPatterns",
         "emitStandardDiagnostics",
         "logFindRequests",
       ],
@@ -199,7 +222,7 @@ export const memoryOpenVikingConfigSchema = {
         50,
         Math.min(10000, Math.floor(toNumber(cfg.recallMaxContentChars, DEFAULT_RECALL_MAX_CONTENT_CHARS))),
       ),
-      recallPreferAbstract: cfg.recallPreferAbstract !== false,
+      recallPreferAbstract: cfg.recallPreferAbstract === true,
       recallTokenBudget: Math.max(
         100,
         Math.min(50000, Math.floor(toNumber(cfg.recallTokenBudget, DEFAULT_RECALL_TOKEN_BUDGET))),
@@ -208,7 +231,14 @@ export const memoryOpenVikingConfigSchema = {
         0,
         Math.min(100_000, Math.floor(toNumber(cfg.commitTokenThreshold, DEFAULT_COMMIT_TOKEN_THRESHOLD))),
       ),
-      ingestReplyAssist: cfg.ingestReplyAssist !== false,
+      bypassSessionPatterns: toStringArray(
+        cfg.bypassSessionPatterns,
+        toStringArray(
+          cfg.ingestReplyAssistIgnoreSessionPatterns,
+          DEFAULT_BYPASS_SESSION_PATTERNS,
+        ),
+      ),
+      ingestReplyAssist: cfg.ingestReplyAssist === true,
       ingestReplyAssistMinSpeakerTurns: Math.max(
         1,
         Math.min(
@@ -227,6 +257,10 @@ export const memoryOpenVikingConfigSchema = {
           10000,
           Math.floor(toNumber(cfg.ingestReplyAssistMinChars, DEFAULT_INGEST_REPLY_ASSIST_MIN_CHARS)),
         ),
+      ),
+      ingestReplyAssistIgnoreSessionPatterns: toStringArray(
+        cfg.ingestReplyAssistIgnoreSessionPatterns,
+        DEFAULT_INGEST_REPLY_ASSIST_IGNORE_SESSION_PATTERNS,
       ),
       emitStandardDiagnostics:
         typeof cfg.emitStandardDiagnostics === "boolean"
@@ -327,6 +361,12 @@ export const memoryOpenVikingConfigSchema = {
       advanced: true,
       help: "Maximum estimated tokens for auto-recall memory injection. Injection stops when budget is exhausted.",
     },
+    bypassSessionPatterns: {
+      label: "Bypass Session Patterns",
+      placeholder: "agent:*:cron:**",
+      help: "Completely bypass OpenViking for matching session keys. Use * within one segment and ** across segments.",
+      advanced: true,
+    },
     commitTokenThreshold: {
       label: "Commit Token Threshold",
       placeholder: String(DEFAULT_COMMIT_TOKEN_THRESHOLD),
@@ -348,6 +388,12 @@ export const memoryOpenVikingConfigSchema = {
       label: "Ingest Min Chars",
       placeholder: String(DEFAULT_INGEST_REPLY_ASSIST_MIN_CHARS),
       help: "Minimum sanitized text length required before ingest reply assist can trigger.",
+      advanced: true,
+    },
+    ingestReplyAssistIgnoreSessionPatterns: {
+      label: "Deprecated Ingest Ignore Session Patterns",
+      placeholder: "agent:*:cron:**",
+      help: "Deprecated alias for bypassSessionPatterns. Matching sessions now bypass OpenViking entirely.",
       advanced: true,
     },
     emitStandardDiagnostics: {

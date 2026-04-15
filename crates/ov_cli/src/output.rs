@@ -364,17 +364,12 @@ fn render_session_context(
     compact: bool,
 ) -> Option<String> {
     if !(obj.contains_key("latest_archive_overview")
-        && obj.contains_key("latest_archive_id")
         && obj.contains_key("pre_archive_abstracts")
         && obj.contains_key("messages"))
     {
         return None;
     }
 
-    let latest_archive_id = obj
-        .get("latest_archive_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
     let latest_archive_overview = obj
         .get("latest_archive_overview")
         .and_then(|v| v.as_str())
@@ -385,14 +380,6 @@ fn render_session_context(
         .unwrap_or_else(|| "0".to_string());
 
     let mut lines: Vec<String> = Vec::new();
-    lines.push(format!(
-        "latest_archive_id      {}",
-        if latest_archive_id.is_empty() {
-            "(none)"
-        } else {
-            latest_archive_id
-        }
-    ));
     lines.push(format!("estimated_tokens       {}", estimated_tokens));
 
     if let Some(stats) = obj.get("stats").and_then(|v| v.as_object()) {
@@ -405,19 +392,22 @@ fn render_session_context(
         ));
         lines.push(format!(
             "total_archives         {}",
-            stats.get("totalArchives")
+            stats
+                .get("totalArchives")
                 .map(format_value)
                 .unwrap_or_else(|| "0".to_string())
         ));
         lines.push(format!(
             "included_archives      {}",
-            stats.get("includedArchives")
+            stats
+                .get("includedArchives")
                 .map(format_value)
                 .unwrap_or_else(|| "0".to_string())
         ));
         lines.push(format!(
             "dropped_archives       {}",
-            stats.get("droppedArchives")
+            stats
+                .get("droppedArchives")
                 .map(format_value)
                 .unwrap_or_else(|| "0".to_string())
         ));
@@ -426,7 +416,12 @@ fn render_session_context(
     lines.push(String::new());
     lines.push("latest_archive_overview".to_string());
     if latest_archive_overview.is_empty() {
-        if latest_archive_id.is_empty() {
+        let has_abstracts = obj
+            .get("pre_archive_abstracts")
+            .and_then(|v| v.as_array())
+            .map(|items| !items.is_empty())
+            .unwrap_or(false);
+        if !has_abstracts {
             lines.push("(none)".to_string());
         } else {
             lines.push("(trimmed by token budget or unavailable)".to_string());
@@ -465,7 +460,9 @@ fn render_session_archive(
     obj: &serde_json::Map<String, serde_json::Value>,
     compact: bool,
 ) -> Option<String> {
-    if !(obj.contains_key("archive_id") && obj.contains_key("overview") && obj.contains_key("messages"))
+    if !(obj.contains_key("archive_id")
+        && obj.contains_key("overview")
+        && obj.contains_key("messages"))
     {
         return None;
     }
@@ -579,8 +576,14 @@ fn summarize_message_content(parts: Option<&Vec<serde_json::Value>>) -> String {
                 });
             }
             "tool" => {
-                let name = obj.get("tool_name").and_then(|v| v.as_str()).unwrap_or("tool");
-                let status = obj.get("tool_status").and_then(|v| v.as_str()).unwrap_or("");
+                let name = obj
+                    .get("tool_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("tool");
+                let status = obj
+                    .get("tool_status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 chunks.push(if status.is_empty() {
                     format!("[tool:{}]", name)
                 } else {

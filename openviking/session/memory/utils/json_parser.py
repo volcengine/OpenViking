@@ -1,22 +1,33 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 JSON stable parsing - Five-Layer Fault Tolerance Architecture.
 
 Layer 1: JSON Cleanup    - extract_json_content()
-Layer 2: JSON Repair      - json_repair.loads()
+Layer 2: JSON Repair      - json_repair.loads() (handles markdown too)
 Layer 3: Structure Tolerance - list→object conversion + field filtering
 Layer 4: Value Tolerance  - value_fault_tolerance()
 Layer 5: Validation Tolerance - TypeAdapter(strict=False) + list item filtering
 """
 
 import json
-import re
+from dataclasses import is_dataclass, asdict
 from types import UnionType
-from typing import Any, Dict, List, Optional, Tuple, Type, get_type_hints, get_origin, get_args, Union
+from typing import (
+    Any,
+    List,
+    Optional,
+    Tuple,
+    Type,
+    Union,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
 import json_repair
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, BaseModel, parse_obj_as
+
 
 from openviking_cli.utils import get_logger
 
@@ -28,13 +39,45 @@ __all__ = [
     "extract_json_content",
     "remove_json_trailing_content",
     "parse_json_with_stability",
-    "extract_json_from_markdown",
     "value_fault_tolerance",
     "parse_value_with_tolerance",
     "_get_origin_type",
     "_get_arg_type",
     "_any_to_str",
+    "JsonUtils",
 ]
+
+
+
+
+class PydanticEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, BaseModel) :
+            # 保存类名和属性值
+            return {
+                **obj.model_dump(mode='python')
+            }
+        elif is_dataclass(obj):
+            return asdict(obj)
+        return super().default(obj)
+
+
+
+class JsonUtils:
+
+    @staticmethod
+    def dumps(obj, indent=4, ensure_ascii=False):
+        if obj is None:
+            return None
+        return json.dumps(obj, ensure_ascii=ensure_ascii, indent=indent, cls=PydanticEncoder)
+
+    @staticmethod
+    def loads(json_str, clazz=None):
+        if not json_str:
+            return None
+        if clazz:
+            return TypeAdapter.validate_python(clazz, json_repair.loads(json_str))
+        return json_repair.loads(json_str)
 
 
 def extract_json_content(s: str) -> str:
@@ -60,8 +103,8 @@ def extract_json_content(s: str) -> str:
     temp_s = s
 
     # Find first { or [
-    first_brace = temp_s.find('{')
-    first_bracket = temp_s.find('[')
+    first_brace = temp_s.find("{")
+    first_bracket = temp_s.find("[")
 
     start_idx = 0
     if first_brace != -1 and first_bracket != -1:
@@ -78,8 +121,8 @@ def extract_json_content(s: str) -> str:
         temp_s = temp_s[start_idx:]
 
     # Find last } or ]
-    last_brace = temp_s.rfind('}')
-    last_bracket = temp_s.rfind(']')
+    last_brace = temp_s.rfind("}")
+    last_bracket = temp_s.rfind("]")
 
     end_idx = len(temp_s)
     if last_brace != -1 and last_bracket != -1:
@@ -182,7 +225,7 @@ def _any_to_str(value) -> str:
     elif isinstance(value, dict):
         return json.dumps(value, ensure_ascii=False)
     elif isinstance(value, (int, bool, float)):
-        return f'{value}'
+        return f"{value}"
     return str(value)
 
 
@@ -208,7 +251,7 @@ def value_fault_tolerance(field_type, value):
     origin_type = _get_origin_type(field_type)
 
     # Handle json_repair converting None to 'None'
-    if value == 'None':
+    if value == "None":
         if origin_type is not str:
             return None
 
@@ -217,7 +260,7 @@ def value_fault_tolerance(field_type, value):
         return _any_to_str(value)
     elif origin_type is int:
         if isinstance(value, str):
-            if value is None or value == 'None':
+            if value is None or value == "None":
                 return 0
             try:
                 return int(value)
@@ -225,7 +268,7 @@ def value_fault_tolerance(field_type, value):
                 pass
     elif origin_type is float:
         if isinstance(value, str):
-            if value is None or value == 'None':
+            if value is None or value == "None":
                 return 0.0
             try:
                 return float(value)
@@ -265,25 +308,59 @@ def parse_value_with_tolerance(value, annotation):
         if isinstance(value, str):
             return value
         else:
-            return json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else str(value)
+            return (
+                json.dumps(value, ensure_ascii=False)
+                if isinstance(value, (dict, list))
+                else str(value)
+            )
 
-    if value == 'None':
+    if value == "None":
         return None
 
-    parsed_value = value
-
-    # Apply value fault tolerance first
-    parsed_value = value_fault_tolerance(annotation, parsed_value)
+    # Apply value fault tolerance (inline for efficiency)
+    origin_type = _get_origin_type(annotation)
+    if origin_type is str:
+        parsed_value = _any_to_str(value)
+    elif origin_type is int:
+        if isinstance(value, str):
+            if value == "None":
+                parsed_value = 0
+            else:
+                try:
+                    parsed_value = int(value)
+                except (ValueError, TypeError):
+                    parsed_value = value
+        else:
+            parsed_value = value
+    elif origin_type is float:
+        if isinstance(value, str):
+            if value == "None":
+                parsed_value = 0.0
+            else:
+                try:
+                    parsed_value = float(value)
+                except (ValueError, TypeError):
+                    parsed_value = value
+        else:
+            parsed_value = value
+    elif origin_type is list:
+        if isinstance(value, str):
+            parsed_value = [value]
+        elif isinstance(value, dict):
+            parsed_value = [value]
+        else:
+            parsed_value = value
+    else:
+        parsed_value = value
 
     # Try validation with TypeAdapter
     try:
         return TypeAdapter(annotation).validate_python(parsed_value, strict=False)
     except Exception as e:
-        logger.warning(f'TypeAdapter validation failed: {e}')
+        logger.warning(f"TypeAdapter validation failed: {e}")
 
         # For list types, try filtering invalid items
-        if (get_origin(annotation) is list and
-            isinstance(parsed_value, list)):
+        if get_origin(annotation) is list and isinstance(parsed_value, list):
             filtered_items = []
             item_type = _get_arg_type(annotation)
             if item_type is not None:
@@ -378,7 +455,7 @@ def parse_json_with_stability(
         return model_class.model_validate(parsed_data), None
     except Exception as e:
         logger.warning(f"Direct model validation failed, trying parse_value_with_tolerance: {e}")
-
+        logger.warning(f"content={content}")
         # Fallback: Apply value fault tolerance to each field individually
         try:
             field_types = get_type_hints(model_class)
@@ -387,8 +464,7 @@ def parse_json_with_stability(
                 if field_name in field_types:
                     try:
                         tolerant_data[field_name] = parse_value_with_tolerance(
-                            field_value,
-                            field_types[field_name]
+                            field_value, field_types[field_name]
                         )
                     except Exception as field_e:
                         logger.warning(f"Field {field_name} parsing failed: {field_e}")
@@ -401,30 +477,3 @@ def parse_json_with_stability(
             return None, f"Model validation failed even after tolerance: {e} (fallback: {e2})"
 
 
-def extract_json_from_markdown(content: str) -> str:
-    """
-    Extract JSON from markdown code blocks.
-
-    Handles:
-    - ```json { ... } ```
-    - ``` { ... } ```
-    - Plain JSON without markdown
-
-    Args:
-        content: Content possibly containing markdown code blocks
-
-    Returns:
-        Extracted JSON string
-    """
-    if not content:
-        return content
-
-    content = content.strip()
-
-    # Try to find ```json ... ```
-    match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", content, re.DOTALL)
-    if match:
-        return match.group(1).strip()
-
-    # If no code block, return as-is
-    return content

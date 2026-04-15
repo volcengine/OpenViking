@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Tests for VikingURI short-format URI normalization.
 
 Verifies that VikingURI accepts short-format paths (e.g., '/resources',

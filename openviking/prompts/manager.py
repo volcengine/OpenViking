@@ -1,7 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Prompt template management for OpenViking."""
 
+import os
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -9,6 +10,11 @@ from typing import Any, Dict, List, Optional
 import yaml
 from jinja2 import Template
 from pydantic import BaseModel, Field
+
+from openviking_cli.utils.config import (
+    OPENVIKING_PROMPT_TEMPLATES_DIR_ENV,
+    get_openviking_config,
+)
 
 
 class PromptMetadata(BaseModel):
@@ -67,10 +73,31 @@ class PromptManager:
                           If None, uses bundled templates.
             enable_caching: Enable prompt template caching
         """
-        self.templates_dir = templates_dir or self._get_bundled_templates_dir()
+        self.templates_dir = self._resolve_templates_dir(templates_dir)
         self.enable_caching = enable_caching
         self._cache: Dict[str, PromptTemplate] = {}
         self._lock = threading.RLock()
+
+    @classmethod
+    def _resolve_templates_dir(cls, templates_dir: Optional[Path]) -> Path:
+        """Resolve prompt templates directory with runtime overrides."""
+        if templates_dir is not None:
+            return Path(templates_dir)
+
+        env_dir = os.environ.get(OPENVIKING_PROMPT_TEMPLATES_DIR_ENV)
+        if env_dir:
+            return Path(env_dir).expanduser()
+
+        try:
+            config = get_openviking_config()
+        except FileNotFoundError:
+            return cls._get_bundled_templates_dir()
+
+        config_dir = config.prompts.templates_dir.strip()
+        if config_dir:
+            return Path(config_dir).expanduser()
+
+        return cls._get_bundled_templates_dir()
 
     @staticmethod
     def _get_bundled_templates_dir() -> Path:
@@ -120,7 +147,17 @@ class PromptManager:
         parts = prompt_id.split(".")
         category = parts[0]
         name = "_".join(parts[1:])
-        return self.templates_dir / category / f"{name}.yaml"
+        relative_path = Path(category) / f"{name}.yaml"
+
+        primary_path = self.templates_dir / relative_path
+        if primary_path.exists():
+            return primary_path
+
+        bundled_path = self._get_bundled_templates_dir() / relative_path
+        if bundled_path.exists():
+            return bundled_path
+
+        return primary_path
 
     def render(
         self,

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """VikingDB storage backend for OpenViking."""
 
 from __future__ import annotations
@@ -136,6 +136,12 @@ class _SingleAccountBackend:
         except Exception:
             return data
 
+    def _prepare_upsert_payload(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Drop runtime-only or stale legacy fields before writing back to the current schema."""
+        payload = {k: v for k, v in data.items() if v is not None}
+        filtered = self._filter_known_fields(payload)
+        return {k: v for k, v in filtered.items() if v is not None}
+
     # =========================================================================
     # Collection Management
     # =========================================================================
@@ -196,6 +202,19 @@ class _SingleAccountBackend:
             "status": "active",
         }
 
+    async def get_collection_meta(self) -> Optional[Dict[str, Any]]:
+        if not await self.collection_exists():
+            return None
+        return self._get_collection().get_meta_data()
+
+    async def update_collection_description(self, description: str) -> bool:
+        if not await self.collection_exists():
+            return False
+        coll = self._get_collection()
+        coll.update(description=description)
+        self._refresh_meta_data(coll)
+        return True
+
     # =========================================================================
     # Data Operations (with tenant enforcement)
     # =========================================================================
@@ -224,7 +243,7 @@ class _SingleAccountBackend:
         if not payload.get("id"):
             payload["id"] = str(uuid.uuid4())
 
-        payload = self._filter_known_fields(payload)
+        payload = self._prepare_upsert_payload(payload)
         ids = self._adapter.upsert(payload)
         return ids[0] if ids else ""
 
@@ -582,6 +601,12 @@ class VikingVectorIndexBackend:
     async def get_collection_info(self) -> Optional[Dict[str, Any]]:
         return await self._get_default_backend().get_collection_info()
 
+    async def get_collection_meta(self) -> Optional[Dict[str, Any]]:
+        return await self._get_default_backend().get_collection_meta()
+
+    async def update_collection_description(self, description: str) -> bool:
+        return await self._get_default_backend().update_collection_description(description)
+
     # =========================================================================
     # 公开数据操作 API（强制要求 ctx）
     # =========================================================================
@@ -826,12 +851,28 @@ class VikingVectorIndexBackend:
         extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
         limit: int = 10,
     ) -> List[Dict[str, Any]]:
+        # TODO：Better Alternative to Current Temporary Fix
+        
+        # If parent_uri is already under the requested target_directories, 
+        # adding a redundant scope prefix filter can slow down the backend. 
+        # Keep tenant/context filters but skip target_directories in that case.
+        effective_target_directories = target_directories
+        if target_directories:
+            parent_norm = parent_uri.rstrip("/")
+            for target_dir in target_directories:
+                if not target_dir:
+                    continue
+                target_norm = target_dir.rstrip("/")
+                if parent_norm == target_norm or parent_norm.startswith(target_norm + "/"):
+                    effective_target_directories = None
+                    break
+
         merged_filter = self._merge_filters(
             PathScope("uri", parent_uri, depth=1),
             self._build_scope_filter(
                 ctx=ctx,
                 context_type=context_type,
-                target_directories=target_directories,
+                target_directories=effective_target_directories,
                 extra_filter=extra_filter,
             ),
         )

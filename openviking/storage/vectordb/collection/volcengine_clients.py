@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 import json
 
 import requests  # type: ignore
@@ -21,11 +21,12 @@ class ClientForConsoleApi:
         "cn-guangzhou": "vikingdb.cn-guangzhou.volcengineapi.com",
     }
 
-    def __init__(self, ak, sk, region, host=None):
+    def __init__(self, ak, sk, region, host=None, session_token=None):
         self.ak = ak
         self.sk = sk
         self.region = region
         self.host = host if host else ClientForConsoleApi._global_host[region]
+        self.session_token = session_token or ""
 
         if not all([self.ak, self.sk, self.host, self.region]):
             raise ValueError("AK, SK, Host, and Region are required for ClientForConsoleApi")
@@ -54,7 +55,13 @@ class ClientForConsoleApi:
         if data is not None:
             r.set_body(json.dumps(data))
 
-        credentials = Credentials(self.ak, self.sk, "vikingdb", self.region)
+        credentials = Credentials(
+            self.ak,
+            self.sk,
+            "vikingdb",
+            self.region,
+            session_token=self.session_token,
+        )
         SignerV4.sign(r, credentials)
         return r
 
@@ -64,7 +71,7 @@ class ClientForConsoleApi:
             method=req.method,
             url=f"https://{self.host}{req.path}",
             headers=req.headers,
-            params=req_params,
+            params=req.query,
             data=req.body,
             timeout=DEFAULT_TIMEOUT,
         )
@@ -77,11 +84,12 @@ class ClientForDataApi:
         "cn-guangzhou": "api-vikingdb.vikingdb.cn-guangzhou.volces.com",
     }
 
-    def __init__(self, ak, sk, region, host=None):
+    def __init__(self, ak, sk, region, host=None, session_token=None):
         self.ak = ak
         self.sk = sk
         self.region = region
         self.host = host if host else ClientForDataApi._global_host[region]
+        self.session_token = session_token or ""
 
         if not all([self.ak, self.sk, self.host, self.region]):
             raise ValueError("AK, SK, Host, and Region are required for ClientForDataApi")
@@ -110,7 +118,13 @@ class ClientForDataApi:
         if data is not None:
             r.set_body(json.dumps(data))
 
-        credentials = Credentials(self.ak, self.sk, "vikingdb", self.region)
+        credentials = Credentials(
+            self.ak,
+            self.sk,
+            "vikingdb",
+            self.region,
+            session_token=self.session_token,
+        )
         SignerV4.sign(r, credentials)
         return r
 
@@ -122,7 +136,7 @@ class ClientForDataApi:
             method=req.method,
             url=f"https://{self.host}{req.path}",
             headers=req.headers,
-            params=req_params,
+            params=req.query,
             data=req.body,
             timeout=DEFAULT_TIMEOUT,
         )

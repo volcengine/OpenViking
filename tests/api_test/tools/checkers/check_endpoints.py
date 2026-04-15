@@ -71,19 +71,26 @@ def check_endpoints():
     except Exception as e:
         print(f"2. /api/v1/fs/ls: ERROR - {e}")
 
-    # Check fs_write (will likely fail but let's try)
-    try:
-        import uuid
-
-        test_uri = f"viking://user/test-{uuid.uuid4()[:8]}.md"
-        response = client.fs_write(test_uri, "test content")
-        print(f"\n7. /api/v1/content/write: {response.status_code}")
-        if response.status_code == 200:
-            print(f"   Response: {response.json()}")
-        else:
-            print(f"   Response text: {response.text}")
-    except Exception as e:
-        print(f"7. /api/v1/content/write: ERROR - {e}")
+    # Check fs_write only when the caller provides an existing file URI.
+    write_check_uri = os.getenv("OPENVIKING_WRITE_CHECK_URI")
+    if write_check_uri:
+        try:
+            response = client.fs_write(
+                write_check_uri,
+                "endpoint write smoke check",
+                wait=False,
+            )
+            print(f"\n7. /api/v1/content/write: {response.status_code}")
+            if response.status_code == 200:
+                print(f"   Response: {response.json()}")
+            else:
+                print(f"   Response text: {response.text}")
+        except Exception as e:
+            print(f"7. /api/v1/content/write: ERROR - {e}")
+    else:
+        print(
+            "\n7. /api/v1/content/write: SKIPPED - set OPENVIKING_WRITE_CHECK_URI to an existing file"
+        )
 
     print("\n" + "=" * 80)
 

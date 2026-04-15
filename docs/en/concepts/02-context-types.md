@@ -52,16 +52,18 @@ Memories are divided into user memories and Agent memories, representing learned
 - **Dynamic updates**: Continuously updated from interactions by Agent
 - **Personalized**: Learned for specific users or specific Agents
 
-### 6 Categories
+### 8 Categories
 
 | Category | Location | Description | Update Strategy |
 |----------|----------|-------------|-----------------|
-| **profile** | `user/memories/.overview.md` | User basic info | ✅ Appendable |
+| **profile** | `user/memories/profile.md` | User basic info | ✅ Merge into one file |
 | **preferences** | `user/memories/preferences/` | User preferences by topic | ✅ Appendable |
 | **entities** | `user/memories/entities/` | Entity memories (people, projects) | ✅ Appendable |
 | **events** | `user/memories/events/` | Event records (decisions, milestones) | ❌ No update |
 | **cases** | `agent/memories/cases/` | Learned cases | ❌ No update |
-| **patterns** | `agent/memories/patterns/` | Learned patterns | ❌ No update |
+| **patterns** | `agent/memories/patterns/` | Learned patterns | ✅ Mergeable |
+| **tools** | `agent/memories/tools/` | Tool usage knowledge and best practices | ✅ Mergeable |
+| **skills** | `agent/memories/skills/` | Skill execution knowledge and workflow strategies | ✅ Mergeable |
 
 ### Usage
 
@@ -69,7 +71,8 @@ Memories are divided into user memories and Agent memories, representing learned
 # Memories are auto-extracted from sessions
 session = client.session()
 await session.add_message("user", [{"type": "text", "text": "I prefer dark mode"}])
-await session.commit()  # Extracts preference memory
+commit = await session.commit()  # Starts background memory extraction
+task = await client.get_task(commit["task_id"])  # Poll until task["status"] == "completed"
 
 # Search memories
 results = await client.find(

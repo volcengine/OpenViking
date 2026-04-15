@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
-"""VolcEngine VLM backend implementation"""
+# SPDX-License-Identifier: AGPL-3.0
+"""VolcEngine VLM backend implementation."""
 
 import asyncio
 import base64
@@ -10,27 +10,63 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
+from openviking.telemetry import tracer
+from ..base import ToolCall, VLMResponse
 from .openai_vlm import OpenAIVLM
-from ..base import VLMResponse, ToolCall
 
 logger = logging.getLogger(__name__)
 
 
 class VolcEngineVLM(OpenAIVLM):
-    """VolcEngine VLM backend"""
+    """VolcEngine VLM backend with Chat Completions API support."""
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self._sync_client = None
         self._async_client = None
-        # Ensure provider type is correct
         self.provider = "volcengine"
 
-        # VolcEngine-specific defaults
         if not self.api_base:
             self.api_base = "https://ark.cn-beijing.volces.com/api/v3"
         if not self.model:
             self.model = "doubao-seed-2-0-pro-260215"
+
+    def _parse_tool_calls(self, message) -> List[ToolCall]:
+        """Parse tool calls from VolcEngine response message."""
+        tool_calls = []
+        if hasattr(message, "tool_calls") and message.tool_calls:
+            for tc in message.tool_calls:
+                args = tc.function.arguments
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except json.JSONDecodeError:
+                        args = {"raw": args}
+                tool_calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args))
+        return tool_calls
+
+    def _build_vlm_response(self, response, has_tools: bool) -> Union[str, VLMResponse]:
+        """Build response from Chat Completions response. Returns str or VLMResponse based on has_tools."""
+        choice = response.choices[0]
+        message = choice.message
+        tracer.info(f"message.content={message.content}")
+        if has_tools:
+            usage = {}
+            if hasattr(response, "usage") and response.usage:
+                usage = {
+                    "prompt_tokens": response.usage.prompt_tokens,
+                    "completion_tokens": response.usage.completion_tokens,
+                    "total_tokens": response.usage.total_tokens,
+                    "prompt_tokens_details": getattr(response.usage, "prompt_tokens_details", None),
+                }
+
+            return VLMResponse(
+                content=message.content,
+                tool_calls=self._parse_tool_calls(message),
+                finish_reason=choice.finish_reason or "stop",
+                usage=usage,
+            )
+        return message.content or ""
 
     def get_client(self):
         """Get sync client"""
@@ -62,48 +98,6 @@ class VolcEngineVLM(OpenAIVLM):
             )
         return self._async_client
 
-    def _parse_tool_calls(self, message) -> List[ToolCall]:
-        """Parse tool calls from VolcEngine response message."""
-        tool_calls = []
-        if hasattr(message, "tool_calls") and message.tool_calls:
-            for tc in message.tool_calls:
-                args = tc.function.arguments
-                if isinstance(args, str):
-                    try:
-                        args = json.loads(args)
-                    except json.JSONDecodeError:
-                        args = {"raw": args}
-                tool_calls.append(ToolCall(
-                    id=tc.id,
-                    name=tc.function.name,
-                    arguments=args
-                ))
-        return tool_calls
-
-    def _build_vlm_response(self, response, has_tools: bool) -> Union[str, VLMResponse]:
-        """Build response from VolcEngine response. Returns str or VLMResponse based on has_tools."""
-        choice = response.choices[0]
-        message = choice.message
-
-        if has_tools:
-            usage = {}
-            if hasattr(response, "usage") and response.usage:
-                usage = {
-                    "prompt_tokens": response.usage.prompt_tokens,
-                    "completion_tokens": response.usage.completion_tokens,
-                    "total_tokens": response.usage.total_tokens,
-                    "prompt_tokens_details": getattr(response.usage, "prompt_tokens_details", None),
-                }
-
-            return VLMResponse(
-                content=message.content,
-                tool_calls=self._parse_tool_calls(message),
-                finish_reason=choice.finish_reason or "stop",
-                usage=usage,
-            )
-        else:
-            return message.content or ""
-
     def get_completion(
         self,
         prompt: str = "",
@@ -112,13 +106,8 @@ class VolcEngineVLM(OpenAIVLM):
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
-        """Get text completion"""
-        client = self.get_client()
-        if messages:
-            kwargs_messages = messages
-        else:
-            kwargs_messages = [{"role": "user", "content": prompt}]
-
+        """Get text completion via Chat Completions API."""
+        kwargs_messages = messages or [{"role": "user", "content": prompt}]
         kwargs = {
             "model": self.model or "doubao-seed-2-0-pro-260215",
             "messages": kwargs_messages,
@@ -127,33 +116,31 @@ class VolcEngineVLM(OpenAIVLM):
         }
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
-
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
 
+        client = self.get_client()
         t0 = time.perf_counter()
         response = client.chat.completions.create(**kwargs)
         elapsed = time.perf_counter() - t0
         self._update_token_usage_from_response(response, duration_seconds=elapsed)
-        return self._build_vlm_response(response, has_tools=bool(tools))
+        result = self._build_vlm_response(response, has_tools=bool(tools))
+        if tools:
+            return result
+        return self._clean_response(str(result))
 
+    @tracer("volcengine.vlm.call", ignore_result=True, ignore_args=False)
     async def get_completion_async(
         self,
         prompt: str = "",
         thinking: bool = False,
-        max_retries: int = 0,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
-        """Get text completion asynchronously"""
-        client = self.get_async_client()
-        if messages:
-            kwargs_messages = messages
-        else:
-            kwargs_messages = [{"role": "user", "content": prompt}]
-
+        """Get text completion asynchronously via Chat Completions API."""
+        kwargs_messages = messages or [{"role": "user", "content": prompt}]
         kwargs = {
             "model": self.model or "doubao-seed-2-0-pro-260215",
             "messages": kwargs_messages,
@@ -162,24 +149,29 @@ class VolcEngineVLM(OpenAIVLM):
         }
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
-
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
 
+        # 用 tracer.info 打印请求
+        tracer.info(f"request: {json.dumps(kwargs_messages, ensure_ascii=False, indent=2)}")
+
+        client = self.get_async_client()
+
         last_error = None
-        for attempt in range(max_retries + 1):
+        for attempt in range(self.max_retries + 1):
             try:
                 t0 = time.perf_counter()
                 response = await client.chat.completions.create(**kwargs)
                 elapsed = time.perf_counter() - t0
-                self._update_token_usage_from_response(
-                    response, duration_seconds=elapsed,
-                )
-                return self._build_vlm_response(response, has_tools=bool(tools))
+                self._update_token_usage_from_response(response, duration_seconds=elapsed)
+                result = self._build_vlm_response(response, has_tools=bool(tools))
+                if tools:
+                    return result
+                return self._clean_response(str(result))
             except Exception as e:
                 last_error = e
-                if attempt < max_retries:
+                if attempt < self.max_retries:
                     await asyncio.sleep(2**attempt)
 
         if last_error:
@@ -309,16 +301,13 @@ class VolcEngineVLM(OpenAIVLM):
         tools: Optional[List[Dict[str, Any]]] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
-        """Get vision completion"""
-        client = self.get_client()
-
+        """Get vision completion via Chat Completions API."""
         if messages:
             kwargs_messages = messages
         else:
             content = []
             if images:
-                for img in images:
-                    content.append(self._prepare_image(img))
+                content.extend(self._prepare_image(img) for img in images)
             if prompt:
                 content.append({"type": "text", "text": prompt})
             kwargs_messages = [{"role": "user", "content": content}]
@@ -331,16 +320,19 @@ class VolcEngineVLM(OpenAIVLM):
         }
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
-
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
 
+        client = self.get_client()
         t0 = time.perf_counter()
         response = client.chat.completions.create(**kwargs)
         elapsed = time.perf_counter() - t0
         self._update_token_usage_from_response(response, duration_seconds=elapsed)
-        return self._build_vlm_response(response, has_tools=bool(tools))
+        result = self._build_vlm_response(response, has_tools=bool(tools))
+        if tools:
+            return result
+        return self._clean_response(str(result))
 
     async def get_vision_completion_async(
         self,
@@ -350,16 +342,13 @@ class VolcEngineVLM(OpenAIVLM):
         tools: Optional[List[Dict[str, Any]]] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
-        """Get vision completion asynchronously"""
-        client = self.get_async_client()
-
+        """Get vision completion asynchronously via Chat Completions API."""
         if messages:
             kwargs_messages = messages
         else:
             content = []
             if images:
-                for img in images:
-                    content.append(self._prepare_image(img))
+                content.extend(self._prepare_image(img) for img in images)
             if prompt:
                 content.append({"type": "text", "text": prompt})
             kwargs_messages = [{"role": "user", "content": content}]
@@ -372,13 +361,16 @@ class VolcEngineVLM(OpenAIVLM):
         }
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
-
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
 
+        client = self.get_async_client()
         t0 = time.perf_counter()
         response = await client.chat.completions.create(**kwargs)
         elapsed = time.perf_counter() - t0
         self._update_token_usage_from_response(response, duration_seconds=elapsed)
-        return self._build_vlm_response(response, has_tools=bool(tools))
+        result = self._build_vlm_response(response, has_tools=bool(tools))
+        if tools:
+            return result
+        return self._clean_response(str(result))

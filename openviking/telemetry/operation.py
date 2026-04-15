@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Operation-scoped telemetry primitives."""
 
 from __future__ import annotations
@@ -169,10 +169,12 @@ class TelemetrySummaryBuilder:
             summary["queue"] = {
                 "semantic": {
                     "processed": cls._i(gauges.get("queue.semantic.processed"), 0),
+                    "requeue_count": cls._i(gauges.get("queue.semantic.requeue_count"), 0),
                     "error_count": cls._i(gauges.get("queue.semantic.error_count"), 0),
                 },
                 "embedding": {
                     "processed": cls._i(gauges.get("queue.embedding.processed"), 0),
+                    "requeue_count": cls._i(gauges.get("queue.embedding.requeue_count"), 0),
                     "error_count": cls._i(gauges.get("queue.embedding.error_count"), 0),
                 },
             }
@@ -281,7 +283,7 @@ class OperationTelemetry:
     ):
         self.operation = operation
         self.enabled = enabled
-        self.telemetry_id = f"tm_{uuid4().hex}" if enabled else ""
+        self.telemetry_id = f"tm_{uuid4().hex}"
         self._start_time = time.perf_counter()
         self._counters: Dict[str, float] = defaultdict(float)
         self._gauges: Dict[str, Any] = {}

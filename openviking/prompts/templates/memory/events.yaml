@@ -1,30 +1,45 @@
 memory_type: events
 description: |
-  Event memory - captures "what happened, what decision was made, and why".
-  Extract notable events, decisions, milestones, and turning points from the conversation.
-  Events should be things worth remembering for future context: decisions made, agreements reached, milestones achieved, problems solved, etc.
-  Each event should include: what happened, why it happened, what the outcome was, and any relevant context/timeline.
-  Use absolute dates for event_time, not relative time like "today" or "recently".
-directory: "viking://user/{user_space}/memories/events"
-filename_template: "{event_time}_{event_name}.md"
+  # Guidelines
+  - The summary must include information records related to the entities involved, with attention to detail, especially emphasizing commitments, agreements, or proposals that may be referenced in the future (for example: Xiaoming once asked, "Do you need me to help you get a membership?" and Xiaosen replied, "Let's talk about it later"), and nothing should be omitted. If there is a time expression (such as "yesterday"), the date must be converted to a specific year, month, and day format according to when the event occurred.
+  - Include all facts as comprehensively as possible, especially requests made by specific roles and mark major events.
+  - Convert dialogue into indirect speech, covering emotions and speaker characteristics, recording the user's emotional state, conversation content, emotional feedback (such as happy, sad, curious, etc.), and the assistant's response.
+  - Create a coherent narrative, retaining key dramatic elements.
+  - Use a third-person perspective.
+  - If possible, combine the user's current behavior and reactions to speculate on the user's possible thoughts or actions.
+  - Describe the complete content of an event within a single event as much as possible; do not split one event into multiple parts.
+  - Record content that mentions time.
+directory: "viking://user/{{ user_space }}/memories/events"
+filename_template: "{{ extract_context.get_year(ranges) }}/{{ extract_context.get_month(ranges) }}/{{ extract_context.get_day(ranges) }}/{{ event_name }}.md"
 enabled: true
+# 操作模式：add_only 表示只新增记忆，不需要查看之前的记忆列表
+# upsert 表示新增或更新（默认行为）
+operation_mode: "add_only"
+content_template: |
+  time: {{extract_context.get_first_message_time_with_weekday_from_ranges(ranges|default(''))|default('N/A')}}
+  {{ extract_context.read_message_ranges(ranges|default('')).pretty_print() if ranges else '' }}
+
 fields:
   - name: event_name
     type: string
     description: |
-      Event name in Chinese or English. If English, use lowercase with underscores, max 3 words.
+      Event name in Chinese or English. If English, use lowercase with underscores, max 3 words. Do not include any dates.
     merge_op: immutable
 
-  - name: event_time
+  - name: goal
     type: string
     description: |
-      Time when the event occurred, format “2026-03-17”. If unknown, use current time.
-    merge_op: immutable
+      Summarize the purpose of the content in 5 words or less
 
-  - name: content
+  - name: summary
     type: string
     description: |
-      Event content in Markdown format, describing “what happened”.
-      Includes: decision content, reasons, outcomes, context, timeline, etc.
-      Example: “In memory system design discussion, found original 6 category boundaries were unclear. Especially status, lessons learned, and insights often overlapped, making them difficult to distinguish. Decided to refactor to 5 categories, removing these three to make boundaries clearer.”
-    merge_op: patch
+      Based on the content of the above fields, compile a description to outline the complete Fact content.
+      Use specific year-month-day dates instead of vague terms such as yesterday, last week, and tomorrow.
+
+  - name: ranges
+    type: string
+    description: |
+      Conversation message index ranges to extract, format: "start-end,start-end,..."
+      Example: "0-3,40-45" means extract messages 0-3 and 40-45.
+    merge_op: immutable

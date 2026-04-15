@@ -3,6 +3,7 @@ requires = [
     "setuptools>=61.0",
     "setuptools-scm>=8.0",
     "cmake>=3.15",
+    "maturin>=1.0,<2.0",
     "wheel",
 ]
 build-backend = "setuptools.build_meta"
@@ -16,7 +17,7 @@ requires-python = ">=3.10"
 authors = [
     {name = "ByteDance", email = "noreply@bytedance.com"}
 ]
-license = { text = "Apache-2.0" }
+license = { text = "AGPL-3.0" }
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -57,7 +58,7 @@ dependencies = [
     "protobuf>=6.33.5",
     "pdfminer-six>=20251230",
     "typer>=0.12.0",
-    "litellm>=1.0.0,<1.82.6",
+    "litellm>=1.0.0,<1.83.1",
     "python-multipart>=0.0.22",
     "tree-sitter>=0.23.0",
     "tree-sitter-python>=0.23.0",
@@ -68,13 +69,19 @@ dependencies = [
     "tree-sitter-rust>=0.23.0",
     "tree-sitter-go>=0.23.0",
     "tree-sitter-c-sharp>=0.23.0",
+    "tree-sitter-php>=0.23.0",
+    "tree-sitter-lua>=0.1.0",
+    # OpenTelemetry
+    "opentelemetry-api>=1.14",
+    "opentelemetry-sdk>=1.14",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.14",
+    "opentelemetry-instrumentation-asyncio>=0.61b0",
     "loguru>=0.7.3",
     "cryptography>=42.0.0",
     "argon2-cffi>=23.0.0",
+    "lark-oapi>=1.5.3",
 ]
 
-[tool.uv.sources]
-pyagfs = { path = "third_party/agfs/agfs-sdk/python" }
 
 [project.optional-dependencies]
 test = [
@@ -91,6 +98,7 @@ test = [
 dev = [
     "mypy>=1.0.0",
     "ruff>=0.1.0",
+    "setuptools_scm>=10.0.0",
 ]
 doc = [
     "sphinx>=7.0.0",
@@ -140,6 +148,7 @@ bot = [
     "tavily-python>=0.5.0",
     "gradio>=6.6.0",
     "py-machineid>=1.0.0",
+    "mcp>=1.0.0",
 ]
 # vikingbot optional features
 bot-langfuse = ["langfuse>=3.0.0"]
@@ -157,6 +166,17 @@ bot-fuse = ["fusepy>=3.0.1"]
 bot-opencode = ["opencode-ai>=0.1.0a0"]
 bot-full = [
     "openviking[bot,bot-langfuse,bot-telegram,bot-feishu,bot-dingtalk,bot-slack,bot-qq,bot-sandbox,bot-fuse,bot-opencode]",
+]
+benchmark = [
+    "langchain>=1.0.0",
+    "langchain-core>=1.0.0",
+    "langchain-openai>=1.0.0",
+    "tiktoken>=0.5.0",
+    "datasets>=2.0.0",
+    "pandas>=2.0.0",
+]
+local-embed = [
+    "llama-cpp-python>=0.3.0",
 ]
 
 [project.urls]
@@ -184,11 +204,9 @@ exclude = ["tests*", "docs*", "examples*"]
 [tool.setuptools.package-data]
 openviking = [
     "prompts/templates/**/*.yaml",
-    "bin/agfs-server",
-    "bin/agfs-server.exe",
-    "lib/libagfsbinding.so",
-    "lib/libagfsbinding.dylib",
-    "lib/libagfsbinding.dll",
+    "console/static/**/*",
+    "lib/ragfs_python*.so",
+    "lib/ragfs_python*.pyd",
     "bin/ov",
     "bin/ov.exe",
     "storage/vectordb/engine/*.abi3.so",
@@ -198,7 +216,6 @@ vikingbot = [
     "**/*.mjs",
     "skills/**/*.md",
     "skills/**/*.sh",
-    "console/static/**/*",
     "bridge/**/*",
 ]
 

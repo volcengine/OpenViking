@@ -3,14 +3,12 @@
 # Variables
 PYTHON ?= python3
 SETUP_PY := setup.py
-AGFS_SERVER_DIR := third_party/agfs/agfs-server
 OV_CLI_DIR := crates/ov_cli
 
 # Dependency Versions
 MIN_PYTHON_VERSION := 3.10
-MIN_GO_VERSION := 1.22
 MIN_CMAKE_VERSION := 3.12
-MIN_RUST_VERSION := 1.88
+MIN_RUST_VERSION := 1.91.1
 MIN_GCC_VERSION := 9
 MIN_CLANG_VERSION := 11
 
@@ -21,7 +19,6 @@ CLEAN_DIRS := \
 	*.egg-info/ \
 	openviking/bin/ \
 	openviking/lib/ \
-	$(AGFS_SERVER_DIR)/build/ \
 	$(OV_CLI_DIR)/target/ \
 	src/cmake_build/ \
 	.pytest_cache/ \
@@ -35,9 +32,9 @@ all: build
 
 help:
 	@echo "Available targets:"
-	@echo "  build       - Build AGFS, ov CLI, and C++ extensions using setup.py"
+	@echo "  build       - Build ragfs-python and C++ extensions using setup.py"
 	@echo "  clean       - Remove build artifacts and temporary files"
-	@echo "  check-deps  - Check if required dependencies (Go, Rust, CMake, etc.) are installed"
+	@echo "  check-deps  - Check if required dependencies (Rust, CMake, etc.) are installed"
 	@echo "  help        - Show this help message"
 
 check-pip:
@@ -59,11 +56,6 @@ check-deps:
 	@# Python check
 	@$(PYTHON) -c "import sys; v=sys.version_info; exit(0 if v.major > 3 or (v.major == 3 and v.minor >= 10) else 1)" || (echo "Error: Python >= $(MIN_PYTHON_VERSION) is required."; exit 1)
 	@echo "  [OK] Python $$( $(PYTHON) -V | cut -d' ' -f2 )"
-	@# Go check
-	@command -v go > /dev/null 2>&1 || (echo "Error: Go is not installed."; exit 1)
-	@GO_VER=$$(go version | awk '{print $$3}' | sed 's/go//'); \
-	$(PYTHON) -c "v='$$GO_VER'.split('.'); exit(0 if int(v[0]) > 1 or (int(v[0]) == 1 and int(v[1]) >= 22) else 1)" || (echo "Error: Go >= $(MIN_GO_VERSION) is required. Found $$GO_VER"; exit 1); \
-	echo "  [OK] Go $$GO_VER"
 	@# CMake check
 	@command -v cmake > /dev/null 2>&1 || (echo "Error: CMake is not installed."; exit 1)
 	@CMAKE_VER=$$(cmake --version | head -n1 | awk '{print $$3}'); \
@@ -72,7 +64,7 @@ check-deps:
 	@# Rust check
 	@command -v rustc > /dev/null 2>&1 || (echo "Error: Rust is not installed."; exit 1)
 	@RUST_VER=$$(rustc --version | awk '{print $$2}'); \
-	$(PYTHON) -c "v='$$RUST_VER'.split('.'); exit(0 if int(v[0]) > 1 or (int(v[0]) == 1 and int(v[1]) >= 88) else 1)" || (echo "Error: Rust >= $(MIN_RUST_VERSION) is required. Found $$RUST_VER"; exit 1); \
+	$(PYTHON) -c "import sys; parse=lambda v: tuple(int(x) for x in v.split('.')); raise SystemExit(0 if parse(sys.argv[1]) >= parse(sys.argv[2]) else 1)" "$$RUST_VER" "$(MIN_RUST_VERSION)" || (echo "Error: Rust >= $(MIN_RUST_VERSION) is required. Found $$RUST_VER"; exit 1); \
 	echo "  [OK] Rust $$RUST_VER"
 	@# C++ Compiler check
 	@if command -v clang++ > /dev/null 2>&1; then \
@@ -98,6 +90,39 @@ build: check-deps check-pip
 	else \
 		echo "  [OK] pip found, use pip to install..."; \
 		$(PYTHON) -m pip install -e .; \
+	fi
+	@echo "Building ragfs-python (Rust RAGFS binding) into openviking/lib/..."
+	@MATURIN_CMD=""; \
+	if command -v maturin > /dev/null 2>&1; then \
+		MATURIN_CMD=maturin; \
+	elif command -v uv > /dev/null 2>&1 && uv pip --help > /dev/null 2>&1; then \
+		uv pip install maturin && MATURIN_CMD=maturin; \
+	fi; \
+	if [ -n "$$MATURIN_CMD" ]; then \
+		TMPDIR=$$(mktemp -d); \
+		cd crates/ragfs-python && $$MATURIN_CMD build --release --features s3 --out "$$TMPDIR" 2>&1; \
+		cd ../..; \
+		mkdir -p openviking/lib; \
+		echo "import zipfile, glob, shutil, os, sys" > /tmp/extract_ragfs.py; \
+		echo "whls = glob.glob(os.path.join('$$TMPDIR', 'ragfs_python-*.whl'))" >> /tmp/extract_ragfs.py; \
+		echo "assert whls, 'maturin produced no wheel'" >> /tmp/extract_ragfs.py; \
+		echo "with zipfile.ZipFile(whls[0]) as zf:" >> /tmp/extract_ragfs.py; \
+		echo "    for name in zf.namelist():" >> /tmp/extract_ragfs.py; \
+		echo "        bn = os.path.basename(name)" >> /tmp/extract_ragfs.py; \
+		echo "        if bn.startswith('ragfs_python') and (bn.endswith('.so') or bn.endswith('.pyd')):" >> /tmp/extract_ragfs.py; \
+		echo "            dst = os.path.join('openviking', 'lib', bn)" >> /tmp/extract_ragfs.py; \
+		echo "            with zf.open(name) as src, open(dst, 'wb') as f: f.write(src.read())" >> /tmp/extract_ragfs.py; \
+		echo "            os.chmod(dst, 0o755)" >> /tmp/extract_ragfs.py; \
+		echo "            print(f'  [OK] ragfs-python: extracted {bn} -> {dst}')" >> /tmp/extract_ragfs.py; \
+		echo "            sys.exit(0)" >> /tmp/extract_ragfs.py; \
+		echo "print('[Warning] No ragfs_python .so/.pyd found in wheel')" >> /tmp/extract_ragfs.py; \
+		echo "sys.exit(1)" >> /tmp/extract_ragfs.py; \
+		$(PYTHON) /tmp/extract_ragfs.py; \
+		rm -f /tmp/extract_ragfs.py; \
+		rm -rf "$$TMPDIR"; \
+	else \
+		echo "  [SKIP] maturin not found, ragfs-python (Rust binding) will not be built."; \
+		echo "         Install maturin to enable: uv pip install maturin"; \
 	fi
 	@echo "Build completed successfully."
 

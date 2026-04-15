@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Preset directory structure definitions for OpenViking.
 
@@ -204,6 +204,7 @@ class DirectoryInitializer:
         count += await self._initialize_children(
             "agent", agent_tree.children, agent_space_root, ctx=ctx
         )
+
         return count
 
     async def _ensure_directory(

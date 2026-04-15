@@ -1,0 +1,53 @@
+# Raw datasets (downloaded from external sources)
+raw_data/
+
+# Processed datasets (sampled subsets)
+datasets/
+data/
+
+# Processed documents and vector storage
+ov_storage/
+
+# Evaluation output results
+Output/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+.venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp

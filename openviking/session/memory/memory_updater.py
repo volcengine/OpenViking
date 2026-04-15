@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Memory updater - applies MemoryOperations directly.
 
@@ -7,25 +7,176 @@ This is the system executor that applies LLM's final output (MemoryOperations)
 to the storage system.
 """
 
-from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+from openviking.message import Message
 from openviking.server.identity import RequestContext
+from openviking.session.memory.dataclass import MemoryField
+from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+from openviking.session.memory.merge_op import MergeOpFactory, PatchOp
 from openviking.session.memory.utils import (
     deserialize_full,
-    serialize_with_metadata,
-    resolve_all_operations,
     flat_model_to_dict,
+    parse_memory_file_with_fields,
+    resolve_all_operations,
+    serialize_with_metadata,
 )
-from openviking.session.memory.dataclass import MemoryField
-from openviking.session.memory.merge_op import MergeOpFactory, PatchOp
-from openviking.session.memory.merge_op.base import FieldType, SearchReplaceBlock, StrPatch
-from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.storage.viking_fs import get_viking_fs
+from openviking.telemetry import tracer
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+
+class ExtractContext:
+    """Extract context for template rendering."""
+
+    def __init__(self, messages: List[Message]):
+        self.messages = messages
+
+    def get_first_message_time_from_ranges(self, ranges_str: str) -> str | None:
+        """根据 ranges 字符串获取第一条消息的时间（YAML 日期格式）"""
+        if not ranges_str:
+            return None
+        msg_range = self.read_message_ranges(ranges_str)
+        return msg_range._first_message_time()
+
+    def get_first_message_time_with_weekday_from_ranges(self, ranges_str: str) -> str | None:
+        """根据 ranges 字符串获取第一条消息的时间，带周几"""
+        if not ranges_str:
+            return None
+        msg_range = self.read_message_ranges(ranges_str)
+        return msg_range._first_message_time_with_weekday()
+
+    def get_year(self, ranges_str: str) -> str | None:
+        """根据 ranges 字符串获取第一条消息的年份"""
+        if not ranges_str:
+            return None
+        msg_range = self.read_message_ranges(ranges_str)
+        first_time = msg_range._first_message_time()
+        return first_time.split("-")[0] if first_time else None
+
+    def get_month(self, ranges_str: str) -> str | None:
+        """根据 ranges 字符串获取第一条消息的月份"""
+        if not ranges_str:
+            return None
+        msg_range = self.read_message_ranges(ranges_str)
+        first_time = msg_range._first_message_time()
+        return first_time.split("-")[1] if first_time else None
+
+    def get_day(self, ranges_str: str) -> str | None:
+        """根据 ranges 字符串获取第一条消息的日期"""
+        if not ranges_str:
+            return None
+        msg_range = self.read_message_ranges(ranges_str)
+        first_time = msg_range._first_message_time()
+        return first_time.split("-")[2] if first_time else None
+
+    def read_message_ranges(self, ranges_str: str) -> "MessageRange":
+        """Parse ranges string like "0-10,50-60" or "7,9,11,13" and return combined MessageRange.
+
+        If there's a gap between ranges (e.g., 0-10 and 50-60), add "..." as separator.
+        Supports:
+        - "0-10,50-60" - ranges
+        - "7,9,11,13" - single indices
+        - "0-10,15,20-25" - mixed
+        """
+        if not ranges_str:
+            return MessageRange([])
+
+        # 解析所有范围/索引
+        ranges = []
+        for part in ranges_str.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            if "-" in part:
+                start, end = part.split("-")
+                ranges.append((int(start), int(end)))
+            else:
+                # 单个索引转为相同起止范围
+                idx = int(part)
+                ranges.append((idx, idx))
+
+        if not ranges:
+            return MessageRange([])
+
+        # 按 start 排序
+        ranges.sort(key=lambda x: x[0])
+
+        # elements 可以是 Message 或 str ("...")
+        elements: List[Message | str] = []
+        for i, (start, end) in enumerate(ranges):
+            # 兼容 LLM 提取的 range 越界情况
+            if start < 0:
+                start = 0
+            if end >= len(self.messages):
+                end = len(self.messages) - 1
+            if start > end:
+                continue
+            range_msgs = self.messages[start : end + 1]
+
+            if i > 0:
+                prev_end = ranges[i - 1][1]
+                # 如果有间隔，加 ...
+                if start > prev_end + 1:
+                    elements.append("...")
+            elements.extend(range_msgs)
+
+        return MessageRange(elements)
+
+
+class MessageRange:
+    """Represents a range of messages for formatting."""
+
+    def __init__(self, elements: List[Message | str]):
+        self.elements = elements
+
+    def pretty_print(self) -> str:
+        """Pretty print the message range."""
+        result = []
+        for elem in self.elements:
+            if isinstance(elem, str):
+                result.append(elem)
+            else:
+                result.append(f"[{elem.role}]: {elem.content}")
+        return "\n".join(result)
+
+    def _first_message_time(self) -> str | None:
+        """获取第一条消息的时间（内部方法）"""
+        from datetime import datetime
+
+        for elem in self.elements:
+            if isinstance(elem, str):
+                continue
+            if hasattr(elem, "created_at") and elem.created_at:
+                dt = datetime.fromisoformat(elem.created_at)
+                return dt.strftime("%Y-%m-%d")
+        return None
+
+    def _first_message_time_with_weekday(self) -> str | None:
+        """获取第一条消息的时间，带周几（内部方法）"""
+        from datetime import datetime
+
+        for elem in self.elements:
+            if isinstance(elem, str):
+                continue
+            if hasattr(elem, "created_at") and elem.created_at:
+                # 获取周几的英文全称
+                weekday_en = [
+                    "Monday",
+                    "Tuesday",
+                    "Wednesday",
+                    "Thursday",
+                    "Friday",
+                    "Saturday",
+                    "Sunday",
+                ]
+                dt = datetime.fromisoformat(elem.created_at)
+                weekday = weekday_en[dt.weekday()]
+                return f"{dt.strftime('%Y-%m-%d')} ({weekday})"
+        return None
 
 
 class MemoryUpdateResult:
@@ -50,11 +201,7 @@ class MemoryUpdateResult:
         self.errors.append((uri, error))
 
     def has_changes(self) -> bool:
-        return (
-            len(self.written_uris) > 0
-            or len(self.edited_uris) > 0
-            or len(self.deleted_uris) > 0
-        )
+        return len(self.written_uris) > 0 or len(self.edited_uris) > 0 or len(self.deleted_uris) > 0
 
     def summary(self) -> str:
         return (
@@ -65,8 +212,6 @@ class MemoryUpdateResult:
         )
 
 
-
-
 class MemoryUpdater:
     """
     Applies MemoryOperations to storage.
@@ -75,10 +220,13 @@ class MemoryUpdater:
     No function calls are used for write/edit/delete - these are executed directly.
     """
 
-    def __init__(self, registry: Optional[MemoryTypeRegistry] = None, vikingdb=None):
+    def __init__(
+        self, registry: Optional[MemoryTypeRegistry] = None, vikingdb=None, transaction_handle=None
+    ):
         self._viking_fs = None
         self._registry = registry
         self._vikingdb = vikingdb
+        self._transaction_handle = transaction_handle
 
     def set_registry(self, registry: MemoryTypeRegistry) -> None:
         """Set the memory type registry for URI resolution."""
@@ -95,6 +243,7 @@ class MemoryUpdater:
         operations: Any,
         ctx: RequestContext,
         registry: Optional[MemoryTypeRegistry] = None,
+        extract_context: Any = None,
     ) -> MemoryUpdateResult:
         """
         Apply MemoryOperations directly using the flat model format.
@@ -102,7 +251,7 @@ class MemoryUpdater:
         This is the system executor - no LLM involved at this stage.
 
         Args:
-            operations: StructuredMemoryOperations from LLM (final output) with flat models
+            operations: StructuredMemoryOperations from LLM with per-memory_type fields (e.g., soul, identity)
             ctx: Request context
             registry: Optional MemoryTypeRegistry for URI resolution
 
@@ -125,12 +274,13 @@ class MemoryUpdater:
         user_space = ctx.user.user_space_name() if ctx and ctx.user else "default"
         agent_space = ctx.user.agent_space_name() if ctx and ctx.user else "default"
 
-        # Resolve all URIs first
+        # Resolve all URIs first (pass extract_context for template rendering)
         resolved_ops = resolve_all_operations(
             operations,
             resolved_registry,
             user_space=user_space,
             agent_space=agent_space,
+            extract_context=extract_context,
         )
 
         if resolved_ops.has_errors():
@@ -138,23 +288,28 @@ class MemoryUpdater:
                 result.add_error("unknown", ValueError(error))
             return result
 
-        # Apply write operations
-        for op, uri in resolved_ops.write_operations:
+        # Apply unified operations - _apply_edit returns True if edited, False if written
+        for resolved_op in resolved_ops.operations:
             try:
-                await self._apply_write(op, uri, ctx)
-                result.add_written(uri)
+                is_edited = await self._apply_edit(
+                    resolved_op.model,
+                    resolved_op.uri,
+                    ctx,
+                    extract_context=extract_context,
+                    memory_type=resolved_op.memory_type,
+                )
+                if is_edited:
+                    result.add_edited(resolved_op.uri)
+                else:
+                    result.add_written(resolved_op.uri)
             except Exception as e:
-                logger.error(f"Failed to write memory: {e}")
-                result.add_error(uri, e)
-
-        # Apply edit operations
-        for op, uri in resolved_ops.edit_operations:
-            try:
-                await self._apply_edit(op, uri, ctx)
-                result.add_edited(uri)
-            except Exception as e:
-                logger.error(f"Failed to edit memory {uri}: {e}")
-                result.add_error(uri, e)
+                tracer.error(
+                    f"Failed to apply operation: {e}, op={resolved_op.model}, op type={type(resolved_op.model)}",
+                    e,
+                )
+                if hasattr(resolved_op.model, "model_dump"):
+                    tracer.info(f"Op dump: {resolved_op.model.model_dump()}")
+                result.add_error(resolved_op.uri, e)
 
         # Apply edit_overview operations
         for op, uri in resolved_ops.edit_overview_operations:
@@ -162,7 +317,7 @@ class MemoryUpdater:
                 await self._apply_edit_overview(op, uri, ctx)
                 result.add_edited(uri)
             except Exception as e:
-                logger.error(f"Failed to edit overview {uri}: {e}")
+                tracer.error(f"Failed to edit overview {uri}", e)
                 result.add_error(uri, e)
 
         # Apply delete operations
@@ -171,122 +326,90 @@ class MemoryUpdater:
                 await self._apply_delete(uri, ctx)
                 result.add_deleted(uri)
             except Exception as e:
-                logger.error(f"Failed to delete memory {uri}: {e}")
+                tracer.error(f"Failed to delete memory {uri}", e)
                 result.add_error(uri, e)
 
         # Vectorize written and edited memories
         await self._vectorize_memories(result, ctx)
 
-        logger.info(f"Memory operations applied: {result.summary()}")
+        tracer.info(f"Memory operations applied: {result.summary()}")
         return result
 
-    async def _apply_write(self, flat_model: Any, uri: str, ctx: RequestContext) -> None:
-        """Apply write operation from a flat model."""
+    async def _apply_edit(
+        self,
+        flat_model: Any,
+        uri: str,
+        ctx: RequestContext,
+        extract_context: Any = None,
+        memory_type: str = None,
+    ) -> bool:
+        """Apply edit operation from a flat model.
+
+        Returns:
+            True if file was edited (existed), False if file was written (new)
+        """
         viking_fs = self._get_viking_fs()
 
-        # Convert model to dict
+        # Convert flat model to dict first (needed for checking content type)
         model_dict = flat_model_to_dict(flat_model)
 
-        # Set timestamps if not provided
-        now = datetime.utcnow()
-        created_at = model_dict.get("created_at", now)
-        updated_at = model_dict.get("updated_at", now)
+        # Get memory type schema - use parameter first, then fallback to model_dict
+        memory_type_str = memory_type or model_dict.get("memory_type")
 
-        # Extract content - priority: model_dict["content"]
-        content = model_dict.pop("content", None) or ""
-
-        # Get memory type schema to know which fields are business fields vs metadata
-        memory_type_str = model_dict.get("memory_type")
-        field_schema_map: Dict[str, MemoryField] = {}
-        business_fields: Dict[str, Any] = {}
-
-        if self._registry and memory_type_str:
-            schema = self._registry.get(memory_type_str)
-            if schema:
-                field_schema_map = {f.name: f for f in schema.fields}
-                # Extract business fields (those defined in the schema)
-                for field_name in field_schema_map:
-                    if field_name in model_dict:
-                        business_fields[field_name] = model_dict[field_name]
-
-        # Collect metadata - only include business fields (from schema, except content)
-        metadata = business_fields.copy()
-
-        # Serialize content with metadata
-        full_content = serialize_with_metadata(content, metadata)
-
-        # Write content to VikingFS
-        # VikingFS automatically handles L0/L1/L2 and vector index updates
-        await viking_fs.write_file(uri, full_content, ctx=ctx)
-        logger.debug(f"Written memory: {uri}")
-
-    async def _apply_edit(self, flat_model: Any, uri: str, ctx: RequestContext) -> None:
-        """Apply edit operation from a flat model."""
-        viking_fs = self._get_viking_fs()
-
-        # Read current memory
+        # Read current memory (or use empty if not found)
+        current_full_content = ""
+        file_existed = True
         try:
             current_full_content = await viking_fs.read_file(uri, ctx=ctx) or ""
         except NotFoundError:
-            logger.warning(f"Memory not found for edit: {uri}")
-            return
+            file_existed = False
 
         # Deserialize content and metadata
         current_plain_content, current_metadata = deserialize_full(current_full_content)
+        metadata = current_metadata or {}
 
-        # Convert flat model to dict
-        model_dict = flat_model_to_dict(flat_model)
-
-        # Get memory type schema
-        memory_type_str = model_dict.get("memory_type") or current_metadata.get("memory_type")
+        # Get schema
         field_schema_map: Dict[str, MemoryField] = {}
-
         if self._registry and memory_type_str:
             schema = self._registry.get(memory_type_str)
             if schema:
                 field_schema_map = {f.name: f for f in schema.fields}
 
-        # Apply all fields (including content) through MergeOp
-        new_plain_content = current_plain_content
-        metadata = current_metadata or {}
-
-        # Handle schema-defined fields first
+        # Build metadata by applying merge_op to each field
+        # (merge_op.apply handles current_value=None case for new files)
+        metadata: Dict[str, Any] = {}
         for field_name, field_schema in field_schema_map.items():
             if field_name in model_dict:
                 patch_value = model_dict[field_name]
-
                 # Get current value
                 if field_name == "content":
                     current_value = current_plain_content
                 else:
                     current_value = metadata.get(field_name)
-
-                # Create MergeOp and apply
+                # Use merge_op to process field value
                 merge_op = MergeOpFactory.from_field(field_schema)
                 new_value = merge_op.apply(current_value, patch_value)
+                metadata[field_name] = new_value
 
-                # Update the field
-                if field_name == "content":
-                    new_plain_content = new_value
-                else:
-                    metadata[field_name] = new_value
+        # Serialize and write (template rendering is handled inside serialize_with_metadata)
+        content_template = None
+        if self._registry and memory_type_str:
+            schema = self._registry.get(memory_type_str)
+            if schema:
+                content_template = schema.content_template
 
-        # Special case: handle content field even without schema (for backward compatibility/testing)
-        if "content" in model_dict and "content" not in field_schema_map:
-            from openviking.session.memory.merge_op import PatchOp
-            from openviking.session.memory.merge_op.base import FieldType
-            patch_value = model_dict["content"]
-            merge_op = PatchOp(FieldType.STRING)
-            new_plain_content = merge_op.apply(current_plain_content, patch_value)
+        # serialize_with_metadata modifies metadata dict, so pass a copy
+        new_full_content = serialize_with_metadata(
+            metadata.copy(),
+            content_template=content_template,
+            extract_context=extract_context,
+        )
 
-        # Re-serialize with updated content and metadata
-        new_full_content = serialize_with_metadata(new_plain_content, metadata)
-
-        # Print diff of the edit
-        self._print_diff(uri, current_plain_content, new_plain_content)
+        if file_existed:
+            self._print_diff(uri, current_plain_content, new_full_content)
 
         await viking_fs.write_file(uri, new_full_content, ctx=ctx)
-        logger.debug(f"Edited memory: {uri}")
+        return file_existed
 
     async def _apply_delete(self, uri: str, ctx: RequestContext) -> None:
         """Apply delete operation (uri is already a string)."""
@@ -296,120 +419,15 @@ class MemoryUpdater:
         # VikingFS automatically handles vector index cleanup
         try:
             await viking_fs.rm(uri, recursive=False, ctx=ctx)
-            logger.debug(f"Deleted memory: {uri}")
         except NotFoundError:
-            logger.warning(f"Memory not found for delete: {uri}")
+            tracer.error(f"Memory not found for delete: {uri}")
             # Idempotent - deleting non-existent file succeeds
-
-    async def _apply_edit_overview(self, overview_model: Any, uri: str, ctx: RequestContext) -> None:
-        """
-        Apply edit operation for .overview.md file.
-
-        Args:
-            overview_model: Overview edit model with memory_type and overview fields
-            uri: URI of the .overview.md file
-            ctx: Request context
-        """
-        viking_fs = self._get_viking_fs()
-
-        # Get overview value from model
-        if hasattr(overview_model, 'overview'):
-            overview_value = overview_model.overview
-        elif isinstance(overview_model, dict):
-            overview_value = overview_model.get('overview')
-        else:
-            raise ValueError("overview_model must have overview field")
-
-        # Read current overview if exists
-        current_overview = ""
-        try:
-            current_overview = await viking_fs.read_file(uri, ctx=ctx) or ""
-        except NotFoundError:
-            # File doesn't exist yet, start with empty content
-            logger.debug(f"Overview file does not exist yet: {uri}")
-
-        # Apply patch or replace based on overview_value type
-        new_overview = current_overview
-        if overview_value is None:
-            # No overview provided, nothing to do
-            logger.debug(f"No overview value provided, skipping edit")
-            return
-        elif isinstance(overview_value, str):
-            # Direct string - replace
-            new_overview = overview_value
-        elif isinstance(overview_value, dict):
-            # Dict format - convert to StrPatch if needed
-            if 'blocks' in overview_value:
-                # Already in StrPatch format
-                blocks = [SearchReplaceBlock(**block) for block in overview_value['blocks']]
-                str_patch = StrPatch(blocks=blocks)
-            else:
-                # Unexpected format
-                raise ValueError(f"Invalid overview patch format: {overview_value}")
-
-            # Apply patch
-            patch_op = PatchOp(FieldType.STRING)
-            new_overview = patch_op.apply(current_overview, str_patch)
-        else:
-            # StrPatch object
-            patch_op = PatchOp(FieldType.STRING)
-            new_overview = patch_op.apply(current_overview, overview_value)
-
-        # Print diff of the edit
-        self._print_diff(uri, current_overview, new_overview)
-
-        # Write new overview
-        await viking_fs.write_file(uri, new_overview, ctx=ctx)
-        logger.debug(f"Edited overview: {uri}")
-
-        # Extract and write .abstract.md
-        await self._write_abstract_from_overview(uri, new_overview, ctx)
-
-    def _extract_abstract_from_overview(self, overview_content: str) -> str:
-        """Extract abstract from overview.md - same logic as SemanticProcessor."""
-        lines = overview_content.split("\n")
-
-        # Skip header lines (starting with #)
-        content_lines = []
-        in_header = True
-
-        for line in lines:
-            if in_header and line.startswith("#"):
-                continue
-            elif in_header and line.strip():
-                in_header = False
-
-            if not in_header:
-                # Stop at first ##
-                if line.startswith("##"):
-                    break
-                if line.strip():
-                    content_lines.append(line.strip())
-
-        return "\n".join(content_lines).strip()
-
-    async def _write_abstract_from_overview(
-        self, overview_uri: str, overview_content: str, ctx: RequestContext
-    ) -> None:
-        """Extract abstract from overview and write to .abstract.md."""
-        viking_fs = self._get_viking_fs()
-
-        # Extract abstract from overview
-        abstract = self._extract_abstract_from_overview(overview_content)
-
-        # Convert overview_uri (e.g., skills/.overview.md) to abstract path
-        abstract_uri = overview_uri.replace("/.overview.md", "/.abstract.md")
-
-        try:
-            await viking_fs.write_file(abstract_uri, abstract, ctx=ctx)
-            logger.debug(f"Wrote abstract: {abstract_uri}")
-        except Exception as e:
-            logger.warning(f"Failed to write abstract {abstract_uri}: {e}")
 
     def _print_diff(self, uri: str, old_content: str, new_content: str) -> None:
         """Print a diff of the memory edit using diff_match_patch."""
         try:
             from diff_match_patch import diff_match_patch
+
             dmp = diff_match_patch()
 
             # Compute character-level diff
@@ -424,7 +442,7 @@ class MemoryUpdater:
 
             # ANSI styles
             STYLE_DELETE = "\033[9m\033[31m"  # 删除线 + 红色
-            STYLE_INSERT = "\033[32m"          # 绿色
+            STYLE_INSERT = "\033[32m"  # 绿色
             STYLE_RESET = "\033[0m"
 
             for op, text in diffs:
@@ -438,12 +456,12 @@ class MemoryUpdater:
             lines.append(f"{'=' * 60}\n")
 
             # Print directly
-            print("\n".join(lines))
+            tracer.info("diff=" + "\n".join(lines))
         except ImportError:
             # Fallback: just show file name
-            logger.debug(f"diff_match_patch not available, skipping diff for {uri}")
+            tracer.error(f"diff_match_patch not available, skipping diff for {uri}")
         except Exception as e:
-            logger.debug(f"Failed to print diff for {uri}: {e}")
+            tracer.error(f"Failed to print diff for {uri}: {e}")
 
     async def _vectorize_memories(
         self,
@@ -477,8 +495,9 @@ class MemoryUpdater:
                 # Read the memory file to get content
                 content = await viking_fs.read_file(uri, ctx=ctx) or ""
 
-                # Extract abstract (first 200 chars or first paragraph)
-                abstract = content[:200].split("\n\n")[0] if content else ""
+                # Use parse_memory_file_with_fields to strip MEMORY_FIELDS comment
+                parsed = parse_memory_file_with_fields(content)
+                abstract = parsed.get("content", "")
 
                 # Get parent URI
                 from openviking_cli.utils.uri import VikingURI

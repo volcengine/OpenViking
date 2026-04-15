@@ -1,18 +1,18 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Single-turn channel - no extra output, just the result."""
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any
-import json
 
 from loguru import logger
 
-from vikingbot.bus.events import InboundMessage, OutboundMessage, OutboundEventType
+from vikingbot.bus.events import InboundMessage, OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
-from vikingbot.config.schema import SessionKey, BaseChannelConfig
+from vikingbot.config.schema import BaseChannelConfig, SessionKey
 
 
 class SingleTurnChannelConfig(BaseChannelConfig):
@@ -77,9 +77,10 @@ class SingleTurnChannel(BaseChannel):
         try:
             await asyncio.wait_for(self._response_received.wait(), timeout=3000.0)
             if self._last_response:
-                from vikingbot.cli.commands import console
                 from rich.markdown import Markdown
                 from rich.text import Text
+
+                from vikingbot.cli.commands import console
 
                 content = self._last_response or ""
                 body = Markdown(content) if self.markdown else Text(content)

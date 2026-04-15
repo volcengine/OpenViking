@@ -20,6 +20,9 @@ pub enum Error {
     #[error("Output error: {0}")]
     Output(String),
 
+    #[error("Invalid path: {0}")]
+    InvalidPath(String),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
@@ -76,6 +79,7 @@ impl From<Error> for CliError {
             Error::Client(msg) => CliError::new(format!("Client error: {}", msg)),
             Error::Parse(msg) => CliError::new(format!("Parse error: {}", msg)),
             Error::Output(msg) => CliError::new(format!("Output error: {}", msg)),
+            Error::InvalidPath(msg) => CliError::new(format!("Invalid path: {}", msg)),
             Error::Io(e) => CliError::new(format!("IO error: {}", e)),
             Error::Serialization(e) => CliError::new(format!("Serialization error: {}", e)),
             Error::Zip(e) => CliError::new(format!("Zip error: {}", e)),

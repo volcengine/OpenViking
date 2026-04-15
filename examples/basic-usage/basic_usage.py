@@ -17,7 +17,6 @@ Requirements:
 
 import os
 import sys
-import time
 
 # Add parent directory to path for local development
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -76,7 +75,7 @@ def main():
         # Add a URL resource
         result = client.add_resource(
             path="https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md",
-            wait=False  # Non-blocking, process in background
+            wait=False,  # Non-blocking, process in background
         )
 
         root_uri = result.get("root_uri", "")
@@ -101,13 +100,13 @@ def main():
     if root_uri:
         try:
             # List directory contents
-            print(f"   Directory listing:")
+            print("   Directory listing:")
             files = client.ls(root_uri, simple=True)
             for f in files[:5]:  # Show first 5 files
                 print(f"   - {f}")
 
             # Show tree structure
-            print(f"\n   Tree view:")
+            print("\n   Tree view:")
             tree = client.tree(root_uri, level_limit=2)
             print_tree(tree, indent="   ")
 
@@ -163,14 +162,17 @@ def main():
 
             print()
 
-            # L2: Full content (read first 500 chars)
+            # L2: Read one concrete file under the resource root
             print("   L2 (Full content - first 500 chars):")
-            content = client.read(root_uri)
-            if content:
+            glob_result = client.glob(pattern="**/*.md", uri=root_uri)
+            matches = glob_result.get("matches", []) if isinstance(glob_result, dict) else []
+            if matches:
+                content = client.read(matches[0])
                 preview = content[:500] + "..." if len(content) > 500 else content
+                print(f"   File: {matches[0]}")
                 print(f"   {preview}")
             else:
-                print("   (Not available)")
+                print("   (No readable markdown file found under this resource)")
 
         except Exception as e:
             print(f"   Error loading context: {e}")
@@ -189,13 +191,9 @@ def main():
             print(f"   Query: '{query}'")
             print("   Results:")
 
-            results = client.find(
-                query=query,
-                target_uri=root_uri,
-                limit=5
-            )
+            results = client.find(query=query, target_uri=root_uri, limit=5)
 
-            if hasattr(results, 'resources') and results.resources:
+            if hasattr(results, "resources") and results.resources:
                 for r in results.resources:
                     print(f"   - {r.uri}")
                     print(f"     Score: {r.score:.4f}")
@@ -246,7 +244,9 @@ def main():
 
         # Add a conversation turn
         client.add_message(session_id, "user", "I prefer Python for data science projects")
-        client.add_message(session_id, "assistant", "Understood! I'll use Python for your data science work.")
+        client.add_message(
+            session_id, "assistant", "Understood! I'll use Python for your data science work."
+        )
 
         print("   Added conversation turn")
 
@@ -264,29 +264,42 @@ def main():
     # ============================================================
     # 9. Cleanup
     # ============================================================
-    print("8. Closing OpenViking...")
+    print("9. Closing OpenViking...")
     print("-" * 40)
 
-    client.close()
-    print("   Done!")
+    try:
+        client.close()
+        print("   Done!")
+    except Exception as e:
+        print(f"   Note: Close skipped - {e}")
     print()
     print("=" * 60)
     print("Example completed successfully!")
     print("=" * 60)
 
 
-def print_tree(tree: dict, indent: str = ""):
+def print_tree(tree, indent: str = ""):
     """Helper function to print tree structure."""
     if not tree:
         return
 
+    if isinstance(tree, list):
+        for child in tree[:5]:
+            print_tree(child, indent)
+        return
+
+    if not isinstance(tree, dict):
+        print(f"{indent}{tree}")
+        return
+
     name = tree.get("name", "?")
     children = tree.get("children", [])
+    is_dir = tree.get("isDir", tree.get("is_dir", bool(children)))
 
-    print(f"{indent}{name}/")
+    print(f"{indent}{name}/" if is_dir else f"{indent}{name}")
 
     for child in children[:5]:  # Limit to first 5 children
-        if child.get("is_dir"):
+        if child.get("isDir", child.get("is_dir")):
             print_tree(child, indent + "  ")
         else:
             print(f"{indent}  {child.get('name', '?')}")

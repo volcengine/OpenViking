@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 
 """Comprehensive tests for Message and Part classes."""
 
@@ -514,6 +514,24 @@ class TestMessageFromDict:
         assert isinstance(msg.parts[0], ToolPart)
         assert msg.parts[0].tool_id == "call-1"
 
+    def test_from_dict_supports_legacy_content_only_messages(self):
+        """Legacy messages with only content should load as a TextPart."""
+        d = {
+            "id": "msg-legacy",
+            "role": "user",
+            "content": "Hello from legacy storage",
+        }
+
+        msg = Message.from_dict(d)
+
+        assert msg.id == "msg-legacy"
+        assert msg.role == "user"
+        assert len(msg.parts) == 1
+        assert isinstance(msg.parts[0], TextPart)
+        assert msg.parts[0].text == "Hello from legacy storage"
+        assert msg.content == "Hello from legacy storage"
+        assert msg.created_at is None
+
     def test_roundtrip(self):
         """Test to_dict -> from_dict roundtrip."""
         original = Message(
@@ -533,6 +551,29 @@ class TestMessageFromDict:
         assert len(restored.parts) == len(original.parts)
         assert isinstance(restored.parts[0], TextPart)
         assert isinstance(restored.parts[1], ContextPart)
+
+    def test_legacy_message_can_be_reloaded_and_extended(self):
+        """Legacy content-only rows should survive reload before appending new messages."""
+        legacy_row = {
+            "id": "msg-legacy",
+            "role": "user",
+            "content": "Legacy message",
+            "created_at": "2026-03-26T10:30:00Z",
+        }
+        fresh = Message.create_user("Fresh message", msg_id="msg-fresh")
+
+        reloaded_messages = [Message.from_dict(legacy_row), Message.from_dict(fresh.to_dict())]
+
+        assert [message.content for message in reloaded_messages] == [
+            "Legacy message",
+            "Fresh message",
+        ]
+        assert [
+            json.loads(message.to_jsonl())["parts"][0]["text"] for message in reloaded_messages
+        ] == [
+            "Legacy message",
+            "Fresh message",
+        ]
 
 
 class TestMessageFactoryMethods:

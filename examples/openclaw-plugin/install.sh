@@ -5,6 +5,7 @@
 #
 # Options:
 #   --repo <owner/repo>           - GitHub repository (default: volcengine/OpenViking)
+#   --version <ver>               - Shorthand for --plugin-version v<ver> + --openviking-version <ver>
 #   --plugin-version <tag>        - Plugin version (Git tag, e.g. v0.2.9, default: latest tag)
 #   --openviking-version <ver>    - OpenViking PyPI version (e.g. 0.2.9, default: latest)
 #   --workdir <path>              - OpenClaw config directory (default: ~/.openclaw)
@@ -52,6 +53,10 @@ if [[ -n "${PLUGIN_VERSION:-}" || -n "${BRANCH:-}" ]]; then
 fi
 PLUGIN_VERSION="${PLUGIN_VERSION:-${BRANCH:-}}"
 OPENVIKING_VERSION="${OPENVIKING_VERSION:-}"
+VERSION_ALIAS=""
+VERSION_ALIAS_EXPLICIT="0"
+PLUGIN_VERSION_ARG_EXPLICIT="0"
+OPENVIKING_VERSION_ARG_EXPLICIT="0"
 INSTALL_YES="${OPENVIKING_INSTALL_YES:-0}"
 UPGRADE_PLUGIN_ONLY="${OPENVIKING_UPGRADE_PLUGIN_ONLY:-0}"
 ROLLBACK_LAST_UPGRADE="${OPENVIKING_ROLLBACK_LAST_UPGRADE:-0}"
@@ -65,7 +70,6 @@ OPENCLAW_DIR="${DEFAULT_OPENCLAW_DIR}"
 OPENVIKING_DIR="${HOME_DIR}/.openviking"
 PLUGIN_DEST=""  # Will be set after resolving plugin config
 DEFAULT_SERVER_PORT=1933
-DEFAULT_AGFS_PORT=1833
 DEFAULT_VLM_MODEL="doubao-seed-2-0-pro-260215"
 DEFAULT_EMBED_MODEL="doubao-embedding-vision-251215"
 SELECTED_SERVER_PORT="${DEFAULT_SERVER_PORT}"
@@ -110,6 +114,7 @@ UPGRADE_AUDIT_PLUGIN_BACKUPS=()
 _expect_workdir=""
 _expect_plugin_version=""
 _expect_ov_version=""
+_expect_version_alias=""
 _expect_repo=""
 for arg in "$@"; do
   if [[ -n "$_expect_workdir" ]]; then
@@ -120,12 +125,20 @@ for arg in "$@"; do
   if [[ -n "$_expect_plugin_version" ]]; then
     PLUGIN_VERSION="$arg"
     PLUGIN_VERSION_EXPLICIT="1"
+    PLUGIN_VERSION_ARG_EXPLICIT="1"
     _expect_plugin_version=""
     continue
   fi
   if [[ -n "$_expect_ov_version" ]]; then
     OPENVIKING_VERSION="$arg"
+    OPENVIKING_VERSION_ARG_EXPLICIT="1"
     _expect_ov_version=""
+    continue
+  fi
+  if [[ -n "$_expect_version_alias" ]]; then
+    VERSION_ALIAS="$arg"
+    VERSION_ALIAS_EXPLICIT="1"
+    _expect_version_alias=""
     continue
   fi
   if [[ -n "$_expect_repo" ]]; then
@@ -140,12 +153,17 @@ for arg in "$@"; do
   [[ "$arg" == "--workdir" ]] && { _expect_workdir="1"; continue; }
   [[ "$arg" == "--plugin-version" ]] && { _expect_plugin_version="1"; continue; }
   [[ "$arg" == "--openviking-version" ]] && { _expect_ov_version="1"; continue; }
+  [[ "$arg" == "--version" ]] && { _expect_version_alias="1"; continue; }
+  [[ "$arg" == --plugin-version=* ]] && { PLUGIN_VERSION="${arg#--plugin-version=}"; PLUGIN_VERSION_EXPLICIT="1"; PLUGIN_VERSION_ARG_EXPLICIT="1"; continue; }
+  [[ "$arg" == --openviking-version=* ]] && { OPENVIKING_VERSION="${arg#--openviking-version=}"; OPENVIKING_VERSION_ARG_EXPLICIT="1"; continue; }
+  [[ "$arg" == --version=* ]] && { VERSION_ALIAS="${arg#--version=}"; VERSION_ALIAS_EXPLICIT="1"; continue; }
   [[ "$arg" == "--repo" ]] && { _expect_repo="1"; continue; }
   [[ "$arg" == "-h" || "$arg" == "--help" ]] && {
     echo "Usage: curl -fsSL <INSTALL_URL> | bash [-s -- OPTIONS]"
     echo ""
     echo "Options:"
     echo "  --repo <owner/repo>      GitHub repository (default: volcengine/OpenViking)"
+    echo "  --version <v>            Shorthand for --plugin-version v<v> and --openviking-version <v>"
     echo "  --plugin-version <tag>   Plugin version (Git tag, e.g. v0.2.9, default: latest tag)"
     echo "  --openviking-version <v> OpenViking PyPI version (e.g. 0.2.9, default: latest)"
     echo "  --workdir <path>         OpenClaw config directory (default: ~/.openclaw)"
@@ -159,6 +177,9 @@ for arg in "$@"; do
     echo "Examples:"
     echo "  # Install latest version"
     echo "  curl -fsSL <URL> | bash"
+    echo ""
+    echo "  # Install a specific release version"
+    echo "  curl -fsSL <URL> | bash -s -- --version 0.2.9"
     echo ""
     echo "  # Install from a fork repository"
     echo "  curl -fsSL <URL> | bash -s -- --repo yourname/OpenViking --plugin-version dev-branch"
@@ -176,6 +197,28 @@ for arg in "$@"; do
     exit 0
   }
 done
+
+normalize_combined_version() {
+  local value="${1:-}"
+  local normalized="${value#v}"
+  if [[ ! "$normalized" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
+    err "--version requires a semantic version like 0.2.9 or v0.2.9"
+    exit 1
+  fi
+  COMBINED_PLUGIN_VERSION="v${normalized}"
+  COMBINED_OPENVIKING_VERSION="${normalized}"
+}
+
+if [[ "$VERSION_ALIAS_EXPLICIT" == "1" ]]; then
+  if [[ "$PLUGIN_VERSION_ARG_EXPLICIT" == "1" || "$OPENVIKING_VERSION_ARG_EXPLICIT" == "1" ]]; then
+    err "--version cannot be used together with --plugin-version or --openviking-version"
+    exit 1
+  fi
+  normalize_combined_version "$VERSION_ALIAS"
+  PLUGIN_VERSION="${COMBINED_PLUGIN_VERSION}"
+  OPENVIKING_VERSION="${COMBINED_OPENVIKING_VERSION}"
+  PLUGIN_VERSION_EXPLICIT="1"
+fi
 
 if [[ "$UPGRADE_PLUGIN_ONLY" == "1" && "$ROLLBACK_LAST_UPGRADE" == "1" ]]; then
   echo "[ERROR] --update/--upgrade-plugin and --rollback cannot be used together"
@@ -290,7 +333,7 @@ validate_requested_plugin_version() {
 
 ensure_plugin_only_operation_args() {
   if [[ ("${UPGRADE_PLUGIN_ONLY}" == "1" || "${ROLLBACK_LAST_UPGRADE}" == "1") && -n "${OPENVIKING_VERSION}" ]]; then
-    err "--update/--upgrade-plugin and --rollback only operate on the plugin. Do not use --openviking-version with these modes."
+    err "--update/--upgrade-plugin and --rollback only operate on the plugin. Do not use --openviking-version or --version with these modes."
     exit 1
   fi
 }
@@ -1474,9 +1517,9 @@ install_openviking() {
   local pkg_spec="openviking"
   if [[ -n "$OPENVIKING_VERSION" ]]; then
     pkg_spec="openviking==${OPENVIKING_VERSION}"
-    info "$(tr "Installing OpenViking ${OPENVIKING_VERSION} from PyPI..." "正在安装 OpenViking ${OPENVIKING_VERSION} (PyPI)...")"
+    info "$(tr "Installing or upgrading OpenViking ${OPENVIKING_VERSION} from PyPI..." "正在安装或升级 OpenViking ${OPENVIKING_VERSION} (PyPI)...")"
   else
-    info "$(tr "Installing OpenViking (latest) from PyPI..." "正在安装 OpenViking (最新版) (PyPI)...")"
+    info "$(tr "Installing or upgrading OpenViking (latest) from PyPI..." "正在安装或升级 OpenViking (最新版) (PyPI)...")"
   fi
   info "$(tr "Using pip index: ${PIP_INDEX_URL}" "使用 pip 镜像: ${PIP_INDEX_URL}")"
 
@@ -1487,7 +1530,7 @@ install_openviking() {
   local pip_log
   pip_log=$(mktemp)
   "$py" -m pip install --upgrade pip -q -i "${PIP_INDEX_URL}" >/dev/null 2>&1 || true
-  if run_pip_install_capture "${pip_log}" "$py" -m pip install --progress-bar on "$pkg_spec" -i "${PIP_INDEX_URL}"; then
+  if run_pip_install_capture "${pip_log}" "$py" -m pip install --upgrade --progress-bar on "$pkg_spec" -i "${PIP_INDEX_URL}"; then
     rm -f "${pip_log}" 2>/dev/null || true
     OPENVIKING_PYTHON_PATH="$(command -v "$py" || true)"
     [[ -z "$OPENVIKING_PYTHON_PATH" ]] && OPENVIKING_PYTHON_PATH="$py"
@@ -1506,7 +1549,7 @@ install_openviking() {
       # Opt-in: allow install with --break-system-packages when venv is not available (PEP 668 only, default off)
       if [[ "${OPENVIKING_ALLOW_BREAK_SYSTEM_PACKAGES}" == "1" ]]; then
         info "Installing OpenViking with --break-system-packages (OPENVIKING_ALLOW_BREAK_SYSTEM_PACKAGES=1)"
-        if "$py" -m pip install --progress-bar on --break-system-packages "$pkg_spec" -i "${PIP_INDEX_URL}"; then
+        if "$py" -m pip install --upgrade --progress-bar on --break-system-packages "$pkg_spec" -i "${PIP_INDEX_URL}"; then
           OPENVIKING_PYTHON_PATH="$(command -v "$py" || true)"
           [[ -z "$OPENVIKING_PYTHON_PATH" ]] && OPENVIKING_PYTHON_PATH="$py"
           info "OpenViking installed (system)"
@@ -1618,18 +1661,24 @@ configure_openviking_conf() {
 
   local workspace="${OPENVIKING_DIR}/data"
   local server_port="${DEFAULT_SERVER_PORT}"
-  local agfs_port="${DEFAULT_AGFS_PORT}"
   local vlm_model="${DEFAULT_VLM_MODEL}"
   local embedding_model="${DEFAULT_EMBED_MODEL}"
   local vlm_api_key="${OPENVIKING_VLM_API_KEY:-${OPENVIKING_ARK_API_KEY:-}}"
   local embedding_api_key="${OPENVIKING_EMBEDDING_API_KEY:-${OPENVIKING_ARK_API_KEY:-}}"
   local conf_path="${OPENVIKING_DIR}/ov.conf"
 
+  if [[ "$INSTALL_YES" == "1" && -f "${conf_path}" ]]; then
+    SELECTED_SERVER_PORT="$(readPortFromOvConf "${conf_path}" || true)"
+    [[ -z "${SELECTED_SERVER_PORT}" ]] && SELECTED_SERVER_PORT="${DEFAULT_SERVER_PORT}"
+    SELECTED_CONFIG_PATH="${conf_path}"
+    info "$(tr "Preserved existing config: ${conf_path}" "已保留现有配置: ${conf_path}")"
+    return 0
+  fi
+
   if [[ "$INSTALL_YES" != "1" ]]; then
     echo ""
     read -r -p "$(tr "OpenViking workspace path [${workspace}]: " "OpenViking 数据目录 [${workspace}]: ")" _workspace < /dev/tty || true
     read -r -p "OpenViking HTTP port [${server_port}]: " _server_port < /dev/tty || true
-    read -r -p "AGFS port [${agfs_port}]: " _agfs_port < /dev/tty || true
     read -r -p "VLM model [${vlm_model}]: " _vlm_model < /dev/tty || true
     read -r -p "Embedding model [${embedding_model}]: " _embedding_model < /dev/tty || true
     echo "VLM and Embedding API keys can differ. You can leave either empty and edit ov.conf later."
@@ -1638,7 +1687,6 @@ configure_openviking_conf() {
 
     workspace="${_workspace:-$workspace}"
     server_port="${_server_port:-$server_port}"
-    agfs_port="${_agfs_port:-$agfs_port}"
     vlm_model="${_vlm_model:-$vlm_model}"
     embedding_model="${_embedding_model:-$embedding_model}"
     vlm_api_key="${_vlm_api_key:-$vlm_api_key}"
@@ -1646,14 +1694,12 @@ configure_openviking_conf() {
   fi
 
   server_port="$(normalize_port "${server_port}" "${DEFAULT_SERVER_PORT}" "OpenViking HTTP port")"
-  agfs_port="$(normalize_port "${agfs_port}" "${DEFAULT_AGFS_PORT}" "AGFS port")"
   mkdir -p "${workspace}"
   local py_json="${OPENVIKING_PYTHON_PATH:-${OPENVIKING_PYTHON:-}}"
   [[ -z "$py_json" ]] && py_json="$(command -v python3 || command -v python || true)"
   [[ -z "$py_json" ]] && py_json="python3"
   WORKSPACE="${workspace}" \
   SERVER_PORT="${server_port}" \
-  AGFS_PORT="${agfs_port}" \
   VLM_MODEL="${vlm_model}" \
   EMBEDDING_MODEL="${embedding_model}" \
   VLM_API_KEY="${vlm_api_key}" \
@@ -1677,11 +1723,8 @@ config = {
         "workspace": os.environ["WORKSPACE"],
         "vectordb": {"name": "context", "backend": "local", "project": "default"},
         "agfs": {
-            "port": int(os.environ["AGFS_PORT"]),
-            "log_level": "warn",
             "backend": "local",
             "timeout": 10,
-            "retry_times": 3,
         },
     },
     "embedding": {
@@ -1967,11 +2010,6 @@ configure_openclaw_plugin() {
   if [[ "${preserve_existing_config}" == "1" ]]; then
     info "Preserved existing plugin runtime config"
     return 0
-  fi
-
-  # Set gateway mode
-  if [[ "${skip_gateway_mode}" != "1" ]]; then
-    "${oc_env[@]}" openclaw config set gateway.mode "${SELECTED_MODE}"
   fi
 
   # Set plugin config for the selected mode

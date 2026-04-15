@@ -38,6 +38,29 @@ pub async fn overview(
     Ok(())
 }
 
+pub async fn write(
+    client: &HttpClient,
+    uri: &str,
+    content: &str,
+    append: bool,
+    wait: bool,
+    timeout: Option<f64>,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let result = client
+        .write(
+            uri,
+            content,
+            if append { "append" } else { "replace" },
+            wait,
+            timeout,
+        )
+        .await?;
+    crate::output::output_success(result, output_format, compact);
+    Ok(())
+}
+
 pub async fn reindex(
     client: &HttpClient,
     uri: &str,

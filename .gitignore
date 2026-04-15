@@ -22,6 +22,7 @@ share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+.ttadk
 MANIFEST
 openviking.egg-info/
 data/
@@ -123,6 +124,16 @@ exports/
 tests/api_test/api-test-report.html
 tests/api_test/openviking-server.log
 tests/api_test/openviking-server.pid
+tests/oc2ov_test/config/settings.py
+
+# Benchmark outputs
+examples/benchmark/outputs/
+examples/benchmark/datasets/full/
+examples/benchmark/*.log
+RAGbenchmark/datasets/*/
+!RAGbenchmark/datasets/Benchmark_Lite/
+RAGbenchmark/Output/
+RAGbenchmark/*.log
 
 # AI Coding
 CLAUDE.md
@@ -141,6 +152,7 @@ logs/
 *.temp
 .tmp/
 ov.conf
+result/
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -184,3 +196,5 @@ examples/data/
 openviking/_version.py
 specs/
 .trae/
+.codex/
+.ttadk/

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 VikingFS: OpenViking file system abstraction layer
 
@@ -23,19 +23,38 @@ from datetime import datetime
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+from openviking.pyagfs.exceptions import AGFSClientError, AGFSDirectoryNotEmptyError, AGFSHTTPError
+from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext, Role
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import format_simplified, get_current_timestamp, parse_iso_datetime
-from openviking_cli.exceptions import NotFoundError
+from openviking_cli.exceptions import FailedPreconditionError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
 
 if TYPE_CHECKING:
+    from openviking.storage.transaction.lock_handle import LockHandle
     from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
     from openviking_cli.utils.config import RerankConfig
 
 logger = get_logger(__name__)
+
+
+def _is_directory_not_empty_error(message: str) -> bool:
+    """Check if an error message indicates a directory not empty error.
+
+    Handles multiple possible error message formats from different backends.
+    """
+    msg = message.lower()
+    return any(
+        pattern in msg
+        for pattern in [
+            "directory not empty",
+            "dir not empty",
+            "directory is not empty",
+        ]
+    )
 
 
 # ========== Dataclass ==========
@@ -151,15 +170,13 @@ def get_viking_fs() -> "VikingFS":
 
 
 class VikingFS:
-    """AGFS-based OpenViking file system.
+    """RAGFS-based OpenViking file system.
 
     APIs are divided into two categories:
-    - AGFS basic commands (direct forwarding): read, ls, write, mkdir, rm, mv, grep, stat
+    - RAGFS basic commands (direct forwarding): read, ls, write, mkdir, rm, mv, grep, stat
     - VikingFS specific capabilities: abstract, overview, find, search, relations, link, unlink
 
-    Supports two modes:
-    - HTTP mode: Use AGFSClient to connect to AGFS server via HTTP
-    - Binding mode: Use AGFSBindingClient to directly use AGFS implementation
+    Uses Rust binding mode: Use RAGFSBindingClient to directly use RAGFS implementation
     """
 
     def __init__(
@@ -276,6 +293,13 @@ class VikingFS:
         if not self._is_accessible(normalized_uri, real_ctx):
             raise PermissionError(f"Access denied for {uri}")
 
+    def _ensure_mutable_access(self, uri: str, ctx: Optional[RequestContext]) -> None:
+        self._ensure_access(uri, ctx)
+        real_ctx = self._ctx_or_default(ctx)
+        normalized_uri, _ = self._normalized_uri_parts(uri)
+        if real_ctx.role != Role.ROOT and normalized_uri.rstrip("/") == "viking://temp":
+            raise PermissionError("Temp root is read-only for non-root users")
+
     # ========== AGFS Basic Commands ==========
 
     async def read(
@@ -326,7 +350,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> str:
         """Write file"""
-        self._ensure_access(uri, ctx)
+        self._ensure_mutable_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         if isinstance(data, str):
             data = data.encode("utf-8")
@@ -342,7 +366,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Create directory."""
-        self._ensure_access(uri, ctx)
+        self._ensure_mutable_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         # Always ensure parent directories exist before creating this directory
         await self._ensure_parent_dirs(path)
@@ -357,7 +381,11 @@ class VikingFS:
         self.agfs.mkdir(path)
 
     async def rm(
-        self, uri: str, recursive: bool = False, ctx: Optional[RequestContext] = None
+        self,
+        uri: str,
+        recursive: bool = False,
+        ctx: Optional[RequestContext] = None,
+        lock_handle: Optional["LockHandle"] = None,
     ) -> Dict[str, Any]:
         """Delete file/directory + recursively update vector index.
 
@@ -371,7 +399,7 @@ class VikingFS:
         from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
         from openviking.storage.transaction import LockContext, get_lock_manager
 
-        self._ensure_access(uri, ctx)
+        self._ensure_mutable_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         target_uri = self._path_to_uri(path, ctx=ctx)
 
@@ -396,11 +424,28 @@ class VikingFS:
             lock_mode = "point"
 
         try:
-            async with LockContext(get_lock_manager(), lock_paths, lock_mode=lock_mode):
+            async with LockContext(
+                get_lock_manager(),
+                lock_paths,
+                lock_mode=lock_mode,
+                handle=lock_handle,
+            ):
                 uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
                 uris_to_delete.append(target_uri)
                 await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
-                result = self.agfs.rm(path, recursive=recursive)
+                try:
+                    result = self.agfs.rm(path, recursive=recursive)
+                except AGFSDirectoryNotEmptyError:
+                    raise FailedPreconditionError(
+                        f"Directory not empty: {uri}. Use recursive=True to delete non-empty directories."
+                    )
+                except RuntimeError as e:
+                    # Fallback for older versions without typed exceptions
+                    if _is_directory_not_empty_error(str(e)):
+                        raise FailedPreconditionError(
+                            f"Directory not empty: {uri}. Use recursive=True to delete non-empty directories."
+                        )
+                    raise
                 return result
         except LockAcquisitionError:
             raise ResourceBusyError(f"Resource is being processed: {uri}")
@@ -410,6 +455,7 @@ class VikingFS:
         old_uri: str,
         new_uri: str,
         ctx: Optional[RequestContext] = None,
+        lock_handle: Optional["LockHandle"] = None,
     ) -> Dict[str, Any]:
         """Move file/directory + recursively update vector index.
 
@@ -419,8 +465,8 @@ class VikingFS:
         from openviking.pyagfs.helpers import cp as agfs_cp
         from openviking.storage.transaction import LockContext, get_lock_manager
 
-        self._ensure_access(old_uri, ctx)
-        self._ensure_access(new_uri, ctx)
+        self._ensure_mutable_access(old_uri, ctx)
+        self._ensure_mutable_access(new_uri, ctx)
         old_path = self._uri_to_path(old_uri, ctx=ctx)
         new_path = self._uri_to_path(new_uri, ctx=ctx)
         target_uri = self._path_to_uri(old_path, ctx=ctx)
@@ -440,6 +486,7 @@ class VikingFS:
             lock_mode="mv",
             mv_dst_parent_path=dst_parent,
             src_is_dir=is_dir,
+            handle=lock_handle,
         ):
             uris_to_move = await self._collect_uris(old_path, recursive=True, ctx=ctx)
             uris_to_move.append(target_uri)
@@ -523,27 +570,54 @@ class VikingFS:
         self,
         uri: str,
         pattern: str,
+        exclude_uri: Optional[str] = None,
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
+        level_limit: int = 5,
         ctx: Optional[RequestContext] = None,
     ) -> Dict:
         """Content search by pattern or keywords.
 
         Grep search implemented at VikingFS layer, supports encrypted files.
+
+        Args:
+            uri: Viking URI
+            pattern: Regular expression pattern to search for
+            exclude_uri: Optional URI prefix to exclude from search
+            case_insensitive: Whether to perform case-insensitive matching
+            node_limit: Maximum number of results to return
+            level_limit: Maximum depth level to traverse (default: 5)
+            ctx: Request context
         """
         self._ensure_access(uri, ctx)
 
         flags = re.IGNORECASE if case_insensitive else 0
         compiled_pattern = re.compile(pattern, flags)
+        excluded_prefix = None
+        if exclude_uri:
+            excluded_prefix = self._normalize_uri(exclude_uri).rstrip("/")
+            self._ensure_access(excluded_prefix, ctx)
 
         results = []
+        files_scanned = 0
 
-        async def search_recursive(current_uri: str):
+        async def search_recursive(current_uri: str, current_depth: int):
             if node_limit and len(results) >= node_limit:
                 return
 
+            if current_depth > level_limit:
+                return
+
+            normalized_current_uri = self._normalize_uri(current_uri)
+            if excluded_prefix and (
+                normalized_current_uri == excluded_prefix
+                or normalized_current_uri.startswith(excluded_prefix + "/")
+            ):
+                logger.debug(f"Skipping excluded uri during grep: {normalized_current_uri}")
+                return
+
             try:
-                entries = await self.ls(current_uri, ctx=ctx)
+                entries = await self.ls(normalized_current_uri, ctx=ctx)
             except Exception:
                 return
 
@@ -551,11 +625,18 @@ class VikingFS:
                 if node_limit and len(results) >= node_limit:
                     break
 
-                entry_uri = f"{current_uri.rstrip('/')}/{entry['name']}"
+                entry_uri = f"{normalized_current_uri.rstrip('/')}/{entry['name']}"
+                if excluded_prefix and (
+                    entry_uri == excluded_prefix or entry_uri.startswith(excluded_prefix + "/")
+                ):
+                    logger.debug(f"Skipping excluded uri during grep: {entry_uri}")
+                    continue
 
                 if entry.get("isDir"):
-                    await search_recursive(entry_uri)
+                    await search_recursive(entry_uri, current_depth + 1)
                 else:
+                    nonlocal files_scanned
+                    files_scanned += 1
                     try:
                         content = await self.read(entry_uri, ctx=ctx)
                         if isinstance(content, bytes):
@@ -576,9 +657,14 @@ class VikingFS:
                     except Exception as e:
                         logger.debug(f"Failed to grep {entry_uri}: {e}")
 
-        await search_recursive(uri)
+        await search_recursive(uri, 0)
 
-        return {"matches": results}
+        return {
+            "matches": results,
+            "count": len(results),
+            "match_count": len(results),
+            "files_scanned": files_scanned,
+        }
 
     async def stat(self, uri: str, ctx: Optional[RequestContext] = None) -> Dict[str, Any]:
         """
@@ -792,11 +878,15 @@ class VikingFS:
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         info = await asyncio.to_thread(self.agfs.stat, path)
-        if not info.get("isDir"):
+        if not info.get("isDir", info.get("is_dir")):
             raise ValueError(f"{uri} is not a directory")
         file_path = f"{path}/.abstract.md"
-        content_bytes = await asyncio.to_thread(self.agfs.read, file_path)
-        content_bytes = self._handle_agfs_read(content_bytes)
+        try:
+            content_bytes = await asyncio.to_thread(self.agfs.read, file_path)
+            content_bytes = self._handle_agfs_read(content_bytes)
+        except Exception:
+            # Fallback to default if .abstract.md doesn't exist
+            return f"# {uri}\n\n[Directory abstract is not ready]"
 
         if self._encryptor:
             real_ctx = self._ctx_or_default(ctx)
@@ -813,11 +903,15 @@ class VikingFS:
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         info = await asyncio.to_thread(self.agfs.stat, path)
-        if not info.get("isDir"):
+        if not info.get("isDir", info.get("is_dir")):
             raise ValueError(f"{uri} is not a directory")
         file_path = f"{path}/.overview.md"
-        content_bytes = await asyncio.to_thread(self.agfs.read, file_path)
-        content_bytes = self._handle_agfs_read(content_bytes)
+        try:
+            content_bytes = await asyncio.to_thread(self.agfs.read, file_path)
+            content_bytes = self._handle_agfs_read(content_bytes)
+        except Exception:
+            # Fallback to default if .overview.md doesn't exist
+            return f"# {uri}\n\n[Directory overview is not ready]"
 
         if self._encryptor:
             real_ctx = self._ctx_or_default(ctx)
@@ -1221,12 +1315,24 @@ class VikingFS:
         else:
             return f"viking://{path}"
 
+    def _looks_like_legacy_temp_leaf(self, value: str) -> bool:
+        return bool(re.match(r"^\d{8}_[0-9a-f]{6}$", value or ""))
+
+    def _is_legacy_temp_uri_parts(self, parts: List[str]) -> bool:
+        if len(parts) < 2 or parts[0] != "temp" or not self._looks_like_legacy_temp_leaf(parts[1]):
+            return False
+        if len(parts) == 2:
+            return True
+        return not self._looks_like_legacy_temp_leaf(parts[2])
+
     def _extract_space_from_uri(self, uri: str) -> Optional[str]:
         """Extract space segment from URI if present.
 
         URIs are WYSIWYG: viking://{scope}/{space}/...
         For user/agent, the second segment is space unless it's a known structure dir.
         For session, the second segment is always space (when 3+ parts).
+        Legacy temp URIs keep the historical shape viking://temp/<temp-id> and therefore
+        intentionally have no space segment.
         """
         _, parts = self._normalized_uri_parts(uri)
         if len(parts) < 2:
@@ -1235,6 +1341,8 @@ class VikingFS:
         second = parts[1]
         # Treat scope-root metadata files as not having a tenant space segment.
         if len(parts) == 2 and second in {".abstract.md", ".overview.md"}:
+            return None
+        if self._is_legacy_temp_uri_parts(parts):
             return None
         if scope == "user" and second not in self._USER_STRUCTURE_DIRS:
             return second
@@ -1251,10 +1359,18 @@ class VikingFS:
             return True
         if not parts:
             return True
+        if is_watch_task_control_uri(normalized_uri):
+            return False
 
         scope = parts[0]
-        if scope in {"resources", "temp"}:
+        if scope == "resources":
             return True
+        if scope == "temp":
+            if len(parts) == 1:
+                return True
+            if parts[1] == ctx.user.user_space_name():
+                return True
+            return self._is_legacy_temp_uri_parts(parts)
         if scope == "_system":
             return False
 
@@ -1412,6 +1528,7 @@ class VikingFS:
         old_uri: str,
         new_uri: str,
         ctx: Optional[RequestContext] = None,
+        lock_handle: Optional["LockHandle"] = None,
     ) -> None:
         from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
         from openviking.storage.transaction import LockContext, get_lock_manager
@@ -1454,6 +1571,7 @@ class VikingFS:
                 lock_mode="mv",
                 mv_dst_parent_path=dst_parent,
                 src_is_dir=True,
+                handle=lock_handle,
             ):
                 await self._update_vector_store_uris(
                     uris=[old_dir],
@@ -1670,8 +1788,11 @@ class VikingFS:
                 existing_bytes = self._handle_agfs_read(self.agfs.read(path))
                 existing_bytes = await self._decrypt_content(existing_bytes, ctx=ctx)
                 existing = self._decode_bytes(existing_bytes)
-            except Exception:
-                pass
+            except AGFSHTTPError as e:
+                if e.status_code != 404:
+                    raise
+            except AGFSClientError:
+                raise
 
             await self._ensure_parent_dirs(path)
             final_content = (existing + content).encode("utf-8")
@@ -1802,8 +1923,8 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Move file."""
-        self._ensure_access(from_uri, ctx)
-        self._ensure_access(to_uri, ctx)
+        self._ensure_mutable_access(from_uri, ctx)
+        self._ensure_mutable_access(to_uri, ctx)
         from_path = self._uri_to_path(from_uri, ctx=ctx)
 
         content_bytes = await self.read_file_bytes(from_uri, ctx=ctx)
@@ -1812,12 +1933,20 @@ class VikingFS:
 
     # ========== Temp File Operations (backward compatible) ==========
 
-    def create_temp_uri(self) -> str:
-        """Create temp directory URI."""
-        return VikingURI.create_temp_uri()
+    def create_temp_uri(self, ctx: Optional[RequestContext] = None) -> str:
+        """Create a temp directory URI.
+
+        - explicit ctx or bound request context -> user-scoped temp URI
+        - no explicit/bound context -> legacy temp URI shape for backward compatibility
+        """
+        real_ctx = ctx if ctx is not None else self._bound_ctx.get()
+        if real_ctx is None:
+            return VikingURI.create_temp_uri()
+        return VikingURI.create_temp_uri(space=real_ctx.user.user_space_name())
 
     async def delete_temp(self, temp_uri: str, ctx: Optional[RequestContext] = None) -> None:
         """Delete temp directory and its contents."""
+        self._ensure_mutable_access(temp_uri, ctx)
         path = self._uri_to_path(temp_uri, ctx=ctx)
         try:
             for entry in self._ls_entries(path):

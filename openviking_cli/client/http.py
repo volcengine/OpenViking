@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Async HTTP Client for OpenViking.
 
 Implements BaseClient interface using HTTP calls to OpenViking Server.
@@ -77,9 +77,9 @@ class _HTTPObserver:
         """Fetch VikingDB status asynchronously."""
         return await self._client._get_vikingdb_status()
 
-    async def _fetch_vlm_status(self) -> Dict[str, Any]:
-        """Fetch VLM status asynchronously."""
-        return await self._client._get_vlm_status()
+    async def _fetch_models_status(self) -> Dict[str, Any]:
+        """Fetch models status asynchronously."""
+        return await self._client._get_models_status()
 
     async def _fetch_system_status(self) -> Dict[str, Any]:
         """Fetch system status asynchronously."""
@@ -96,9 +96,9 @@ class _HTTPObserver:
         return run_async(self._fetch_vikingdb_status())
 
     @property
-    def vlm(self) -> Dict[str, Any]:
-        """Get VLM status (sync wrapper)."""
-        return run_async(self._fetch_vlm_status())
+    def models(self) -> Dict[str, Any]:
+        """Get models status (VLM, Embedding, Rerank) (sync wrapper)."""
+        return run_async(self._fetch_models_status())
 
     @property
     def system(self) -> Dict[str, Any]:
@@ -324,7 +324,7 @@ class AsyncHTTPClient(BaseClient):
         instruction: str = "",
         wait: bool = False,
         timeout: Optional[float] = None,
-        strict: bool = True,
+        strict: bool = False,
         ignore_dirs: Optional[str] = None,
         include: Optional[str] = None,
         exclude: Optional[str] = None,
@@ -357,6 +357,8 @@ class AsyncHTTPClient(BaseClient):
         path_obj = Path(path)
         if path_obj.exists():
             if path_obj.is_dir():
+                source_name = path_obj.name
+                request_data["source_name"] = source_name
                 zip_path = self._zip_directory(path)
                 try:
                     temp_file_id = await self._upload_temp_file(zip_path)
@@ -364,6 +366,7 @@ class AsyncHTTPClient(BaseClient):
                 finally:
                     Path(zip_path).unlink(missing_ok=True)
             elif path_obj.is_file():
+                request_data["source_name"] = path_obj.name
                 temp_file_id = await self._upload_temp_file(path)
                 request_data["temp_file_id"] = temp_file_id
             else:
@@ -488,12 +491,15 @@ class AsyncHTTPClient(BaseClient):
         )
         return self._handle_response(response)
 
-    async def mkdir(self, uri: str) -> None:
+    async def mkdir(self, uri: str, description: Optional[str] = None) -> None:
         """Create directory."""
         uri = VikingURI.normalize(uri)
+        payload = {"uri": uri}
+        if description is not None:
+            payload["description"] = description
         response = await self._http.post(
             "/api/v1/fs/mkdir",
-            json={"uri": uri},
+            json=payload,
         )
         self._handle_response(response)
 
@@ -551,6 +557,32 @@ class AsyncHTTPClient(BaseClient):
             params={"uri": uri},
         )
         return self._handle_response(response)
+
+    async def write(
+        self,
+        uri: str,
+        content: str,
+        mode: str = "replace",
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Write text content to an existing file and refresh semantics/vectors."""
+        telemetry = self._validate_telemetry(telemetry)
+        uri = VikingURI.normalize(uri)
+        response = await self._http.post(
+            "/api/v1/content/write",
+            json={
+                "uri": uri,
+                "content": content,
+                "mode": mode,
+                "wait": wait,
+                "timeout": timeout,
+                "telemetry": telemetry,
+            },
+        )
+        response_data = self._handle_response_data(response)
+        return self._attach_telemetry(response_data.get("result") or {}, response_data)
 
     # ============= Search =============
 
@@ -622,6 +654,7 @@ class AsyncHTTPClient(BaseClient):
         pattern: str,
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
+        exclude_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Content search with pattern."""
         uri = VikingURI.normalize(uri)
@@ -632,6 +665,8 @@ class AsyncHTTPClient(BaseClient):
         }
         if node_limit is not None:
             request_json["node_limit"] = node_limit
+        if exclude_uri is not None:
+            request_json["exclude_uri"] = VikingURI.normalize(exclude_uri)
         response = await self._http.post(
             "/api/v1/search/grep",
             json=request_json,
@@ -684,11 +719,17 @@ class AsyncHTTPClient(BaseClient):
 
     # ============= Sessions =============
 
-    async def create_session(self) -> Dict[str, Any]:
-        """Create a new session."""
+    async def create_session(self, session_id: Optional[str] = None) -> Dict[str, Any]:
+        """Create a new session.
+
+        Args:
+            session_id: Optional session ID. If provided, creates a session with the given ID.
+                       If None, creates a new session with auto-generated ID.
+        """
+        json_body = {"session_id": session_id} if session_id else {}
         response = await self._http.post(
             "/api/v1/sessions",
-            json={},
+            json=json_body,
         )
         return self._handle_response(response)
 
@@ -759,6 +800,7 @@ class AsyncHTTPClient(BaseClient):
         role: str,
         content: str | None = None,
         parts: list[dict] | None = None,
+        created_at: str | None = None,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -767,6 +809,7 @@ class AsyncHTTPClient(BaseClient):
             role: Message role ("user" or "assistant")
             content: Text content (simple mode, backward compatible)
             parts: Parts array (full Part support mode)
+            created_at: Message creation time (ISO format string)
 
         If both content and parts are provided, parts takes precedence.
         """
@@ -778,6 +821,9 @@ class AsyncHTTPClient(BaseClient):
         else:
             raise ValueError("Either content or parts must be provided")
 
+        if created_at is not None:
+            payload["created_at"] = created_at
+
         response = await self._http.post(
             f"/api/v1/sessions/{session_id}/messages",
             json=payload,
@@ -787,14 +833,45 @@ class AsyncHTTPClient(BaseClient):
     # ============= Pack =============
 
     async def export_ovpack(self, uri: str, to: str) -> str:
-        """Export context as .ovpack file."""
+        """Export context as .ovpack file and save to local path.
+
+        Args:
+            uri: Viking URI to export
+            to: Local file path where to save the .ovpack file
+
+        Returns:
+            Local file path where the .ovpack was saved
+        """
         uri = VikingURI.normalize(uri)
+
+        # Determine target path
+        to_path = Path(to)
+        if to_path.is_dir():
+            base_name = uri.strip().rstrip("/").split("/")[-1]
+            if not base_name:
+                base_name = "export"
+            to_path = to_path / f"{base_name}.ovpack"
+        elif not str(to_path).endswith(".ovpack"):
+            to_path = Path(str(to_path) + ".ovpack")
+
+        # Ensure parent directory exists
+        to_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Request export and stream response
         response = await self._http.post(
             "/api/v1/pack/export",
-            json={"uri": uri, "to": to},
+            json={"uri": uri},
         )
-        result = self._handle_response(response)
-        return result.get("file", "")
+
+        # Check for errors
+        if not response.is_success:
+            self._handle_response(response)
+
+        # Save streamed content to local file
+        with open(to_path, "wb") as f:
+            f.write(response.content)
+
+        return str(to_path)
 
     async def import_ovpack(
         self,
@@ -850,9 +927,9 @@ class AsyncHTTPClient(BaseClient):
         response = await self._http.get("/api/v1/observer/vikingdb")
         return self._handle_response(response)
 
-    async def _get_vlm_status(self) -> Dict[str, Any]:
-        """Get VLM status (internal for _HTTPObserver)."""
-        response = await self._http.get("/api/v1/observer/vlm")
+    async def _get_models_status(self) -> Dict[str, Any]:
+        """Get models status (VLM, Embedding, Rerank) (internal for _HTTPObserver)."""
+        response = await self._http.get("/api/v1/observer/models")
         return self._handle_response(response)
 
     async def _get_system_status(self) -> Dict[str, Any]:

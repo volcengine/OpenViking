@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Resource monitoring task manager.
 
@@ -14,6 +14,11 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from openviking.resource.watch_storage import (
+    WATCH_TASK_STORAGE_BAK_URI,
+    WATCH_TASK_STORAGE_TMP_URI,
+    WATCH_TASK_STORAGE_URI,
+)
 from openviking_cli.exceptions import ConflictError, NotFoundError
 from openviking_cli.utils.logger import get_logger
 
@@ -110,9 +115,9 @@ class WatchManager:
     Supports multi-tenant authorization.
     """
 
-    STORAGE_URI = "viking://resources/.watch_tasks.json"
-    STORAGE_BAK_URI = "viking://resources/.watch_tasks.json.bak"
-    STORAGE_TMP_URI = "viking://resources/.watch_tasks.json.tmp"
+    STORAGE_URI = WATCH_TASK_STORAGE_URI
+    STORAGE_BAK_URI = WATCH_TASK_STORAGE_BAK_URI
+    STORAGE_TMP_URI = WATCH_TASK_STORAGE_TMP_URI
 
     def __init__(self, viking_fs: Optional[Any] = None):
         """Initialize WatchManager.

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 
 """Full workflow integration tests"""
 
@@ -113,7 +113,8 @@ class TestSessionWorkflow:
 
         # 5. Commit
         commit_result = session.commit()
-        assert commit_result["status"] == "committed"
+        assert commit_result["status"] == "accepted"
+        assert commit_result["task_id"] is not None
 
         # 6. Wait for memory extraction
         await client.wait_processed()
@@ -127,7 +128,9 @@ class TestSessionWorkflow:
         session1 = client.session(session_id=session_id)
         session1.add_message("user", [TextPart("First message")])
         session1.add_message("assistant", [TextPart("First response")])
-        session1.commit()
+        commit_result1 = session1.commit()
+        assert commit_result1["status"] == "accepted"
+        assert commit_result1["task_id"] is not None
 
         # 2. Reload session
         session2 = client.session(session_id=session_id)
@@ -139,7 +142,8 @@ class TestSessionWorkflow:
 
         # 4. Commit again
         commit_result = session2.commit()
-        assert commit_result["status"] == "committed"
+        assert commit_result["status"] == "accepted"
+        assert commit_result["task_id"] is not None
 
 
 class TestImportExportWorkflow:
@@ -228,7 +232,8 @@ class TestFullEndToEndWorkflow:
 
         # Commit session
         commit_result = session.commit()
-        assert commit_result["status"] == "committed"
+        assert commit_result["status"] == "accepted"
+        assert commit_result["task_id"] is not None
 
         # ===== Phase 4: Import/Export =====
         if resource_uris:

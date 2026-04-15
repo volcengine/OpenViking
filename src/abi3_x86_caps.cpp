@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0
 #define Py_LIMITED_API 0x030A0000
 #include <Python.h>
 

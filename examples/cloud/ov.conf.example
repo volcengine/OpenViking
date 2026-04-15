@@ -18,11 +18,8 @@
       }
     },
     "agfs": {
-      "port": 1833,
-      "log_level": "warn",
       "backend": "s3",
       "timeout": 10,
-      "retry_times": 3,
       "s3": {
         "bucket": "<your-tos-bucket>",
         "region": "cn-beijing",
@@ -37,7 +34,7 @@
   },
   "embedding": {
     "dense": {
-      "model": "doubao-embedding-vision-250615",
+      "model": "doubao-embedding-vision-251215",
       "api_key": "<your-ark-api-key>",
       "api_base": "https://ark.cn-beijing.volces.com/api/v3",
       "dimension": 1024,

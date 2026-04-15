@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -12,6 +13,7 @@ from loguru import logger
 
 from vikingbot.agent.context import ContextBuilder
 from vikingbot.agent.memory import MemoryStore
+from vikingbot.heartbeat.service import HEARTBEAT_METADATA_KEY, is_heartbeat_noop_response
 from vikingbot.agent.subagent import SubagentManager
 from vikingbot.agent.tools import register_default_tools
 from vikingbot.agent.tools.registry import ToolRegistry
@@ -61,6 +63,7 @@ class AgentLoop:
         sandbox_manager: SandboxManager | None = None,
         config: Config = None,
         eval: bool = False,
+        mcp_servers: dict | None = None,
     ):
         """
         Initialize the AgentLoop with all required dependencies and configuration.
@@ -128,7 +131,47 @@ class AgentLoop:
         )
 
         self._running = False
+        self._mcp_servers = mcp_servers or {}
+        self._mcp_stack: AsyncExitStack | None = None
+        self._mcp_connected = False
+        self._mcp_connecting = False
         self._register_default_tools()
+
+    async def _connect_mcp(self) -> None:
+        """Connect to configured MCP servers (one-time, lazy, retryable on failure).
+
+        Ported from HKUDS/nanobot v0.1.5.
+        """
+        if self._mcp_connected or self._mcp_connecting or not self._mcp_servers:
+            return
+        self._mcp_connecting = True
+        try:
+            from vikingbot.agent.tools.mcp import connect_mcp_servers
+
+            self._mcp_stack = AsyncExitStack()
+            await self._mcp_stack.__aenter__()
+            await connect_mcp_servers(self._mcp_servers, self.tools, self._mcp_stack)
+            self._mcp_connected = True
+        except Exception as e:
+            logger.error(f"Failed to connect MCP servers (will retry next message): {e}")
+            if self._mcp_stack:
+                try:
+                    await self._mcp_stack.aclose()
+                except Exception:
+                    pass
+                self._mcp_stack = None
+        finally:
+            self._mcp_connecting = False
+
+    async def close_mcp(self) -> None:
+        """Close MCP server connections. Ported from HKUDS/nanobot v0.1.5."""
+        if self._mcp_stack:
+            try:
+                await self._mcp_stack.aclose()
+            except (RuntimeError, BaseExceptionGroup):
+                pass  # MCP SDK cancel scope cleanup is noisy but harmless
+            self._mcp_stack = None
+        self._mcp_connected = False
 
     async def _publish_thinking_event(
         self, session_key: SessionKey, event_type: OutboundEventType, content: str
@@ -181,6 +224,7 @@ class AgentLoop:
     async def run(self) -> None:
         """Run the agent loop, processing messages from the bus."""
         self._running = True
+        await self._connect_mcp()
         logger.info("Agent loop started")
 
         while self._running:
@@ -217,6 +261,7 @@ class AgentLoop:
         session_key: SessionKey,
         publish_events: bool = True,
         sender_id: str | None = None,
+        ov_tools_enable: bool = True,
     ) -> tuple[str | None, list[dict], dict[str, int], int]:
         """
         Run the core agent loop: call LLM, execute tools, repeat until done.
@@ -225,6 +270,7 @@ class AgentLoop:
             messages: Initial message list
             session_key: Session key for tool execution context
             publish_events: Whether to publish ITERATION/REASONING/TOOL_CALL events to the bus
+            ov_tools_enable: Whether to enable OpenViking tools for this session
 
         Returns:
             tuple of (final_content, tools_used)
@@ -252,7 +298,7 @@ class AgentLoop:
 
             response = await self.provider.chat(
                 messages=messages,
-                tools=self.tools.get_definitions(),
+                tools=self.tools.get_definitions(ov_tools_enable=ov_tools_enable),
                 model=self.model,
                 session_id=session_key.safe_name(),
             )
@@ -396,7 +442,7 @@ class AgentLoop:
             max_ticks = 7
 
             while not long_running_notified and tick_count < max_ticks:
-                await asyncio.sleep(40)
+                await asyncio.sleep(60)
                 if long_running_notified:
                     break
                 if msg.metadata:
@@ -433,6 +479,16 @@ class AgentLoop:
             skip_heartbeat = session_key.type == "cli"
             session = self.sessions.get_or_create(session_key, skip_heartbeat=skip_heartbeat)
 
+            ov_tools_enable = self._get_ov_tools_enable(session_key)
+            # Get profile_user_list from channel config
+            profile_user_list = []
+            memory_user = ""
+            channel_config = self._get_channel_config(session_key)
+
+            if channel_config and ov_tools_enable:
+                profile_user_list = getattr(channel_config, "profile_user_list", [])
+                memory_user = getattr(channel_config, "memory_user", "")
+
             # Handle slash commands
             is_group_chat = msg.metadata.get("chat_type") == "group" if msg.metadata else False
             if is_group_chat:
@@ -440,6 +496,18 @@ class AgentLoop:
             else:
                 cmd = msg.content.strip().lower()
             if cmd == "/new":
+                # Clone session for async consolidation, then immediately clear original
+                if not self._check_cmd_auth(msg):
+                    return OutboundMessage(
+                        session_key=msg.session_key, content="🐈 Sorry, you are not authorized to use this command.",
+                        metadata=msg.metadata
+                    )
+                session.clear()
+                await self.sessions.save(session)
+                return OutboundMessage(
+                    session_key=msg.session_key, content="🐈 New session started. Session history droped.", metadata=msg.metadata
+                )
+            elif cmd == "/compact":
                 # Clone session for async consolidation, then immediately clear original
                 if not self._check_cmd_auth(msg):
                     return OutboundMessage(
@@ -460,8 +528,9 @@ class AgentLoop:
                         session_key=msg.session_key, content="🐈 Sorry, you are not authorized to use this command.",
                         metadata=msg.metadata
                     )
-                session_clone = session.clone()
-                await self._consolidate_viking_memory(session_clone)
+                if ov_tools_enable:
+                    session_clone = session.clone()
+                    await self._consolidate_viking_memory(session_clone)
                 return OutboundMessage(
                     session_key=msg.session_key, content="This conversation has been submitted to memory storage.", metadata=msg.metadata
                 )
@@ -478,6 +547,16 @@ class AgentLoop:
                 session.add_message("user", msg.content, sender_id=msg.sender_id)
                 await self.sessions.save(session)
                 return None
+
+            if not msg.need_reply:
+                session.add_message("user", msg.content, sender_id=msg.sender_id)
+                await self.sessions.save(session)
+                return OutboundMessage(
+                    session_key=msg.session_key,
+                    content="",
+                    metadata=msg.metadata,
+                    event_type=OutboundEventType.NO_REPLY,
+                )
 
             # Consolidate memory before processing if session is too large
             if len(session.messages) > self.memory_window:
@@ -510,6 +589,9 @@ class AgentLoop:
                 current_message=msg.content,
                 media=msg.media if msg.media else None,
                 session_key=msg.session_key,
+                ov_tools_enable=ov_tools_enable,
+                profile_user_list=profile_user_list,
+                memory_user=memory_user,
             )
             # logger.info(f"New messages: {messages}")
 
@@ -519,19 +601,21 @@ class AgentLoop:
                 session_key=session_key,
                 publish_events=True,
                 sender_id=msg.sender_id,
+                ov_tools_enable=ov_tools_enable,
             )
 
             # Log response preview
             preview = final_content[:300] + "..." if len(final_content) > 300 else final_content
             logger.info(f"Response to {msg.session_key}: {preview}")
 
-            # Save to session (include tool names so consolidation sees what happened)
-            session.add_message("user", msg.content, sender_id=msg.sender_id)
-            session.add_message(
-                "assistant", final_content, tools_used=tools_used if tools_used else None, token_usage=token_usage,
-                sender_id=msg.sender_id,
-            )
-            await self.sessions.save(session)
+            is_heartbeat = bool(msg.metadata.get(HEARTBEAT_METADATA_KEY))
+            if not (is_heartbeat and is_heartbeat_noop_response(final_content)):
+                session.add_message("user", msg.content, sender_id=msg.sender_id)
+                session.add_message(
+                    "assistant", final_content, tools_used=tools_used if tools_used else None, token_usage=token_usage,
+                    sender_id=msg.sender_id,
+                )
+                await self.sessions.save(session)
 
             time_cost = round(time.time() - start_time, 2)
             if tools_used is not None:
@@ -555,6 +639,29 @@ class AgentLoop:
             except asyncio.CancelledError:
                 pass
 
+    def _get_channel_config(self, session_key: SessionKey):
+        """Get channel config for a session key.
+
+        Args:
+            session_key: Session key to get channel config for
+
+        Returns:
+            Channel config object if found, None otherwise
+        """
+        return self.config.channels_config.get_channel_by_key(session_key.channel_key())
+
+    def _get_ov_tools_enable(self, session_key: SessionKey) -> bool:
+        """Get ov_tools_enable setting from channel config.
+
+        Args:
+            session_key: Session key to get channel config for
+
+        Returns:
+            True if ov tools should be enabled, False otherwise
+        """
+        channel_config = self._get_channel_config(session_key)
+        return getattr(channel_config, "ov_tools_enable", True) if channel_config else True
+
     async def _process_system_message(self, msg: InboundMessage) -> OutboundMessage | None:
         """
         Process a system message (e.g., subagent announce).
@@ -566,9 +673,20 @@ class AgentLoop:
 
         session = self.sessions.get_or_create(msg.session_key)
 
+        # Get channel config
+        ov_tools_enable = self._get_ov_tools_enable(msg.session_key)
+        profile_user_list = []
+        channel_config = self._get_channel_config(msg.session_key)
+        if channel_config and ov_tools_enable:
+            profile_user_list = getattr(channel_config, "profile_user_list", [])
+
         # Build messages with the announce content
         messages = await self.context.build_messages(
-            history=session.get_history(), current_message=msg.content, session_key=msg.session_key
+            history=session.get_history(),
+            current_message=msg.content,
+            session_key=msg.session_key,
+            ov_tools_enable=ov_tools_enable,
+            profile_user_list=profile_user_list,
         )
 
         # Run agent loop (no events published)
@@ -576,6 +694,7 @@ class AgentLoop:
             messages=messages,
             session_key=msg.session_key,
             publish_events=False,
+            ov_tools_enable=ov_tools_enable,
         )
 
         if final_content is None or (
@@ -731,12 +850,11 @@ Respond with ONLY valid JSON, no markdown fences."""
         allow_from = []
         if self.config.ov_server and self.config.ov_server.admin_user_id:
             allow_from.append(self.config.ov_server.admin_user_id)
-        for channel in self.config.channels_config.get_all_channels():
-            if channel.channel_key() == msg.session_key.channel_key():
-                allow_cmd = getattr(channel, 'allow_cmd_from', [])
-                if allow_cmd:
-                    allow_from.extend(allow_cmd)
-                break
+        channel_config = self._get_channel_config(msg.session_key)
+        if channel_config:
+            allow_cmd = getattr(channel_config, 'allow_cmd_from', [])
+            if allow_cmd:
+                allow_from.extend(allow_cmd)
 
         # If channel not found or sender not in allow_from list, ignore message
         if msg.sender_id not in allow_from:
@@ -748,6 +866,7 @@ Respond with ONLY valid JSON, no markdown fences."""
         self,
         content: str,
         session_key: SessionKey = SessionKey(type="cli", channel_id="default", chat_id="direct"),
+        metadata: dict[str, object] | None = None,
     ) -> str:
         """
         Process a message directly (for CLI or cron usage).
@@ -759,7 +878,13 @@ Respond with ONLY valid JSON, no markdown fences."""
         Returns:
             The agent's response.
         """
-        msg = InboundMessage(session_key=session_key, sender_id="user", content=content)
+        await self._connect_mcp()
+        msg = InboundMessage(
+            session_key=session_key,
+            sender_id="user",
+            content=content,
+            metadata=metadata or {},
+        )
 
         response = await self._process_message(msg)
         return response.content if response else ""

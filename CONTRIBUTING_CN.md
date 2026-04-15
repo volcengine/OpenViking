@@ -15,7 +15,7 @@
 
 - **Python**: 3.10+
 - **Go**: 1.22+ (从源码构建 AGFS 组件需要)
-- **Rust**: 1.88+（从源码构建需要；打包流程会同时构建内置 `ov` CLI）
+- **Rust**: 1.91.1+（从源码构建需要；打包流程会同时构建内置 `ov` CLI）
 - **C++ 编译器**: GCC 9+ 或 Clang 11+ (构建核心扩展需要，必须支持 C++17)
 - **CMake**: 3.12+
 
@@ -76,7 +76,7 @@ uv pip install -e . --force-reinstall
     "dense": {
       "provider": "volcengine",
       "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-250615",
+      "model": "doubao-embedding-vision-251215",
       "api_base": "https://ark.cn-beijing.volces.com/api/v3",
       "dimension": 1024,
       "input": "multimodal"

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Async OpenViking client implementation (embedded mode only).
 
@@ -128,10 +128,15 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         return await self._client.session_exists(session_id)
 
-    async def create_session(self) -> Dict[str, Any]:
-        """Create a new session."""
+    async def create_session(self, session_id: Optional[str] = None) -> Dict[str, Any]:
+        """Create a new session.
+
+        Args:
+            session_id: Optional session ID. If provided, creates a session with the given ID.
+                       If None, creates a new session with auto-generated ID.
+        """
         await self._ensure_initialized()
-        return await self._client.create_session()
+        return await self._client.create_session(session_id)
 
     async def list_sessions(self) -> List[Any]:
         """List all sessions."""
@@ -166,6 +171,7 @@ class AsyncOpenViking:
         role: str,
         content: str | None = None,
         parts: list[dict] | None = None,
+        created_at: str | None = None,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -174,12 +180,13 @@ class AsyncOpenViking:
             role: Message role ("user" or "assistant")
             content: Text content (simple mode)
             parts: Parts array (full Part support: TextPart, ContextPart, ToolPart)
+            created_at: Message creation time (ISO format string)
 
         If both content and parts are provided, parts takes precedence.
         """
         await self._ensure_initialized()
         return await self._client.add_message(
-            session_id=session_id, role=role, content=content, parts=parts
+            session_id=session_id, role=role, content=content, parts=parts, created_at=created_at
         )
 
     async def commit_session(
@@ -307,6 +314,9 @@ class AsyncOpenViking:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         telemetry: TelemetryRequest = False,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
     ):
         """
         Complex search with session context.
@@ -332,6 +342,9 @@ class AsyncOpenViking:
             score_threshold=score_threshold,
             filter=filter,
             telemetry=telemetry,
+            since=since,
+            until=until,
+            time_field=time_field,
         )
 
     async def find(
@@ -342,6 +355,9 @@ class AsyncOpenViking:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         telemetry: TelemetryRequest = False,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
     ):
         """Semantic search"""
         await self._ensure_initialized()
@@ -352,6 +368,9 @@ class AsyncOpenViking:
             score_threshold=score_threshold,
             filter=filter,
             telemetry=telemetry,
+            since=since,
+            until=until,
+            time_field=time_field,
         )
 
     # ============= FS methods =============
@@ -370,6 +389,26 @@ class AsyncOpenViking:
         """Read file content"""
         await self._ensure_initialized()
         return await self._client.read(uri, offset=offset, limit=limit)
+
+    async def write(
+        self,
+        uri: str,
+        content: str,
+        mode: str = "replace",
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Write text content to an existing file and refresh semantics/vectors."""
+        await self._ensure_initialized()
+        return await self._client.write(
+            uri=uri,
+            content=content,
+            mode=mode,
+            wait=wait,
+            timeout=timeout,
+            telemetry=telemetry,
+        )
 
     async def ls(self, uri: str, **kwargs) -> List[Any]:
         """
@@ -400,10 +439,23 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         await self._client.rm(uri, recursive=recursive)
 
-    async def grep(self, uri: str, pattern: str, case_insensitive: bool = False) -> Dict:
+    async def grep(
+        self,
+        uri: str,
+        pattern: str,
+        case_insensitive: bool = False,
+        node_limit: Optional[int] = None,
+        exclude_uri: Optional[str] = None,
+    ) -> Dict:
         """Content search"""
         await self._ensure_initialized()
-        return await self._client.grep(uri, pattern, case_insensitive=case_insensitive)
+        return await self._client.grep(
+            uri,
+            pattern,
+            case_insensitive=case_insensitive,
+            node_limit=node_limit,
+            exclude_uri=exclude_uri,
+        )
 
     async def glob(self, pattern: str, uri: str = "viking://") -> Dict:
         """File pattern matching"""
@@ -430,10 +482,10 @@ class AsyncOpenViking:
             node_limit=node_limit,
         )
 
-    async def mkdir(self, uri: str) -> None:
+    async def mkdir(self, uri: str, description: Optional[str] = None) -> None:
         """Create directory"""
         await self._ensure_initialized()
-        await self._client.mkdir(uri)
+        await self._client.mkdir(uri, description=description)
 
     async def stat(self, uri: str) -> Dict:
         """Get resource status"""

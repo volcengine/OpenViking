@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Resource Service for OpenViking.
 
@@ -11,16 +11,22 @@ import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.server.identity import RequestContext
+from openviking.server.local_input_guard import (
+    is_remote_resource_source,
+    require_remote_resource_source,
+)
 from openviking.storage import VikingDBManager
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
+from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import (
     build_queue_status_payload,
     record_resource_wait_metrics,
     register_wait_telemetry,
     unregister_wait_telemetry,
 )
+from openviking.utils.network_guard import ensure_public_remote_target
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.exceptions import (
@@ -110,6 +116,7 @@ class ResourceService:
         watch_interval: float = 0,
         skip_watch_management: bool = False,
         allow_local_path_resolution: bool = True,
+        enforce_public_remote_targets: bool = False,
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking (only supports resources scope).
@@ -137,6 +144,8 @@ class ResourceService:
                 creating a new one.
             skip_watch_management: If True, skip watch task management (used by scheduler to
                 avoid recursive watch task creation during scheduled execution)
+            enforce_public_remote_targets: When True, reject non-public remote hosts and
+                validate each outbound HTTP request URL during fetch.
             **kwargs: Extra options forwarded to the parser chain
 
         Returns:
@@ -150,6 +159,9 @@ class ResourceService:
         request_start = time.perf_counter()
         telemetry = get_current_telemetry()
         telemetry_id = register_wait_telemetry(wait)
+        request_wait_tracker = get_request_wait_tracker()
+        if wait and telemetry_id:
+            request_wait_tracker.register_request(telemetry_id)
         watch_manager = self._get_watch_manager()
         watch_enabled = bool(
             watch_manager and to and not skip_watch_management and watch_interval > 0
@@ -178,6 +190,9 @@ class ResourceService:
                 raise InvalidArgumentError(
                     "watch_interval > 0 requires 'to' to be specified (target URI to watch)"
                 )
+            if enforce_public_remote_targets and is_remote_resource_source(path):
+                path = require_remote_resource_source(path)
+                kwargs.setdefault("request_validator", ensure_public_remote_target)
 
             result = await self._resource_processor.process_resource(
                 path=path,
@@ -194,11 +209,19 @@ class ResourceService:
             )
 
             if wait:
-                qm = get_queue_manager()
                 wait_start = time.perf_counter()
                 try:
                     with telemetry.measure("resource.wait"):
-                        status = await qm.wait_complete(timeout=timeout)
+                        if telemetry_id:
+                            await request_wait_tracker.wait_for_request(
+                                telemetry_id, timeout=timeout
+                            )
+                            status = request_wait_tracker.build_queue_status(telemetry_id)
+                        else:
+                            qm = get_queue_manager()
+                            status = build_queue_status_payload(
+                                await qm.wait_complete(timeout=timeout)
+                            )
                 except TimeoutError as exc:
                     telemetry.set_error(
                         "resource_service.wait_complete",
@@ -207,7 +230,19 @@ class ResourceService:
                     )
                     raise DeadlineExceededError("queue processing", timeout) from exc
                 queue_wait_duration_ms = round((time.perf_counter() - wait_start) * 1000, 3)
-                result["queue_status"] = build_queue_status_payload(status)
+                try:
+                    from openviking.metrics.datasources.resource import (
+                        ResourceIngestionEventDataSource,
+                    )
+
+                    ResourceIngestionEventDataSource.record_wait(
+                        operation="queue_processing",
+                        duration_seconds=float(queue_wait_duration_ms) / 1000.0,
+                        account_id=getattr(ctx, "account_id", None),
+                    )
+                except Exception:
+                    pass
+                result["queue_status"] = status
                 record_resource_wait_metrics(
                     telemetry_id=telemetry_id,
                     queue_status=status,
@@ -257,6 +292,7 @@ class ResourceService:
                 "resource.request.duration_ms",
                 round((time.perf_counter() - request_start) * 1000, 3),
             )
+            get_request_wait_tracker().cleanup(telemetry_id)
             unregister_wait_telemetry(telemetry_id)
 
     async def _handle_watch_task_creation(
@@ -392,33 +428,44 @@ class ResourceService:
             Processing result
         """
         self._ensure_initialized()
+        telemetry_id = get_current_telemetry().telemetry_id
+        request_wait_tracker = get_request_wait_tracker()
+        if wait and telemetry_id:
+            request_wait_tracker.register_request(telemetry_id)
 
-        result = await self._skill_processor.process_skill(
-            data=data,
-            viking_fs=self._viking_fs,
-            ctx=ctx,
-            allow_local_path_resolution=allow_local_path_resolution,
-        )
-
-        if wait:
-            qm = get_queue_manager()
-            wait_start = time.perf_counter()
-            try:
-                status = await qm.wait_complete(timeout=timeout)
-            except TimeoutError as exc:
-                get_current_telemetry().set_error(
-                    "resource_service.wait_complete",
-                    "DEADLINE_EXCEEDED",
-                    str(exc),
-                )
-                raise DeadlineExceededError("queue processing", timeout) from exc
-            get_current_telemetry().set(
-                "queue.wait.duration_ms",
-                round((time.perf_counter() - wait_start) * 1000, 3),
+        try:
+            result = await self._skill_processor.process_skill(
+                data=data,
+                viking_fs=self._viking_fs,
+                ctx=ctx,
+                allow_local_path_resolution=allow_local_path_resolution,
             )
-            result["queue_status"] = build_queue_status_payload(status)
 
-        return result
+            if wait:
+                wait_start = time.perf_counter()
+                try:
+                    if telemetry_id:
+                        await request_wait_tracker.wait_for_request(telemetry_id, timeout=timeout)
+                        status = request_wait_tracker.build_queue_status(telemetry_id)
+                    else:
+                        qm = get_queue_manager()
+                        status = build_queue_status_payload(await qm.wait_complete(timeout=timeout))
+                except TimeoutError as exc:
+                    get_current_telemetry().set_error(
+                        "resource_service.wait_complete",
+                        "DEADLINE_EXCEEDED",
+                        str(exc),
+                    )
+                    raise DeadlineExceededError("queue processing", timeout) from exc
+                get_current_telemetry().set(
+                    "queue.wait.duration_ms",
+                    round((time.perf_counter() - wait_start) * 1000, 3),
+                )
+                result["queue_status"] = status
+
+            return result
+        finally:
+            request_wait_tracker.cleanup(telemetry_id)
 
     async def build_index(
         self, resource_uris: List[str], ctx: RequestContext, **kwargs
@@ -467,6 +514,7 @@ class ResourceService:
         return {
             name: {
                 "processed": s.processed,
+                "requeue_count": getattr(s, "requeue_count", 0),
                 "error_count": s.error_count,
                 "errors": [{"message": e.message} for e in s.errors],
             }

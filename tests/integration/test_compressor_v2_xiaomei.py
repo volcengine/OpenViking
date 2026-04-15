@@ -5,6 +5,7 @@ OpenViking 记忆演示脚本 — 用户: 小美（日常生活记录）
 
 import argparse
 import time
+from datetime import datetime
 
 from rich import box
 from rich.console import Console
@@ -16,12 +17,11 @@ import openviking as ov
 # ── 常量 ───────────────────────────────────────────────────────────────────
 
 DISPLAY_NAME = "小美"
-DEFAULT_URL = "http://localhost:1933"
+DEFAULT_URL = "http://localhost:1934"
 PANEL_WIDTH = 78
 DEFAULT_API_KEY = "1cf407c39990e5dc874ccc697942da4892208a86a44c4781396dfdc57aa5c98d"
 DEFAULT_AGENT_ID = "test"
 DEFAULT_SESSION_ID = "xiaomei-demo"
-
 
 
 console = Console()
@@ -106,18 +106,32 @@ def run_ingest(client: ov.SyncHTTPClient, session_id: str, wait_seconds: float):
     console.rule(f"[bold]Phase 1: 写入对话 — {DISPLAY_NAME} ({len(CONVERSATION)} 轮)[/bold]")
 
     # 获取 session；若不存在则由服务端按 session_id 自动创建
-    session= client.create_session()
-    session_id = session.get('session_id')
-    print(f'session_id={session_id}')
+    session = client.create_session()
+    session_id = session.get("session_id")
+    print(f"session_id={session_id}")
     console.print(f"  Session: [bold cyan]{session_id}[/bold cyan]")
     console.print()
+
+    # 设置一个测试用的会话时间（2023年4月2日）
+    session_time = datetime(2023, 4, 2, 9, 36)
+    session_time_str = session_time.isoformat()
 
     # 逐轮添加消息
     total = len(CONVERSATION)
     for i, turn in enumerate(CONVERSATION, 1):
         console.print(f"  [dim][{i}/{total}][/dim] 添加 user + assistant 消息...")
-        client.add_message(session_id, role="user", parts=[{"type": "text", "text": turn["user"]}])
-        client.add_message(session_id, role="assistant", parts=[{"type": "text", "text": turn["assistant"]}])
+        client.add_message(
+            session_id,
+            role="user",
+            parts=[{"type": "text", "text": turn["user"]}],
+            created_at=session_time_str,
+        )
+        client.add_message(
+            session_id,
+            role="assistant",
+            parts=[{"type": "text", "text": turn["assistant"]}],
+            created_at=session_time_str,
+        )
 
     console.print()
     console.print(f"  共添加 [bold]{total * 2}[/bold] 条消息")
@@ -127,6 +141,8 @@ def run_ingest(client: ov.SyncHTTPClient, session_id: str, wait_seconds: float):
     console.print("  [yellow]提交 Session（触发记忆抽取）...[/yellow]")
     commit_result = client.commit_session(session_id)
     task_id = commit_result.get("task_id")
+    trace_id = commit_result.get("trace_id")
+    console.print(f"  [bold cyan]trace_id: {trace_id}[/bold cyan]")
     console.print(f"  Commit 结果: {commit_result}")
 
     # 轮询后台任务直到完成
@@ -147,11 +163,9 @@ def run_ingest(client: ov.SyncHTTPClient, session_id: str, wait_seconds: float):
     console.print(f"  [yellow]等待向量化完成...[/yellow]")
     client.wait_processed()
 
-
     if wait_seconds > 0:
         console.print(f"  [dim]额外等待 {wait_seconds:.0f}s...[/dim]")
         time.sleep(wait_seconds)
-
 
     session_info = client.get_session(session_id)
     console.print(f"  Session 详情: {session_info}")
@@ -196,20 +210,24 @@ def run_verify(client: ov.SyncHTTPClient):
             if hasattr(results, "memories") and results.memories:
                 for m in results.memories:
                     text = getattr(m, "content", "") or getattr(m, "text", "") or str(m)
+                    print(f"  [DEBUG] memory text: {repr(text)}")
                     recall_texts.append(text)
                     uri = getattr(m, "uri", "")
                     score = getattr(m, "score", 0)
                     console.print(f"    [green]Memory:[/green] {uri} (score: {score:.4f})")
-                    console.print(f"    [dim]{text[:120]}...[/dim]" if len(text) > 120 else f"    [dim]{text}[/dim]")
+                    console.print(
+                        f"    [dim]{text[:120]}...[/dim]"
+                        if len(text) > 120
+                        else f"    [dim]{text}[/dim]"
+                    )
                 count += len(results.memories)
 
             if hasattr(results, "resources") and results.resources:
                 for r in results.resources:
                     text = getattr(r, "content", "") or getattr(r, "text", "") or str(r)
+                    print(f"  [DEBUG] resource text: {repr(text)}")
                     recall_texts.append(text)
-                    console.print(
-                        f"    [blue]Resource:[/blue] {r.uri} (score: {r.score:.4f})"
-                    )
+                    console.print(f"    [blue]Resource:[/blue] {r.uri} (score: {r.score:.4f})")
                 count += len(results.resources)
 
             if hasattr(results, "skills") and results.skills:
@@ -247,9 +265,7 @@ def main():
     parser.add_argument(
         "--session-id", default=DEFAULT_SESSION_ID, help=f"Session ID (默认: {DEFAULT_SESSION_ID})"
     )
-    parser.add_argument(
-        "--wait", type=float, default=5.0, help="提交后额外等待秒数 (默认: 5)"
-    )
+    parser.add_argument("--wait", type=float, default=5.0, help="提交后额外等待秒数 (默认: 5)")
     args = parser.parse_args()
 
     console.print(
@@ -262,8 +278,7 @@ def main():
     )
 
     client = ov.SyncHTTPClient(
-        url=args.url, api_key=args.api_key, agent_id=args.agent_id,
-        timeout=180
+        url=args.url, api_key=args.api_key, agent_id=args.agent_id, timeout=180
     )
 
     try:
@@ -285,9 +300,7 @@ def main():
         )
 
     except Exception as e:
-        console.print(
-            Panel(f"[bold red]Error:[/bold red] {e}", style="red", width=PANEL_WIDTH)
-        )
+        console.print(Panel(f"[bold red]Error:[/bold red] {e}", style="red", width=PANEL_WIDTH))
         import traceback
 
         traceback.print_exc()

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Constants for CodeRepositoryParser.
 
@@ -95,12 +95,14 @@ IGNORE_EXTENSIONS = {
 # Code file extensions for file type detection
 CODE_EXTENSIONS = {
     ".py",
+    ".pyi",
     ".java",
     ".cpp",
     ".cc",
     ".c",
     ".h",
     ".hpp",
+    ".inl",
     ".cs",
     ".js",
     ".ts",
@@ -226,6 +228,8 @@ ADDITIONAL_TEXT_EXTENSIONS = {
     ".yarnrc",
     ".env",
     ".env.example",
+    ".lock",
+    ".in",
 }
 
 # Common text encodings to try for encoding detection (in order of likelihood)

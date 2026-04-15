@@ -28,8 +28,8 @@ resolve_openviking_version = importlib.import_module(
 ).resolve_openviking_version
 
 CMAKE_PATH = shutil.which("cmake") or "cmake"
-C_COMPILER_PATH = shutil.which("gcc") or "gcc"
-CXX_COMPILER_PATH = shutil.which("g++") or "g++"
+C_COMPILER_PATH = os.environ.get("CC") or shutil.which("gcc") or "gcc"
+CXX_COMPILER_PATH = os.environ.get("CXX") or shutil.which("g++") or "g++"
 ENGINE_SOURCE_DIR = "src/"
 ENGINE_BUILD_CONFIG = get_host_engine_build_config(platform.machine())
 
@@ -73,8 +73,8 @@ class OpenVikingBuildExt(build_ext):
     """Build OpenViking runtime artifacts and Python native extensions."""
 
     def run(self):
-        self.build_agfs_artifacts()
         self.build_ov_cli_artifact()
+        self.build_ragfs_python_artifact()
         self.cmake_executable = CMAKE_PATH
 
         for ext in self.extensions:
@@ -138,156 +138,6 @@ class OpenVikingBuildExt(build_ext):
             print(f"[Warning] Failed to resolve Cargo target directory via metadata: {exc}")
 
         return cargo_project_dir.parents[1] / "target"
-
-    def build_agfs_artifacts(self):
-        """Build or reuse the AGFS server binary and binding library."""
-        binary_name = "agfs-server.exe" if sys.platform == "win32" else "agfs-server"
-        if sys.platform == "win32":
-            lib_name = "libagfsbinding.dll"
-        elif sys.platform == "darwin":
-            lib_name = "libagfsbinding.dylib"
-        else:
-            lib_name = "libagfsbinding.so"
-
-        agfs_server_dir = Path("third_party/agfs/agfs-server").resolve()
-        agfs_bin_dir = Path("openviking/bin").resolve()
-        agfs_lib_dir = Path("openviking/lib").resolve()
-        agfs_target_binary = agfs_bin_dir / binary_name
-        agfs_target_lib = agfs_lib_dir / lib_name
-
-        self._run_stage_with_artifact_checks(
-            "AGFS build",
-            lambda: self._build_agfs_artifacts_impl(
-                agfs_server_dir,
-                binary_name,
-                lib_name,
-                agfs_target_binary,
-                agfs_target_lib,
-            ),
-            [
-                (agfs_target_binary, binary_name),
-                (agfs_target_lib, lib_name),
-            ],
-            on_success=lambda: self._copy_artifacts_to_build_lib(
-                agfs_target_binary, agfs_target_lib
-            ),
-        )
-
-    def _build_agfs_artifacts_impl(
-        self, agfs_server_dir, binary_name, lib_name, agfs_target_binary, agfs_target_lib
-    ):
-        """Implement AGFS artifact building without final artifact checks."""
-
-        prebuilt_dir = os.environ.get("OV_PREBUILT_BIN_DIR")
-        if prebuilt_dir:
-            prebuilt_path = Path(prebuilt_dir).resolve()
-            print(f"Checking for pre-built AGFS artifacts in {prebuilt_path}...")
-            src_bin = prebuilt_path / binary_name
-            src_lib = prebuilt_path / lib_name
-
-            if src_bin.exists():
-                self._copy_artifact(src_bin, agfs_target_binary)
-            if src_lib.exists():
-                self._copy_artifact(src_lib, agfs_target_lib)
-
-            if agfs_target_binary.exists() and agfs_target_lib.exists():
-                print(f"[OK] Used pre-built AGFS artifacts from {prebuilt_dir}")
-                return
-
-        if os.environ.get("OV_SKIP_AGFS_BUILD") == "1":
-            if agfs_target_binary.exists() and agfs_target_lib.exists():
-                print("[OK] Skipping AGFS build, using existing artifacts")
-                return
-            print("[Warning] OV_SKIP_AGFS_BUILD=1 but artifacts are missing. Will try to build.")
-
-        if agfs_server_dir.exists() and shutil.which("go"):
-            print("Building AGFS artifacts from source...")
-
-            try:
-                print(f"Building AGFS server: {binary_name}")
-                env = os.environ.copy()
-                if "GOOS" in env or "GOARCH" in env:
-                    print(f"Cross-compiling with GOOS={env.get('GOOS')} GOARCH={env.get('GOARCH')}")
-
-                build_args = (
-                    ["go", "build", "-o", f"build/{binary_name}", "cmd/server/main.go"]
-                    if sys.platform == "win32"
-                    else ["make", "build"]
-                )
-
-                result = subprocess.run(
-                    build_args,
-                    cwd=str(agfs_server_dir),
-                    env=env,
-                    check=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                )
-                if result.stdout:
-                    print(f"Build stdout: {result.stdout.decode('utf-8', errors='replace')}")
-                if result.stderr:
-                    print(f"Build stderr: {result.stderr.decode('utf-8', errors='replace')}")
-
-                agfs_built_binary = agfs_server_dir / "build" / binary_name
-                self._require_artifact(agfs_built_binary, binary_name, "AGFS server build")
-                self._copy_artifact(agfs_built_binary, agfs_target_binary)
-                print("[OK] AGFS server built successfully from source")
-            except Exception as exc:
-                error_msg = f"Failed to build AGFS server from source: {exc}"
-                if isinstance(exc, subprocess.CalledProcessError):
-                    if exc.stdout:
-                        error_msg += (
-                            f"\nBuild stdout:\n{exc.stdout.decode('utf-8', errors='replace')}"
-                        )
-                    if exc.stderr:
-                        error_msg += (
-                            f"\nBuild stderr:\n{exc.stderr.decode('utf-8', errors='replace')}"
-                        )
-                print(f"[Error] {error_msg}")
-                raise RuntimeError(error_msg)
-
-            try:
-                print(f"Building AGFS binding library: {lib_name}")
-                env = os.environ.copy()
-                env["CGO_ENABLED"] = "1"
-
-                result = subprocess.run(
-                    ["make", "build-lib"],
-                    cwd=str(agfs_server_dir),
-                    env=env,
-                    check=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                )
-                if result.stdout:
-                    print(f"Build stdout: {result.stdout.decode('utf-8', errors='replace')}")
-                if result.stderr:
-                    print(f"Build stderr: {result.stderr.decode('utf-8', errors='replace')}")
-
-                agfs_built_lib = agfs_server_dir / "build" / lib_name
-                self._require_artifact(agfs_built_lib, lib_name, "AGFS binding build")
-                self._copy_artifact(agfs_built_lib, agfs_target_lib)
-                print("[OK] AGFS binding library built successfully")
-            except Exception as exc:
-                error_msg = f"Failed to build AGFS binding library: {exc}"
-                if isinstance(exc, subprocess.CalledProcessError):
-                    if exc.stdout:
-                        error_msg += (
-                            f"\nBuild stdout: {exc.stdout.decode('utf-8', errors='replace')}"
-                        )
-                    if exc.stderr:
-                        error_msg += (
-                            f"\nBuild stderr: {exc.stderr.decode('utf-8', errors='replace')}"
-                        )
-                print(f"[Error] {error_msg}")
-                raise RuntimeError(error_msg)
-        else:
-            if agfs_target_binary.exists() and agfs_target_lib.exists():
-                print("[Info] AGFS artifacts already exist locally. Skipping source build.")
-            elif not agfs_server_dir.exists():
-                print(f"[Warning] AGFS source directory not found at {agfs_server_dir}")
-            else:
-                print("[Warning] Go compiler not found. Cannot build AGFS from source.")
 
     def build_ov_cli_artifact(self):
         """Build or reuse the ov Rust CLI binary."""
@@ -358,11 +208,11 @@ class OpenVikingBuildExt(build_ext):
                 if isinstance(exc, subprocess.CalledProcessError):
                     if exc.stdout:
                         error_msg += (
-                            f"\nBuild stdout: {exc.stdout.decode('utf-8', errors='replace')}"
+                            f"\nBuild stdout:\n{exc.stdout.decode('utf-8', errors='replace')}"
                         )
                     if exc.stderr:
                         error_msg += (
-                            f"\nBuild stderr: {exc.stderr.decode('utf-8', errors='replace')}"
+                            f"\nBuild stderr:\n{exc.stderr.decode('utf-8', errors='replace')}"
                         )
                 print(f"[Error] {error_msg}")
                 raise RuntimeError(error_msg)
@@ -373,6 +223,132 @@ class OpenVikingBuildExt(build_ext):
                 print(f"[Warning] ov CLI source directory not found at {ov_cli_dir}")
             else:
                 print("[Warning] Cargo not found. Cannot build ov CLI from source.")
+
+    def build_ragfs_python_artifact(self):
+        """Build ragfs-python (Rust RAGFS binding) via maturin and copy the native
+        extension into ``openviking/lib/`` so it ships inside the openviking wheel.
+        """
+        require_ragfs_artifact = self._should_require_ragfs_artifact()
+        ragfs_python_dir = Path("crates/ragfs-python").resolve()
+        ragfs_lib_dir = Path("openviking/lib").resolve()
+
+        if not ragfs_python_dir.exists():
+            message = "ragfs-python source directory not found."
+            if require_ragfs_artifact:
+                raise RuntimeError(message)
+            print(f"[Info] {message} Skipping.")
+            return
+
+        if os.environ.get("OV_SKIP_RAGFS_BUILD") == "1":
+            message = "Skipping ragfs-python build (OV_SKIP_RAGFS_BUILD=1)"
+            if require_ragfs_artifact:
+                raise RuntimeError(f"{message} is incompatible with required wheel artifacts.")
+            print(f"[OK] {message}")
+            return
+
+        if importlib.util.find_spec("maturin") is None:
+            message = (
+                "maturin not found. ragfs-python (Rust binding) will not be built.\n"
+                "       Install maturin to enable: pip install maturin"
+            )
+            if require_ragfs_artifact:
+                raise RuntimeError(message)
+            print(f"[SKIP] {message}")
+            return
+
+        import tempfile
+        import zipfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            try:
+                print("Building ragfs-python (Rust RAGFS binding) via maturin...")
+                env = os.environ.copy()
+                build_args = [
+                    sys.executable,
+                    "-m",
+                    "maturin",
+                    "build",
+                    "--release",
+                    "--features",
+                    "s3",
+                    "--out",
+                    tmpdir,
+                ]
+                # Respect CARGO_BUILD_TARGET for cross-compilation
+                target = env.get("CARGO_BUILD_TARGET")
+                if target:
+                    build_args.extend(["--target", target])
+
+                result = subprocess.run(
+                    build_args,
+                    cwd=str(ragfs_python_dir),
+                    env=env,
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                if result.stdout:
+                    print(result.stdout.decode("utf-8", errors="replace"))
+                if result.stderr:
+                    print(result.stderr.decode("utf-8", errors="replace"))
+
+                # Extract the native .so/.pyd from the built wheel.
+                whl_files = list(Path(tmpdir).glob("ragfs_python-*.whl"))
+                if not whl_files:
+                    message = "maturin produced no wheel for ragfs-python."
+                    if require_ragfs_artifact:
+                        raise RuntimeError(message)
+                    print(f"[Warning] {message}")
+                    return
+
+                ragfs_lib_dir.mkdir(parents=True, exist_ok=True)
+                extracted = False
+                with zipfile.ZipFile(str(whl_files[0])) as zf:
+                    for name in zf.namelist():
+                        basename = Path(name).name
+                        # Match: ragfs_python.cpython-312-darwin.so, ragfs_python.cp312-win_amd64.pyd, etc.
+                        if basename.startswith("ragfs_python") and (
+                            basename.endswith(".so") or basename.endswith(".pyd")
+                        ):
+                            target_path = ragfs_lib_dir / basename
+                            with zf.open(name) as src, open(target_path, "wb") as dst:
+                                dst.write(src.read())
+                            if sys.platform != "win32":
+                                os.chmod(str(target_path), 0o755)
+                            print(f"[OK] ragfs-python: extracted {basename} -> {target_path}")
+                            extracted = True
+                            break
+
+                if not extracted:
+                    message = "Could not find ragfs_python .so/.pyd in built wheel."
+                    if require_ragfs_artifact:
+                        raise RuntimeError(message)
+                    print(f"[Warning] {message}")
+                else:
+                    self._copy_artifacts_to_build_lib(target_lib=target_path)
+
+            except Exception as exc:
+                error_detail = ""
+                if isinstance(exc, subprocess.CalledProcessError):
+                    if exc.stdout:
+                        error_detail += exc.stdout.decode("utf-8", errors="replace")
+                    if exc.stderr:
+                        error_detail += exc.stderr.decode("utf-8", errors="replace")
+                if require_ragfs_artifact:
+                    error_message = f"Failed to build ragfs-python: {exc}"
+                    if error_detail:
+                        error_message += f"\n{error_detail}"
+                    raise RuntimeError(error_message) from exc
+                print(f"[Warning] Failed to build ragfs-python: {exc}")
+                if error_detail:
+                    print(error_detail)
+
+    def _should_require_ragfs_artifact(self) -> bool:
+        """Fail wheel builds closed when ragfs-python cannot be bundled."""
+        required = os.environ.get("OV_REQUIRE_RAGFS_BUILD")
+        if required is not None:
+            return required == "1"
+        return "bdist_wheel" in sys.argv
 
     def build_extension(self, ext):
         """Build a single Python native extension artifact using CMake."""
@@ -460,9 +436,6 @@ if OpenVikingBdistWheel is not None:
 
 
 setup(
-    # install_requires=[
-    #     f"pyagfs @ file://localhost/{os.path.abspath('third_party/agfs/agfs-sdk/python')}"
-    # ],
     ext_modules=[
         Extension(
             name=ENGINE_BUILD_CONFIG.primary_extension,
@@ -473,13 +446,11 @@ setup(
     cmdclass=cmdclass,
     package_data={
         "openviking": [
-            "bin/agfs-server",
-            "bin/agfs-server.exe",
-            "lib/libagfsbinding.so",
-            "lib/libagfsbinding.dylib",
-            "lib/libagfsbinding.dll",
+            "lib/ragfs_python*.so",
+            "lib/ragfs_python*.pyd",
             "bin/ov",
             "bin/ov.exe",
+            "console/static/**/*",
             "storage/vectordb/engine/*.abi3.so",
             "storage/vectordb/engine/*.pyd",
         ],

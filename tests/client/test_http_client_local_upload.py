@@ -1,7 +1,9 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 
 """Tests for client-side temp uploads when using localhost URLs."""
+
+import json
 
 import pytest
 
@@ -15,6 +17,36 @@ class _FakeHTTPClient:
     async def post(self, path, json=None, files=None):
         self.calls.append({"path": path, "json": json, "files": files})
         return object()
+
+
+@pytest.fixture(autouse=True)
+def isolated_ovcli_config(tmp_path, monkeypatch):
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text(json.dumps({"url": "http://localhost:1933"}))
+    monkeypatch.setenv("OPENVIKING_CLI_CONFIG_FILE", str(config_path))
+
+
+@pytest.mark.asyncio
+async def test_write_omits_removed_semantic_flags_from_http_payload(tmp_path, monkeypatch):
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = _FakeHTTPClient()
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {
+        "result": {"uri": "viking://resources/demo.md"}
+    }
+
+    await client.write("viking://resources/demo.md", "updated", wait=True)
+
+    call = fake_http.calls[-1]
+    assert call["path"] == "/api/v1/content/write"
+    assert call["json"] == {
+        "uri": "viking://resources/demo.md",
+        "content": "updated",
+        "mode": "replace",
+        "wait": True,
+        "timeout": None,
+        "telemetry": False,
+    }
 
 
 @pytest.mark.asyncio

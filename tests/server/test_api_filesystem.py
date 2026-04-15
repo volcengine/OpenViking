@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 
 """Tests for filesystem endpoints: ls, tree, stat, mkdir, rm, mv."""
 
@@ -57,6 +57,43 @@ async def test_mkdir_and_ls(client: httpx.AsyncClient):
         params={"uri": "viking://resources/"},
     )
     assert resp.status_code == 200
+
+
+async def test_mkdir_with_description_initializes_abstract_and_enqueues_l0(
+    client: httpx.AsyncClient,
+    monkeypatch,
+):
+    seen = {}
+
+    async def _fake_vectorize_directory_meta(**kwargs):
+        seen.update(kwargs)
+
+    monkeypatch.setattr(
+        "openviking.service.fs_service.vectorize_directory_meta",
+        _fake_vectorize_directory_meta,
+    )
+
+    uri = "viking://resources/described_dir/"
+    description = "Directory for API docs"
+    resp = await client.post(
+        "/api/v1/fs/mkdir",
+        json={"uri": uri, "description": description},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+
+    abstract_resp = await client.get(
+        "/api/v1/content/abstract",
+        params={"uri": uri},
+    )
+    assert abstract_resp.status_code == 200
+    assert abstract_resp.json()["result"] == description
+    assert seen["uri"] == "viking://resources/described_dir"
+    assert seen["abstract"] == description
+    assert seen["overview"] == ""
+    assert seen["context_type"] == "resource"
+    assert seen["include_overview"] is False
+    assert seen["ctx"] is not None
 
 
 async def test_tree(client: httpx.AsyncClient):
