@@ -28,6 +28,7 @@ from openviking.parse.parsers.powerpoint import PowerPointParser
 from openviking.parse.parsers.text import TextParser
 from openviking.parse.parsers.word import WordParser
 from openviking.parse.parsers.zip_parser import ZipParser
+from openviking_cli.utils.config.parser_config import ParserConfig
 
 if TYPE_CHECKING:
     from openviking.parse.custom import CustomParserProtocol
@@ -42,7 +43,11 @@ class ParserRegistry:
     Automatically selects appropriate parser based on file extension.
     """
 
-    def __init__(self, register_optional: bool = True):
+    def __init__(
+        self,
+        register_optional: bool = True,
+        parser_configs: Optional[Dict[str, ParserConfig]] = None,
+    ):
         """
         Initialize registry with default parsers.
 
@@ -53,19 +58,20 @@ class ParserRegistry:
         """
         self._parsers: Dict[str, BaseParser] = {}
         self._extension_map: Dict[str, str] = {}
+        self._parser_configs = parser_configs or {}
 
         # Register core parsers
-        self.register("text", TextParser())
-        self.register("markdown", MarkdownParser())
-        self.register("pdf", PDFParser())
-        self.register("html", HTMLParser())  # HTMLParser doesn't accept config yet
+        self.register("text", TextParser(config=self._parser_configs.get("text")))
+        self.register("markdown", MarkdownParser(config=self._parser_configs.get("markdown")))
+        self.register("pdf", PDFParser(config=self._parser_configs.get("pdf")))
+        self.register("html", HTMLParser(config=self._parser_configs.get("html")))
 
         # Register markitdown-inspired parsers (built-in)
-        self.register("word", WordParser())
-        self.register("legacy_doc", LegacyDocParser())
-        self.register("powerpoint", PowerPointParser())
-        self.register("excel", ExcelParser())
-        self.register("epub", EPubParser())
+        self.register("word", WordParser(config=self._parser_configs.get("word")))
+        self.register("legacy_doc", LegacyDocParser(config=self._parser_configs.get("legacy_doc")))
+        self.register("powerpoint", PowerPointParser(config=self._parser_configs.get("powerpoint")))
+        self.register("excel", ExcelParser(config=self._parser_configs.get("excel")))
+        self.register("epub", EPubParser(config=self._parser_configs.get("epub")))
         self.register("zip", ZipParser())
         self.register("directory", DirectoryParser())
 
@@ -261,7 +267,25 @@ def get_registry() -> ParserRegistry:
     """Get the default parser registry."""
     global _default_registry
     if _default_registry is None:
-        _default_registry = ParserRegistry()
+        parser_configs = None
+        try:
+            from openviking_cli.utils.config import get_openviking_config
+
+            config = get_openviking_config()
+            parser_configs = {
+                "text": config.text,
+                "markdown": config.markdown,
+                "pdf": config.pdf,
+                "html": config.html,
+                "word": config.markdown,
+                "legacy_doc": config.markdown,
+                "powerpoint": config.markdown,
+                "excel": config.markdown,
+                "epub": config.markdown,
+            }
+        except Exception:
+            parser_configs = None
+        _default_registry = ParserRegistry(parser_configs=parser_configs)
     return _default_registry
 
 

@@ -19,6 +19,7 @@ from openviking.parse.base import (
     create_parse_result,
 )
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking_cli.utils.config.parser_config import HTMLConfig
 
 logger = __import__("openviking_cli.utils.logger").utils.logger.get_logger(__name__)
 
@@ -45,7 +46,12 @@ class HTMLParser(BaseParser):
     in the new two-layer architecture. This parser only handles local files.
     """
 
-    def __init__(self, timeout: float = 30.0, **kwargs):
+    def __init__(
+        self,
+        timeout: float = 30.0,
+        config: Optional[HTMLConfig] = None,
+        **kwargs,
+    ):
         """
         Initialize HTML parser.
 
@@ -54,7 +60,8 @@ class HTMLParser(BaseParser):
                 URL downloading has been moved to HTTPAccessor.
             **kwargs: Additional arguments (kept for backward compatibility)
         """
-        pass
+        self.config = config or HTMLConfig()
+        self._markdown_parser = None
 
     @staticmethod
     def _extract_filename_from_url(url: str) -> str:
@@ -104,6 +111,14 @@ class HTMLParser(BaseParser):
                     "Install it with: pip install markdownify"
                 )
         return self._markdownify
+
+    def _get_markdown_parser(self):
+        """Lazy import and create MarkdownParser with the HTML parser config."""
+        if self._markdown_parser is None:
+            from openviking.parse.parsers.markdown import MarkdownParser
+
+            self._markdown_parser = MarkdownParser(config=self.config)
+        return self._markdown_parser
 
     @property
     def supported_extensions(self) -> List[str]:
@@ -219,9 +234,7 @@ class HTMLParser(BaseParser):
         markdown_content = self._html_to_markdown(content, base_url=source_path or "")
 
         # Delegate to MarkdownParser
-        from openviking.parse.parsers.markdown import MarkdownParser
-
-        md_parser = MarkdownParser()
+        md_parser = self._get_markdown_parser()
         result = await md_parser.parse_content(markdown_content, source_path=source_path, **kwargs)
 
         # Update metadata
