@@ -518,6 +518,33 @@ async function makeRequest<T = any>(config: OpenVikingConfig, options: HttpReque
   }
 }
 
+async function uploadLocalFile(config: OpenVikingConfig, filePath: string): Promise<string> {
+  const fileBuffer = fs.readFileSync(filePath)
+  const fileName = path.basename(filePath)
+  const blob = new Blob([fileBuffer])
+  const formData = new FormData()
+  formData.append("file", blob, fileName)
+
+  const headers: Record<string, string> = {}
+  if (config.apiKey) headers["X-API-Key"] = config.apiKey
+
+  const response = await fetch(`${config.endpoint}/api/v1/resources/temp_upload`, {
+    method: "POST",
+    headers,
+    body: formData,
+  })
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    throw new Error(`File upload failed (${response.status}): ${errorText}`)
+  }
+
+  const result = (await response.json()) as OpenVikingResponse<{ temp_file_id: string }>
+  const tempFileId = unwrapResponse(result)?.temp_file_id
+  if (!tempFileId) throw new Error("No temp_file_id returned from upload")
+  return tempFileId
+}
+
 function getResponseErrorMessage(error: OpenVikingResponse["error"]): string {
   if (!error) return "Unknown OpenViking error"
   if (typeof error === "string") return error
@@ -1374,6 +1401,42 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
   startAutoCommit(config)
 
   return {
+    // Intercept read/glob/grep tools targeting viking:// URIs and redirect to appropriate OpenViking tools
+    "tool.execute.before": async (input, output) => {
+      const toolName = input.tool
+      if (toolName !== "read" && toolName !== "glob" && toolName !== "grep") return
+
+      const filePath = output.args?.filePath ?? output.args?.path ?? ""
+      if (typeof filePath !== "string" || !filePath.startsWith("viking://")) return
+
+      const uri = filePath as string
+
+      if (toolName === "read") {
+        log("INFO", "hook", "Redirecting read -> memread for viking:// URI", { uri })
+        throw new Error(
+          `viking:// URIs are not filesystem paths. Use the "memread" tool instead.\n` +
+          `Example: memread(uri="${uri}", level="auto")`
+        )
+      }
+
+      if (toolName === "glob") {
+        log("INFO", "hook", "Redirecting glob -> membrowse for viking:// URI", { uri })
+        throw new Error(
+          `viking:// URIs are not filesystem paths. Use the "membrowse" tool instead.\n` +
+          `Example: membrowse(uri="${uri}", view="list", recursive=true)`
+        )
+      }
+
+      if (toolName === "grep") {
+        const query = output.args?.pattern ?? ""
+        log("INFO", "hook", "Redirecting grep -> memsearch for viking:// URI", { uri, query })
+        throw new Error(
+          `viking:// URIs are not filesystem paths. Use the "memsearch" tool to search memories.\n` +
+          `Example: memsearch(query="${query}", target_uri="${uri}")`
+        )
+      }
+    },
+
     event: async ({ event }) => {
       if (event && event.type && event.type === "session.diff") {
         return;
@@ -1972,6 +2035,176 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
           },
         },
       ),
+      memwrite: tool({
+        description:
+          "Write content to a specific file in OpenViking memory at a given viking:// URI.\n\nModes:\n- replace: overwrite existing file content entirely\n- append: add content to the end of an existing file\n\nUse when:\n- You want to manually write or update a memory, resource, or knowledge entry\n- You need to store information that wasn't captured through conversation\n- You want to correct or supplement existing memory content\n\nRequires: Complete viking:// URI pointing to a file (not directory).\nParent directories are created automatically if they don't exist.",
+        args: {
+          uri: z
+            .string()
+            .describe(
+              "Complete viking:// URI for the file to write (e.g., viking://user/memories/notes.md, viking://resources/knowledge/api-design.md)",
+            ),
+          content: z
+            .string()
+            .describe("The content to write to the file"),
+          mode: z
+            .enum(["replace", "append"])
+            .optional()
+            .describe("Write mode. 'replace' overwrites the file, 'append' adds to the end. Default: replace"),
+        },
+        async execute(args, context) {
+          log("INFO", "memwrite", "Writing content", { uri: args.uri, mode: args.mode })
+
+          const validationError = validateVikingUri(args.uri, "memwrite")
+          if (validationError) return validationError
+
+          try {
+            // Auto-create parent directories
+            const uriPath = args.uri.replace(/\/[^/]+$/, "")
+            try {
+              await makeRequest(config, {
+                method: "POST",
+                endpoint: "/api/v1/fs/mkdir",
+                body: { uri: uriPath },
+                abortSignal: context.abort,
+              })
+              log("INFO", "memwrite", "Ensured parent directory exists", { parentUri: uriPath })
+            } catch (mkdirError: any) {
+              // Directory may already exist, skip silently
+              log("INFO", "memwrite", "mkdir skipped", { error: mkdirError.message })
+            }
+
+            const response = await makeRequest<OpenVikingResponse<{
+              uri: string
+              root_uri: string
+              context_type: string
+              mode: string
+              written_bytes: number
+              semantic_updated: boolean
+              vector_updated: boolean
+              queue_status: string
+            }>>(config, {
+              method: "POST",
+              endpoint: "/api/v1/content/write",
+              body: {
+                uri: args.uri,
+                content: args.content,
+                mode: args.mode ?? "replace",
+                wait: true,
+              },
+              abortSignal: context.abort,
+            })
+
+            const result = unwrapResponse(response)
+            if (!result) return "Error: No response from write operation"
+
+            return [
+              `Written successfully to ${result.uri}`,
+              `  Bytes: ${result.written_bytes}`,
+              `  Mode: ${result.mode}`,
+              `  Semantic updated: ${result.semantic_updated}`,
+              `  Vector updated: ${result.vector_updated}`,
+              `  Queue: ${result.queue_status}`,
+            ].join("\n")
+          } catch (error: any) {
+            log("ERROR", "memwrite", "Write failed", { error: error.message, args })
+            return `Error: ${error.message}`
+          }
+        },
+      }),
+      memimport: tool({
+        description:
+          "Import resources into OpenViking knowledge base.\n\nSupports:\n- Remote URLs (http/https) — passed directly to the server\n- Local files — uploaded automatically via temp_upload\n- Local directories — zip first, then pass the .zip path\n\nContent is automatically parsed, indexed, and made searchable.\nIncremental updates supported when specifying a target URI that already exists.\n\nUse when:\n- You want to import documentation, articles, or reference materials\n- You need to add external or local knowledge to the memory system\n- You want to update existing resources with newer content",
+        args: {
+          path: z
+            .string()
+            .describe("URL or local file path to import. URLs are fetched server-side; local files are uploaded first. For directories, zip them and pass the .zip path."),
+          target: z
+            .string()
+            .optional()
+            .describe(
+              "Target viking:// URI for the imported resource (must be in resources scope, e.g., viking://resources/docs/). Omit for auto-placement.",
+            ),
+          reason: z
+            .string()
+            .optional()
+            .describe("Reason for adding this resource (improves search relevance)"),
+          wait: z
+            .boolean()
+            .optional()
+            .describe("Wait for semantic processing to complete. Default: true"),
+        },
+        async execute(args, context) {
+          log("INFO", "memimport", "Importing resource", { path: args.path, target: args.target })
+
+          try {
+            const isUrl = /^https?:\/\//i.test(args.path)
+            const isLocalFile = !isUrl && fs.existsSync(args.path)
+
+            let requestBody: {
+              path?: string
+              temp_file_id?: string
+              target?: string
+              reason?: string
+              wait: boolean
+            } = {
+              wait: args.wait ?? true,
+            }
+
+            if (isUrl) {
+              requestBody.path = args.path
+            } else if (isLocalFile) {
+              const stats = fs.statSync(args.path)
+              if (stats.isDirectory()) {
+                return "Error: Directory import is not supported directly. Please zip the directory first (e.g., `zip -r archive.zip ./my-dir`) and pass the .zip file path."
+              }
+              log("INFO", "memimport", "Uploading local file", { path: args.path, size: stats.size })
+              const tempFileId = await uploadLocalFile(config, args.path)
+              requestBody.temp_file_id = tempFileId
+            } else {
+              return `Error: Path not found or not a valid URL: ${args.path}`
+            }
+
+            if (args.target) requestBody.target = args.target
+            if (args.reason) requestBody.reason = args.reason
+
+            const response = await makeRequest<OpenVikingResponse<{
+              status: string
+              root_uri: string
+              source_path: string
+              errors: string[]
+            }>>(config, {
+              method: "POST",
+              endpoint: "/api/v1/resources",
+              body: requestBody,
+              abortSignal: context.abort,
+            })
+
+            const result = unwrapResponse(response)
+            if (!result) return "Error: No response from import operation"
+
+            if (result.errors && result.errors.length > 0) {
+              return [
+                "Import completed with errors:",
+                `  Status: ${result.status}`,
+                `  URI: ${result.root_uri}`,
+                `  Source: ${result.source_path}`,
+                `  Errors: ${result.errors.join(", ")}`,
+              ].join("\n")
+            }
+
+            return [
+              "Imported successfully:",
+              `  Status: ${result.status}`,
+              `  URI: ${result.root_uri}`,
+              `  Source: ${result.source_path}`,
+            ].join("\n")
+          } catch (error: any) {
+            log("ERROR", "memimport", "Import failed", { error: error.message, args })
+            return `Error: ${error.message}`
+          }
+        },
+      }),
     },
 
     stop: async () => {
