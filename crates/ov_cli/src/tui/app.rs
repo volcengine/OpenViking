@@ -224,6 +224,12 @@ impl App {
         self.error_message_time = Some(Instant::now());
     }
 
+    /// Clear the error message immediately
+    pub fn clear_error_message(&mut self) {
+        self.error_message.clear();
+        self.error_message_time = None;
+    }
+
     pub fn set_status_message(&mut self, message: String) {
         if self.status_message_locked {
             let message = format!("Error: Cannot set status message while locked");
@@ -251,6 +257,13 @@ impl App {
                 self.error_message_time = None;
             }
         }
+    }
+
+    /// Clear confirmation and unlock status message in a single operation
+    /// This ensures we never leave status_message_locked stuck as true
+    pub fn clear_confirmation(&mut self) {
+        self.confirmation = None;
+        self.status_message_locked = false;
     }
 
     pub fn create_confirmation<F>(&mut self, message: String, on_confirmed: F)
@@ -443,28 +456,30 @@ impl App {
         self.set_status_message("Tree refreshed".to_string());
     }
 
-    pub async fn delete_selected_uri(&mut self) -> bool {
+    /// Delete the currently selected URI
+    /// Returns true if deletion was initiated (not whether it succeeded)
+    pub async fn delete_selected_uri(&mut self) {
         if let Some(selected_uri) = self.tree.selected_uri() {
             let is_dir = self.tree.selected_is_dir().unwrap_or(false);
-            let deleted = self.delete_uri(selected_uri.to_string(), is_dir).await;
-            deleted
+            self.delete_uri(selected_uri.to_string(), is_dir).await;
         } else {
             self.set_status_message("Nothing selected to delete".to_string());
-            true
         }
     }
 
-    pub async fn delete_uri(&mut self, selected_uri: String, is_dir: bool) -> bool {
-
+    /// Delete a specific URI
+    /// No return value - success/failure is communicated via status messages
+    pub async fn delete_uri(&mut self, selected_uri: String, is_dir: bool) {
         if !self.tree.allow_deletion(&selected_uri) {
-            return false;
+            self.set_error_message("Cannot delete root and scope directories".to_string());
+            return;
         }
 
         let client = self.client.clone();
-        
+
         // Collect expanded nodes before deletion
         let expanded_nodes = self.collect_expanded_nodes();
-        
+
         // Determine target URI: next node if exists, otherwise previous node
         let current_cursor = self.tree.cursor;
         let target_uri = if current_cursor + 1 < self.tree.visible.len() {
@@ -485,15 +500,15 @@ impl App {
                 Some("/".to_string())
             }
         };
-        
+
         match client.rm(&selected_uri, is_dir).await {
             Ok(_) => {
                 self.set_status_message(format!("Deleted: {}", selected_uri));
-                
+
                 // Remove deleted node from expanded nodes
                 let mut expanded_nodes = expanded_nodes;
                 expanded_nodes.retain(|uri| uri != &selected_uri);
-                
+
                 // Reload tree and restore state
                 if let Some(uri) = &target_uri {
                     self.reload_tree_and_restore_state(&client, &expanded_nodes, uri).await;
@@ -503,7 +518,5 @@ impl App {
                 self.set_status_message(format!("Delete failed: {}", e));
             }
         }
-
-        true
     }
 }
