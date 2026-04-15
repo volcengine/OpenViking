@@ -24,6 +24,14 @@ export type MemoryOpenVikingConfig = {
   recallMaxContentChars?: number;
   recallPreferAbstract?: boolean;
   recallTokenBudget?: number;
+  adaptiveRecall?: boolean;
+  recallCacheTtlMs?: number;
+  recallFastMaxAgeMs?: number;
+  recallBackgroundRefresh?: boolean;
+  recallTierOverrides?: {
+    full?: string[];
+    none?: string[];
+  };
   commitTokenThreshold?: number;
   bypassSessionPatterns?: string[];
   ingestReplyAssist?: boolean;
@@ -52,6 +60,11 @@ const DEFAULT_RECALL_SCORE_THRESHOLD = 0.15;
 const DEFAULT_RECALL_MAX_CONTENT_CHARS = 500;
 const DEFAULT_RECALL_PREFER_ABSTRACT = true;
 const DEFAULT_RECALL_TOKEN_BUDGET = 2000;
+const DEFAULT_ADAPTIVE_RECALL = true;
+const DEFAULT_RECALL_CACHE_TTL_MS = 600_000;
+const DEFAULT_RECALL_FAST_MAX_AGE_MS = 600_000;
+const DEFAULT_RECALL_BACKGROUND_REFRESH = true;
+const DEFAULT_RECALL_TIER_OVERRIDES = { full: [] as string[], none: [] as string[] };
 const DEFAULT_COMMIT_TOKEN_THRESHOLD = 20000;
 const DEFAULT_BYPASS_SESSION_PATTERNS: string[] = [];
 const DEFAULT_INGEST_REPLY_ASSIST = true;
@@ -109,6 +122,21 @@ function toStringArray(value: unknown, fallback: string[]): string[] {
   return fallback;
 }
 
+function toRecallTierOverrides(value: unknown): { full: string[]; none: string[] } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {
+      full: [...DEFAULT_RECALL_TIER_OVERRIDES.full],
+      none: [...DEFAULT_RECALL_TIER_OVERRIDES.none],
+    };
+  }
+  const raw = value as Record<string, unknown>;
+  assertAllowedKeys(raw, ["full", "none"], "openviking recallTierOverrides");
+  return {
+    full: toStringArray(raw.full, DEFAULT_RECALL_TIER_OVERRIDES.full),
+    none: toStringArray(raw.none, DEFAULT_RECALL_TIER_OVERRIDES.none),
+  };
+}
+
 /** True when env is 1 / true / yes (case-insensitive). Used for debug flags without editing plugin JSON. */
 function envFlag(name: string): boolean {
   const v = process.env[name];
@@ -162,6 +190,11 @@ export const memoryOpenVikingConfigSchema = {
         "recallMaxContentChars",
         "recallPreferAbstract",
         "recallTokenBudget",
+        "adaptiveRecall",
+        "recallCacheTtlMs",
+        "recallFastMaxAgeMs",
+        "recallBackgroundRefresh",
+        "recallTierOverrides",
         "commitTokenThreshold",
         "bypassSessionPatterns",
         "ingestReplyAssist",
@@ -239,6 +272,23 @@ export const memoryOpenVikingConfigSchema = {
         100,
         Math.min(50000, Math.floor(toNumber(cfg.recallTokenBudget, DEFAULT_RECALL_TOKEN_BUDGET))),
       ),
+      adaptiveRecall:
+        typeof cfg.adaptiveRecall === "boolean"
+          ? cfg.adaptiveRecall
+          : DEFAULT_ADAPTIVE_RECALL,
+      recallCacheTtlMs: Math.max(
+        0,
+        Math.min(3_600_000, Math.floor(toNumber(cfg.recallCacheTtlMs, DEFAULT_RECALL_CACHE_TTL_MS))),
+      ),
+      recallFastMaxAgeMs: Math.max(
+        0,
+        Math.min(3_600_000, Math.floor(toNumber(cfg.recallFastMaxAgeMs, DEFAULT_RECALL_FAST_MAX_AGE_MS))),
+      ),
+      recallBackgroundRefresh:
+        typeof cfg.recallBackgroundRefresh === "boolean"
+          ? cfg.recallBackgroundRefresh
+          : DEFAULT_RECALL_BACKGROUND_REFRESH,
+      recallTierOverrides: toRecallTierOverrides(cfg.recallTierOverrides),
       commitTokenThreshold: Math.max(
         0,
         Math.min(100_000, Math.floor(toNumber(cfg.commitTokenThreshold, DEFAULT_COMMIT_TOKEN_THRESHOLD))),
@@ -378,6 +428,33 @@ export const memoryOpenVikingConfigSchema = {
       placeholder: String(DEFAULT_RECALL_TOKEN_BUDGET),
       advanced: true,
       help: "Maximum estimated tokens for auto-recall memory injection. Injection stops when budget is exhausted.",
+    },
+    adaptiveRecall: {
+      label: "Adaptive Recall",
+      advanced: true,
+      help: "Skip or cache OpenViking memory recall for mechanical turns while preserving full recall for substantive memory-needed prompts.",
+    },
+    recallCacheTtlMs: {
+      label: "Recall Cache TTL (ms)",
+      placeholder: String(DEFAULT_RECALL_CACHE_TTL_MS),
+      advanced: true,
+      help: "How long exact recall results can be reused for repeated prompts.",
+    },
+    recallFastMaxAgeMs: {
+      label: "Fast Recall Max Age (ms)",
+      placeholder: String(DEFAULT_RECALL_FAST_MAX_AGE_MS),
+      advanced: true,
+      help: "How long a session's latest recall can be reused for short follow-up prompts.",
+    },
+    recallBackgroundRefresh: {
+      label: "Recall Background Refresh",
+      advanced: true,
+      help: "Refresh recall cache in the background for fast-tier follow-up prompts without blocking the current response.",
+    },
+    recallTierOverrides: {
+      label: "Recall Tier Overrides",
+      advanced: true,
+      help: "Optional substring overrides: { full: [...], none: [...] }.",
     },
     bypassSessionPatterns: {
       label: "Bypass Session Patterns",

@@ -19,6 +19,14 @@ import {
   prepareRecallQuery,
 } from "./recall-context.js";
 import type { RecallPromptSectionResult } from "./recall-context.js";
+import {
+  decideRecallTier,
+  isFreshRecallCacheEntry,
+  makeRecallCacheKey,
+  makeRecallConfigVersion,
+  normalizeRecallCacheQuery,
+} from "./adaptive-recall.js";
+import type { RecallCacheEntry, RecallTierDecision } from "./adaptive-recall.js";
 import { withTimeout } from "./process-manager.js";
 import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
 
@@ -109,6 +117,17 @@ type Logger = {
   info: (msg: string) => void;
   warn?: (msg: string) => void;
   error: (msg: string) => void;
+};
+
+type RecallRefreshRequest = {
+  cacheKey: string;
+  sessionCacheKey: string;
+  queryText: string;
+  agentId: string;
+  client: Pick<OpenVikingClient, "find" | "read">;
+  logger: Logger;
+  verboseLog: (message: string) => void;
+  sessionId: string;
 };
 
 function estimateTokens(messages: AgentMessage[]): number {
@@ -537,6 +556,170 @@ export function createMemoryOpenVikingContextEngine(params: {
   const isBypassedSession = (params: { sessionId?: string; sessionKey?: string }): boolean =>
     shouldBypassSession(params, bypassSessionPatterns);
 
+  const recallCache = new Map<string, RecallCacheEntry<RecallPromptSectionResult>>();
+  const latestRecallBySession = new Map<string, RecallCacheEntry<RecallPromptSectionResult>>();
+  const pendingRecallByKey = new Map<string, Promise<RecallCacheEntry<RecallPromptSectionResult>>>();
+  const pendingRecallBySession = new Map<string, Promise<void>>();
+  const trailingRecallBySession = new Map<string, RecallRefreshRequest>();
+
+  function sessionRecallCacheKey(ovSessionId: string, agentId: string): string {
+    return [
+      ovSessionId,
+      agentId,
+      makeRecallConfigVersion(cfg),
+    ].join("\u0000");
+  }
+
+  function getFreshExactRecall(cacheKey: string): RecallCacheEntry<RecallPromptSectionResult> | undefined {
+    const cached = recallCache.get(cacheKey);
+    if (isFreshRecallCacheEntry(cached, cfg.recallCacheTtlMs)) {
+      return cached;
+    }
+    if (cached) {
+      recallCache.delete(cacheKey);
+    }
+    return undefined;
+  }
+
+  function getFreshSessionRecall(sessionCacheKey: string): RecallCacheEntry<RecallPromptSectionResult> | undefined {
+    const cached = latestRecallBySession.get(sessionCacheKey);
+    if (isFreshRecallCacheEntry(cached, cfg.recallFastMaxAgeMs)) {
+      return cached;
+    }
+    if (cached) {
+      latestRecallBySession.delete(sessionCacheKey);
+    }
+    return undefined;
+  }
+
+  function storeRecallCache(
+    request: RecallRefreshRequest,
+    value: RecallPromptSectionResult,
+  ): RecallCacheEntry<RecallPromptSectionResult> {
+    const entry = {
+      key: request.cacheKey,
+      sessionKey: request.sessionCacheKey,
+      query: normalizeRecallCacheQuery(request.queryText),
+      value,
+      createdAt: Date.now(),
+    };
+    recallCache.set(request.cacheKey, entry);
+    if (value.memories.length > 0 || value.section) {
+      latestRecallBySession.set(request.sessionCacheKey, entry);
+    }
+    return entry;
+  }
+
+  async function runRecallRefresh(
+    request: RecallRefreshRequest,
+  ): Promise<RecallCacheEntry<RecallPromptSectionResult>> {
+    const existing = pendingRecallByKey.get(request.cacheKey);
+    if (existing) {
+      return existing;
+    }
+
+    const start = Date.now();
+    const pending = buildRecallPromptSection({
+      cfg,
+      client: request.client,
+      logger: request.logger,
+      queryText: request.queryText,
+      agentId: request.agentId,
+      verboseLog: request.verboseLog,
+    }).then((value) => {
+      const entry = storeRecallCache(request, value);
+      request.verboseLog(
+        `openviking: adaptive recall refreshed (session=${request.sessionId}, ` +
+          `durationMs=${Date.now() - start}, memories=${value.memories.length})`,
+      );
+      return entry;
+    }).finally(() => {
+      pendingRecallByKey.delete(request.cacheKey);
+    });
+
+    pendingRecallByKey.set(request.cacheKey, pending);
+    return pending;
+  }
+
+  function scheduleRecallRefresh(request: RecallRefreshRequest): void {
+    if (!cfg.recallBackgroundRefresh) {
+      return;
+    }
+
+    if (pendingRecallByKey.has(request.cacheKey)) {
+      request.verboseLog(
+        `openviking: adaptive recall refresh already pending (session=${request.sessionId})`,
+      );
+      return;
+    }
+
+    const active = pendingRecallBySession.get(request.sessionCacheKey);
+    if (active) {
+      trailingRecallBySession.set(request.sessionCacheKey, request);
+      request.verboseLog(
+        `openviking: adaptive recall refresh coalesced (session=${request.sessionId})`,
+      );
+      return;
+    }
+
+    const run = async (initial: RecallRefreshRequest): Promise<void> => {
+      let current: RecallRefreshRequest | undefined = initial;
+      while (current) {
+        trailingRecallBySession.delete(current.sessionCacheKey);
+        try {
+          await runRecallRefresh(current);
+        } catch (err) {
+          warnOrInfo(
+            logger,
+            `openviking: adaptive recall background refresh failed for session=${current.sessionId}: ${String(err)}`,
+          );
+        }
+        current = trailingRecallBySession.get(initial.sessionCacheKey);
+      }
+    };
+
+    const pending = run(request).finally(() => {
+      pendingRecallBySession.delete(request.sessionCacheKey);
+    });
+    pendingRecallBySession.set(request.sessionCacheKey, pending);
+  }
+
+  async function resolveAdaptiveRecall(params: {
+    request: RecallRefreshRequest;
+    decision: RecallTierDecision;
+    exactCache?: RecallCacheEntry<RecallPromptSectionResult>;
+    sessionCache?: RecallCacheEntry<RecallPromptSectionResult>;
+  }): Promise<RecallPromptSectionResult> {
+    const { request, decision, exactCache, sessionCache } = params;
+    if (decision.tier === "none") {
+      return { estimatedTokens: 0, memories: [] };
+    }
+
+    if (exactCache) {
+      request.verboseLog(
+        `openviking: adaptive recall cache hit (tier=${decision.tier}, reason=${decision.reason}, exact=true)`,
+      );
+      return exactCache.value;
+    }
+
+    if (decision.tier === "fast") {
+      if (sessionCache) {
+        request.verboseLog(
+          `openviking: adaptive recall cache hit (tier=fast, reason=${decision.reason}, exact=false)`,
+        );
+        return sessionCache.value;
+      }
+      scheduleRecallRefresh(request);
+      request.verboseLog(
+        `openviking: adaptive recall skipped fresh search (tier=fast, reason=${decision.reason})`,
+      );
+      return { estimatedTokens: 0, memories: [] };
+    }
+
+    const entry = await runRecallRefresh(request);
+    return entry.value;
+  }
+
   async function doCommitOVSession(sessionId: string, sessionKey?: string): Promise<boolean> {
     if (isBypassedSession({ sessionId, sessionKey })) {
       warnOrInfo(
@@ -712,6 +895,49 @@ export function createMemoryOpenVikingContextEngine(params: {
           cfg,
           runtimeLog,
         );
+        const recallCacheKey = makeRecallCacheKey({
+          queryText: recallQuery.query,
+          agentId,
+          cfg,
+        });
+        const recallSessionCacheKey = sessionRecallCacheKey(OVSessionId, agentId);
+        const exactRecallCache = getFreshExactRecall(recallCacheKey);
+        const sessionRecallCache = getFreshSessionRecall(recallSessionCacheKey);
+        const recallDecision = decideRecallTier({
+          queryText: recallQuery.query,
+          cfg,
+          hasRecentCache: !!sessionRecallCache,
+        });
+        runtimeLog(
+          `openviking: adaptive recall decision (tier=${recallDecision.tier}, ` +
+            `reason=${recallDecision.reason}, queryChars=${recallDecision.effectiveText.length})`,
+        );
+        diag("recall_decision", OVSessionId, {
+          tier: recallDecision.tier,
+          reason: recallDecision.reason,
+          cacheHit: !!exactRecallCache,
+          sessionCacheHit: !!sessionRecallCache,
+          queryChars: recallDecision.effectiveText.length,
+        });
+        const recallRequest: RecallRefreshRequest = {
+          cacheKey: recallCacheKey,
+          sessionCacheKey: recallSessionCacheKey,
+          queryText: recallQuery.query,
+          agentId,
+          client,
+          logger,
+          verboseLog: runtimeLog,
+          sessionId: OVSessionId,
+        };
+        const recallPromise =
+          cfg.recallPath === "assemble"
+            ? resolveAdaptiveRecall({
+                request: recallRequest,
+                decision: recallDecision,
+                exactCache: exactRecallCache,
+                sessionCache: sessionRecallCache,
+              })
+            : Promise.resolve({ estimatedTokens: 0, memories: [] });
 
         const [ctxSettled, recallSettled] = await Promise.allSettled([
           withTimeout(
@@ -723,16 +949,7 @@ export function createMemoryOpenVikingContextEngine(params: {
             cfg.timeoutMs,
             "openviking: session context timeout",
           ),
-          cfg.recallPath === "assemble"
-            ? buildRecallPromptSection({
-                cfg,
-                client,
-                logger,
-                queryText: recallQuery.query,
-                agentId,
-                verboseLog: runtimeLog,
-              })
-            : Promise.resolve({ estimatedTokens: 0, memories: [] }),
+          recallPromise,
         ]);
 
         if (ctxSettled.status === "rejected") {
