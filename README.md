@@ -104,6 +104,8 @@ OpenViking supports multiple VLM providers:
 | `volcengine` | Volcengine Doubao Models | [Volcengine Console](https://console.volcengine.com/ark/region:ark+cn-beijing/overview?briefPage=0&briefType=introduce&type=new&utm_content=OpenViking&utm_medium=devrel&utm_source=OWO&utm_term=OpenViking) |
 | `openai` | OpenAI Official API | [OpenAI Platform](https://platform.openai.com) |
 | `openai-codex` | Codex VLM via ChatGPT/Codex OAuth | Use `openviking-server init` or run `ov codex login` manually |
+| `kimi` | Kimi Coding subscription endpoint with built-in Claude-compatible headers | Use `openviking-server init` or configure `vlm.provider = "kimi"` manually |
+| `glm` | GLM Coding Plan endpoint with Z.AI subscription API key | Use `openviking-server init` or configure `vlm.provider = "glm"` manually |
 | `litellm` | Unified access to various third-party models (Anthropic, DeepSeek, Gemini, vLLM, Ollama, etc.) | See [LiteLLM Providers](https://docs.litellm.ai/docs/providers) |
 
 > 💡 **Tip**:
@@ -208,6 +210,68 @@ ov codex status
 > - `openai-codex` does not require `vlm.api_key` when Codex OAuth is available
 > - OpenViking stores its own Codex auth state at `~/.openviking/codex_auth.json`
 > - `openviking-server doctor` validates that the current Codex auth is usable
+
+</details>
+
+<details>
+<summary><b>Kimi Coding (Subscription)</b></summary>
+
+Use this provider when you want OpenViking to call the dedicated Kimi Coding subscription endpoint directly instead of routing through LiteLLM:
+
+```bash
+openviking-server init
+# choose Kimi Coding when prompted
+openviking-server doctor
+```
+
+```json
+{
+  "vlm": {
+    "provider": "kimi",
+    "model": "kimi-code",
+    "api_key": "your-kimi-subscription-api-key",
+    "api_base": "https://api.kimi.com/coding",
+    "temperature": 0.0,
+    "max_retries": 2
+  }
+}
+```
+
+> 💡 **Tip**:
+> - `kimi` automatically sends the required Claude-compatible headers, including the Kimi Coding user agent
+> - `kimi-code` and `kimi-coding` are accepted aliases for the provider name
+> - `kimi-code` is normalized to Kimi's upstream coding model automatically
+
+</details>
+
+<details>
+<summary><b>GLM Coding Plan (Subscription)</b></summary>
+
+Use this provider when you want OpenViking to call Z.AI's OpenAI-compatible Coding Plan endpoint directly:
+
+```bash
+openviking-server init
+# choose GLM Coding Plan when prompted
+openviking-server doctor
+```
+
+```json
+{
+  "vlm": {
+    "provider": "glm",
+    "model": "glm-4.6v",
+    "api_key": "your-zai-api-key",
+    "api_base": "https://api.z.ai/api/coding/paas/v4",
+    "temperature": 0.0,
+    "max_retries": 2
+  }
+}
+```
+
+> 💡 **Tip**:
+> - `glm`, `zhipu`, `zai`, `z-ai`, and `z.ai` all resolve to the same first-class GLM provider
+> - The default endpoint is the Coding Plan endpoint, not the general Z.AI endpoint
+> - Use a vision-capable model such as `glm-4.6v` or `glm-5v-turbo` for multimodal parsing
 
 </details>
 
@@ -317,14 +381,14 @@ If you prefer manual configuration, create `~/.openviking/ov.conf`, remove the c
   "vlm": {
     "api_base" : "<api-endpoint>",     // API endpoint address
     "api_key"  : "<your-api-key>",     // Model service API Key (optional for openai-codex)
-    "provider" : "<provider-type>",    // Provider type (volcengine, openai, openai-codex, litellm, etc.)
+    "provider" : "<provider-type>",    // Provider type (volcengine, openai, openai-codex, kimi, glm, litellm, etc.)
     "model"    : "<model-name>",       // VLM model name (e.g., doubao-seed-2-0-pro-260215 or gpt-4-vision-preview)
     "max_concurrent": 100              // Max concurrent LLM calls for semantic processing (default: 100)
   }
 }
 ```
 
-> **Note**: For embedding models, supported providers are `volcengine` (Doubao), `openai`, `jina`, `voyage`, `minimax`, `vikingdb`, and `gemini` (requires `pip install "google-genai>=1.0.0"`). For VLM models, common providers include `volcengine`, `openai`, `openai-codex`, and `litellm`. The `litellm` provider supports various models including Anthropic (Claude), DeepSeek, Gemini, Moonshot, Zhipu, DashScope, MiniMax, vLLM, Ollama, and more.
+> **Note**: For embedding models, supported providers are `volcengine` (Doubao), `openai`, `jina`, `voyage`, `minimax`, `vikingdb`, and `gemini` (requires `pip install "google-genai>=1.0.0"`). For VLM models, common providers include `volcengine`, `openai`, `openai-codex`, `kimi`, `glm`, and `litellm`. The `litellm` provider still supports various models including Anthropic (Claude), DeepSeek, Gemini, Moonshot, Zhipu, DashScope, MiniMax, vLLM, Ollama, and more.
 
 #### Server Configuration Examples
 

@@ -4,14 +4,22 @@ from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field, model_validator
 
+_PROVIDER_ALIASES = {
+    "codex": "openai-codex",
+    "kimi-code": "kimi",
+    "kimi-coding": "kimi",
+    "zhipu": "glm",
+    "zai": "glm",
+    "z-ai": "glm",
+    "z.ai": "glm",
+}
+
 
 def _normalize_provider_name(name: Optional[str]) -> Optional[str]:
     if not isinstance(name, str):
         return name
     cleaned = name.strip().lower()
-    if cleaned == "codex":
-        return "openai-codex"
-    return cleaned or None
+    return _PROVIDER_ALIASES.get(cleaned, cleaned) or None
 
 
 class VLMConfig(BaseModel):
@@ -78,8 +86,17 @@ class VLMConfig(BaseModel):
             providers = data.get("providers")
             if isinstance(providers, dict):
                 normalized: Dict[str, Dict[str, Any]] = {}
+                provider_sources: Dict[str, str] = {}
                 for name, config in providers.items():
-                    normalized[_normalize_provider_name(name) or str(name)] = config
+                    normalized_name = _normalize_provider_name(name) or str(name)
+                    existing_name = provider_sources.get(normalized_name)
+                    if existing_name is not None and existing_name != str(name):
+                        raise ValueError(
+                            "Duplicate VLM provider config after alias normalization: "
+                            f"{existing_name} and {name}"
+                        )
+                    normalized[normalized_name] = config
+                    provider_sources[normalized_name] = str(name)
                 data["providers"] = normalized
         return data
 

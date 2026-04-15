@@ -16,6 +16,16 @@ except ImportError:
     CodexVLM = None
 
 try:
+    from .backends.glm_vlm import GLMVLM
+except ImportError:
+    GLMVLM = None
+
+try:
+    from .backends.kimi_vlm import KimiVLM
+except ImportError:
+    KimiVLM = None
+
+try:
     from .backends.openai_vlm import OpenAIVLM
 except ImportError:
     OpenAIVLM = None
@@ -30,6 +40,8 @@ __all__ = [
     "VLMFactory",
     "OpenAIVLM",
     "CodexVLM",
+    "KimiVLM",
+    "GLMVLM",
     "VolcEngineVLM",
     "LiteLLMVLMProvider",
     "get_all_provider_names",

@@ -132,6 +132,60 @@ If you used `openviking-server init` and selected `OpenAI Codex`, the wizard alr
 
 </details>
 
+<details>
+<summary><b>Volcengine Embedding + Kimi Coding VLM</b></summary>
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
+      "api_key"  : "your-volcengine-api-key",
+      "provider" : "volcengine",
+      "dimension": 1024,
+      "model"    : "doubao-embedding-vision-251215"
+    }
+  },
+  "vlm": {
+    "provider" : "kimi",
+    "model"    : "kimi-code",
+    "api_key"  : "your-kimi-subscription-api-key",
+    "api_base" : "https://api.kimi.com/coding"
+  }
+}
+```
+
+`kimi` automatically adds the required Claude-compatible subscription headers. Override `extra_headers` only when you need to extend or replace them.
+
+</details>
+
+<details>
+<summary><b>Volcengine Embedding + GLM Coding Plan VLM</b></summary>
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
+      "api_key"  : "your-volcengine-api-key",
+      "provider" : "volcengine",
+      "dimension": 1024,
+      "model"    : "doubao-embedding-vision-251215"
+    }
+  },
+  "vlm": {
+    "provider" : "glm",
+    "model"    : "glm-4.6v",
+    "api_key"  : "your-zai-api-key",
+    "api_base" : "https://api.z.ai/api/coding/paas/v4"
+  }
+}
+```
+
+Use a vision-capable GLM model such as `glm-4.6v` or `glm-5v-turbo` when OpenViking needs image understanding.
+
+</details>
+
 ## Configuration Sections
 
 ### embedding
@@ -442,7 +496,7 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 | `thinking` | bool | Enable thinking mode for VolcEngine models (default: `false`) |
 | `max_concurrent` | int | Maximum concurrent semantic LLM calls (default: `100`) |
 | `max_retries` | int | Maximum retry attempts for transient VLM provider errors (default: `3`; `0` disables retry) |
-| `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
+| `extra_headers` | object | Custom HTTP headers for compatible HTTP providers. `kimi` also accepts header overrides, but already injects the required subscription headers by default |
 | `stream` | bool | Enable streaming mode (for OpenAI-compatible providers, default: `false`) |
 
 `vlm.max_retries` only applies to transient errors such as `429`, `5xx`, timeouts, and connection failures. Permanent authentication, authorization, and billing errors are not retried automatically. The backoff strategy is exponential backoff with jitter, starting at `0.5s` and capped at `8s`.
@@ -465,6 +519,8 @@ If VLM is not configured, L0/L1 will be generated from content directly (less se
 - `volcengine`: Volcengine VLM API
 - `openai`: OpenAI-compatible VLM API
 - `openai-codex`: Codex VLM via ChatGPT/Codex OAuth
+- `kimi`: Kimi Coding subscription endpoint with built-in Claude-compatible headers
+- `glm`: Z.AI GLM Coding Plan endpoint with OpenAI-compatible requests
 - `litellm`: Unified third-party providers such as Anthropic, Gemini, DeepSeek, vLLM, and Ollama
 
 For `openai-codex`, authenticate with:
@@ -497,6 +553,7 @@ For OpenAI-compatible providers (e.g., OpenRouter), you can add custom HTTP head
 
 Common use cases:
 - **OpenRouter**: Requires `HTTP-Referer` and `X-Title` to identify your application
+- **Kimi Coding**: Override or extend the default subscription headers when you need a custom user agent
 - **Custom proxies**: Add authentication or tracing headers
 - **API gateways**: Add version or routing identifiers
 

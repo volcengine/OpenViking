@@ -133,6 +133,60 @@ openviking-server doctor
 
 </details>
 
+<details>
+<summary><b>火山引擎 Embedding + Kimi Coding VLM</b></summary>
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
+      "api_key"  : "your-volcengine-api-key",
+      "provider" : "volcengine",
+      "dimension": 1024,
+      "model"    : "doubao-embedding-vision-251215"
+    }
+  },
+  "vlm": {
+    "provider" : "kimi",
+    "model"    : "kimi-code",
+    "api_key"  : "your-kimi-subscription-api-key",
+    "api_base" : "https://api.kimi.com/coding"
+  }
+}
+```
+
+`kimi` 会自动注入订阅版所需的 Claude 兼容请求头，只有在需要扩展或覆盖这些头时才需要设置 `extra_headers`。
+
+</details>
+
+<details>
+<summary><b>火山引擎 Embedding + GLM Coding Plan VLM</b></summary>
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
+      "api_key"  : "your-volcengine-api-key",
+      "provider" : "volcengine",
+      "dimension": 1024,
+      "model"    : "doubao-embedding-vision-251215"
+    }
+  },
+  "vlm": {
+    "provider" : "glm",
+    "model"    : "glm-4.6v",
+    "api_key"  : "your-zai-api-key",
+    "api_base" : "https://api.z.ai/api/coding/paas/v4"
+  }
+}
+```
+
+如果 OpenViking 需要处理图片，请使用 `glm-4.6v` 或 `glm-5v-turbo` 这类支持视觉输入的模型。
+
+</details>
+
 ## 配置部分
 
 ### embedding
@@ -413,7 +467,7 @@ openviking-server doctor
 | `thinking` | bool | 启用思考模式（仅对部分火山模型生效，默认：`false`） |
 | `max_concurrent` | int | 语义处理阶段 LLM 最大并发调用数（默认：`100`） |
 | `max_retries` | int | VLM provider 瞬时错误的最大重试次数（默认：`3`；`0` 表示禁用重试） |
-| `extra_headers` | object | 自定义 HTTP 请求头（OpenAI 兼容 provider 可用，可选） |
+| `extra_headers` | object | 兼容 HTTP provider 的自定义请求头。`kimi` 默认已注入所需订阅请求头，也支持在这里覆盖或扩展 |
 | `stream` | bool | 启用流式模式（OpenAI 兼容 provider 可用，默认：`false`） |
 
 `vlm.max_retries` 仅对瞬时错误生效，例如 `429`、`5xx`、超时和连接错误；认证、鉴权、欠费等永久错误不会自动重试。退避策略为指数退避，初始延迟 `0.5s`，上限 `8s`，并带随机抖动。
@@ -436,6 +490,8 @@ openviking-server doctor
 - `volcengine`：火山引擎 VLM API
 - `openai`：OpenAI 兼容 VLM API
 - `openai-codex`：通过 ChatGPT/Codex OAuth 使用 Codex VLM
+- `kimi`：Kimi Coding 订阅端点，内置 Claude 兼容请求头
+- `glm`：Z.AI GLM Coding Plan 端点，使用 OpenAI 兼容请求格式
 - `litellm`：统一接入 Anthropic、Gemini、DeepSeek、vLLM、Ollama 等第三方模型
 
 对于 `openai-codex`，建议使用以下命令完成鉴权与校验：
@@ -468,6 +524,7 @@ openviking-server doctor
 
 常见使用场景：
 - **OpenRouter**: 需要 `HTTP-Referer` 和 `X-Title` 来标识应用
+- **Kimi Coding**: 需要自定义 user agent 或追加订阅请求头时可以在这里覆盖
 - **自定义代理**: 添加认证头或追踪头
 - **API 网关**: 添加版本或路由标识
 

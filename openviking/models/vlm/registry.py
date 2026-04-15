@@ -3,7 +3,7 @@
 """
 Provider Registry — single source of truth for LLM provider metadata.
 
-Supported providers: volcengine, openai, litellm
+Supported providers: volcengine, openai, codex, kimi, glm, litellm
 """
 
 from __future__ import annotations
@@ -12,6 +12,14 @@ VALID_PROVIDERS: tuple[str, ...] = (
     "volcengine",
     "openai",
     "azure",
+    "kimi",
+    "kimi-code",
+    "kimi-coding",
+    "glm",
+    "zhipu",
+    "zai",
+    "z-ai",
+    "z.ai",
     "litellm",
     "openai-codex",
     "codex",

@@ -285,6 +285,16 @@ class VLMFactory:
 
             return CodexVLM(config)
 
+        elif provider in ("kimi", "kimi-code", "kimi-coding"):
+            from .backends.kimi_vlm import KimiVLM
+
+            return KimiVLM(config)
+
+        elif provider in ("glm", "zhipu", "zai", "z-ai", "z.ai"):
+            from .backends.glm_vlm import GLMVLM
+
+            return GLMVLM(config)
+
         else:
             from .backends.litellm_vlm import LiteLLMVLMProvider
 

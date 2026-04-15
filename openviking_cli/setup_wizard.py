@@ -26,6 +26,10 @@ from openviking_cli.utils.ollama import (
 )
 
 _DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
+_DEFAULT_KIMI_BASE_URL = "https://api.kimi.com/coding"
+_DEFAULT_GLM_BASE_URL = "https://api.z.ai/api/coding/paas/v4"
+_DEFAULT_KIMI_MODEL = "kimi-code"
+_DEFAULT_GLM_MODEL = "glm-4.6v"
 
 # ---------------------------------------------------------------------------
 # ANSI helpers (same pattern as doctor.py)
@@ -339,6 +343,13 @@ CLOUD_PROVIDERS: list[CloudProvider] = [
     ),
 ]
 
+_WIZARD_VLM_OPTIONS: list[tuple[str, str]] = [
+    ("Same as embedding provider", "(API key)"),
+    ("OpenAI Codex", "(Subscription)"),
+    ("Kimi", "(Subscription API Key)"),
+    ("GLM", "(Subscription API Key)"),
+]
+
 
 # ---------------------------------------------------------------------------
 # Config building
@@ -553,10 +564,7 @@ def _wizard_cloud() -> dict[str, Any] | None:
         embedding_dim = provider.default_embedding_dim
     embedding_api_base = _prompt_input("API Base", default=provider.default_api_base)
 
-    vlm_mode = _prompt_choice("VLM provider:", [
-        (provider.label, "(API key)"),
-        ("OpenAI Codex", "(Subscription)"),
-    ], default=1)
+    vlm_mode = _prompt_choice("VLM provider:", _WIZARD_VLM_OPTIONS, default=1)
 
     if vlm_mode == 1:
         print(f"\n  {_bold('VLM configuration')}")
@@ -568,7 +576,7 @@ def _wizard_cloud() -> dict[str, Any] | None:
         vlm_api_base = _prompt_input("API Base", default=provider.default_api_base)
         vlm_provider = provider.provider
         workspace = _prompt_input("Workspace", default=_DEFAULT_WORKSPACE)
-    else:
+    elif vlm_mode == 2:
         _ensure_codex_auth()
         print(f"\n  {_bold('Codex VLM configuration')}")
         vlm_model = _prompt_input("Model", default="gpt-5.3-codex")
@@ -578,6 +586,27 @@ def _wizard_cloud() -> dict[str, Any] | None:
         workspace = _DEFAULT_WORKSPACE
         print(f"  {_dim('Using default API Base: ' + vlm_api_base)}")
         print(f"  {_dim('Using default Workspace: ' + workspace)}")
+    elif vlm_mode == 3:
+        print(f"\n  {_bold('Kimi VLM configuration')}")
+        vlm_api_key = _prompt_input("API Key")
+        if not vlm_api_key:
+            print(f"  {_red('API key is required')}")
+            return None
+        vlm_model = _prompt_input("Model", default=_DEFAULT_KIMI_MODEL)
+        vlm_api_base = _prompt_input("API Base", default=_DEFAULT_KIMI_BASE_URL)
+        vlm_provider = "kimi"
+        workspace = _prompt_input("Workspace", default=_DEFAULT_WORKSPACE)
+    else:
+        print(f"\n  {_bold('GLM VLM configuration')}")
+        vlm_api_key = _prompt_input("API Key")
+        if not vlm_api_key:
+            print(f"  {_red('API key is required')}")
+            return None
+        # Default to a vision-capable GLM model so the generated config works as a real VLM setup.
+        vlm_model = _prompt_input("Model", default=_DEFAULT_GLM_MODEL)
+        vlm_api_base = _prompt_input("API Base", default=_DEFAULT_GLM_BASE_URL)
+        vlm_provider = "glm"
+        workspace = _prompt_input("Workspace", default=_DEFAULT_WORKSPACE)
 
     return _build_cloud_config(
         provider,
