@@ -3,7 +3,6 @@
 """Sessions endpoints for OpenViking HTTP Server."""
 
 import logging
-from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, Path, Query
