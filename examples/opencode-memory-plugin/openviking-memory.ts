@@ -519,7 +519,7 @@ async function makeRequest<T = any>(config: OpenVikingConfig, options: HttpReque
 }
 
 async function uploadLocalFile(config: OpenVikingConfig, filePath: string): Promise<string> {
-  const fileBuffer = fs.readFileSync(filePath)
+  const fileBuffer = await fs.promises.readFile(filePath)
   const fileName = path.basename(filePath)
   const blob = new Blob([fileBuffer])
   const formData = new FormData()
@@ -2139,7 +2139,15 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
 
           try {
             const isUrl = /^https?:\/\//i.test(args.path)
-            const isLocalFile = !isUrl && fs.existsSync(args.path)
+            let isLocalFile = false
+            if (!isUrl) {
+              try {
+                await fs.promises.access(args.path)
+                isLocalFile = true
+              } catch {
+                isLocalFile = false
+              }
+            }
 
             let requestBody: {
               path?: string
@@ -2154,7 +2162,7 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
             if (isUrl) {
               requestBody.path = args.path
             } else if (isLocalFile) {
-              const stats = fs.statSync(args.path)
+              const stats = await fs.promises.stat(args.path)
               if (stats.isDirectory()) {
                 return "Error: Directory import is not supported directly. Please zip the directory first (e.g., `zip -r archive.zip ./my-dir`) and pass the .zip file path."
               }
