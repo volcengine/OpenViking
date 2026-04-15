@@ -243,24 +243,6 @@ def _load_tokens_from_source(source: str, path: Path) -> Optional[Dict[str, Any]
     client_id = _extract_codex_oauth_client_id(payload)
     auth_owner = _extract_codex_auth_owner(payload)
     imported_from = payload.get("imported_from")
-    if source == "openviking":
-        tokens = payload.get("tokens")
-        if not isinstance(tokens, dict):
-            return None
-        access_token = str(tokens.get("access_token", "") or "").strip()
-        refresh_token = str(tokens.get("refresh_token", "") or "").strip()
-        if not access_token or not refresh_token:
-            return None
-        return {
-            "access_token": access_token,
-            "refresh_token": refresh_token,
-            "last_refresh": payload.get("last_refresh"),
-            "source": source,
-            "path": path,
-            "client_id": client_id,
-            "auth_owner": auth_owner,
-            "imported_from": imported_from,
-        }
     tokens = payload.get("tokens")
     if not isinstance(tokens, dict):
         return None
@@ -641,18 +623,9 @@ def resolve_codex_runtime_credentials(
                 access_token = payload["access_token"]
                 refresh_token = payload["refresh_token"]
             if refresh_if_expiring and _codex_access_token_is_expiring(access_token, refresh_skew_seconds):
-                if external_path is not None:
-                    payload = _sync_external_codex_auth(
-                        external_path,
-                        ov_auth_path,
-                        fallback_payload=payload,
-                    )
-                    access_token = payload["access_token"]
-                    refresh_token = payload["refresh_token"]
-                if _codex_access_token_is_expiring(access_token, refresh_skew_seconds):
-                    raise CodexAuthError(
-                        "Externally managed Codex auth is expiring. Refresh it via Codex CLI or re-run openviking-server init."
-                    )
+                raise CodexAuthError(
+                    "Externally managed Codex auth is expiring. Refresh it via Codex CLI or re-run openviking-server init."
+                )
             return {
                 "provider": "openai-codex",
                 "api_key": access_token,

@@ -1,6 +1,22 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+"""
+Codex VLM Backend Integration
+
+This module implements the integration with the Codex provider for Vision-Language Models (VLM).
+Unlike standard OpenAI API billing endpoints which use the Chat Completions API, Codex's 
+subscription-based endpoints process multimodal (vision/VLM) requests primarily through 
+the auxiliary Responses API (`client.responses`).
+
+The complexity in this file arises from the need to shim/adapt standard Chat Completions 
+requests (used by OpenViking) into Responses API requests. This involves:
+1. Converting `text` and `image_url` parts into `input_text` and `input_image`.
+2. Adapting tool calls and schemas.
+3. Translating the `client.responses.stream` event stream back into a format 
+   compatible with standard Chat Completion responses.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -17,6 +33,13 @@ from .openai_vlm import OpenAIVLM, _build_openai_client_kwargs
 
 
 def _convert_content_for_responses(content: Any) -> Any:
+    """
+    Converts standard chat completion content (like `text` and `image_url`) into 
+    the format expected by the Responses API (`input_text` and `input_image`).
+    
+    The Responses API, which the Codex subscription endpoint uses for multimodal inputs,
+    requires a different payload structure compared to standard OpenAI vision requests.
+    """
     if isinstance(content, str):
         return content
     if not isinstance(content, list):
@@ -78,6 +101,11 @@ def _item_get(obj: Any, key: str, default: Any = None) -> Any:
 
 
 def _build_chat_completion_like_response(final_response: Any, model: str) -> Any:
+    """
+    Translates the final response object from the Responses API back into a
+    structure mimicking a standard OpenAI ChatCompletion object. This is crucial
+    for compatibility with OpenViking's broader VLM logic.
+    """
     text_parts: List[str] = []
     tool_calls: List[Any] = []
     for item in getattr(final_response, "output", []) or []:
@@ -148,6 +176,14 @@ async def _response_to_async_stream_chunks(response: Any):
 
 
 class _CodexCompletionsAdapter:
+    """
+    An adapter that mimics the standard `client.chat.completions` interface but internally
+    routes requests to the `client.responses.stream` endpoint.
+    
+    This is necessary because the Codex subscription endpoint for VLM operations primarily
+    functions via the Responses API, which utilizes streaming and a slightly different 
+    payload/event schema compared to the standard OpenAI Chat Completion API.
+    """
     def __init__(self, client_factory: Callable[[], Any], model: str):
         self._client_factory = client_factory
         self._model = model
@@ -202,7 +238,7 @@ class _CodexCompletionsAdapter:
                     has_function_calls = True
             final_response = stream.get_final_response()
         output = getattr(final_response, "output", None)
-        if isinstance(output, list) and not output:
+        if not output:
             if collected_output_items:
                 final_response.output = list(collected_output_items)
             elif collected_text_deltas and not has_function_calls:

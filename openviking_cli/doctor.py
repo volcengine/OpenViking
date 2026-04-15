@@ -196,6 +196,10 @@ def check_vlm() -> tuple[bool, str, Optional[str]]:
         return False, "No VLM provider configured", "Add vlm section to ov.conf"
 
     if provider in {"codex", "openai-codex"}:
+        api_key = vlm._get_effective_api_key()
+        if api_key and not api_key.startswith("{"):
+            return True, f"openai-codex/{model} (explicit api_key)", None
+
         from openviking.models.vlm.backends.codex_auth import (
             get_codex_auth_status,
             resolve_codex_runtime_credentials,

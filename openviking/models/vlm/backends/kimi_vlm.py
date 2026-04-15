@@ -1,6 +1,23 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Kimi Coding VLM backend."""
+"""
+Kimi Coding VLM Backend Integration
+
+This module implements the integration with the Kimi Coding subscription endpoint 
+(`api.kimi.com/coding`). 
+
+Unlike Moonshot's public developer API (`api.moonshot.ai`) which is natively 
+OpenAI-compatible, the Kimi Coding endpoint acts as a drop-in replacement for 
+Anthropic's Claude. It strictly expects Anthropic-style HTTP headers, message schemas, 
+and XML-based tool use.
+
+The complexity in this file arises from the need to adapt OpenViking's internal 
+OpenAI-style architecture to this Anthropic-style endpoint. This involves:
+1. Client Identification: Providing specific User-Agent headers required by the endpoint.
+2. Payload Translation: Converting standard OpenAI messages and tools into Anthropic's schema.
+3. Custom XML Parsing: Extracting tool calls from raw text embedded with custom tags 
+   (e.g., `<|tool_call_begin|>`) instead of standard JSON arrays.
+"""
 
 from __future__ import annotations
 
