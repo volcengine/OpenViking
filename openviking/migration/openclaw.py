@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Protocol, Sequence
 
 from openviking_cli.exceptions import NotFoundError
 
@@ -65,6 +65,53 @@ class OpenClawTranscriptSession:
     label: str = ""
     updated_at: str = ""
     channel: str = ""
+
+
+class OpenClawMigrationClient(Protocol):
+    """Synchronous client surface required by the OpenClaw migration helper."""
+
+    def stat(self, uri: str) -> dict[str, Any]:
+        ...
+
+    def import_memory(
+        self,
+        uri: str,
+        content: str,
+        *,
+        mode: str = "replace",
+        wait: bool = True,
+        timeout: float | None = None,
+        telemetry: bool = False,
+    ) -> dict[str, Any]:
+        ...
+
+    def session_exists(self, session_id: str) -> bool:
+        ...
+
+    def get_session(self, session_id: str, auto_create: bool = True) -> dict[str, Any]:
+        ...
+
+    def delete_session(self, session_id: str) -> Any:
+        ...
+
+    def create_session(self, session_id: str) -> Any:
+        ...
+
+    def add_message(
+        self,
+        session_id: str,
+        role: str,
+        *,
+        content: str,
+        created_at: str | None = None,
+    ) -> Any:
+        ...
+
+    def commit_session(self, session_id: str, *, telemetry: bool = False) -> dict[str, Any]:
+        ...
+
+    def get_task(self, task_id: str) -> dict[str, Any]:
+        ...
 
 
 def _sanitize_segment(value: str, *, fallback: str) -> str:
@@ -329,7 +376,12 @@ def parse_openclaw_transcript(path: str | Path) -> list[OpenClawTranscriptMessag
     return messages
 
 
-def _call_sync_client_method(client: Any, method_name: str, *args: Any, **kwargs: Any) -> Any:
+def _call_sync_client_method(
+    client: OpenClawMigrationClient,
+    method_name: str,
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
     """Call a sync client method and fail fast on async clients."""
     method = getattr(client, method_name)
     result = method(*args, **kwargs)
@@ -344,7 +396,7 @@ def _call_sync_client_method(client: Any, method_name: str, *args: Any, **kwargs
     return result
 
 
-def _uri_exists(client: Any, uri: str) -> bool:
+def _uri_exists(client: OpenClawMigrationClient, uri: str) -> bool:
     try:
         _call_sync_client_method(client, "stat", uri)
     except NotFoundError:
@@ -352,7 +404,7 @@ def _uri_exists(client: Any, uri: str) -> bool:
     return True
 
 
-def _session_exists(client: Any, session_id: str) -> bool:
+def _session_exists(client: OpenClawMigrationClient, session_id: str) -> bool:
     if hasattr(client, "session_exists"):
         return bool(_call_sync_client_method(client, "session_exists", session_id))
     try:
@@ -372,7 +424,7 @@ def _stable_target_session_id(agent_id: str, session_id: str) -> str:
 
 
 def _wait_for_task(
-    client: Any,
+    client: OpenClawMigrationClient,
     task_id: str,
     *,
     timeout: float,
@@ -409,7 +461,7 @@ def _summarize_records(records: Iterable[dict[str, Any]]) -> dict[str, int]:
 
 
 def migrate_openclaw(
-    client: Any,
+    client: OpenClawMigrationClient,
     openclaw_dir: str | Path,
     *,
     mode: str = "memory",
@@ -425,6 +477,11 @@ def migrate_openclaw(
 
     Returns a structured summary containing per-item records for both import
     paths. The caller can print or persist the records as needed.
+
+    The helper expects a synchronous OpenViking client such as
+    ``SyncOpenViking`` or ``SyncHTTPClient``. If an async client is passed,
+    the first awaited method is rejected with ``TypeError`` instead of being
+    silently ignored.
     """
 
     if mode not in {"memory", "transcript", "all"}:

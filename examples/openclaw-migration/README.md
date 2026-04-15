@@ -8,6 +8,9 @@ This tool imports existing OpenClaw data into OpenViking through two paths:
 
 By default it reads from `~/.openclaw` and connects to OpenViking over HTTP using the same config as `ovcli.conf`. You can also point it at an embedded local data path with `--ov-path`.
 
+The migration entrypoint is synchronous. Use `SyncHTTPClient` or `SyncOpenViking`;
+async OpenViking clients are intentionally rejected to avoid silent coroutine misuse.
+
 ## Examples
 
 ```bash
