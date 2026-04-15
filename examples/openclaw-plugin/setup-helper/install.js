@@ -1260,7 +1260,7 @@ function getOpenClawConfigPath() {
   const cliPath = detectOpenClawConfigPathFromCli();
   if (cliPath) return cliPath;
 
-  const candidates = [join(OPENCLAW_DIR, "openclaw.json5"), join(OPENCLAW_DIR, "openclaw.json")];
+  const candidates = [join(OPENCLAW_DIR, "openclaw.json")];
   for (const candidate of candidates) {
     if (existsSync(candidate)) return candidate;
   }
