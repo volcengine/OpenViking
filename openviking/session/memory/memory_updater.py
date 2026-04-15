@@ -239,6 +239,7 @@ class MemoryUpdater:
             self._viking_fs = get_viking_fs()
         return self._viking_fs
 
+    @tracer()
     async def apply_operations(
         self,
         operations: Any,
