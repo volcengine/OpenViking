@@ -7,6 +7,7 @@ Implements directory-based hierarchical retrieval with recursive search
 and rerank-based relevance scoring.
 """
 
+import asyncio
 import heapq
 import logging
 import math
@@ -129,7 +130,11 @@ class HierarchicalRetriever:
         query_vector = None
         sparse_query_vector = None
         if self.embedder:
-            result: EmbedResult = await embed_compat(self.embedder, query.query, is_query=True)
+            embed_async = getattr(self.embedder, "embed_async", None)
+            if callable(embed_async):
+                result: EmbedResult = await embed_compat(self.embedder, query.query, is_query=True)
+            else:
+                result = await asyncio.to_thread(self.embedder.embed, query.query, True)
             query_vector = result.dense_vector
             sparse_query_vector = result.sparse_vector
 
@@ -168,7 +173,7 @@ class HierarchicalRetriever:
                 )
 
         # Step 3: Merge starting points
-        starting_points = self._merge_starting_points(
+        starting_points = await self._merge_starting_points(
             query.query,
             root_uris,
             global_results,
@@ -178,7 +183,7 @@ class HierarchicalRetriever:
         # 从 global_results 中提取 level 2 的文件作为初始候选者
         initial_candidates = [r for r in global_results if r.get("level", 2) == 2]
 
-        initial_candidates = self._prepare_initial_candidates(
+        initial_candidates = await self._prepare_initial_candidates(
             query.query,
             initial_candidates,
             mode=mode,
@@ -247,7 +252,7 @@ class HierarchicalRetriever:
         telemetry.count("vector.scanned", len(results))
         return results
 
-    def _rerank_scores(
+    async def _rerank_scores(
         self,
         query: str,
         documents: List[str],
@@ -258,7 +263,7 @@ class HierarchicalRetriever:
             return fallback_scores
 
         try:
-            scores = self._rerank_client.rerank_batch(query, documents)
+            scores = await asyncio.to_thread(self._rerank_client.rerank_batch, query, documents)
         except Exception as e:
             logger.warning(
                 "[HierarchicalRetriever] Rerank failed, fallback to vector scores: %s", e
@@ -279,7 +284,7 @@ class HierarchicalRetriever:
                 normalized_scores.append(fallback)
         return normalized_scores
 
-    def _merge_starting_points(
+    async def _merge_starting_points(
         self,
         query: str,
         root_uris: List[str],
@@ -301,7 +306,7 @@ class HierarchicalRetriever:
         ]
         if self._rerank_client and mode == RetrieverMode.THINKING:
             docs = [str(r.get("abstract", "")) for r in global_results]
-            query_scores = self._rerank_scores(query, docs, default_scores)
+            query_scores = await self._rerank_scores(query, docs, default_scores)
             for i, r in enumerate(global_results):
                 # 只添加非 level 2 的项目到起始点
                 if r.get("level", 2) != 2:
@@ -322,7 +327,7 @@ class HierarchicalRetriever:
 
         return points
 
-    def _prepare_initial_candidates(
+    async def _prepare_initial_candidates(
         self,
         query: str,
         global_results: List[Dict[str, Any]],
@@ -339,7 +344,7 @@ class HierarchicalRetriever:
         ]
         if self._rerank_client and mode == RetrieverMode.THINKING:
             docs = [str(r.get("abstract", "")) for r in initial_candidates]
-            query_scores = self._rerank_scores(query, docs, default_scores)
+            query_scores = await self._rerank_scores(query, docs, default_scores)
         else:
             query_scores = default_scores
 
@@ -442,7 +447,7 @@ class HierarchicalRetriever:
             ]
             if self._rerank_client and mode == RetrieverMode.THINKING:
                 documents = [str(r.get("abstract", "")) for r in results]
-                query_scores = self._rerank_scores(query, documents, query_scores)
+                query_scores = await self._rerank_scores(query, documents, query_scores)
 
             for r, score in zip(results, query_scores, strict=True):
                 uri = r.get("uri", "")

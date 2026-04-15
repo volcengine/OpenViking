@@ -326,7 +326,8 @@ class _SingleAccountBackend:
                     f"[_SingleAccountBackend.query] Applied account filter, final filter={filter}"
                 )
 
-            return self._adapter.query(
+            return await asyncio.to_thread(
+                self._adapter.query,
                 query_vector=query_vector,
                 sparse_query_vector=sparse_query_vector,
                 filter=filter,
