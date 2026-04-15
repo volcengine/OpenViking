@@ -1314,7 +1314,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           ) {
             tokensAfter = ctx.estimatedTokens;
           }
-          // 打印 compact 后重新写入 session 的完整内容
+          // 打印 compact 后重新写入 session 的非内容统计；正文预览只在 debug 日志下输出。
           logger.info(
             `openviking: compact restored session content for ${OVSessionId}: ` +
               `messages=${ctx.messages?.length ?? 0}, ` +
