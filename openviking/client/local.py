@@ -511,27 +511,17 @@ class LocalClient(BaseClient):
         """Check service health."""
         return True  # Local service is always healthy if initialized
 
-    def session(self, session_id: Optional[str] = None, must_exist: bool = False) -> Any:
+    def session(self, session_id: Optional[str] = None) -> Any:
         """Create a new session or load an existing one.
 
         Args:
             session_id: Session ID, creates a new session if None
-            must_exist: If True and session_id is provided, raises NotFoundError
-                        when the session does not exist.
-                        If session_id is None, must_exist is ignored.
-
         Returns:
             Session object
-
-        Raises:
-            NotFoundError: If must_exist=True and the session does not exist.
         """
         session = self._service.sessions.session(self._ctx, session_id)
-        if must_exist and session_id:
-            if not run_async(session.exists()):
-                from openviking_cli.exceptions import NotFoundError
-
-                raise NotFoundError(session_id, "session")
+        if not run_async(session.exists()):
+            run_async(session.ensure_exists())
         return session
 
     async def session_exists(self, session_id: str) -> bool:
