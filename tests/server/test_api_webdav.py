@@ -89,6 +89,49 @@ async def test_webdav_put_create_get_and_replace_text_file(client: httpx.AsyncCl
     assert get_resp.text == "# Notes\n\nupdated"
 
 
+async def test_webdav_put_replace_reuses_direct_write_path(
+    client: httpx.AsyncClient,
+    service,
+    monkeypatch,
+):
+    assert (await client.request("MKCOL", "/webdav/resources/replace-space")).status_code == 201
+    assert (
+        await client.request(
+            "PUT",
+            "/webdav/resources/replace-space/notes.md",
+            content="first version".encode("utf-8"),
+        )
+    ).status_code == 201
+
+    calls: list[tuple[str, object]] = []
+
+    async def _unexpected_fs_write(*args, **kwargs):
+        raise AssertionError("WebDAV replace should not use service.fs.write")
+
+    async def _tracked_write_file(uri, content, ctx=None):
+        calls.append(("write_file", uri, content))
+
+    async def _tracked_summarize(resource_uris, ctx=None, **kwargs):
+        calls.append(("summarize", tuple(resource_uris)))
+        return {"status": "success"}
+
+    monkeypatch.setattr(service.fs, "write", _unexpected_fs_write)
+    monkeypatch.setattr(service.viking_fs, "write_file", _tracked_write_file)
+    monkeypatch.setattr(service.resources, "summarize", _tracked_summarize)
+
+    replace_resp = await client.request(
+        "PUT",
+        "/webdav/resources/replace-space/notes.md",
+        content="second version".encode("utf-8"),
+    )
+
+    assert replace_resp.status_code == 204
+    assert calls == [
+        ("write_file", "viking://resources/replace-space/notes.md", "second version"),
+        ("summarize", ("viking://resources/replace-space/notes.md",)),
+    ]
+
+
 async def test_webdav_put_rejects_non_utf8_content(client: httpx.AsyncClient):
     assert (await client.request("MKCOL", "/webdav/resources/binary-space")).status_code == 201
 

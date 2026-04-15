@@ -178,6 +178,12 @@ def _destination_path(destination: str) -> str:
     return _normalized_resource_path(normalized[len(prefix) + 1 :])
 
 
+async def _write_text_resource(service, uri: str, content: str, ctx: RequestContext) -> None:
+    """Persist UTF-8 text content and refresh derived summaries before returning."""
+    await service.viking_fs.write_file(uri, content, ctx=ctx)
+    await service.resources.summarize([uri], ctx=ctx)
+
+
 async def _safe_stat(service, uri: str, ctx: RequestContext) -> Optional[dict[str, Any]]:
     try:
         return await service.fs.stat(uri, ctx=ctx)
@@ -330,11 +336,10 @@ async def put(
     if stat is not None:
         if stat.get("isDir", False):
             return _error(405, "PUT is only supported for files")
-        await service.fs.write(uri=uri, content=content, ctx=_ctx, mode="replace", wait=False)
+        await _write_text_resource(service, uri, content, _ctx)
         return FastAPIResponse(status_code=204, headers=_webdav_headers())
 
-    await service.viking_fs.write_file(uri, content, ctx=_ctx)
-    await service.resources.summarize([uri], ctx=_ctx)
+    await _write_text_resource(service, uri, content, _ctx)
     headers = _webdav_headers()
     headers["Location"] = _href_for_path(request, normalized_path, is_dir=False)
     return FastAPIResponse(status_code=201, headers=headers)
