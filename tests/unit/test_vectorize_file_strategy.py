@@ -31,9 +31,17 @@ class DummyFS:
     async def read_file(self, _path, ctx=None):
         return self.content
 
+    async def exists(self, _path, ctx=None):
+        return False
+
+    async def ls(self, _uri, ctx=None):
+        return []
+
 
 class DummyUser:
     account_id = "default"
+    user_id = "default"
+    agent_id = "default"
 
     def user_space_name(self):
         return "user/default"
@@ -46,6 +54,7 @@ class DummyReq:
     def __init__(self):
         self.user = DummyUser()
         self.account_id = "default"
+        self.namespace_policy = types.SimpleNamespace(isolate_user_scope_by_agent=False)
 
 
 @pytest.mark.asyncio
@@ -107,3 +116,29 @@ async def test_vectorize_file_truncates_content_when_content_only(monkeypatch):
     text = queue.items[0].get_vectorization_text()
     assert text.startswith("A" * 1000)
     assert text.endswith("...(truncated for embedding)")
+
+
+@pytest.mark.asyncio
+async def test_index_resource_skips_session_namespace(monkeypatch):
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("ignored"))
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="summary_first", max_input_chars=1000)
+        ),
+    )
+    monkeypatch.setattr(
+        embedding_utils.EmbeddingMsgConverter,
+        "from_context",
+        lambda context: context,
+    )
+
+    await embedding_utils.index_resource(
+        uri="viking://session/default/sess_001/history/archive_001",
+        ctx=DummyReq(),
+    )
+
+    assert queue.items == []

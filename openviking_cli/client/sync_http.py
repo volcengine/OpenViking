@@ -136,6 +136,21 @@ class SyncHTTPClient:
         """Query background task status."""
         return run_async(self._async_client.get_task(task_id))
 
+    def reindex(
+        self,
+        uri: str,
+        mode: str = "vectors_only",
+        wait: bool = True,
+    ) -> Dict[str, Any]:
+        """Trigger reindex for a URI."""
+        return run_async(
+            self._async_client.reindex(
+                uri=uri,
+                mode=mode,
+                wait=wait,
+            )
+        )
+
     def commit_session(
         self, session_id: str, telemetry: TelemetryRequest = False
     ) -> Dict[str, Any]:

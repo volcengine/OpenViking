@@ -20,6 +20,7 @@ _ROOT_IMPLICIT_TENANT_ALLOWED_PATHS = {
     "/api/v1/system/status",
     "/api/v1/system/wait",
     "/api/v1/debug/health",
+    "/api/v1/content/reindex",
 }
 _ROOT_IMPLICIT_TENANT_ALLOWED_PREFIXES = (
     "/api/v1/admin",

@@ -406,6 +406,10 @@ async def index_resource(
     (``/memories/``) are indexed as ``"memory"`` rather than the default
     ``"resource"``.
     """
+    if uri.startswith("viking://session/") or uri == "viking://session":
+        logger.info("Skipping indexing for session namespace: %s", uri)
+        return
+
     viking_fs = get_viking_fs()
     context_type = get_context_type_for_uri(uri)
 

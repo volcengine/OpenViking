@@ -374,12 +374,12 @@ impl HttpClient {
     pub async fn reindex(
         &self,
         uri: &str,
-        regenerate: bool,
+        mode: &str,
         wait: bool,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "uri": uri,
-            "regenerate": regenerate,
+            "mode": mode,
             "wait": wait,
         });
         self.post("/api/v1/content/reindex", &body).await

@@ -451,17 +451,14 @@ pub async fn handle_write(
     .await
 }
 
-pub async fn handle_reindex(uri: String, regenerate: bool, wait: bool, ctx: CliContext) -> Result<()> {
+pub async fn handle_reindex(
+    uri: String,
+    mode: String,
+    wait: bool,
+    ctx: CliContext,
+) -> Result<()> {
     let client = ctx.get_client();
-    commands::content::reindex(
-        &client,
-        &uri,
-        regenerate,
-        wait,
-        ctx.output_format,
-        ctx.compact,
-    )
-    .await
+    commands::content::reindex(&client, &uri, &mode, wait, ctx.output_format, ctx.compact).await
 }
 
 pub async fn handle_get(uri: String, local_path: String, ctx: CliContext) -> Result<()> {
