@@ -40,6 +40,7 @@ import pytest
 from openviking.client import LocalClient
 from openviking.telemetry import tracer
 from openviking_cli.exceptions import NotFoundError
+from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import OpenVikingConfigSingleton, get_openviking_config
 
 logger = logging.getLogger(__name__)
@@ -183,7 +184,7 @@ def tmp_data_dir():
     # d = tempfile.mkdtemp(prefix="ov_agent_memory_test_")
     d = Path("./demo/agent")
     yield Path(d)
-    # shutil.rmtree(d, ignore_errors=True)
+    shutil.rmtree(d, ignore_errors=True)
 
 
 @pytest.fixture()
@@ -272,6 +273,49 @@ class TestAgentMemoryE2E:
 
         finally:
             await client.close()
+
+    async def test_agent_memory_isolated_by_user_and_agent(
+        self, tmp_data_dir: Path, agent_memory_config_check
+    ):
+        os.environ["OPENVIKING_DATA_DIR"] = str(tmp_data_dir)
+        OpenVikingConfigSingleton._instance = None
+        config = get_openviking_config()
+        if config.memory.agent_scope_mode != "user+agent":
+            pytest.skip("memory.agent_scope_mode != user+agent — skipping isolation test")
+
+        alice_user = UserIdentifier("acct", "alice", "travelbot")
+        bob_user = UserIdentifier("acct", "bob", "travelbot")
+        alice_space = alice_user.agent_space_name()
+        bob_space = bob_user.agent_space_name()
+        assert alice_space != bob_space
+
+        alice_traj_dir = f"viking://agent/{alice_space}/memories/trajectories"
+        alice_exp_dir = f"viking://agent/{alice_space}/memories/experiences"
+        bob_traj_dir = f"viking://agent/{bob_space}/memories/trajectories"
+        bob_exp_dir = f"viking://agent/{bob_space}/memories/experiences"
+
+        alice_client = LocalClient(path=str(tmp_data_dir), user=alice_user)
+        await alice_client.initialize()
+        try:
+            await _run_conversation(alice_client, CONV_A_FLIGHT_DUPLICATE)
+            alice_traj = await _list_non_overview_entries(alice_client, alice_traj_dir)
+            alice_exp = await _list_non_overview_entries(alice_client, alice_exp_dir)
+        finally:
+            await alice_client.close()
+
+        bob_client = LocalClient(path=str(tmp_data_dir), user=bob_user)
+        await bob_client.initialize()
+        try:
+            await _run_conversation(bob_client, CONV_A_FLIGHT_DUPLICATE)
+            bob_traj = await _list_non_overview_entries(bob_client, bob_traj_dir)
+            bob_exp = await _list_non_overview_entries(bob_client, bob_exp_dir)
+        finally:
+            await bob_client.close()
+
+        assert alice_traj, "alice should have trajectory memories"
+        assert alice_exp, "alice should have experience memories"
+        assert bob_traj, "bob should have trajectory memories"
+        assert bob_exp, "bob should have experience memories"
 
     async def test_no_agent_only_schemas_in_user_memory(self, tmp_data_dir: Path):
         """
