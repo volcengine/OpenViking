@@ -7,6 +7,8 @@ INPUT_FILE="data/vaka_locomo.csv"
 OUTPUT_FILE="$SCRIPT_DIR/result/vaka_qa_result.csv"
 OPENVIKING_URL="http://localhost:1933"
 OPENVIKING_ACCOUNT="default"
+OPENVIKING_USER_ID="default"
+OPENVIKING_AGENT_ID="default"
 MEMORY_SESSIONS="1-70"
 EVAL_SESSIONS="71-"
 PARALLEL=10
@@ -31,6 +33,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --account)
             OPENVIKING_ACCOUNT="$2"
+            shift 2
+            ;;
+        --user-id)
+            OPENVIKING_USER_ID="$2"
+            shift 2
+            ;;
+        --agent-id)
+            OPENVIKING_AGENT_ID="$2"
             shift 2
             ;;
         --memory-sessions)
@@ -63,7 +73,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             echo "Unknown argument: $1"
-            echo "Usage: $0 [--input CSV] [--output CSV] [--openviking-url URL] [--account ACCOUNT] [--memory-sessions RANGE] [--eval-sessions RANGE] [--parallel N] [--python PYTHON_BIN] [--skip-import] [--skip-prepare] [--skip-judge]"
+            echo "Usage: $0 [--input CSV] [--output CSV] [--openviking-url URL] [--account ACCOUNT] [--user-id USER] [--agent-id AGENT] [--memory-sessions RANGE] [--eval-sessions RANGE] [--parallel N] [--python PYTHON_BIN] [--skip-import] [--skip-prepare] [--skip-judge]"
             exit 1
             ;;
     esac
@@ -79,6 +89,8 @@ if [[ "$SKIP_IMPORT" != "true" ]]; then
         --input "$INPUT_FILE" \
         --openviking-url "$OPENVIKING_URL" \
         --account "$OPENVIKING_ACCOUNT" \
+        --user-id "$OPENVIKING_USER_ID" \
+        --agent-id "$OPENVIKING_AGENT_ID" \
         --memory-sessions "$MEMORY_SESSIONS"
 else
     echo "[1/4] Skipping import..."

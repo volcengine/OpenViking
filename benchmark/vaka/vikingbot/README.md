@@ -34,7 +34,15 @@ python3 benchmark/vaka/vikingbot/import_to_ov.py
 
 `import_to_ov.py` imports each memory row as a two-message conversation:
 `query` is the user message and `deepsearch_answer` is the assistant message.
+All imported memory uses the same OpenViking identity by default:
+`account=default`, `user_id=default`, and `agent_id=default`.
 Evaluation sessions 71+ are not imported as memory by default.
+
+Use a custom single user/agent when needed:
+
+```bash
+python3 benchmark/vaka/vikingbot/import_to_ov.py --user-id vaka --agent-id vaka
+```
 
 Prepare the judge input CSV:
 
