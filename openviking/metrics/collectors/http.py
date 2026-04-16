@@ -59,21 +59,41 @@ class HTTPCollector(EventMetricCollector):
         - http.inflight: route, value, optional account_id
         """
         if event_name == "http.request":
+            # Be defensive: router/middleware bugs should never crash metrics.
+            required_keys = ("method", "route", "status", "duration_seconds")
+            if not all(key in payload for key in required_keys):
+                return
+            try:
+                duration_seconds = float(payload["duration_seconds"])
+            except (TypeError, ValueError):
+                return
             self.record_request(
                 registry,
                 method=str(payload["method"]),
                 route=str(payload["route"]),
                 status=str(payload["status"]),
-                duration_seconds=float(payload["duration_seconds"]),
+                duration_seconds=duration_seconds,
                 account_id=payload.get("account_id"),
             )
             return
-        self.record_inflight(
-            registry,
-            route=str(payload["route"]),
-            value=float(payload["value"]),
-            account_id=payload.get("account_id"),
-        )
+        if event_name == "http.inflight":
+            if "route" not in payload or "value" not in payload:
+                return
+            try:
+                value = float(payload["value"])
+            except (TypeError, ValueError):
+                return
+            self.record_inflight(
+                registry,
+                route=str(payload["route"]),
+                value=value,
+                account_id=payload.get("account_id"),
+            )
+            return
+
+        # Unknown events are ignored; `EventMetricCollector.receive()` already gates supported
+        # events, but keep this explicit to avoid future regressions.
+        return
 
     def record_request(
         self,

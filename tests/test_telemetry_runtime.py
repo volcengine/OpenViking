@@ -349,17 +349,19 @@ async def test_embedding_handler_binds_registered_operation_telemetry(monkeypatc
 
     handler = TextEmbeddingHandler(_DummyVikingDB())
     payload = {
-        "data": json.dumps({
-            "id": "msg-1",
-            "message": "hello",
-            "telemetry_id": telemetry.telemetry_id,
-            "context_data": {
-                "id": "id-1",
-                "uri": "viking://resources/sample",
-                "account_id": "default",
-                "abstract": "sample",
-            },
-        })
+        "data": json.dumps(
+            {
+                "id": "msg-1",
+                "message": "hello",
+                "telemetry_id": telemetry.telemetry_id,
+                "context_data": {
+                    "id": "id-1",
+                    "uri": "viking://resources/sample",
+                    "account_id": "default",
+                    "abstract": "sample",
+                },
+            }
+        )
     }
 
     try:

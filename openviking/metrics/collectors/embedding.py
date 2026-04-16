@@ -64,11 +64,13 @@ class EmbeddingCollector(EventMetricCollector):
     # e.g.: openviking_embedding_errors_total
     ERRORS_TOTAL: ClassVar[str] = MetricCollector.metric_name(DOMAIN, "errors", unit="total")
 
-    SUPPORTED_EVENTS: ClassVar[frozenset[str]] = frozenset({
-        "embedding.call",
-        "embedding.success",
-        "embedding.error",
-    })
+    SUPPORTED_EVENTS: ClassVar[frozenset[str]] = frozenset(
+        {
+            "embedding.call",
+            "embedding.success",
+            "embedding.error",
+        }
+    )
 
     def collect(self, registry=None) -> None:
         """Implement the unified collector interface as a no-op for this event-driven collector."""

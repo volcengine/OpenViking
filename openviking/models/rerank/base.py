@@ -6,9 +6,11 @@ RerankBase: Base class for all rerank clients.
 Provides common token usage tracking functionality.
 """
 
+import logging
 from typing import Any, Dict
 
 _token_tracker_instance = None
+logger = logging.getLogger(__name__)
 
 
 def _get_token_tracker():
@@ -79,8 +81,16 @@ class RerankBase:
                 int(completion_tokens),
                 stage="rerank",
             )
-        except Exception:
-            pass
+        except Exception as e:
+            # Telemetry must never break rerank execution.
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "rerank.update_token_usage telemetry emit failed provider=%s model_name=%s err=%s: %s",
+                    provider,
+                    model_name,
+                    type(e).__name__,
+                    e,
+                )
         try:
             from openviking.metrics.account_context import get_metric_account_context
             from openviking.metrics.datasources import RerankEventDataSource
@@ -93,9 +103,16 @@ class RerankBase:
                 completion_tokens=int(completion_tokens),
                 account_id=get_metric_account_context().http_account_id,
             )
-        except Exception:
+        except Exception as e:
             # Metrics must never break rerank execution.
-            pass
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "rerank.update_token_usage metrics emit failed provider=%s model_name=%s err=%s: %s",
+                    provider,
+                    model_name,
+                    type(e).__name__,
+                    e,
+                )
 
     def _extract_and_update_token_usage(
         self,

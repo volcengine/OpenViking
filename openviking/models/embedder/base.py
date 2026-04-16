@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 import asyncio
+import logging
 import random
 import time
 import weakref
@@ -13,6 +14,7 @@ from openviking.telemetry import get_current_telemetry
 from openviking.utils.model_retry import retry_async, retry_sync
 
 T = TypeVar("T")
+logger = logging.getLogger(__name__)
 
 
 _token_tracker_instance = None
@@ -337,9 +339,16 @@ class EmbedderBase(ABC):
                 completion_tokens=int(completion_tokens),
                 account_id=get_metric_account_context().http_account_id,
             )
-        except Exception:
+        except Exception as e:
             # Metrics must never break embedding execution.
-            pass
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "embedding.update_token_usage metrics emit failed provider=%s model_name=%s err=%s: %s",
+                    provider,
+                    model_name,
+                    type(e).__name__,
+                    e,
+                )
 
     def get_token_usage(self) -> Dict[str, Any]:
         """Get token usage
