@@ -86,9 +86,13 @@ async def resolve_identity(
         configured_root_api_key = _configured_root_api_key(request)
         if configured_root_api_key:
             if not api_key:
-                raise UnauthenticatedError("Missing API Key")
+                raise UnauthenticatedError(
+                    "Missing API Key in trusted mode with Root API Key enabled."
+                )
             if not hmac.compare_digest(api_key, configured_root_api_key):
-                raise UnauthenticatedError("Invalid API Key")
+                raise UnauthenticatedError(
+                    "Invalid API Key in trusted mode with Root API Key enabled."
+                )
         if not x_openviking_account or not x_openviking_user:
             raise InvalidArgumentError(
                 "Trusted mode requests must include X-OpenViking-Account and X-OpenViking-User."
@@ -109,7 +113,7 @@ async def resolve_identity(
         )
 
     if not api_key:
-        raise UnauthenticatedError("Missing API Key")
+        raise UnauthenticatedError("Missing API Key when resolving identity.")
 
     identity = api_key_manager.resolve(api_key)
     identity.agent_id = x_openviking_agent or "default"
