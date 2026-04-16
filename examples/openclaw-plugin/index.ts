@@ -272,14 +272,23 @@ const contextEnginePlugin = {
   configSchema: memoryOpenVikingConfigSchema,
 
   register(api: OpenClawPluginApi) {
-    // Idempotency guard: when OpenClaw reloads the plugin with a different cacheKey,
-    // module-level state (localClientCache, localClientPendingPromises) persists from
-    // the previous load. Reset stale state so the second registration works cleanly.
-    // See: https://github.com/volcengine/OpenViking/issues/1210
+    // Idempotency on re-register: the lookup paths below already handle
+    // both found and not-found states for localClientCache (resolved
+    // client) and localClientPendingPromises (pending startup entry), so
+    // a second register() with the same or a different cacheKey reuses
+    // state correctly for the #1210 reload case.
+    //
+    // Do NOT clear these maps here. The first registration's clientPromise
+    // closure is bound to a specific pending-entry instance; clearing and
+    // letting the second register() install a fresh entry under the same
+    // cacheKey orphans the first closure — service startup resolves the
+    // replacement entry while the first registration's getClient() hangs.
+    // Clearing localClientCache has the same hazard post-startup: the
+    // second registration falls into the pending path even though the
+    // process is already running, so no new resolve() ever fires. See the
+    // review discussion on #1214.
     if (_registered) {
-      api.logger.info("openviking: plugin re-loaded, resetting stale state");
-      localClientCache.clear();
-      localClientPendingPromises.clear();
+      api.logger.info("openviking: plugin re-loaded (cacheKey-keyed state reused)");
     }
     _registered = true;
 
