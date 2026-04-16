@@ -31,7 +31,6 @@ from openviking.server.routers import (
     content_router,
     debug_router,
     filesystem_router,
-    maintenance_router,
     metrics_router,
     observer_router,
     pack_router,
@@ -412,7 +411,6 @@ def create_app(
     app.include_router(metrics_router)
     app.include_router(tasks_router)
     app.include_router(webdav_router)
-    app.include_router(maintenance_router)
     app.include_router(bot_router, prefix="/bot/v1")
 
     # MCP endpoint — serves 5 tools (search, read, store, forget, health)
