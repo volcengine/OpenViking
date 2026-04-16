@@ -775,7 +775,7 @@ sequenceDiagram
 | --- | --- |
 | `summary.operation` + `summary.status` | `openviking_operation_requests_total` |
 | `summary.duration_ms` | `openviking_operation_duration_seconds` |
-| `summary.tokens.total` | `openviking_operation_tokens_total{token_type="all"}` |
+| `summary.tokens.total` | 不直接落单独指标；通过对 `openviking_operation_tokens_total` 的原子分量在查询层聚合得到 |
 | `summary.tokens.llm.input` | `openviking_operation_tokens_total{token_type="llm_input"}` |
 | `summary.tokens.llm.output` | `openviking_operation_tokens_total{token_type="llm_output"}` |
 | `summary.tokens.embedding.total` | `openviking_operation_tokens_total{token_type="embedding"}` |
@@ -809,7 +809,7 @@ Openviking 指标体系采用如下兼容性策略:
 
 - 保持现有 retrieval / embedding / vlm / cache 指标名尽量不变；
 - `/metrics` 路由地址保持不变；
-- `telemetry.prometheus.enabled` 配置保持不变；
+- `server.observability.metrics.enabled` 配置保持不变；
 - `/api/v1/observer/*` 与 `/api/v1/stats/*` 行为保持不变。
 
 ## 6. 风险与缓解

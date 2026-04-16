@@ -28,7 +28,7 @@ from openviking.session.memory.utils import (
     validate_operations_uris,
 )
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
-from openviking.telemetry import tracer
+from openviking.telemetry import bind_telemetry_stage, tracer
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -152,8 +152,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
 {schema_str}
 ```
         """,
-            }
-        )
+        })
 
         await self._mark_cache_breakpoint(messages)
         # Pre-fetch context via provider
@@ -188,12 +187,10 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
             # If last iteration, add a message telling the model to return result directly
             if is_last_iteration:
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": "You have reached the maximum number of tool call iterations. Do not call any more tools - return your final result directly now.",
-                    }
-                )
+                messages.append({
+                    "role": "user",
+                    "content": "You have reached the maximum number of tool call iterations. Do not call any more tools - return your final result directly now.",
+                })
 
             # Call LLM with tools - model decides: tool calls OR final operations
             pretty_print_messages(messages)
@@ -285,13 +282,11 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 logger.warning(f"Tool call {tool_call.name} has no arguments, skipping")
                 continue
 
-            tools_used.append(
-                {
-                    "tool_name": tool_call.name,
-                    "params": tool_call.arguments,
-                    "result": result,
-                }
-            )
+            tools_used.append({
+                "tool_name": tool_call.name,
+                "params": tool_call.arguments,
+                "result": result,
+            })
 
             # Track read tool calls for refetch detection
             if tool_call.name == "read" and tool_call.arguments.get("uri"):
@@ -361,11 +356,12 @@ The final output of the model must strictly follow the JSON Schema format shown 
         if not self._disable_tools_for_iteration:
             tools = self._tool_schemas
             tool_choice = "auto"
-        response = await self.vlm.get_completion_async(
-            messages=messages,
-            tools=tools,
-            tool_choice=tool_choice,
-        )
+        with bind_telemetry_stage("memory_extract"):
+            response = await self.vlm.get_completion_async(
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+            )
         tracer.info(f"response={response}")
         # print(f'response={response}')
         # Log cache hit info
@@ -549,12 +545,10 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 logger.warning(f"Failed to refetch {uri}: {e}")
 
         # Add reminder message for the model
-        messages.append(
-            {
-                "role": "user",
-                "content": "Note: The files above were automatically read because they exist and you didn't read them before deciding to write. Please consider the existing content when making write decisions. You can now output updated operations.",
-            }
-        )
+        messages.append({
+            "role": "user",
+            "content": "Note: The files above were automatically read because they exist and you didn't read them before deciding to write. Please consider the existing content when making write decisions. You can now output updated operations.",
+        })
 
     async def _mark_cache_breakpoint(self, messages):
         # 支持 dict 消息和 object 消息

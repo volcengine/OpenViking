@@ -31,7 +31,7 @@ from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecutor
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.viking_fs import get_viking_fs
-from openviking.telemetry import bind_telemetry, resolve_telemetry
+from openviking.telemetry import bind_telemetry, bind_telemetry_stage, resolve_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.circuit_breaker import (
     CircuitBreaker,
@@ -903,7 +903,8 @@ class SemanticProcessor(DequeueHandlerBase):
                             },
                         )
                         async with llm_sem:
-                            summary = await vlm.get_completion_async(prompt)
+                            with bind_telemetry_stage("resource_summarize"):
+                                summary = await vlm.get_completion_async(prompt)
                         return {"name": file_name, "summary": summary.strip()}
                 if skeleton_text is None:
                     logger.info("AST unsupported language, fallback to LLM: %s", file_path)
@@ -916,7 +917,8 @@ class SemanticProcessor(DequeueHandlerBase):
                 {"file_name": file_name, "content": content, "output_language": output_language},
             )
             async with llm_sem:
-                summary = await vlm.get_completion_async(prompt)
+                with bind_telemetry_stage("resource_summarize"):
+                    summary = await vlm.get_completion_async(prompt)
             return {"name": file_name, "summary": summary.strip()}
 
         elif file_type == FILE_TYPE_DOCUMENTATION:
@@ -930,7 +932,8 @@ class SemanticProcessor(DequeueHandlerBase):
         )
 
         async with llm_sem:
-            summary = await vlm.get_completion_async(prompt)
+            with bind_telemetry_stage("resource_summarize"):
+                summary = await vlm.get_completion_async(prompt)
         return {"name": file_name, "summary": summary.strip()}
 
     async def _generate_single_file_summary(
@@ -1173,7 +1176,8 @@ class SemanticProcessor(DequeueHandlerBase):
                 },
             )
 
-            overview = await vlm.get_completion_async(prompt)
+            with bind_telemetry_stage("resource_summarize"):
+                overview = await vlm.get_completion_async(prompt)
 
             # Post-process: replace [number] with actual file name
             def replace_index(match):
@@ -1267,7 +1271,8 @@ class SemanticProcessor(DequeueHandlerBase):
         async def _run_batch(batch_idx: int, prompt: str, batch_index_map: Dict[int, str]) -> None:
             try:
                 async with llm_sem:
-                    partial = await vlm.get_completion_async(prompt)
+                    with bind_telemetry_stage("resource_summarize"):
+                        partial = await vlm.get_completion_async(prompt)
                 partial = re.sub(r"\[(\d+)\]", make_replacer(batch_index_map), partial)
                 partial_overviews[batch_idx] = partial.strip()
             except Exception as e:
@@ -1298,7 +1303,8 @@ class SemanticProcessor(DequeueHandlerBase):
                     "output_language": output_language,
                 },
             )
-            overview = await vlm.get_completion_async(prompt)
+            with bind_telemetry_stage("resource_summarize"):
+                overview = await vlm.get_completion_async(prompt)
             return overview.strip()
         except Exception as e:
             logger.error(

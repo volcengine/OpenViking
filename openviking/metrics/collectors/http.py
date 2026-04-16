@@ -25,10 +25,10 @@ from .base import EventMetricCollector
 @dataclass
 class HTTPCollector(EventMetricCollector):
     """
-    Translate HTTP lifecycle events into request counters, latency histograms, and inflight gauges.
+    Translate HTTP lifecycle events into request volume, latency, and inflight gauges.
 
-    The collector expects already-normalized route templates and status codes from the middleware
-    datasource, then applies account-dimension policy before writing registry series.
+    Events are emitted by `HttpRequestLifecycleDataSource` (and middleware call sites) and are
+    normalized to avoid framework-specific request objects leaking into the metrics layer.
     """
 
     DOMAIN: ClassVar[str] = "http"
@@ -47,15 +47,16 @@ class HTTPCollector(EventMetricCollector):
     SUPPORTED_EVENTS: ClassVar[frozenset[str]] = frozenset({"http.request", "http.inflight"})
 
     def collect(self, registry=None) -> None:
-        """Implement the unified collector interface as a no-op for this event-driven collector."""
+        """Implement the collector interface as a no-op because HTTP metrics are event-driven."""
         return None
 
     def receive_hook(self, event_name: str, payload: dict, registry) -> None:
         """
-        Translate one supported HTTP lifecycle event into the corresponding metric writes.
+        Dispatch one normalized HTTP event payload to the matching metric writers.
 
-        The hook assumes payload validation has already happened in the shared event-collector
-        entrypoint and only branches on the normalized event name.
+        Supported payloads:
+        - http.request: method, route, status, duration_seconds, optional account_id
+        - http.inflight: route, value, optional account_id
         """
         if event_name == "http.request":
             self.record_request(
@@ -64,20 +65,15 @@ class HTTPCollector(EventMetricCollector):
                 route=str(payload["route"]),
                 status=str(payload["status"]),
                 duration_seconds=float(payload["duration_seconds"]),
-                account_id=(
-                    None if payload.get("account_id") is None else str(payload.get("account_id"))
-                ),
+                account_id=payload.get("account_id"),
             )
             return
-        if event_name == "http.inflight":
-            self.record_inflight(
-                registry,
-                route=str(payload["route"]),
-                value=float(payload["value"]),
-                account_id=(
-                    None if payload.get("account_id") is None else str(payload.get("account_id"))
-                ),
-            )
+        self.record_inflight(
+            registry,
+            route=str(payload["route"]),
+            value=float(payload["value"]),
+            account_id=payload.get("account_id"),
+        )
 
     def record_request(
         self,
@@ -89,40 +85,32 @@ class HTTPCollector(EventMetricCollector):
         duration_seconds: float,
         account_id: str | None = None,
     ) -> None:
-        """
-        Record a completed HTTP request as both a counter increment and a latency sample.
-
-        Counter and histogram labels intentionally share the same route/method/status tuple so
-        downstream PromQL can aggregate them consistently.
-        """
+        """Record a completed HTTP request counter increment and one latency sample."""
         labels = {"method": str(method), "route": str(route), "status": str(status)}
         registry.inc_counter(
             self.REQUESTS_TOTAL,
             labels=labels,
             label_names=("method", "route", "status"),
-            account_id=account_id,
+            account_id=None if account_id is None else str(account_id),
         )
+        if duration_seconds < 0:
+            return
         registry.observe_histogram(
             self.REQUEST_DURATION_SECONDS,
             float(duration_seconds),
             labels=labels,
             label_names=("method", "route", "status"),
-            account_id=account_id,
+            account_id=None if account_id is None else str(account_id),
         )
 
     def record_inflight(
         self, registry, *, route: str, value: float, account_id: str | None = None
     ) -> None:
-        """
-        Set the current inflight request gauge value for one normalized route template.
-
-        The caller provides the absolute inflight value, allowing middleware to keep the stateful
-        accounting logic outside the collector itself.
-        """
+        """Set the inflight request gauge value for one route template."""
         registry.set_gauge(
             self.INFLIGHT_REQUESTS,
             float(value),
             labels={"route": str(route)},
             label_names=("route",),
-            account_id=account_id,
+            account_id=None if account_id is None else str(account_id),
         )

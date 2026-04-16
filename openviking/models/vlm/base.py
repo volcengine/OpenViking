@@ -196,9 +196,13 @@ class VLMBase(ABC):
         )
         # Operation-level telemetry aggregation (no-op when telemetry is disabled).
         try:
-            from openviking.telemetry import get_current_telemetry
+            from openviking.telemetry import get_current_telemetry, get_current_telemetry_stage
 
-            get_current_telemetry().add_token_usage(prompt_tokens, completion_tokens)
+            get_current_telemetry().add_token_usage(
+                prompt_tokens,
+                completion_tokens,
+                stage=get_current_telemetry_stage() or "vlm",
+            )
         except Exception:
             # Telemetry must never break model inference.
             pass

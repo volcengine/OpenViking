@@ -124,13 +124,16 @@ scrape_configs:
 | `context_type` | retrieval context type | `resource` |
 | `provider` | model or external service provider | `volcengine` |
 | `model_name` | model name | `doubao-seed-1-8-251228` |
-| `stage` | resource processing stage | `parse`, `persist`, `process` |
+| `stage` | stage label (defined by each metric family) | resource stage: `parse`; token attribution stage: `embed_query` |
 | `valid` | whether the current sample is fresh and valid | `1` / `0` |
 
 Notes:
 
 - `account_id` is only enabled on controlled allowlisted metric families to prevent high-cardinality growth
 - `valid=0` means the current state/probe sample is a fallback or stale value, not that the label itself is malformed
+- `stage` semantics depend on the metric family:
+  - `openviking_resource_stage_*`: resource ingestion pipeline stages (for example `parse/persist/process`)
+  - `openviking_operation_tokens_total`: token attribution stages (for example `embed_query/rerank/vlm`)
 
 ## Key Metric Families
 
@@ -158,8 +161,12 @@ Typical usage:
 | `openviking_retrieval_requests_total` | Counter | `account_id, context_type` | retrieval request count |
 | `openviking_retrieval_results_total` | Counter | `account_id, context_type` | total retrieved results |
 | `openviking_retrieval_latency_seconds` | Histogram | `account_id, context_type` | retrieval latency distribution |
+| `openviking_retrieval_zero_result_total` | Counter | `account_id, context_type` | retrieval zero-result count |
+| `openviking_retrieval_rerank_used_total` | Counter | `account_id` | number of retrievals that used rerank |
+| `openviking_retrieval_rerank_fallback_total` | Counter | `account_id` | retrieval rerank fallback count |
 | `openviking_resource_stage_total` | Counter | `account_id, stage, status` | count of resource ingestion stages |
 | `openviking_resource_stage_duration_seconds` | Histogram | `account_id, stage, status` | duration distribution of ingestion stages |
+| `openviking_resource_wait_duration_seconds` | Histogram | `account_id, operation` | resource ingestion wait duration distribution (for example queue waiting) |
 
 Typical `stage` values include:
 
@@ -169,6 +176,18 @@ Typical `stage` values include:
 - `persist`
 - `finalize`
 - `process`
+
+### Vector, Memory, and Semantic Metrics
+
+| Metric Family | Type | Common Labels | Meaning |
+|---------------|------|---------------|---------|
+| `openviking_vector_searches_total` | Counter | `operation` | vector search count |
+| `openviking_vector_scored_total` | Counter | `operation` | total scored candidates |
+| `openviking_vector_passed_total` | Counter | `operation` | total passed candidates |
+| `openviking_vector_returned_total` | Counter | `operation` | total returned candidates |
+| `openviking_vector_scanned_total` | Counter | `operation` | total scanned candidates |
+| `openviking_memory_extracted_total` | Counter | `operation` | total extracted memory items |
+| `openviking_semantic_nodes_total` | Counter | `status` | total semantic nodes |
 
 ### Model Calls and Tokens
 
@@ -183,6 +202,18 @@ Typical `stage` values include:
 | `openviking_vlm_call_duration_seconds` | Histogram | `account_id, provider, model_name` | VLM call duration distribution |
 | `openviking_embedding_requests_total` | Counter | `account_id, status` | embedding request count |
 | `openviking_embedding_latency_seconds` | Histogram | `account_id, status` | embedding latency distribution |
+| `openviking_embedding_errors_total` | Counter | `account_id, error_code` | embedding error count |
+| `openviking_embedding_calls_total` | Counter | `account_id, provider, model_name` | embedding provider call count (per-call) |
+| `openviking_embedding_call_duration_seconds` | Histogram | `account_id, provider, model_name` | embedding provider call duration distribution (per-call) |
+| `openviking_embedding_tokens_input_total` | Counter | `account_id, provider, model_name` | embedding input tokens (per-call aggregate) |
+| `openviking_embedding_tokens_output_total` | Counter | `account_id, provider, model_name` | embedding output tokens (per-call aggregate; may not appear if always 0) |
+| `openviking_embedding_tokens_total` | Counter | `account_id, provider, model_name` | embedding total tokens (per-call aggregate) |
+| `openviking_rerank_calls_total` | Counter | `account_id, provider, model_name` | rerank provider call count (per-call) |
+| `openviking_rerank_call_duration_seconds` | Histogram | `account_id, provider, model_name` | rerank provider call duration distribution (per-call) |
+| `openviking_rerank_tokens_input_total` | Counter | `account_id, provider, model_name` | rerank input tokens (per-call aggregate) |
+| `openviking_rerank_tokens_output_total` | Counter | `account_id, provider, model_name` | rerank output tokens (per-call aggregate; may not appear if always 0) |
+| `openviking_rerank_tokens_total` | Counter | `account_id, provider, model_name` | rerank total tokens (per-call aggregate) |
+| `openviking_operation_tokens_total` | Counter | `account_id, operation, stage, token_type` | operation token aggregation (token attribution stages) |
 
 Notes:
 
@@ -194,6 +225,7 @@ Notes:
 | Metric Family | Type | Common Labels | Meaning |
 |---------------|------|---------------|---------|
 | `openviking_queue_processed_total` | Counter | `queue` | total processed items per queue |
+| `openviking_queue_errors_total` | Counter | `queue` | total error count per queue |
 | `openviking_queue_pending` | Gauge | `queue` | pending queue items |
 | `openviking_queue_in_progress` | Gauge | `queue` | in-progress queue items |
 | `openviking_lock_active` | Gauge | none | current active locks |
@@ -204,6 +236,30 @@ These help answer:
 
 - Is there queue backlog?
 - Is there lock contention or stale locking?
+
+### Tasks and Task Tracker
+
+| Metric Family | Type | Common Labels | Meaning |
+|---------------|------|---------------|---------|
+| `openviking_task_pending` | Gauge | `task_type` | pending tasks tracked by task tracker |
+| `openviking_task_running` | Gauge | `task_type` | running tasks tracked by task tracker |
+| `openviking_task_completed` | Gauge | `task_type` | completed tasks tracked by task tracker |
+| `openviking_task_failed` | Gauge | `task_type` | failed tasks tracked by task tracker |
+
+### Cache
+
+| Metric Family | Type | Common Labels | Meaning |
+|---------------|------|---------------|---------|
+| `openviking_cache_hits_total` | Counter | `level` | cache hit count |
+| `openviking_cache_misses_total` | Counter | `level` | cache miss count |
+
+### Session
+
+| Metric Family | Type | Common Labels | Meaning |
+|---------------|------|---------------|---------|
+| `openviking_session_lifecycle_total` | Counter | `account_id, action, status` | session lifecycle event count |
+| `openviking_session_contexts_used_total` | Counter | `account_id, action` | session contexts used total |
+| `openviking_session_archive_total` | Counter | `account_id, status` | session archive count |
 
 ### Probes and Health State
 
@@ -223,6 +279,22 @@ Meaning of `valid`:
 
 - `valid="1"`: the sample was produced by a successful refresh
 - `valid="0"`: the sample is a fallback or stale value and should be treated with caution
+
+### Encryption (Operational Metrics)
+
+| Metric Family | Type | Common Labels | Meaning |
+|---------------|------|---------------|---------|
+| `openviking_encryption_operations_total` | Counter | `account_id, operation, status` | encrypt/decrypt operation count |
+| `openviking_encryption_duration_seconds` | Histogram | `account_id, operation, status` | encrypt/decrypt duration distribution |
+| `openviking_encryption_bytes_total` | Counter | `account_id, operation` | encrypt/decrypt processed bytes total |
+| `openviking_encryption_payload_size_bytes` | Histogram | `account_id, operation` | encrypt/decrypt payload size distribution |
+| `openviking_encryption_auth_failed_total` | Counter | `account_id, status` | auth-failed count |
+| `openviking_encryption_key_derivation_total` | Counter | `account_id, status` | key derivation count |
+| `openviking_encryption_key_derivation_duration_seconds` | Histogram | `account_id, status` | key derivation duration distribution |
+| `openviking_encryption_key_load_duration_seconds` | Histogram | `account_id, status, provider` | key load duration distribution |
+| `openviking_encryption_key_cache_hits_total` | Counter | `account_id, provider` | key cache hit count |
+| `openviking_encryption_key_cache_misses_total` | Counter | `account_id, provider` | key cache miss count |
+| `openviking_encryption_key_version_usage_total` | Counter | `account_id, key_version` | key version usage count |
 
 ### Component and Observer Aggregate Metrics
 
@@ -260,30 +332,28 @@ Possible `model_type` values include:
 
 ### Enabling Metrics
 
-In `ov.conf`, the new metrics subsystem can be explicitly enabled through `server.metrics`:
+In `ov.conf`, the metrics subsystem can be explicitly enabled through `server.observability.metrics`:
 
 ```json
 {
   "server": {
-    "telemetry": {
-      "prometheus": {
-        "enabled": true
-      }
-    },
-    "metrics": {
-      "enabled": true,
-      "account_dimension": {
+    "observability": {
+      "metrics": {
         "enabled": true,
-        "max_active_accounts": 100,
-        "metric_allowlist": [
-          "openviking_http_requests_total",
-          "openviking_http_request_duration_seconds",
-          "openviking_http_inflight_requests",
-          "openviking_operation_requests_total",
-          "openviking_operation_duration_seconds",
-          "openviking_vlm_calls_total",
-          "openviking_vlm_call_duration_seconds"
-        ]
+        "account_dimension": {
+          "enabled": true,
+          "max_active_accounts": 100,
+          "metric_allowlist": [
+            "openviking_http_requests_total",
+            "openviking_http_request_duration_seconds",
+            "openviking_http_inflight_requests",
+            "openviking_operation_requests_total",
+            "openviking_operation_duration_seconds",
+            "openviking_vlm_calls_total",
+          "openviking_vlm_call_duration_seconds",
+          "openviking_rerank_*"
+          ]
+        }
       }
     }
   }
@@ -292,16 +362,15 @@ In `ov.conf`, the new metrics subsystem can be explicitly enabled through `serve
 
 Recommended mental model:
 
-- `server.metrics.enabled`: master switch for the new metrics subsystem
-- `server.metrics.account_dimension`: controls whether `account_id` labels are enabled and where they are allowed
-- `server.telemetry.prometheus.enabled`: compatibility path for the older configuration entry; the current implementation still reads it
+- `server.observability.metrics.enabled`: master switch for the metrics subsystem
+- `server.observability.metrics.account_dimension`: controls whether `account_id` labels are enabled and where they are allowed
 
 ### Recommended `account_id` Usage
 
 - enabled by default, but only allowlisted metric families will receive tenant ids (empty allowlist still yields `__unknown__`)
 - do not turn `user_id`, `session_id`, or `resource_uri` into labels
 - only enable tenant dimensions on a small set of critical dashboard and alert metrics
-- `metric_allowlist` supports a limited wildcard syntax: only trailing `*` prefix matches (e.g. `openviking_rerank_*`)
+- `metric_allowlist` supports a limited wildcard syntax: only trailing `*` prefix matches (e.g. `openviking_rerank_*`, `openviking_embedding_*`)
 - a standalone `*` is not supported, nor full glob/regex patterns
 
 ## Related Documentation
