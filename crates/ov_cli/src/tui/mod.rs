@@ -60,6 +60,9 @@ async fn run_loop(client: HttpClient, uri: &str) -> Result<()> {
             app.vector_state.adjust_scroll(tree_height);
         }
 
+        // Update status message (clear after 3 seconds)
+        app.update_messages();
+
         terminal.draw(|frame| ui::render(frame, &app))?;
 
         if ct_event::poll(std::time::Duration::from_millis(100))? {

@@ -227,21 +227,23 @@ class VikingURI:
             URI-safe string
         """
         # Preserve:
-        # - Letters, numbers, underscores, hyphens (\w includes [a-zA-Z0-9_])
+        # - Letters, numbers, underscores, hyphens, dots (\w includes [a-zA-Z0-9_])
+        # - Latin-1 Supplement, Latin Extended-A/B (Western European languages: Spanish, Portuguese, French, German, etc.)
+        # - Cyrillic (Russian, Bulgarian, Serbian, etc.)
+        # - Arabic (Arabic, Persian, Urdu, etc.)
         # - CJK Unified Ideographs (Chinese, Japanese Kanji, Korean Hanja)
         # - Hiragana and Katakana (Japanese)
         # - Hangul Syllables (Korean)
-        # - CJK Unified Ideographs Extension A
-        # - CJK Unified Ideographs Extension B
+        # - CJK Unified Ideographs Extension A/B
         safe = re.sub(
-            r"[^\w\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af\u3400-\u4dbf\U00020000-\U0002a6df\-]",
+            r"[^\w\u0080-\u02af\u0400-\u052f\u0600-\u077f\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af\u3400-\u4dbf\U00020000-\U0002a6df\-.]",
             "_",
             text,
         )
         # Merge consecutive underscores
         safe = re.sub(r"_+", "_", safe)
-        # Strip leading/trailing underscores and limit length
-        safe = safe.strip("_")[:50]
+        # Strip leading/trailing underscores and dots, limit length
+        safe = safe.strip("_.")[:50]
         return safe or "unnamed"
 
     def __str__(self) -> str:

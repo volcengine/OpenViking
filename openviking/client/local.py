@@ -14,6 +14,7 @@ from openviking.telemetry.execution import (
     attach_telemetry_payload,
     run_with_telemetry,
 )
+from openviking.utils.search_filters import merge_time_filter
 from openviking_cli.client.base import BaseClient
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import run_async
@@ -29,6 +30,21 @@ def _to_jsonable(value: Any) -> Any:
     if isinstance(value, dict):
         return {k: _to_jsonable(v) for k, v in value.items()}
     return value
+
+
+def _resolve_search_filter(
+    filter: Optional[Dict[str, Any]],
+    since: Optional[str],
+    until: Optional[str],
+    time_field: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """Merge optional retrieval time bounds into the metadata filter."""
+    return merge_time_filter(
+        filter,
+        since=since,
+        until=until,
+        time_field=time_field,
+    )
 
 
 class LocalClient(BaseClient):
@@ -264,8 +280,12 @@ class LocalClient(BaseClient):
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
     ) -> Any:
         """Semantic search without session context."""
+        resolved_filter = _resolve_search_filter(filter, since, until, time_field)
         execution = await run_with_telemetry(
             operation="search.find",
             telemetry=telemetry,
@@ -275,7 +295,7 @@ class LocalClient(BaseClient):
                 target_uri=target_uri,
                 limit=limit,
                 score_threshold=score_threshold,
-                filter=filter,
+                filter=resolved_filter,
             ),
         )
         return attach_telemetry_payload(
@@ -292,8 +312,12 @@ class LocalClient(BaseClient):
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
     ) -> Any:
         """Semantic search with optional session context."""
+        resolved_filter = _resolve_search_filter(filter, since, until, time_field)
 
         async def _search():
             session = None
@@ -307,7 +331,7 @@ class LocalClient(BaseClient):
                 session=session,
                 limit=limit,
                 score_threshold=score_threshold,
-                filter=filter,
+                filter=resolved_filter,
             )
 
         execution = await run_with_telemetry(
@@ -443,7 +467,6 @@ class LocalClient(BaseClient):
 
         If both content and parts are provided, parts takes precedence.
         """
-
         from openviking.message.part import Part, TextPart, part_from_dict
 
         session = self._service.sessions.session(self._ctx, session_id)
@@ -492,23 +515,19 @@ class LocalClient(BaseClient):
         """Create a new session or load an existing one.
 
         Args:
-            session_id: Session ID, creates a new session if None
-            must_exist: If True and session_id is provided, raises NotFoundError
-                        when the session does not exist.
-                        If session_id is None, must_exist is ignored.
-
+            session_id: Session ID, creates a new session if None.
+            must_exist: Whether to raise an error if the session does not exist. Default False.
         Returns:
-            Session object
-
-        Raises:
-            NotFoundError: If must_exist=True and the session does not exist.
+            Session object if exists, None otherwise.
         """
+    
         session = self._service.sessions.session(self._ctx, session_id)
-        if must_exist and session_id:
-            if not run_async(session.exists()):
+        if not run_async(session.exists()):
+            if must_exist and session_id:
                 from openviking_cli.exceptions import NotFoundError
-
                 raise NotFoundError(session_id, "session")
+            else:
+                run_async(session.ensure_exists())
         return session
 
     async def session_exists(self, session_id: str) -> bool:

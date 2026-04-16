@@ -1443,7 +1443,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
       const latestUserText = extractLatestUserText(eventObj.messages);
       const rawRecallQuery =
         latestUserText ||
-        (typeof eventObj.prompt === "string" ? eventObj.prompt.trim() : "");
+        (typeof eventObj.prompt === "string" ? sanitizeUserTextForCapture(eventObj.prompt) : "");
       const recallQuery = prepareRecallQuery(rawRecallQuery);
       const queryText = recallQuery.query;
       if (!queryText) {

@@ -46,13 +46,13 @@ class TestCheckConfig:
         assert not ok
         assert "Invalid JSON" in detail
 
-    def test_fail_missing_embedding_section(self, tmp_path: Path):
+    def test_pass_without_embedding_section(self, tmp_path: Path):
         config = tmp_path / "ov.conf"
         config.write_text(json.dumps({"server": {}}))
         with patch("openviking_cli.doctor._find_config", return_value=config):
             ok, detail, fix = check_config()
-        assert not ok
-        assert "embedding" in detail
+        assert ok
+        assert str(config) in detail
 
 
 class TestCheckPython:
@@ -138,6 +138,86 @@ class TestCheckAgfs:
 
 
 class TestCheckEmbedding:
+    def test_fail_local_default_when_optional_dependency_missing(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(json.dumps({}))
+
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            with patch(
+                "openviking_cli.doctor.importlib.import_module",
+                side_effect=ImportError("No module named 'llama_cpp'"),
+            ):
+                ok, detail, fix = check_embedding()
+
+        assert not ok
+        assert "missing llama-cpp-python" in detail
+        assert "openviking[local-embed]" in fix
+
+    def test_pass_local_default_with_cached_model(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(json.dumps({}))
+        cached_model = (
+            Path.home() / ".cache" / "openviking" / "models" / "bge-small-zh-v1.5-f16.gguf"
+        )
+        real_import = __import__
+
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            with patch(
+                "openviking.models.embedder.local_embedders.get_local_model_cache_path",
+                return_value=cached_model,
+            ):
+                with patch.object(Path, "exists", autospec=True, return_value=True):
+                    with patch(
+                        "openviking_cli.doctor.importlib.import_module",
+                        side_effect=lambda name: object()
+                        if name == "llama_cpp"
+                        else real_import(name),
+                    ):
+                        ok, detail, fix = check_embedding()
+
+        assert ok
+        assert "local/bge-small-zh-v1.5-f16" in detail
+        assert fix is None
+
+    def test_pass_local_default_reports_startup_download_when_cache_missing(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(json.dumps({}))
+        real_import = __import__
+
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            with patch.object(Path, "exists", autospec=True, return_value=False):
+                with patch(
+                    "openviking_cli.doctor.importlib.import_module",
+                    side_effect=lambda name: object() if name == "llama_cpp" else real_import(name),
+                ):
+                    ok, detail, fix = check_embedding()
+
+        assert ok
+        assert "startup initialization" in detail
+        assert fix is None
+
+    def test_fail_local_unknown_model(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps(
+                {
+                    "embedding": {
+                        "dense": {
+                            "provider": "local",
+                            "model": "unknown-local-model",
+                        }
+                    }
+                }
+            )
+        )
+
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            ok, detail, fix = check_embedding()
+
+        assert not ok
+        assert "unsupported local model" in detail
+        assert "Unknown local embedding model" in fix
+
     def test_pass_with_api_key(self, tmp_path: Path):
         config = tmp_path / "ov.conf"
         config.write_text(

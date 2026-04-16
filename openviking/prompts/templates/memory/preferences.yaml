@@ -8,6 +8,15 @@ description: |
 directory: "viking://user/{{ user_space }}/memories/preferences"
 filename_template: "{{ user }}/{{ topic }}.md"
 enabled: true
+
+overview_template: |-
+  # Preferences Overview
+  {% if items %}**User:** {{ items[0].file_content.user }}
+  **Topic:** {{ items[0].file_content.topic }}{% endif %}
+  {% for item in items %}
+  - [{{ item.file_content.topic }}](./{{ item.file_name }})
+  {% endfor %}
+
 fields:
   - name: user
     type: string

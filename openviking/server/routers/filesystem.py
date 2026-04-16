@@ -7,7 +7,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
-from openviking.pyagfs.exceptions import AGFSClientError
+from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
@@ -32,16 +32,25 @@ async def ls(
     """List directory contents."""
     service = get_service()
     actual_node_limit = limit if limit is not None else node_limit
-    result = await service.fs.ls(
-        uri,
-        ctx=_ctx,
-        recursive=recursive,
-        simple=simple,
-        output=output,
-        abs_limit=abs_limit,
-        show_all_hidden=show_all_hidden,
-        node_limit=actual_node_limit,
-    )
+    try:
+        result = await service.fs.ls(
+            uri,
+            ctx=_ctx,
+            recursive=recursive,
+            simple=simple,
+            output=output,
+            abs_limit=abs_limit,
+            show_all_hidden=show_all_hidden,
+            node_limit=actual_node_limit,
+        )
+    except AGFSNotFoundError:
+        raise NotFoundError(uri, "file")
+    except AGFSClientError as e:
+        # Fallback for older versions without typed exceptions
+        err_msg = str(e).lower()
+        if "not found" in err_msg or "no such file or directory" in err_msg:
+            raise NotFoundError(uri, "file")
+        raise
     return Response(status="ok", result=result)
 
 
@@ -59,15 +68,24 @@ async def tree(
     """Get directory tree."""
     service = get_service()
     actual_node_limit = limit if limit is not None else node_limit
-    result = await service.fs.tree(
-        uri,
-        ctx=_ctx,
-        output=output,
-        abs_limit=abs_limit,
-        show_all_hidden=show_all_hidden,
-        node_limit=actual_node_limit,
-        level_limit=level_limit,
-    )
+    try:
+        result = await service.fs.tree(
+            uri,
+            ctx=_ctx,
+            output=output,
+            abs_limit=abs_limit,
+            show_all_hidden=show_all_hidden,
+            node_limit=actual_node_limit,
+            level_limit=level_limit,
+        )
+    except AGFSNotFoundError:
+        raise NotFoundError(uri, "file")
+    except AGFSClientError as e:
+        # Fallback for older versions without typed exceptions
+        err_msg = str(e).lower()
+        if "not found" in err_msg or "no such file or directory" in err_msg:
+            raise NotFoundError(uri, "file")
+        raise
     return Response(status="ok", result=result)
 
 
@@ -81,7 +99,10 @@ async def stat(
     try:
         result = await service.fs.stat(uri, ctx=_ctx)
         return Response(status="ok", result=result)
+    except AGFSNotFoundError:
+        raise NotFoundError(uri, "file")
     except AGFSClientError as e:
+        # Fallback for older versions without typed exceptions
         err_msg = str(e).lower()
         if "not found" in err_msg or "no such file or directory" in err_msg:
             raise NotFoundError(uri, "file")
@@ -102,7 +123,14 @@ async def mkdir(
 ):
     """Create directory."""
     service = get_service()
-    await service.fs.mkdir(request.uri, ctx=_ctx, description=request.description)
+    try:
+        await service.fs.mkdir(request.uri, ctx=_ctx, description=request.description)
+    except AGFSClientError as e:
+        # Handle common AGFS errors
+        err_msg = str(e).lower()
+        if "not found" in err_msg or "no such file or directory" in err_msg:
+            raise NotFoundError(request.uri, "file")
+        raise
     return Response(status="ok", result={"uri": request.uri})
 
 
@@ -114,7 +142,16 @@ async def rm(
 ):
     """Remove resource."""
     service = get_service()
-    await service.fs.rm(uri, ctx=_ctx, recursive=recursive)
+    try:
+        await service.fs.rm(uri, ctx=_ctx, recursive=recursive)
+    except AGFSNotFoundError:
+        raise NotFoundError(uri, "file")
+    except AGFSClientError as e:
+        # Fallback for older versions without typed exceptions
+        err_msg = str(e).lower()
+        if "not found" in err_msg or "no such file or directory" in err_msg:
+            raise NotFoundError(uri, "file")
+        raise
     return Response(status="ok", result={"uri": uri})
 
 
@@ -132,5 +169,14 @@ async def mv(
 ):
     """Move resource."""
     service = get_service()
-    await service.fs.mv(request.from_uri, request.to_uri, ctx=_ctx)
+    try:
+        await service.fs.mv(request.from_uri, request.to_uri, ctx=_ctx)
+    except AGFSNotFoundError:
+        raise NotFoundError(request.from_uri, "file")
+    except AGFSClientError as e:
+        # Fallback for older versions without typed exceptions
+        err_msg = str(e).lower()
+        if "not found" in err_msg or "no such file or directory" in err_msg:
+            raise NotFoundError(request.from_uri, "file")
+        raise
     return Response(status="ok", result={"from": request.from_uri, "to": request.to_uri})

@@ -380,6 +380,12 @@ enum Commands {
         /// Score threshold
         #[arg(short, long)]
         threshold: Option<f64>,
+        /// Only include results on or after this time (e.g. 48h, 7d, 2026-03-10, ISO-8601)
+        #[arg(long = "after")]
+        after: Option<String>,
+        /// Only include results on or before this time (e.g. 24h, 2026-03-15, ISO-8601)
+        #[arg(long = "before")]
+        before: Option<String>,
     },
     /// Run context-aware retrieval
     Search {
@@ -402,6 +408,12 @@ enum Commands {
         /// Score threshold
         #[arg(short, long)]
         threshold: Option<f64>,
+        /// Only include results on or after this time (e.g. 48h, 7d, 2026-03-10, ISO-8601)
+        #[arg(long = "after")]
+        after: Option<String>,
+        /// Only include results on or before this time (e.g. 24h, 2026-03-15, ISO-8601)
+        #[arg(long = "before")]
+        before: Option<String>,
     },
     /// Run content pattern search
     Grep {
@@ -799,14 +811,23 @@ async fn main() {
             uri,
             node_limit,
             threshold,
-        } => handle_find(query, uri, node_limit, threshold, ctx).await,
+            after,
+            before,
+        } => handle_find(query, uri, node_limit, threshold, after, before, ctx).await,
         Commands::Search {
             query,
             uri,
             session_id,
             node_limit,
             threshold,
-        } => handle_search(query, uri, session_id, node_limit, threshold, ctx).await,
+            after,
+            before,
+        } => {
+            handle_search(
+                query, uri, session_id, node_limit, threshold, after, before, ctx,
+            )
+            .await
+        }
         Commands::Grep {
             uri,
             exclude_uri,
@@ -1297,12 +1318,15 @@ async fn handle_find(
     uri: String,
     node_limit: i32,
     threshold: Option<f64>,
+    after: Option<String>,
+    before: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
     if let Some(t) = threshold {
         params.push(format!("--threshold {}", t));
     }
+    append_time_filter_params(&mut params, after.as_deref(), before.as_deref());
     params.push(format!("\"{}\"", query));
     print_command_echo("ov find", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
@@ -1312,6 +1336,9 @@ async fn handle_find(
         &uri,
         node_limit,
         threshold,
+        after.as_deref(),
+        before.as_deref(),
+        None,
         ctx.output_format,
         ctx.compact,
     )
@@ -1324,6 +1351,8 @@ async fn handle_search(
     session_id: Option<String>,
     node_limit: i32,
     threshold: Option<f64>,
+    after: Option<String>,
+    before: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
@@ -1333,6 +1362,7 @@ async fn handle_search(
     if let Some(t) = threshold {
         params.push(format!("--threshold {}", t));
     }
+    append_time_filter_params(&mut params, after.as_deref(), before.as_deref());
     params.push(format!("\"{}\"", query));
     print_command_echo("ov search", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
@@ -1343,10 +1373,26 @@ async fn handle_search(
         session_id,
         node_limit,
         threshold,
+        after.as_deref(),
+        before.as_deref(),
+        None,
         ctx.output_format,
         ctx.compact,
     )
     .await
+}
+
+fn append_time_filter_params(
+    params: &mut Vec<String>,
+    after: Option<&str>,
+    before: Option<&str>,
+) {
+    if let Some(value) = after {
+        params.push(format!("--after {}", value));
+    }
+    if let Some(value) = before {
+        params.push(format!("--before {}", value));
+    }
 }
 
 /// Print command with specified parameters for debugging
@@ -1611,5 +1657,16 @@ mod tests {
         ]);
 
         assert!(result.is_err(), "removed write flags should not parse");
+    }
+
+    #[test]
+    fn append_time_filter_params_only_emits_after_and_before() {
+        let mut params = Vec::new();
+        let after = Some("7d".to_string());
+        let before = Some("2026-03-12".to_string());
+
+        super::append_time_filter_params(&mut params, after.as_deref(), before.as_deref());
+
+        assert_eq!(params, vec!["--after 7d", "--before 2026-03-12"]);
     }
 }

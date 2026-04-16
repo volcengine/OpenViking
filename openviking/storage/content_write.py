@@ -329,6 +329,7 @@ class ContentWriteCoordinator:
             parent_uri=parent.uri,
             context_type=context_type,
             ctx=ctx,
+            preserve_existing_created_at=True,
         )
 
     async def _summary_dict_for_vectorize(

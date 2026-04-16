@@ -25,8 +25,14 @@ Basic vector similarity search.
 | query | str | Yes | - | Search query string |
 | target_uri | str | No | "" | Limit search to specific URI prefix |
 | limit | int | No | 10 | Maximum number of results |
+| node_limit | int | No | None | Optional HTTP alias that overrides `limit` when provided |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filters |
+| since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--after` maps to this field |
+| until | str | No | None | Upper time bound, accepts `30m` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--before` maps to this field |
+| time_field | `"updated_at"` or `"created_at"` | No | `"updated_at"` | Metadata time field used by `since` / `until` |
+| include_provenance | bool | No | False | Include provenance/query-plan details in the serialized result |
+| telemetry | bool or object | No | False | Attach telemetry data to the response |
 
 **FindResult Structure**
 
@@ -59,6 +65,13 @@ class MatchedContext:
 ```python
 results = client.find("how to authenticate users")
 
+recent_emails = client.find(
+    "invoice",
+    target_uri="viking://resources/email/",
+    since="7d",
+    time_field="created_at",
+)
+
 for ctx in results.resources:
     print(f"URI: {ctx.uri}")
     print(f"Score: {ctx.score:.3f}")
@@ -87,7 +100,10 @@ curl -X POST http://localhost:1933/api/v1/search/find \
 
 ```bash
 openviking find "how to authenticate users" [--uri viking://resources/] [--limit 10]
+openviking find "invoice" --after 7d
 ```
+
+`--after` maps to API `since`, and `--before` maps to API `until`.
 
 **Response**
 
@@ -133,7 +149,7 @@ results = client.find(
 # Search only in skills
 results = client.find(
     "web search",
-    target_uri="viking://skills/"
+    target_uri="viking://agent/skills/"
 )
 
 # Search in specific project
@@ -182,8 +198,14 @@ Search with session context and intent analysis.
 | session | Session | No | None | Session for context-aware search (SDK) |
 | session_id | str | No | None | Session ID for context-aware search (HTTP) |
 | limit | int | No | 10 | Maximum number of results |
+| node_limit | int | No | None | Optional HTTP alias that overrides `limit` when provided |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filters |
+| since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--after` maps to this field |
+| until | str | No | None | Upper time bound, accepts `30m` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--before` maps to this field |
+| time_field | `"updated_at"` or `"created_at"` | No | `"updated_at"` | Metadata time field used by `since` / `until` |
+| include_provenance | bool | No | False | Include provenance/query-plan details in the serialized result |
+| telemetry | bool or object | No | False | Attach telemetry data to the response |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -202,7 +224,8 @@ session.add_message("assistant", [
 # Search understands the conversation context
 results = client.search(
     "best practices",
-    session=session
+    session=session,
+    since="2h"
 )
 
 for ctx in results.resources:
@@ -223,6 +246,8 @@ curl -X POST http://localhost:1933/api/v1/search/search \
   -d '{
     "query": "best practices",
     "session_id": "abc123",
+    "since": "2h",
+    "time_field": "updated_at",
     "limit": 10
   }'
 ```
@@ -231,7 +256,10 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 
 ```bash
 openviking search "best practices" [--session-id abc123] [--limit 10]
+openviking search "watch vs scheduled" --after 2026-03-15 --before 2026-03-15
 ```
+
+`--after` maps to API `since`, and `--before` maps to API `until`.
 
 **Response**
 
@@ -299,8 +327,9 @@ Search content by pattern (regex).
 | uri | str | Yes | - | Viking URI to search in |
 | pattern | str | Yes | - | Search pattern (regex) |
 | case_insensitive | bool | No | False | Ignore case |
-| node_limit | int | No | None | Maximum number of nodes to search |
 | exclude_uri | str | No | None | URI prefix to exclude from search |
+| node_limit | int | No | None | Maximum number of nodes to search |
+| level_limit | int | No | 5 | Maximum directory depth to traverse |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -371,6 +400,7 @@ Match files by glob pattern.
 |-----------|------|----------|---------|-------------|
 | pattern | str | Yes | - | Glob pattern (e.g., `**/*.md`) |
 | uri | str | No | "viking://" | Starting URI |
+| node_limit | int | No | None | Maximum number of matches to return |
 
 **Python SDK (Embedded / HTTP)**
 

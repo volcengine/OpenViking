@@ -23,12 +23,12 @@ from datetime import datetime
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-from openviking.pyagfs.exceptions import AGFSClientError, AGFSHTTPError
+from openviking.pyagfs.exceptions import AGFSClientError, AGFSDirectoryNotEmptyError, AGFSHTTPError
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext, Role
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import format_simplified, get_current_timestamp, parse_iso_datetime
-from openviking_cli.exceptions import NotFoundError
+from openviking_cli.exceptions import FailedPreconditionError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
@@ -39,6 +39,22 @@ if TYPE_CHECKING:
     from openviking_cli.utils.config import RerankConfig
 
 logger = get_logger(__name__)
+
+
+def _is_directory_not_empty_error(message: str) -> bool:
+    """Check if an error message indicates a directory not empty error.
+
+    Handles multiple possible error message formats from different backends.
+    """
+    msg = message.lower()
+    return any(
+        pattern in msg
+        for pattern in [
+            "directory not empty",
+            "dir not empty",
+            "directory is not empty",
+        ]
+    )
 
 
 # ========== Dataclass ==========
@@ -417,7 +433,19 @@ class VikingFS:
                 uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
                 uris_to_delete.append(target_uri)
                 await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
-                result = self.agfs.rm(path, recursive=recursive)
+                try:
+                    result = self.agfs.rm(path, recursive=recursive)
+                except AGFSDirectoryNotEmptyError:
+                    raise FailedPreconditionError(
+                        f"Directory not empty: {uri}. Use recursive=True to delete non-empty directories."
+                    )
+                except RuntimeError as e:
+                    # Fallback for older versions without typed exceptions
+                    if _is_directory_not_empty_error(str(e)):
+                        raise FailedPreconditionError(
+                            f"Directory not empty: {uri}. Use recursive=True to delete non-empty directories."
+                        )
+                    raise
                 return result
         except LockAcquisitionError:
             raise ResourceBusyError(f"Resource is being processed: {uri}")

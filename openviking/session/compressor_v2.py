@@ -225,9 +225,7 @@ class SessionCompressorV2:
             extract_context = ExtractContext(messages)
 
             # Apply operations
-            result = await updater.apply_operations(
-                operations, ctx, registry=registry, extract_context=extract_context
-            )
+            result = await updater.apply_operations(operations, ctx, extract_context=extract_context)
 
             tracer.info(
                 f"Applied memory operations: written={len(result.written_uris)}, "
