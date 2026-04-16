@@ -7,12 +7,14 @@ Uses the new Memory Templating System with ReAct orchestrator.
 Maintains the same interface as compressor.py for backward compatibility.
 """
 
+import asyncio
 from typing import List, Optional
 
 from openviking.core.context import Context
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater
+from openviking.session.memory.utils.json_parser import JsonUtils
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
@@ -78,6 +80,7 @@ class SessionCompressorV2:
             registry=registry, vikingdb=self.vikingdb, transaction_handle=transaction_handle
         )
 
+    @tracer()
     async def extract_long_term_memories(
         self,
         messages: List[Message],
@@ -92,6 +95,7 @@ class SessionCompressorV2:
         Note: Returns empty List[Context] because v2 directly writes to storage.
         The list length is used for stats in session.py.
         """
+
         if not messages:
             return []
 
@@ -100,7 +104,8 @@ class SessionCompressorV2:
             return []
 
         tracer.info("Starting v2 memory extraction from conversation")
-
+        tracer.info(f"messages={JsonUtils.dumps(messages)}")
+        config = get_openviking_config()
         # Initialize default memory files (soul.md, identity.md) if not exist
         from openviking.session.memory.memory_type_registry import create_default_registry
 
@@ -158,8 +163,11 @@ class SessionCompressorV2:
                         memory_schema_dirs.append(dir_path)
                 logger.debug(f"Memory schema directories to lock: {memory_schema_dirs}")
 
-                # 循环等待获取锁（机制确保不会死锁）
-                # 由于使用有序加锁法，可以安全地无限等待
+                retry_interval = config.memory.v2_lock_retry_interval_seconds
+                max_retries = config.memory.v2_lock_max_retries
+                retry_count = 0
+
+                # 循环重试获取锁（机制确保不会死锁）
                 while True:
                     lock_acquired = await lock_manager.acquire_subtree_batch(
                         transaction_handle,
@@ -168,7 +176,19 @@ class SessionCompressorV2:
                     )
                     if lock_acquired:
                         break
-                    logger.warning("Failed to acquire memory locks, retrying...")
+                    retry_count += 1
+                    if max_retries > 0 and retry_count >= max_retries:
+                        raise TimeoutError(
+                            "Failed to acquire memory locks after "
+                            f"{retry_count} retries (max={max_retries})"
+                        )
+
+                    logger.warning(
+                        "Failed to acquire memory locks, retrying "
+                        f"(attempt={retry_count}, max={max_retries or 'unlimited'})..."
+                    )
+                    if retry_interval > 0:
+                        await asyncio.sleep(retry_interval)
 
             orchestrator._transaction_handle = transaction_handle  # 传递给 ExtractLoop
 
@@ -205,9 +225,7 @@ class SessionCompressorV2:
             extract_context = ExtractContext(messages)
 
             # Apply operations
-            result = await updater.apply_operations(
-                operations, ctx, registry=registry, extract_context=extract_context
-            )
+            result = await updater.apply_operations(operations, ctx, extract_context=extract_context)
 
             tracer.info(
                 f"Applied memory operations: written={len(result.written_uris)}, "

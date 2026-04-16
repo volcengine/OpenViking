@@ -11,6 +11,7 @@ Layer 5: Validation Tolerance - TypeAdapter(strict=False) + list item filtering
 """
 
 import json
+from dataclasses import is_dataclass, asdict
 from types import UnionType
 from typing import (
     Any,
@@ -25,7 +26,8 @@ from typing import (
 )
 
 import json_repair
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, BaseModel, parse_obj_as
+
 
 from openviking_cli.utils import get_logger
 
@@ -42,7 +44,40 @@ __all__ = [
     "_get_origin_type",
     "_get_arg_type",
     "_any_to_str",
+    "JsonUtils",
 ]
+
+
+
+
+class PydanticEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, BaseModel) :
+            # 保存类名和属性值
+            return {
+                **obj.model_dump(mode='python')
+            }
+        elif is_dataclass(obj):
+            return asdict(obj)
+        return super().default(obj)
+
+
+
+class JsonUtils:
+
+    @staticmethod
+    def dumps(obj, indent=4, ensure_ascii=False):
+        if obj is None:
+            return None
+        return json.dumps(obj, ensure_ascii=ensure_ascii, indent=indent, cls=PydanticEncoder)
+
+    @staticmethod
+    def loads(json_str, clazz=None):
+        if not json_str:
+            return None
+        if clazz:
+            return TypeAdapter.validate_python(clazz, json_repair.loads(json_str))
+        return json_repair.loads(json_str)
 
 
 def extract_json_content(s: str) -> str:
@@ -440,3 +475,5 @@ def parse_json_with_stability(
             return model_class.model_validate(tolerant_data), None
         except Exception as e2:
             return None, f"Model validation failed even after tolerance: {e} (fallback: {e2})"
+
+

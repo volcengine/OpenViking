@@ -4,8 +4,10 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
+from typing import Optional, Tuple
 
 from openviking.utils.network_guard import ensure_public_remote_target
 from openviking_cli.exceptions import PermissionDeniedError
@@ -51,8 +53,26 @@ def deny_direct_local_skill_input(value: str) -> None:
         )
 
 
-def resolve_uploaded_temp_file_id(temp_file_id: str, upload_temp_dir: Path) -> str:
-    """Resolve a temp upload id to a regular file under the server upload temp dir."""
+def _read_upload_meta(meta_path: Path) -> Optional[dict]:
+    """Read upload metadata file if it exists."""
+    try:
+        if meta_path.exists():
+            with open(meta_path, "r") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return None
+
+
+def resolve_uploaded_temp_file_id(
+    temp_file_id: str, upload_temp_dir: Path
+) -> Tuple[str, Optional[str]]:
+    """Resolve a temp upload id to a regular file under the server upload temp dir.
+
+    Returns:
+        Tuple of (resolved_file_path, original_filename)
+        original_filename is None if no meta file exists.
+    """
     if not temp_file_id or temp_file_id in {".", ".."}:
         raise PermissionDeniedError(
             "HTTP server only accepts regular files from the upload temp directory."
@@ -90,4 +110,9 @@ def resolve_uploaded_temp_file_id(temp_file_id: str, upload_temp_dir: Path) -> s
             "HTTP server only accepts regular files from the upload temp directory."
         )
 
-    return str(resolved_path)
+    # Try to read original filename from meta file
+    meta_path = upload_temp_dir / f"{temp_file_id}.ov_upload.meta"
+    meta = _read_upload_meta(meta_path)
+    original_filename = meta.get("original_filename") if meta else None
+
+    return (str(resolved_path), original_filename)

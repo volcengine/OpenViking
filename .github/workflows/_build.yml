@@ -80,9 +80,6 @@ jobs:
         git reset --hard HEAD
         git clean -fd
         # For sdist, ensure local runtime binaries are not packaged even if present
-        rm -rf openviking/bin openviking/lib third_party/agfs/bin || true
-        rm -f openviking/storage/vectordb/*.so openviking/storage/vectordb/*.dylib openviking/storage/vectordb/*.dll openviking/storage/vectordb/*.exe || true
-        rm -rf openviking/_version.py openviking.egg-info
         # Ignore uv.lock changes to avoid dirty state in setuptools_scm
         git update-index --assume-unchanged uv.lock || true
 
@@ -143,12 +140,20 @@ jobs:
         # Retry apt-get update
         for i in 1 2 3 4 5; do apt-get update && break || sleep 5; done
         apt-get install -y \
-          git ca-certificates cmake build-essential tzdata curl \
+          git ca-certificates cmake build-essential clang tzdata curl \
           libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev \
           libffi-dev liblzma-dev libgdbm-dev libnss3-dev libncurses5-dev \
           libncursesw5-dev tk-dev uuid-dev libexpat1-dev
         ln -fs /usr/share/zoneinfo/Etc/UTC /etc/localtime
         dpkg-reconfigure -f noninteractive tzdata
+
+    - name: Select compiler toolchain (Linux)
+      run: |
+        echo "CC=clang" >> "$GITHUB_ENV"
+        echo "CXX=clang++" >> "$GITHUB_ENV"
+        echo "OV_REQUIRE_RAGFS_BUILD=1" >> "$GITHUB_ENV"
+        clang --version
+        clang++ --version
 
     - uses: actions/checkout@v6
       with:
@@ -193,11 +198,6 @@ jobs:
         echo "LD_LIBRARY_PATH=${PYTHON_PREFIX}/lib:${LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
         export LD_LIBRARY_PATH="${PYTHON_PREFIX}/lib:${LD_LIBRARY_PATH}"
         "$PYTHON_BIN" -V
-    - name: Set up Go
-      uses: actions/setup-go@v6
-      with:
-        go-version: '1.25.1'
-
     - name: Set up Rust
       uses: dtolnay/rust-toolchain@v1
       with:
@@ -238,49 +238,16 @@ jobs:
         cp target/${{ matrix.arch == 'aarch64' && 'aarch64-unknown-linux-gnu' || 'x86_64-unknown-linux-gnu' }}/release/ov openviking/bin/
         chmod +x openviking/bin/ov
 
-    - name: Build ragfs-python and extract into openviking/lib/ (Linux)
-      shell: bash
-      run: |
-        uv pip install maturin
-        TMPDIR=$(mktemp -d)
-        cd crates/ragfs-python
-        maturin build --release \
-          --target ${{ matrix.arch == 'aarch64' && 'aarch64-unknown-linux-gnu' || 'x86_64-unknown-linux-gnu' }} \
-          --out "$TMPDIR"
-        cd ../..
-        mkdir -p openviking/lib
-        python3 -c "
-import zipfile, glob, os, sys
-whls = glob.glob(os.path.join('$TMPDIR', 'ragfs_python-*.whl'))
-assert whls, 'maturin produced no wheel'
-with zipfile.ZipFile(whls[0]) as zf:
-    for name in zf.namelist():
-        bn = os.path.basename(name)
-        if bn.startswith('ragfs_python') and (bn.endswith('.so') or bn.endswith('.pyd')):
-            dst = os.path.join('openviking', 'lib', bn)
-            with zf.open(name) as src, open(dst, 'wb') as f:
-                f.write(src.read())
-            os.chmod(dst, 0o755)
-            print(f'Extracted {bn} -> {dst}')
-            sys.exit(0)
-print('ERROR: No ragfs_python .so/.pyd found in wheel')
-sys.exit(1)
-        "
-        rm -rf "$TMPDIR"
-        echo "Contents of openviking/lib/:"
-        ls -la openviking/lib/
     - name: Clean workspace (force ignore dirty)
       shell: bash
       run: |
         # Back up pre-built artifacts before cleaning
         cp -a openviking/bin /tmp/_ov_bin || true
-        cp -a openviking/lib /tmp/_ov_lib || true
         git reset --hard HEAD
         git clean -fd
         rm -rf openviking/_version.py openviking.egg-info
         # Restore pre-built artifacts
         cp -a /tmp/_ov_bin openviking/bin || true
-        cp -a /tmp/_ov_lib openviking/lib || true
         # Ignore uv.lock changes to avoid dirty state in setuptools_scm
         git update-index --assume-unchanged uv.lock || true
 
@@ -296,7 +263,7 @@ sys.exit(1)
         echo "=== Check openviking/_version.py ==="
         if [ -f openviking/_version.py ]; then cat openviking/_version.py; else echo "Not found"; fi
         echo "=== Verify pre-built artifacts survived clean ==="
-        ls -la openviking/bin/ openviking/lib/ || true
+        ls -la openviking/bin/ || true
 
     - name: Build package (Wheel Only)
       run: uv build --wheel
@@ -320,6 +287,36 @@ sys.exit(1)
         rm dist/*.whl
         mv dist_fixed/*.whl dist/
         rmdir dist_fixed
+
+    - name: Smoke test built wheel (Linux)
+      shell: bash
+      run: |
+        "$PYTHON_BIN" -m pip install --upgrade pip
+        "$PYTHON_BIN" -m pip install --force-reinstall dist/*.whl
+
+        cd "$RUNNER_TEMP"
+        "$PYTHON_BIN" - <<'PY'
+        import importlib.util
+
+        from openviking.pyagfs import get_binding_client
+        import openviking.storage.vectordb.engine as engine
+
+        binding_client, _ = get_binding_client()
+        if binding_client is None:
+            raise SystemExit("ragfs binding client was not installed")
+
+        print(f"Loaded RAGFS binding client {binding_client.__name__}")
+        print(f"Loaded runtime engine variant {engine.ENGINE_VARIANT}")
+        print(f"Available engine variants {engine.AVAILABLE_ENGINE_VARIANTS}")
+
+        module_name = f"openviking.storage.vectordb.engine._{engine.ENGINE_VARIANT}"
+        backend_spec = importlib.util.find_spec(module_name)
+        if backend_spec is None or backend_spec.origin is None:
+            raise SystemExit(f"backend module {module_name} was not installed")
+
+        print(f"Imported backend module {module_name}")
+        print(f"Backend module origin {backend_spec.origin}")
+        PY
 
     - name: Store the distribution packages
       uses: actions/upload-artifact@v7
@@ -384,11 +381,6 @@ sys.exit(1)
         echo "_PYTHON_HOST_PLATFORM=macosx-${MACOS_VERSION}-${TARGET_ARCH}" >> "$GITHUB_ENV"
         echo "Configured macOS wheel platform: macosx-${MACOS_VERSION}-${TARGET_ARCH}"
 
-    - name: Set up Go
-      uses: actions/setup-go@v6
-      with:
-        go-version: '1.25.1'
-
     - name: Set up Rust
       uses: dtolnay/rust-toolchain@v1
       with:
@@ -413,6 +405,10 @@ sys.exit(1)
 
     - name: Install build dependencies
       run: uv pip install setuptools setuptools_scm cmake wheel build
+
+    - name: Require ragfs native artifact for wheel builds
+      shell: bash
+      run: echo "OV_REQUIRE_RAGFS_BUILD=1" >> "$GITHUB_ENV"
 
     - name: Resolve OpenViking version for Rust CLI (macOS/Windows)
       shell: bash
@@ -443,51 +439,16 @@ sys.exit(1)
           chmod +x openviking/bin/ov
         fi
 
-    - name: Build ragfs-python and extract into openviking/lib/ (macOS/Windows)
-      shell: bash
-      run: |
-        uv pip install maturin
-        TMPDIR=$(mktemp -d)
-        cd crates/ragfs-python
-        if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-          maturin build --release --target x86_64-pc-windows-msvc --out "$TMPDIR"
-        else
-          maturin build --release --out "$TMPDIR"
-        fi
-        cd ../..
-        mkdir -p openviking/lib
-        python3 -c "
-import zipfile, glob, os, sys
-whls = glob.glob(os.path.join('$TMPDIR', 'ragfs_python-*.whl'))
-assert whls, 'maturin produced no wheel'
-with zipfile.ZipFile(whls[0]) as zf:
-    for name in zf.namelist():
-        bn = os.path.basename(name)
-        if bn.startswith('ragfs_python') and (bn.endswith('.so') or bn.endswith('.pyd')):
-            dst = os.path.join('openviking', 'lib', bn)
-            with zf.open(name) as src, open(dst, 'wb') as f:
-                f.write(src.read())
-            os.chmod(dst, 0o755)
-            print(f'Extracted {bn} -> {dst}')
-            sys.exit(0)
-print('ERROR: No ragfs_python .so/.pyd found in wheel')
-sys.exit(1)
-        "
-        rm -rf "$TMPDIR"
-        echo "Contents of openviking/lib/:"
-        ls -la openviking/lib/
     - name: Clean workspace (force ignore dirty)
       shell: bash
       run: |
         # Back up pre-built artifacts before cleaning
         cp -a openviking/bin /tmp/_ov_bin || true
-        cp -a openviking/lib /tmp/_ov_lib || true
         git reset --hard HEAD
         git clean -fd
         rm -rf openviking/_version.py openviking.egg-info
         # Restore pre-built artifacts
         cp -a /tmp/_ov_bin openviking/bin || true
-        cp -a /tmp/_ov_lib openviking/lib || true
         # Ignore uv.lock changes to avoid dirty state in setuptools_scm
         git update-index --assume-unchanged uv.lock || true
 
@@ -503,10 +464,41 @@ sys.exit(1)
         echo "=== Check openviking/_version.py ==="
         if [ -f openviking/_version.py ]; then cat openviking/_version.py; else echo "Not found"; fi
         echo "=== Verify pre-built artifacts survived clean ==="
-        ls -la openviking/bin/ openviking/lib/ || true
+        ls -la openviking/bin/ || true
 
     - name: Build package (Wheel Only)
       run: uv build --wheel
+
+    - name: Smoke test built wheel (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install --force-reinstall dist/*.whl
+
+        cd "$RUNNER_TEMP"
+        python - <<'PY'
+        import importlib.util
+
+        from openviking.pyagfs import get_binding_client
+        import openviking.storage.vectordb.engine as engine
+
+        binding_client, _ = get_binding_client()
+        if binding_client is None:
+            raise SystemExit("ragfs binding client was not installed")
+
+        print(f"Loaded RAGFS binding client {binding_client.__name__}")
+        print(f"Loaded runtime engine variant {engine.ENGINE_VARIANT}")
+        print(f"Available engine variants {engine.AVAILABLE_ENGINE_VARIANTS}")
+
+        module_name = f"openviking.storage.vectordb.engine._{engine.ENGINE_VARIANT}"
+        backend_spec = importlib.util.find_spec(module_name)
+        if backend_spec is None or backend_spec.origin is None:
+            raise SystemExit(f"backend module {module_name} was not installed")
+
+        print(f"Imported backend module {module_name}")
+        print(f"Backend module origin {backend_spec.origin}")
+        PY
 
     - name: Smoke test built wheel (Windows)
       if: runner.os == 'Windows'

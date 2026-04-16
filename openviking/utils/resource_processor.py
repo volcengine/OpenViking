@@ -128,7 +128,13 @@ class ResourceProcessor:
         with telemetry.measure("resource.process"):
             # ============ Phase 1: Parse source and writes to temp viking fs ============
             try:
+                from openviking.metrics.datasources.resource import (
+                    ResourceIngestionEventDataSource,
+                )
+
                 parse_start = time.perf_counter()
+                stage_start = time.perf_counter()
+                stage_status = "ok"
                 media_processor = self._get_media_processor()
                 viking_fs = get_viking_fs()
                 # Use reason as instruction fallback so it influences L0/L1
@@ -151,6 +157,7 @@ class ResourceProcessor:
                     result["errors"].extend(
                         parse_result.warnings or ["Parse failed: no content generated"],
                     )
+                    stage_status = "error"
                     return result
 
                 if parse_result.warnings and kwargs.get("strict", False):
@@ -163,6 +170,7 @@ class ResourceProcessor:
                 telemetry.set("resource.parse.warnings_count", len(parse_result.warnings or []))
 
             except OpenVikingError:
+                stage_status = "error"
                 raise
             except Exception as e:
                 result["status"] = "error"
@@ -172,7 +180,18 @@ class ResourceProcessor:
                 import traceback
 
                 traceback.print_exc()
+                stage_status = "error"
                 return result
+            finally:
+                try:
+                    ResourceIngestionEventDataSource.record_stage(
+                        stage="parse",
+                        status=str(stage_status),
+                        duration_seconds=float(time.perf_counter() - stage_start),
+                        account_id=getattr(ctx, "account_id", None),
+                    )
+                except Exception:
+                    pass
 
             # parse_result contains:
             # - root: ResourceNode tree (with L0/L1 in meta)
@@ -181,6 +200,8 @@ class ResourceProcessor:
 
             # ============ Phase 3: TreeBuilder finalizes from temp (scan + move to AGFS) ============
             try:
+                stage_start = time.perf_counter()
+                stage_status = "ok"
                 finalize_start = time.perf_counter()
                 with get_viking_fs().bind_request_context(ctx):
                     context_tree = await self.tree_builder.finalize_from_temp(
@@ -203,6 +224,7 @@ class ResourceProcessor:
                 result["status"] = "error"
                 result["errors"].append(f"Finalize from temp error: {e}")
                 telemetry.set_error("resource_processor.finalize", "PROCESSING_ERROR", str(e))
+                stage_status = "error"
 
                 # Cleanup temporary directory on error (via VikingFS)
                 try:
@@ -212,67 +234,96 @@ class ResourceProcessor:
                     pass
 
                 return result
+            finally:
+                try:
+                    ResourceIngestionEventDataSource.record_stage(
+                        stage="finalize",
+                        status=str(stage_status),
+                        duration_seconds=float(time.perf_counter() - stage_start),
+                        account_id=getattr(ctx, "account_id", None),
+                    )
+                except Exception:
+                    pass
 
             # ============ Phase 3.5: 首次添加立即落盘 + 生命周期锁 ============
             root_uri = result.get("root_uri")
             temp_uri = result.get("temp_uri")  # temp_doc_uri
+            original_temp_uri = temp_uri  # 保存原始 temp_uri 用于最终输出
             candidate_uri = getattr(context_tree, "_candidate_uri", None) if context_tree else None
             lifecycle_lock_handle_id = ""
 
             if root_uri and temp_uri:
                 from openviking.storage.transaction import LockContext, get_lock_manager
 
+                stage_start = time.perf_counter()
+                stage_status = "ok"
                 viking_fs = get_viking_fs()
                 lock_manager = get_lock_manager()
-                target_exists = await viking_fs.exists(root_uri, ctx=ctx)
+                try:
+                    target_exists = await viking_fs.exists(root_uri, ctx=ctx)
 
-                if not target_exists:
-                    # 第一次添加：锁保护下将 temp 移到 final
-                    dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
-                    parent_path = dst_path.rsplit("/", 1)[0] if "/" in dst_path else dst_path
+                    if not target_exists:
+                        dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
+                        parent_path = dst_path.rsplit("/", 1)[0] if "/" in dst_path else dst_path
 
-                    parent_uri = "/".join(root_uri.rstrip("/").rsplit("/", 1)[:-1])
-                    if parent_uri:
-                        await viking_fs.mkdir(parent_uri, exist_ok=True, ctx=ctx)
+                        parent_uri = "/".join(root_uri.rstrip("/").rsplit("/", 1)[:-1])
+                        if parent_uri:
+                            await viking_fs.mkdir(parent_uri, exist_ok=True, ctx=ctx)
 
-                    async with LockContext(lock_manager, [parent_path], lock_mode="point"):
-                        if candidate_uri:
-                            with viking_fs.bind_request_context(ctx):
-                                root_uri = await self.tree_builder._resolve_unique_uri(
-                                    candidate_uri
-                                )
-                            result["root_uri"] = root_uri
-                            dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
+                        async with LockContext(lock_manager, [parent_path], lock_mode="point"):
+                            if candidate_uri:
+                                with viking_fs.bind_request_context(ctx):
+                                    root_uri = await self.tree_builder._resolve_unique_uri(
+                                        candidate_uri
+                                    )
+                                result["root_uri"] = root_uri
+                                dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
 
-                        src_path = viking_fs._uri_to_path(temp_uri, ctx=ctx)
-                        await asyncio.to_thread(viking_fs.agfs.mv, src_path, dst_path)
+                            src_path = viking_fs._uri_to_path(temp_uri, ctx=ctx)
+                            await asyncio.to_thread(viking_fs.agfs.mv, src_path, dst_path)
 
-                        # 在 POINT 锁内获取 SUBTREE 锁（消除竞态窗口）
+                            lifecycle_lock_handle_id = await self._try_acquire_lifecycle_lock(
+                                lock_manager, dst_path
+                            )
+
+                        try:
+                            await viking_fs.delete_temp(parse_result.temp_dir_path, ctx=ctx)
+                        except Exception:
+                            pass
+
+                        result["temp_uri"] = root_uri
+                    else:
+                        resource_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
                         lifecycle_lock_handle_id = await self._try_acquire_lifecycle_lock(
-                            lock_manager, dst_path
+                            lock_manager, resource_path
                         )
-
+                except Exception:
+                    stage_status = "error"
+                    raise
+                finally:
                     try:
-                        await viking_fs.delete_temp(parse_result.temp_dir_path, ctx=ctx)
+                        ResourceIngestionEventDataSource.record_stage(
+                            stage="persist",
+                            status=str(stage_status),
+                            duration_seconds=float(time.perf_counter() - stage_start),
+                            account_id=getattr(ctx, "account_id", None),
+                        )
                     except Exception:
                         pass
 
-                    result["temp_uri"] = root_uri
-                else:
-                    # 增量更新：对目标目录加 SUBTREE 锁
-                    resource_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
-                    lifecycle_lock_handle_id = await self._try_acquire_lifecycle_lock(
-                        lock_manager, resource_path
-                    )
+                    # 数据已移动到 root_uri，后续处理使用 root_uri
+                    temp_uri = root_uri
 
             # ============ Phase 4: Optional Steps ============
             build_index = kwargs.get("build_index", True)
-            temp_uri_for_summarize = result.get("temp_uri") or parse_result.temp_dir_path
+            temp_uri_for_summarize = temp_uri or parse_result.temp_dir_path
             should_summarize = summarize or build_index
             if should_summarize:
                 skip_vec = not build_index
                 is_code_repo = parse_result.source_format == "repository"
                 try:
+                    stage_start = time.perf_counter()
+                    stage_status = "ok"
                     with telemetry.measure("resource.summarize"):
                         await self._get_summarizer().summarize(
                             resource_uris=[result["root_uri"]],
@@ -286,6 +337,17 @@ class ResourceProcessor:
                 except Exception as e:
                     logger.error(f"Summarization failed: {e}")
                     result["warnings"] = result.get("warnings", []) + [f"Summarization failed: {e}"]
+                    stage_status = "error"
+                finally:
+                    try:
+                        ResourceIngestionEventDataSource.record_stage(
+                            stage="summarize",
+                            status=str(stage_status),
+                            duration_seconds=float(time.perf_counter() - stage_start),
+                            account_id=getattr(ctx, "account_id", None),
+                        )
+                    except Exception:
+                        pass
             elif lifecycle_lock_handle_id:
                 # 无下游处理接管锁，主动释放
                 from openviking.storage.transaction import get_lock_manager
@@ -293,6 +355,10 @@ class ResourceProcessor:
                 handle = get_lock_manager().get_handle(lifecycle_lock_handle_id)
                 if handle:
                     await get_lock_manager().release(handle)
+
+            # 恢复原始 temp_uri 用于输出
+            if original_temp_uri is not None:
+                result["temp_uri"] = original_temp_uri
 
             return result
 

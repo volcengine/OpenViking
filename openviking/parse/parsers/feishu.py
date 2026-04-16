@@ -28,6 +28,7 @@ from openviking.parse.base import (
     format_table_to_markdown,
 )
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking_cli.utils.config.parser_config import FeishuConfig
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -173,9 +174,10 @@ class FeishuParser(BaseParser):
     # Wiki obj_type normalization (API returns short names)
     _WIKI_TYPE_MAP = {"doc": "docx", "sheet": "sheets", "bitable": "base"}
 
-    def __init__(self):
+    def __init__(self, config: Optional[FeishuConfig] = None):
         self._client = None
-        self._config = None
+        self._config = config
+        self._markdown_parser = None
 
     @property
     def supported_extensions(self) -> List[str]:
@@ -190,6 +192,14 @@ class FeishuParser(BaseParser):
 
             self._config = get_openviking_config().feishu
         return self._config
+
+    def _get_markdown_parser(self):
+        """Lazy import and create MarkdownParser with Feishu parser config."""
+        if self._markdown_parser is None:
+            from openviking.parse.parsers.markdown import MarkdownParser
+
+            self._markdown_parser = MarkdownParser(config=self._get_config())
+        return self._markdown_parser
 
     def _get_client(self):
         """Lazy-init lark-oapi client."""
@@ -256,15 +266,9 @@ class FeishuParser(BaseParser):
                     f"Unsupported Feishu document type: {doc_type}. "
                     f"Supported: {list(self._DOC_TYPE_HANDLERS.keys())}"
                 )
-            markdown, doc_title = await asyncio.to_thread(getattr(self, handler_name), token)
+            markdown, _doc_title = await asyncio.to_thread(getattr(self, handler_name), token)
 
-            if title:
-                doc_title = title
-
-            # Delegate to MarkdownParser
-            from openviking.parse.parsers.markdown import MarkdownParser
-
-            md_parser = MarkdownParser()
+            md_parser = self._get_markdown_parser()
             result = await md_parser.parse_content(
                 markdown, source_path=url, instruction=instruction, **kwargs
             )

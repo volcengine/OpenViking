@@ -258,6 +258,7 @@ Provider configuration is read from OpenViking config (`vlm` section in `ov.conf
 > - **Groq** provides free voice transcription via Whisper. If configured, Telegram voice messages will be automatically transcribed.
 > - **Zhipu Coding Plan**: If you're on Zhipu's coding plan, set `"apiBase": "https://open.bigmodel.cn/api/coding/paas/v4"` in your zhipu provider config.
 > - **MiniMax (Mainland China)**: If your API key is from MiniMax's mainland China platform (minimaxi.com), set `"apiBase": "https://api.minimaxi.com/v1"` in your minimax provider config.
+> - **MiniMax Recommended Models**: `MiniMax-M2.7` (peak performance) and `MiniMax-M2.7-highspeed` (faster, more agile). Configure with `"model": "MiniMax-M2.7"` in your agent config.
 
 | Provider | Purpose | Get API Key |
 |----------|---------|-------------|

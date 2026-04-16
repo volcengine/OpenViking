@@ -173,3 +173,7 @@ curl http://localhost:1933/api/v1/search/find \
 - [Retrieval Mechanism](./07-retrieval.md) - Retrieval process details
 - [Context Extraction](./06-extraction.md) - Parsing and extraction process
 - [Session Management](./08-session.md) - Session and memory management
+- [Transaction Model](./09-transaction.md) - Write and consistency model
+- [Data Encryption](./10-encryption.md) - At-rest encryption and key architecture
+- [Multi-Tenant](./11-multi-tenant.md) - Account / user / agent isolation model
+- [Metrics](./12-metrics.md) - `/metrics` usage and key metric explanations

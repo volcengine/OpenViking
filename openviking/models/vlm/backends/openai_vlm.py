@@ -350,7 +350,7 @@ class OpenAIVLM(VLMBase):
             operation_name="OpenAI VLM completion",
         )
 
-    @tracer("vlm.call", ignore_result=True, ignore_args=["messages"])
+    @tracer("openai.vlm.call", ignore_result=True, ignore_args=["messages"])
     async def get_completion_async(
         self,
         prompt: str = "",

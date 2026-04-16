@@ -79,13 +79,34 @@ class SessionService:
         Raises:
             AlreadyExistsError: If a session with the given ID already exists
         """
-        if session_id:
-            existing = self.session(ctx, session_id)
-            if await existing.exists():
-                raise AlreadyExistsError(f"Session '{session_id}' already exists")
-        session = self.session(ctx, session_id)
-        await session.ensure_exists()
-        return session
+        try:
+            from openviking.metrics.datasources.session import SessionLifecycleDataSource
+
+            SessionLifecycleDataSource.record_lifecycle(action="create", status="attempt")
+        except Exception:
+            pass
+        try:
+            if session_id:
+                existing = self.session(ctx, session_id)
+                if await existing.exists():
+                    raise AlreadyExistsError(f"Session '{session_id}' already exists")
+            session = self.session(ctx, session_id)
+            await session.ensure_exists()
+            try:
+                from openviking.metrics.datasources.session import SessionLifecycleDataSource
+
+                SessionLifecycleDataSource.record_lifecycle(action="create", status="ok")
+            except Exception:
+                pass
+            return session
+        except Exception:
+            try:
+                from openviking.metrics.datasources.session import SessionLifecycleDataSource
+
+                SessionLifecycleDataSource.record_lifecycle(action="create", status="error")
+            except Exception:
+                pass
+            raise
 
     async def get(
         self, session_id: str, ctx: RequestContext, *, auto_create: bool = False
@@ -98,13 +119,28 @@ class SessionService:
             auto_create: If True, create the session when it does not exist.
                          Default is False (raise NotFoundError).
         """
-        session = self.session(ctx, session_id)
-        if not await session.exists():
-            if not auto_create:
-                raise NotFoundError(session_id, "session")
-            await session.ensure_exists()
-        await session.load()
-        return session
+        try:
+            session = self.session(ctx, session_id)
+            if not await session.exists():
+                if not auto_create:
+                    raise NotFoundError(session_id, "session")
+                await session.ensure_exists()
+            await session.load()
+            try:
+                from openviking.metrics.datasources.session import SessionLifecycleDataSource
+
+                SessionLifecycleDataSource.record_lifecycle(action="get", status="ok")
+            except Exception:
+                pass
+            return session
+        except Exception:
+            try:
+                from openviking.metrics.datasources.session import SessionLifecycleDataSource
+
+                SessionLifecycleDataSource.record_lifecycle(action="get", status="error")
+            except Exception:
+                pass
+            raise
 
     async def sessions(self, ctx: RequestContext) -> List[Dict[str, Any]]:
         """Get all sessions for the current user.
@@ -148,9 +184,21 @@ class SessionService:
         try:
             await self._viking_fs.rm(session_uri, recursive=True, ctx=ctx)
             logger.info(f"Deleted session: {session_id}")
+            try:
+                from openviking.metrics.datasources.session import SessionLifecycleDataSource
+
+                SessionLifecycleDataSource.record_lifecycle(action="delete", status="ok")
+            except Exception:
+                pass
             return True
         except Exception as e:
             logger.error(f"Failed to delete session {session_id}: {e}")
+            try:
+                from openviking.metrics.datasources.session import SessionLifecycleDataSource
+
+                SessionLifecycleDataSource.record_lifecycle(action="delete", status="error")
+            except Exception:
+                pass
             raise NotFoundError(session_id, "session")
 
     async def commit(self, session_id: str, ctx: RequestContext) -> Dict[str, Any]:
@@ -181,7 +229,19 @@ class SessionService:
         """
         self._ensure_initialized()
         session = await self.get(session_id, ctx)
-        return await session.commit_async()
+        result = await session.commit_async()
+        try:
+            from openviking.metrics.datasources.session import SessionLifecycleDataSource
+
+            SessionLifecycleDataSource.record_lifecycle(
+                action="commit", status="ok" if result.get("status") else "error"
+            )
+            SessionLifecycleDataSource.record_archive(
+                status="ok" if result.get("archived") else "skip"
+            )
+        except Exception:
+            pass
+        return result
 
     async def get_commit_task(self, task_id: str, ctx: RequestContext) -> Optional[Dict[str, Any]]:
         """Query background commit task status by task_id for the calling owner."""
@@ -207,9 +267,16 @@ class SessionService:
 
         session = await self.get(session_id, ctx)
 
-        return await self._session_compressor.extract_long_term_memories(
+        memories = await self._session_compressor.extract_long_term_memories(
             messages=session.messages,
             user=ctx.user,
             session_id=session_id,
             ctx=ctx,
         )
+        try:
+            from openviking.metrics.datasources.session import SessionLifecycleDataSource
+
+            SessionLifecycleDataSource.record_lifecycle(action="extract", status="ok")
+        except Exception:
+            pass
+        return memories

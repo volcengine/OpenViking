@@ -10,6 +10,41 @@ python examples/openclaw-plugin/ov-healthcheck.py
 
 No extra dependencies — standard library only. Addresses and tokens are auto-discovered from `openclaw.json`.
 
+## Prerequisites
+
+### Gateway HTTP Endpoints Must Be Enabled
+
+Phase 1 conversation injection requires the Gateway's `/v1/responses` endpoint, which is **disabled by default**. Enable it in `openclaw.json`:
+
+```json
+{
+  "gateway": {
+    "http": {
+      "endpoints": {
+        "chatCompletions": {
+          "enabled": true
+        },
+        "responses": {
+          "enabled": true
+        }
+      }
+    }
+  }
+}
+```
+
+Restart Gateway to apply:
+
+```bash
+openclaw gateway restart
+```
+
+Without this, Phase 1 will fail with:
+
+```
+[FAIL] Chat turn 1 failed (POST http://127.0.0.1:18789/v1/responses failed with HTTP 404: Not Found)
+```
+
 ## Expected Output
 
 A successful run looks like this:
@@ -127,6 +162,29 @@ cat ~/.openviking/ov.conf
 
 Check `storage.workspace/log/openviking.log` for errors.
 
+### `Chat turn 1 failed (POST /v1/responses failed with HTTP 404: Not Found)`
+
+The most common Phase 1 failure. Gateway's `/v1/responses` and `/v1/chat/completions` endpoints are **disabled by default**. Enable them under `gateway.http.endpoints` in `openclaw.json`:
+
+```json
+{
+  "gateway": {
+    "http": {
+      "endpoints": {
+        "chatCompletions": { "enabled": true },
+        "responses": { "enabled": true }
+      }
+    }
+  }
+}
+```
+
+Restart Gateway:
+
+```bash
+openclaw gateway restart
+```
+
 ### `Probe session not found in OpenViking`
 
 The conversation completed but the plugin did not persist it.
@@ -168,9 +226,10 @@ This is `INFO`, not a failure. If fresh-session recall answers correctly, the pi
 
 ## Recommended Debug Order
 
-1. Check `plugins.slots.contextEngine` is `openviking`
-2. Check Gateway `/health`
-3. Check OpenViking `/health`
-4. Check `openclaw logs --follow`
-5. Check OpenViking log
-6. Look at the specific failed phase in script output
+1. Confirm `gateway.http.endpoints` is configured as described in Prerequisites
+2. Check `plugins.slots.contextEngine` is `openviking`
+3. Check Gateway `/health`
+4. Check OpenViking `/health`
+5. Check `openclaw logs --follow`
+6. Check OpenViking log
+7. Look at the specific failed phase in script output

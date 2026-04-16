@@ -17,6 +17,10 @@ class VolcengineConfig(BaseModel):
 
     ak: Optional[str] = Field(default=None, description="Volcengine Access Key")
     sk: Optional[str] = Field(default=None, description="Volcengine Secret Key")
+    session_token: Optional[str] = Field(
+        default=None,
+        description="Optional Volcengine STS security token for temporary credentials",
+    )
     region: Optional[str] = Field(
         default=None, description="Volcengine region (e.g., 'cn-beijing')"
     )

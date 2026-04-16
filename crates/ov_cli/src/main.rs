@@ -7,7 +7,7 @@ mod tui;
 mod utils;
 
 use clap::{ArgAction, Parser, Subcommand};
-use config::Config;
+use config::{Config, merge_csv_options};
 use error::{Error, Result};
 use output::OutputFormat;
 
@@ -283,6 +283,9 @@ enum Commands {
     Mkdir {
         /// Directory URI to create
         uri: String,
+        /// Initial directory description
+        #[arg(long)]
+        description: Option<String>,
     },
     /// Remove resource
     #[command(alias = "del", alias = "delete")]
@@ -313,12 +316,12 @@ enum Commands {
     },
     /// Read abstract content (L0)
     Abstract {
-        /// Viking URI
+        /// Directory URI
         uri: String,
     },
     /// Read overview content (L1)
     Overview {
-        /// Viking URI
+        /// Directory URI
         uri: String,
     },
     /// Write text content to an existing file
@@ -377,6 +380,12 @@ enum Commands {
         /// Score threshold
         #[arg(short, long)]
         threshold: Option<f64>,
+        /// Only include results on or after this time (e.g. 48h, 7d, 2026-03-10, ISO-8601)
+        #[arg(long = "after")]
+        after: Option<String>,
+        /// Only include results on or before this time (e.g. 24h, 2026-03-15, ISO-8601)
+        #[arg(long = "before")]
+        before: Option<String>,
     },
     /// Run context-aware retrieval
     Search {
@@ -399,6 +408,12 @@ enum Commands {
         /// Score threshold
         #[arg(short, long)]
         threshold: Option<f64>,
+        /// Only include results on or after this time (e.g. 48h, 7d, 2026-03-10, ISO-8601)
+        #[arg(long = "after")]
+        after: Option<String>,
+        /// Only include results on or before this time (e.g. 24h, 2026-03-15, ISO-8601)
+        #[arg(long = "before")]
+        before: Option<String>,
     },
     /// Run content pattern search
     Grep {
@@ -735,7 +750,7 @@ async fn main() {
             node_limit,
             level_limit,
         } => handle_tree(uri, abs_limit, all, node_limit, level_limit, ctx).await,
-        Commands::Mkdir { uri } => handle_mkdir(uri, ctx).await,
+        Commands::Mkdir { uri, description } => handle_mkdir(uri, description, ctx).await,
         Commands::Rm { uri, recursive } => handle_rm(uri, recursive, ctx).await,
         Commands::Mv { from_uri, to_uri } => handle_mv(from_uri, to_uri, ctx).await,
         Commands::Stat { uri } => handle_stat(uri, ctx).await,
@@ -784,8 +799,7 @@ async fn main() {
             append,
             wait,
             timeout,
-        } => handle_write(uri, content, from_file, append, wait, timeout, ctx)
-            .await,
+        } => handle_write(uri, content, from_file, append, wait, timeout, ctx).await,
         Commands::Reindex {
             uri,
             regenerate,
@@ -797,14 +811,23 @@ async fn main() {
             uri,
             node_limit,
             threshold,
-        } => handle_find(query, uri, node_limit, threshold, ctx).await,
+            after,
+            before,
+        } => handle_find(query, uri, node_limit, threshold, after, before, ctx).await,
         Commands::Search {
             query,
             uri,
             session_id,
             node_limit,
             threshold,
-        } => handle_search(query, uri, session_id, node_limit, threshold, ctx).await,
+            after,
+            before,
+        } => {
+            handle_search(
+                query, uri, session_id, node_limit, threshold, after, before, ctx,
+            )
+            .await
+        }
         Commands::Grep {
             uri,
             exclude_uri,
@@ -812,7 +835,18 @@ async fn main() {
             ignore_case,
             node_limit,
             level_limit,
-        } => handle_grep(uri, exclude_uri, pattern, ignore_case, node_limit, level_limit, ctx).await,
+        } => {
+            handle_grep(
+                uri,
+                exclude_uri,
+                pattern,
+                ignore_case,
+                node_limit,
+                level_limit,
+                ctx,
+            )
+            .await
+        }
 
         Commands::Glob {
             pattern,
@@ -886,6 +920,11 @@ async fn handle_add_resource(
     let strict = strict_mode;
     let directly_upload_media = !no_directly_upload_media;
 
+    let effective_ignore_dirs =
+        merge_csv_options(ctx.config.upload.ignore_dirs.clone(), ignore_dirs);
+    let effective_include = merge_csv_options(ctx.config.upload.include.clone(), include);
+    let effective_exclude = merge_csv_options(ctx.config.upload.exclude.clone(), exclude);
+
     let effective_timeout = if wait {
         timeout.unwrap_or(60.0).max(ctx.config.timeout)
     } else {
@@ -909,9 +948,9 @@ async fn handle_add_resource(
         wait,
         timeout,
         strict,
-        ignore_dirs,
-        include,
-        exclude,
+        effective_ignore_dirs,
+        effective_include,
+        effective_exclude,
         directly_upload_media,
         watch_interval,
         ctx.output_format,
@@ -1237,7 +1276,11 @@ async fn handle_write(
         (Some(value), None) => value,
         (None, Some(path)) => std::fs::read_to_string(path)
             .map_err(|e| Error::Client(format!("Failed to read --from-file: {}", e)))?,
-        _ => return Err(Error::Client("Specify exactly one of --content or --from-file".into())),
+        _ => {
+            return Err(Error::Client(
+                "Specify exactly one of --content or --from-file".into(),
+            ));
+        }
     };
     commands::content::write(
         &client,
@@ -1275,12 +1318,15 @@ async fn handle_find(
     uri: String,
     node_limit: i32,
     threshold: Option<f64>,
+    after: Option<String>,
+    before: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
     if let Some(t) = threshold {
         params.push(format!("--threshold {}", t));
     }
+    append_time_filter_params(&mut params, after.as_deref(), before.as_deref());
     params.push(format!("\"{}\"", query));
     print_command_echo("ov find", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
@@ -1290,6 +1336,9 @@ async fn handle_find(
         &uri,
         node_limit,
         threshold,
+        after.as_deref(),
+        before.as_deref(),
+        None,
         ctx.output_format,
         ctx.compact,
     )
@@ -1302,6 +1351,8 @@ async fn handle_search(
     session_id: Option<String>,
     node_limit: i32,
     threshold: Option<f64>,
+    after: Option<String>,
+    before: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
@@ -1311,6 +1362,7 @@ async fn handle_search(
     if let Some(t) = threshold {
         params.push(format!("--threshold {}", t));
     }
+    append_time_filter_params(&mut params, after.as_deref(), before.as_deref());
     params.push(format!("\"{}\"", query));
     print_command_echo("ov search", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
@@ -1321,10 +1373,26 @@ async fn handle_search(
         session_id,
         node_limit,
         threshold,
+        after.as_deref(),
+        before.as_deref(),
+        None,
         ctx.output_format,
         ctx.compact,
     )
     .await
+}
+
+fn append_time_filter_params(
+    params: &mut Vec<String>,
+    after: Option<&str>,
+    before: Option<&str>,
+) {
+    if let Some(value) = after {
+        params.push(format!("--after {}", value));
+    }
+    if let Some(value) = before {
+        params.push(format!("--before {}", value));
+    }
 }
 
 /// Print command with specified parameters for debugging
@@ -1411,9 +1479,16 @@ async fn handle_tree(
     .await
 }
 
-async fn handle_mkdir(uri: String, ctx: CliContext) -> Result<()> {
+async fn handle_mkdir(uri: String, description: Option<String>, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
-    commands::filesystem::mkdir(&client, &uri, ctx.output_format, ctx.compact).await
+    commands::filesystem::mkdir(
+        &client,
+        &uri,
+        description.as_deref(),
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
 }
 
 async fn handle_rm(uri: String, recursive: bool, ctx: CliContext) -> Result<()> {
@@ -1454,7 +1529,11 @@ async fn handle_grep(
         std::process::exit(1);
     }
 
-    let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit), format!("-L {}", level_limit)];
+    let mut params = vec![
+        format!("--uri={}", uri),
+        format!("-n {}", node_limit),
+        format!("-L {}", level_limit),
+    ];
     if let Some(excluded) = &exclude_uri {
         params.push(format!("-x {}", excluded));
     }
@@ -1548,6 +1627,7 @@ mod tests {
             timeout: 60.0,
             output: "table".to_string(),
             echo_command: true,
+            upload: Default::default(),
         };
 
         let ctx = CliContext::from_config(
@@ -1577,5 +1657,16 @@ mod tests {
         ]);
 
         assert!(result.is_err(), "removed write flags should not parse");
+    }
+
+    #[test]
+    fn append_time_filter_params_only_emits_after_and_before() {
+        let mut params = Vec::new();
+        let after = Some("7d".to_string());
+        let before = Some("2026-03-12".to_string());
+
+        super::append_time_filter_params(&mut params, after.as_deref(), before.as_deref());
+
+        assert_eq!(params, vec!["--after 7d", "--before 2026-03-12"]);
     }
 }

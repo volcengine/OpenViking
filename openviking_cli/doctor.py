@@ -1,8 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""ov doctor - validate OpenViking subsystems and report actionable diagnostics.
+"""openviking-server doctor - validate OpenViking subsystems and report actionable diagnostics.
 
-Unlike ``ov health`` (which pings a running server), ``ov doctor`` checks
+Unlike ``ov health`` (which pings a running server), ``openviking-server doctor`` checks
 local prerequisites without requiring a server: config file, Python version,
 native vector engine, AGFS, embedding provider, VLM provider, and disk space.
 """
@@ -77,7 +77,7 @@ def check_config() -> tuple[bool, str, Optional[str]]:
     except json.JSONDecodeError as exc:
         return False, f"Invalid JSON in {config_path}", f"Fix syntax error: {exc}"
 
-    missing = [key for key in ("embedding",) if key not in data]
+    missing = [key for key in () if key not in data]
     if missing:
         return (
             False,
@@ -152,13 +152,58 @@ def check_embedding() -> tuple[bool, str, Optional[str]]:
     if data is None:
         return False, "Cannot check (config unreadable)", None
 
-    embedding = data.get("embedding", {})
-    dense = embedding.get("dense", {})
-    provider = dense.get("provider", "unknown")
-    model = dense.get("model", "unknown")
+    embedding = data.get("embedding", {}) or {}
+    dense = embedding.get("dense", {}) or {}
+    provider = dense.get("provider", "local")
+    model = dense.get("model", "bge-small-zh-v1.5-f16")
 
-    if provider == "unknown":
-        return False, "No embedding provider configured", "Add embedding.dense section to ov.conf"
+    if provider == "local":
+        from openviking.models.embedder.local_embedders import (
+            get_local_model_cache_path,
+            get_local_model_spec,
+        )
+
+        try:
+            get_local_model_spec(model)
+        except ValueError as exc:
+            return (
+                False,
+                f"{provider}/{model} (unsupported local model)",
+                str(exc),
+            )
+
+        try:
+            importlib.import_module("llama_cpp")
+        except ImportError:
+            return (
+                False,
+                f"{provider}/{model} (missing llama-cpp-python)",
+                'pip install "openviking[local-embed]"',
+            )
+
+        model_path = dense.get("model_path", "")
+        cache_dir = Path(dense.get("cache_dir", "~/.cache/openviking/models")).expanduser()
+        if model_path:
+            if not Path(model_path).expanduser().exists():
+                return (
+                    False,
+                    f"{provider}/{model} (model_path missing)",
+                    f"Download the GGUF model to {Path(model_path).expanduser()} or update embedding.dense.model_path",
+                )
+            return True, f"{provider}/{model} ({Path(model_path).expanduser()})", None
+
+        cached_file = get_local_model_cache_path(model, str(cache_dir))
+        if cached_file.exists():
+            return True, f"{provider}/{model} ({cached_file})", None
+        return (
+            True,
+            f"{provider}/{model} (will auto-download during startup initialization)",
+            None,
+        )
+
+    # Ollama doesn't need an API key
+    if provider == "ollama":
+        return True, f"{provider}/{model}", None
 
     api_key = dense.get("api_key", "")
     if not api_key or api_key.startswith("{"):
@@ -188,6 +233,10 @@ def check_vlm() -> tuple[bool, str, Optional[str]]:
     if not provider:
         return False, "No VLM provider configured", "Add vlm section to ov.conf"
 
+    # Ollama via LiteLLM doesn't need a real API key
+    if provider == "litellm" and model.startswith("ollama/"):
+        return True, f"{provider}/{model}", None
+
     api_key = vlm.get("api_key", "")
     if not api_key or api_key.startswith("{"):
         return (
@@ -197,6 +246,43 @@ def check_vlm() -> tuple[bool, str, Optional[str]]:
         )
 
     return True, f"{provider}/{model}", None
+
+
+def check_ollama() -> tuple[bool, str, Optional[str]]:
+    """Check Ollama connectivity if the config uses an Ollama provider."""
+    config_path = _find_config()
+    if config_path is None:
+        return True, "not configured", None
+
+    data = _load_config_json(config_path)
+    if data is None:
+        return True, "not configured", None
+
+    # Detect whether config uses Ollama
+    dense = data.get("embedding", {}).get("dense", {})
+    vlm = data.get("vlm", {})
+    uses_embedding = dense.get("provider") == "ollama"
+    uses_vlm = vlm.get("provider") == "litellm" and (vlm.get("model", "")).startswith("ollama/")
+
+    if not uses_embedding and not uses_vlm:
+        return True, "not configured", None
+
+    from openviking_cli.utils.ollama import check_ollama_running, parse_ollama_url
+
+    # Determine host/port from config
+    if uses_embedding:
+        host, port = parse_ollama_url(dense.get("api_base"))
+    else:
+        host, port = parse_ollama_url(vlm.get("api_base"))
+
+    if check_ollama_running(host, port):
+        return True, f"running at {host}:{port}", None
+
+    return (
+        False,
+        f"unreachable at {host}:{port}",
+        "Run 'ollama serve' or check your Ollama configuration",
+    )
 
 
 def check_disk() -> tuple[bool, str, Optional[str]]:
@@ -237,6 +323,7 @@ _CHECKS = [
     ("AGFS", check_agfs),
     ("Embedding", check_embedding),
     ("VLM", check_vlm),
+    ("Ollama", check_ollama),
     ("Disk", check_disk),
 ]
 
@@ -279,5 +366,5 @@ def run_doctor() -> int:
 
 
 def main() -> int:
-    """Entry point for ``ov doctor``."""
+    """Entry point for ``openviking-server doctor``."""
     return run_doctor()

@@ -55,7 +55,7 @@ config:
       api_key: "your-volcengine-api-key"
       provider: "volcengine"
       dimension: 1024
-      model: "doubao-embedding-vision-250615"
+      model: "doubao-embedding-vision-251215"
       input: "multimodal"
     max_concurrent: 10
   vlm:

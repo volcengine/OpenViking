@@ -230,6 +230,18 @@ class ResourceService:
                     )
                     raise DeadlineExceededError("queue processing", timeout) from exc
                 queue_wait_duration_ms = round((time.perf_counter() - wait_start) * 1000, 3)
+                try:
+                    from openviking.metrics.datasources.resource import (
+                        ResourceIngestionEventDataSource,
+                    )
+
+                    ResourceIngestionEventDataSource.record_wait(
+                        operation="queue_processing",
+                        duration_seconds=float(queue_wait_duration_ms) / 1000.0,
+                        account_id=getattr(ctx, "account_id", None),
+                    )
+                except Exception:
+                    pass
                 result["queue_status"] = status
                 record_resource_wait_metrics(
                     telemetry_id=telemetry_id,
@@ -502,6 +514,7 @@ class ResourceService:
         return {
             name: {
                 "processed": s.processed,
+                "requeue_count": getattr(s, "requeue_count", 0),
                 "error_count": s.error_count,
                 "errors": [{"message": e.message} for e in s.errors],
             }

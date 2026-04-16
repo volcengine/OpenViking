@@ -15,7 +15,7 @@ from enum import Enum
 from typing import Dict, List, Optional
 
 from openviking.core.context import Context
-from openviking.models.embedder.base import EmbedResult
+from openviking.models.embedder.base import EmbedResult, embed_compat
 from openviking.prompts import render_prompt
 from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager
@@ -151,7 +151,7 @@ class MemoryDeduplicator:
 
         # Generate embedding for candidate
         query_text = f"{candidate.abstract} {candidate.content}"
-        embed_result: EmbedResult = self.embedder.embed(query_text, is_query=True)
+        embed_result: EmbedResult = await embed_compat(self.embedder, query_text, is_query=True)
         query_vector = embed_result.dense_vector
 
         category_uri_prefix = self._category_uri_prefix(candidate.category.value, candidate.user)
@@ -439,7 +439,7 @@ class MemoryDeduplicator:
         if len(vec_a) != len(vec_b):
             return 0.0
 
-        dot = sum(a * b for a, b in zip(vec_a, vec_b))
+        dot = sum(a * b for a, b in zip(vec_a, vec_b, strict=False))
         mag_a = sum(a * a for a in vec_a) ** 0.5
         mag_b = sum(b * b for b in vec_b) ** 0.5
 

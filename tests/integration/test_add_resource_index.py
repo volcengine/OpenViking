@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from openviking.async_client import AsyncOpenViking
+from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 from tests.utils.mock_agfs import MockLocalAGFS
 
@@ -36,7 +37,7 @@ async def client(test_config, tmp_path):
     """Initialize AsyncOpenViking client with mocks."""
 
     # Set config env var
-    os.environ["OPENVIKING_CONFIG_FILE"] = str(test_config)
+    os.environ[OPENVIKING_CONFIG_ENV] = str(test_config)
 
     # Reset Singletons
     OpenVikingConfigSingleton._instance = None
@@ -49,8 +50,6 @@ async def client(test_config, tmp_path):
         patch("openviking.utils.summarizer.Summarizer.summarize") as mock_summarize,
         patch("openviking.utils.index_builder.IndexBuilder.build_index") as mock_build_index,
         patch("openviking.utils.agfs_utils.create_agfs_client", return_value=mock_agfs),
-        patch("openviking.agfs_manager.AGFSManager.start"),
-        patch("openviking.agfs_manager.AGFSManager.stop"),
     ):
         # Make mocks return success
         mock_summarize.return_value = {"status": "success"}
@@ -65,8 +64,8 @@ async def client(test_config, tmp_path):
 
         # Cleanup
         OpenVikingConfigSingleton._instance = None
-        if "OPENVIKING_CONFIG_FILE" in os.environ:
-            del os.environ["OPENVIKING_CONFIG_FILE"]
+        if OPENVIKING_CONFIG_ENV in os.environ:
+            del os.environ[OPENVIKING_CONFIG_ENV]
 
 
 @pytest.mark.asyncio
@@ -76,7 +75,7 @@ async def test_add_resource_indexing_logic(test_config, tmp_path):
     Uses Mock AGFS but tests the client logic.
     """
     # Set config env var
-    os.environ["OPENVIKING_CONFIG_FILE"] = str(test_config)
+    os.environ[OPENVIKING_CONFIG_ENV] = str(test_config)
     OpenVikingConfigSingleton._instance = None
     await AsyncOpenViking.reset()
 
@@ -106,8 +105,6 @@ async def test_add_resource_indexing_logic(test_config, tmp_path):
             "openviking.utils.summarizer.Summarizer.summarize", new_callable=AsyncMock
         ) as mock_summarize,
         patch("openviking.utils.agfs_utils.create_agfs_client", return_value=mock_agfs),
-        patch("openviking.agfs_manager.AGFSManager.start"),
-        patch("openviking.agfs_manager.AGFSManager.stop"),
         patch(
             "openviking.utils.media_processor.UnifiedResourceProcessor.process",
             new_callable=AsyncMock,
@@ -158,5 +155,5 @@ async def test_add_resource_indexing_logic(test_config, tmp_path):
         finally:
             await client.close()
             OpenVikingConfigSingleton._instance = None
-            if "OPENVIKING_CONFIG_FILE" in os.environ:
-                del os.environ["OPENVIKING_CONFIG_FILE"]
+            if OPENVIKING_CONFIG_ENV in os.environ:
+                del os.environ[OPENVIKING_CONFIG_ENV]

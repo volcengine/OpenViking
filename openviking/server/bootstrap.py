@@ -15,6 +15,7 @@ import uvicorn
 
 from openviking.server.app import create_app
 from openviking.server.config import load_server_config
+from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.logger import configure_uvicorn_logging
 
 
@@ -31,6 +32,15 @@ def _get_version() -> str:
         return __version__
     except ImportError:
         return "unknown"
+
+
+def _normalize_host_arg(host: Optional[str]) -> Optional[str]:
+    """Normalize special CLI host values."""
+    if host is None:
+        return None
+    if host.strip().lower() == "all":
+        return None
+    return host
 
 
 def main():
@@ -110,7 +120,7 @@ def main():
     # Set OPENVIKING_CONFIG_FILE environment variable if --config is provided
     # This allows OpenVikingConfigSingleton to load from the specified config file
     if args.config is not None:
-        os.environ["OPENVIKING_CONFIG_FILE"] = args.config
+        os.environ[OPENVIKING_CONFIG_ENV] = args.config
 
     from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 
@@ -122,9 +132,30 @@ def main():
         print(e, file=sys.stderr)
         sys.exit(1)
 
+    # Ensure Ollama is running if configured
+    try:
+        from openviking_cli.utils.ollama import detect_ollama_in_config, ensure_ollama_for_server
+
+        ov_config = OpenVikingConfigSingleton.get_instance()
+        uses_ollama, ollama_host, ollama_port = detect_ollama_in_config(ov_config)
+        if uses_ollama:
+            result = ensure_ollama_for_server(ollama_host, ollama_port)
+            if result.success:
+                print(f"Ollama is running at {ollama_host}:{ollama_port}")
+            else:
+                print(
+                    f"Warning: Ollama not available at {ollama_host}:{ollama_port}. "
+                    f"Embedding/VLM may fail. ({result.message})",
+                    file=sys.stderr,
+                )
+                if result.stderr_output:
+                    print(f"  Ollama stderr: {result.stderr_output}", file=sys.stderr)
+    except Exception as e:
+        print(f"Warning: Ollama pre-flight check failed: {e}", file=sys.stderr)
+
     # Override with command line arguments
     if args.host is not None:
-        config.host = args.host
+        config.host = _normalize_host_arg(args.host)
     if args.port is not None:
         config.port = args.port
     if args.workers is not None:

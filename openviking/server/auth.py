@@ -7,6 +7,7 @@ from typing import Optional
 
 from fastapi import Depends, Header, Request
 
+from openviking.metrics.account_context import set_metric_account_context
 from openviking.server.identity import RequestContext, ResolvedIdentity, Role
 from openviking_cli.exceptions import (
     InvalidArgumentError,
@@ -145,7 +146,7 @@ async def get_request_context(
     if auth_mode == "trusted" and not identity.user_id:
         raise InvalidArgumentError("Trusted mode requests must include X-OpenViking-User.")
 
-    return RequestContext(
+    ctx = RequestContext(
         user=UserIdentifier(
             identity.account_id or "default",
             identity.user_id or "default",
@@ -153,6 +154,9 @@ async def get_request_context(
         ),
         role=identity.role,
     )
+    request.state.metric_account_id = ctx.account_id
+    set_metric_account_context(account_id=ctx.account_id)
+    return ctx
 
 
 def require_role(*allowed_roles: Role):

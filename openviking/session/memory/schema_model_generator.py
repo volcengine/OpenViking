@@ -15,7 +15,7 @@ from pydantic.config import ConfigDict
 
 from openviking.session.memory.dataclass import FaultTolerantBaseModel, MemoryTypeSchema
 from openviking.session.memory.merge_op import MergeOp, MergeOpFactory
-from openviking.session.memory.merge_op.base import FieldType, StrPatch, get_python_type_for_field
+from openviking.session.memory.merge_op.base import FieldType, get_python_type_for_field
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -38,14 +38,10 @@ class SchemaModelGenerator:
     for polymorphic memory data.
     """
 
-    # Generic overview edit model shared by all memory types
-    _generic_overview_edit_model: Optional[Type[BaseModel]] = None
-
     def __init__(self, schemas: List[MemoryTypeSchema]):
         self.schemas = schemas
         self._model_cache: Dict[str, Type[BaseModel]] = {}
         self._flat_data_models: Dict[str, Type[BaseModel]] = {}
-        self._overview_edit_models: Dict[str, Type[BaseModel]] = {}
         self._union_model: Optional[Type[BaseModel]] = None
         self._operations_model: Optional[Type[BaseModel]] = None
 
@@ -120,44 +116,6 @@ class SchemaModelGenerator:
         for memory_type in self.schemas:
             models[memory_type.memory_type] = self.create_flat_data_model(memory_type)
         return models
-
-    def create_overview_edit_model(self, memory_type: MemoryTypeSchema) -> Type[BaseModel]:
-        """
-        Create a simplified model for editing .overview.md files.
-
-        The model includes:
-        - memory_type (literal discriminator)
-        - overview (Union[str, StrPatch])
-
-        Args:
-            memory_type: The memory type schema
-
-        Returns:
-            Dynamically created overview edit model class
-        """
-        # Use cached generic model
-        if SchemaModelGenerator._generic_overview_edit_model is not None:
-            return SchemaModelGenerator._generic_overview_edit_model
-
-        # Create generic model with string memory_type (not Literal)
-        model = create_model(
-            "GenericOverviewEdit",
-            __config__=ConfigDict(extra="forbid"),
-            memory_type=(
-                str,
-                Field(..., description="Memory type to edit (e.g., 'profile', 'skills')"),
-            ),
-            overview=(
-                Optional[Union[str, StrPatch]],
-                Field(
-                    None,
-                    description="Overview content (L1). Use Markdown with internal links: [filename](filename.md), e.g., [python](python.md), [go](go.md). Supports direct string or patch format.",
-                ),
-            ),
-        )
-
-        SchemaModelGenerator._generic_overview_edit_model = model
-        return model
 
     def create_discriminated_union_model(self) -> Type[BaseModel]:
         """
@@ -271,14 +229,6 @@ class SchemaModelGenerator:
         #     enabled_memory_types[0] if enabled_memory_types else None
         # )
 
-        # field_definitions["edit_overview_uris"] = (
-        #     List[generic_overview_edit],  # type: ignore
-        #     Field(
-        #         default_factory=list,
-        #         description="Edit operations for .overview.md files using memory_type",
-        #     ),
-        # )
-
         field_definitions["delete_uris"] = (
             List[str],
             Field(default_factory=list, description="Delete operations as URI strings"),
@@ -304,7 +254,7 @@ class SchemaModelGenerator:
                     else:
                         # Single value (not None)
                         return False
-            return len(self.edit_overview_uris) == 0 and len(self.delete_uris) == 0
+            return len(self.delete_uris) == 0
 
         def to_legacy_operations(self) -> Dict[str, Any]:
             """Convert new per-type structure to legacy write_uris/edit_uris format."""
@@ -330,7 +280,6 @@ class SchemaModelGenerator:
             return {
                 "write_uris": write_uris,
                 "edit_uris": edit_uris,
-                #"edit_overview_uris": self.edit_overview_uris,
                 "delete_uris": self.delete_uris,
             }
 

@@ -249,25 +249,18 @@ async def add_message(
        ]}
 
     If both `content` and `parts` are provided, `parts` takes precedence.
+    Missing sessions are auto-created on first add.
     """
     service = get_service()
-    session = service.sessions.session(_ctx, session_id)
-    await session.load()
+    session = await service.sessions.get(session_id, _ctx, auto_create=True)
 
     if request.parts is not None:
         parts = [part_from_dict(p) for p in request.parts]
     else:
         parts = [TextPart(text=request.content or "")]
 
-    # 解析 created_at
-    created_at = None
-    if request.created_at:
-        try:
-            created_at = datetime.fromisoformat(request.created_at)
-        except ValueError:
-            logger.warning(f"Invalid created_at format: {request.created_at}")
-
-    session.add_message(request.role, parts, created_at=created_at)
+    # created_at 直接传递给 session (ISO string)
+    session.add_message(request.role, parts, created_at=request.created_at)
     return Response(
         status="ok",
         result={

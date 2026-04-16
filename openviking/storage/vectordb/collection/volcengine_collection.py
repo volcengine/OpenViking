@@ -4,7 +4,8 @@ import copy
 import json
 from typing import Any, Dict, List, Optional
 
-from openviking.storage.vectordb.collection.collection import ICollection
+from openviking.storage.errors import ConnectionError
+from openviking.storage.vectordb.collection.collection import Collection, ICollection
 from openviking.storage.vectordb.collection.result import (
     AggregateResult,
     DataItem,
@@ -35,13 +36,16 @@ def get_or_create_volcengine_collection(config: Dict[str, Any], meta_data: Dict[
     ak = config.get("AK")
     sk = config.get("SK")
     region = config.get("Region")
+    session_token = config.get("SessionToken")
+    if not ak or not sk or not region:
+        raise ValueError("AK, SK, and Region are required in config")
 
     collection_name = meta_data.get("CollectionName")
     if not collection_name:
         raise ValueError("CollectionName is required in config")
 
     # Initialize Console client for creating Collection
-    client = ClientForConsoleApi(ak, sk, region)
+    client = ClientForConsoleApi(ak, sk, region, session_token=session_token)
 
     # Try to create Collection
     try:
@@ -63,10 +67,15 @@ def get_or_create_volcengine_collection(config: Dict[str, Any], meta_data: Dict[
         raise e
 
     logger.info(f"Collection {collection_name} created successfully")
-    return VolcengineCollection(ak, sk, region, meta_data=meta_data)
-
-    # Return VolcengineCollection instance
-    return VolcengineCollection(ak=ak, sk=sk, region=region, meta_data=meta_data)
+    return Collection(
+        VolcengineCollection(
+            ak,
+            sk,
+            region,
+            session_token=session_token,
+            meta_data=meta_data,
+        )
+    )
 
 
 class VolcengineCollection(ICollection):
@@ -76,19 +85,59 @@ class VolcengineCollection(ICollection):
         sk: str,
         region: str,
         host: Optional[str] = None,
+        session_token: Optional[str] = None,
         meta_data: Optional[Dict[str, Any]] = None,
     ):
-        self.console_client = ClientForConsoleApi(ak, sk, region, host)
-        self.data_client = ClientForDataApi(ak, sk, region, host)
+        self.console_client = ClientForConsoleApi(
+            ak,
+            sk,
+            region,
+            host,
+            session_token=session_token,
+        )
+        self.data_client = ClientForDataApi(
+            ak,
+            sk,
+            region,
+            host,
+            session_token=session_token,
+        )
         self.meta_data = meta_data if meta_data is not None else {}
         self.project_name = self.meta_data.get("ProjectName", "default")
         self.collection_name = self.meta_data.get("CollectionName", "")
+
+    @staticmethod
+    def _build_response_error(response: Any, action: str) -> ConnectionError:
+        try:
+            result = response.json()
+        except json.JSONDecodeError:
+            result = {}
+
+        metadata = result.get("ResponseMetadata", {}) if isinstance(result, dict) else {}
+        error = metadata.get("Error", {}) if isinstance(metadata, dict) else {}
+        code = error.get("Code", "UnknownError")
+        message = error.get("Message", response.text)
+        return ConnectionError(
+            f"Request to {action} failed: {response.status_code} {code} {message}"
+        )
+
+    @staticmethod
+    def _is_collection_not_found(response: Any, action: str) -> bool:
+        if action != "GetVikingdbCollection" or response.status_code != 404:
+            return False
+        try:
+            result = response.json()
+        except json.JSONDecodeError:
+            return False
+        metadata = result.get("ResponseMetadata", {}) if isinstance(result, dict) else {}
+        error = metadata.get("Error", {}) if isinstance(metadata, dict) else {}
+        return error.get("Code") == "NotFound.VikingdbCollection"
 
     def _console_post(self, data: Dict[str, Any], action: str):
         params = {"Action": action, "Version": VIKING_DB_VERSION}
         response = self.console_client.do_req("POST", req_params=params, req_body=data)
         if response.status_code != 200:
-            logger.error(f"Request to {action} failed: {response.text}")
+            logger.error(str(self._build_response_error(response, action)))
             return {}
         try:
             result = response.json()
@@ -103,11 +152,10 @@ class VolcengineCollection(ICollection):
             params = {}
         req_params = {"Action": action, "Version": VIKING_DB_VERSION}
         req_body = params
-
         response = self.console_client.do_req("POST", req_params=req_params, req_body=req_body)
 
         if response.status_code != 200:
-            logger.error(f"Request to {action} failed: {response.text}")
+            logger.error(str(self._build_response_error(response, action)))
             return {}
         try:
             result = response.json()

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+from openviking.storage.expr import PathScope
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.volcengine_collection import (
     VolcengineCollection,
@@ -24,15 +25,18 @@ class VolcengineCollectionAdapter(CollectionAdapter):
         ak: str,
         sk: str,
         region: str,
+        session_token: str | None,
         project_name: str,
         collection_name: str,
         index_name: str,
     ):
         super().__init__(collection_name=collection_name, index_name=index_name)
+        self._collection: Collection | None = None
         self.mode = "volcengine"
         self._ak = ak
         self._sk = sk
         self._region = region
+        self._session_token = session_token
         self._project_name = project_name
 
     @classmethod
@@ -48,6 +52,7 @@ class VolcengineCollectionAdapter(CollectionAdapter):
             ak=config.volcengine.ak,
             sk=config.volcengine.sk,
             region=config.volcengine.region,
+            session_token=config.volcengine.session_token,
             project_name=config.project_name or "default",
             collection_name=config.name or "context",
             index_name=config.index_name or "default",
@@ -64,14 +69,18 @@ class VolcengineCollectionAdapter(CollectionAdapter):
             "AK": self._ak,
             "SK": self._sk,
             "Region": self._region,
+            "SessionToken": self._session_token,
         }
 
-    def _new_collection_handle(self) -> VolcengineCollection:
-        return VolcengineCollection(
-            ak=self._ak,
-            sk=self._sk,
-            region=self._region,
-            meta_data=self._meta(),
+    def _new_collection_handle(self) -> Collection:
+        return Collection(
+            VolcengineCollection(
+                ak=self._ak,
+                sk=self._sk,
+                region=self._region,
+                session_token=self._session_token,
+                meta_data=self._meta(),
+            )
         )
 
     def _load_existing_collection_if_needed(self) -> None:
@@ -123,6 +132,16 @@ class VolcengineCollectionAdapter(CollectionAdapter):
             index_meta["VectorIndex"]["EnableSparse"] = True
             index_meta["VectorIndex"]["SearchWithSparseLogitAlpha"] = sparse_weight
         return index_meta
+
+    def _compile_filter(self, expr):
+        if isinstance(expr, PathScope):
+            path = (
+                self._encode_uri_field_value(expr.path)
+                if expr.field in self._URI_FIELD_NAMES
+                else expr.path
+            )
+            return {"op": "prefix", "field": expr.field, "prefix": path}
+        return super()._compile_filter(expr)
 
     def _normalize_record_for_read(self, record: Dict[str, Any]) -> Dict[str, Any]:
         return super()._normalize_record_for_read(record)

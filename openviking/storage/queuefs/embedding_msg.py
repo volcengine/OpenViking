@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Union
 from uuid import uuid4
 
@@ -10,6 +10,7 @@ from uuid import uuid4
 class EmbeddingMsg:
     message: Union[str, List[Dict[str, Any]]]
     context_data: Dict[str, Any]
+    id: str = field(default_factory=lambda: str(uuid4()))
     telemetry_id: str = ""
     semantic_msg_id: Optional[str] = None
 

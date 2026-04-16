@@ -3,6 +3,7 @@ requires = [
     "setuptools>=61.0",
     "setuptools-scm>=8.0",
     "cmake>=3.15",
+    "maturin>=1.0,<2.0",
     "wheel",
 ]
 build-backend = "setuptools.build_meta"
@@ -69,6 +70,7 @@ dependencies = [
     "tree-sitter-go>=0.23.0",
     "tree-sitter-c-sharp>=0.23.0",
     "tree-sitter-php>=0.23.0",
+    "tree-sitter-lua>=0.1.0",
     # OpenTelemetry
     "opentelemetry-api>=1.14",
     "opentelemetry-sdk>=1.14",
@@ -77,10 +79,9 @@ dependencies = [
     "loguru>=0.7.3",
     "cryptography>=42.0.0",
     "argon2-cffi>=23.0.0",
+    "lark-oapi>=1.5.3",
 ]
 
-[tool.uv.sources]
-pyagfs = { path = "third_party/agfs/agfs-sdk/python" }
 
 [project.optional-dependencies]
 test = [
@@ -147,6 +148,7 @@ bot = [
     "tavily-python>=0.5.0",
     "gradio>=6.6.0",
     "py-machineid>=1.0.0",
+    "mcp>=1.0.0",
 ]
 # vikingbot optional features
 bot-langfuse = ["langfuse>=3.0.0"]
@@ -172,6 +174,9 @@ benchmark = [
     "tiktoken>=0.5.0",
     "datasets>=2.0.0",
     "pandas>=2.0.0",
+]
+local-embed = [
+    "llama-cpp-python>=0.3.0",
 ]
 
 [project.urls]
@@ -200,11 +205,6 @@ exclude = ["tests*", "docs*", "examples*"]
 openviking = [
     "prompts/templates/**/*.yaml",
     "console/static/**/*",
-    "bin/agfs-server",
-    "bin/agfs-server.exe",
-    "lib/libagfsbinding.so",
-    "lib/libagfsbinding.dylib",
-    "lib/libagfsbinding.dll",
     "lib/ragfs_python*.so",
     "lib/ragfs_python*.pyd",
     "bin/ov",

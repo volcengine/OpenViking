@@ -1,9 +1,13 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field, model_validator
+
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class DirectoryMarkerMode(str, Enum):
@@ -26,7 +30,7 @@ class S3Config(BaseModel):
 
     access_key: Optional[str] = Field(
         default=None,
-        description="S3 access key ID. If not provided, AGFS may attempt to use environment variables or IAM roles.",
+        description="S3 access key ID. If not provided, RAGFS may attempt to use environment variables or IAM roles.",
     )
 
     secret_key: Optional[str] = Field(
@@ -60,6 +64,13 @@ class S3Config(BaseModel):
         description="How to persist S3 directory markers: 'none' skips marker creation, 'empty' writes a zero-byte marker, and 'nonempty' writes a non-empty marker payload. Defaults to 'empty'.",
     )
 
+    disable_batch_delete: bool = Field(
+        default=False,
+        description="Disable batch delete (DeleteObjects) and use sequential single-object deletes instead. "
+        "Required for S3-compatible services like Alibaba Cloud OSS that require a Content-MD5 header "
+        "for DeleteObjects but AWS SDK v2 does not send it by default. Defaults to False.",
+    )
+
     model_config = {"extra": "forbid"}
 
     def validate_config(self):
@@ -83,55 +94,70 @@ class S3Config(BaseModel):
 
 
 class AGFSConfig(BaseModel):
-    """Configuration for AGFS (Agent Global File System)."""
+    """Configuration for RAGFS (Rust-based AGFS)."""
 
     path: Optional[str] = Field(
         default=None,
-        description="[Deprecated in favor of `storage.workspace`] AGFS data storage path. This will be ignored if `storage.workspace` is set.",
+        description="[Deprecated in favor of `storage.workspace`] RAGFS data storage path. This will be ignored if `storage.workspace` is set.",
     )
 
-    port: int = Field(default=1833, description="AGFS service port")
-
-    log_level: str = Field(default="warn", description="AGFS log level")
-
-    url: Optional[str] = Field(
-        default="http://localhost:1833", description="AGFS service URL for service mode"
+    port: Any = Field(
+        default=None,
+        exclude=True,
+        description="[Deprecated] Legacy AGFS service port. Ignored by RAGFS.",
     )
 
-    mode: str = Field(
-        default="binding-client",
-        description="AGFS client mode: 'http-client' | 'binding-client'",
+    log_level: Any = Field(
+        default=None,
+        exclude=True,
+        description="[Deprecated] Legacy AGFS log level. Ignored by RAGFS.",
     )
 
-    impl: str = Field(
-        default="auto",
-        description="Binding implementation to use when mode is 'binding-client'. "
-        "'auto' = Rust first with Go fallback, 'rust' = Rust only, 'go' = Go only. "
-        "Can be overridden by the RAGFS_IMPL environment variable.",
+    url: Any = Field(
+        default=None,
+        exclude=True,
+        description="[Deprecated] Legacy AGFS service URL. Ignored by RAGFS.",
+    )
+
+    mode: Any = Field(
+        default=None,
+        exclude=True,
+        description="[Deprecated] Legacy AGFS client mode. Ignored by RAGFS.",
+    )
+
+    impl: Any = Field(
+        default=None,
+        exclude=True,
+        description="[Deprecated] Legacy AGFS binding implementation selector. Ignored by RAGFS.",
     )
 
     backend: str = Field(
-        default="local", description="AGFS storage backend: 'local' | 's3' | 'memory'"
+        default="local", description="RAGFS storage backend: 'local' | 's3' | 'memory'"
     )
 
-    timeout: int = Field(default=10, description="AGFS request timeout (seconds)")
+    timeout: int = Field(default=10, description="RAGFS request timeout (seconds)")
 
-    retry_times: int = Field(default=3, description="AGFS retry times on failure")
-
-    use_ssl: bool = Field(
-        default=True,
-        description="Enable/Disable SSL (HTTPS) for AGFS service. Set to False for local testing without HTTPS.",
-    )
-
-    lib_path: Optional[str] = Field(
+    retry_times: Any = Field(
         default=None,
-        description="Path to AGFS binding shared library. If set, use python binding instead of HTTP client. "
-        "Default: third_party/agfs/bin/libagfsbinding.{so,dylib}",
+        exclude=True,
+        description="[Deprecated] Legacy AGFS retry count. Ignored by RAGFS.",
+    )
+
+    use_ssl: Any = Field(
+        default=None,
+        exclude=True,
+        description="[Deprecated] Legacy AGFS SSL switch. Ignored by RAGFS.",
+    )
+
+    lib_path: Any = Field(
+        default=None,
+        exclude=True,
+        description="[Deprecated] Legacy AGFS binding library path. Ignored by RAGFS.",
     )
 
     # S3 backend configuration
     # These settings are used when backend is set to 's3'.
-    # AGFS will act as a gateway to the specified S3 bucket.
+    # RAGFS will act as a gateway to the specified S3 bucket.
     s3: S3Config = Field(default_factory=lambda: S3Config(), description="S3 backend configuration")
 
     model_config = {"extra": "forbid"}
@@ -139,19 +165,26 @@ class AGFSConfig(BaseModel):
     @model_validator(mode="after")
     def validate_config(self):
         """Validate configuration completeness and consistency"""
-        if self.mode not in ["http-client", "binding-client"]:
-            raise ValueError(
-                f"Invalid AGFS mode: '{self.mode}'. Must be one of: 'http-client', 'binding-client'"
-            )
-
-        if self.impl not in ["auto", "rust", "go"]:
-            raise ValueError(
-                f"Invalid AGFS impl: '{self.impl}'. Must be one of: 'auto', 'rust', 'go'"
-            )
+        deprecated_fields = (
+            "port",
+            "log_level",
+            "url",
+            "mode",
+            "impl",
+            "retry_times",
+            "use_ssl",
+            "lib_path",
+        )
+        for field_name in deprecated_fields:
+            if field_name in self.model_fields_set:
+                logger.warning(
+                    "AGFSConfig: 'storage.agfs.%s' is deprecated and ignored after the RAGFS migration.",
+                    field_name,
+                )
 
         if self.backend not in ["local", "s3", "memory"]:
             raise ValueError(
-                f"Invalid AGFS backend: '{self.backend}'. Must be one of: 'local', 's3', 'memory'"
+                f"Invalid RAGFS backend: '{self.backend}'. Must be one of: 'local', 's3', 'memory'"
             )
 
         if self.backend == "local":

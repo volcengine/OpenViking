@@ -99,6 +99,23 @@ async def readiness_check(request: Request):
     except Exception as e:
         checks["api_key_manager"] = f"error: {e}"
 
+    # 4. Ollama: connectivity check if configured
+    try:
+        from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+        from openviking_cli.utils.ollama import check_ollama_running, detect_ollama_in_config
+
+        ov_config = OpenVikingConfigSingleton.get_instance()
+        uses_ollama, ollama_host, ollama_port = detect_ollama_in_config(ov_config)
+        if uses_ollama:
+            if check_ollama_running(ollama_host, ollama_port):
+                checks["ollama"] = "ok"
+            else:
+                checks["ollama"] = f"unreachable at {ollama_host}:{ollama_port}"
+        else:
+            checks["ollama"] = "not_configured"
+    except Exception as e:
+        checks["ollama"] = f"error: {e}"
+
     all_ok = all(v in ("ok", "not_configured") for v in checks.values())
     status_code = 200 if all_ok else 503
     return JSONResponse(

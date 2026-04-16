@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 from typing import List, Literal, Optional
 
 from openviking.message.part import ContextPart, Part, TextPart, ToolPart
-from openviking.utils.time_utils import format_iso8601, parse_iso_datetime
 
 
 @dataclass
@@ -21,7 +20,7 @@ class Message:
     id: str
     role: Literal["user", "assistant"]
     parts: List[Part]
-    created_at: datetime = None
+    created_at: str = None
 
     @property
     def content(self) -> str:
@@ -64,13 +63,18 @@ class Message:
 
     def to_dict(self) -> dict:
         """Serialize to JSONL."""
-        created_at_val = self.created_at or datetime.now(timezone.utc)
-        created_at_str = format_iso8601(created_at_val)
+        created_at_val = self.created_at or datetime.now(timezone.utc).isoformat()
+        if isinstance(created_at_val, datetime):
+            created_at_val = (
+                created_at_val.astimezone(timezone.utc)
+                .isoformat(timespec="milliseconds")
+                .replace("+00:00", "Z")
+            )
         return {
             "id": self.id,
             "role": self.role,
             "parts": [self._part_to_dict(p) for p in self.parts],
-            "created_at": created_at_str,
+            "created_at": created_at_val,
         }
 
     def _part_to_dict(self, part: Part) -> dict:
@@ -109,7 +113,15 @@ class Message:
     def from_dict(cls, data: dict) -> "Message":
         """Deserialize from JSONL."""
         parts = []
-        for p in data.get("parts", []):
+        raw_parts = data.get("parts")
+        if raw_parts is None:
+            legacy_content = data.get("content")
+            if legacy_content is not None:
+                raw_parts = [{"type": "text", "text": legacy_content}]
+            else:
+                raw_parts = []
+
+        for p in raw_parts:
             if p["type"] == "text":
                 parts.append(TextPart(text=p.get("text", "")))
             elif p["type"] == "context":
@@ -139,7 +151,7 @@ class Message:
             id=data["id"],
             role=data["role"],
             parts=parts,
-            created_at=parse_iso_datetime(data["created_at"]),
+            created_at=data.get("created_at"),
         )
 
     @classmethod
@@ -151,7 +163,7 @@ class Message:
             id=msg_id or f"msg_{uuid4().hex}",
             role="user",
             parts=[TextPart(text=content)],
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(timezone.utc).isoformat(),
         )
 
     @classmethod
@@ -194,7 +206,7 @@ class Message:
             id=msg_id or f"msg_{uuid4().hex}",
             role="assistant",
             parts=parts,
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(timezone.utc).isoformat(),
         )
 
     def get_context_parts(self) -> List[ContextPart]:

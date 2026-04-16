@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from openviking.server.api_keys import APIKeyManager
 from openviking.server.config import ServerConfig, load_server_config, validate_server_config
 from openviking.server.dependencies import set_service
+from openviking.server.error_mapping import map_exception
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 from openviking.server.routers import (
     admin_router,
@@ -31,11 +32,10 @@ from openviking.server.routers import (
     stats_router,
     system_router,
     tasks_router,
+    webdav_router,
 )
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
-from openviking.storage.observers import PrometheusObserver
-from openviking.storage.observers.prometheus_observer import set_prometheus_observer
 from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.utils import get_logger
 
@@ -70,6 +70,7 @@ def create_app(
             await service.initialize()
             logger.info("OpenVikingService initialized")
 
+        assert service is not None
         set_service(service)
 
         # Initialize APIKeyManager after service (needs VikingFS)
@@ -96,8 +97,9 @@ def create_app(
             else:
                 logger.warning(
                     "Trusted mode enabled: authentication uses X-OpenViking-Account/User/Agent "
-                    "headers without API keys. Only expose this server behind a trusted "
-                    "network boundary or identity-injecting gateway."
+                    "headers without API keys. This is only allowed on localhost. "
+                    "Only expose this server behind a trusted network boundary or "
+                    "identity-injecting gateway after configuring server.root_api_key."
                 )
         else:
             app.state.api_key_manager = None
@@ -109,11 +111,13 @@ def create_app(
                 config.host,
             )
 
-        app.state.prometheus_observer = None
-        if config.telemetry.prometheus.enabled:
-            observer = PrometheusObserver()
-            app.state.prometheus_observer = observer
-            set_prometheus_observer(observer)
+        from openviking.metrics.global_api import (
+            init_metrics_from_server_config,
+            is_metrics_enabled_from_server_config,
+        )
+
+        init_metrics_from_server_config(config, app=app, service=service)
+        if is_metrics_enabled_from_server_config(config):
             logger.info("Prometheus metrics enabled at /metrics")
 
         # Start TaskTracker cleanup loop
@@ -128,7 +132,9 @@ def create_app(
         yield
 
         # Cleanup
-        set_prometheus_observer(None)
+        from openviking.metrics.global_api import shutdown_metrics
+
+        shutdown_metrics(app=app)
         task_tracker.stop_cleanup_loop()
         if owns_service and service:
             try:
@@ -166,6 +172,14 @@ def create_app(
         response.headers["X-Process-Time"] = str(process_time)
         return response
 
+    from openviking.metrics.http_middleware import create_http_metrics_middleware
+
+    http_metrics_middleware = create_http_metrics_middleware()
+
+    @app.middleware("http")
+    async def add_http_metrics(request: Request, call_next: Callable):
+        return await http_metrics_middleware(request, call_next)
+
     # Add exception handler for OpenVikingError
     @app.exception_handler(OpenVikingError)
     async def openviking_error_handler(request: Request, exc: OpenVikingError):
@@ -185,14 +199,34 @@ def create_app(
     # Catch-all for unhandled exceptions so clients always get JSON
     @app.exception_handler(Exception)
     async def general_error_handler(request: Request, exc: Exception):
-        logger.warning("Unhandled exception: %s", exc)
+        mapped = map_exception(exc)
+        if mapped is not None:
+            http_status = ERROR_CODE_TO_HTTP_STATUS.get(mapped.code, 500)
+            logger.warning(
+                "Mapped unhandled exception to structured API error",
+                extra={"error_code": mapped.code, "error_message": mapped.message},
+                exc_info=exc,
+            )
+            return JSONResponse(
+                status_code=http_status,
+                content=Response(
+                    status="error",
+                    error=ErrorInfo(
+                        code=mapped.code,
+                        message=mapped.message,
+                        details=mapped.details,
+                    ),
+                ).model_dump(),
+            )
+
+        logger.exception("Unhandled exception")
         return JSONResponse(
             status_code=500,
             content=Response(
                 status="error",
                 error=ErrorInfo(
                     code="INTERNAL",
-                    message=str(exc),
+                    message="Internal server error",
                 ),
             ).model_dump(),
         )
@@ -221,6 +255,7 @@ def create_app(
     app.include_router(observer_router)
     app.include_router(metrics_router)
     app.include_router(tasks_router)
+    app.include_router(webdav_router)
     app.include_router(bot_router, prefix="/bot/v1")
 
     return app

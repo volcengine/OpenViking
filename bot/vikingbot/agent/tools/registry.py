@@ -100,12 +100,16 @@ class ToolRegistry:
         """
         return name in self._tools
 
-    def get_definitions(self) -> list[dict[str, Any]]:
+    def get_definitions(self, ov_tools_enable: bool = True) -> list[dict[str, Any]]:
         """
         Get all tool definitions in OpenAI format.
 
         Converts all registered tools to the OpenAI function schema format,
         suitable for use with OpenAI's function calling API.
+
+        Args:
+            ov_tools_enable: Whether to include OpenViking tools. If False,
+                tools with names starting with "openviking_" will be excluded.
 
         Returns:
             List of tool schemas in OpenAI format, where each schema contains
@@ -116,7 +120,10 @@ class ToolRegistry:
             >>> for defn in definitions:
             ...     print(f"Tool: {defn['function']['name']}")
         """
-        return [tool.to_schema() for tool in self._tools.values()]
+        tools = self._tools.values()
+        if not ov_tools_enable:
+            tools = [tool for tool in tools if not tool.name.startswith("openviking_")]
+        return [tool.to_schema() for tool in tools]
 
     async def execute(
         self,

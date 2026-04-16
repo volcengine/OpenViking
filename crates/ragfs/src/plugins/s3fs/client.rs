@@ -79,6 +79,7 @@ pub struct S3Client {
     bucket: String,
     prefix: String,
     marker_mode: DirectoryMarkerMode,
+    disable_batch_delete: bool,
 }
 
 impl S3Client {
@@ -125,6 +126,11 @@ impl S3Client {
             .map(|s| DirectoryMarkerMode::from_str(s))
             .unwrap_or(DirectoryMarkerMode::Empty);
 
+        let disable_batch_delete = config
+            .get("disable_batch_delete")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         // Build S3 config
         let mut s3_config_builder = aws_sdk_s3::Config::builder()
             .behavior_version(BehaviorVersion::latest())
@@ -150,6 +156,7 @@ impl S3Client {
             bucket,
             prefix,
             marker_mode,
+            disable_batch_delete,
         })
     }
 
@@ -258,35 +265,51 @@ impl S3Client {
     }
 
     /// Batch delete objects (up to 1000 per call)
+    /// If disable_batch_delete is true, use sequential single-object deletes
+    /// for S3-compatible services (e.g., Alibaba Cloud OSS) that require
+    /// Content-MD5 for DeleteObjects but AWS SDK v2 does not send it by default.
     pub async fn delete_objects(&self, keys: &[String]) -> Result<()> {
         if keys.is_empty() {
             return Ok(());
         }
 
-        // S3 batch delete limit is 1000
-        for chunk in keys.chunks(1000) {
-            let objects: Vec<_> = chunk
-                .iter()
-                .map(|k| {
-                    aws_sdk_s3::types::ObjectIdentifier::builder()
-                        .key(k.as_str())
-                        .build()
-                        .unwrap()
-                })
-                .collect();
+        if self.disable_batch_delete {
+            // Sequential single-object delete
+            for key in keys {
+                self.client
+                    .delete_object()
+                    .bucket(&self.bucket)
+                    .key(key.as_str())
+                    .send()
+                    .await
+                    .map_err(|e| Error::internal(format!("S3 DeleteObject error: {}", e)))?;
+            }
+        } else {
+            // S3 batch delete limit is 1000
+            for chunk in keys.chunks(1000) {
+                let objects: Vec<_> = chunk
+                    .iter()
+                    .map(|k| {
+                        aws_sdk_s3::types::ObjectIdentifier::builder()
+                            .key(k.as_str())
+                            .build()
+                            .unwrap()
+                    })
+                    .collect();
 
-            let delete = aws_sdk_s3::types::Delete::builder()
-                .set_objects(Some(objects))
-                .build()
-                .map_err(|e| Error::internal(format!("S3 build delete: {}", e)))?;
+                let delete = aws_sdk_s3::types::Delete::builder()
+                    .set_objects(Some(objects))
+                    .build()
+                    .map_err(|e| Error::internal(format!("S3 build delete: {}", e)))?;
 
-            self.client
-                .delete_objects()
-                .bucket(&self.bucket)
-                .delete(delete)
-                .send()
-                .await
-                .map_err(|e| Error::internal(format!("S3 DeleteObjects error: {}", e)))?;
+                self.client
+                    .delete_objects()
+                    .bucket(&self.bucket)
+                    .delete(delete)
+                    .send()
+                    .await
+                    .map_err(|e| Error::internal(format!("S3 DeleteObjects error: {}", e)))?;
+            }
         }
 
         Ok(())

@@ -12,6 +12,16 @@ from .config_utils import format_validation_error
 from .consts import DEFAULT_OVCLI_CONF, OPENVIKING_CLI_CONFIG_ENV
 
 
+class OVCLIUploadConfig(BaseModel):
+    """Upload-related defaults in ovcli.conf."""
+
+    ignore_dirs: Optional[str] = None
+    include: Optional[str] = None
+    exclude: Optional[str] = None
+
+    model_config = {"extra": "forbid"}
+
+
 class OVCLIConfig(BaseModel):
     """Client configuration loaded from ovcli.conf."""
 
@@ -21,6 +31,7 @@ class OVCLIConfig(BaseModel):
     account: Optional[str] = None
     user: Optional[str] = None
     timeout: float = 60.0
+    upload: Optional[OVCLIUploadConfig] = None
 
     model_config = {"extra": "forbid"}
 

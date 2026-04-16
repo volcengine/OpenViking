@@ -9,7 +9,7 @@ import asyncio
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import uuid4
 
@@ -29,7 +29,6 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 _ARCHIVE_WAIT_POLL_SECONDS = 0.1
-_ARCHIVE_WAIT_TIMEOUT_SECONDS = 300.0  # 5 minutes max wait for previous archive
 
 
 @dataclass
@@ -170,7 +169,7 @@ class Session:
         self.user = user or UserIdentifier.the_default_user()
         self.ctx = ctx or RequestContext(user=self.user, role=Role.ROOT)
         self.session_id = session_id or str(uuid4())
-        self.created_at = datetime.now()
+        self.created_at = int(datetime.now(timezone.utc).timestamp() * 1000)
         self._auto_commit_threshold = auto_commit_threshold
         self._session_uri = f"viking://session/{self.user.user_space_name()}/{self.session_id}"
 
@@ -285,6 +284,14 @@ class Session:
                 self._usage_records.append(usage)
                 self._stats.contexts_used += 1
                 logger.debug(f"Tracked context usage: {uri}")
+            try:
+                from openviking.metrics.datasources.session import SessionLifecycleDataSource
+
+                SessionLifecycleDataSource.record_contexts_used(
+                    action="context", delta=len(contexts)
+                )
+            except Exception:
+                pass
 
         if skill:
             usage = Usage(
@@ -297,19 +304,25 @@ class Session:
             self._usage_records.append(usage)
             self._stats.skills_used += 1
             logger.debug(f"Tracked skill usage: {skill.get('uri')}")
+            try:
+                from openviking.metrics.datasources.session import SessionLifecycleDataSource
+
+                SessionLifecycleDataSource.record_contexts_used(action="skill", delta=1)
+            except Exception:
+                pass
 
     def add_message(
         self,
         role: str,
         parts: List[Part],
-        created_at: datetime = None,
+        created_at: str = None,
     ) -> Message:
         """Add a message."""
         msg = Message(
             id=f"msg_{uuid4().hex}",
             role=role,
             parts=parts,
-            created_at=created_at or datetime.now(),
+            created_at=created_at or datetime.now(timezone.utc).isoformat(),
         )
         self._messages.append(msg)
 
@@ -412,8 +425,9 @@ class Session:
 
             try:
                 await self._write_to_agfs_async(messages=[])
-            except Exception:
+            except Exception as e:
                 # Rollback: restore messages so they aren't lost
+                logger.error(f"[commit] Failed to write empty messages.jsonl: {e}")
                 self._messages.extend(messages_to_archive)
                 self._compression.compression_index -= 1
                 raise
@@ -443,8 +457,6 @@ class Session:
 
         # Snapshot mutable state for Phase 2
         usage_snapshot = self._usage_records.copy()
-        first_message_id = messages_to_archive[0].id if messages_to_archive else ""
-        last_message_id = messages_to_archive[-1].id if messages_to_archive else ""
 
         # Create TaskRecord for tracking Phase 2
         tracker = get_task_tracker()
@@ -461,8 +473,8 @@ class Session:
                 archive_uri=archive_uri,
                 messages=messages_to_archive,
                 usage_records=usage_snapshot,
-                first_message_id=first_message_id,
-                last_message_id=last_message_id,
+                first_message_id=messages_to_archive[0].id if messages_to_archive else "",
+                last_message_id=messages_to_archive[-1].id if messages_to_archive else "",
             )
         )
 
@@ -475,7 +487,6 @@ class Session:
             "trace_id": trace_id,
         }
 
-    @tracer("session_commit_phase2")
     async def _run_memory_extraction(
         self,
         task_id: str,
@@ -731,7 +742,15 @@ class Session:
         """Get assembled session context with the latest summary archive and merged messages."""
         context = await self._collect_session_context_components()
         merged_messages = context["messages"]
+
         message_tokens = sum(m.estimated_tokens for m in merged_messages)
+
+        # 精简日志：只打印关键信息
+        logger.info(
+            f"[get_session_context] session_id={self.session_id}, "
+            f"messages={len(merged_messages)}, tokens={message_tokens}"
+        )
+
         remaining_budget = max(0, token_budget - message_tokens)
 
         latest_archive = context["latest_archive"]
@@ -742,16 +761,9 @@ class Session:
         if include_latest_overview:
             remaining_budget -= latest_archive_tokens
 
+        # pre_archive_abstracts: 保留字段返回空数组，保持 API 向下兼容
         included_pre_archive_abstracts: List[Dict[str, str]] = []
         pre_archive_tokens = 0
-        for item in context["pre_archive_abstracts"]:
-            if item["tokens"] > remaining_budget:
-                break
-            included_pre_archive_abstracts.append(
-                {"archive_id": item["archive_id"], "abstract": item["abstract"]}
-            )
-            pre_archive_tokens += item["tokens"]
-            remaining_budget -= item["tokens"]
 
         archive_tokens = latest_archive_tokens + pre_archive_tokens
         included_archives = len(included_pre_archive_abstracts)
@@ -763,7 +775,7 @@ class Session:
             "latest_archive_overview": (
                 latest_archive["overview"] if include_latest_overview else ""
             ),
-            "pre_archive_abstracts": included_pre_archive_abstracts,
+            "pre_archive_abstracts": [],  # 保持 API 向后兼容，返回空数组
             "messages": [m.to_dict() for m in merged_messages],
             "estimatedTokens": message_tokens + archive_tokens,
             "stats": {
@@ -1043,18 +1055,11 @@ class Session:
         return int(match.group(1))
 
     async def _wait_for_previous_archive_done(self, archive_index: int) -> bool:
-        """Wait until the previous archive is done, or report dependency failure.
-
-        Returns True if the previous archive completed successfully, False if it
-        failed or timed out.  A timeout is treated as a failure so that the
-        current archive does not hang indefinitely when the previous archive's
-        Phase 2 crashed without writing either .done or .failed.json.
-        """
+        """Wait until the previous archive is done, or report dependency failure."""
         if archive_index <= 1 or not self._viking_fs:
             return True
 
         previous_archive_uri = f"{self._session_uri}/history/archive_{archive_index - 1:03d}"
-        deadline = asyncio.get_event_loop().time() + _ARCHIVE_WAIT_TIMEOUT_SECONDS
         while True:
             try:
                 await self._viking_fs.read_file(f"{previous_archive_uri}/.done", ctx=self.ctx)
@@ -1070,13 +1075,6 @@ class Session:
                 return False
             except Exception:
                 pass
-
-            if asyncio.get_event_loop().time() >= deadline:
-                logger.error(
-                    f"Timed out waiting for previous archive archive_{archive_index - 1:03d} "
-                    f"after {_ARCHIVE_WAIT_TIMEOUT_SECONDS}s — treating as failed"
-                )
-                return False
 
             await asyncio.sleep(_ARCHIVE_WAIT_POLL_SECONDS)
 

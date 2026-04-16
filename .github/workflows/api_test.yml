@@ -1,4 +1,4 @@
-name: 03. API Integration Tests
+name: 06. API Integration Tests
 
 on:
   workflow_dispatch:
@@ -42,29 +42,23 @@ jobs:
   api-tests:
     name: API Integration Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-14, macos-15-intel, windows-latest]
+        os: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && fromJSON('["ubuntu-24.04", "macos-14", "windows-latest"]') || fromJSON('["ubuntu-24.04"]') }}
     
     steps:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
+          fetch-depth: 100
 
       - name: Set up Python 3.10
         uses: actions/setup-python@v6
         with:
           python-version: '3.10'
-
-      - name: Cache Go modules
-        uses: actions/cache@v5
-        continue-on-error: true
-        with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('third_party/agfs/**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
 
       - name: Cache Python dependencies (Unix)
         if: runner.os != 'Windows'
@@ -83,11 +77,6 @@ jobs:
           key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt', '**/pyproject.toml') }}
           restore-keys: |
             ${{ runner.os }}-pip-
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: '1.25.1'
 
       - name: Install system dependencies (Ubuntu)
         if: runner.os == 'Linux'
@@ -127,7 +116,20 @@ jobs:
           uv pip install setuptools setuptools_scm cmake wheel
 
       - name: Build C++ extensions
+        shell: bash
         run: |
+          export OV_SKIP_OV_BUILD=1
+          mkdir -p openviking/bin
+          touch openviking/bin/ov
+          chmod +x openviking/bin/ov
+          echo "OV_SKIP_OV_BUILD=1 set, skipping ov CLI Rust build (ragfs build still needed for server)"
+          
+          if [ -z "$SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING" ]; then
+            PRETEND_VERSION=$(git describe --tags --always 2>/dev/null | sed -E 's/^v?([0-9]+\.[0-9]+\.[0-9]+).*/\1.dev0/' || echo "0.0.0.dev0")
+            echo "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING=$PRETEND_VERSION" >> $GITHUB_ENV
+            echo "Using pretend version: $PRETEND_VERSION"
+          fi
+          
           uv run python setup.py build_ext --inplace
 
       - name: Install API test dependencies
@@ -408,7 +410,8 @@ jobs:
             echo "Running basic tests only (no VLM/Embedding)"
             uv run python -m pytest . -v --html=api-test-report.html --self-contained-html \
               --ignore=retrieval/ --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py \
-              --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py -k "not test_observer"
+              --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py \
+              --ignore=scenarios/ -k "not test_observer"
           fi
         continue-on-error: true
 
@@ -426,7 +429,7 @@ jobs:
             uv run python -m pytest . -v --html=api-test-report.html --self-contained-html --ignore=filesystem/
           } else {
             Write-Host "Running basic tests only (no VLM/Embedding, Windows: skipping filesystem tests)"
-            uv run python -m pytest . -v --html=api-test-report.html --self-contained-html --ignore=retrieval/ --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py --ignore=filesystem/ -k "not test_observer"
+            uv run python -m pytest . -v --html=api-test-report.html --self-contained-html --ignore=retrieval/ --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py --ignore=filesystem/ --ignore=scenarios/ -k "not test_observer"
           }
         continue-on-error: true
 

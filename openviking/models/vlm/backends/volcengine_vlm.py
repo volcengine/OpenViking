@@ -130,7 +130,7 @@ class VolcEngineVLM(OpenAIVLM):
             return result
         return self._clean_response(str(result))
 
-    @tracer("vlm.call")
+    @tracer("volcengine.vlm.call", ignore_result=True, ignore_args=False)
     async def get_completion_async(
         self,
         prompt: str = "",

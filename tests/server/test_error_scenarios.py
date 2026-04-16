@@ -33,7 +33,7 @@ async def test_not_found_resource_returns_structured_error(
         "/api/v1/fs/stat",
         params={"uri": "viking://does_not_exist"},
     )
-    assert resp.status_code in (404, 500)
+    assert resp.status_code == 404
     body = resp.json()
     assert body["status"] == "error"
     assert "code" in body["error"]

@@ -9,8 +9,8 @@ services:
       - "8020:8020"
     volumes:
       # Mount the configuration and data directory to persist state
-      - /var/lib/openviking/ov.conf:/app/ov.conf
-      - /var/lib/openviking/data:/app/data
+      - ~/.openviking/ov.conf:/app/ov.conf
+      - ~/.openviking/data:/app/data
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:1933/health || exit 1"]
       interval: 30s

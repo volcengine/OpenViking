@@ -280,6 +280,8 @@ Compact JSON with status wrapper (when `--compact` is true, which is the default
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/health` | Health check (no auth) |
+| GET | `/ready` | Readiness probe (no auth) |
+| GET | `/metrics` | Prometheus metrics export |
 | GET | `/api/v1/system/status` | System status |
 | POST | `/api/v1/system/wait` | Wait for processing |
 
@@ -287,6 +289,7 @@ Compact JSON with status wrapper (when `--compact` is true, which is the default
 
 | Method | Path | Description |
 |--------|------|-------------|
+| POST | `/api/v1/resources/temp_upload` | Upload local file for raw HTTP resource / pack import |
 | POST | `/api/v1/resources` | Add resource |
 | POST | `/api/v1/skills` | Add skill |
 | POST | `/api/v1/pack/export` | Export .ovpack |
@@ -310,7 +313,9 @@ Compact JSON with status wrapper (when `--compact` is true, which is the default
 | GET | `/api/v1/content/read` | Read full content (L2) |
 | GET | `/api/v1/content/abstract` | Read abstract (L0) |
 | GET | `/api/v1/content/overview` | Read overview (L1) |
+| GET | `/api/v1/content/download` | Download raw file bytes |
 | POST | `/api/v1/content/write` | Update an existing file and refresh semantics/vectors |
+| POST | `/api/v1/content/reindex` | Rebuild semantic/vector index for existing content |
 
 ### Search
 
@@ -339,7 +344,16 @@ Compact JSON with status wrapper (when `--compact` is true, which is the default
 | GET | `/api/v1/sessions/{id}/context` | Get assembled session context |
 | DELETE | `/api/v1/sessions/{id}` | Delete session |
 | POST | `/api/v1/sessions/{id}/commit` | Commit session |
+| POST | `/api/v1/sessions/{id}/extract` | Extract memories from a session |
 | POST | `/api/v1/sessions/{id}/messages` | Add message |
+| POST | `/api/v1/sessions/{id}/used` | Record contexts / skills actually used |
+
+### Tasks
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/tasks/{task_id}` | Get background task status |
+| GET | `/api/v1/tasks` | List background tasks |
 
 ### Observer
 
@@ -347,9 +361,18 @@ Compact JSON with status wrapper (when `--compact` is true, which is the default
 |--------|------|-------------|
 | GET | `/api/v1/observer/queue` | Queue status |
 | GET | `/api/v1/observer/vikingdb` | VikingDB status |
-| GET | `/api/v1/observer/vlm` | VLM status |
+| GET | `/api/v1/observer/models` | Models status (VLM / embedding / rerank) |
+| GET | `/api/v1/observer/lock` | Lock subsystem status |
+| GET | `/api/v1/observer/retrieval` | Retrieval subsystem status |
 | GET | `/api/v1/observer/system` | System status |
+
+### Debug
+
+| Method | Path | Description |
+|--------|------|-------------|
 | GET | `/api/v1/debug/health` | Quick health check |
+| GET | `/api/v1/debug/vector/scroll` | Paginated vector record inspection |
+| GET | `/api/v1/debug/vector/count` | Count vector records |
 
 ### Admin (Multi-tenant)
 
@@ -372,4 +395,5 @@ Compact JSON with status wrapper (when `--compact` is true, which is the default
 - [Sessions](05-sessions.md) - Session management
 - [Skills](04-skills.md) - Skill management
 - [System](07-system.md) - System and monitoring API
+- [Metrics](09-metrics.md) - Prometheus metrics export and scraping guide
 - [Admin](08-admin.md) - Multi-tenant management API

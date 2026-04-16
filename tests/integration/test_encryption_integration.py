@@ -374,9 +374,9 @@ class TestVikingFSEncryptionWithAccounts:
         assert user_key is not None
         assert len(user_key) == 64
 
-        # AGFS /local/... paths map to test_data_dir/viking/viking/...
+        # RAGFS /local/... paths map to test_data_dir/viking/viking/...
         # because OpenVikingService path is test_data_dir/viking,
-        # and AGFSManager vikingfs_path is data_path/viking
+        # and RAGFS vikingfs_path is data_path/viking
         agfs_data_root = test_data_dir / "viking" / "viking"
 
         # Verify global accounts.json file created and encrypted

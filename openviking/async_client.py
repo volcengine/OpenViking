@@ -314,6 +314,9 @@ class AsyncOpenViking:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         telemetry: TelemetryRequest = False,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
     ):
         """
         Complex search with session context.
@@ -339,6 +342,9 @@ class AsyncOpenViking:
             score_threshold=score_threshold,
             filter=filter,
             telemetry=telemetry,
+            since=since,
+            until=until,
+            time_field=time_field,
         )
 
     async def find(
@@ -349,6 +355,9 @@ class AsyncOpenViking:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         telemetry: TelemetryRequest = False,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
     ):
         """Semantic search"""
         await self._ensure_initialized()
@@ -359,6 +368,9 @@ class AsyncOpenViking:
             score_threshold=score_threshold,
             filter=filter,
             telemetry=telemetry,
+            since=since,
+            until=until,
+            time_field=time_field,
         )
 
     # ============= FS methods =============
@@ -470,10 +482,10 @@ class AsyncOpenViking:
             node_limit=node_limit,
         )
 
-    async def mkdir(self, uri: str) -> None:
+    async def mkdir(self, uri: str, description: Optional[str] = None) -> None:
         """Create directory"""
         await self._ensure_initialized()
-        await self._client.mkdir(uri)
+        await self._client.mkdir(uri, description=description)
 
     async def stat(self, uri: str) -> Dict:
         """Get resource status"""
