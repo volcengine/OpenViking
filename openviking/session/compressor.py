@@ -303,6 +303,13 @@ class SessionCompressor:
         if not ctx:
             return []
 
+        # Read scope_mode from config to control memory category routing
+        try:
+            from openviking_cli.utils.config import get_openviking_config
+            scope_mode = get_openviking_config().memory.scope_mode
+        except Exception:
+            scope_mode = "default"
+
         self._pending_semantic_changes.clear()
         telemetry = get_current_telemetry()
         telemetry.set("memory.extract.candidates.total", 0)
@@ -352,7 +359,8 @@ class SessionCompressor:
                     if candidate.category in ALWAYS_MERGE_CATEGORIES:
                         with telemetry.measure("memory.extract.stage.profile_create"):
                             memory = await self.extractor.create_memory(
-                                candidate, user, session_id, ctx=ctx
+                                candidate, user, session_id, ctx=ctx,
+                                scope_mode=scope_mode,
                             )
                         if memory:
                             memories.append(memory)
@@ -518,7 +526,8 @@ class SessionCompressor:
 
                         with telemetry.measure("memory.extract.stage.create_memory"):
                             memory = await self.extractor.create_memory(
-                                candidate, user, session_id, ctx=ctx
+                                candidate, user, session_id, ctx=ctx,
+                                scope_mode=scope_mode,
                             )
                         if memory:
                             memories.append(memory)

@@ -773,7 +773,8 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 ```json
 {
   "memory": {
-    "agent_scope_mode": "user+agent"
+    "agent_scope_mode": "user+agent",
+    "scope_mode": "default"
   }
 }
 ```
@@ -781,8 +782,12 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 | Field | Description | Default |
 |-------|-------------|---------|
 | `agent_scope_mode` | Agent memory namespace mode: `"user+agent"` isolates by `(user_id, agent_id)`, while `"agent"` isolates only by `agent_id` and shares agent memories across users of the same agent | `"user+agent"` |
+| `scope_mode` | Memory category routing mode: `"default"` routes user-level categories (profile/preferences/entities/events) to shared user space, `"isolated"` routes ALL categories to agent space for full inter-agent isolation | `"default"` |
 
-`agent_scope_mode` only affects agent-level namespaces such as `viking://agent/{agent_space}/memories/...`. User memories under `viking://user/{user_space}/memories/...` are not affected.
+`agent_scope_mode` controls how the agent space hash is computed. `scope_mode` controls which memory categories are routed to agent vs user scope. These are independent settings:
+
+- `agent_scope_mode` only affects agent-level namespaces such as `viking://agent/{agent_space}/memories/...`. User memories under `viking://user/{user_space}/memories/...` are not affected.
+- `scope_mode="isolated"` moves all categories (including profile and preferences) into `viking://agent/{agent_space}/memories/...`, achieving full inter-agent memory isolation.
 
 ### ovcli.conf
 

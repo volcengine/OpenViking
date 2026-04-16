@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-from typing import Any, Dict
+from typing import Any, Dict, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -17,6 +17,16 @@ class MemoryConfig(BaseModel):
         description=(
             "Agent memory namespace mode: 'user+agent' keeps agent memory isolated by "
             "(user_id, agent_id), while 'agent' shares agent memory across users of the same agent."
+        ),
+    )
+
+    scope_mode: Literal["default", "isolated"] = Field(
+        default="default",
+        description=(
+            "Memory scope routing mode. 'default' routes user-level categories "
+            "(profile/preferences/entities/events) to shared user space and agent-level "
+            "categories (cases/patterns) to isolated agent space. 'isolated' routes ALL "
+            "categories to agent space for full inter-agent memory isolation."
         ),
     )
 
@@ -56,6 +66,13 @@ class MemoryConfig(BaseModel):
     def validate_agent_scope_mode(cls, value: str) -> str:
         if value not in {"user+agent", "agent"}:
             raise ValueError("memory.agent_scope_mode must be 'user+agent' or 'agent'")
+        return value
+
+    @field_validator("scope_mode")
+    @classmethod
+    def validate_scope_mode(cls, value: str) -> str:
+        if value not in {"default", "isolated"}:
+            raise ValueError("memory.scope_mode must be 'default' or 'isolated'")
         return value
 
     @classmethod
