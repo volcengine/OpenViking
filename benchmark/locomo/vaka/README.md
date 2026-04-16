@@ -5,7 +5,7 @@ This benchmark evaluates Vaka multi-turn long-memory CSV results.
 The default input is relative to this benchmark directory:
 
 ```bash
-benchmark/LoCoMo/vaka/data/vaka多轮对话48轮.csv
+benchmark/LoCoMo/vaka/data/vaka_locomo.csv
 ```
 
 You can also pass a custom path with `--input`.

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_INPUT = "data/vaka多轮对话48轮.csv"
+DEFAULT_INPUT = "data/vaka_locomo.csv"
 DEFAULT_CASE_SIZE = 10
 SCRIPT_DIR = Path(__file__).parent
 

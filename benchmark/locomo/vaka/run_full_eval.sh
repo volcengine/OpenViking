@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-INPUT_FILE="data/vaka多轮对话48轮.csv"
+INPUT_FILE="data/vaka_locomo.csv"
 OUTPUT_FILE="$SCRIPT_DIR/result/vaka_qa_result.csv"
 OPENVIKING_URL="http://localhost:1933"
 OPENVIKING_ACCOUNT="default"
