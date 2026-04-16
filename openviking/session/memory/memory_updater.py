@@ -9,6 +9,7 @@ to the storage system.
 
 from typing import Any, Dict, List, Optional, Tuple
 
+import jinja2
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryField
@@ -238,11 +239,11 @@ class MemoryUpdater:
             self._viking_fs = get_viking_fs()
         return self._viking_fs
 
+    @tracer()
     async def apply_operations(
         self,
         operations: Any,
         ctx: RequestContext,
-        registry: Optional[MemoryTypeRegistry] = None,
         extract_context: Any = None,
     ) -> MemoryUpdateResult:
         """
@@ -253,7 +254,7 @@ class MemoryUpdater:
         Args:
             operations: StructuredMemoryOperations from LLM with per-memory_type fields (e.g., soul, identity)
             ctx: Request context
-            registry: Optional MemoryTypeRegistry for URI resolution
+            extract_context: Optional context for template rendering
 
         Returns:
             MemoryUpdateResult with changes made
@@ -265,9 +266,7 @@ class MemoryUpdater:
             logger.warning("VikingFS not available, skipping memory operations")
             return result
 
-        # Use provided registry or internal registry
-        resolved_registry = registry or self._registry
-        if not resolved_registry:
+        if not self._registry:
             raise ValueError("MemoryTypeRegistry is required for URI resolution")
 
         # Get actual user/agent space from ctx
@@ -277,7 +276,7 @@ class MemoryUpdater:
         # Resolve all URIs first (pass extract_context for template rendering)
         resolved_ops = resolve_all_operations(
             operations,
-            resolved_registry,
+            self._registry,
             user_space=user_space,
             agent_space=agent_space,
             extract_context=extract_context,
@@ -311,15 +310,6 @@ class MemoryUpdater:
                     tracer.info(f"Op dump: {resolved_op.model.model_dump()}")
                 result.add_error(resolved_op.uri, e)
 
-        # Apply edit_overview operations
-        for op, uri in resolved_ops.edit_overview_operations:
-            try:
-                await self._apply_edit_overview(op, uri, ctx)
-                result.add_edited(uri)
-            except Exception as e:
-                tracer.error(f"Failed to edit overview {uri}", e)
-                result.add_error(uri, e)
-
         # Apply delete operations
         for _uri_str, uri in resolved_ops.delete_operations:
             try:
@@ -333,6 +323,36 @@ class MemoryUpdater:
         await self._vectorize_memories(result, ctx)
 
         tracer.info(f"Memory operations applied: {result.summary()}")
+
+        # Generate overview files for directories that have modified files
+        # Include deleted_uris to handle cleanup when files are removed
+        all_modified_uris = result.written_uris + result.edited_uris + result.deleted_uris
+        if all_modified_uris:
+            # Collect unique directories with their memory types
+            dir_to_memory_type = {}
+            for uri in all_modified_uris:
+                # Extract directory path (remove the filename)
+                if "/" in uri:
+                    dir_path = "/".join(uri.split("/")[:-1])
+                    # Find which memory type this directory belongs to
+                    for schema in self._registry.list_all():
+                        if schema.overview_template and schema.directory:
+                            env = jinja2.Environment(autoescape=False)
+                            base_dir = env.from_string(schema.directory).render(
+                                user_space=ctx.user.user_space_name(),
+                                agent_space=ctx.user.agent_space_name(),
+                            )
+                            # Check if this uri belongs to this memory type's directory
+                            if dir_path.startswith(base_dir.rstrip("/")):
+                                # Use the directory containing the file directly
+                                if dir_path not in dir_to_memory_type:
+                                    dir_to_memory_type[dir_path] = schema.memory_type
+
+            # Generate overview for each unique directory
+            for directory, memory_type in dir_to_memory_type.items():
+                logger.info(f"[apply_operations] Generating overview for {memory_type} at {directory}")
+                await self.generate_overview(memory_type, directory, ctx, extract_context)
+
         return result
 
     async def _apply_edit(
@@ -528,3 +548,114 @@ class MemoryUpdater:
 
             except Exception as e:
                 logger.warning(f"Failed to vectorize memory {uri}: {e}")
+
+    async def generate_overview(
+        self,
+        memory_type: str,
+        directory: str,
+        ctx: RequestContext,
+        extract_context: Any = None,
+    ) -> None:
+        """
+        Generate .overview.md file for a directory based on overview_template.
+
+        Args:
+            memory_type: Memory type name (e.g., 'events')
+            directory: Directory path containing memory files
+            ctx: Request context
+        """
+        from openviking.session.memory.utils.messages import parse_memory_file_with_fields
+
+        tracer.info(f"[generate_overview] Called with memory_type={memory_type}, directory={directory}")
+
+        # Get the schema for this memory type
+        registry = self._registry
+        tracer.info(f"[generate_overview] registry={registry}")
+        schema = registry.get(memory_type)
+        tracer.info(f"[generate_overview] schema={schema}, overview_template={schema.overview_template if schema else None}")
+        if not schema or not schema.overview_template:
+            logger.debug(f"No overview_template for memory type: {memory_type}")
+            return
+
+        viking_fs = self._get_viking_fs()
+
+        # List direct .md files in the directory (excluding .overview.md and .abstract.md)
+        try:
+            # Use ls to list direct children
+            entries = await viking_fs.ls(directory, show_all_hidden=True, ctx=ctx)
+            tracer.info(f"[generate_overview] LS entries in {directory}: {entries}")
+
+            # Extract file paths from ls entries
+            md_files = []
+            base_uri = directory.rstrip("/")
+            for entry in entries:
+                name = entry.get("name", "")
+                if name.endswith(".md") and not name.endswith(".overview.md") and not name.endswith(".abstract.md"):
+                    md_files.append(f"{base_uri}/{name}")
+
+            tracer.info(f"[generate_overview] Filtered md_files: {md_files}")
+        except Exception as e:
+            logger.warning(f"Failed to list files in {directory}: {e}")
+            return
+
+        # If no memory files, delete the .overview.md and the directory if empty
+        if not md_files:
+            overview_path = f"{directory.rstrip('/')}/.overview.md"
+            try:
+                await viking_fs.delete_file(overview_path, ctx=ctx)
+                tracer.info(f"[generate_overview] Removed orphaned overview: {overview_path}")
+            except Exception:
+                pass
+            # Try to delete empty directory
+            try:
+                await viking_fs.delete_file(directory, ctx=ctx)
+                tracer.info(f"[generate_overview] Removed empty directory: {directory}")
+            except Exception:
+                pass
+            return
+
+        # Parse each file and collect items
+        items = []
+        for file_path in md_files:
+            try:
+                content = await viking_fs.read_file(file_path, ctx=ctx)
+                parsed = parse_memory_file_with_fields(content)
+                tracer.info(f"[generate_overview] Parsed {file_path}: {parsed.keys() if parsed else None}")
+
+                # Extract filename from path
+                filename = file_path.split("/")[-1]
+
+                items.append({
+                    "file_name": filename,
+                    "file_content": parsed,
+                })
+            except Exception as e:
+                logger.warning(f"Failed to parse {file_path}: {e}")
+                continue
+
+        tracer.info(f"[generate_overview] Total items: {len(items)}")
+        if not items:
+            logger.debug(f"No valid memory files parsed in {directory}")
+            return
+
+        # Render the template
+        try:
+            env = jinja2.Environment(autoescape=False)
+            template = env.from_string(schema.overview_template)
+            rendered = template.render(
+                memory_type=memory_type,
+                items=items,
+                extract_context=extract_context,
+            )
+            tracer.info(f"[generate_overview] Rendered overview length: {len(rendered)}")
+        except Exception as e:
+            logger.error(f"Failed to render overview template for {memory_type}: {e}")
+            return
+
+        # Write .overview.md to the directory
+        overview_path = f"{directory.rstrip('/')}/.overview.md"
+        try:
+            await viking_fs.write_file(overview_path, rendered, ctx=ctx)
+            tracer.info(f"[generate_overview] Generated overview: {overview_path}")
+        except Exception as e:
+            logger.error(f"Failed to write overview {overview_path}: {e}")

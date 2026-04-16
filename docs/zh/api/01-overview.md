@@ -281,6 +281,7 @@ openviking -o json ls viking://resources/
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/health` | 健康检查（无需认证） |
+| GET | `/ready` | 就绪探针（无需认证） |
 | GET | `/metrics` | Prometheus 指标导出 |
 | GET | `/api/v1/system/status` | 系统状态 |
 | POST | `/api/v1/system/wait` | 等待处理完成 |
@@ -289,6 +290,7 @@ openviking -o json ls viking://resources/
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| POST | `/api/v1/resources/temp_upload` | 裸 HTTP 导入资源 / pack 时上传本地文件 |
 | POST | `/api/v1/resources` | 添加资源 |
 | POST | `/api/v1/skills` | 添加技能 |
 | POST | `/api/v1/pack/export` | 导出 .ovpack |
@@ -312,7 +314,9 @@ openviking -o json ls viking://resources/
 | GET | `/api/v1/content/read` | 读取完整内容（L2） |
 | GET | `/api/v1/content/abstract` | 读取摘要（L0） |
 | GET | `/api/v1/content/overview` | 读取概览（L1） |
+| GET | `/api/v1/content/download` | 下载原始文件字节流 |
 | POST | `/api/v1/content/write` | 修改已有文件并自动刷新语义与向量 |
+| POST | `/api/v1/content/reindex` | 重新构建已有内容的语义/向量索引 |
 
 ### 搜索
 
@@ -341,7 +345,16 @@ openviking -o json ls viking://resources/
 | GET | `/api/v1/sessions/{id}/context` | 获取组装后的会话上下文 |
 | DELETE | `/api/v1/sessions/{id}` | 删除会话 |
 | POST | `/api/v1/sessions/{id}/commit` | 提交会话 |
+| POST | `/api/v1/sessions/{id}/extract` | 从会话提取记忆 |
 | POST | `/api/v1/sessions/{id}/messages` | 添加消息 |
+| POST | `/api/v1/sessions/{id}/used` | 记录实际使用的上下文 / 技能 |
+
+### 任务
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/tasks/{task_id}` | 获取后台任务状态 |
+| GET | `/api/v1/tasks` | 列出后台任务 |
 
 ### Observer
 
@@ -349,9 +362,18 @@ openviking -o json ls viking://resources/
 |------|------|------|
 | GET | `/api/v1/observer/queue` | 队列状态 |
 | GET | `/api/v1/observer/vikingdb` | VikingDB 状态 |
-| GET | `/api/v1/observer/vlm` | VLM 状态 |
+| GET | `/api/v1/observer/models` | 模型状态（VLM / embedding / rerank） |
+| GET | `/api/v1/observer/lock` | 锁子系统状态 |
+| GET | `/api/v1/observer/retrieval` | 检索子系统状态 |
 | GET | `/api/v1/observer/system` | 系统状态 |
+
+### 调试
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
 | GET | `/api/v1/debug/health` | 快速健康检查 |
+| GET | `/api/v1/debug/vector/scroll` | 分页查看向量记录 |
+| GET | `/api/v1/debug/vector/count` | 统计向量记录数量 |
 
 ### 管理员（多租户）
 

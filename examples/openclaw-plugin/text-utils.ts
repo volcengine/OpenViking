@@ -488,6 +488,7 @@ export type ExtractedMessage = {
     text: string;
   } | {
     type: "tool";
+    toolCallId?: string;
     toolName: string;
     toolInput?: Record<string, unknown>;
     toolOutput: string;
@@ -574,6 +575,7 @@ export function extractNewTurnMessages(
       if (output) {
         appendExtractedMessage(result, "user", [{
           type: "tool",
+          toolCallId: toolCallId || undefined,
           toolName,
           toolInput,
           toolOutput: `[${toolName} result]: ${output}`,

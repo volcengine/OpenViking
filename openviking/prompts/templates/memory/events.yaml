@@ -19,6 +19,14 @@ content_template: |
   time: {{extract_context.get_first_message_time_with_weekday_from_ranges(ranges|default(''))|default('N/A')}}
   {{ extract_context.read_message_ranges(ranges|default('')).pretty_print() if ranges else '' }}
 
+
+overview_template: |-
+  # Events Overview
+  {% if items %}**Date:** {{ extract_context.get_year(items[0].file_content.ranges|default(''))|default('') }}/{{ extract_context.get_month(items[0].file_content.ranges|default(''))|default('') }}/{{ extract_context.get_day(items[0].file_content.ranges|default(''))|default('') }}{% endif %}
+  {% for item in items %}
+  - [{{ item.file_content.summary }}](./{{ item.file_name }})
+  {% endfor %}
+
 fields:
   - name: event_name
     type: string
@@ -43,3 +51,4 @@ fields:
       Conversation message index ranges to extract, format: "start-end,start-end,..."
       Example: "0-3,40-45" means extract messages 0-3 and 40-45.
     merge_op: immutable
+

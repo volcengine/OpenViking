@@ -42,12 +42,15 @@ Add a resource to the knowledge base.
 |-----------|------|----------|---------|-------------|
 | path | str | Yes | - | SDK/CLI: local path, directory path, or URL. Raw HTTP: remote URL only |
 | temp_file_id | str | No | None | Upload ID returned by `POST /api/v1/resources/temp_upload` for raw HTTP local file ingestion |
-| target | str | No | None | Target Viking URI (must be in `resources` scope) |
+| to | str | No | None | Exact target Viking URI (must be in `resources` scope) |
+| parent | str | No | None | Parent URI under which the resource will be stored. Cannot be combined with `to` |
 | reason | str | No | "" | Why this resource is being added (improves search relevance) |
 | instruction | str | No | "" | Special processing instructions |
 | wait | bool | No | False | Wait for semantic processing to complete |
 | timeout | float | No | None | Timeout in seconds (only used when wait=True) |
-| watch_interval | float | No | 0 | Watch interval (minutes). >0 enables/updates watch; <=0 disables watch. Only takes effect when target is provided |
+| watch_interval | float | No | 0 | Watch interval (minutes). >0 enables/updates watch; <=0 disables watch. Only takes effect when `to` is provided |
+
+`POST /api/v1/resources` uses `to` in JSON. CLI uses `--to`.
 
 **How local files and directories work**
 
@@ -62,13 +65,13 @@ Add a resource to the knowledge base.
 
 When you call `add_resource()` repeatedly for the same resource URI, the system performs an incremental update instead of rebuilding everything from scratch:
 
-- **Trigger**: `target` is provided and already exists in the knowledge base.
-- **High-level idea**: each ingestion first builds a temporary resource tree from the new input. During asynchronous semantic processing, the temporary tree is compared against the existing tree at `target`, and only the changed parts are re-processed and synchronized.
+- **Trigger**: `to` is provided and already exists in the knowledge base.
+- **High-level idea**: each ingestion first builds a temporary resource tree from the new input. During asynchronous semantic processing, the temporary tree is compared against the existing tree at `to`, and only the changed parts are re-processed and synchronized.
 - **Incremental behavior in the semantic stage**:
   - **Unchanged files**: reuse existing L0 summaries and vector index records; skip vectorization.
   - **Changed files**: regenerate summaries and vector index entries.
   - **Directory-level L0/L1 (abstract/overview)**: if the child set and their change status are unchanged, reuse existing results and skip vectorization; otherwise recompute and update.
-- **Filesystem + index sync**: after the semantic DAG finishes, a top-down diff is applied from the temporary tree to `target` to synchronize additions, deletions, and updates. Vector store records are kept consistent: deletions remove corresponding vectors, while moves/overwrites update vector records’ URI mapping, completing an incremental update of both the resource tree and the semantic index.
+- **Filesystem + index sync**: after the semantic DAG finishes, a top-down diff is applied from the temporary tree to `to` to synchronize additions, deletions, and updates. Vector store records are kept consistent: deletions remove corresponding vectors, while moves/overwrites update vector records’ URI mapping, completing an incremental update of both the resource tree and the semantic index.
 
 **Python SDK (Embedded / HTTP)**
 
@@ -126,7 +129,7 @@ openviking add-resource ./documents/guide.md --reason "User guide documentation"
 ```python
 result = client.add_resource(
     "https://example.com/api-docs.md",
-    target="viking://resources/external/",
+    to="viking://resources/external/",
     reason="External API documentation"
 )
 client.wait_processed()
@@ -140,7 +143,7 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -H "X-API-Key: your-key" \
   -d '{
     "path": "https://example.com/api-docs.md",
-    "target": "viking://resources/external/",
+    "to": "viking://resources/external/",
     "reason": "External API documentation",
     "wait": true
   }'
@@ -299,18 +302,18 @@ openviking add-resource ./documents/guide.md --wait
 
 `watch_interval` is in minutes and periodically triggers re-processing for the specified target URI:
 
-- `watch_interval > 0`: create (or reactivate and update) a watch task for the `target`
-- `watch_interval <= 0`: disable (deactivate) the watch task for the `target`
-- watch tasks are only managed when `target` / CLI `--to` is provided
+- `watch_interval > 0`: create (or reactivate and update) a watch task for the `to`
+- `watch_interval <= 0`: disable (deactivate) the watch task for the `to`
+- watch tasks are only managed when `to` / CLI `--to` is provided
 
-If there is already an active watch task for the same `target`, submitting another request with `watch_interval > 0` returns a conflict error. Disable it first (`watch_interval = 0`) and then set a new interval.
+If there is already an active watch task for the same `to`, submitting another request with `watch_interval > 0` returns a conflict error. Disable it first (`watch_interval = 0`) and then set a new interval.
 
 **Python SDK (Embedded / HTTP)**
 
 ```python
 client.add_resource(
     "./documents/guide.md",
-    target="viking://resources/documents/guide.md",
+    to="viking://resources/documents/guide.md",
     watch_interval=60,
 )
 ```
@@ -323,7 +326,7 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -H "X-API-Key: your-key" \
   -d '{
     "path": "https://example.com/guide.md",
-    "target": "viking://resources/documents/guide.md",
+    "to": "viking://resources/documents/guide.md",
     "watch_interval": 60
   }'
 ```
@@ -343,12 +346,18 @@ openviking add-resource ./documents/guide.md --to viking://resources/documents/g
 
 Export a resource tree as a `.ovpack` file.
 
-**Parameters**
+**SDK / CLI parameters**
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI to export |
 | to | str | Yes | - | Target file path |
+
+**Raw HTTP request body**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| uri | str | Yes | - | Viking URI to export |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -371,8 +380,7 @@ curl -X POST http://localhost:1933/api/v1/pack/export \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
   -d '{
-    "uri": "viking://resources/my-project/",
-    "to": "./exports/my-project.ovpack"
+    "uri": "viking://resources/my-project/"
   }'
 ```
 
@@ -384,15 +392,7 @@ openviking export viking://resources/my-project/ ./exports/my-project.ovpack
 
 **Response**
 
-```json
-{
-  "status": "ok",
-  "result": {
-    "file": "./exports/my-project.ovpack"
-  },
-  "time": 0.1
-}
-```
+The HTTP API streams the `.ovpack` file directly as a download (`Content-Type: application/zip`). It does not return a JSON envelope for this endpoint.
 
 ---
 

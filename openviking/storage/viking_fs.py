@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSDirectoryNotEmptyError, AGFSHTTPError
 from openviking.resource.watch_storage import is_watch_task_control_uri
+from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext, Role
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import format_simplified, get_current_timestamp, parse_iso_datetime
@@ -407,7 +408,12 @@ class VikingFS:
         try:
             stat = self.agfs.stat(path)
             is_dir = stat.get("isDir", False) if isinstance(stat, dict) else False
-        except Exception:
+        except Exception as exc:
+            if not is_not_found_error(exc):
+                mapped = map_exception(exc, resource=uri)
+                if mapped is not None:
+                    raise mapped from exc
+                raise
             # Path does not exist: clean up any orphan index records and return
             uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
             uris_to_delete.append(target_uri)
@@ -416,6 +422,11 @@ class VikingFS:
             return {}
 
         if is_dir:
+            if not recursive:
+                raise FailedPreconditionError(
+                    f"Cannot remove directory without --recursive: {uri}",
+                    details={"resource": uri, "expected_flag": "recursive"},
+                )
             lock_paths = [path]
             lock_mode = "subtree"
         else:
@@ -877,13 +888,27 @@ class VikingFS:
         """Read directory's L0 summary (.abstract.md)."""
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
-        info = self.agfs.stat(path)
+        try:
+            info = self.agfs.stat(path)
+        except Exception as exc:
+            mapped = map_exception(exc, resource=uri)
+            if mapped is not None:
+                raise mapped from exc
+            raise
         if not info.get("isDir", info.get("is_dir")):
-            raise ValueError(f"{uri} is not a directory")
+            raise FailedPreconditionError(
+                f"{uri} is not a directory",
+                details={"resource": uri, "expected": "directory"},
+            )
         file_path = f"{path}/.abstract.md"
         try:
             content_bytes = self._handle_agfs_read(self.agfs.read(file_path))
-        except Exception:
+        except Exception as exc:
+            if not is_not_found_error(exc):
+                mapped = map_exception(exc, resource=uri)
+                if mapped is not None:
+                    raise mapped from exc
+                raise
             # Fallback to default if .abstract.md doesn't exist
             return f"# {uri}\n\n[Directory abstract is not ready]"
 
@@ -901,13 +926,27 @@ class VikingFS:
         """Read directory's L1 overview (.overview.md)."""
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
-        info = self.agfs.stat(path)
+        try:
+            info = self.agfs.stat(path)
+        except Exception as exc:
+            mapped = map_exception(exc, resource=uri)
+            if mapped is not None:
+                raise mapped from exc
+            raise
         if not info.get("isDir", info.get("is_dir")):
-            raise ValueError(f"{uri} is not a directory")
+            raise FailedPreconditionError(
+                f"{uri} is not a directory",
+                details={"resource": uri, "expected": "directory"},
+            )
         file_path = f"{path}/.overview.md"
         try:
             content_bytes = self._handle_agfs_read(self.agfs.read(file_path))
-        except Exception:
+        except Exception as exc:
+            if not is_not_found_error(exc):
+                mapped = map_exception(exc, resource=uri)
+                if mapped is not None:
+                    raise mapped from exc
+                raise
             # Fallback to default if .overview.md doesn't exist
             return f"# {uri}\n\n[Directory overview is not ready]"
 

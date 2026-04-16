@@ -58,7 +58,11 @@ openviking session new
   "status": "ok",
   "result": {
     "session_id": "a1b2c3d4",
-    "user": "alice"
+    "user": {
+      "account_id": "default",
+      "user_id": "alice",
+      "agent_id": "default"
+    }
   },
   "time": 0.1
 }
@@ -73,9 +77,9 @@ openviking session new
 **Python SDK (Embedded / HTTP)**
 
 ```python
-sessions = client.ls("viking://session/")
+sessions = client.list_sessions()
 for s in sessions:
-    print(f"{s['name']}")
+    print(f"{s['session_id']} -> {s['uri']}")
 ```
 
 **HTTP API**
@@ -101,8 +105,8 @@ openviking session list
 {
   "status": "ok",
   "result": [
-    {"session_id": "a1b2c3d4", "user": "alice"},
-    {"session_id": "e5f6g7h8", "user": "bob"}
+    {"session_id": "a1b2c3d4", "uri": "viking://session/alice/a1b2c3d4", "is_dir": true},
+    {"session_id": "e5f6g7h8", "uri": "viking://session/alice/e5f6g7h8", "is_dir": true}
   ],
   "time": 0.1
 }
@@ -178,6 +182,7 @@ openviking session get a1b2c3d4
       "total_tokens": 7000
     },
     "user": {
+      "account_id": "default",
       "user_id": "alice",
       "agent_id": "default"
     }
@@ -430,6 +435,7 @@ openviking session delete a1b2c3d4
 | role | str | 是 | - | 消息角色："user" 或 "assistant" |
 | parts | List[Part] | 条件必填 | - | 消息部分列表（Python SDK 必填；HTTP API 可选，与 content 二选一） |
 | content | str | 条件必填 | - | 消息文本内容（HTTP API 简单模式，与 parts 二选一） |
+| created_at | str | 否 | None | 可选的 ISO 8601 时间戳，会原样保存到消息中 |
 
 > **注意**：HTTP API 支持两种模式：
 > 1. **简单模式**：使用 `content` 字符串（向后兼容）
@@ -456,7 +462,7 @@ ContextPart(
 ToolPart(
     tool_id="call_123",
     tool_name="search_web",
-    skill_uri="viking://skills/search-web/",
+    skill_uri="viking://agent/skills/search-web/",
     tool_input={"query": "OAuth best practices"},
     tool_output="",
     tool_status="pending"  # "pending"、"running"、"completed"、"error"
@@ -571,7 +577,7 @@ session.used(contexts=["viking://resources/docs/auth/"])
 
 # 记录使用的技能
 session.used(skill={
-    "uri": "viking://skills/search-web/",
+    "uri": "viking://agent/skills/search-web/",
     "input": {"query": "OAuth"},
     "output": "Results...",
     "success": True
@@ -595,7 +601,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
 curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
-  -d '{"skill": {"uri": "viking://skills/search-web/", "input": {"query": "OAuth"}, "output": "Results...", "success": true}}'
+  -d '{"skill": {"uri": "viking://agent/skills/search-web/", "input": {"query": "OAuth"}, "output": "Results...", "success": true}}'
 ```
 
 **响应**
@@ -686,6 +692,34 @@ openviking session commit a1b2c3d4
 
 ---
 
+### extract()
+
+仅 HTTP API。立即对已有会话触发一次记忆提取，不会额外创建新的 commit 任务。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| session_id | str | 是 | - | 要提取记忆的会话 ID |
+
+**HTTP API**
+
+```
+POST /api/v1/sessions/{session_id}/extract
+```
+
+```bash
+curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/extract \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key"
+```
+
+**响应**
+
+该接口会直接返回本次提取产生的记忆写入结果列表。列表项的具体结构取决于该会话实际提取出了哪些记忆。
+
+---
+
 ### get_task()
 
 查询后台任务状态（如 commit 的摘要生成和记忆提取进度）。
@@ -752,6 +786,52 @@ curl -X GET http://localhost:1933/api/v1/tasks/uuid-xxx \
 ```
 
 完成态任务结果里的 `memories_extracted` 表示本次 commit 的分类计数；如果只需要本次 commit 的总数，请把这些值求和。
+
+---
+
+### list_tasks()
+
+仅 HTTP API。列出当前调用方可见的后台任务。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| task_type | str | 否 | None | 按任务类型过滤，例如 `session_commit` |
+| status | str | 否 | None | 按任务状态过滤：`pending`、`running`、`completed`、`failed` |
+| resource_id | str | 否 | None | 按资源 ID 过滤，例如会话 ID |
+| limit | int | 否 | 50 | 最多返回的任务条数 |
+
+**HTTP API**
+
+```
+GET /api/v1/tasks
+```
+
+```bash
+curl -X GET "http://localhost:1933/api/v1/tasks?task_type=session_commit&status=running&limit=20" \
+  -H "X-API-Key: your-key"
+```
+
+**响应**
+
+```json
+{
+  "status": "ok",
+  "result": [
+    {
+      "task_id": "uuid-xxx",
+      "task_type": "session_commit",
+      "status": "running",
+      "resource_id": "a1b2c3d4",
+      "created_at": 1770000000.0,
+      "updated_at": 1770000005.0,
+      "result": null,
+      "error": null
+    }
+  ]
+}
+```
 
 ---
 
