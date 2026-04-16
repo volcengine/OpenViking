@@ -94,7 +94,7 @@ async def import_ovpack(
     service = get_service()
 
     upload_temp_dir = get_openviking_config().storage.get_upload_temp_dir()
-    file_path = resolve_uploaded_temp_file_id(request.temp_file_id, upload_temp_dir)
+    file_path, _ = resolve_uploaded_temp_file_id(request.temp_file_id, upload_temp_dir)
 
     result = await service.pack.import_ovpack(
         file_path,

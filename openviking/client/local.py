@@ -14,6 +14,7 @@ from openviking.telemetry.execution import (
     attach_telemetry_payload,
     run_with_telemetry,
 )
+from openviking.utils.search_filters import merge_time_filter
 from openviking_cli.client.base import BaseClient
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import run_async
@@ -29,6 +30,21 @@ def _to_jsonable(value: Any) -> Any:
     if isinstance(value, dict):
         return {k: _to_jsonable(v) for k, v in value.items()}
     return value
+
+
+def _resolve_search_filter(
+    filter: Optional[Dict[str, Any]],
+    since: Optional[str],
+    until: Optional[str],
+    time_field: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """Merge optional retrieval time bounds into the metadata filter."""
+    return merge_time_filter(
+        filter,
+        since=since,
+        until=until,
+        time_field=time_field,
+    )
 
 
 class LocalClient(BaseClient):
@@ -195,9 +211,9 @@ class LocalClient(BaseClient):
         """Get resource status."""
         return await self._service.fs.stat(uri, ctx=self._ctx)
 
-    async def mkdir(self, uri: str) -> None:
+    async def mkdir(self, uri: str, description: Optional[str] = None) -> None:
         """Create directory."""
-        await self._service.fs.mkdir(uri, ctx=self._ctx)
+        await self._service.fs.mkdir(uri, ctx=self._ctx, description=description)
 
     async def rm(self, uri: str, recursive: bool = False) -> None:
         """Remove resource."""
@@ -264,8 +280,12 @@ class LocalClient(BaseClient):
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
     ) -> Any:
         """Semantic search without session context."""
+        resolved_filter = _resolve_search_filter(filter, since, until, time_field)
         execution = await run_with_telemetry(
             operation="search.find",
             telemetry=telemetry,
@@ -275,7 +295,7 @@ class LocalClient(BaseClient):
                 target_uri=target_uri,
                 limit=limit,
                 score_threshold=score_threshold,
-                filter=filter,
+                filter=resolved_filter,
             ),
         )
         return attach_telemetry_payload(
@@ -292,8 +312,12 @@ class LocalClient(BaseClient):
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
     ) -> Any:
         """Semantic search with optional session context."""
+        resolved_filter = _resolve_search_filter(filter, since, until, time_field)
 
         async def _search():
             session = None
@@ -307,7 +331,7 @@ class LocalClient(BaseClient):
                 session=session,
                 limit=limit,
                 score_threshold=score_threshold,
-                filter=filter,
+                filter=resolved_filter,
             )
 
         execution = await run_with_telemetry(

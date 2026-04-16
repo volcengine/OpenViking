@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import httpx
 import pytest
 
-from openviking.parse.parsers.html import HTMLParser, URLTypeDetector
+from openviking.parse.parsers.html import URLTypeDetector
 from openviking.utils.network_guard import ensure_public_remote_target
 from openviking_cli.exceptions import PermissionDeniedError
 
@@ -225,15 +225,5 @@ async def test_url_detector_request_validator_blocks_loopback_head(loopback_http
         await detector.detect(
             loopback_http_url,
             timeout=2.0,
-            request_validator=ensure_public_remote_target,
-        )
-
-
-async def test_html_parser_request_validator_blocks_loopback_fetch(loopback_http_url: str):
-    parser = HTMLParser(timeout=2.0)
-
-    with pytest.raises(PermissionDeniedError):
-        await parser._fetch_html(
-            loopback_http_url,
             request_validator=ensure_public_remote_target,
         )

@@ -2,6 +2,27 @@
 
 OpenViking 提供类 Unix 的文件系统操作来管理上下文。
 
+## WebDAV（Phase 1）
+
+OpenViking Server 也提供了一个面向资源文件的精简 WebDAV 适配层：
+
+```text
+/webdav/resources
+```
+
+Phase 1 有意把范围控制得比较小：
+
+- 仅开放 `resources` 命名空间，不暴露 memories、skills、sessions 等其他空间。
+- 以文本写入为主，当前 `PUT` 只接受 UTF-8 文本内容。
+- 只实现一小部分 WebDAV 方法：`OPTIONS`、`PROPFIND`、`GET`、`HEAD`、`PUT`、`DELETE`、`MKCOL`、`MOVE`。
+- 语义侧边文件保持内部可见。`.abstract.md`、`.overview.md`、`.relations.json`、`.path.ovlock` 这些派生文件不会出现在 WebDAV 列表中，也不能被直接访问。
+
+行为说明：
+
+- 通过 WebDAV 新建文件时，会对该文件路径触发 OpenViking 的语义生成。
+- 通过 WebDAV 覆盖已有文件时，会像 `write()` 一样刷新相关语义和向量。
+- 用户自己创建的点目录或点文件仍然可见，只有上面列出的保留内部文件名会被隐藏。
+
 ## API 参考
 
 ### abstract()
@@ -106,6 +127,8 @@ openviking overview viking://resources/docs/
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | uri | str | 是 | - | Viking URI |
+| offset | int | 否 | 0 | 起始行号（0 开始） |
+| limit | int | 否 | -1 | 读取的行数，`-1` 表示读到结尾 |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -243,6 +266,11 @@ openviking write viking://resources/docs/api.md \
 | uri | str | 是 | - | Viking URI |
 | simple | bool | 否 | False | 仅返回相对路径 |
 | recursive | bool | 否 | False | 递归列出所有子目录 |
+| output | str | 否 | `agent` | 输出格式：`agent` 或 `original` |
+| abs_limit | int | 否 | 256 | `agent` 输出中的摘要长度限制 |
+| show_all_hidden | bool | 否 | False | 像 `-a` 一样包含隐藏文件 |
+| node_limit | int | 否 | 1000 | 最大返回节点数 |
+| limit | int | 否 | None | `node_limit` 的别名 |
 
 **条目结构**
 
@@ -323,6 +351,12 @@ openviking ls viking://resources/ [--simple] [--recursive]
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | uri | str | 是 | - | Viking URI |
+| output | str | 否 | `agent` | 输出格式：`agent` 或 `original` |
+| abs_limit | int | 否 | 256 | `agent` 输出中的摘要长度限制 |
+| show_all_hidden | bool | 否 | False | 像 `-a` 一样包含隐藏文件 |
+| node_limit | int | 否 | 1000 | 最大返回节点数 |
+| limit | int | 否 | None | `node_limit` 的别名 |
+| level_limit | int | 否 | 3 | 最大目录遍历深度 |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -440,11 +474,13 @@ openviking stat viking://resources/my-project/docs/api.md
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | uri | str | 是 | - | 新目录的 Viking URI |
+| description | str | 否 | `null` | 目录初始说明。传入后会写入 `.abstract.md`，并进入目录 L0 向量化队列。 |
 
 **Python SDK (Embedded / HTTP)**
 
 ```python
 client.mkdir("viking://resources/new-project/")
+client.mkdir("viking://resources/new-project/", description="接口文档目录")
 ```
 
 **HTTP API**
@@ -458,7 +494,8 @@ curl -X POST http://localhost:1933/api/v1/fs/mkdir \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
   -d '{
-    "uri": "viking://resources/new-project/"
+    "uri": "viking://resources/new-project/",
+    "description": "接口文档目录"
   }'
 ```
 
@@ -466,6 +503,7 @@ curl -X POST http://localhost:1933/api/v1/fs/mkdir \
 
 ```bash
 openviking mkdir viking://resources/new-project/
+openviking mkdir viking://resources/new-project/ --description "接口文档目录"
 ```
 
 **响应**
@@ -607,6 +645,9 @@ openviking mv viking://resources/old-name/ viking://resources/new-name/
 | uri | str | 是 | - | 要搜索的 Viking URI |
 | pattern | str | 是 | - | 搜索模式（正则表达式） |
 | case_insensitive | bool | 否 | False | 忽略大小写 |
+| exclude_uri | str | 否 | None | 搜索时要排除的 URI 前缀 |
+| node_limit | int | 否 | None | 最大搜索节点数 |
+| level_limit | int | 否 | 5 | 最大目录遍历深度 |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -677,6 +718,7 @@ openviking grep viking://resources/ "authentication" [--ignore-case]
 |------|------|------|--------|------|
 | pattern | str | 是 | - | Glob 模式（例如 `**/*.md`） |
 | uri | str | 否 | "viking://" | 起始 URI |
+| node_limit | int | 否 | None | 最大返回匹配数 |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -741,7 +783,7 @@ openviking glob "**/*.md" [--uri viking://resources/]
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | from_uri | str | 是 | - | 源 URI |
-| uris | str 或 List[str] | 是 | - | 目标 URI |
+| to_uris | str 或 List[str] | 是 | - | 目标 URI |
 | reason | str | 否 | "" | 关联原因 |
 
 **Python SDK (Embedded / HTTP)**
@@ -874,7 +916,7 @@ openviking relations viking://resources/docs/auth/
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | from_uri | str | 是 | - | 源 URI |
-| uri | str | 是 | - | 要取消关联的目标 URI |
+| to_uri | str | 是 | - | 要取消关联的目标 URI |
 
 **Python SDK (Embedded / HTTP)**
 

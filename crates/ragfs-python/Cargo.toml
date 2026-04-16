@@ -2,12 +2,17 @@
 name = "ragfs-python"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.91.1"
 description = "Python bindings for RAGFS - Rust AGFS filesystem"
 publish = false
 
 [lib]
 name = "ragfs_python"
 crate-type = ["cdylib"]
+
+[features]
+default = ["s3"]
+s3 = ["ragfs/s3"]
 
 [dependencies]
 ragfs = { path = "../ragfs" }

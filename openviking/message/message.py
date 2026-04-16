@@ -65,6 +65,12 @@ class Message:
     def to_dict(self) -> dict:
         """Serialize to JSONL."""
         created_at_val = self.created_at or datetime.now(timezone.utc).isoformat()
+        if isinstance(created_at_val, datetime):
+            created_at_val = (
+                created_at_val.astimezone(timezone.utc)
+                .isoformat(timespec="milliseconds")
+                .replace("+00:00", "Z")
+            )
         return {
             "id": self.id,
             "role": self.role,
@@ -109,7 +115,15 @@ class Message:
     def from_dict(cls, data: dict) -> "Message":
         """Deserialize from JSONL."""
         parts = []
-        for p in data.get("parts", []):
+        raw_parts = data.get("parts")
+        if raw_parts is None:
+            legacy_content = data.get("content")
+            if legacy_content is not None:
+                raw_parts = [{"type": "text", "text": legacy_content}]
+            else:
+                raw_parts = []
+
+        for p in raw_parts:
             if p["type"] == "text":
                 parts.append(TextPart(text=p.get("text", "")))
             elif p["type"] == "context":
@@ -140,7 +154,7 @@ class Message:
             role=data["role"],
             parts=parts,
             role_id=data.get("role_id"),
-            created_at=data["created_at"],
+            created_at=data.get("created_at"),
         )
 
     @classmethod

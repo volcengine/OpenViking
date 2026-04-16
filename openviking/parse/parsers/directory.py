@@ -87,6 +87,16 @@ class DirectoryParser(BaseParser):
         if not source_path.is_dir():
             raise NotADirectoryError(f"Not a directory: {source_path}")
 
+        # Check if this is a git repository, delegate to CodeRepositoryParser
+        if await self._is_git_repository(source_path):
+            logger.debug(
+                f"Directory {source_path} is a git repository, delegating to CodeRepositoryParser"
+            )
+            from openviking.parse.parsers.code.code import CodeRepositoryParser
+
+            await self._add_git_metadata(source_path, kwargs)
+            return await CodeRepositoryParser().parse(str(source_path), instruction, **kwargs)
+
         dir_name = kwargs.get("source_name") or source_path.name
         warnings: List[str] = []
 
@@ -451,6 +461,59 @@ class DirectoryParser(BaseParser):
             await viking_fs.delete_temp(src_temp_uri)
         except Exception:
             pass
+
+    @staticmethod
+    async def _is_git_repository(source_path: Path) -> bool:
+        """Check if the directory contains a git repository."""
+        try:
+            return (source_path / ".git").exists() and (source_path / ".git").is_dir()
+        except (OSError, PermissionError):
+            return False
+
+    @staticmethod
+    async def _add_git_metadata(source_path: Path, kwargs: dict) -> None:
+        """Add git metadata (branch, commit, repo_name) to kwargs dictionary."""
+        try:
+            from openviking.parse.accessors.git_accessor import GitAccessor
+
+            git_accessor = GitAccessor()
+
+            # Get branch
+            try:
+                branch = await git_accessor._run_git(
+                    ["git", "-C", str(source_path), "rev-parse", "--abbrev-ref", "HEAD"]
+                )
+                kwargs["repo_ref"] = branch
+            except Exception as e:
+                logger.debug(f"Failed to get git branch: {e}")
+
+            # Get commit
+            try:
+                commit = await git_accessor._run_git(
+                    ["git", "-C", str(source_path), "rev-parse", "HEAD"]
+                )
+                kwargs["repo_commit"] = commit
+            except Exception as e:
+                logger.debug(f"Failed to get git commit: {e}")
+
+            # Get repo name
+            try:
+                remote_url = await git_accessor._run_git(
+                    ["git", "-C", str(source_path), "config", "--get", "remote.origin.url"]
+                )
+                if remote_url:
+                    repo_name = git_accessor._get_repo_name(remote_url)
+                    if repo_name and repo_name != "repository":
+                        kwargs["repo_name"] = repo_name
+                else:
+                    kwargs["repo_name"] = source_path.name
+            except Exception as e:
+                logger.debug(f"Failed to get git remote info: {e}")
+                kwargs["repo_name"] = source_path.name
+
+        except Exception as e:
+            logger.debug(f"Failed to get git metadata: {e}")
+            kwargs["repo_name"] = source_path.name
 
     @staticmethod
     async def _recursive_move(

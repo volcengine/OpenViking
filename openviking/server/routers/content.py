@@ -9,12 +9,14 @@ from fastapi import APIRouter, Body, Depends, Query
 from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel, ConfigDict
 
+from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import ErrorInfo, Response
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -55,7 +57,16 @@ async def read(
 ):
     """Read file content (L2)."""
     service = get_service()
-    result = await service.fs.read(uri, ctx=_ctx, offset=offset, limit=limit)
+    try:
+        result = await service.fs.read(uri, ctx=_ctx, offset=offset, limit=limit)
+    except AGFSNotFoundError:
+        raise NotFoundError(uri, "file")
+    except AGFSClientError as e:
+        # Fallback for older versions without typed exceptions
+        err_msg = str(e).lower()
+        if "not found" in err_msg or "no such file or directory" in err_msg:
+            raise NotFoundError(uri, "file")
+        raise
 
     # 清理MEMORY_FIELDS隐藏注释（v2记忆加工过程中的临时内部数据，不暴露给外部用户）
     if isinstance(result, bytes):
@@ -80,7 +91,16 @@ async def abstract(
 ):
     """Read L0 abstract."""
     service = get_service()
-    result = await service.fs.abstract(uri, ctx=_ctx)
+    try:
+        result = await service.fs.abstract(uri, ctx=_ctx)
+    except AGFSNotFoundError:
+        raise NotFoundError(uri, "file")
+    except AGFSClientError as e:
+        # Fallback for older versions without typed exceptions
+        err_msg = str(e).lower()
+        if "not found" in err_msg or "no such file or directory" in err_msg:
+            raise NotFoundError(uri, "file")
+        raise
     return Response(status="ok", result=result)
 
 
@@ -91,7 +111,16 @@ async def overview(
 ):
     """Read L1 overview."""
     service = get_service()
-    result = await service.fs.overview(uri, ctx=_ctx)
+    try:
+        result = await service.fs.overview(uri, ctx=_ctx)
+    except AGFSNotFoundError:
+        raise NotFoundError(uri, "file")
+    except AGFSClientError as e:
+        # Fallback for older versions without typed exceptions
+        err_msg = str(e).lower()
+        if "not found" in err_msg or "no such file or directory" in err_msg:
+            raise NotFoundError(uri, "file")
+        raise
     return Response(status="ok", result=result)
 
 
@@ -102,7 +131,16 @@ async def download(
 ):
     """Download file as raw bytes (for images, binaries, etc.)."""
     service = get_service()
-    content = await service.fs.read_file_bytes(uri, ctx=_ctx)
+    try:
+        content = await service.fs.read_file_bytes(uri, ctx=_ctx)
+    except AGFSNotFoundError:
+        raise NotFoundError(uri, "file")
+    except AGFSClientError as e:
+        # Fallback for older versions without typed exceptions
+        err_msg = str(e).lower()
+        if "not found" in err_msg or "no such file or directory" in err_msg:
+            raise NotFoundError(uri, "file")
+        raise
 
     # Try to get filename from stat
     filename = "download"

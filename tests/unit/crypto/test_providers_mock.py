@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+import openviking.crypto.providers as providers_module
 from openviking.crypto.encryptor import FileEncryptor
 from openviking.crypto.providers import (
     PROVIDER_LOCAL,
@@ -29,6 +30,7 @@ from openviking.crypto.providers import (
     VaultProvider,
     VolcengineKMSProvider,
 )
+from openviking.metrics.datasources.encryption import EncryptionEventDataSource
 
 
 @pytest.fixture
@@ -273,3 +275,73 @@ class TestCrossProviderEnvelope:
         finally:
             if os.path.exists(temp_path2):
                 os.unlink(temp_path2)
+
+
+@pytest.mark.asyncio
+async def test_hkdf_derive_logs_debug_when_metrics_recording_fails(
+    local_file_provider, monkeypatch: pytest.MonkeyPatch
+):
+    """HKDF derivation should log metrics side-effect failures without changing the result."""
+
+    debug = Mock()
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("metrics write failed")
+
+    monkeypatch.setattr(providers_module.logger, "debug", debug)
+    monkeypatch.setattr(EncryptionEventDataSource, "record_key_derivation", staticmethod(_boom))
+
+    result = await local_file_provider._hkdf_derive(
+        b"a" * 32,
+        "acct-1",
+        b"salt",
+        b"info:",
+    )
+
+    assert isinstance(result, bytes)
+    assert len(result) == 32
+    debug.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider_factory", "provider_name"),
+    [
+        ("local_file_provider", "local"),
+        ("vault_mock_provider", "vault"),
+        ("volcengine_mock_provider", "volcengine_kms"),
+    ],
+)
+async def test_get_root_key_logs_debug_when_metrics_recording_fails(
+    request: pytest.FixtureRequest,
+    provider_factory: str,
+    provider_name: str,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Provider get_root_key should log metrics side-effect failures and still return the key."""
+
+    provider = request.getfixturevalue(provider_factory)
+    provider._root_key = None
+    debug = Mock()
+
+    if provider_name == "local":
+        provider._load_or_create_root_key = AsyncMock(return_value=b"k" * 32)
+    else:
+        provider._get_or_create_root_key = AsyncMock(return_value=b"k" * 32)
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("metrics write failed")
+
+    monkeypatch.setattr(providers_module.logger, "debug", debug)
+    monkeypatch.setattr(EncryptionEventDataSource, "record_key_load", staticmethod(_boom))
+
+    result = await provider.get_root_key()
+
+    assert result == b"k" * 32
+    if provider_name == "local":
+        provider._load_or_create_root_key.assert_awaited_once()
+    else:
+        provider._get_or_create_root_key.assert_awaited_once()
+    debug.assert_called_once()
+    (message,) = debug.call_args.args[:1]
+    assert "Failed to record encryption key metrics" in str(message)

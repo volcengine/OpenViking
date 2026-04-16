@@ -272,7 +272,7 @@ vim ~/.openviking/ov.conf
       "api_key"  : "<your-api-key>",   // Model service API Key
       "provider" : "<provider-type>",  // volcengine or openai
       "dimension": 1024,               // Vector dimension
-      "model"    : "<model-name>",     // e.g., doubao-embedding-vision-250615
+      "model"    : "<model-name>",     // e.g., doubao-embedding-vision-251215
       "input"    : "multimodal"        // Use "multimodal" for doubao-embedding-vision models
     }
   },

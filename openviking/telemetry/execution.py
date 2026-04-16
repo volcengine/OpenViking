@@ -100,6 +100,15 @@ async def run_with_telemetry(
 
     snapshot = collector.finish(status="ok")
     _log_telemetry_summary(snapshot)
+    try:
+        if snapshot is not None:
+            from openviking.metrics.datasources.telemetry_bridge import (
+                TelemetryBridgeEventDataSource,
+            )
+
+            TelemetryBridgeEventDataSource.record_summary(snapshot.summary)
+    except Exception:
+        pass
     telemetry_payload = build_telemetry_payload(
         snapshot,
         selection,

@@ -269,8 +269,8 @@ vim ~/.openviking/ov.conf
       "api_key"  : "<your-api-key>",   // Model service API Key
       "provider" : "<provider-type>",  // Provider type (volcengine or openai)
       "dimension": 1024,               // Vector dimension
-      "model"    : "<model-name>",     // Embedding model name (e.g., doubao-embedding-vision-250615)
-      "input"    : "multimodal"        // if use doubao-embedding-vision-250615, should be multimodal
+      "model"    : "<model-name>",     // Embedding model name (e.g., doubao-embedding-vision-251215)
+      "input"    : "multimodal"        // if use doubao-embedding-vision-251215, should be multimodal
     }
   },
   "vlm": {

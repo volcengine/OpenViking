@@ -284,4 +284,43 @@ describe("OpenVikingClient resource and skill import", () => {
 
     await assertion;
   });
+
+  it("keeps polling wait=true commit long enough for slow Phase 2 completion", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn((url: string) => {
+      if (url.endsWith("/api/v1/sessions/slow-session/commit")) {
+        return Promise.resolve(okResponse({
+          session_id: "slow-session",
+          status: "accepted",
+          task_id: "task-slow",
+          archived: true,
+        }));
+      }
+      if (url.endsWith("/api/v1/tasks/task-slow")) {
+        const completed = Date.now() >= 200_000;
+        return Promise.resolve(okResponse({
+          task_id: "task-slow",
+          task_type: "session_commit",
+          status: completed ? "completed" : "running",
+          created_at: 0,
+          updated_at: 0,
+          result: completed ? { memories_extracted: { core: 1 } } : {},
+        }));
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5_000);
+    const pending = client.commitSession("slow-session", { wait: true });
+
+    await vi.advanceTimersByTimeAsync(200_500);
+
+    await expect(pending).resolves.toMatchObject({
+      status: "completed",
+      archived: true,
+      task_id: "task-slow",
+      memories_extracted: { core: 1 },
+    });
+  });
 });

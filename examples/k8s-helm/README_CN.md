@@ -89,7 +89,7 @@ openviking:
       dense:
         api_key: "your-api-key-here"
         api_base: "https://ark.cn-beijing.volces.com/api/v3"
-        model: "doubao-embedding-vision-250615"
+        model: "doubao-embedding-vision-251215"
 ```
 
 ### VLM 配置

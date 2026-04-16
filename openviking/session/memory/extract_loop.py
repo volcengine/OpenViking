@@ -120,7 +120,6 @@ class ExtractLoop:
         ]
 
         # 预计算 expected_fields
-        # self._expected_fields = ["reasoning", "edit_overview_uris", "delete_uris"]
         self._expected_fields = ["delete_uris"]
 
         # 获取 ExtractContext（整个流程复用）
@@ -142,17 +141,12 @@ class ExtractLoop:
         schema_str = json.dumps(self._json_schema, ensure_ascii=False)
 
         messages = []
-        # instruction() 返回字符串，需要包装成 message 格式
-        messages.append(
-            {
-                "role": "system",
-                "content": self.context_provider.instruction(),
-            }
-        )
         messages.append(
             {
                 "role": "system",
                 "content": f"""
+{self.context_provider.instruction()}
+
 ## Output Format
 The final output of the model must strictly follow the JSON Schema format shown below:
 ```json
@@ -384,6 +378,15 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 if isinstance(usage.get("prompt_tokens_details"), dict)
                 else 0
             )
+            try:
+                from openviking.metrics.datasources.cache import CacheEventDataSource
+
+                if int(cached_tokens or 0) > 0:
+                    CacheEventDataSource.record_hit("L2")
+                else:
+                    CacheEventDataSource.record_miss("L2")
+            except Exception:
+                pass
             if prompt_tokens > 0:
                 cache_hit_rate = (cached_tokens / prompt_tokens) * 100
                 tracer.info(

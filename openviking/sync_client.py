@@ -167,11 +167,24 @@ class SyncOpenViking:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         telemetry: TelemetryRequest = False,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
     ):
         """Execute complex retrieval (intent analysis, hierarchical retrieval)."""
         return run_async(
             self._async_client.search(
-                query, target_uri, session, session_id, limit, score_threshold, filter, telemetry
+                query=query,
+                target_uri=target_uri,
+                session=session,
+                session_id=session_id,
+                limit=limit,
+                score_threshold=score_threshold,
+                filter=filter,
+                telemetry=telemetry,
+                since=since,
+                until=until,
+                time_field=time_field,
             )
         )
 
@@ -183,6 +196,9 @@ class SyncOpenViking:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         telemetry: TelemetryRequest = False,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
     ):
         """Quick retrieval"""
         return run_async(
@@ -193,6 +209,9 @@ class SyncOpenViking:
                 score_threshold,
                 filter,
                 telemetry,
+                since,
+                until,
+                time_field,
             )
         )
 
@@ -303,9 +322,9 @@ class SyncOpenViking:
         """Get resource status"""
         return run_async(self._async_client.stat(uri))
 
-    def mkdir(self, uri: str) -> None:
+    def mkdir(self, uri: str, description: Optional[str] = None) -> None:
         """Create directory"""
-        return run_async(self._async_client.mkdir(uri))
+        return run_async(self._async_client.mkdir(uri, description=description))
 
     def get_status(self):
         """Get system status.

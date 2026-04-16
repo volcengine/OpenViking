@@ -284,6 +284,8 @@ class BotChannelConfig(BaseChannelConfig):
     allow_from: list[str] = Field(default_factory=list)
     max_concurrent_requests: int = 100
     need_mention: bool = False
+    profile_user_list: list[str] = Field(default_factory=list)
+    memory_user: str = ""
     id: str = "default"  # Channel identifier for multi-channel support
 
     def channel_id(self) -> str:

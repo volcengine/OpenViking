@@ -9,7 +9,7 @@ class MemoryConfig(BaseModel):
     """Memory configuration for OpenViking."""
 
     version: str = Field(
-        default="v1",
+        default="v2",
         description="Memory implementation version: 'v1' (legacy) or 'v2' (new templating system)",
     )
     agent_scope_mode: str = Field(
@@ -38,6 +38,14 @@ class MemoryConfig(BaseModel):
         description=(
             "Maximum retries for SessionCompressorV2 memory lock acquisition. "
             "0 means unlimited retries."
+        ),
+    )
+    eager_prefetch: bool = Field(
+        default=False,
+        description=(
+            "When enabled, prefetch will execute search + read to preload all memory file contents "
+            "into the context, and no read/search tools will be provided to the LLM. "
+            "When disabled (default), LLM has read tool and reads files on-demand."
         ),
     )
 

@@ -3,7 +3,22 @@
     "host": "0.0.0.0",
     "port": 1933,
     "root_api_key": null,
-    "cors_origins": ["*"]
+    "cors_origins": ["*"],
+    "telemetry": {
+      "prometheus": {
+        "enabled": false
+      }
+    },
+    "metrics": {
+      "enabled": true,
+      "account_dimension": {
+        "enabled": true,
+        "max_active_accounts": 100,
+        "metric_allowlist": [
+          "openviking_*"
+        ]
+      }
+    }
   },
   "storage": {
     "workspace": "./data",
@@ -35,7 +50,7 @@
   },
   "embedding": {
     "dense": {
-        "model": "doubao-embedding-vision-250615",
+        "model": "doubao-embedding-vision-251215",
         "api_key": "{your-api-key}",
         "api_base": "https://ark.cn-beijing.volces.com/api/v3",
         "dimension": 1024,
@@ -157,10 +172,7 @@
       "extract_text_only": false,
       "preserve_structure": true,
       "clean_html": true,
-      "extract_metadata": true,
-      "code_hosting_domains": ["github.com", "gitlab.com"],
-      "github_domains": ["github.com", "www.github.com"],
-      "gitlab_domains": ["gitlab.com", "www.gitlab.com"]
+      "extract_metadata": true
     },
     "text": {
       "detect_language": true,

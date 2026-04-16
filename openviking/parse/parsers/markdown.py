@@ -23,10 +23,47 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
+from openviking.parse.accessors.mime_types import IANA_MEDIA_TYPE_TO_EXTENSION
 from openviking.parse.base import NodeType, ParseResult, ResourceNode, create_parse_result
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking.parse.parsers.constants import (
+    CODE_EXTENSIONS,
+    DOCUMENTATION_EXTENSIONS,
+    IGNORE_EXTENSIONS,
+)
 from openviking_cli.utils.config.parser_config import ParserConfig
 from openviking_cli.utils.logger import get_logger
+
+# All known valid extensions - only these should be stripped when getting stem
+KNOWN_EXTENSIONS: set[str] = set()
+for extensions in IANA_MEDIA_TYPE_TO_EXTENSION.values():
+    KNOWN_EXTENSIONS.update(extensions)
+KNOWN_EXTENSIONS.update(CODE_EXTENSIONS)
+KNOWN_EXTENSIONS.update(DOCUMENTATION_EXTENSIONS)
+KNOWN_EXTENSIONS.update(IGNORE_EXTENSIONS)
+
+
+def _smart_stem(path_or_name: str | Path) -> str:
+    """Get the stem of a filename, but only strip known valid extensions.
+
+    For filenames like "2601.00014" where ".00014" is not a valid extension,
+    returns the full name instead of just "2601".
+
+    Args:
+        path_or_name: Path object or string filename
+
+    Returns:
+        Stem with only known extensions stripped
+    """
+    path = Path(path_or_name)
+    suffix = path.suffix.lower()
+
+    if suffix in KNOWN_EXTENSIONS:
+        return path.stem
+
+    # If the suffix is not a known extension, treat the whole name as the stem
+    return path.name
+
 
 logger = get_logger(__name__)
 
@@ -180,9 +217,9 @@ class MarkdownParser(BaseParser):
             # the temp upload name (e.g. upload_<uuid>.txt).
             doc_title = meta.get("frontmatter", {}).get(
                 "title",
-                Path(explicit_name).stem
+                _smart_stem(explicit_name)
                 if explicit_name
-                else Path(source_path).stem
+                else _smart_stem(source_path)
                 if source_path
                 else "Document",
             )
@@ -200,7 +237,7 @@ class MarkdownParser(BaseParser):
                 headings,
                 root_dir,
                 source_path,
-                doc_name=self._sanitize_for_path(Path(doc_title).stem),
+                doc_name=self._sanitize_for_path(doc_title),
             )
 
             parse_time = time.time() - start_time
@@ -358,12 +395,12 @@ class MarkdownParser(BaseParser):
 
     def _sanitize_for_path(self, text: str, max_length: int = 50) -> str:
         safe = re.sub(
-            r"[^\w\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af\u3400-\u4dbf\U00020000-\U0002a6df\s-]",
+            r"[^\w\u0080-\u02af\u0400-\u052f\u0600-\u077f\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af\u3400-\u4dbf\U00020000-\U0002a6df\s.-]",
             "",
             text,
         )
         safe = re.sub(r"\s+", "_", safe)
-        safe = safe.strip("_")
+        safe = safe.strip("._")
         if not safe:
             return "section"
         if len(safe) > max_length:
@@ -411,7 +448,7 @@ class MarkdownParser(BaseParser):
 
         # Get document name
         doc_name = doc_name or self._sanitize_for_path(
-            Path(source_path).stem if source_path else "content"
+            _smart_stem(source_path) if source_path else "content"
         )
 
         # Small document: save as single file (check both token and char limits)

@@ -226,7 +226,7 @@ class SessionCompressorV2:
 
             # Apply operations
             result = await updater.apply_operations(
-                operations, ctx, registry=registry, extract_context=extract_context
+                operations, ctx, extract_context=extract_context
             )
 
             tracer.info(
