@@ -24,6 +24,7 @@ class InboundMessage:
     """Message received from a chat channel."""
 
     sender_id: str  # User identifier
+    sender_name: str
     content: str  # Message text
     session_key: SessionKey
     timestamp: datetime = field(default_factory=datetime.now)

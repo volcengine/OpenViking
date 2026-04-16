@@ -2701,7 +2701,7 @@
 
         // Calculate current game score
         const winner = info.winner || '';
-        // Use the same correct logic as saveGameToLeaderboard
+        // Use the same server-aligned winner interpretation for current-game display
         const isWolfWin = winner.includes('狼人胜利') && !winner.includes('死亡') && !winner.includes('好人');
         const dead = info.dead || new Set();
 
@@ -4060,98 +4060,6 @@ function bindNav() {
     }
 
 
-    // Track saved sessions to prevent duplicate saves - use localStorage for persistence
-    function getSavedSessionIds() {
-      try {
-        const saved = localStorage.getItem('leaderboard_saved_sessions');
-        return saved ? new Set(JSON.parse(saved)) : new Set();
-      } catch {
-        return new Set();
-      }
-    }
-
-    function addSavedSessionId(sessionId) {
-      try {
-        const saved = getSavedSessionIds();
-        saved.add(sessionId);
-        localStorage.setItem('leaderboard_saved_sessions', JSON.stringify(Array.from(saved)));
-      } catch {
-        // Ignore storage errors
-      }
-    }
-
-    async function saveGameToLeaderboard(data, info, status) {
-      if (!info.winner) return;
-      if (status && status.game_mode === 'human_player') return;
-
-      const sessionId = status ? status.session_id : '';
-      // Prevent saving the same session multiple times
-      const savedSessionIds = getSavedSessionIds();
-      if (sessionId && savedSessionIds.has(sessionId)) {
-        console.log('Session already saved to leaderboard:', sessionId);
-        return;
-      }
-
-      const players = data.players || [];
-      // Fix: Check for wolf win correctly
-      const winnerText = info.winner || '';
-      // Only judge as wolf win if explicitly says "狼人胜利"
-      const isWolfWin = winnerText.includes('狼人胜利') && !winnerText.includes('死亡') && !winnerText.includes('好人');
-      // Judge as good win if says "好人胜利" or "狼人死亡"
-      const isGoodWin = winnerText.includes('好人胜利') || winnerText.includes('平民胜利') || (winnerText.includes('狼人') && winnerText.includes('死亡'));
-      const dead = info.dead || new Set();
-
-      const gamePlayers = players.map((p, i) => {
-        const role = String(p.role || '');
-        // Support both English and Chinese role names
-        const isWolf =
-          role === 'Werewolf' || role === 'WhiteWolfKing' || role === 'WolfCub' || role === 'WolfBeauty' ||
-          role === '狼人' || role === '白狼王' || role === '狼美人' || role === '狼崽';
-        const won = (isWolfWin && isWolf) || (!isWolfWin && !isWolf);
-        const isDead = dead.has(i);
-
-        let score = 0;
-        if (won) score += 3;
-        if (!isDead) score += 1;
-        else score -= 1;
-
-        return {
-          id: p.id || `player_${i + 1}`,
-          role: role,
-          won: won,
-          dead: isDead,
-          score: score
-        };
-      });
-
-      const gameData = {
-        session_id: status ? status.session_id : '',
-        game_mode: status ? status.game_mode : '',
-        winner: info.winner,
-        players: gamePlayers
-      };
-
-      try {
-        const res = await fetch('/api/leaderboard/save', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(gameData)
-        });
-        if (res.ok) {
-          console.log('Game saved to leaderboard');
-          // Mark session as saved
-          if (sessionId) {
-            addSavedSessionId(sessionId);
-          }
-          // Clear leaderboard cache to force reload on next render
-          cachedLeaderboard = null;
-          cachedLeaderboardTs = 0;
-        }
-      } catch (e) {
-        console.error('Failed to save to leaderboard:', e);
-      }
-    }
-
     async function refreshFromHttp() {
       if (uiState.loading) return;
       uiState.loading = true;
@@ -4240,10 +4148,10 @@ function bindNav() {
           // Ignore chart rendering errors
         }
 
-        // Check if game just ended and save to leaderboard
         if (statusData.game_ended && info.winner && !uiState.lastGameWinner) {
           uiState.lastGameWinner = info.winner;
-          saveGameToLeaderboard(data, info, statusData);
+          cachedLeaderboard = null;
+          cachedLeaderboardTs = 0;
         } else if (!statusData.game_ended || !info.winner) {
           uiState.lastGameWinner = null;
         }
