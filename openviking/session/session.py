@@ -162,7 +162,17 @@ class Session:
         ctx: Optional[RequestContext] = None,
         session_id: Optional[str] = None,
         auto_commit_threshold: int = 8000,
+        auto_commit_threshold_ratio: Optional[float] = None,
+        context_window: Optional[int] = None,
     ):
+        if auto_commit_threshold_ratio is not None:
+            if not (0.0 < auto_commit_threshold_ratio < 1.0):
+                raise ValueError(
+                    "auto_commit_threshold_ratio must be between 0.0 and 1.0 (exclusive)"
+                )
+        if context_window is not None and context_window <= 0:
+            raise ValueError("context_window must be a positive integer")
+
         self._viking_fs = viking_fs
         self._vikingdb_manager = vikingdb_manager
         self._session_compressor = session_compressor
@@ -171,6 +181,8 @@ class Session:
         self.session_id = session_id or str(uuid4())
         self.created_at = int(datetime.now(timezone.utc).timestamp() * 1000)
         self._auto_commit_threshold = auto_commit_threshold
+        self._auto_commit_threshold_ratio = auto_commit_threshold_ratio
+        self._context_window = context_window
         self._session_uri = f"viking://session/{self.user.user_space_name()}/{self.session_id}"
 
         self._messages: List[Message] = []
@@ -181,6 +193,18 @@ class Session:
         self._loaded = False
 
         logger.info(f"Session created: {self.session_id} for user {self.user}")
+
+    @property
+    def effective_commit_threshold(self) -> int:
+        """Compute the effective auto-commit threshold.
+
+        Priority: ratio * context_window > fixed value > default (8000).
+        When auto_commit_threshold_ratio and context_window are both set,
+        the threshold is computed as a percentage of the model's context window.
+        """
+        if self._auto_commit_threshold_ratio is not None and self._context_window is not None:
+            return int(self._context_window * self._auto_commit_threshold_ratio)
+        return self._auto_commit_threshold
 
     async def load(self):
         """Load session data from storage."""
