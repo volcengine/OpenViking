@@ -3,12 +3,23 @@ from __future__ import annotations
 import argparse
 import csv
 import os
+import sys
 from collections import defaultdict
 from pathlib import Path
 
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 DEFAULT_INPUT = str(SCRIPT_DIR / "result" / "vaka_qa_result.csv")
+
+
+def raise_csv_field_limit() -> None:
+    limit = sys.maxsize
+    while True:
+        try:
+            csv.field_size_limit(limit)
+            return
+        except OverflowError:
+            limit //= 10
 
 
 def _as_float(value: str | None) -> float | None:
@@ -38,6 +49,7 @@ def main() -> None:
         print(f"Error: File not found: {args.input}")
         raise SystemExit(1)
 
+    raise_csv_field_limit()
     with open(args.input, "r", encoding="utf-8", newline="") as f:
         rows = list(csv.DictReader(f))
 
@@ -53,20 +65,20 @@ def main() -> None:
     for row in rows:
         result = (row.get("result") or "").strip().upper()
         case_id = row.get("case_id") or "unknown"
-        local_session_id = row.get("local_session_id") or "unknown"
+        session_id = row.get("global_session_id") or row.get("local_session_id") or "unknown"
 
         if result == "CORRECT":
             correct += 1
             by_case[case_id]["correct"] += 1
-            by_session[local_session_id]["correct"] += 1
+            by_session[session_id]["correct"] += 1
         elif result == "WRONG":
             wrong += 1
             by_case[case_id]["wrong"] += 1
-            by_session[local_session_id]["wrong"] += 1
+            by_session[session_id]["wrong"] += 1
         else:
             ungraded += 1
             by_case[case_id]["ungraded"] += 1
-            by_session[local_session_id]["ungraded"] += 1
+            by_session[session_id]["ungraded"] += 1
 
         latency = _as_float(row.get("latency_time"))
         if latency is not None:
@@ -101,7 +113,7 @@ def main() -> None:
         f"Source pass: {source_cmdfollow_pass}",
         f"Source pass rate: {source_cmdfollow_rate:.2%}",
         "",
-        "=== By Local Eval Session ===",
+        "=== By Global Eval Session ===",
     ]
 
     for session_id in sorted(by_session, key=lambda value: int(value) if value.isdigit() else 999):

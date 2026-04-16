@@ -9,6 +9,8 @@ from typing import Any
 
 DEFAULT_INPUT = "data/vaka_locomo.csv"
 DEFAULT_CASE_SIZE = 10
+DEFAULT_MEMORY_SESSIONS = "1-70"
+DEFAULT_EVAL_SESSIONS = "71-"
 SCRIPT_DIR = Path(__file__).parent
 
 REFERENCE_RE = re.compile(r"<reference\b[^>]*>.*?</reference>", re.IGNORECASE | re.DOTALL)
@@ -23,8 +25,8 @@ def strip_references(text: str | None) -> str:
     return cleaned.strip()
 
 
-def parse_session_selector(selector: str) -> set[int]:
-    """Parse selectors like '1-7', '8,9,10', or '8-10' into local session IDs."""
+def parse_session_selector(selector: str, *, max_session_id: int | None = None) -> set[int]:
+    """Parse selectors like '1-70', '8,9,10', or '71-' into global session IDs."""
     selected: set[int] = set()
     for chunk in selector.split(","):
         chunk = chunk.strip()
@@ -32,13 +34,23 @@ def parse_session_selector(selector: str) -> set[int]:
             continue
         if "-" in chunk:
             lo_text, hi_text = chunk.split("-", 1)
-            lo = int(lo_text.strip())
-            hi = int(hi_text.strip())
+            lo = int(lo_text.strip() or "1")
+            if hi_text.strip():
+                hi = int(hi_text.strip())
+            elif max_session_id is not None:
+                hi = max_session_id
+            else:
+                raise ValueError(f"Open-ended session range requires max_session_id: {chunk}")
             if lo > hi:
                 raise ValueError(f"Invalid session range: {chunk}")
+            if lo <= 0 or hi <= 0:
+                raise ValueError(f"Session IDs must be positive: {chunk}")
             selected.update(range(lo, hi + 1))
         else:
-            selected.add(int(chunk))
+            session_id = int(chunk)
+            if session_id <= 0:
+                raise ValueError(f"Session IDs must be positive: {chunk}")
+            selected.add(session_id)
     if not selected:
         raise ValueError("Session selector cannot be empty")
     return selected
@@ -58,9 +70,9 @@ def _parse_positive_int(value: str | None, *, field: str, row_number: int) -> in
 def load_vaka_cases(input_path: str, case_size: int = DEFAULT_CASE_SIZE) -> list[dict[str, Any]]:
     """Load a Vaka CSV and group rows by global session-id blocks.
 
-    Case grouping follows the benchmark rule:
+    Case grouping is retained for reporting and partial selection:
     session_id 1-10 is case 1, 11-20 is case 2, 21-30 is case 3, ...
-    Within each case, local_session_id 1-7 are memory turns and 8-10 are eval turns.
+    The default benchmark split uses global session_id 1-70 as memory and 71+ as eval.
     """
     path = Path(input_path).expanduser()
     if not path.is_absolute() and not path.exists():
@@ -111,6 +123,17 @@ def load_vaka_cases(input_path: str, case_size: int = DEFAULT_CASE_SIZE) -> list
         cases[case_index]["rows"].append(enriched)
 
     return list(cases.values())
+
+
+def flatten_case_rows(cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return rows from cases in original CSV order."""
+    rows = [row for case in cases for row in case["rows"]]
+    return sorted(rows, key=lambda row: row["_row_index"])
+
+
+def max_global_session_id(cases: list[dict[str, Any]]) -> int | None:
+    session_ids = [row["_global_session_id"] for row in flatten_case_rows(cases)]
+    return max(session_ids) if session_ids else None
 
 
 def select_cases(cases: list[dict[str, Any]], selector: str | None) -> list[dict[str, Any]]:
@@ -198,7 +221,7 @@ def format_turn(
 
 
 def build_context_for_row(
-    case: dict[str, Any],
+    rows: list[dict[str, Any]],
     current_row: dict[str, Any],
     *,
     memory_sessions: set[int],
@@ -209,8 +232,9 @@ def build_context_for_row(
     """Build memory and prior eval context for one eval row."""
     memory_turns = [
         format_turn(row, answer_column=answer_column)
-        for row in case["rows"]
-        if row["_local_session_id"] in memory_sessions
+        for row in rows
+        if row["_global_session_id"] in memory_sessions
+        and row["_row_index"] < current_row["_row_index"]
     ]
     memory_context = "\n\n".join(memory_turns)
 
@@ -218,8 +242,8 @@ def build_context_for_row(
     if include_eval_history:
         history_turns = [
             format_turn(row, answer_column=answer_column)
-            for row in case["rows"]
-            if row["_local_session_id"] in eval_sessions
+            for row in rows
+            if row["_global_session_id"] in eval_sessions
             and row["_row_index"] < current_row["_row_index"]
         ]
         eval_history = "\n\n".join(history_turns)

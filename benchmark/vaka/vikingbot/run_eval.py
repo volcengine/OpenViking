@@ -7,12 +7,16 @@ from pathlib import Path
 
 from vaka_utils import (
     DEFAULT_CASE_SIZE,
+    DEFAULT_EVAL_SESSIONS,
     DEFAULT_INPUT,
+    DEFAULT_MEMORY_SESSIONS,
     build_context_for_row,
     case_has_all_sessions,
     choose_response,
     choose_response_without_refs,
+    flatten_case_rows,
     load_vaka_cases,
+    max_global_session_id,
     parse_session_selector,
     present_session_ids,
     select_cases,
@@ -94,13 +98,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--memory-sessions",
-        default="1-7",
-        help="Local session IDs used as memory context, default: 1-7",
+        default=DEFAULT_MEMORY_SESSIONS,
+        help=f"Global session IDs used as memory context, default: {DEFAULT_MEMORY_SESSIONS}",
     )
     parser.add_argument(
         "--eval-sessions",
-        default="8-10",
-        help="Local session IDs used as evaluation turns, default: 8-10",
+        default=DEFAULT_EVAL_SESSIONS,
+        help=f"Global session IDs used as evaluation turns, default: {DEFAULT_EVAL_SESSIONS}",
     )
     parser.add_argument(
         "--answer-column",
@@ -128,11 +132,13 @@ def main() -> None:
     if args.case_size <= 0:
         raise ValueError("--case-size must be positive")
 
-    memory_sessions = parse_session_selector(args.memory_sessions)
-    eval_sessions = parse_session_selector(args.eval_sessions)
+    all_cases = load_vaka_cases(args.input, args.case_size)
+    max_session = max_global_session_id(all_cases)
+    memory_sessions = parse_session_selector(args.memory_sessions, max_session_id=max_session)
+    eval_sessions = parse_session_selector(args.eval_sessions, max_session_id=max_session)
+    all_rows = flatten_case_rows(all_cases)
 
-    cases = load_vaka_cases(args.input, args.case_size)
-    cases = select_cases(cases, args.case)
+    cases = select_cases(all_cases, args.case)
 
     output_rows: list[dict] = []
     for case in cases:
@@ -142,7 +148,10 @@ def main() -> None:
                 f"{case['case_id']} is incomplete. Present local sessions: {present}"
             )
 
-        eval_rows = [row for row in case["rows"] if row["_local_session_id"] in eval_sessions]
+        eval_rows = [
+            row for row in case["rows"] if row["_global_session_id"] in eval_sessions
+        ]
+        eval_rows.sort(key=lambda row: row["_row_index"])
         for question_index, row in enumerate(eval_rows):
             if args.count is not None and len(output_rows) >= args.count:
                 break
@@ -151,7 +160,7 @@ def main() -> None:
             response_without_ref = choose_response_without_refs(row, response)
             answer, answer_source = _choose_expected(row)
             memory_context, eval_history = build_context_for_row(
-                case,
+                all_rows,
                 row,
                 memory_sessions=memory_sessions,
                 eval_sessions=eval_sessions,

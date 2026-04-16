@@ -18,15 +18,15 @@ Rows are grouped by global `session_id` blocks:
 - `session_id` 11-20 is `case_0002`
 - `session_id` 21-30 is `case_0003`
 
-Inside each case:
+The default split is global across the whole CSV:
 
-- local sessions 1-7 are memory context
-- local sessions 8-10 are evaluation turns
+- `session_id` 1-70 are committed/imported as memory
+- `session_id` 71 through the max session in the CSV are evaluation turns
 - each row is one `query` + `deepsearch_answer` turn
 
 ## Usage
 
-Import memory sessions 1-7 into OpenViking:
+Import memory sessions 1-70 into OpenViking:
 
 ```bash
 python3 benchmark/vaka/vikingbot/import_to_ov.py
@@ -34,7 +34,7 @@ python3 benchmark/vaka/vikingbot/import_to_ov.py
 
 `import_to_ov.py` imports each memory row as a two-message conversation:
 `query` is the user message and `deepsearch_answer` is the assistant message.
-Evaluation sessions 8-10 are not imported as memory by default.
+Evaluation sessions 71+ are not imported as memory by default.
 
 Prepare the judge input CSV:
 
@@ -79,5 +79,5 @@ the generated answer to evaluate.
 
 If `standard_answer` is present, `judge.py` grades against it. If `judge_standard` is
 present, `judge.py` treats it as a rubric. If both are empty, the judge evaluates whether
-the answer follows the current query while preserving relevant memory from local sessions
-1-7 and prior evaluation turns.
+the answer follows the current query while preserving relevant memory from global
+`session_id` 1-70 and prior evaluation turns.

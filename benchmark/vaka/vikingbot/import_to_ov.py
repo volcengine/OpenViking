@@ -14,9 +14,11 @@ from typing import Any
 from vaka_utils import (
     DEFAULT_CASE_SIZE,
     DEFAULT_INPUT,
+    DEFAULT_MEMORY_SESSIONS,
     choose_response,
     choose_response_without_refs,
     load_vaka_cases,
+    max_global_session_id,
     parse_session_selector,
     select_cases,
 )
@@ -186,10 +188,16 @@ def build_case_sessions(
     keep_references: bool,
 ) -> list[dict[str, Any]]:
     sessions: list[dict[str, Any]] = []
-    for local_session_id in sorted(memory_sessions):
-        rows = [row for row in case["rows"] if row["_local_session_id"] == local_session_id]
+    global_session_ids = {
+        row["_global_session_id"]
+        for row in case["rows"]
+        if row["_global_session_id"] in memory_sessions
+    }
+    for global_session_id in sorted(global_session_ids):
+        rows = [row for row in case["rows"] if row["_global_session_id"] == global_session_id]
         if not rows:
             continue
+        local_session_id = rows[0]["_local_session_id"]
         messages = build_session_messages(
             rows,
             answer_column=answer_column,
@@ -205,7 +213,7 @@ def build_case_sessions(
                 "meta": {
                     "case_id": case["case_id"],
                     "case_session_range": case["session_range"],
-                    "global_session_id": rows[0]["_global_session_id"],
+                    "global_session_id": global_session_id,
                     "local_session_id": local_session_id,
                     "row_count": len(rows),
                     "used_docs": used_docs,
@@ -328,9 +336,10 @@ async def process_session(
 
 
 async def run_import(args: argparse.Namespace) -> None:
-    memory_sessions = parse_session_selector(args.memory_sessions)
-    cases = load_vaka_cases(args.input, args.case_size)
-    cases = select_cases(cases, args.case)
+    all_cases = load_vaka_cases(args.input, args.case_size)
+    max_session = max_global_session_id(all_cases)
+    memory_sessions = parse_session_selector(args.memory_sessions, max_session_id=max_session)
+    cases = select_cases(all_cases, args.case)
 
     if args.clear_ingest_record:
         ingest_record: dict[str, Any] = {}
@@ -421,8 +430,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--memory-sessions",
-        default="1-7",
-        help="Local session IDs to import as memory, default: 1-7",
+        default=DEFAULT_MEMORY_SESSIONS,
+        help=f"Global session IDs to import as memory, default: {DEFAULT_MEMORY_SESSIONS}",
     )
     parser.add_argument(
         "--answer-column",
