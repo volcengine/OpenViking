@@ -7,9 +7,63 @@ from pathlib import Path
 DEFAULT_CONFIG_DIR = Path.home() / ".openviking"
 SYSTEM_CONFIG_DIR = Path("/etc/openviking")
 
+# =============================================================================
+# Core OpenViking Environment Variables
+# =============================================================================
+
+# Configuration file paths
 OPENVIKING_CONFIG_ENV = "OPENVIKING_CONFIG_FILE"
 OPENVIKING_CLI_CONFIG_ENV = "OPENVIKING_CLI_CONFIG_FILE"
+
+# Prompt templates
 OPENVIKING_PROMPT_TEMPLATES_DIR_ENV = "OPENVIKING_PROMPT_TEMPLATES_DIR"
+
+# Server & Authentication & Identity
+OPENVIKING_ENABLE_RECORDER_ENV = "OPENVIKING_ENABLE_RECORDER"
+OPENVIKING_API_KEY_ENV = "OPENVIKING_API_KEY"
+OPENVIKING_ACCOUNT_ENV = "OPENVIKING_ACCOUNT"
+OPENVIKING_USER_ENV = "OPENVIKING_USER"
+OPENVIKING_AGENT_ID_ENV = "OPENVIKING_AGENT_ID"
+
+# Embedding & VLM
+OPENVIKING_EMBEDDING_API_KEY_ENV = "OPENVIKING_EMBEDDING_API_KEY"
+OPENVIKING_VLM_API_KEY_ENV = "OPENVIKING_VLM_API_KEY"
+OPENVIKING_ARK_API_KEY_ENV = "OPENVIKING_ARK_API_KEY"
+
+# Docker / Deployment
+OPENVIKING_URL_ENV = "OPENVIKING_URL"
+OPENVIKING_BASE_URL_ENV = "OPENVIKING_BASE_URL"
+OPENVIKING_WITH_BOT_ENV = "OPENVIKING_WITH_BOT"
+OPENVIKING_CONSOLE_PORT_ENV = "OPENVIKING_CONSOLE_PORT"
+OPENVIKING_CONSOLE_HOST_ENV = "OPENVIKING_CONSOLE_HOST"
+
+# Local server startup (for plugins)
+OPENVIKING_START_CONFIG_ENV = "OPENVIKING_START_CONFIG"
+OPENVIKING_START_HOST_ENV = "OPENVIKING_START_HOST"
+OPENVIKING_START_PORT_ENV = "OPENVIKING_START_PORT"
+
+# Python environment (for plugins)
+OPENVIKING_PYTHON_ENV = "OPENVIKING_PYTHON"
+
+# Build / Version
+OPENVIKING_VERSION_ENV = "OPENVIKING_VERSION"
+
+# =============================================================================
+# Plugin-only Environment Variables
+# (used by Claude Code Memory Plugin, OpenClaw Plugin, etc.)
+# =============================================================================
+
+OPENVIKING_DEBUG_ENV = "OPENVIKING_DEBUG"
+OPENVIKING_DEBUG_LOG_ENV = "OPENVIKING_DEBUG_LOG"
+OPENVIKING_TIMEOUT_MS_ENV = "OPENVIKING_TIMEOUT_MS"
+OPENVIKING_RECALL_LIMIT_ENV = "OPENVIKING_RECALL_LIMIT"
+OPENVIKING_SCORE_THRESHOLD_ENV = "OPENVIKING_SCORE_THRESHOLD"
+OPENVIKING_LOG_ROUTING_ENV = "OPENVIKING_LOG_ROUTING"
+OPENVIKING_WRITE_CHECK_URI_ENV = "OPENVIKING_WRITE_CHECK_URI"
+
+# =============================================================================
+# Default filenames
+# =============================================================================
 
 DEFAULT_OV_CONF = "ov.conf"
 DEFAULT_OVCLI_CONF = "ovcli.conf"
