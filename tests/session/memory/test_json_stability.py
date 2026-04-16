@@ -10,6 +10,7 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 
 from openviking.session.memory.utils import (
+    JsonUtils,
     _get_arg_type,
     _get_origin_type,
     extract_json_content,
@@ -222,6 +223,26 @@ Please be careful with the output."""
         data, error = parse_json_with_stability(content)
         assert data is None
         assert error is not None
+
+
+class TestJsonUtilsLoads:
+    """Tests for JsonUtils.loads convenience parsing."""
+
+    class TestModel(BaseModel):
+        reasonning: str
+        count: Optional[int] = None
+
+    def test_loads_returns_raw_dict_without_model(self):
+        """Test raw JSON loading still returns a dict without a model class."""
+        data = JsonUtils.loads('{"reasonning": "test", "count": 42}')
+        assert data == {"reasonning": "test", "count": 42}
+
+    def test_loads_validates_pydantic_model(self):
+        """Test model class loading uses a TypeAdapter instance."""
+        data = JsonUtils.loads('{"reasonning": "test", "count": "42"}', self.TestModel)
+        assert isinstance(data, self.TestModel)
+        assert data.reasonning == "test"
+        assert data.count == 42
 
 
 class TestMemoryOperationsIntegration:

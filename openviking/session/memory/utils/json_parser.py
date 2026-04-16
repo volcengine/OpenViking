@@ -11,7 +11,7 @@ Layer 5: Validation Tolerance - TypeAdapter(strict=False) + list item filtering
 """
 
 import json
-from dataclasses import is_dataclass, asdict
+from dataclasses import asdict, is_dataclass
 from types import UnionType
 from typing import (
     Any,
@@ -26,8 +26,7 @@ from typing import (
 )
 
 import json_repair
-from pydantic import TypeAdapter, BaseModel, parse_obj_as
-
+from pydantic import BaseModel, TypeAdapter
 
 from openviking_cli.utils import get_logger
 
@@ -76,7 +75,7 @@ class JsonUtils:
         if not json_str:
             return None
         if clazz:
-            return TypeAdapter.validate_python(clazz, json_repair.loads(json_str))
+            return TypeAdapter(clazz).validate_python(json_repair.loads(json_str), strict=False)
         return json_repair.loads(json_str)
 
 
@@ -475,5 +474,3 @@ def parse_json_with_stability(
             return model_class.model_validate(tolerant_data), None
         except Exception as e2:
             return None, f"Model validation failed even after tolerance: {e} (fallback: {e2})"
-
-
