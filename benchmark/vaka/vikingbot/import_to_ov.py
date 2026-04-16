@@ -228,7 +228,7 @@ async def viking_ingest(
     except ImportError as exc:
         raise RuntimeError(
             "openviking package is required. Run from the project environment, "
-            "for example: uv run python benchmark/LoCoMo/vaka/import_to_ov.py"
+            "for example: uv run python benchmark/vaka/vikingbot/import_to_ov.py"
         ) from exc
 
     client = ov.AsyncHTTPClient(url=openviking_url, account=account, user=user_id, agent_id=agent_id)

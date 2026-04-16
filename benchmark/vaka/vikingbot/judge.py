@@ -255,7 +255,7 @@ async def main() -> None:
 
     if AsyncOpenAI is None:
         print("Error: openai package is required to run the judge.")
-        print("请使用项目环境运行，例如: uv run python benchmark/LoCoMo/vaka/judge.py")
+        print("请使用项目环境运行，例如: uv run python benchmark/vaka/vikingbot/judge.py")
         raise SystemExit(1)
 
     rows, fieldnames = load_answers(args.input)

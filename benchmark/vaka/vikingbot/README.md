@@ -5,7 +5,7 @@ This benchmark evaluates Vaka multi-turn long-memory CSV results.
 The default input is relative to this benchmark directory:
 
 ```bash
-benchmark/LoCoMo/vaka/data/vaka_locomo.csv
+benchmark/vaka/vikingbot/data/vaka_locomo.csv
 ```
 
 You can also pass a custom path with `--input`.
@@ -29,7 +29,7 @@ Inside each case:
 Import memory sessions 1-7 into OpenViking:
 
 ```bash
-python3 benchmark/LoCoMo/vaka/import_to_ov.py
+python3 benchmark/vaka/vikingbot/import_to_ov.py
 ```
 
 `import_to_ov.py` imports each memory row as a two-message conversation:
@@ -39,37 +39,37 @@ Evaluation sessions 8-10 are not imported as memory by default.
 Prepare the judge input CSV:
 
 ```bash
-python3 benchmark/LoCoMo/vaka/run_eval.py
+python3 benchmark/vaka/vikingbot/run_eval.py
 ```
 
 Judge the prepared answers:
 
 ```bash
-uv run python benchmark/LoCoMo/vaka/judge.py --parallel 10
+uv run python benchmark/vaka/vikingbot/judge.py --parallel 10
 ```
 
 Calculate stats:
 
 ```bash
-python3 benchmark/LoCoMo/vaka/stat_judge_result.py
+python3 benchmark/vaka/vikingbot/stat_judge_result.py
 ```
 
 Or run all steps:
 
 ```bash
-bash benchmark/LoCoMo/vaka/run_full_eval.sh
+bash benchmark/vaka/vikingbot/run_full_eval.sh
 ```
 
 Skip OpenViking import and only do offline CSV preparation/judge/stat:
 
 ```bash
-bash benchmark/LoCoMo/vaka/run_full_eval.sh --skip-import
+bash benchmark/vaka/vikingbot/run_full_eval.sh --skip-import
 ```
 
 If the judge dependencies are only available through the project environment:
 
 ```bash
-bash benchmark/LoCoMo/vaka/run_full_eval.sh --python "uv run python"
+bash benchmark/vaka/vikingbot/run_full_eval.sh --python "uv run python"
 ```
 
 ## Notes
