@@ -40,6 +40,14 @@ class MemoryConfig(BaseModel):
             "0 means unlimited retries."
         ),
     )
+    eager_prefetch: bool = Field(
+        default=False,
+        description=(
+            "When enabled, prefetch will execute search + read to preload all memory file contents "
+            "into the context, and no read/search tools will be provided to the LLM. "
+            "When disabled (default), LLM has read tool and reads files on-demand."
+        ),
+    )
 
     model_config = {"extra": "forbid"}
 

@@ -1,6 +1,13 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+import openviking.metrics.bootstrap as bootstrap
 from openviking.metrics.account_dimension import (
     configure_metric_account_dimension,
     reset_metric_account_dimension,
@@ -10,6 +17,51 @@ from openviking.metrics.core.registry import MetricRegistry
 from openviking.metrics.datasources.base import EventMetricDataSource
 from openviking.metrics.datasources.resource import ResourceIngestionEventDataSource
 from openviking.metrics.exporters.prometheus import PrometheusExporter
+
+
+def test_create_default_collector_manager_registers_expected_collectors_in_order():
+    manager = bootstrap.create_default_collector_manager(app=None, service=None)
+
+    names = [type(c).__name__ for c in manager._collectors]
+    assert names == [
+        "QueueCollector",
+        "TaskTrackerCollector",
+        "ObserverHealthCollector",
+        "ObserverStateCollector",
+        "LockCollector",
+        "VikingDBCollector",
+        "ModelUsageCollector",
+        "ServiceProbeCollector",
+        "StorageProbeCollector",
+        "RetrievalBackendProbeCollector",
+        "ModelProviderProbeCollector",
+        "AsyncSystemProbeCollector",
+        "EncryptionProbeCollector",
+    ]
+
+
+def test_create_default_collector_manager_propagates_construction_failures(monkeypatch):
+    def _boom():
+        raise RuntimeError("cannot init datasource")
+
+    monkeypatch.setattr(bootstrap, "QueuePipelineStateDataSource", _boom)
+    with pytest.raises(RuntimeError, match="cannot init datasource"):
+        bootstrap.create_default_collector_manager(app=None, service=None)
+
+
+def test_optional_cache_datasource_instrumentation_is_wired_into_key_call_sites():
+    project_root = Path(__file__).resolve().parents[3]
+    targets = [
+        project_root / "openviking" / "storage" / "queuefs" / "semantic_dag.py",
+        project_root / "openviking" / "storage" / "queuefs" / "semantic_processor.py",
+        project_root / "openviking" / "session" / "memory" / "extract_loop.py",
+    ]
+    missing = []
+    for path in targets:
+        text = path.read_text(encoding="utf-8")
+        if "CacheEventDataSource.record_" not in text:
+            missing.append(path.name)
+    assert missing == []
 
 
 def test_resource_ingestion_event_datasource_can_drive_resource_ingestion_collector(monkeypatch):

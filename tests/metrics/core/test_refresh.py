@@ -145,13 +145,11 @@ async def test_collector_manager_deadline_exceeded_does_not_stick_inflight(monke
     assert r1
     assert any(item.collector == "dummy" and item.reason == "deadline_exceeded" for item in r1)
 
-    # While the long refresh is still running, we should see inflight but it must not be permanent.
     r2 = await mgr.refresh_all(registry, deadline_seconds=1.0)
     assert r2 and r2[0].collector == "dummy"
     assert r2[0].attempted is False
     assert r2[0].reason == "inflight"
 
-    # Let the background refresh finish and confirm the next scrape recovers to ttl_valid.
     release.set()
     await asyncio.wait_for(asyncio.sleep(0), timeout=0.5)
     r3 = await mgr.refresh_all(registry, deadline_seconds=1.0)

@@ -283,6 +283,15 @@ interface OpenVikingConfig {
     enabled: boolean
     intervalMinutes: number
   }
+  // Auto memory recall configuration
+  autoRecall?: {
+    enabled: boolean
+    limit: number
+    scoreThreshold: number
+    maxContentChars: number
+    preferAbstract: boolean
+    tokenBudget: number
+  }
 }
 
 // ============================================================================
@@ -354,7 +363,15 @@ const DEFAULT_CONFIG: OpenVikingConfig = {
   autoCommit: {
     enabled: true,
     intervalMinutes: 10
-  }
+  },
+  autoRecall: {
+    enabled: true,
+    limit: 6,
+    scoreThreshold: 0.15,
+    maxContentChars: 500,
+    preferAbstract: true,
+    tokenBudget: 2000,
+  },
 }
 
 function totalMemoriesExtracted(memories?: MemoryCounts): number {
@@ -378,6 +395,12 @@ function totalMemoriesFromResult(result?: {
   return totalMemoriesExtracted(result?.memories_extracted)
 }
 
+function clampRecallConfig(recall: NonNullable<OpenVikingConfig["autoRecall"]>): void {
+  recall.limit = Math.max(1, Math.min(50, Math.round(recall.limit)))
+  recall.scoreThreshold = Math.max(0, Math.min(1, recall.scoreThreshold))
+  recall.tokenBudget = Math.max(100, Math.min(10000, Math.round(recall.tokenBudget)))
+}
+
 function loadConfig(): OpenVikingConfig {
   const configPath = path.join(pluginFileDir, "openviking-config.json")
 
@@ -396,9 +419,22 @@ function loadConfig(): OpenVikingConfig {
           : DEFAULT_CONFIG.autoCommit
             ? { ...DEFAULT_CONFIG.autoCommit }
             : undefined,
+        autoRecall: fileConfig.autoRecall
+          ? {
+              ...DEFAULT_CONFIG.autoRecall,
+              ...fileConfig.autoRecall,
+            }
+          : DEFAULT_CONFIG.autoRecall
+            ? { ...DEFAULT_CONFIG.autoRecall }
+            : undefined,
       }
       if (config.autoCommit) {
         config.autoCommit.intervalMinutes = getAutoCommitIntervalMinutes(config)
+      }
+
+      // Validate recall config ranges
+      if (config.autoRecall) {
+        clampRecallConfig(config.autoRecall)
       }
 
       // Environment variable takes precedence over config file
@@ -417,6 +453,9 @@ function loadConfig(): OpenVikingConfig {
     ...DEFAULT_CONFIG,
     autoCommit: DEFAULT_CONFIG.autoCommit
       ? { ...DEFAULT_CONFIG.autoCommit }
+      : undefined,
+    autoRecall: DEFAULT_CONFIG.autoRecall
+      ? { ...DEFAULT_CONFIG.autoRecall }
       : undefined,
   }
   if (process.env.OPENVIKING_API_KEY) {
@@ -1347,6 +1386,270 @@ function validateVikingUri(uri: string, toolName: string): string | null {
 }
 
 // ============================================================================
+// Memory Recall: Types, Ranking & Dedup
+// ============================================================================
+
+/** Shape returned by OpenViking search API, adapted for recall use. */
+interface RecallSearchItem {
+  uri: string
+  score: number
+  title?: string
+  abstract?: string
+  content?: string
+  type?: string
+  category?: string
+  level?: number
+  overview?: string
+}
+
+/** Minimal message part type for hook injection. */
+interface RecallMessagePart {
+  type: "text" | "tool" | "reasoning"
+  text?: string
+}
+
+/** Minimal message shape for chat.messages.transform hook. */
+interface RecallWithParts {
+  info: { role: string }
+  parts: RecallMessagePart[]
+}
+
+const AUTO_RECALL_TIMEOUT_MS = 5_000
+
+// ─── Scoring helpers ───
+
+function recallClampScore(value: number | undefined): number {
+  if (typeof value !== "number" || Number.isNaN(value)) return 0
+  return Math.max(0, Math.min(1, value))
+}
+
+const RECALL_STOPWORDS = new Set([
+  "what", "when", "where", "which", "who", "whom", "whose", "why", "how",
+  "did", "does", "is", "are", "was", "were", "the", "and", "for", "with",
+  "from", "that", "this", "your", "you",
+])
+
+const RECALL_TOKEN_RE = /[a-z0-9]{2,}/gi
+
+const PREFERENCE_QUERY_RE = /prefer|preference|favorite|favourite|like|偏好|喜欢|爱好|更倾向/i
+const TEMPORAL_QUERY_RE = /when|what time|date|day|month|year|yesterday|today|tomorrow|last|next|什么时候|何时|哪天|几月|几年|昨天|今天|明天|上周|下周|上个月|下个月|去年|明年/i
+
+interface RecallQueryProfile {
+  tokens: string[]
+  wantsPreference: boolean
+  wantsTemporal: boolean
+}
+
+function buildRecallQueryProfile(query: string): RecallQueryProfile {
+  const text = query.trim()
+  const allTokens = text.toLowerCase().match(RECALL_TOKEN_RE) ?? []
+  const tokens = allTokens.filter((t) => !RECALL_STOPWORDS.has(t))
+  return {
+    tokens,
+    wantsPreference: PREFERENCE_QUERY_RE.test(text),
+    wantsTemporal: TEMPORAL_QUERY_RE.test(text),
+  }
+}
+
+function lexicalOverlapBoost(tokens: string[], text: string): number {
+  if (tokens.length === 0 || !text) return 0
+  const haystack = ` ${text.toLowerCase()} `
+  let matched = 0
+  for (const token of tokens.slice(0, 8)) {
+    if (haystack.includes(` ${token} `) || haystack.includes(token)) {
+      matched += 1
+    }
+  }
+  return Math.min(0.2, (matched / Math.min(tokens.length, 4)) * 0.2)
+}
+
+function isEventMemory(item: RecallSearchItem): boolean {
+  const cat = (item.category ?? "").toLowerCase()
+  return cat === "events" || item.uri.includes("/events/")
+}
+
+function isPreferencesMemory(item: RecallSearchItem): boolean {
+  return item.category === "preferences" || item.uri.includes("/preferences/") || item.uri.endsWith("/preferences")
+}
+
+function isLeafLikeMemory(item: RecallSearchItem): boolean {
+  return item.level === 2
+}
+
+function rankForInjection(item: RecallSearchItem, query: RecallQueryProfile): number {
+  const baseScore = recallClampScore(item.score)
+  const abstract = (item.abstract ?? item.overview ?? "").trim()
+  const leafBoost = isLeafLikeMemory(item) ? 0.12 : 0
+  const eventBoost = query.wantsTemporal && isEventMemory(item) ? 0.1 : 0
+  const preferenceBoost = query.wantsPreference && isPreferencesMemory(item) ? 0.08 : 0
+  const overlapBoost = lexicalOverlapBoost(query.tokens, `${item.uri} ${abstract}`)
+  return baseScore + leafBoost + eventBoost + preferenceBoost + overlapBoost
+}
+
+// ─── Dedup + selection ───
+
+function normalizeDedupeText(text: string): string {
+  return text.toLowerCase().replace(/\s+/g, " ").trim()
+}
+
+function isEventOrCaseMemory(item: RecallSearchItem): boolean {
+  const cat = (item.category ?? "").toLowerCase()
+  const uri = item.uri.toLowerCase()
+  return cat === "events" || cat === "cases" || uri.includes("/events/") || uri.includes("/cases/")
+}
+
+function getMemoryDedupeKey(item: RecallSearchItem): string {
+  const abstract = normalizeDedupeText(item.abstract ?? item.overview ?? "")
+  const cat = (item.category ?? "").toLowerCase() || "unknown"
+  if (abstract && !isEventOrCaseMemory(item)) {
+    return `abstract:${cat}:${abstract}`
+  }
+  return `uri:${item.uri}`
+}
+
+function pickMemoriesForInjection(
+  items: RecallSearchItem[],
+  limit: number,
+  queryText: string,
+  scoreThreshold: number = 0,
+): RecallSearchItem[] {
+  if (items.length === 0 || limit <= 0) return []
+
+  const query = buildRecallQueryProfile(queryText)
+  const sorted = [...items].sort((a, b) => rankForInjection(b, query) - rankForInjection(a, query))
+
+  const deduped: RecallSearchItem[] = []
+  const seen = new Set<string>()
+  for (const item of sorted) {
+    const key = getMemoryDedupeKey(item)
+    if (seen.has(key)) continue
+    seen.add(key)
+    deduped.push(item)
+  }
+
+  // Prefer leaf memories first, then supplement with non-leaf
+  const leaves = deduped.filter((item) => isLeafLikeMemory(item))
+  if (leaves.length >= limit) return leaves.slice(0, limit)
+
+  const picked = [...leaves]
+  const used = new Set(leaves.map((item) => item.uri))
+  for (const item of deduped) {
+    if (picked.length >= limit) break
+    if (used.has(item.uri)) continue
+    if (recallClampScore(item.score) < scoreThreshold) continue
+    picked.push(item)
+  }
+  return picked
+}
+
+// ─── Post-processing ───
+
+function postProcessMemories(
+  items: RecallSearchItem[],
+  maxContentChars: number,
+  preferAbstract: boolean,
+): RecallSearchItem[] {
+  return items.map((item) => {
+    const abstract = (item.abstract ?? "").trim()
+    const content = (item.content ?? "").trim()
+    let displayContent: string
+    if (preferAbstract && abstract) {
+      displayContent = abstract.length > maxContentChars ? abstract.slice(0, maxContentChars) + "..." : abstract
+    } else if (content) {
+      displayContent = content.length > maxContentChars ? content.slice(0, maxContentChars) + "..." : content
+    } else if (abstract) {
+      displayContent = abstract.length > maxContentChars ? abstract.slice(0, maxContentChars) + "..." : abstract
+    } else {
+      displayContent = ""
+    }
+    return { ...item, content: displayContent, abstract: abstract || undefined }
+  })
+}
+
+function formatMemoryBlock(
+  items: RecallSearchItem[],
+  maxChars: number,
+  tokenBudget: number,
+): string {
+  if (items.length === 0) return ""
+
+  const maxBlockChars = tokenBudget * 4 // 4 chars ≈ 1 token
+  let usedChars = 0
+  const lines: string[] = ["<relevant-memories>"]
+
+  for (const item of items) {
+    const title = item.title ? `${item.title}\n` : ""
+    const content = item.content ?? ""
+    const entry = `<memory uri="${item.uri}">\n${title}${content}\n</memory>`
+    const entryChars = entry.length + 1 // +1 for newline
+
+    if (usedChars + entryChars > maxBlockChars) break
+    lines.push(entry)
+    usedChars += entryChars
+  }
+
+  if (usedChars === 0) return ""
+  lines.push("</relevant-memories>")
+  lines.push("Use the `memread` tool with a memory's URI and level=\"overview\" or level=\"read\" to retrieve more details.")
+  return lines.join("\n")
+}
+
+// ─── Hook helpers ───
+
+/** Extract text from the last user message. Returns null if empty or already injected. */
+function extractLatestUserText(messages: RecallWithParts[]): string | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i]
+    if (msg.info.role !== "user") continue
+    const parts = msg.parts ?? []
+    const texts: string[] = []
+    for (const part of parts) {
+      if (part.type === "text" && typeof part.text === "string") {
+        texts.push(part.text)
+      }
+    }
+    const joined = texts.join(" ").trim()
+    if (!joined) continue
+    // Idempotency: skip if already contains injection marker
+    if (joined.includes("<relevant-memories>")) return null
+    return joined
+  }
+  return null
+}
+
+/** Perform search against OpenViking with a timeout guard. Returns empty on any failure. */
+async function performRecallSearch(config: OpenVikingConfig, query: string): Promise<RecallSearchItem[]> {
+  try {
+    const response = await makeRequest<OpenVikingResponse<{ memories?: RecallSearchItem[]; results?: RecallSearchItem[] }>>(
+      config,
+      {
+        method: "POST",
+        endpoint: "/api/v1/search/find",
+        body: { query: query.slice(0, 4000), limit: 20, mode: "auto" },
+        timeoutMs: AUTO_RECALL_TIMEOUT_MS,
+      },
+    )
+    const result = unwrapResponse(response)
+    return result?.memories ?? result?.results ?? []
+  } catch {
+    return []
+  }
+}
+
+/** Append injection text to the last text part of a message. */
+function appendToLastTextPart(message: RecallWithParts, injection: string): boolean {
+  const parts = message.parts ?? []
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const part = parts[i]
+    if (part.type === "text" && typeof part.text === "string") {
+      part.text = `${part.text}\n\n${injection}`
+      return true
+    }
+  }
+  return false
+}
+
+// ============================================================================
 // Plugin Export
 // ============================================================================
 
@@ -1972,6 +2275,56 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
           },
         },
       ),
+    },
+
+    "experimental.chat.messages.transform": async (_input: {}, output: { messages: RecallWithParts[] }) => {
+      try {
+        // 1. Check if autoRecall is enabled
+        if (!config.autoRecall?.enabled) return
+
+        // 2. Extract latest user text
+        const query = extractLatestUserText(output.messages)
+        if (!query) return
+
+        // 3. Search OpenViking
+        const rawResults = await performRecallSearch(config, query)
+        if (rawResults.length === 0) return
+
+        // 4. Rank + dedup + filter
+        const ranked = pickMemoriesForInjection(
+          rawResults,
+          config.autoRecall.limit ?? 6,
+          query,
+          config.autoRecall.scoreThreshold ?? 0.15,
+        )
+        if (ranked.length === 0) return
+
+        // 5. Post-process (truncate content, prefer abstract)
+        const processed = postProcessMemories(
+          ranked,
+          config.autoRecall.maxContentChars ?? 500,
+          config.autoRecall.preferAbstract ?? true,
+        )
+
+        // 6. Format injection block
+        const block = formatMemoryBlock(
+          processed,
+          config.autoRecall.maxContentChars ?? 500,
+          config.autoRecall.tokenBudget ?? 2000,
+        )
+        if (!block) return
+
+        // 7. Find last user message and append
+        const lastUser = [...output.messages].reverse().find((m) => m.info.role === "user")
+        if (lastUser) {
+          appendToLastTextPart(lastUser, block)
+          log("info", "recall", `Injected ${processed.length} memories`)
+        }
+      } catch (error: any) {
+        log("warn", "recall", "Auto recall failed, skipping silently", {
+          error: error?.message ?? String(error),
+        })
+      }
     },
 
     stop: async () => {

@@ -79,7 +79,7 @@ class PDFParser(BaseParser):
         if self._markdown_parser is None:
             from openviking.parse.parsers.markdown import MarkdownParser
 
-            self._markdown_parser = MarkdownParser()
+            self._markdown_parser = MarkdownParser(config=self.config)
         return self._markdown_parser
 
     @property

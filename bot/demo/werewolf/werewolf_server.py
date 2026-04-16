@@ -56,11 +56,23 @@ class GameState:
     pending_replies: Dict[str, PendingReply] = field(default_factory=dict)
     message_queue: List[Dict[str, Any]] = field(default_factory=list)
     game_ended: bool = False
+    remember_sent: bool = False  # Track if /remember command has been sent
     force_restarted: bool = False
+    game_mode: str = "all_agents"
     has_human_player: bool = False
     human_player_channel: str = "human"
     waiting_for_human: bool = False
     human_player_message: Optional[str] = None
+    human_messages: List[ChatMessage] = field(default_factory=list)
+    auto_run_enabled: bool = False
+    auto_run_mode: str = "off"
+    auto_run_target_games: Optional[int] = None
+    auto_run_started_completed_games: int = 0
+    auto_restart_scheduled: bool = False
+    starting_next_game: bool = False
+    completed_games: int = 0
+    auto_start_task: Optional[asyncio.Task] = None
+    god_no_mention_retry_count: int = 0
 
 
 # ============================================================================
@@ -170,6 +182,91 @@ def extract_content_without_mentions(content: str) -> str:
     return cleaned.strip()
 
 
+def is_waiting_like_reply(content: str) -> bool:
+    """Check whether god reply is an initialization/paused-state reply."""
+    text = str(content or "")
+    waiting_markers = ["初始化完成", "等待开始", "等待指令", "等待继续"]
+    return any(marker in text for marker in waiting_markers)
+
+
+def parse_game_record(game_record_path: Path) -> Dict[str, Any]:
+    """
+    Parse GAME_RECORD.md to extract game status information.
+
+    Returns:
+        Dict with keys:
+        - game_status: "进行中", "游戏结束", or "等待开始"
+        - game_result: "狼人胜利", "平民胜利", or None
+        - game_time: "白天", "黑夜", or None
+        - players: list of dicts with "id", "role", "status"
+    """
+    result = {
+        "game_status": None,
+        "game_result": None,
+        "game_time": None,
+        "players": []
+    }
+
+    if not game_record_path.exists():
+        logger.warning(f"GAME_RECORD.md not found at {game_record_path}")
+        return result
+
+    try:
+        content = game_record_path.read_text(encoding="utf-8")
+
+        status_match = re.search(r"游戏状态[:：]\s*\[?([^\]/\n]+)\]?", content)
+        if status_match:
+            result["game_status"] = status_match.group(1).strip()
+
+        result_match = re.search(r"游戏结果[:：]\s*\[?([^\]/\n]+?)\]?\s*$", content, re.MULTILINE)
+        if result_match:
+            result_str = result_match.group(1).strip()
+            if result_str and not result_str.startswith("##"):
+                result["game_result"] = result_str
+
+        time_match = re.search(r"游戏时间[:：]\s*\[?([^\]/\n]+)\]?", content)
+        if time_match:
+            result["game_time"] = time_match.group(1).strip()
+
+        table_match = re.search(r"## 玩家列表\n\|.*?\n(?:\|.*?\n)+", content, re.MULTILINE)
+        if table_match:
+            table_content = table_match.group(0)
+            lines = table_content.strip().split("\n")
+            for line in lines[2:]:
+                if line.strip().startswith("|"):
+                    cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+                    if len(cells) >= 4:
+                        player_id = cells[1]
+                        role = cells[2]
+                        status = cells[3].strip("[]")
+                        if player_id and not all(c == '-' for c in player_id):
+                            result["players"].append({
+                                "id": player_id,
+                                "role": role,
+                                "status": status
+                            })
+
+    except Exception as e:
+        logger.warning(f"Error parsing GAME_RECORD.md: {e}")
+
+    return result
+
+
+def is_game_ended_from_record(game_record_path: Path) -> tuple[bool, str]:
+    """
+    Check if game has ended by parsing GAME_RECORD.md.
+
+    Returns:
+        (is_ended, result) where result is "狼人胜利", "平民胜利", or None
+    """
+    record = parse_game_record(game_record_path)
+
+    if record["game_status"] == "游戏结束":
+        return True, record["game_result"]
+
+    return False, None
+
+
 # ============================================================================
 # UI File Initialization
 # ============================================================================
@@ -197,6 +294,356 @@ def save_conversation_to_file(storage_path: Path, session_id: str, messages: Lis
 
     file_path.write_text("\n".join(lines), encoding="utf-8")
     logger.info(f"Conversation saved to {file_path}")
+
+
+def get_player_game_md_path(storage_path: Path, channel_id: str, human_player_channel: str = "human") -> Path:
+    """Get GAME.md path for a player channel."""
+    bot_workspace = storage_path / "bot" / "workspace"
+    if channel_id == human_player_channel:
+        return bot_workspace / human_player_channel / "GAME.md"
+    return bot_workspace / f"bot_api__{channel_id}" / "GAME.md"
+
+
+def get_players_snapshot(storage_path: Path, channels: List[str], human_player_channel: str = "human") -> List[Dict[str, Any]]:
+    """Read current players info from GAME.md files."""
+    players = []
+    player_idx = 1
+    for ch in channels:
+        if ch == "god":
+            continue
+        if player_idx > 8:
+            break
+
+        game_md_path = get_player_game_md_path(storage_path, ch, human_player_channel)
+        role = "未知"
+        if game_md_path.exists():
+            content = game_md_path.read_text(encoding="utf-8")
+            role_match = re.search(r"身份[:：]\s*(.+)", content)
+            if role_match:
+                role = role_match.group(1).strip()
+
+        players.append({
+            "id": ch,
+            "seat": player_idx,
+            "role": role,
+        })
+        player_idx += 1
+    return players
+
+
+def get_replay_state_path(storage_path: Path, session_id: str) -> Path:
+    """Get replay state archive path for a session."""
+    bot_workspace = storage_path / "bot" / "workspace" / "werewolf"
+    bot_workspace.mkdir(parents=True, exist_ok=True)
+    return bot_workspace / f"REPLAY_STATE_{session_id}.json"
+
+
+def get_runtime_state_path(storage_path: Path) -> Path:
+    """Get runtime state file path used for restart recovery."""
+    bot_workspace = storage_path / "bot" / "workspace" / "werewolf"
+    bot_workspace.mkdir(parents=True, exist_ok=True)
+    return bot_workspace / "RUNTIME_STATE.json"
+
+
+def save_runtime_state(storage_path: Path, *, game_mode: str) -> Path:
+    """Persist lightweight runtime state for server restarts."""
+    runtime_state_path = get_runtime_state_path(storage_path)
+    payload = {
+        "saved_at": time.time(),
+        "game_mode": game_mode,
+    }
+    runtime_state_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return runtime_state_path
+
+
+def load_runtime_state(storage_path: Path) -> Dict[str, Any]:
+    """Load lightweight runtime state for server restarts."""
+    runtime_state_path = get_runtime_state_path(storage_path)
+    if not runtime_state_path.exists():
+        return {}
+
+    try:
+        return json.loads(runtime_state_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.warning(f"Error loading runtime state from {runtime_state_path}: {e}")
+        return {}
+
+
+def build_replay_base_info(game_record_text: str, parsed_record: Dict[str, Any], players: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Build minimal replay base info from archived game record and players."""
+    dead = []
+    record_player_by_id = {player.get("id"): player for player in parsed_record.get("players", [])}
+    for idx, player in enumerate(players):
+        status = str(record_player_by_id.get(player.get("id"), {}).get("status", ""))
+        if any(token in status for token in ["死亡", "出局", "淘汰"]):
+            dead.append(idx)
+
+    game_time = str(parsed_record.get("game_time") or "")
+    winner = str(parsed_record.get("game_result") or "")
+    is_night = "黑夜" in game_time
+    phase = "night" if is_night else "day"
+    round_match = re.search(r"第\s*(\d+)\s*[轮天]", game_record_text)
+    round_value = int(round_match.group(1)) if round_match else None
+    return {
+        "dead": dead,
+        "badge": None,
+        "isNight": is_night,
+        "round": round_value,
+        "day": round_value,
+        "winner": winner,
+        "phase": phase,
+        "lastSection": parsed_record.get("game_status") or "",
+    }
+
+
+def archive_replay_state(storage_path: Path, channels: List[str], session_id: str, force: bool = False) -> Optional[Path]:
+    """Archive replay state for a session so replay does not depend on live files."""
+    if not session_id:
+        return None
+
+    replay_state_path = get_replay_state_path(storage_path, session_id)
+    if replay_state_path.exists() and not force:
+        return replay_state_path
+
+    god_record_path = storage_path / "bot" / "workspace" / "bot_api__god" / "GAME_RECORD.md"
+    if not god_record_path.exists():
+        logger.warning(f"Skip replay state archive; GAME_RECORD.md not found at {god_record_path}")
+        return None
+
+    game_record = god_record_path.read_text(encoding="utf-8")
+    parsed_record = parse_game_record(god_record_path)
+    players = get_players_snapshot(storage_path, channels)
+    payload = {
+        "session_id": session_id,
+        "archived_at": time.time(),
+        "game_record": game_record,
+        "parsed_record": parsed_record,
+        "players": players,
+        "base_info": build_replay_base_info(game_record, parsed_record, players),
+    }
+    replay_state_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    logger.info(f"Replay state archived to {replay_state_path}")
+    return replay_state_path
+
+
+def build_restart_message(state: GameState) -> str:
+    """Build the restart/init message for god."""
+    player_list = []
+    player_idx = 1
+    for ch in state.channels:
+        if ch != "god" and player_idx <= 8:
+            game_md_path = get_player_game_md_path(state.storage_path, ch, state.human_player_channel)
+            player_list.append(f"{player_idx}号: {ch}，GAME.md地址：{game_md_path}")
+            player_idx += 1
+
+    bot_workspace = state.storage_path / "bot" / "workspace"
+
+    return f"""重新开始游戏
+
+游戏配置：
+- 玩家数: {len(player_list)}
+- 玩家列表:
+{chr(10).join(f'  - {p}' for p in player_list)}
+- GAME_RECORD.md 位置：{bot_workspace}/bot_api__god/GAME_RECORD.md
+- 对话记录位置：{bot_workspace}/werewolf/CONVERSATION_{state.session_id}.md
+
+请初始化游戏文件，然后等待\"开始\"指令。"""
+
+
+def ensure_human_workspace(storage_path: Path, human_channel: str = "human") -> Path:
+    """Ensure the human player workspace and GAME.md exist."""
+    human_workspace = storage_path / "bot" / "workspace" / human_channel
+    human_workspace.mkdir(parents=True, exist_ok=True)
+    human_game_md = human_workspace / "GAME.md"
+    if not human_game_md.exists():
+        human_game_md.write_text("# 真实玩家游戏文件\n\n请编辑此文件来设置你的角色和状态。\n", encoding="utf-8")
+    return human_game_md
+
+
+def build_channels_for_game_mode(config: Dict[str, Any], game_mode: str, human_channel: str = "human") -> List[str]:
+    """Build channel list for the requested game mode."""
+    channels = get_bot_channels(config)
+    if game_mode != "human_player":
+        return channels
+
+    if len(channels) > 1 and "god" in channels:
+        non_god_channels = [ch for ch in channels if ch != "god"]
+        if len(non_god_channels) > 0:
+            channels = ["god"] + non_god_channels[:-1]
+        channels.append(human_channel)
+    return channels
+
+
+def apply_game_mode_to_state(state: GameState, game_mode: str) -> None:
+    """Apply game mode settings to state."""
+    state.game_mode = game_mode
+    state.has_human_player = game_mode == "human_player"
+    state.human_player_channel = "human"
+    state.channels = build_channels_for_game_mode(state.config, game_mode, state.human_player_channel)
+    state.waiting_for_human = False
+    state.human_player_message = None
+    state.human_messages.clear()
+    save_runtime_state(state.storage_path, game_mode=state.game_mode)
+    if state.has_human_player:
+        human_game_md = ensure_human_workspace(state.storage_path, state.human_player_channel)
+        logger.info(f"Human player mode enabled. Channels: {state.channels}")
+        logger.info(f"Human player GAME.md at: {human_game_md}")
+
+
+def cancel_auto_start_task(state: GameState):
+    """Cancel pending auto-start task if any."""
+    current_task = asyncio.current_task()
+    if state.auto_start_task and not state.auto_start_task.done() and state.auto_start_task is not current_task:
+        state.auto_start_task.cancel()
+    if state.auto_start_task is not current_task:
+        state.auto_start_task = None
+
+
+def get_completed_games_in_auto_run(state: GameState) -> int:
+    """Return how many games have finished since current auto-run plan started."""
+    return max(0, state.completed_games - state.auto_run_started_completed_games)
+
+
+def get_remaining_auto_run_games(state: GameState) -> Optional[int]:
+    """Return remaining games in fixed mode, None for non-fixed modes."""
+    if not state.auto_run_enabled or state.auto_run_mode != "fixed" or not state.auto_run_target_games:
+        return None
+    return max(0, state.auto_run_target_games - get_completed_games_in_auto_run(state))
+
+
+def should_continue_auto_run(state: GameState) -> bool:
+    """Check whether auto-run should continue into another game."""
+    if not state.auto_run_enabled:
+        return False
+    if state.auto_run_mode == "infinite":
+        return True
+    if state.auto_run_mode == "fixed":
+        remaining = get_remaining_auto_run_games(state)
+        return bool(remaining and remaining > 0)
+    return False
+
+
+def disable_auto_run(state: GameState):
+    """Disable auto-run and clear related transient state."""
+    state.auto_run_enabled = False
+    state.auto_run_mode = "off"
+    state.auto_run_target_games = None
+    state.auto_run_started_completed_games = state.completed_games
+    state.auto_restart_scheduled = False
+    state.starting_next_game = False
+    cancel_auto_start_task(state)
+
+
+async def stop_router_task(state: GameState):
+    """Stop current router task if it is running."""
+    if state.running and state.router_task:
+        state.running = False
+        state.router_task.cancel()
+        try:
+            await state.router_task
+        except asyncio.CancelledError:
+            pass
+    state.router_task = None
+
+
+async def begin_game_loop(state: GameState, initial_message: str, *, reset_game_flags: bool = False) -> None:
+    """Start the router loop with a god message."""
+    if "god" not in state.channels:
+        raise ValueError("god channel not found")
+
+    if reset_game_flags:
+        state.game_ended = False
+        state.remember_sent = False
+        state.force_restarted = False
+
+    state.running = True
+    state.router_task = asyncio.create_task(
+        message_router_loop(state, initial_channel="god", initial_message=initial_message)
+    )
+
+
+async def restart_game_session(state: GameState) -> str:
+    """Create a new session and run the init step for a new game."""
+    await stop_router_task(state)
+    cancel_auto_start_task(state)
+
+    if state.session_id:
+        save_conversation_to_file(state.storage_path, state.session_id, state.messages)
+        archive_replay_state(state.storage_path, state.channels, state.session_id, force=True)
+
+    state.session_id = generate_session_id()
+    state.messages.clear()
+    state.human_messages.clear()
+    state.waiting_for_human = False
+    state.human_player_message = None
+    state.game_ended = False
+    state.remember_sent = False
+    state.force_restarted = True
+    state.auto_restart_scheduled = False
+
+    restart_message = build_restart_message(state)
+    await begin_game_loop(state, restart_message)
+    return state.session_id
+
+
+async def start_current_game(state: GameState) -> None:
+    """Send the standard start command for the current session."""
+    await stop_router_task(state)
+    cancel_auto_start_task(state)
+    await begin_game_loop(state, "开始", reset_game_flags=True)
+
+
+async def continue_current_game(state: GameState) -> None:
+    """Continue the current paused game."""
+    await stop_router_task(state)
+    cancel_auto_start_task(state)
+    await begin_game_loop(state, "继续本局游戏")
+
+
+def schedule_next_game(state: GameState, delay_seconds: float = 1.5):
+    """Schedule automatic restart + start for the next game."""
+    if not should_continue_auto_run(state) or state.auto_restart_scheduled or state.starting_next_game:
+        return
+
+    state.auto_restart_scheduled = True
+
+    async def _auto_start_next_game():
+        try:
+            logger.info(f"Auto-run scheduling next game in {delay_seconds}s")
+            await asyncio.sleep(delay_seconds)
+
+            if not should_continue_auto_run(state):
+                logger.info("Auto-run no longer eligible before next game started; skipping")
+                return
+
+            state.starting_next_game = True
+            await restart_game_session(state)
+
+            init_router_task = state.router_task
+            if init_router_task:
+                logger.info("Auto-run waiting for god initialization reply before sending start")
+                try:
+                    await init_router_task
+                except asyncio.CancelledError:
+                    logger.info("Initialization router task was cancelled before auto start")
+                    return
+
+            if not should_continue_auto_run(state):
+                logger.info("Auto-run no longer eligible after restart; skipping auto start")
+                return
+
+            await start_current_game(state)
+            logger.info(f"Auto-run started next game, session_id={state.session_id}")
+        except asyncio.CancelledError:
+            logger.info("Auto-run next-game task cancelled")
+        except Exception as e:
+            logger.exception(f"Error during auto-run next game: {e}")
+        finally:
+            state.starting_next_game = False
+            state.auto_restart_scheduled = False
+            state.auto_start_task = None
+
+    state.auto_start_task = asyncio.create_task(_auto_start_next_game())
 
 
 def load_latest_conversation(storage_path: Path) -> tuple[List[ChatMessage], Optional[str]]:
@@ -403,23 +850,19 @@ async def broadcast_to_players(
         logger.info(f"Waiting for human player input...")
         state.waiting_for_human = True
 
-        # Record the message to human player
         human_message = f"{sender_prefix}{message}"
-        state.messages.append(ChatMessage(
-            channel_id=sender_id,
+        state.human_messages.append(ChatMessage(
+            channel_id="god",
             content=human_message,
             is_user=False,
             timestamp=time.time(),
         ))
-        if state.session_id:
-            save_conversation_to_file(state.storage_path, state.session_id, state.messages)
 
         # Wait for human player to respond
         while state.waiting_for_human and state.running:
             await asyncio.sleep(0.1)
 
         if state.human_player_message:
-            # Add human reply
             reply_content = state.human_player_message
             state.human_player_message = None
             replies.append({
@@ -594,29 +1037,113 @@ async def message_router_loop(
                 timestamp=time.time(),
             ))
 
-            # 4. Save conversation to file
-            if state.session_id:
-                save_conversation_to_file(state.storage_path, state.session_id, state.messages)
-
-            # 4. Parse mentions from response
+            # 4. Parse mentions and pure content early (needed for game end broadcasting)
             mentions = parse_mentions(response_content)
             pure_content = extract_content_without_mentions(response_content)
             if not pure_content:
                 pure_content = current_message
 
+            # Check if game has ended by parsing GAME_RECORD.md
+            god_record_path = state.storage_path / "bot" / "workspace" / "bot_api__god" / "GAME_RECORD.md"
+            has_game_ended, game_result = is_game_ended_from_record(god_record_path)
+            valid_mentions = [m for m in mentions if m in state.channels and m != "god"]
+            if valid_mentions:
+                state.god_no_mention_retry_count = 0
+
+            # Only treat the game as fully ended after god has produced the final conclusion
+            # and no longer asks any player for follow-up actions.
+            if current_channel == "god" and has_game_ended and not state.remember_sent and not valid_mentions:
+                state.game_ended = True
+                logger.info(f"Game ended detected from GAME_RECORD.md after final god reply, result: {game_result}")
+
+                if pure_content:
+                    await broadcast_message_to_players(
+                        state=state,
+                        message=pure_content,
+                        sender_id="god",
+                        exclude_players=[],
+                    )
+                    logger.info("Game end message broadcasted to all players")
+
+                if state.session_id:
+                    save_conversation_to_file(state.storage_path, state.session_id, state.messages)
+                    archive_replay_state(state.storage_path, state.channels, state.session_id, force=True)
+
+                try:
+                    await send_to_channel(
+                        vikingbot_url=state.vikingbot_url,
+                        channel_id="god",
+                        message="/remember",
+                        session_id=state.session_id,
+                        user_id="system",
+                        need_reply=False,
+                    )
+                    logger.info("/remember sent to god")
+
+                    for ch in [channel for channel in state.channels if channel != "god"]:
+                        try:
+                            await send_to_channel(
+                                vikingbot_url=state.vikingbot_url,
+                                channel_id=ch,
+                                message="/remember",
+                                session_id=state.session_id,
+                                user_id="system",
+                                need_reply=False,
+                            )
+                            logger.info(f"/remember sent to {ch}")
+                        except Exception as e:
+                            logger.exception(f"Error sending /remember to {ch}: {e}")
+
+                    state.remember_sent = True
+                    state.completed_games += 1
+                    logger.info(f"/remember sent to all, game complete! completed_games={state.completed_games}")
+                except Exception as e:
+                    logger.exception(f"Error sending /remember: {e}")
+
+                if should_continue_auto_run(state):
+                    schedule_next_game(state)
+                elif state.auto_run_enabled:
+                    logger.info("Auto-run target reached; disabling auto-run")
+                    disable_auto_run(state)
+
+                break
+
+            if current_channel == "god" and has_game_ended and valid_mentions:
+                logger.info(
+                    f"GAME_RECORD indicates end ({game_result}), but god is still waiting on players: {valid_mentions}; delaying end handling"
+                )
+
+            # 5. Save conversation to file
+            if state.session_id:
+                save_conversation_to_file(state.storage_path, state.session_id, state.messages)
+
+            waiting_like_reply = is_waiting_like_reply(response_content)
+            if not valid_mentions and current_channel == "god" and not has_game_ended and not waiting_like_reply:
+                if state.god_no_mention_retry_count >= 2:
+                    logger.warning("God reply still has no valid player mention after fallback retries; stopping router")
+                    break
+
+                state.god_no_mention_retry_count += 1
+                current_channel = "god"
+                current_message = "你上个回复没有@任何玩家，检查下如果游戏结束，更新GAME_RECORD.md信息后，再回复结束信息；如果游戏没结束，继续@一个玩家进行"
+                current_sender_id = "admin_fallback_no_mention"
+                logger.warning(
+                    f"God reply missing valid player mention while game not ended; sending admin fallback retry #{state.god_no_mention_retry_count}"
+                )
+                await asyncio.sleep(0.1)
+                continue
+
             if not mentions:
                 # 如果没有 @ 提及，可能是游戏初始化完成，等待继续
-                if "初始化完成" in response_content or "等待" in response_content:
+                if waiting_like_reply:
                     logger.info("Game initialized, waiting for start command...")
-                    # 保持运行，但不继续发送消息，等待外部命令
-                    await asyncio.sleep(1)
+                    state.god_no_mention_retry_count = 0
                     break  # 退出循环，等待下次调用
                 else:
                     logger.info("No mentions in response, waiting for next command")
                     break
 
             # Validate mentioned channels exist
-            valid_mentions = [m for m in mentions if m in state.channels and m != "god"]
             if not valid_mentions:
                 logger.warning(f"No valid player mentions in: {mentions}, available: {state.channels}")
                 break
@@ -640,7 +1167,7 @@ async def message_router_loop(
                 for reply in player_replies:
                     reply_channel = reply['channel_id']
                     reply_content = reply.get("response", {}).get("message", "")
-                    if reply_content:
+                    if reply_content and reply_channel != state.human_player_channel:
                         await broadcast_message_to_players(
                             state=state,
                             message=reply_content,
@@ -655,6 +1182,11 @@ async def message_router_loop(
             # 9. Next iteration: send replies back to god
             current_channel = "god"
             current_message = god_message
+            # Use specific player_id as sender_id (use first player if multiple replies)
+            if player_replies:
+                current_sender_id = player_replies[0]['channel_id']
+            else:
+                current_sender_id = "players"
 
             await asyncio.sleep(0.1)
 
@@ -728,19 +1260,9 @@ def create_fastapi_app(state: GameState) -> FastAPI:
     @fastapi_app.get("/api/status")
     async def get_status():
         """Get current game status."""
-        # Check if game has ended by looking at GAME_RECORD.md
-        if not state.game_ended:
-            god_record_path = state.storage_path / "bot" / "workspace" / "bot_api__god" / "GAME_RECORD.md"
-            if god_record_path.exists():
-                try:
-                    content = god_record_path.read_text(encoding="utf-8")
-                    if "游戏结束" in content:
-                        state.game_ended = True
-                        # Also set running to False when game ends
-                        if state.running:
-                            state.running = False
-                except Exception:
-                    pass
+        # Report current status without mutating game flow state.
+        # The router loop owns the end-of-game transition so god's final reply
+        # can still be received, broadcast to players, and followed by /remember.
 
         return JSONResponse(content={
             "game_id": state.game_id,
@@ -751,9 +1273,35 @@ def create_fastapi_app(state: GameState) -> FastAPI:
             "smart_buttons": state.config.get("smart_buttons", False),
             "game_ended": state.game_ended,
             "force_restarted": state.force_restarted,
+            "game_mode": state.game_mode,
             "has_human_player": state.has_human_player,
             "human_player_channel": state.human_player_channel,
             "waiting_for_human": state.waiting_for_human,
+            "auto_run_enabled": state.auto_run_enabled,
+            "auto_run_mode": state.auto_run_mode,
+            "auto_run_target_games": state.auto_run_target_games,
+            "auto_run_remaining_games": get_remaining_auto_run_games(state),
+            "auto_restart_scheduled": state.auto_restart_scheduled,
+            "starting_next_game": state.starting_next_game,
+            "completed_games": state.completed_games,
+        })
+
+    @fastapi_app.get("/api/human/messages")
+    async def get_human_messages():
+        """Get human private chat history."""
+        if not state.has_human_player:
+            return JSONResponse(content={"messages": []})
+
+        return JSONResponse(content={
+            "messages": [
+                {
+                    "channel_id": msg.channel_id,
+                    "content": msg.content,
+                    "is_user": msg.is_user,
+                    "timestamp": msg.timestamp,
+                }
+                for msg in state.human_messages
+            ]
         })
 
     @fastapi_app.post("/api/human/send")
@@ -761,27 +1309,47 @@ def create_fastapi_app(state: GameState) -> FastAPI:
         """Send a message from human player."""
         if not state.has_human_player:
             return JSONResponse(content={"success": False, "error": "Human player mode not enabled"})
+        if not state.waiting_for_human:
+            return JSONResponse(content={"success": False, "error": "Not waiting for human input"})
 
-        message = payload.get("message", "")
+        message = str(payload.get("message", "")).strip()
         if not message:
             return JSONResponse(content={"success": False, "error": "Message is empty"})
 
+        target = str(payload.get("target") or "god").strip().lower()
+        if target not in {"god", "all"}:
+            return JSONResponse(content={"success": False, "error": "Invalid target"})
+
         import time
-        # Record human message
-        state.messages.append(ChatMessage(
+        timestamp = time.time()
+        state.human_messages.append(ChatMessage(
             channel_id=state.human_player_channel,
             content=message,
             is_user=True,
-            timestamp=time.time(),
+            timestamp=timestamp,
         ))
-        if state.session_id:
-            save_conversation_to_file(state.storage_path, state.session_id, state.messages)
 
-        # Set the message for the router
+        if target == "all":
+            state.messages.append(ChatMessage(
+                channel_id=state.human_player_channel,
+                content=message,
+                is_user=False,
+                timestamp=timestamp,
+            ))
+            await broadcast_message_to_players(
+                state,
+                message,
+                sender_id=state.human_player_channel,
+                exclude_players=[state.human_player_channel],
+            )
+
         state.human_player_message = message
         state.waiting_for_human = False
 
-        return JSONResponse(content={"success": True})
+        if state.session_id:
+            save_conversation_to_file(state.storage_path, state.session_id, state.messages)
+
+        return JSONResponse(content={"success": True, "target": target})
 
     @fastapi_app.get("/api/human/game-md")
     async def get_human_game_md():
@@ -826,111 +1394,124 @@ def create_fastapi_app(state: GameState) -> FastAPI:
     @fastapi_app.get("/api/players")
     async def get_players():
         """Get player info, reading roles from GAME.md."""
-        players = []
-        player_idx = 1
-        for ch in state.channels:
-            if ch == "god":
-                continue
-            if player_idx > 8:
-                break
-
-            # Read this player's GAME.md
-            game_md_path = state.storage_path / "bot" / "workspace" / f"bot_api__{ch}" / "GAME.md"
-            role = "未知"
-            if game_md_path.exists():
-                content = game_md_path.read_text(encoding="utf-8")
-                role_match = re.search(r"身份[:：]\s*(.+)", content)
-                if role_match:
-                    role = role_match.group(1).strip()
-
-            players.append({
-                "id": ch,
-                "seat": player_idx,
-                "role": role
-            })
-            player_idx += 1
-
+        players = get_players_snapshot(state.storage_path, state.channels, state.human_player_channel)
         return JSONResponse(content={"players": players})
 
     @fastapi_app.post("/api/start")
-    async def start_game():
+    async def start_game(payload: Optional[Dict[str, Any]] = None):
         """Start the game."""
-        if state.running:
+        if state.running or (state.router_task and not state.router_task.done()):
             return JSONResponse(content={"success": False, "error": "Game already running"})
 
-        if "god" not in state.channels:
-            return JSONResponse(content={"success": False, "error": "god channel not found"})
+        requested_game_mode = str((payload or {}).get("game_mode") or state.game_mode or "all_agents").strip()
+        if requested_game_mode not in {"all_agents", "human_player"}:
+            return JSONResponse(content={"success": False, "error": "Invalid game_mode"})
 
-        state.running = True
-        state.game_ended = False
-        state.router_task = asyncio.create_task(
-            message_router_loop(state, initial_channel="god", initial_message="开始")
-        )
-        return JSONResponse(content={"success": True})
+        apply_game_mode_to_state(state, requested_game_mode)
+
+        try:
+            await start_current_game(state)
+        except ValueError as e:
+            return JSONResponse(content={"success": False, "error": str(e)})
+
+        return JSONResponse(content={"success": True, "session_id": state.session_id, "game_mode": state.game_mode})
 
     @fastapi_app.post("/api/restart")
-    async def restart_game():
+    async def restart_game(payload: Optional[Dict[str, Any]] = None):
         """Restart the game."""
-        if state.running and state.router_task:
-            state.running = False
-            state.router_task.cancel()
-            try:
-                await state.router_task
-            except asyncio.CancelledError:
-                pass
-            state.router_task = None
+        requested_game_mode = str((payload or {}).get("game_mode") or state.game_mode or "all_agents").strip()
+        if requested_game_mode not in {"all_agents", "human_player"}:
+            return JSONResponse(content={"success": False, "error": "Invalid game_mode"})
 
-        # Generate new session ID and clear messages
-        state.session_id = generate_session_id()
-        state.messages.clear()
-        state.game_ended = False
-        state.force_restarted = True
+        apply_game_mode_to_state(state, requested_game_mode)
 
-        if "god" not in state.channels:
-            return JSONResponse(content={"success": False, "error": "god channel not found"})
+        try:
+            session_id = await restart_game_session(state)
+        except ValueError as e:
+            return JSONResponse(content={"success": False, "error": str(e)})
 
-        # Build restart message with player info and workspace
-        player_list = []
-        player_idx = 1
-        bot_workspace = state.storage_path / "bot" / "workspace"
-        for ch in state.channels:
-            if ch != "god" and player_idx <= 8:
-                player_list.append(f"{player_idx}号: {ch}，GAME.md地址：{bot_workspace}/bot_api__{ch}/GAME.md")
-                player_idx += 1
+        return JSONResponse(content={"success": True, "session_id": session_id, "game_mode": state.game_mode})
 
-        restart_message = f"""重新开始游戏
+    @fastapi_app.post("/api/continue")
+    async def continue_game():
+        """Continue the current game by nudging god to proceed."""
+        if state.running or (state.router_task and not state.router_task.done()):
+            return JSONResponse(content={"success": False, "error": "Game already running"})
 
-游戏配置：
-- 玩家数: {len(player_list)}
-- 玩家列表:
-{chr(10).join(f'  - {p}' for p in player_list)}
-- GAME_RECORD.md 位置：{bot_workspace}/bot_api__god/GAME_RECORD.md
-- 对话记录位置：{bot_workspace}/werewolf/CONVERSATION_{state.session_id}.md
+        if state.game_ended:
+            return JSONResponse(content={"success": False, "error": "Game already ended"})
 
-请初始化游戏文件，然后等待"开始"指令。"""
+        try:
+            await continue_current_game(state)
+        except ValueError as e:
+            return JSONResponse(content={"success": False, "error": str(e)})
 
-        state.running = True
-        state.router_task = asyncio.create_task(
-            message_router_loop(state, initial_channel="god", initial_message=restart_message)
-        )
         return JSONResponse(content={"success": True, "session_id": state.session_id})
 
     @fastapi_app.post("/api/stop")
     async def stop_game():
         """Stop the game."""
-        if not state.running:
+        if not state.running and not state.auto_restart_scheduled and not state.starting_next_game:
             return JSONResponse(content={"success": False, "error": "Game not running"})
 
-        state.running = False
-        if state.router_task:
-            state.router_task.cancel()
-            try:
-                await state.router_task
-            except asyncio.CancelledError:
-                pass
-            state.router_task = None
+        disable_auto_run(state)
+        await stop_router_task(state)
 
         return JSONResponse(content={"success": True})
+
+    @fastapi_app.post("/api/auto-run")
+    async def set_auto_run(payload: Dict[str, Any]):
+        """Enable or disable automatic continuous games."""
+        enabled = bool(payload.get("enabled", False))
+        if not enabled:
+            disable_auto_run(state)
+            return JSONResponse(content={
+                "success": True,
+                "auto_run_enabled": state.auto_run_enabled,
+                "auto_run_mode": state.auto_run_mode,
+                "auto_run_target_games": state.auto_run_target_games,
+                "auto_run_remaining_games": get_remaining_auto_run_games(state),
+                "auto_restart_scheduled": state.auto_restart_scheduled,
+                "starting_next_game": state.starting_next_game,
+                "completed_games": state.completed_games,
+            })
+
+        mode = str(payload.get("mode") or "fixed").strip().lower()
+        target_games_raw = payload.get("target_games")
+
+        if mode not in {"fixed", "infinite"}:
+            return JSONResponse(content={"success": False, "error": "auto-run mode must be 'fixed' or 'infinite'"})
+
+        target_games = None
+        if mode == "fixed":
+            try:
+                target_games = int(target_games_raw)
+            except (TypeError, ValueError):
+                return JSONResponse(content={"success": False, "error": "target_games must be an integer >= 1"})
+            if target_games < 1:
+                return JSONResponse(content={"success": False, "error": "target_games must be an integer >= 1"})
+
+        state.auto_run_enabled = True
+        state.auto_run_mode = mode
+        state.auto_run_target_games = target_games
+        state.auto_run_started_completed_games = state.completed_games
+        state.auto_restart_scheduled = False
+        state.starting_next_game = False
+        cancel_auto_start_task(state)
+
+        if not state.running and (not state.router_task or state.router_task.done()):
+            schedule_next_game(state, delay_seconds=0.1)
+
+        return JSONResponse(content={
+            "success": True,
+            "auto_run_enabled": state.auto_run_enabled,
+            "auto_run_mode": state.auto_run_mode,
+            "auto_run_target_games": state.auto_run_target_games,
+            "auto_run_remaining_games": get_remaining_auto_run_games(state),
+            "auto_restart_scheduled": state.auto_restart_scheduled,
+            "starting_next_game": state.starting_next_game,
+            "completed_games": state.completed_games,
+        })
 
     @fastapi_app.get("/api/openviking/tree")
     async def get_openviking_tree():
@@ -1027,6 +1608,19 @@ def create_fastapi_app(state: GameState) -> FastAPI:
                 "content": content,
                 "filename": file_path.name
             })
+        except Exception as e:
+            return JSONResponse(content={"error": str(e)}, status_code=500)
+
+    @fastapi_app.get("/api/replay-state/{session_id}")
+    async def get_replay_state(session_id: str):
+        """Get archived replay state for a session."""
+        replay_state_path = get_replay_state_path(state.storage_path, session_id)
+        if not replay_state_path.exists():
+            return JSONResponse(content={"error": "Replay state not found"}, status_code=404)
+
+        try:
+            payload = json.loads(replay_state_path.read_text(encoding="utf-8"))
+            return JSONResponse(content=payload)
         except Exception as e:
             return JSONResponse(content={"error": str(e)}, status_code=500)
 
@@ -1174,6 +1768,9 @@ def create_fastapi_app(state: GameState) -> FastAPI:
     @fastapi_app.post("/api/leaderboard/save")
     async def save_game_to_leaderboard(game_data: Dict[str, Any]):
         """Save a completed game to leaderboard."""
+        if str(game_data.get("game_mode") or "") == "human_player":
+            return JSONResponse(content={"success": True, "skipped": True, "reason": "human_player games are excluded from leaderboard"})
+
         leaderboard = load_leaderboard()
 
         # Add game record
@@ -1341,30 +1938,21 @@ def main(
 
     logger.info(f"Loading config from {config_path_resolved}")
     config = load_config(config_path_resolved)
-    channels = get_bot_channels(config)
-    logger.info(f"Loaded channels: {channels}")
+    logger.info(f"Loaded channels: {get_bot_channels(config)}")
 
     storage_path = get_storage_path(config)
     logger.info(f"Storage path: {storage_path}")
 
-    has_human_player = game_mode == "human_player"
-    human_channel = "human"
-    if has_human_player:
-        # Remove last bot player and add human
-        if len(channels) > 1 and "god" in channels:
-            # Keep god and remove the last player
-            non_god_channels = [ch for ch in channels if ch != "god"]
-            if len(non_god_channels) > 0:
-                channels = ["god"] + non_god_channels[:-1]
-            channels.append(human_channel)
-        logger.info(f"Human player mode enabled. Channels: {channels}")
+    runtime_state = load_runtime_state(storage_path)
+    persisted_game_mode = str(runtime_state.get("game_mode") or "").strip()
+    if persisted_game_mode in {"all_agents", "human_player"} and game_mode == "all_agents":
+        game_mode = persisted_game_mode
+        logger.info(f"Restored game mode from runtime state: {game_mode}")
 
-        # Create human player GAME.md
-        human_workspace = storage_path / "bot" / "workspace" / "human"
-        human_workspace.mkdir(parents=True, exist_ok=True)
-        human_game_md = human_workspace / "GAME.md"
-        if not human_game_md.exists():
-            human_game_md.write_text("# 真实玩家游戏文件\n\n请编辑此文件来设置你的角色和状态。\n", encoding="utf-8")
+    channels = build_channels_for_game_mode(config, game_mode)
+    if game_mode == "human_player":
+        human_game_md = ensure_human_workspace(storage_path)
+        logger.info(f"Human player mode enabled. Channels: {channels}")
         logger.info(f"Human player GAME.md at: {human_game_md}")
 
     init_ui_files(storage_path, channels, game_id)
@@ -1393,12 +1981,12 @@ def main(
         config=config,
         storage_path=storage_path,
         session_id=initial_session_id,
+        game_mode=game_mode,
     )
 
     # Store smart_buttons in config for easy access
     state.config["smart_buttons"] = smart_buttons
-    state.has_human_player = has_human_player
-    state.human_player_channel = human_channel
+    apply_game_mode_to_state(state, game_mode)
 
     # Load messages if available
     if previous_messages:

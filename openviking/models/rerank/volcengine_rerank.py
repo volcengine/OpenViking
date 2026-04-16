@@ -10,6 +10,7 @@ import json
 
 # For logging, use Python's built-in logging
 import logging
+import time
 from typing import List, Optional
 
 import requests
@@ -109,6 +110,7 @@ class RerankClient(RerankBase):
         }
 
         try:
+            started = time.monotonic()
             req = self._prepare_request(
                 method="POST",
                 path="/api/vikingdb/rerank",
@@ -130,7 +132,12 @@ class RerankClient(RerankBase):
                 return None
 
             # Update token usage tracking (estimate, VikingDB doesn't provide token info)
-            self._extract_and_update_token_usage(result, query, documents)
+            self._extract_and_update_token_usage(
+                result,
+                query,
+                documents,
+                duration_seconds=time.monotonic() - started,
+            )
 
             # Each document is a separate group, data array returns scores for each group sequentially
             data = result["result"]["data"]
