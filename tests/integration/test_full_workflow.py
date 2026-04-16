@@ -3,7 +3,9 @@
 
 """Full workflow integration tests"""
 
+import json
 import shutil
+import zipfile
 from pathlib import Path
 
 import pytest_asyncio
@@ -191,6 +193,42 @@ class TestImportExportWorkflow:
             if not data["isDir"]:
                 imported_content += await client.read(data["uri"])
         assert original_content == imported_content
+
+    async def test_import_skips_derived_files_and_rebuilds_semantics(
+        self, integration_client: AsyncOpenViking, temp_dir: Path
+    ):
+        """Test: import stale ovpack -> skip derived files -> wait -> rebuilt semantics searchable"""
+        client = integration_client
+        ovpack_path = temp_dir / "stale_semantics.ovpack"
+        stale_abstract = "STALE_ABSTRACT_SHOULD_NOT_SURVIVE"
+        stale_overview = "STALE_OVERVIEW_SHOULD_NOT_SURVIVE"
+        unique_phrase = "import semantic refresh sentinel"
+
+        with zipfile.ZipFile(ovpack_path, "w") as zf:
+            zf.writestr("demo/", "")
+            zf.writestr("demo/_._meta.json", json.dumps({"uri": "viking://resources/demo"}))
+            zf.writestr(
+                "demo/content.md",
+                "# Imported Demo\n\nThis document carries the import semantic refresh sentinel.\n",
+            )
+            zf.writestr("demo/_._abstract.md", stale_abstract)
+            zf.writestr("demo/_._overview.md", stale_overview)
+
+        import_uri = await client.import_ovpack(
+            str(ovpack_path), "viking://resources/imported/", vectorize=False
+        )
+
+        await client.wait_processed()
+
+        abstract = await client.read(f"{import_uri}/.abstract.md")
+        overview = await client.read(f"{import_uri}/.overview.md")
+        assert stale_abstract not in abstract
+        assert stale_overview not in overview
+        assert abstract.strip()
+        assert overview.strip()
+
+        find_result = await client.find(query=unique_phrase, target_uri=import_uri)
+        assert any(result.uri.startswith(import_uri) for result in find_result.resources)
 
 
 class TestFullEndToEndWorkflow:

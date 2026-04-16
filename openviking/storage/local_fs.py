@@ -1,14 +1,14 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-import asyncio
 import json
 import os
 import re
 import zipfile
 
+from openviking.core.directories import get_context_type_for_uri
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
-from openviking.utils.embedding_utils import vectorize_directory_meta, vectorize_file
+from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
@@ -16,6 +16,8 @@ from openviking_cli.utils.uri import VikingURI
 logger = get_logger(__name__)
 
 _DERIVED_FILENAMES = frozenset({".abstract.md", ".overview.md", ".relations.json"})
+_SEMANTIC_REFRESH_IGNORED_FILENAMES = frozenset({".meta.json"})
+_MAX_SKIPPED_EXAMPLES = 5
 
 _UNSAFE_PATH_RE = re.compile(r"(^|[\\/])\.\.($|[\\/])")
 _DRIVE_RE = re.compile(r"^[A-Za-z]:")
@@ -88,64 +90,51 @@ def get_viking_rel_path_from_zip(zip_path: str) -> str:
     return "/".join(new_parts)
 
 
-def _validate_import_target_uri(uri: str) -> None:
-    """Enforce the same target-policy boundary as direct content writes."""
+def _classify_import_target_uri(
+    uri: str, *, allow_soft_skip: bool, is_dir: bool
+) -> str:
+    """Classify ovpack import target as allow / soft_skip or raise on hard fail."""
     parsed = VikingURI(uri)
     if parsed.scope not in {"resources", "user", "agent"}:
         raise InvalidArgumentError(f"ovpack import is not supported for scope: {parsed.scope}")
 
     name = uri.rstrip("/").split("/")[-1]
-    if name in _DERIVED_FILENAMES:
-        raise InvalidArgumentError(f"cannot import derived semantic file: {uri}")
     if is_watch_task_control_uri(uri):
         raise InvalidArgumentError(f"cannot import watch task control file: {uri}")
+    if name in _DERIVED_FILENAMES:
+        if allow_soft_skip and not is_dir:
+            return "soft_skip"
+        raise InvalidArgumentError(f"cannot import derived semantic file: {uri}")
+    return "allow"
 
 
-async def _enqueue_direct_vectorization(viking_fs, uri: str, ctx: RequestContext) -> None:
-    entries = await viking_fs.tree(uri, node_limit=100000, level_limit=1000, ctx=ctx)
-    dir_uris = {uri}
-    file_entries: list[tuple[str, str, str]] = []
-    for entry in entries:
-        entry_uri = entry.get("uri")
-        if not entry_uri:
-            continue
-        if entry.get("isDir"):
-            dir_uris.add(entry_uri)
-            continue
-        name = entry.get("name", "")
-        if name.startswith("."):
-            continue
-        parent_uri = VikingURI(entry_uri).parent.uri
-        file_entries.append((entry_uri, parent_uri, name))
-
-    async def index_dir(dir_uri: str) -> None:
-        abstract_uri = f"{dir_uri}/.abstract.md"
-        overview_uri = f"{dir_uri}/.overview.md"
-        abstract = ""
-        overview = ""
-        try:
-            if await viking_fs.exists(abstract_uri, ctx=ctx):
-                content = await viking_fs.read_file(abstract_uri, ctx=ctx)
-                abstract = content.decode("utf-8") if isinstance(content, bytes) else content
-            if await viking_fs.exists(overview_uri, ctx=ctx):
-                content = await viking_fs.read_file(overview_uri, ctx=ctx)
-                overview = content.decode("utf-8") if isinstance(content, bytes) else content
-        except Exception:
-            return
-        await vectorize_directory_meta(dir_uri, abstract, overview, ctx=ctx)
-
-    async def index_file(file_uri: str, parent_uri: str, name: str) -> None:
-        await vectorize_file(
-            file_path=file_uri, summary_dict={"name": name}, parent_uri=parent_uri, ctx=ctx
-        )
-
-    await asyncio.gather(*(index_dir(dir_uri) for dir_uri in dir_uris))
-    await asyncio.gather(
-        *(
-            index_file(file_uri, parent_uri, file_name)
-            for file_uri, parent_uri, file_name in file_entries
-        )
+async def _enqueue_semantic_refresh(root_uri: str, ctx: RequestContext) -> None:
+    """Enqueue the imported root for normal semantic regeneration."""
+    queue_manager = get_queue_manager()
+    semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
+    msg = SemanticMsg(
+        uri=root_uri,
+        context_type=get_context_type_for_uri(root_uri),
+        account_id=ctx.account_id,
+        user_id=ctx.user.user_id,
+        agent_id=ctx.user.agent_id,
+        role=ctx.role.value,
+        skip_vectorization=False,
     )
+    await semantic_queue.enqueue(msg)
+
+
+def _counts_for_semantic_refresh(uri: str) -> bool:
+    """Return True when an imported file should trigger semantic regeneration."""
+    name = uri.rstrip("/").split("/")[-1]
+    return name not in _SEMANTIC_REFRESH_IGNORED_FILENAMES
+
+
+def _should_export_ovpack_entry(entry: dict) -> bool:
+    """Return True when an entry should be included in ovpack export."""
+    if entry.get("isDir"):
+        return True
+    return entry.get("name") not in _DERIVED_FILENAMES
 
 
 async def import_ovpack(
@@ -164,7 +153,9 @@ async def import_ovpack(
         file_path: Local .ovpack file path
         parent: Target parent URI (e.g., viking://resources/...)
         force: Whether to force overwrite existing resource (default: False)
-        vectorize: Whether to trigger vectorization (default: True)
+        vectorize: Deprecated compatibility flag. Import now always refreshes
+            semantics via the semantic queue when at least one non-derived file
+            is imported.
 
     Returns:
         Root resource URI after import
@@ -172,13 +163,13 @@ async def import_ovpack(
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"File not found: {file_path}")
 
-    parent = parent.strip().rstrip("/")
+    if vectorize is False:
+        logger.debug(
+            "[local_fs] import_ovpack received vectorize=False; the flag is kept for "
+            "compatibility and no longer changes import behavior"
+        )
 
-    try:
-        await viking_fs.stat(parent, ctx=ctx)
-    except Exception:
-        # Parent directory does not exist, create it
-        await viking_fs.mkdir(parent, ctx=ctx)
+    parent = parent.strip().rstrip("/")
 
     with zipfile.ZipFile(file_path, "r") as zf:
         # 1. Get root directory name from ZIP and perform initial validation
@@ -195,7 +186,13 @@ async def import_ovpack(
             raise ValueError("Could not determine root directory name from ovpack")
 
         root_uri = f"{parent}/{base_name}"
-        _validate_import_target_uri(root_uri)
+        _classify_import_target_uri(root_uri, allow_soft_skip=False, is_dir=True)
+
+        try:
+            await viking_fs.stat(parent, ctx=ctx)
+        except Exception:
+            # Parent directory does not exist, create it after target validation.
+            await viking_fs.mkdir(parent, ctx=ctx)
 
         # 2. Conflict check
         try:
@@ -226,6 +223,9 @@ async def import_ovpack(
             raise ValueError(f"Invalid JSON in {meta_zip_path}")
 
         # 4. Execute import
+        semantic_seed_file_count = 0
+        skipped_file_count = 0
+        skipped_examples: list[str] = []
         for info in infolist:
             zip_path = info.filename
             if not zip_path:
@@ -235,22 +235,33 @@ async def import_ovpack(
             safe_zip_path = _validate_ovpack_member_path(zip_path, base_name)
             # Normalize path separators to handle Windows-created ZIPs
             safe_zip_path = safe_zip_path.replace("\\", "/")
+            is_dir_entry = safe_zip_path.endswith("/")
 
             # Handle directory entries
-            if safe_zip_path.endswith("/"):
+            if is_dir_entry:
                 rel_path = get_viking_rel_path_from_zip(safe_zip_path.rstrip("/"))
                 target_dir_uri = f"{root_uri}/{rel_path}" if rel_path else root_uri
+                _classify_import_target_uri(target_dir_uri, allow_soft_skip=False, is_dir=True)
                 await viking_fs.mkdir(target_dir_uri, exist_ok=True, ctx=ctx)
                 continue
 
             # Handle file entries
             rel_path = get_viking_rel_path_from_zip(safe_zip_path)
             target_file_uri = f"{root_uri}/{rel_path}" if rel_path else root_uri
-            _validate_import_target_uri(target_file_uri)
+            decision = _classify_import_target_uri(
+                target_file_uri, allow_soft_skip=True, is_dir=False
+            )
+            if decision == "soft_skip":
+                skipped_file_count += 1
+                if len(skipped_examples) < _MAX_SKIPPED_EXAMPLES:
+                    skipped_examples.append(target_file_uri)
+                continue
 
             try:
                 data = zf.read(safe_zip_path)
                 await viking_fs.write_file_bytes(target_file_uri, data, ctx=ctx)
+                if _counts_for_semantic_refresh(target_file_uri):
+                    semantic_seed_file_count += 1
             except Exception as e:
                 logger.error(f"Failed to import {zip_path} to {target_file_uri}: {e}")
                 if not force:  # In non-force mode, stop on error
@@ -258,9 +269,24 @@ async def import_ovpack(
 
     logger.info(f"[local_fs] Successfully imported {file_path} to {root_uri}")
 
-    if vectorize:
-        await _enqueue_direct_vectorization(viking_fs, root_uri, ctx=ctx)
-        logger.info(f"[local_fs] Enqueued direct vectorization for: {root_uri}")
+    if skipped_file_count:
+        logger.warning(
+            "[local_fs] Skipped %d derived semantic files during ovpack import to %s; "
+            "examples=%s. Call wait_processed() if you need regenerated semantics or "
+            "retrieval results immediately.",
+            skipped_file_count,
+            root_uri,
+            skipped_examples,
+        )
+
+    if semantic_seed_file_count > 0:
+        await _enqueue_semantic_refresh(root_uri, ctx=ctx)
+        logger.info(f"[local_fs] Enqueued semantic refresh for: {root_uri}")
+    else:
+        logger.info(
+            "[local_fs] Imported no semantic-source files from %s; skipping semantic refresh",
+            file_path,
+        )
 
     return root_uri
 
@@ -296,6 +322,7 @@ async def export_ovpack(viking_fs, uri: str, to: str, ctx: RequestContext) -> st
     ensure_dir_exists(to)
 
     entries = await viking_fs.tree(uri, show_all_hidden=True, ctx=ctx)
+    entries = [entry for entry in entries if _should_export_ovpack_entry(entry)]
 
     # Check file count limit
     file_count = sum(1 for entry in entries if not entry.get("isDir"))
