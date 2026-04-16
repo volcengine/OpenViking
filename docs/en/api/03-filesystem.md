@@ -127,6 +127,8 @@ Read L2 full content.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI |
+| offset | int | No | 0 | Starting line number (0-indexed) |
+| limit | int | No | -1 | Number of lines to read, `-1` means read to end |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -264,6 +266,11 @@ List directory contents.
 | uri | str | Yes | - | Viking URI |
 | simple | bool | No | False | Return only relative paths |
 | recursive | bool | No | False | List all subdirectories recursively |
+| output | str | No | `agent` | Output format: `agent` or `original` |
+| abs_limit | int | No | 256 | Abstract length limit for `agent` output |
+| show_all_hidden | bool | No | False | Include hidden files like `-a` |
+| node_limit | int | No | 1000 | Maximum number of nodes to return |
+| limit | int | No | None | Alias for `node_limit` |
 
 **Entry Structure**
 
@@ -344,6 +351,12 @@ Get directory tree structure.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI |
+| output | str | No | `agent` | Output format: `agent` or `original` |
+| abs_limit | int | No | 256 | Abstract length limit for `agent` output |
+| show_all_hidden | bool | No | False | Include hidden files like `-a` |
+| node_limit | int | No | 1000 | Maximum number of nodes to return |
+| limit | int | No | None | Alias for `node_limit` |
+| level_limit | int | No | 3 | Maximum directory depth to traverse |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -632,6 +645,9 @@ Search content by pattern.
 | uri | str | Yes | - | Viking URI to search in |
 | pattern | str | Yes | - | Search pattern (regex) |
 | case_insensitive | bool | No | False | Ignore case |
+| exclude_uri | str | No | None | URI prefix to exclude from search |
+| node_limit | int | No | None | Maximum number of nodes to search |
+| level_limit | int | No | 5 | Maximum directory depth to traverse |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -702,6 +718,7 @@ Match files by pattern.
 |-----------|------|----------|---------|-------------|
 | pattern | str | Yes | - | Glob pattern (e.g., `**/*.md`) |
 | uri | str | No | "viking://" | Starting URI |
+| node_limit | int | No | None | Maximum number of matches to return |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -766,7 +783,7 @@ Create relations between resources.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | from_uri | str | Yes | - | Source URI |
-| uris | str or List[str] | Yes | - | Target URI(s) |
+| to_uris | str or List[str] | Yes | - | Target URI(s) |
 | reason | str | No | "" | Reason for the link |
 
 **Python SDK (Embedded / HTTP)**
@@ -899,7 +916,7 @@ Remove a relation.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | from_uri | str | Yes | - | Source URI |
-| uri | str | Yes | - | Target URI to unlink |
+| to_uri | str | Yes | - | Target URI to unlink |
 
 **Python SDK (Embedded / HTTP)**
 
