@@ -89,8 +89,9 @@ class OpenAIRerankClient(RerankBase):
             # Update token usage tracking (estimate, OpenAI rerank doesn't provide token info)
             self._extract_and_update_token_usage(result, query, documents)
 
-            # Standard OpenAI/Cohere rerank format: results[].{index, relevance_score}
-            results = result.get("results")
+            # Standard OpenAI/Cohere-style APIs use results[].
+            # Voyage uses data[] with the same {index, relevance_score} items.
+            results = result.get("results") or result.get("data")
             if not results:
                 logger.warning(f"[OpenAIRerankClient] Unexpected response format: {result}")
                 return None
