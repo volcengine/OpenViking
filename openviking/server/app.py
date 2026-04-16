@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from openviking.server.api_keys import APIKeyManager
 from openviking.server.config import ServerConfig, load_server_config, validate_server_config
 from openviking.server.dependencies import set_service
+from openviking.server.error_mapping import map_exception
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 from openviking.server.routers import (
     admin_router,
@@ -198,6 +199,26 @@ def create_app(
     # Catch-all for unhandled exceptions so clients always get JSON
     @app.exception_handler(Exception)
     async def general_error_handler(request: Request, exc: Exception):
+        mapped = map_exception(exc)
+        if mapped is not None:
+            http_status = ERROR_CODE_TO_HTTP_STATUS.get(mapped.code, 500)
+            logger.warning(
+                "Mapped unhandled exception to structured API error",
+                extra={"error_code": mapped.code, "error_message": mapped.message},
+                exc_info=exc,
+            )
+            return JSONResponse(
+                status_code=http_status,
+                content=Response(
+                    status="error",
+                    error=ErrorInfo(
+                        code=mapped.code,
+                        message=mapped.message,
+                        details=mapped.details,
+                    ),
+                ).model_dump(),
+            )
+
         logger.exception("Unhandled exception")
         return JSONResponse(
             status_code=500,

@@ -63,13 +63,17 @@ impl CliContext {
     }
 
     pub fn get_client(&self) -> client::HttpClient {
+        self.get_client_with_timeout(None)
+    }
+
+    pub fn get_client_with_timeout(&self, timeout_secs: Option<f64>) -> client::HttpClient {
         client::HttpClient::new(
             &self.config.url,
             self.config.api_key.clone(),
             self.config.agent_id.clone(),
             self.config.account.clone(),
             self.config.user.clone(),
-            self.config.timeout,
+            timeout_secs.unwrap_or(self.config.timeout),
         )
     }
 }
@@ -104,9 +108,22 @@ struct Cli {
     command: Commands,
 }
 
+// Commands are organized with category tags in their doc comments.
+//
+// # Command Tagging System
+//
+// Tags are added at the beginning of command doc comments, e.g.:
+// - `[Data]` - Data operations category
+// - `[Interactive]` - Interactive tools category
+// - `[Status]` - Status & observability category
+// - `[Admin]` - Admin tools category
+// - `[Experimental]` - Experimental/preview features (API may change)
+//
+// Some tags can be combined, e.g. `[Experimental][Data]`
 #[derive(Subcommand)]
 enum Commands {
-    /// Add resources into OpenViking
+    // --- Data Operations ---
+    /// [Data] Add resources into OpenViking
     AddResource {
         /// Local path or URL to import
         path: String,
@@ -147,7 +164,7 @@ enum Commands {
         #[arg(long, default_value = "0")]
         watch_interval: f64,
     },
-    /// Add a skill into OpenViking
+    /// [Data] Add a skill into OpenViking
     AddSkill {
         /// Skill directory, SKILL.md, or raw content
         data: String,
@@ -158,36 +175,14 @@ enum Commands {
         #[arg(long)]
         timeout: Option<f64>,
     },
-    /// List relations of a resource
-    Relations {
-        /// Viking URI
-        uri: String,
-    },
-    /// Create relation links from one URI to one or more targets
-    Link {
-        /// Source URI
-        from_uri: String,
-        /// One or more target URIs
-        to_uris: Vec<String>,
-        /// Reason for linking
-        #[arg(long, default_value = "")]
-        reason: String,
-    },
-    /// Remove a relation link
-    Unlink {
-        /// Source URI
-        from_uri: String,
-        /// Target URI to unlink
-        to_uri: String,
-    },
-    /// Export context as .ovpack
+    /// [Data] Export context as .ovpack
     Export {
         /// Source URI
         uri: String,
         /// Output .ovpack file path
         to: String,
     },
-    /// Import .ovpack into target URI
+    /// [Data] Import .ovpack into target URI
     Import {
         /// Input .ovpack file path
         file_path: String,
@@ -200,37 +195,7 @@ enum Commands {
         #[arg(long)]
         no_vectorize: bool,
     },
-    /// Wait for queued async processing to complete
-    Wait {
-        /// Wait timeout in seconds
-        #[arg(long)]
-        timeout: Option<f64>,
-    },
-    /// Show OpenViking component status
-    Status,
-    /// Quick health check
-    Health,
-    /// System utility commands
-    System {
-        #[command(subcommand)]
-        action: SystemCommands,
-    },
-    /// Observer status commands
-    Observer {
-        #[command(subcommand)]
-        action: ObserverCommands,
-    },
-    /// Session management commands
-    Session {
-        #[command(subcommand)]
-        action: SessionCommands,
-    },
-    /// Account and user management commands (multi-tenant)
-    Admin {
-        #[command(subcommand)]
-        action: AdminCommands,
-    },
-    /// List directory contents
+    /// [Data] List directory contents
     #[command(alias = "list")]
     Ls {
         /// Viking URI to list (default: viking://)
@@ -257,7 +222,7 @@ enum Commands {
         )]
         node_limit: i32,
     },
-    /// Get directory tree
+    /// [Data] Get directory tree
     Tree {
         /// Viking URI to get tree for
         uri: String,
@@ -279,7 +244,7 @@ enum Commands {
         #[arg(short = 'L', long = "level-limit", default_value = "3")]
         level_limit: i32,
     },
-    /// Create directory
+    /// [Data] Create directory
     Mkdir {
         /// Directory URI to create
         uri: String,
@@ -287,7 +252,7 @@ enum Commands {
         #[arg(long)]
         description: Option<String>,
     },
-    /// Remove resource
+    /// [Data] Remove resource
     #[command(alias = "del", alias = "delete")]
     Rm {
         /// Viking URI to remove
@@ -296,7 +261,7 @@ enum Commands {
         #[arg(short, long)]
         recursive: bool,
     },
-    /// Move or rename resource
+    /// [Data] Move or rename resource
     #[command(alias = "rename")]
     Mv {
         /// Source URI
@@ -304,27 +269,27 @@ enum Commands {
         /// Target URI
         to_uri: String,
     },
-    /// Get resource metadata
+    /// [Data] Get resource metadata
     Stat {
         /// Viking URI to get metadata for
         uri: String,
     },
-    /// Read file content (L2)
+    /// [Data] Read file content (L2)
     Read {
         /// Viking URI
         uri: String,
     },
-    /// Read abstract content (L0)
+    /// [Data] Read abstract content (L0)
     Abstract {
-        /// Viking URI
+        /// Directory URI
         uri: String,
     },
-    /// Read overview content (L1)
+    /// [Data] Read overview content (L1)
     Overview {
-        /// Viking URI
+        /// Directory URI
         uri: String,
     },
-    /// Write text content to an existing file
+    /// [Data] Write text content to an existing file
     Write {
         /// Viking URI
         uri: String,
@@ -344,25 +309,14 @@ enum Commands {
         #[arg(long)]
         timeout: Option<f64>,
     },
-    /// Reindex content at URI (regenerates .abstract.md and .overview.md)
-    Reindex {
-        /// Viking URI
-        uri: String,
-        /// Force regenerate summaries even if they exist
-        #[arg(short, long)]
-        regenerate: bool,
-        /// Wait for reindex to complete
-        #[arg(long, default_value = "true")]
-        wait: bool,
-    },
-    /// Download file to local path (supports binaries/images)
+    /// [Data] Download file to local path (supports binaries/images)
     Get {
         /// Viking URI
         uri: String,
         /// Local path (must not exist yet)
         local_path: String,
     },
-    /// Run semantic retrieval
+    /// [Data] Run semantic retrieval
     Find {
         /// Search query
         query: String,
@@ -387,7 +341,7 @@ enum Commands {
         #[arg(long = "before")]
         before: Option<String>,
     },
-    /// Run context-aware retrieval
+    /// [Data] Run context-aware retrieval
     Search {
         /// Search query
         query: String,
@@ -415,7 +369,7 @@ enum Commands {
         #[arg(long = "before")]
         before: Option<String>,
     },
-    /// Run content pattern search
+    /// [Data] Run content pattern search
     Grep {
         /// Target URI
         #[arg(short, long, default_value = "viking://")]
@@ -440,7 +394,7 @@ enum Commands {
         #[arg(short = 'L', long = "level-limit", default_value = "10")]
         level_limit: i32,
     },
-    /// Run file glob pattern search
+    /// [Data] Run file glob pattern search
     Glob {
         /// Glob pattern
         pattern: String,
@@ -456,20 +410,48 @@ enum Commands {
         )]
         node_limit: i32,
     },
-    /// Add memory in one shot (creates session, adds messages, commits)
+    /// [Data] Session management commands
+    Session {
+        #[command(subcommand)]
+        action: SessionCommands,
+    },
+    /// [Experimental][Data] Add memory in one shot (creates session, adds messages, commits)
     AddMemory {
         /// Content to memorize. Plain string (treated as user message),
         /// JSON {"role":"...","content":"..."} for a single message,
         /// or JSON array of such objects for multiple messages.
         content: String,
     },
-    /// Interactive TUI file explorer
+    /// [Experimental][Data] List relations of a resource
+    Relations {
+        /// Viking URI
+        uri: String,
+    },
+    /// [Experimental][Data] Create relation links from one URI to one or more targets
+    Link {
+        /// Source URI
+        from_uri: String,
+        /// One or more target URIs
+        to_uris: Vec<String>,
+        /// Reason for linking
+        #[arg(long, default_value = "")]
+        reason: String,
+    },
+    /// [Experimental][Data] Remove a relation link
+    Unlink {
+        /// Source URI
+        from_uri: String,
+        /// Target URI to unlink
+        to_uri: String,
+    },
+    // --- Interactive Tools ---
+    /// [Interactive] Interactive TUI file explorer
     Tui {
         /// Viking URI to start browsing (default: /)
         #[arg(default_value = "/")]
         uri: String,
     },
-    /// Chat with vikingbot agent
+    /// [Interactive] Chat with vikingbot agent
     Chat {
         /// Message to send to the agent
         #[arg(short, long)]
@@ -490,13 +472,53 @@ enum Commands {
         #[arg(long)]
         no_history: bool,
     },
-    /// Configuration management
+
+    // --- Status & Observability ---
+    /// [Status] Wait for queued async processing to complete
+    Wait {
+        /// Wait timeout in seconds
+        #[arg(long)]
+        timeout: Option<f64>,
+    },
+    /// [Status] Show OpenViking component status
+    Status,
+    /// [Status] Quick health check
+    Health,
+    /// [Status] System utility commands
+    System {
+        #[command(subcommand)]
+        action: SystemCommands,
+    },
+    /// [Status] Observer status commands
+    Observer {
+        #[command(subcommand)]
+        action: ObserverCommands,
+    },
+    /// [Status] Configuration management
     Config {
         #[command(subcommand)]
         action: ConfigCommands,
     },
-    /// Show CLI version
+    /// [Status] Show CLI version
     Version,
+
+    // --- Admin Tools ---
+    /// [Admin] Account and user management commands (multi-tenant)
+    Admin {
+        #[command(subcommand)]
+        action: AdminCommands,
+    },
+    /// [Admin] Reindex content at URI (regenerates .abstract.md and .overview.md)
+    Reindex {
+        /// Viking URI
+        uri: String,
+        /// Force regenerate summaries even if they exist
+        #[arg(short, long)]
+        regenerate: bool,
+        /// Wait for reindex to complete
+        #[arg(long, default_value = "true")]
+        wait: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -772,9 +794,12 @@ async fn main() {
             } else {
                 format!("{}/bot/v1", ctx.config.url)
             };
+            let api_key = std::env::var("VIKINGBOT_API_KEY")
+                .ok()
+                .or_else(|| ctx.config.api_key.clone());
             let cmd = commands::chat::ChatCommand {
                 endpoint,
-                api_key: std::env::var("VIKINGBOT_API_KEY").ok(),
+                api_key,
                 session: session_id,
                 sender,
                 message,
@@ -786,7 +811,20 @@ async fn main() {
         }
         Commands::Config { action } => handle_config(action, ctx).await,
         Commands::Version => {
-            println!("{}", env!("OPENVIKING_CLI_VERSION"));
+            println!("CLI:     {}", env!("OPENVIKING_CLI_VERSION"));
+
+            // Try to get server version from /health endpoint with a short timeout (3 seconds)
+            let client = ctx.get_client_with_timeout(Some(3.0));
+            match client.get::<serde_json::Value>("/health", &[]).await {
+                Ok(health) => {
+                    if let Some(version) = health.get("version").and_then(|v| v.as_str()) {
+                        println!("Server:  {}", version);
+                    }
+                }
+                Err(_) => {
+                    // If can't connect to server, just don't print server version
+                }
+            }
             Ok(())
         }
         Commands::Read { uri } => handle_read(uri, ctx).await,

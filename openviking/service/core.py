@@ -31,7 +31,7 @@ from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.exceptions import NotInitializedError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
-from openviking_cli.utils.config import get_openviking_config
+from openviking_cli.utils.config import OPENVIKING_ENABLE_RECORDER_ENV, get_openviking_config
 from openviking_cli.utils.config.open_viking_config import initialize_openviking_config
 from openviking_cli.utils.config.storage_config import StorageConfig
 
@@ -250,7 +250,7 @@ class OpenVikingService:
             logger.info("Encryption module not enabled")
 
         # Initialize VikingFS and VikingDB with recorder if enabled
-        enable_recorder = os.environ.get("OPENVIKING_ENABLE_RECORDER", "").lower() == "true"
+        enable_recorder = os.environ.get(OPENVIKING_ENABLE_RECORDER_ENV, "").lower() == "true"
 
         # Create context collection
         if self._vikingdb_manager is None:

@@ -12,6 +12,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from openviking.models.embedder.base import EmbedResult  # noqa: E402
+from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV  # noqa: E402
 
 
 class _FakeEmbedder:
@@ -208,7 +209,7 @@ class TestQuickStartLite(unittest.TestCase):
         # NOTE: We do NOT use patch.dict(os.environ, env_vars) here anymore.
         # Instead, we rely on OPENVIKING_CONFIG_FILE pointing to our file.
 
-        env_override = {"OPENVIKING_CONFIG_FILE": self.config_file}
+        env_override = {OPENVIKING_CONFIG_ENV: self.config_file}
 
         # IMPORTANT: We need to ensure that when `initialize_openviking_config` is called,
         # it reads our file. We can set the env var for the subprocess/exec context.
