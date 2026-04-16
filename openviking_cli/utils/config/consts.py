@@ -8,7 +8,7 @@ DEFAULT_CONFIG_DIR = Path.home() / ".openviking"
 SYSTEM_CONFIG_DIR = Path("/etc/openviking")
 
 # =============================================================================
-# Core OpenViking Environment Variables
+# All OpenViking Environment Variables
 # =============================================================================
 
 # Configuration file paths
