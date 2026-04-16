@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from openviking.metrics.account_context import get_metric_account_context
 from openviking.models.embedder.base import EmbedResult
 from openviking.server.identity import RequestContext, Role
 from openviking.service.resource_service import ResourceService
@@ -178,6 +179,46 @@ async def test_semantic_processor_binds_registered_operation_telemetry(monkeypat
     assert summary["tokens"]["total"] == 18
     assert summary["tokens"]["llm"]["total"] == 18
     assert "embedding" not in summary["tokens"]
+
+
+@pytest.mark.asyncio
+async def test_semantic_processor_binds_metric_account_context(monkeypatch):
+    processor = SemanticProcessor()
+    ran = {"value": False}
+
+    class FakeVikingFS:
+        async def ls(self, uri, ctx=None):
+            return []
+
+    class _FakeDagExecutor:
+        def __init__(self, **kwargs):
+            pass
+
+        async def run(self, root_uri):
+            ran["value"] = True
+            assert get_metric_account_context().http_account_id == "acct-semantic"
+
+        def get_stats(self):
+            return DagStats()
+
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: FakeVikingFS(),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticDagExecutor",
+        lambda **kwargs: _FakeDagExecutor(**kwargs),
+    )
+
+    await processor.on_dequeue(
+        SemanticMsg(
+            uri="viking://resources/demo",
+            context_type="resource",
+            recursive=False,
+            account_id="acct-semantic",
+        ).to_dict()
+    )
+    assert ran["value"] is True
 
 
 @pytest.mark.asyncio

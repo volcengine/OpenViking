@@ -458,10 +458,15 @@ def prepare_channel(
 
 def prepare_heartbeat(config, agent_loop, session_manager) -> HeartbeatService:
     # Create heartbeat service
-    async def on_heartbeat(prompt: str, session_key: SessionKey | None = None) -> str:
+    async def on_heartbeat(
+        prompt: str,
+        session_key: SessionKey | None = None,
+        metadata: dict | None = None,
+    ) -> str:
         return await agent_loop.process_direct(
             prompt,
             session_key=session_key,
+            metadata=metadata,
         )
 
     heartbeat = HeartbeatService(

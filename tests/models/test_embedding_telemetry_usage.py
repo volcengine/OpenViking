@@ -56,7 +56,7 @@ def test_volcengine_dense_embedder_reports_embedding_telemetry_usage(monkeypatch
     telemetry = MemoryOperationTelemetry(operation="resources.add_resource", enabled=True)
     with bind_telemetry(telemetry):
         embedder = VolcengineDenseEmbedder(
-            model_name="doubao-embedding-vision-250615",
+            model_name="doubao-embedding-vision-251215",
             api_key="test",
             input_type="multimodal",
             dimension=3,
@@ -92,7 +92,7 @@ def test_volcengine_dense_embedder_reports_embedding_telemetry_usage_from_dict_u
     telemetry = MemoryOperationTelemetry(operation="search.find", enabled=True)
     with bind_telemetry(telemetry):
         embedder = VolcengineDenseEmbedder(
-            model_name="doubao-embedding-vision-250615",
+            model_name="doubao-embedding-vision-251215",
             api_key="test",
             input_type="multimodal",
             dimension=3,

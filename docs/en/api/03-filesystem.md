@@ -2,6 +2,27 @@
 
 OpenViking provides Unix-like file system operations for managing context.
 
+## WebDAV (Phase 1)
+
+OpenViking Server also exposes a minimal WebDAV adapter for resource files:
+
+```text
+/webdav/resources
+```
+
+Phase 1 intentionally keeps the scope narrow:
+
+- Resources only. Memories, skills, sessions, and other namespaces are not exposed.
+- Text-first writes. `PUT` currently accepts UTF-8 text content only.
+- WebDAV subset only. `OPTIONS`, `PROPFIND`, `GET`, `HEAD`, `PUT`, `DELETE`, `MKCOL`, and `MOVE` are supported.
+- Semantic sidecars stay internal. Derived files such as `.abstract.md`, `.overview.md`, `.relations.json`, and `.path.ovlock` are hidden from listings and cannot be accessed directly through WebDAV.
+
+Behavior notes:
+
+- Creating a new file through WebDAV triggers OpenViking semantic generation for that file path.
+- Replacing an existing file through WebDAV refreshes related semantics and vectors, same as `write()`.
+- User-created dot-directories and dot-files remain visible unless they match one of the reserved internal filenames above.
+
 ## API Reference
 
 ### abstract()
@@ -440,11 +461,13 @@ Create a directory.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI for the new directory |
+| description | str | No | `null` | Initial directory description. When provided, it is written to `.abstract.md` and queued for L0 vectorization. |
 
 **Python SDK (Embedded / HTTP)**
 
 ```python
 client.mkdir("viking://resources/new-project/")
+client.mkdir("viking://resources/new-project/", description="API docs directory")
 ```
 
 **HTTP API**
@@ -458,7 +481,8 @@ curl -X POST http://localhost:1933/api/v1/fs/mkdir \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
   -d '{
-    "uri": "viking://resources/new-project/"
+    "uri": "viking://resources/new-project/",
+    "description": "API docs directory"
   }'
 ```
 
@@ -466,6 +490,7 @@ curl -X POST http://localhost:1933/api/v1/fs/mkdir \
 
 ```bash
 openviking mkdir viking://resources/new-project/
+openviking mkdir viking://resources/new-project/ --description "API docs directory"
 ```
 
 **Response**

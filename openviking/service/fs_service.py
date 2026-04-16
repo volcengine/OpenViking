@@ -8,11 +8,13 @@ Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, abstract, 
 
 from typing import Any, Dict, List, Optional
 
+from openviking.core.directories import get_context_type_for_uri
 from openviking.server.identity import RequestContext
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.viking_fs import VikingFS
+from openviking.utils.embedding_utils import vectorize_directory_meta
 from openviking_cli.exceptions import NotInitializedError
-from openviking_cli.utils import get_logger
+from openviking_cli.utils import VikingURI, get_logger
 
 logger = get_logger(__name__)
 
@@ -100,10 +102,42 @@ class FSService:
             )
         return entries
 
-    async def mkdir(self, uri: str, ctx: RequestContext) -> None:
+    async def mkdir(
+        self,
+        uri: str,
+        ctx: RequestContext,
+        description: Optional[str] = None,
+    ) -> None:
         """Create directory."""
         viking_fs = self._ensure_initialized()
         await viking_fs.mkdir(uri, ctx=ctx)
+        abstract = self._normalize_directory_description(description)
+        if not abstract:
+            return
+
+        directory_uri, abstract_uri = self._resolve_directory_uris(uri)
+        await viking_fs.write_file(abstract_uri, abstract, ctx=ctx)
+        await vectorize_directory_meta(
+            uri=directory_uri,
+            abstract=abstract,
+            overview="",
+            context_type=get_context_type_for_uri(directory_uri),
+            ctx=ctx,
+            include_overview=False,
+        )
+
+    @staticmethod
+    def _normalize_directory_description(description: Optional[str]) -> Optional[str]:
+        if description is None:
+            return None
+        abstract = description.strip()
+        return abstract or None
+
+    @staticmethod
+    def _resolve_directory_uris(uri: str) -> tuple[str, str]:
+        abstract_uri = VikingURI(uri).join(".abstract.md").uri
+        directory_uri = VikingURI(abstract_uri).parent.uri
+        return directory_uri, abstract_uri
 
     async def rm(self, uri: str, ctx: RequestContext, recursive: bool = False) -> None:
         """Remove resource."""

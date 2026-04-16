@@ -172,3 +172,7 @@ curl http://localhost:1933/api/v1/search/find \
 - [检索机制](./07-retrieval.md) - 检索流程详解
 - [上下文提取](./06-extraction.md) - 解析和提取流程
 - [会话管理](./08-session.md) - 会话和记忆管理
+- [事务模型](./09-transaction.md) - 写入与一致性模型
+- [数据加密](./10-encryption.md) - 静态数据加密与密钥架构
+- [多租户](./11-multi-tenant.md) - account / user / agent 隔离模型
+- [指标](./12-metrics.md) - `/metrics` 使用方式与关键指标说明

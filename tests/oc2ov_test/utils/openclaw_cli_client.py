@@ -2,12 +2,44 @@
 OpenClaw CLI 客户端封装 - 使用 openclaw agent 命令
 """
 
+import glob
 import json
 import logging
+import os
 import subprocess
+import time
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
+
+OPENCLAW_HOME = os.path.expanduser("~/.openclaw")
+SESSION_LOCK_TIMEOUT = 15
+SESSION_LOCK_POLL_INTERVAL = 0.5
+
+
+def _find_session_lock(session_id: str) -> Optional[str]:
+    for pattern in [
+        os.path.join(OPENCLAW_HOME, "agents", "*", "sessions", f"{session_id}.jsonl.lock"),
+        os.path.join(OPENCLAW_HOME, "agents", "main", "sessions", f"{session_id}.jsonl.lock"),
+    ]:
+        matches = glob.glob(pattern)
+        if matches:
+            return matches[0]
+    return None
+
+
+def _wait_for_session_lock_release(session_id: str, timeout: float = SESSION_LOCK_TIMEOUT) -> bool:
+    lock_path = _find_session_lock(session_id)
+    if lock_path is None:
+        return True
+    start = time.time()
+    while time.time() - start < timeout:
+        if not os.path.exists(lock_path):
+            logger.info(f"Session lock released: {lock_path}")
+            return True
+        time.sleep(SESSION_LOCK_POLL_INTERVAL)
+    logger.warning(f"Session lock still held after {timeout}s: {lock_path}")
+    return False
 
 
 class OpenClawCLIClient:
@@ -20,7 +52,7 @@ class OpenClawCLIClient:
         初始化客户端
         """
         self.session_id = session_id or "test_session_default"
-        self.timeout = 300
+        self.timeout = 180
 
     def send_message(
         self, message: str, session_id: Optional[str] = None, agent_id: Optional[str] = None
@@ -53,11 +85,17 @@ class OpenClawCLIClient:
             logger.info(f"输入消息: {message}")
             logger.info(f"完整命令: {' '.join(cmd)}")
 
+            lock_released = _wait_for_session_lock_release(target_session_id)
+            if not lock_released:
+                logger.warning("Session lock not released, request may fail with lock timeout")
+
             logger.info(f"⏳ 等待响应 (超时: {self.timeout}秒)...")
 
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout)
 
             logger.info(f"✅ 命令执行完成 - 返回码: {result.returncode}")
+
+            _wait_for_session_lock_release(target_session_id)
 
             if result.returncode != 0:
                 error_msg = f"命令执行失败: {result.stderr}"

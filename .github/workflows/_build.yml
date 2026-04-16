@@ -140,12 +140,20 @@ jobs:
         # Retry apt-get update
         for i in 1 2 3 4 5; do apt-get update && break || sleep 5; done
         apt-get install -y \
-          git ca-certificates cmake build-essential tzdata curl \
+          git ca-certificates cmake build-essential clang tzdata curl \
           libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev \
           libffi-dev liblzma-dev libgdbm-dev libnss3-dev libncurses5-dev \
           libncursesw5-dev tk-dev uuid-dev libexpat1-dev
         ln -fs /usr/share/zoneinfo/Etc/UTC /etc/localtime
         dpkg-reconfigure -f noninteractive tzdata
+
+    - name: Select compiler toolchain (Linux)
+      run: |
+        echo "CC=clang" >> "$GITHUB_ENV"
+        echo "CXX=clang++" >> "$GITHUB_ENV"
+        echo "OV_REQUIRE_RAGFS_BUILD=1" >> "$GITHUB_ENV"
+        clang --version
+        clang++ --version
 
     - uses: actions/checkout@v6
       with:
@@ -280,6 +288,36 @@ jobs:
         mv dist_fixed/*.whl dist/
         rmdir dist_fixed
 
+    - name: Smoke test built wheel (Linux)
+      shell: bash
+      run: |
+        "$PYTHON_BIN" -m pip install --upgrade pip
+        "$PYTHON_BIN" -m pip install --force-reinstall dist/*.whl
+
+        cd "$RUNNER_TEMP"
+        "$PYTHON_BIN" - <<'PY'
+        import importlib.util
+
+        from openviking.pyagfs import get_binding_client
+        import openviking.storage.vectordb.engine as engine
+
+        binding_client, _ = get_binding_client()
+        if binding_client is None:
+            raise SystemExit("ragfs binding client was not installed")
+
+        print(f"Loaded RAGFS binding client {binding_client.__name__}")
+        print(f"Loaded runtime engine variant {engine.ENGINE_VARIANT}")
+        print(f"Available engine variants {engine.AVAILABLE_ENGINE_VARIANTS}")
+
+        module_name = f"openviking.storage.vectordb.engine._{engine.ENGINE_VARIANT}"
+        backend_spec = importlib.util.find_spec(module_name)
+        if backend_spec is None or backend_spec.origin is None:
+            raise SystemExit(f"backend module {module_name} was not installed")
+
+        print(f"Imported backend module {module_name}")
+        print(f"Backend module origin {backend_spec.origin}")
+        PY
+
     - name: Store the distribution packages
       uses: actions/upload-artifact@v7
       with:
@@ -368,6 +406,10 @@ jobs:
     - name: Install build dependencies
       run: uv pip install setuptools setuptools_scm cmake wheel build
 
+    - name: Require ragfs native artifact for wheel builds
+      shell: bash
+      run: echo "OV_REQUIRE_RAGFS_BUILD=1" >> "$GITHUB_ENV"
+
     - name: Resolve OpenViking version for Rust CLI (macOS/Windows)
       shell: bash
       run: |
@@ -426,6 +468,37 @@ jobs:
 
     - name: Build package (Wheel Only)
       run: uv build --wheel
+
+    - name: Smoke test built wheel (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install --force-reinstall dist/*.whl
+
+        cd "$RUNNER_TEMP"
+        python - <<'PY'
+        import importlib.util
+
+        from openviking.pyagfs import get_binding_client
+        import openviking.storage.vectordb.engine as engine
+
+        binding_client, _ = get_binding_client()
+        if binding_client is None:
+            raise SystemExit("ragfs binding client was not installed")
+
+        print(f"Loaded RAGFS binding client {binding_client.__name__}")
+        print(f"Loaded runtime engine variant {engine.ENGINE_VARIANT}")
+        print(f"Available engine variants {engine.AVAILABLE_ENGINE_VARIANTS}")
+
+        module_name = f"openviking.storage.vectordb.engine._{engine.ENGINE_VARIANT}"
+        backend_spec = importlib.util.find_spec(module_name)
+        if backend_spec is None or backend_spec.origin is None:
+            raise SystemExit(f"backend module {module_name} was not installed")
+
+        print(f"Imported backend module {module_name}")
+        print(f"Backend module origin {backend_spec.origin}")
+        PY
 
     - name: Smoke test built wheel (Windows)
       if: runner.os == 'Windows'

@@ -482,10 +482,10 @@ class AsyncOpenViking:
             node_limit=node_limit,
         )
 
-    async def mkdir(self, uri: str) -> None:
+    async def mkdir(self, uri: str, description: Optional[str] = None) -> None:
         """Create directory"""
         await self._ensure_initialized()
-        await self._client.mkdir(uri)
+        await self._client.mkdir(uri, description=description)
 
     async def stat(self, uri: str) -> Dict:
         """Get resource status"""

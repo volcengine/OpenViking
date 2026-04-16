@@ -67,3 +67,36 @@ def test_load_server_config_preserves_supported_fields(tmp_path):
     assert config.bot_api_url == "http://localhost:19999"
     assert config.telemetry.prometheus.enabled is True
     assert config.encryption_enabled is True
+
+
+def test_load_server_config_preserves_metrics_account_dimension_fields(tmp_path):
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "server": {
+                    "metrics": {
+                        "enabled": True,
+                        "account_dimension": {
+                            "enabled": True,
+                            "max_active_accounts": 5,
+                            "metric_allowlist": [
+                                "openviking_http_requests_total",
+                                "openviking_task_pending",
+                            ],
+                        },
+                    }
+                }
+            }
+        )
+    )
+
+    config = load_server_config(str(config_path))
+
+    assert config.metrics.enabled is True
+    assert config.metrics.account_dimension.enabled is True
+    assert config.metrics.account_dimension.max_active_accounts == 5
+    assert config.metrics.account_dimension.metric_allowlist == [
+        "openviking_http_requests_total",
+        "openviking_task_pending",
+    ]

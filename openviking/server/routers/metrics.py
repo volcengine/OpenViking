@@ -11,11 +11,11 @@ router = APIRouter(tags=["metrics"])
 @router.get("/metrics")
 async def metrics(request: Request):
     """Return Prometheus metrics in text exposition format."""
-    observer = getattr(request.app.state, "prometheus_observer", None)
-    if observer is None:
+    exporter = getattr(request.app.state, "metrics_exporter", None)
+    if exporter is None:
         return PlainTextResponse(status_code=404, content="Prometheus metrics are disabled.\n")
 
     return PlainTextResponse(
-        content=observer.render_metrics(),
+        content=await exporter.export(),
         media_type="text/plain; version=0.0.4; charset=utf-8",
     )

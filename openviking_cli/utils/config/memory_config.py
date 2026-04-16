@@ -9,7 +9,7 @@ class MemoryConfig(BaseModel):
     """Memory configuration for OpenViking."""
 
     version: str = Field(
-        default="v1",
+        default="v2",
         description="Memory implementation version: 'v1' (legacy) or 'v2' (new templating system)",
     )
     agent_scope_mode: str = Field(

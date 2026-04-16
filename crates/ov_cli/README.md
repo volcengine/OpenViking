@@ -13,7 +13,7 @@ curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/crates/o
 ### From Source
 
 ```bash
-# openviking need rust >= 1.88, please upgrade it if necessary
+# openviking need rust >= 1.91.1, please upgrade it if necessary
 # brew upgrade rust
 cargo install --path crates/ov_cli
 ```

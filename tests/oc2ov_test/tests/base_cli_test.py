@@ -9,21 +9,23 @@ import unittest
 
 from config.settings import TEST_CONFIG
 from utils.assertions import AssertionHelper
-from utils.openclaw_cli_client import OpenClawCLIClient
+from utils.openclaw_cli_client import OpenClawCLIClient, _wait_for_session_lock_release
 from utils.test_utils import (
+    RetryManager,
     SessionIdManager,
     SmartWaiter,
-    RetryManager,
-    TestDataManager,
     TestData,
+    TestDataManager,
     get_default_data_manager,
 )
+
+MIN_SYNC_WAIT_SECONDS = 5
 
 
 class BaseOpenClawCLITest(unittest.TestCase):
     """
     OpenClaw CLI 测试基类（增强版）
-    
+
     新增功能：
     - Session ID 自动管理：每个测试类使用唯一的 session_id
     - 智能等待策略：替代固定等待，支持轮询检查
@@ -39,9 +41,7 @@ class BaseOpenClawCLITest(unittest.TestCase):
         """
         测试类初始化
         """
-        cls._class_session_id = SessionIdManager.generate_test_class_session_id(
-            cls.__name__
-        )
+        cls._class_session_id = SessionIdManager.generate_test_class_session_id(cls.__name__)
         cls.client = OpenClawCLIClient(session_id=cls._class_session_id)
         cls.logger = logging.getLogger(cls.__name__)
         cls.wait_time = TEST_CONFIG["wait_time"]
@@ -96,13 +96,19 @@ class BaseOpenClawCLITest(unittest.TestCase):
 
     def wait_for_sync(self, seconds: int = None):
         """
-        等待记忆同步（固定等待）
+        等待记忆同步（锁释放 + 最小等待）
 
         Args:
-            seconds: 等待秒数，默认使用配置的 wait_time
+            seconds: 等待秒数，默认使用配置的 wait_time，最小 MIN_SYNC_WAIT_SECONDS
         """
-        wait_seconds = seconds or self.wait_time
-        self.logger.info(f"等待 {wait_seconds} 秒，确认记忆同步...")
+        wait_seconds = max(seconds or self.wait_time, MIN_SYNC_WAIT_SECONDS)
+        self.logger.info(f"等待记忆同步 (锁释放 + {wait_seconds}秒)...")
+
+        lock_ok = _wait_for_session_lock_release(self.current_session_id)
+        if not lock_ok:
+            self.logger.warning("Session lock 未释放，额外等待 5 秒...")
+            time.sleep(5)
+
         time.sleep(wait_seconds)
 
     def smart_wait_for_sync(
@@ -110,16 +116,16 @@ class BaseOpenClawCLITest(unittest.TestCase):
         check_message: str = None,
         keywords: list = None,
         timeout: float = None,
-        poll_interval: float = 2.0,
+        poll_interval: float = 3.0,
     ) -> bool:
         """
-        智能等待记忆同步（轮询检查）
+        智能等待记忆同步（锁释放 + 轮询检查）
 
         Args:
             check_message: 用于检查的消息（如不提供则使用固定等待）
             keywords: 期望响应中包含的关键词
             timeout: 超时时间（秒）
-            poll_interval: 轮询间隔（秒）
+            poll_interval: 轮询间隔（秒），最小 3.0
 
         Returns:
             bool: 是否成功同步
@@ -128,9 +134,16 @@ class BaseOpenClawCLITest(unittest.TestCase):
             self.wait_for_sync()
             return True
 
+        poll_interval = max(poll_interval, 3.0)
         timeout = timeout or self.wait_time * 3
 
+        lock_ok = _wait_for_session_lock_release(self.current_session_id)
+        if not lock_ok:
+            self.logger.warning("Session lock 未释放，额外等待 5 秒...")
+            time.sleep(5)
+
         def check_response() -> bool:
+            _wait_for_session_lock_release(self.current_session_id)
             response = self.client.send_message(check_message, session_id=self.current_session_id)
             return self.assertion.assert_keywords_in_response(
                 response, keywords, require_all=True, case_sensitive=False

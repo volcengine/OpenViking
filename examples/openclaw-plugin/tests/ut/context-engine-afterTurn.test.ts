@@ -201,10 +201,10 @@ describe("context-engine afterTurn()", () => {
     expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
     // First call: user message
     expect(client.addSessionMessage.mock.calls[0][1]).toBe("user");
-    expect(client.addSessionMessage.mock.calls[0][2]).toContain("hello world");
+    expect(client.addSessionMessage.mock.calls[0][2][0].text).toContain("hello world");
     // Second call: assistant message
     expect(client.addSessionMessage.mock.calls[1][1]).toBe("assistant");
-    expect(client.addSessionMessage.mock.calls[1][2]).toContain("hi there");
+    expect(client.addSessionMessage.mock.calls[1][2][0].text).toContain("hi there");
   });
 
   it("passes the latest non-system message timestamp to addSessionMessage as ISO string", async () => {
@@ -249,7 +249,7 @@ describe("context-engine afterTurn()", () => {
 
     expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
     expect(client.addSessionMessage.mock.calls[0][1]).toBe("user");
-    const storedContent = client.addSessionMessage.mock.calls[0][2] as string;
+    const storedContent = (client.addSessionMessage.mock.calls[0][2] as Array<{ text?: string }>)[0].text;
     expect(storedContent).not.toContain("relevant-memories");
     expect(storedContent).not.toContain("injected memory data");
     expect(storedContent).toContain("my question");
@@ -398,11 +398,11 @@ describe("context-engine afterTurn()", () => {
     });
 
     expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
-    const userContent = client.addSessionMessage.mock.calls[0][2] as string;
-    const assistantContent = client.addSessionMessage.mock.calls[1][2] as string;
-    expect(userContent).toContain("src/app.ts");
-    expect(userContent).toContain("npm install");
-    expect(assistantContent).toContain("export const x = 1");
+    const userParts = client.addSessionMessage.mock.calls[0][2] as Array<{ text?: string }>;
+    const assistantParts = client.addSessionMessage.mock.calls[1][2] as Array<{ text?: string }>;
+    expect(userParts.map(p => p.text).join(" ")).toContain("src/app.ts");
+    expect(userParts.map(p => p.text).join(" ")).toContain("npm install");
+    expect(assistantParts.map(p => p.text).join(" ")).toContain("export const x = 1");
   });
 
   it("passes agentId to addSessionMessage", async () => {
@@ -459,8 +459,8 @@ describe("context-engine afterTurn()", () => {
     // assistant → user(toolResult) → assistant
     expect(client.addSessionMessage.mock.calls[0][1]).toBe("assistant");
     expect(client.addSessionMessage.mock.calls[1][1]).toBe("user");
-    expect(client.addSessionMessage.mock.calls[1][2]).toContain("[bash result]:");
-    expect(client.addSessionMessage.mock.calls[1][2]).toContain("file1.txt");
+    expect(client.addSessionMessage.mock.calls[1][2][0].tool_output).toContain("[bash result]:");
+    expect(client.addSessionMessage.mock.calls[1][2][0].tool_output).toContain("file1.txt");
     expect(client.addSessionMessage.mock.calls[2][1]).toBe("assistant");
   });
 
@@ -482,8 +482,9 @@ describe("context-engine afterTurn()", () => {
 
     expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
     expect(client.addSessionMessage.mock.calls[0][1]).toBe("user");
-    expect(client.addSessionMessage.mock.calls[0][2]).toContain("first question");
-    expect(client.addSessionMessage.mock.calls[0][2]).toContain("second question");
+    const firstCallParts = client.addSessionMessage.mock.calls[0][2] as Array<{ text?: string; type?: string }>;
+    expect(firstCallParts.map(p => p.text).join(" ")).toContain("first question");
+    expect(firstCallParts.map(p => p.text).join(" ")).toContain("second question");
     expect(client.addSessionMessage.mock.calls[1][1]).toBe("assistant");
   });
 
@@ -511,8 +512,9 @@ describe("context-engine afterTurn()", () => {
     expect(client.addSessionMessage.mock.calls[0][1]).toBe("assistant");
     // Two toolResults merged into one user call
     expect(client.addSessionMessage.mock.calls[1][1]).toBe("user");
-    expect(client.addSessionMessage.mock.calls[1][2]).toContain("[read result]:");
-    expect(client.addSessionMessage.mock.calls[1][2]).toContain("[write result]:");
+    const toolParts = (client.addSessionMessage.mock.calls[1][2] as Array<{ tool_output?: string }>).filter(p => p.tool_output);
+    expect(toolParts.map(p => p.tool_output).join(" ")).toContain("[read result]:");
+    expect(toolParts.map(p => p.tool_output).join(" ")).toContain("[write result]:");
     expect(client.addSessionMessage.mock.calls[2][1]).toBe("assistant");
   });
 
@@ -532,8 +534,8 @@ describe("context-engine afterTurn()", () => {
     });
 
     expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
-    const assistantContent = client.addSessionMessage.mock.calls[1][2] as string;
-    expect(assistantContent).toContain("relevant-memories");
+    const assistantParts = client.addSessionMessage.mock.calls[1][2] as Array<{ text?: string }>;
+    expect(assistantParts.map(p => p.text).join(" ")).toContain("relevant-memories");
   });
 
   it("skips heartbeat messages from being stored", async () => {

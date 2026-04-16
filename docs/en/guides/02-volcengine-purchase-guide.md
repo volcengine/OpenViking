@@ -9,7 +9,7 @@ OpenViking requires the following model services:
 | Model Type | Purpose | Recommended Model |
 |------------|---------|-------------------|
 | VLM (Vision Language Model) | Content understanding, semantic generation | `doubao-seed-2-0-pro-260215` |
-| Embedding | Vectorization, semantic retrieval | `doubao-embedding-vision-250615` |
+| Embedding | Vectorization, semantic retrieval | `doubao-embedding-vision-251215` |
 
 ## Prerequisites
 
@@ -82,7 +82,7 @@ Visit: [Model Management Page](https://console.volcengine.com/ark/region:ark+cn-
 <img src="../../images/activate_emb_model.gif" width="80%">
 </div>
 
-After activation, use the model ID: `doubao-embedding-vision-250615`
+After activation, use the model ID: `doubao-embedding-vision-251215`
 
 ## Configure OpenViking
 
@@ -132,7 +132,7 @@ Create an `~/.openviking/ov.conf` file using the following template:
 |-------|------|----------|-------------|
 | `provider` | string | Yes | Model service provider, fill in `"volcengine"` for Volcengine |
 | `api_key` | string | Yes | Volcano Ark API Key |
-| `model` | string | Yes | Model ID, e.g., `doubao-embedding-vision-250615` |
+| `model` | string | Yes | Model ID, e.g., `doubao-embedding-vision-251215` |
 | `api_base` | string | No | API endpoint address, defaults to Beijing region endpoint, see Appendix - Regional Endpoints for details |
 | `dimension` | int | Yes | Vector dimension, depends on the model (usually 1024 or 768) |
 | `input` | string | No | Input type: `"multimodal"` (multimodal) or `"text"` (plain text), default `"multimodal"` |
@@ -155,7 +155,7 @@ Save the following content as `~/.openviking/ov.conf`:
     "dense": {
       "provider": "volcengine",
       "api_key": "sk-1234567890abcdef1234567890abcdef",
-      "model": "doubao-embedding-vision-250615",
+      "model": "doubao-embedding-vision-251215",
       "api_base": "https://ark.cn-beijing.volces.com/api/v3",
       "dimension": 1024,
       "input": "multimodal"
@@ -278,6 +278,6 @@ Error: Connection timeout
 | Model Name | Current Version | Release Date |
 |------------|-----------------|--------------|
 | Doubao-Seed-1.8 | `doubao-seed-2-0-pro-260215` | 2025-12-28 |
-| Doubao-Embedding-Vision | `doubao-embedding-vision-250615` | 2025-06-15 |
+| Doubao-Embedding-Vision | `doubao-embedding-vision-251215` | 2025-06-15 |
 
 > Note: Model versions may be updated, please refer to the Volcano Ark Console for the latest information.
