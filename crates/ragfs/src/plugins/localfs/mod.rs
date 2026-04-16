@@ -180,7 +180,7 @@ impl FileSystem for LocalFileSystem {
         }
     }
 
-    async fn write(&self, path: &str, data: &[u8], offset: u64, flags: WriteFlag) -> Result<u64> {
+    async fn write(&self, path: &str, data: &[u8], offset: u64, _flags: WriteFlag) -> Result<u64> {
         let local_path = self.resolve_path(path);
 
         // Check if it's a directory
@@ -195,16 +195,19 @@ impl FileSystem for LocalFileSystem {
             }
         }
 
-        // Determine if we should truncate based on flags
-        let should_truncate = matches!(flags, WriteFlag::Create | WriteFlag::Truncate);
-
-        // Open or create file with truncate support
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(should_truncate)
-            .open(&local_path)
-            .map_err(|e| Error::plugin(format!("failed to open file: {}", e)))?;
+        // Open or create file
+        let mut file = if local_path.exists() {
+            fs::OpenOptions::new()
+                .write(true)
+                .open(&local_path)
+                .map_err(|e| Error::plugin(format!("failed to open file: {}", e)))?
+        } else {
+            fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .open(&local_path)
+                .map_err(|e| Error::plugin(format!("failed to create file: {}", e)))?
+        };
 
         // Write data
         use std::io::{Seek, SeekFrom, Write};
@@ -457,48 +460,5 @@ VERSION: 1.0.0
 
     fn config_params(&self) -> &[ConfigParameter] {
         &self.config_params
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
-
-    #[tokio::test]
-    async fn write_create_truncates_existing_file() {
-        let dir = tempdir().unwrap();
-        let fs = LocalFileSystem::new(dir.path().to_str().unwrap()).unwrap();
-
-        fs.write(
-            "/messages.jsonl",
-            b"large stale transcript",
-            0,
-            WriteFlag::Create,
-        )
-        .await
-        .unwrap();
-        fs.write("/messages.jsonl", b"\n", 0, WriteFlag::Create)
-            .await
-            .unwrap();
-
-        let data = fs.read("/messages.jsonl", 0, 0).await.unwrap();
-        assert_eq!(data, b"\n");
-    }
-
-    #[tokio::test]
-    async fn write_none_preserves_tail_when_overwriting_shorter_content() {
-        let dir = tempdir().unwrap();
-        let fs = LocalFileSystem::new(dir.path().to_str().unwrap()).unwrap();
-
-        fs.write("/partial.txt", b"abcdef", 0, WriteFlag::Create)
-            .await
-            .unwrap();
-        fs.write("/partial.txt", b"XY", 0, WriteFlag::None)
-            .await
-            .unwrap();
-
-        let data = fs.read("/partial.txt", 0, 0).await.unwrap();
-        assert_eq!(data, b"XYcdef");
     }
 }

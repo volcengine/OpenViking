@@ -99,12 +99,6 @@ class TestCommit:
         assert result.get("archived") is True
         # Current message list should be cleared after commit
         assert len(session_with_messages.messages) == 0
-        live_messages = await session_with_messages._viking_fs.read_file(
-            f"viking://session/{session_with_messages.user.user_space_name()}/"
-            f"{session_with_messages.session_id}/messages.jsonl",
-            ctx=session_with_messages.ctx,
-        )
-        assert live_messages.strip() == ""
 
     async def test_commit_empty_session(self, session: Session):
         """Test committing empty session"""
@@ -289,60 +283,6 @@ class TestCommit:
         memory_task = await _wait_for_memory_task(commit_task)
         assert memory_task is not None
         assert memory_task["status"] == "completed"
-
-    async def test_commit_falls_back_when_archive_summary_llm_times_out(
-        self, client: AsyncOpenViking, monkeypatch: pytest.MonkeyPatch
-    ):
-        """Archive readiness should not depend on a responsive LLM summary backend."""
-        session = client.session(session_id="summary_timeout_uses_fallback")
-        session._session_compressor.extract_long_term_memories = _no_memories
-
-        class HangingVLM:
-            def is_available(self):
-                return True
-
-            async def get_completion_async(self, *args, **kwargs):
-                del args, kwargs
-                await asyncio.sleep(60)
-                return "unreachable"
-
-        class Config:
-            vlm = HangingVLM()
-
-        monkeypatch.setattr(
-            "openviking.session.session._ARCHIVE_SUMMARY_TIMEOUT_SECONDS",
-            0.01,
-        )
-        monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: Config())
-
-        large_blob = "A" * 20_000
-        session.add_message(
-            "user",
-            [TextPart(f"Please analyze this image payload data:image/png;base64,{large_blob}")],
-        )
-
-        result = await session.commit_async()
-        commit_task = await _wait_for_task(result["task_id"])
-
-        assert commit_task["status"] == "completed"
-        assert commit_task["result"]["archive_ready"] is True
-
-        overview = await session._viking_fs.read_file(
-            f"{result['archive_uri']}/.overview.md",
-            ctx=session.ctx,
-        )
-        meta_content = await session._viking_fs.read_file(
-            f"{result['archive_uri']}/.meta.json",
-            ctx=session.ctx,
-        )
-        meta = json.loads(meta_content)
-
-        assert "Fallback archive summary" in overview
-        assert "[large data URL omitted]" in overview
-        assert large_blob not in overview
-        assert len(overview) <= 16_000
-        assert meta["summary_mode"] == "fallback"
-        assert meta["summary_fallback_reason"] == "llm_timeout_0.01s"
 
     async def test_memory_followup_failure_does_not_block_next_commit(
         self, client: AsyncOpenViking

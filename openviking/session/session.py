@@ -29,13 +29,6 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 _ARCHIVE_WAIT_POLL_SECONDS = 0.1
-_ARCHIVE_SUMMARY_TIMEOUT_SECONDS = 15.0
-_ARCHIVE_SUMMARY_INPUT_CHAR_LIMIT = 80_000
-_ARCHIVE_SUMMARY_MESSAGE_CHAR_LIMIT = 4_000
-_ARCHIVE_FALLBACK_SUMMARY_CHAR_LIMIT = 16_000
-_ARCHIVE_RECENT_MESSAGE_LIMIT = 24
-_DATA_URL_RE = re.compile(r"data:[^;,\s]+;base64,[A-Za-z0-9+/=\s]{128,}")
-_BASE64_BLOB_RE = re.compile(r"\b[A-Za-z0-9+/]{2048,}={0,2}\b")
 
 
 @dataclass
@@ -182,7 +175,6 @@ class Session:
 
         self._messages: List[Message] = []
         self._usage_records: List[Usage] = []
-        self._last_archive_summary_fallback_reason = ""
         self._compression: SessionCompression = SessionCompression()
         self._stats: SessionStats = SessionStats()
         self._meta = SessionMeta(session_id=self.session_id, created_at=get_current_timestamp())
@@ -248,7 +240,7 @@ class Session:
         if await self.exists():
             return
         await self._viking_fs.mkdir(self._session_uri, exist_ok=True, ctx=self.ctx)
-        await self._viking_fs.write_file(f"{self._session_uri}/messages.jsonl", "\n", ctx=self.ctx)
+        await self._viking_fs.write_file(f"{self._session_uri}/messages.jsonl", "", ctx=self.ctx)
         await self._save_meta()
 
     async def _save_meta(self) -> None:
@@ -548,14 +540,6 @@ class Session:
                             {
                                 "overview_tokens": -(-len(summary) // 4),
                                 "abstract_tokens": -(-len(abstract) // 4),
-                                "summary_mode": (
-                                    "fallback"
-                                    if self._last_archive_summary_fallback_reason
-                                    else "llm"
-                                ),
-                                "summary_fallback_reason": (
-                                    self._last_archive_summary_fallback_reason or ""
-                                ),
                             }
                         ),
                         ctx=self.ctx,
@@ -1253,24 +1237,10 @@ class Session:
         latest_archive_overview: str = "",
     ) -> str:
         """Generate structured summary for archive."""
-        return run_async(
-            self._generate_archive_summary_async(
-                messages,
-                latest_archive_overview=latest_archive_overview,
-            )
-        )
-
-    async def _generate_archive_summary_async(
-        self,
-        messages: List[Message],
-        latest_archive_overview: str = "",
-    ) -> str:
-        """Generate structured summary for archive (async)."""
         if not messages:
             return ""
 
-        self._last_archive_summary_fallback_reason = ""
-        formatted = self._format_messages_for_archive_summary(messages)
+        formatted = "\n".join([f"[{m.role}]: {m.content}" for m in messages])
 
         vlm = get_openviking_config().vlm
         if vlm and vlm.is_available():
@@ -1284,128 +1254,42 @@ class Session:
                         "latest_archive_overview": latest_archive_overview,
                     },
                 )
-                return await asyncio.wait_for(
-                    vlm.get_completion_async(prompt),
-                    timeout=_ARCHIVE_SUMMARY_TIMEOUT_SECONDS,
-                )
-            except asyncio.TimeoutError:
-                reason = f"llm_timeout_{_ARCHIVE_SUMMARY_TIMEOUT_SECONDS:g}s"
-                logger.warning(f"LLM summary timed out after {_ARCHIVE_SUMMARY_TIMEOUT_SECONDS:g}s")
-                return self._generate_fallback_archive_summary(
-                    messages,
-                    latest_archive_overview=latest_archive_overview,
-                    reason=reason,
-                )
+                return run_async(vlm.get_completion_async(prompt))
             except Exception as e:
                 logger.warning(f"LLM summary failed: {e}")
-                return self._generate_fallback_archive_summary(
-                    messages,
-                    latest_archive_overview=latest_archive_overview,
-                    reason=f"llm_error_{type(e).__name__}",
-                )
 
-        return self._generate_fallback_archive_summary(
-            messages,
-            latest_archive_overview=latest_archive_overview,
-            reason="vlm_unavailable",
-        )
+        turn_count = len([m for m in messages if m.role == "user"])
+        return f"# Session Summary\n\n**Overview**: {turn_count} turns, {len(messages)} messages"
 
-    def _format_messages_for_archive_summary(self, messages: List[Message]) -> str:
-        lines: List[str] = []
-        remaining = _ARCHIVE_SUMMARY_INPUT_CHAR_LIMIT
-
-        for message in messages:
-            if remaining <= 0:
-                break
-
-            text = self._sanitize_archive_message_text(message.content)
-            if len(text) > _ARCHIVE_SUMMARY_MESSAGE_CHAR_LIMIT:
-                text = f"{text[:_ARCHIVE_SUMMARY_MESSAGE_CHAR_LIMIT]} [truncated]"
-
-            line = f"[{message.role}]: {text}"
-            if len(line) > remaining:
-                line = f"{line[:remaining]} [truncated]"
-            lines.append(line)
-            remaining -= len(line) + 1
-
-        if len(messages) > len(lines):
-            lines.append(f"[system]: {len(messages) - len(lines)} messages omitted for summary input cap")
-
-        return "\n".join(lines)
-
-    def _generate_fallback_archive_summary(
+    async def _generate_archive_summary_async(
         self,
         messages: List[Message],
         latest_archive_overview: str = "",
-        reason: str = "fallback",
     ) -> str:
-        self._last_archive_summary_fallback_reason = reason
-
-        role_counts: Dict[str, int] = {}
-        tool_parts = 0
-        context_parts = 0
-        omitted_blobs = 0
-        for message in messages:
-            role_counts[message.role] = role_counts.get(message.role, 0) + 1
-            tool_parts += len(message.get_tool_parts())
-            context_parts += len(message.get_context_parts())
-            omitted_blobs += self._count_omitted_archive_blobs(message.content)
-
-        user_turns = role_counts.get("user", 0)
-        lines = [
-            "# Session Summary",
-            "",
-            (
-                f"**Overview**: Fallback archive summary for {user_turns} user turns "
-                f"and {len(messages)} total messages."
-            ),
-            "",
-            "**Fallback Reason**: " + reason,
-            "",
-            "**Stats**:",
-            f"- User messages: {role_counts.get('user', 0)}",
-            f"- Assistant messages: {role_counts.get('assistant', 0)}",
-            f"- Tool parts: {tool_parts}",
-            f"- Context refs: {context_parts}",
-            f"- Large attachment/blob markers omitted: {omitted_blobs}",
-        ]
-
-        if latest_archive_overview:
-            previous = self._clip_text(
-                self._sanitize_archive_message_text(latest_archive_overview),
-                2_000,
-            )
-            lines.extend(["", "**Previous Archive Context**:", previous])
-
-        recent = messages[-_ARCHIVE_RECENT_MESSAGE_LIMIT:]
-        lines.extend(["", "**Recent Text-Bearing Turns**:"])
-        for message in recent:
-            text = self._clip_text(self._sanitize_archive_message_text(message.content), 700)
-            if text:
-                lines.append(f"- [{message.role}] {text}")
-
-        summary = "\n".join(lines)
-        return self._clip_text(summary, _ARCHIVE_FALLBACK_SUMMARY_CHAR_LIMIT)
-
-    @staticmethod
-    def _sanitize_archive_message_text(text: str) -> str:
-        if not text:
+        """Generate structured summary for archive (async)."""
+        if not messages:
             return ""
-        sanitized = _DATA_URL_RE.sub("[large data URL omitted]", text)
-        sanitized = _BASE64_BLOB_RE.sub("[large encoded blob omitted]", sanitized)
-        return re.sub(r"\s+", " ", sanitized).strip()
 
-    @staticmethod
-    def _count_omitted_archive_blobs(text: str) -> int:
-        if not text:
-            return 0
-        return len(_DATA_URL_RE.findall(text)) + len(_BASE64_BLOB_RE.findall(text))
+        formatted = "\n".join([f"[{m.role}]: {m.content}" for m in messages])
 
-    @staticmethod
-    def _clip_text(text: str, limit: int) -> str:
-        if len(text) <= limit:
-            return text
-        return f"{text[: max(0, limit - 14)]} [truncated]"
+        vlm = get_openviking_config().vlm
+        if vlm and vlm.is_available():
+            try:
+                from openviking.prompts import render_prompt
+
+                prompt = render_prompt(
+                    "compression.structured_summary",
+                    {
+                        "messages": formatted,
+                        "latest_archive_overview": latest_archive_overview,
+                    },
+                )
+                return await vlm.get_completion_async(prompt)
+            except Exception as e:
+                logger.warning(f"LLM summary failed: {e}")
+
+        turn_count = len([m for m in messages if m.role == "user"])
+        return f"# Session Summary\n\n**Overview**: {turn_count} turns, {len(messages)} messages"
 
     def _write_archive(
         self,
@@ -1446,17 +1330,21 @@ class Session:
             return
 
         viking_fs = self._viking_fs
-        messages_uri = f"{self._session_uri}/messages.jsonl"
         turn_count = len([m for m in messages if m.role == "user"])
 
         abstract = self._generate_abstract()
         overview = self._generate_overview(turn_count)
 
         lines = [m.to_jsonl() for m in messages]
-        content = "\n".join(lines) + "\n" if lines else "\n"
+        content = "\n".join(lines) + "\n" if lines else ""
 
-        write_messages = viking_fs.replace_file if not lines else viking_fs.write_file
-        run_async(write_messages(uri=messages_uri, content=content, ctx=self.ctx))
+        run_async(
+            viking_fs.write_file(
+                uri=f"{self._session_uri}/messages.jsonl",
+                content=content,
+                ctx=self.ctx,
+            )
+        )
 
         # Update L0/L1
         run_async(
@@ -1480,17 +1368,19 @@ class Session:
             return
 
         viking_fs = self._viking_fs
-        messages_uri = f"{self._session_uri}/messages.jsonl"
         turn_count = len([m for m in messages if m.role == "user"])
 
         abstract = self._generate_abstract()
         overview = self._generate_overview(turn_count)
 
         lines = [m.to_jsonl() for m in messages]
-        content = "\n".join(lines) + "\n" if lines else "\n"
+        content = "\n".join(lines) + "\n" if lines else ""
 
-        write_messages = viking_fs.replace_file if not lines else viking_fs.write_file
-        await write_messages(uri=messages_uri, content=content, ctx=self.ctx)
+        await viking_fs.write_file(
+            uri=f"{self._session_uri}/messages.jsonl",
+            content=content,
+            ctx=self.ctx,
+        )
         await viking_fs.write_file(
             uri=f"{self._session_uri}/.abstract.md",
             content=abstract,
@@ -1520,9 +1410,14 @@ class Session:
             return
 
         lines = [m.to_jsonl() for m in self._messages]
-        content = "\n".join(lines) + "\n" if lines else "\n"
-        write_messages = self._viking_fs.replace_file if not lines else self._viking_fs.write_file
-        run_async(write_messages(f"{self._session_uri}/messages.jsonl", content, ctx=self.ctx))
+        content = "\n".join(lines) + "\n"
+        run_async(
+            self._viking_fs.write_file(
+                f"{self._session_uri}/messages.jsonl",
+                content,
+                ctx=self.ctx,
+            )
+        )
 
     def _save_tool_result(
         self,

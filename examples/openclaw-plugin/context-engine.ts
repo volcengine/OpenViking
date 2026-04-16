@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import type { OpenVikingClient, OVMessage } from "./client.js";
 import type { MemoryOpenVikingConfig } from "./config.js";
 import {
@@ -133,11 +132,6 @@ type RecallRefreshRequest = {
 
 const MAX_RECALL_CACHE_ENTRIES = 256;
 const MAX_SESSION_RECALL_ENTRIES = 128;
-const LOCAL_COMPACTION_SUMMARY_CHAR_LIMIT = 16_000;
-const LOCAL_COMPACTION_RECENT_ENTRY_LIMIT = 24;
-const LOCAL_COMPACTION_ENTRY_CHAR_LIMIT = 700;
-const DATA_URL_RE = /data:[^;,\s]+;base64,[A-Za-z0-9+/=\s]{128,}/g;
-const BASE64_BLOB_RE = /\b[A-Za-z0-9+/]{2048,}={0,2}\b/g;
 
 function pruneOldestEntries<K, V>(map: Map<K, V>, maxEntries: number): void {
   while (map.size > maxEntries) {
@@ -155,144 +149,6 @@ function estimateTokens(messages: AgentMessage[]): number {
 
 function roughEstimate(messages: AgentMessage[]): number {
   return Math.ceil(JSON.stringify(messages).length / 4);
-}
-
-function sanitizeCompactionText(text: string): { text: string; omittedBlobs: number } {
-  let omittedBlobs = 0;
-  const withoutDataUrls = text.replace(DATA_URL_RE, () => {
-    omittedBlobs += 1;
-    return "[large data URL omitted]";
-  });
-  const withoutBlobs = withoutDataUrls.replace(BASE64_BLOB_RE, () => {
-    omittedBlobs += 1;
-    return "[large encoded blob omitted]";
-  });
-  return {
-    text: withoutBlobs.replace(/\s+/g, " ").trim(),
-    omittedBlobs,
-  };
-}
-
-function clipText(text: string, limit: number): string {
-  if (text.length <= limit) return text;
-  return `${text.slice(0, Math.max(0, limit - 14))} [truncated]`;
-}
-
-function extractTextSamples(value: unknown, samples: string[], stats: { images: number }): void {
-  if (typeof value === "string") {
-    if (value.trim()) samples.push(value);
-    return;
-  }
-  if (!value || typeof value !== "object") return;
-  if (Array.isArray(value)) {
-    for (const item of value) extractTextSamples(item, samples, stats);
-    return;
-  }
-
-  const record = value as Record<string, unknown>;
-  const type = typeof record.type === "string" ? record.type.toLowerCase() : "";
-  if (type.includes("image") || record.image_url || record.imageUrl) {
-    stats.images += 1;
-  }
-
-  for (const key of ["text", "content", "message", "output", "tool_output", "toolOutput"]) {
-    if (key in record) extractTextSamples(record[key], samples, stats);
-  }
-}
-
-function extractEntryRole(entry: unknown): string {
-  if (!entry || typeof entry !== "object") return "unknown";
-  const record = entry as Record<string, unknown>;
-  if (typeof record.role === "string") return record.role;
-  const message = record.message;
-  if (message && typeof message === "object") {
-    const messageRole = (message as Record<string, unknown>).role;
-    if (typeof messageRole === "string") return messageRole;
-  }
-  return "unknown";
-}
-
-function summarizeTranscriptEntries(
-  entries: unknown[],
-  reason: string,
-  sessionId: string,
-  readError?: string,
-): string {
-  const roleCounts = new Map<string, number>();
-  const recent: string[] = [];
-  let omittedBlobs = 0;
-  const stats = { images: 0 };
-
-  for (const entry of entries) {
-    const role = extractEntryRole(entry);
-    roleCounts.set(role, (roleCounts.get(role) ?? 0) + 1);
-
-    const samples: string[] = [];
-    extractTextSamples(entry, samples, stats);
-    const joined = samples.join(" ");
-    if (!joined.trim()) continue;
-
-    const sanitized = sanitizeCompactionText(joined);
-    omittedBlobs += sanitized.omittedBlobs;
-    const clipped = clipText(sanitized.text, LOCAL_COMPACTION_ENTRY_CHAR_LIMIT);
-    if (clipped) recent.push(`- [${role}] ${clipped}`);
-    if (recent.length > LOCAL_COMPACTION_RECENT_ENTRY_LIMIT) recent.shift();
-  }
-
-  const lines = [
-    "# Session Summary",
-    "",
-    `**Overview**: Local fallback compaction summary for session ${sessionId}.`,
-    "",
-    `**Fallback Reason**: ${reason}`,
-    "",
-    "**Stats**:",
-    `- Transcript entries: ${entries.length}`,
-    `- User entries: ${roleCounts.get("user") ?? 0}`,
-    `- Assistant entries: ${roleCounts.get("assistant") ?? 0}`,
-    `- Image-like parts: ${stats.images}`,
-    `- Large attachment/blob markers omitted: ${omittedBlobs}`,
-  ];
-
-  if (readError) {
-    lines.push(`- Transcript read error: ${readError}`);
-  }
-
-  lines.push("", "**Recent Text-Bearing Entries**:");
-  lines.push(...(recent.length > 0 ? recent : ["- No readable text entries were available."]));
-
-  return clipText(lines.join("\n"), LOCAL_COMPACTION_SUMMARY_CHAR_LIMIT);
-}
-
-async function buildLocalCompactionFallbackSummary(params: {
-  sessionFile: string;
-  reason: string;
-  sessionId: string;
-}): Promise<{ summary: string; estimatedTokens: number; readError?: string }> {
-  if (!params.sessionFile) {
-    const summary = summarizeTranscriptEntries([], params.reason, params.sessionId, "missing sessionFile");
-    return { summary, estimatedTokens: Math.ceil(summary.length / 4), readError: "missing sessionFile" };
-  }
-
-  try {
-    const raw = await readFile(params.sessionFile, "utf8");
-    const entries = raw.split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => {
-        try {
-          return JSON.parse(line) as unknown;
-        } catch {
-          return line;
-        }
-      });
-    const summary = summarizeTranscriptEntries(entries, params.reason, params.sessionId);
-    return { summary, estimatedTokens: Math.ceil(summary.length / 4) };
-  } catch (err) {
-    const readError = String(err);
-    const summary = summarizeTranscriptEntries([], params.reason, params.sessionId, readError);
-    return { summary, estimatedTokens: Math.ceil(summary.length / 4), readError };
-  }
 }
 
 function msgTokenEstimate(msg: AgentMessage): number {
@@ -1493,44 +1349,6 @@ export function createMemoryOpenVikingContextEngine(params: {
       }
 
       const tokensBefore = tokensBeforeOriginal ?? preCommitEstimatedTokens ?? -1;
-      const localFallback = async (
-        reason: string,
-        details: Record<string, unknown>,
-      ): Promise<CompactResult> => {
-        const fallback = await buildLocalCompactionFallbackSummary({
-          sessionFile: compactParams.sessionFile,
-          reason,
-          sessionId: OVSessionId,
-        });
-        const tokensAfter = fallback.estimatedTokens;
-        logger.info(
-          `openviking: compact using local fallback session=${OVSessionId}, ` +
-            `reason=${reason}, tokensBefore=${tokensBefore}, tokensAfter=${tokensAfter}`,
-        );
-        diag("compact_result", OVSessionId, {
-          ok: true,
-          compacted: true,
-          reason,
-          tokensBefore,
-          tokensAfter,
-          fallbackReadError: fallback.readError ?? null,
-        });
-        return {
-          ok: true,
-          compacted: true,
-          reason,
-          result: {
-            summary: fallback.summary,
-            firstKeptEntryId: "local-fallback",
-            tokensBefore,
-            tokensAfter,
-            details: {
-              ...details,
-              fallbackReadError: fallback.readError,
-            },
-          },
-        };
-      };
 
       try {
         logger.info(
@@ -1553,10 +1371,20 @@ export function createMemoryOpenVikingContextEngine(params: {
             taskId: commitResult.task_id ?? null,
             error: commitResult.error ?? null,
           });
-          return await localFallback("local_fallback_after_commit_failed", {
-            commit: commitResult,
-            originalReason: "commit_failed",
-          });
+          return {
+            ok: false,
+            compacted: false,
+            reason: "commit_failed",
+            result: {
+              summary: "",
+              firstKeptEntryId: "",
+              tokensBefore: tokensBefore,
+              tokensAfter: undefined,
+              details: {
+                commit: commitResult,
+              },
+            },
+          };
         }
 
         if (commitResult.status === "timeout") {
@@ -1572,10 +1400,20 @@ export function createMemoryOpenVikingContextEngine(params: {
             archived: commitResult.archived ?? false,
             taskId: commitResult.task_id ?? null,
           });
-          return await localFallback("local_fallback_after_commit_timeout", {
-            commit: commitResult,
-            originalReason: "commit_timeout",
-          });
+          return {
+            ok: false,
+            compacted: false,
+            reason: "commit_timeout",
+            result: {
+              summary: "",
+              firstKeptEntryId: "",
+              tokensBefore: tokensBefore,
+              tokensAfter: undefined,
+              details: {
+                commit: commitResult,
+              },
+            },
+          };
         }
 
         logger.info(
@@ -1679,10 +1517,20 @@ export function createMemoryOpenVikingContextEngine(params: {
         diag("compact_error", OVSessionId, {
           error: String(err),
         });
-        return await localFallback("local_fallback_after_commit_error", {
-          error: String(err),
-          originalReason: "commit_error",
-        });
+        return {
+          ok: false,
+          compacted: false,
+          reason: "commit_error",
+          result: {
+            summary: "",
+            firstKeptEntryId: "",
+            tokensBefore: tokensBefore,
+            tokensAfter: undefined,
+            details: {
+              error: String(err),
+            },
+          },
+        };
       }
     },
   };

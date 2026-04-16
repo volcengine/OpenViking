@@ -1,7 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 
 import type { OpenVikingClient } from "../../client.js";
 import { memoryOpenVikingConfigSchema } from "../../config.js";
@@ -236,7 +233,7 @@ describe("context-engine compact()", () => {
     expect(result.reason).toBe("commit_no_archive");
   });
 
-  it("uses local fallback when commit status is 'failed'", async () => {
+  it("returns ok=false when commit status is 'failed'", async () => {
     const { engine, logger } = makeEngine({
       status: "failed",
       error: "extraction pipeline error",
@@ -248,16 +245,15 @@ describe("context-engine compact()", () => {
       sessionFile: "",
     });
 
-    expect(result.ok).toBe(true);
-    expect(result.compacted).toBe(true);
-    expect(result.reason).toBe("local_fallback_after_commit_failed");
-    expect(result.result?.summary).toContain("Local fallback compaction summary");
+    expect(result.ok).toBe(false);
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toBe("commit_failed");
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("Phase 2 failed"),
     );
   });
 
-  it("uses local fallback when commit status is 'timeout'", async () => {
+  it("returns ok=false when commit status is 'timeout'", async () => {
     const { engine, logger } = makeEngine({
       status: "timeout",
       task_id: "task-4",
@@ -268,54 +264,12 @@ describe("context-engine compact()", () => {
       sessionFile: "",
     });
 
-    expect(result.ok).toBe(true);
-    expect(result.compacted).toBe(true);
-    expect(result.reason).toBe("local_fallback_after_commit_timeout");
-    expect(result.result?.firstKeptEntryId).toBe("local-fallback");
+    expect(result.ok).toBe(false);
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toBe("commit_timeout");
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("Phase 2 timed out"),
     );
-  });
-
-  it("local fallback strips large transcript payloads", async () => {
-    const { engine } = makeEngine({
-      status: "timeout",
-      task_id: "task-large",
-    });
-    const dir = await mkdtemp(join(tmpdir(), "openviking-plugin-"));
-    const sessionFile = join(dir, "session.jsonl");
-    const largeBlob = "A".repeat(20_000);
-    const transcript = [
-      {
-        role: "user",
-        content: [
-          {
-            type: "input_text",
-            text: `Please inspect this image data:image/png;base64,${largeBlob}`,
-          },
-          { type: "input_image", image_url: `data:image/png;base64,${largeBlob}` },
-        ],
-      },
-    ].map((entry) => JSON.stringify(entry)).join("\n");
-
-    try {
-      await writeFile(sessionFile, transcript);
-
-      const result = await engine.compact({
-        sessionId: "s-large",
-        sessionFile,
-      });
-
-      expect(result.ok).toBe(true);
-      expect(result.compacted).toBe(true);
-      expect(result.reason).toBe("local_fallback_after_commit_timeout");
-      expect(result.result?.summary).toContain("[large data URL omitted]");
-      expect(result.result?.summary).not.toContain(largeBlob);
-      expect((result.result?.summary ?? "").length).toBeLessThanOrEqual(16_000);
-      expect(result.result?.tokensAfter).toBeLessThan(10_000);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
   });
 
   it("commit passes wait=true for synchronous extraction", async () => {
@@ -401,7 +355,7 @@ describe("context-engine compact()", () => {
     });
   });
 
-  it("uses local fallback when commit throws", async () => {
+  it("returns ok=false with reason=commit_error when commit throws", async () => {
     const { engine, logger } = makeEngine(null, {
       throwError: new Error("network unreachable"),
     });
@@ -411,9 +365,9 @@ describe("context-engine compact()", () => {
       sessionFile: "",
     });
 
-    expect(result.ok).toBe(true);
-    expect(result.compacted).toBe(true);
-    expect(result.reason).toBe("local_fallback_after_commit_error");
+    expect(result.ok).toBe(false);
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toBe("commit_error");
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("commit failed"),
     );

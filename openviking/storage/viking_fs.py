@@ -1635,38 +1635,6 @@ class VikingFS:
         content = await self._encrypt_content(content, ctx=ctx)
         self.agfs.write(path, content)
 
-    async def replace_file(
-        self,
-        uri: str,
-        content: Union[str, bytes],
-        ctx: Optional[RequestContext] = None,
-    ) -> None:
-        """Replace file contents with truncate semantics.
-
-        Some AGFS backends do not truncate stale bytes when writing shorter
-        content, so callers that must clear a file should remove it first.
-        """
-        self._ensure_access(uri, ctx)
-        path = self._uri_to_path(uri, ctx=ctx)
-        await self._ensure_parent_dirs(path)
-
-        if isinstance(content, str):
-            content = content.encode("utf-8")
-
-        content = await self._encrypt_content(content, ctx=ctx)
-
-        try:
-            self.agfs.stat(path)
-        except (AGFSClientError, RuntimeError) as exc:
-            # The in-process Rust AGFS binding currently reports missing paths
-            # as RuntimeError, while the HTTP client reports AGFSClientError.
-            if "not found" not in str(exc).lower():
-                raise
-        else:
-            self.agfs.rm(path)
-
-        self.agfs.write(path, content)
-
     async def read_file(
         self,
         uri: str,
