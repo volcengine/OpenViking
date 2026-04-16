@@ -21,11 +21,13 @@ class _DummyEventCollector(EventMetricCollector):
         self.seen: list[tuple[str, str]] = []
 
     def receive_hook(self, event_name: str, payload: dict, registry) -> None:
-        self.seen.append((
-            str(event_name),
-            str(payload["value"]),
-            registry.collector_name() if hasattr(registry, "collector_name") else "registry",
-        ))
+        self.seen.append(
+            (
+                str(event_name),
+                str(payload["value"]),
+                registry.collector_name() if hasattr(registry, "collector_name") else "registry",
+            )
+        )
 
 
 def test_event_metric_collector_uses_supported_events_and_receive_hook(registry):
