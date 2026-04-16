@@ -108,18 +108,18 @@ struct Cli {
     command: Commands,
 }
 
-/// Commands are organized with category tags in their doc comments.
-///
-/// # Command Tagging System
-///
-/// Tags are added at the beginning of command doc comments, e.g.:
-/// - `[Data]` - Data operations category
-/// - `[Interactive]` - Interactive tools category
-/// - `[Status]` - Status & observability category
-/// - `[Admin]` - Admin tools category
-/// - `[Experimental]` - Experimental/preview features (API may change)
-///
-/// Some tags can be combined, e.g. `[Experimental][Data]`
+// Commands are organized with category tags in their doc comments.
+//
+// # Command Tagging System
+//
+// Tags are added at the beginning of command doc comments, e.g.:
+// - `[Data]` - Data operations category
+// - `[Interactive]` - Interactive tools category
+// - `[Status]` - Status & observability category
+// - `[Admin]` - Admin tools category
+// - `[Experimental]` - Experimental/preview features (API may change)
+//
+// Some tags can be combined, e.g. `[Experimental][Data]`
 #[derive(Subcommand)]
 enum Commands {
     // --- Data Operations ---
