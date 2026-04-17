@@ -950,14 +950,17 @@ class FeishuChannel(BaseChannel):
             if hasattr(message, 'mentions') and message.mentions:
                 for idx, mention in enumerate(message.mentions):
                     placeholder = f"@_user_{idx + 1}"
-                    if hasattr(mention, 'id') and mention.id and placeholder in content:
-                        # mention.id 是 UserId 对象，直接取 open_id
-                        user_id = mention.id.open_id
-                        # 保存 name 供后续使用
-                        if hasattr(mention, 'name') and mention.name:
-                            mention_name_map[user_id] = mention.name
-                        # 先替换成 @open_id 格式
-                        content = content.replace(placeholder, f"@{user_id}")
+
+                    # 检查必要的字段是否存在
+                    if not hasattr(mention, 'id') or not mention.id or placeholder not in content:
+                        continue
+                    user_id = mention.id.open_id
+                    mention_name = mention.name if hasattr(mention, 'name') else None
+                    is_self_bot = mention_name and mention_name == self.config.bot_name
+                    content = content.replace(placeholder, f"@{user_id}")
+                    if not is_self_bot and mention_name:
+                        mention_name_map[user_id] = mention_name
+            # 兜底：如果还有没替换的占位符，用 sender_id 替换
             if "@_user_" in content:
                 content = MENTION_PATTERN.sub(f"@{sender_id}", content)
 
