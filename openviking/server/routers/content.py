@@ -45,6 +45,34 @@ class WriteContentRequest(BaseModel):
     telemetry: TelemetryRequest = False
 
 
+class BatchWriteItem(BaseModel):
+    """A single file entry in a batch write request."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    uri: str
+    content: str
+    mode: str = "replace"
+
+
+class BatchWriteContentRequest(BaseModel):
+    """Request to write multiple memory files under the same category
+    directory in a single operation.
+
+    All files must resolve to the same ``root_uri``. The server acquires
+    the subtree lock once and triggers a single directory-level semantic
+    refresh for the whole batch, eliminating redundant overview LLM calls
+    and lock-cycle overhead compared with N sequential ``/write`` calls.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    files: list[BatchWriteItem]
+    wait: bool = False
+    timeout: float | None = None
+    telemetry: TelemetryRequest = False
+
+
 router = APIRouter(prefix="/api/v1/content", tags=["content"])
 
 
@@ -173,6 +201,56 @@ async def write(
             content=request.content,
             ctx=_ctx,
             mode=request.mode,
+            wait=request.wait,
+            timeout=request.timeout,
+        ),
+    )
+    return Response(
+        status="ok",
+        result=execution.result,
+        telemetry=execution.telemetry,
+    ).model_dump(exclude_none=True)
+
+
+@router.post("/write-batch")
+async def write_batch(
+    request: BatchWriteContentRequest = Body(...),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Write multiple memory files under the same category directory in a
+    single operation.
+
+    All files must resolve to the same ``root_uri``. The server acquires
+    the subtree lock once, writes every file in place, vectorizes each
+    leaf file independently, then enqueues **one** semantic refresh
+    message covering the entire batch. The final
+    ``.abstract.md`` / ``.overview.md`` produced for the directory is
+    identical to the output of N sequential ``/write`` calls, but with
+    only 1 overview LLM call and 1 directory-level embedding round-trip
+    instead of N.
+
+    Use case: bulk memory import (e.g. migrating conversation history
+    from another agent system).
+
+    Constraints:
+
+    - ``files`` must be non-empty (max 100 entries, max 10 MB total).
+    - All files must be memory URIs under the same ``root_uri``.
+    - Duplicate URIs in the same batch are rejected.
+    - Best-effort per-file processing: individual failures are recorded
+      in the ``files`` response array without aborting the batch; the
+      semantic refresh only covers successful writes.
+    - ``wait=True`` blocks until the semantic refresh and its embedding
+      jobs complete (same semantics as ``/write``).
+    """
+    service = get_service()
+    files_tuple = [(f.uri, f.content, f.mode) for f in request.files]
+    execution = await run_operation(
+        operation="content.write_batch",
+        telemetry=request.telemetry,
+        fn=lambda: service.fs.write_batch(
+            files=files_tuple,
+            ctx=_ctx,
             wait=request.wait,
             timeout=request.timeout,
         ),

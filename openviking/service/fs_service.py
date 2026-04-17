@@ -249,3 +249,23 @@ class FSService:
             wait=wait,
             timeout=timeout,
         )
+
+    async def write_batch(
+        self,
+        files: List[tuple],  # list of (uri, content, mode)
+        ctx: RequestContext,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Write multiple memory files under the same category directory in
+        a single operation with one shared semantic refresh. See
+        ``ContentWriteCoordinator.write_batch`` for full semantics.
+        """
+        viking_fs = self._ensure_initialized()
+        coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
+        return await coordinator.write_batch(
+            files=files,
+            ctx=ctx,
+            wait=wait,
+            timeout=timeout,
+        )

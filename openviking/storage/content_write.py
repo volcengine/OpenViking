@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
@@ -264,10 +264,17 @@ class ContentWriteCoordinator:
         self,
         *,
         root_uri: str,
-        modified_uri: str,
+        modified_uris: List[str],
         ctx: RequestContext,
         lifecycle_lock_handle_id: str,
     ) -> None:
+        """Enqueue a semantic refresh covering one or more files under the
+        same ``root_uri``. The semantic worker treats ``changes.modified`` as
+        a set of files needing fresh per-file summaries (see
+        semantic_processor:475), so packing N URIs into one message produces
+        the same end state as N separate messages — with only one overview
+        LLM call and one directory-level embedding round-trip.
+        """
         queue_manager = get_queue_manager()
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
         telemetry = get_current_telemetry()
@@ -281,7 +288,7 @@ class ContentWriteCoordinator:
             skip_vectorization=False,
             telemetry_id=telemetry.telemetry_id,
             lifecycle_lock_handle_id=lifecycle_lock_handle_id,
-            changes={"modified": [modified_uri]},
+            changes={"modified": list(modified_uris)},
         )
         await semantic_queue.enqueue(msg)
         if msg.telemetry_id:
@@ -383,7 +390,7 @@ class ContentWriteCoordinator:
             await self._vectorize_single_file(uri, context_type="memory", ctx=ctx)
             await self._enqueue_memory_refresh(
                 root_uri=root_uri,
-                modified_uri=uri,
+                modified_uris=[uri],
                 ctx=ctx,
                 lifecycle_lock_handle_id=handle.id,
             )
@@ -408,6 +415,192 @@ class ContentWriteCoordinator:
                 await lock_manager.release(handle)
             raise
         finally:
+            if wait and telemetry_id:
+                get_request_wait_tracker().cleanup(telemetry_id)
+
+    async def write_batch(
+        self,
+        *,
+        files: List[tuple],  # list of (uri, content, mode)
+        ctx: RequestContext,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Write multiple memory files under the same category directory in
+        a single operation.
+
+        All files must resolve to the same ``root_uri`` (the category
+        directory). The coordinator acquires the subtree lock once, writes
+        every file in place, vectorizes each leaf file independently, then
+        enqueues **one** semantic refresh message with every successful URI
+        listed in ``changes.modified``. The final ``.abstract.md`` /
+        ``.overview.md`` produced for the directory is identical to what
+        would have been produced by N sequential ``write()`` calls, but
+        with only 1 overview LLM call and 1 directory-level embedding
+        round-trip instead of N.
+
+        Use case: bulk import of existing memory files (e.g. migrating
+        memories from another agent system). The serialized per-file path
+        runs N redundant overview generations against the same final
+        directory state — this endpoint eliminates that redundancy.
+
+        Semantics:
+
+        - ``files`` must be non-empty.
+        - All files must be memory URIs under the same ``root_uri``.
+        - Duplicate URIs in the same batch are rejected.
+        - ``MAX_BATCH_FILES = 100``, ``MAX_BATCH_BYTES = 10 MB``.
+        - Best-effort: per-file failures are recorded in the response
+          without aborting the batch, and the semantic refresh is issued
+          only for files that wrote successfully.
+        - ``wait=True`` blocks the response until the single semantic
+          refresh and its embedding jobs complete, matching the single
+          ``write()`` wait semantics.
+        """
+        MAX_BATCH_FILES = 100
+        MAX_BATCH_BYTES = 10 * 1024 * 1024  # 10 MB
+
+        # 1. Pre-validation (fail fast before acquiring any lock)
+        if not files:
+            raise InvalidArgumentError("batch must contain at least one file")
+        if len(files) > MAX_BATCH_FILES:
+            raise InvalidArgumentError(
+                f"batch exceeds max {MAX_BATCH_FILES} files (got {len(files)})"
+            )
+
+        normalized: List[tuple] = []
+        total_bytes = 0
+        for idx, item in enumerate(files):
+            try:
+                uri, content, mode = item
+            except (TypeError, ValueError) as exc:
+                raise InvalidArgumentError(
+                    f"batch item {idx} must be a (uri, content, mode) tuple"
+                ) from exc
+            nuri = VikingURI.normalize(uri)
+            self._validate_mode(mode)
+            self._validate_target_uri(nuri)
+            if self._context_type_for_uri(nuri) != "memory":
+                raise InvalidArgumentError(
+                    f"write_batch only supports memory URIs: {uri}"
+                )
+            encoded = content.encode("utf-8")
+            total_bytes += len(encoded)
+            if total_bytes > MAX_BATCH_BYTES:
+                raise InvalidArgumentError(
+                    f"batch exceeds max {MAX_BATCH_BYTES} bytes"
+                )
+            normalized.append((nuri, content, mode, len(encoded)))
+
+        # Duplicate URI check
+        seen = set()
+        for nuri, _, _, _ in normalized:
+            if nuri in seen:
+                raise InvalidArgumentError(f"duplicate URI in batch: {nuri}")
+            seen.add(nuri)
+
+        # Same-root check: all files must share one category directory
+        roots = set()
+        for nuri, _, _, _ in normalized:
+            roots.add(await self._resolve_root_uri(nuri, ctx=ctx))
+        if len(roots) != 1:
+            raise InvalidArgumentError(
+                f"batch files must share one root_uri, got {len(roots)}: "
+                f"{sorted(roots)}"
+            )
+        root_uri = roots.pop()
+
+        # 2. Acquire subtree lock once
+        lock_manager = get_lock_manager()
+        handle = lock_manager.create_handle()
+        lock_path = self._viking_fs._uri_to_path(root_uri, ctx=ctx)
+        acquired = await lock_manager.acquire_subtree(handle, lock_path)
+        if not acquired:
+            await lock_manager.release(handle)
+            raise InvalidArgumentError(
+                f"resource is busy and cannot be written now: {root_uri}"
+            )
+
+        telemetry_id = get_current_telemetry().telemetry_id
+        lock_transferred = False
+        results: List[Dict[str, Any]] = []
+        success_uris: List[str] = []
+
+        try:
+            if wait and telemetry_id:
+                get_request_wait_tracker().register_request(telemetry_id)
+
+            # 3. Per-file write + leaf vectorization (best-effort)
+            for nuri, content, mode, byte_size in normalized:
+                try:
+                    stat = await self._safe_stat(nuri, ctx=ctx)
+                    if stat.get("isDir"):
+                        raise InvalidArgumentError(
+                            f"write only supports existing files, got "
+                            f"directory: {nuri}"
+                        )
+                    await self._write_in_place(nuri, content, mode=mode, ctx=ctx)
+                    await self._vectorize_single_file(
+                        nuri, context_type="memory", ctx=ctx
+                    )
+                    success_uris.append(nuri)
+                    results.append(
+                        {
+                            "uri": nuri,
+                            "status": "ok",
+                            "written_bytes": byte_size,
+                        }
+                    )
+                except Exception as exc:
+                    results.append(
+                        {
+                            "uri": nuri,
+                            "status": "failed",
+                            "error": str(exc),
+                        }
+                    )
+
+            # 4. Enqueue one semantic refresh for all successful writes
+            if success_uris:
+                await self._enqueue_memory_refresh(
+                    root_uri=root_uri,
+                    modified_uris=success_uris,
+                    ctx=ctx,
+                    lifecycle_lock_handle_id=handle.id,
+                )
+                lock_transferred = True
+
+            # 5. Wait for semantic + embedding completion if requested
+            queue_status = (
+                await self._wait_for_request(
+                    telemetry_id=telemetry_id, timeout=timeout
+                )
+                if wait and success_uris
+                else None
+            )
+
+            return {
+                "root_uri": root_uri,
+                "files": results,
+                "total": len(results),
+                "succeeded": len(success_uris),
+                "failed": len(results) - len(success_uris),
+                "queue_status": queue_status,
+            }
+
+        except Exception:
+            if not lock_transferred:
+                await lock_manager.release(handle)
+            raise
+        finally:
+            if not lock_transferred:
+                # All files failed (no successful URIs to enqueue refresh for).
+                # Release the lock now since we never transferred ownership
+                # to the semantic queue.
+                try:
+                    await lock_manager.release(handle)
+                except Exception:
+                    pass
             if wait and telemetry_id:
                 get_request_wait_tracker().cleanup(telemetry_id)
 
