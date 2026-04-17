@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import uuid4
 
 from openviking.core.namespace import canonical_session_uri
-from openviking.message import Message, Part
+from openviking.message import ContextPart, Message, Part, TextPart, ToolPart
 from openviking.server.identity import RequestContext, Role
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking.utils.time_utils import get_current_timestamp
@@ -30,6 +30,9 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 _ARCHIVE_WAIT_POLL_SECONDS = 0.1
+_WORKING_MEMORY_TAIL_MAX_MESSAGES = 4
+_WORKING_MEMORY_TEXT_MAX_CHARS = 800
+_WORKING_MEMORY_TOOL_IO_MAX_CHARS = 400
 
 
 @dataclass
@@ -790,6 +793,7 @@ class Session:
         include_latest_overview = bool(
             latest_archive and latest_archive["overview_tokens"] <= remaining_budget
         )
+        latest_archive_overview = latest_archive["overview"] if include_latest_overview else ""
         latest_archive_tokens = latest_archive["overview_tokens"] if include_latest_overview else 0
         if include_latest_overview:
             remaining_budget -= latest_archive_tokens
@@ -803,11 +807,16 @@ class Session:
         dropped_archives = max(
             0, context["total_archives"] - context["failed_archives"] - included_archives
         )
+        working_memory_markdown = self._build_working_memory_markdown(
+            latest_archive_overview=latest_archive_overview,
+            merged_messages=merged_messages,
+        )
 
         return {
-            "latest_archive_overview": (
-                latest_archive["overview"] if include_latest_overview else ""
-            ),
+            "latest_archive_overview": latest_archive_overview,
+            "working_memory": {
+                "markdown": working_memory_markdown,
+            },
             "pre_archive_abstracts": [],  # 保持 API 向后兼容，返回空数组
             "messages": [m.to_dict() for m in merged_messages],
             "estimatedTokens": message_tokens + archive_tokens,
@@ -820,6 +829,72 @@ class Session:
                 "archiveTokens": archive_tokens,
             },
         }
+
+    def _build_working_memory_markdown(
+        self,
+        latest_archive_overview: str,
+        merged_messages: List[Message],
+    ) -> str:
+        """Build a compact working-memory markdown block for downstream clients."""
+        overview = (latest_archive_overview or "").strip()
+        if not overview:
+            return ""
+
+        sections = [overview]
+        tail_messages = merged_messages[-_WORKING_MEMORY_TAIL_MAX_MESSAGES:]
+        if tail_messages:
+            sections.append("## Current Conversation Tail")
+            sections.extend(self._format_working_memory_message(message) for message in tail_messages)
+        return "\n\n".join(section for section in sections if section).strip()
+
+    def _format_working_memory_message(self, message: Message) -> str:
+        """Render one message into markdown for the working-memory tail."""
+        role_label = "User" if message.role == "user" else "Assistant"
+        blocks: List[str] = []
+        for part in message.parts:
+            if isinstance(part, TextPart):
+                text = self._truncate_working_memory_text(part.text, _WORKING_MEMORY_TEXT_MAX_CHARS)
+                if text:
+                    blocks.append(text)
+            elif isinstance(part, ContextPart):
+                abstract = self._truncate_working_memory_text(
+                    part.abstract, _WORKING_MEMORY_TEXT_MAX_CHARS
+                )
+                if abstract:
+                    blocks.append(f"[Context: {part.context_type}] {abstract}")
+            elif isinstance(part, ToolPart):
+                tool_lines = [
+                    f"[Tool: {part.tool_name or 'unknown'}] ({part.tool_status or 'unknown'})"
+                ]
+                if part.tool_input:
+                    tool_lines.append(
+                        "Input: "
+                        + self._truncate_working_memory_text(
+                            json.dumps(part.tool_input, ensure_ascii=False),
+                            _WORKING_MEMORY_TOOL_IO_MAX_CHARS,
+                        )
+                    )
+                if part.tool_output:
+                    tool_lines.append(
+                        "Output: "
+                        + self._truncate_working_memory_text(
+                            part.tool_output, _WORKING_MEMORY_TOOL_IO_MAX_CHARS
+                        )
+                    )
+                blocks.append("\n".join(tool_lines))
+
+        if not blocks:
+            blocks.append("(empty)")
+
+        return f"### {role_label}\n" + "\n\n".join(blocks)
+
+    @staticmethod
+    def _truncate_working_memory_text(text: str, max_chars: int) -> str:
+        """Bound working-memory text blocks to keep the derived field compact."""
+        normalized = (text or "").strip()
+        if len(normalized) <= max_chars:
+            return normalized
+        return normalized[: max_chars - 3].rstrip() + "..."
 
     async def get_context_for_search(self, query: str, max_messages: int = 20) -> Dict[str, Any]:
         """Get session context for intent analysis."""

@@ -12,7 +12,13 @@ function makeLogger() {
   };
 }
 
-function makeEngine(commitResult: unknown, opts?: { throwError?: Error }) {
+function makeEngine(
+  commitResult: unknown,
+  opts?: {
+    throwError?: Error;
+    contextResult?: Record<string, unknown>;
+  },
+) {
   const cfg = memoryOpenVikingConfigSchema.parse({
     mode: "remote",
     baseUrl: "http://127.0.0.1:1933",
@@ -31,10 +37,12 @@ function makeEngine(commitResult: unknown, opts?: { throwError?: Error }) {
     getSessionContext: vi.fn().mockResolvedValue({
       latest_archive_overview: "",
       latest_archive_id: "",
+      working_memory: undefined,
       pre_archive_abstracts: [],
       messages: [],
       estimatedTokens: 0,
       stats: { totalArchives: 0, includedArchives: 0, droppedArchives: 0, failedArchives: 0, activeTokens: 0, archiveTokens: 0 },
+      ...opts?.contextResult,
     }),
   } as unknown as OpenVikingClient;
 
@@ -213,6 +221,39 @@ describe("context-engine compact()", () => {
     expect(result.ok).toBe(true);
     expect(result.compacted).toBe(true);
     expect(result.reason).toBe("commit_completed");
+  });
+
+  it("uses working_memory.markdown as the restored compact summary when present", async () => {
+    const { engine, logger } = makeEngine({
+      status: "completed",
+      archived: true,
+      task_id: "task-wm",
+      memories_extracted: {},
+    }, {
+      contextResult: {
+        latest_archive_overview: "# Session Summary\nLegacy overview",
+        working_memory: {
+          markdown: "# Session Summary\nPreferred working memory",
+        },
+      },
+    });
+
+    const contextCalls = logger.info.mock.calls.length;
+    await engine.compact({
+      sessionId: "s-working-memory",
+      sessionFile: "",
+    });
+
+    expect(logger.info.mock.calls.slice(contextCalls)).toEqual(
+      expect.arrayContaining([
+        [
+          expect.stringContaining('"working_memory": {\n    "markdown": "# Session Summary\\nPreferred working memory"'),
+        ],
+        [
+          expect.stringContaining("latestArchiveOverview=present"),
+        ],
+      ]),
+    );
   });
 
   it("returns compacted=false when commit succeeds with archived=false", async () => {

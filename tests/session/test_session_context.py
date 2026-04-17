@@ -391,6 +391,37 @@ class TestGetSessionContext:
         assert context["stats"]["activeTokens"] == session.messages[0].estimated_tokens
         assert context["stats"]["activeTokens"] > _estimate_tokens("Executing tool...")
 
+    async def test_get_session_context_builds_working_memory_from_latest_overview_and_tail(
+        self, client: AsyncOpenViking, monkeypatch
+    ):
+        session = client.session(session_id="working_memory_tail_test")
+        summary = "# Session Summary\n\nArchived project state."
+
+        async def fake_generate(_messages, latest_archive_overview=""):
+            del _messages, latest_archive_overview
+            return summary
+
+        monkeypatch.setattr(session, "_generate_archive_summary_async", fake_generate)
+
+        session.add_message("user", [TextPart("archived seed")])
+        result = await session.commit_async()
+        await _wait_for_task(result["task_id"])
+
+        for text in ("tail one", "tail two", "tail three", "tail four", "tail five"):
+            session.add_message("user", [TextPart(text)])
+
+        token_budget = sum(message.estimated_tokens for message in session.messages) + _estimate_tokens(
+            summary
+        )
+        context = await session.get_session_context(token_budget=token_budget)
+
+        markdown = context["working_memory"]["markdown"]
+        assert markdown.startswith(summary)
+        assert "## Current Conversation Tail" in markdown
+        assert "tail one" not in markdown
+        assert "tail two" in markdown
+        assert "tail five" in markdown
+
     async def test_get_session_context_reads_latest_overview_and_all_archive_abstracts(
         self, client: AsyncOpenViking, monkeypatch
     ):
