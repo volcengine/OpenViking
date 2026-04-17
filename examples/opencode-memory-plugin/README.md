@@ -173,9 +173,9 @@ Import resources into the OpenViking knowledge base.
 Parameters:
 
 - `path`: URL or local file path to import. URLs are fetched server-side; local files are uploaded first. For directories, zip them and pass the `.zip` path.
-- `target?`: target `viking://` URI for the imported resource (must be in resources scope)
+- `to?`: target `viking://` URI for the imported resource (must be in resources scope)
 - `reason?`: reason for adding this resource (improves search relevance)
-- `wait?`: wait for semantic processing to complete (default: `true`)
+- `wait?`: wait for semantic processing to complete (default: `false`)
 
 Content is automatically parsed, indexed, and made searchable.
 
@@ -226,7 +226,7 @@ Import external documentation:
 ```typescript
 const result = await memimport({
   path: "https://example.com/api-docs.html",
-  target: "viking://resources/external/api-docs/",
+  to: "viking://resources/external/api-docs/resource-example.md",
   reason: "API reference for integration project"
 })
 ```

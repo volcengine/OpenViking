@@ -567,21 +567,50 @@ async function uploadLocalFile(config: OpenVikingConfig, filePath: string): Prom
   const headers: Record<string, string> = {}
   if (config.apiKey) headers["X-API-Key"] = config.apiKey
 
-  const response = await fetch(`${config.endpoint}/api/v1/resources/temp_upload`, {
-    method: "POST",
-    headers,
-    body: formData,
-  })
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), config.timeoutMs)
 
-  if (!response.ok) {
-    const errorText = await response.text()
-    throw new Error(`File upload failed (${response.status}): ${errorText}`)
+  try {
+    const response = await fetch(`${config.endpoint}/api/v1/resources/temp_upload`, {
+      method: "POST",
+      headers,
+      body: formData,
+      signal: controller.signal,
+    })
+
+    clearTimeout(timeout)
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      switch (response.status) {
+        case 413:
+          throw new Error("File too large for upload. The server rejected the payload size.")
+        case 415:
+          throw new Error("Unsupported file type. The server rejected the content type of the uploaded file.")
+        default:
+          throw new Error(`File upload failed (${response.status}): ${errorText}`)
+      }
+    }
+
+    const result = (await response.json()) as OpenVikingResponse<{ temp_file_id: string }>
+    const tempFileId = unwrapResponse(result)?.temp_file_id
+    if (!tempFileId) throw new Error("No temp_file_id returned from upload")
+    return tempFileId
+  } catch (error: any) {
+    clearTimeout(timeout)
+
+    if (error.name === "AbortError") {
+      throw new Error(`File upload timed out after ${config.timeoutMs}ms`)
+    }
+
+    if (error.message?.includes("fetch failed") || error.code === "ECONNREFUSED") {
+      throw new Error(
+        `OpenViking service unavailable at ${config.endpoint}. Please check if the service is running (try: openviking-server).`,
+      )
+    }
+
+    throw error
   }
-
-  const result = (await response.json()) as OpenVikingResponse<{ temp_file_id: string }>
-  const tempFileId = unwrapResponse(result)?.temp_file_id
-  if (!tempFileId) throw new Error("No temp_file_id returned from upload")
-  return tempFileId
 }
 
 function getResponseErrorMessage(error: OpenVikingResponse["error"]): string {
@@ -2422,11 +2451,11 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
           path: z
             .string()
             .describe("URL or local file path to import. URLs are fetched server-side; local files are uploaded first. For directories, zip them and pass the .zip path."),
-          target: z
+          to: z
             .string()
             .optional()
             .describe(
-              "Target viking:// URI for the imported resource (must be in resources scope, e.g., viking://resources/docs/). Omit for auto-placement.",
+              "Target viking:// URI for the imported resource (must be in resources scope, e.g., viking://resources/docs/somethin.md). Omit for auto-placement.",
             ),
           reason: z
             .string()
@@ -2435,10 +2464,10 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
           wait: z
             .boolean()
             .optional()
-            .describe("Wait for semantic processing to complete. Default: true"),
+            .describe("Wait for semantic processing to complete. Default: false"),
         },
         async execute(args, context) {
-          log("INFO", "memimport", "Importing resource", { path: args.path, target: args.target })
+          log("INFO", "memimport", "Importing resource", { path: args.path, to: args.to })
 
           try {
             const isUrl = /^https?:\/\//i.test(args.path)
@@ -2455,11 +2484,11 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
             let requestBody: {
               path?: string
               temp_file_id?: string
-              target?: string
+              to?: string
               reason?: string
               wait: boolean
             } = {
-              wait: args.wait ?? true,
+              wait: args.wait ?? false,
             }
 
             if (isUrl) {
@@ -2476,7 +2505,7 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
               return `Error: Path not found or not a valid URL: ${args.path}`
             }
 
-            if (args.target) requestBody.target = args.target
+            if (args.to) requestBody.to = args.to
             if (args.reason) requestBody.reason = args.reason
 
             const response = await makeRequest<OpenVikingResponse<{
