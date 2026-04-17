@@ -410,17 +410,25 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
         return self._dimension
 
     def close(self):
+        # --- sync clients ---
+        if self._openai_client is not None:
+            self._openai_client.close()
         if self._httpx_client is not None:
             self._httpx_client.close()
-        # Async clients need event-loop-aware cleanup
-        if self._async_httpx_client is not None:
-            import asyncio
+        # --- async clients (event-loop-aware cleanup) ---
+        import asyncio
 
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
-            if loop and loop.is_running():
-                loop.create_task(self._async_httpx_client.aclose())
-            else:
-                asyncio.run(self._async_httpx_client.aclose())
+        async def _close_async_clients() -> None:
+            if self._async_openai_client is not None:
+                await self._async_openai_client.close()
+            if self._async_httpx_client is not None:
+                await self._async_httpx_client.aclose()
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop and loop.is_running():
+            loop.create_task(_close_async_clients())
+        else:
+            asyncio.run(_close_async_clients())
