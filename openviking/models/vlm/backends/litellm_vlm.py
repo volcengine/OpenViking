@@ -227,11 +227,14 @@ class LiteLLMVLMProvider(VLMBase):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
 
-        # Only send enable_thinking to DashScope-compatible providers
         provider = self._detected_provider or detect_provider_by_model(model)
-        if provider == "dashscope":
-            extra = kwargs.get("extra_body", {})
-            extra["enable_thinking"] = thinking
+        enable_thinking = self._resolve_enable_thinking_value(
+            thinking=thinking,
+            auto_supported=provider == "dashscope",
+        )
+        if enable_thinking is not None:
+            extra = dict(kwargs.get("extra_body", {}))
+            extra["enable_thinking"] = enable_thinking
             kwargs["extra_body"] = extra
 
         return kwargs

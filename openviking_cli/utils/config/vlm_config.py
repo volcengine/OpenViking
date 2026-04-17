@@ -32,6 +32,13 @@ class VLMConfig(BaseModel):
     )
 
     thinking: bool = Field(default=False, description="Enable thinking mode for VolcEngine models")
+    enable_thinking: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Control whether OpenAI-compatible and LiteLLM backends send "
+            "extra_body.enable_thinking (None = backend default behavior)"
+        ),
+    )
 
     max_concurrent: int = Field(
         default=100, description="Maximum number of concurrent LLM calls for semantic processing"
@@ -90,6 +97,11 @@ class VLMConfig(BaseModel):
                 self.providers[self.provider]["extra_headers"] = self.extra_headers
             if self.stream and "stream" not in self.providers[self.provider]:
                 self.providers[self.provider]["stream"] = self.stream
+            if (
+                self.enable_thinking is not None
+                and "enable_thinking" not in self.providers[self.provider]
+            ):
+                self.providers[self.provider]["enable_thinking"] = self.enable_thinking
 
     def _has_any_config(self) -> bool:
         """Check if any config is provided."""
@@ -154,6 +166,11 @@ class VLMConfig(BaseModel):
         stream = (
             config.get("stream") if config and config.get("stream") is not None else self.stream
         )
+        enable_thinking = (
+            config.get("enable_thinking")
+            if config and "enable_thinking" in config
+            else self.enable_thinking
+        )
 
         result = {
             "model": self.model,
@@ -161,6 +178,7 @@ class VLMConfig(BaseModel):
             "max_retries": self.max_retries,
             "provider": name,
             "thinking": self.thinking,
+            "enable_thinking": enable_thinking,
             "max_tokens": self.max_tokens,
             "stream": stream,
             "api_version": self.api_version,
