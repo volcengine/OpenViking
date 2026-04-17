@@ -295,7 +295,7 @@ def build_leaderboard_game_from_record(parsed_record: Dict[str, Any], *, session
         role = player.get("role", "")
         dead = is_dead_status_for_leaderboard(player.get("status", ""))
         won = (winner == "狼人胜利" and is_wolf_role_for_leaderboard(role)) or (winner == "好人胜利" and not is_wolf_role_for_leaderboard(role))
-        score = (3 if won else 0) + (1 if not dead else -1)
+        score = (2 if won else 0) + (1 if not dead else 0)
         players.append({
             "id": player.get("id", ""),
             "role": role,
