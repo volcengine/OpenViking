@@ -176,26 +176,6 @@ enum Commands {
         #[arg(long)]
         timeout: Option<f64>,
     },
-    /// [Data] Export context as .ovpack
-    Export {
-        /// Source URI
-        uri: String,
-        /// Output .ovpack file path
-        to: String,
-    },
-    /// [Data] Import .ovpack into target URI
-    Import {
-        /// Input .ovpack file path
-        file_path: String,
-        /// Target parent URI
-        target_uri: String,
-        /// Overwrite when conflicts exist
-        #[arg(long)]
-        force: bool,
-        /// Disable vectorization after import
-        #[arg(long)]
-        no_vectorize: bool,
-    },
     /// [Data] List directory contents
     #[command(alias = "list")]
     Ls {
@@ -342,7 +322,7 @@ enum Commands {
         #[arg(long = "before")]
         before: Option<String>,
     },
-    /// [Data] Run context-aware retrieval
+    /// [Experimental][Data] Run context-aware retrieval
     Search {
         /// Search query
         query: String,
@@ -508,6 +488,26 @@ enum Commands {
     Admin {
         #[command(subcommand)]
         action: AdminCommands,
+    },
+    /// [Admin][Data] Export context as .ovpack
+    Export {
+        /// Source URI
+        uri: String,
+        /// Output .ovpack file path
+        to: String,
+    },
+    /// [Admin][Data] Import .ovpack into target URI
+    Import {
+        /// Input .ovpack file path
+        file_path: String,
+        /// Target parent URI
+        target_uri: String,
+        /// Overwrite when conflicts exist
+        #[arg(long)]
+        force: bool,
+        /// Disable vectorization after import
+        #[arg(long)]
+        no_vectorize: bool,
     },
     /// [Admin] Reindex content at URI (regenerates .abstract.md and .overview.md)
     Reindex {
