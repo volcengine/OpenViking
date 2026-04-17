@@ -30,7 +30,7 @@ from openviking.core.namespace import (
 from openviking.core.namespace import (
     is_accessible as namespace_is_accessible,
 )
-from openviking.pyagfs.exceptions import AGFSClientError, AGFSDirectoryNotEmptyError, AGFSHTTPError
+from openviking.pyagfs.exceptions import AGFSDirectoryNotEmptyError
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext, Role
@@ -321,6 +321,59 @@ class VikingFS:
                 resource=normalized_uri,
             )
 
+    def _agfs_read(self, path: str, offset: int = 0, size: int = -1) -> Any:
+        """Call AGFS read while tolerating backends that omit offset/size params."""
+        if offset == 0 and size == -1:
+            return self.agfs.read(path)
+        try:
+            return self.agfs.read(path, offset, size)
+        except TypeError:
+            return self.agfs.read(path)
+
+    async def _read_path_bytes(
+        self,
+        path: str,
+        *,
+        ctx: Optional[RequestContext] = None,
+        offset: int = 0,
+        size: int = -1,
+        decrypt: bool = False,
+        require_exists: bool = False,
+    ) -> bytes:
+        """Read bytes from AGFS with optional full-file decrypt and plaintext slicing."""
+        if require_exists:
+            self.agfs.stat(path)
+
+        read_offset = 0 if decrypt and self._encryptor else offset
+        read_size = -1 if decrypt and self._encryptor else size
+        raw = self._handle_agfs_read(self._agfs_read(path, read_offset, read_size))
+
+        if decrypt:
+            raw = await self._decrypt_content(raw, ctx=ctx)
+            if offset > 0 or size != -1:
+                if size != -1:
+                    raw = raw[offset : offset + size]
+                else:
+                    raw = raw[offset:]
+
+        return raw
+
+    async def _write_path_bytes(
+        self,
+        path: str,
+        content: bytes,
+        *,
+        ctx: Optional[RequestContext] = None,
+        encrypt: bool = False,
+        ensure_parent: bool = False,
+    ) -> Any:
+        """Write bytes to AGFS with optional parent creation and encryption."""
+        if ensure_parent:
+            await self._ensure_parent_dirs(path)
+        if encrypt:
+            content = await self._encrypt_content(content, ctx=ctx)
+        return self.agfs.write(path, content)
+
     # ========== AGFS Basic Commands ==========
 
     async def read(
@@ -333,36 +386,13 @@ class VikingFS:
         """Read file"""
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
-
-        if self._encryptor:
-            # When encryption is enabled: must read entire file for decryption
-            result = self.agfs.read(path, 0, -1)
-            if isinstance(result, bytes):
-                raw = result
-            elif result is not None and hasattr(result, "content"):
-                raw = result.content
-            else:
-                raw = b""
-
-            raw = await self._decrypt_content(raw, ctx=ctx)
-
-            # Apply slicing on decrypted plaintext
-            if offset > 0 or size != -1:
-                if size != -1:
-                    raw = raw[offset : offset + size]
-                else:
-                    raw = raw[offset:]
-        else:
-            # When not encrypted: normal read
-            result = self.agfs.read(path, offset, size)
-            if isinstance(result, bytes):
-                raw = result
-            elif result is not None and hasattr(result, "content"):
-                raw = result.content
-            else:
-                raw = b""
-
-        return raw
+        return await self._read_path_bytes(
+            path,
+            ctx=ctx,
+            offset=offset,
+            size=size,
+            decrypt=True,
+        )
 
     async def write(
         self,
@@ -375,9 +405,7 @@ class VikingFS:
         path = self._uri_to_path(uri, ctx=ctx)
         if isinstance(data, str):
             data = data.encode("utf-8")
-
-        data = await self._encrypt_content(data, ctx=ctx)
-        return self.agfs.write(path, data)
+        return await self._write_path_bytes(path, data, ctx=ctx, encrypt=True)
 
     async def mkdir(
         self,
@@ -922,7 +950,7 @@ class VikingFS:
             )
         file_path = f"{path}/.abstract.md"
         try:
-            content_bytes = self._handle_agfs_read(self.agfs.read(file_path))
+            content_bytes = await self._read_path_bytes(file_path, ctx=ctx, decrypt=True)
         except Exception as exc:
             if not is_not_found_error(exc):
                 mapped = map_exception(exc, resource=uri)
@@ -931,10 +959,6 @@ class VikingFS:
                 raise
             # Fallback to default if .abstract.md doesn't exist
             return f"# {uri}\n\n[Directory abstract is not ready]"
-
-        if self._encryptor:
-            real_ctx = self._ctx_or_default(ctx)
-            content_bytes = await self._encryptor.decrypt(real_ctx.account_id, content_bytes)
 
         return self._decode_bytes(content_bytes)
 
@@ -960,7 +984,7 @@ class VikingFS:
             )
         file_path = f"{path}/.overview.md"
         try:
-            content_bytes = self._handle_agfs_read(self.agfs.read(file_path))
+            content_bytes = await self._read_path_bytes(file_path, ctx=ctx, decrypt=True)
         except Exception as exc:
             if not is_not_found_error(exc):
                 mapped = map_exception(exc, resource=uri)
@@ -969,10 +993,6 @@ class VikingFS:
                 raise
             # Fallback to default if .overview.md doesn't exist
             return f"# {uri}\n\n[Directory overview is not ready]"
-
-        if self._encryptor:
-            real_ctx = self._ctx_or_default(ctx)
-            content_bytes = await self._encryptor.decrypt(real_ctx.account_id, content_bytes)
 
         return self._decode_bytes(content_bytes)
 
@@ -1713,9 +1733,7 @@ class VikingFS:
         table_path = f"{dir_path}/.relations.json"
         if isinstance(content, str):
             content = content.encode("utf-8")
-
-        content = await self._encrypt_content(content, ctx=ctx)
-        self.agfs.write(table_path, content)
+        await self._write_path_bytes(table_path, content, ctx=ctx, encrypt=True)
 
     # ========== Batch Read (backward compatible) ==========
 
@@ -1745,15 +1763,12 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Write file directly."""
-        self._ensure_access(uri, ctx)
+        self._ensure_mutable_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
-        await self._ensure_parent_dirs(path)
 
         if isinstance(content, str):
             content = content.encode("utf-8")
-
-        content = await self._encrypt_content(content, ctx=ctx)
-        self.agfs.write(path, content)
+        await self._write_path_bytes(path, content, ctx=ctx, encrypt=True, ensure_parent=True)
 
     async def read_file(
         self,
@@ -1774,29 +1789,13 @@ class VikingFS:
         """
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
-        # Verify the file exists before reading, because AGFS read returns
-        # empty bytes for non-existent files instead of raising an error.
         try:
-            self.agfs.stat(path)
-        except Exception:
+            raw = await self._read_path_bytes(path, ctx=ctx, decrypt=True, require_exists=True)
+        except Exception as exc:
+            if not is_not_found_error(exc):
+                raise
             raise NotFoundError(uri, "file")
-        try:
-            content = self.agfs.read(path)
-            if isinstance(content, bytes):
-                raw = content
-            elif content is not None and hasattr(content, "content"):
-                raw = content.content
-            else:
-                raw = b""
-
-            # If encryption is enabled, always decrypt full file first
-            if self._encryptor:
-                raw = await self._decrypt_content(raw, ctx=ctx)
-
-            text = self._decode_bytes(raw)
-        except Exception:
-            raise NotFoundError(uri, "file")
-
+        text = self._decode_bytes(raw)
         if offset == 0 and limit == -1:
             return text
         lines = text.splitlines(keepends=True)
@@ -1812,10 +1811,10 @@ class VikingFS:
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         try:
-            raw = self._handle_agfs_read(self.agfs.read(path))
-            raw = await self._decrypt_content(raw, ctx=ctx)
-            return raw
-        except Exception:
+            return await self._read_path_bytes(path, ctx=ctx, decrypt=True, require_exists=True)
+        except Exception as exc:
+            if not is_not_found_error(exc):
+                raise
             raise NotFoundError(uri, "file")
 
     async def write_file_bytes(
@@ -1825,12 +1824,9 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Write single binary file."""
-        self._ensure_access(uri, ctx)
+        self._ensure_mutable_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
-        await self._ensure_parent_dirs(path)
-
-        content = await self._encrypt_content(content, ctx=ctx)
-        self.agfs.write(path, content)
+        await self._write_path_bytes(path, content, ctx=ctx, encrypt=True, ensure_parent=True)
 
     async def append_file(
         self,
@@ -1839,27 +1835,25 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Append content to file."""
-        self._ensure_access(uri, ctx)
+        self._ensure_mutable_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
 
         try:
             existing = ""
             try:
-                existing_bytes = self._handle_agfs_read(self.agfs.read(path))
-                existing_bytes = await self._decrypt_content(existing_bytes, ctx=ctx)
+                existing_bytes = await self._read_path_bytes(
+                    path, ctx=ctx, decrypt=True, require_exists=True
+                )
                 existing = self._decode_bytes(existing_bytes)
-            except FileNotFoundError:
-                pass
-            except AGFSHTTPError as e:
-                if e.status_code != 404:
+            except Exception as exc:
+                if not is_not_found_error(exc):
                     raise
-            except AGFSClientError:
-                raise
+                pass
 
-            await self._ensure_parent_dirs(path)
             final_content = (existing + content).encode("utf-8")
-            final_content = await self._encrypt_content(final_content, ctx=ctx)
-            self.agfs.write(path, final_content)
+            await self._write_path_bytes(
+                path, final_content, ctx=ctx, encrypt=True, ensure_parent=True
+            )
 
         except Exception as e:
             logger.error(f"[VikingFS] Failed to append to file {uri}: {e}")
