@@ -24,6 +24,10 @@ const COMPACTED_SYSTEM_MSG_RE = /^System:\s*\[.*?\]\s*Compacted\s*(.+)$/i;
 const COMMAND_TEXT_RE = /^\/[a-z0-9_-]{1,64}\b/i;
 const NON_CONTENT_TEXT_RE = /^[\p{P}\p{S}\s]+$/u;
 const SUBAGENT_CONTEXT_RE = /^\s*\[Subagent Context\]/i;
+// Matches cron/maintenance task prompts that should never be treated as transcript ingestion.
+// These are autonomous maintenance jobs (distillation, synthesis, workspace ops), not user transcripts.
+const CRON_MAINTENANCE_RE =
+  /(?:daily|weekly|monthly|nightly)\s+(?:memory\s+)?(?:maintenance|distillation|synthesis|digest|cleanup|summary)|(?:read\s+skills\/[^\s]+\/references\/|workspace:\s*\/[^\s]+|\.openviking\/workspace|lockfile|debrief\s+to\s+archived)/i;
 const MEMORY_INTENT_RE = /记住|记下|remember|save|store|偏好|preference|规则|rule|事实|fact/i;
 const QUESTION_CUE_RE =
   /[?？]|\b(?:what|when|where|who|why|how|which|can|could|would|did|does|is|are)\b|^(?:请问|能否|可否|怎么|如何|什么时候|谁|什么|哪|是否)/i;
@@ -192,6 +196,16 @@ export function isTranscriptLikeIngest(
     return {
       shouldAssist: false,
       reason: "subagent_context",
+      normalizedText,
+      speakerTurns: 0,
+      chars: normalizedText.length,
+    };
+  }
+
+  if (CRON_MAINTENANCE_RE.test(normalizedText)) {
+    return {
+      shouldAssist: false,
+      reason: "cron_maintenance_task",
       normalizedText,
       speakerTurns: 0,
       chars: normalizedText.length,
