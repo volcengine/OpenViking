@@ -1324,8 +1324,8 @@ async function downloadPlugin(destDir) {
   // npm install
   info(tr("Installing plugin npm dependencies...", "正在安装插件 npm 依赖..."));
   const npmArgs = resolvedNpmOmitDev
-    ? ["install", "--omit=dev", "--no-audit", "--no-fund", "--registry", NPM_REGISTRY]
-    : ["install", "--no-audit", "--no-fund", "--registry", NPM_REGISTRY];
+    ? ["install", "--ignore-scripts", "--omit=dev", "--no-audit", "--no-fund", "--registry", NPM_REGISTRY]
+    : ["install", "--ignore-scripts", "--no-audit", "--no-fund", "--registry", NPM_REGISTRY];
   await run("npm", npmArgs, { cwd: destDir, silent: false });
   info(tr(`Plugin deployed: ${PLUGIN_DEST}`, `插件部署完成: ${PLUGIN_DEST}`));
 }
