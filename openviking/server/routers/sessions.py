@@ -12,7 +12,7 @@ from pydantic import BaseModel, model_validator
 from openviking.message.part import TextPart, part_from_dict
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
-from openviking.server.identity import RequestContext, Role
+from openviking.server.identity import AuthMode, RequestContext, Role
 from openviking.server.models import ErrorInfo, Response
 from openviking_cli.exceptions import InvalidArgumentError
 
@@ -101,9 +101,11 @@ def _to_jsonable(value: Any) -> Any:
     return value
 
 
-def _request_auth_mode(request: Request) -> str:
+def _request_auth_mode(request: Request) -> AuthMode:
     config = getattr(request.app.state, "config", None)
-    return getattr(config, "auth_mode", "api_key")
+    if config is not None and hasattr(config, "get_effective_auth_mode"):
+        return config.get_effective_auth_mode()
+    return AuthMode.API_KEY
 
 
 def _resolve_message_role_id(
@@ -115,7 +117,7 @@ def _resolve_message_role_id(
         return request.role_id
 
     role_id_provided = "role_id" in request.model_fields_set
-    allow_explicit_role_id = _request_auth_mode(http_request) == "trusted" or ctx.role in {
+    allow_explicit_role_id = _request_auth_mode(http_request) == AuthMode.TRUSTED or ctx.role in {
         Role.ROOT,
         Role.ADMIN,
     }

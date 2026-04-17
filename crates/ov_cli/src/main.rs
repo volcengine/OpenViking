@@ -461,20 +461,15 @@ enum Commands {
         #[arg(long)]
         timeout: Option<f64>,
     },
-    /// [Status] Show OpenViking component status
+    /// [Status] All OpenViking Server components status
     Status,
-    /// [Status] Quick health check
-    Health,
-    /// [Status] System utility commands
-    System {
-        #[command(subcommand)]
-        action: SystemCommands,
-    },
-    /// [Status] Observer status commands
+    /// [Status] Observe OpenViking Server components status
     Observer {
         #[command(subcommand)]
         action: ObserverCommands,
     },
+    /// [Status] Quick health check
+    Health,
     /// [Status] Configuration management
     Config {
         #[command(subcommand)]
@@ -488,6 +483,11 @@ enum Commands {
     Admin {
         #[command(subcommand)]
         action: AdminCommands,
+    },
+    /// [Admin] System utility commands
+    System {
+        #[command(subcommand)]
+        action: SystemCommands,
     },
     /// [Admin][Data] Export context as .ovpack
     Export {

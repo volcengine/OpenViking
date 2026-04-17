@@ -101,7 +101,6 @@ def create_agfs_client(agfs_config: Any) -> Any:
         )
 
     client = RAGFSBindingClient()
-    logger.warning("[RAGFS] Using Rust binding (ragfs-python)")
 
     # Automatically mount backend for binding client
     mount_agfs_backend(client, agfs_config)

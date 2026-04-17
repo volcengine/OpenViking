@@ -8,7 +8,7 @@ from typing import Optional
 from fastapi import Depends, Header, Request
 
 from openviking.metrics.account_context import set_metric_account_context
-from openviking.server.identity import RequestContext, ResolvedIdentity, Role
+from openviking.server.identity import AuthMode, RequestContext, ResolvedIdentity, Role
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     PermissionDeniedError,
@@ -27,9 +27,11 @@ _ROOT_IMPLICIT_TENANT_ALLOWED_PREFIXES = (
 )
 
 
-def _auth_mode(request: Request) -> str:
+def _auth_mode(request: Request) -> AuthMode:
     config = getattr(request.app.state, "config", None)
-    return getattr(config, "auth_mode", "api_key")
+    if config is not None and hasattr(config, "get_effective_auth_mode"):
+        return config.get_effective_auth_mode()
+    return AuthMode.API_KEY
 
 
 def _root_request_requires_explicit_tenant(path: str) -> bool:
@@ -48,7 +50,8 @@ def _root_request_requires_explicit_tenant(path: str) -> bool:
 
 def _configured_root_api_key(request: Request) -> Optional[str]:
     config = getattr(request.app.state, "config", None)
-    return getattr(config, "root_api_key", None)
+    key = getattr(config, "root_api_key", None)
+    return key if key != "" else None
 
 
 def _extract_api_key(x_api_key: Optional[str], authorization: Optional[str]) -> Optional[str]:
@@ -74,15 +77,24 @@ async def resolve_identity(
     """Resolve API key to identity.
 
     Strategy:
+    - dev mode: no authentication, return implicit ROOT/default identity
     - trusted mode: trust explicit account/user headers and return USER identity
-    - api_key mode without manager: dev mode, return implicit ROOT/default identity
-    - api_key mode with manager: resolve via APIKeyManager (root key first, then user key index)
+    - api_key mode: resolve via APIKeyManager (root key first, then user key index)
     """
     auth_mode = _auth_mode(request)
     api_key_manager = getattr(request.app.state, "api_key_manager", None)
     api_key = _extract_api_key(x_api_key, authorization)
 
-    if auth_mode == "trusted":
+    if auth_mode == AuthMode.DEV:
+        # Dev mode: no authentication, always return ROOT
+        return ResolvedIdentity(
+            role=Role.ROOT,
+            account_id=x_openviking_account or "default",
+            user_id=x_openviking_user or "default",
+            agent_id=x_openviking_agent or "default",
+        )
+
+    if auth_mode == AuthMode.TRUSTED:
         configured_root_api_key = _configured_root_api_key(request)
         if configured_root_api_key:
             if not api_key:
@@ -104,13 +116,10 @@ async def resolve_identity(
             agent_id=x_openviking_agent or "default",
         )
 
+    # AuthMode.API_KEY
     if api_key_manager is None:
-        return ResolvedIdentity(
-            role=Role.ROOT,
-            account_id=x_openviking_account or "default",
-            user_id=x_openviking_user or "default",
-            agent_id=x_openviking_agent or "default",
-        )
+        # This should not happen due to validate_server_config
+        raise RuntimeError("api_key_manager not initialized in api_key mode")
 
     if not api_key:
         raise UnauthenticatedError("Missing API Key when resolving identity.")
@@ -152,7 +161,7 @@ async def get_request_context(
     auth_mode = _auth_mode(request)
     api_key_manager = getattr(request.app.state, "api_key_manager", None)
     if (
-        auth_mode == "api_key"
+        auth_mode == AuthMode.API_KEY
         and api_key_manager is not None
         and identity.role == Role.ROOT
         and _root_request_requires_explicit_tenant(path)
@@ -165,9 +174,9 @@ async def get_request_context(
                 "and X-OpenViking-User headers. Use a user key for regular data access."
             )
 
-    if auth_mode == "trusted" and not identity.account_id:
+    if auth_mode == AuthMode.TRUSTED and not identity.account_id:
         raise InvalidArgumentError("Trusted mode requests must include X-OpenViking-Account.")
-    if auth_mode == "trusted" and not identity.user_id:
+    if auth_mode == AuthMode.TRUSTED and not identity.user_id:
         raise InvalidArgumentError("Trusted mode requests must include X-OpenViking-User.")
 
     ctx = RequestContext(
@@ -259,8 +268,8 @@ def require_auth_role(*allowed_roles: Role):
                 raise RuntimeError("require_auth_role decorator requires 'ctx' parameter")
 
             config = getattr(request.app.state, "config", None)
-            auth_mode = getattr(config, "auth_mode", "api_key")
-            if auth_mode == "trusted":
+            auth_mode = getattr(config, "auth_mode", AuthMode.API_KEY)
+            if auth_mode == AuthMode.TRUSTED:
                 raise PermissionDeniedError(_TRUSTED_MODE_ADMIN_API_MESSAGE)
 
             manager = getattr(request.app.state, "api_key_manager", None)
