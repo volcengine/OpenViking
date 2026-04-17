@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
+from openviking.core.namespace import agent_space_fragment, user_space_fragment
 from openviking.session.memory.dataclass import MemoryField, MemoryTypeSchema
 from openviking.session.memory.merge_op import MergeOp
 from openviking.session.memory.merge_op.base import FieldType
@@ -205,8 +206,8 @@ class MemoryTypeRegistry:
 
         logger = get_logger(__name__)
 
-        user_space = ctx.user.user_space_name() if ctx and ctx.user else "default"
-        agent_space = ctx.user.agent_space_name() if ctx and ctx.user else "default"
+        user_space = user_space_fragment(ctx) if ctx and ctx.user else "default"
+        agent_space = agent_space_fragment(ctx) if ctx and ctx.user else "default"
 
         logger.info(
             f"[MemoryTypeRegistry] Starting memory files initialization for user={user_space}, agent={agent_space}"

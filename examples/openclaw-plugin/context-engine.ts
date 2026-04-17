@@ -117,10 +117,12 @@ const RESERVED_MIN = 20_000;
 const RESERVED_RATIO = 0.15;
 const ARCHIVE_INDEX_TRIM_LIMIT = 10;
 
-function allocateContextBudget(totalBudget: number): ContextBudgets {
-  const reserved = Math.max(totalBudget * RESERVED_RATIO, RESERVED_MIN);
-  const archiveMemory = Math.min(totalBudget * ARCHIVE_BUDGET_RATIO, ARCHIVE_BUDGET_CAP);
-  const sessionContext = Math.max(totalBudget - archiveMemory - reserved, 0);
+function allocateContextBudget(totalBudget: number, instructionTokens = 0): ContextBudgets {
+  const reserveFloor = totalBudget >= RESERVED_MIN * 2 ? RESERVED_MIN : 0;
+  const reserved = Math.min(totalBudget, Math.max(totalBudget * RESERVED_RATIO, reserveFloor));
+  const usableBudget = Math.max(totalBudget - reserved - instructionTokens, 0);
+  const archiveMemory = Math.min(usableBudget * ARCHIVE_BUDGET_RATIO, ARCHIVE_BUDGET_CAP);
+  const sessionContext = Math.max(usableBudget - archiveMemory, 0);
   return { archiveMemory, sessionContext, reserved };
 }
 
@@ -267,9 +269,10 @@ export function openClawSessionRefToOvStorageId(ref: string): string {
  * 1. The assistant message with toolUse blocks in its content array
  * 2. A separate toolResult message per ToolPart (carrying tool_output)
  */
-function convertToAgentMessages(msg: { role: string; parts: unknown[] }): AgentMessage[] {
+export function convertToAgentMessages(msg: { role: string; parts: unknown[] }): AgentMessage[] {
   const parts = msg.parts ?? [];
   const contentBlocks: Record<string, unknown>[] = [];
+  const toolUseBlocks: Record<string, unknown>[] = [];
   const toolResults: AgentMessage[] = [];
 
   for (const part of parts) {
@@ -282,43 +285,33 @@ function convertToAgentMessages(msg: { role: string; parts: unknown[] }): AgentM
       if (typeof p.abstract === "string" && p.abstract) {
         contentBlocks.push({ type: "text", text: p.abstract });
       }
-    } else if (p.type === "tool" && msg.role === "assistant") {
+    } else if (p.type === "tool") {
       const toolId = typeof p.tool_id === "string" ? p.tool_id : "";
       const toolName = typeof p.tool_name === "string" ? p.tool_name : "unknown";
+      const status = typeof p.tool_status === "string" ? p.tool_status : "unknown";
+      const output = typeof p.tool_output === "string" ? p.tool_output : "";
 
       if (toolId) {
-        contentBlocks.push({
+        // Structured path: emit toolUse + toolResult pair (works for any role)
+        toolUseBlocks.push({
           type: "toolUse",
           id: toolId,
           name: toolName,
           input: p.tool_input ?? {},
         });
 
-        const status = typeof p.tool_status === "string" ? p.tool_status : "";
-        const output = typeof p.tool_output === "string" ? p.tool_output : "";
-
-        if (status === "completed" || status === "error") {
-          toolResults.push({
-            role: "toolResult",
-            toolCallId: toolId,
-            toolName,
-            content: [{ type: "text", text: output || "(no output)" }],
-            isError: status === "error",
-          } as unknown as AgentMessage);
-        } else {
-          toolResults.push({
-            role: "toolResult",
-            toolCallId: toolId,
-            toolName,
-            content: [{ type: "text", text: "(interrupted — tool did not complete)" }],
-            isError: false,
-          } as unknown as AgentMessage);
-        }
+        const resultText = (status === "completed" || status === "error")
+          ? (output || "(no output)")
+          : "(interrupted — tool did not complete)";
+        toolResults.push({
+          role: "toolResult",
+          toolCallId: toolId,
+          toolName,
+          content: [{ type: "text", text: resultText }],
+          isError: status === "error",
+        } as unknown as AgentMessage);
       } else {
-        // No tool_id: degrade to text block to preserve information.
-        // Cannot emit toolUse/toolResult without a valid id.
-        const status = typeof p.tool_status === "string" ? p.tool_status : "unknown";
-        const output = typeof p.tool_output === "string" ? p.tool_output : "";
+        // No tool_id: degrade to text block
         const segments = [`[${toolName}] (${status})`];
         if (p.tool_input) {
           try {
@@ -338,16 +331,21 @@ function convertToAgentMessages(msg: { role: string; parts: unknown[] }): AgentM
   const result: AgentMessage[] = [];
 
   if (msg.role === "assistant") {
-    result.push({ role: msg.role, content: contentBlocks });
+    // Assistant: text + toolUse in one message, then toolResults
+    result.push({ role: "assistant", content: [...contentBlocks, ...toolUseBlocks] });
     result.push(...toolResults);
   } else {
+    // Non-assistant: emit text as original role, then synthesize assistant(toolUse) + toolResult
     const texts = contentBlocks
       .filter((b) => b.type === "text")
       .map((b) => b.text as string);
     if (texts.length > 0) {
       result.push({ role: msg.role, content: texts.join("\n") });
+    } else if (toolUseBlocks.length === 0) {
+      result.push({ role: msg.role, content: "" });
     }
-    if (toolResults.length > 0) {
+    if (toolUseBlocks.length > 0) {
+      result.push({ role: "assistant", content: toolUseBlocks });
       result.push(...toolResults);
     }
   }
@@ -492,11 +490,28 @@ function buildArchiveMemory(
   return { messages: trimmedMessages, tokens };
 }
 
+/** Merge consecutive assistant messages by concatenating their content arrays. */
+export function mergeConsecutiveAssistants(messages: AgentMessage[]): AgentMessage[] {
+  const result: AgentMessage[] = [];
+  for (const msg of messages) {
+    const prev = result[result.length - 1];
+    if (msg.role === "assistant" && prev?.role === "assistant") {
+      const prevContent = Array.isArray(prev.content) ? prev.content : [{ type: "text", text: prev.content }];
+      const currContent = Array.isArray(msg.content) ? msg.content : [{ type: "text", text: msg.content }];
+      prev.content = [...prevContent, ...currContent] as typeof prev.content;
+    } else {
+      result.push({ ...msg });
+    }
+  }
+  return result;
+}
+
 function buildSessionContext(
   ovMessages: OVMessage[],
   budget: number,
 ): { messages: AgentMessage[]; tokens: number } {
-  const messages = ovMessages.flatMap((m) => convertToAgentMessages(m));
+  const raw = ovMessages.flatMap((m) => convertToAgentMessages(m));
+  const messages = mergeConsecutiveAssistants(raw);
   const tokens = roughEstimate(messages);
   if (budget === BUDGET_UNLIMITED || tokens <= budget) {
     return { messages, tokens };
@@ -720,15 +735,21 @@ export function createMemoryOpenVikingContextEngine(params: {
     budgets: ContextBudgets;
     instruction: { text: string; tokens: number };
   } {
-    // 4-layer context partitioning (budget computed for diag; BUDGET_UNLIMITED bypasses limits):
+    const hasArchives = Boolean(overview) || preAbstracts.length > 0;
+    const instruction = hasArchives ? buildInstructionPrompt() : { text: "", tokens: 0 };
+
+    // 4-layer context partitioning:
     //   Instruction — system prompt guide (Archive Index / Session History usage)
     //   Archive     — session history summary + per-archive one-line abstracts
     //   Session     — active OV messages converted to AgentMessage format
     //   Reserved    — headroom for model output (not consumed here)
-    const budgets = allocateContextBudget(tokenBudget);
-    const instruction = buildInstructionPrompt();
-    const archive = buildArchiveMemory(overview, preAbstracts, BUDGET_UNLIMITED);
-    const session = buildSessionContext(ovMessages, BUDGET_UNLIMITED);
+    const budgets = allocateContextBudget(tokenBudget, instruction.tokens);
+    const archive = buildArchiveMemory(overview, preAbstracts, budgets.archiveMemory);
+    const sessionBudget = Math.max(
+      tokenBudget - budgets.reserved - instruction.tokens - archive.tokens,
+      0,
+    );
+    const session = buildSessionContext(ovMessages, sessionBudget);
     const assembled = [...archive.messages, ...session.messages];
 
     logger.info(
@@ -829,7 +850,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           });
         }
 
-        const assembledTokens = roughEstimate(sanitized);
+        const assembledTokens = roughEstimate(sanitized) + instruction.tokens;
         const tokensSaved = originalTokens - assembledTokens;
         const savingPct = originalTokens > 0 ? Math.round((tokensSaved / originalTokens) * 100) : 0;
 
@@ -853,7 +874,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         return {
           messages: sanitized,
           estimatedTokens: assembledTokens,
-          ...(hasArchives ? { systemPromptAddition: instruction.text } : {}),
+          ...(instruction.text ? { systemPromptAddition: instruction.text } : {}),
         };
       } catch (err) {
         logger.warn?.(
@@ -972,6 +993,7 @@ export function createMemoryOpenVikingContextEngine(params: {
             } else {
               return {
                 type: "tool" as const,
+                tool_id: part.toolCallId,
                 tool_name: part.toolName,
                 tool_input: part.toolInput,
                 tool_output: part.toolOutput,

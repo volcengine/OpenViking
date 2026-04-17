@@ -45,6 +45,14 @@ impl HttpClient {
         }
     }
 
+    pub fn user_id(&self) -> Option<&str> {
+        self.user.as_deref()
+    }
+
+    pub fn agent_id(&self) -> Option<&str> {
+        self.agent_id.as_deref()
+    }
+
     /// Zip a directory to a temporary file
     fn zip_directory(&self, dir_path: &Path) -> Result<NamedTempFile> {
         if !dir_path.is_dir() {
@@ -267,6 +275,10 @@ impl HttpClient {
 
         // Handle HTTP errors
         if !status.is_success() {
+            let error_code = json
+                .get("error")
+                .and_then(|e| e.get("code"))
+                .and_then(|c| c.as_str());
             let error_msg = json
                 .get("error")
                 .and_then(|e| e.get("message"))
@@ -278,7 +290,10 @@ impl HttpClient {
                         .map(|s| s.to_string())
                 })
                 .unwrap_or_else(|| format!("HTTP error {}", status));
-            return Err(Error::Api(error_msg));
+            return Err(Error::Api(match error_code {
+                Some(code) => format!("[{}] {}", code, error_msg),
+                None => error_msg,
+            }));
         }
 
         // Handle API errors (status == success but body has error)

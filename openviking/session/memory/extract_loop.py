@@ -10,6 +10,7 @@ import asyncio
 import json
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from openviking.core.namespace import agent_space_fragment, user_space_fragment
 from openviking.models.vlm.base import VLMBase
 from openviking.server.identity import RequestContext
 from openviking.session.memory.schema_model_generator import (
@@ -28,7 +29,7 @@ from openviking.session.memory.utils import (
     validate_operations_uris,
 )
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
-from openviking.telemetry import tracer
+from openviking.telemetry import bind_telemetry_stage, tracer
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -330,8 +331,8 @@ The final output of the model must strictly follow the JSON Schema format shown 
             operations,
             schemas,
             registry,
-            user_space=self.ctx.user.user_space_name(),
-            agent_space=self.ctx.user.agent_space_name(),
+            user_space=user_space_fragment(self.ctx),
+            agent_space=agent_space_fragment(self.ctx),
             extract_context=self._extract_context,
         )
         if not is_valid:
@@ -361,11 +362,12 @@ The final output of the model must strictly follow the JSON Schema format shown 
         if not self._disable_tools_for_iteration:
             tools = self._tool_schemas
             tool_choice = "auto"
-        response = await self.vlm.get_completion_async(
-            messages=messages,
-            tools=tools,
-            tool_choice=tool_choice,
-        )
+        with bind_telemetry_stage("memory_extract"):
+            response = await self.vlm.get_completion_async(
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+            )
         tracer.info(f"response={response}")
         # print(f'response={response}')
         # Log cache hit info
@@ -501,8 +503,8 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     uri = resolve_flat_model_uri(
                         item_dict,
                         registry,
-                        user_space=self.ctx.user.user_space_name(),
-                        agent_space=self.ctx.user.agent_space_name(),
+                        user_space=user_space_fragment(self.ctx),
+                        agent_space=agent_space_fragment(self.ctx),
                         memory_type=field_name,
                         extract_context=self._extract_context,
                     )

@@ -9,7 +9,7 @@ import pytest
 import pytest_asyncio
 
 from openviking.server.api_keys import APIKeyManager
-from openviking.server.identity import Role
+from openviking.server.identity import AccountNamespacePolicy, Role
 from openviking.service.core import OpenVikingService
 from openviking_cli.exceptions import AlreadyExistsError, NotFoundError, UnauthenticatedError
 from openviking_cli.session.user_id import UserIdentifier
@@ -111,6 +111,7 @@ async def test_default_account_exists(manager: APIKeyManager):
     """Default account should be created on load."""
     accounts = manager.get_accounts()
     assert any(a["account_id"] == "default" for a in accounts)
+    assert manager.get_account_policy("default") == AccountNamespacePolicy()
 
 
 # ---- User lifecycle tests ----
@@ -221,6 +222,40 @@ async def test_persistence_across_reload(manager_service):
     assert identity.account_id == acct
     assert identity.user_id == "alice"
     assert identity.role == Role.ADMIN
+
+
+async def test_legacy_account_without_settings_infers_user_and_agent_policy(manager_service):
+    """Legacy accounts default to user-shared + agent-shared and persist the inferred policy."""
+    acct = _uid()
+    created_at = "2026-04-16T00:00:00+00:00"
+
+    seed_mgr = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await seed_mgr._write_json(
+        "/local/_system/accounts.json", {"accounts": {acct: {"created_at": created_at}}}
+    )
+    await seed_mgr._write_json(
+        f"/local/{acct}/_system/users.json",
+        {"users": {"alice": {"role": "admin", "key": "legacy-key-alice"}}},
+    )
+
+    mgr = APIKeyManager(
+        root_key=ROOT_KEY,
+        viking_fs=manager_service.viking_fs,
+    )
+    await mgr.load()
+
+    assert mgr.get_account_policy(acct) == AccountNamespacePolicy(
+        isolate_user_scope_by_agent=False,
+        isolate_agent_scope_by_user=False,
+    )
+
+    settings = await mgr._read_json(f"/local/{acct}/_system/setting.json")
+    assert settings == {
+        "namespace": {
+            "isolate_user_scope_by_agent": False,
+            "isolate_agent_scope_by_user": False,
+        }
+    }
 
 
 # ---- Encryption tests ----
