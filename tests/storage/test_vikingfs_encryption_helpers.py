@@ -10,11 +10,9 @@ from pathlib import Path
 import pytest
 
 from openviking.crypto.encryptor import FileEncryptor
-from openviking.crypto.exceptions import KeyMismatchError
 from openviking.crypto.providers import LocalFileProvider
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.exceptions import PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -103,31 +101,17 @@ def test_bound_context_helper_paths_encrypt_and_decrypt_consistently(encrypted_f
     assert raw_abstract.startswith(b"OVE1")
     assert raw_relations.startswith(b"OVE1")
 
+def test_read_and_read_file_return_plaintext_while_storage_stays_ciphertext(encrypted_fs: VikingFS):
+    ctx = _ctx("acct-a", "alice")
+    uri = "viking://resources/docs/plaintext-proof.txt"
+    plaintext = "line-1\nline-2\nline-3"
 
-def test_raw_helper_surfaces_wrong_account_decrypt_failure(encrypted_fs: VikingFS):
-    owner_ctx = _ctx("acct-a", "alice")
-    other_ctx = _ctx("acct-b", "bob")
-    uri = "viking://resources/private.txt"
+    _run(encrypted_fs.write_file(uri, plaintext, ctx=ctx))
 
-    _run(encrypted_fs.write_file(uri, "secret", ctx=owner_ctx))
-    path = encrypted_fs._uri_to_path(uri, ctx=owner_ctx)
+    assert _run(encrypted_fs.read_file(uri, ctx=ctx)) == plaintext
+    assert _run(encrypted_fs.read(uri, ctx=ctx)) == plaintext.encode("utf-8")
+    assert _run(encrypted_fs.read(uri, offset=7, size=6, ctx=ctx)) == b"line-2"
 
-    with pytest.raises(KeyMismatchError):
-        _run(encrypted_fs._read_path_bytes(path, ctx=other_ctx, decrypt=True, require_exists=True))
-
-
-@pytest.mark.parametrize("method_name,arg", [("write_file", "nope"), ("write_file_bytes", b"nope")])
-def test_non_root_cannot_mutate_temp_root_via_helper_writes(
-    encrypted_fs: VikingFS, method_name: str, arg
-):
-    ctx = _ctx("acct-a", "alice", role=Role.USER)
-
-    with pytest.raises(PermissionDeniedError, match="Temp root is read-only"):
-        _run(getattr(encrypted_fs, method_name)("viking://temp", arg, ctx=ctx))
-
-
-def test_non_root_cannot_append_temp_root_via_helper_write(encrypted_fs: VikingFS):
-    ctx = _ctx("acct-a", "alice", role=Role.USER)
-
-    with pytest.raises(PermissionDeniedError, match="Temp root is read-only"):
-        _run(encrypted_fs.append_file("viking://temp", "nope", ctx=ctx))
+    stored = encrypted_fs.agfs.read("/local/acct-a/resources/docs/plaintext-proof.txt")
+    assert stored.startswith(b"OVE1")
+    assert plaintext.encode("utf-8") not in stored

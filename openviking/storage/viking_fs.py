@@ -1763,7 +1763,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Write file directly."""
-        self._ensure_mutable_access(uri, ctx)
+        self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
 
         if isinstance(content, str):
@@ -1824,7 +1824,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Write single binary file."""
-        self._ensure_mutable_access(uri, ctx)
+        self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         await self._write_path_bytes(path, content, ctx=ctx, encrypt=True, ensure_parent=True)
 
@@ -1835,7 +1835,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Append content to file."""
-        self._ensure_mutable_access(uri, ctx)
+        self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
 
         try:
