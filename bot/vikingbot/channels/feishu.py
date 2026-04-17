@@ -756,21 +756,20 @@ class FeishuChannel(BaseChannel):
             return True
 
         chat_mode = await self._get_chat_mode(chat_id)
-        if chat_mode != "thread":
-            return True
 
-        # 话题群处理逻辑
-        is_topic_starter = message.root_id == message.message_id or not message.root_id
-
+        # 普通群和话题群都根据 thread_require_mention 判断
         if self.config.thread_require_mention:
-            # 模式1：所有消息都需要@才处理
+            # 模式1：所有消息都需要@才处理（普通群和话题群）
             if not is_mentioned:
                 return False
         else:
-            # 模式2：仅话题首条消息不需要@，后续回复需要@（DEBUG模式除外）
-            config = load_config()
-            if not is_topic_starter and not is_mentioned and config.mode != BotMode.DEBUG:
-                return False
+            # 模式2：话题群仅首条消息不需要@，后续回复需要@
+            if chat_mode == "thread":
+                is_topic_starter = message.root_id == message.message_id or not message.root_id
+                config = load_config()
+                if not is_topic_starter and not is_mentioned and config.mode != BotMode.DEBUG:
+                    return False
+            # 普通群不需要@，直接处理
 
         return True
 
