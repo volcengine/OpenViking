@@ -14,6 +14,7 @@ Supported providers:
 - Jina AI: Dense only
 - Voyage AI: Dense only
 - Cohere: Dense only
+- DashScope (Alibaba Tongyi): Dense only (text + multimodal)
 - Google Gemini: Dense only
 - LiteLLM: Dense only (bridges to OpenRouter, Ollama, vLLM, and many others)
 """
@@ -27,6 +28,7 @@ from openviking.models.embedder.base import (
     SparseEmbedderBase,
 )
 from openviking.models.embedder.cohere_embedders import CohereDenseEmbedder
+from openviking.models.embedder.dashscope_embedders import DashScopeDenseEmbedder
 
 try:
     from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
@@ -56,6 +58,8 @@ from openviking.models.embedder.voyage_embedders import VoyageDenseEmbedder
 __all__ = [
     # Cohere implementations
     "CohereDenseEmbedder",
+    # DashScope (Alibaba Tongyi) implementations
+    "DashScopeDenseEmbedder",
     # Base classes
     "EmbedResult",
     "EmbedderBase",

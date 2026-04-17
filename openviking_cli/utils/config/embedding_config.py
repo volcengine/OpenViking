@@ -37,7 +37,7 @@ class EmbeddingModelConfig(BaseModel):
     provider: Optional[str] = Field(
         default="volcengine",
         description=(
-            "Provider type: 'openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'litellm', 'local'. "
+            "Provider type: 'openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'litellm', 'local', 'dashscope'. "
             "For OpenRouter or other OpenAI-compatible providers, use 'litellm' with "
             "api_base and api_key, or 'openai' with api_base and extra_headers."
         ),
@@ -112,12 +112,13 @@ class EmbeddingModelConfig(BaseModel):
             "voyage",
             "minimax",
             "cohere",
+            "dashscope",
             "litellm",
             "local",
         ]:
             raise ValueError(
                 f"Invalid embedding provider: '{self.provider}'. Must be one of: "
-                "'openai', 'azure', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'minimax', 'cohere', 'litellm', 'local'"
+                "'openai', 'azure', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'minimax', 'cohere', 'dashscope', 'litellm', 'local'"
             )
 
         # Provider-specific validation
@@ -192,6 +193,10 @@ class EmbeddingModelConfig(BaseModel):
         elif self.provider == "cohere":
             if not self.api_key:
                 raise ValueError("Cohere provider requires 'api_key' to be set")
+
+        elif self.provider == "dashscope":
+            if not self.api_key:
+                raise ValueError("DashScope provider requires 'api_key' to be set")
 
         elif self.provider == "litellm":
             # litellm handles auth via env vars or explicit api_key; no strict requirement
@@ -383,6 +388,7 @@ class EmbeddingConfig(BaseModel):
         """
         from openviking.models.embedder import (
             CohereDenseEmbedder,
+            DashScopeDenseEmbedder,
             GeminiDenseEmbedder,
             JinaDenseEmbedder,
             LiteLLMDenseEmbedder,
@@ -582,6 +588,17 @@ class EmbeddingConfig(BaseModel):
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
+                    "config": dict(runtime_config),
+                },
+            ),
+            ("dashscope", "dense"): (
+                DashScopeDenseEmbedder,
+                lambda cfg: {
+                    "model_name": cfg.model,
+                    "api_key": cfg.api_key,
+                    "api_base": cfg.api_base,
+                    "dimension": cfg.dimension,
+                    "input_type": cfg.input,
                     "config": dict(runtime_config),
                 },
             ),
