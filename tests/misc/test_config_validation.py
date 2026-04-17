@@ -92,6 +92,57 @@ def test_vectordb_validation():
     except ValueError as e:
         print(f"   Fail: {e}")
 
+    # Test 4: volcengine_api_key backend complete config
+    print("\n4. Test volcengine_api_key backend complete config...")
+    try:
+        _ = VectorDBBackendConfig(
+            backend="volcengine_api_key",
+            volcengine_api_key={
+                "api_key": "vk-test-token",
+                "host": "api-vikingdb.vikingdb.cn-beijing.volces.com",
+            },
+        )
+        print("   Pass")
+    except ValueError as e:
+        print(f"   Fail: {e}")
+
+
+def test_vectordb_volcengine_api_key_validation():
+    config = VectorDBBackendConfig(
+        backend="volcengine_api_key",
+        volcengine_api_key={
+            "api_key": "vk-test-token",
+            "host": "api-vikingdb.vikingdb.cn-beijing.volces.com",
+        },
+    )
+
+    assert config.backend == "volcengine_api_key"
+    assert config.volcengine_api_key is not None
+    assert config.volcengine_api_key.api_key == "vk-test-token"
+    assert config.volcengine_api_key.host == "api-vikingdb.vikingdb.cn-beijing.volces.com"
+
+
+def test_vectordb_volcengine_api_key_requires_api_key():
+    try:
+        VectorDBBackendConfig(
+            backend="volcengine_api_key",
+            volcengine_api_key={"host": "api-vikingdb.vikingdb.cn-beijing.volces.com"},
+        )
+        raise AssertionError("Expected ValueError for missing api_key")
+    except ValueError as e:
+        assert "api_key" in str(e)
+
+
+def test_vectordb_volcengine_api_key_requires_host():
+    try:
+        VectorDBBackendConfig(
+            backend="volcengine_api_key",
+            volcengine_api_key={"api_key": "vk-test-token"},
+        )
+        raise AssertionError("Expected ValueError for missing host")
+    except ValueError as e:
+        assert "host" in str(e)
+
 
 def test_vectordb_index_name_defaults_and_overrides():
     default_config = VectorDBBackendConfig()

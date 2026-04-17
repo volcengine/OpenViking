@@ -533,6 +533,33 @@ async def test_init_context_collection_excludes_parent_uri_for_local_backend(mon
     assert "parent_uri" not in captured["schema"]["ScalarIndex"]
 
 
+@pytest.mark.asyncio
+async def test_init_context_collection_skips_bootstrap_for_volcengine_api_key(monkeypatch):
+    class _Storage:
+        async def create_collection(self, name, schema):  # pragma: no cover
+            del name, schema
+            raise AssertionError("create_collection should not be called for data-plane backend")
+
+        async def get_collection_meta(self):  # pragma: no cover
+            raise AssertionError("get_collection_meta should not be called for data-plane backend")
+
+        async def update_collection_description(self, description):  # pragma: no cover
+            del description
+            raise AssertionError(
+                "update_collection_description should not be called for data-plane backend"
+            )
+
+    embedder = _DummyEmbedder()
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(embedder, backend="volcengine_api_key"),
+    )
+
+    created = await init_context_collection(_Storage())
+
+    assert created is False
+
+
 def test_single_account_backend_filters_parent_uri_against_current_schema():
     class _Collection:
         def get_meta_data(self):

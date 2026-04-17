@@ -9,11 +9,13 @@ from .http_adapter import HttpCollectionAdapter
 from .local_adapter import LocalCollectionAdapter
 from .vikingdb_private_adapter import VikingDBPrivateCollectionAdapter
 from .volcengine_adapter import VolcengineCollectionAdapter
+from .volcengine_api_key_adapter import VolcengineApiKeyCollectionAdapter
 
 _ADAPTER_REGISTRY: dict[str, type[CollectionAdapter]] = {
     "local": LocalCollectionAdapter,
     "http": HttpCollectionAdapter,
     "volcengine": VolcengineCollectionAdapter,
+    "volcengine_api_key": VolcengineApiKeyCollectionAdapter,
     "vikingdb": VikingDBPrivateCollectionAdapter,
 }
 

@@ -46,6 +46,18 @@ class VikingDBConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class VolcengineApiKeyConfig(BaseModel):
+    """Configuration for Volcengine VikingDB data-plane access via API key."""
+
+    api_key: Optional[str] = Field(default=None, description="VikingDB Data API key")
+    host: Optional[str] = Field(
+        default=None,
+        description="VikingDB data API host, e.g. api-vikingdb.vikingdb.cn-beijing.volces.com",
+    )
+
+    model_config = {"extra": "forbid"}
+
+
 class VectorDBBackendConfig(BaseModel):
     """
     Configuration for VectorDB backend.
@@ -56,7 +68,10 @@ class VectorDBBackendConfig(BaseModel):
 
     backend: str = Field(
         default="local",
-        description="VectorDB backend type: 'local' (file-based), 'http' (remote service), or 'volcengine' (VikingDB)",
+        description=(
+            "VectorDB backend type: 'local', 'http', 'volcengine' (AK/SK signed), "
+            "'volcengine_api_key' (data-plane only), or 'vikingdb' (private deployment)"
+        ),
     )
 
     name: Optional[str] = Field(default=COLLECTION_NAME, description="Collection name for VectorDB")
@@ -103,6 +118,11 @@ class VectorDBBackendConfig(BaseModel):
         description="Volcengine VikingDB configuration for 'volcengine' type",
     )
 
+    volcengine_api_key: Optional[VolcengineApiKeyConfig] = Field(
+        default_factory=lambda: VolcengineApiKeyConfig(),
+        description="Volcengine VikingDB data-plane configuration for 'volcengine_api_key' type",
+    )
+
     # VikingDB private deployment mode
     vikingdb: Optional[VikingDBConfig] = Field(
         default_factory=lambda: VikingDBConfig(),
@@ -119,7 +139,7 @@ class VectorDBBackendConfig(BaseModel):
     @model_validator(mode="after")
     def validate_config(self):
         """Validate configuration completeness and consistency"""
-        standard_backends = ["local", "http", "volcengine", "vikingdb"]
+        standard_backends = ["local", "http", "volcengine", "volcengine_api_key", "vikingdb"]
 
         # Allow custom backend classes (containing dot) without standard validation
         if "." in self.backend:
@@ -150,6 +170,16 @@ class VectorDBBackendConfig(BaseModel):
                     "Using region-based console/data hosts for region='%s'.",
                     self.volcengine.region,
                 )
+
+        elif self.backend == "volcengine_api_key":
+            if self.volcengine_api_key and self.volcengine_api_key.host:
+                self.volcengine_api_key.host = self.volcengine_api_key.host.strip().rstrip("/")
+            if not self.volcengine_api_key or not self.volcengine_api_key.api_key:
+                raise ValueError(
+                    "VectorDB volcengine_api_key backend requires 'api_key' to be set"
+                )
+            if not self.volcengine_api_key.host:
+                raise ValueError("VectorDB volcengine_api_key backend requires 'host' to be set")
 
         elif self.backend == "vikingdb":
             if not self.vikingdb or not self.vikingdb.host:

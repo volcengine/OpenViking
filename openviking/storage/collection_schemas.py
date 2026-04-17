@@ -214,6 +214,12 @@ async def init_context_collection(storage) -> bool:
         raise ValueError("Vector DB collection name is required")
     collection_name = name
     embedding_meta = _build_embedding_metadata(config)
+    if config.storage.vectordb.backend == "volcengine_api_key":
+        logger.info(
+            "Skip collection bootstrap for volcengine_api_key backend; "
+            "collection/index/schema must be pre-created out of band"
+        )
+        return False
     schema = CollectionSchemas.context_collection(
         collection_name,
         vector_dim,

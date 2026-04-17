@@ -28,6 +28,10 @@
         "ak": null,
         "sk": null,
         "session_token": null
+      },
+      "volcengine_api_key": {
+        "api_key": null,
+        "host": "api-vikingdb.vikingdb.cn-beijing.volces.com"
       }
     },
     "agfs": {
