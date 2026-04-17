@@ -134,12 +134,12 @@ def test_prompt_manager_ignores_custom_templates_from_config_when_not_enabled(
     assert manager.templates_dir == PromptManager._get_bundled_templates_dir()
     bundled_template = manager.load_template("vision.image_understanding")
     assert bundled_template.metadata.id == "vision.image_understanding"
-    assert manager._resolve_template_path("memory.profile") != custom_dir / "memory" / "profile.yaml"
+    assert (
+        manager._resolve_template_path("memory.profile") != custom_dir / "memory" / "profile.yaml"
+    )
 
 
-def test_prompt_manager_ignores_environment_templates_dir_when_not_enabled(
-    tmp_path, monkeypatch
-):
+def test_prompt_manager_ignores_environment_templates_dir_when_not_enabled(tmp_path, monkeypatch):
     env_dir = tmp_path / "env-prompts"
     config_dir = tmp_path / "config-prompts"
     config_path = tmp_path / "ov.conf"
