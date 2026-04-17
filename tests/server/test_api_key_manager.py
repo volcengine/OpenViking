@@ -225,7 +225,7 @@ async def test_persistence_across_reload(manager_service):
 
 
 async def test_legacy_account_without_settings_infers_user_and_agent_policy(manager_service):
-    """Legacy accounts default to user-shared + agent-isolated and persist the inferred policy."""
+    """Legacy accounts default to user-shared + agent-shared and persist the inferred policy."""
     acct = _uid()
     created_at = "2026-04-16T00:00:00+00:00"
 
@@ -246,14 +246,14 @@ async def test_legacy_account_without_settings_infers_user_and_agent_policy(mana
 
     assert mgr.get_account_policy(acct) == AccountNamespacePolicy(
         isolate_user_scope_by_agent=False,
-        isolate_agent_scope_by_user=True,
+        isolate_agent_scope_by_user=False,
     )
 
     settings = await mgr._read_json(f"/local/{acct}/_system/setting.json")
     assert settings == {
         "namespace": {
             "isolate_user_scope_by_agent": False,
-            "isolate_agent_scope_by_user": True,
+            "isolate_agent_scope_by_user": False,
         }
     }
 

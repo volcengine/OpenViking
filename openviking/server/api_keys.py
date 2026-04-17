@@ -119,7 +119,7 @@ class APIKeyManager:
                 if inferred_from_legacy:
                     logger.info(
                         "Inferred namespace policy for legacy account %s using the historical "
-                        "default user-shared/agent-isolated layout",
+                        "default user-shared/agent-shared layout",
                         account_id,
                     )
 
@@ -189,10 +189,10 @@ class APIKeyManager:
         return AccountNamespacePolicy(), True, False
 
     def _infer_legacy_namespace_policy(self) -> AccountNamespacePolicy:
-        """Map pre-policy accounts to the historical default namespace policy."""
+        """Map pre-policy accounts to the compatibility default namespace policy."""
         return AccountNamespacePolicy(
             isolate_user_scope_by_agent=False,
-            isolate_agent_scope_by_user=True,
+            isolate_agent_scope_by_user=False,
         )
 
     def resolve(self, api_key: str) -> ResolvedIdentity:

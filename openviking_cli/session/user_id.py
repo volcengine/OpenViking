@@ -50,11 +50,18 @@ class UserIdentifier(object):
         return self._user_id
 
     def _agent_space_source(self) -> str:
-        """Return the legacy source string used by deprecated hash-based agent helpers."""
+        """Return the legacy source string used by deprecated hash-based agent helpers.
+
+        This helper is kept only for backward-compatible tooling paths. Service-side
+        namespace resolution is now driven by per-account namespace policy instead.
+        """
         return f"{self._user_id}:{self._agent_id}"
 
     def agent_space_name(self) -> str:
-        """Legacy hash-based agent space helper kept for backward compatibility."""
+        """Return the legacy hash-based agent space for backward-compatible helpers only.
+
+        New server-side agent URIs no longer derive from this hash helper.
+        """
         return hashlib.md5(self._agent_space_source().encode()).hexdigest()[:12]
 
     def memory_space_uri(self) -> str:
