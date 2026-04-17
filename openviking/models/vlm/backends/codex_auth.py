@@ -586,22 +586,64 @@ def resolve_codex_runtime_credentials(
                 external_path = Path(os.getenv("OPENVIKING_CODEX_BOOTSTRAP_PATH", "").strip()).expanduser()
             elif _default_codex_auth_path().exists():
                 external_path = _default_codex_auth_path()
+            external_missing = False
             should_resync = force_refresh or (
                 refresh_if_expiring
                 and _codex_access_token_is_expiring(access_token, refresh_skew_seconds)
             )
-            if external_path is not None and (should_resync or force_refresh):
-                payload = _sync_external_codex_auth(
-                    external_path,
+            if should_resync:
+                if external_path is not None:
+                    external_payload = _load_tokens_from_source("codex-cli", external_path)
+                    if external_payload is not None:
+                        _write_tokens_to_ov_store(
+                            ov_auth_path,
+                            external_payload["access_token"],
+                            external_payload["refresh_token"],
+                            last_refresh=external_payload.get("last_refresh"),
+                            imported_from=str(external_path),
+                            client_id=external_payload.get("client_id"),
+                            auth_owner=CODEX_AUTH_OWNER_EXTERNAL,
+                        )
+                        payload = external_payload
+                        access_token = payload["access_token"]
+                        refresh_token = payload["refresh_token"]
+                    else:
+                        external_missing = True
+                else:
+                    external_missing = True
+
+            should_refresh = force_refresh or (
+                refresh_if_expiring
+                and _codex_access_token_is_expiring(access_token, refresh_skew_seconds)
+            )
+            if should_refresh and external_missing:
+                refreshed = refresh_codex_oauth(access_token, refresh_token)
+                access_token = refreshed["access_token"]
+                refresh_token = refreshed["refresh_token"]
+                _write_tokens_to_ov_store(
                     ov_auth_path,
-                    fallback_payload=payload,
+                    access_token,
+                    refresh_token,
+                    last_refresh=refreshed.get("last_refresh"),
+                    imported_from=None,
+                    client_id=payload.get("client_id"),
+                    auth_owner=CODEX_AUTH_OWNER_OPENVIKING,
                 )
-                access_token = payload["access_token"]
-                refresh_token = payload["refresh_token"]
-            if refresh_if_expiring and _codex_access_token_is_expiring(access_token, refresh_skew_seconds):
+                return {
+                    "provider": "openai-codex",
+                    "api_key": access_token,
+                    "refresh_token": refresh_token,
+                    "base_url": _resolve_base_url(),
+                    "source": "openviking",
+                    "path": str(ov_auth_path),
+                    "auth_owner": CODEX_AUTH_OWNER_OPENVIKING,
+                }
+
+            if should_refresh:
                 raise CodexAuthError(
                     "Externally managed Codex auth is expiring. Refresh it via Codex CLI or re-run openviking-server init."
                 )
+
             return {
                 "provider": "openai-codex",
                 "api_key": access_token,

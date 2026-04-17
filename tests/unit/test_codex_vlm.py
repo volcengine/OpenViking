@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import json
+import base64
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -218,3 +219,49 @@ def test_codex_auth_store_uses_windows_lock_when_fcntl_is_unavailable(tmp_path, 
 
     assert ov_auth_path.exists()
     assert lock_calls == [(_FakeMsvcrt.LK_LOCK, 1), (_FakeMsvcrt.LK_UNLCK, 1)]
+
+
+def _make_jwt_token(payload: dict) -> str:
+    encoded = base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode("utf-8").rstrip("=")
+    return f"header.{encoded}.signature"
+
+
+def test_codex_auth_takeover_refreshes_when_external_store_missing(tmp_path, monkeypatch):
+    ov_auth_path = tmp_path / "codex_auth.json"
+    missing_external = tmp_path / "codex_cli_auth.json"
+    expiring_access_token = _make_jwt_token({"exp": 0, "aud": "app_testclient"})
+    ov_auth_path.write_text(
+        json.dumps(
+            {
+                "provider": "openai-codex",
+                "auth_mode": "chatgpt",
+                "auth_owner": "external",
+                "imported_from": str(missing_external),
+                "tokens": {
+                    "access_token": expiring_access_token,
+                    "refresh_token": "refresh-token",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENVIKING_CODEX_AUTH_PATH", str(ov_auth_path))
+
+    class _Response:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"access_token": _make_jwt_token({"exp": 9999999999}), "refresh_token": "new-refresh"}
+
+    monkeypatch.setattr(codex_auth.httpx, "post", lambda *_args, **_kwargs: _Response())
+
+    creds = resolve_codex_runtime_credentials(force_refresh=True)
+
+    assert creds["source"] == "openviking"
+    assert creds["auth_owner"] == "openviking"
+    persisted = json.loads(ov_auth_path.read_text(encoding="utf-8"))
+    assert persisted["auth_owner"] == "openviking"
+    assert "imported_from" not in persisted
+    assert persisted["tokens"]["refresh_token"] == "new-refresh"
