@@ -152,6 +152,37 @@ async def test_explicit_subpath_not_split():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("recursive", [False, True])
+async def test_recursive_flag_is_forwarded_to_semantic_msg(recursive):
+    queue = _DummyQueue()
+    qm = _DummyQueueManager(queue)
+    vfs = _DummyVikingFS({})
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    with (
+        patch("openviking.utils.summarizer.get_queue_manager", return_value=qm),
+        patch(
+            "openviking.utils.summarizer.get_current_telemetry",
+            return_value=SimpleNamespace(telemetry_id="tid"),
+        ),
+        patch(
+            "openviking.utils.summarizer.get_request_wait_tracker", return_value=_DummyWaitTracker()
+        ),
+        patch("openviking.utils.summarizer.get_viking_fs", return_value=vfs),
+    ):
+        summarizer = Summarizer(vlm_processor=None)
+        res = await summarizer.summarize(
+            resource_uris=["viking://resources/foo"],
+            ctx=ctx,
+            recursive=recursive,
+        )
+
+    assert res["status"] == "success"
+    assert res["enqueued_count"] == 1
+    assert queue.msgs[0].recursive is recursive
+
+
+@pytest.mark.asyncio
 async def test_resources_root_empty_import_is_error():
     queue = _DummyQueue()
     qm = _DummyQueueManager(queue)

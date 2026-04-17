@@ -129,7 +129,7 @@ async def test_reindex_uses_request_tenant_for_exists(monkeypatch):
         def has_running(self, task_type, uri, owner_account_id=None, owner_user_id=None):
             return False
 
-    async def fake_do_reindex(service, uri, regenerate, ctx):
+    async def fake_do_reindex(service, uri, regenerate, recursive, ctx):
         return {"status": "success", "message": "Indexed 1 resources"}
 
     ctx = RequestContext(
@@ -154,3 +154,52 @@ async def test_reindex_uses_request_tenant_for_exists(monkeypatch):
     assert response.status == "ok"
     assert seen["uri"] == "viking://resources/demo/demo-note.md"
     assert seen["ctx"] == ctx
+    assert request.recursive is False
+
+
+@pytest.mark.asyncio
+async def test_reindex_forwards_recursive_flag(monkeypatch):
+    """Reindex should forward the recursive flag to the execution layer."""
+    seen = {}
+
+    class FakeVikingFS:
+        async def exists(self, uri, ctx=None):
+            return True
+
+    class FakeTracker:
+        def has_running(self, task_type, uri, owner_account_id=None, owner_user_id=None):
+            return False
+
+    async def fake_do_reindex(service, uri, regenerate, recursive, ctx):
+        seen["recursive"] = recursive
+        seen["uri"] = uri
+        return {"status": "success", "message": "Indexed recursively"}
+
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="test", user_id="alice", agent_id="default"),
+        role=Role.ADMIN,
+    )
+    request = ReindexRequest(
+        uri="viking://resources/demo",
+        wait=True,
+        recursive=True,
+    )
+
+    monkeypatch.setattr("openviking.storage.viking_fs.get_viking_fs", lambda: FakeVikingFS())
+    monkeypatch.setattr(
+        "openviking.service.task_tracker.get_task_tracker",
+        lambda: FakeTracker(),
+    )
+    monkeypatch.setattr(
+        "openviking.server.routers.content.get_service",
+        lambda: SimpleNamespace(),
+    )
+    monkeypatch.setattr("openviking.server.routers.content._do_reindex", fake_do_reindex)
+
+    response = await reindex(request=request, _ctx=ctx)
+
+    assert response.status == "ok"
+    assert seen == {
+        "recursive": True,
+        "uri": "viking://resources/demo",
+    }

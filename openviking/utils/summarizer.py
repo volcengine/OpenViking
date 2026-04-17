@@ -57,6 +57,7 @@ class Summarizer:
                 "message": "temp_uris length must match resource_uris length",
             }
         enqueued_count = 0
+        recursive = kwargs.get("recursive", True)
 
         telemetry = get_current_telemetry()
 
@@ -97,6 +98,7 @@ class Summarizer:
                 msg = SemanticMsg(
                     uri=source_uri,
                     context_type=context_type,
+                    recursive=recursive,
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
                     agent_id=ctx.user.agent_id,
