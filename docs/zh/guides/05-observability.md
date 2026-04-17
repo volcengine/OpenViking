@@ -246,6 +246,33 @@ curl -X POST http://localhost:1933/api/v1/search/find \
 
 和前面的 `telemetry` 相比，`/metrics` 关注的是**聚合后的时间序列**；`telemetry` 关注的是**某一次请求内部到底发生了什么**。
 
+### 快速开启 metrics
+
+`/metrics` 默认是关闭的：当指标体系未启用时，访问会返回 `404`，并提示 `Prometheus metrics are disabled.`。
+
+开启方式不需要完整配置，只需要在 `ov.conf` 的 `server` 段打开总开关即可。
+
+**最小配置（推荐）**
+
+在 `~/.openviking/ov.conf`（或你启动时通过 `--config` 指定的路径）里加入：
+
+```json
+{
+  "server": {
+    "observability": {
+      "metrics": {
+        "enabled": true
+      }
+    }
+  }
+}
+```
+改完配置后需要**重启 OpenViking Server** 才会生效。
+
+完整字段、支持范围和更多示例见：
+
+- [指标](../concepts/12-metrics.md) 
+
 ### 直接访问 `/metrics`
 
 当前实现中，`/metrics` 未接入 `get_request_context` 等鉴权依赖，因此从代码行为上看，它当前等价于公开抓取端点：
@@ -284,9 +311,10 @@ scrape_configs:
 
 **第 2 步：在 Grafana 导入官方 demo dashboard**
 
-OpenViking 仓库里已经提供了一个可直接导入的 dashboard JSON：
+OpenViking 仓库里已经提供了可直接导入的 dashboard JSON：
 
 - [openviking_demo_dashboard.json](../../../examples/grafana/openviking_demo_dashboard.json)
+- [openviking_token_demo_dashboard.json](../../../examples/grafana/openviking_token_demo_dashboard.json) （注意，该 dashboard 依赖 `tim012432-calendarheatmap-panel` grafana 插件，需要先安装才能正常工作）
 
 导入步骤可以按下面做：
 

@@ -63,7 +63,7 @@ jobs:
     steps:
     - name: Verify actor permission
       id: check
-      uses: actions/github-script@v8
+      uses: actions/github-script@v9
       with:
         script: |
           // Only check permission for manual dispatch

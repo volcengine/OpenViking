@@ -114,6 +114,56 @@ class TelemetryBridgeCollector(EventMetricCollector):
 
     SUPPORTED_EVENTS: ClassVar[frozenset[str]] = frozenset({"telemetry.summary"})
 
+    @staticmethod
+    def _extract_total_tokens(payload: Any) -> int:
+        """Extract a total token count from either an int payload or a `{total: ...}` mapping."""
+        if isinstance(payload, Mapping):
+            return int(payload.get("total", 0) or 0)
+        return int(payload or 0)
+
+    def _iter_stage_token_metrics(self, tokens: Mapping[str, Any]) -> list[tuple[str, str, int]]:
+        """Expand telemetry token payloads into `(stage, token_type, value)` tuples."""
+        stages = tokens.get("stages") or {}
+        if isinstance(stages, Mapping) and stages:
+            metrics: list[tuple[str, str, int]] = []
+            for stage, stage_payload in stages.items():
+                if not isinstance(stage_payload, Mapping):
+                    continue
+                llm_payload = stage_payload.get("llm") or {}
+                if isinstance(llm_payload, Mapping):
+                    llm_input = int(llm_payload.get("input", 0) or 0)
+                    llm_output = int(llm_payload.get("output", 0) or 0)
+                    if llm_input > 0:
+                        metrics.append((str(stage), "llm_input", llm_input))
+                    if llm_output > 0:
+                        metrics.append((str(stage), "llm_output", llm_output))
+                for source_name, token_type in (
+                    ("embedding", "embedding"),
+                    ("rerank", "rerank"),
+                ):
+                    total = self._extract_total_tokens(stage_payload.get(source_name, 0) or 0)
+                    if total > 0:
+                        metrics.append((str(stage), token_type, total))
+            return metrics
+
+        llm = tokens.get("llm") or {}
+        metrics = []
+        llm_input = int(llm.get("input", 0) or 0)
+        llm_output = int(llm.get("output", 0) or 0)
+        if llm_input > 0:
+            metrics.append(("vlm", "llm_input", llm_input))
+        if llm_output > 0:
+            metrics.append(("vlm", "llm_output", llm_output))
+
+        embedding_total = self._extract_total_tokens(tokens.get("embedding", 0) or 0)
+        if embedding_total > 0:
+            metrics.append(("embed_resource", "embedding", embedding_total))
+
+        rerank_total = self._extract_total_tokens(tokens.get("rerank", 0) or 0)
+        if rerank_total > 0:
+            metrics.append(("rerank", "rerank", rerank_total))
+        return metrics
+
     def collect(self, registry=None) -> None:
         """
         Implement the unified collector interface as a no-op for this event-driven collector.
@@ -160,24 +210,13 @@ class TelemetryBridgeCollector(EventMetricCollector):
         )
 
         tokens = summary.get("tokens") or {}
-        total_tokens = int(tokens.get("total", 0) or 0)
-        llm = tokens.get("llm") or {}
-        llm_input = int(llm.get("input", 0) or 0)
-        llm_output = int(llm.get("output", 0) or 0)
-        embedding_tokens = int(tokens.get("embedding", 0) or 0)
-
-        for token_type, value in (
-            ("all", total_tokens),
-            ("llm_input", llm_input),
-            ("llm_output", llm_output),
-            ("embedding", embedding_tokens),
-        ):
+        for stage, token_type, value in self._iter_stage_token_metrics(tokens):
             if value <= 0:
                 continue
             registry.inc_counter(
                 self.OPERATION_TOKENS_TOTAL,
-                labels={"operation": operation, "token_type": token_type},
-                label_names=("operation", "token_type"),
+                labels={"operation": operation, "stage": stage, "token_type": token_type},
+                label_names=("operation", "stage", "token_type"),
                 amount=value,
             )
 

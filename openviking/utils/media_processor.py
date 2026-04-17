@@ -193,3 +193,13 @@ class UnifiedResourceProcessor:
     def _is_url(self, source: str) -> bool:
         """Check if source is a URL."""
         return is_remote_resource_source(source)
+
+    @staticmethod
+    def _is_feishu_url(source: str) -> bool:
+        """Backward-compatible Feishu URL detector used by legacy tests/callers."""
+        try:
+            from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+
+            return FeishuAccessor._is_feishu_url(source)
+        except Exception:
+            return False

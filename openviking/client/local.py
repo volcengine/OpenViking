@@ -515,23 +515,19 @@ class LocalClient(BaseClient):
         """Create a new session or load an existing one.
 
         Args:
-            session_id: Session ID, creates a new session if None
-            must_exist: If True and session_id is provided, raises NotFoundError
-                        when the session does not exist.
-                        If session_id is None, must_exist is ignored.
-
+            session_id: Session ID, creates a new session if None.
+            must_exist: Whether to raise an error if the session does not exist. Default False.
         Returns:
-            Session object
-
-        Raises:
-            NotFoundError: If must_exist=True and the session does not exist.
+            Session object if exists, None otherwise.
         """
+    
         session = self._service.sessions.session(self._ctx, session_id)
-        if must_exist and session_id:
-            if not run_async(session.exists()):
+        if not run_async(session.exists()):
+            if must_exist and session_id:
                 from openviking_cli.exceptions import NotFoundError
-
                 raise NotFoundError(session_id, "session")
+            else:
+                run_async(session.ensure_exists())
         return session
 
     async def session_exists(self, session_id: str) -> bool:

@@ -504,11 +504,11 @@ except Exception as e:
     > /tmp/openviking.log
 
     if [ -n "$OV_CONF" ]; then
-        nohup $OV_PYTHON -m openviking.server.bootstrap --config "$OV_CONF" > /tmp/openviking.log 2>&1 &
+        nohup $OV_PYTHON -u -m openviking.server.bootstrap --config "$OV_CONF" > /tmp/openviking.log 2>&1 &
         OV_SERVER_PID=$!
         log "Started OpenViking server with config: $OV_CONF (PID: $OV_SERVER_PID)"
     else
-        nohup $OV_PYTHON -m openviking.server.bootstrap > /tmp/openviking.log 2>&1 &
+        nohup $OV_PYTHON -u -m openviking.server.bootstrap > /tmp/openviking.log 2>&1 &
         OV_SERVER_PID=$!
         log "Started OpenViking server without explicit config (PID: $OV_SERVER_PID)"
     fi
@@ -535,9 +535,15 @@ except Exception as e:
     done
 
     if [ "$OV_SERVER_RUNNING" = false ]; then
-        log "⚠️  WARNING: OpenViking server failed to start on port 1933"
+        log "❌ ERROR: OpenViking server failed to start on port 1933"
         log "   Server log:"
         cat /tmp/openviking.log 2>/dev/null | tee -a "$LOG_FILE" || true
+        log ""
+        log "This likely indicates a data compatibility issue between the new code"
+        log "and existing vectordb data. Check the error above for details."
+        log "Do NOT delete /root/.openviking/data/ - this error should be reported and fixed."
+        log "Caches, build artifacts, and temp files are safe to clean."
+        exit 1
     fi
 fi
 
