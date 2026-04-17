@@ -267,17 +267,37 @@ async def _do_reindex(
     regenerate: bool,
     ctx: RequestContext,
 ) -> dict:
-    """Execute reindex within a lock scope."""
-    from openviking.storage.transaction import LockContext, get_lock_manager
+    """Execute reindex within a lock scope.
+
+    Uses a 30-second timeout to allow stale locks (from crashed semantic
+    processing) to be detected and cleaned up, or for active locks to be
+    released naturally.  Without a timeout, reindex fails immediately when
+    a lifecycle lock from semantic processing is present, even if that lock
+    is stale or about to be released.
+    """
+    from openviking.storage.errors import LockAcquisitionError
+    from openviking.storage.transaction import get_lock_manager
 
     viking_fs = service.viking_fs
     path = viking_fs._uri_to_path(uri, ctx=ctx)
+    lock_manager = get_lock_manager()
 
-    async with LockContext(get_lock_manager(), [path], lock_mode="point"):
+    # Create a handle with explicit timeout for lock acquisition
+    handle = lock_manager.create_handle()
+    try:
+        # Acquire lock with 30s timeout (allows stale lock cleanup)
+        acquired = await lock_manager.acquire_point(handle, path, timeout=30.0)
+        if not acquired:
+            raise LockAcquisitionError(f"Failed to acquire lock for {uri} after 30s")
+
         if regenerate:
-            return await service.resources.summarize([uri], ctx=ctx)
+            result = await service.resources.summarize([uri], ctx=ctx)
         else:
-            return await service.resources.build_index([uri], ctx=ctx)
+            result = await service.resources.build_index([uri], ctx=ctx)
+
+        return result
+    finally:
+        await lock_manager.release(handle)
 
 
 async def _background_reindex_tracked(
