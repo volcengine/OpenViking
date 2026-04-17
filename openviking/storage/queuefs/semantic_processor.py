@@ -54,8 +54,19 @@ class DiffResult:
     added_files: List[str] = field(default_factory=list)
     deleted_files: List[str] = field(default_factory=list)
     updated_files: List[str] = field(default_factory=list)
+    unchanged_files: List[str] = field(default_factory=list)
     added_dirs: List[str] = field(default_factory=list)
     deleted_dirs: List[str] = field(default_factory=list)
+    unchanged_dirs: List[str] = field(default_factory=list)
+
+    def operation_counts(self) -> tuple[int, int, int, int, int]:
+        return (
+            len(self.added_files),
+            len(self.deleted_files),
+            len(self.updated_files),
+            len(self.added_dirs),
+            len(self.deleted_dirs),
+        )
 
 
 class RequestQueueStats:
@@ -651,6 +662,7 @@ class SemanticProcessor(DequeueHandlerBase):
             return files, dirs
 
         async def sync_dir(root_dir: str, target_dir: str) -> None:
+            before_counts = diff.operation_counts()
             root_files, root_dirs = await list_children(root_dir)
             target_files, target_dirs = await list_children(target_dir)
 
@@ -740,6 +752,8 @@ class SemanticProcessor(DequeueHandlerBase):
                             logger.error(
                                 f"[SyncDiff] Failed to move updated file: {root_file} -> {target_file}, error={e}"
                             )
+                    else:
+                        diff.unchanged_files.append(root_file)
                     continue
 
                 if root_file and not target_file:
@@ -811,6 +825,9 @@ class SemanticProcessor(DequeueHandlerBase):
 
                 if root_subdir and target_subdir:
                     await sync_dir(root_subdir, target_subdir)
+
+            if diff.operation_counts() == before_counts:
+                diff.unchanged_dirs.append(root_dir)
 
         target_exists = await viking_fs.exists(target_uri, ctx=ctx)
         if not target_exists:

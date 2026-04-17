@@ -46,6 +46,20 @@ class DagStats:
 
 
 @dataclass
+class IncrementalReuseStats:
+    reused_file_summaries: int = 0
+    regenerated_file_summaries: int = 0
+    missing_cached_file_summaries: int = 0
+    reused_directory_summaries: int = 0
+    regenerated_directory_summaries: int = 0
+    extracted_directory_abstracts: int = 0
+    skipped_file_vectorizations: int = 0
+    enqueued_file_vectorizations: int = 0
+    skipped_directory_vectorizations: int = 0
+    enqueued_directory_vectorizations: int = 0
+
+
+@dataclass
 class VectorizeTask:
     """Vectorize task information."""
 
@@ -107,6 +121,7 @@ class SemanticDagExecutor:
         self._overview_cache: Dict[str, Dict[str, str]] = {}
         self._overview_cache_lock = asyncio.Lock()
         self._refresh_task: Optional[asyncio.Task] = None
+        self._incremental_reuse_stats = IncrementalReuseStats()
 
     def _create_on_complete_callback(self) -> Callable[[], Awaitable[None]]:
         """Create on_complete callback for incremental update or full update."""
@@ -135,8 +150,10 @@ class SemanticDagExecutor:
                     f"added_files={len(diff.added_files)}, "
                     f"deleted_files={len(diff.deleted_files)}, "
                     f"updated_files={len(diff.updated_files)}, "
+                    f"unchanged_files={len(diff.unchanged_files)}, "
                     f"added_dirs={len(diff.added_dirs)}, "
-                    f"deleted_dirs={len(diff.deleted_dirs)}"
+                    f"deleted_dirs={len(diff.deleted_dirs)}, "
+                    f"unchanged_dirs={len(diff.unchanged_dirs)}"
                 )
             except Exception as e:
                 logger.error(
@@ -181,6 +198,8 @@ class SemanticDagExecutor:
         async with self._vectorize_lock:
             task_count = self._vectorize_task_count
             tasks = list(self._pending_vectorize_tasks)
+
+        self._log_incremental_reuse_stats()
 
         if task_count > 0:
             from .embedding_tracker import EmbeddingTaskTracker
@@ -421,12 +440,22 @@ class SemanticDagExecutor:
         target_path = self._get_target_file_path(dir_uri)
         if not target_path:
             return None, None
+        overview = None
+        abstract = None
         try:
             overview = await self._viking_fs.read_file(f"{target_path}/.overview.md", ctx=self._ctx)
-            abstract = await self._viking_fs.read_file(f"{target_path}/.abstract.md", ctx=self._ctx)
-            return overview, abstract
         except Exception:
-            return None, None
+            overview = None
+        try:
+            abstract = await self._viking_fs.read_file(f"{target_path}/.abstract.md", ctx=self._ctx)
+        except Exception:
+            abstract = None
+
+        if overview and not abstract:
+            abstract = self._processor._extract_abstract_from_overview(overview)
+            if abstract:
+                self._incremental_reuse_stats.extracted_directory_abstracts += 1
+        return overview, abstract
 
     async def _file_summary_task(self, parent_uri: str, file_path: str) -> None:
         """Generate file summary and notify parent completion."""
@@ -443,14 +472,18 @@ class SemanticDagExecutor:
                     summary_dict = await self._read_existing_summary(file_path)
                     if summary_dict is not None:
                         need_vectorize = False
+                        self._incremental_reuse_stats.reused_file_summaries += 1
                     else:
                         self._file_change_status[file_path] = True
+                        self._incremental_reuse_stats.missing_cached_file_summaries += 1
             else:
                 self._file_change_status[file_path] = True
             if summary_dict is None:
                 summary_dict = await self._processor._generate_single_file_summary(
                     file_path, llm_sem=self._llm_sem, ctx=self._ctx
                 )
+                if self._incremental_update:
+                    self._incremental_reuse_stats.regenerated_file_summaries += 1
         except Exception as e:
             logger.warning(f"Failed to generate summary for {file_path}: {e}")
             summary_dict = {"name": file_name, "summary": ""}
@@ -473,6 +506,10 @@ class SemanticDagExecutor:
                     use_summary=use_summary,
                 )
                 await self._add_vectorize_task(task)
+                if self._incremental_update:
+                    self._incremental_reuse_stats.enqueued_file_vectorizations += 1
+            elif self._incremental_update:
+                self._incremental_reuse_stats.skipped_file_vectorizations += 1
         except Exception as e:
             logger.error(f"Failed to schedule vectorization for {file_path}: {e}", exc_info=True)
         await self._on_file_done(parent_uri, file_path, summary_dict)
@@ -559,8 +596,10 @@ class SemanticDagExecutor:
                 )
 
                 if not children_changed:
-                    need_vectorize = False
                     overview, abstract = await self._read_existing_overview_abstract(dir_uri)
+                    if overview is not None and abstract is not None:
+                        need_vectorize = False
+                        self._incremental_reuse_stats.reused_directory_summaries += 1
             if overview is None or abstract is None:
                 async with node.lock:
                     file_summaries = self._finalize_file_summaries(node)
@@ -571,6 +610,8 @@ class SemanticDagExecutor:
                     )
                 abstract = self._processor._extract_abstract_from_overview(overview)
                 overview, abstract = self._processor._enforce_size_limits(overview, abstract)
+                if self._incremental_update:
+                    self._incremental_reuse_stats.regenerated_directory_summaries += 1
 
             # Write directly — protected by the outer lifecycle SUBTREE lock
             try:
@@ -591,6 +632,10 @@ class SemanticDagExecutor:
                         overview=overview,
                     )
                     await self._add_vectorize_task(task)
+                    if self._incremental_update:
+                        self._incremental_reuse_stats.enqueued_directory_vectorizations += 1
+                elif self._incremental_update:
+                    self._incremental_reuse_stats.skipped_directory_vectorizations += 1
             except Exception as e:
                 logger.error(f"Failed to schedule vectorization for {dir_uri}: {e}", exc_info=True)
 
@@ -665,6 +710,27 @@ class SemanticDagExecutor:
             pending_nodes=self._stats.pending_nodes,
             in_progress_nodes=self._stats.in_progress_nodes,
             done_nodes=self._stats.done_nodes,
+        )
+
+    def get_incremental_reuse_stats(self) -> IncrementalReuseStats:
+        return IncrementalReuseStats(**vars(self._incremental_reuse_stats))
+
+    def _log_incremental_reuse_stats(self) -> None:
+        if not self._incremental_update:
+            return
+        stats = self._incremental_reuse_stats
+        logger.info(
+            f"[IncrementalReuse] root_uri={self._root_uri} target_uri={self._target_uri} "
+            f"reused_file_summaries={stats.reused_file_summaries} "
+            f"regenerated_file_summaries={stats.regenerated_file_summaries} "
+            f"missing_cached_file_summaries={stats.missing_cached_file_summaries} "
+            f"reused_directory_summaries={stats.reused_directory_summaries} "
+            f"regenerated_directory_summaries={stats.regenerated_directory_summaries} "
+            f"extracted_directory_abstracts={stats.extracted_directory_abstracts} "
+            f"skipped_file_vectorizations={stats.skipped_file_vectorizations} "
+            f"enqueued_file_vectorizations={stats.enqueued_file_vectorizations} "
+            f"skipped_directory_vectorizations={stats.skipped_directory_vectorizations} "
+            f"enqueued_directory_vectorizations={stats.enqueued_directory_vectorizations}"
         )
 
 
