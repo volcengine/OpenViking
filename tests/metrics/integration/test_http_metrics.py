@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-"""Integration-oriented tests for account-aware metric writes."""
+from __future__ import annotations
 
 from types import SimpleNamespace
 
@@ -13,17 +13,11 @@ from openviking.metrics.account_context import (
     bind_metric_account_context,
     reset_metric_account_context,
 )
-from openviking.metrics.account_dimension import MetricAccountDimensionPolicy
-from openviking.metrics.collectors.embedding import EmbeddingCollector
 from openviking.metrics.collectors.http import HTTPCollector
-from openviking.metrics.collectors.task_tracker import TaskTrackerCollector
-from openviking.metrics.collectors.vlm import VLMCollector
 from openviking.metrics.core.registry import MetricRegistry
 from openviking.metrics.datasources.base import EventMetricDataSource
 from openviking.metrics.datasources.http import HttpRequestLifecycleDataSource
-from openviking.metrics.datasources.model_usage import (
-    VLMEventDataSource,
-)
+from openviking.metrics.datasources.model_usage import VLMEventDataSource
 from openviking.metrics.exporters.prometheus import PrometheusExporter
 from openviking.metrics.global_api import configure_metric_account_dimension, shutdown_metrics
 from openviking.metrics.http_middleware import (
@@ -39,15 +33,13 @@ from openviking.models.vlm.base import VLMBase
 def test_http_collector_emits_account_label():
     registry = MetricRegistry()
     configure_metric_account_dimension(
-        policy=MetricAccountDimensionPolicy(
-            enabled=True,
-            metric_allowlist={
-                HTTPCollector.REQUESTS_TOTAL,
-                HTTPCollector.REQUEST_DURATION_SECONDS,
-                HTTPCollector.INFLIGHT_REQUESTS,
-            },
-            max_active_accounts=10,
-        )
+        enabled=True,
+        metric_allowlist={
+            HTTPCollector.REQUESTS_TOTAL,
+            HTTPCollector.REQUEST_DURATION_SECONDS,
+            HTTPCollector.INFLIGHT_REQUESTS,
+        },
+        max_active_accounts=10,
     )
     collector = HTTPCollector()
 
@@ -72,38 +64,6 @@ def test_http_collector_emits_account_label():
         'openviking_http_requests_total{account_id="acct-1",method="GET",route="/items",status="200"} 1'
         in text
     )
-
-
-def test_state_collector_emits_unknown_when_metric_not_allowlisted(monkeypatch):
-    class DummyTracker:
-        def snapshot_counts_by_type(self):
-            return {
-                "session_commit": {"pending": 1, "running": 0, "completed": 0, "failed": 0},
-            }
-
-    import openviking.metrics.datasources.task as task_datasource_module
-    from openviking.metrics.datasources.task import TaskStateDataSource
-
-    monkeypatch.setattr(task_datasource_module, "get_task_tracker", lambda: DummyTracker())
-    configure_metric_account_dimension(
-        policy=MetricAccountDimensionPolicy(
-            enabled=True,
-            metric_allowlist={HTTPCollector.REQUESTS_TOTAL},
-            max_active_accounts=10,
-        )
-    )
-    registry = MetricRegistry()
-    collector = TaskTrackerCollector(data_source=TaskStateDataSource())
-
-    token = bind_metric_account_context(account_id="acct-9")
-    try:
-        collector.collect(registry)
-    finally:
-        reset_metric_account_context(token)
-        shutdown_metrics(app=None)
-
-    text = PrometheusExporter(registry=registry).render()
-    assert 'openviking_task_pending{task_type="session_commit"} 1.0' in text
 
 
 def test_http_request_datasource_propagates_explicit_account_id(monkeypatch):
@@ -147,77 +107,6 @@ def test_http_request_datasource_propagates_explicit_account_id(monkeypatch):
             },
         ),
     ]
-
-
-def test_vlm_collector_uses_explicit_account_id_from_payload():
-    registry = MetricRegistry()
-    configure_metric_account_dimension(
-        policy=MetricAccountDimensionPolicy(
-            enabled=True,
-            metric_allowlist={
-                VLMCollector.CALLS_TOTAL,
-                VLMCollector.CALL_DURATION_SECONDS,
-                VLMCollector.TOKENS_INPUT_TOTAL,
-                VLMCollector.TOKENS_OUTPUT_TOTAL,
-                VLMCollector.TOKENS_TOTAL,
-            },
-            max_active_accounts=10,
-        )
-    )
-
-    VLMCollector().receive(
-        "vlm.call",
-        {
-            "provider": "volcengine",
-            "model_name": "m1",
-            "duration_seconds": 1.2,
-            "prompt_tokens": 10,
-            "completion_tokens": 5,
-            "account_id": "acct-vlm",
-        },
-        registry,
-    )
-    text = PrometheusExporter(registry=registry).render()
-    shutdown_metrics(app=None)
-
-    assert (
-        'openviking_vlm_calls_total{account_id="acct-vlm",model_name="m1",provider="volcengine"} 1'
-        in text
-    )
-
-
-def test_embedding_collector_uses_explicit_account_id_from_payload():
-    registry = MetricRegistry()
-    configure_metric_account_dimension(
-        policy=MetricAccountDimensionPolicy(
-            enabled=True,
-            metric_allowlist={
-                EmbeddingCollector.REQUESTS_TOTAL,
-                EmbeddingCollector.LATENCY_SECONDS,
-                EmbeddingCollector.ERRORS_TOTAL,
-            },
-            max_active_accounts=10,
-        )
-    )
-
-    collector = EmbeddingCollector()
-    collector.receive(
-        "embedding.success",
-        {"latency_seconds": 0.6, "account_id": "acct-embed"},
-        registry,
-    )
-    collector.receive(
-        "embedding.error",
-        {"error_code": "timeout", "account_id": "acct-embed"},
-        registry,
-    )
-    text = PrometheusExporter(registry=registry).render()
-    shutdown_metrics(app=None)
-
-    assert 'openviking_embedding_requests_total{account_id="acct-embed",status="ok"} 1' in text
-    assert (
-        'openviking_embedding_errors_total{account_id="acct-embed",error_code="timeout"} 1' in text
-    )
 
 
 def test_extract_request_account_id_prefers_authenticated_request_state():

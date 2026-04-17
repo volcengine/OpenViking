@@ -269,8 +269,6 @@ class OpenVikingBuildExt(build_ext):
                     "maturin",
                     "build",
                     "--release",
-                    "--features",
-                    "s3",
                     "--out",
                     tmpdir,
                 ]
@@ -306,7 +304,7 @@ class OpenVikingBuildExt(build_ext):
                 with zipfile.ZipFile(str(whl_files[0])) as zf:
                     for name in zf.namelist():
                         basename = Path(name).name
-                        # Match: ragfs_python.cpython-312-darwin.so, ragfs_python.cp312-win_amd64.pyd, etc.
+                        # Match: ragfs_python.cpython-312-darwin.so, ragfs_python.abi3.so, ragfs_python.cp312-win_amd64.pyd, etc.
                         if basename.startswith("ragfs_python") and (
                             basename.endswith(".so") or basename.endswith(".pyd")
                         ):

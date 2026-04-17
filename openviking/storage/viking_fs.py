@@ -1319,13 +1319,13 @@ class VikingFS:
     def _ls_entries(self, path: str) -> List[Dict[str, Any]]:
         """List directory entries, filtering out internal directories.
 
-        At account root (/local/{account}), uses VALID_SCOPES whitelist.
+        At account root (/local/{account}), uses LISTABLE_SCOPES whitelist.
         At other levels, uses _INTERNAL_NAMES blacklist.
         """
         entries = self.agfs.ls(path)
         parts = [p for p in path.strip("/").split("/") if p]
         if len(parts) == 2 and parts[0] == "local":
-            return [e for e in entries if e.get("name") in VikingURI.VALID_SCOPES]
+            return [e for e in entries if e.get("name") in VikingURI.LISTABLE_SCOPES]
         return [e for e in entries if e.get("name") not in self._INTERNAL_NAMES]
 
     def _path_to_uri(self, path: str, ctx: Optional[RequestContext] = None) -> str:

@@ -28,7 +28,7 @@ from openviking.session.memory.utils import (
     validate_operations_uris,
 )
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
-from openviking.telemetry import tracer
+from openviking.telemetry import bind_telemetry_stage, tracer
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -361,11 +361,12 @@ The final output of the model must strictly follow the JSON Schema format shown 
         if not self._disable_tools_for_iteration:
             tools = self._tool_schemas
             tool_choice = "auto"
-        response = await self.vlm.get_completion_async(
-            messages=messages,
-            tools=tools,
-            tool_choice=tool_choice,
-        )
+        with bind_telemetry_stage("memory_extract"):
+            response = await self.vlm.get_completion_async(
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+            )
         tracer.info(f"response={response}")
         # print(f'response={response}')
         # Log cache hit info

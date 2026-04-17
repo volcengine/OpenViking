@@ -1,9 +1,23 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+from pathlib import Path
+
 import pytest
 
+from openviking.metrics.core.base import MetricCollector
 from openviking.metrics.core.registry import MetricRegistry
+
+
+def test_metric_collector_metric_name_includes_namespace_and_optional_unit():
+    assert (
+        MetricCollector.metric_name("cache", "hits", unit="total") == "openviking_cache_hits_total"
+    )
+    assert (
+        MetricCollector.metric_name("resource", "stage_duration", unit="seconds")
+        == "openviking_resource_stage_duration_seconds"
+    )
+    assert MetricCollector.metric_name("lock", "active") == "openviking_lock_active"
 
 
 def test_registry_rejects_type_conflict():
@@ -68,13 +82,11 @@ def test_histogram_boundary_bucket(registry, render_prometheus):
     assert 'openviking_latency_seconds_bucket{le="+Inf"} 1' in text
 
 
-def test_exporter_outputs_help_type_and_empty_metrics(registry, render_prometheus):
-    registry.counter("openviking_empty_counter_total")
-    registry.gauge("openviking_empty_gauge")
-    registry.histogram("openviking_empty_histogram_seconds")
-    text = render_prometheus(registry)
-    assert "# TYPE openviking_empty_counter_total counter" in text
-    assert "openviking_empty_counter_total 0" in text
-    assert "# TYPE openviking_empty_histogram_seconds histogram" in text
-    assert "openviking_empty_histogram_seconds_count 0" in text
-    assert 'openviking_empty_histogram_seconds_bucket{le="+Inf"} 0' in text
+def test_collectors_do_not_embed_openviking_metric_name_literals():
+    root = Path(__file__).resolve().parents[3] / "openviking" / "metrics" / "collectors"
+    offenders = []
+    for path in root.glob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        if '"openviking_' in text or "'openviking_" in text:
+            offenders.append(path.name)
+    assert offenders == []

@@ -113,11 +113,10 @@ def create_app(
 
         from openviking.metrics.global_api import (
             init_metrics_from_server_config,
-            is_metrics_enabled_from_server_config,
         )
 
         init_metrics_from_server_config(config, app=app, service=service)
-        if is_metrics_enabled_from_server_config(config):
+        if config.observability.metrics.enabled:
             logger.info("Prometheus metrics enabled at /metrics")
 
         # Start TaskTracker cleanup loop

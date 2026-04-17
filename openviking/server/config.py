@@ -23,22 +23,6 @@ from openviking_cli.utils.config.consts import (
 logger = get_logger(__name__)
 
 
-class PrometheusConfig(BaseModel):
-    """Prometheus exporter configuration."""
-
-    enabled: bool = False
-
-    model_config = {"extra": "forbid"}
-
-
-class TelemetryConfig(BaseModel):
-    """Telemetry configuration."""
-
-    prometheus: PrometheusConfig = Field(default_factory=PrometheusConfig)
-
-    model_config = {"extra": "forbid"}
-
-
 class MetricsAccountDimensionConfig(BaseModel):
     """Account-dimension configuration for metrics label injection."""
 
@@ -61,6 +45,14 @@ class MetricsConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class ObservabilityConfig(BaseModel):
+    """Server-side observability configuration."""
+
+    metrics: MetricsConfig = Field(default_factory=MetricsConfig)
+
+    model_config = {"extra": "forbid"}
+
+
 class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 1933
@@ -71,8 +63,7 @@ class ServerConfig(BaseModel):
     with_bot: bool = False  # Enable Bot API proxy to Vikingbot
     bot_api_url: str = "http://localhost:18790"  # Vikingbot OpenAPIChannel URL (default port)
     encryption_enabled: bool = False  # Whether API key hashing is enabled
-    telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
-    metrics: MetricsConfig = Field(default_factory=MetricsConfig)
+    observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
 
     model_config = {"extra": "forbid"}
 

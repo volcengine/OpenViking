@@ -3,13 +3,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 
 import pytest
 
 from openviking.metrics.account_context import get_metric_account_context
-from openviking.models.embedder.base import EmbedResult
+from openviking.models.embedder.base import EmbedResult, embed_compat
+from openviking.models.vlm.base import VLMBase
 from openviking.server.identity import RequestContext, Role
 from openviking.service.resource_service import ResourceService
 from openviking.storage.collection_schemas import TextEmbeddingHandler
@@ -23,7 +25,7 @@ from openviking.telemetry import (
     unregister_telemetry,
 )
 from openviking.telemetry.backends.memory import MemoryOperationTelemetry
-from openviking.telemetry.context import bind_telemetry
+from openviking.telemetry.context import bind_telemetry, bind_telemetry_stage
 from openviking.telemetry.snapshot import TelemetrySnapshot
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -74,6 +76,94 @@ def test_telemetry_summary_breaks_down_llm_and_embedding_token_usage():
     assert "semantic_nodes" not in summary
     assert "memory" not in summary
     assert "errors" not in summary
+
+
+def test_telemetry_summary_breaks_down_stage_token_usage():
+    telemetry = MemoryOperationTelemetry(operation="search.find", enabled=True)
+    telemetry.record_token_usage("embedding", 11, 0, stage="embed_query")
+    telemetry.record_token_usage("rerank", 7, 0, stage="rerank")
+    telemetry.record_token_usage("llm", 5, 3, stage="vlm")
+
+    summary = telemetry.finish().summary
+
+    assert summary["tokens"]["total"] == 26
+    assert summary["tokens"]["rerank"] == {"total": 7}
+    assert summary["tokens"]["stages"]["embed_query"]["embedding"] == {"total": 11}
+    assert summary["tokens"]["stages"]["rerank"]["rerank"] == {"total": 7}
+    assert summary["tokens"]["stages"]["vlm"]["llm"] == {
+        "input": 5,
+        "output": 3,
+        "total": 8,
+    }
+
+
+@pytest.mark.asyncio
+async def test_bind_telemetry_stage_propagates_across_async_tasks():
+    telemetry = MemoryOperationTelemetry(operation="resource.process", enabled=True)
+
+    async def _worker() -> None:
+        await asyncio.sleep(0)
+        get_current_telemetry().add_token_usage(6, 4)
+
+    with bind_telemetry(telemetry):
+        with bind_telemetry_stage("resource_summarize"):
+            await asyncio.create_task(_worker())
+
+    summary = telemetry.finish().summary
+    assert summary["tokens"]["stages"]["resource_summarize"]["llm"] == {
+        "input": 6,
+        "output": 4,
+        "total": 10,
+    }
+
+
+@pytest.mark.asyncio
+async def test_embed_compat_binds_query_stage_for_embedding_tokens():
+    telemetry = MemoryOperationTelemetry(operation="search.find", enabled=True)
+
+    class _TelemetryAwareAsyncEmbedder:
+        async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+            assert text == "hello"
+            assert is_query is True
+            get_current_telemetry().record_token_usage("embedding", 9, 0)
+            return EmbedResult(dense_vector=[0.1, 0.2])
+
+    with bind_telemetry(telemetry):
+        await embed_compat(_TelemetryAwareAsyncEmbedder(), "hello", is_query=True)
+
+    summary = telemetry.finish().summary
+    assert summary["tokens"]["stages"]["embed_query"]["embedding"] == {"total": 9}
+
+
+def test_vlm_base_defaults_operation_tokens_to_vlm_stage():
+    class _DummyVLM(VLMBase):
+        def get_completion(self, *args, **kwargs):
+            raise NotImplementedError()
+
+        async def get_completion_async(self, *args, **kwargs):
+            raise NotImplementedError()
+
+        def get_vision_completion(self, *args, **kwargs):
+            raise NotImplementedError()
+
+        async def get_vision_completion_async(self, *args, **kwargs):
+            raise NotImplementedError()
+
+    telemetry = MemoryOperationTelemetry(operation="session.commit", enabled=True)
+    with bind_telemetry(telemetry):
+        _DummyVLM({"provider": "openai", "model": "gpt-4o-mini"}).update_token_usage(
+            model_name="gpt-4o-mini",
+            provider="openai",
+            prompt_tokens=7,
+            completion_tokens=5,
+        )
+
+    summary = telemetry.finish().summary
+    assert summary["tokens"]["stages"]["vlm"]["llm"] == {
+        "input": 7,
+        "output": 5,
+        "total": 12,
+    }
 
 
 def test_disabled_telemetry_still_has_request_id():
@@ -227,8 +317,9 @@ async def test_embedding_handler_binds_registered_operation_telemetry(monkeypatc
     register_telemetry(telemetry)
 
     class _TelemetryAwareEmbedder:
-        def embed(self, text: str) -> EmbedResult:
+        def embed(self, text: str, is_query: bool = False) -> EmbedResult:
             assert text == "hello"
+            assert is_query is False
             get_current_telemetry().record_token_usage("embedding", 9, 0)
             return EmbedResult(dense_vector=[0.1, 0.2])
 

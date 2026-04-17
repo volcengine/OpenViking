@@ -1,15 +1,115 @@
-"""Module-level tests for `openviking.metrics.datasources.probes`."""
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import openviking.metrics.datasources.probes as probes
+from openviking.metrics.collectors.base import (
+    CollectorConfig,
+    ProbeMetricCollector,
+    StateMetricCollector,
+)
+from openviking.metrics.core.base import ReadEnvelope
+from openviking.metrics.core.registry import MetricRegistry
+
+
+class _EnvelopeStateCollector(StateMetricCollector):
+    config = CollectorConfig()
+    STALE_ON_ERROR = True
+
+    def __init__(self) -> None:
+        self.error_seen = False
+        self.value_seen = None
+
+    def read_metric_input(self):
+        return ReadEnvelope(ok=False, value=("fallback",))
+
+    def collect_hook(self, registry, metric_input) -> None:
+        self.value_seen = metric_input
+
+    def collect_stale_hook(self, registry, error: Exception) -> None:
+        self.error_seen = True
+
+
+class _EnvelopeProbeCollector(ProbeMetricCollector):
+    config = CollectorConfig()
+
+    def __init__(self) -> None:
+        self.error_seen = False
+        self.value_seen = None
+
+    def read_metric_input(self):
+        return ReadEnvelope(ok=False, value={"probe": True})
+
+    def collect_hook(self, registry, metric_input) -> None:
+        self.value_seen = metric_input
+
+    def collect_stale_hook(self, registry, error: Exception) -> None:
+        self.error_seen = True
+
+
+def test_metric_datasource_owns_safe_read_helpers_and_datasource_subclasses_reuse_them():
+    project_root = Path(__file__).resolve().parents[3]
+
+    core_base = (project_root / "openviking" / "metrics" / "core" / "base.py").read_text(
+        encoding="utf-8"
+    )
+    datasource_base = (
+        project_root / "openviking" / "metrics" / "datasources" / "base.py"
+    ).read_text(encoding="utf-8")
+    probes_text = (project_root / "openviking" / "metrics" / "datasources" / "probes.py").read_text(
+        encoding="utf-8"
+    )
+    encryption = (
+        project_root / "openviking" / "metrics" / "datasources" / "encryption.py"
+    ).read_text(encoding="utf-8")
+    model_usage = (
+        project_root / "openviking" / "metrics" / "datasources" / "model_usage.py"
+    ).read_text(encoding="utf-8")
+    observer_state = (
+        project_root / "openviking" / "metrics" / "datasources" / "observer_state.py"
+    ).read_text(encoding="utf-8")
+
+    assert "def safe_read(" in core_base
+    assert "def safe_read_async(" in core_base
+    assert "def best_effort(" not in datasource_base
+    assert "def best_effort_async(" not in datasource_base
+
+    assert "safe_value_probe(" in datasource_base
+    assert probes_text.count("safe_value_probe(") >= 1
+    assert encryption.count("safe_value_probe(") >= 1
+
+    assert '"available"' in model_usage
+    assert '"usage_by_model"' in model_usage
+    assert ".as_dict(" in model_usage
+    assert ".normalize_str(" in model_usage
+    assert ".as_dict(" in observer_state or ".normalize_str(" in observer_state
+
+
+def test_state_collector_unwraps_envelope_and_routes_ok_false_to_stale_hook():
+    registry = MetricRegistry()
+    collector = _EnvelopeStateCollector()
+
+    collector.collect(registry)
+
+    assert collector.error_seen is True
+    assert collector.value_seen is None
+
+
+def test_probe_collector_unwraps_envelope_and_routes_ok_false_to_stale_hook():
+    registry = MetricRegistry()
+    collector = _EnvelopeProbeCollector()
+
+    collector.collect(registry)
+
+    assert collector.error_seen is True
+    assert collector.value_seen is None
 
 
 def test_service_probe_datasource_reads_service_and_app_state_success():
-    """ServiceProbeDataSource returns readiness booleans derived from service/app state."""
-
     app = SimpleNamespace(state=SimpleNamespace(api_key_manager=object()))
     service = SimpleNamespace(initialized=True)
     ds = probes.ServiceProbeDataSource(app=app, service=service)
@@ -21,8 +121,6 @@ def test_service_probe_datasource_reads_service_and_app_state_success():
 
 
 def test_service_probe_datasource_returns_default_on_exception():
-    """ServiceProbeDataSource must wrap exceptions into `ok=False` with deterministic default."""
-
     class _BadApp:
         @property
         def state(self):
@@ -38,8 +136,6 @@ def test_service_probe_datasource_returns_default_on_exception():
 
 
 def test_storage_probe_datasource_returns_agfs_probe_success(monkeypatch):
-    """StorageProbeDataSource exposes a single `agfs` boolean probe on success."""
-
     monkeypatch.setattr(probes, "get_viking_fs", lambda: SimpleNamespace(agfs=object()))
     ds = probes.StorageProbeDataSource()
 
@@ -49,8 +145,6 @@ def test_storage_probe_datasource_returns_agfs_probe_success(monkeypatch):
 
 
 def test_storage_probe_datasource_returns_default_on_exception(monkeypatch):
-    """StorageProbeDataSource must return `ok=False` with `{agfs: False}` on read failure."""
-
     def _boom():
         raise RuntimeError("no fs")
 
@@ -64,8 +158,6 @@ def test_storage_probe_datasource_returns_default_on_exception(monkeypatch):
 
 
 def test_retrieval_backend_probe_datasource_returns_false_when_no_service():
-    """RetrievalBackendProbeDataSource treats missing wiring as a negative readiness (ok=True)."""
-
     ds = probes.RetrievalBackendProbeDataSource(service=None)
     env = ds.read_probe_state()
     assert env.ok is True
@@ -73,8 +165,6 @@ def test_retrieval_backend_probe_datasource_returns_false_when_no_service():
 
 
 def test_retrieval_backend_probe_datasource_returns_default_on_exception(monkeypatch):
-    """RetrievalBackendProbeDataSource must return `ok=False` on health-check runner failures."""
-
     class _VikingDB:
         def health_check(self):
             return object()
@@ -93,8 +183,6 @@ def test_retrieval_backend_probe_datasource_returns_default_on_exception(monkeyp
 
 
 def test_model_provider_probe_datasource_returns_provider_tuple_success():
-    """ModelProviderProbeDataSource must return provider name and a boolean ok flag."""
-
     class _VlmCfg:
         provider = "volcengine"
 
@@ -110,8 +198,6 @@ def test_model_provider_probe_datasource_returns_provider_tuple_success():
 
 
 def test_model_provider_probe_datasource_returns_default_on_exception():
-    """ModelProviderProbeDataSource must fall back to `unknown/False` on config failures."""
-
     class _BadVlmCfg:
         provider = "volcengine"
 
@@ -128,8 +214,6 @@ def test_model_provider_probe_datasource_returns_default_on_exception():
 
 
 def test_async_system_probe_datasource_returns_queue_probe_success(monkeypatch):
-    """AsyncSystemProbeDataSource returns a boolean `queue` probe based on queue manager wiring."""
-
     monkeypatch.setattr(probes, "get_queue_manager", lambda: object())
     ds = probes.AsyncSystemProbeDataSource()
 
@@ -139,8 +223,6 @@ def test_async_system_probe_datasource_returns_queue_probe_success(monkeypatch):
 
 
 def test_async_system_probe_datasource_returns_default_on_exception(monkeypatch):
-    """AsyncSystemProbeDataSource must return `ok=False` with `{queue: False}` on failures."""
-
     def _boom():
         raise RuntimeError("no queue")
 

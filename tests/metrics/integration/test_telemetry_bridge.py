@@ -3,12 +3,12 @@
 
 from openviking.metrics.datasources.telemetry_bridge import TelemetryBridgeEventDataSource
 from openviking.metrics.global_api import init_metrics_from_server_config, shutdown_metrics
-from openviking.server.config import PrometheusConfig, ServerConfig, TelemetryConfig
+from openviking.server.config import MetricsConfig, ObservabilityConfig, ServerConfig
 
 
 def test_telemetry_bridge_records_operation_and_resource_metrics(registry, render_prometheus):
     init_metrics_from_server_config(
-        ServerConfig(telemetry=TelemetryConfig(prometheus=PrometheusConfig(enabled=True))),
+        ServerConfig(observability=ObservabilityConfig(metrics=MetricsConfig(enabled=True))),
         app=None,
         registry=registry,
     )
@@ -18,7 +18,15 @@ def test_telemetry_bridge_records_operation_and_resource_metrics(registry, rende
                 "operation": "resource.process",
                 "status": "ok",
                 "duration_ms": 1200,
-                "tokens": {"total": 10, "llm": {"input": 3, "output": 7}},
+                "tokens": {
+                    "total": 14,
+                    "llm": {"input": 3, "output": 7},
+                    "rerank": {"total": 4},
+                    "stages": {
+                        "vlm": {"llm": {"input": 3, "output": 7, "total": 10}},
+                        "rerank": {"rerank": {"total": 4}},
+                    },
+                },
                 "vector": {"searches": 1, "scored": 2, "passed": 2, "returned": 1, "scanned": 9},
                 "memory": {"extracted": 4},
                 "semantic_nodes": {"OK": 12},
@@ -43,6 +51,10 @@ def test_telemetry_bridge_records_operation_and_resource_metrics(registry, rende
             'openviking_operation_duration_seconds_count{account_id="__unknown__",operation="resource.process",status="ok"} 1'
             in text
         )
+        assert (
+            'openviking_operation_tokens_total{account_id="__unknown__",operation="resource.process",stage="rerank",token_type="rerank"} 4'
+            in text
+        )
         assert 'openviking_vector_searches_total{operation="resource.process"} 1' in text
         assert 'openviking_memory_extracted_total{operation="resource.process"} 4' in text
         assert (
@@ -63,7 +75,7 @@ def test_telemetry_bridge_records_operation_and_resource_metrics(registry, rende
 
 def test_telemetry_bridge_semantic_nodes_total_is_cumulative(registry, render_prometheus):
     init_metrics_from_server_config(
-        ServerConfig(telemetry=TelemetryConfig(prometheus=PrometheusConfig(enabled=True))),
+        ServerConfig(observability=ObservabilityConfig(metrics=MetricsConfig(enabled=True))),
         app=None,
         registry=registry,
     )
