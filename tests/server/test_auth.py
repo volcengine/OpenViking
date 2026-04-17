@@ -24,7 +24,7 @@ from openviking.server.identity import ResolvedIdentity, Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker, reset_task_tracker
-from openviking_cli.exceptions import InvalidArgumentError, OpenVikingError
+from openviking_cli.exceptions import InvalidArgumentError, OpenVikingError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -41,6 +41,7 @@ def _make_request(
     auth_enabled: bool = True,
     auth_mode: str = "api_key",
     root_api_key: str | None = None,
+    api_key_manager=None,
 ) -> Request:
     """Create a minimal Starlette request for auth dependency tests."""
     raw_headers = []
@@ -50,7 +51,7 @@ def _make_request(
     app.state.config = ServerConfig(auth_mode=auth_mode, root_api_key=root_api_key)
     if auth_enabled:
         # Non-empty api_key_manager means the server is in authenticated mode.
-        app.state.api_key_manager = object()
+        app.state.api_key_manager = api_key_manager if api_key_manager is not None else object()
     scope = {
         "type": "http",
         "path": path,
@@ -370,6 +371,109 @@ async def test_agent_id_header_forwarded(auth_client: httpx.AsyncClient):
         headers={"X-API-Key": ROOT_KEY, "X-OpenViking-Agent": "my-agent"},
     )
     assert resp.status_code == 200
+
+
+async def test_admin_key_can_switch_effective_user_and_agent_within_account(auth_app):
+    """ADMIN keys may reuse X-OpenViking-User/Agent within their own account."""
+    manager = auth_app.state.api_key_manager
+    account_id = _uid()
+    admin_key = await manager.create_account(account_id, "admin_user")
+    await manager.register_user(account_id, "alice")
+
+    request = _make_request(
+        "/api/v1/resources",
+        headers={
+            "X-API-Key": admin_key,
+            "X-OpenViking-Account": account_id,
+            "X-OpenViking-User": "alice",
+            "X-OpenViking-Agent": "assistant-2",
+        },
+        auth_enabled=True,
+        api_key_manager=manager,
+    )
+
+    identity = await resolve_identity(
+        request,
+        x_api_key=admin_key,
+        x_openviking_account=account_id,
+        x_openviking_user="alice",
+        x_openviking_agent="assistant-2",
+    )
+
+    assert identity.role == Role.ADMIN
+    assert identity.account_id == account_id
+    assert identity.user_id == "alice"
+    assert identity.agent_id == "assistant-2"
+
+
+async def test_admin_key_cannot_switch_account_via_header(auth_app):
+    """ADMIN keys must stay inside their own account."""
+    manager = auth_app.state.api_key_manager
+    account_id = _uid()
+    admin_key = await manager.create_account(account_id, "admin_user")
+
+    request = _make_request(
+        "/api/v1/resources",
+        headers={
+            "X-API-Key": admin_key,
+            "X-OpenViking-Account": "other-account",
+        },
+        auth_enabled=True,
+        api_key_manager=manager,
+    )
+
+    with pytest.raises(PermissionDeniedError, match="X-OpenViking-Account"):
+        await resolve_identity(
+            request,
+            x_api_key=admin_key,
+            x_openviking_account="other-account",
+        )
+
+
+async def test_user_key_can_switch_agent_but_not_user(auth_app):
+    """USER keys may set agent context but may not impersonate another user."""
+    manager = auth_app.state.api_key_manager
+    account_id = _uid()
+    await manager.create_account(account_id, "admin_user")
+    user_key = await manager.register_user(account_id, "alice")
+
+    request = _make_request(
+        "/api/v1/resources",
+        headers={
+            "X-API-Key": user_key,
+            "X-OpenViking-Agent": "assistant-7",
+        },
+        auth_enabled=True,
+        api_key_manager=manager,
+    )
+
+    identity = await resolve_identity(
+        request,
+        x_api_key=user_key,
+        x_openviking_agent="assistant-7",
+    )
+
+    assert identity.role == Role.USER
+    assert identity.account_id == account_id
+    assert identity.user_id == "alice"
+    assert identity.agent_id == "assistant-7"
+
+    forbidden_request = _make_request(
+        "/api/v1/resources",
+        headers={
+            "X-API-Key": user_key,
+            "X-OpenViking-User": "bob",
+        },
+        auth_enabled=True,
+        api_key_manager=manager,
+    )
+
+    with pytest.raises(PermissionDeniedError, match="X-OpenViking-User"):
+        await resolve_identity(
+            forbidden_request,
+            x_api_key=user_key,
+            x_openviking_user="bob",
+        )
 
 
 async def test_cross_tenant_session_get_returns_not_found(auth_client: httpx.AsyncClient, auth_app):

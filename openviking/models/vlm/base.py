@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """VLM base interface and abstract classes"""
 
+import logging
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -13,6 +14,7 @@ from openviking.utils.time_utils import format_iso8601
 from .token_usage import TokenUsageTracker
 
 _THINK_TAG_RE = re.compile(r"<think>[\s\S]*?</think>")
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -196,12 +198,23 @@ class VLMBase(ABC):
         )
         # Operation-level telemetry aggregation (no-op when telemetry is disabled).
         try:
-            from openviking.telemetry import get_current_telemetry
+            from openviking.telemetry import get_current_telemetry, get_current_telemetry_stage
 
-            get_current_telemetry().add_token_usage(prompt_tokens, completion_tokens)
-        except Exception:
+            get_current_telemetry().add_token_usage(
+                prompt_tokens,
+                completion_tokens,
+                stage=get_current_telemetry_stage() or "vlm",
+            )
+        except Exception as e:
             # Telemetry must never break model inference.
-            pass
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "vlm.update_token_usage telemetry emit failed provider=%s model_name=%s err=%s: %s",
+                    provider,
+                    model_name,
+                    type(e).__name__,
+                    e,
+                )
 
         # Record the VLM call in Prometheus metrics (if enabled).
         try:
@@ -216,8 +229,16 @@ class VLMBase(ABC):
                 completion_tokens=int(completion_tokens),
                 account_id=get_metric_account_context().http_account_id,
             )
-        except Exception:
-            pass
+        except Exception as e:
+            # Metrics must never break model inference.
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "vlm.update_token_usage metrics emit failed provider=%s model_name=%s err=%s: %s",
+                    provider,
+                    model_name,
+                    type(e).__name__,
+                    e,
+                )
 
     def get_token_usage(self) -> Dict[str, Any]:
         """Get token usage

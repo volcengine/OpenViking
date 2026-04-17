@@ -33,6 +33,7 @@ class ContextBuilder:
         workspace: Path,
         sandbox_manager: SandboxManager | None = None,
         sender_id: str = None,
+        sender_name: str = None,
         is_group_chat: bool = False,
         eval: bool = False,
     ):
@@ -42,6 +43,7 @@ class ContextBuilder:
         self._memory = None
         self._skills = None
         self._sender_id = sender_id
+        self._sender_name = sender_name
         self._is_group_chat = is_group_chat
         self._eval = eval
 
@@ -68,13 +70,15 @@ class ContextBuilder:
             self._templates_ensured = True
 
     async def build_system_prompt(
-        self, session_key: SessionKey, current_message: str, history: list[dict[str, Any]], ov_tools_enable: bool = True
+        self, session_key: SessionKey, ov_tools_enable: bool = True, profile_user_list: list[str] | None = None
     ) -> str:
         """
         Build the system prompt from bootstrap files, memory, and skills.
 
         Args:
-            skill_names: Optional list of skills to include.
+            session_key: Session key for the context.
+            ov_tools_enable: Whether to enable OpenViking tools and memory.
+            profile_user_list: List of additional user IDs to fetch profiles for.
 
         Returns:
             Complete system prompt.
@@ -125,6 +129,7 @@ Skills with available="false" need dependencies installed first - you can try in
 
         # Viking user profile (only if ov tools are enabled)
         if ov_tools_enable:
+            # Fetch current user's profile
             start = _time.time()
             profile = await self.memory.get_viking_user_profile(
                 workspace_id=workspace_id, user_id=self._sender_id
@@ -136,10 +141,18 @@ Skills with available="false" need dependencies installed first - you can try in
             if profile:
                 parts.append(f"## Current user's information\n{profile}")
 
+            # Fetch additional profiles from profile_user_list
+            if profile_user_list:
+                profiles = await self.memory.get_viking_user_profiles(
+                    workspace_id=workspace_id, user_ids=profile_user_list
+                )
+                if profiles:
+                    parts.append(profiles)
+
         return "\n\n---\n\n".join(parts)
 
     async def _build_user_memory(
-        self, session_key: SessionKey, current_message: str, sender_id: str, ov_tools_enable: bool = True
+        self, session_key: SessionKey, current_message: str, sender_id: str, memory_user: str, ov_tools_enable: bool = True
     ) -> str:
         """
         Build the system prompt from bootstrap files, memory, and skills.
@@ -161,8 +174,8 @@ Skills with available="false" need dependencies installed first - you can try in
             session_context += f"\nChannel: {session_key.type}"
             if self._is_group_chat:
                 session_context += (
-                    f"\n**Group chat session.** Current user ID: {self._sender_id}\n"
-                    f"Multiple users can participate in this conversation. Each user message is prefixed with the user ID in brackets like @<user_id>. "
+                    f"\n**Group chat session.** Current user: {self._sender_name if self._sender_name else self._sender_id}\n"
+                    f"Multiple users can participate in this conversation. Each user message is prefixed with the user's name in brackets like '[张三]: 你好'. "
                     f"You should pay attention to who is speaking to understand the context. "
                 )
         parts.append(session_context)
@@ -172,8 +185,9 @@ Skills with available="false" need dependencies installed first - you can try in
         # Viking agent memory (only if ov tools are enabled)
         if ov_tools_enable:
             start = _time.time()
+            user = memory_user or sender_id
             viking_memory = await self.memory.get_viking_memory_context(
-                current_message=current_message, workspace_id=workspace_id, sender_id=sender_id
+                current_message=current_message, workspace_id=workspace_id, sender_id=user
             )
             logger.info(f'viking_memory={viking_memory}')
             cost = round(_time.time() - start, 2)
@@ -252,6 +266,8 @@ IMPORTANT:
         media: list[str] | None = None,
         session_key: SessionKey | None = None,
         ov_tools_enable: bool = True,
+        profile_user_list: list[str] | None = None,
+        memory_user: str | None = None,
     ) -> list[dict[str, Any]]:
         """
         Build the complete message list for an LLM call.
@@ -262,6 +278,8 @@ IMPORTANT:
             media: Optional list of local file paths for images/media.
             session_key: Optional session key.
             ov_tools_enable: Whether to enable OpenViking tools and memory.
+            profile_user_list: List of additional user IDs to fetch profiles for.
+            memory_user: Optional user ID to fetch memory for.
 
         Returns:
             List of messages including system prompt.
@@ -269,7 +287,9 @@ IMPORTANT:
         messages = []
 
         # System prompt
-        system_prompt = await self.build_system_prompt(session_key, current_message, history, ov_tools_enable=ov_tools_enable)
+        system_prompt = await self.build_system_prompt(
+            session_key, ov_tools_enable=ov_tools_enable, profile_user_list=profile_user_list
+        )
         messages.append({"role": "system", "content": system_prompt})
         # logger.debug(f"system_prompt: {system_prompt}")
 
@@ -278,7 +298,9 @@ IMPORTANT:
             messages.extend(history)
 
         # User
-        user_info = await self._build_user_memory(session_key, current_message, self._sender_id, ov_tools_enable=ov_tools_enable)
+        user_info = await self._build_user_memory(
+            session_key, current_message, self._sender_id, memory_user, ov_tools_enable=ov_tools_enable
+        )
         messages.append({"role": "user", "content": user_info})
 
         # Current message (with optional image attachments)

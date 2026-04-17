@@ -120,11 +120,17 @@ viking://
 │       ├── entities/             # Each independent
 │       └── events/               # Each independent
 │
-├── agent/{agent_space}/          # agent_space is derived from memory.agent_scope_mode
+├── agent/{agent_id}/             # Agent root when isolate_agent_scope_by_user = false
 │   ├── skills/                   # Skill definitions
 │   ├── memories/
 │   │   ├── cases/
 │   │   └── patterns/
+│   ├── workspaces/
+│   └── instructions/
+│
+├── agent/{agent_id}/user/{user_id}/   # Agent root when isolate_agent_scope_by_user = true
+│   ├── skills/
+│   ├── memories/
 │   ├── workspaces/
 │   └── instructions/
 │
@@ -134,10 +140,12 @@ viking://
     └── history/
 ```
 
-The `agent_space` value depends on `memory.agent_scope_mode`:
+Agent namespace shape is controlled by per-account namespace policy:
 
-- `user+agent` (default): `agent_space = md5(f"{user_id}:{agent_id}")[:12]`
-- `agent`: `agent_space = md5(agent_id)[:12]`
+- `isolate_agent_scope_by_user = false`: `viking://agent/{agent_id}/...`
+- `isolate_agent_scope_by_user = true`: `viking://agent/{agent_id}/user/{user_id}/...`
+
+`memory.agent_scope_mode` is deprecated and ignored.
 
 ## URI Operations
 

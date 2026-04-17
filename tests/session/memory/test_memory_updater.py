@@ -4,10 +4,13 @@
 Tests for MemoryUpdater.
 """
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
+from openviking.session.memory.dataclass import MemoryTypeSchema
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.memory_updater import (
     MemoryUpdater,
@@ -17,7 +20,13 @@ from openviking.session.memory.merge_op import (
     SearchReplaceBlock,
     StrPatch,
 )
-from openviking.session.memory.utils import deserialize_full, serialize_with_metadata
+from openviking.session.memory.utils import (
+    ResolvedOperation,
+    ResolvedOperations,
+    deserialize_full,
+    serialize_with_metadata,
+)
+from openviking_cli.session.user_id import UserIdentifier
 
 
 class TestMemoryUpdateResult:
@@ -97,6 +106,88 @@ class TestMemoryUpdater:
         updater.set_registry(registry)
 
         assert updater._registry == registry
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("policy", "schema_directory", "resolved_uri", "expected_directory", "memory_type"),
+        [
+            (
+                AccountNamespacePolicy(
+                    isolate_user_scope_by_agent=True,
+                    isolate_agent_scope_by_user=False,
+                ),
+                "viking://user/{{ user_space }}/memories/preferences",
+                "viking://user/alice/agent/bot/memories/preferences/theme.md",
+                "viking://user/alice/agent/bot/memories/preferences",
+                "preferences",
+            ),
+            (
+                AccountNamespacePolicy(
+                    isolate_user_scope_by_agent=False,
+                    isolate_agent_scope_by_user=True,
+                ),
+                "viking://agent/{{ agent_space }}/memories/tools",
+                "viking://agent/bot/user/alice/memories/tools/web_search.md",
+                "viking://agent/bot/user/alice/memories/tools",
+                "tools",
+            ),
+        ],
+    )
+    async def test_apply_operations_matches_overview_directories_with_namespace_policy(
+        self,
+        monkeypatch,
+        policy,
+        schema_directory,
+        resolved_uri,
+        expected_directory,
+        memory_type,
+    ):
+        """Overview generation should use policy-expanded user/agent space fragments."""
+        schema = MemoryTypeSchema(
+            memory_type=memory_type,
+            description=f"{memory_type} memory",
+            directory=schema_directory,
+            filename_template="{{ name }}.md",
+            fields=[],
+            overview_template="overview",
+        )
+        registry = MagicMock()
+        registry.list_all.return_value = [schema]
+
+        updater = MemoryUpdater(registry=registry)
+        updater._get_viking_fs = MagicMock(return_value=MagicMock())
+        updater._apply_edit = AsyncMock(return_value=False)
+        updater._vectorize_memories = AsyncMock()
+        updater.generate_overview = AsyncMock()
+
+        resolved = ResolvedOperations()
+        resolved.operations.append(
+            ResolvedOperation(
+                model={"name": "demo"},
+                uri=resolved_uri,
+                memory_type=memory_type,
+            )
+        )
+        monkeypatch.setattr(
+            "openviking.session.memory.memory_updater.resolve_all_operations",
+            lambda *args, **kwargs: resolved,
+        )
+
+        ctx = RequestContext(
+            user=UserIdentifier("acme", "alice", "bot"),
+            role=Role.USER,
+            namespace_policy=policy,
+        )
+
+        result = await updater.apply_operations(operations=SimpleNamespace(), ctx=ctx)
+
+        assert result.written_uris == [resolved_uri]
+        updater.generate_overview.assert_awaited_once_with(
+            memory_type,
+            expected_directory,
+            ctx,
+            None,
+        )
 
 
 # The TestApplyWriteWithContentInFields tests are outdated because WriteOp no longer exists

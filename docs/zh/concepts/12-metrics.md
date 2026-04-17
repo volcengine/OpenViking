@@ -124,13 +124,16 @@ scrape_configs:
 | `context_type` | 检索上下文类型 | `resource` |
 | `provider` | 模型或外部服务提供方 | `volcengine` |
 | `model_name` | 模型名称 | `doubao-seed-1-8-251228` |
-| `stage` | 资源处理阶段 | `parse`、`persist`、`process` |
+| `stage` | 阶段标签（按指标族定义） | 资源阶段：`parse`；Token 归因阶段：`embed_query` |
 | `valid` | 当前样本是否为有效新鲜值 | `1` / `0` |
 
 其中：
 
 - `account_id` 只在受控白名单指标上启用，避免高基数失控
 - `valid=0` 表示该状态/探针的当前样本是失败回退值或 stale fallback，不代表标签本身错误
+- `stage` 的语义依赖指标族：
+  - `openviking_resource_stage_*`：资源导入流水线阶段（如 `parse/persist/process`）
+  - `openviking_operation_tokens_total`：Token Attribution 的归因阶段（如 `embed_query/rerank/vlm`）
 
 ## 关键指标说明
 
@@ -158,8 +161,12 @@ scrape_configs:
 | `openviking_retrieval_requests_total` | Counter | `account_id, context_type` | 检索请求次数 |
 | `openviking_retrieval_results_total` | Counter | `account_id, context_type` | 检索返回结果数量累计 |
 | `openviking_retrieval_latency_seconds` | Histogram | `account_id, context_type` | 检索耗时分布 |
+| `openviking_retrieval_zero_result_total` | Counter | `account_id, context_type` | 检索零结果次数 |
+| `openviking_retrieval_rerank_used_total` | Counter | `account_id` | 检索中使用 rerank 的次数 |
+| `openviking_retrieval_rerank_fallback_total` | Counter | `account_id` | 检索 rerank 回退次数 |
 | `openviking_resource_stage_total` | Counter | `account_id, stage, status` | 资源导入各阶段执行次数 |
 | `openviking_resource_stage_duration_seconds` | Histogram | `account_id, stage, status` | 资源导入阶段耗时分布 |
+| `openviking_resource_wait_duration_seconds` | Histogram | `account_id, operation` | 资源导入等待耗时分布（例如队列等待） |
 
 典型 `stage` 包括：
 
@@ -169,6 +176,18 @@ scrape_configs:
 - `persist`
 - `finalize`
 - `process`
+
+### 向量检索、记忆与语义节点
+
+| 指标族 | 类型 | 常见标签 | 含义 |
+|--------|------|----------|------|
+| `openviking_vector_searches_total` | Counter | `operation` | 向量检索次数 |
+| `openviking_vector_scored_total` | Counter | `operation` | 向量候选打分数量累计 |
+| `openviking_vector_passed_total` | Counter | `operation` | 向量候选通过数量累计 |
+| `openviking_vector_returned_total` | Counter | `operation` | 向量候选返回数量累计 |
+| `openviking_vector_scanned_total` | Counter | `operation` | 向量候选扫描数量累计 |
+| `openviking_memory_extracted_total` | Counter | `operation` | memory extracted 数量累计 |
+| `openviking_semantic_nodes_total` | Counter | `status` | semantic nodes 数量累计 |
 
 ### 模型调用与 Token
 
@@ -183,17 +202,33 @@ scrape_configs:
 | `openviking_vlm_call_duration_seconds` | Histogram | `account_id, provider, model_name` | VLM 调用耗时分布 |
 | `openviking_embedding_requests_total` | Counter | `account_id, status` | embedding 请求数 |
 | `openviking_embedding_latency_seconds` | Histogram | `account_id, status` | embedding 耗时分布 |
+| `openviking_embedding_errors_total` | Counter | `account_id, error_code` | embedding 错误次数 |
+| `openviking_embedding_calls_total` | Counter | `account_id, provider, model_name` | embedding provider 调用次数（per-call） |
+| `openviking_embedding_call_duration_seconds` | Histogram | `account_id, provider, model_name` | embedding provider 调用耗时分布（per-call） |
+| `openviking_embedding_tokens_input_total` | Counter | `account_id, provider, model_name` | embedding 输入 token（per-call 聚合） |
+| `openviking_embedding_tokens_output_total` | Counter | `account_id, provider, model_name` | embedding 输出 token（per-call 聚合；若长期为 0 可能不出现） |
+| `openviking_embedding_tokens_total` | Counter | `account_id, provider, model_name` | embedding 总 token（per-call 聚合） |
+| `openviking_rerank_calls_total` | Counter | `account_id, provider, model_name` | rerank provider 调用次数（per-call） |
+| `openviking_rerank_call_duration_seconds` | Histogram | `account_id, provider, model_name` | rerank provider 调用耗时分布（per-call） |
+| `openviking_rerank_tokens_input_total` | Counter | `account_id, provider, model_name` | rerank 输入 token（per-call 聚合） |
+| `openviking_rerank_tokens_output_total` | Counter | `account_id, provider, model_name` | rerank 输出 token（per-call 聚合；若长期为 0 可能不出现） |
+| `openviking_rerank_tokens_total` | Counter | `account_id, provider, model_name` | rerank 总 token（per-call 聚合） |
+| `openviking_operation_tokens_total` | Counter | `account_id, operation, stage, token_type` | Operation Token 汇总（含 token attribution 归因阶段） |
 
 说明：
 
 - `openviking_model_*` 是统一模型视角，便于同时看 embedding / vlm
 - `openviking_vlm_*` 和 `openviking_embedding_*` 更适合业务侧针对性看板
+  - `*_requests_*` 更偏“业务请求视角”
+  - `*_calls_* / *_call_duration_* / *_tokens_*` 更偏“模型调用视角”（按 `provider/model_name` 聚合）
+ - `openviking_operation_tokens_total` 不存 `token_type="all/total"` 这类预聚合标签，总账建议在 TSDB 查询侧用 `sum(...)` 聚合得到
 
 ### 队列、锁与系统运行态
 
 | 指标族 | 类型 | 常见标签 | 含义 |
 |--------|------|----------|------|
 | `openviking_queue_processed_total` | Counter | `queue` | 队列累计处理量 |
+| `openviking_queue_errors_total` | Counter | `queue` | 队列累计错误量 |
 | `openviking_queue_pending` | Gauge | `queue` | 队列待处理数 |
 | `openviking_queue_in_progress` | Gauge | `queue` | 队列执行中数量 |
 | `openviking_lock_active` | Gauge | 无 | 当前活跃锁数量 |
@@ -204,6 +239,30 @@ scrape_configs:
 
 - 是否有队列堆积？
 - 是否有锁竞争或 stale lock？
+
+### 任务与 Task Tracker
+
+| 指标族 | 类型 | 常见标签 | 含义 |
+|--------|------|----------|------|
+| `openviking_task_pending` | Gauge | `task_type` | task tracker 待执行任务数 |
+| `openviking_task_running` | Gauge | `task_type` | task tracker 执行中任务数 |
+| `openviking_task_completed` | Gauge | `task_type` | task tracker 已完成任务数 |
+| `openviking_task_failed` | Gauge | `task_type` | task tracker 失败任务数 |
+
+### Cache
+
+| 指标族 | 类型 | 常见标签 | 含义 |
+|--------|------|----------|------|
+| `openviking_cache_hits_total` | Counter | `level` | Cache 命中次数 |
+| `openviking_cache_misses_total` | Counter | `level` | Cache 未命中次数 |
+
+### Session
+
+| 指标族 | 类型 | 常见标签 | 含义 |
+|--------|------|----------|------|
+| `openviking_session_lifecycle_total` | Counter | `account_id, action, status` | session 生命周期事件次数 |
+| `openviking_session_contexts_used_total` | Counter | `account_id, action` | session contexts used 累计量 |
+| `openviking_session_archive_total` | Counter | `account_id, status` | session archive 次数 |
 
 ### 探针与健康状态
 
@@ -223,6 +282,22 @@ scrape_configs:
 
 - `valid="1"`：当前样本是本次成功刷新得到的结果
 - `valid="0"`：当前样本是失败回退值或 stale fallback，说明该探针/状态当前不可完全信任
+
+### 加密（运行指标）
+
+| 指标族 | 类型 | 常见标签 | 含义 |
+|--------|------|----------|------|
+| `openviking_encryption_operations_total` | Counter | `account_id, operation, status` | encrypt/decrypt 操作次数 |
+| `openviking_encryption_duration_seconds` | Histogram | `account_id, operation, status` | encrypt/decrypt 耗时分布 |
+| `openviking_encryption_bytes_total` | Counter | `account_id, operation` | encrypt/decrypt 处理字节数累计 |
+| `openviking_encryption_payload_size_bytes` | Histogram | `account_id, operation` | encrypt/decrypt payload size 分布 |
+| `openviking_encryption_auth_failed_total` | Counter | `account_id, status` | auth failed 次数 |
+| `openviking_encryption_key_derivation_total` | Counter | `account_id, status` | key derivation 次数 |
+| `openviking_encryption_key_derivation_duration_seconds` | Histogram | `account_id, status` | key derivation 耗时分布 |
+| `openviking_encryption_key_load_duration_seconds` | Histogram | `account_id, status, provider` | key load 耗时分布 |
+| `openviking_encryption_key_cache_hits_total` | Counter | `account_id, provider` | key cache hits 次数 |
+| `openviking_encryption_key_cache_misses_total` | Counter | `account_id, provider` | key cache misses 次数 |
+| `openviking_encryption_key_version_usage_total` | Counter | `account_id, key_version` | key version 使用次数 |
 
 ### 组件与 Observer 聚合指标
 
@@ -260,30 +335,28 @@ scrape_configs:
 
 ### 启用 Metrics
 
-在 `ov.conf` 中，可以通过 `server.metrics` 显式启用新的 metrics 子系统：
+在 `ov.conf` 中，可以通过 `server.observability.metrics` 显式启用 metrics 子系统：
 
 ```json
 {
   "server": {
-    "telemetry": {
-      "prometheus": {
-        "enabled": true
-      }
-    },
-    "metrics": {
-      "enabled": true,
-      "account_dimension": {
+    "observability": {
+      "metrics": {
         "enabled": true,
-        "max_active_accounts": 100,
-        "metric_allowlist": [
-          "openviking_http_requests_total",
-          "openviking_http_request_duration_seconds",
-          "openviking_http_inflight_requests",
-          "openviking_operation_requests_total",
-          "openviking_operation_duration_seconds",
-          "openviking_vlm_calls_total",
-          "openviking_vlm_call_duration_seconds"
-        ]
+        "account_dimension": {
+          "enabled": true,
+          "max_active_accounts": 100,
+          "metric_allowlist": [
+            "openviking_http_requests_total",
+            "openviking_http_request_duration_seconds",
+            "openviking_http_inflight_requests",
+            "openviking_operation_requests_total",
+            "openviking_operation_duration_seconds",
+            "openviking_vlm_calls_total",
+            "openviking_vlm_call_duration_seconds",
+            "openviking_rerank_*"
+          ]
+        }
       }
     }
   }
@@ -292,9 +365,8 @@ scrape_configs:
 
 推荐理解方式：
 
-- `server.metrics.enabled`：新指标体系总开关
-- `server.metrics.account_dimension`：控制 `account_id` 标签是否启用以及启用范围
-- `server.telemetry.prometheus.enabled`：兼容旧配置入口，当前实现仍兼容读取
+- `server.observability.metrics.enabled`：指标体系总开关
+- `server.observability.metrics.account_dimension`：控制 `account_id` 标签是否启用以及启用范围
 
 ### `account_id` 标签的使用建议
 

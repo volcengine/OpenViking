@@ -6,9 +6,11 @@ RerankBase: Base class for all rerank clients.
 Provides common token usage tracking functionality.
 """
 
+import logging
 from typing import Any, Dict
 
 _token_tracker_instance = None
+logger = logging.getLogger(__name__)
 
 
 def _get_token_tracker():
@@ -53,6 +55,7 @@ class RerankBase:
         provider: str,
         prompt_tokens: int,
         completion_tokens: int,
+        duration_seconds: float = 0.0,
     ) -> None:
         """Update token usage
 
@@ -61,6 +64,7 @@ class RerankBase:
             provider: Provider name (vikingdb, openai, cohere, litellm, etc.)
             prompt_tokens: Number of input tokens
             completion_tokens: Number of output tokens
+            duration_seconds: Wall-clock duration of the rerank provider call in seconds
         """
         self._token_tracker.update(
             model_name=model_name,
@@ -68,12 +72,54 @@ class RerankBase:
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )
+        try:
+            from openviking.telemetry import get_current_telemetry
+
+            get_current_telemetry().record_token_usage(
+                "rerank",
+                int(prompt_tokens),
+                int(completion_tokens),
+                stage="rerank",
+            )
+        except Exception as e:
+            # Telemetry must never break rerank execution.
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "rerank.update_token_usage telemetry emit failed provider=%s model_name=%s err=%s: %s",
+                    provider,
+                    model_name,
+                    type(e).__name__,
+                    e,
+                )
+        try:
+            from openviking.metrics.account_context import get_metric_account_context
+            from openviking.metrics.datasources import RerankEventDataSource
+
+            RerankEventDataSource.record_call(
+                provider=str(provider),
+                model_name=str(model_name),
+                duration_seconds=max(float(duration_seconds), 0.0),
+                prompt_tokens=int(prompt_tokens),
+                completion_tokens=int(completion_tokens),
+                account_id=get_metric_account_context().http_account_id,
+            )
+        except Exception as e:
+            # Metrics must never break rerank execution.
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "rerank.update_token_usage metrics emit failed provider=%s model_name=%s err=%s: %s",
+                    provider,
+                    model_name,
+                    type(e).__name__,
+                    e,
+                )
 
     def _extract_and_update_token_usage(
         self,
         response_data: dict,
         query: str,
         documents: list,
+        duration_seconds: float = 0.0,
     ) -> None:
         """Extract and update token usage from API response.
 
@@ -81,6 +127,7 @@ class RerankBase:
             response_data: Raw API response dict
             query: Query text (for estimation if needed)
             documents: List of documents (for estimation if needed)
+            duration_seconds: Wall-clock duration of the rerank provider call in seconds
         """
         prompt_tokens = 0
         completion_tokens = 0
@@ -109,6 +156,7 @@ class RerankBase:
             provider=self.provider,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
+            duration_seconds=duration_seconds,
         )
 
     def get_token_usage(self) -> Dict[str, Any]:

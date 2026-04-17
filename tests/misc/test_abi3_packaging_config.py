@@ -74,6 +74,15 @@ def test_build_workflow_smoke_tests_windows_wheel_engine_import():
     assert "engine.ENGINE_VARIANT" in build_workflow
 
 
+def test_build_workflow_smoke_tests_linux_and_macos_ragfs_binding_import():
+    build_workflow = _read_text(".github/workflows/_build.yml")
+
+    assert "Smoke test built wheel (Linux)" in build_workflow
+    assert "Smoke test built wheel (macOS)" in build_workflow
+    assert "from openviking.pyagfs import get_binding_client" in build_workflow
+    assert "Loaded RAGFS binding client" in build_workflow
+
+
 def test_windows_abi3_backend_uses_stable_python_linkage():
     setup_py = _read_text("setup.py")
     src_cmake = _read_text("src/CMakeLists.txt")
