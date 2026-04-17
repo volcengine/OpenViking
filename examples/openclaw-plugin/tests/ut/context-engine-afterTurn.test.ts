@@ -207,6 +207,60 @@ describe("context-engine afterTurn()", () => {
     expect(client.addSessionMessage.mock.calls[1][2][0].text).toContain("hi there");
   });
 
+  it("rescues the current-turn user message when prePromptMessageCount starts at the assistant reply", async () => {
+    const { engine, client } = makeEngine();
+
+    const messages = [
+      { role: "user", content: "old message" },
+      { role: "assistant", content: "old reply" },
+      { role: "user", content: "current message that must still be captured" },
+      { role: "assistant", content: "current reply" },
+    ];
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages,
+      prePromptMessageCount: 3,
+    });
+
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
+    expect(client.addSessionMessage.mock.calls[0][1]).toBe("user");
+    expect(client.addSessionMessage.mock.calls[0][2][0].text).toContain("current message");
+    expect(client.addSessionMessage.mock.calls[0][2][0].text).not.toContain("old message");
+    expect(client.addSessionMessage.mock.calls[1][1]).toBe("assistant");
+    expect(client.addSessionMessage.mock.calls[1][2][0].text).toContain("current reply");
+  });
+
+  it("rescues grouped user messages across a system gap when prePromptMessageCount starts at the assistant reply", async () => {
+    const { engine, client } = makeEngine();
+
+    const messages = [
+      { role: "user", content: "old message" },
+      { role: "assistant", content: "old reply" },
+      { role: "user", content: "current first question" },
+      { role: "user", content: "current second question" },
+      { role: "system", content: "system prompt injection" },
+      { role: "assistant", content: "current answer" },
+    ];
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages,
+      prePromptMessageCount: 5,
+    });
+
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
+    expect(client.addSessionMessage.mock.calls[0][1]).toBe("user");
+    const userParts = client.addSessionMessage.mock.calls[0][2] as Array<{ text?: string }>;
+    expect(userParts.map((part) => part.text).join(" ")).toContain("current first question");
+    expect(userParts.map((part) => part.text).join(" ")).toContain("current second question");
+    expect(userParts.map((part) => part.text).join(" ")).not.toContain("old message");
+    expect(client.addSessionMessage.mock.calls[1][1]).toBe("assistant");
+    expect(client.addSessionMessage.mock.calls[1][2][0].text).toContain("current answer");
+  });
+
   it("passes the latest non-system message timestamp to addSessionMessage as ISO string", async () => {
     const { engine, client } = makeEngine();
 
