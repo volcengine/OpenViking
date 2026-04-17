@@ -12,6 +12,8 @@ import re
 from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
+from openviking.utils.time_utils import parse_iso_datetime
+
 # Regex pattern to match the MEMORY_FIELDS HTML comment
 MEMORY_FIELDS_PATTERN = re.compile(r"\n\n<!--\s*MEMORY_FIELDS\s*\n(.*?)\n-->", re.DOTALL)
 
@@ -32,7 +34,7 @@ def _deserialize_datetime(metadata: Dict[str, Any]) -> Dict[str, Any]:
     for key in ["created_at", "updated_at"]:
         if key in result and isinstance(result[key], str):
             try:
-                result[key] = datetime.fromisoformat(result[key])
+                result[key] = parse_iso_datetime(result[key])
             except (ValueError, TypeError):
                 # Keep as string if parsing fails
                 pass
