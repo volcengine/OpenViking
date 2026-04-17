@@ -171,6 +171,37 @@ describe("isTranscriptLikeIngest", () => {
     expect(result.shouldAssist).toBe(false);
     expect(result.reason).toBe("speaker_turns_below_threshold");
   });
+
+  it("daily maintenance prompt → shouldAssist=false (issue #982)", () => {
+    const text =
+      "Daily memory maintenance. Read skills/opencortex/references/distillation.md for full instructions and follow them. Workspace: /Users/neo/.openclaw/workspace";
+    const result = isTranscriptLikeIngest(text, { minSpeakerTurns: 2, minChars: 50 });
+    expect(result.shouldAssist).toBe(false);
+    expect(result.reason).toBe("cron_maintenance_task");
+  });
+
+  it("weekly synthesis prompt → shouldAssist=false", () => {
+    const text =
+      "Weekly memory synthesis. Read skills/opencortex/references/synthesis.md for full instructions and follow them. Workspace: /home/user/.openclaw/workspace";
+    const result = isTranscriptLikeIngest(text, { minSpeakerTurns: 2, minChars: 50 });
+    expect(result.shouldAssist).toBe(false);
+    expect(result.reason).toBe("cron_maintenance_task");
+  });
+
+  it("nightly distillation prompt → shouldAssist=false", () => {
+    const text =
+      "Nightly distillation task. Read skills/memory/distillation.md and execute full workflow. lockfile at /tmp/distill.lock. Workspace: /data/openclaw/workspace";
+    const result = isTranscriptLikeIngest(text, { minSpeakerTurns: 2, minChars: 50 });
+    expect(result.shouldAssist).toBe(false);
+    expect(result.reason).toBe("cron_maintenance_task");
+  });
+
+  it("genuine multi-speaker transcript still triggers assist", () => {
+    const text = "Alice: 今天的会议主要讨论Q2目标\nBob: 我觉得我们应该把重点放在用户增长上\nAlice: 同意，那我们就定下来吧";
+    const result = isTranscriptLikeIngest(text, { minSpeakerTurns: 2, minChars: 50 });
+    expect(result.shouldAssist).toBe(true);
+    expect(result.reason).toBe("transcript_like_ingest");
+  });
 });
 
 describe("extractNewTurnTexts", () => {
