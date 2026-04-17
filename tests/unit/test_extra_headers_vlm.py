@@ -175,9 +175,7 @@ class TestVLMExtraHeaders:
         assert "extra_body" not in call_kwargs
 
     @patch("openviking.models.vlm.backends.openai_vlm.openai.OpenAI")
-    def test_explicit_enable_thinking_forces_extra_body_on_openai_backend(
-        self, mock_openai_class
-    ):
+    def test_explicit_enable_thinking_forces_extra_body_on_openai_backend(self, mock_openai_class):
         """Explicit config should force enable_thinking even without a legacy allowlist match."""
         mock_client = MagicMock()
         mock_openai_class.return_value = mock_client
