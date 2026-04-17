@@ -164,8 +164,13 @@ class TestSemanticPromptLanguageContract:
         prompt = render_prompt(prompt_id, variables)
 
         assert "matching the dominant natural language used in the source content" in prompt
-        assert "Do not default to English unless the source content is predominantly English" in prompt
-        assert "Keep unavoidable file names, code identifiers, API names, and quoted literals in their original form" in prompt
+        assert (
+            "Do not default to English unless the source content is predominantly English" in prompt
+        )
+        assert (
+            "Keep unavoidable file names, code identifiers, API names, and quoted literals in their original form"
+            in prompt
+        )
 
     def test_overview_prompt_requires_localized_headings_and_navigation(self):
         prompt = render_prompt(
