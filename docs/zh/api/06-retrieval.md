@@ -25,11 +25,14 @@ OpenViking 提供两种搜索方法：`find` 用于简单的语义搜索，`sear
 | query | str | 是 | - | 搜索查询字符串 |
 | target_uri | str | 否 | "" | 限制搜索范围到指定的 URI 前缀 |
 | limit | int | 否 | 10 | 最大返回结果数 |
+| node_limit | int | 否 | None | 可选 HTTP 别名；如果提供，会覆盖 `limit` |
 | score_threshold | float | 否 | None | 最低相关性分数阈值 |
 | filter | Dict | 否 | None | 元数据过滤器 |
-| since | str | 否 | None | 时间下界，支持 `2h` 或 ISO 8601 / `YYYY-MM-DD`，不带时区的值按本地时间解释。CLI `--after` 会映射到这个字段 |
-| until | str | 否 | None | 时间上界，支持 `30m` 或 ISO 8601 / `YYYY-MM-DD`，不带时区的值按本地时间解释。CLI `--before` 会映射到这个字段 |
+| since | str | 否 | None | 时间下界，支持 `2h` 或 ISO 8601 / `YYYY-MM-DD`。不带时区的值按 UTC 解释。CLI `--after` 会映射到这个字段 |
+| until | str | 否 | None | 时间上界，支持 `30m` 或 ISO 8601 / `YYYY-MM-DD`。不带时区的值按 UTC 解释。CLI `--before` 会映射到这个字段 |
 | time_field | `"updated_at"` 或 `"created_at"` | 否 | `"updated_at"` | `since` / `until` 使用的元数据时间字段 |
+| include_provenance | bool | 否 | False | 在序列化结果中附带 provenance / query-plan 细节 |
+| telemetry | bool 或 object | 否 | False | 在响应中附带遥测数据 |
 
 **FindResult 结构**
 
@@ -146,7 +149,7 @@ results = client.find(
 # 仅在技能中搜索
 results = client.find(
     "web search",
-    target_uri="viking://skills/"
+    target_uri="viking://agent/skills/"
 )
 
 # 在特定项目中搜索
@@ -195,11 +198,14 @@ curl -X POST http://localhost:1933/api/v1/search/find \
 | session | Session | 否 | None | 用于上下文感知搜索的会话（SDK） |
 | session_id | str | 否 | None | 用于上下文感知搜索的会话 ID（HTTP） |
 | limit | int | 否 | 10 | 最大返回结果数 |
+| node_limit | int | 否 | None | 可选 HTTP 别名；如果提供，会覆盖 `limit` |
 | score_threshold | float | 否 | None | 最低相关性分数阈值 |
 | filter | Dict | 否 | None | 元数据过滤器 |
-| since | str | 否 | None | 时间下界，支持 `2h` 或 ISO 8601 / `YYYY-MM-DD`，不带时区的值按本地时间解释。CLI `--after` 会映射到这个字段 |
-| until | str | 否 | None | 时间上界，支持 `30m` 或 ISO 8601 / `YYYY-MM-DD`，不带时区的值按本地时间解释。CLI `--before` 会映射到这个字段 |
+| since | str | 否 | None | 时间下界，支持 `2h` 或 ISO 8601 / `YYYY-MM-DD`。不带时区的值按 UTC 解释。CLI `--after` 会映射到这个字段 |
+| until | str | 否 | None | 时间上界，支持 `30m` 或 ISO 8601 / `YYYY-MM-DD`。不带时区的值按 UTC 解释。CLI `--before` 会映射到这个字段 |
 | time_field | `"updated_at"` 或 `"created_at"` | 否 | `"updated_at"` | `since` / `until` 使用的元数据时间字段 |
+| include_provenance | bool | 否 | False | 在序列化结果中附带 provenance / query-plan 细节 |
+| telemetry | bool 或 object | 否 | False | 在响应中附带遥测数据 |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -323,6 +329,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 | case_insensitive | bool | 否 | False | 忽略大小写 |
 | node_limit | int | 否 | None | 最大搜索节点数 |
 | exclude_uri | str | 否 | None | 要排除在搜索之外的 URI 前缀 |
+| level_limit | int | 否 | 5 | 最大目录遍历深度 |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -393,6 +400,7 @@ openviking grep viking://resources/ "authentication" [--ignore-case]
 |------|------|------|--------|------|
 | pattern | str | 是 | - | Glob 模式（例如 `**/*.md`） |
 | uri | str | 否 | "viking://" | 起始 URI |
+| node_limit | int | 否 | None | 最大返回匹配数 |
 
 **Python SDK (Embedded / HTTP)**
 

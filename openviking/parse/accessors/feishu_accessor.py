@@ -257,7 +257,9 @@ class FeishuAccessor(DataAccessor):
         host = parsed.hostname or ""
         path = parsed.path
         is_feishu_domain = host.endswith(".feishu.cn") or host.endswith(".larksuite.com")
-        has_doc_path = any(path == f"/{t}" or path.startswith(f"/{t}/") for t in ("docx", "wiki"))
+        has_doc_path = any(
+            path == f"/{t}" or path.startswith(f"/{t}/") for t in ("docx", "wiki", "sheets", "base")
+        )
         return is_feishu_domain and has_doc_path
 
     @staticmethod

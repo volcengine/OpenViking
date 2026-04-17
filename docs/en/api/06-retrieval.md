@@ -25,11 +25,14 @@ Basic vector similarity search.
 | query | str | Yes | - | Search query string |
 | target_uri | str | No | "" | Limit search to specific URI prefix |
 | limit | int | No | 10 | Maximum number of results |
+| node_limit | int | No | None | Optional HTTP alias that overrides `limit` when provided |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filters |
-| since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`, timezone-less values use local time. CLI `--after` maps to this field |
-| until | str | No | None | Upper time bound, accepts `30m` or ISO 8601 / `YYYY-MM-DD`, timezone-less values use local time. CLI `--before` maps to this field |
+| since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--after` maps to this field |
+| until | str | No | None | Upper time bound, accepts `30m` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--before` maps to this field |
 | time_field | `"updated_at"` or `"created_at"` | No | `"updated_at"` | Metadata time field used by `since` / `until` |
+| include_provenance | bool | No | False | Include provenance/query-plan details in the serialized result |
+| telemetry | bool or object | No | False | Attach telemetry data to the response |
 
 **FindResult Structure**
 
@@ -146,7 +149,7 @@ results = client.find(
 # Search only in skills
 results = client.find(
     "web search",
-    target_uri="viking://skills/"
+    target_uri="viking://agent/skills/"
 )
 
 # Search in specific project
@@ -195,11 +198,14 @@ Search with session context and intent analysis.
 | session | Session | No | None | Session for context-aware search (SDK) |
 | session_id | str | No | None | Session ID for context-aware search (HTTP) |
 | limit | int | No | 10 | Maximum number of results |
+| node_limit | int | No | None | Optional HTTP alias that overrides `limit` when provided |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filters |
-| since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`, timezone-less values use local time. CLI `--after` maps to this field |
-| until | str | No | None | Upper time bound, accepts `30m` or ISO 8601 / `YYYY-MM-DD`, timezone-less values use local time. CLI `--before` maps to this field |
+| since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--after` maps to this field |
+| until | str | No | None | Upper time bound, accepts `30m` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--before` maps to this field |
 | time_field | `"updated_at"` or `"created_at"` | No | `"updated_at"` | Metadata time field used by `since` / `until` |
+| include_provenance | bool | No | False | Include provenance/query-plan details in the serialized result |
+| telemetry | bool or object | No | False | Attach telemetry data to the response |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -321,8 +327,9 @@ Search content by pattern (regex).
 | uri | str | Yes | - | Viking URI to search in |
 | pattern | str | Yes | - | Search pattern (regex) |
 | case_insensitive | bool | No | False | Ignore case |
-| node_limit | int | No | None | Maximum number of nodes to search |
 | exclude_uri | str | No | None | URI prefix to exclude from search |
+| node_limit | int | No | None | Maximum number of nodes to search |
+| level_limit | int | No | 5 | Maximum directory depth to traverse |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -393,6 +400,7 @@ Match files by glob pattern.
 |-----------|------|----------|---------|-------------|
 | pattern | str | Yes | - | Glob pattern (e.g., `**/*.md`) |
 | uri | str | No | "viking://" | Starting URI |
+| node_limit | int | No | None | Maximum number of matches to return |
 
 **Python SDK (Embedded / HTTP)**
 

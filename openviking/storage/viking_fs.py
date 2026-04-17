@@ -23,12 +23,25 @@ from datetime import datetime
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+from openviking.core.namespace import (
+    NamespaceShapeError,
+    canonicalize_uri,
+)
+from openviking.core.namespace import (
+    is_accessible as namespace_is_accessible,
+)
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSDirectoryNotEmptyError, AGFSHTTPError
 from openviking.resource.watch_storage import is_watch_task_control_uri
+from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext, Role
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import format_simplified, get_current_timestamp, parse_iso_datetime
-from openviking_cli.exceptions import FailedPreconditionError, NotFoundError
+from openviking_cli.exceptions import (
+    FailedPreconditionError,
+    InvalidArgumentError,
+    NotFoundError,
+    PermissionDeniedError,
+)
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
@@ -275,14 +288,19 @@ class VikingFS:
 
         for part in parts:
             if part in {".", ".."}:
-                raise PermissionError(f"Unsafe URI traversal segment '{part}' in {normalized}")
+                raise PermissionDeniedError(
+                    f"Unsafe URI traversal segment '{part}' in {normalized}",
+                    resource=normalized,
+                )
             if "\\" in part:
-                raise PermissionError(
-                    f"Unsafe URI path separator '\\\\' in component '{part}' of {normalized}"
+                raise PermissionDeniedError(
+                    f"Unsafe URI path separator '\\\\' in component '{part}' of {normalized}",
+                    resource=normalized,
                 )
             if len(part) >= 2 and part[1] == ":" and part[0].isalpha():
-                raise PermissionError(
-                    f"Unsafe URI drive-prefixed component '{part}' in {normalized}"
+                raise PermissionDeniedError(
+                    f"Unsafe URI drive-prefixed component '{part}' in {normalized}",
+                    resource=normalized,
                 )
 
         return normalized, parts
@@ -291,14 +309,17 @@ class VikingFS:
         real_ctx = self._ctx_or_default(ctx)
         normalized_uri, _ = self._normalized_uri_parts(uri)
         if not self._is_accessible(normalized_uri, real_ctx):
-            raise PermissionError(f"Access denied for {uri}")
+            raise PermissionDeniedError(f"Access denied for {uri}", resource=normalized_uri)
 
     def _ensure_mutable_access(self, uri: str, ctx: Optional[RequestContext]) -> None:
         self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
         normalized_uri, _ = self._normalized_uri_parts(uri)
         if real_ctx.role != Role.ROOT and normalized_uri.rstrip("/") == "viking://temp":
-            raise PermissionError("Temp root is read-only for non-root users")
+            raise PermissionDeniedError(
+                "Temp root is read-only for non-root users",
+                resource=normalized_uri,
+            )
 
     # ========== AGFS Basic Commands ==========
 
@@ -407,7 +428,12 @@ class VikingFS:
         try:
             stat = self.agfs.stat(path)
             is_dir = stat.get("isDir", False) if isinstance(stat, dict) else False
-        except Exception:
+        except Exception as exc:
+            if not is_not_found_error(exc):
+                mapped = map_exception(exc, resource=uri)
+                if mapped is not None:
+                    raise mapped from exc
+                raise
             # Path does not exist: clean up any orphan index records and return
             uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
             uris_to_delete.append(target_uri)
@@ -416,6 +442,11 @@ class VikingFS:
             return {}
 
         if is_dir:
+            if not recursive:
+                raise FailedPreconditionError(
+                    f"Cannot remove directory without --recursive: {uri}",
+                    details={"resource": uri, "expected_flag": "recursive"},
+                )
             lock_paths = [path]
             lock_mode = "subtree"
         else:
@@ -877,13 +908,27 @@ class VikingFS:
         """Read directory's L0 summary (.abstract.md)."""
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
-        info = self.agfs.stat(path)
+        try:
+            info = self.agfs.stat(path)
+        except Exception as exc:
+            mapped = map_exception(exc, resource=uri)
+            if mapped is not None:
+                raise mapped from exc
+            raise
         if not info.get("isDir", info.get("is_dir")):
-            raise ValueError(f"{uri} is not a directory")
+            raise FailedPreconditionError(
+                f"{uri} is not a directory",
+                details={"resource": uri, "expected": "directory"},
+            )
         file_path = f"{path}/.abstract.md"
         try:
             content_bytes = self._handle_agfs_read(self.agfs.read(file_path))
-        except Exception:
+        except Exception as exc:
+            if not is_not_found_error(exc):
+                mapped = map_exception(exc, resource=uri)
+                if mapped is not None:
+                    raise mapped from exc
+                raise
             # Fallback to default if .abstract.md doesn't exist
             return f"# {uri}\n\n[Directory abstract is not ready]"
 
@@ -901,13 +946,27 @@ class VikingFS:
         """Read directory's L1 overview (.overview.md)."""
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
-        info = self.agfs.stat(path)
+        try:
+            info = self.agfs.stat(path)
+        except Exception as exc:
+            mapped = map_exception(exc, resource=uri)
+            if mapped is not None:
+                raise mapped from exc
+            raise
         if not info.get("isDir", info.get("is_dir")):
-            raise ValueError(f"{uri} is not a directory")
+            raise FailedPreconditionError(
+                f"{uri} is not a directory",
+                details={"resource": uri, "expected": "directory"},
+            )
         file_path = f"{path}/.overview.md"
         try:
             content_bytes = self._handle_agfs_read(self.agfs.read(file_path))
-        except Exception:
+        except Exception as exc:
+            if not is_not_found_error(exc):
+                mapped = map_exception(exc, resource=uri)
+                if mapped is not None:
+                    raise mapped from exc
+                raise
             # Fallback to default if .overview.md doesn't exist
             return f"# {uri}\n\n[Directory overview is not ready]"
 
@@ -965,6 +1024,10 @@ class VikingFS:
         )
 
         if target_uri and target_uri not in {"/", "viking://"}:
+            try:
+                target_uri = canonicalize_uri(target_uri, self._ctx_or_default(ctx))
+            except NamespaceShapeError as exc:
+                raise InvalidArgumentError(str(exc)) from exc
             self._ensure_access(target_uri, ctx)
 
         storage = self._get_vector_store()
@@ -1056,6 +1119,16 @@ class VikingFS:
 
         # Normalize target_uri to list
         target_uri_list = [target_uri] if isinstance(target_uri, str) else (target_uri or [])
+        real_ctx = self._ctx_or_default(ctx)
+        canonical_target_uri_list: List[str] = []
+        for item in target_uri_list:
+            if not item or item in {"/", "viking://"}:
+                continue
+            try:
+                canonical_target_uri_list.append(canonicalize_uri(item, real_ctx))
+            except NamespaceShapeError as exc:
+                raise InvalidArgumentError(str(exc)) from exc
+        target_uri_list = canonical_target_uri_list
         # Use first URI for context inference and access check
         primary_target_uri = target_uri_list[0] if target_uri_list else ""
 
@@ -1267,7 +1340,8 @@ class VikingFS:
         """
         real_ctx = self._ctx_or_default(ctx)
         account_id = real_ctx.account_id
-        _, parts = self._normalized_uri_parts(uri)
+        canonical_uri = canonicalize_uri(uri, real_ctx)
+        _, parts = self._normalized_uri_parts(canonical_uri)
         if not parts:
             return f"/local/{account_id}"
 
@@ -1280,13 +1354,13 @@ class VikingFS:
     def _ls_entries(self, path: str) -> List[Dict[str, Any]]:
         """List directory entries, filtering out internal directories.
 
-        At account root (/local/{account}), uses VALID_SCOPES whitelist.
+        At account root (/local/{account}), uses LISTABLE_SCOPES whitelist.
         At other levels, uses _INTERNAL_NAMES blacklist.
         """
         entries = self.agfs.ls(path)
         parts = [p for p in path.strip("/").split("/") if p]
         if len(parts) == 2 and parts[0] == "local":
-            return [e for e in entries if e.get("name") in VikingURI.VALID_SCOPES]
+            return [e for e in entries if e.get("name") in VikingURI.LISTABLE_SCOPES]
         return [e for e in entries if e.get("name") not in self._INTERNAL_NAMES]
 
     def _path_to_uri(self, path: str, ctx: Optional[RequestContext] = None) -> str:
@@ -1371,16 +1445,7 @@ class VikingFS:
             return self._is_legacy_temp_uri_parts(parts)
         if scope == "_system":
             return False
-
-        space = self._extract_space_from_uri(normalized_uri)
-        if space is None:
-            return True
-
-        if scope in {"user", "session"}:
-            return space == ctx.user.user_space_name()
-        if scope == "agent":
-            return space == ctx.user.agent_space_name()
-        return True
+        return namespace_is_accessible(normalized_uri, ctx)
 
     def _handle_agfs_read(self, result: Union[bytes, Any, None]) -> bytes:
         """Handle AGFSClient read return types consistently."""
@@ -1783,6 +1848,8 @@ class VikingFS:
                 existing_bytes = self._handle_agfs_read(self.agfs.read(path))
                 existing_bytes = await self._decrypt_content(existing_bytes, ctx=ctx)
                 existing = self._decode_bytes(existing_bytes)
+            except FileNotFoundError:
+                pass
             except AGFSHTTPError as e:
                 if e.status_code != 404:
                     raise
@@ -1853,19 +1920,22 @@ class VikingFS:
             if len(all_entries) >= node_limit:
                 break
             name = entry.get("name", "")
-            # After modification: compatible with 7+ digits of microseconds by truncating
             raw_time = entry.get("modTime", "")
-            if raw_time and len(raw_time) > 26 and "+" in raw_time:
-                # Handle strings like 2026-02-21T13:20:23.1470042+08:00
-                # Truncate to 2026-02-21T13:20:23.147004+08:00
-                parts = raw_time.split("+")
-                # Keep time part at most 26 characters (YYYY-MM-DDTHH:MM:SS.mmmmmm)
-                raw_time = parts[0][:26] + "+" + parts[1]
+            parsed_time = now
+            if isinstance(raw_time, (int, float)):
+                parsed_time = datetime.fromtimestamp(raw_time)
+            elif raw_time:
+                if len(raw_time) > 26 and "+" in raw_time:
+                    parts = raw_time.split("+")
+                    raw_time = parts[0][:26] + "+" + parts[1]
+                parsed_time = parse_iso_datetime(raw_time)
+            elif isinstance(entry.get("mtime"), (int, float)):
+                parsed_time = datetime.fromtimestamp(entry["mtime"])
             new_entry = {
                 "uri": self._path_to_uri(f"{path}/{name}", ctx=ctx),
                 "size": entry.get("size", 0),
                 "isDir": entry.get("isDir", False),
-                "modTime": format_simplified(parse_iso_datetime(raw_time), now),
+                "modTime": format_simplified(parsed_time, now),
             }
             if not self._is_accessible(new_entry["uri"], real_ctx):
                 continue

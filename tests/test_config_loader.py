@@ -4,6 +4,9 @@
 
 import pytest
 
+from openviking_cli.utils.config import (
+    OPENVIKING_CONFIG_ENV,
+)
 from openviking_cli.utils.config.config_loader import (
     load_json_config,
     require_config,
@@ -110,7 +113,7 @@ class TestRequireConfig:
 
 
 def test_openviking_config_rejects_unknown_nested_parser_section(monkeypatch):
-    monkeypatch.setenv("OPENVIKING_CONFIG_FILE", "/tmp/codex-no-config.json")
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 
     from openviking_cli.utils.config.open_viking_config import (
         OpenVikingConfig,
@@ -135,7 +138,7 @@ def test_openviking_config_rejects_unknown_nested_parser_section(monkeypatch):
 
 
 def test_openviking_config_rejects_unknown_top_level_section_with_suggestion(monkeypatch):
-    monkeypatch.setenv("OPENVIKING_CONFIG_FILE", "/tmp/codex-no-config.json")
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 
     from openviking_cli.utils.config.open_viking_config import (
         OpenVikingConfig,
@@ -166,8 +169,25 @@ def test_openviking_config_rejects_unknown_top_level_section_with_suggestion(mon
     OpenVikingConfigSingleton.reset_instance()
 
 
-def test_openviking_config_singleton_preserves_value_error_for_bad_config(tmp_path, monkeypatch):
+def test_openviking_config_warns_when_agent_scope_mode_is_configured(monkeypatch, caplog):
     monkeypatch.setenv("OPENVIKING_CONFIG_FILE", "/tmp/codex-no-config.json")
+
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    with caplog.at_level("WARNING"):
+        config = OpenVikingConfig.from_dict({"memory": {"agent_scope_mode": "agent"}})
+
+    assert config.memory.agent_scope_mode == "agent"
+    assert "memory.agent_scope_mode is deprecated and ignored" in caplog.text
+
+    OpenVikingConfigSingleton.reset_instance()
+
+
+def test_openviking_config_singleton_preserves_value_error_for_bad_config(tmp_path, monkeypatch):
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 
     from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 
@@ -196,7 +216,7 @@ def test_require_config_missing_message_uses_openviking_ai_docs(tmp_path, monkey
 def test_load_server_config_missing_message_uses_openviking_ai_docs(tmp_path, monkeypatch):
     import openviking.server.config as server_config
 
-    monkeypatch.delenv("OPENVIKING_CONFIG_FILE", raising=False)
+    monkeypatch.delenv(OPENVIKING_CONFIG_ENV, raising=False)
     monkeypatch.setattr(server_config, "DEFAULT_CONFIG_DIR", tmp_path / "user")
     monkeypatch.setattr(server_config, "SYSTEM_CONFIG_DIR", tmp_path / "system")
 
@@ -208,7 +228,7 @@ def test_openviking_config_singleton_missing_message_uses_openviking_ai_docs(tmp
     import openviking_cli.utils.config.open_viking_config as config_module
     from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 
-    monkeypatch.delenv("OPENVIKING_CONFIG_FILE", raising=False)
+    monkeypatch.delenv(OPENVIKING_CONFIG_ENV, raising=False)
     monkeypatch.setattr(config_module, "DEFAULT_CONFIG_DIR", tmp_path / "user")
     monkeypatch.setattr(config_module, "SYSTEM_CONFIG_DIR", tmp_path / "system")
 
@@ -220,11 +240,13 @@ def test_openviking_config_singleton_missing_message_uses_openviking_ai_docs(tmp
         OpenVikingConfigSingleton.reset_instance()
 
 
-def test_openviking_config_singleton_initialize_missing_message_uses_openviking_ai_docs(tmp_path, monkeypatch):
+def test_openviking_config_singleton_initialize_missing_message_uses_openviking_ai_docs(
+    tmp_path, monkeypatch
+):
     import openviking_cli.utils.config.open_viking_config as config_module
     from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 
-    monkeypatch.delenv("OPENVIKING_CONFIG_FILE", raising=False)
+    monkeypatch.delenv(OPENVIKING_CONFIG_ENV, raising=False)
     monkeypatch.setattr(config_module, "DEFAULT_CONFIG_DIR", tmp_path / "user")
     monkeypatch.setattr(config_module, "SYSTEM_CONFIG_DIR", tmp_path / "system")
 

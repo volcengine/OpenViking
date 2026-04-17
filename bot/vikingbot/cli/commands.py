@@ -438,7 +438,7 @@ def prepare_channel(
         openapi_config = OpenAPIChannelConfig(
             enabled=True,
             port=openapi_port,
-            api_key="",  # No auth required by default
+            api_key="",
         )
         openapi_channel = OpenAPIChannel(
             openapi_config,
@@ -447,7 +447,9 @@ def prepare_channel(
             global_config=config,
         )
         channels.add_channel(openapi_channel)
-        logger.info(f"OpenAPI channel enabled on port {openapi_port}")
+        logger.info(
+            f"OpenAPI channel enabled on port {openapi_port}; configure an API key before using HTTP chat endpoints"
+        )
 
     if channels.enabled_channels:
         console.print(f"[green]✓[/green] Channels enabled: {', '.join(channels.enabled_channels)}")

@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
-from openviking.server.identity import RequestContext, Role
+from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
 from openviking.server.models import Response
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.exceptions import PermissionDeniedError
@@ -33,6 +33,8 @@ _DEV_MODE_ADMIN_API_MESSAGE = (
 class CreateAccountRequest(BaseModel):
     account_id: str
     admin_user_id: str
+    isolate_user_scope_by_agent: bool = False
+    isolate_agent_scope_by_user: bool = False
 
 
 class RegisterUserRequest(BaseModel):
@@ -94,11 +96,20 @@ async def create_account(
 ):
     """Create a new account (workspace) with its first admin user."""
     manager = _get_api_key_manager(request)
-    user_key = await manager.create_account(body.account_id, body.admin_user_id)
+    policy = AccountNamespacePolicy(
+        isolate_user_scope_by_agent=body.isolate_user_scope_by_agent,
+        isolate_agent_scope_by_user=body.isolate_agent_scope_by_user,
+    )
+    user_key = await manager.create_account(
+        body.account_id,
+        body.admin_user_id,
+        namespace_policy=policy,
+    )
     service = get_service()
     account_ctx = RequestContext(
         user=UserIdentifier(body.account_id, body.admin_user_id, "default"),
         role=Role.ADMIN,
+        namespace_policy=policy,
     )
     await service.initialize_account_directories(account_ctx)
     await service.initialize_user_directories(account_ctx)
@@ -108,6 +119,7 @@ async def create_account(
             "account_id": body.account_id,
             "admin_user_id": body.admin_user_id,
             "user_key": user_key,
+            **policy.to_dict(),
         },
     )
 
@@ -184,6 +196,7 @@ async def register_user(
     user_ctx = RequestContext(
         user=UserIdentifier(account_id, body.user_id, "default"),
         role=Role.USER,
+        namespace_policy=manager.get_account_policy(account_id),
     )
     await service.initialize_user_directories(user_ctx)
     return Response(

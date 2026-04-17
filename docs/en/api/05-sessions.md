@@ -58,7 +58,11 @@ openviking session new
   "status": "ok",
   "result": {
     "session_id": "a1b2c3d4",
-    "user": "alice"
+    "user": {
+      "account_id": "default",
+      "user_id": "alice",
+      "agent_id": "default"
+    }
   },
   "time": 0.1
 }
@@ -73,9 +77,9 @@ List all sessions.
 **Python SDK (Embedded / HTTP)**
 
 ```python
-sessions = client.ls("viking://session/")
+sessions = client.list_sessions()
 for s in sessions:
-    print(f"{s['name']}")
+    print(f"{s['session_id']} -> {s['uri']}")
 ```
 
 **HTTP API**
@@ -101,8 +105,8 @@ openviking session list
 {
   "status": "ok",
   "result": [
-    {"session_id": "a1b2c3d4", "user": "alice"},
-    {"session_id": "e5f6g7h8", "user": "bob"}
+    {"session_id": "a1b2c3d4", "uri": "viking://session/alice/a1b2c3d4", "is_dir": true},
+    {"session_id": "e5f6g7h8", "uri": "viking://session/alice/e5f6g7h8", "is_dir": true}
   ],
   "time": 0.1
 }
@@ -178,6 +182,7 @@ openviking session get a1b2c3d4
       "total_tokens": 7000
     },
     "user": {
+      "account_id": "default",
       "user_id": "alice",
       "agent_id": "default"
     }
@@ -430,6 +435,7 @@ Add a message to the session.
 | role | str | Yes | - | Message role: "user" or "assistant" |
 | parts | List[Part] | Conditional | - | List of message parts (Required for Python SDK; Optional for HTTP API, mutually exclusive with content) |
 | content | str | Conditional | - | Message text content (HTTP API simple mode, mutually exclusive with parts) |
+| created_at | str | No | None | Optional ISO 8601 timestamp to persist on the message |
 
 > **Note**: HTTP API supports two modes:
 > 1. **Simple mode**: Use `content` string (backward compatible)
@@ -456,7 +462,7 @@ ContextPart(
 ToolPart(
     tool_id="call_123",
     tool_name="search_web",
-    skill_uri="viking://skills/search-web/",
+    skill_uri="viking://agent/skills/search-web/",
     tool_input={"query": "OAuth best practices"},
     tool_output="",
     tool_status="pending"  # "pending", "running", "completed", "error"
@@ -571,7 +577,7 @@ session.used(contexts=["viking://resources/docs/auth/"])
 
 # Record used skill
 session.used(skill={
-    "uri": "viking://skills/search-web/",
+    "uri": "viking://agent/skills/search-web/",
     "input": {"query": "OAuth"},
     "output": "Results...",
     "success": True
@@ -595,7 +601,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
 curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
-  -d '{"skill": {"uri": "viking://skills/search-web/", "input": {"query": "OAuth"}, "output": "Results...", "success": true}}'
+  -d '{"skill": {"uri": "viking://agent/skills/search-web/", "input": {"query": "OAuth"}, "output": "Results...", "success": true}}'
 ```
 
 **Response**
@@ -686,6 +692,34 @@ openviking session commit a1b2c3d4
 
 ---
 
+### extract()
+
+HTTP API only. Trigger memory extraction immediately for an existing session without creating a new commit task.
+
+**Parameters**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| session_id | str | Yes | - | Session ID to extract memories from |
+
+**HTTP API**
+
+```
+POST /api/v1/sessions/{session_id}/extract
+```
+
+```bash
+curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/extract \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key"
+```
+
+**Response**
+
+The endpoint returns the extracted memory write results as a JSON list. The exact item shape depends on which memories were produced for that session.
+
+---
+
 ### get_task()
 
 Query background task status (e.g., commit summary generation and memory extraction progress).
@@ -752,6 +786,52 @@ curl -X GET http://localhost:1933/api/v1/tasks/uuid-xxx \
 ```
 
 `memories_extracted` in the completed task result reports per-category counts for this commit only. Sum its values when you want the total for this commit.
+
+---
+
+### list_tasks()
+
+HTTP API only. List background tasks visible to the current caller.
+
+**Parameters**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| task_type | str | No | None | Filter by task type, for example `session_commit` |
+| status | str | No | None | Filter by task status: `pending`, `running`, `completed`, `failed` |
+| resource_id | str | No | None | Filter by task resource ID, for example a session ID |
+| limit | int | No | 50 | Maximum number of task records to return |
+
+**HTTP API**
+
+```
+GET /api/v1/tasks
+```
+
+```bash
+curl -X GET "http://localhost:1933/api/v1/tasks?task_type=session_commit&status=running&limit=20" \
+  -H "X-API-Key: your-key"
+```
+
+**Response**
+
+```json
+{
+  "status": "ok",
+  "result": [
+    {
+      "task_id": "uuid-xxx",
+      "task_type": "session_commit",
+      "status": "running",
+      "resource_id": "a1b2c3d4",
+      "created_at": 1770000000.0,
+      "updated_at": 1770000005.0,
+      "result": null,
+      "error": null
+    }
+  ]
+}
+```
 
 ---
 

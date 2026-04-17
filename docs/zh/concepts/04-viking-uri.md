@@ -120,11 +120,16 @@ viking://
 │       ├── entities/             # 每条独立
 │       └── events/               # 每条独立
 │
-├── agent/{agent_space}/          # agent_space 由 memory.agent_scope_mode 决定
+├── agent/{agent_id}/             # isolate_agent_scope_by_user = false 时的 agent 根目录
 │   ├── skills/                   # 技能定义
 │   ├── memories/
 │   │   ├── cases/
 │   │   └── patterns/
+│   └── instructions/
+│
+├── agent/{agent_id}/user/{user_id}/   # isolate_agent_scope_by_user = true 时的 agent 根目录
+│   ├── skills/
+│   ├── memories/
 │   └── instructions/
 │
 └── session/{session_id}/
@@ -133,10 +138,12 @@ viking://
     └── history/
 ```
 
-其中 `agent_space` 的计算方式取决于 `memory.agent_scope_mode`：
+其中 agent 命名空间形状由 account 级 namespace policy 决定：
 
-- `user+agent`（默认）：`agent_space = md5(f"{user_id}:{agent_id}")[:12]`
-- `agent`：`agent_space = md5(agent_id)[:12]`
+- `isolate_agent_scope_by_user = false`：`viking://agent/{agent_id}/...`
+- `isolate_agent_scope_by_user = true`：`viking://agent/{agent_id}/user/{user_id}/...`
+
+`memory.agent_scope_mode` 已废弃且被忽略。
 
 ## URI 操作
 
