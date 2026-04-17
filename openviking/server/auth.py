@@ -205,3 +205,136 @@ def require_role(*allowed_roles: Role):
         return ctx
 
     return Depends(_check)
+
+
+# Convenience dependency factories for common role requirements
+require_root = require_role(Role.ROOT)
+require_admin = require_role(Role.ADMIN)
+require_user = require_role(Role.USER)
+
+
+_TRUSTED_MODE_ADMIN_API_MESSAGE = (
+    "Admin API is unavailable in trusted mode. In trusted mode, each request is resolved as USER "
+    "from X-OpenViking-Account/X-OpenViking-User headers and does not use user-key "
+    "registration. Switch to api_key mode with root_api_key for account and user management."
+)
+
+_DEV_MODE_ADMIN_API_MESSAGE = (
+    "Admin API requires api_key mode with root_api_key configured. Development mode does not "
+    "support account or user management."
+)
+
+
+def require_auth_role(*allowed_roles: Role):
+    """Decorator for Admin API routes with mode-aware errors.
+
+    Usage:
+        @router.post("/admin/accounts")
+        @require_auth_role(Role.ROOT)
+        async def create_account(body: CreateAccountRequest, request: Request, ctx: RequestContext):
+            ...
+    """
+    from functools import wraps
+
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            # Extract request and ctx from kwargs or args
+            request = kwargs.get("request")
+            ctx = kwargs.get("ctx")
+
+            # Find request and ctx in args if not in kwargs
+            if request is None or ctx is None:
+                import inspect
+
+                sig = inspect.signature(func)
+                bound_args = sig.bind(*args, **kwargs)
+                bound_args.apply_defaults()
+                request = bound_args.arguments.get("request")
+                ctx = bound_args.arguments.get("ctx")
+
+            if request is None:
+                raise RuntimeError("require_auth_role decorator requires 'request' parameter")
+            if ctx is None:
+                raise RuntimeError("require_auth_role decorator requires 'ctx' parameter")
+
+            config = getattr(request.app.state, "config", None)
+            auth_mode = getattr(config, "auth_mode", "api_key")
+            if auth_mode == "trusted":
+                raise PermissionDeniedError(_TRUSTED_MODE_ADMIN_API_MESSAGE)
+
+            manager = getattr(request.app.state, "api_key_manager", None)
+            if manager is None:
+                raise PermissionDeniedError(_DEV_MODE_ADMIN_API_MESSAGE)
+
+            if ctx.role not in allowed_roles:
+                raise PermissionDeniedError(
+                    f"Requires role: {', '.join(r.value for r in allowed_roles)}"
+                )
+
+            return await func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
+# Convenience decorators for common admin role requirements
+def require_auth_root(func):
+    """Decorator to require ROOT role for Admin API.
+
+    Usage:
+        @router.post("/admin/accounts")
+        @require_auth_root
+        async def create_account(body: CreateAccountRequest, request: Request, ctx: RequestContext):
+            ...
+    """
+    return require_auth_role(Role.ROOT)(func)
+
+
+def require_auth_admin(func):
+    """Decorator to require ADMIN role for Admin API.
+
+    Usage:
+        @router.post("/admin/accounts")
+        @require_auth_admin
+        async def create_account(body: CreateAccountRequest, request: Request, ctx: RequestContext):
+            ...
+    """
+    return require_auth_role(Role.ADMIN)(func)
+
+
+def require_auth_user(func):
+    """Decorator to require USER role for Admin API.
+
+    Usage:
+        @router.post("/admin/accounts")
+        @require_auth_user
+        async def create_account(body: CreateAccountRequest, request: Request, ctx: RequestContext):
+            ...
+    """
+    return require_auth_role(Role.USER)(func)
+
+
+def require_auth_root_or_admin(func):
+    """Decorator to require ROOT or ADMIN role for Admin API.
+
+    Usage:
+        @router.post("/admin/accounts")
+        @require_auth_root_or_admin
+        async def create_account(body: CreateAccountRequest, request: Request, ctx: RequestContext):
+            ...
+    """
+    return require_auth_role(Role.ROOT, Role.ADMIN)(func)
+
+
+def get_api_key_manager_or_raise(request: Request):
+    """Get APIKeyManager from app state or raise appropriate error.
+
+    Raises:
+        PermissionDeniedError: In dev mode without API key manager.
+    """
+    manager = getattr(request.app.state, "api_key_manager", None)
+    if manager is None:
+        raise PermissionDeniedError(_DEV_MODE_ADMIN_API_MESSAGE)
+    return manager
