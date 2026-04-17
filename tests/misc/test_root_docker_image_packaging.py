@@ -59,6 +59,17 @@ def test_ragfs_python_uses_pyo3_version_with_python_314_support():
     assert 'pyo3 = { version = "0.27"' in cargo_toml
 
 
+def test_ragfs_python_python_source_points_to_existing_package_dir():
+    pyproject = _read_text("crates/ragfs-python/pyproject.toml")
+
+    match = re.search(r'^python-source = "(?P<path>[^"]+)"$', pyproject, re.MULTILINE)
+    if match is None:
+        return
+
+    package_dir = REPO_ROOT / "crates/ragfs-python" / match.group("path")
+    assert package_dir.is_dir(), f"Configured python-source directory is missing: {package_dir}"
+
+
 def test_root_build_system_includes_maturin_for_isolated_builds():
     pyproject = _read_text("pyproject.toml")
     setup_py = _read_text("setup.py")

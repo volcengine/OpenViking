@@ -10,4 +10,3 @@ requires-python = ">=3.10"
 [tool.maturin]
 features = ["s3"]
 abi3 = true
-python-source = "3.10"
