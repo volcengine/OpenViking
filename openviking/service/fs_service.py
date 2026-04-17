@@ -13,6 +13,7 @@ from openviking.server.identity import RequestContext
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.viking_fs import VikingFS
 from openviking.utils.embedding_utils import vectorize_directory_meta
+from openviking.utils.privacy_config_service import PrivacyConfigService
 from openviking_cli.exceptions import NotInitializedError
 from openviking_cli.utils import VikingURI, get_logger
 
@@ -22,12 +23,20 @@ logger = get_logger(__name__)
 class FSService:
     """File system operations service."""
 
-    def __init__(self, viking_fs: Optional[VikingFS] = None):
+    def __init__(
+        self,
+        viking_fs: Optional[VikingFS] = None,
+        privacy_config_service: Optional[PrivacyConfigService] = None,
+    ):
         self._viking_fs = viking_fs
+        self._privacy_config_service = privacy_config_service
 
     def set_viking_fs(self, viking_fs: VikingFS) -> None:
         """Set VikingFS instance (for deferred initialization)."""
         self._viking_fs = viking_fs
+
+    def set_privacy_config_service(self, privacy_config_service: PrivacyConfigService) -> None:
+        self._privacy_config_service = privacy_config_service
 
     def _ensure_initialized(self) -> VikingFS:
         """Ensure VikingFS is initialized."""
@@ -179,6 +188,15 @@ class FSService:
     async def read(self, uri: str, ctx: RequestContext, offset: int = 0, limit: int = -1) -> str:
         """Read file content."""
         viking_fs = self._ensure_initialized()
+        privacy_service = self._privacy_config_service
+        if privacy_service and privacy_service.is_skill_content_uri(uri):
+            content = await viking_fs.read_file(uri, offset=0, limit=-1, ctx=ctx)
+            restored = await privacy_service.restore_skill_content(uri, content, ctx)
+            if offset == 0 and limit == -1:
+                return restored
+            lines = restored.splitlines(keepends=True)
+            sliced = lines[offset:] if limit == -1 else lines[offset : offset + limit]
+            return "".join(sliced)
         return await viking_fs.read_file(uri, offset=offset, limit=limit, ctx=ctx)
 
     async def abstract(self, uri: str, ctx: RequestContext) -> str:

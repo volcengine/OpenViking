@@ -27,6 +27,7 @@ from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_ma
 from openviking.storage.transaction import LockManager, init_lock_manager
 from openviking.storage.viking_fs import VikingFS, init_viking_fs
 from openviking.utils.resource_processor import ResourceProcessor
+from openviking.utils.privacy_config_service import PrivacyConfigService
 from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.exceptions import NotInitializedError
 from openviking_cli.session.user_id import UserIdentifier
@@ -74,6 +75,7 @@ class OpenVikingService:
         self._embedder: Optional[Any] = None
         self._resource_processor: Optional[ResourceProcessor] = None
         self._skill_processor: Optional[SkillProcessor] = None
+        self._privacy_config_service: Optional[PrivacyConfigService] = None
         self._session_compressor: Optional[SessionCompressor] = None
         self._lock_manager: Optional[LockManager] = None
         self._directory_initializer: Optional[DirectoryInitializer] = None
@@ -300,7 +302,11 @@ class OpenVikingService:
         self._resource_processor = ResourceProcessor(
             vikingdb=self._vikingdb_manager,
         )
-        self._skill_processor = SkillProcessor(vikingdb=self._vikingdb_manager)
+        self._privacy_config_service = PrivacyConfigService(viking_fs=self._viking_fs)
+        self._skill_processor = SkillProcessor(
+            vikingdb=self._vikingdb_manager,
+            privacy_config_service=self._privacy_config_service,
+        )
         self._session_compressor = create_session_compressor(vikingdb=self._vikingdb_manager)
 
         # Start LockManager if initialized
@@ -317,6 +323,7 @@ class OpenVikingService:
 
         # Wire up sub-services
         self._fs_service.set_viking_fs(self._viking_fs)
+        self._fs_service.set_privacy_config_service(self._privacy_config_service)
         self._relation_service.set_viking_fs(self._viking_fs)
         self._pack_service.set_viking_fs(self._viking_fs)
         self._search_service.set_viking_fs(self._viking_fs)
