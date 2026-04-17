@@ -52,7 +52,11 @@ async def test_index_resource_recursive_traversal(recursive, expected_dirs, expe
     vfs = _DummyVikingFS(
         entries_by_uri={
             "viking://resources/root": [
-                {"name": ".abstract.md", "uri": "viking://resources/root/.abstract.md", "isDir": False},
+                {
+                    "name": ".abstract.md",
+                    "uri": "viking://resources/root/.abstract.md",
+                    "isDir": False,
+                },
                 {"name": "top.md", "uri": "viking://resources/root/top.md", "isDir": False},
                 {"name": "nested", "uri": "viking://resources/root/nested", "isDir": True},
             ],
