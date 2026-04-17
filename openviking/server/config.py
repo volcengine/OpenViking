@@ -54,6 +54,15 @@ class ObservabilityConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class TokenGuardrailsConfig(BaseModel):
+    """Optional per-operation token limits for expensive ingest paths."""
+
+    add_resource: Optional[int] = Field(default=None, ge=1)
+    add_skill: Optional[int] = Field(default=None, ge=1)
+
+    model_config = {"extra": "forbid"}
+
+
 class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 1933
@@ -65,6 +74,7 @@ class ServerConfig(BaseModel):
     bot_api_url: str = "http://localhost:18790"  # Vikingbot OpenAPIChannel URL (default port)
     encryption_enabled: bool = False  # Whether API key hashing is enabled
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
+    token_guardrails: TokenGuardrailsConfig = Field(default_factory=TokenGuardrailsConfig)
 
     model_config = {"extra": "forbid"}
 

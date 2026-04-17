@@ -8,6 +8,7 @@ Provides resource management operations: add_resource, add_skill, wait_processed
 
 import json
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.server.identity import RequestContext
@@ -34,6 +35,7 @@ from openviking_cli.exceptions import (
     DeadlineExceededError,
     InvalidArgumentError,
     NotInitializedError,
+    ResourceExhaustedError,
 )
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.uri import VikingURI
@@ -43,6 +45,13 @@ if TYPE_CHECKING:
     from openviking.resource.watch_scheduler import WatchScheduler
 
 logger = get_logger(__name__)
+
+
+def _estimate_tokens_from_text(text: str) -> int:
+    normalized = text.strip()
+    if not normalized:
+        return 0
+    return (len(normalized) + 3) // 4
 
 
 class ResourceService:
@@ -61,6 +70,10 @@ class ResourceService:
         self._resource_processor = resource_processor
         self._skill_processor = skill_processor
         self._watch_scheduler = watch_scheduler
+        self._token_guardrails: Dict[str, Optional[int]] = {
+            "add_resource": None,
+            "add_skill": None,
+        }
 
     def set_dependencies(
         self,
@@ -76,6 +89,16 @@ class ResourceService:
         self._resource_processor = resource_processor
         self._skill_processor = skill_processor
         self._watch_scheduler = watch_scheduler
+
+    def set_token_guardrails(
+        self,
+        *,
+        add_resource: Optional[int] = None,
+        add_skill: Optional[int] = None,
+    ) -> None:
+        """Configure per-operation token guardrails for ingest-heavy paths."""
+        self._token_guardrails["add_resource"] = add_resource
+        self._token_guardrails["add_skill"] = add_skill
 
     def _get_watch_manager(self) -> Optional["WatchManager"]:
         if not self._watch_scheduler:
@@ -100,6 +123,78 @@ class ResourceService:
             raise NotInitializedError("SkillProcessor")
         if not self._viking_fs:
             raise NotInitializedError("VikingFS")
+
+    def _estimate_path_payload_tokens(self, path: str) -> int:
+        candidate = Path(path)
+        try:
+            exists = candidate.exists()
+        except (OSError, ValueError):
+            exists = False
+        if exists:
+            if candidate.is_file():
+                return (candidate.stat().st_size + 3) // 4
+            if candidate.is_dir():
+                total_bytes = 0
+                for item in candidate.rglob("*"):
+                    if item.is_file():
+                        try:
+                            total_bytes += item.stat().st_size
+                        except OSError:
+                            continue
+                return (total_bytes + 3) // 4
+        return _estimate_tokens_from_text(path)
+
+    def _estimate_skill_payload_tokens(self, data: Any) -> int:
+        if data is None:
+            return 0
+        if isinstance(data, Path):
+            return self._estimate_path_payload_tokens(str(data))
+        if isinstance(data, str):
+            candidate = Path(data)
+            try:
+                exists = candidate.exists()
+            except (OSError, ValueError):
+                exists = False
+            if exists:
+                return self._estimate_path_payload_tokens(data)
+            return _estimate_tokens_from_text(data)
+        if isinstance(data, dict):
+            return _estimate_tokens_from_text(json.dumps(data, ensure_ascii=False))
+        return _estimate_tokens_from_text(str(data))
+
+    def _enforce_token_guardrail(
+        self,
+        *,
+        operation: str,
+        estimated_tokens: int,
+        extra_tokens: int = 0,
+    ) -> None:
+        limit = self._token_guardrails.get(operation)
+        if limit is None:
+            return
+
+        total_estimated = estimated_tokens + extra_tokens
+        telemetry = get_current_telemetry()
+        prefix = "resource" if operation == "add_resource" else "skill"
+        telemetry.set(f"{prefix}.guardrail.limit_tokens", limit)
+        telemetry.set(f"{prefix}.guardrail.estimated_tokens", total_estimated)
+
+        if total_estimated <= limit:
+            telemetry.set(f"{prefix}.guardrail.blocked", False)
+            return
+
+        telemetry.set(f"{prefix}.guardrail.blocked", True)
+        raise ResourceExhaustedError(
+            (
+                f"{operation} estimated input tokens ({total_estimated}) exceed configured "
+                f"limit ({limit})"
+            ),
+            details={
+                "operation": operation,
+                "estimated_tokens": total_estimated,
+                "limit_tokens": limit,
+            },
+        )
 
     async def add_resource(
         self,
@@ -173,6 +268,13 @@ class ResourceService:
         telemetry.set("resource.flags.watch_enabled", watch_enabled)
 
         try:
+            self._enforce_token_guardrail(
+                operation="add_resource",
+                estimated_tokens=self._estimate_path_payload_tokens(path),
+                extra_tokens=_estimate_tokens_from_text(reason)
+                + _estimate_tokens_from_text(instruction),
+            )
+
             # add_resource only supports resources scope
             if to and to.startswith("viking://"):
                 parsed = VikingURI(to)
@@ -434,6 +536,11 @@ class ResourceService:
             request_wait_tracker.register_request(telemetry_id)
 
         try:
+            self._enforce_token_guardrail(
+                operation="add_skill",
+                estimated_tokens=self._estimate_skill_payload_tokens(data),
+            )
+
             result = await self._skill_processor.process_skill(
                 data=data,
                 viking_fs=self._viking_fs,

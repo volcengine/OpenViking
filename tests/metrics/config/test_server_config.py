@@ -57,3 +57,24 @@ def test_load_server_config_preserves_metrics_fields_under_server_observability(
         "openviking_http_requests_total",
         "openviking_task_pending",
     ]
+
+
+def test_load_server_config_preserves_token_guardrails(tmp_path):
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "server": {
+                    "token_guardrails": {
+                        "add_resource": 2048,
+                        "add_skill": 1024,
+                    }
+                }
+            }
+        )
+    )
+
+    config = load_server_config(str(config_path))
+
+    assert config.token_guardrails.add_resource == 2048
+    assert config.token_guardrails.add_skill == 1024
