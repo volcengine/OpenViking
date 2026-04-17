@@ -289,6 +289,79 @@ Common fixtures are defined in `tests/conftest.py`, including `client` (initiali
 
 ---
 
+## Maintainer Routing and Contribution Entry
+
+### Contributor-Facing Module Map
+
+If you are not sure where your question, issue, or PR belongs, start with this table:
+
+| Domain | Area | Primary Contact |
+|--------|------|-----------------|
+| Integration | Bot | `@yeshion23333` |
+| Integration | OpenClaw Plugin | `@Mijamind719`, `@wlff123` |
+| Platform | Framework / Multi-tenant / Resources / Session | `@qin-ctx` |
+| Platform | Incremental / Scheduled Update | `@myysy` |
+| Knowledge | Memory | `@chenjw` |
+| Knowledge | Retrieval / Directory Semantics | `@zhoujh01` |
+| Storage & Security | Virtual FS / File Encryption | `@chuanbao666`, `@baojun-zhang` |
+
+If the area is still unclear, mention one of the cross-module maintainers listed below.
+
+### Maintainer Routing Map
+
+Use this table when routing issues, PRs, or design questions to a more specific owner:
+
+| Domain | Subarea | Representative Paths or Topics | Primary Contact | Backup / Cross-Module |
+|--------|---------|--------------------------------|-----------------|-----------------------|
+| Integration | Bot Runtime | `bot/vikingbot`, `bot/bridge`, deployment scripts, bot docs | `@yeshion23333` | `@chenjw` |
+| Integration | OpenClaw Plugin | `examples/openclaw-plugin`, installation, remote mode, compatibility | `@Mijamind719`, `@wlff123` | `@LinQiang391` |
+| Platform | Server & Multi-tenant | `openviking/server`, `openviking/service`, auth, identity, admin, tenant boundary | `@qin-ctx` | `@MaojiaSheng` |
+| Platform | Resource & Session Lifecycle | `openviking/resource`, `openviking/session`, resource ingestion, session lifecycle | `@qin-ctx` | `@MaojiaSheng` |
+| Platform | Incremental & Scheduled Update | `openviking/resource/watch_manager.py`, `openviking/resource/watch_scheduler.py` | `@myysy` | `@qin-ctx` |
+| Knowledge | Memory Engine | `openviking/session/memory`, `memory_extractor.py`, `memory_deduplicator.py` | `@chenjw` | `@qin-ctx` |
+| Knowledge | Retrieval & Directory Semantics | `openviking/retrieve`, intent analysis, hierarchical retrieval, directory semantics | `@zhoujh01` | `@qin-ctx` |
+| Storage & Security | VFS / AGFS Path Semantics | `openviking/storage`, `openviking/pyagfs`, filesystem behavior, path semantics | `@chuanbao666`, `@baojun-zhang` | `@zhoujh01` |
+| Storage & Security | Encryption & Data Safety | `openviking/crypto`, file encryption, storage safety | `@chuanbao666`, `@baojun-zhang` | `@zhoujh01` |
+
+For areas without a stable owner yet, cross-module maintainers will help route the request first.
+
+### Cross-Module Maintainers
+
+- `@MaojiaSheng`
+- `@qin-ctx`
+- `@zhoujh01`
+
+Cross-module maintainers help with issue routing, cross-cutting design questions, and fallback review support.
+
+### How to Ask for Help
+
+- If you already know the affected module, mention it in the issue or PR description.
+- If you are unsure about the module, describe the use case and affected behavior first.
+- If you want to work on an issue, leave a comment before starting, especially for cross-module changes.
+- If your PR spans multiple areas, call out the primary affected domain in the description.
+
+### Contribution Entry Labels
+
+Issue templates already classify reports such as `bug`, `enhancement`, and `question`. Maintainers may also use the following labels to make contribution entry clearer:
+
+| Label | Meaning |
+|-------|---------|
+| `good first issue` | Newcomer-friendly work with clear scope and acceptance criteria |
+| `help wanted` | Tasks that benefit from contributors who already know the codebase or review style |
+| `needs-design` | Work that needs maintainer clarification before implementation |
+| `needs-review` | Pull requests waiting for the first review round |
+
+### Contributor Growth Path
+
+The project uses a practical contribution path so contributors can see what “next step” looks like:
+
+| Stage | Typical Signals | Common Next Step |
+|-------|------------------|------------------|
+| New Contributor | First issue or first PR, often docs, tests, or scoped fixes | Start with `good first issue` items and get familiar with local workflow |
+| Active Contributor | One or more merged contributions | Pick up `help wanted` work in an area you already touched |
+| Module Contributor | Repeated contributions in the same subarea | Help with triage, reproduction, docs, or review comments in that area |
+| Backup Reviewer Candidate | Stable contribution record in one subarea | Help with first-pass review, routing, and contributor support |
+
 ## Contribution Workflow
 
 ### 1. Create a Branch
