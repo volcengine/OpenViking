@@ -119,7 +119,7 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 |-----------|------|-------------|
 | `max_concurrent` | int | Maximum concurrent embedding requests (`embedding.max_concurrent`, default: `10`) |
 | `max_retries` | int | Maximum retry attempts for transient embedding provider errors (`embedding.max_retries`, default: `3`; `0` disables retry) |
-| `provider` | str | `"volcengine"`, `"openai"`, `"vikingdb"`, `"jina"`, `"voyage"`, or `"gemini"` |
+| `provider` | str | `"volcengine"`, `"openai"`, `"dashscope"`, `"vikingdb"`, `"jina"`, `"voyage"`, or `"gemini"` |
 | `api_key` | str | API key |
 | `model` | str | Model name |
 | `dimension` | int | Vector dimension. For Voyage, this maps to `output_dimension` |
@@ -127,6 +127,8 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 | `batch_size` | int | Batch size for embedding requests |
 
 `embedding.max_retries` only applies to transient errors such as `429`, `5xx`, timeouts, and connection failures. Permanent errors such as `400`, `401`, `403`, and `AccountOverdue` are not retried automatically. The backoff strategy is exponential backoff with jitter, starting at `0.5s` and capped at `8s`.
+
+When `provider` is `dashscope`, OpenViking currently supports dense text embeddings only. If `input` is omitted, it defaults to `"text"`. Setting `input: "multimodal"` is rejected in this PR.
 
 #### Embedding Circuit Breaker
 
@@ -161,12 +163,28 @@ With `input: "multimodal"`, OpenViking can embed text, images (PNG, JPG, etc.), 
 
 **Supported providers:**
 - `openai`: OpenAI Embedding API
+- `dashscope`: DashScope OpenAI-compatible Embedding API (dense text only in this PR)
 - `volcengine`: Volcengine Embedding API
 - `vikingdb`: VikingDB Embedding API
 - `jina`: Jina AI Embedding API
 - `voyage`: Voyage AI Embedding API
 - `minimax`: MiniMax Embedding API
 - `gemini`: Google Gemini Embedding API (text-only; requires `google-genai>=1.0.0`)
+
+**dashscope provider example:**
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "dashscope",
+      "api_key": "your-dashscope-api-key",
+      "model": "text-embedding-v4",
+      "dimension": 1024
+    }
+  }
+}
+```
 
 **minimax provider example:**
 

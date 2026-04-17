@@ -121,7 +121,7 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 |------|------|------|
 | `max_concurrent` | int | 最大并发 Embedding 请求数（`embedding.max_concurrent`，默认：`10`） |
 | `max_retries` | int | Embedding provider 瞬时错误的最大重试次数（`embedding.max_retries`，默认：`3`；`0` 表示禁用重试） |
-| `provider` | str | `"volcengine"`、`"openai"`、`"vikingdb"`、`"jina"`、`"voyage"`、`"minimax"` 或 `"gemini"` |
+| `provider` | str | `"volcengine"`、`"openai"`、`"dashscope"`、`"vikingdb"`、`"jina"`、`"voyage"`、`"minimax"` 或 `"gemini"` |
 | `api_key` | str | API Key |
 | `model` | str | 模型名称 |
 | `dimension` | int | 向量维度 |
@@ -129,6 +129,8 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 | `batch_size` | int | 批量请求大小 |
 
 `embedding.max_retries` 仅对瞬时错误生效，例如 `429`、`5xx`、超时和连接错误；`400`、`401`、`403`、`AccountOverdue` 这类永久错误不会自动重试。退避策略为指数退避，初始延迟 `0.5s`，上限 `8s`，并带随机抖动。
+
+当 `provider` 为 `dashscope` 时，当前 PR 只支持 dense 文本 embedding。若省略 `input`，会默认使用 `"text"`；显式设置 `input: "multimodal"` 会被拒绝。
 
 #### Embedding 熔断（Circuit Breaker）
 
@@ -163,12 +165,28 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 
 **支持的 provider:**
 - `openai`: OpenAI Embedding API
+- `dashscope`: DashScope OpenAI 兼容 Embedding API（当前 PR 仅支持 dense 文本）
 - `volcengine`: 火山引擎 Embedding API
 - `vikingdb`: VikingDB Embedding API
 - `jina`: Jina AI Embedding API
 - `voyage`: Voyage AI Embedding API
 - `minimax`: MiniMax Embedding API
 - `gemini`: Google Gemini Embedding API（仅文本；需安装 `google-genai>=1.0.0`）
+
+**dashscope provider 配置示例:**
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "dashscope",
+      "api_key": "your-dashscope-api-key",
+      "model": "text-embedding-v4",
+      "dimension": 1024
+    }
+  }
+}
+```
 
 **minimax provider 配置示例:**
 

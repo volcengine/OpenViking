@@ -37,14 +37,14 @@ class EmbeddingModelConfig(BaseModel):
     provider: Optional[str] = Field(
         default="volcengine",
         description=(
-            "Provider type: 'openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'litellm', 'local'. "
+            "Provider type: 'openai', 'dashscope', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'litellm', 'local'. "
             "For OpenRouter or other OpenAI-compatible providers, use 'litellm' with "
             "api_base and api_key, or 'openai' with api_base and extra_headers."
         ),
     )
     backend: Optional[str] = Field(
         default="volcengine",
-        description="Backend type (Deprecated, use 'provider' instead): 'openai', 'volcengine', 'vikingdb', 'voyage', 'local'",
+        description="Backend type (Deprecated, use 'provider' instead): 'openai', 'dashscope', 'volcengine', 'vikingdb', 'voyage', 'local'",
     )
     version: Optional[str] = Field(default=None, description="Model version")
     ak: Optional[str] = Field(default=None, description="Access Key ID for VikingDB API")
@@ -80,9 +80,23 @@ class EmbeddingModelConfig(BaseModel):
         if isinstance(data, dict):
             provider = data.get("provider")
             backend = data.get("backend")
+            provider_name = provider.lower() if isinstance(provider, str) else None
+            backend_name = backend.lower() if isinstance(backend, str) else None
 
             if backend is not None and provider is None:
                 data["provider"] = backend
+                provider_name = backend_name
+
+            input_type = data.get("input")
+            if isinstance(input_type, str):
+                data["input"] = input_type.lower()
+
+            # DashScope support in this PR is text-only. When input is omitted, default to
+            # text so users can discover provider='dashscope' without needing an OpenAI
+            # compatibility workaround or an extra input override.
+            if (provider_name or backend_name) == "dashscope" and "input" not in data:
+                data["input"] = "text"
+
             for key in ("query_param", "document_param"):
                 value = data.get(key)
                 if isinstance(value, str):
@@ -103,6 +117,7 @@ class EmbeddingModelConfig(BaseModel):
 
         if self.provider not in [
             "openai",
+            "dashscope",
             "azure",
             "volcengine",
             "vikingdb",
@@ -117,7 +132,7 @@ class EmbeddingModelConfig(BaseModel):
         ]:
             raise ValueError(
                 f"Invalid embedding provider: '{self.provider}'. Must be one of: "
-                "'openai', 'azure', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'minimax', 'cohere', 'litellm', 'local'"
+                "'openai', 'dashscope', 'azure', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'minimax', 'cohere', 'litellm', 'local'"
             )
 
         # Provider-specific validation
@@ -131,6 +146,15 @@ class EmbeddingModelConfig(BaseModel):
                 raise ValueError("Azure provider requires 'api_key' to be set")
             if not self.api_base:
                 raise ValueError("Azure provider requires 'api_base' (Azure endpoint) to be set")
+
+        elif self.provider == "dashscope":
+            if not self.api_key:
+                raise ValueError("DashScope provider requires 'api_key' to be set")
+            if self.input != "text":
+                raise ValueError(
+                    "DashScope provider currently supports dense text embeddings only. "
+                    "Set 'input' to 'text'; 'multimodal' is not supported in this PR."
+                )
 
         elif self.provider == "ollama":
             # Ollama runs locally, no API key required
@@ -297,7 +321,8 @@ class EmbeddingCircuitBreakerConfig(BaseModel):
 
 class EmbeddingConfig(BaseModel):
     """
-    Embedding configuration, supports OpenAI, VolcEngine, VikingDB, Jina, Gemini, Voyage, or LiteLLM APIs.
+    Embedding configuration, supports OpenAI, DashScope, VolcEngine, VikingDB, Jina,
+    Gemini, Voyage, or LiteLLM APIs.
 
     Structure:
     - dense: Configuration for dense embedder
@@ -371,7 +396,7 @@ class EmbeddingConfig(BaseModel):
         """Factory method to create embedder instance based on provider and type.
 
         Args:
-            provider: Provider type ('openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'litellm')
+            provider: Provider type ('openai', 'dashscope', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'litellm')
             embedder_type: Embedder type ('dense', 'sparse', 'hybrid')
             config: EmbeddingModelConfig instance
 
@@ -383,6 +408,7 @@ class EmbeddingConfig(BaseModel):
         """
         from openviking.models.embedder import (
             CohereDenseEmbedder,
+            DashScopeDenseEmbedder,
             GeminiDenseEmbedder,
             JinaDenseEmbedder,
             LiteLLMDenseEmbedder,
@@ -435,6 +461,20 @@ class EmbeddingConfig(BaseModel):
                     "dimension": cfg.dimension,
                     "provider": "azure",
                     "configured_provider": "azure",
+                    "config": dict(runtime_config),
+                    **({"query_param": cfg.query_param} if cfg.query_param else {}),
+                    **({"document_param": cfg.document_param} if cfg.document_param else {}),
+                    **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
+                },
+            ),
+            ("dashscope", "dense"): (
+                DashScopeDenseEmbedder,
+                lambda cfg: {
+                    "model_name": cfg.model,
+                    "api_key": cfg.api_key,
+                    "api_base": cfg.api_base,
+                    "dimension": cfg.dimension,
+                    "input_type": cfg.input,
                     "config": dict(runtime_config),
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
