@@ -268,6 +268,7 @@ class BaseClient(ABC):
         content: str | None = None,
         parts: list[dict] | None = None,
         created_at: str | None = None,
+        role_id: str | None = None,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -277,6 +278,7 @@ class BaseClient(ABC):
             content: Text content (simple mode)
             parts: Parts array (full Part support: TextPart, ContextPart, ToolPart)
             created_at: Message creation time (ISO format string)
+            role_id: Optional explicit actor identity. Omit to let the server derive it.
 
         If both content and parts are provided, parts takes precedence.
         """

@@ -15,6 +15,7 @@ import uvicorn
 
 from openviking.server.app import create_app
 from openviking.server.config import load_server_config
+from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.logger import configure_uvicorn_logging
 
 
@@ -119,7 +120,7 @@ def main():
     # Set OPENVIKING_CONFIG_FILE environment variable if --config is provided
     # This allows OpenVikingConfigSingleton to load from the specified config file
     if args.config is not None:
-        os.environ["OPENVIKING_CONFIG_FILE"] = args.config
+        os.environ[OPENVIKING_CONFIG_ENV] = args.config
 
     from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 

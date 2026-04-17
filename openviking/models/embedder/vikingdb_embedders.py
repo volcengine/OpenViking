@@ -46,11 +46,15 @@ class VikingDBClientMixin:
         texts: List[str],
         dense_model: Dict[str, Any] = None,
         sparse_model: Optional[Dict[str, Any]] = None,
+        input_type: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Call VikingDB Embedding API"""
         path = "/api/vikingdb/embedding"
 
         data_items = [{"text": text} for text in texts]
+        if input_type is not None:
+            for item in data_items:
+                item["input_type"] = input_type
 
         req_body = {"data": data_items}
         if dense_model:
@@ -158,6 +162,8 @@ class VikingDBDenseEmbedder(DenseEmbedderBase, VikingDBClientMixin):
         dimension: Optional[int] = None,
         embedding_type: str = "text",
         config: Optional[Dict[str, Any]] = None,
+        query_param: Optional[str] = None,
+        document_param: Optional[str] = None,
     ):
         DenseEmbedderBase.__init__(self, model_name, config)
         self.provider = "vikingdb"
@@ -166,10 +172,22 @@ class VikingDBDenseEmbedder(DenseEmbedderBase, VikingDBClientMixin):
         self.dimension = dimension
         self.embedding_type = embedding_type
         self.dense_model = {"name": model_name, "version": model_version, "dim": dimension}
+        self.query_param = query_param
+        self.document_param = document_param
+
+    def _resolve_input_type(self, is_query: bool) -> Optional[str]:
+        """Return the input_type value for query or document side, or None for symmetric mode."""
+        if is_query and self.query_param is not None:
+            return self.query_param
+        if not is_query and self.document_param is not None:
+            return self.document_param
+        return None
 
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
+        input_type = self._resolve_input_type(is_query)
+
         def _call() -> EmbedResult:
-            results = self._call_api([text], dense_model=self.dense_model)
+            results = self._call_api([text], dense_model=self.dense_model, input_type=input_type)
             if not results:
                 return EmbedResult(dense_vector=[])
 
@@ -198,9 +216,10 @@ class VikingDBDenseEmbedder(DenseEmbedderBase, VikingDBClientMixin):
     def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         if not texts:
             return []
+        input_type = self._resolve_input_type(is_query)
 
         def _call() -> List[EmbedResult]:
-            raw_results = self._call_api(texts, dense_model=self.dense_model)
+            raw_results = self._call_api(texts, dense_model=self.dense_model, input_type=input_type)
             return [
                 EmbedResult(
                     dense_vector=self._truncate_and_normalize(
@@ -438,6 +457,8 @@ class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
         dimension: Optional[int] = None,
         embedding_type: str = "text",
         config: Optional[Dict[str, Any]] = None,
+        query_param: Optional[str] = None,
+        document_param: Optional[str] = None,
     ):
         HybridEmbedderBase.__init__(self, model_name, config)
         self.provider = "vikingdb"
@@ -450,11 +471,24 @@ class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
             "name": model_name,
             "version": model_version,
         }
+        self.query_param = query_param
+        self.document_param = document_param
+
+    def _resolve_input_type(self, is_query: bool) -> Optional[str]:
+        """Return the input_type value for query or document side, or None for symmetric mode."""
+        if is_query and self.query_param is not None:
+            return self.query_param
+        if not is_query and self.document_param is not None:
+            return self.document_param
+        return None
 
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
+        input_type = self._resolve_input_type(is_query)
+
         def _call() -> EmbedResult:
             results = self._call_api(
-                [text], dense_model=self.dense_model, sparse_model=self.sparse_model
+                [text], dense_model=self.dense_model, sparse_model=self.sparse_model,
+                input_type=input_type,
             )
             if not results:
                 return EmbedResult(dense_vector=[], sparse_vector={})
@@ -462,7 +496,6 @@ class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
             item = results[0]
             dense_vector = []
             sparse_vector = {}
-
             if "dense" in item:
                 dense_vector = self._truncate_and_normalize(item["dense"], self.dimension)
             if "sparse" in item:
@@ -488,10 +521,12 @@ class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
     def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         if not texts:
             return []
+        input_type = self._resolve_input_type(is_query)
 
         def _call() -> List[EmbedResult]:
             raw_results = self._call_api(
-                texts, dense_model=self.dense_model, sparse_model=self.sparse_model
+                texts, dense_model=self.dense_model, sparse_model=self.sparse_model,
+                input_type=input_type,
             )
             results = []
             for item in raw_results:

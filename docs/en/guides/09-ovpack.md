@@ -93,7 +93,7 @@ curl -X POST http://localhost:1933/api/v1/pack/import \
 OpenViking memories are stored under fixed directory structures:
 
 - User memories: `viking://user/{user_space}/memories/`
-- Agent memories: `viking://agent/{agent_space}/memories/`
+- Agent memories: `viking://agent/{agent_id}/memories/` or `viking://agent/{agent_id}/user/{user_id}/memories/`
 
 When migrating memories with OVPack, you must import the `.ovpack` into the parent of the corresponding space (not an arbitrary directory). Otherwise you may end up with paths like `.../memories/memories/...`, and OpenViking will not be able to access and use them as memories.
 
@@ -110,8 +110,13 @@ openviking import ./exports/user-memories.ovpack viking://user/default/ --force
 ### Export/Import Agent Memories (CLI)
 
 ```bash
+# isolate_agent_scope_by_user = false
 openviking export viking://agent/default/memories/ ./exports/agent-memories.ovpack
 openviking import ./exports/agent-memories.ovpack viking://agent/default/ --force
+
+# isolate_agent_scope_by_user = true
+openviking export viking://agent/default/user/alice/memories/ ./exports/agent-memories.ovpack
+openviking import ./exports/agent-memories.ovpack viking://agent/default/user/alice/ --force
 ```
 
 ### Export/Import Memories (Python SDK)

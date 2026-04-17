@@ -3,10 +3,16 @@
 
 """Tests for search endpoints: find, search, grep, glob."""
 
+from datetime import datetime, timezone
+
 import httpx
 import pytest
 
 from openviking.models.embedder.base import EmbedResult
+from openviking.server.auth import get_request_context
+from openviking.server.identity import RequestContext, Role
+from openviking.utils.time_utils import parse_iso_datetime
+from openviking_cli.session.user_id import UserIdentifier
 
 
 @pytest.fixture(autouse=True)
@@ -42,6 +48,28 @@ async def test_find_with_target_uri(client_with_resource):
     assert resp.json()["status"] == "ok"
 
 
+async def test_find_with_inaccessible_target_uri_returns_permission_denied(
+    client: httpx.AsyncClient, app
+):
+    app.dependency_overrides[get_request_context] = lambda: RequestContext(
+        user=UserIdentifier.the_default_user(),
+        role=Role.USER,
+    )
+    try:
+        resp = await client.post(
+            "/api/v1/search/find",
+            json={"query": "sample", "target_uri": "viking://agent/foreign-agent", "limit": 5},
+        )
+    finally:
+        app.dependency_overrides.pop(get_request_context, None)
+
+    assert resp.status_code == 403
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "PERMISSION_DENIED"
+    assert "Access denied" in body["error"]["message"]
+
+
 async def test_find_with_score_threshold(client_with_resource):
     client, uri = client_with_resource
     resp = await client.post(
@@ -63,6 +91,96 @@ async def test_find_no_results(client: httpx.AsyncClient):
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+
+
+async def test_find_with_since_compiles_time_range(client: httpx.AsyncClient, service, monkeypatch):
+    captured = {}
+
+    async def fake_find(*, filter=None, **kwargs):
+        captured["filter"] = filter
+        captured["kwargs"] = kwargs
+        return {"items": []}
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+
+    resp = await client.post(
+        "/api/v1/search/find",
+        json={"query": "sample", "since": "2h"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    assert captured["filter"]["op"] == "time_range"
+    assert captured["filter"]["field"] == "updated_at"
+    gte = parse_iso_datetime(captured["filter"]["gte"])
+    delta = datetime.now(timezone.utc) - gte
+    assert 7_100 <= delta.total_seconds() <= 7_300
+
+
+async def test_find_combines_existing_filter_with_time_range(
+    client: httpx.AsyncClient, service, monkeypatch
+):
+    captured = {}
+
+    async def fake_find(*, filter=None, **kwargs):
+        captured["filter"] = filter
+        return {"items": []}
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+
+    resp = await client.post(
+        "/api/v1/search/find",
+        json={
+            "query": "sample",
+            "filter": {"op": "must", "field": "kind", "conds": ["email"]},
+            "since": "2026-03-10",
+            "time_field": "created_at",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    assert captured["filter"] == {
+        "op": "and",
+        "conds": [
+            {"op": "must", "field": "kind", "conds": ["email"]},
+            {
+                "op": "time_range",
+                "field": "created_at",
+                "gte": "2026-03-10T00:00:00.000Z",
+            },
+        ],
+    }
+
+
+async def test_find_with_invalid_time_returns_422(client: httpx.AsyncClient):
+    resp = await client.post(
+        "/api/v1/search/find",
+        json={"query": "sample", "since": "not-a-time"},
+    )
+
+    assert resp.status_code == 422
+    assert resp.json()["detail"]
+
+
+async def test_find_with_invalid_time_field_returns_422(client: httpx.AsyncClient):
+    resp = await client.post(
+        "/api/v1/search/find",
+        json={"query": "sample", "time_field": "published_at", "since": "2h"},
+    )
+
+    assert resp.status_code == 422
+    assert resp.json()["detail"]
+
+
+async def test_find_with_inverted_mixed_time_range_returns_422(client: httpx.AsyncClient):
+    resp = await client.post(
+        "/api/v1/search/find",
+        json={"query": "sample", "since": "2099-01-01", "until": "2h"},
+    )
+
+    assert resp.status_code == 422
+    assert "earlier than or equal to" in resp.json()["detail"]
 
 
 async def test_search_basic(client_with_resource):
@@ -106,7 +224,7 @@ async def test_find_telemetry_metrics(client_with_resource):
     summary = body["telemetry"]["summary"]
     assert summary["operation"] == "search.find"
     assert "duration_ms" in summary
-    assert {"total", "llm", "embedding"}.issubset(summary["tokens"].keys())
+    assert "tokens" not in summary
     assert "vector" in summary
     assert summary["vector"]["searches"] >= 0
     assert "queue" not in summary
@@ -127,7 +245,10 @@ async def test_search_telemetry_metrics(client_with_resource):
     body = resp.json()
     summary = body["telemetry"]["summary"]
     assert summary["operation"] == "search.search"
-    assert summary["vector"]["returned"] >= 0
+    if body["result"]["total"] > 0:
+        assert summary["vector"]["returned"] == body["result"]["total"]
+    else:
+        assert "returned" not in summary["vector"]
     assert "queue" not in summary
     assert "semantic_nodes" not in summary
     assert "memory" not in summary
@@ -169,6 +290,31 @@ async def test_find_rejects_events_telemetry_request(client_with_resource):
     assert "events" in body["error"]["message"]
 
 
+async def test_search_with_until_compiles_time_range(
+    client: httpx.AsyncClient, service, monkeypatch
+):
+    captured = {}
+
+    async def fake_search(*, filter=None, **kwargs):
+        captured["filter"] = filter
+        return {"items": []}
+
+    monkeypatch.setattr(service.search, "search", fake_search)
+
+    resp = await client.post(
+        "/api/v1/search/search",
+        json={"query": "sample", "until": "2026-03-11", "time_field": "created_at"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    assert captured["filter"] == {
+        "op": "time_range",
+        "field": "created_at",
+        "lte": "2026-03-11T23:59:59.999Z",
+    }
+
+
 async def test_grep(client_with_resource):
     client, uri = client_with_resource
     parent_uri = "/".join(uri.split("/")[:-1]) + "/"
@@ -193,8 +339,6 @@ async def test_grep_case_insensitive(client_with_resource):
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
-
-
 
 
 async def test_grep_exclude_uri_excludes_specific_uri_range(
@@ -231,7 +375,7 @@ async def test_grep_exclude_uri_excludes_specific_uri_range(
     assert body["status"] == "ok"
     matches = body["result"]["matches"]
     assert matches
-    assert all(not m["uri"].startswith(exclude_uri.rstrip('/')) for m in matches)
+    assert all(not m["uri"].startswith(exclude_uri.rstrip("/")) for m in matches)
 
 
 async def test_grep_exclude_uri_does_not_exclude_same_named_sibling_dirs(
@@ -274,6 +418,7 @@ async def test_grep_exclude_uri_does_not_exclude_same_named_sibling_dirs(
     uris = {m["uri"] for m in matches}
     assert any(uri.startswith("viking://resources/group_b/cache/") for uri in uris)
     assert all(not uri.startswith("viking://resources/group_a/cache/") for uri in uris)
+
 
 async def test_glob(client_with_resource):
     client, _ = client_with_resource

@@ -75,7 +75,7 @@ impl From<Error> for CliError {
         match err {
             Error::Config(msg) => CliError::config(msg),
             Error::Network(msg) => CliError::network(msg),
-            Error::Api(msg) => CliError::new(format!("API error: {}", msg)),
+            Error::Api(msg) => CliError::new(msg),
             Error::Client(msg) => CliError::new(format!("Client error: {}", msg)),
             Error::Parse(msg) => CliError::new(format!("Parse error: {}", msg)),
             Error::Output(msg) => CliError::new(format!("Output error: {}", msg)),

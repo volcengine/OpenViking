@@ -15,8 +15,8 @@ class MemoryConfig(BaseModel):
     agent_scope_mode: str = Field(
         default="user+agent",
         description=(
-            "Agent memory namespace mode: 'user+agent' keeps agent memory isolated by "
-            "(user_id, agent_id), while 'agent' shares agent memory across users of the same agent."
+            "Deprecated and ignored. Kept only for backward compatibility with older ov.conf files. "
+            "Agent/user namespace behavior is now controlled by per-account namespace policy."
         ),
     )
 
@@ -38,6 +38,14 @@ class MemoryConfig(BaseModel):
         description=(
             "Maximum retries for SessionCompressorV2 memory lock acquisition. "
             "0 means unlimited retries."
+        ),
+    )
+    eager_prefetch: bool = Field(
+        default=False,
+        description=(
+            "When enabled, prefetch will execute search + read to preload all memory file contents "
+            "into the context, and no read/search tools will be provided to the LLM. "
+            "When disabled (default), LLM has read tool and reads files on-demand."
         ),
     )
 

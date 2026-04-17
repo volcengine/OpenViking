@@ -9,7 +9,8 @@ Provides session management operations: session, sessions, add_message, commit, 
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
-from openviking.server.identity import RequestContext
+from openviking.core.namespace import canonical_session_uri
+from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session, ToolSkillCandidateMemory
 from openviking.session.compressor import SessionCompressor
@@ -150,7 +151,7 @@ class SessionService:
             List of session info dicts
         """
         self._ensure_initialized()
-        session_base_uri = f"viking://session/{ctx.user.user_space_name()}"
+        session_base_uri = canonical_session_uri()
 
         try:
             entries = await self._viking_fs.ls(session_base_uri, ctx=ctx)
@@ -180,7 +181,12 @@ class SessionService:
             True if deleted successfully
         """
         self._ensure_initialized()
-        session_uri = f"viking://session/{ctx.user.user_space_name()}/{session_id}"
+        if ctx.role not in {Role.ADMIN, Role.ROOT}:
+            from openviking_cli.exceptions import PermissionDeniedError
+
+            raise PermissionDeniedError("Deleting shared sessions requires ADMIN or ROOT role")
+
+        session_uri = canonical_session_uri(session_id)
 
         try:
             await self._viking_fs.rm(session_uri, recursive=True, ctx=ctx)
@@ -249,7 +255,6 @@ class SessionService:
         task = get_task_tracker().get(
             task_id,
             owner_account_id=ctx.account_id,
-            owner_user_id=ctx.user.user_id,
         )
         return task.to_dict() if task else None
 

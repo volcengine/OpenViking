@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 import asyncio
+import logging
 import random
 import time
 import weakref
@@ -13,6 +14,7 @@ from openviking.telemetry import get_current_telemetry
 from openviking.utils.model_retry import retry_async, retry_sync
 
 T = TypeVar("T")
+logger = logging.getLogger(__name__)
 
 
 _token_tracker_instance = None
@@ -44,20 +46,28 @@ def _get_token_tracker():
 
 async def embed_compat(embedder: Any, text: str, *, is_query: bool = False) -> "EmbedResult":
     """Call async embedding when available, otherwise fall back to sync embed()."""
+    from openviking.telemetry import bind_telemetry_stage
+
+    stage = "embed_query" if is_query else "embed_resource"
     embed_async = getattr(embedder, "embed_async", None)
-    if callable(embed_async):
-        return await embed_async(text, is_query=is_query)
-    return embedder.embed(text, is_query=is_query)
+    with bind_telemetry_stage(stage):
+        if callable(embed_async):
+            return await embed_async(text, is_query=is_query)
+        return embedder.embed(text, is_query=is_query)
 
 
 async def embed_batch_compat(
     embedder: Any, texts: List[str], *, is_query: bool = False
 ) -> List["EmbedResult"]:
     """Call async batch embedding when available, otherwise fall back to sync embed_batch()."""
+    from openviking.telemetry import bind_telemetry_stage
+
+    stage = "embed_query" if is_query else "embed_resource"
     embed_batch_async = getattr(embedder, "embed_batch_async", None)
-    if callable(embed_batch_async):
-        return await embed_batch_async(texts, is_query=is_query)
-    return embedder.embed_batch(texts, is_query=is_query)
+    with bind_telemetry_stage(stage):
+        if callable(embed_batch_async):
+            return await embed_batch_async(texts, is_query=is_query)
+        return embedder.embed_batch(texts, is_query=is_query)
 
 
 def truncate_and_normalize(embedding: List[float], dimension: Optional[int]) -> List[float]:
@@ -131,6 +141,7 @@ class EmbedderBase(ABC):
 
         # Token usage tracking
         self._token_tracker = _get_token_tracker()
+        self._active_call_started_at: float | None = None
 
     @abstractmethod
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
@@ -157,6 +168,22 @@ class EmbedderBase(ABC):
         """
         return [self.embed(text, is_query=is_query) for text in texts]
 
+    def embed_query(self, text: str) -> EmbedResult:
+        """Embed query text with explicit retrieval-side semantics."""
+        return self.embed(text, is_query=True)
+
+    def embed_document(self, text: str) -> EmbedResult:
+        """Embed document text with explicit indexing-side semantics."""
+        return self.embed(text, is_query=False)
+
+    def embed_batch_query(self, texts: List[str]) -> List[EmbedResult]:
+        """Batch embed query texts."""
+        return self.embed_batch(texts, is_query=True)
+
+    def embed_batch_document(self, texts: List[str]) -> List[EmbedResult]:
+        """Batch embed document texts."""
+        return self.embed_batch(texts, is_query=False)
+
     async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
         """Async embed single text.
 
@@ -175,13 +202,33 @@ class EmbedderBase(ABC):
             results.append(await self.embed_async(text, is_query=is_query))
         return results
 
+    async def embed_query_async(self, text: str) -> EmbedResult:
+        return await self.embed_async(text, is_query=True)
+
+    async def embed_document_async(self, text: str) -> EmbedResult:
+        return await self.embed_async(text, is_query=False)
+
+    async def embed_batch_query_async(self, texts: List[str]) -> List[EmbedResult]:
+        return await self.embed_batch_async(texts, is_query=True)
+
+    async def embed_batch_document_async(self, texts: List[str]) -> List[EmbedResult]:
+        return await self.embed_batch_async(texts, is_query=False)
+
     def close(self):
         """Release resources, subclasses can override as needed"""
         pass
 
     def _run_with_retry(self, func: Callable[[], T], *, logger=None, operation_name: str) -> T:
+        def _wrapped() -> T:
+            previous_started_at = self._active_call_started_at
+            self._active_call_started_at = time.monotonic()
+            try:
+                return func()
+            finally:
+                self._active_call_started_at = previous_started_at
+
         return retry_sync(
-            func,
+            _wrapped,
             max_retries=self.max_retries,
             logger=logger,
             operation_name=operation_name,
@@ -204,6 +251,8 @@ class EmbedderBase(ABC):
             telemetry.set("embedding.async.wait_ms", round(wait_elapsed * 1000, 3))
 
             started = time.monotonic()
+            previous_started_at = self._active_call_started_at
+            self._active_call_started_at = started
             try:
                 return await func()
             finally:
@@ -218,6 +267,7 @@ class EmbedderBase(ABC):
                         wait_elapsed * 1000,
                         elapsed * 1000,
                     )
+                self._active_call_started_at = previous_started_at
                 semaphore.release()
 
         return await retry_async(
@@ -242,12 +292,25 @@ class EmbedderBase(ABC):
         """Check if result is hybrid (contains both dense and sparse vectors)"""
         return False
 
+    def _resolve_metrics_duration_seconds(self, duration_seconds: float = 0.0) -> float:
+        """Resolve per-call metrics duration from an explicit value or the active call timer."""
+        try:
+            normalized_duration = max(float(duration_seconds), 0.0)
+        except (TypeError, ValueError):
+            normalized_duration = 0.0
+        if normalized_duration > 0:
+            return normalized_duration
+        if self._active_call_started_at is None:
+            return 0.0
+        return max(time.monotonic() - self._active_call_started_at, 0.0)
+
     def update_token_usage(
         self,
         model_name: str,
         provider: str,
         prompt_tokens: int,
         completion_tokens: int,
+        duration_seconds: float = 0.0,
     ) -> None:
         """Update token usage
 
@@ -256,6 +319,7 @@ class EmbedderBase(ABC):
             provider: Provider name (openai, volcengine, etc.)
             prompt_tokens: Number of input tokens
             completion_tokens: Number of output tokens
+            duration_seconds: Wall-clock duration of the embedding provider call in seconds
         """
         self._token_tracker.update(
             model_name=model_name,
@@ -263,6 +327,28 @@ class EmbedderBase(ABC):
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )
+        try:
+            from openviking.metrics.account_context import get_metric_account_context
+            from openviking.metrics.datasources import EmbeddingEventDataSource
+
+            EmbeddingEventDataSource.record_call(
+                provider=str(provider),
+                model_name=str(model_name),
+                duration_seconds=self._resolve_metrics_duration_seconds(duration_seconds),
+                prompt_tokens=int(prompt_tokens),
+                completion_tokens=int(completion_tokens),
+                account_id=get_metric_account_context().http_account_id,
+            )
+        except Exception as e:
+            # Metrics must never break embedding execution.
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "embedding.update_token_usage metrics emit failed provider=%s model_name=%s err=%s: %s",
+                    provider,
+                    model_name,
+                    type(e).__name__,
+                    e,
+                )
 
     def get_token_usage(self) -> Dict[str, Any]:
         """Get token usage

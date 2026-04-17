@@ -5,9 +5,11 @@ import json
 from pathlib import Path
 
 from openviking.prompts.manager import PromptManager
+from openviking_cli.utils.config import (
+    OPENVIKING_CONFIG_ENV,
+    OPENVIKING_PROMPT_TEMPLATES_DIR_ENV,
+)
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
-
-PROMPT_TEMPLATES_ENV = "OPENVIKING_PROMPT_TEMPLATES_DIR"
 
 
 def _write_template(templates_dir: Path, content: str) -> None:
@@ -70,8 +72,8 @@ def test_prompt_manager_prefers_environment_templates_dir(tmp_path, monkeypatch)
     _write_config(config_path, config_dir)
 
     OpenVikingConfigSingleton.reset_instance()
-    monkeypatch.setenv("OPENVIKING_CONFIG_FILE", str(config_path))
-    monkeypatch.setenv(PROMPT_TEMPLATES_ENV, str(env_dir))
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, str(config_path))
+    monkeypatch.setenv(OPENVIKING_PROMPT_TEMPLATES_DIR_ENV, str(env_dir))
 
     manager = PromptManager(enable_caching=False)
 
@@ -87,8 +89,8 @@ def test_prompt_manager_uses_ov_conf_templates_dir_when_env_is_unset(tmp_path, m
     _write_config(config_path, config_dir)
 
     OpenVikingConfigSingleton.reset_instance()
-    monkeypatch.setenv("OPENVIKING_CONFIG_FILE", str(config_path))
-    monkeypatch.delenv(PROMPT_TEMPLATES_ENV, raising=False)
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, str(config_path))
+    monkeypatch.delenv(OPENVIKING_PROMPT_TEMPLATES_DIR_ENV, raising=False)
 
     manager = PromptManager(enable_caching=False)
 
@@ -98,8 +100,8 @@ def test_prompt_manager_uses_ov_conf_templates_dir_when_env_is_unset(tmp_path, m
 
 def test_prompt_manager_falls_back_to_bundled_templates_dir(monkeypatch):
     OpenVikingConfigSingleton.reset_instance()
-    monkeypatch.delenv("OPENVIKING_CONFIG_FILE", raising=False)
-    monkeypatch.delenv(PROMPT_TEMPLATES_ENV, raising=False)
+    monkeypatch.delenv(OPENVIKING_CONFIG_ENV, raising=False)
+    monkeypatch.delenv(OPENVIKING_PROMPT_TEMPLATES_DIR_ENV, raising=False)
 
     manager = PromptManager(enable_caching=False)
 
@@ -116,8 +118,8 @@ def test_prompt_manager_falls_back_to_bundled_template_when_custom_dir_is_partia
     _write_config(config_path, custom_dir)
 
     OpenVikingConfigSingleton.reset_instance()
-    monkeypatch.setenv("OPENVIKING_CONFIG_FILE", str(config_path))
-    monkeypatch.delenv(PROMPT_TEMPLATES_ENV, raising=False)
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, str(config_path))
+    monkeypatch.delenv(OPENVIKING_PROMPT_TEMPLATES_DIR_ENV, raising=False)
 
     manager = PromptManager(enable_caching=False)
 

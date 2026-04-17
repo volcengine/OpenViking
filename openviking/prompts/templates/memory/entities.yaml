@@ -7,6 +7,13 @@ directory: "viking://user/{{ user_space }}/memories/entities"
 filename_template: "{{ category }}/{{ name }}.md"
 enabled: true
 
+overview_template: |-
+  # Entities Overview
+  {% if items %}**Category:** {{ items[0].file_content.category }}{% endif %}
+  {% for item in items %}
+  - [{{ item.file_content.name }}](./{{ item.file_name }})
+  {% endfor %}
+
 fields:
   - name: category
     type: string

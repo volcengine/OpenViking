@@ -290,4 +290,34 @@ impl TreeState {
             self.scroll_offset = self.cursor - viewport_height + 1;
         }
     }
+    
+    /// Expand a node by its URI
+    pub async fn expand_node_by_uri(&mut self, client: &HttpClient, uri: &str) {
+        // Find the node in visible rows
+        if let Some(row) = self.visible.iter().find(|r| r.uri == uri) {
+            // Get the node index path
+            let index_path = row.node_index.clone();
+            // Get the node and expand it
+            if let Some(node) = Self::get_node_mut(&mut self.nodes, &index_path) {
+                node.expanded = true;
+                // Ensure children are loaded if it's a directory
+                if node.entry.is_dir && !node.children_loaded {
+                    // Load children if not already loaded
+                    if let Ok(mut children) = Self::fetch_children(client, &node.entry.uri).await {
+                        let child_depth = node.depth + 1;
+                        for child in &mut children {
+                            child.depth = child_depth;
+                        }
+                        node.children = children;
+                        node.children_loaded = true;
+                    }
+                }
+                self.rebuild_visible();
+            }
+        }
+    }
+    
+    pub fn allow_deletion(&self, selected_uri: &str) -> bool {
+        selected_uri != "/" && !Self::ROOT_SCOPES.iter().any(|s| selected_uri == format!("viking://{}", s))
+    }
 }

@@ -3,19 +3,22 @@
 """Sessions endpoints for OpenViking HTTP Server."""
 
 import logging
+import re
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Depends, Path, Query, Request
 from pydantic import BaseModel, model_validator
 
 from openviking.message.part import TextPart, part_from_dict
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
-from openviking.server.identity import RequestContext
+from openviking.server.identity import AuthMode, RequestContext, Role
 from openviking.server.models import ErrorInfo, Response
+from openviking_cli.exceptions import InvalidArgumentError
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
 logger = logging.getLogger(__name__)
+_ROLE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
 class TextPartRequest(BaseModel):
@@ -61,6 +64,7 @@ class AddMessageRequest(BaseModel):
     """
 
     role: str
+    role_id: Optional[str] = None
     content: Optional[str] = None
     parts: Optional[List[Dict[str, Any]]] = None
     created_at: Optional[str] = None
@@ -95,6 +99,49 @@ def _to_jsonable(value: Any) -> Any:
     if isinstance(value, dict):
         return {k: _to_jsonable(v) for k, v in value.items()}
     return value
+
+
+def _request_auth_mode(request: Request) -> AuthMode:
+    config = getattr(request.app.state, "config", None)
+    if config is not None and hasattr(config, "get_effective_auth_mode"):
+        return config.get_effective_auth_mode()
+    return AuthMode.API_KEY
+
+
+def _resolve_message_role_id(
+    http_request: Request,
+    request: AddMessageRequest,
+    ctx: RequestContext,
+) -> Optional[str]:
+    if request.role not in {"user", "assistant"}:
+        return request.role_id
+
+    role_id_provided = "role_id" in request.model_fields_set
+    allow_explicit_role_id = _request_auth_mode(http_request) == AuthMode.TRUSTED or ctx.role in {
+        Role.ROOT,
+        Role.ADMIN,
+    }
+    if not allow_explicit_role_id and role_id_provided:
+        raise InvalidArgumentError(
+            "USER requests cannot explicitly set role_id; it is derived from the request context."
+        )
+
+    role_id = request.role_id if allow_explicit_role_id else None
+    if not role_id:
+        role_id = ctx.user.user_id if request.role == "user" else ctx.user.agent_id
+
+    if not _ROLE_ID_PATTERN.match(role_id):
+        raise InvalidArgumentError("role_id must be alpha-numeric string.")
+
+    if request.role == "user":
+        api_key_manager = getattr(http_request.app.state, "api_key_manager", None)
+        has_user = getattr(api_key_manager, "has_user", None)
+        if callable(has_user) and not has_user(ctx.account_id, role_id):
+            raise InvalidArgumentError(
+                f"role_id '{role_id}' is not a registered user in account '{ctx.account_id}'."
+            )
+
+    return role_id
 
 
 @router.post("")
@@ -243,6 +290,7 @@ async def preview_extract_session(
 @router.post("/{session_id}/messages")
 async def add_message(
     request: AddMessageRequest,
+    http_request: Request,
     session_id: str = Path(..., description="Session ID"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
@@ -263,6 +311,7 @@ async def add_message(
     """
     service = get_service()
     session = await service.sessions.get(session_id, _ctx, auto_create=True)
+    role_id = _resolve_message_role_id(http_request, request, _ctx)
 
     if request.parts is not None:
         parts = [part_from_dict(p) for p in request.parts]
@@ -270,7 +319,12 @@ async def add_message(
         parts = [TextPart(text=request.content or "")]
 
     # created_at 直接传递给 session (ISO string)
-    session.add_message(request.role, parts, created_at=request.created_at)
+    session.add_message(
+        request.role,
+        parts,
+        role_id=role_id,
+        created_at=request.created_at,
+    )
     return Response(
         status="ok",
         result={

@@ -37,14 +37,14 @@ class EmbeddingModelConfig(BaseModel):
     provider: Optional[str] = Field(
         default="volcengine",
         description=(
-            "Provider type: 'openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'litellm'. "
+            "Provider type: 'openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'dashscope', 'minimax', 'cohere', 'litellm', 'local'. "
             "For OpenRouter or other OpenAI-compatible providers, use 'litellm' with "
             "api_base and api_key, or 'openai' with api_base and extra_headers."
         ),
     )
     backend: Optional[str] = Field(
         default="volcengine",
-        description="Backend type (Deprecated, use 'provider' instead): 'openai', 'volcengine', 'vikingdb', 'voyage'",
+        description="Backend type (Deprecated, use 'provider' instead): 'openai', 'volcengine', 'vikingdb', 'voyage', 'local'",
     )
     version: Optional[str] = Field(default=None, description="Model version")
     ak: Optional[str] = Field(default=None, description="Access Key ID for VikingDB API")
@@ -62,6 +62,26 @@ class EmbeddingModelConfig(BaseModel):
     api_version: Optional[str] = Field(
         default=None,
         description="API version for Azure OpenAI (e.g., '2025-01-01-preview').",
+    )
+    model_path: Optional[str] = Field(
+        default=None,
+        description="Explicit local GGUF model path for provider='local'.",
+    )
+    cache_dir: Optional[str] = Field(
+        default=None,
+        description="Local model cache directory for provider='local'.",
+    )
+    enable_fusion: Optional[bool] = Field(
+        default=None,
+        description="Enable multimodal fusion for DashScope provider (multimodal models only).",
+    )
+    res_level: Optional[int] = Field(
+        default=None,
+        description="Resolution level for DashScope multimodal models (multimodal models only).",
+    )
+    max_video_frames: Optional[int] = Field(
+        default=None,
+        description="Maximum video frames for DashScope multimodal models (multimodal models only).",
     )
 
     model_config = {"extra": "forbid"}
@@ -102,13 +122,15 @@ class EmbeddingModelConfig(BaseModel):
             "ollama",
             "gemini",
             "voyage",
+            "dashscope",
             "minimax",
             "cohere",
             "litellm",
+            "local",
         ]:
             raise ValueError(
                 f"Invalid embedding provider: '{self.provider}'. Must be one of: "
-                "'openai', 'azure', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'minimax', 'cohere', 'litellm'"
+                "'openai', 'azure', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'dashscope', 'minimax', 'cohere', 'litellm', 'local'"
             )
 
         # Provider-specific validation
@@ -184,6 +206,18 @@ class EmbeddingModelConfig(BaseModel):
             if not self.api_key:
                 raise ValueError("Cohere provider requires 'api_key' to be set")
 
+        elif self.provider == "dashscope":
+            if not self.api_key:
+                raise ValueError("DashScope provider requires 'api_key' to be set")
+            if self.input == "text" and (
+                self.enable_fusion is not None
+                or self.res_level is not None
+                or self.max_video_frames is not None
+            ):
+                raise ValueError(
+                    "Parameters enable_fusion, res_level, and max_video_frames only apply to multimodal input mode"
+                )
+
         elif self.provider == "litellm":
             # litellm handles auth via env vars or explicit api_key; no strict requirement
             if not self.dimension:
@@ -191,6 +225,11 @@ class EmbeddingModelConfig(BaseModel):
                     "LiteLLM provider requires 'dimension' to be set explicitly. "
                     "Check your embedding model's documentation for the correct dimension."
                 )
+
+        elif self.provider == "local":
+            from openviking.models.embedder.local_embedders import get_local_model_spec
+
+            get_local_model_spec(self.model)
 
         return self
 
@@ -248,6 +287,22 @@ class EmbeddingModelConfig(BaseModel):
                 f"Please set 'dimension' explicitly in your embedding config. "
                 f"Known models: {list(ollama_model_dimensions.keys())}"
             )
+
+        if provider == "local":
+            from openviking.models.embedder.local_embedders import get_local_model_default_dimension
+
+            return get_local_model_default_dimension(self.model)
+
+        if provider == "dashscope":
+            try:
+                from openviking.models.embedder.dashscope_embedders import (
+                    get_dashscope_model_default_dimension,
+                )
+
+                return get_dashscope_model_default_dimension(self.model)
+            except ImportError:
+                # Fallback dimension if dashscope_embedders module doesn't exist yet
+                return 1024
 
         return 2048
 
@@ -314,6 +369,22 @@ class EmbeddingConfig(BaseModel):
 
     model_config = {"extra": "forbid"}
 
+    @model_validator(mode="before")
+    @classmethod
+    def apply_default_local_dense(cls, data: Any) -> Any:
+        if data is None:
+            data = {}
+        if not isinstance(data, dict):
+            return data
+
+        if not data.get("dense") and not data.get("sparse") and not data.get("hybrid"):
+            data = dict(data)
+            data["dense"] = {
+                "provider": "local",
+                "model": "bge-small-zh-v1.5-f16",
+            }
+        return data
+
     @model_validator(mode="after")
     def validate_config(self):
         """Validate configuration completeness and consistency"""
@@ -348,9 +419,11 @@ class EmbeddingConfig(BaseModel):
         """
         from openviking.models.embedder import (
             CohereDenseEmbedder,
+            DashScopeDenseEmbedder,
             GeminiDenseEmbedder,
             JinaDenseEmbedder,
             LiteLLMDenseEmbedder,
+            LocalDenseEmbedder,
             MinimaxDenseEmbedder,
             OpenAIDenseEmbedder,
             VikingDBDenseEmbedder,
@@ -448,6 +521,8 @@ class EmbeddingConfig(BaseModel):
                     "dimension": cfg.dimension,
                     "input_type": cfg.input,
                     "config": dict(runtime_config),
+                    **({"query_param": cfg.query_param} if cfg.query_param else {}),
+                    **({"document_param": cfg.document_param} if cfg.document_param else {}),
                 },
             ),
             ("vikingdb", "sparse"): (
@@ -474,6 +549,8 @@ class EmbeddingConfig(BaseModel):
                     "dimension": cfg.dimension,
                     "input_type": cfg.input,
                     "config": dict(runtime_config),
+                    **({"query_param": cfg.query_param} if cfg.query_param else {}),
+                    **({"document_param": cfg.document_param} if cfg.document_param else {}),
                 },
             ),
             ("jina", "dense"): (
@@ -535,6 +612,28 @@ class EmbeddingConfig(BaseModel):
                     **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
                 },
             ),
+            ("dashscope", "dense"): (
+                DashScopeDenseEmbedder,
+                lambda cfg: {
+                    "model_name": cfg.model,
+                    "api_key": cfg.api_key,
+                    "api_base": cfg.api_base,
+                    "dimension": cfg.dimension,
+                    "input_type": cfg.input,
+                    "config": dict(runtime_config),
+                    **(
+                        {"enable_fusion": cfg.enable_fusion}
+                        if cfg.enable_fusion is not None
+                        else {}
+                    ),
+                    **({"res_level": cfg.res_level} if cfg.res_level is not None else {}),
+                    **(
+                        {"max_video_frames": cfg.max_video_frames}
+                        if cfg.max_video_frames is not None
+                        else {}
+                    ),
+                },
+            ),
             ("cohere", "dense"): (
                 CohereDenseEmbedder,
                 lambda cfg: {
@@ -556,6 +655,16 @@ class EmbeddingConfig(BaseModel):
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                     **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
+                },
+            ),
+            ("local", "dense"): (
+                LocalDenseEmbedder,
+                lambda cfg: {
+                    "model_name": cfg.model,
+                    "model_path": cfg.model_path,
+                    "cache_dir": cfg.cache_dir,
+                    "dimension": cfg.dimension,
+                    "config": dict(runtime_config),
                 },
             ),
         }

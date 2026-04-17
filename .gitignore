@@ -22,6 +22,7 @@ share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+.ttadk
 MANIFEST
 openviking.egg-info/
 data/

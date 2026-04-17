@@ -81,6 +81,7 @@ class SyncOpenViking:
         content: str | None = None,
         parts: list[dict] | None = None,
         created_at: str | None = None,
+        role_id: str | None = None,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -90,11 +91,12 @@ class SyncOpenViking:
             content: Text content (simple mode)
             parts: Parts array (full Part support: TextPart, ContextPart, ToolPart)
             created_at: Message creation time (ISO format string). If not provided, current time is used.
+            role_id: Optional explicit actor identity. Omit to let the client/server derive it.
 
         If both content and parts are provided, parts takes precedence.
         """
         return run_async(
-            self._async_client.add_message(session_id, role, content, parts, created_at)
+            self._async_client.add_message(session_id, role, content, parts, created_at, role_id)
         )
 
     def commit_session(
@@ -169,11 +171,24 @@ class SyncOpenViking:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         telemetry: TelemetryRequest = False,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
     ):
         """Execute complex retrieval (intent analysis, hierarchical retrieval)."""
         return run_async(
             self._async_client.search(
-                query, target_uri, session, session_id, limit, score_threshold, filter, telemetry
+                query=query,
+                target_uri=target_uri,
+                session=session,
+                session_id=session_id,
+                limit=limit,
+                score_threshold=score_threshold,
+                filter=filter,
+                telemetry=telemetry,
+                since=since,
+                until=until,
+                time_field=time_field,
             )
         )
 
@@ -185,6 +200,9 @@ class SyncOpenViking:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         telemetry: TelemetryRequest = False,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
     ):
         """Quick retrieval"""
         return run_async(
@@ -195,6 +213,9 @@ class SyncOpenViking:
                 score_threshold,
                 filter,
                 telemetry,
+                since,
+                until,
+                time_field,
             )
         )
 
