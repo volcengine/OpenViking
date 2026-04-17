@@ -9,26 +9,26 @@ import pytest
 
 from openviking.models.vlm import VLMFactory
 from openviking.models.vlm.backends.glm_vlm import DEFAULT_GLM_API_BASE, GLMVLM
-from openviking.models.vlm.backends.kimi_vlm import DEFAULT_KIMI_USER_AGENT, KimiVLM
+from openviking.models.vlm.backends.kimi_vlm import (
+    DEFAULT_KIMI_MAX_TOKENS,
+    DEFAULT_KIMI_USER_AGENT,
+    KimiVLM,
+)
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
-def _build_kimi_response(text: str = "ok", stop_reason: str = "end_turn") -> dict:
-    return {
-        "content": [{"type": "text", "text": text}],
-        "stop_reason": stop_reason,
-        "usage": {"input_tokens": 12, "output_tokens": 7},
-    }
+def _build_openai_response(text: str = "ok", finish_reason: str = "stop") -> MagicMock:
+    response = MagicMock()
+    response.choices = [MagicMock(message=MagicMock(content=text), finish_reason=finish_reason)]
+    response.usage = MagicMock(prompt_tokens=12, completion_tokens=7, total_tokens=19)
+    return response
 
 
-@patch("openviking.models.vlm.backends.kimi_vlm.httpx.Client")
-def test_kimi_vision_completion_uses_anthropic_messages_and_headers(mock_client_class):
+@patch("openviking.models.vlm.backends.openai_vlm.openai.OpenAI")
+def test_kimi_vision_completion_uses_openai_messages_and_headers(mock_openai_class):
     mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.json.return_value = _build_kimi_response("vision ok")
-    mock_response.raise_for_status.return_value = None
-    mock_client.post.return_value = mock_response
-    mock_client_class.return_value = mock_client
+    mock_client.chat.completions.create.return_value = _build_openai_response("vision ok")
+    mock_openai_class.return_value = mock_client
 
     vlm = KimiVLM(
         {
@@ -41,75 +41,26 @@ def test_kimi_vision_completion_uses_anthropic_messages_and_headers(mock_client_
     result = vlm.get_vision_completion(prompt="describe", images=[b"\x89PNG\r\n\x1a\n0000"])
 
     assert result == "vision ok"
-    call_kwargs = mock_client.post.call_args.kwargs
-    assert mock_client.post.call_args.args[0] == "https://api.kimi.com/coding/v1/messages"
-    assert call_kwargs["headers"]["X-API-Key"] == "kimi-test-key"
-    assert call_kwargs["headers"]["User-Agent"] == DEFAULT_KIMI_USER_AGENT
-    assert call_kwargs["json"]["model"] == "kimi-for-coding"
-    content = call_kwargs["json"]["messages"][0]["content"]
-    assert content[0]["type"] == "image"
-    assert content[0]["source"]["media_type"] == "image/png"
+    client_kwargs = mock_openai_class.call_args.kwargs
+    assert client_kwargs["base_url"] == "https://api.kimi.com/coding/v1"
+    assert client_kwargs["api_key"] == "kimi-test-key"
+    assert client_kwargs["default_headers"]["User-Agent"] == DEFAULT_KIMI_USER_AGENT
+    call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+    assert call_kwargs["model"] == "kimi-for-coding"
+    content = call_kwargs["messages"][0]["content"]
+    assert content[0]["type"] == "image_url"
+    assert content[0]["image_url"]["url"].startswith("data:image/png;base64,")
     assert content[1] == {"type": "text", "text": "describe"}
 
 
-def test_kimi_tool_markup_is_mapped_to_tool_calls():
+def test_kimi_backend_sets_openai_compatible_defaults():
     vlm = KimiVLM({"provider": "kimi", "model": "kimi-code", "api_key": "kimi-test-key"})
 
-    response = vlm._build_response(
-        _build_kimi_response(
-            "<|tool_calls_section_begin|><|tool_call_begin|>search:0"
-            "<|tool_call_argument_begin|>{\"query\":\"glm\"}<|tool_call_end|>"
-            "<|tool_calls_section_end|>",
-            stop_reason="tool_use",
-        ),
-        has_tools=True,
-    )
-
-    assert response.finish_reason == "tool_calls"
-    assert len(response.tool_calls) == 1
-    assert response.tool_calls[0].name == "search"
-    assert response.tool_calls[0].arguments == {"query": "glm"}
-
-
-def test_kimi_converts_openai_style_tool_history():
-    vlm = KimiVLM({"provider": "kimi", "model": "kimi-code", "api_key": "kimi-test-key"})
-
-    messages, _ = vlm._convert_messages(
-        messages=[
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "call-1",
-                        "function": {
-                            "name": "search",
-                            "arguments": "{\"query\": \"kimi\"}",
-                        },
-                    }
-                ],
-            },
-            {
-                "role": "tool",
-                "tool_call_id": "call-1",
-                "content": "{\"items\": []}",
-            },
-        ]
-    )
-
-    assert messages[0]["role"] == "assistant"
-    assert messages[0]["content"][0]["type"] == "tool_use"
-    assert messages[0]["content"][0]["name"] == "search"
-    assert messages[1]["role"] == "user"
-    assert messages[1]["content"][0]["type"] == "tool_result"
-    assert messages[1]["content"][0]["tool_use_id"] == "call-1"
-
-
-def test_kimi_rejects_remote_image_urls():
-    vlm = KimiVLM({"provider": "kimi", "model": "kimi-code", "api_key": "kimi-test-key"})
-
-    with pytest.raises(ValueError, match="local image bytes, paths, or data URLs"):
-        vlm.get_vision_completion(prompt="describe", images=["https://example.com/test.png"])
+    assert vlm.provider == "kimi"
+    assert vlm.api_base == "https://api.kimi.com/coding/v1"
+    assert vlm.model == "kimi-for-coding"
+    assert vlm.max_tokens == DEFAULT_KIMI_MAX_TOKENS
+    assert vlm.extra_headers == {"User-Agent": DEFAULT_KIMI_USER_AGENT}
 
 
 def test_glm_backend_sets_coding_plan_defaults():

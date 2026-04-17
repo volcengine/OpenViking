@@ -1,5 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
+import importlib
 from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field, model_validator
@@ -13,6 +14,11 @@ _PROVIDER_ALIASES = {
     "z-ai": "glm",
     "z.ai": "glm",
 }
+
+
+def _load_codex_auth_module():
+    importlib.import_module("openviking.models.vlm")
+    return importlib.import_module("openviking.models.vlm.backends.codex_auth")
 
 
 def _normalize_provider_name(name: Optional[str]) -> Optional[str]:
@@ -110,11 +116,11 @@ class VLMConfig(BaseModel):
                 raise ValueError("VLM configuration requires 'model' to be set")
             provider_name = self._resolve_provider_name()
             if provider_name == "openai-codex":
-                from openviking.models.vlm.backends.codex_auth import has_codex_auth_available
+                has_codex_auth_available = _load_codex_auth_module().has_codex_auth_available
 
                 if not self._get_effective_api_key() and not has_codex_auth_available():
                     raise ValueError(
-                        "VLM configuration requires Codex OAuth credentials in ~/.openviking/codex_auth.json, OPENVIKING_CODEX_ACCESS_TOKEN, or an importable Codex CLI auth file"
+                        "VLM configuration requires Codex OAuth credentials in ~/.openviking/codex_auth.json or an importable Codex CLI auth file"
                     )
             elif not self._get_effective_api_key():
                 raise ValueError("VLM configuration requires 'api_key' to be set")
@@ -169,7 +175,7 @@ class VLMConfig(BaseModel):
         if config.get("api_key"):
             return True
         if provider_name == "openai-codex":
-            from openviking.models.vlm.backends.codex_auth import has_codex_auth_available
+            has_codex_auth_available = _load_codex_auth_module().has_codex_auth_available
 
             return has_codex_auth_available()
         return False
@@ -287,7 +293,7 @@ class VLMConfig(BaseModel):
     def is_available(self) -> bool:
         """Check if LLM is configured."""
         if self._resolve_provider_name() == "openai-codex":
-            from openviking.models.vlm.backends.codex_auth import has_codex_auth_available
+            has_codex_auth_available = _load_codex_auth_module().has_codex_auth_available
 
             return bool(self._get_effective_api_key() or has_codex_auth_available())
         return self._get_effective_api_key() is not None

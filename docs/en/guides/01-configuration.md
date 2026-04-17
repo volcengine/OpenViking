@@ -149,7 +149,7 @@ Use `openviking-server init` to complete the Codex login/import step, then run `
 }
 ```
 
-`kimi` automatically adds the required Claude-compatible subscription headers. Override `extra_headers` only when you need to extend or replace them.
+`kimi` applies the Kimi Coding defaults automatically, including the default Kimi Coding user agent.
 
 </details>
 
@@ -513,7 +513,7 @@ If VLM is not configured, L0/L1 will be generated from content directly (less se
 - `volcengine`: Volcengine VLM API
 - `openai`: OpenAI-compatible VLM API
 - `openai-codex`: Codex VLM via ChatGPT/Codex OAuth
-- `kimi`: Kimi Coding subscription endpoint with built-in Claude-compatible headers
+- `kimi`: Kimi Coding subscription endpoint with built-in provider defaults
 - `glm`: Z.AI GLM Coding Plan endpoint with OpenAI-compatible requests
 
 For `openai-codex`, authenticate through `openviking-server init`, then verify with `openviking-server doctor`.

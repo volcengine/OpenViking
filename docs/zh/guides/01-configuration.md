@@ -150,7 +150,7 @@ openviking-server doctor
 }
 ```
 
-`kimi` 会自动注入订阅版所需的 Claude 兼容请求头，只有在需要扩展或覆盖这些头时才需要设置 `extra_headers`。
+`kimi` 会自动应用 Kimi Coding 的默认配置，包括默认的 Kimi Coding User-Agent。
 
 </details>
 
@@ -484,7 +484,7 @@ openviking-server doctor
 - `volcengine`：火山引擎 VLM API
 - `openai`：OpenAI 兼容 VLM API
 - `openai-codex`：通过 ChatGPT/Codex OAuth 使用 Codex VLM
-- `kimi`：Kimi Coding 订阅端点，内置 Claude 兼容请求头
+- `kimi`：Kimi Coding 订阅端点，内置 provider 默认配置
 - `glm`：Z.AI GLM Coding Plan 端点，使用 OpenAI 兼容请求格式
 
 对于 `openai-codex`，请通过 `openviking-server init` 完成鉴权，再使用 `openviking-server doctor` 做校验。

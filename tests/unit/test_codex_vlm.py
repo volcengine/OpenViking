@@ -175,8 +175,6 @@ def test_codex_auth_bootstraps_into_openviking_store(tmp_path, monkeypatch):
     )
     monkeypatch.setenv("OPENVIKING_CODEX_AUTH_PATH", str(ov_auth_path))
     monkeypatch.setenv("OPENVIKING_CODEX_BOOTSTRAP_PATH", str(bootstrap_path))
-    monkeypatch.delenv("OPENVIKING_CODEX_ACCESS_TOKEN", raising=False)
-    monkeypatch.delenv("OPENVIKING_CODEX_REFRESH_TOKEN", raising=False)
 
     creds = resolve_codex_runtime_credentials(refresh_if_expiring=False)
 

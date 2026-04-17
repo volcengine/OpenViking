@@ -241,24 +241,21 @@ def check_vlm() -> tuple[bool, str, Optional[str]]:
         if api_key and not api_key.startswith("{"):
             return True, f"openai-codex/{model} (explicit api_key)", None
 
-        from openviking.models.vlm.backends.codex_auth import (
-            get_codex_auth_status,
-            resolve_codex_runtime_credentials,
-        )
+        importlib.import_module("openviking.models.vlm")
+        codex_auth = importlib.import_module("openviking.models.vlm.backends.codex_auth")
 
         try:
-            creds = resolve_codex_runtime_credentials()
+            creds = codex_auth.resolve_codex_runtime_credentials()
             source = creds.get("source", "unknown")
             return True, f"openai-codex/{model} (oauth via {source})", None
         except Exception as exc:
-            status = get_codex_auth_status()
+            status = codex_auth.get_codex_auth_status()
             store_path = status.get("store_path") or "~/.openviking/codex_auth.json"
             bootstrap_path = status.get("bootstrap_path") or "~/.codex/auth.json"
             return (
                 False,
                 f"openai-codex/{model} ({exc})",
                 "Run `openviking-server init` and choose `OpenAI Codex` to create OV-owned auth state\n"
-                f"Or set OPENVIKING_CODEX_ACCESS_TOKEN\n"
                 f"Or bootstrap once from {bootstrap_path} into {store_path}",
             )
 
@@ -371,7 +368,7 @@ def run_doctor() -> int:
         try:
             ok, detail, fix = check_fn()
         except Exception as exc:
-            ok, detail, fix = False, f"Unexpected error: {exc}", None
+            ok, detail, fix = False, f"Unexpected error: {type(exc).__name__}: {exc}", None
 
         pad = " " * (max_label - len(label) + 1)
         if ok:

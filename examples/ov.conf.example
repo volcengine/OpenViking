@@ -91,7 +91,7 @@
     "max_retries": 2
   },
   "vlm_kimi_example": {
-    "_comment": "For Kimi Coding subscription. OpenViking adds the required Claude-compatible headers automatically.",
+    "_comment": "For Kimi Coding subscription. OpenViking applies the recommended provider defaults automatically.",
     "provider": "kimi",
     "model": "kimi-code",
     "api_key": "{your-kimi-subscription-api-key}",

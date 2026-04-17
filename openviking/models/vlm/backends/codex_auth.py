@@ -348,7 +348,6 @@ def get_codex_auth_status() -> Dict[str, Any]:
         "store_exists": store_payload is not None,
         "bootstrap_path": str(bootstrap_path) if bootstrap_path else None,
         "bootstrap_available": bool(bootstrap_path and _load_tokens_from_source("codex-cli", bootstrap_path)),
-        "env_override": bool(os.getenv("OPENVIKING_CODEX_ACCESS_TOKEN", "").strip()),
         "provider": "openai-codex",
     }
     if store_payload:
@@ -517,8 +516,6 @@ def refresh_codex_oauth(
 
 
 def has_codex_auth_available() -> bool:
-    if os.getenv("OPENVIKING_CODEX_ACCESS_TOKEN", "").strip():
-        return True
     return any(
         _load_tokens_from_source(source, path) is not None
         for source, path in _candidate_auth_sources()
@@ -556,27 +553,6 @@ def resolve_codex_runtime_credentials(
     refresh_if_expiring: bool = True,
     refresh_skew_seconds: int = CODEX_ACCESS_TOKEN_REFRESH_SKEW_SECONDS,
 ) -> Dict[str, Any]:
-    env_access_token = os.getenv("OPENVIKING_CODEX_ACCESS_TOKEN", "").strip()
-    env_refresh_token = os.getenv("OPENVIKING_CODEX_REFRESH_TOKEN", "").strip()
-    if env_access_token:
-        access_token = env_access_token
-        refresh_token = env_refresh_token
-        if (force_refresh or (
-            refresh_if_expiring
-            and refresh_token
-            and _codex_access_token_is_expiring(access_token, refresh_skew_seconds)
-        )):
-            refreshed = refresh_codex_oauth(access_token, refresh_token)
-            access_token = refreshed["access_token"]
-            refresh_token = refreshed["refresh_token"]
-        return {
-            "provider": "openai-codex",
-            "api_key": access_token,
-            "refresh_token": refresh_token,
-            "base_url": _resolve_base_url(),
-            "source": "env",
-        }
-
     ov_auth_path = get_codex_auth_store_path()
     payload = _load_tokens_from_source("openviking", ov_auth_path)
     if payload is None:
@@ -631,7 +607,7 @@ def resolve_codex_runtime_credentials(
                 "api_key": access_token,
                 "refresh_token": refresh_token,
                 "base_url": _resolve_base_url(),
-                "source": "openviking-auth-store",
+                "source": "codex-cli",
                 "path": str(ov_auth_path),
                 "auth_owner": CODEX_AUTH_OWNER_EXTERNAL,
             }
@@ -663,7 +639,7 @@ def resolve_codex_runtime_credentials(
         }
 
     raise CodexAuthError(
-        "No Codex OAuth credentials found. Set OPENVIKING_CODEX_ACCESS_TOKEN, populate ~/.openviking/codex_auth.json, or bootstrap from an existing Codex CLI auth file."
+        "No Codex OAuth credentials found. Run openviking-server init or populate ~/.openviking/codex_auth.json."
     )
 
 

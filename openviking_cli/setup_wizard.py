@@ -203,31 +203,28 @@ def _ensure_ollama() -> bool:
 
 
 def _ensure_codex_auth() -> bool:
-    from openviking.models.vlm.backends.codex_auth import (
-        CodexAuthError,
-        bootstrap_codex_auth,
-        get_codex_auth_status,
-        login_codex_with_device_code,
-        resolve_codex_runtime_credentials,
-    )
+    import importlib
+
+    importlib.import_module("openviking.models.vlm")
+    codex_auth = importlib.import_module("openviking.models.vlm.backends.codex_auth")
 
     print("\n  Checking Codex OAuth...", end=" ", flush=True)
     try:
-        creds = resolve_codex_runtime_credentials(refresh_if_expiring=False)
+        creds = codex_auth.resolve_codex_runtime_credentials(refresh_if_expiring=False)
         source = creds.get("source", "unknown")
         print(_green(f"ready via {source}"))
         return True
     except Exception:
         print(_yellow("not ready"))
 
-    status = get_codex_auth_status()
+    status = codex_auth.get_codex_auth_status()
     bootstrap_path = status.get("bootstrap_path")
 
     if status.get("bootstrap_available") and bootstrap_path:
         if _prompt_confirm(f"Import existing Codex CLI auth from {bootstrap_path}?"):
             try:
-                path = bootstrap_codex_auth()
-            except CodexAuthError as exc:
+                path = codex_auth.bootstrap_codex_auth()
+            except codex_auth.CodexAuthError as exc:
                 print(f"  {_yellow(str(exc))}")
             else:
                 if path is not None:
@@ -236,8 +233,8 @@ def _ensure_codex_auth() -> bool:
 
     if _prompt_confirm("Sign in to Codex now?"):
         try:
-            path = login_codex_with_device_code()
-        except CodexAuthError as exc:
+            path = codex_auth.login_codex_with_device_code()
+        except codex_auth.CodexAuthError as exc:
             print(f"  {_yellow(str(exc))}")
         else:
             print(f"  {_green('OK')} Codex OAuth stored in {path}")
