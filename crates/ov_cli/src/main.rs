@@ -509,10 +509,22 @@ enum Commands {
         #[arg(long)]
         no_vectorize: bool,
     },
-    /// [Admin] Reindex content at URI (regenerates .abstract.md and .overview.md)
+    /// [Admin] Reindex content at URI or inspect an all-resources dry-run plan
+    #[command(group(
+        clap::ArgGroup::new("reindex_target")
+            .required(true)
+            .multiple(false)
+            .args(["uri", "all"])
+    ))]
     Reindex {
         /// Viking URI
-        uri: String,
+        uri: Option<String>,
+        /// Plan a batch reindex for all resources (MVP dry-run only)
+        #[arg(long, conflicts_with = "uri")]
+        all: bool,
+        /// Show the batch reindex plan without executing it
+        #[arg(long, requires = "all")]
+        dry_run: bool,
         /// Force regenerate summaries even if they exist
         #[arg(short, long)]
         regenerate: bool,
@@ -841,9 +853,11 @@ async fn main() {
         } => handlers::handle_write(uri, content, from_file, append, wait, timeout, ctx).await,
         Commands::Reindex {
             uri,
+            all,
+            dry_run,
             regenerate,
             wait,
-        } => handlers::handle_reindex(uri, regenerate, wait, ctx).await,
+        } => handlers::handle_reindex(uri, all, dry_run, regenerate, wait, ctx).await,
         Commands::Get { uri, local_path } => handlers::handle_get(uri, local_path, ctx).await,
         Commands::Find {
             query,
@@ -902,7 +916,7 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, CliContext};
+    use super::{Cli, CliContext, Commands};
     use crate::config::Config;
     use crate::handlers;
     use crate::output::OutputFormat;
@@ -979,5 +993,40 @@ mod tests {
         handlers::append_time_filter_params(&mut params, after.as_deref(), before.as_deref());
 
         assert_eq!(params, vec!["--after 7d", "--before 2026-03-12"]);
+    }
+
+    #[test]
+    fn cli_reindex_parses_all_dry_run_mode() {
+        let cli = Cli::try_parse_from(["ov", "reindex", "--all", "--dry-run"])
+            .expect("reindex all dry-run should parse");
+
+        match cli.command {
+            Commands::Reindex {
+                uri,
+                all,
+                dry_run,
+                regenerate,
+                wait,
+            } => {
+                assert!(uri.is_none());
+                assert!(all);
+                assert!(dry_run);
+                assert!(!regenerate);
+                assert!(wait);
+            }
+            other => panic!("unexpected command parsed: {:?}", std::mem::discriminant(&other)),
+        }
+    }
+
+    #[test]
+    fn cli_reindex_rejects_dry_run_without_all() {
+        let result = Cli::try_parse_from(["ov", "reindex", "--dry-run"]);
+        assert!(result.is_err(), "dry-run without --all should not parse");
+    }
+
+    #[test]
+    fn cli_reindex_rejects_uri_and_all_together() {
+        let result = Cli::try_parse_from(["ov", "reindex", "viking://resources/demo.md", "--all"]);
+        assert!(result.is_err(), "uri and --all should be mutually exclusive");
     }
 }

@@ -451,8 +451,52 @@ pub async fn handle_write(
     .await
 }
 
-pub async fn handle_reindex(uri: String, regenerate: bool, wait: bool, ctx: CliContext) -> Result<()> {
+pub async fn handle_reindex(
+    uri: Option<String>,
+    all: bool,
+    dry_run: bool,
+    regenerate: bool,
+    wait: bool,
+    ctx: CliContext,
+) -> Result<()> {
+    let mut params = Vec::new();
+    if let Some(uri) = &uri {
+        params.push(uri.clone());
+    }
+    if all {
+        params.push("--all".to_string());
+    }
+    if dry_run {
+        params.push("--dry-run".to_string());
+    }
+    if regenerate {
+        params.push("--regenerate".to_string());
+    }
+    if wait {
+        params.push("--wait".to_string());
+    }
+    print_command_echo("ov reindex", &params.join(" "), ctx.config.echo_command);
+
     let client = ctx.get_client();
+    if all {
+        if !dry_run {
+            return Err(Error::Client(
+                "Batch reindex execution is not implemented in this MVP. Use 'ov reindex --all --dry-run' to inspect the plan.".into(),
+            ));
+        }
+        return commands::content::reindex_all_dry_run(&client, ctx.output_format, ctx.compact)
+            .await;
+    }
+
+    if dry_run {
+        return Err(Error::Client(
+            "Dry-run is currently only supported with '--all' in this MVP.".into(),
+        ));
+    }
+
+    let uri = uri.ok_or_else(|| {
+        Error::Client("Specify a target URI or use '--all --dry-run'.".to_string())
+    })?;
     commands::content::reindex(
         &client,
         &uri,
