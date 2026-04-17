@@ -113,7 +113,12 @@ jobs:
       - name: Install build dependencies (uv pip)
         run: |
           echo "Installing build dependencies to uv environment..."
-          uv pip install setuptools setuptools_scm cmake wheel
+          uv pip install setuptools setuptools_scm cmake wheel maturin
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
 
       - name: Build C++ extensions
         shell: bash
@@ -131,6 +136,53 @@ jobs:
           fi
           
           uv run python setup.py build_ext --inplace
+
+      - name: Build ragfs-python native extension
+        shell: bash
+        run: |
+          RAGFS_LIB_DIR="openviking/lib"
+          RAGFS_SO_COUNT=$(ls -1 "$RAGFS_LIB_DIR"/ragfs_python*.so "$RAGFS_LIB_DIR"/ragfs_python*.pyd "$RAGFS_LIB_DIR"/ragfs_python*.dylib 2>/dev/null | wc -l | xargs || echo "0")
+          
+          if [ "$RAGFS_SO_COUNT" -gt 0 ]; then
+            echo "✅ ragfs_python native extension already exists:"
+            ls -la "$RAGFS_LIB_DIR"/ragfs_python*
+            exit 0
+          fi
+          
+          echo "ragfs_python native lib not found after build_ext, building via maturin..."
+          TMPDIR_RAGFS=$(mktemp -d)
+          cd crates/ragfs-python
+          uv run --no-project maturin build --release --features s3 --out "$TMPDIR_RAGFS"
+          cd ../..
+          
+          WHL_FILE=$(ls -1 "$TMPDIR_RAGFS"/ragfs_python-*.whl 2>/dev/null | head -1)
+          if [ -z "$WHL_FILE" ]; then
+            echo "❌ ERROR: maturin build produced no wheel"
+            ls -la "$TMPDIR_RAGFS"/
+            exit 1
+          fi
+          
+          echo "Extracting ragfs_python from wheel: $WHL_FILE"
+          mkdir -p "$RAGFS_LIB_DIR"
+          uv run python -c "
+          import zipfile, os, sys, stat
+          with zipfile.ZipFile('$WHL_FILE') as zf:
+              for name in zf.namelist():
+                  bn = os.path.basename(name)
+                  if bn.startswith('ragfs_python') and (bn.endswith('.so') or bn.endswith('.pyd') or bn.endswith('.dylib')):
+                      dst = os.path.join('$RAGFS_LIB_DIR', bn)
+                      with zf.open(name) as src, open(dst, 'wb') as f:
+                          f.write(src.read())
+                      os.chmod(dst, 0o755)
+                      print(f'  [OK] ragfs-python: extracted {bn} -> {dst}')
+                      sys.exit(0)
+          print('[ERROR] No ragfs_python native library found in wheel')
+          sys.exit(1)
+          "
+          rm -rf "$TMPDIR_RAGFS"
+          
+          echo "Verifying ragfs_python native extension:"
+          ls -la "$RAGFS_LIB_DIR"/ragfs_python*
 
       - name: Install API test dependencies
         run: |
@@ -411,7 +463,7 @@ jobs:
             uv run python -m pytest . -v --html=api-test-report.html --self-contained-html \
               --ignore=retrieval/ --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py \
               --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py \
-              --ignore=scenarios/ -k "not test_observer"
+              --ignore=scenarios/ --ignore=sessions/ -k "not test_observer"
           fi
         continue-on-error: true
 
@@ -429,7 +481,7 @@ jobs:
             uv run python -m pytest . -v --html=api-test-report.html --self-contained-html --ignore=filesystem/
           } else {
             Write-Host "Running basic tests only (no VLM/Embedding, Windows: skipping filesystem tests)"
-            uv run python -m pytest . -v --html=api-test-report.html --self-contained-html --ignore=retrieval/ --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py --ignore=filesystem/ --ignore=scenarios/ -k "not test_observer"
+            uv run python -m pytest . -v --html=api-test-report.html --self-contained-html --ignore=retrieval/ --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py --ignore=filesystem/ --ignore=scenarios/ --ignore=sessions/ -k "not test_observer"
           }
         continue-on-error: true
 

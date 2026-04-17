@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 import json
+import logging
 import os
 from pathlib import Path
 from threading import Lock
@@ -228,6 +229,15 @@ class OpenVikingConfig(BaseModel):
 
             # Apply memory configuration
             if memory_config_data is not None:
+                if (
+                    isinstance(memory_config_data, dict)
+                    and "agent_scope_mode" in memory_config_data
+                ):
+                    logging.getLogger(__name__).warning(
+                        "memory.agent_scope_mode is deprecated and ignored. "
+                        "User/agent namespace behavior is now controlled by per-account "
+                        "namespace policy."
+                    )
                 instance.memory = MemoryConfig.from_dict(memory_config_data)
 
             # Apply parser configurations
@@ -245,8 +255,6 @@ class OpenVikingConfig(BaseModel):
                 db_dim = instance.storage.vectordb.dimension
                 emb_dim = instance.embedding.dimension
                 if db_dim > 0 and emb_dim > 0 and db_dim != emb_dim:
-                    import logging
-
                     logging.warning(
                         f"Dimension mismatch: VectorDB dimension is {db_dim}, "
                         f"but Embedding dimension is {emb_dim}. "
@@ -336,9 +344,7 @@ class OpenVikingConfigSingleton:
                 if config_dict is not None:
                     cls._instance = OpenVikingConfig.from_dict(config_dict)
                 else:
-                    path = resolve_config_path(
-                        config_path, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF
-                    )
+                    path = resolve_config_path(config_path, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
                     if path is not None:
                         cls._instance = cls._load_from_file(str(path))
                     else:

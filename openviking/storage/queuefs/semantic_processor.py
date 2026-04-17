@@ -8,6 +8,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from openviking.core.namespace import agent_space_fragment, user_space_fragment
 from openviking.metrics.account_context import (
     bind_metric_account_context,
     reset_metric_account_context,
@@ -161,9 +162,9 @@ class SemanticProcessor(DequeueHandlerBase):
         caller's space name.
         """
         if uri.startswith("viking://agent/"):
-            return ctx.user.agent_space_name()
+            return agent_space_fragment(ctx)
         if uri.startswith("viking://user/") or uri.startswith("viking://session/"):
-            return ctx.user.user_space_name()
+            return user_space_fragment(ctx)
         # resources and anything else → shared (empty owner_space)
         return ""
 

@@ -853,9 +853,9 @@ openviking-server --config /path/to/ov.conf
 
 | 字段 | 说明 | 默认值 |
 |------|------|--------|
-| `agent_scope_mode` | Agent memory 命名空间模式：`"user+agent"` 按 `(user_id, agent_id)` 隔离；`"agent"` 仅按 `agent_id` 隔离，同一 agent 的不同用户共享 agent memory | `"user+agent"` |
+| `agent_scope_mode` | 已废弃且被忽略。仅为兼容旧版 `ov.conf` 保留。当前 agent/user 命名空间行为由 account 级 namespace policy 控制。 | `"user+agent"` |
 
-`agent_scope_mode` 只影响 `viking://agent/{agent_space}/memories/...` 这类 agent 级命名空间，不影响 `viking://user/{user_space}/memories/...` 下的 user memory。
+`agent_scope_mode` 不再影响命名空间行为。服务端现在根据 account 级 namespace policy 在 `viking://agent/{agent_id}/...` 与 `viking://agent/{agent_id}/user/{user_id}/...` 之间选择。
 
 ### ovcli.conf
 

@@ -11,16 +11,16 @@ import asyncio
 from typing import List, Optional
 
 from openviking.core.context import Context
+from openviking.core.namespace import agent_space_fragment, user_space_fragment
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater
 from openviking.session.memory.utils.json_parser import JsonUtils
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import get_viking_fs
-from openviking.telemetry import get_current_telemetry
+from openviking.telemetry import get_current_telemetry, tracer
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
-from openviking.telemetry import tracer
 from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
@@ -150,8 +150,8 @@ class SessionCompressorV2:
                 for schema in schemas:
                     if not schema.directory:
                         continue
-                    user_space = ctx.user.user_space_name() if ctx and ctx.user else "default"
-                    agent_space = ctx.user.agent_space_name() if ctx and ctx.user else "default"
+                    user_space = user_space_fragment(ctx) if ctx and ctx.user else "default"
+                    agent_space = agent_space_fragment(ctx) if ctx and ctx.user else "default"
                     # 使用 Jinja2 渲染 directory
                     import jinja2
 
@@ -225,7 +225,9 @@ class SessionCompressorV2:
             extract_context = ExtractContext(messages)
 
             # Apply operations
-            result = await updater.apply_operations(operations, ctx, extract_context=extract_context)
+            result = await updater.apply_operations(
+                operations, ctx, extract_context=extract_context
+            )
 
             tracer.info(
                 f"Applied memory operations: written={len(result.written_uris)}, "

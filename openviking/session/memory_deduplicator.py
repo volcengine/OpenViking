@@ -15,6 +15,7 @@ from enum import Enum
 from typing import Dict, List, Optional
 
 from openviking.core.context import Context
+from openviking.core.namespace import canonical_agent_root, canonical_user_root
 from openviking.models.embedder.base import EmbedResult, embed_compat
 from openviking.prompts import render_prompt
 from openviking.server.identity import RequestContext
@@ -74,12 +75,12 @@ class MemoryDeduplicator:
     _AGENT_CATEGORIES = {"cases", "patterns", "tools", "skills"}
 
     @staticmethod
-    def _category_uri_prefix(category: str, user) -> str:
+    def _category_uri_prefix(category: str, ctx: RequestContext) -> str:
         """Build category URI prefix with space segment."""
         if category in MemoryDeduplicator._USER_CATEGORIES:
-            return f"viking://user/{user.user_space_name()}/memories/{category}/"
+            return f"{canonical_user_root(ctx)}/memories/{category}/"
         elif category in MemoryDeduplicator._AGENT_CATEGORIES:
-            return f"viking://agent/{user.agent_space_name()}/memories/{category}/"
+            return f"{canonical_agent_root(ctx)}/memories/{category}/"
         return ""
 
     def __init__(
@@ -154,27 +155,18 @@ class MemoryDeduplicator:
         embed_result: EmbedResult = await embed_compat(self.embedder, query_text, is_query=True)
         query_vector = embed_result.dense_vector
 
-        category_uri_prefix = self._category_uri_prefix(candidate.category.value, candidate.user)
-
-        owner = candidate.user
-        owner_space = None
-        if owner and hasattr(owner, "user_space_name"):
-            owner_space = (
-                owner.agent_space_name()
-                if candidate.category.value in {"cases", "patterns"}
-                else owner.user_space_name()
-            )
+        category_uri_prefix = self._category_uri_prefix(candidate.category.value, ctx)
         logger.debug(
             "Dedup prefilter candidate category=%s owner_space=%s uri_prefix=%s",
             candidate.category.value,
-            owner_space,
+            None,
             category_uri_prefix,
         )
 
         try:
             # Search with memory-scope filter.
             results = await self.vikingdb.search_similar_memories(
-                owner_space=owner_space,
+                owner_space=None,
                 category_uri_prefix=category_uri_prefix,
                 query_vector=query_vector,
                 limit=5,

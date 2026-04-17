@@ -222,6 +222,43 @@ else
     log "⚠️  Rust toolchain setup failed, build may fail"
 fi
 
+log "[5.55/8] Checking maturin for ragfs-python build..."
+MATURIN_OK=false
+
+if python -c "import maturin" 2>/dev/null; then
+    MATURIN_VERSION=$(python -m maturin --version 2>/dev/null | awk '{print $2}' || echo "unknown")
+    log "✅ maturin is already available (Python module): $MATURIN_VERSION"
+    MATURIN_OK=true
+elif command -v maturin &> /dev/null; then
+    MATURIN_VERSION=$(maturin --version 2>/dev/null | awk '{print $2}' || echo "unknown")
+    log "✅ maturin is already available (CLI): $MATURIN_VERSION"
+    MATURIN_OK=true
+fi
+
+if [ "$MATURIN_OK" = false ]; then
+    log "maturin not found, installing..."
+    if command -v uv &> /dev/null && uv pip --help &> /dev/null; then
+        if uv pip install maturin 2>&1 | tee -a "$LOG_FILE"; then
+            log "✅ maturin installed via uv pip"
+            MATURIN_OK=true
+        fi
+    fi
+
+    if [ "$MATURIN_OK" = false ]; then
+        if pip install maturin 2>&1 | tee -a "$LOG_FILE"; then
+            log "✅ maturin installed via pip"
+            MATURIN_OK=true
+        else
+            log "⚠️  Failed to install maturin, ragfs-python will not be built"
+        fi
+    fi
+fi
+
+if [ "$MATURIN_OK" = true ]; then
+    MATURIN_VERSION=$(python -m maturin --version 2>/dev/null || maturin --version 2>/dev/null || echo "unknown")
+    log "maturin version: $MATURIN_VERSION"
+fi
+
 log "[5.6/8] Checking Python build dependencies..."
 
 # Check if setuptools-scm is already installed
@@ -280,7 +317,49 @@ for i in $(seq 1 $MAX_RETRIES); do
     log "Build attempt $i/$MAX_RETRIES..."
     
     if python setup.py build_ext --inplace 2>&1 | tee -a "$LOG_FILE"; then
-        log "build_ext completed, installing dependencies..."
+        log "build_ext completed"
+
+        RAGFS_LIB_DIR="$PROJECT_DIR/openviking/lib"
+        RAGFS_SO_COUNT=$(ls -1 "$RAGFS_LIB_DIR"/ragfs_python*.so "$RAGFS_LIB_DIR"/ragfs_python*.pyd "$RAGFS_LIB_DIR"/ragfs_python*.dylib 2>/dev/null | wc -l | xargs || echo "0")
+        if [ "$RAGFS_SO_COUNT" -eq 0 ] && [ "$MATURIN_OK" = true ] && [ -d "$PROJECT_DIR/crates/ragfs-python" ]; then
+            log "ragfs_python native lib not found after build_ext, building via maturin..."
+            TMPDIR_RAGFS=$(mktemp -d)
+            if (cd "$PROJECT_DIR/crates/ragfs-python" && python -m maturin build --release --features s3 --out "$TMPDIR_RAGFS" 2>&1 | tee -a "$LOG_FILE"); then
+                WHL_FILE=$(ls -1 "$TMPDIR_RAGFS"/ragfs_python-*.whl 2>/dev/null | head -1)
+                if [ -n "$WHL_FILE" ]; then
+                    mkdir -p "$RAGFS_LIB_DIR"
+                    python -c "
+import zipfile, os, sys, stat
+with zipfile.ZipFile('$WHL_FILE') as zf:
+    for name in zf.namelist():
+        bn = os.path.basename(name)
+        if bn.startswith('ragfs_python') and (bn.endswith('.so') or bn.endswith('.pyd') or bn.endswith('.dylib')):
+            dst = os.path.join('$RAGFS_LIB_DIR', bn)
+            with zf.open(name) as src, open(dst, 'wb') as f:
+                f.write(src.read())
+            os.chmod(dst, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+            print(f'  [OK] ragfs-python: extracted {bn} -> {dst}')
+            sys.exit(0)
+print('[ERROR] No ragfs_python native library found in wheel')
+sys.exit(1)
+" 2>&1 | tee -a "$LOG_FILE"
+                else
+                    log "⚠️  maturin produced no wheel"
+                fi
+            else
+                log "⚠️  maturin build failed, ragfs-python may not be available"
+            fi
+            rm -rf "$TMPDIR_RAGFS"
+        fi
+
+        RAGFS_SO_FINAL=$(ls -1 "$RAGFS_LIB_DIR"/ragfs_python*.so "$RAGFS_LIB_DIR"/ragfs_python*.pyd "$RAGFS_LIB_DIR"/ragfs_python*.dylib 2>/dev/null | head -1 || true)
+        if [ -n "$RAGFS_SO_FINAL" ]; then
+            log "✅ ragfs_python native extension verified: $RAGFS_SO_FINAL"
+        else
+            log "⚠️  WARNING: ragfs_python native extension not found in $RAGFS_LIB_DIR, server may fail to start"
+        fi
+
+        log "Installing dependencies..."
         UV_EXTRA_ARGS=""
         if [ -n "$GITHUB_WORKSPACE" ]; then
             UV_EXTRA_ARGS="--index-url https://pypi.tuna.tsinghua.edu.cn/simple"
