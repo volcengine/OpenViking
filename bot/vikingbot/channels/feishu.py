@@ -48,6 +48,11 @@ try:
         ReplyMessageRequest,
         ReplyMessageRequestBody
     )
+    from lark_oapi.api.contact.v3 import (
+        GetUserRequest,
+        BatchGetIdUserRequest,
+        BatchGetIdUserRequestBody
+    )
 
     FEISHU_AVAILABLE = True
 except ImportError:
@@ -55,6 +60,9 @@ except ImportError:
     lark = None
     Emoji = None
     GetImageRequest = None
+    GetUserRequest = None
+    BatchGetIdUserRequest = None
+    BatchGetIdUserRequestBody = None
 
 # Message type display mapping
 MSG_TYPE_MAP = {
@@ -63,6 +71,10 @@ MSG_TYPE_MAP = {
     "file": "[file]",
     "sticker": "[sticker]",
 }
+
+# Pre-compiled regex patterns
+MENTION_PATTERN = re.compile(r"@_user_\d+")
+OPEN_ID_MENTION_PATTERN = re.compile(r"@ou_[a-f0-9]+")
 
 
 class FeishuChannel(BaseChannel):
@@ -100,6 +112,9 @@ class FeishuChannel(BaseChannel):
         self._tenant_access_token: str | None = None
         self._token_expire_time: float = 0
         self._chat_mode_cache: dict[str, str] = {}  # 缓存群类型：group(普通群)/thread(话题群)
+        self._user_name_cache: OrderedDict[str, str] = OrderedDict()  # LRU缓存用户ID到姓名的映射
+        self._bot_name_cache: dict[str, str] = {}  # 缓存机器人open_id到名称的映射
+        self._MAX_USER_CACHE_SIZE = 1000  # 最大缓存1000个用户
 
     async def _get_tenant_access_token(self) -> str:
         """Get tenant access token for Feishu API."""
@@ -741,25 +756,139 @@ class FeishuChannel(BaseChannel):
             return True
 
         chat_mode = await self._get_chat_mode(chat_id)
-        if chat_mode != "thread":
-            return True
 
-        # 话题群处理逻辑
-        is_topic_starter = message.root_id == message.message_id or not message.root_id
-
+        # 普通群和话题群都根据 thread_require_mention 判断
         if self.config.thread_require_mention:
-            # 模式1：所有消息都需要@才处理
+            # 模式1：所有消息都需要@才处理（普通群和话题群）
             if not is_mentioned:
-                logger.info(f"Skipping thread message: thread_require_mention is True and not mentioned")
                 return False
         else:
-            # 模式2：仅话题首条消息不需要@，后续回复需要@（DEBUG模式除外）
-            config = load_config()
-            if not is_topic_starter and not is_mentioned and config.mode != BotMode.DEBUG:
-                logger.info(f"Skipping thread message: not topic starter and not mentioned")
-                return False
+            # 模式2：话题群仅首条消息不需要@，后续回复需要@
+            if chat_mode == "thread":
+                is_topic_starter = message.root_id == message.message_id or not message.root_id
+                config = load_config()
+                if not is_topic_starter and not is_mentioned and config.mode != BotMode.DEBUG:
+                    return False
+            # 普通群不需要@，直接处理
 
         return True
+
+    async def _get_user_name(self, open_id: str) -> str | None:
+        """
+        Get user name from Feishu API by open_id.
+        Returns user name if found, None otherwise.
+        Uses LRU cache to avoid memory issues.
+        """
+        # Check cache first
+        if open_id in self._user_name_cache:
+            # Move to end (most recently used)
+            name = self._user_name_cache.pop(open_id)
+            self._user_name_cache[open_id] = name
+            return name
+
+        try:
+            # Directly get user by open_id
+            if GetUserRequest:
+                # Use open_id directly with user_id_type="open_id"
+                user_request = GetUserRequest.builder().user_id(open_id).user_id_type("open_id").build()
+                user_response = self._client.contact.v3.user.get(user_request)
+
+                if user_response.success() and user_response.data and user_response.data.user:
+                    name = user_response.data.user.name
+                    if len(self._user_name_cache) >= self._MAX_USER_CACHE_SIZE:
+                        self._user_name_cache.popitem(last=False)
+                    self._user_name_cache[open_id] = name
+                    return name
+        except Exception as e:
+            logger.warning(f"Failed to get user name for {open_id}: {e}")
+
+        return None
+
+    async def _get_bot_name(self, open_id: str) -> str | None:
+        """
+        Get bot name by open_id.
+        First tries to get from cache, then uses config bot_name or "Bot".
+        Returns bot name if found, None otherwise.
+        """
+        # Check cache first
+        if open_id in self._bot_name_cache:
+            return self._bot_name_cache[open_id]
+
+        # Use config bot_name if available, otherwise "Bot"
+        bot_name = self.config.bot_name or "Bot"
+        self._bot_name_cache[open_id] = bot_name
+        return bot_name
+
+    async def _batch_get_user_names(self, open_ids: list[str]) -> dict[str, str]:
+        """
+        Get user names from Feishu API by open_ids (fetches individually with LRU cache).
+        Returns a dict mapping open_id to user name.
+        """
+        if not open_ids:
+            return {}
+
+        result = {}
+        # Check cache first
+        missing_ids = []
+        for open_id in open_ids:
+            if open_id in self._user_name_cache:
+                # Move to end (most recently used)
+                name = self._user_name_cache.pop(open_id)
+                self._user_name_cache[open_id] = name
+                result[open_id] = name
+            else:
+                missing_ids.append(open_id)
+
+        if not missing_ids:
+            return result
+
+        try:
+            # Fetch missing users one by one
+            for open_id in missing_ids:
+                try:
+                    name = await self._get_user_name(open_id)
+                    if name:
+                        result[open_id] = name
+                except Exception as e:
+                    logger.warning(f"Failed to get user name for {open_id}: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to get user names: {e}")
+
+        return result
+
+    async def _process_group_message_content(self, content: str, sender_id: str) -> tuple[str, str]:
+        """
+        Process group message content:
+        1. Get sender name and prepend to content
+        2. Replace @open_id mentions with @name mentions
+
+        Returns:
+            tuple of (processed_content, sender_name)
+        """
+        mentioned_open_ids = OPEN_ID_MENTION_PATTERN.findall(content)
+        mentioned_open_ids = [mid[1:] for mid in mentioned_open_ids] if mentioned_open_ids else []
+
+        all_ids_to_fetch = list({sender_id} | set(mentioned_open_ids))
+        user_name_map = await self._batch_get_user_names(all_ids_to_fetch)
+
+        processed_content = content
+        if mentioned_open_ids:
+            for open_id in mentioned_open_ids:
+                name = user_name_map.get(open_id)
+                if not name:
+                    # If user name not found, try to get bot name
+                    name = await self._get_bot_name(open_id)
+                if name:
+                    processed_content = processed_content.replace(f"@{open_id}", f"@{name}")
+
+        sender_name = user_name_map.get(sender_id, "")
+        if not sender_name:
+            # If sender name not found, try to get bot name
+            sender_name = await self._get_bot_name(sender_id) or ""
+        if sender_name:
+            processed_content = f"[{sender_name}]: {processed_content}"
+
+        return processed_content, sender_name
 
     async def _on_message(self, data: "P2ImMessageReceiveV1") -> None:
         """Handle incoming message from Feishu."""
@@ -811,13 +940,38 @@ class FeishuChannel(BaseChannel):
             should_process = await self._check_should_process(chat_type, chat_id, message, is_mentioned)
 
             # 7. 添加已读表情
-            config = load_config()
-            if config.mode != BotMode.DEBUG and should_process:
-                await self._add_reaction(message_id, "MeMeMe")
+            if should_process:
+                config = load_config()
+                if config.mode != BotMode.DEBUG:
+                    await self._add_reaction(message_id, "MeMeMe")
 
-            # 8. 处理@占位符
-            mention_pattern = re.compile(r"@_user_\d+")
-            content = mention_pattern.sub(f"@{sender_id}", content)
+            # 8. 处理@占位符：从 message.mentions 中直接获取 name 和 id
+            mention_name_map = {}
+            if hasattr(message, 'mentions') and message.mentions:
+                for idx, mention in enumerate(message.mentions):
+                    placeholder = f"@_user_{idx + 1}"
+                    if hasattr(mention, 'id') and mention.id and placeholder in content:
+                        # mention.id 是 UserId 对象，直接取 open_id
+                        user_id = mention.id.open_id
+                        # 保存 name 供后续使用
+                        if hasattr(mention, 'name') and mention.name:
+                            mention_name_map[user_id] = mention.name
+                        # 先替换成 @open_id 格式
+                        content = content.replace(placeholder, f"@{user_id}")
+            if "@_user_" in content:
+                content = MENTION_PATTERN.sub(f"@{sender_id}", content)
+
+            # 8.5 群聊场景：处理用户姓名
+            user_name = ""
+            if chat_type == "group":
+                user_name = mention_name_map.get(sender_id, "")
+                if not user_name:
+                    user_name = await self._get_user_name(sender_id) or ""
+                if user_name:
+                    content = f"[{user_name}]: {content}"
+                for user_id, name in mention_name_map.items():
+                    if name and f"@{user_id}" in content:
+                        content = content.replace(f"@{user_id}", f"@{name}")
 
             # 9. 构建会话ID（处理话题群）
             reply_to = chat_id if chat_type == "group" else sender_id
@@ -835,6 +989,7 @@ class FeishuChannel(BaseChannel):
             logger.info(f"Received message from Feishu: {content}")
             await self._handle_message(
                 sender_id=sender_id,
+                sender_name=user_name,
                 chat_id=final_chat_id,
                 content=content,
                 media=media if media else None,

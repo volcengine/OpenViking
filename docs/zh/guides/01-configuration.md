@@ -121,7 +121,7 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 |------|------|------|
 | `max_concurrent` | int | 最大并发 Embedding 请求数（`embedding.max_concurrent`，默认：`10`） |
 | `max_retries` | int | Embedding provider 瞬时错误的最大重试次数（`embedding.max_retries`，默认：`3`；`0` 表示禁用重试） |
-| `provider` | str | `"volcengine"`、`"openai"`、`"vikingdb"`、`"jina"`、`"voyage"`、`"minimax"` 或 `"gemini"` |
+| `provider` | str | `"volcengine"`、`"openai"`、`"vikingdb"`、`"jina"`、`"voyage"`、`"minimax"`、`"dashscope"` 或 `"gemini"` |
 | `api_key` | str | API Key |
 | `model` | str | 模型名称 |
 | `dimension` | int | 向量维度 |
@@ -169,6 +169,7 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 - `voyage`: Voyage AI Embedding API
 - `minimax`: MiniMax Embedding API
 - `gemini`: Google Gemini Embedding API（仅文本；需安装 `google-genai>=1.0.0`）
+- `dashscope`: DashScope（阿里通义）Embedding API
 
 **minimax provider 配置示例:**
 
@@ -269,6 +270,52 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 推荐维度: `768`、`1536` 或 `3072`（默认: `3072`）。
 
 获取 API Key: https://aistudio.google.com/apikey
+
+**DashScope（阿里通义）provider 配置示例:**
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "dashscope",
+      "api_key": "${DASHSCOPE_API_KEY}",
+      "model": "text-embedding-v4",
+      "dimension": 1024
+    }
+  }
+}
+```
+
+**可用 DashScope 模型:**
+
+| 模型 | 维度 | 输入类型 | 说明 |
+|------|------|----------|------|
+| `text-embedding-v3` | 1024 | text | 针对中文优化 |
+| `text-embedding-v4` | 1024 | text | 针对中文优化 |
+| `tongyi-embedding-vision-plus` | 1152 | multimodal | 支持通过 `enable_fusion` 启用融合向量 |
+| `tongyi-embedding-vision-flash` | 768 | multimodal | 更快，成本更低 |
+| `qwen3-vl-embedding` | 2560 | multimodal | 文本 + 图像 + 视频 |
+| `qwen2.5-vl-embedding` | 1024 | multimodal | 文本 + 图像 + 视频 |
+
+**多模态参数**（仅文本+图像/视频模型支持）:
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `input_type` | str | `"multimodal"` 或 `"text"` | 嵌入模式（默认: `"multimodal"`） |
+| `enable_fusion` | bool | `false` | 为 `tongyi-embedding-vision-*` 模型启用融合向量 |
+| `res_level` | int | `2` | 图像分辨率级别（1=高，2=中，3=低） |
+| `max_video_frames` | int | `16` | 视频最大嵌入帧数 |
+
+**端点选择** — DashScope 为中国区（`cn`）和国际区（`intl`）提供 `api_base` 默认值:
+
+| 区域 | `api_base` | 说明 |
+|------|-----------|------|
+| 中国 | `https://dashscope.aliyuncs.com`（默认） | 推荐中国大陆用户使用 |
+| 国际 | `https://dashscope-intl.aliyuncs.com` | 推荐中国境外用户使用 |
+
+也支持设置完整 URL 来自定义端点地址。
+
+获取 API Key: https://dashscope.console.aliyun.com/api-key
 
 **非对称检索**（索引和查询使用不同的 task type）:
 
