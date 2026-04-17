@@ -244,6 +244,29 @@ For complete model support, see [LiteLLM Providers Documentation](https://docs.l
 
 ### 3. Environment Configuration
 
+#### Quick Setup for Local Models (Ollama)
+
+If you want to run OpenViking with local models via [Ollama](https://ollama.ai), the interactive setup wizard handles everything automatically:
+
+```bash
+openviking-server init
+```
+
+The wizard will:
+- Detect and install Ollama if needed
+- Recommend and pull suitable embedding and VLM models for your hardware
+- Generate a ready-to-use `ov.conf` configuration file
+
+To validate your setup at any time:
+
+```bash
+openviking-server doctor
+```
+
+`doctor` checks local prerequisites (config file, Python version, embedding/VLM provider connectivity, disk space) without requiring a running server.
+
+> For cloud API providers (Volcengine, OpenAI, Gemini, etc.), continue with the manual configuration below.
+
 #### Server Configuration Template
 
 Create a configuration file `~/.openviking/ov.conf`, remove the comments before copy:

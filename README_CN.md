@@ -267,6 +267,29 @@ ollama serve
 
 ### 3. 环境配置
 
+#### 本地模型快速配置 (Ollama)
+
+如果你想通过 [Ollama](https://ollama.ai) 使用本地模型运行 OpenViking，交互式向导会自动完成所有配置：
+
+```bash
+openviking-server init
+```
+
+向导会：
+- 检测并安装 Ollama（如需要）
+- 根据你的硬件推荐并拉取合适的 embedding 和 VLM 模型
+- 生成可直接使用的 `ov.conf` 配置文件
+
+随时验证配置是否正确：
+
+```bash
+openviking-server doctor
+```
+
+`doctor` 会检查本地环境（配置文件、Python 版本、embedding/VLM 服务连通性、磁盘空间），无需启动服务器。
+
+> 如果使用云端 API（火山引擎、OpenAI、Gemini 等），请继续下方的手动配置。
+
 #### 服务器配置模板
 
 创建配置文件 `~/.openviking/ov.conf`，复制前请删除注释：

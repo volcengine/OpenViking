@@ -19,12 +19,14 @@ class OpenVikingAPIClient:
         api_key: Optional[str] = None,
         account: Optional[str] = None,
         user: Optional[str] = None,
+        agent: Optional[str] = None,
     ):
         self.base_url = base_url or Config.CONSOLE_URL
         self.server_url = server_url or Config.SERVER_URL
         self.api_key = api_key or Config.OPENVIKING_API_KEY
         self.account = account or Config.OPENVIKING_ACCOUNT
         self.user = user or Config.OPENVIKING_USER
+        self.agent = agent or Config.OPENVIKING_AGENT
         self.session = requests.Session()
         self._setup_default_headers()
         self.max_retries = 3
@@ -108,6 +110,7 @@ class OpenVikingAPIClient:
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
             "X-OpenViking-Account": self.account,
             "X-OpenViking-User": self.user,
+            "X-OpenViking-Agent": self.agent,
         }
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -312,10 +315,19 @@ class OpenVikingAPIClient:
         url = self._build_url(self.server_url, endpoint)
         return self._request_with_retry("DELETE", url)
 
-    def add_message(self, session_id: str, role: str, content: str) -> requests.Response:
+    def add_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        role_id: Optional[str] = None,
+    ) -> requests.Response:
         endpoint = f"/api/v1/sessions/{session_id}/messages"
         url = self._build_url(self.server_url, endpoint)
-        return self._request_with_retry("POST", url, json={"role": role, "content": content})
+        payload = {"role": role, "content": content}
+        if role_id is not None:
+            payload["role_id"] = role_id
+        return self._request_with_retry("POST", url, json=payload)
 
     def fs_ls(self, uri: str, simple: bool = False, recursive: bool = False) -> requests.Response:
         endpoint = "/api/v1/fs/ls"

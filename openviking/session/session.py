@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import uuid4
 
+from openviking.core.namespace import canonical_session_uri
 from openviking.message import Message, Part
 from openviking.server.identity import RequestContext, Role
 from openviking.telemetry import get_current_telemetry, tracer
@@ -60,6 +61,9 @@ class SessionMeta:
     session_id: str = ""
     created_at: str = ""
     updated_at: str = ""
+    created_by_user_id: str = ""
+    participant_user_ids: List[str] = field(default_factory=list)
+    participant_agent_ids: List[str] = field(default_factory=list)
     message_count: int = 0
     commit_count: int = 0
     memories_extracted: Dict[str, int] = field(
@@ -94,6 +98,9 @@ class SessionMeta:
             "session_id": self.session_id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "created_by_user_id": self.created_by_user_id,
+            "participant_user_ids": list(self.participant_user_ids),
+            "participant_agent_ids": list(self.participant_agent_ids),
             "message_count": self.message_count,
             "commit_count": self.commit_count,
             "memories_extracted": dict(self.memories_extracted),
@@ -112,6 +119,9 @@ class SessionMeta:
             session_id=data.get("session_id", ""),
             created_at=data.get("created_at", ""),
             updated_at=data.get("updated_at", ""),
+            created_by_user_id=data.get("created_by_user_id", ""),
+            participant_user_ids=list(data.get("participant_user_ids", [])),
+            participant_agent_ids=list(data.get("participant_agent_ids", [])),
             message_count=data.get("message_count", 0),
             commit_count=data.get("commit_count", 0),
             memories_extracted={
@@ -171,13 +181,18 @@ class Session:
         self.session_id = session_id or str(uuid4())
         self.created_at = int(datetime.now(timezone.utc).timestamp() * 1000)
         self._auto_commit_threshold = auto_commit_threshold
-        self._session_uri = f"viking://session/{self.user.user_space_name()}/{self.session_id}"
+        self._session_uri = canonical_session_uri(self.session_id)
 
         self._messages: List[Message] = []
         self._usage_records: List[Usage] = []
         self._compression: SessionCompression = SessionCompression()
         self._stats: SessionStats = SessionStats()
-        self._meta = SessionMeta(session_id=self.session_id, created_at=get_current_timestamp())
+        self._meta = SessionMeta(
+            session_id=self.session_id,
+            created_at=get_current_timestamp(),
+            created_by_user_id=self.ctx.user.user_id,
+            participant_user_ids=[self.ctx.user.user_id],
+        )
         self._loaded = False
 
         logger.info(f"Session created: {self.session_id} for user {self.user}")
@@ -224,6 +239,13 @@ class Session:
             # Old session without meta — derive from existing data
             self._meta.message_count = len(self._messages)
             self._meta.commit_count = self._compression.compression_index
+
+        if not self._meta.created_by_user_id:
+            self._meta.created_by_user_id = self.ctx.user.user_id
+        if not self._meta.participant_user_ids:
+            self._meta.participant_user_ids = [self._meta.created_by_user_id]
+        for message in self._messages:
+            self._record_participant(message)
 
         self._loaded = True
 
@@ -315,6 +337,7 @@ class Session:
         self,
         role: str,
         parts: List[Part],
+        role_id: Optional[str] = None,
         created_at: str = None,
     ) -> Message:
         """Add a message."""
@@ -322,9 +345,11 @@ class Session:
             id=f"msg_{uuid4().hex}",
             role=role,
             parts=parts,
+            role_id=role_id,
             created_at=created_at or datetime.now(timezone.utc).isoformat(),
         )
         self._messages.append(msg)
+        self._record_participant(msg)
 
         # Update statistics
         if role == "user":
@@ -336,6 +361,14 @@ class Session:
         self._meta.message_count = len(self._messages)
         self._save_meta_sync()
         return msg
+
+    def _record_participant(self, msg: Message) -> None:
+        if msg.role == "user" and msg.role_id:
+            if msg.role_id not in self._meta.participant_user_ids:
+                self._meta.participant_user_ids.append(msg.role_id)
+        if msg.role == "assistant" and msg.role_id:
+            if msg.role_id not in self._meta.participant_agent_ids:
+                self._meta.participant_agent_ids.append(msg.role_id)
 
     def update_tool_part(
         self,

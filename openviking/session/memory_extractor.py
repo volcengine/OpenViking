@@ -15,10 +15,11 @@ from typing import List, Optional
 from uuid import uuid4
 
 from openviking.core.context import Context, ContextType, Vectorize
+from openviking.core.namespace import canonical_agent_root, canonical_user_root
 from openviking.prompts import render_prompt
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import get_viking_fs
-from openviking.telemetry import get_current_telemetry
+from openviking.telemetry import bind_telemetry_stage, get_current_telemetry
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
@@ -141,8 +142,8 @@ class MemoryExtractor:
         CASES / PATTERNS → agent_space
         """
         if category in MemoryExtractor._USER_CATEGORIES:
-            return ctx.user.user_space_name()
-        return ctx.user.agent_space_name()
+            return ctx.user.user_id
+        return ctx.user.agent_id
 
     @staticmethod
     def _detect_output_language(messages: List, fallback_language: str = "en") -> str:
@@ -312,7 +313,8 @@ class MemoryExtractor:
             }
             logger.debug("Memory extraction LLM request summary: %s", request_summary)
             with telemetry.measure("memory.extract.stage.llm_extract"):
-                response = await vlm.get_completion_async(prompt)
+                with bind_telemetry_stage("memory_extract"):
+                    response = await vlm.get_completion_async(prompt)
             logger.debug("Memory extraction LLM raw response: %s", response)
             with telemetry.measure("memory.extract.stage.normalize_candidates"):
                 data = parse_json_from_response(response) or {}
@@ -458,11 +460,11 @@ class MemoryExtractor:
             payload = await self._append_to_profile(candidate, viking_fs, ctx=ctx)
             if not payload:
                 return None
-            user_space = ctx.user.user_space_name()
-            memory_uri = f"viking://user/{user_space}/memories/profile.md"
+            user_root = canonical_user_root(ctx)
+            memory_uri = f"{user_root}/memories/profile.md"
             memory = Context(
                 uri=memory_uri,
-                parent_uri=f"viking://user/{user_space}/memories",
+                parent_uri=f"{user_root}/memories",
                 is_leaf=True,
                 abstract=payload.abstract,
                 context_type=ContextType.MEMORY.value,
@@ -483,9 +485,9 @@ class MemoryExtractor:
             MemoryCategory.ENTITIES,
             MemoryCategory.EVENTS,
         ]:
-            parent_uri = f"viking://user/{ctx.user.user_space_name()}/{cat_dir}"
+            parent_uri = f"{canonical_user_root(ctx)}/{cat_dir}"
         else:  # CASES, PATTERNS
-            parent_uri = f"viking://agent/{ctx.user.agent_space_name()}/{cat_dir}"
+            parent_uri = f"{canonical_agent_root(ctx)}/{cat_dir}"
 
         # Generate file URI (store directly as .md file, no directory creation)
         memory_id = f"mem_{str(uuid4())}"
@@ -523,7 +525,7 @@ class MemoryExtractor:
         ctx: RequestContext,
     ) -> Optional[MergedMemoryPayload]:
         """Update user profile - always merge with existing content."""
-        uri = f"viking://user/{ctx.user.user_space_name()}/memories/profile.md"
+        uri = f"{canonical_user_root(ctx)}/memories/profile.md"
         existing = ""
         try:
             existing = await viking_fs.read_file(uri, ctx=ctx) or ""
@@ -590,7 +592,8 @@ class MemoryExtractor:
         try:
             from openviking_cli.utils.llm import parse_json_from_response
 
-            response = await vlm.get_completion_async(prompt)
+            with bind_telemetry_stage("memory_extract"):
+                response = await vlm.get_completion_async(prompt)
             data = parse_json_from_response(response) or {}
             if not isinstance(data, dict):
                 logger.error("Memory merge bundle parse failed: non-dict payload")
@@ -630,8 +633,8 @@ class MemoryExtractor:
             logger.warning("Tool name is empty, skipping tool memory merge")
             return None
 
-        agent_space = ctx.user.agent_space_name()
-        uri = f"viking://agent/{agent_space}/memories/tools/{tool_name}.md"
+        agent_root = canonical_agent_root(ctx)
+        uri = f"{agent_root}/memories/tools/{tool_name}.md"
         viking_fs = get_viking_fs()
 
         if not viking_fs:
@@ -1002,7 +1005,8 @@ class MemoryExtractor:
         )
 
         try:
-            response = await vlm.get_completion_async(prompt)
+            with bind_telemetry_stage("memory_extract"):
+                response = await vlm.get_completion_async(prompt)
             compressed = response.strip()
             if len(compressed) <= max_length:
                 logger.info(
@@ -1141,10 +1145,10 @@ class MemoryExtractor:
         abstract_override: Optional[str] = None,
     ) -> Context:
         """创建 Tool Memory 的 Context 对象"""
-        agent_space = ctx.user.agent_space_name()
+        agent_root = canonical_agent_root(ctx)
         return Context(
             uri=uri,
-            parent_uri=f"viking://agent/{agent_space}/memories/tools",
+            parent_uri=f"{agent_root}/memories/tools",
             is_leaf=True,
             abstract=abstract_override or candidate.abstract,
             context_type=ContextType.MEMORY.value,
@@ -1152,7 +1156,7 @@ class MemoryExtractor:
             session_id=candidate.source_session,
             user=candidate.user,
             account_id=ctx.account_id,
-            owner_space=agent_space,
+            owner_space=ctx.user.agent_id,
         )
 
     def _extract_tool_guidelines(self, content: str) -> str:
@@ -1183,8 +1187,8 @@ class MemoryExtractor:
             logger.warning("Skill name is empty, skipping skill memory merge")
             return None
 
-        agent_space = ctx.user.agent_space_name()
-        uri = f"viking://agent/{agent_space}/memories/skills/{skill_name}.md"
+        agent_root = canonical_agent_root(ctx)
+        uri = f"{agent_root}/memories/skills/{skill_name}.md"
         viking_fs = get_viking_fs()
 
         if not viking_fs:
@@ -1469,10 +1473,10 @@ class MemoryExtractor:
         abstract_override: Optional[str] = None,
     ) -> Context:
         """创建 Skill Memory 的 Context 对象"""
-        agent_space = ctx.user.agent_space_name()
+        agent_root = canonical_agent_root(ctx)
         return Context(
             uri=uri,
-            parent_uri=f"viking://agent/{agent_space}/memories/skills",
+            parent_uri=f"{agent_root}/memories/skills",
             is_leaf=True,
             abstract=abstract_override or candidate.abstract,
             context_type=ContextType.MEMORY.value,
@@ -1480,7 +1484,7 @@ class MemoryExtractor:
             session_id=candidate.source_session,
             user=candidate.user,
             account_id=ctx.account_id,
-            owner_space=agent_space,
+            owner_space=ctx.user.agent_id,
         )
 
     def _extract_skill_guidelines(self, content: str) -> str:

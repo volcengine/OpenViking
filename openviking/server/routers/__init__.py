@@ -7,6 +7,7 @@ from openviking.server.routers.bot import router as bot_router
 from openviking.server.routers.content import router as content_router
 from openviking.server.routers.debug import router as debug_router
 from openviking.server.routers.filesystem import router as filesystem_router
+from openviking.server.routers.maintenance import router as maintenance_router
 from openviking.server.routers.metrics import router as metrics_router
 from openviking.server.routers.observer import router as observer_router
 from openviking.server.routers.pack import router as pack_router
@@ -17,6 +18,7 @@ from openviking.server.routers.sessions import router as sessions_router
 from openviking.server.routers.stats import router as stats_router
 from openviking.server.routers.system import router as system_router
 from openviking.server.routers.tasks import router as tasks_router
+from openviking.server.routers.webdav import router as webdav_router
 
 __all__ = [
     "admin_router",
@@ -34,4 +36,6 @@ __all__ = [
     "metrics_router",
     "observer_router",
     "tasks_router",
+    "webdav_router",
+    "maintenance_router",
 ]

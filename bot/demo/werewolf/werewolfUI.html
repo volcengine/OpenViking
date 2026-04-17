@@ -115,18 +115,24 @@
       white-space: nowrap;
     }
     .btn.active { border-color: rgba(56, 189, 248, 0.75); }
-    .leftCol { display: grid; gap: 16px; }
+    .leftCol { display: grid; gap: 16px; min-height: 0; }
     .rightCol { display: flex; flex-direction: column; gap: 16px; min-height: 0; }
-    .arenaWrap { padding: 10px 14px 20px 14px; }
+    #gameWrap { height: calc(100vh - 80px); grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr); gap: 16px; align-items: stretch; }
+    #gameWrap.human-mode { grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr); }
+    #gameWrap.human-mode .leftCol { grid-template-rows: minmax(420px, 1.35fr) minmax(220px, 0.72fr); }
+    #gameWrap.human-mode .rightCol { min-height: 0; }
+    .arenaWrap { padding: 18px 20px 24px 20px; min-height: 0; overflow: hidden; }
     .arena {
       position: relative;
-      height: 560px;
+      z-index: 0;
+      isolation: isolate;
+      height: clamp(420px, 58vh, 620px);
       background:
         radial-gradient(circle at center, rgba(26, 32, 51, 0.95) 0%, rgba(7, 9, 19, 0.92) 70%),
         linear-gradient(180deg, rgba(56, 189, 248, 0.08) 0%, rgba(124, 58, 237, 0.06) 100%);
       border: 2px solid rgba(58, 68, 102, 0.9);
       border-radius: 18px;
-      overflow: visible;
+      overflow: hidden;
     }
     .scanlines {
       pointer-events: none;
@@ -151,7 +157,7 @@
     }
     .seat {
       position: absolute;
-      width: 118px;
+      width: 104px;
       text-align: center;
       font-size: 11px;
       cursor: pointer;
@@ -284,8 +290,8 @@
     .seat .phaseIcon { position: absolute; right: 4px; bottom: -16px; font-size: 11px; color: rgba(251, 191, 36, 0.85); }
     .phaseIndicator {
       position: absolute;
-      left: 14px;
-      top: 14px;
+      left: 26px;
+      top: 32px;
       padding: 6px 10px;
       border-radius: 12px;
       border: 2px solid rgba(43, 51, 80, 0.8);
@@ -299,11 +305,12 @@
     .arena::before {
       content: "";
       position: absolute;
-      inset: -20px;
+      inset: 10px;
       border-radius: 50%;
       background: conic-gradient(from 0deg, rgba(56,189,248,0.06), rgba(124,58,237,0.08), rgba(56,189,248,0.06));
       animation: spin 16s linear infinite;
-      opacity: 0.6;
+      opacity: 0.45;
+      pointer-events: none;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
     .btn.hidden { display: none; }
@@ -362,14 +369,36 @@
     }
     .rankList { display: grid; gap: 8px; }
     .rankItem { display: flex; justify-content: space-between; gap: 10px; font-size: 14px; padding: 10px 12px; border-radius: 10px; border: 2px solid rgba(43, 51, 80, 0.6); background: rgba(9, 11, 21, 0.55); }
-    .humanChatWrap { display: grid; grid-template-rows: auto 1fr auto; height: 100%; min-height: 300px; border: 2px solid rgba(167,139,250,0.5); border-radius: 14px; overflow: hidden; }
-    .humanChatHeader { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border-bottom: 2px solid rgba(167,139,250,0.5); background: rgba(26,20,46,0.8); }
-    .humanChatBody { padding: 12px; overflow: auto; display: grid; gap: 10px; min-height: 150px; background: rgba(10,8,20,0.4); }
-    .humanChatFooter { padding: 10px 12px; border-top: 2px solid rgba(167,139,250,0.5); background: rgba(26,20,46,0.8); display: grid; gap: 8px; }
-    .humanInput { width: 100%; padding: 10px 12px; border-radius: 10px; border: 2px solid rgba(167,139,250,0.5); background: rgba(10,8,20,0.6); color: rgba(233,237,247,0.95); font-family: inherit; font-size: 13px; resize: none; min-height: 60px; }
-    .humanInput:focus { outline: none; border-color: rgba(167,139,250,0.9); }
-    .humanModeIndicator { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: rgba(167,139,250,0.15); border: 2px solid rgba(167,139,250,0.4); }
+    #humanPlayerPanel { display: none; min-height: 220px; border-color: rgba(167,139,250,0.55); box-shadow: 0 0 0 2px rgba(34,20,64,0.9) inset, 0 24px 60px rgba(66,31,118,0.26); }
+    #humanPlayerPanel.is-visible { display: flex; flex-direction: column; min-height: 0; }
+    #humanPlayerPanel .panelHeader { background: linear-gradient(180deg, rgba(42, 24, 76, 0.88) 0%, rgba(17, 13, 35, 0.92) 100%); border-bottom-color: rgba(167,139,250,0.38); }
+    #humanPlayerPanel .panelHeader h2 { color: rgba(233,237,247,0.96); font-size: 14px; }
+    .humanPanelHint { font-size: 11px; color: rgba(196,181,253,0.86); }
+    .humanChatWrap { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(220px, 0.78fr); height: 100%; min-height: 0; border: 2px solid rgba(167,139,250,0.36); border-radius: 14px; overflow: hidden; margin: 12px; background: linear-gradient(180deg, rgba(31,20,58,0.72) 0%, rgba(10,8,20,0.92) 100%); }
+    .humanChatBody { padding: 14px; overflow: auto; display: grid; gap: 10px; min-height: 160px; background: radial-gradient(circle at top, rgba(59,34,103,0.22) 0%, rgba(10,8,20,0.18) 48%, rgba(10,8,20,0.45) 100%); }
+    .humanChatFooter { padding: 12px; border-left: 2px solid rgba(167,139,250,0.26); background: rgba(22,14,41,0.92); display: grid; grid-template-rows: minmax(90px, 1fr) auto auto; gap: 8px; min-width: 0; align-items: stretch; }
+    .humanActions { display: flex; gap: 8px; }
+    .humanActions .btn { flex: 1; }
+    .humanSendActions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .humanInput { width: 100%; padding: 10px 12px; border-radius: 12px; border: 2px solid rgba(167,139,250,0.45); background: rgba(10,8,20,0.82); color: rgba(233,237,247,0.95); font-family: inherit; font-size: 12px; resize: none; min-height: 90px; height: 100%; box-shadow: 0 0 0 1px rgba(77,56,127,0.35) inset; }
+    .humanInput:focus { outline: none; border-color: rgba(167,139,250,0.9); box-shadow: 0 0 0 1px rgba(196,181,253,0.4) inset, 0 0 0 4px rgba(167,139,250,0.12); }
+    .humanInput:disabled { opacity: 0.72; cursor: not-allowed; }
+    .humanPrimaryBtn { width: 100%; padding: 8px 10px; font-size: 11px; background: rgba(167,139,250,0.16); border-color: rgba(167,139,250,0.42); }
+    .humanPrimaryBtn:disabled { opacity: 0.55; }
+    .humanModeIndicator { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: rgba(167,139,250,0.15); border: 2px solid rgba(167,139,250,0.4); color: rgba(233,237,247,0.92); }
+    .humanModeIndicator.is-waiting { background: rgba(251,191,36,0.12); border-color: rgba(251,191,36,0.38); }
     .humanModeIndicator .dot { width: 8px; height: 8px; border-radius: 2px; background: rgba(167,139,250,0.9); animation: pulse 1s ease-in-out infinite; }
+    .humanModeIndicator.is-waiting .dot { background: rgba(251,191,36,0.92); box-shadow: 0 0 10px rgba(251,191,36,0.35); }
+    .humanMessage { padding: 10px 12px; border-radius: 14px; border: 1px solid rgba(167,139,250,0.18); background: rgba(20,12,36,0.88); }
+    .humanMessage--god { border-color: rgba(99,102,241,0.3); background: linear-gradient(180deg, rgba(35,40,94,0.7) 0%, rgba(17,18,46,0.86) 100%); }
+    .humanMessage--self { border-color: rgba(167,139,250,0.34); background: linear-gradient(180deg, rgba(67,42,113,0.86) 0%, rgba(30,16,56,0.92) 100%); }
+    .humanMessage__meta { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-size: 11px; opacity: 0.84; }
+    .humanMessage__author { font-weight: 700; }
+    .humanMessage__author--god { color: #818cf8; }
+    .humanMessage__author--self { color: #c4b5fd; }
+    .humanMessage__time { margin-left: auto; opacity: 0.55; font-size: 10px; }
+    .humanMessage__content { font-size: 13px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; color: rgba(255,255,255,0.92); }
+    .humanEmptyState { padding: 16px; border: 1px dashed rgba(167,139,250,0.24); border-radius: 12px; background: rgba(22,14,41,0.55); color: rgba(196,181,253,0.82); font-size: 12px; line-height: 1.6; }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
     .bar { height: 6px; border-radius: 999px; background: rgba(56, 189, 248, 0.2); overflow: hidden; margin-top: 6px; }
     .bar > span { display: block; height: 100%; background: rgba(56, 189, 248, 0.75); }
@@ -378,6 +407,30 @@
     .selectInput { padding: 8px 10px; border-radius: 10px; border: 2px solid rgba(43, 51, 80, 0.6); background: rgba(9, 11, 21, 0.6); color: rgba(233, 237, 247, 0.95); font-family: inherit; font-size: 13px; }
     .panelHeader .hint .btn { margin: 0 2px; padding: 3px 8px; font-size: 10px; }
     .panelHeader .hint .btn.active { border-color: rgba(56, 189, 248, 0.75); background: rgba(56, 189, 248, 0.15); }
+    .progressBar {
+      padding: 10px 14px;
+      border-top: 2px solid rgba(43, 51, 80, 0.7);
+      background: rgba(14, 18, 35, 0.75);
+    }
+    .progressInfo {
+      display: flex; gap: 10px; align-items: center;
+      margin-bottom: 8px; font-size: 12px; color: #9aa4b2;
+    }
+    .progressInfo .current { color: rgba(233, 237, 247, 0.9); font-weight: 600; }
+    .event {
+      padding: 10px 12px;
+      border-radius: 10px;
+      border-left: 3px solid rgba(43, 51, 80, 0.7);
+      background: rgba(9, 11, 21, 0.55);
+      cursor: pointer;
+    }
+    .event:hover { border-left-color: rgba(56, 189, 248, 0.65); }
+    .event.active {
+      border-left-color: rgba(56, 189, 248, 0.8);
+      background: rgba(56, 189, 248, 0.15);
+    }
+    .event .title { font-weight: 600; color: rgba(233, 237, 247, 0.95); margin-bottom: 4px; }
+    .event .meta { font-size: 11px; color: rgba(154, 164, 178, 0.8); }
     .endOverlay {
       position: fixed;
       inset: 0;
@@ -518,6 +571,10 @@
     .raw { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.6; color: rgba(233, 237, 247, 0.92); }
     @media (max-width: 1100px) {
       .wrap { grid-template-columns: 1fr; }
+      #gameWrap, #gameWrap.human-mode { grid-template-columns: 1fr; height: auto; }
+      #gameWrap.human-mode .leftCol { grid-template-rows: auto auto; }
+      .humanChatWrap { grid-template-columns: 1fr; }
+      .humanChatFooter { border-left: none; border-top: 2px solid rgba(167,139,250,0.26); }
       .rosterGrid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     }
     @media (max-width: 720px) {
@@ -533,22 +590,52 @@
         <button class="navBtn active" id="navGame">游戏</button>
         <button class="navBtn" id="navMemory">记忆</button>
         <button class="navBtn" id="navRank">排行榜</button>
+        <button class="navBtn" id="navReplay">回放</button>
       </div>
-      <button class="btn" id="navForceRestart" style="margin-right: 12px; padding: 4px 12px; font-size: 13px; height: 26px;">强制重开</button>
+      <label class="pill" style="margin-right: 12px; gap: 8px;">
+        <span>模式</span>
+        <select id="restartMode" style="background: transparent; color: rgba(233,237,247,0.95); border: none; outline: none; font-size: 12px;">
+          <option value="all_agents" style="color: #111827;">全AI</option>
+          <option value="human_player" style="color: #111827;">真人参与</option>
+        </select>
+      </label>
+      <button class="btn" id="navForceRestart" style="margin-right: 12px; padding: 4px 12px; font-size: 13px; height: 26px;">初始化游戏</button>
       <div class="pill"><span id="phaseDot" class="dot"></span><span id="phaseText">DAY</span></div>
       <div class="pill"><span class="dot" style="background: rgba(110,231,183,0.95); box-shadow: 0 0 0 2px rgba(110,231,183,0.25)"></span><span id="aliveText">0/0 alive</span></div>
       <div class="pill"><span class="dot" style="background: rgba(251,191,36,0.95); box-shadow: 0 0 0 2px rgba(251,191,36,0.25)"></span><span id="fsText">http: /data</span></div>
     </div>
   </header>
   <section class="page active" id="page-game">
-  <div class="wrap" id="gameWrap" style="height: calc(100vh - 80px); grid-template-columns: minmax(560px, 1.8fr) minmax(360px, 1fr); gap: 16px;">
-    <div class="leftCol" style="height: 100%; display: flex; flex-direction: column;">
-      <section class="panel" style="flex: 1; display: flex; flex-direction: column;">
+  <div class="wrap" id="gameWrap">
+    <div class="leftCol" style="height: 100%; display: grid; min-height: 0;">
+      <section class="panel" style="display: flex; flex-direction: column; min-height: 0;">
         <div class="panelHeader">
           <h2>游戏界面</h2>
         </div>
         <div class="arenaWrap" style="flex: 1; display: flex; align-items: center; justify-content: center; position: relative;">
           <div class="arena" id="arena" style="width: 100%;"></div>
+        </div>
+      </section>
+      <section class="panel" id="humanPlayerPanel">
+        <div class="panelHeader">
+          <div>
+            <h2>真实玩家</h2>
+            <div class="humanPanelHint">仅你与 god 可见</div>
+          </div>
+          <div class="humanModeIndicator"><span class="dot"></span><span id="humanStatus">等待中...</span></div>
+        </div>
+        <div class="humanChatWrap">
+          <div class="humanChatBody" id="humanChatBody"></div>
+          <div class="humanChatFooter">
+            <textarea class="humanInput" id="humanInput" placeholder="在此输入你的回复..."></textarea>
+            <div class="humanSendActions">
+              <button class="btn humanPrimaryBtn" id="humanSendBtn">只发给 god</button>
+              <button class="btn" id="humanSendAllBtn">发给全员</button>
+            </div>
+            <div class="humanActions">
+              <button class="btn" id="humanEditGameMd" style="font-size: 11px;">查看 GAME.md</button>
+            </div>
+          </div>
         </div>
       </section>
     </div>
@@ -567,22 +654,6 @@
           <div class="chatFooter">
             <div id="chatStatus">等待开始...</div>
             <div class="voteRow" id="chatVotes"></div>
-          </div>
-        </div>
-      </section>
-      <section class="panel" id="humanPlayerPanel" style="display: none; min-height: 320px;">
-        <div class="panelHeader">
-          <h2>真实玩家</h2>
-          <div class="humanModeIndicator"><span class="dot"></span><span id="humanStatus">等待中...</span></div>
-        </div>
-        <div class="humanChatWrap" style="flex: 1;">
-          <div class="humanChatBody" id="humanChatBody"></div>
-          <div class="humanChatFooter">
-            <textarea class="humanInput" id="humanInput" placeholder="在此输入你的回复..."></textarea>
-            <button class="btn" id="humanSendBtn" style="width: 100%; background: rgba(167,139,250,0.2); border-color: rgba(167,139,250,0.6);">发送</button>
-            <div style="display: flex; gap: 8px; margin-top: 8px;">
-              <button class="btn" id="humanEditGameMd" style="flex: 1; font-size: 11px;">编辑GAME.md</button>
-            </div>
           </div>
         </div>
       </section>
@@ -629,17 +700,30 @@
     </div>
   </section>
   <section class="page rankPage" id="page-rank" style="display: none;">
-    <div class="wrap" style="height: calc(100vh - 80px); grid-template-columns: 1fr 1fr; gap: 16px;">
-      <div class="panel" style="width: 100%; height: 100%; display: flex; flex-direction: column;">
-        <div class="panelHeader">
-          <h2>排行榜</h2>
-          <div class="hint">存活 + 阵营胜负</div>
+    <div class="wrap" style="height: calc(100vh - 80px); grid-template-columns: 2fr 1fr; gap: 16px;">
+      <!-- Left column: rank list + win rate chart (vertical stack) -->
+      <div style="display: flex; flex-direction: column; gap: 16px; height: 100%;">
+        <div class="panel" style="flex: 1; display: flex; flex-direction: column; min-height: 0;">
+          <div class="panelHeader">
+            <h2>排行榜</h2>
+            <div class="hint">存活 + 阵营胜负</div>
+          </div>
+          <div class="memoryBody" style="flex: 1; overflow-y: auto;">
+            <div class="rankList" id="rankList"></div>
+          </div>
         </div>
-        <div class="memoryBody" style="flex: 1; overflow-y: auto;">
-          <div class="rankList" id="rankList"></div>
+        <div class="panel" style="flex: 1; display: flex; flex-direction: column; min-height: 0;">
+          <div class="panelHeader">
+            <h2>胜率曲线图</h2>
+            <div class="hint">每局游戏后的胜率变化</div>
+          </div>
+          <div class="memoryBody" style="flex: 1; padding: 16px; overflow: hidden;">
+            <canvas id="winRateChart" style="width: 100%; height: 100%;"></canvas>
+          </div>
         </div>
       </div>
-      <div class="panel" style="width: 100%; height: 100%; display: flex; flex-direction: column;">
+      <!-- Right column: Agent architecture (narrower) -->
+      <div class="panel" style="height: 100%; display: flex; flex-direction: column;">
         <div class="panelHeader">
           <h2>Agent 架构</h2>
           <div class="hint">消息流向图</div>
@@ -650,21 +734,77 @@
       </div>
     </div>
   </section>
+  <section class="page replayPage" id="page-replay" style="display: none;">
+    <div class="wrap" style="height: calc(100vh - 80px); display: grid; grid-template-columns: minmax(240px, 0.8fr) minmax(560px, 1.8fr) minmax(320px, 1fr); gap: 16px;">
+      <div style="display: flex; flex-direction: column; gap: 16px; height: 100%; min-height: 0;">
+        <section class="panel" style="flex: 1; display: flex; flex-direction: column; min-height: 0;">
+          <div class="panelHeader">
+            <h2>对局记录</h2>
+          </div>
+          <div class="memoryBody" style="flex: 1; overflow-y: auto;">
+            <div class="timeline" id="replayList"></div>
+          </div>
+        </section>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 16px; height: 100%; min-height: 0;">
+        <section class="panel" style="flex: 1; display: flex; flex-direction: column; min-height: 0;">
+          <div class="panelHeader">
+            <h2>回放映像</h2>
+            <div class="hint">
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <button class="btn" id="replayPrev" style="padding: 4px 10px; font-size: 10px;">⏮ 上一条</button>
+                <button class="btn" id="replayPlay" style="padding: 4px 10px; font-size: 10px;">▶ 播放</button>
+                <button class="btn" id="replayNext" style="padding: 4px 10px; font-size: 10px;">下一条 ⏭</button>
+              </div>
+            </div>
+          </div>
+          <div class="arenaWrap" style="flex: 1; display: flex; align-items: center; justify-content: center; position: relative;">
+            <div class="arena" id="replayArena" style="width: 100%;"></div>
+          </div>
+          <div class="progressBar">
+            <div class="progressInfo">
+              <span>进度:</span>
+              <span class="current" id="replayProgress">0 / 0</span>
+            </div>
+            <input type="range" id="replaySlider" min="0" max="0" value="0" style="width: 100%;">
+            <div style="display: flex; gap: 8px; margin-top: 8px;">
+              <select class="selectInput" id="replaySpeed" style="flex: 1;">
+                <option value="0.5">0.5x 慢放</option>
+                <option value="1" selected>1x 正常</option>
+                <option value="2">2x 快进</option>
+                <option value="3">3x 极速</option>
+              </select>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 16px; height: 100%; min-height: 0;">
+        <section class="panel" style="flex: 1; display: flex; flex-direction: column; min-height: 0;">
+          <div class="chatWrap" style="flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0;">
+            <div class="chatHeader">
+              <div class="phase">
+                <span id="replayChatPhaseIcon">🎬</span>
+                <span id="replayChatPhaseText">回放对话</span>
+                <span id="replayChatRoundText"></span>
+              </div>
+              <div style="margin-left: auto; opacity: 0.75; font-size: 11px;" id="replayChatAliveText">0/0 alive</div>
+            </div>
+            <div class="chatBody" id="replayChatBody" style="flex: 1; overflow-y: auto;"></div>
+            <div style="padding: 8px 12px; border-top: 1px solid rgba(43, 51, 80, 0.55); font-size: 11px; color: rgba(154,164,178,0.85);" id="replayChatStatus">等待选择回放</div>
+            <div class="voteRow" id="replayChatVotes"></div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
   <div class="endOverlay" id="endOverlay">
     <div class="endCard">
       <div class="pulseRing"></div>
       <div class="endTitle">游戏结束</div>
       <div class="endWinner" id="endWinner">胜利方：-</div>
-      <div class="searchRow" style="margin: 8px 0;">
-        <select class="selectInput" id="restartMode">
-          <option value="random">随机配置</option>
-          <option value="classic">经典局</option>
-          <option value="tubian">屠边局</option>
-          <option value="whitewolf">白狼王局</option>
-          <option value="purewhite">纯白少女局</option>
-        </select>
-      </div>
-      <button class="btn" id="btnRestart">再来一局</button>
+      <button class="btn" id="btnRestart">确认</button>
       <div class="endStatus" id="endStatus"></div>
     </div>
   </div>
@@ -675,6 +815,15 @@
     </div>
     <div class="drawerBody">
       <div class="raw" id="drawerContent"></div>
+    </div>
+  </div>
+  <div class="endOverlay" id="humanGameMdOverlay">
+    <div class="endCard" style="width: min(720px, 92vw); text-align: left;">
+      <div class="endTitle" style="margin-bottom: 14px;">查看我的 GAME.md</div>
+      <textarea id="humanGameMdEditor" class="humanInput" readonly style="min-height: 320px; height: 320px;"></textarea>
+      <div class="humanActions" style="margin-top: 12px; justify-content: flex-end;">
+        <button class="btn" id="humanGameMdCancel">关闭</button>
+      </div>
     </div>
   </div>
 
@@ -825,16 +974,73 @@
       const day = lastDay || 0;
 
       let winner = '';
-      const winRe = /游戏结束：\s*(.+)\s*$/gm;
-      let m = null;
-      for (const mm of text.matchAll(winRe)) m = mm;
-      if (m && m[1]) winner = m[1].trim();
+      // Check if game has ended first
+      const gameEnded = /游戏状态[：:]\s*游戏结束|胜负判定|游戏结束[：:]/.test(text);
+
+      if (gameEnded) {
+        // Support multiple formats for game end and winner
+        // Priority 1: "游戏结果：{winner}" (most explicit, from GAME_RECORD.md)
+        // Priority 2: "胜负判定：{winner}"
+        // Priority 3: "游戏结束：{winner}"
+        // Priority 4: "{winner}胜利"
+        const winRe0 = /游戏结果[：:]\s*(.+?)(?:\s|$)/g;
+        const winRe1 = /游戏结束[：:]\s*(.+?)(?:\s|$)/g;
+        const winRe2 = /胜负判定[：:]\s*(.+?)(?:！|。|$)/g;
+        const winRe3 = /(狼人|好人|平民|村民)胜利/g;
+
+        let m = null;
+        // Try format 0 first (most explicit: "游戏结果：...")
+        for (const mm of text.matchAll(winRe0)) m = mm;
+        if (m && m[1]) {
+          winner = m[1].trim();
+        } else {
+          // Try format 2 ("胜负判定：...")
+          for (const mm of text.matchAll(winRe2)) m = mm;
+          if (m && m[1]) {
+            winner = m[1].trim();
+          } else {
+            // Try format 1 ("游戏结束：...")
+            for (const mm of text.matchAll(winRe1)) m = mm;
+            if (m && m[1]) {
+              winner = m[1].trim();
+            } else {
+              // Try format 3 - just check who won
+              for (const mm of text.matchAll(winRe3)) m = mm;
+              if (m && m[1]) {
+                winner = m[1] + '胜利';
+              }
+            }
+          }
+        }
+      }
 
       return { dead, badge, isNight, round, day, winner, phase, lastSection };
     }
 
+    function normalizeRoleName(role) {
+      const r = String(role || '').trim();
+      const aliases = {
+        预言家: 'Seer',
+        女巫: 'Witch',
+        猎人: 'Hunter',
+        守卫: 'Guard',
+        守墓人: 'Guard',
+        白痴: 'Idiot',
+        村民: 'Villager',
+        平民: 'Villager',
+        狼人: 'Werewolf',
+        白狼王: 'WhiteWolfKing',
+        狼崽: 'WolfCub',
+        狼美人: 'WolfBeauty',
+        梦魇: 'Dreamer',
+        纯白之女: 'PureWhiteGirl',
+        老村长: 'OldVillageChief',
+      };
+      return aliases[r] || r;
+    }
+
     function roleInfo(role) {
-      const r = String(role || '未知');
+      const r = normalizeRoleName(role || '未知');
       const map = {
         Seer: { kind: 'special', label: 'SEER' },
         Witch: { kind: 'special', label: 'WITCH' },
@@ -855,7 +1061,7 @@
     }
 
     function sigilSvg(role) {
-      const r = String(role || '');
+      const r = normalizeRoleName(role || '');
       if (r === 'Werewolf' || r === 'WhiteWolfKing' || r === 'WolfCub' || r === 'WolfBeauty') {
         return '<svg viewBox="0 0 24 24" fill="none"><path d="M6 20l2-8-4-2 4-6 4 4 4-4 4 6-4 2 2 8" stroke="rgba(251,113,133,0.95)" stroke-width="2"/><path d="M9 14h6" stroke="rgba(251,113,133,0.95)" stroke-width="2"/></svg>';
       }
@@ -1194,7 +1400,9 @@
           avatar.className = 'avatarMini';
           if (m.type !== 'system') {
             const player = (data.players || []).find(p => p.id === m.id);
-            avatar.innerHTML = sigilSvg(player ? player.role : '');
+            const humanMode = uiState.lastStatus && uiState.lastStatus.game_mode === 'human_player';
+            const canShowRole = !humanMode;
+            avatar.innerHTML = sigilSvg(canShowRole && player ? player.role : '');
           } else {
             avatar.textContent = '!';
           }
@@ -1249,6 +1457,55 @@
       }
     }
 
+    function renderHumanChat(messages, statusData) {
+      const humanChatBody = document.getElementById('humanChatBody');
+      if (!humanChatBody) return;
+
+      const messagesKey = messages.map(m => `${m.channel_id}:${m.timestamp}:${m.content.substring(0, 50)}`).join('|');
+      if (humanChatBody.dataset.messagesKey === messagesKey) {
+        return;
+      }
+      humanChatBody.dataset.messagesKey = messagesKey;
+      humanChatBody.innerHTML = '';
+
+      if (!messages.length) {
+        const empty = document.createElement('div');
+        empty.className = 'humanEmptyState';
+        empty.textContent = statusData && statusData.waiting_for_human ? 'god 正在等待你的回复…' : '等待 god 操作指令…';
+        humanChatBody.appendChild(empty);
+        return;
+      }
+
+      messages.forEach((msg) => {
+        const fromGod = msg.channel_id === 'god';
+        const row = document.createElement('div');
+        row.className = `humanMessage ${fromGod ? 'humanMessage--god' : 'humanMessage--self'}`;
+
+        const label = document.createElement('div');
+        label.className = 'humanMessage__meta';
+
+        const nameSpan = document.createElement('span');
+        nameSpan.className = `humanMessage__author ${fromGod ? 'humanMessage__author--god' : 'humanMessage__author--self'}`;
+        nameSpan.textContent = fromGod ? 'god' : '你';
+        label.appendChild(nameSpan);
+
+        const timeSpan = document.createElement('span');
+        timeSpan.className = 'humanMessage__time';
+        timeSpan.textContent = new Date(msg.timestamp * 1000).toLocaleTimeString();
+        label.appendChild(timeSpan);
+
+        const content = document.createElement('div');
+        content.className = 'humanMessage__content';
+        content.textContent = msg.content;
+
+        row.appendChild(label);
+        row.appendChild(content);
+        humanChatBody.appendChild(row);
+      });
+
+      humanChatBody.scrollTop = humanChatBody.scrollHeight;
+    }
+
     function renderChatFromMessages(messages, info, data) {
       const chatBody = document.getElementById('chatBody');
       const chatStatus = document.getElementById('chatStatus');
@@ -1291,8 +1548,10 @@
           } else {
             // Agent reply
             const player = (data.players || []).find(p => p.id === msg.channel_id);
+            const humanMode = uiState.lastStatus && uiState.lastStatus.game_mode === 'human_player';
+            const canShowRole = !humanMode;
             if (player) {
-              avatar.innerHTML = sigilSvg(player.role);
+              avatar.innerHTML = sigilSvg(canShowRole ? player.role : '');
             } else if (msg.channel_id === 'god') {
               avatar.innerHTML = sigilSvg('');
             } else {
@@ -1399,11 +1658,17 @@
       const content = document.getElementById('drawerContent');
       if (!drawer || !content) return;
       title.textContent = `${String(seatIdx + 1).padStart(2, '0')}号 ${player.id || ''}`;
-      
-      // Use markdown rendering for drawer content
-      content.className = 'drawerBody md';
-      content.innerHTML = mdToHtml(player.game || '');
-      
+
+      const humanMode = uiState.lastStatus && uiState.lastStatus.game_mode === 'human_player';
+      const canViewDetails = !humanMode || player.id === 'human';
+      if (!canViewDetails) {
+        content.className = 'drawerBody raw';
+        content.textContent = '真人参与模式下，不能查看其他玩家的私有信息。';
+      } else {
+        content.className = 'drawerBody md';
+        content.innerHTML = mdToHtml(player.game || '');
+      }
+
       drawer.classList.add('show');
     }
 
@@ -1618,6 +1883,10 @@
       expandedDetails: new Set(),
       conversations: null,
       botSessions: null,
+      endOverlayConfirmed: false,
+      endOverlaySource: null,
+      pendingGameMode: null,
+      preferredGameMode: localStorage.getItem('ww_preferred_game_mode') || 'all_agents',
     };
 
     function setViewer(title, content) {
@@ -1784,8 +2053,8 @@
          badgeCandidates = extractBadgeCandidates(data.game_record);
       }
       const totalSeats = players.length;
-      const center = { x: 50, y: 50 };
-      const radius = { x: 38, y: 34 };
+      const center = { x: 50, y: 49 };
+      const radius = totalSeats <= 6 ? { x: 33, y: 26 } : { x: 36, y: 30 };
 
       players.forEach((p, i) => {
         const angle = (-90 + (360 / totalSeats) * i) * (Math.PI / 180);
@@ -1793,12 +2062,15 @@
           x: center.x + radius.x * Math.cos(angle),
           y: center.y + radius.y * Math.sin(angle),
         };
+        if (i === 0) {
+          pos.y -= 2;
+        }
         const seatIdx = i;
         const dead = info.dead.has(seatIdx);
         const seat = document.createElement('div');
         seat.className = 'seat' + (dead ? ' dead' : '');
-        seat.style.left = `calc(${pos.x}% - 59px)`;
-        seat.style.top = `calc(${pos.y}% - 22px)`;
+        seat.style.left = `calc(${pos.x}% - 52px)`;
+        seat.style.top = `calc(${pos.y}% - 14px)`;
 
         const avatar = document.createElement('div');
         avatar.className = 'avatar';
@@ -1821,9 +2093,12 @@
           vote.textContent = voteTarget + '号';
           avatar.appendChild(vote);
         }
+        const humanMode = uiState.lastStatus && uiState.lastStatus.game_mode === 'human_player';
+        const canViewSeatRole = !humanMode || p.id === 'human';
+
         const sigil = document.createElement('div');
         sigil.className = 'sigil';
-        sigil.innerHTML = sigilSvg(p.role);
+        sigil.innerHTML = sigilSvg(canViewSeatRole ? p.role : '');
         avatar.appendChild(sigil);
 
         const name = document.createElement('div');
@@ -1831,7 +2106,7 @@
         name.textContent = String(seatIdx + 1).padStart(2, '0') + ' ' + ((p.id || '').replace('demo__werewolf__', '').replaceAll('_', ' ') || ('player_' + String(seatIdx + 1).padStart(2, '0')));
         const sub = document.createElement('div');
         sub.className = 'sub';
-        sub.textContent = (p.role || '未知');
+        sub.textContent = canViewSeatRole ? (p.role || '未知') : '身份保密';
         seat.appendChild(avatar);
         seat.appendChild(name);
         seat.appendChild(sub);
@@ -1840,7 +2115,9 @@
           openDrawer(p, seatIdx);
         });
 
-        if (latest && latest.id === p.id && p.last_speech) {
+        const speechText = String(p.last_speech || '');
+        const hasSpeechBubble = !!speechText.trim();
+        if (hasSpeechBubble) {
           seat.className += ' speaking';
           const wave = document.createElement('div');
           wave.className = 'speaker-wave';
@@ -1849,8 +2126,7 @@
         }
 
         // Add compact speech bubble
-        const speechText = String(p.last_speech || '');
-        if (speechText && speechText.trim()) {
+        if (hasSpeechBubble) {
           const bubble = document.createElement('div');
           bubble.style.cssText = `
             position: absolute;
@@ -1863,12 +2139,9 @@
             box-shadow: 0 3px 10px rgba(0,0,0,0.25);
             z-index: 200;
             pointer-events: auto;
-            top: -55px;
+            top: -48px;
             left: 50%;
             transform: translateX(-50%);
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
             max-width: 180px;
           `;
 
@@ -1877,7 +2150,15 @@
           if (displayText.length > 50) {
             displayText = displayText.substring(0, 47) + '...';
           }
-          bubble.textContent = displayText;
+
+          const bubbleText = document.createElement('div');
+          bubbleText.style.cssText = `
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+          `;
+          bubbleText.textContent = displayText;
+          bubble.appendChild(bubbleText);
 
           // Add small tail
           const tail = document.createElement('div');
@@ -1993,16 +2274,31 @@
       if (chatAliveText) chatAliveText.textContent = `${alive}/${(players || []).length} alive`;
     }
 
-    function updateEndOverlay(info) {
+    function setEndOverlay({ visible, winnerText = '', statusText = '', source = null }) {
       const overlay = document.getElementById('endOverlay');
       const winner = document.getElementById('endWinner');
       const status = document.getElementById('endStatus');
-      if (info.winner) {
+      if (!overlay || !winner || !status) return;
+      if (visible) {
+        uiState.endOverlaySource = source;
         overlay.classList.add('show');
-        winner.textContent = '胜利方：' + info.winner;
+        winner.textContent = '胜利方：' + (winnerText || '-');
+        status.textContent = statusText || '';
       } else {
+        if (source && uiState.endOverlaySource && uiState.endOverlaySource !== source) return;
         overlay.classList.remove('show');
         status.textContent = '';
+        if (!source || uiState.endOverlaySource === source) uiState.endOverlaySource = null;
+      }
+    }
+
+    function updateEndOverlay(info, statusData) {
+      const gameEnded = Boolean(statusData && statusData.game_ended);
+      if (gameEnded && info.winner && !uiState.endOverlayConfirmed) {
+        setEndOverlay({ visible: true, winnerText: info.winner, source: 'live' });
+      } else if (!gameEnded || !info.winner) {
+        setEndOverlay({ visible: false, source: 'live' });
+        uiState.endOverlayConfirmed = false;
       }
     }
 
@@ -2031,14 +2327,14 @@
         setHeaderState(info, data.players || []);
         renderArena(data.players || [], info, data);
         setFsState();
-        updateEndOverlay(info);
+        updateEndOverlay(info, uiState.lastStatus);
         renderChat(data, info);
 
         // 加载OpenViking树
         await loadOpenvikingTree();
 
         renderMemoryPage(data);
-        renderRank(data, info);
+        await renderRank(data, info);
       } finally {
         uiState.loading = false;
       }
@@ -2126,20 +2422,6 @@
       const root = document.getElementById('memTree');
       if (!root || !uiState.openvikingTree) return;
 
-      // 保存当前details的打开状态
-      const currentDetails = root.querySelectorAll('details');
-      currentDetails.forEach((detail, index) => {
-        const summary = detail.querySelector('summary');
-        if (summary) {
-          const key = 'detail_' + index + '_' + summary.textContent.trim();
-          if (detail.open) {
-            uiState.expandedDetails.add(key);
-          } else {
-            uiState.expandedDetails.delete(key);
-          }
-        }
-      });
-
       const tree = uiState.openvikingTree;
       let fileCount = 0;
 
@@ -2162,19 +2444,19 @@
         return '<button class="fileBtn' + active + '" data-ov-path="' + escapeHtml(fullPath) + '"><span>' + escapeHtml(label) + '</span>' + metaHtml + '</button>';
       }
 
-      function renderItems(items, prefix) {
+      function renderItems(items, rootPrefix) {
         let html = '';
         for (const item of items) {
+          const fullPath = rootPrefix + '/' + (item.path || item.name);
           if (item.type === 'directory') {
-            const detailsKey = 'detail_' + html.length + '_' + item.name;
+            const detailsKey = 'ov/' + fullPath;
             const isOpen = uiState.expandedDetails.has(detailsKey) ? ' open' : '';
-            html += '<details' + isOpen + ' data-index="' + html.length + '"><summary>' + escapeHtml(item.name) + '</summary><div class="node">';
+            html += '<details' + isOpen + ' data-details-key="' + escapeHtml(detailsKey) + '"><summary>' + escapeHtml(item.name) + '</summary><div class="node">';
             if (item.children) {
-              html += renderItems(item.children, prefix + '/' + item.name);
+              html += renderItems(item.children, rootPrefix);
             }
             html += '</div></details>';
           } else {
-            const fullPath = prefix + '/' + item.name;
             html += fileButton(fullPath, item.name, item.size ? item.size + ' bytes' : '');
           }
         }
@@ -2184,9 +2466,9 @@
       let html = '';
 
       // 世界记忆 - 保持打开状态
-      const worldKey = 'detail_0_世界记忆';
+      const worldKey = 'mem/world';
       const worldOpen = uiState.expandedDetails.size === 0 || uiState.expandedDetails.has(worldKey) ? ' open' : '';
-      html += '<details' + worldOpen + ' data-index="0"><summary>世界记忆</summary><div class="node">';
+      html += '<details' + worldOpen + ' data-details-key="' + worldKey + '"><summary>世界记忆</summary><div class="node">';
 
       // 只显示当前对话记录
       if (uiState.conversations && uiState.conversations.files) {
@@ -2204,23 +2486,23 @@
       html += '</div></details>';
 
       // OpenViking 记忆 - 保持打开状态
-      const ovKey = 'detail_1_OpenViking 记忆';
+      const ovKey = 'mem/openviking';
       const ovOpen = uiState.expandedDetails.size === 0 || uiState.expandedDetails.has(ovKey) ? ' open' : '';
-      html += '<details' + ovOpen + ' data-index="1"><summary>OpenViking 记忆</summary><div class="node">';
+      html += '<details' + ovOpen + ' data-details-key="' + ovKey + '"><summary>OpenViking 记忆</summary><div class="node">';
 
       // agent目录 - 保持打开状态
-      const agentKey = 'detail_2_agent';
+      const agentKey = 'ov/agent';
       const agentOpen = uiState.expandedDetails.size === 0 || uiState.expandedDetails.has(agentKey) ? ' open' : '';
-      html += '<details' + agentOpen + ' data-index="2"><summary>agent</summary><div class="node">';
+      html += '<details' + agentOpen + ' data-details-key="' + agentKey + '"><summary>agent</summary><div class="node">';
       if (tree.agent && tree.agent.files) {
         html += renderItems(tree.agent.files, 'agent');
       }
       html += '</div></details>';
 
       // user目录 - 保持打开状态
-      const userKey = 'detail_3_user';
+      const userKey = 'ov/user';
       const userOpen = uiState.expandedDetails.size === 0 || uiState.expandedDetails.has(userKey) ? ' open' : '';
-      html += '<details' + userOpen + ' data-index="3"><summary>user</summary><div class="node">';
+      html += '<details' + userOpen + ' data-details-key="' + userKey + '"><summary>user</summary><div class="node">';
       if (tree.user && tree.user.files) {
         html += renderItems(tree.user.files, 'user');
       }
@@ -2229,9 +2511,9 @@
       html += '</div></details>';
 
       // 智能体记忆 - 保持打开状态
-      const playerKey = 'detail_4_智能体记忆';
+      const playerKey = 'mem/agents';
       const playerOpen = uiState.expandedDetails.size === 0 || uiState.expandedDetails.has(playerKey) ? ' open' : '';
-      html += '<details' + playerOpen + ' data-index="4"><summary>智能体记忆</summary><div class="node">';
+      html += '<details' + playerOpen + ' data-details-key="' + playerKey + '"><summary>智能体记忆</summary><div class="node">';
 
       // 获取玩家列表来确定座位号
       const players = uiState.lastData ? (uiState.lastData.players || []) : [];
@@ -2244,9 +2526,9 @@
       if (uiState.botSessions && uiState.botSessions.files) {
         const godSessions = uiState.botSessions.files.filter(f => f.channel_id === 'god');
         if (godSessions.length > 0) {
-          const godKey = 'detail_5_god';
+          const godKey = 'agent/god';
           const godOpen = uiState.expandedDetails.has(godKey) ? ' open' : '';
-          html += '<details' + godOpen + ' data-index="5"><summary>god</summary><div class="node">';
+          html += '<details' + godOpen + ' data-details-key="' + godKey + '"><summary>god</summary><div class="node">';
 
           // 显示当前session文件
           const currentGodSession = godSessions.find(s =>
@@ -2266,10 +2548,10 @@
         const seat = i + 1;
         const pId = p.id;
         const label = String(seat).padStart(2, '0') + '号 ' + pId;
-        const playerDetailKey = 'detail_' + (6 + i) + '_' + label;
+        const playerDetailKey = 'agent/' + pId;
         const playerDetailOpen = uiState.expandedDetails.has(playerDetailKey) ? ' open' : '';
 
-        html += '<details' + playerDetailOpen + ' data-index="' + (6 + i) + '"><summary>' + escapeHtml(label) + '</summary><div class="node">';
+        html += '<details' + playerDetailOpen + ' data-details-key="' + escapeHtml(playerDetailKey) + '"><summary>' + escapeHtml(label) + '</summary><div class="node">';
 
         if (uiState.botSessions && uiState.botSessions.files) {
           const playerSessions = uiState.botSessions.files.filter(f => f.channel_id === pId);
@@ -2293,18 +2575,16 @@
       root.innerHTML = html;
 
       // 监听所有details的toggle事件，更新状态
-      root.querySelectorAll('details').forEach((detail, index) => {
-        const summary = detail.querySelector('summary');
-        if (summary) {
-          const key = 'detail_' + (detail.getAttribute('data-index') || index) + '_' + summary.textContent.trim();
-          detail.addEventListener('toggle', () => {
-            if (detail.open) {
-              uiState.expandedDetails.add(key);
-            } else {
-              uiState.expandedDetails.delete(key);
-            }
-          });
-        }
+      root.querySelectorAll('details').forEach((detail) => {
+        const key = detail.getAttribute('data-details-key');
+        if (!key) return;
+        detail.addEventListener('toggle', () => {
+          if (detail.open) {
+            uiState.expandedDetails.add(key);
+          } else {
+            uiState.expandedDetails.delete(key);
+          }
+        });
       });
 
       root.querySelectorAll('.fileBtn[data-ov-path]').forEach(btn => {
@@ -2372,11 +2652,15 @@
       if (id === 'page-game') document.getElementById('navGame').classList.add('active');
       if (id === 'page-memory') document.getElementById('navMemory').classList.add('active');
       if (id === 'page-rank') document.getElementById('navRank').classList.add('active');
+      if (id === 'page-replay') document.getElementById('navReplay').classList.add('active');
 
       if (id === 'page-memory') {
         loadOpenvikingTree().then(() => {
           renderOpenvikingTree();
         });
+      }
+      if (id === 'page-replay') {
+        loadReplayConversations();
       }
     }
 
@@ -2390,88 +2674,81 @@
       }
     }
 
-    function computeLeaderboard(data, info) {
-      const players = data.players || [];
-      const historyScores = {};
-      const historyWins = {};
-      const historyPlays = {};
-      
-      // Calculate scores dynamically from all history records in the workspace
-      if (data.history && data.history.records) {
-        data.history.records.forEach(r => {
-          const rInfo = parseRecordInfo(r.text);
-          if (!rInfo.winner) return;
-          
-          const rWinner = rInfo.winner || '';
-          const rIsWolfWin = rWinner.includes('狼人');
-          const rDead = rInfo.dead || new Set();
-          
-          players.forEach((p, i) => {
-            const pid = p.id || `player_${i+1}`;
-            
-            // Try to find this player's role in this specific game session
-            let rRole = '未知';
-            if (data.history.player_sessions && data.history.player_sessions[pid]) {
-              const pSession = data.history.player_sessions[pid].find(s => s.session === r.session);
-              if (pSession) rRole = extractRole(pSession.game);
-            }
-            if (rRole === '未知') rRole = String(p.role || ''); // fallback
-            
-            const rIsWolf = rRole === 'Werewolf' || rRole === 'WhiteWolfKing' || rRole === 'WolfCub' || rRole === 'WolfBeauty';
-            
-            let score = 0;
-            if ((rIsWolfWin && rIsWolf) || (!rIsWolfWin && !rIsWolf)) {
-              score += 3;
-              historyWins[pid] = (historyWins[pid] || 0) + 1;
-            }
-            if (!rDead.has(i)) {
-              score += 1;
-            } else {
-              score -= 1;
-            }
-            
-            historyScores[pid] = (historyScores[pid] || 0) + score;
-            historyPlays[pid] = (historyPlays[pid] || 0) + 1;
-          });
-        });
+    // Store loaded leaderboard data
+    let cachedLeaderboard = null;
+    let cachedLeaderboardTs = 0;
+
+    async function loadLeaderboardFromAPI() {
+      const now = Date.now();
+      // Cache for 5 seconds to avoid frequent API calls
+      if (cachedLeaderboard && (now - cachedLeaderboardTs) < 5000) {
+        return cachedLeaderboard;
       }
+
+      try {
+        const res = await fetch('/api/leaderboard', { cache: 'no-store' });
+        if (res.ok) {
+          cachedLeaderboard = await res.json();
+          cachedLeaderboardTs = now;
+          return cachedLeaderboard;
+        }
+      } catch (e) {
+        console.error('Failed to load leaderboard from API:', e);
+      }
+      return { games: [], players: {} };
+    }
+
+    async function computeLeaderboard(data, info) {
+      const players = data.players || [];
+
+      // Try to load history from backend API first (persistent leaderboard)
+      const leaderboard = await loadLeaderboardFromAPI();
+      const historyPlayers = leaderboard.players || {};
+      const isHumanMode = uiState.lastStatus && uiState.lastStatus.game_mode === 'human_player';
 
       const results = players.map((p, i) => {
         const role = String(p.role || '');
         const isWolf = role === 'Werewolf' || role === 'WhiteWolfKing' || role === 'WolfCub' || role === 'WolfBeauty';
-        
+
         let currentScore = 0;
         let winStatus = '进行中';
-        
+
         // Calculate current game score
         const winner = info.winner || '';
-        const isWolfWin = winner.includes('狼人');
+        // Use the same server-aligned winner interpretation for current-game display
+        const isWolfWin = winner.includes('狼人胜利') && !winner.includes('死亡') && !winner.includes('好人');
         const dead = info.dead || new Set();
-        
-        if (winner) {
+
+        if (!isHumanMode && winner) {
           if ((isWolfWin && isWolf) || (!isWolfWin && !isWolf)) {
-            currentScore += 3;
+            currentScore += 2;
             winStatus = '胜利';
           } else {
             winStatus = '失败';
           }
           if (!dead.has(i)) {
             currentScore += 1;
-          } else {
-            currentScore -= 1;
           }
+        } else if (winner) {
+          winStatus = '不计分';
         }
-        
-        const pid = p.id || `player_${i+1}`;
-        const totalScore = (historyScores[pid] || 0);
-        const wins = (historyWins[pid] || 0);
-        const plays = (historyPlays[pid] || 0);
 
-        return { 
-          seat: i + 1, 
-          id: pid, 
-          role, 
-          currentScore: winner ? currentScore : 0,
+        const pid = p.id || `player_${i+1}`;
+
+        // Get history stats from backend leaderboard
+        const historyStats = historyPlayers[pid] || {};
+        let totalScore = historyStats.total_score || 0;
+        let wins = historyStats.games_won || 0;
+        let plays = historyStats.games_played || 0;
+
+        // Don't add current score again - it should already be saved in LEADERBOARD.json
+        // The currentScore is just for showing "本局" score
+
+        return {
+          seat: i + 1,
+          id: pid,
+          role,
+          currentScore: !isHumanMode && winner ? currentScore : 0,
           totalScore: totalScore,
           wins: wins,
           plays: plays,
@@ -2483,11 +2760,12 @@
       return results.sort((a, b) => b.totalScore - a.totalScore);
     }
 
-    function renderRank(data, info) {
+    async function renderRank(data, info) {
       const list = document.getElementById('rankList');
+      if (!list) return;
       list.innerHTML = '';
-      const rows = computeLeaderboard(data, info);
-      
+      const rows = await computeLeaderboard(data, info);
+
       rows.forEach((r, idx) => {
         const item = document.createElement('div');
         item.className = 'rankItem';
@@ -2576,15 +2854,15 @@
   svg.appendChild(border);
 
   function addNode(x, y, label, icon, color, isBig) {
-    var w = isBig ? 78 : 50;
-    var h = isBig ? 56 : 38;
+    var w = isBig ? 78 : 45;
+    var h = isBig ? 56 : 34;
     var nx = x - w/2;
     var ny = y - h/2;
 
     var glow = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
     glow.setAttribute('cx', String(x));
     glow.setAttribute('cy', String(y));
-    glow.setAttribute('r', isBig ? '42' : '30');
+    glow.setAttribute('r', isBig ? '42' : '26');
     glow.setAttribute('fill', 'none');
     glow.setAttribute('stroke', color);
     glow.setAttribute('stroke-width', '1');
@@ -2625,7 +2903,7 @@
     iconText.setAttribute('y', String(y - iconY));
     iconText.setAttribute('text-anchor', 'middle');
     iconText.setAttribute('fill', color);
-    var iconSize = isBig ? '18' : '14';
+    var iconSize = isBig ? '18' : '13';
     iconText.setAttribute('font-size', iconSize);
     iconText.setAttribute('font-family', 'monospace');
     iconText.textContent = icon;
@@ -2633,11 +2911,11 @@
 
     var labelText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
     labelText.setAttribute('x', String(x));
-    var labelY = isBig ? 18 : 14;
+    var labelY = isBig ? 18 : 13;
     labelText.setAttribute('y', String(y + labelY));
     labelText.setAttribute('text-anchor', 'middle');
     labelText.setAttribute('fill', color);
-    var labelSize = isBig ? '11' : '10';
+    var labelSize = isBig ? '11' : '9';
     labelText.setAttribute('font-size', labelSize);
     labelText.setAttribute('font-family', 'monospace');
     labelText.textContent = label;
@@ -2681,43 +2959,80 @@
     svg.appendChild(t);
   }
 
-  addLine(105, 75, 105, 105, '#6ee7b7', false);
-  addLine(105, 152, 105, 188, '#38bdf8', false);
-  addLine(100, 188, 100, 152, '#38bdf8', false);
-  addLine(92, 228, 70, 278, '#38bdf8', false);
-  addLine(118, 228, 140, 278, '#38bdf8', false);
-  addLine(70, 282, 92, 232, '#f87171', false);
-  addLine(140, 282, 118, 232, '#f87171', false);
+  // Top hierarchy (all centered)
+  addLine(210, 30, 210, 60, '#6ee7b7', false);
+  addLine(210, 72, 210, 102, '#38bdf8', false);
+  addLine(210, 114, 210, 144, '#38bdf8', false);
+  addLine(210, 156, 210, 186, '#38bdf8', false);
 
-  addLine(125, 208, 265, 190, '#a78bfa', true);
-  addLine(265, 200, 125, 218, '#a78bfa', true);
-  addLabel(195, 199, 'R/W', '#a78bfa');
+  // God to players connections (all 6 players in one row)
+  addLine(90, 150, 60, 220, '#38bdf8', false);
+  addLine(140, 150, 110, 220, '#38bdf8', false);
+  addLine(190, 150, 160, 220, '#38bdf8', false);
+  addLine(230, 150, 210, 220, '#38bdf8', false);
+  addLine(280, 150, 260, 220, '#38bdf8', false);
+  addLine(330, 150, 310, 220, '#38bdf8', false);
 
-  addLine(80, 300, 265, 215, '#a78bfa', true);
-  addLine(265, 225, 80, 310, '#a78bfa', true);
-  addLabel(175, 252, 'R/W', '#a78bfa');
+  // Player to God connections (all 6 players in one row)
+  addLine(60, 225, 90, 156, '#f87171', false);
+  addLine(110, 225, 140, 156, '#f87171', false);
+  addLine(160, 225, 190, 156, '#f87171', false);
+  addLine(210, 225, 230, 156, '#f87171', false);
+  addLine(260, 225, 280, 156, '#f87171', false);
+  addLine(310, 225, 330, 156, '#f87171', false);
 
-  addLine(130, 300, 265, 235, '#a78bfa', true);
-  addLine(265, 245, 130, 310, '#a78bfa', true);
-  addLabel(197, 267, 'R/W', '#a78bfa');
+  // OpenViking connections (only for P1-P3)
+  addLine(60, 235, 210, 310, '#a78bfa', true);
+  addLine(210, 300, 60, 245, '#a78bfa', true);
+  addLabel(135, 295, 'R/W', '#a78bfa');
 
-  addNode(105, 48, 'ADMIN', '◆', '#6ee7b7', false);
-  addNode(105, 130, 'SERVER', '◇', '#38bdf8', false);
-  addNode(105, 210, 'GOD', '★', '#fbbf24', false);
-  addNode(60, 300, 'P1', '●', '#f87171', false);
-  addNode(150, 300, 'P2', '●', '#f87171', false);
-  addNode(300, 205, 'OpenViking', '◈', '#a78bfa', true);
+  addLine(110, 235, 210, 320, '#a78bfa', true);
+  addLine(210, 310, 110, 245, '#a78bfa', true);
+  addLabel(160, 305, 'R/W', '#a78bfa');
+
+  addLine(160, 235, 210, 330, '#a78bfa', true);
+  addLine(210, 320, 160, 245, '#a78bfa', true);
+  addLabel(185, 315, 'R/W', '#a78bfa');
+
+  // Nodes (all centered vertically)
+  addNode(210, 18, 'ADMIN', '◆', '#6ee7b7', false);
+  addNode(210, 58, 'SERVER', '◇', '#38bdf8', false);
+  addNode(210, 98, 'GOD', '★', '#fbbf24', false);
+
+  // All 6 players in one row, evenly spaced
+  addNode(60, 220, 'P1', '●', '#f87171', false);
+  addNode(110, 220, 'P2', '●', '#f87171', false);
+  addNode(160, 220, 'P3', '●', '#f87171', false);
+  addNode(210, 220, 'P4', '○', '#9aa4b2', false);
+  addNode(260, 220, 'P5', '○', '#9aa4b2', false);
+  addNode(310, 220, 'P6', '○', '#9aa4b2', false);
+
+  // OpenViking node (bottom, centered)
+  addNode(210, 315, 'OpenViking', '◈', '#a78bfa', true);
 
   root.appendChild(svg);
 }
 function bindNav() {
       document.getElementById('navGame').addEventListener('click', () => switchPage('page-game'));
       document.getElementById('navMemory').addEventListener('click', () => switchPage('page-memory'));
-      document.getElementById('navRank').addEventListener('click', () => {
+      document.getElementById('navRank').addEventListener('click', async () => {
         switchPage('page-rank');
-        // Load history leaderboard when switching to rank page
-        loadHistoryLeaderboard();
+        // Load history leaderboard and chart when switching to rank page
+        await loadHistoryLeaderboardAndChart();
+        // Also refresh current rank with latest data
+        if (uiState.lastData) {
+          const info = parseRecordInfo(uiState.lastData.game_record || '');
+          await renderRank(uiState.lastData, info);
+        }
       });
+
+      // Replay button - switch to replay tab
+      const navReplay = document.getElementById('navReplay');
+      if (navReplay) {
+        navReplay.addEventListener('click', function() {
+          switchPage('page-replay');
+        });
+      }
 
       // Rank tab buttons
       const tabCurrent = document.getElementById('rankTabCurrent');
@@ -2739,27 +3054,38 @@ function bindNav() {
           tabCurrent.classList.remove('active');
           if (listCurrent) listCurrent.style.display = 'none';
           if (listHistory) listHistory.style.display = '';
-          loadHistoryLeaderboard();
+          loadHistoryLeaderboardAndChart();
         });
       }
 
       // Human player buttons
       const humanSendBtn = document.getElementById('humanSendBtn');
       if (humanSendBtn) {
-        humanSendBtn.addEventListener('click', sendHumanMessage);
+        humanSendBtn.addEventListener('click', () => sendHumanMessage('god'));
+      }
+      const humanSendAllBtn = document.getElementById('humanSendAllBtn');
+      if (humanSendAllBtn) {
+        humanSendAllBtn.addEventListener('click', () => sendHumanMessage('all'));
       }
       const humanInput = document.getElementById('humanInput');
       if (humanInput) {
         humanInput.addEventListener('keydown', (e) => {
           if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
-            sendHumanMessage();
+            sendHumanMessage('god');
           }
         });
       }
       const humanEditGameMd = document.getElementById('humanEditGameMd');
       if (humanEditGameMd) {
         humanEditGameMd.addEventListener('click', editHumanGameMd);
+      }
+      const humanGameMdCancel = document.getElementById('humanGameMdCancel');
+      if (humanGameMdCancel) {
+        humanGameMdCancel.addEventListener('click', () => {
+          const overlay = document.getElementById('humanGameMdOverlay');
+          if (overlay) overlay.classList.remove('show');
+        });
       }
 
       // Load human GAME.md on init
@@ -2806,6 +3132,306 @@ function bindNav() {
         });
       } catch (e) {
         console.error('Failed to load history leaderboard:', e);
+      }
+    }
+
+    function calculateWinRateHistory(leaderboard) {
+      const games = leaderboard.games || [];
+      if (games.length === 0) return {};
+
+      // Get all unique player IDs
+      const playerIds = new Set();
+      games.forEach(game => {
+        game.players.forEach(p => playerIds.add(p.id));
+      });
+
+      const history = {};
+      Array.from(playerIds).forEach(pid => {
+        history[pid] = [];
+      });
+
+      // Calculate cumulative win rates after each game
+      let cumulativeWins = {};
+      let cumulativePlays = {};
+
+      games.forEach((game, gameIndex) => {
+        game.players.forEach(p => {
+          const pid = p.id;
+          if (!cumulativeWins[pid]) cumulativeWins[pid] = 0;
+          if (!cumulativePlays[pid]) cumulativePlays[pid] = 0;
+
+          cumulativePlays[pid]++;
+          if (p.won) cumulativeWins[pid]++;
+
+          const winRate = Math.round((cumulativeWins[pid] / cumulativePlays[pid]) * 100);
+          history[pid].push({
+            game: gameIndex + 1,
+            winRate: winRate
+          });
+        });
+      });
+
+      return history;
+    }
+
+    function renderWinRateChart(leaderboard) {
+      const canvas = document.getElementById('winRateChart');
+      if (!canvas) return;
+
+      const ctx = canvas.getContext('2d');
+      const history = calculateWinRateHistory(leaderboard);
+      const playerIds = Object.keys(history);
+
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      const width = rect.width;
+      const height = rect.height;
+      ctx.clearRect(0, 0, width, height);
+
+      if (playerIds.length === 0) {
+        ctx.fillStyle = 'rgba(154, 164, 178, 0.8)';
+        ctx.font = '14px "Geist Pixel", monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('暂无游戏数据', width / 2, height / 2);
+        return;
+      }
+
+      const colors = [
+        '#6ee7b7', '#38bdf8', '#fbbf24', '#fb7185', '#a78bfa', '#f472b6',
+        '#22d3ee', '#f59e0b', '#34d399', '#f97316', '#60a5fa', '#c084fc'
+      ];
+      const lineDashes = [[], [8, 4], [3, 3], [12, 4], [10, 3, 2, 3], [2, 3]];
+      const layout = {
+        left: 50,
+        right: 72,
+        bottom: 52,
+        top: 18,
+        legendGapX: 18,
+        legendGapY: 10,
+        legendItemHeight: 16,
+        legendMarkerWidth: 14,
+        xTickTarget: Math.max(4, Math.min(8, Math.floor(width / 90))),
+        markerRadius: 3,
+        denseMarkerThreshold: 10,
+        endpointLabelGap: 16,
+        endpointLabelMinYGap: 14,
+      };
+
+      let maxGames = 0;
+      playerIds.forEach(pid => {
+        (history[pid] || []).forEach(point => {
+          maxGames = Math.max(maxGames, point.game || 0);
+        });
+      });
+      maxGames = Math.max(maxGames, 1);
+
+      ctx.font = '11px "Geist Pixel", monospace';
+      const legendItems = playerIds.map((pid, index) => ({
+        pid,
+        label: pid.replace('player_', ''),
+        color: colors[index % colors.length],
+        dash: lineDashes[index % lineDashes.length]
+      }));
+
+      let legendRows = [[]];
+      let currentRowWidth = layout.left;
+      const maxLegendWidth = Math.max(width - layout.right, layout.left + 80);
+      legendItems.forEach(item => {
+        const textWidth = ctx.measureText(item.label).width;
+        const itemWidth = layout.legendMarkerWidth + 8 + textWidth + layout.legendGapX;
+        if (legendRows[legendRows.length - 1].length && currentRowWidth + itemWidth > maxLegendWidth) {
+          legendRows.push([]);
+          currentRowWidth = layout.left;
+        }
+        legendRows[legendRows.length - 1].push({ ...item, itemWidth, textWidth });
+        currentRowWidth += itemWidth;
+      });
+
+      const legendHeight = legendRows.length * layout.legendItemHeight + Math.max(0, legendRows.length - 1) * layout.legendGapY;
+      const padding = {
+        left: layout.left,
+        right: layout.right,
+        top: layout.top + legendHeight + 12,
+        bottom: layout.bottom,
+      };
+      const chartWidth = Math.max(1, width - padding.left - padding.right);
+      const chartHeight = Math.max(1, height - padding.top - padding.bottom);
+      const yTicks = [0, 25, 50, 75, 100];
+      const xDenominator = Math.max(maxGames - 1, 1);
+
+      function getX(game) {
+        return padding.left + ((game - 1) / xDenominator) * chartWidth;
+      }
+
+      ctx.strokeStyle = 'rgba(43, 51, 80, 0.5)';
+      ctx.lineWidth = 1;
+      yTicks.forEach(tick => {
+        const y = padding.top + chartHeight - (tick / 100) * chartHeight;
+        ctx.beginPath();
+        ctx.moveTo(padding.left, y);
+        ctx.lineTo(padding.left + chartWidth, y);
+        ctx.stroke();
+
+        ctx.fillStyle = 'rgba(154, 164, 178, 0.8)';
+        ctx.font = '11px "Geist Pixel", monospace';
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`${tick}%`, padding.left - 8, y);
+      });
+
+      const tickSet = new Set([1, maxGames]);
+      if (maxGames <= layout.xTickTarget + 1) {
+        for (let i = 1; i <= maxGames; i++) tickSet.add(i);
+      } else {
+        const step = Math.max(1, Math.ceil(maxGames / layout.xTickTarget));
+        for (let i = 1; i <= maxGames; i += step) tickSet.add(i);
+      }
+      const xTicks = Array.from(tickSet).sort((a, b) => a - b);
+
+      ctx.fillStyle = 'rgba(154, 164, 178, 0.8)';
+      ctx.font = '10px "Geist Pixel", monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      xTicks.forEach(gameIndex => {
+        const x = getX(gameIndex);
+        ctx.fillText(`第${gameIndex}局`, x, height - padding.bottom + 18);
+      });
+
+      const series = playerIds.map((pid, index) => {
+        const data = history[pid] || [];
+        const color = colors[index % colors.length];
+        const dash = lineDashes[index % lineDashes.length];
+        const endpoint = data.length ? data[data.length - 1] : null;
+        return {
+          pid,
+          label: pid.replace('player_', ''),
+          data,
+          color,
+          dash,
+          endpoint,
+          endpointX: endpoint ? getX(endpoint.game) : 0,
+          endpointY: endpoint ? (padding.top + chartHeight - (endpoint.winRate / 100) * chartHeight) : 0,
+        };
+      }).filter(seriesItem => seriesItem.data.length > 0);
+
+      series.forEach(seriesItem => {
+        ctx.beginPath();
+        ctx.strokeStyle = seriesItem.color;
+        ctx.lineWidth = 2.5;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.setLineDash(seriesItem.dash);
+
+        seriesItem.data.forEach((point, i) => {
+          const x = getX(point.game);
+          const y = padding.top + chartHeight - (point.winRate / 100) * chartHeight;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        const showAllMarkers = seriesItem.data.length <= layout.denseMarkerThreshold;
+        seriesItem.data.forEach((point, i) => {
+          if (!showAllMarkers && i !== seriesItem.data.length - 1) return;
+          const x = getX(point.game);
+          const y = padding.top + chartHeight - (point.winRate / 100) * chartHeight;
+
+          ctx.beginPath();
+          ctx.arc(x, y, i === seriesItem.data.length - 1 ? layout.markerRadius + 2 : layout.markerRadius, 0, Math.PI * 2);
+          ctx.fillStyle = seriesItem.color;
+          ctx.fill();
+          ctx.strokeStyle = 'rgba(7, 9, 19, 0.95)';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        });
+      });
+
+      const labelSeries = [...series].sort((a, b) => a.endpointY - b.endpointY);
+      let prevLabelY = -Infinity;
+      labelSeries.forEach(seriesItem => {
+        let labelY = seriesItem.endpointY;
+        labelY = Math.max(padding.top + 8, Math.min(padding.top + chartHeight - 8, labelY));
+        if (labelY - prevLabelY < layout.endpointLabelMinYGap) {
+          labelY = prevLabelY + layout.endpointLabelMinYGap;
+        }
+        labelY = Math.min(padding.top + chartHeight - 8, labelY);
+        seriesItem.labelY = labelY;
+        prevLabelY = labelY;
+      });
+      for (let i = labelSeries.length - 2; i >= 0; i--) {
+        const next = labelSeries[i + 1];
+        const current = labelSeries[i];
+        if (next.labelY - current.labelY < layout.endpointLabelMinYGap) {
+          current.labelY = Math.max(padding.top + 8, next.labelY - layout.endpointLabelMinYGap);
+        }
+      }
+
+      labelSeries.forEach(seriesItem => {
+        const anchorX = Math.min(width - layout.right + 6, seriesItem.endpointX + 2);
+        const labelX = width - layout.right + layout.endpointLabelGap;
+        ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(anchorX, seriesItem.endpointY);
+        ctx.lineTo(labelX - 6, seriesItem.labelY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        ctx.fillStyle = seriesItem.color;
+        ctx.font = '11px "Geist Pixel", monospace';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(seriesItem.label, labelX, seriesItem.labelY);
+      });
+
+      let legendY = layout.top;
+      legendRows.forEach(row => {
+        let legendX = layout.left;
+        row.forEach(item => {
+          ctx.strokeStyle = item.color;
+          ctx.lineWidth = 2;
+          ctx.setLineDash(item.dash || []);
+          ctx.beginPath();
+          ctx.moveTo(legendX, legendY + 6);
+          ctx.lineTo(legendX + layout.legendMarkerWidth, legendY + 6);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          ctx.beginPath();
+          ctx.arc(legendX + layout.legendMarkerWidth / 2, legendY + 6, 3, 0, Math.PI * 2);
+          ctx.fillStyle = item.color;
+          ctx.fill();
+
+          ctx.fillStyle = 'rgba(233, 237, 247, 0.9)';
+          ctx.font = '11px "Geist Pixel", monospace';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(item.label, legendX + layout.legendMarkerWidth + 8, legendY + 6);
+
+          legendX += item.itemWidth;
+        });
+        legendY += layout.legendItemHeight + layout.legendGapY;
+      });
+    }
+
+    async function loadHistoryLeaderboardAndChart() {
+      await loadHistoryLeaderboard();
+
+      try {
+        const res = await fetch('/api/leaderboard', { cache: 'no-store' });
+        if (res.ok) {
+          const leaderboard = await res.json();
+          renderWinRateChart(leaderboard);
+        }
+      } catch (e) {
+        console.error('Failed to load leaderboard for chart:', e);
       }
     }
 
@@ -2927,8 +3553,8 @@ function bindNav() {
         // Support both formats:
         // 1. Old format: "- 1号: player_1"
         // 2. New table format: "| 1号 | player_1 | ... |"
-        const playerRe1 = /- (\d+)号\s+(player_\d+):/g;
-        const playerRe2 = /\|\s*(\d+)号\s*\|\s*(player_\d+)\s*\|/g;
+        const playerRe1 = /- (\d+)号\s+([\w-]+):/g;
+        const playerRe2 = /\|\s*(\d+)号\s*\|\s*([\w-]+)\s*\|/g;
 
         let match;
         while ((match = playerRe1.exec(out.game_record)) !== null) {
@@ -2948,18 +3574,21 @@ function bindNav() {
 
         // If no players found in record, fall back to checking directories
         const playersToLoad = actualPlayers.length > 0
-          ? actualPlayers.map(p => ({ id: p.id, botApiId: `bot_api__${p.id}` }))
-          : Array.from({ length: 8 }, (_, i) => ({ id: `player_${i + 1}`, botApiId: `bot_api__player_${i + 1}` }));
+          ? actualPlayers.map(p => ({
+              id: p.id,
+              isHuman: p.id === 'human',
+              basePath: p.id === 'human' ? 'human' : `bot_api__${p.id}`,
+            }))
+          : Array.from({ length: 8 }, (_, i) => ({ id: `player_${i + 1}`, isHuman: false, basePath: `bot_api__player_${i + 1}` }));
 
         // Load players
-        for (const { id, botApiId } of playersToLoad) {
-          if (botApiDirs.includes(botApiId)) {
+        for (const { id, isHuman, basePath } of playersToLoad) {
+          if (isHuman || botApiDirs.includes(basePath)) {
             out.history.player_sessions[id] = [];
 
-            // Load GAME.md directly from bot_api__player_i/
-            const game = await fetchFileText(baseUrl, botApiId + '/GAME.md');
-            const memory = await fetchFileText(baseUrl, botApiId + '/memory/MEMORY.md');
-            const history = await fetchFileText(baseUrl, botApiId + '/memory/HISTORY.md');
+            const game = await fetchFileText(baseUrl, basePath + '/GAME.md');
+            const memory = isHuman ? { text: '', lastModified: 0 } : await fetchFileText(baseUrl, basePath + '/memory/MEMORY.md');
+            const history = isHuman ? { text: '', lastModified: 0 } : await fetchFileText(baseUrl, basePath + '/memory/HISTORY.md');
 
             const role = extractRole(game.text);
             const info = out.game_record ? parseRecordInfo(out.game_record) : { phase: 'day' };
@@ -2972,7 +3601,7 @@ function bindNav() {
               history: history.text,
               role,
               last_speech: lastSpeech,
-              has_session: true,
+              has_session: !isHuman,
               updated_at: String(Math.max(game.lastModified || 0, memory.lastModified || 0, history.lastModified || 0)),
             });
           }
@@ -2985,28 +3614,146 @@ function bindNav() {
 
     async function bindPickers() {}
 
+    async function setAutoRunEnabled(enabled, mode = 'fixed', targetGames = 1) {
+      const payload = enabled ? { enabled, mode, target_games: targetGames } : { enabled: false };
+      const res = await fetch('/api/auto-run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      return await res.json();
+    }
+
+    function updateAutoRunInputVisibility() {
+      const autoRunCount = document.getElementById('autoRunCount');
+      if (!autoRunCount) return;
+      autoRunCount.style.display = '';
+    }
+
+    function renderAutoRunButton(status) {
+      const btnAutoRun = document.getElementById('btnAutoRun');
+      const autoRunCount = document.getElementById('autoRunCount');
+      if (!btnAutoRun) return;
+      const enabled = !!(status && status.auto_run_enabled);
+      const scheduled = !!(status && (status.auto_restart_scheduled || status.starting_next_game));
+      const mode = String((status && status.auto_run_mode) || 'off');
+      const target = Number((status && status.auto_run_target_games) || 0);
+      const remaining = Number((status && status.auto_run_remaining_games) || 0);
+      btnAutoRun.classList.toggle('active', enabled);
+      if (enabled && mode === 'fixed' && target > 0) {
+        btnAutoRun.textContent = `自动${target}局: 剩余${remaining}`;
+      } else if (enabled && mode === 'infinite') {
+        btnAutoRun.textContent = '自动连跑: 无限';
+      } else {
+        btnAutoRun.textContent = '自动N局';
+      }
+      btnAutoRun.title = scheduled ? '本局结束后会自动进入下一局' : '设置自动连续跑局';
+      if (autoRunCount && enabled && mode === 'fixed' && target > 0) {
+        autoRunCount.value = String(target);
+      }
+      updateAutoRunInputVisibility();
+    }
+
     function bindGameControls() {
       const btnStart = document.getElementById('btnStart');
+      const btnContinue = document.getElementById('btnContinue');
       const btnStop = document.getElementById('btnStop');
+      const btnAutoRun = document.getElementById('btnAutoRun');
       const btnRestart = document.getElementById('btnRestart');
       const forceBtn = document.getElementById('navForceRestart');
       const status = document.getElementById('endStatus');
       const modeSel = document.getElementById('restartMode');
+      if (modeSel) {
+        modeSel.value = uiState.pendingGameMode || uiState.preferredGameMode || modeSel.value;
+        modeSel.addEventListener('change', () => {
+          uiState.preferredGameMode = modeSel.value || 'all_agents';
+          localStorage.setItem('ww_preferred_game_mode', uiState.preferredGameMode);
+        });
+      }
 
       // 开始游戏 - 只发送"开始"指令
       if (btnStart) {
         btnStart.addEventListener('click', async () => {
           try {
-            const res = await fetch('/api/start', { method: 'POST' });
+            const selectedMode = modeSel ? modeSel.value : 'all_agents';
+            uiState.pendingGameMode = selectedMode;
+            uiState.preferredGameMode = selectedMode;
+            localStorage.setItem('ww_preferred_game_mode', selectedMode);
+            const res = await fetch('/api/start', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ game_mode: selectedMode })
+            });
             const result = await res.json();
             if (result.success) {
+              uiState.pendingGameMode = null;
               alert('游戏已开始！');
             } else {
+              uiState.pendingGameMode = null;
               alert('启动失败: ' + (result.error || '未知错误'));
             }
           } catch (e) {
+            uiState.pendingGameMode = null;
             console.error('Start error:', e);
             alert('启动失败，请检查服务器是否运行');
+          }
+        });
+      }
+
+      if (btnContinue) {
+        btnContinue.addEventListener('click', async () => {
+          try {
+            const res = await fetch('/api/continue', { method: 'POST' });
+            const result = await res.json();
+            if (result.success) {
+              alert('已通知 god 继续本局游戏');
+            } else {
+              alert('继续失败: ' + (result.error || '未知错误'));
+            }
+          } catch (e) {
+            console.error('Continue error:', e);
+            alert('继续失败，请检查服务器是否运行');
+          }
+        });
+      }
+
+      const autoRunCount = document.getElementById('autoRunCount');
+      if (btnAutoRun) {
+        btnAutoRun.addEventListener('click', async () => {
+          const isActive = btnAutoRun.classList.contains('active');
+          if (isActive) {
+            try {
+              const result = await setAutoRunEnabled(false);
+              if (result.success) {
+                renderAutoRunButton(result);
+                alert('已关闭自动N局');
+              } else {
+                alert('自动N局设置失败: ' + (result.error || '未知错误'));
+              }
+            } catch (e) {
+              console.error('Auto-run error:', e);
+              alert('自动N局设置失败，请检查服务器是否运行');
+            }
+            return;
+          }
+
+          const parsedTarget = Number(autoRunCount && autoRunCount.value ? autoRunCount.value : '1');
+          if (!Number.isInteger(parsedTarget) || parsedTarget < 1) {
+            alert('请输入大于等于 1 的局数');
+            return;
+          }
+
+          try {
+            const result = await setAutoRunEnabled(true, 'fixed', parsedTarget);
+            if (result.success) {
+              renderAutoRunButton(result);
+              alert(`已开启自动${parsedTarget}局；若当前没在跑，会自动启动第一局`);
+            } else {
+              alert('自动N局设置失败: ' + (result.error || '未知错误'));
+            }
+          } catch (e) {
+            console.error('Auto-run error:', e);
+            alert('自动N局设置失败，请检查服务器是否运行');
           }
         });
       }
@@ -3029,6 +3776,17 @@ function bindNav() {
         });
       }
 
+      // 确认按钮 - 关闭游戏结束界面
+      const doConfirm = () => {
+        if (uiState.endOverlaySource === 'replay') {
+          replayState.endOverlayConfirmed = true;
+          setEndOverlay({ visible: false, source: 'replay' });
+          return;
+        }
+        uiState.endOverlayConfirmed = true;
+        setEndOverlay({ visible: false, source: 'live' });
+      };
+
       // 重新开始游戏 - 重新初始化
       const doRestart = async (triggerBtn) => {
         if (triggerBtn) triggerBtn.disabled = true;
@@ -3036,32 +3794,44 @@ function bindNav() {
         localStorage.setItem('ww_restart_at', String(Date.now()));
         uiState.lastSpeechKey = '';
         uiState.lastData = null;
+        uiState.endOverlayConfirmed = false; // Reset confirmation flag
         const chatBody = document.getElementById('chatBody');
         if (chatBody) chatBody.innerHTML = '';
 
         try {
+          const selectedMode = modeSel ? modeSel.value : 'all_agents';
+          uiState.pendingGameMode = selectedMode;
+          uiState.preferredGameMode = selectedMode;
+          localStorage.setItem('ww_preferred_game_mode', selectedMode);
           // 调用重启API
-          const res = await fetch('/api/restart', { method: 'POST' });
+          const res = await fetch('/api/restart', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ game_mode: selectedMode })
+          });
           const result = await res.json();
 
           if (result.success) {
+            uiState.pendingGameMode = null;
             if (status) status.textContent = '新局已启动，正在刷新...';
             // 直接刷新页面
             setTimeout(() => {
               window.location.reload();
             }, 500);
           } else {
+            uiState.pendingGameMode = null;
             alert('重启失败: ' + (result.error || '未知错误'));
             if (triggerBtn) triggerBtn.disabled = false;
           }
         } catch (e) {
+          uiState.pendingGameMode = null;
           console.error('Restart error:', e);
           alert('重启失败，请检查服务器是否运行');
           if (triggerBtn) triggerBtn.disabled = false;
         }
       };
 
-      if (btnRestart) btnRestart.addEventListener('click', () => doRestart(btnRestart));
+      if (btnRestart) btnRestart.addEventListener('click', () => doConfirm());
       if (forceBtn) forceBtn.addEventListener('click', () => {
         if (confirm('确定要在游戏中途强制重开吗？')) {
           doRestart(forceBtn);
@@ -3107,6 +3877,30 @@ function bindNav() {
       btnStart.style.cssText = 'margin-right: 8px; padding: 4px 12px; font-size: 13px; height: 26px; background: rgba(110,231,183,0.15); border-color: rgba(110,231,183,0.5);';
       btnStart.textContent = '开始游戏';
 
+      // 创建继续按钮
+      const btnContinue = document.createElement('button');
+      btnContinue.id = 'btnContinue';
+      btnContinue.className = 'btn';
+      btnContinue.style.cssText = 'margin-right: 8px; padding: 4px 12px; font-size: 13px; height: 26px; background: rgba(59,130,246,0.15); border-color: rgba(59,130,246,0.5);';
+      btnContinue.textContent = '继续';
+
+      // 创建自动N局输入框
+      const autoRunCount = document.createElement('input');
+      autoRunCount.id = 'autoRunCount';
+      autoRunCount.type = 'number';
+      autoRunCount.min = '1';
+      autoRunCount.step = '1';
+      autoRunCount.value = '3';
+      autoRunCount.style.cssText = 'width: 72px; margin-right: 8px; padding: 4px 8px; font-size: 12px; height: 26px; border-radius: 10px; border: 2px solid rgba(124,58,237,0.4); background: rgba(9,11,21,0.55); color: rgba(233,237,247,0.9);';
+      autoRunCount.title = '自动运行局数';
+
+      // 创建自动N局按钮
+      const btnAutoRun = document.createElement('button');
+      btnAutoRun.id = 'btnAutoRun';
+      btnAutoRun.className = 'btn';
+      btnAutoRun.style.cssText = 'margin-right: 8px; padding: 4px 12px; font-size: 13px; height: 26px; background: rgba(124,58,237,0.15); border-color: rgba(124,58,237,0.5);';
+      btnAutoRun.textContent = '自动N局';
+
       // 创建停止按钮
       const btnStop = document.createElement('button');
       btnStop.id = 'btnStop';
@@ -3116,7 +3910,10 @@ function bindNav() {
 
       // 插入到强制重开按钮之前
       headerRight.insertBefore(btnStop, forceBtn);
-      headerRight.insertBefore(btnStart, btnStop);
+      headerRight.insertBefore(btnAutoRun, btnStop);
+      headerRight.insertBefore(autoRunCount, btnAutoRun);
+      headerRight.insertBefore(btnContinue, autoRunCount);
+      headerRight.insertBefore(btnStart, btnContinue);
     }
 
     function updateButtonVisibility(status) {
@@ -3126,28 +3923,44 @@ function bindNav() {
       const forceRestarted = status.force_restarted || false;
 
       const btnStart = document.getElementById('btnStart');
+      const btnContinue = document.getElementById('btnContinue');
       const btnStop = document.getElementById('btnStop');
+      const btnAutoRun = document.getElementById('btnAutoRun');
       const forceBtn = document.getElementById('navForceRestart');
+
+      renderAutoRunButton(status);
 
       if (!smartButtons) {
         if (btnStart) btnStart.style.display = '';
+        if (btnContinue) btnContinue.style.display = '';
         if (btnStop) btnStop.style.display = '';
+        if (btnAutoRun) btnAutoRun.style.display = '';
         if (forceBtn) forceBtn.style.display = '';
         return;
       }
 
       if (btnStart) {
-        if (gameEnded) {
-          btnStart.style.display = 'none';
-        } else if (running) {
+        if (gameEnded || running) {
           btnStart.style.display = 'none';
         } else {
           btnStart.style.display = '';
         }
       }
 
+      if (btnContinue) {
+        if (gameEnded || running) {
+          btnContinue.style.display = 'none';
+        } else {
+          btnContinue.style.display = '';
+        }
+      }
+
       if (btnStop) {
         btnStop.style.display = 'none';
+      }
+
+      if (btnAutoRun) {
+        btnAutoRun.style.display = '';
       }
 
       if (forceBtn) {
@@ -3174,33 +3987,53 @@ function bindNav() {
       const gameWrap = document.getElementById('gameWrap');
       const humanStatus = document.getElementById('humanStatus');
       const humanSendBtn = document.getElementById('humanSendBtn');
+      const humanSendAllBtn = document.getElementById('humanSendAllBtn');
       const humanInput = document.getElementById('humanInput');
+      const humanIndicator = document.querySelector('#humanPlayerPanel .humanModeIndicator');
+      const modeSel = document.getElementById('restartMode');
+
+      if (modeSel) {
+        const preferredMode = uiState.pendingGameMode || uiState.preferredGameMode || (status && status.game_mode);
+        if (preferredMode) {
+          modeSel.value = preferredMode;
+        }
+      }
+
+      if (gameWrap) {
+        gameWrap.classList.toggle('human-mode', hasHumanPlayer);
+      }
 
       if (!hasHumanPlayer) {
-        if (humanPanel) humanPanel.style.display = 'none';
-        if (gameWrap) gameWrap.style.gridTemplateColumns = 'minmax(560px, 1.8fr) minmax(360px, 1fr)';
+        if (humanPanel) humanPanel.classList.remove('is-visible');
         return;
       }
 
-      if (humanPanel) humanPanel.style.display = '';
-      if (gameWrap) gameWrap.style.gridTemplateColumns = 'minmax(520px, 1.5fr) minmax(340px, 1fr)';
+      if (humanPanel) humanPanel.classList.add('is-visible');
 
       if (humanStatus) {
-        humanStatus.textContent = waitingForHuman ? '需要你回复！' : '等待中...';
+        humanStatus.textContent = waitingForHuman ? '轮到你回复' : '等待 god 指令';
+      }
+      if (humanIndicator) {
+        humanIndicator.classList.toggle('is-waiting', waitingForHuman);
       }
 
       if (humanSendBtn) {
         humanSendBtn.disabled = !waitingForHuman;
-        humanSendBtn.style.opacity = waitingForHuman ? '1' : '0.5';
+      }
+      if (humanSendAllBtn) {
+        humanSendAllBtn.disabled = !waitingForHuman;
       }
 
       if (humanInput) {
         humanInput.disabled = !waitingForHuman;
-        humanInput.placeholder = waitingForHuman ? '在此输入你的回复...' : '等待轮到你...';
+        humanInput.placeholder = waitingForHuman ? '在此输入仅发送给 god 的回复...' : '等待轮到你...';
+        if (waitingForHuman) {
+          requestAnimationFrame(() => humanInput.focus());
+        }
       }
     }
 
-    async function sendHumanMessage() {
+    async function sendHumanMessage(target = 'god') {
       const input = document.getElementById('humanInput');
       if (!input || !input.value.trim()) return;
 
@@ -3208,7 +4041,7 @@ function bindNav() {
         const res = await fetch('/api/human/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: input.value.trim() })
+          body: JSON.stringify({ message: input.value.trim(), target })
         });
         if (res.ok) {
           input.value = '';
@@ -3232,69 +4065,14 @@ function bindNav() {
 
     async function editHumanGameMd() {
       await loadHumanGameMd();
-      const content = prompt('编辑你的GAME.md（角色、状态等）:', humanGameMdContent);
-      if (content !== null) {
-        try {
-          const res = await fetch('/api/human/game-md', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ content: content })
-          });
-          if (res.ok) {
-            humanGameMdContent = content;
-          }
-        } catch (e) {
-          console.error('Failed to save human GAME.md:', e);
-        }
-      }
+      const overlay = document.getElementById('humanGameMdOverlay');
+      const editor = document.getElementById('humanGameMdEditor');
+      if (!overlay || !editor) return;
+      editor.value = humanGameMdContent || '';
+      overlay.classList.add('show');
+      requestAnimationFrame(() => editor.focus());
     }
 
-    async function saveGameToLeaderboard(data, info, status) {
-      if (!info.winner) return;
-
-      const players = data.players || [];
-      const isWolfWin = info.winner.includes('狼人');
-      const dead = info.dead || new Set();
-
-      const gamePlayers = players.map((p, i) => {
-        const role = String(p.role || '');
-        const isWolf = role === 'Werewolf' || role === 'WhiteWolfKing' || role === 'WolfCub' || role === 'WolfBeauty';
-        const won = (isWolfWin && isWolf) || (!isWolfWin && !isWolf);
-        const isDead = dead.has(i);
-
-        let score = 0;
-        if (won) score += 3;
-        if (!isDead) score += 1;
-        else score -= 1;
-
-        return {
-          id: p.id || `player_${i + 1}`,
-          role: role,
-          won: won,
-          dead: isDead,
-          score: score
-        };
-      });
-
-      const gameData = {
-        session_id: status ? status.session_id : '',
-        winner: info.winner,
-        players: gamePlayers
-      };
-
-      try {
-        const res = await fetch('/api/leaderboard/save', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(gameData)
-        });
-        if (res.ok) {
-          console.log('Game saved to leaderboard');
-        }
-      } catch (e) {
-        console.error('Failed to save to leaderboard:', e);
-      }
-    }
 
     async function refreshFromHttp() {
       if (uiState.loading) return;
@@ -3315,11 +4093,19 @@ function bindNav() {
 
         // Update button visibility based on status
         updateButtonVisibility(statusData);
+        updateHumanPlayerUI(statusData);
 
         // Load messages from API
         const messagesRes = await fetch('/api/messages');
         const messagesData = await messagesRes.json();
         console.log('/api/messages result:', messagesData);
+
+        let humanMessagesData = { messages: [] };
+        if (statusData.has_human_player) {
+          const humanMessagesRes = await fetch('/api/human/messages');
+          humanMessagesData = await humanMessagesRes.json();
+          console.log('/api/human/messages result:', humanMessagesData);
+        }
 
         const info = parseRecordInfo(data.game_record || '');
         console.log('parseRecordInfo result:', info);
@@ -3359,16 +4145,28 @@ function bindNav() {
         setHeaderState(info, playersWithSpeech || []);
         renderArena(playersWithSpeech || [], info, data);
         setFsState();
-        updateEndOverlay(info);
+        updateEndOverlay(info, statusData);
         renderChatFromMessages(messagesData.messages, info, data);
+        renderHumanChat(humanMessagesData.messages || [], statusData);
         renderMemoryPage(data);
-        renderRank(data, info);
+        await renderRank(data, info);
 
-        // Check if game just ended and save to leaderboard
-        if (info.winner && !uiState.lastGameWinner) {
+        // Try to render win rate chart if we're on rank page
+        try {
+          const res = await fetch('/api/leaderboard', { cache: 'no-store' });
+          if (res.ok) {
+            const leaderboard = await res.json();
+            renderWinRateChart(leaderboard);
+          }
+        } catch (e) {
+          // Ignore chart rendering errors
+        }
+
+        if (statusData.game_ended && info.winner && !uiState.lastGameWinner) {
           uiState.lastGameWinner = info.winner;
-          saveGameToLeaderboard(data, info, statusData);
-        } else if (!info.winner) {
+          cachedLeaderboard = null;
+          cachedLeaderboardTs = 0;
+        } else if (!statusData.game_ended || !info.winner) {
           uiState.lastGameWinner = null;
         }
 
@@ -3379,6 +4177,478 @@ function bindNav() {
         uiState.loading = false;
       }
     }
+
+    // Re-render chart when window is resized
+    let resizeTimeout = null;
+    window.addEventListener('resize', () => {
+      if (resizeTimeout) clearTimeout(resizeTimeout);
+      resizeTimeout = setTimeout(async () => {
+        // Only re-render if we're on rank page
+        const rankPage = document.getElementById('page-rank');
+        if (rankPage && rankPage.style.display !== 'none') {
+          try {
+            const res = await fetch('/api/leaderboard', { cache: 'no-store' });
+            if (res.ok) {
+              const leaderboard = await res.json();
+              renderWinRateChart(leaderboard);
+            }
+          } catch (e) {
+            // Ignore chart rendering errors
+          }
+        }
+      }, 250);
+    });
+
+    // ==================== 回放功能 ====================
+    const replayState = {
+      sessions: [],
+      currentSessionId: null,
+      events: [],
+      currentIndex: -1,
+      isPlaying: false,
+      playInterval: null,
+      playerSeatMap: {},
+      seatPlayerMap: {},
+      players: [],
+      baseInfo: null,
+      gameRecord: '',
+      endOverlayConfirmed: false
+    };
+
+    function parseReplayTimestamp(sessionId, timeText, fallbackIndex) {
+      const base = /^\d{8}_\d{6}$/.test(sessionId || '') ? sessionId : null;
+      if (!base || !timeText) return fallbackIndex + 1;
+      const year = parseInt(base.slice(0, 4), 10);
+      const month = parseInt(base.slice(4, 6), 10) - 1;
+      const day = parseInt(base.slice(6, 8), 10);
+      const [hours, minutes, seconds] = String(timeText).split(':').map(v => parseInt(v, 10) || 0);
+      return new Date(year, month, day, hours, minutes, seconds).getTime() / 1000;
+    }
+
+    function buildReplayBaseInfo() {
+      return {
+        dead: new Set(),
+        badge: null,
+        isNight: false,
+        round: null,
+        day: null,
+        winner: '',
+        phase: 'day',
+        lastSection: ''
+      };
+    }
+
+    function parseConversationForReplay(content, sessionId) {
+      const events = [];
+      const lines = content.split('\n');
+      let currentSpeaker = null;
+      let currentTimestamp = null;
+      let currentContent = [];
+      const playerSeatMap = {};
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const match = line.match(/^## \[([0-9:]+)\] (.+)$/);
+        if (match) {
+          if (currentSpeaker && currentContent.length > 0) {
+            events.push({
+              type: 'message',
+              speaker: currentSpeaker,
+              timestamp: currentTimestamp,
+              content: currentContent.join('\n').trim(),
+              seat: playerSeatMap[currentSpeaker],
+              channel_id: currentSpeaker,
+              is_user: currentSpeaker === 'admin',
+              ts: parseReplayTimestamp(sessionId, currentTimestamp, events.length)
+            });
+          }
+          currentTimestamp = match[1];
+          currentSpeaker = match[2];
+          currentContent = [];
+
+          if (currentSpeaker !== 'admin' && currentSpeaker !== 'god' && !playerSeatMap[currentSpeaker]) {
+            const seatIdx = Object.keys(playerSeatMap).filter(k => k !== 'admin' && k !== 'god').length + 1;
+            playerSeatMap[currentSpeaker] = seatIdx;
+          }
+        } else if (line && !line.startsWith('# ')) {
+          if (currentSpeaker !== null) {
+            currentContent.push(line);
+          }
+        }
+      }
+
+      if (currentSpeaker && currentContent.length > 0) {
+        events.push({
+          type: 'message',
+          speaker: currentSpeaker,
+          timestamp: currentTimestamp,
+          content: currentContent.join('\n').trim(),
+          seat: playerSeatMap[currentSpeaker],
+          channel_id: currentSpeaker,
+          is_user: currentSpeaker === 'admin',
+          ts: parseReplayTimestamp(sessionId, currentTimestamp, events.length)
+        });
+      }
+
+      return { events, playerSeatMap };
+    }
+
+    async function loadReplayPlayers() {
+      try {
+        const res = await fetch('/api/players', { cache: 'no-store' });
+        if (!res.ok) return [];
+        const data = await res.json();
+        return Array.isArray(data.players) ? data.players : [];
+      } catch (e) {
+        console.error('Failed to load replay players:', e);
+        return [];
+      }
+    }
+
+    async function loadReplayState(sessionId) {
+      try {
+        const res = await fetch(`/api/replay-state/${sessionId}`, { cache: 'no-store' });
+        if (!res.ok) return null;
+        return await res.json();
+      } catch (e) {
+        console.error('Failed to load replay state:', e);
+        return null;
+      }
+    }
+
+    function normalizeReplayBaseInfo(baseInfo) {
+      if (!baseInfo) return buildReplayBaseInfo();
+      return {
+        ...buildReplayBaseInfo(),
+        ...baseInfo,
+        dead: new Set(Array.isArray(baseInfo.dead) ? baseInfo.dead : [])
+      };
+    }
+
+    function buildReplayPlayers(events, loadedPlayers) {
+      const orderedPlayers = [];
+      const seen = new Set();
+      (loadedPlayers || []).forEach(player => {
+        if (!player || !player.id || seen.has(player.id)) return;
+        seen.add(player.id);
+        orderedPlayers.push({ ...player });
+      });
+      events.forEach(event => {
+        if (event.channel_id === 'admin' || event.channel_id === 'god' || seen.has(event.channel_id)) return;
+        seen.add(event.channel_id);
+        orderedPlayers.push({
+          id: event.channel_id,
+          role: '未知',
+          seat: orderedPlayers.length + 1
+        });
+      });
+      return orderedPlayers.map((player, index) => ({
+        ...player,
+        seat: player.seat || index + 1,
+        role: player.role || '未知',
+        game: player.game || '',
+        last_speech: '',
+        updated_at: 0
+      }));
+    }
+
+    function buildReplayPlayersWithSpeech(index) {
+      const players = replayState.players.map(player => ({
+        ...player,
+        last_speech: '',
+        updated_at: 0
+      }));
+      const currentEvent = replayState.events[index];
+      if (currentEvent && !currentEvent.is_user && currentEvent.channel_id !== 'god') {
+        const target = players.find(player => player.id === currentEvent.channel_id);
+        if (target) {
+          target.last_speech = currentEvent.content;
+          target.updated_at = currentEvent.ts || (index + 1);
+        }
+      }
+      return players;
+    }
+
+    function buildReplayMessages(index) {
+      if (index < 0) return [];
+      return replayState.events.slice(0, index + 1).map(event => ({
+        channel_id: event.channel_id,
+        content: event.content,
+        is_user: event.is_user,
+        timestamp: event.ts || (event.timestamp || index + 1)
+      }));
+    }
+
+    function updateReplayEndOverlay() {
+      const isAtEnd = replayState.events.length > 0 && replayState.currentIndex === replayState.events.length - 1;
+      const winner = String(replayState.baseInfo?.winner || '').trim();
+      if (isAtEnd && winner && !replayState.endOverlayConfirmed) {
+        setEndOverlay({ visible: true, winnerText: winner, source: 'replay' });
+      } else {
+        setEndOverlay({ visible: false, source: 'replay' });
+      }
+    }
+
+    function withReplayDomBindings(run) {
+      const bindings = [
+        ['arena', 'replayArena'],
+        ['chatBody', 'replayChatBody'],
+        ['chatStatus', 'replayChatStatus'],
+        ['chatVotes', 'replayChatVotes'],
+        ['chatPhaseIcon', 'replayChatPhaseIcon'],
+        ['chatPhaseText', 'replayChatPhaseText'],
+        ['chatRoundText', 'replayChatRoundText'],
+        ['chatAliveText', 'replayChatAliveText']
+      ];
+      const originals = new Map();
+      bindings.forEach(([sourceId, replayId]) => {
+        const sourceEl = document.getElementById(sourceId);
+        const replayEl = document.getElementById(replayId);
+        originals.set(sourceId, sourceEl ? sourceEl.id : null);
+        if (sourceEl) sourceEl.id = `${sourceId}__main`;
+        if (replayEl) replayEl.id = sourceId;
+      });
+      const previousSpeechKey = uiState.lastSpeechKey;
+      try {
+        run();
+      } finally {
+        uiState.lastSpeechKey = previousSpeechKey;
+        bindings.forEach(([sourceId, replayId]) => {
+          const remapped = document.getElementById(sourceId);
+          if (remapped) remapped.id = replayId;
+          const originalId = originals.get(sourceId);
+          if (originalId) {
+            const originalEl = document.getElementById(`${sourceId}__main`);
+            if (originalEl) originalEl.id = sourceId;
+          }
+        });
+      }
+    }
+
+    async function loadReplayConversations() {
+      try {
+        const res = await fetch('/api/conversations', { cache: 'no-store' });
+        if (!res.ok) return;
+        const data = await res.json();
+        replayState.sessions = data.files || [];
+        renderReplayList();
+      } catch (e) {
+        console.error('Failed to load conversations:', e);
+      }
+    }
+
+    function renderReplayList() {
+      const list = document.getElementById('replayList');
+      if (!list) return;
+      list.innerHTML = '';
+
+      if (replayState.sessions.length === 0) {
+        list.innerHTML = '<div style="padding: 20px; text-align: center; color: rgba(154,164,178,0.8);">暂无对局记录</div>';
+        return;
+      }
+
+      replayState.sessions.forEach(conv => {
+        const item = document.createElement('div');
+        item.className = 'event' + (replayState.currentSessionId === conv.session_id ? ' active' : '');
+
+        const date = new Date(conv.modified * 1000);
+        const timeStr = date.toLocaleString('zh-CN');
+
+        item.innerHTML = `
+          <div class="title">对局 ${conv.session_id}</div>
+          <div class="meta">${timeStr} · ${Math.round(conv.size / 1024)} KB</div>
+        `;
+        item.addEventListener('click', () => loadReplaySession(conv.session_id));
+        list.appendChild(item);
+      });
+    }
+
+    async function loadReplaySession(sessionId) {
+      try {
+        const res = await fetch(`/api/conversation/${sessionId}`, { cache: 'no-store' });
+        if (!res.ok) return;
+        const data = await res.json();
+
+        const [replayArchive, loadedPlayers] = await Promise.all([
+          loadReplayState(sessionId),
+          loadReplayPlayers()
+        ]);
+
+        const parsed = parseConversationForReplay(data.content, sessionId);
+        const replayPlayers = buildReplayPlayers(parsed.events, replayArchive?.players || loadedPlayers);
+        replayState.currentSessionId = sessionId;
+        replayState.events = parsed.events;
+        replayState.currentIndex = -1;
+        replayState.playerSeatMap = parsed.playerSeatMap;
+        replayState.seatPlayerMap = {};
+        Object.entries(parsed.playerSeatMap).forEach(([player, seat]) => {
+          replayState.seatPlayerMap[seat] = player;
+        });
+        replayState.players = replayPlayers;
+        replayState.gameRecord = String(replayArchive?.game_record || '');
+        replayState.baseInfo = normalizeReplayBaseInfo(replayArchive?.base_info);
+        replayState.endOverlayConfirmed = false;
+        setEndOverlay({ visible: false, source: 'replay' });
+        replayState.isPlaying = false;
+        if (replayState.playInterval) {
+          clearInterval(replayState.playInterval);
+          replayState.playInterval = null;
+        }
+
+        const slider = document.getElementById('replaySlider');
+        if (slider) {
+          slider.min = '-1';
+          slider.max = String(replayState.events.length - 1);
+          slider.value = '-1';
+        }
+
+        renderReplayList();
+        goToReplayIndex(-1);
+        updateReplayProgress();
+      } catch (e) {
+        console.error('Failed to load session:', e);
+      }
+    }
+
+    function updateReplayProgress() {
+      const progressEl = document.getElementById('replayProgress');
+      const slider = document.getElementById('replaySlider');
+      const playBtn = document.getElementById('replayPlay');
+
+      if (progressEl) {
+        progressEl.textContent = `${replayState.currentIndex + 1} / ${replayState.events.length}`;
+      }
+      if (slider && replayState.currentIndex >= 0) {
+        slider.value = String(replayState.currentIndex);
+      }
+      if (playBtn) {
+        playBtn.textContent = replayState.isPlaying ? '⏸ 暂停' : '▶ 播放';
+      }
+    }
+
+    function clearReplayChat() {
+      const chatBody = document.getElementById('replayChatBody');
+      const chatVotes = document.getElementById('replayChatVotes');
+      const chatStatus = document.getElementById('replayChatStatus');
+      if (chatBody) chatBody.innerHTML = '';
+      if (chatVotes) chatVotes.innerHTML = '';
+      if (chatStatus) chatStatus.textContent = '等待选择回放';
+    }
+
+    function renderReplayView(index) {
+      const replayArena = document.getElementById('replayArena');
+      if (!replayArena) return;
+      if (!replayState.players.length) {
+        replayArena.innerHTML = '<div class="table"></div><div class="scanlines"></div><div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font-size:13px;color:rgba(154,164,178,0.8);">选择对局开始回放</div>';
+        clearReplayChat();
+        return;
+      }
+
+      const playersWithSpeech = buildReplayPlayersWithSpeech(index);
+      const replayInfo = replayState.baseInfo ? {
+        ...replayState.baseInfo,
+        dead: new Set(),
+      } : buildReplayBaseInfo();
+      const replayMessages = buildReplayMessages(index);
+      const replayData = {
+        players: playersWithSpeech,
+        game_record: replayState.gameRecord || ''
+      };
+
+      withReplayDomBindings(() => {
+        renderArena(playersWithSpeech, replayInfo, replayData);
+        renderChatFromMessages(replayMessages, replayInfo, replayData);
+      });
+    }
+
+    function goToReplayIndex(index) {
+      if (index < -1 || index >= replayState.events.length) return;
+      replayState.currentIndex = index;
+      if (index < replayState.events.length - 1) {
+        replayState.endOverlayConfirmed = false;
+      }
+      renderReplayView(index);
+      updateReplayProgress();
+      updateReplayEndOverlay();
+    }
+
+    function toggleReplayPlay() {
+      if (replayState.events.length === 0) return;
+
+      replayState.isPlaying = !replayState.isPlaying;
+
+      if (replayState.isPlaying) {
+        if (replayState.currentIndex >= replayState.events.length - 1) {
+          replayState.currentIndex = -1;
+          replayState.endOverlayConfirmed = false;
+          setEndOverlay({ visible: false, source: 'replay' });
+        }
+
+        const speedSelect = document.getElementById('replaySpeed');
+        const speed = speedSelect ? parseFloat(speedSelect.value) : 1;
+        const intervalMs = Math.max(500, 2000 / speed);
+
+        replayState.playInterval = setInterval(() => {
+          if (!replayState.isPlaying) return;
+          if (replayState.currentIndex >= replayState.events.length - 1) {
+            replayState.isPlaying = false;
+            clearInterval(replayState.playInterval);
+            replayState.playInterval = null;
+            updateReplayProgress();
+            return;
+          }
+          goToReplayIndex(replayState.currentIndex + 1);
+        }, intervalMs);
+      } else {
+        if (replayState.playInterval) {
+          clearInterval(replayState.playInterval);
+          replayState.playInterval = null;
+        }
+      }
+      updateReplayProgress();
+    }
+
+    function bindReplayControls() {
+      const prevBtn = document.getElementById('replayPrev');
+      const nextBtn = document.getElementById('replayNext');
+      const playBtn = document.getElementById('replayPlay');
+      const slider = document.getElementById('replaySlider');
+      const speedSelect = document.getElementById('replaySpeed');
+
+      if (prevBtn) {
+        prevBtn.addEventListener('click', () => {
+          if (replayState.isPlaying) toggleReplayPlay();
+          goToReplayIndex(Math.max(-1, replayState.currentIndex - 1));
+        });
+      }
+      if (nextBtn) {
+        nextBtn.addEventListener('click', () => {
+          if (replayState.isPlaying) toggleReplayPlay();
+          goToReplayIndex(Math.min(replayState.events.length - 1, replayState.currentIndex + 1));
+        });
+      }
+      if (playBtn) {
+        playBtn.addEventListener('click', toggleReplayPlay);
+      }
+      if (slider) {
+        slider.addEventListener('input', (e) => {
+          if (replayState.isPlaying) toggleReplayPlay();
+          const idx = parseInt(e.target.value, 10);
+          goToReplayIndex(idx);
+        });
+      }
+      if (speedSelect) {
+        speedSelect.addEventListener('change', () => {
+          if (replayState.isPlaying) {
+            toggleReplayPlay();
+            toggleReplayPlay();
+          }
+        });
+      }
+    }
+
+    // 绑定回放控件
+    bindReplayControls();
   </script>
 </body>
 </html>

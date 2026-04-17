@@ -2337,9 +2337,10 @@ function bindAddMemory() {
       }
 
       for (const msg of messages) {
+        const payload = { ...msg };
         await callConsole(`/ov/sessions/${sessionId}/messages`, {
           method: "POST",
-          body: JSON.stringify(msg),
+          body: JSON.stringify(payload),
         });
       }
 

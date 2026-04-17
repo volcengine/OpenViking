@@ -6,7 +6,7 @@
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList};
+use pyo3::types::{PyBytes, PyDict, PyList, PyType};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
@@ -18,9 +18,54 @@ use ragfs::plugins::{
     KVFSPlugin, LocalFSPlugin, MemFSPlugin, QueueFSPlugin, SQLFSPlugin, ServerInfoFSPlugin,
 };
 
-/// Convert a ragfs error into a Python RuntimeError
+/// Get a Python exception class from the pyagfs module
+fn get_exception<'py>(py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyType>> {
+    let pyagfs = PyModule::import(py, "openviking.pyagfs")?;
+    let exc = pyagfs.getattr(name)?;
+    Ok(exc.cast_into()?)
+}
+
+/// Create a PyErr from an exception type name and message
+fn new_py_err(name: &str, msg: String) -> PyErr {
+    Python::attach(|py| {
+        if let Ok(exc) = get_exception(py, name) {
+            PyErr::from_type(exc, msg)
+        } else {
+            PyRuntimeError::new_err(msg)
+        }
+    })
+}
+
+/// Convert a ragfs error into the appropriate Python exception
 fn to_py_err(e: ragfs::core::Error) -> PyErr {
-    PyRuntimeError::new_err(e.to_string())
+    let msg = e.to_string();
+    match e {
+        ragfs::core::Error::NotFound(_) => new_py_err("AGFSNotFoundError", msg),
+        ragfs::core::Error::AlreadyExists(_) => new_py_err("AGFSAlreadyExistsError", msg),
+        ragfs::core::Error::PermissionDenied(_) => new_py_err("AGFSPermissionDeniedError", msg),
+        ragfs::core::Error::InvalidPath(_) => new_py_err("AGFSInvalidPathError", msg),
+        ragfs::core::Error::NotADirectory(_) => new_py_err("AGFSNotADirectoryError", msg),
+        ragfs::core::Error::IsADirectory(_) => new_py_err("AGFSIsADirectoryError", msg),
+        ragfs::core::Error::DirectoryNotEmpty(_) => new_py_err("AGFSDirectoryNotEmptyError", msg),
+        ragfs::core::Error::InvalidOperation(_) => new_py_err("AGFSInvalidOperationError", msg),
+        ragfs::core::Error::Io(_) => new_py_err("AGFSIoError", msg),
+        ragfs::core::Error::Plugin(_) => {
+            // Check if the plugin error message contains known patterns
+            let err_msg = msg.to_lowercase();
+            if err_msg.contains("directory not empty") {
+                new_py_err("AGFSDirectoryNotEmptyError", msg)
+            } else {
+                new_py_err("AGFSPluginError", msg)
+            }
+        }
+        ragfs::core::Error::Config(_) => new_py_err("AGFSConfigError", msg),
+        ragfs::core::Error::MountPointNotFound(_) => new_py_err("AGFSMountPointNotFoundError", msg),
+        ragfs::core::Error::MountPointExists(_) => new_py_err("AGFSMountPointExistsError", msg),
+        ragfs::core::Error::Serialization(_) => new_py_err("AGFSSerializationError", msg),
+        ragfs::core::Error::Network(_) => new_py_err("AGFSNetworkError", msg),
+        ragfs::core::Error::Timeout(_) => new_py_err("AGFSTimeoutError", msg),
+        ragfs::core::Error::Internal(_) => new_py_err("AGFSInternalError", msg),
+    }
 }
 
 /// Convert FileInfo to a Python dict matching the Go binding JSON format:

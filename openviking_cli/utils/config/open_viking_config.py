@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 import json
+import logging
 import os
 from pathlib import Path
 from threading import Lock
@@ -132,17 +133,19 @@ class OpenVikingConfig(BaseModel):
 
     default_search_limit: int = Field(default=3, description="Default number of results to return")
 
-    enable_memory_decay: bool = Field(default=True, description="Enable automatic memory decay")
-
-    memory_decay_check_interval: int = Field(
-        default=3600, description="Interval (seconds) to check for expired memories"
-    )
-
     language_fallback: str = Field(
         default="en",
         description=(
             "Fallback language used by memory extraction and semantic processing when dominant "
             "user language cannot be confidently detected"
+        ),
+    )
+
+    allow_private_networks: bool = Field(
+        default=False,
+        description=(
+            "Allow fetching resources from private/non-public network addresses. "
+            "When disabled (default), only public IP addresses and hostnames are allowed."
         ),
     )
 
@@ -226,6 +229,15 @@ class OpenVikingConfig(BaseModel):
 
             # Apply memory configuration
             if memory_config_data is not None:
+                if (
+                    isinstance(memory_config_data, dict)
+                    and "agent_scope_mode" in memory_config_data
+                ):
+                    logging.getLogger(__name__).warning(
+                        "memory.agent_scope_mode is deprecated and ignored. "
+                        "User/agent namespace behavior is now controlled by per-account "
+                        "namespace policy."
+                    )
                 instance.memory = MemoryConfig.from_dict(memory_config_data)
 
             # Apply parser configurations
@@ -243,8 +255,6 @@ class OpenVikingConfig(BaseModel):
                 db_dim = instance.storage.vectordb.dimension
                 emb_dim = instance.embedding.dimension
                 if db_dim > 0 and emb_dim > 0 and db_dim != emb_dim:
-                    import logging
-
                     logging.warning(
                         f"Dimension mismatch: VectorDB dimension is {db_dim}, "
                         f"but Embedding dimension is {emb_dim}. "
@@ -268,31 +278,52 @@ class OpenVikingConfigSingleton:
       3. ~/.openviking/ov.conf
       4. /etc/openviking/ov.conf
       5. Error with clear guidance
+
+    ``_initializing`` prevents a same-thread deadlock: loading the config
+    triggers pydantic validation which can import modules whose module-level
+    ``get_logger()`` calls ``get_instance()`` again *before* the lock is
+    released.  The flag is checked **before** ``_lock.acquire()`` so the
+    re-entrant call raises immediately, letting ``_load_log_config()``
+    fall back to default logging.
     """
 
     _instance: Optional[OpenVikingConfig] = None
     _lock: Lock = Lock()
+    _initializing: bool = False
 
     @classmethod
     def get_instance(cls) -> OpenVikingConfig:
         """Get the global singleton instance.
 
         Raises FileNotFoundError if no config file is found.
+        Raises RuntimeError if called re-entrantly during initialization.
         """
+        if cls._initializing:
+            raise RuntimeError(
+                "OpenVikingConfigSingleton is still initializing "
+                "(re-entrant call detected, falling back to defaults)"
+            )
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
-                    config_path = resolve_config_path(None, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
-                    if config_path is not None:
-                        cls._instance = cls._load_from_file(str(config_path))
-                    else:
-                        default_path_user = DEFAULT_CONFIG_DIR / DEFAULT_OV_CONF
-                        default_path_system = SYSTEM_CONFIG_DIR / DEFAULT_OV_CONF
-                        raise FileNotFoundError(
-                            f"OpenViking configuration file not found.\n"
-                            f"Please create {default_path_user} or {default_path_system}, or set {OPENVIKING_CONFIG_ENV}.\n"
-                            f"See: https://openviking.ai/docs"
+                    cls._initializing = True
+                    try:
+                        config_path = resolve_config_path(
+                            None, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF
                         )
+                        if config_path is not None:
+                            cls._instance = cls._load_from_file(str(config_path))
+                        else:
+                            default_path_user = DEFAULT_CONFIG_DIR / DEFAULT_OV_CONF
+                            default_path_system = SYSTEM_CONFIG_DIR / DEFAULT_OV_CONF
+                            raise FileNotFoundError(
+                                f"OpenViking configuration file not found.\n"
+                                f"Please create {default_path_user} or {default_path_system}, "
+                                f"or set {OPENVIKING_CONFIG_ENV}.\n"
+                                f"See: https://openviking.ai/docs"
+                            )
+                    finally:
+                        cls._initializing = False
         return cls._instance
 
     @classmethod
@@ -308,20 +339,25 @@ class OpenVikingConfigSingleton:
             config_path: Explicit path to ov.conf file.
         """
         with cls._lock:
-            if config_dict is not None:
-                cls._instance = OpenVikingConfig.from_dict(config_dict)
-            else:
-                path = resolve_config_path(config_path, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
-                if path is not None:
-                    cls._instance = cls._load_from_file(str(path))
+            cls._initializing = True
+            try:
+                if config_dict is not None:
+                    cls._instance = OpenVikingConfig.from_dict(config_dict)
                 else:
-                    default_path_user = DEFAULT_CONFIG_DIR / DEFAULT_OV_CONF
-                    default_path_system = SYSTEM_CONFIG_DIR / DEFAULT_OV_CONF
-                    raise FileNotFoundError(
-                        f"OpenViking configuration file not found.\n"
-                        f"Please create {default_path_user} or {default_path_system}, or set {OPENVIKING_CONFIG_ENV}.\n"
-                        f"See: https://openviking.ai/docs"
-                    )
+                    path = resolve_config_path(config_path, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
+                    if path is not None:
+                        cls._instance = cls._load_from_file(str(path))
+                    else:
+                        default_path_user = DEFAULT_CONFIG_DIR / DEFAULT_OV_CONF
+                        default_path_system = SYSTEM_CONFIG_DIR / DEFAULT_OV_CONF
+                        raise FileNotFoundError(
+                            f"OpenViking configuration file not found.\n"
+                            f"Please create {default_path_user} or {default_path_system}, "
+                            f"or set {OPENVIKING_CONFIG_ENV}.\n"
+                            f"See: https://openviking.ai/docs"
+                        )
+            finally:
+                cls._initializing = False
         return cls._instance
 
     @classmethod

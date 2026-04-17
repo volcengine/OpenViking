@@ -104,7 +104,7 @@ curl -X POST http://localhost:1933/api/v1/pack/import \
 OpenViking 的记忆会写入固定的目录结构中：
 
 - 用户记忆：`viking://user/{user_space}/memories/`
-- Agent 记忆：`viking://agent/{agent_space}/memories/`
+- Agent 记忆：`viking://agent/{agent_id}/memories/` 或 `viking://agent/{agent_id}/user/{user_id}/memories/`
 
 使用 OVPack 迁移记忆时，必须把 `.ovpack` 导入到对应 space 的父目录（而不是随便一个目录），否则会变成例如 `.../memories/memories/...` 的路径，OpenViking 将无法按“记忆”语义访问和使用这些文件。
 
@@ -121,8 +121,13 @@ openviking import ./exports/user-memories.ovpack viking://user/default/ --force
 ### 导出/导入 Agent 记忆（CLI）
 
 ```bash
+# isolate_agent_scope_by_user = false
 openviking export viking://agent/default/memories/ ./exports/agent-memories.ovpack
 openviking import ./exports/agent-memories.ovpack viking://agent/default/ --force
+
+# isolate_agent_scope_by_user = true
+openviking export viking://agent/default/user/alice/memories/ ./exports/agent-memories.ovpack
+openviking import ./exports/agent-memories.ovpack viking://agent/default/user/alice/ --force
 ```
 
 ### 导出/导入记忆（Python SDK）

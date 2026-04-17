@@ -182,6 +182,59 @@ Force a mid-session commit:
 const result = await memcommit({})
 ```
 
+## Memory Recall
+
+The plugin can automatically search OpenViking memories and inject relevant context into each user message before it reaches the LLM. This uses OpenCode's `experimental.chat.messages.transform` hook.
+
+> **Note**: This feature relies on an experimental OpenCode API. The hook signature or behavior may change in future OpenCode versions.
+
+### How It Works
+
+1. On every user message, the plugin extracts the latest user text
+2. Searches OpenViking using semantic search (5-second timeout)
+3. Ranks results using multi-factor scoring (base score + leaf boost + temporal boost + preference boost + lexical overlap)
+4. Deduplicates results (abstract-based for regular memories, URI-based for events/cases)
+5. Formats matching memories as a `<relevant-memories>` XML block
+6. Appends the block to the user message's text part
+
+If OpenViking is unavailable or the search times out, the message is passed through unchanged.
+
+### Recall Configuration
+
+Add an `autoRecall` block to your `openviking-config.json` to customize recall behavior:
+
+- `enabled`: `boolean` (default: `true`) — enable or disable automatic memory recall
+- `limit`: `number` (default: `6`) — maximum number of memories to inject (1–50)
+- `scoreThreshold`: `number` (default: `0.15`) — minimum relevance score for a memory to be included (0–1)
+- `maxContentChars`: `number` (default: `500`) — maximum characters per individual memory content
+- `preferAbstract`: `boolean` (default: `true`) — prefer abstract (L0) content over full (L2) content when available
+- `tokenBudget`: `number` (default: `2000`) — approximate total token budget for injected memories (100–10000, estimated at 4 chars per token)
+
+### Example Config with Recall
+
+```json
+{
+  "endpoint": "http://localhost:1933",
+  "apiKey": "",
+  "enabled": true,
+  "timeoutMs": 30000,
+  "autoCommit": {
+    "enabled": true,
+    "intervalMinutes": 10
+  },
+  "autoRecall": {
+    "enabled": true,
+    "limit": 6,
+    "scoreThreshold": 0.15,
+    "maxContentChars": 500,
+    "preferAbstract": true,
+    "tokenBudget": 2000
+  }
+}
+```
+
+To disable recall, set `"autoRecall": { "enabled": false }`.
+
 ## Notes for Reviewers
 
 - The plugin is designed to run as a first-level `*.ts` file in the OpenCode plugins directory

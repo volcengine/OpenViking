@@ -38,23 +38,20 @@ pub async fn health(
         .get("healthy")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let _status = response.get("status").and_then(|v| v.as_str());
-    let version = response.get("version").and_then(|v| v.as_str());
-    let user_id = response.get("user_id").and_then(|v| v.as_str());
 
     // For table output, print in a readable format
     if matches!(output_format, OutputFormat::Table) || matches!(output_format, OutputFormat::Json) {
         output_success(&response, output_format, compact);
     } else {
-        // Simple text output
-        print!("healthy  {}", if healthy { "true" } else { "false" });
-        if let Some(v) = version {
-            print!("  version  {}", v);
+        // Simple text output - print healthy first, then other fields line by line
+        println!("healthy  {}", if healthy { "true" } else { "false" });
+        if let Some(obj) = response.as_object() {
+            for (key, value) in obj {
+                if key != "healthy" {
+                    println!("{}  {}", key, value);
+                }
+            }
         }
-        if let Some(u) = user_id {
-            print!("  user_id  {}", u);
-        }
-        println!();
     }
 
     Ok(healthy)
