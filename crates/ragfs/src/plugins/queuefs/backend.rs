@@ -5,13 +5,14 @@
 
 use crate::core::errors::{Error, Result};
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection};
+use rusqlite::{params, types::ValueRef, Connection, Row};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::time::{Duration, UNIX_EPOCH};
 use std::time::SystemTime;
 use uuid::Uuid;
+
 
 /// A message in the queue
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,6 +87,22 @@ fn unix_secs(time: SystemTime) -> i64 {
     time.duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64
+}
+
+fn read_sqlite_text(row: &Row<'_>, idx: usize) -> rusqlite::Result<String> {
+    match row.get_ref(idx)? {
+        ValueRef::Text(bytes) => Ok(String::from_utf8_lossy(bytes).into_owned()),
+        ValueRef::Blob(bytes) => Ok(String::from_utf8_lossy(bytes).into_owned()),
+        ValueRef::Null => Ok(String::new()),
+        other => Err(rusqlite::Error::InvalidColumnType(
+            idx,
+            row.as_ref()
+                .column_name(idx)
+                .map(|s| s.to_string())
+                .unwrap_or_else(|_| format!("column_{idx}")),
+            other.data_type(),
+        )),
+    }
 }
 
 /// Queue backend trait for pluggable storage implementations
@@ -507,7 +524,7 @@ impl QueueBackend for SQLiteQueueBackend {
              WHERE queue_name = ?1 AND status = 'pending'
              ORDER BY id LIMIT 1",
             params![queue_name],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+            |row| Ok((row.get::<_, i64>(0)?, read_sqlite_text(row, 1)?)),
         );
 
         let (id, raw_data) = match row {
@@ -527,7 +544,8 @@ impl QueueBackend for SQLiteQueueBackend {
         tx.commit()
             .map_err(|e| Error::internal(format!("sqlite transaction commit error: {}", e)))?;
 
-        let stored: StoredMessage = serde_json::from_str(&raw_data)?;
+        let stored: StoredMessage =
+            serde_json::from_str(&raw_data).map_err(|e| Error::Serialization(e.to_string()))?;
         Ok(Some(stored.into_message()))
     }
 
@@ -542,7 +560,7 @@ impl QueueBackend for SQLiteQueueBackend {
              WHERE queue_name = ?1 AND status = 'pending'
              ORDER BY id LIMIT 1",
             params![queue_name],
-            |row| row.get::<_, String>(0),
+            |row| read_sqlite_text(row, 0),
         ) {
             Ok(data) => data,
             Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
@@ -803,5 +821,37 @@ mod tests {
         let recovered = reopened.dequeue("test").unwrap().unwrap();
         assert_eq!(recovered.id, msg_id);
         assert_eq!(recovered.data, b"recover me");
+    }
+
+    #[test]
+    fn test_sqlite_backend_dequeue_legacy_go_row() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("queue.db");
+        let db_path_str = db_path.to_str().unwrap().to_string();
+
+        let mut backend =
+            SQLiteQueueBackend::open(&db_path_str, SQLiteQueueOptions::default()).unwrap();
+        backend.create_queue("Semantic").unwrap();
+        drop(backend);
+
+        let conn = Connection::open(&db_path_str).unwrap();
+        conn.execute(
+            "INSERT INTO queue_messages (queue_name, message_id, data, timestamp, status)
+             VALUES (?1, ?2, ?3, ?4, 'pending')",
+            params![
+                "Semantic",
+                "legacy-msg-id",
+                r#"{"id":"legacy-msg-id","data":"{\"id\":\"semantic-inner\",\"uri\":\"viking://resources/demo\",\"context_type\":\"resource\",\"status\":\"pending\",\"timestamp\":1776411350,\"recursive\":true,\"account_id\":\"default\",\"user_id\":\"default\",\"agent_id\":\"default\",\"role\":\"root\",\"skip_vectorization\":false,\"telemetry_id\":\"tm_demo\",\"target_uri\":null,\"lifecycle_lock_handle_id\":\"lock-demo\",\"is_code_repo\":false,\"changes\":null}","timestamp":"2026-04-17T15:37:39.287855+08:00"}"#,
+                1776411459_i64,
+            ],
+        )
+        .unwrap();
+        drop(conn);
+
+        let mut reopened =
+            SQLiteQueueBackend::open(&db_path_str, SQLiteQueueOptions::default()).unwrap();
+        let msg = reopened.dequeue("Semantic").unwrap().unwrap();
+        let payload = String::from_utf8(msg.data).unwrap();
+        assert!(payload.contains("\"uri\":\"viking://resources/demo\""));
     }
 }
