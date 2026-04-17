@@ -96,9 +96,15 @@
       "help": "Completely bypass OpenViking for matching session keys. Use * within one segment and ** across segments.",
       "advanced": true
     },
+    "commitTokenThresholdRatio": {
+      "label": "Commit Threshold Ratio",
+      "placeholder": "0.38",
+      "advanced": true,
+      "help": "Preferred over Commit Token Threshold when set. Uses up to 49% of the current token budget/context window to decide when auto-commit should trigger."
+    },
     "commitTokenThreshold": {
       "label": "Commit Token Threshold",
-      "placeholder": "2000",
+      "placeholder": "20000",
       "advanced": true,
       "help": "Minimum estimated pending tokens before auto-commit triggers. Set to 0 to commit every turn."
     },
@@ -189,6 +195,9 @@
         "type": "boolean"
       },
       "recallTokenBudget": {
+        "type": "number"
+      },
+      "commitTokenThresholdRatio": {
         "type": "number"
       },
       "commitTokenThreshold": {

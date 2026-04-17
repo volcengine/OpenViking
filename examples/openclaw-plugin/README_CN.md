@@ -112,7 +112,7 @@ Session 是这套设计的主轴。当前实现里，它覆盖了“历史组装
 - 会先剥掉注入过的 `<relevant-memories>` 和元数据噪音
 - 最终把清洗后的增量内容追加到 OpenViking session
 
-之后插件会读取 session 的 `pending_tokens`。当它超过 `commitTokenThreshold` 时，会触发一次 `commit(wait=false)`：
+之后插件会读取 session 的 `pending_tokens`。如果配置了 `commitTokenThresholdRatio`，插件会优先基于当前 token budget 或模型上下文窗口计算出一个生效阈值；否则继续使用固定的 `commitTokenThreshold`。当 `pending_tokens` 超过这个生效阈值时，就会触发一次 `commit(wait=false)`：
 
 - archive 和 Phase 2 记忆抽取在服务端异步继续跑
 - 当前 turn 不会因为等待抽取而阻塞

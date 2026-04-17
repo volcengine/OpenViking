@@ -112,7 +112,7 @@ That means OpenClaw sees “compressed history summary + archive index + active 
 - it strips injected `<relevant-memories>` blocks and metadata noise before capture
 - it appends the sanitized turn text into the OpenViking session
 
-After that, the plugin checks `pending_tokens`. Once the session crosses `commitTokenThreshold`, it triggers `commit(wait=false)`:
+After that, the plugin checks `pending_tokens`. If `commitTokenThresholdRatio` is configured, the plugin first derives an effective threshold from the current token budget or model context window; otherwise it uses the fixed `commitTokenThreshold`. Once the session crosses that effective threshold, it triggers `commit(wait=false)`:
 
 - archive generation and Phase 2 memory extraction continue asynchronously on the server
 - the current turn is not blocked waiting for extraction
