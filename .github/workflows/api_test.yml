@@ -101,7 +101,7 @@ jobs:
       - name: Install build dependencies (system pip)
         run: |
           python -m pip install --upgrade pip
-          pip install "setuptools>=70.1" setuptools_scm cmake wheel
+          pip install "setuptools>=70.1" setuptools_scm cmake wheel maturin
           echo "---"
           python -c "import setuptools; print(f'setuptools version: {setuptools.__version__}')"
 
@@ -113,12 +113,13 @@ jobs:
       - name: Install build dependencies (uv pip)
         run: |
           echo "Installing build dependencies to uv environment..."
-          uv pip install setuptools setuptools_scm cmake wheel
+          uv pip install setuptools setuptools_scm cmake wheel maturin
 
       - name: Build C++ extensions
         shell: bash
         run: |
           export OV_SKIP_OV_BUILD=1
+          export OV_REQUIRE_RAGFS_BUILD=1
           mkdir -p openviking/bin
           touch openviking/bin/ov
           chmod +x openviking/bin/ov
@@ -131,6 +132,7 @@ jobs:
           fi
           
           uv run python setup.py build_ext --inplace
+          uv run python -c "from openviking.pyagfs import get_binding_client; get_binding_client()"
 
       - name: Install API test dependencies
         run: |
@@ -312,7 +314,7 @@ jobs:
           echo "Starting OpenViking Server on port $SERVER_PORT..."
           export ROOT_API_KEY=test-root-api-key
           export SERVER_PORT=$SERVER_PORT
-          nohup uv run python -m openviking.server.bootstrap > openviking-server.log 2>&1 &
+          nohup uv run python -m openviking.server.bootstrap --port "$SERVER_PORT" > openviking-server.log 2>&1 &
           echo $! > openviking-server.pid
           echo "SERVER_PID=$(cat openviking-server.pid)" >> $GITHUB_ENV
           
@@ -348,7 +350,7 @@ jobs:
           $errFile = Join-Path $PWD "openviking-server-error.log"
           $batchFile = Join-Path $PWD "start-server.bat"
           
-          $batchContent = "@echo off`r`nset ROOT_API_KEY=test-root-api-key`r`nset SERVER_PORT=$port`r`nuv run python -m openviking.server.bootstrap`r`n"
+          $batchContent = "@echo off`r`nset ROOT_API_KEY=test-root-api-key`r`nset SERVER_PORT=$port`r`nuv run python -m openviking.server.bootstrap --port $port`r`n"
           Set-Content -Path $batchFile -Value $batchContent -Encoding ASCII
           
           Write-Host "Batch file created at: $batchFile"

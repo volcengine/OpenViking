@@ -27,14 +27,14 @@ jobs:
     - name: Install dependencies
       run: uv sync --frozen --extra dev
 
-    # --- NEW STEP: Get the list of changed files ---
+    - name: Fetch base branch
+      run: git fetch origin "${{ github.base_ref }}" --depth=1
+
     - name: Get changed files
       id: files
       run: |
-        # Compare the PR head to the base branch
-        echo "changed_files=$(git diff --name-only --diff-filter=d origin/${{ github.base_ref }} HEAD | grep '\.py$' | xargs)" >> $GITHUB_OUTPUT
+        echo "changed_files=$(git diff --name-only --diff-filter=d origin/${{ github.base_ref }}...HEAD -- '*.py' | xargs)" >> $GITHUB_OUTPUT
 
-    # --- UPDATED STEPS: Use the file list ---
     - name: List files
       run: echo "The changed files are ${{ steps.files.outputs.changed_files }}"
 

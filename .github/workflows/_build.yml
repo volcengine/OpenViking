@@ -209,16 +209,13 @@ jobs:
         enable-cache: true
 
     - name: Create venv (Linux)
-      run: uv venv --python "$PYTHON_BIN"
-
-    - name: Seed pip (Linux)
-      run: uv run python -m ensurepip --upgrade
+      run: uv venv --python "$PYTHON_BIN" --seed
 
     - name: Install dependencies
       run: uv sync --frozen
 
     - name: Install build dependencies
-      run: uv pip install setuptools setuptools_scm cmake wheel build
+      run: uv pip install setuptools setuptools_scm cmake wheel build maturin
 
     - name: Resolve OpenViking version for Rust CLI (Linux)
       shell: bash
@@ -404,7 +401,7 @@ jobs:
       run: uv sync --frozen
 
     - name: Install build dependencies
-      run: uv pip install setuptools setuptools_scm cmake wheel build
+      run: uv pip install setuptools setuptools_scm cmake wheel build maturin
 
     - name: Require ragfs native artifact for wheel builds
       shell: bash
