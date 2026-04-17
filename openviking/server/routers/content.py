@@ -29,6 +29,7 @@ class ReindexRequest(BaseModel):
 
     uri: str
     regenerate: bool = False
+    recursive: bool = False
     wait: bool = True
 
 
@@ -229,7 +230,7 @@ async def reindex(
                     message=f"URI {uri} already has a reindex in progress",
                 ),
             )
-        result = await _do_reindex(service, uri, request.regenerate, _ctx)
+        result = await _do_reindex(service, uri, request.regenerate, request.recursive, _ctx)
         return Response(status="ok", result=result)
     else:
         # Async path: run in background, return task_id for polling
@@ -248,7 +249,14 @@ async def reindex(
                 ),
             )
         asyncio.create_task(
-            _background_reindex_tracked(service, uri, request.regenerate, _ctx, task.task_id)
+            _background_reindex_tracked(
+                service,
+                uri,
+                request.regenerate,
+                request.recursive,
+                _ctx,
+                task.task_id,
+            )
         )
         return Response(
             status="ok",
@@ -265,6 +273,7 @@ async def _do_reindex(
     service,
     uri: str,
     regenerate: bool,
+    recursive: bool,
     ctx: RequestContext,
 ) -> dict:
     """Execute reindex within a lock scope."""
@@ -275,15 +284,16 @@ async def _do_reindex(
 
     async with LockContext(get_lock_manager(), [path], lock_mode="point"):
         if regenerate:
-            return await service.resources.summarize([uri], ctx=ctx)
+            return await service.resources.summarize([uri], ctx=ctx, recursive=recursive)
         else:
-            return await service.resources.build_index([uri], ctx=ctx)
+            return await service.resources.build_index([uri], ctx=ctx, recursive=recursive)
 
 
 async def _background_reindex_tracked(
     service,
     uri: str,
     regenerate: bool,
+    recursive: bool,
     ctx: RequestContext,
     task_id: str,
 ) -> None:
@@ -293,7 +303,7 @@ async def _background_reindex_tracked(
     tracker = get_task_tracker()
     tracker.start(task_id)
     try:
-        result = await _do_reindex(service, uri, regenerate, ctx)
+        result = await _do_reindex(service, uri, regenerate, recursive, ctx)
         tracker.complete(task_id, {"uri": uri, **result})
         logger.info("Background reindex completed: uri=%s task=%s", uri, task_id)
     except Exception as exc:

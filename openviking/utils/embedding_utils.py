@@ -394,6 +394,7 @@ async def vectorize_file(
 async def index_resource(
     uri: str,
     ctx: RequestContext,
+    recursive: bool = False,
 ) -> None:
     """
     Build vector index for a resource directory.
@@ -406,53 +407,62 @@ async def index_resource(
     ``"resource"``.
     """
     viking_fs = get_viking_fs()
-    context_type = get_context_type_for_uri(uri)
 
-    # 1. Index Directory Metadata
-    abstract_uri = f"{uri}/.abstract.md"
-    overview_uri = f"{uri}/.overview.md"
+    async def _index_directory(directory_uri: str) -> None:
+        context_type = get_context_type_for_uri(directory_uri)
 
-    abstract = ""
-    overview = ""
+        abstract_uri = f"{directory_uri}/.abstract.md"
+        overview_uri = f"{directory_uri}/.overview.md"
 
-    if await viking_fs.exists(abstract_uri, ctx=ctx):
-        content = await viking_fs.read_file(abstract_uri, ctx=ctx)
-        if isinstance(content, bytes):
-            abstract = content.decode("utf-8")
+        abstract = ""
+        overview = ""
 
-    if await viking_fs.exists(overview_uri, ctx=ctx):
-        content = await viking_fs.read_file(overview_uri, ctx=ctx)
-        if isinstance(content, bytes):
-            overview = content.decode("utf-8")
+        if await viking_fs.exists(abstract_uri, ctx=ctx):
+            content = await viking_fs.read_file(abstract_uri, ctx=ctx)
+            if isinstance(content, bytes):
+                abstract = content.decode("utf-8")
 
-    if abstract or overview:
-        await vectorize_directory_meta(uri, abstract, overview, context_type=context_type, ctx=ctx)
+        if await viking_fs.exists(overview_uri, ctx=ctx):
+            content = await viking_fs.read_file(overview_uri, ctx=ctx)
+            if isinstance(content, bytes):
+                overview = content.decode("utf-8")
 
-    # 2. Index Files
-    try:
-        files = await viking_fs.ls(uri, ctx=ctx)
-        for file_info in files:
-            file_name = file_info["name"]
-
-            # Skip hidden files (like .abstract.md)
-            if file_name.startswith("."):
-                continue
-
-            if file_info.get("type") == "directory" or file_info.get("isDir"):
-                # TODO: Recursive indexing? For now, skip subdirectories to match previous behavior
-                continue
-
-            file_uri = file_info.get("uri") or f"{uri}/{file_name}"
-
-            # For direct indexing, we might not have summaries.
-            # We pass empty summary_dict, vectorize_file will try to read content for text files.
-            await vectorize_file(
-                file_path=file_uri,
-                summary_dict={"name": file_name},
-                parent_uri=uri,
+        if abstract or overview:
+            await vectorize_directory_meta(
+                directory_uri,
+                abstract,
+                overview,
                 context_type=context_type,
                 ctx=ctx,
             )
 
-    except Exception as e:
-        logger.error(f"Failed to scan directory {uri} for indexing: {e}")
+        try:
+            files = await viking_fs.ls(directory_uri, ctx=ctx)
+            for file_info in files:
+                file_name = file_info["name"]
+
+                # Skip hidden files and directories (like .abstract.md).
+                if file_name.startswith("."):
+                    continue
+
+                file_uri = file_info.get("uri") or f"{directory_uri}/{file_name}"
+                is_directory = file_info.get("type") == "directory" or file_info.get("isDir")
+                if is_directory:
+                    if recursive:
+                        await _index_directory(file_uri)
+                    continue
+
+                # For direct indexing, we might not have summaries.
+                # We pass empty summary_dict, vectorize_file will try to read content for text files.
+                await vectorize_file(
+                    file_path=file_uri,
+                    summary_dict={"name": file_name},
+                    parent_uri=directory_uri,
+                    context_type=context_type,
+                    ctx=ctx,
+                )
+
+        except Exception as e:
+            logger.error(f"Failed to scan directory {directory_uri} for indexing: {e}")
+
+    await _index_directory(uri)
