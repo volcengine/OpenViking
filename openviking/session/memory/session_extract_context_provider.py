@@ -19,15 +19,14 @@ from openviking.session.memory.tools import (
     get_tool,
 )
 from openviking.storage.viking_fs import VikingFS
-from openviking.telemetry import tracer
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
-logger = get_logger(__name__)
-
 if TYPE_CHECKING:
     from openviking.session.memory.memory_updater import ExtractContext
+
+logger = get_logger(__name__)
 
 
 class SessionExtractContextProvider(ExtractContextProvider):
