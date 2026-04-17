@@ -77,6 +77,7 @@ class SyncOpenViking:
         content: str | None = None,
         parts: list[dict] | None = None,
         created_at: str | None = None,
+        role_id: str | None = None,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -86,11 +87,12 @@ class SyncOpenViking:
             content: Text content (simple mode)
             parts: Parts array (full Part support: TextPart, ContextPart, ToolPart)
             created_at: Message creation time (ISO format string). If not provided, current time is used.
+            role_id: Optional explicit actor identity. Omit to let the client/server derive it.
 
         If both content and parts are provided, parts takes precedence.
         """
         return run_async(
-            self._async_client.add_message(session_id, role, content, parts, created_at)
+            self._async_client.add_message(session_id, role, content, parts, created_at, role_id)
         )
 
     def commit_session(

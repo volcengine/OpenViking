@@ -16,6 +16,7 @@ from openviking_cli.doctor import (
     check_disk,
     check_embedding,
     check_native_engine,
+    check_ollama,
     check_python,
     check_vlm,
     run_doctor,
@@ -316,6 +317,102 @@ class TestCheckVlm:
             ok, detail, fix = check_vlm()
         assert not ok
         assert "unreadable" in detail
+
+
+class TestCheckOllama:
+    def test_pass_when_config_is_missing(self):
+        with patch("openviking_cli.doctor._find_config", return_value=None):
+            ok, detail, fix = check_ollama()
+        assert ok
+        assert detail == "not configured"
+        assert fix is None
+
+    def test_pass_when_config_does_not_use_ollama(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps(
+                {
+                    "embedding": {
+                        "dense": {
+                            "provider": "openai",
+                            "model": "text-embedding-3-small",
+                        }
+                    },
+                    "vlm": {"provider": "openai", "model": "gpt-4o-mini"},
+                }
+            )
+        )
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            ok, detail, fix = check_ollama()
+        assert ok
+        assert detail == "not configured"
+        assert fix is None
+
+    def test_checks_embedding_ollama_api_base(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps(
+                {
+                    "embedding": {
+                        "dense": {
+                            "provider": "ollama",
+                            "model": "bge-m3",
+                            "api_base": "http://embedding-host:11435/v1",
+                        }
+                    }
+                }
+            )
+        )
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            with patch("openviking_cli.utils.ollama.check_ollama_running", return_value=True) as running:
+                ok, detail, fix = check_ollama()
+        running.assert_called_once_with("embedding-host", 11435)
+        assert ok
+        assert "embedding-host:11435" in detail
+        assert fix is None
+
+    def test_checks_vlm_ollama_api_base(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps(
+                {
+                    "vlm": {
+                        "provider": "litellm",
+                        "model": "ollama/llava",
+                        "api_base": "http://vlm-host:11436/v1",
+                    }
+                }
+            )
+        )
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            with patch("openviking_cli.utils.ollama.check_ollama_running", return_value=True) as running:
+                ok, detail, fix = check_ollama()
+        running.assert_called_once_with("vlm-host", 11436)
+        assert ok
+        assert "vlm-host:11436" in detail
+        assert fix is None
+
+    def test_fails_when_configured_ollama_is_unreachable(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps(
+                {
+                    "embedding": {
+                        "dense": {
+                            "provider": "ollama",
+                            "model": "bge-m3",
+                            "api_base": "http://localhost:11434/v1",
+                        }
+                    }
+                }
+            )
+        )
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            with patch("openviking_cli.utils.ollama.check_ollama_running", return_value=False):
+                ok, detail, fix = check_ollama()
+        assert not ok
+        assert "unreachable at localhost:11434" in detail
+        assert "ollama serve" in fix
 
 
 class TestCheckDisk:

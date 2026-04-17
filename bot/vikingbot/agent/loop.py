@@ -579,6 +579,7 @@ class AgentLoop:
                 message_workspace,
                 sandbox_manager=self.sandbox_manager,
                 sender_id=msg.sender_id,
+                sender_name=msg.sender_name,
                 is_group_chat=is_group_chat,
                 eval=self._eval,
             )
@@ -593,7 +594,7 @@ class AgentLoop:
                 profile_user_list=profile_user_list,
                 memory_user=memory_user,
             )
-            # logger.info(f"New messages: {messages}")
+            # logger.info(f"New messages: {json.dumps(messages, indent=4)}")
 
             # Run agent loop
             final_content, tools_used, token_usage, iteration = await self._run_agent_loop(

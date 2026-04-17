@@ -8,8 +8,9 @@ Session Extract Context Provider - 会话提取 Provider 实现
 
 import json
 import os
-from typing import Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List
 
+from openviking.core.namespace import agent_space_fragment, user_space_fragment
 from openviking.server.identity import RequestContext
 from openviking.session.memory.core import ExtractContextProvider
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
@@ -18,11 +19,13 @@ from openviking.session.memory.tools import (
     get_tool,
 )
 from openviking.storage.viking_fs import VikingFS
-from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from openviking.session.memory.memory_updater import ExtractContext
 
 
 class SessionExtractContextProvider(ExtractContextProvider):
@@ -95,7 +98,6 @@ The system automatically generates URIs based on memory_type and fields. Just pr
 
     See GenericOverviewEdit in the JSON Schema below.
         """
-
 
     def _build_conversation_message(self) -> Dict[str, Any]:
         """构建包含 Conversation History 的 user message"""
@@ -233,8 +235,8 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                 continue
 
             # Replace variables in directory path with actual user/agent space
-            user_space = ctx.user.user_space_name() if ctx and ctx.user else "default"
-            agent_space = ctx.user.agent_space_name() if ctx and ctx.user else "default"
+            user_space = user_space_fragment(ctx) if ctx and ctx.user else "default"
+            agent_space = agent_space_fragment(ctx) if ctx and ctx.user else "default"
             import jinja2
 
             env = jinja2.Environment(autoescape=False)
