@@ -13,6 +13,7 @@ from openviking.server.dependencies import get_service
 from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
+from openviking.server.permissions import require_data_read, require_data_write
 from openviking_cli.exceptions import NotFoundError
 
 router = APIRouter(prefix="/api/v1/fs", tags=["filesystem"])
@@ -31,6 +32,7 @@ async def ls(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """List directory contents."""
+    require_data_read(_ctx, operation="filesystem.ls", resource=uri)
     service = get_service()
     actual_node_limit = limit if limit is not None else node_limit
     try:
@@ -67,6 +69,7 @@ async def tree(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get directory tree."""
+    require_data_read(_ctx, operation="filesystem.tree", resource=uri)
     service = get_service()
     actual_node_limit = limit if limit is not None else node_limit
     try:
@@ -96,6 +99,7 @@ async def stat(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get resource status."""
+    require_data_read(_ctx, operation="filesystem.stat", resource=uri)
     service = get_service()
     try:
         result = await service.fs.stat(uri, ctx=_ctx)
@@ -128,6 +132,7 @@ async def mkdir(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Create directory."""
+    require_data_write(_ctx, operation="filesystem.mkdir", resource=request.uri)
     service = get_service()
     try:
         await service.fs.mkdir(request.uri, ctx=_ctx, description=request.description)
@@ -147,6 +152,7 @@ async def rm(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Remove resource."""
+    require_data_write(_ctx, operation="filesystem.rm", resource=uri)
     service = get_service()
     try:
         await service.fs.rm(uri, ctx=_ctx, recursive=recursive)
@@ -178,6 +184,7 @@ async def mv(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Move resource."""
+    require_data_write(_ctx, operation="filesystem.mv", resource=request.from_uri)
     service = get_service()
     try:
         await service.fs.mv(request.from_uri, request.to_uri, ctx=_ctx)

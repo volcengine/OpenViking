@@ -4,6 +4,7 @@
 
 import hmac
 import json
+import re
 import secrets
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -12,10 +13,21 @@ from typing import Dict, Optional
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 
-from openviking.server.identity import AccountNamespacePolicy, ResolvedIdentity, Role
+from openviking.server.identity import (
+    DEFAULT_PERMISSION_PROFILE_ID,
+    AccountNamespacePolicy,
+    EffectivePermissions,
+    NO_DATA_ACCESS_PERMISSION_PROFILE_ID,
+    PermissionProfile,
+    ResolvedIdentity,
+    Role,
+    get_builtin_permission_profiles,
+)
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import (
     AlreadyExistsError,
+    FailedPreconditionError,
+    InvalidArgumentError,
     NotFoundError,
     UnauthenticatedError,
 )
@@ -53,6 +65,7 @@ class AccountInfo:
     created_at: str
     users: Dict[str, dict] = field(default_factory=dict)
     namespace_policy: AccountNamespacePolicy = field(default_factory=AccountNamespacePolicy)
+    permission_profiles: Dict[str, PermissionProfile] = field(default_factory=dict)
 
 
 class APIKeyManager:
@@ -108,11 +121,13 @@ class APIKeyManager:
                     allow_legacy_inference=not fresh_workspace,
                 )
             )
+            permission_profiles = self._resolve_permission_profiles(settings_data)
 
             self._accounts[account_id] = AccountInfo(
                 created_at=info.get("created_at", ""),
                 users=users,
                 namespace_policy=namespace_policy,
+                permission_profiles=permission_profiles,
             )
             if should_persist_settings:
                 await self._save_settings_json(account_id, settings_data=settings_data)
@@ -195,13 +210,37 @@ class APIKeyManager:
             isolate_agent_scope_by_user=False,
         )
 
+    def _resolve_permission_profiles(self, settings_data: Optional[dict]) -> Dict[str, PermissionProfile]:
+        """Load custom account-level permission profiles from persisted settings."""
+        acl_data = settings_data.get("acl") if isinstance(settings_data, dict) else None
+        raw_profiles = acl_data.get("permission_profiles") if isinstance(acl_data, dict) else None
+        if not isinstance(raw_profiles, dict):
+            return {}
+
+        profiles: Dict[str, PermissionProfile] = {}
+        builtin_ids = set(get_builtin_permission_profiles())
+        for profile_id, profile_data in raw_profiles.items():
+            if not isinstance(profile_id, str) or not profile_id:
+                continue
+            if profile_id in builtin_ids:
+                logger.warning(
+                    "Ignoring custom permission profile %s because it collides with a built-in id",
+                    profile_id,
+                )
+                continue
+            profiles[profile_id] = PermissionProfile.from_dict(profile_id, profile_data)
+        return profiles
+
     def resolve(self, api_key: str) -> ResolvedIdentity:
         """Resolve an API key to identity. Sequential matching: root key first, then user key index."""
         if not api_key:
             raise UnauthenticatedError("Missing API Key")
 
         if hmac.compare_digest(api_key, self._root_key):
-            return ResolvedIdentity(role=Role.ROOT)
+            return ResolvedIdentity(
+                role=Role.ROOT,
+                effective_permissions=EffectivePermissions.full_access(),
+            )
 
         # Use prefix index to quickly locate candidate keys
         key_prefix = self._get_key_prefix(api_key)
@@ -211,20 +250,34 @@ class APIKeyManager:
             if entry.is_hashed:
                 # Verify hashed key
                 if self._verify_api_key(api_key, entry.key_or_hash):
+                    permission_profile, permissions = self._resolve_effective_permissions(
+                        entry.role,
+                        entry.account_id,
+                        entry.user_id,
+                    )
                     return ResolvedIdentity(
                         role=entry.role,
                         account_id=entry.account_id,
                         user_id=entry.user_id,
                         namespace_policy=self.get_account_policy(entry.account_id),
+                        permission_profile=permission_profile,
+                        effective_permissions=permissions,
                     )
             else:
                 # Verify plaintext key
                 if hmac.compare_digest(api_key, entry.key_or_hash):
+                    permission_profile, permissions = self._resolve_effective_permissions(
+                        entry.role,
+                        entry.account_id,
+                        entry.user_id,
+                    )
                     return ResolvedIdentity(
                         role=entry.role,
                         account_id=entry.account_id,
                         user_id=entry.user_id,
                         namespace_policy=self.get_account_policy(entry.account_id),
+                        permission_profile=permission_profile,
+                        effective_permissions=permissions,
                     )
 
         raise UnauthenticatedError("Invalid API Key")
@@ -259,6 +312,7 @@ class APIKeyManager:
         user_info = {
             "role": "admin",
             "key": stored_key,
+            "permission_profile": DEFAULT_PERMISSION_PROFILE_ID,
         }
         if self._encryption_enabled:
             user_info["key_prefix"] = key_prefix
@@ -267,6 +321,7 @@ class APIKeyManager:
             created_at=now,
             users={admin_user_id: user_info},
             namespace_policy=policy,
+            permission_profiles={},
         )
 
         entry = UserKeyEntry(
@@ -318,13 +373,20 @@ class APIKeyManager:
 
         await self._save_accounts_json()
 
-    async def register_user(self, account_id: str, user_id: str, role: str = "user") -> str:
+    async def register_user(
+        self,
+        account_id: str,
+        user_id: str,
+        role: str = "user",
+        permission_profile: str = DEFAULT_PERMISSION_PROFILE_ID,
+    ) -> str:
         """Register a new user in an account. Returns the user's API key."""
         account = self._accounts.get(account_id)
         if account is None:
             raise NotFoundError(account_id, "account")
         if user_id in account.users:
             raise AlreadyExistsError(user_id, "user")
+        self.get_permission_profile(account_id, permission_profile)
 
         key = self._generate_api_key()
 
@@ -340,6 +402,7 @@ class APIKeyManager:
         user_info = {
             "role": role,
             "key": stored_key,
+            "permission_profile": permission_profile,
         }
         if self._encryption_enabled:
             user_info["key_prefix"] = key_prefix
@@ -493,6 +556,7 @@ class APIKeyManager:
                     "account_id": account_id,
                     "created_at": info.created_at,
                     "user_count": len(info.users),
+                    "custom_permission_profile_count": len(info.permission_profiles),
                     **info.namespace_policy.to_dict(),
                 }
             )
@@ -518,9 +582,106 @@ class APIKeyManager:
                 {
                     "user_id": user_id,
                     "role": user_info.get("role", "user"),
+                    "permission_profile": user_info.get(
+                        "permission_profile",
+                        DEFAULT_PERMISSION_PROFILE_ID,
+                    ),
                 }
             )
         return result
+
+    def get_permission_profiles(self, account_id: str) -> list[dict]:
+        """List built-in and account custom permission profiles."""
+        account = self._accounts.get(account_id)
+        if account is None:
+            raise NotFoundError(account_id, "account")
+
+        profiles = list(get_builtin_permission_profiles().values()) + list(
+            account.permission_profiles.values()
+        )
+        profiles.sort(key=lambda profile: (not profile.builtin, profile.profile_id))
+        return [profile.to_dict() for profile in profiles]
+
+    def get_permission_profile(self, account_id: str, profile_id: str) -> PermissionProfile:
+        """Resolve a built-in or account custom permission profile."""
+        if profile_id in get_builtin_permission_profiles():
+            return get_builtin_permission_profiles()[profile_id]
+
+        account = self._accounts.get(account_id)
+        if account is None:
+            raise NotFoundError(account_id, "account")
+
+        profile = account.permission_profiles.get(profile_id)
+        if profile is None:
+            raise NotFoundError(profile_id, "permission profile")
+        return profile
+
+    async def upsert_permission_profile(
+        self,
+        account_id: str,
+        profile_id: str,
+        *,
+        permissions: EffectivePermissions,
+    ) -> PermissionProfile:
+        """Create or update a custom account permission profile."""
+        account = self._accounts.get(account_id)
+        if account is None:
+            raise NotFoundError(account_id, "account")
+
+        normalized_profile_id = self._normalize_custom_permission_profile_id(profile_id)
+        profile = PermissionProfile(
+            profile_id=normalized_profile_id,
+            permissions=permissions,
+            builtin=False,
+        )
+        account.permission_profiles[normalized_profile_id] = profile
+        await self._save_settings_json(account_id)
+        return profile
+
+    async def delete_permission_profile(self, account_id: str, profile_id: str) -> None:
+        """Delete a custom permission profile after verifying no user still references it."""
+        account = self._accounts.get(account_id)
+        if account is None:
+            raise NotFoundError(account_id, "account")
+
+        normalized_profile_id = self._normalize_custom_permission_profile_id(profile_id)
+        if normalized_profile_id not in account.permission_profiles:
+            raise NotFoundError(normalized_profile_id, "permission profile")
+
+        in_use_by = [
+            user_id
+            for user_id, user_info in account.users.items()
+            if user_info.get("permission_profile", DEFAULT_PERMISSION_PROFILE_ID)
+            == normalized_profile_id
+        ]
+        if in_use_by:
+            raise FailedPreconditionError(
+                f"Permission profile is still assigned to users: {', '.join(sorted(in_use_by))}",
+                details={
+                    "profile_id": normalized_profile_id,
+                    "user_ids": sorted(in_use_by),
+                },
+            )
+
+        del account.permission_profiles[normalized_profile_id]
+        await self._save_settings_json(account_id)
+
+    async def set_user_permission_profile(
+        self,
+        account_id: str,
+        user_id: str,
+        profile_id: str,
+    ) -> None:
+        """Assign a permission profile to a user."""
+        account = self._accounts.get(account_id)
+        if account is None:
+            raise NotFoundError(account_id, "account")
+        if user_id not in account.users:
+            raise NotFoundError(user_id, "user")
+
+        self.get_permission_profile(account_id, profile_id)
+        account.users[user_id]["permission_profile"] = profile_id
+        await self._save_users_json(account_id)
 
     def has_user(self, account_id: str, user_id: str) -> bool:
         """Return True when the account registry contains the given user."""
@@ -528,6 +689,60 @@ class APIKeyManager:
         if account is None:
             return False
         return user_id in account.users
+
+    def _resolve_effective_permissions(
+        self,
+        role: Role,
+        account_id: str,
+        user_id: str,
+    ) -> tuple[Optional[str], EffectivePermissions]:
+        """Resolve effective permissions for the authenticated identity."""
+        if role in {Role.ROOT, Role.ADMIN}:
+            account = self._accounts.get(account_id)
+            user_info = account.users.get(user_id, {}) if account is not None else {}
+            return user_info.get("permission_profile"), EffectivePermissions.full_access()
+        return self._resolve_user_permissions(account_id, user_id)
+
+    def _resolve_user_permissions(
+        self,
+        account_id: str,
+        user_id: str,
+    ) -> tuple[Optional[str], EffectivePermissions]:
+        """Resolve the stored profile assignment into effective permissions."""
+        account = self._accounts.get(account_id)
+        if account is None:
+            return None, EffectivePermissions.no_access()
+
+        user_info = account.users.get(user_id, {})
+        profile_id = user_info.get("permission_profile") or DEFAULT_PERMISSION_PROFILE_ID
+        try:
+            profile = self.get_permission_profile(account_id, profile_id)
+        except NotFoundError:
+            logger.warning(
+                "User %s in account %s references missing permission profile %s; "
+                "falling back to no_data_access",
+                user_id,
+                account_id,
+                profile_id,
+            )
+            fallback = self.get_permission_profile(account_id, NO_DATA_ACCESS_PERMISSION_PROFILE_ID)
+            return profile_id, fallback.permissions
+        return profile_id, profile.permissions
+
+    def _normalize_custom_permission_profile_id(self, profile_id: str) -> str:
+        """Validate custom profile ids and block collisions with built-ins."""
+        normalized = profile_id.strip() if isinstance(profile_id, str) else ""
+        if not normalized:
+            raise InvalidArgumentError("permission profile id must be a non-empty string.")
+        if normalized in get_builtin_permission_profiles():
+            raise InvalidArgumentError(
+                f"permission profile id '{normalized}' is reserved by a built-in profile."
+            )
+        if not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", normalized):
+            raise InvalidArgumentError(
+                "permission profile id must match [a-z][a-z0-9_-]{0,63}."
+            )
+        return normalized
 
     # ---- internal helpers ----
 
@@ -645,4 +860,11 @@ class APIKeyManager:
         path = SETTINGS_PATH_TEMPLATE.format(account_id=account_id)
         merged_settings = dict(settings_data) if isinstance(settings_data, dict) else {}
         merged_settings["namespace"] = account.namespace_policy.to_dict()
+        existing_acl = merged_settings.get("acl")
+        acl_settings = dict(existing_acl) if isinstance(existing_acl, dict) else {}
+        acl_settings["permission_profiles"] = {
+            profile_id: profile.permissions.to_dict()
+            for profile_id, profile in sorted(account.permission_profiles.items())
+        }
+        merged_settings["acl"] = acl_settings
         await self._write_json(path, merged_settings)

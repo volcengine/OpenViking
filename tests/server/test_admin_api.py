@@ -313,6 +313,61 @@ async def test_regenerate_key(admin_client: httpx.AsyncClient):
     assert resp.status_code == 200
 
 
+async def test_manage_permission_profiles_and_assign_user(admin_client: httpx.AsyncClient):
+    """ROOT can manage custom permission profiles and assign them to users."""
+    acct = _uid()
+    create_resp = await admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    assert create_resp.status_code == 200
+
+    upsert_resp = await admin_client.put(
+        f"/api/v1/admin/accounts/{acct}/permission-profiles/readonly_docs",
+        json={"data_read": True, "data_write": False},
+        headers=root_headers(),
+    )
+    assert upsert_resp.status_code == 200
+    assert upsert_resp.json()["result"] == {
+        "profile_id": "readonly_docs",
+        "builtin": False,
+        "data_read": True,
+        "data_write": False,
+    }
+
+    list_resp = await admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/permission-profiles",
+        headers=root_headers(),
+    )
+    assert list_resp.status_code == 200
+    profile_ids = {item["profile_id"] for item in list_resp.json()["result"]}
+    assert {"data_rw", "data_readonly", "no_data_access", "readonly_docs"} <= profile_ids
+
+    register_resp = await admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={"user_id": "bob", "role": "user", "permission_profile": "readonly_docs"},
+        headers=root_headers(),
+    )
+    assert register_resp.status_code == 200
+    assert register_resp.json()["result"]["permission_profile"] == "readonly_docs"
+
+    assign_resp = await admin_client.put(
+        f"/api/v1/admin/accounts/{acct}/users/bob/permission-profile",
+        json={"permission_profile": "data_readonly"},
+        headers=root_headers(),
+    )
+    assert assign_resp.status_code == 200
+    assert assign_resp.json()["result"]["permission_profile"] == "data_readonly"
+
+    users_resp = await admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/users",
+        headers=root_headers(),
+    )
+    users = {item["user_id"]: item for item in users_resp.json()["result"]}
+    assert users["bob"]["permission_profile"] == "data_readonly"
+
+
 # ---- Permission guard ----
 
 

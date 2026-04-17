@@ -7,7 +7,15 @@ import zipfile
 
 import httpx
 
+from openviking.server.auth import get_request_context
+from openviking.server.identity import (
+    READ_ONLY_PERMISSION_PROFILE_ID,
+    EffectivePermissions,
+    RequestContext,
+    Role,
+)
 from openviking.telemetry import get_current_telemetry
+from openviking_cli.session.user_id import UserIdentifier
 
 
 async def test_add_resource_success(
@@ -188,6 +196,37 @@ async def test_add_resource_file_not_found(client: httpx.AsyncClient):
     body = resp.json()
     assert body["status"] == "error"
     assert body["error"]["code"] == "PERMISSION_DENIED"
+
+
+async def test_add_resource_requires_data_write_permission(
+    client: httpx.AsyncClient,
+    app,
+    sample_markdown_file,
+    upload_temp_dir,
+):
+    app.dependency_overrides[get_request_context] = lambda: RequestContext(
+        user=UserIdentifier.the_default_user(),
+        role=Role.USER,
+        permission_profile=READ_ONLY_PERMISSION_PROFILE_ID,
+        effective_permissions=EffectivePermissions(data_read=True, data_write=False),
+    )
+    try:
+        resp = await client.post(
+            "/api/v1/resources",
+            json={
+                "temp_file_id": sample_markdown_file.name,
+                "reason": "test resource",
+                "wait": False,
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(get_request_context, None)
+
+    assert resp.status_code == 403
+    body = resp.json()
+    assert body["error"]["code"] == "PERMISSION_DENIED"
+    assert body["error"]["details"]["operation"] == "resources.add_resource"
+    assert body["error"]["details"]["required_permission"] == "data.write"
 
 
 async def test_add_resource_with_to(

@@ -20,7 +20,7 @@ from openviking.server.app import create_app
 from openviking.server.auth import get_request_context, resolve_identity
 from openviking.server.config import ServerConfig, _is_localhost, validate_server_config
 from openviking.server.dependencies import set_service
-from openviking.server.identity import ResolvedIdentity, Role
+from openviking.server.identity import EffectivePermissions, ResolvedIdentity, Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker, reset_task_tracker
@@ -546,6 +546,26 @@ async def test_root_tenant_scoped_requests_allow_explicit_identity():
     assert ctx.role == Role.ROOT
     assert ctx.user.account_id == "acme"
     assert ctx.user.user_id == "alice"
+
+
+async def test_request_context_propagates_permission_profile_and_effective_permissions():
+    """Resolved identity permission state should flow into the request context."""
+    request = _make_request("/api/v1/search/find", auth_enabled=True)
+    identity = ResolvedIdentity(
+        role=Role.USER,
+        account_id="acme",
+        user_id="alice",
+        permission_profile="readonly_docs",
+        effective_permissions=EffectivePermissions(data_read=True, data_write=False),
+    )
+
+    ctx = await get_request_context(request, identity)
+
+    assert ctx.permission_profile == "readonly_docs"
+    assert ctx.effective_permissions == EffectivePermissions(
+        data_read=True,
+        data_write=False,
+    )
 
 
 async def test_root_monitoring_requests_allow_implicit_default_identity():

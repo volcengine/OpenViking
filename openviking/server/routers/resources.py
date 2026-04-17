@@ -18,6 +18,7 @@ from openviking.server.local_input_guard import (
     resolve_uploaded_temp_file_id,
 )
 from openviking.server.models import Response
+from openviking.server.permissions import require_data_write
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import InvalidArgumentError
@@ -144,6 +145,7 @@ async def temp_upload(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Upload a temporary file for add_resource or import_ovpack."""
+    require_data_write(_ctx, operation="resources.temp_upload")
 
     async def _upload() -> dict[str, str]:
         import json
@@ -192,6 +194,11 @@ async def add_resource(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Add resource to OpenViking."""
+    require_data_write(
+        _ctx,
+        operation="resources.add_resource",
+        resource=request.to or request.parent,
+    )
     service = get_service()
     if request.to and request.parent:
         raise InvalidArgumentError("Cannot specify both 'to' and 'parent' at the same time.")
@@ -257,6 +264,7 @@ async def add_skill(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Add skill to OpenViking."""
+    require_data_write(_ctx, operation="resources.add_skill")
     service = get_service()
     upload_temp_dir = get_openviking_config().storage.get_upload_temp_dir()
     data = request.data

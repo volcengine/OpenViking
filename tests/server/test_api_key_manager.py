@@ -9,7 +9,12 @@ import pytest
 import pytest_asyncio
 
 from openviking.server.api_keys import APIKeyManager
-from openviking.server.identity import AccountNamespacePolicy, Role
+from openviking.server.identity import (
+    READ_ONLY_PERMISSION_PROFILE_ID,
+    AccountNamespacePolicy,
+    EffectivePermissions,
+    Role,
+)
 from openviking.service.core import OpenVikingService
 from openviking_cli.exceptions import AlreadyExistsError, NotFoundError, UnauthenticatedError
 from openviking_cli.session.user_id import UserIdentifier
@@ -201,6 +206,63 @@ async def test_get_users(manager: APIKeyManager):
     roles = {u["user_id"]: u["role"] for u in users}
     assert roles["alice"] == "admin"
     assert roles["bob"] == "user"
+
+
+async def test_custom_permission_profile_is_persisted_and_applied(manager_service):
+    """Custom permission profiles should persist and drive effective user permissions."""
+    acct = _uid()
+    mgr1 = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await mgr1.load()
+
+    await mgr1.create_account(acct, "alice")
+    profile = await mgr1.upsert_permission_profile(
+        acct,
+        "readonly_docs",
+        permissions=EffectivePermissions(data_read=True, data_write=False),
+    )
+    user_key = await mgr1.register_user(
+        acct,
+        "bob",
+        "user",
+        permission_profile=profile.profile_id,
+    )
+
+    identity = mgr1.resolve(user_key)
+    assert identity.permission_profile == "readonly_docs"
+    assert identity.effective_permissions == EffectivePermissions(
+        data_read=True,
+        data_write=False,
+    )
+
+    mgr2 = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await mgr2.load()
+
+    profiles = {item["profile_id"]: item for item in mgr2.get_permission_profiles(acct)}
+    assert profiles["readonly_docs"] == {
+        "profile_id": "readonly_docs",
+        "builtin": False,
+        "data_read": True,
+        "data_write": False,
+    }
+
+    reloaded_identity = mgr2.resolve(user_key)
+    assert reloaded_identity.permission_profile == "readonly_docs"
+    assert reloaded_identity.effective_permissions == EffectivePermissions(
+        data_read=True,
+        data_write=False,
+    )
+
+
+async def test_admin_profile_assignment_does_not_reduce_admin_access(manager: APIKeyManager):
+    """ADMIN semantics must remain full-access even when a restrictive profile is assigned."""
+    acct = _uid()
+    admin_key = await manager.create_account(acct, "alice")
+    await manager.set_user_permission_profile(acct, "alice", READ_ONLY_PERMISSION_PROFILE_ID)
+
+    identity = manager.resolve(admin_key)
+    assert identity.role == Role.ADMIN
+    assert identity.permission_profile == READ_ONLY_PERMISSION_PROFILE_ID
+    assert identity.effective_permissions == EffectivePermissions.full_access()
 
 
 # ---- Persistence tests ----

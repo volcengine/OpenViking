@@ -47,11 +47,16 @@ from openviking.models.embedder.vikingdb_embedders import (
     VikingDBHybridEmbedder,
     VikingDBSparseEmbedder,
 )
-from openviking.models.embedder.volcengine_embedders import (
-    VolcengineDenseEmbedder,
-    VolcengineHybridEmbedder,
-    VolcengineSparseEmbedder,
-)
+try:
+    from openviking.models.embedder.volcengine_embedders import (
+        VolcengineDenseEmbedder,
+        VolcengineHybridEmbedder,
+        VolcengineSparseEmbedder,
+    )
+except ImportError:
+    VolcengineDenseEmbedder = None  # volcenginesdkarkruntime not installed
+    VolcengineHybridEmbedder = None
+    VolcengineSparseEmbedder = None
 from openviking.models.embedder.voyage_embedders import VoyageDenseEmbedder
 
 __all__ = [
