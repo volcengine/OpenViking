@@ -188,6 +188,11 @@ def parse_args() -> argparse.Namespace:
         help="Disable SSL certificate verification (useful for self-signed certs in remote mode).",
     )
     parser.add_argument("--json-out", default="", help="Optional JSON report output path.")
+    parser.add_argument(
+        "--keep-test-data",
+        action="store_true",
+        help="Keep synthetic sessions and memories for debugging instead of cleaning them up automatically.",
+    )
     parser.add_argument("--verbose", "-v", action="store_true", help="Print extra debug information.")
     return parser.parse_args()
 
@@ -629,6 +634,18 @@ class OpenVikingInspector:
         result = extract_result(payload)
         return result if isinstance(result, dict) else None
 
+    def delete_session(self, session_id: str) -> bool:
+        payload = http_json(
+            self.base_url,
+            f"/api/v1/sessions/{urllib.parse.quote(session_id, safe='')}",
+            method="DELETE",
+            headers=self.headers(),
+            timeout=20.0,
+            insecure=self.insecure,
+        )
+        result = extract_result(payload)
+        return isinstance(result, dict)
+
     def commit(self, session_id: str) -> dict[str, Any] | None:
         payload = http_json(
             self.base_url,
@@ -670,6 +687,103 @@ class OpenVikingInspector:
             if isinstance(memories, list):
                 return [item for item in memories if isinstance(item, dict)]
         return []
+
+    def delete_uri(self, uri: str, recursive: bool = False) -> bool:
+        payload = http_json(
+            self.base_url,
+            f"/api/v1/fs?uri={urllib.parse.quote(uri, safe='')}&recursive={'true' if recursive else 'false'}",
+            method="DELETE",
+            headers=self.headers(),
+            timeout=20.0,
+            insecure=self.insecure,
+        )
+        result = extract_result(payload)
+        return isinstance(result, dict)
+
+
+def collect_cleanup_session_ids(
+    inspector: OpenVikingInspector,
+    hints: list[str],
+) -> list[str]:
+    hint_set = {item.strip() for item in hints if item and item.strip()}
+    matched = set(hint_set)
+    try:
+        sessions = inspector.list_sessions()
+    except Exception:
+        return sorted(matched)
+    for item in sessions:
+        session_id = str(item.get("session_id", "")).strip()
+        if not session_id:
+            continue
+        if any(hint in session_id for hint in hint_set):
+            matched.add(session_id)
+    return sorted(matched)
+
+
+def cleanup_healthcheck_artifacts(
+    recorder: Recorder,
+    inspector: OpenVikingInspector,
+    *,
+    generated_user_id: bool,
+    user_id: str,
+    fresh_user_id: str | None,
+    probe: str,
+    discovered_session_id: str | None,
+    keep_test_data: bool,
+) -> None:
+    if keep_test_data:
+        recorder.add("INFO", "Synthetic cleanup skipped", "--keep-test-data enabled")
+        return
+
+    if not generated_user_id:
+        recorder.add(
+            "WARN",
+            "Synthetic cleanup skipped",
+            "explicit --user-id provided; refusing to auto-delete potentially real user data",
+        )
+        return
+
+    session_hints = [user_id]
+    if fresh_user_id:
+        session_hints.append(fresh_user_id)
+    if discovered_session_id:
+        session_hints.append(discovered_session_id)
+    session_ids = collect_cleanup_session_ids(inspector, session_hints)
+
+    deleted_sessions = 0
+    session_errors: list[str] = []
+    for session_id in session_ids:
+        try:
+            if inspector.delete_session(session_id):
+                deleted_sessions += 1
+        except Exception as exc:
+            session_errors.append(f"{session_id}: {exc}")
+
+    memory_uris: set[str] = set()
+    for query in (probe, MEMORY_QUERY):
+        try:
+            for item in inspector.search_memories(query, limit=20):
+                uri = item.get("uri")
+                if isinstance(uri, str) and uri.strip():
+                    memory_uris.add(uri.strip())
+        except Exception:
+            continue
+
+    deleted_memories = 0
+    memory_errors: list[str] = []
+    for uri in sorted(memory_uris):
+        try:
+            if inspector.delete_uri(uri, recursive=False):
+                deleted_memories += 1
+        except Exception as exc:
+            memory_errors.append(f"{uri}: {exc}")
+
+    detail = f"sessions={deleted_sessions} memories={deleted_memories}"
+    if session_errors or memory_errors:
+        error_detail = "; ".join((session_errors + memory_errors)[:3])
+        recorder.add("WARN", "Synthetic cleanup completed with partial failures", f"{detail}; {error_detail}")
+    else:
+        recorder.add("PASS", "Synthetic cleanup completed", detail)
 
 
 def send_gateway_message(
@@ -777,8 +891,12 @@ def main() -> int:
         or str(os.environ.get("OPENVIKING_API_KEY", "")).strip()
     )
     agent_id = (args.agent_id or str(plugin_config.get("agentId", "")).strip() or DEFAULT_AGENT_ID)
+    generated_user_id = not bool(args.user_id)
     user_id = args.user_id or f"ov-healthcheck-{uuid.uuid4().hex[:8]}"
     probe = f"probe-{uuid.uuid4().hex[:8]}"
+    fresh_user_id: str | None = None
+    discovered_session_id: str | None = None
+    synthetic_data_created = False
     ov_log_path = openviking_log_path(ov_config)
 
     print(bold("OpenViking Plugin Healthcheck"))
@@ -858,6 +976,7 @@ def main() -> int:
             payload = send_gateway_message(gateway_url, token, user_id, message, timeout=args.chat_timeout, insecure=args.insecure)
             reply = extract_reply_text(payload)
             if reply:
+                synthetic_data_created = True
                 recorder.add("PASS", f"Chat turn {index} succeeded", f"reply_len={len(reply)}")
                 if args.verbose:
                     print(f"  reply preview: {reply[:180]}")
@@ -872,6 +991,17 @@ def main() -> int:
             time.sleep(max(0.0, args.delay))
 
     if recorder.has_failures():
+        if synthetic_data_created:
+            cleanup_healthcheck_artifacts(
+                recorder,
+                inspector,
+                generated_user_id=generated_user_id,
+                user_id=user_id,
+                fresh_user_id=fresh_user_id,
+                probe=probe,
+                discovered_session_id=discovered_session_id,
+                keep_test_data=args.keep_test_data,
+            )
         print()
         print(red("Stopping because the real conversation flow did not complete."))
         return 1
@@ -896,6 +1026,7 @@ def main() -> int:
         session_context = None
 
     if session_id:
+        discovered_session_id = session_id
         recorder.add("PASS", "Probe session located in OpenViking", session_id)
     else:
         recorder.add("FAIL", "Probe session not found in OpenViking", "afterTurn capture may be broken")
@@ -916,6 +1047,17 @@ def main() -> int:
         recorder.add("FAIL", "Failed to read OpenViking session context")
 
     if not session_id:
+        if synthetic_data_created:
+            cleanup_healthcheck_artifacts(
+                recorder,
+                inspector,
+                generated_user_id=generated_user_id,
+                user_id=user_id,
+                fresh_user_id=fresh_user_id,
+                probe=probe,
+                discovered_session_id=discovered_session_id,
+                keep_test_data=args.keep_test_data,
+            )
         print()
         print(red("Stopping because no matching OpenViking session was found."))
         return 1
@@ -1008,6 +1150,7 @@ def main() -> int:
             recall_payload = send_gateway_message(gateway_url, token, fresh_user_id, RECALL_QUESTION, timeout=args.chat_timeout, insecure=args.insecure)
             recall_reply = extract_reply_text(recall_payload)
             if recall_reply:
+                synthetic_data_created = True
                 hit_count, hits = count_keyword_hits(recall_reply, RECALL_KEYWORDS)
                 if hit_count >= 2:
                     recorder.add("PASS", "Fresh-session recall returned seeded stack facts", ",".join(hits))
@@ -1019,6 +1162,18 @@ def main() -> int:
             recorder.add("WARN", "Fresh-session recall request failed", str(exc))
     else:
         recorder.add("SKIP", "Fresh-session recall skipped", "autoRecall is disabled in plugin config")
+
+    if synthetic_data_created:
+        cleanup_healthcheck_artifacts(
+            recorder,
+            inspector,
+            generated_user_id=generated_user_id,
+            user_id=user_id,
+            fresh_user_id=fresh_user_id,
+            probe=probe,
+            discovered_session_id=discovered_session_id,
+            keep_test_data=args.keep_test_data,
+        )
 
     print()
     print(bold("Summary"))
