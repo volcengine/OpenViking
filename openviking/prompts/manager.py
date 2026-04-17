@@ -70,7 +70,10 @@ class PromptManager:
 
         Args:
             templates_dir: Directory containing YAML templates.
-                          If None, uses bundled templates.
+                          If provided explicitly, this trusted in-process override
+                          takes precedence over config-based custom template loading.
+                          If None, PromptManager uses bundled templates unless
+                          prompts.enable_custom_templates is enabled.
             enable_caching: Enable prompt template caching
         """
         self.templates_dir = self._resolve_templates_dir(templates_dir)
@@ -84,14 +87,17 @@ class PromptManager:
         if templates_dir is not None:
             return Path(templates_dir)
 
-        env_dir = os.environ.get(OPENVIKING_PROMPT_TEMPLATES_DIR_ENV)
-        if env_dir:
-            return Path(env_dir).expanduser()
-
         try:
             config = get_openviking_config()
         except FileNotFoundError:
             return cls._get_bundled_templates_dir()
+
+        if not config.prompts.enable_custom_templates:
+            return cls._get_bundled_templates_dir()
+
+        env_dir = os.environ.get(OPENVIKING_PROMPT_TEMPLATES_DIR_ENV)
+        if env_dir:
+            return Path(env_dir).expanduser()
 
         config_dir = config.prompts.templates_dir.strip()
         if config_dir:
