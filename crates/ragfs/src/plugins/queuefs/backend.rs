@@ -363,6 +363,16 @@ impl SQLiteQueueBackend {
             }
         }
 
+        // Backfill queue metadata for legacy databases that only persisted queue_messages.
+        conn.execute(
+            "INSERT OR IGNORE INTO queue_metadata (queue_name)
+             SELECT DISTINCT queue_name
+             FROM queue_messages
+             WHERE queue_name IS NOT NULL AND queue_name != ''",
+            [],
+        )
+        .map_err(|e| Error::internal(format!("sqlite migration backfill queue metadata error: {}", e)))?;
+
         Ok(())
     }
 
@@ -396,6 +406,38 @@ impl SQLiteQueueBackend {
         )
         .map_err(|e| Error::internal(format!("sqlite ensure queue error: {}", e)))?;
         Ok(())
+    }
+
+    fn queue_known(conn: &Connection, queue_name: &str) -> Result<bool> {
+        let metadata_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM queue_metadata WHERE queue_name = ?1",
+                params![queue_name],
+                |row| row.get(0),
+            )
+            .map_err(|e| Error::internal(format!("sqlite queue metadata lookup error: {}", e)))?;
+
+        if metadata_count > 0 {
+            return Ok(true);
+        }
+
+        let message_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM queue_messages WHERE queue_name = ?1",
+                params![queue_name],
+                |row| row.get(0),
+            )
+            .map_err(|e| Error::internal(format!("sqlite queue messages lookup error: {}", e)))?;
+
+        Ok(message_count > 0)
+    }
+
+    fn require_queue_exists(conn: &Connection, queue_name: &str) -> Result<()> {
+        if Self::queue_known(conn, queue_name)? {
+            Ok(())
+        } else {
+            Err(Error::NotFound(format!("queue '{}' not found", queue_name)))
+        }
     }
 }
 
@@ -449,13 +491,7 @@ impl QueueBackend for SQLiteQueueBackend {
             Ok(conn) => conn,
             Err(_) => return false,
         };
-
-        let count: rusqlite::Result<i64> = conn.query_row(
-            "SELECT COUNT(*) FROM queue_metadata WHERE queue_name = ?1",
-            params![name],
-            |row| row.get(0),
-        );
-        count.unwrap_or(0) > 0
+        Self::queue_known(&conn, name).unwrap_or(false)
     }
 
     fn list_queues(&self, prefix: &str) -> Vec<String> {
@@ -498,7 +534,7 @@ impl QueueBackend for SQLiteQueueBackend {
             .lock()
             .map_err(|e| Error::internal(format!("sqlite mutex poisoned: {}", e)))?;
 
-        Self::ensure_queue_exists(&conn, queue_name)?;
+        Self::require_queue_exists(&conn, queue_name)?;
         let stored = serde_json::to_string(&StoredMessage::from_message(&msg))?;
         conn.execute(
             "INSERT INTO queue_messages (queue_name, message_id, data, timestamp, status)
@@ -514,6 +550,8 @@ impl QueueBackend for SQLiteQueueBackend {
             .conn
             .lock()
             .map_err(|e| Error::internal(format!("sqlite mutex poisoned: {}", e)))?;
+
+        Self::require_queue_exists(&conn, queue_name)?;
 
         let tx = conn
             .transaction()
@@ -555,6 +593,8 @@ impl QueueBackend for SQLiteQueueBackend {
             .lock()
             .map_err(|e| Error::internal(format!("sqlite mutex poisoned: {}", e)))?;
 
+        Self::require_queue_exists(&conn, queue_name)?;
+
         let raw_data = match conn.query_row(
             "SELECT data FROM queue_messages
              WHERE queue_name = ?1 AND status = 'pending'
@@ -577,6 +617,8 @@ impl QueueBackend for SQLiteQueueBackend {
             .lock()
             .map_err(|e| Error::internal(format!("sqlite mutex poisoned: {}", e)))?;
 
+        Self::require_queue_exists(&conn, queue_name)?;
+
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM queue_messages
@@ -594,6 +636,8 @@ impl QueueBackend for SQLiteQueueBackend {
             .lock()
             .map_err(|e| Error::internal(format!("sqlite mutex poisoned: {}", e)))?;
 
+        Self::require_queue_exists(&conn, queue_name)?;
+
         conn.execute(
             "DELETE FROM queue_messages WHERE queue_name = ?1",
             params![queue_name],
@@ -607,6 +651,8 @@ impl QueueBackend for SQLiteQueueBackend {
             .conn
             .lock()
             .map_err(|e| Error::internal(format!("sqlite mutex poisoned: {}", e)))?;
+
+        Self::require_queue_exists(&conn, queue_name)?;
 
         let timestamp: Option<i64> = conn
             .query_row(
@@ -630,6 +676,8 @@ impl QueueBackend for SQLiteQueueBackend {
             .conn
             .lock()
             .map_err(|e| Error::internal(format!("sqlite mutex poisoned: {}", e)))?;
+
+        Self::require_queue_exists(&conn, queue_name)?;
 
         let changed = conn
             .execute(
@@ -853,5 +901,56 @@ mod tests {
         let msg = reopened.dequeue("Semantic").unwrap().unwrap();
         let payload = String::from_utf8(msg.data).unwrap();
         assert!(payload.contains("\"uri\":\"viking://resources/demo\""));
+    }
+
+    #[test]
+    fn test_sqlite_backend_backfills_queue_metadata_from_legacy_rows() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("legacy.db");
+        let db_path_str = db_path.to_str().unwrap().to_string();
+
+        let conn = Connection::open(&db_path_str).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE queue_metadata (
+                queue_name TEXT PRIMARY KEY,
+                created_at INTEGER DEFAULT (strftime('%s', 'now')),
+                last_updated INTEGER DEFAULT (strftime('%s', 'now'))
+            );
+            CREATE TABLE queue_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                queue_name TEXT NOT NULL,
+                message_id TEXT NOT NULL,
+                data TEXT NOT NULL,
+                timestamp INTEGER NOT NULL
+            );
+            INSERT INTO queue_messages (queue_name, message_id, data, timestamp)
+            VALUES ('legacy/semantic', 'legacy-id', '{"id":"legacy-id","data":"payload"}', 1776411459);
+            "#,
+        )
+        .unwrap();
+        drop(conn);
+
+        let backend =
+            SQLiteQueueBackend::open(&db_path_str, SQLiteQueueOptions::default()).unwrap();
+        assert!(backend.queue_exists("legacy/semantic"));
+        assert_eq!(backend.list_queues("legacy"), vec!["legacy/semantic"]);
+    }
+
+    #[test]
+    fn test_sqlite_backend_operations_on_nonexistent_queue() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("queue.db");
+        let mut backend =
+            SQLiteQueueBackend::open(db_path.to_str().unwrap(), SQLiteQueueOptions::default())
+                .unwrap();
+
+        assert!(backend.enqueue("nonexistent", Message::new(b"data".to_vec())).is_err());
+        assert!(backend.dequeue("nonexistent").is_err());
+        assert!(backend.peek("nonexistent").is_err());
+        assert!(backend.size("nonexistent").is_err());
+        assert!(backend.clear("nonexistent").is_err());
+        assert!(backend.get_last_enqueue_time("nonexistent").is_err());
+        assert!(backend.ack("nonexistent", "msg-id").is_err());
     }
 }
