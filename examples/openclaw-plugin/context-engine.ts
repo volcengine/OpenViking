@@ -344,7 +344,12 @@ function convertToAgentMessages(msg: { role: string; parts: unknown[] }): AgentM
     const texts = contentBlocks
       .filter((b) => b.type === "text")
       .map((b) => b.text as string);
-    result.push({ role: msg.role, content: texts.join("\n") || "" });
+    if (texts.length > 0) {
+      result.push({ role: msg.role, content: texts.join("\n") });
+    }
+    if (toolResults.length > 0) {
+      result.push(...toolResults);
+    }
   }
 
   return result;

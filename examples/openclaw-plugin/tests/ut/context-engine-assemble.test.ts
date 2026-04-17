@@ -463,4 +463,37 @@ describe("context-engine assemble()", () => {
     expect(result.estimatedTokens).toBe(roughEstimate(liveMessages));
     expect(result.systemPromptAddition).toBeUndefined();
   });
+
+  it("drops tool-only user messages instead of emitting empty content (issue #1485)", async () => {
+    const { engine } = makeEngine({
+      latest_archive_overview: "",
+      pre_archive_abstracts: [],
+      messages: [
+        {
+          id: "msg_tool_only_user",
+          role: "user",
+          created_at: "2026-04-17T00:00:00Z",
+          parts: [
+            {
+              type: "tool",
+              tool_id: "tool_abc",
+              tool_name: "bash",
+              tool_input: { command: "ls" },
+              tool_output: "file.txt",
+              tool_status: "completed",
+            },
+          ],
+        },
+      ],
+      estimatedTokens: 50,
+      stats: { ...makeStats(), activeTokens: 50 },
+    });
+
+    const result = await engine.assemble({ sessionId: "session-tool-only", messages: [] });
+
+    const emptyContentMsg = result.messages.find(
+      (m) => typeof m.content === "string" && m.content === "",
+    );
+    expect(emptyContentMsg).toBeUndefined();
+  });
 });
