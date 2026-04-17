@@ -1,8 +1,8 @@
 metadata:
   id: "compression.memory_merge_bundle"
   name: "Memory Merge Bundle"
-  description: "Merge memory and return L0/L1/L2 in one structured response"
-  version: "1.0.0"
+  description: "Merge memory and return L0/L1/L2 in one structured response, with facet guard and length limits"
+  version: "2.0.0"
   language: "en"
   category: "compression"
 
@@ -46,7 +46,7 @@ variables:
     default: "auto"
 
 template: |
-  You are merging one existing memory with one new memory update.
+  You are deciding whether to merge two memories of the same category, or skip (keep them separate).
 
   Category: {{ category }}
   Target Output Language: {{ output_language }}
@@ -61,25 +61,28 @@ template: |
   - Overview (L1): {{ new_overview }}
   - Content (L2): {{ new_content }}
 
-  Requirements:
-  - Merge into a single coherent memory.
-  - Keep non-conflicting details from existing memory.
-  - Update conflicting details to reflect the newer fact.
-  - Output language must be {{ output_language }}.
-  - Return JSON only.
+  Step 1 — Facet check:
+  - The two memories share a category, but may describe different facets (e.g. both `preferences` but
+    one is "Python code style" and the other is "food preference"). If the facets differ, output
+    `{"decision": "skip", "reason": "..."}` and do NOT merge.
+  - Only merge when both memories describe the same specific facet/topic.
 
-  Output JSON schema:
-  {
-    "decision": "merge",
-    "abstract": "one-line L0 summary",
-    "overview": "structured markdown L1 summary",
-    "content": "full merged L2 content",
-    "reason": "short reason"
-  }
+  Step 2 — Merge (same facet only):
+  - Keep the NEWER value when facts conflict; do not retain superseded details.
+  - Condense to a clean up-to-date snapshot — not an accumulating changelog.
+
+  Length limits (hard): `abstract` ≤ 80 chars, `overview` ≤ 200 chars, `content` ≤ 300 chars.
+  If a limit would be exceeded, drop older/less important details first and preserve specific
+  values (names, numbers, versions) over narrative.
+
+  Output JSON only, one of:
+  {"decision": "merge", "abstract": "...", "overview": "...", "content": "...", "reason": "..."}
+  {"decision": "skip", "reason": "..."}
 
   Constraints:
   - `abstract` must be concise and specific.
-  - `overview` and `content` must be non-empty.
+  - `overview` and `content` must be non-empty when decision is "merge".
+  - Output language must be {{ output_language }}.
   - Do not output any text outside JSON.
 
 llm_config:

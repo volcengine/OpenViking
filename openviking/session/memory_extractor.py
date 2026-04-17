@@ -474,7 +474,7 @@ class MemoryExtractor:
                 owner_space=owner_space,
             )
             logger.info(f"uri {memory_uri} abstract: {payload.abstract} content: {payload.content}")
-            memory.set_vectorize(Vectorize(text=payload.content))
+            memory.set_vectorize(Vectorize(text=payload.abstract or payload.content))
             return memory
 
         # Determine parent URI based on category
@@ -514,7 +514,7 @@ class MemoryExtractor:
             owner_space=owner_space,
         )
         logger.info(f"uri {memory_uri} abstract: {candidate.abstract} content: {candidate.content}")
-        memory.set_vectorize(Vectorize(text=candidate.content))
+        memory.set_vectorize(Vectorize(text=candidate.abstract or candidate.content))
         return memory
 
     async def _append_to_profile(
