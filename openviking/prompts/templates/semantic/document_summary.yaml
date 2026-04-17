@@ -33,6 +33,12 @@ template: |
   【File Content】
   {{ content }}
 
+  Language requirements:
+  - Write the summary in {{ output_language }}, matching the dominant natural language used in the source content
+  - Do not default to English unless the source content is predominantly English
+  - If the content mixes languages, follow the dominant human-language prose and use it consistently for the whole summary
+  - Keep unavoidable file names, code identifiers, API names, and quoted literals in their original form, but keep all explanatory prose in {{ output_language }}
+
   Output requirements:
   - Length: 60-180 words
   - Focus on the main topics and purpose of this document

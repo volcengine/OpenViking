@@ -45,6 +45,12 @@ template: |
   [Subdirectories and Their Summaries]
   {{ children_abstracts }}
 
+  Language requirements:
+  - Write the entire overview in {{ output_language }}, matching the dominant natural language used across the provided summaries and abstracts
+  - Do not default the title, section headings, navigation text, or descriptions to English unless the dominant source language is English
+  - If the inputs mix languages, follow the dominant human-language prose and use it consistently for the whole overview
+  - Keep unavoidable file names, directory names, code identifiers, API names, and code tokens in their original form, but keep all explanatory prose in {{ output_language }}
+
   Relationship rules:
   - Treat child directories as parts of the same repository unless the summaries clearly show they are independent projects.
   - Do not describe every child directory as an independent project by default.
@@ -68,6 +74,8 @@ template: |
 
   4. **Detailed Description** (H2): One H3 subsection for each file/subdirectory
      - Use the file summaries or subdirectory summaries provided above as description content
+
+  Use headings and navigation labels translated into {{ output_language }} while preserving the markdown hierarchy above.
 
   Total length: 400-800 words
 
