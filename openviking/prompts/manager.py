@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
-from jinja2 import Template
+from jinja2.sandbox import SandboxedEnvironment
 from pydantic import BaseModel, Field
 
 from openviking_cli.utils.config import (
@@ -200,8 +200,8 @@ class PromptManager:
             ):
                 variables[var_def.name] = variables[var_def.name][: var_def.max_length]
 
-        # Render template with Jinja2
-        jinja_template = Template(template.template)
+        # Render template with sandboxed Jinja2
+        jinja_template = SandboxedEnvironment(autoescape=False).from_string(template.template)
         return jinja_template.render(**variables)
 
     def _validate_variables(self, template: PromptTemplate, variables: Dict[str, Any]) -> None:

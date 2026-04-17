@@ -1842,7 +1842,7 @@ download_plugin() {
 
   # npm install
   info "$(tr "Installing plugin npm dependencies..." "正在安装插件 npm 依赖...")"
-  local npm_args="--no-audit --no-fund"
+  local npm_args="--ignore-scripts --no-audit --no-fund"
   if [[ "$RESOLVED_NPM_OMIT_DEV" == "true" ]]; then
     npm_args="--omit=dev $npm_args"
   fi
