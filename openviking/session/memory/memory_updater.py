@@ -10,11 +10,13 @@ to the storage system.
 from typing import Any, Dict, List, Optional, Tuple
 
 import jinja2
+
+from openviking.core.namespace import agent_space_fragment, user_space_fragment
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryField
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
-from openviking.session.memory.merge_op import MergeOpFactory, PatchOp
+from openviking.session.memory.merge_op import MergeOpFactory
 from openviking.session.memory.utils import (
     deserialize_full,
     flat_model_to_dict,
@@ -267,8 +269,8 @@ class MemoryUpdater:
             raise ValueError("MemoryTypeRegistry is required for URI resolution")
 
         # Get actual user/agent space from ctx
-        user_space = ctx.user.user_space_name() if ctx and ctx.user else "default"
-        agent_space = ctx.user.agent_space_name() if ctx and ctx.user else "default"
+        user_space = user_space_fragment(ctx) if ctx and ctx.user else "default"
+        agent_space = agent_space_fragment(ctx) if ctx and ctx.user else "default"
 
         # Resolve all URIs first (pass extract_context for template rendering)
         resolved_ops = resolve_all_operations(
@@ -336,8 +338,8 @@ class MemoryUpdater:
                         if schema.overview_template and schema.directory:
                             env = jinja2.Environment(autoescape=False)
                             base_dir = env.from_string(schema.directory).render(
-                                user_space=ctx.user.user_space_name(),
-                                agent_space=ctx.user.agent_space_name(),
+                                user_space=user_space,
+                                agent_space=agent_space,
                             )
                             # Check if this uri belongs to this memory type's directory
                             if dir_path.startswith(base_dir.rstrip("/")):
@@ -347,7 +349,9 @@ class MemoryUpdater:
 
             # Generate overview for each unique directory
             for directory, memory_type in dir_to_memory_type.items():
-                logger.info(f"[apply_operations] Generating overview for {memory_type} at {directory}")
+                logger.info(
+                    f"[apply_operations] Generating overview for {memory_type} at {directory}"
+                )
                 await self.generate_overview(memory_type, directory, ctx, extract_context)
 
         return result
@@ -563,13 +567,17 @@ class MemoryUpdater:
         """
         from openviking.session.memory.utils.messages import parse_memory_file_with_fields
 
-        tracer.info(f"[generate_overview] Called with memory_type={memory_type}, directory={directory}")
+        tracer.info(
+            f"[generate_overview] Called with memory_type={memory_type}, directory={directory}"
+        )
 
         # Get the schema for this memory type
         registry = self._registry
         tracer.info(f"[generate_overview] registry={registry}")
         schema = registry.get(memory_type)
-        tracer.info(f"[generate_overview] schema={schema}, overview_template={schema.overview_template if schema else None}")
+        tracer.info(
+            f"[generate_overview] schema={schema}, overview_template={schema.overview_template if schema else None}"
+        )
         if not schema or not schema.overview_template:
             logger.debug(f"No overview_template for memory type: {memory_type}")
             return
@@ -587,7 +595,11 @@ class MemoryUpdater:
             base_uri = directory.rstrip("/")
             for entry in entries:
                 name = entry.get("name", "")
-                if name.endswith(".md") and not name.endswith(".overview.md") and not name.endswith(".abstract.md"):
+                if (
+                    name.endswith(".md")
+                    and not name.endswith(".overview.md")
+                    and not name.endswith(".abstract.md")
+                ):
                     md_files.append(f"{base_uri}/{name}")
 
             tracer.info(f"[generate_overview] Filtered md_files: {md_files}")
@@ -617,15 +629,19 @@ class MemoryUpdater:
             try:
                 content = await viking_fs.read_file(file_path, ctx=ctx)
                 parsed = parse_memory_file_with_fields(content)
-                tracer.info(f"[generate_overview] Parsed {file_path}: {parsed.keys() if parsed else None}")
+                tracer.info(
+                    f"[generate_overview] Parsed {file_path}: {parsed.keys() if parsed else None}"
+                )
 
                 # Extract filename from path
                 filename = file_path.split("/")[-1]
 
-                items.append({
-                    "file_name": filename,
-                    "file_content": parsed,
-                })
+                items.append(
+                    {
+                        "file_name": filename,
+                        "file_content": parsed,
+                    }
+                )
             except Exception as e:
                 logger.warning(f"Failed to parse {file_path}: {e}")
                 continue

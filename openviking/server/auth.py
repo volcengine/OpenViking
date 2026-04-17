@@ -116,10 +116,30 @@ async def resolve_identity(
         raise UnauthenticatedError("Missing API Key when resolving identity.")
 
     identity = api_key_manager.resolve(api_key)
-    identity.agent_id = x_openviking_agent or "default"
     if identity.role == Role.ROOT:
         identity.account_id = x_openviking_account or identity.account_id or "default"
         identity.user_id = x_openviking_user or identity.user_id or "default"
+        identity.agent_id = x_openviking_agent or identity.agent_id or "default"
+        return identity
+
+    identity.account_id = identity.account_id or "default"
+    if x_openviking_account and x_openviking_account != identity.account_id:
+        raise PermissionDeniedError(
+            "X-OpenViking-Account cannot override the account for ADMIN/USER API keys."
+        )
+
+    if identity.role == Role.ADMIN:
+        identity.user_id = x_openviking_user or identity.user_id or "default"
+        identity.agent_id = x_openviking_agent or identity.agent_id or "default"
+        return identity
+
+    identity.user_id = identity.user_id or "default"
+    if x_openviking_user and x_openviking_user != identity.user_id:
+        raise PermissionDeniedError(
+            "USER API keys cannot override X-OpenViking-User; the effective user is derived "
+            "from the key."
+        )
+    identity.agent_id = x_openviking_agent or identity.agent_id or "default"
     return identity
 
 
@@ -157,6 +177,11 @@ async def get_request_context(
             identity.agent_id or "default",
         ),
         role=identity.role,
+        namespace_policy=(
+            api_key_manager.get_account_policy(identity.account_id)
+            if api_key_manager is not None
+            else identity.namespace_policy
+        ),
     )
     request.state.metric_account_id = ctx.account_id
     set_metric_account_context(account_id=ctx.account_id)

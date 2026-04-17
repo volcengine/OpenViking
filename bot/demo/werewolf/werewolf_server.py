@@ -185,7 +185,7 @@ def extract_content_without_mentions(content: str) -> str:
 def is_waiting_like_reply(content: str) -> bool:
     """Check whether god reply is an initialization/paused-state reply."""
     text = str(content or "")
-    waiting_markers = ["初始化完成", "等待开始", "等待指令", "等待继续"]
+    waiting_markers = ["初始化完成", "初始化已完成", "等待开始", "等待指令", "等待继续",'等待"开始"指令']
     return any(marker in text for marker in waiting_markers)
 
 
@@ -265,6 +265,136 @@ def is_game_ended_from_record(game_record_path: Path) -> tuple[bool, str]:
         return True, record["game_result"]
 
     return False, None
+
+
+def normalize_leaderboard_game_result(game_result: Any) -> str:
+    result = str(game_result or "").strip()
+    if not result:
+        return ""
+    if "狼人胜利" in result:
+        return "狼人胜利"
+    if "好人胜利" in result or "平民胜利" in result or ("狼人" in result and "死亡" in result):
+        return "好人胜利"
+    return result
+
+
+def is_wolf_role_for_leaderboard(role: Any) -> bool:
+    role_str = str(role or "").strip()
+    return role_str in {"Werewolf", "WhiteWolfKing", "WolfCub", "WolfBeauty", "狼人", "白狼王", "狼美人", "狼崽"}
+
+
+def is_dead_status_for_leaderboard(status: Any) -> bool:
+    status_str = str(status or "")
+    return any(token in status_str for token in ("死亡", "出局", "淘汰"))
+
+
+def build_leaderboard_game_from_record(parsed_record: Dict[str, Any], *, session_id: str, game_mode: str) -> Dict[str, Any]:
+    winner = normalize_leaderboard_game_result(parsed_record.get("game_result"))
+    players = []
+    for player in parsed_record.get("players", []):
+        role = player.get("role", "")
+        dead = is_dead_status_for_leaderboard(player.get("status", ""))
+        won = (winner == "狼人胜利" and is_wolf_role_for_leaderboard(role)) or (winner == "好人胜利" and not is_wolf_role_for_leaderboard(role))
+        score = (2 if won else 0) + (1 if not dead else 0)
+        players.append({
+            "id": player.get("id", ""),
+            "role": role,
+            "won": won,
+            "dead": dead,
+            "score": score,
+        })
+
+    return {
+        "session_id": session_id,
+        "game_mode": game_mode,
+        "winner": winner,
+        "players": players,
+    }
+
+
+def get_leaderboard_path(storage_path: Path) -> Path:
+    leaderboard_dir = storage_path / "bot" / "workspace" / "werewolf"
+    leaderboard_dir.mkdir(parents=True, exist_ok=True)
+    return leaderboard_dir / "LEADERBOARD.json"
+
+
+def load_leaderboard(storage_path: Path) -> Dict[str, Any]:
+    leaderboard_path = get_leaderboard_path(storage_path)
+    if leaderboard_path.exists():
+        try:
+            return json.loads(leaderboard_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {"games": [], "players": {}}
+
+
+def save_leaderboard(storage_path: Path, data: Dict[str, Any]):
+    leaderboard_path = get_leaderboard_path(storage_path)
+    leaderboard_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def save_game_to_leaderboard_from_record(
+    *,
+    storage_path: Path,
+    session_id: str,
+    game_mode: str,
+) -> Dict[str, Any]:
+    if str(game_mode or "") == "human_player":
+        return {"success": True, "skipped": True, "reason": "human_player games are excluded from leaderboard"}
+
+    if not session_id:
+        return {"success": False, "error": "missing_session_id"}
+
+    god_record_path = storage_path / "bot" / "workspace" / "bot_api__god" / "GAME_RECORD.md"
+    parsed_record = parse_game_record(god_record_path)
+    if parsed_record.get("game_status") != "游戏结束":
+        return {"success": False, "error": "game_record_not_finished"}
+
+    game_data = build_leaderboard_game_from_record(
+        parsed_record,
+        session_id=session_id,
+        game_mode=game_mode,
+    )
+    if not game_data.get("winner"):
+        return {"success": False, "error": "missing_game_result"}
+    if not game_data.get("players"):
+        return {"success": False, "error": "missing_players"}
+
+    leaderboard = load_leaderboard(storage_path)
+    if any(str(game.get("session_id") or "") == session_id for game in leaderboard.get("games", [])):
+        return {"success": True, "skipped": True, "reason": "already_saved", "leaderboard": leaderboard}
+
+    leaderboard["games"].append({
+        "session_id": session_id,
+        "timestamp": time.time(),
+        "winner": game_data.get("winner", ""),
+        "players": game_data.get("players", []),
+    })
+
+    for player in game_data.get("players", []):
+        player_id = player.get("id", "")
+        if not player_id:
+            continue
+        if player_id not in leaderboard["players"]:
+            leaderboard["players"][player_id] = {
+                "id": player_id,
+                "games_played": 0,
+                "games_won": 0,
+                "total_score": 0,
+                "roles": {},
+            }
+        player_stats = leaderboard["players"][player_id]
+        player_stats["games_played"] += 1
+        if player.get("won", False):
+            player_stats["games_won"] += 1
+        player_stats["total_score"] += player.get("score", 0)
+        role = player.get("role", "未知")
+        if role not in player_stats["roles"]:
+            player_stats["roles"][role] = 0
+        player_stats["roles"][role] += 1
+
+    save_leaderboard(storage_path, leaderboard)
+    return {"success": True, "leaderboard": leaderboard}
 
 
 # ============================================================================
@@ -1069,6 +1199,19 @@ async def message_router_loop(
                     save_conversation_to_file(state.storage_path, state.session_id, state.messages)
                     archive_replay_state(state.storage_path, state.channels, state.session_id, force=True)
 
+                leaderboard_result = save_game_to_leaderboard_from_record(
+                    storage_path=state.storage_path,
+                    session_id=state.session_id,
+                    game_mode=state.game_mode,
+                )
+                if leaderboard_result.get("success"):
+                    if leaderboard_result.get("skipped"):
+                        logger.info(f"Leaderboard save skipped: {leaderboard_result.get('reason', 'unknown')}")
+                    else:
+                        logger.info("Leaderboard saved from authoritative GAME_RECORD.md")
+                else:
+                    logger.warning(f"Failed to save leaderboard from GAME_RECORD.md: {leaderboard_result.get('error', 'unknown')}")
+
                 try:
                     await send_to_channel(
                         vikingbot_url=state.vikingbot_url,
@@ -1739,80 +1882,21 @@ def create_fastapi_app(state: GameState) -> FastAPI:
         except Exception as e:
             return JSONResponse(content={"error": str(e)}, status_code=500)
 
-    def get_leaderboard_path() -> Path:
-        """Get the path to the leaderboard file."""
-        leaderboard_dir = state.storage_path / "bot" / "workspace" / "werewolf"
-        leaderboard_dir.mkdir(parents=True, exist_ok=True)
-        return leaderboard_dir / "LEADERBOARD.json"
-
-    def load_leaderboard() -> Dict[str, Any]:
-        """Load leaderboard data from file."""
-        leaderboard_path = get_leaderboard_path()
-        if leaderboard_path.exists():
-            try:
-                return json.loads(leaderboard_path.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-        return {"games": [], "players": {}}
-
-    def save_leaderboard(data: Dict[str, Any]):
-        """Save leaderboard data to file."""
-        leaderboard_path = get_leaderboard_path()
-        leaderboard_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-
     @fastapi_app.get("/api/leaderboard")
     async def get_leaderboard():
         """Get leaderboard data."""
-        return JSONResponse(content=load_leaderboard())
+        return JSONResponse(content=load_leaderboard(state.storage_path))
 
     @fastapi_app.post("/api/leaderboard/save")
     async def save_game_to_leaderboard(game_data: Dict[str, Any]):
-        """Save a completed game to leaderboard."""
-        if str(game_data.get("game_mode") or "") == "human_player":
-            return JSONResponse(content={"success": True, "skipped": True, "reason": "human_player games are excluded from leaderboard"})
-
-        leaderboard = load_leaderboard()
-
-        # Add game record
-        game_record = {
-            "session_id": game_data.get("session_id", state.session_id),
-            "timestamp": time.time(),
-            "winner": game_data.get("winner", ""),
-            "players": game_data.get("players", [])
-        }
-        leaderboard["games"].append(game_record)
-
-        # Update player stats
-        players_data = game_data.get("players", [])
-        for player in players_data:
-            player_id = player.get("id", "")
-            if not player_id:
-                continue
-
-            if player_id not in leaderboard["players"]:
-                leaderboard["players"][player_id] = {
-                    "id": player_id,
-                    "games_played": 0,
-                    "games_won": 0,
-                    "total_score": 0,
-                    "roles": {}
-                }
-
-            player_stats = leaderboard["players"][player_id]
-            player_stats["games_played"] += 1
-
-            if player.get("won", False):
-                player_stats["games_won"] += 1
-
-            player_stats["total_score"] += player.get("score", 0)
-
-            role = player.get("role", "未知")
-            if role not in player_stats["roles"]:
-                player_stats["roles"][role] = 0
-            player_stats["roles"][role] += 1
-
-        save_leaderboard(leaderboard)
-        return JSONResponse(content={"success": True, "leaderboard": leaderboard})
+        """Save a completed game to leaderboard using authoritative GAME_RECORD.md data."""
+        result = save_game_to_leaderboard_from_record(
+            storage_path=state.storage_path,
+            session_id=str(game_data.get("session_id") or state.session_id or ""),
+            game_mode=str(game_data.get("game_mode") or state.game_mode or ""),
+        )
+        status_code = 200 if result.get("success") else 400
+        return JSONResponse(content=result, status_code=status_code)
 
     def scan_directory_tree(root_path: Path, relative_path: str) -> List[Dict[str, Any]]:
         """Recursively scan a directory and build a tree structure."""

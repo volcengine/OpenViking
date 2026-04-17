@@ -9,13 +9,44 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+from fastapi import FastAPI
+from starlette.requests import Request
 
 from openviking.message import Message
+from openviking.server.api_keys import APIKeyManager
+from openviking.server.config import ServerConfig
 from openviking.server.identity import RequestContext, Role
+from openviking.server.routers import sessions as sessions_router
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 from tests.utils.mock_agfs import MockLocalAGFS
+
+DEFAULT_USER = UserIdentifier.the_default_user()
+TEST_ROOT_KEY = "root-secret-key-for-session-tests"
+_UNSET = object()
+
+
+def _message_request(
+    role: str,
+    *,
+    content: str | None = None,
+    parts: list[dict] | None = None,
+    role_id: object = _UNSET,
+) -> dict:
+    payload = {"role": role}
+    if content is not None:
+        payload["content"] = content
+    if parts is not None:
+        payload["parts"] = parts
+    if role_id is _UNSET and role == "user":
+        payload["role_id"] = DEFAULT_USER.user_id
+    elif role_id is _UNSET and role == "assistant":
+        payload["role_id"] = DEFAULT_USER.agent_id
+    elif role_id is not None:
+        payload["role_id"] = role_id
+    return payload
 
 
 @pytest.fixture(autouse=True)
@@ -65,6 +96,45 @@ async def _wait_for_task(client: httpx.AsyncClient, task_id: str, timeout: float
     raise TimeoutError(f"Task {task_id} did not complete within {timeout}s")
 
 
+def _session_route_request(
+    *,
+    auth_mode: str = "api_key",
+    api_key_manager=None,
+) -> Request:
+    app = FastAPI()
+    app.state.config = ServerConfig(auth_mode=auth_mode)
+    app.state.api_key_manager = api_key_manager
+    scope = {
+        "type": "http",
+        "path": "/api/v1/sessions/test-session/messages",
+        "headers": [],
+        "app": app,
+    }
+    return Request(scope)
+
+
+async def _call_add_message_route(
+    service,
+    monkeypatch,
+    *,
+    ctx: RequestContext,
+    payload: dict,
+    auth_mode: str = "api_key",
+    api_key_manager=None,
+    session_id: str = "test-session",
+):
+    monkeypatch.setattr(sessions_router, "get_service", lambda: service)
+    return await sessions_router.add_message(
+        request=sessions_router.AddMessageRequest.model_validate(payload),
+        http_request=_session_route_request(
+            auth_mode=auth_mode,
+            api_key_manager=api_key_manager,
+        ),
+        session_id=session_id,
+        _ctx=ctx,
+    )
+
+
 async def test_create_session(client: httpx.AsyncClient):
     resp = await client.post("/api/v1/sessions", json={})
     assert resp.status_code == 200
@@ -100,7 +170,7 @@ async def test_get_session_context(client: httpx.AsyncClient):
 
     await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={"role": "user", "content": "Current live message"},
+        json=_message_request("user", content="Current live message"),
     )
 
     resp = await client.get(f"/api/v1/sessions/{session_id}/context")
@@ -120,7 +190,7 @@ async def test_get_session_context_includes_incomplete_archive_messages(
 
     await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={"role": "user", "content": "Archived seed"},
+        json=_message_request("user", content="Archived seed"),
     )
     commit_resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
     assert commit_resp.status_code == 200
@@ -129,8 +199,11 @@ async def test_get_session_context_includes_incomplete_archive_messages(
     session = service.sessions.session(ctx, session_id)
     await session.load()
     pending_messages = [
-        Message.create_user("Pending user message"),
-        Message.create_assistant("Pending assistant response"),
+        Message.create_user("Pending user message", role_id=DEFAULT_USER.user_id),
+        Message.create_assistant(
+            "Pending assistant response",
+            role_id=DEFAULT_USER.agent_id,
+        ),
     ]
     await session._viking_fs.write_file(
         uri=f"{session.uri}/history/archive_002/messages.jsonl",
@@ -140,7 +213,7 @@ async def test_get_session_context_includes_incomplete_archive_messages(
 
     await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={"role": "user", "content": "Current live message"},
+        json=_message_request("user", content="Current live message"),
     )
 
     resp = await client.get(f"/api/v1/sessions/{session_id}/context")
@@ -159,12 +232,139 @@ async def test_add_message(client: httpx.AsyncClient):
 
     resp = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={"role": "user", "content": "Hello, world!"},
+        json=_message_request("user", content="Hello, world!"),
     )
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"]["message_count"] == 1
+
+
+async def test_add_message_root_request_autofills_role_id(service, monkeypatch):
+    session_id = "root-auto-fill"
+    ctx = RequestContext(user=DEFAULT_USER, role=Role.ROOT)
+
+    response = await _call_add_message_route(
+        service,
+        monkeypatch,
+        ctx=ctx,
+        payload=_message_request("user", content="hello root", role_id=None),
+        session_id=session_id,
+    )
+
+    assert response.result["message_count"] == 1
+    session = await service.sessions.get(session_id, ctx, auto_create=False)
+    await session.load()
+    assert session.messages[-1].role_id == DEFAULT_USER.user_id
+
+
+async def test_add_message_trusted_request_allows_explicit_role_id(service, monkeypatch):
+    session_id = "trusted-explicit-role-id"
+    ctx = RequestContext(
+        user=UserIdentifier("acct_trusted", "caller", "assistant-a"),
+        role=Role.USER,
+    )
+
+    response = await _call_add_message_route(
+        service,
+        monkeypatch,
+        ctx=ctx,
+        payload=_message_request("assistant", content="hello trusted", role_id="assistant-b"),
+        auth_mode="trusted",
+        session_id=session_id,
+    )
+
+    assert response.result["message_count"] == 1
+    session = await service.sessions.get(session_id, ctx, auto_create=False)
+    await session.load()
+    assert session.messages[-1].role_id == "assistant-b"
+
+
+async def test_add_message_admin_request_allows_registered_user_role_id(service, monkeypatch):
+    manager = APIKeyManager(root_key=TEST_ROOT_KEY, viking_fs=service.viking_fs)
+    await manager.load()
+    account_id = "acct_session_admin"
+    await manager.create_account(account_id, "admin_user")
+    await manager.register_user(account_id, "alice")
+
+    ctx = RequestContext(
+        user=UserIdentifier(account_id, "admin_user", "assistant-admin"),
+        role=Role.ADMIN,
+    )
+    session_id = "admin-explicit-role-id"
+
+    response = await _call_add_message_route(
+        service,
+        monkeypatch,
+        ctx=ctx,
+        payload=_message_request("user", content="hello admin", role_id="alice"),
+        api_key_manager=manager,
+        session_id=session_id,
+    )
+
+    assert response.result["message_count"] == 1
+    session = await service.sessions.get(session_id, ctx, auto_create=False)
+    await session.load()
+    assert session.messages[-1].role_id == "alice"
+
+
+async def test_add_message_user_request_rejects_explicit_role_id(service, monkeypatch):
+    ctx = RequestContext(
+        user=UserIdentifier("acct_session_user", "alice", "assistant-user"),
+        role=Role.USER,
+    )
+
+    with pytest.raises(InvalidArgumentError, match="cannot explicitly set role_id"):
+        await _call_add_message_route(
+            service,
+            monkeypatch,
+            ctx=ctx,
+            payload=_message_request("user", content="hello user", role_id="alice"),
+            session_id="user-explicit-role-id",
+        )
+
+
+async def test_add_message_user_request_autofills_role_id(service, monkeypatch):
+    session_id = "user-auto-fill-role-id"
+    ctx = RequestContext(
+        user=UserIdentifier("acct_session_user", "alice", "assistant-user"),
+        role=Role.USER,
+    )
+
+    response = await _call_add_message_route(
+        service,
+        monkeypatch,
+        ctx=ctx,
+        payload=_message_request("assistant", content="hello user", role_id=None),
+        session_id=session_id,
+    )
+
+    assert response.result["message_count"] == 1
+    session = await service.sessions.get(session_id, ctx, auto_create=False)
+    await session.load()
+    assert session.messages[-1].role_id == "assistant-user"
+
+
+async def test_add_message_rejects_unregistered_user_role_id(service, monkeypatch):
+    manager = APIKeyManager(root_key=TEST_ROOT_KEY, viking_fs=service.viking_fs)
+    await manager.load()
+    account_id = "acct_session_invalid"
+    await manager.create_account(account_id, "admin_user")
+
+    ctx = RequestContext(
+        user=UserIdentifier(account_id, "admin_user", "assistant-admin"),
+        role=Role.ADMIN,
+    )
+
+    with pytest.raises(InvalidArgumentError, match="not a registered user"):
+        await _call_add_message_route(
+            service,
+            monkeypatch,
+            ctx=ctx,
+            payload=_message_request("user", content="hello invalid", role_id="ghost"),
+            api_key_manager=manager,
+            session_id="invalid-user-role-id",
+        )
 
 
 async def test_add_multiple_messages(client: httpx.AsyncClient):
@@ -175,19 +375,19 @@ async def test_add_multiple_messages(client: httpx.AsyncClient):
     # the accumulated count (messages are loaded from storage each time)
     resp1 = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={"role": "user", "content": "Message 0"},
+        json=_message_request("user", content="Message 0"),
     )
     assert resp1.json()["result"]["message_count"] >= 1
 
     resp2 = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={"role": "user", "content": "Message 1"},
+        json=_message_request("user", content="Message 1"),
     )
     count2 = resp2.json()["result"]["message_count"]
 
     resp3 = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={"role": "user", "content": "Message 2"},
+        json=_message_request("user", content="Message 2"),
     )
     count3 = resp3.json()["result"]["message_count"]
 
@@ -202,14 +402,14 @@ async def test_add_message_persistence_regression(client: httpx.AsyncClient, ser
 
     resp1 = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={"role": "user", "content": "Message A"},
+        json=_message_request("user", content="Message A"),
     )
     assert resp1.status_code == 200
     assert resp1.json()["result"]["message_count"] == 1
 
     resp2 = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={"role": "user", "content": "Message B"},
+        json=_message_request("user", content="Message B"),
     )
     assert resp2.status_code == 200
     assert resp2.json()["result"]["message_count"] == 2
@@ -235,7 +435,7 @@ async def test_delete_session(client: httpx.AsyncClient):
     # Add a message so the session file exists in storage
     await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={"role": "user", "content": "ensure persisted"},
+        json=_message_request("user", content="ensure persisted"),
     )
     # Compress to persist
     await client.post(f"/api/v1/sessions/{session_id}/commit")
@@ -252,7 +452,7 @@ async def test_compress_session(client: httpx.AsyncClient):
     # Add some messages before committing
     await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={"role": "user", "content": "Hello"},
+        json=_message_request("user", content="Hello"),
     )
 
     # Default wait=False: returns accepted with task_id
@@ -300,7 +500,7 @@ async def test_get_session_context_endpoint_returns_trimmed_latest_archive_and_m
 
     await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={"role": "user", "content": "archived message"},
+        json=_message_request("user", content="archived message"),
     )
     commit_resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
     task_id = commit_resp.json()["result"]["task_id"]
@@ -308,9 +508,9 @@ async def test_get_session_context_endpoint_returns_trimmed_latest_archive_and_m
 
     await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={
-            "role": "assistant",
-            "parts": [
+        json=_message_request(
+            "assistant",
+            parts=[
                 {"type": "text", "text": "Running tool"},
                 {
                     "type": "tool",
@@ -321,7 +521,7 @@ async def test_get_session_context_endpoint_returns_trimmed_latest_archive_and_m
                     "tool_status": "running",
                 },
             ],
-        },
+        ),
     )
 
     resp = await client.get(f"/api/v1/sessions/{session_id}/context?token_budget=1")
@@ -350,11 +550,11 @@ async def test_get_session_archive_endpoint_returns_archive_details(client: http
 
     await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={"role": "user", "content": "archived question"},
+        json=_message_request("user", content="archived question"),
     )
     await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={"role": "assistant", "content": "archived answer"},
+        json=_message_request("assistant", content="archived answer"),
     )
     commit_resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
     task_id = commit_resp.json()["result"]["task_id"]
@@ -388,7 +588,7 @@ async def test_commit_endpoint_rejects_after_failed_archive(
 
     await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={"role": "user", "content": "first round"},
+        json=_message_request("user", content="first round"),
     )
     commit_resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
     task_id = commit_resp.json()["result"]["task_id"]
@@ -397,7 +597,7 @@ async def test_commit_endpoint_rejects_after_failed_archive(
 
     await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={"role": "user", "content": "second round"},
+        json=_message_request("user", content="second round"),
     )
     resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
 

@@ -83,7 +83,8 @@ def create_app(
             await api_key_manager.load()
             app.state.api_key_manager = api_key_manager
             logger.info(
-                "APIKeyManager initialized with encryption_enabled=%s", config.encryption_enabled
+                "APIKeyManager initialized with encryption_enabled=%s",
+                config.encryption_enabled,
             )
         elif config.auth_mode == "trusted":
             app.state.api_key_manager = None
