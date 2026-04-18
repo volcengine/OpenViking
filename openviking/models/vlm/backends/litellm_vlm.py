@@ -234,6 +234,20 @@ class LiteLLMVLMProvider(VLMBase):
             extra["enable_thinking"] = thinking
             kwargs["extra_body"] = extra
 
+        # Workaround for LiteLLM bug where Gemini context-caching path emits
+        # both `cachedContent` and `toolConfig`, which Gemini rejects with a
+        # 400 "CachedContent can not be used with GenerateContent request
+        # setting system_instruction, tools or tool_config".
+        # See BerriAI/litellm#17304 and PR #25659. Remove when LiteLLM ships
+        # the fix.
+        if provider == "gemini" and tools:
+            kwargs["messages"] = [
+                {k: v for k, v in msg.items() if k != "cache_control"}
+                if isinstance(msg, dict)
+                else msg
+                for msg in messages
+            ]
+
         return kwargs
 
     def _parse_tool_calls(self, message) -> List[ToolCall]:
