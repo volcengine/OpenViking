@@ -65,7 +65,7 @@ async def test_memory_replace_preserves_metadata(service):
         "updated_at": "2026-04-01T10:05:00",
         "fields": {"topic": "theme"},
     }
-    full_content = serialize_with_metadata("Original preference", metadata)
+    full_content = serialize_with_metadata({**metadata, "content": "Original preference"})
     _, expected_metadata = deserialize_full(full_content)
     await service.viking_fs.write_file(memory_uri, full_content, ctx=ctx)
 
