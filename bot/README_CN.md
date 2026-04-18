@@ -224,6 +224,47 @@ Vikingbot 提供 7 个专用的 OpenViking 工具：
 | `openviking_glob` | 使用 glob 模式匹配 OpenViking 资源 |
 | `openviking_memory_commit` | 提交session到Openviking|
 
+### 外部 MCP 服务器
+
+Vikingbot 还可以接入第三方 [MCP（Model Context Protocol）](https://modelcontextprotocol.io/) 服务器的工具（文件系统、GitHub、浏览器、数据库等）。在 `ov.conf` 的 `tools.mcp_servers` 下配置即可，每个服务器的工具会在代理启动时注册，名称前缀为 `mcp_<服务器>_<工具>`。
+
+```json
+{
+  "bot": {
+    "tools": {
+      "mcp_servers": {
+        "filesystem": {
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+          "env": {},
+          "tool_timeout": 30,
+          "enabled_tools": ["*"]
+        },
+        "github": {
+          "type": "streamableHttp",
+          "url": "https://api.githubcopilot.com/mcp/",
+          "headers": {"Authorization": "Bearer $GITHUB_TOKEN"},
+          "enabled_tools": ["search_repositories", "create_issue"]
+        }
+      }
+    }
+  }
+}
+```
+
+| 字段 | 描述 |
+|------|------|
+| `type` | 传输模式：`stdio` / `sse` / `streamableHttp`。省略时自动探测（有 `command` 走 stdio，否则按 `url` 走 HTTP）。 |
+| `command` | （stdio）启动服务器进程的命令（如 `npx`、`uvx`）。 |
+| `args` | （stdio）命令参数。 |
+| `env` | （stdio）传给服务器进程的额外环境变量。 |
+| `url` | （sse / streamableHttp）接入地址。 |
+| `headers` | （sse / streamableHttp）自定义请求头（如 `Authorization`）。 |
+| `tool_timeout` | 单次工具调用超时（秒），默认 `30`。 |
+| `enabled_tools` | 工具白名单，可使用原始 MCP 名称或包装后的 `mcp_<服务器>_<工具>` 名；`["*"]` 表示全部暴露。 |
+
+> MCP 服务器在代理循环启动时连接，并在关闭时自动清理；若某服务器既没有 `command` 也没有 `url`，则跳过并打印警告。连接失败会记录错误日志，代理会在没有该服务器工具的情况下继续运行。
+
 ### OpenViking 钩子
 
 Vikingbot 默认启用 OpenViking 钩子：

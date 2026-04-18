@@ -221,6 +221,47 @@ Vikingbot provides 7 dedicated OpenViking tools:
 | `openviking_glob` | Match OpenViking resources using glob patterns |
 | `openviking_memory_commit` | Commit session to ov |
 
+### External MCP Servers
+
+Vikingbot can also consume tools from third-party [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) servers (filesystem, GitHub, browsers, databases, etc.). Configure servers under `tools.mcp_servers` in `ov.conf`; each server's tools are registered when the agent starts and appear as `mcp_<server>_<tool>`.
+
+```json
+{
+  "bot": {
+    "tools": {
+      "mcp_servers": {
+        "filesystem": {
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+          "env": {},
+          "tool_timeout": 30,
+          "enabled_tools": ["*"]
+        },
+        "github": {
+          "type": "streamableHttp",
+          "url": "https://api.githubcopilot.com/mcp/",
+          "headers": {"Authorization": "Bearer $GITHUB_TOKEN"},
+          "enabled_tools": ["search_repositories", "create_issue"]
+        }
+      }
+    }
+  }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `type` | Transport: `stdio` / `sse` / `streamableHttp`. Auto-detected when omitted (`stdio` if `command` is set, otherwise HTTP from `url`). |
+| `command` | (stdio) Command to launch the server process (e.g. `npx`, `uvx`). |
+| `args` | (stdio) Command arguments. |
+| `env` | (stdio) Extra environment variables for the spawned server. |
+| `url` | (sse / streamableHttp) Endpoint URL. |
+| `headers` | (sse / streamableHttp) Custom request headers (e.g. `Authorization`). |
+| `tool_timeout` | Per-call timeout in seconds (default `30`). |
+| `enabled_tools` | Tool allowlist. Accepts raw MCP names or wrapped `mcp_<server>_<tool>` names; `["*"]` exposes every tool. |
+
+> MCP servers are connected when the agent loop starts and closed automatically on shutdown. If a server has neither `command` nor `url`, it is skipped with a warning. Connection failures are logged and the bot continues without that server's tools.
+
 ### OpenViking Hooks
 
 Vikingbot enables OpenViking hooks by default:
