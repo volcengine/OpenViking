@@ -101,7 +101,7 @@ def get_binding_client():
     """
     try:
         client, fh = _load_rust_binding()
-        _logger.debug("Loaded RAGFS Rust binding")
+        _logger.info("Loaded RAGFS Rust binding")
         return client, fh
     except ImportError as exc:
         raise ImportError("ragfs_python native library is not available: " + str(exc)) from exc

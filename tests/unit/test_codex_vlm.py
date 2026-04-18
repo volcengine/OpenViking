@@ -126,8 +126,8 @@ def test_vlm_config_accepts_codex_without_api_key(_mock_auth_available):
 def test_vlm_config_default_provider_resolves_codex(_mock_auth_available):
     config = VLMConfig(
         model="gpt-5.3-codex",
-        default_provider="codex",
-        providers={"openai": {"api_key": "sk-test"}, "codex": {}},
+        default_provider="openai-codex",
+        providers={"openai": {"api_key": "sk-test"}, "openai-codex": {}},
     )
 
     provider_config, provider_name = config.get_provider_config()
@@ -140,7 +140,7 @@ def test_vlm_config_default_provider_resolves_codex(_mock_auth_available):
 def test_vlm_config_mixed_providers_do_not_auto_pick_codex(_mock_auth_available):
     config = VLMConfig(
         model="gpt-5.3-codex",
-        providers={"openai": {"api_key": "sk-test"}, "codex": {}},
+        providers={"openai": {"api_key": "sk-test"}, "openai-codex": {}},
     )
 
     provider_config, provider_name = config.get_provider_config()
@@ -151,12 +151,12 @@ def test_vlm_config_mixed_providers_do_not_auto_pick_codex(_mock_auth_available)
 
 def test_vlm_config_default_provider_without_model_fails_validation():
     with pytest.raises(ValueError, match="requires 'model' to be set"):
-        VLMConfig(default_provider="codex", providers={"codex": {}})
+        VLMConfig(default_provider="openai-codex", providers={"openai-codex": {}})
 
 
 def test_vlm_config_empty_provider_block_without_model_fails_validation():
     with pytest.raises(ValueError, match="requires 'model' to be set"):
-        VLMConfig(providers={"codex": {}})
+        VLMConfig(providers={"openai-codex": {}})
 
 
 def test_codex_auth_bootstraps_into_openviking_store(tmp_path, monkeypatch):
@@ -197,6 +197,16 @@ def test_codex_auth_native_login_defaults_to_openviking_owner(tmp_path, monkeypa
     persisted = json.loads(ov_auth_path.read_text(encoding="utf-8"))
     assert persisted["auth_owner"] == "openviking"
     assert "imported_from" not in persisted
+
+
+def test_codex_auth_atomic_write_replaces_file_in_place(tmp_path):
+    auth_path = tmp_path / "codex_auth.json"
+    auth_path.write_text('{"old": true}\n', encoding="utf-8")
+
+    codex_auth._atomic_write_json_file(auth_path, {"new": True})
+
+    assert json.loads(auth_path.read_text(encoding="utf-8")) == {"new": True}
+    assert not list(tmp_path.glob("codex_auth.json.*.tmp"))
 
 
 def test_codex_auth_store_uses_windows_lock_when_fcntl_is_unavailable(tmp_path, monkeypatch):

@@ -236,7 +236,7 @@ def check_vlm() -> tuple[bool, str, Optional[str]]:
     if not provider:
         return False, "No VLM provider configured", "Add vlm section to ov.conf"
 
-    if provider in {"codex", "openai-codex"}:
+    if provider == "openai-codex":
         api_key = vlm._get_effective_api_key()
         if api_key and not api_key.startswith("{"):
             return True, f"openai-codex/{model} (explicit api_key)", None

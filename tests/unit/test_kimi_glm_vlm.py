@@ -5,8 +5,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from openviking.models.vlm import VLMFactory
 from openviking.models.vlm.backends.glm_vlm import DEFAULT_GLM_API_BASE, GLMVLM
 from openviking.models.vlm.backends.kimi_vlm import (
@@ -73,17 +71,29 @@ def test_glm_backend_sets_coding_plan_defaults():
 
 def test_vlm_factory_routes_first_class_kimi_and_glm_providers():
     kimi_vlm = VLMFactory.create({"provider": "kimi", "api_key": "kimi-key", "model": "kimi-code"})
-    glm_vlm = VLMFactory.create({"provider": "zai", "api_key": "glm-key", "model": "glm-4.6v"})
+    glm_vlm = VLMFactory.create({"provider": "glm", "api_key": "glm-key", "model": "glm-4.6v"})
 
     assert kimi_vlm.__class__.__name__ == "KimiVLM"
     assert glm_vlm.__class__.__name__ == "GLMVLM"
 
 
-def test_vlm_config_normalizes_kimi_and_glm_aliases():
+def test_vlm_factory_exposes_canonical_provider_names():
+    assert VLMFactory.get_available_providers() == [
+        "volcengine",
+        "openai",
+        "azure",
+        "kimi",
+        "glm",
+        "litellm",
+        "openai-codex",
+    ]
+
+
+def test_vlm_config_uses_canonical_provider_names():
     config = VLMConfig(
         model="glm-4.6v",
-        default_provider="zhipu",
-        providers={"kimi-coding": {"api_key": "kimi-key"}, "zai": {"api_key": "glm-key"}},
+        default_provider="glm",
+        providers={"kimi": {"api_key": "kimi-key"}, "glm": {"api_key": "glm-key"}},
     )
 
     provider_config, provider_name = config.get_provider_config()
@@ -92,14 +102,6 @@ def test_vlm_config_normalizes_kimi_and_glm_aliases():
     assert "glm" in config.providers
     assert provider_name == "glm"
     assert provider_config == {"api_key": "glm-key"}
-
-
-def test_vlm_config_rejects_duplicate_alias_blocks():
-    with pytest.raises(ValueError, match="Duplicate VLM provider config"):
-        VLMConfig(
-            model="glm-4.6v",
-            providers={"glm": {"api_key": "glm-a"}, "zai": {"api_key": "glm-b"}},
-        )
 
 
 @patch("openviking.models.vlm.backends.openai_vlm.openai.OpenAI")

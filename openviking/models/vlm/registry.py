@@ -1,9 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 """
-Provider Registry — single source of truth for LLM provider metadata.
-
-Supported providers: volcengine, openai, codex, kimi, glm, litellm
+Provider Registry — single source of truth for canonical LLM provider metadata.
 """
 
 from __future__ import annotations
@@ -13,16 +11,9 @@ VALID_PROVIDERS: tuple[str, ...] = (
     "openai",
     "azure",
     "kimi",
-    "kimi-code",
-    "kimi-coding",
     "glm",
-    "zhipu",
-    "zai",
-    "z-ai",
-    "z.ai",
     "litellm",
     "openai-codex",
-    "codex",
 )
 
 DEFAULT_AZURE_API_VERSION: str = "2025-01-01-preview"

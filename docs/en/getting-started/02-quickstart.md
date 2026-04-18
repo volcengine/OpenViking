@@ -96,8 +96,6 @@ openviking-server init
 openviking-server doctor
 ```
 
-If you want to use Codex as the VLM provider, start with `openviking-server init` and choose `OpenAI Codex` in the wizard. The wizard can import existing Codex auth or guide you through Codex sign-in directly.
-
 If you prefer manual setup, create `~/.openviking/ov.conf`:
 
 ```json
@@ -120,11 +118,11 @@ If you prefer manual setup, create `~/.openviking/ov.conf`:
 }
 ```
 
-For `provider: "openai-codex"`, `vlm.api_key` is optional after Codex OAuth is available.
+`provider`, `model`, `api_base`, and `api_key` depend on the VLM service you choose. Some providers may use local OAuth state instead of a manually copied API key.
 
 For complete examples for each model provider, see [Configuration Guide - Examples](../guides/01-configuration.md#configuration-examples).
 
-If you want to use Codex as the VLM provider, complete the auth step inside `openviking-server init`, then run `openviking-server doctor`.
+For first-time setup, `openviking-server init` is the recommended path. It helps you pick a provider and writes a working config template for the selected setup.
 
 ### Environment Variables
 

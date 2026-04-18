@@ -96,8 +96,6 @@ openviking-server init
 openviking-server doctor
 ```
 
-如果你希望使用 Codex 作为 VLM，建议先运行 `openviking-server init`，然后在向导里选择 `OpenAI Codex`。初始化向导可以导入已有的 Codex 鉴权，或直接引导你完成登录。
-
 如果你更希望手动创建，再编写 `~/.openviking/ov.conf`：
 
 ```json
@@ -120,11 +118,11 @@ openviking-server doctor
 }
 ```
 
-当 `provider: "openai-codex"` 时，只要 Codex OAuth 已就绪，就可以不填写 `vlm.api_key`。
+`provider`、`model`、`api_base` 和 `api_key` 取决于你选择的 VLM 服务；部分 provider 可能会使用本地 OAuth 状态，而不是手动填写 API key。
 
 各模型服务的完整配置示例请参见 [配置指南 - 配置示例](../guides/01-configuration.md#配置示例)。
 
-如果你希望使用 Codex 作为 VLM，请在 `openviking-server init` 中完成鉴权，然后执行 `openviking-server doctor`。
+首次配置建议优先使用 `openviking-server init`，它会帮助你选择 provider，并生成对应场景可直接使用的配置模板。
 
 ### 设置环境变量
 

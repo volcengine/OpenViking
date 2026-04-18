@@ -301,17 +301,17 @@ class VLMFactory:
 
             return OpenAIVLM(config)
 
-        elif provider in ("openai-codex", "codex"):
+        elif provider == "openai-codex":
             from .backends.codex_vlm import CodexVLM
 
             return CodexVLM(config)
 
-        elif provider in ("kimi", "kimi-code", "kimi-coding"):
+        elif provider == "kimi":
             from .backends.kimi_vlm import KimiVLM
 
             return KimiVLM(config)
 
-        elif provider in ("glm", "zhipu", "zai", "z-ai", "z.ai"):
+        elif provider == "glm":
             from .backends.glm_vlm import GLMVLM
 
             return GLMVLM(config)

@@ -357,8 +357,8 @@ class TestCheckVlm:
                 {
                     "vlm": {
                         "model": "gpt-5.3-codex",
-                        "default_provider": "codex",
-                        "providers": {"openai": {"api_key": "sk-test"}, "codex": {}},
+                        "default_provider": "openai-codex",
+                        "providers": {"openai": {"api_key": "sk-test"}, "openai-codex": {}},
                     }
                 }
             )

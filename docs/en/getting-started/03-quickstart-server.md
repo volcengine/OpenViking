@@ -11,7 +11,7 @@ Run OpenViking as a standalone HTTP server and connect from any client.
 
 Make sure you have a config file at `~/.openviking/ov.conf` with your model and storage settings (see [Configuration](../guides/01-configuration.md)).
 
-For first-time setup, run `openviking-server init` first. If you choose `OpenAI Codex` in the wizard, it handles Codex auth import/login for you.
+For first-time setup, run `openviking-server init` first.
 
 Before startup, validate local setup:
 
@@ -19,7 +19,7 @@ Before startup, validate local setup:
 openviking-server doctor
 ```
 
-If your VLM provider is `openai-codex`, `openviking-server doctor` validates that the local auth state is usable.
+`openviking-server doctor` validates that the configured local setup is usable, including provider-specific auth when required.
 
 ```bash
 # Config file at default path ~/.openviking/ov.conf — just start

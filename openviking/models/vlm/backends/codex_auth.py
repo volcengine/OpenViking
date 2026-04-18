@@ -8,6 +8,7 @@ import base64
 import json
 import os
 import stat
+import tempfile
 import threading
 import time
 from contextlib import contextmanager
@@ -178,6 +179,31 @@ def _read_json_file(path: Path) -> Dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _atomic_write_json_file(path: Path, payload: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f"{path.name}.",
+        suffix=".tmp",
+        dir=str(path.parent),
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, indent=2) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.chmod(tmp_name, stat.S_IRUSR | stat.S_IWUSR)
+        except OSError:
+            pass
+        os.replace(tmp_name, path)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
 def _format_expires_at(token: str) -> Optional[str]:
     claims = _decode_jwt_claims(token)
     exp = claims.get("exp")
@@ -296,12 +322,7 @@ def _write_tokens_to_ov_store(
         )
         if resolved_client_id:
             payload["client_id"] = resolved_client_id
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-        try:
-            path.chmod(stat.S_IRUSR | stat.S_IWUSR)
-        except OSError:
-            pass
+        _atomic_write_json_file(path, payload)
 
 
 def delete_codex_auth_store() -> bool:
