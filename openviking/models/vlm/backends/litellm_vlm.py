@@ -336,7 +336,7 @@ class LiteLLMVLMProvider(VLMBase):
             response = completion(**kwargs)
             elapsed = time.perf_counter() - t0
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
-            tracer.info(f'response={response}')
+            tracer.info(f"response={response}")
             if tools:
                 return self._build_vlm_response(response, has_tools=True)
             return self._clean_response(self._extract_content_from_response(response))
@@ -367,7 +367,7 @@ class LiteLLMVLMProvider(VLMBase):
             response = await acompletion(**kwargs)
             elapsed = time.perf_counter() - t0
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
-            tracer.info(f'response={response}')
+            tracer.info(f"response={response}")
             if tools:
                 return self._build_vlm_response(response, has_tools=True)
             return self._clean_response(self._extract_content_from_response(response))
