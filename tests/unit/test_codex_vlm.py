@@ -51,7 +51,9 @@ def test_codex_text_completion_uses_responses_api(mock_resolve, mock_openai_clas
         "base_url": "https://chatgpt.com/backend-api/codex",
     }
     mock_real_client = MagicMock()
-    mock_real_client.responses.stream.return_value = _MockResponsesStream(_build_final_response("hello from codex"))
+    mock_real_client.responses.stream.return_value = _MockResponsesStream(
+        _build_final_response("hello from codex")
+    )
     mock_openai_class.return_value = mock_real_client
 
     vlm = CodexVLM({"provider": "openai-codex", "model": "gpt-5.3-codex"})
@@ -72,7 +74,9 @@ def test_codex_vision_completion_converts_images(mock_resolve, mock_openai_class
         "base_url": "https://chatgpt.com/backend-api/codex",
     }
     mock_real_client = MagicMock()
-    mock_real_client.responses.stream.return_value = _MockResponsesStream(_build_final_response("image result"))
+    mock_real_client.responses.stream.return_value = _MockResponsesStream(
+        _build_final_response("image result")
+    )
     mock_openai_class.return_value = mock_real_client
 
     vlm = CodexVLM({"provider": "openai-codex", "model": "gpt-5.3-codex"})
@@ -98,7 +102,9 @@ async def test_codex_async_client_defers_runtime_credential_resolution(
         "base_url": "https://chatgpt.com/backend-api/codex",
     }
     mock_real_client = MagicMock()
-    mock_real_client.responses.stream.return_value = _MockResponsesStream(_build_final_response("async hello"))
+    mock_real_client.responses.stream.return_value = _MockResponsesStream(
+        _build_final_response("async hello")
+    )
     mock_openai_class.return_value = mock_real_client
 
     vlm = CodexVLM({"provider": "openai-codex", "model": "gpt-5.3-codex"})
@@ -232,7 +238,9 @@ def test_codex_auth_store_uses_windows_lock_when_fcntl_is_unavailable(tmp_path, 
 
 
 def _make_jwt_token(payload: dict) -> str:
-    encoded = base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode("utf-8").rstrip("=")
+    encoded = (
+        base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode("utf-8").rstrip("=")
+    )
     return f"header.{encoded}.signature"
 
 
@@ -263,7 +271,10 @@ def test_codex_auth_takeover_refreshes_when_external_store_missing(tmp_path, mon
 
         @staticmethod
         def json():
-            return {"access_token": _make_jwt_token({"exp": 9999999999}), "refresh_token": "new-refresh"}
+            return {
+                "access_token": _make_jwt_token({"exp": 9999999999}),
+                "refresh_token": "new-refresh",
+            }
 
     monkeypatch.setattr(codex_auth.httpx, "post", lambda *_args, **_kwargs: _Response())
 

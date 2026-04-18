@@ -5,15 +5,15 @@
 Codex VLM Backend Integration
 
 This module implements the integration with the Codex provider for Vision-Language Models (VLM).
-Unlike standard OpenAI API billing endpoints which use the Chat Completions API, Codex's 
-subscription-based endpoints process multimodal (vision/VLM) requests primarily through 
+Unlike standard OpenAI API billing endpoints which use the Chat Completions API, Codex's
+subscription-based endpoints process multimodal (vision/VLM) requests primarily through
 the auxiliary Responses API (`client.responses`).
 
-The complexity in this file arises from the need to shim/adapt standard Chat Completions 
+The complexity in this file arises from the need to shim/adapt standard Chat Completions
 requests (used by OpenViking) into Responses API requests. This involves:
 1. Converting `text` and `image_url` parts into `input_text` and `input_image`.
 2. Adapting tool calls and schemas.
-3. Translating the `client.responses.stream` event stream back into a format 
+3. Translating the `client.responses.stream` event stream back into a format
    compatible with standard Chat Completion responses.
 """
 

@@ -203,7 +203,9 @@ class CodexCompletionsAdapter:
                         type="message",
                         role="assistant",
                         status="completed",
-                        content=[SimpleNamespace(type="output_text", text="".join(collected_text_deltas))],
+                        content=[
+                            SimpleNamespace(type="output_text", text="".join(collected_text_deltas))
+                        ],
                     )
                 ]
         return _build_chat_completion_like_response(final_response, model)

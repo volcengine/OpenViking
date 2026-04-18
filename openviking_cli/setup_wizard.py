@@ -256,7 +256,9 @@ def _ensure_codex_auth() -> bool:
             print(f"  {_green('OK')} Codex OAuth stored in {path}")
             return True
 
-    print(f"  {_dim('You can finish setup now and re-run `openviking-server init` later to complete Codex sign-in.')}")
+    print(
+        f"  {_dim('You can finish setup now and re-run `openviking-server init` later to complete Codex sign-in.')}"
+    )
     return False
 
 
@@ -929,7 +931,9 @@ def run_init() -> int:
     """Run the interactive setup wizard."""
     print(f"\n  {_bold('OpenViking Setup')}")
     print(f"  {'=' * 16}\n")
-    print(f"  {_dim('Data will be stored under ~/.openviking/data unless you edit ov.conf later.')}\n")
+    print(
+        f"  {_dim('Data will be stored under ~/.openviking/data unless you edit ov.conf later.')}\n"
+    )
 
     # Check for existing config
     if _DEFAULT_CONFIG_PATH.exists():

@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field, model_validator
 
+
 def _load_codex_auth_module():
     importlib.import_module("openviking.models.vlm")
     return importlib.import_module("openviking.models.vlm.backends.codex_auth")
@@ -158,9 +159,7 @@ class VLMConfig(BaseModel):
             config["stream"] = self.stream
         return config
 
-    def _provider_has_usable_credentials(
-        self, provider_name: str, config: Dict[str, Any]
-    ) -> bool:
+    def _provider_has_usable_credentials(self, provider_name: str, config: Dict[str, Any]) -> bool:
         if config.get("api_key"):
             return True
         if provider_name == "openai-codex":

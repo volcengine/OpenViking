@@ -43,10 +43,7 @@ class CodexAuthError(RuntimeError):
 
 
 def _resolve_base_url() -> str:
-    return (
-        os.getenv("OPENVIKING_CODEX_BASE_URL", "").strip().rstrip("/")
-        or DEFAULT_CODEX_BASE_URL
-    )
+    return os.getenv("OPENVIKING_CODEX_BASE_URL", "").strip().rstrip("/") or DEFAULT_CODEX_BASE_URL
 
 
 def _resolve_codex_oauth_issuer() -> str:
@@ -368,7 +365,9 @@ def get_codex_auth_status() -> Dict[str, Any]:
         "store_path": str(store_path),
         "store_exists": store_payload is not None,
         "bootstrap_path": str(bootstrap_path) if bootstrap_path else None,
-        "bootstrap_available": bool(bootstrap_path and _load_tokens_from_source("codex-cli", bootstrap_path)),
+        "bootstrap_available": bool(
+            bootstrap_path and _load_tokens_from_source("codex-cli", bootstrap_path)
+        ),
         "provider": "openai-codex",
     }
     if store_payload:
@@ -420,7 +419,9 @@ def login_codex_with_device_code(
             headers={"Content-Type": "application/json"},
         )
     if response.status_code != 200:
-        raise CodexAuthError(f"Codex device login request failed with status {response.status_code}.")
+        raise CodexAuthError(
+            f"Codex device login request failed with status {response.status_code}."
+        )
     payload = response.json()
     user_code = str(payload.get("user_code", "") or "").strip()
     device_auth_id = str(payload.get("device_auth_id", "") or "").strip()
@@ -448,7 +449,9 @@ def login_codex_with_device_code(
                     break
                 if poll.status_code in (403, 404):
                     continue
-                raise CodexAuthError(f"Codex device auth polling failed with status {poll.status_code}.")
+                raise CodexAuthError(
+                    f"Codex device auth polling failed with status {poll.status_code}."
+                )
     except KeyboardInterrupt as exc:
         raise CodexAuthError("Codex device login cancelled.") from exc
     if auth_code_payload is None:
@@ -456,7 +459,9 @@ def login_codex_with_device_code(
     authorization_code = str(auth_code_payload.get("authorization_code", "") or "").strip()
     code_verifier = str(auth_code_payload.get("code_verifier", "") or "").strip()
     if not authorization_code or not code_verifier:
-        raise CodexAuthError("Codex device login response is missing authorization_code or code_verifier.")
+        raise CodexAuthError(
+            "Codex device login response is missing authorization_code or code_verifier."
+        )
     with httpx.Client(timeout=httpx.Timeout(timeout_seconds)) as client:
         token_response = client.post(
             token_url,
@@ -470,12 +475,16 @@ def login_codex_with_device_code(
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
     if token_response.status_code != 200:
-        raise CodexAuthError(f"Codex token exchange failed with status {token_response.status_code}.")
+        raise CodexAuthError(
+            f"Codex token exchange failed with status {token_response.status_code}."
+        )
     tokens = token_response.json()
     access_token = str(tokens.get("access_token", "") or "").strip()
     refresh_token = str(tokens.get("refresh_token", "") or "").strip()
     if not access_token or not refresh_token:
-        raise CodexAuthError("Codex token exchange did not return both access_token and refresh_token.")
+        raise CodexAuthError(
+            "Codex token exchange did not return both access_token and refresh_token."
+        )
     return save_codex_tokens(
         access_token,
         refresh_token,
@@ -517,7 +526,9 @@ def refresh_codex_oauth(
         except Exception:
             payload = None
         if isinstance(payload, dict):
-            detail = payload.get("error_description") or payload.get("message") or payload.get("error")
+            detail = (
+                payload.get("error_description") or payload.get("message") or payload.get("error")
+            )
             if isinstance(detail, str) and detail.strip():
                 message = f"Codex OAuth refresh failed: {detail.strip()}"
         raise CodexAuthError(message)
@@ -604,7 +615,9 @@ def resolve_codex_runtime_credentials(
             if isinstance(imported_from, str) and imported_from.strip():
                 external_path = Path(imported_from).expanduser()
             elif os.getenv("OPENVIKING_CODEX_BOOTSTRAP_PATH", "").strip():
-                external_path = Path(os.getenv("OPENVIKING_CODEX_BOOTSTRAP_PATH", "").strip()).expanduser()
+                external_path = Path(
+                    os.getenv("OPENVIKING_CODEX_BOOTSTRAP_PATH", "").strip()
+                ).expanduser()
             elif _default_codex_auth_path().exists():
                 external_path = _default_codex_auth_path()
             external_missing = False

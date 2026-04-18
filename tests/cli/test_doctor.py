@@ -170,9 +170,9 @@ class TestCheckEmbedding:
                 with patch.object(Path, "exists", autospec=True, return_value=True):
                     with patch(
                         "openviking_cli.doctor.importlib.import_module",
-                        side_effect=lambda name: object()
-                        if name == "llama_cpp"
-                        else real_import(name),
+                        side_effect=lambda name: (
+                            object() if name == "llama_cpp" else real_import(name)
+                        ),
                     ):
                         ok, detail, fix = check_embedding()
 
@@ -320,7 +320,9 @@ class TestCheckVlm:
 
     def test_pass_with_codex_oauth(self, tmp_path: Path):
         config = tmp_path / "ov.conf"
-        config.write_text(json.dumps({"vlm": {"provider": "openai-codex", "model": "gpt-5.3-codex"}}))
+        config.write_text(
+            json.dumps({"vlm": {"provider": "openai-codex", "model": "gpt-5.3-codex"}})
+        )
         with patch("openviking_cli.doctor._find_config", return_value=config):
             with patch(
                 "openviking.models.vlm.backends.codex_auth.resolve_codex_runtime_credentials",
@@ -332,7 +334,9 @@ class TestCheckVlm:
 
     def test_fail_with_codex_oauth_missing_auth(self, tmp_path: Path):
         config = tmp_path / "ov.conf"
-        config.write_text(json.dumps({"vlm": {"provider": "openai-codex", "model": "gpt-5.3-codex"}}))
+        config.write_text(
+            json.dumps({"vlm": {"provider": "openai-codex", "model": "gpt-5.3-codex"}})
+        )
         with patch("openviking_cli.doctor._find_config", return_value=config):
             with patch(
                 "openviking.models.vlm.backends.codex_auth.resolve_codex_runtime_credentials",
@@ -419,7 +423,9 @@ class TestCheckOllama:
             )
         )
         with patch("openviking_cli.doctor._find_config", return_value=config):
-            with patch("openviking_cli.utils.ollama.check_ollama_running", return_value=True) as running:
+            with patch(
+                "openviking_cli.utils.ollama.check_ollama_running", return_value=True
+            ) as running:
                 ok, detail, fix = check_ollama()
         running.assert_called_once_with("embedding-host", 11435)
         assert ok
@@ -440,7 +446,9 @@ class TestCheckOllama:
             )
         )
         with patch("openviking_cli.doctor._find_config", return_value=config):
-            with patch("openviking_cli.utils.ollama.check_ollama_running", return_value=True) as running:
+            with patch(
+                "openviking_cli.utils.ollama.check_ollama_running", return_value=True
+            ) as running:
                 ok, detail, fix = check_ollama()
         running.assert_called_once_with("vlm-host", 11436)
         assert ok

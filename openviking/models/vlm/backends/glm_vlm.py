@@ -19,7 +19,5 @@ class GLMVLM(OpenAIVLM):
         normalized = dict(config)
         normalized["provider"] = "glm"
         normalized.setdefault("model", DEFAULT_GLM_MODEL)
-        normalized["api_base"] = str(
-            normalized.get("api_base") or DEFAULT_GLM_API_BASE
-        ).rstrip("/")
+        normalized["api_base"] = str(normalized.get("api_base") or DEFAULT_GLM_API_BASE).rstrip("/")
         super().__init__(normalized)
