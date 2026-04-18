@@ -3,8 +3,13 @@ vikingbot - A lightweight AI agent framework
 """
 
 import warnings
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
 
-__version__ = "0.1.3"
+try:
+    __version__ = _pkg_version("openviking")
+except PackageNotFoundError:
+    __version__ = "0.0.0+unknown"
+
 __logo__ = "🐈"
 
 # Suppress RequestsDependencyWarning from requests module
