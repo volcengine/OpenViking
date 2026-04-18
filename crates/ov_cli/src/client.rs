@@ -45,6 +45,14 @@ impl HttpClient {
         }
     }
 
+    pub fn user_id(&self) -> Option<&str> {
+        self.user.as_deref()
+    }
+
+    pub fn agent_id(&self) -> Option<&str> {
+        self.agent_id.as_deref()
+    }
+
     /// Zip a directory to a temporary file
     fn zip_directory(&self, dir_path: &Path) -> Result<NamedTempFile> {
         if !dir_path.is_dir() {

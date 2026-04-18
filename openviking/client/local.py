@@ -455,6 +455,7 @@ class LocalClient(BaseClient):
         content: Optional[str] = None,
         parts: Optional[List[Dict[str, Any]]] = None,
         created_at: Optional[str] = None,
+        role_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -464,13 +465,13 @@ class LocalClient(BaseClient):
             content: Text content (simple mode, backward compatible)
             parts: Parts array (full Part support mode)
             created_at: Message creation time (ISO format string)
+            role_id: Optional explicit actor identity. Omit to derive it from the local context.
 
         If both content and parts are provided, parts takes precedence.
         """
         from openviking.message.part import Part, TextPart, part_from_dict
 
-        session = self._service.sessions.session(self._ctx, session_id)
-        await session.load()
+        session = await self._service.sessions.get(session_id, self._ctx, auto_create=True)
 
         message_parts: list[Part]
         if parts is not None:
@@ -480,8 +481,12 @@ class LocalClient(BaseClient):
         else:
             raise ValueError("Either content or parts must be provided")
 
-        # created_at 直接传递给 session (毫秒时间戳)
-        session.add_message(role, message_parts, created_at=created_at)
+        if role_id is None and role == "user":
+            role_id = self._ctx.user.user_id
+        elif role_id is None and role == "assistant":
+            role_id = self._ctx.user.agent_id
+
+        session.add_message(role, message_parts, role_id=role_id, created_at=created_at)
         return {
             "session_id": session_id,
             "message_count": len(session.messages),
@@ -520,11 +525,12 @@ class LocalClient(BaseClient):
         Returns:
             Session object if exists, None otherwise.
         """
-    
+
         session = self._service.sessions.session(self._ctx, session_id)
         if not run_async(session.exists()):
             if must_exist and session_id:
                 from openviking_cli.exceptions import NotFoundError
+
                 raise NotFoundError(session_id, "session")
             else:
                 run_async(session.ensure_exists())

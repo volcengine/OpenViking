@@ -10,6 +10,7 @@ import asyncio
 import json
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from openviking.core.namespace import agent_space_fragment, user_space_fragment
 from openviking.models.vlm.base import VLMBase
 from openviking.server.identity import RequestContext
 from openviking.session.memory.schema_model_generator import (
@@ -330,8 +331,8 @@ The final output of the model must strictly follow the JSON Schema format shown 
             operations,
             schemas,
             registry,
-            user_space=self.ctx.user.user_space_name(),
-            agent_space=self.ctx.user.agent_space_name(),
+            user_space=user_space_fragment(self.ctx),
+            agent_space=agent_space_fragment(self.ctx),
             extract_context=self._extract_context,
         )
         if not is_valid:
@@ -502,8 +503,8 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     uri = resolve_flat_model_uri(
                         item_dict,
                         registry,
-                        user_space=self.ctx.user.user_space_name(),
-                        agent_space=self.ctx.user.agent_space_name(),
+                        user_space=user_space_fragment(self.ctx),
+                        agent_space=agent_space_fragment(self.ctx),
                         memory_type=field_name,
                         extract_context=self._extract_context,
                     )

@@ -41,9 +41,9 @@ With multi-tenancy enabled, you can:
 
 `agent_id` separates agent-level space.
 
-- In the default mode, agent space is derived from `user_id + agent_id`
-- That means different agents for the same user can have different agent memories
-- If `memory.agent_scope_mode = "agent"`, the same `agent_id` can share agent space across users in the same account
+- Agent URI shape is controlled by per-account namespace policy
+- `isolate_agent_scope_by_user = false` means `viking://agent/{agent_id}/...`
+- `isolate_agent_scope_by_user = true` means `viking://agent/{agent_id}/user/{user_id}/...`
 
 ### Roles
 
@@ -84,7 +84,7 @@ If `auth_mode = "api_key"` and `root_api_key` is not configured, the server runs
 |-----------|------------------------|---------------------------|----------------------------|
 | `resources` | No | Yes | account |
 | `user` | No | No | user |
-| `agent` | No | Depends on `memory.agent_scope_mode` | Default: `user + agent` |
+| `agent` | No | Depends on account namespace policy | Default: `agent` |
 | `session` | No | No | user / session |
 
 ### Storage Layer

@@ -50,22 +50,18 @@ class UserIdentifier(object):
         return self._user_id
 
     def _agent_space_source(self) -> str:
-        """Return the source string used to derive the agent-level space."""
-        scope_mode = "user+agent"
-        try:
-            from openviking_cli.utils.config import get_openviking_config
+        """Return the legacy source string used by deprecated hash-based agent helpers.
 
-            scope_mode = get_openviking_config().memory.agent_scope_mode
-        except Exception:
-            # Fall back to the legacy, fully isolated behavior when config is unavailable.
-            scope_mode = "user+agent"
-
-        if scope_mode == "agent":
-            return self._agent_id
+        This helper is kept only for backward-compatible tooling paths. Service-side
+        namespace resolution is now driven by per-account namespace policy instead.
+        """
         return f"{self._user_id}:{self._agent_id}"
 
     def agent_space_name(self) -> str:
-        """Agent-level space name derived from memory.agent_scope_mode."""
+        """Return the legacy hash-based agent space for backward-compatible helpers only.
+
+        New server-side agent URIs no longer derive from this hash helper.
+        """
         return hashlib.md5(self._agent_space_source().encode()).hexdigest()[:12]
 
     def memory_space_uri(self) -> str:

@@ -15,8 +15,8 @@ class MemoryConfig(BaseModel):
     agent_scope_mode: str = Field(
         default="user+agent",
         description=(
-            "Agent memory namespace mode: 'user+agent' keeps agent memory isolated by "
-            "(user_id, agent_id), while 'agent' shares agent memory across users of the same agent."
+            "Deprecated and ignored. Kept only for backward compatibility with older ov.conf files. "
+            "Agent/user namespace behavior is now controlled by per-account namespace policy."
         ),
     )
 
