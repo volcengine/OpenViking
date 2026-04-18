@@ -25,7 +25,7 @@ export function createFetchOriginalDataTool(params: {
       const normalized = refIds
         .filter((v) => typeof v === "string")
         .map((v) => normalizeRefId(v))
-        .filter((v) => v);
+        .filter((v): v is string => v !== null);
       if (normalized.length === 0) {
         return { content: [{ type: "text", text: "No valid REF_ID provided." }] };
       }

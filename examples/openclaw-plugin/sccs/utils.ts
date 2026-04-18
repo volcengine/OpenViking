@@ -5,6 +5,8 @@ import { resolve } from "node:path";
 type ContentBlock = { type?: unknown; text?: unknown };
 type MessageLike = { role?: unknown; content?: unknown };
 const REF_ID_RE = /\[REF_ID: ([a-f0-9]{32})\]/i;
+/** Strict MD5 hex pattern — only 32 hex chars (case-insensitive) allowed as refId */
+const STRICT_REF_ID_RE = /^[a-f0-9]{32}$/i;
 
 export function md5Hex(input: string): string {
   return createHash("md5").update(input).digest("hex");
@@ -14,9 +16,17 @@ export function hasRefId(text: string): boolean {
   return REF_ID_RE.test(text);
 }
 
-export function normalizeRefId(value: string): string {
+/**
+ * Extract and validate a refId from a string.
+ * - If the string matches [REF_ID: <hash>], extract the hash.
+ * - Otherwise, treat the trimmed string as a raw refId.
+ * - Returns null if the result is not a valid 32-char hex MD5 hash.
+ * - Returned value is always lowercase for consistent file naming.
+ */
+export function normalizeRefId(value: string): string | null {
   const match = value.match(REF_ID_RE);
-  return match ? match[1] : value.trim();
+  const candidate = match ? match[1] : value.trim();
+  return STRICT_REF_ID_RE.test(candidate) ? candidate.toLowerCase() : null;
 }
 
 export function resolveHomePath(pathValue: string): string {

@@ -1,5 +1,5 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve, relative } from "node:path";
 
 export type StoredValue = { content: string; expiresAt: number };
 export interface RefStore {
@@ -39,8 +39,19 @@ export class DiskBackedStore implements RefStore {
     this.memory = new MemoryStore(params.maxEntries);
     this.dir = params.dir;
   }
+  /**
+   * Build a safe file path for a refId.
+   * Resolves against the refs directory and verifies the result stays inside it,
+   * preventing path traversal even if a non-hash refId slips through.
+   */
   private pathFor(refId: string): string {
-    return join(this.dir, "refs", `${refId}.json`);
+    const refsDir = resolve(this.dir, "refs");
+    const target = resolve(refsDir, `${refId}.json`);
+    const rel = relative(refsDir, target);
+    if (rel.startsWith("..") || resolve(refsDir, rel) !== target) {
+      throw new Error(`[sccs] path traversal detected for refId: ${refId}`);
+    }
+    return target;
   }
   async get(refId: string): Promise<string | null> {
     const cached = await this.memory.get(refId);
