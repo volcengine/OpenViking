@@ -198,6 +198,7 @@ All configurations are under the `bot` field in `ov.conf`, with default values f
       {
         "type": "feishu",
         "enabled": true,
+        "ov_tools_enable": true,
         "appId": "",
         "appSecret": "",
         "allowFrom": []
@@ -326,6 +327,7 @@ That's it! Environment variables, model prefixing, config matching, and `vikingb
 |--------|---------|-------------|
 | `tools.restrictToWorkspace` | `true` | When `true`, restricts **all** agent tools (shell, file read/write/edit, list) to the workspace directory. Prevents path traversal and out-of-scope access. |
 | `channels.*.allowFrom` | `[]` (allow all) | Whitelist of user IDs. Empty = allow everyone; non-empty = only listed users can interact. |
+| `channels.*.ov_tools_enable` | `true` | When `false`, disables OpenViking tools (`openviking_*`) and skips memory / user-profile context injection for this channel. Useful for lightweight channels that should not pull from OV memory. See [#1352](https://github.com/volcengine/OpenViking/pull/1352). |
 
 ### Observability (Optional)
 
