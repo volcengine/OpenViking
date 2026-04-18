@@ -71,18 +71,6 @@
 - 是否属于事件类记忆
 - 与当前 query 的词面重合度
 
-### Transcript ingest assist
-
-除了普通 recall，这条链路还包含一个“转录文本辅助分支”。
-
-如果最后一条用户输入看起来像多说话人的转录文本：
-
-- 会先清理 metadata block、命令文本、纯提问文本等噪音
-- 再按说话人数和文本长度做 transcript-like 判断
-- 命中后 prepend 一个很轻量的 `<ingest-reply-assist>` 指令
-
-它的目标不是改写记忆逻辑，而是降低模型在“用户粘贴聊天记录/会议纪要/对话转录”这类场景里直接返回 `NO_REPLY` 的概率。
-
 ## Session 生命周期
 
 ![Session 生命周期与压缩边界](./images/openclaw-plugin-session-lifecycle.png)
