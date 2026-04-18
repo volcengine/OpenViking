@@ -79,6 +79,7 @@ class OpenAIVLM(VLMBase):
         self._sync_client = None
         self._async_client = None
         self.api_version = config.get("api_version")
+        self.reasoning_effort = config.get("reasoning_effort", "minimal")
 
     def get_client(self):
         """Get sync client"""
@@ -273,17 +274,19 @@ class OpenAIVLM(VLMBase):
     ) -> Dict[str, Any]:
         kwargs_messages = messages or [{"role": "user", "content": prompt}]
         model = self.model or "gpt-4o-mini"
+        is_reasoning = _is_reasoning_model(model)
         kwargs: Dict[str, Any] = {
             "model": model,
             "messages": kwargs_messages,
             "stream": self.stream,
         }
-        if not _is_reasoning_model(model):
+        if is_reasoning:
+            kwargs["reasoning_effort"] = self.reasoning_effort
+        else:
             kwargs["temperature"] = self.temperature
         self._apply_provider_specific_extra_body(kwargs, thinking)
         if self.max_tokens is not None:
-            token_key = "max_completion_tokens" if _is_reasoning_model(model) else "max_tokens"
-            kwargs[token_key] = self.max_tokens
+            kwargs["max_completion_tokens" if is_reasoning else "max_tokens"] = self.max_tokens
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
@@ -309,17 +312,19 @@ class OpenAIVLM(VLMBase):
             kwargs_messages = [{"role": "user", "content": content}]
 
         model = self.model or "gpt-4o-mini"
+        is_reasoning = _is_reasoning_model(model)
         kwargs: Dict[str, Any] = {
             "model": model,
             "messages": kwargs_messages,
             "stream": self.stream,
         }
-        if not _is_reasoning_model(model):
+        if is_reasoning:
+            kwargs["reasoning_effort"] = self.reasoning_effort
+        else:
             kwargs["temperature"] = self.temperature
         self._apply_provider_specific_extra_body(kwargs, thinking)
         if self.max_tokens is not None:
-            token_key = "max_completion_tokens" if _is_reasoning_model(model) else "max_tokens"
-            kwargs[token_key] = self.max_tokens
+            kwargs["max_completion_tokens" if is_reasoning else "max_tokens"] = self.max_tokens
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"

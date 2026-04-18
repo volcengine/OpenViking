@@ -69,6 +69,7 @@ class TestReasoningModelTextKwargs:
         assert kwargs["max_completion_tokens"] == 512
         assert "max_tokens" not in kwargs
         assert "temperature" not in kwargs
+        assert kwargs["reasoning_effort"] == "minimal"
 
     def test_o3_mini_uses_max_completion_tokens(self):
         vlm = OpenAIVLM(
@@ -83,6 +84,20 @@ class TestReasoningModelTextKwargs:
         assert kwargs["max_completion_tokens"] == 256
         assert "max_tokens" not in kwargs
         assert "temperature" not in kwargs
+        assert kwargs["reasoning_effort"] == "minimal"
+
+    def test_reasoning_effort_overridable_via_config(self):
+        vlm = OpenAIVLM(
+            {
+                "api_key": "sk-test",
+                "model": "gpt-5-mini",
+                "api_base": "https://api.openai.com/v1",
+                "max_tokens": 512,
+                "reasoning_effort": "high",
+            }
+        )
+        kwargs = vlm._build_text_kwargs(prompt="hi")
+        assert kwargs["reasoning_effort"] == "high"
 
     def test_gpt4o_mini_keeps_max_tokens_and_temperature(self):
         vlm = OpenAIVLM(
@@ -98,6 +113,7 @@ class TestReasoningModelTextKwargs:
         assert kwargs["max_tokens"] == 512
         assert "max_completion_tokens" not in kwargs
         assert kwargs["temperature"] == 0.5
+        assert "reasoning_effort" not in kwargs
 
     def test_reasoning_model_without_max_tokens_omits_both(self):
         vlm = OpenAIVLM(
@@ -129,6 +145,7 @@ class TestReasoningModelVisionKwargs:
         assert kwargs["max_completion_tokens"] == 1024
         assert "max_tokens" not in kwargs
         assert "temperature" not in kwargs
+        assert kwargs["reasoning_effort"] == "minimal"
 
     def test_gpt4o_vision_keeps_max_tokens_and_temperature(self):
         vlm = OpenAIVLM(
