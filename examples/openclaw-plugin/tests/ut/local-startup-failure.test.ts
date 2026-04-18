@@ -95,7 +95,6 @@ describe("local OpenViking startup failure", () => {
           autoCapture: true,
           autoRecall: true,
           configPath: "/tmp/openclaw-ovbug/bad-ov.conf",
-          ingestReplyAssist: false,
           logFindRequests: false,
           mode: "local",
           port: 19433,

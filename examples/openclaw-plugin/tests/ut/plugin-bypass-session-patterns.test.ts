@@ -25,7 +25,6 @@ function setupPlugin(pluginConfig?: Record<string, unknown>) {
       autoCapture: true,
       autoRecall: true,
       recallPath: "hook",
-      ingestReplyAssist: true,
       ...pluginConfig,
     },
     registerContextEngine,

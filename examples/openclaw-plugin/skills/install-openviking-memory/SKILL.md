@@ -70,7 +70,6 @@ Example: User says "Forget my phone number"
 | `autoRecall` | `true` | Automatically recall and inject context |
 | `recallLimit` | `6` | Maximum memories injected during auto-recall |
 | `recallScoreThreshold` | `0.01` | Minimum relevance score for recall |
-| `ingestReplyAssist` | `true` | Add reply guidance when detecting multi-party conversation text |
 
 ## Daily Operations
 
