@@ -339,8 +339,10 @@ export function convertToAgentMessages(msg: { role: string; parts: unknown[] }):
     const texts = contentBlocks
       .filter((b) => b.type === "text")
       .map((b) => b.text as string);
-    if (texts.length > 0 || toolUseBlocks.length === 0) {
-      result.push({ role: msg.role, content: texts.join("\n") || "" });
+    if (texts.length > 0) {
+      result.push({ role: msg.role, content: texts.join("\n") });
+    } else if (toolUseBlocks.length === 0) {
+      result.push({ role: msg.role, content: "" });
     }
     if (toolUseBlocks.length > 0) {
       result.push({ role: "assistant", content: toolUseBlocks });

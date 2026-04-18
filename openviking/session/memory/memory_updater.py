@@ -26,6 +26,7 @@ from openviking.session.memory.utils import (
 )
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
+from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
 
@@ -148,20 +149,16 @@ class MessageRange:
 
     def _first_message_time(self) -> str | None:
         """获取第一条消息的时间（内部方法）"""
-        from datetime import datetime
-
         for elem in self.elements:
             if isinstance(elem, str):
                 continue
             if hasattr(elem, "created_at") and elem.created_at:
-                dt = datetime.fromisoformat(elem.created_at)
+                dt = parse_iso_datetime(elem.created_at)
                 return dt.strftime("%Y-%m-%d")
         return None
 
     def _first_message_time_with_weekday(self) -> str | None:
         """获取第一条消息的时间，带周几（内部方法）"""
-        from datetime import datetime
-
         for elem in self.elements:
             if isinstance(elem, str):
                 continue
@@ -176,7 +173,7 @@ class MessageRange:
                     "Saturday",
                     "Sunday",
                 ]
-                dt = datetime.fromisoformat(elem.created_at)
+                dt = parse_iso_datetime(elem.created_at)
                 weekday = weekday_en[dt.weekday()]
                 return f"{dt.strftime('%Y-%m-%d')} ({weekday})"
         return None

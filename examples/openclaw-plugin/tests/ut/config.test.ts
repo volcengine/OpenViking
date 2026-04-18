@@ -22,7 +22,6 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.recallPreferAbstract).toBe(false);
     expect(cfg.recallTokenBudget).toBe(2000);
     expect(cfg.commitTokenThreshold).toBe(20000);
-    expect(cfg.ingestReplyAssist).toBe(false);
     expect(cfg.captureMode).toBe("semantic");
     expect(cfg.captureMaxLength).toBe(24000);
     expect(cfg.recallMaxContentChars).toBe(500);

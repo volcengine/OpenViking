@@ -24,7 +24,6 @@ function setupPlugin(pluginConfig?: Record<string, unknown>) {
       baseUrl: "http://127.0.0.1:1933",
       autoCapture: true,
       autoRecall: true,
-      ingestReplyAssist: true,
       ...pluginConfig,
     },
     registerContextEngine,

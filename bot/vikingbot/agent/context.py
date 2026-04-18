@@ -33,6 +33,7 @@ class ContextBuilder:
         workspace: Path,
         sandbox_manager: SandboxManager | None = None,
         sender_id: str = None,
+        sender_name: str = None,
         is_group_chat: bool = False,
         eval: bool = False,
     ):
@@ -42,6 +43,7 @@ class ContextBuilder:
         self._memory = None
         self._skills = None
         self._sender_id = sender_id
+        self._sender_name = sender_name
         self._is_group_chat = is_group_chat
         self._eval = eval
 
@@ -172,8 +174,8 @@ Skills with available="false" need dependencies installed first - you can try in
             session_context += f"\nChannel: {session_key.type}"
             if self._is_group_chat:
                 session_context += (
-                    f"\n**Group chat session.** Current user ID: {self._sender_id}\n"
-                    f"Multiple users can participate in this conversation. Each user message is prefixed with the user ID in brackets like @<user_id>. "
+                    f"\n**Group chat session.** Current user: {self._sender_name if self._sender_name else self._sender_id}\n"
+                    f"Multiple users can participate in this conversation. Each user message is prefixed with the user's name in brackets like '[张三]: 你好'. "
                     f"You should pay attention to who is speaking to understand the context. "
                 )
         parts.append(session_context)
@@ -277,6 +279,7 @@ IMPORTANT:
             session_key: Optional session key.
             ov_tools_enable: Whether to enable OpenViking tools and memory.
             profile_user_list: List of additional user IDs to fetch profiles for.
+            memory_user: Optional user ID to fetch memory for.
 
         Returns:
             List of messages including system prompt.

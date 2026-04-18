@@ -48,7 +48,6 @@ describe("local OpenViking startup with a bad config", () => {
           autoCapture: true,
           autoRecall: true,
           configPath: badConfigPath,
-          ingestReplyAssist: false,
           logFindRequests: false,
           mode: "local",
           port: 19439,

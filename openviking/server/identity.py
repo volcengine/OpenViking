@@ -15,6 +15,14 @@ class Role(str, Enum):
     USER = "user"
 
 
+class AuthMode(str, Enum):
+    """Authentication modes for OpenViking server."""
+
+    API_KEY = "api_key"
+    TRUSTED = "trusted"
+    DEV = "dev"
+
+
 @dataclass(frozen=True)
 class AccountNamespacePolicy:
     """Account-level namespace isolation policy."""

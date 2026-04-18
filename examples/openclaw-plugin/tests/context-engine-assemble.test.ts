@@ -9,7 +9,6 @@ const cfg = memoryOpenVikingConfigSchema.parse({
   baseUrl: "http://127.0.0.1:1933",
   autoCapture: false,
   autoRecall: false,
-  ingestReplyAssist: false,
 });
 
 function roughEstimate(messages: unknown[]): number {
