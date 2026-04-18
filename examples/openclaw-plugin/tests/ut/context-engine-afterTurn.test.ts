@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { OpenVikingClient } from "../../client.js";
 import { memoryOpenVikingConfigSchema } from "../../config.js";
-import { createMemoryOpenVikingContextEngine } from "../../context-engine.js";
+import {
+  convertToAgentMessages,
+  createMemoryOpenVikingContextEngine,
+  mergeConsecutiveAssistants,
+} from "../../context-engine.js";
 
 function makeLogger() {
   return {
@@ -630,5 +634,81 @@ describe("context-engine afterTurn()", () => {
     });
 
     expect(client.addSessionMessage).not.toHaveBeenCalled();
+  });
+
+  it("round-trips toolUse + toolResult: afterTurn() → convertToAgentMessages()", async () => {
+    // End-to-end coverage for the regression Mijamind719 flagged on #1424:
+    // assistant messages with toolUse + their matching toolResult must
+    // survive the afterTurn → OV store → assemble read path without losing
+    // tool call history.
+    const { engine, client } = makeEngine();
+
+    const sourceMessages = [
+      { role: "user", content: "ignore me, pre-prompt" },
+      { role: "user", content: "list the files" },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Let me check." },
+          {
+            type: "toolCall",
+            id: "call_abc",
+            name: "exec",
+            arguments: { command: "ls" },
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_abc",
+        toolName: "exec",
+        content: [{ type: "text", text: "file1.txt\nfile2.txt" }],
+      },
+    ];
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages: sourceMessages,
+      prePromptMessageCount: 1,
+    });
+
+    // Reconstruct the stored messages in the snake_case shape OV persists.
+    const storedMessages = client.addSessionMessage.mock.calls.map(
+      (call) => ({ role: call[1] as string, parts: call[2] as unknown[] }),
+    );
+    expect(storedMessages.length).toBeGreaterThan(0);
+
+    // Confirm the assistant message carried the tool part through the
+    // shim. This guards against the shim drifting out of sync with the
+    // extracted (camelCase) format that extractNewTurnMessages emits.
+    const assistantStored = storedMessages.find((m) => m.role === "assistant");
+    expect(assistantStored).toBeDefined();
+    const toolPart = (assistantStored!.parts as Array<Record<string, unknown>>).find(
+      (p) => p.type === "tool",
+    );
+    expect(toolPart).toBeDefined();
+    expect(toolPart!.tool_id).toBe("call_abc");
+    expect(toolPart!.tool_name).toBe("exec");
+    expect(toolPart!.tool_status).toBe("completed");
+
+    // Read path: feed each stored message through convertToAgentMessages
+    // and merge, which is what assemble() does when rehydrating a session.
+    const roundTripped = mergeConsecutiveAssistants(
+      storedMessages.flatMap((m) => convertToAgentMessages(m)),
+    );
+
+    const assistantOut = roundTripped.find((m) => m.role === "assistant");
+    expect(assistantOut).toBeDefined();
+    const blocks = assistantOut!.content as Array<Record<string, unknown>>;
+    expect(blocks.some((b) => b.type === "text" && b.text === "Let me check.")).toBe(true);
+    const toolUseBlock = blocks.find((b) => b.type === "toolUse");
+    expect(toolUseBlock).toBeDefined();
+    expect(toolUseBlock!.id).toBe("call_abc");
+    expect(toolUseBlock!.name).toBe("exec");
+
+    const toolResultOut = roundTripped.find((m) => m.role === "toolResult");
+    expect(toolResultOut).toBeDefined();
+    expect((toolResultOut as Record<string, unknown>).toolCallId).toBe("call_abc");
   });
 });
