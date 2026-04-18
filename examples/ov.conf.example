@@ -4,19 +4,16 @@
     "port": 1933,
     "root_api_key": null,
     "cors_origins": ["*"],
-    "telemetry": {
-      "prometheus": {
-        "enabled": false
-      }
-    },
-    "metrics": {
-      "enabled": true,
-      "account_dimension": {
+    "observability": {
+      "metrics": {
         "enabled": true,
-        "max_active_accounts": 100,
-        "metric_allowlist": [
-          "openviking_*"
-        ]
+        "account_dimension": {
+          "enabled": true,
+          "max_active_accounts": 100,
+          "metric_allowlist": [
+            "openviking_*"
+          ]
+        }
       }
     }
   },

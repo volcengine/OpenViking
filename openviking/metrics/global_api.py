@@ -20,6 +20,8 @@ from __future__ import annotations
 import threading
 from typing import Optional
 
+from openviking.server.config import ServerConfig
+
 from .account_dimension import (
     configure_metric_account_dimension as _configure_metric_account_dimension_runtime,
 )
@@ -31,6 +33,7 @@ from .collectors.cache import CacheCollector
 from .collectors.embedding import EmbeddingCollector
 from .collectors.encryption import EncryptionCollector
 from .collectors.http import HTTPCollector
+from .collectors.rerank import RerankCollector
 from .collectors.resource import ResourceIngestionCollector
 from .collectors.retrieval import RetrievalCollector
 from .collectors.session import SessionCollector
@@ -44,20 +47,6 @@ _lock = threading.Lock()
 _registry: Optional[MetricRegistry] = None
 _exporter: Optional[PrometheusExporter] = None
 _event_router: EventCollectorRouter | None = None
-
-
-def is_metrics_enabled_from_server_config(config) -> bool:
-    """
-    Return whether metrics are enabled through either the new or legacy server config path.
-
-    This compatibility helper keeps older `telemetry.prometheus.enabled` deployments working
-    while newer code migrates toward `server.metrics.enabled`.
-    """
-    legacy_enabled = bool(
-        getattr(getattr(getattr(config, "telemetry", None), "prometheus", None), "enabled", False)
-    )
-    metrics_enabled = bool(getattr(getattr(config, "metrics", None), "enabled", False))
-    return legacy_enabled or metrics_enabled
 
 
 def configure_metric_account_dimension(
@@ -84,7 +73,7 @@ def configure_metric_account_dimension(
 
 
 def init_metrics_from_server_config(
-    config, *, app=None, service=None, registry: MetricRegistry | None = None
+    config: ServerConfig, *, app=None, service=None, registry: MetricRegistry | None = None
 ) -> None:
     """
     Initialize the process-global metrics registry, router, and exporter from server config.
@@ -99,7 +88,7 @@ def init_metrics_from_server_config(
     - Resets account-dimension runtime to its disabled defaults
     - Detaches any exporter reference previously stored on `app.state`
     """
-    enabled = is_metrics_enabled_from_server_config(config)
+    enabled = config.observability.metrics.enabled
     global _registry, _exporter, _event_router
     with _lock:
         if not enabled:
@@ -110,12 +99,11 @@ def init_metrics_from_server_config(
             if app is not None:
                 app.state.metrics_exporter = None
             return
-        metrics_config = getattr(config, "metrics", None)
-        account_dimension = getattr(metrics_config, "account_dimension", None)
+        account_dimension = config.observability.metrics.account_dimension
         configure_metric_account_dimension(
-            enabled=bool(getattr(account_dimension, "enabled", False)),
-            metric_allowlist=list(getattr(account_dimension, "metric_allowlist", []) or []),
-            max_active_accounts=int(getattr(account_dimension, "max_active_accounts", 0) or 0),
+            enabled=account_dimension.enabled,
+            metric_allowlist=list(account_dimension.metric_allowlist or []),
+            max_active_accounts=int(account_dimension.max_active_accounts),
         )
         _registry = registry or MetricRegistry()
         collector_manager = create_default_collector_manager(app=app, service=service)
@@ -189,6 +177,7 @@ def _build_event_router(registry: MetricRegistry) -> EventCollectorRouter:
     http_collector = HTTPCollector()
     cache_collector = CacheCollector()
     embedding_collector = EmbeddingCollector()
+    rerank_collector = RerankCollector()
     vlm_collector = VLMCollector()
     session_collector = SessionCollector()
     resource_collector = ResourceIngestionCollector()
@@ -216,8 +205,10 @@ def _build_event_router(registry: MetricRegistry) -> EventCollectorRouter:
         ("http.inflight", http_collector),
         ("cache.hit", cache_collector),
         ("cache.miss", cache_collector),
+        ("embedding.call", embedding_collector),
         ("embedding.success", embedding_collector),
         ("embedding.error", embedding_collector),
+        ("rerank.call", rerank_collector),
         ("vlm.call", vlm_collector),
         ("session.lifecycle", session_collector),
         ("session.contexts_used", session_collector),

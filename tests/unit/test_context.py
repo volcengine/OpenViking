@@ -482,33 +482,40 @@ class TestContextWithUser:
 
         assert ctx.account_id == user.account_id
 
-    def test_owner_space_agent(self):
-        """Test owner_space for agent URI."""
+    def test_owner_fields_agent(self):
+        """Test owner fields for canonical agent URI."""
         user = UserIdentifier(account_id="account-123", user_id="user-123", agent_id="agent-456")
         ctx = Context(uri="viking://agent/test/skills/my-skill/", user=user)
 
-        assert ctx.owner_space == user.agent_space_name()
+        assert ctx.owner_user_id is None
+        assert ctx.owner_agent_id == "test"
+        assert ctx.owner_space == user.agent_id
 
-    def test_owner_space_user(self):
-        """Test owner_space for user URI."""
+    def test_owner_fields_user(self):
+        """Test owner fields for canonical user URI."""
         user = UserIdentifier(account_id="account-123", user_id="user-123", agent_id="agent-456")
         ctx = Context(uri="viking://user/test/memories/test.md", user=user)
 
-        assert ctx.owner_space == user.user_space_name()
+        assert ctx.owner_user_id == "test"
+        assert ctx.owner_agent_id is None
+        assert ctx.owner_space == user.user_id
 
-    def test_owner_space_session(self):
-        """Test owner_space for session URI."""
+    def test_owner_fields_session(self):
+        """Test owner fields for session URI."""
         user = UserIdentifier(account_id="account-123", user_id="user-123", agent_id="agent-456")
         ctx = Context(uri="viking://session/test/msg/1.md", user=user)
 
-        assert ctx.owner_space == user.user_space_name()
+        assert ctx.owner_user_id is None
+        assert ctx.owner_agent_id is None
+        assert ctx.owner_space == user.user_id
 
-    def test_owner_space_resource_default(self):
-        """Test owner_space default for resource URI."""
+    def test_owner_fields_resource_default(self):
+        """Test owner fields default for resource URI."""
         user = UserIdentifier(account_id="account-123", user_id="user-123", agent_id="agent-456")
         ctx = Context(uri="viking://resources/docs/test.md", user=user)
 
-        # Resource URIs don't match agent/user/session patterns
+        assert ctx.owner_user_id is None
+        assert ctx.owner_agent_id is None
         assert ctx.owner_space == ""
 
 

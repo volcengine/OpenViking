@@ -9,7 +9,10 @@ import httpx
 import pytest
 
 from openviking.models.embedder.base import EmbedResult
+from openviking.server.auth import get_request_context
+from openviking.server.identity import RequestContext, Role
 from openviking.utils.time_utils import parse_iso_datetime
+from openviking_cli.session.user_id import UserIdentifier
 
 
 @pytest.fixture(autouse=True)
@@ -43,6 +46,28 @@ async def test_find_with_target_uri(client_with_resource):
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+
+
+async def test_find_with_inaccessible_target_uri_returns_permission_denied(
+    client: httpx.AsyncClient, app
+):
+    app.dependency_overrides[get_request_context] = lambda: RequestContext(
+        user=UserIdentifier.the_default_user(),
+        role=Role.USER,
+    )
+    try:
+        resp = await client.post(
+            "/api/v1/search/find",
+            json={"query": "sample", "target_uri": "viking://agent/foreign-agent", "limit": 5},
+        )
+    finally:
+        app.dependency_overrides.pop(get_request_context, None)
+
+    assert resp.status_code == 403
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "PERMISSION_DENIED"
+    assert "Access denied" in body["error"]["message"]
 
 
 async def test_find_with_score_threshold(client_with_resource):

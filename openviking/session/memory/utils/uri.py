@@ -379,60 +379,12 @@ def resolve_flat_model_uri(
     return generate_uri(schema, uri_fields, user_space, agent_space, extract_context)
 
 
-def resolve_overview_edit_uri(
-    overview_model: Any,
-    registry: MemoryTypeRegistry,
-    user_space: str = "default",
-    agent_space: str = "default",
-) -> str:
-    """
-    Resolve URI for an overview edit operation.
-
-    Args:
-        overview_model: Overview edit model with memory_type and overview fields
-        registry: MemoryTypeRegistry to get schema
-        user_space: User space for substitution
-        agent_space: Agent space for substitution
-
-    Returns:
-        Resolved URI for .overview.md file (e.g., viking://user/default/memories/.overview.md)
-
-    Raises:
-        ValueError: If memory_type not found or directory not found
-    """
-    # Get memory_type from model
-    if hasattr(overview_model, "memory_type"):
-        memory_type_str = overview_model.memory_type
-    elif isinstance(overview_model, dict):
-        memory_type_str = overview_model.get("memory_type")
-    else:
-        raise ValueError("overview_model must have memory_type field")
-
-    # Get schema from registry
-    schema = registry.get(memory_type_str)
-    if not schema:
-        raise ValueError(f"Unknown memory type: {memory_type_str}")
-
-    if not schema.directory:
-        raise ValueError(f"Memory type {memory_type_str} has no directory configured")
-
-    # Render directory using Jinja2
-    context = {"user_space": user_space, "agent_space": agent_space}
-    directory = _render_jinja_template(schema.directory, context)
-
-    # Return the .overview.md URI
-    return f"{directory}/.overview.md"
-
-
 class ResolvedOperations:
     """Operations with resolved URIs."""
 
     def __init__(self):
         # Unified operations list - all are edit (will read existing file first)
         self.operations: List[ResolvedOperation] = []
-        self.edit_overview_operations: List[
-            Tuple[Any, str]
-        ] = []  # (overview_edit_model, overview_uri)
         self.delete_operations: List[Tuple[str, str]] = []  # (uri_str, uri_str) - just the uri
         self.errors: List[str] = []
 
@@ -494,15 +446,6 @@ def resolve_all_operations(
                 except Exception as e:
                     resolved.errors.append(f"Failed to resolve {field_name} operation: {e}")
 
-    # Resolve edit_overview operations (overview edit models)
-    # if hasattr(operations, "edit_overview_uris"):
-    #     for op in operations.edit_overview_uris:
-    #         try:
-    #             uri = resolve_overview_edit_uri(op, registry, user_space, agent_space)
-    #             resolved.edit_overview_operations.append((op, uri))
-    #         except Exception as e:
-    #             resolved.errors.append(f"Failed to resolve edit_overview operation: {e}")
-
     # Resolve delete operations (already URI strings)
     if hasattr(operations, "delete_uris"):
         for uri in operations.delete_uris:
@@ -556,10 +499,6 @@ def validate_operations_uris(
         for resolved_op in resolved.operations:
             if not is_uri_allowed(resolved_op.uri, allowed_dirs, allowed_patterns):
                 errors.append(f"Operation URI not allowed: {resolved_op.uri}")
-
-        for _op, uri in resolved.edit_overview_operations:
-            if not is_uri_allowed(uri, allowed_dirs, allowed_patterns):
-                errors.append(f"Edit overview operation URI not allowed: {uri}")
 
         for _uri_str, uri in resolved.delete_operations:
             if not is_uri_allowed(uri, allowed_dirs, allowed_patterns):

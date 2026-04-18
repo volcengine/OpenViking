@@ -27,6 +27,7 @@ from openviking.models.embedder.base import (
     SparseEmbedderBase,
 )
 from openviking.models.embedder.cohere_embedders import CohereDenseEmbedder
+from openviking.models.embedder.dashscope_embedders import DashScopeDenseEmbedder
 
 try:
     from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
@@ -56,6 +57,8 @@ from openviking.models.embedder.voyage_embedders import VoyageDenseEmbedder
 __all__ = [
     # Cohere implementations
     "CohereDenseEmbedder",
+    # DashScope implementations
+    "DashScopeDenseEmbedder",
     # Base classes
     "EmbedResult",
     "EmbedderBase",

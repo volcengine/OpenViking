@@ -6,6 +6,7 @@ import json
 import pytest
 
 from openviking_cli.client.http import AsyncHTTPClient
+from openviking_cli.utils.config import OPENVIKING_CLI_CONFIG_ENV
 
 
 def test_async_http_client_loads_missing_fields_from_ovcli_config(tmp_path, monkeypatch):
@@ -22,7 +23,7 @@ def test_async_http_client_loads_missing_fields_from_ovcli_config(tmp_path, monk
             }
         )
     )
-    monkeypatch.setenv("OPENVIKING_CLI_CONFIG_FILE", str(config_path))
+    monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
 
     client = AsyncHTTPClient(url="http://explicit-host:1933")
 
@@ -46,7 +47,7 @@ def test_async_http_client_explicit_values_override_ovcli_config(tmp_path, monke
             }
         )
     )
-    monkeypatch.setenv("OPENVIKING_CLI_CONFIG_FILE", str(config_path))
+    monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
 
     client = AsyncHTTPClient(
         url="http://explicit-host:1933",
@@ -64,7 +65,7 @@ def test_async_http_client_explicit_values_override_ovcli_config(tmp_path, monke
 def test_async_http_client_rejects_unknown_ovcli_field(tmp_path, monkeypatch):
     config_path = tmp_path / "ovcli.conf"
     config_path.write_text(json.dumps({"ur": "http://localhost:1933"}))
-    monkeypatch.setenv("OPENVIKING_CLI_CONFIG_FILE", str(config_path))
+    monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
 
     with pytest.raises(ValueError, match=r"ovcli\.ur'.*ovcli\.url"):
         AsyncHTTPClient()
@@ -73,7 +74,7 @@ def test_async_http_client_rejects_unknown_ovcli_field(tmp_path, monkeypatch):
 def test_async_http_client_reports_invalid_ovcli_value_path(tmp_path, monkeypatch):
     config_path = tmp_path / "ovcli.conf"
     config_path.write_text(json.dumps({"url": "http://localhost:1933", "timeout": "fast"}))
-    monkeypatch.setenv("OPENVIKING_CLI_CONFIG_FILE", str(config_path))
+    monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
 
     with pytest.raises(ValueError, match=r"Invalid value for 'ovcli\.timeout'"):
         AsyncHTTPClient()
@@ -94,7 +95,7 @@ def test_async_http_client_accepts_ovcli_upload_section(tmp_path, monkeypatch):
             }
         )
     )
-    monkeypatch.setenv("OPENVIKING_CLI_CONFIG_FILE", str(config_path))
+    monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
 
     client = AsyncHTTPClient()
 
@@ -114,7 +115,7 @@ def test_async_http_client_rejects_unknown_ovcli_upload_field(tmp_path, monkeypa
             }
         )
     )
-    monkeypatch.setenv("OPENVIKING_CLI_CONFIG_FILE", str(config_path))
+    monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
 
     with pytest.raises(ValueError, match=r"ovcli\.upload\.unknown"):
         AsyncHTTPClient()

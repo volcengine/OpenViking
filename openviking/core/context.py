@@ -7,6 +7,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+from openviking.core.namespace import owner_fields_for_uri
 from openviking.utils.time_utils import format_iso8601, parse_iso_datetime
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.uri import VikingURI
@@ -71,6 +72,8 @@ class Context:
         session_id: Optional[str] = None,
         user: Optional[UserIdentifier] = None,
         account_id: Optional[str] = None,
+        owner_user_id: Optional[str] = None,
+        owner_agent_id: Optional[str] = None,
         owner_space: Optional[str] = None,
         id: Optional[str] = None,
     ):
@@ -97,6 +100,17 @@ class Context:
         self.session_id = session_id
         self.user = user
         self.account_id = account_id or (user.account_id if user else "default")
+        owner_fields = owner_fields_for_uri(
+            uri,
+            user=user,
+            account_id=self.account_id,
+        )
+        self.owner_user_id = (
+            owner_user_id if owner_user_id is not None else owner_fields["owner_user_id"]
+        )
+        self.owner_agent_id = (
+            owner_agent_id if owner_agent_id is not None else owner_fields["owner_agent_id"]
+        )
         self.owner_space = owner_space or self._derive_owner_space(user)
         self.vector: Optional[List[float]] = None
         self.vectorize = Vectorize(abstract)
@@ -106,9 +120,9 @@ class Context:
         if not user:
             return ""
         if self.uri.startswith("viking://agent/"):
-            return user.agent_space_name()
+            return user.agent_id
         if self.uri.startswith("viking://user/") or self.uri.startswith("viking://session/"):
-            return user.user_space_name()
+            return user.user_id
         return ""
 
     def _derive_context_type(self) -> str:
@@ -175,6 +189,8 @@ class Context:
             "related_uri": self.related_uri,
             "session_id": self.session_id,
             "account_id": self.account_id,
+            "owner_user_id": self.owner_user_id,
+            "owner_agent_id": self.owner_agent_id,
             "owner_space": self.owner_space,
         }
         if self.level is not None:
@@ -235,6 +251,8 @@ class Context:
             session_id=data.get("session_id"),
             user=user_obj,
             account_id=data.get("account_id"),
+            owner_user_id=data.get("owner_user_id"),
+            owner_agent_id=data.get("owner_agent_id"),
             owner_space=data.get("owner_space"),
         )
         obj.id = data.get("id", obj.id)

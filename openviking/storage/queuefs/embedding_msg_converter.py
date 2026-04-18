@@ -8,6 +8,7 @@ to EmbeddingMsg objects for asynchronous vector processing.
 """
 
 from openviking.core.context import Context, ContextLevel
+from openviking.core.namespace import owner_fields_for_uri
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.telemetry import get_current_telemetry
 from openviking_cli.utils import get_logger
@@ -48,6 +49,14 @@ class EmbeddingMsgConverter:
                 context_data["owner_space"] = owner_user.user_space_name()
             else:
                 context_data["owner_space"] = ""
+        if context_data.get("owner_user_id") is None and context_data.get("owner_agent_id") is None:
+            owner_fields = owner_fields_for_uri(
+                context_data.get("uri", ""),
+                user=context.user,
+                account_id=context_data.get("account_id"),
+            )
+            context_data["owner_user_id"] = owner_fields["owner_user_id"]
+            context_data["owner_agent_id"] = owner_fields["owner_agent_id"]
 
         # Derive level field for hierarchical retrieval.
         context_level = getattr(context, "level", None)

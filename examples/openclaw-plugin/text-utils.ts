@@ -490,6 +490,7 @@ export type ExtractedMessage = {
     text: string;
   } | {
     type: "tool";
+    toolCallId?: string;
     toolName: string;
     toolInput?: Record<string, unknown>;
     toolOutput: string;
@@ -562,6 +563,7 @@ export function extractNewTurnMessages(
           role: "user",
           parts: [{
             type: "tool",
+            toolCallId: toolCallId || undefined,
             toolName,
             toolInput,
             toolOutput: output,
@@ -595,6 +597,61 @@ export function extractNewTurnMessages(
   }
 
   return { messages: result, newCount: count };
+}
+
+export function extractNewTurnTexts(
+  messages: unknown[],
+  startIndex: number,
+): { texts: string[]; newCount: number } {
+  const texts: string[] = [];
+  let count = 0;
+
+  for (let i = startIndex; i < messages.length; i += 1) {
+    const msg = messages[i] as Record<string, unknown>;
+    if (!msg || typeof msg !== "object") continue;
+
+    const role = msg.role as string;
+    if (!role || role === "system") continue;
+    count += 1;
+
+    if (role === "toolResult") {
+      const toolName = typeof msg.toolName === "string" ? msg.toolName : "tool";
+      const output = formatToolResultContent(msg.content);
+      if (output) {
+        texts.push(`[${toolName} result]: ${output}`);
+      }
+      continue;
+    }
+
+    const content = msg.content;
+    if (typeof content === "string") {
+      const cleaned = sanitizeUserTextForCapture(content);
+      if (cleaned) {
+        texts.push(`[${role}]: ${cleaned}`);
+      }
+      continue;
+    }
+
+    if (!Array.isArray(content)) continue;
+    for (const block of content) {
+      const part = block as Record<string, unknown>;
+      if (part?.type === "text" && typeof part.text === "string") {
+        const cleaned = sanitizeUserTextForCapture(part.text);
+        if (cleaned) {
+          texts.push(`[${role}]: ${cleaned}`);
+        }
+        continue;
+      }
+      if (
+        role === "assistant" &&
+        (part?.type === "toolUse" || part?.type === "toolCall" || part?.type === "tool_call")
+      ) {
+        texts.push(formatToolUseBlock(part));
+      }
+    }
+  }
+
+  return { texts, newCount: count };
 }
 
 export function extractLatestUserText(messages: unknown[] | undefined): string {

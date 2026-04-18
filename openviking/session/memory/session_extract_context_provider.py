@@ -8,8 +8,9 @@ Session Extract Context Provider - 会话提取 Provider 实现
 
 import json
 import os
-from typing import Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List
 
+from openviking.core.namespace import agent_space_fragment, user_space_fragment
 from openviking.server.identity import RequestContext
 from openviking.session.memory.core import ExtractContextProvider
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
@@ -18,9 +19,12 @@ from openviking.session.memory.tools import (
     get_tool,
 )
 from openviking.storage.viking_fs import VikingFS
-from openviking.telemetry import tracer
+from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
+
+if TYPE_CHECKING:
+    from openviking.session.memory.memory_updater import ExtractContext
 
 logger = get_logger(__name__)
 
@@ -35,6 +39,10 @@ class SessionExtractContextProvider(ExtractContextProvider):
         self._registry = None  # 延迟加载
         self._schema_directories = None
         self._extract_context = None  # 缓存 ExtractContext 实例
+
+        # 读取 eager_prefetch 配置
+        config = get_openviking_config()
+        self._eager_prefetch = config.memory.eager_prefetch if config.memory else False
 
     def get_extract_context(self) -> "ExtractContext":
         """获取或创建 ExtractContext 实例（缓存）"""
@@ -92,7 +100,6 @@ The system automatically generates URIs based on memory_type and fields. Just pr
     See GenericOverviewEdit in the JSON Schema below.
         """
 
-
     def _build_conversation_message(self) -> Dict[str, Any]:
         """构建包含 Conversation History 的 user message"""
         from datetime import datetime
@@ -105,7 +112,7 @@ The system automatically generates URIs based on memory_type and fields. Just pr
             last_msg_time = None
 
         if first_msg_time:
-            session_time = datetime.fromisoformat(first_msg_time)
+            session_time = parse_iso_datetime(first_msg_time)
         else:
             session_time = datetime.now()
 
@@ -114,7 +121,7 @@ The system automatically generates URIs based on memory_type and fields. Just pr
 
         # 检查是否需要显示范围
         if last_msg_time and last_msg_time != first_msg_time:
-            last_time = datetime.fromisoformat(last_msg_time)
+            last_time = parse_iso_datetime(last_msg_time)
             time_display = f"{session_time_str} - {last_time.strftime('%Y-%m-%d %H:%M')}"
         else:
             time_display = session_time_str
@@ -229,8 +236,8 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                 continue
 
             # Replace variables in directory path with actual user/agent space
-            user_space = ctx.user.user_space_name() if ctx and ctx.user else "default"
-            agent_space = ctx.user.agent_space_name() if ctx and ctx.user else "default"
+            user_space = user_space_fragment(ctx) if ctx and ctx.user else "default"
+            agent_space = agent_space_fragment(ctx) if ctx and ctx.user else "default"
             import jinja2
 
             env = jinja2.Environment(autoescape=False)
@@ -286,6 +293,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         #         logger.warning(f"Failed to read .overview.md: {e}")
 
         # 在每个之前 ls 的目录内执行 search（替换原来的 ls 操作）
+        files_to_read_from_search = []  # 收集需要读取的文件（eager_prefetch 模式）
         if search_tool and viking_fs and ls_dirs:
             for dir_uri in ls_dirs:
                 # 创建只在该目录搜索的 tool_ctx
@@ -303,13 +311,16 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                     # 处理搜索结果
                     if isinstance(search_result, list):
                         result_value = [m.get("uri", "") for m in search_result]
+                        if self._eager_prefetch:
+                            files_to_read_from_search.extend(result_value)
                     elif isinstance(search_result, dict):
                         if "error" in search_result:
                             result_value = f"Error: {search_result.get('error')}"
                         else:
-                            result_value = [
-                                m.get("uri", "") for m in search_result.get("memories", [])
-                            ]
+                            uris = [m.get("uri", "") for m in search_result.get("memories", [])]
+                            result_value = uris
+                            if self._eager_prefetch:
+                                files_to_read_from_search.extend(uris)
                     else:
                         result_value = []
 
@@ -339,10 +350,31 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             except Exception as e:
                 logger.warning(f"Failed to read {file_uri}: {e}")
 
+        # eager_prefetch 模式：读取所有搜索到的文件内容
+        if self._eager_prefetch and read_tool and viking_fs:
+            for file_uri in files_to_read_from_search:
+                if not file_uri:
+                    continue
+                try:
+                    result_str = await read_tool.execute(viking_fs, tool_ctx, uri=file_uri)
+                    add_tool_call_pair_to_messages(
+                        messages=pre_fetch_messages,
+                        call_id=call_id_seq,
+                        tool_name="read",
+                        params={"uri": file_uri},
+                        result=result_str,
+                    )
+                    call_id_seq += 1
+                except Exception as e:
+                    logger.warning(f"Failed to read {file_uri}: {e}")
+
         return pre_fetch_messages
 
     def get_tools(self) -> List[str]:
-        """获取可用的工具列表 - 会话场景只使用 read"""
+        """获取可用的工具列表"""
+        if self._eager_prefetch:
+            # eager_prefetch 模式下不提供工具，所有内容已在 prefetch 中加载
+            return []
         return ["read"]
 
     def get_memory_schemas(self, ctx: RequestContext) -> List[Any]:

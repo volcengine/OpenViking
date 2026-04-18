@@ -15,6 +15,37 @@ class Role(str, Enum):
     USER = "user"
 
 
+class AuthMode(str, Enum):
+    """Authentication modes for OpenViking server."""
+
+    API_KEY = "api_key"
+    TRUSTED = "trusted"
+    DEV = "dev"
+
+
+@dataclass(frozen=True)
+class AccountNamespacePolicy:
+    """Account-level namespace isolation policy."""
+
+    isolate_user_scope_by_agent: bool = False
+    isolate_agent_scope_by_user: bool = False
+
+    @classmethod
+    def from_dict(cls, data: Optional[dict]) -> "AccountNamespacePolicy":
+        if not isinstance(data, dict):
+            return cls()
+        return cls(
+            isolate_user_scope_by_agent=bool(data.get("isolate_user_scope_by_agent", False)),
+            isolate_agent_scope_by_user=bool(data.get("isolate_agent_scope_by_user", False)),
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "isolate_user_scope_by_agent": self.isolate_user_scope_by_agent,
+            "isolate_agent_scope_by_user": self.isolate_agent_scope_by_user,
+        }
+
+
 @dataclass
 class ResolvedIdentity:
     """Output of auth middleware: raw identity resolved from API Key."""
@@ -23,6 +54,7 @@ class ResolvedIdentity:
     account_id: Optional[str] = None
     user_id: Optional[str] = None
     agent_id: Optional[str] = None
+    namespace_policy: AccountNamespacePolicy = field(default_factory=AccountNamespacePolicy)
 
 
 @dataclass
@@ -31,6 +63,7 @@ class RequestContext:
 
     user: UserIdentifier
     role: Role
+    namespace_policy: AccountNamespacePolicy = field(default_factory=AccountNamespacePolicy)
 
     @property
     def account_id(self) -> str:

@@ -22,6 +22,11 @@ ACCOUNT_DIMENSION_SUPPORTED_METRICS = frozenset(
         "openviking_embedding_requests_total",
         "openviking_embedding_latency_seconds",
         "openviking_embedding_errors_total",
+        "openviking_embedding_calls_total",
+        "openviking_embedding_call_duration_seconds",
+        "openviking_embedding_tokens_input_total",
+        "openviking_embedding_tokens_output_total",
+        "openviking_embedding_tokens_total",
         "openviking_http_requests_total",
         "openviking_http_request_duration_seconds",
         "openviking_http_inflight_requests",
@@ -45,6 +50,11 @@ ACCOUNT_DIMENSION_SUPPORTED_METRICS = frozenset(
         "openviking_vlm_tokens_input_total",
         "openviking_vlm_tokens_output_total",
         "openviking_vlm_tokens_total",
+        "openviking_rerank_calls_total",
+        "openviking_rerank_call_duration_seconds",
+        "openviking_rerank_tokens_input_total",
+        "openviking_rerank_tokens_output_total",
+        "openviking_rerank_tokens_total",
     }
 )
 
@@ -58,9 +68,8 @@ class MetricAccountDimensionConfig:
     account cap that protects Prometheus from unbounded tenant cardinality.
     """
 
-    # Enabled by default, but still allowlist-gated at write time.
-    enabled: bool = True
-    max_active_accounts: int = 100
+    enabled: bool = False
+    max_active_accounts: int = 0
     metric_allowlist: frozenset[str] = frozenset()
 
 
@@ -126,21 +135,20 @@ class MetricAccountDimensionPolicy:
             if not normalized:
                 continue
             if normalized.endswith("*"):
-                # Limited wildcard syntax: trailing '*' means prefix match.
-                # '*' alone (empty prefix) is ignored to reduce accidental broad exposure.
+                # Support a limited wildcard syntax: trailing '*' means prefix match.
                 prefix = normalized[:-1].strip()
                 if prefix:
                     prefixes.add(prefix)
                 continue
             exact.add(normalized)
         self._metric_allowlist_exact = frozenset(exact)
-        # Tuple keeps iteration deterministic and slightly faster than set in hot path.
         self._metric_allowlist_prefixes = tuple(sorted(prefixes))
         self._max_active_accounts = max(0, int(max_active_accounts))
         self._lock = threading.Lock()
         self._active_accounts: set[str] = set()
 
     def _is_metric_allowlisted(self, metric_name: str) -> bool:
+        """Return whether the metric name passes the allowlist gate (exact or prefix '*')."""
         name = str(metric_name)
         if name in self._metric_allowlist_exact:
             return True
