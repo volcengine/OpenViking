@@ -7,7 +7,7 @@ import {
   toJsonLog,
 } from "./memory-ranking.js";
 import { withTimeout } from "./process-manager.js";
-import { isTranscriptLikeIngest, sanitizeUserTextForCapture } from "./text-utils.js";
+import { sanitizeUserTextForCapture } from "./text-utils.js";
 
 type RecallLogger = {
   warn?: (message: string) => void;
@@ -286,35 +286,4 @@ export async function buildRecallPromptSection(
     logger.warn?.(`openviking: auto-recall failed: ${String(err)}`);
     return { estimatedTokens: 0, memories: [] };
   }
-}
-
-export function buildIngestReplyAssistSection(
-  queryText: string,
-  cfg: Required<MemoryOpenVikingConfig>,
-  verboseLog?: (message: string) => void,
-): string | undefined {
-  if (!cfg.ingestReplyAssist) {
-    return undefined;
-  }
-
-  const decision = isTranscriptLikeIngest(queryText, {
-    minSpeakerTurns: cfg.ingestReplyAssistMinSpeakerTurns,
-    minChars: cfg.ingestReplyAssistMinChars,
-  });
-  if (!decision.shouldAssist) {
-    return undefined;
-  }
-
-  verboseLog?.(
-    `openviking: ingest-reply-assist applied (reason=${decision.reason}, speakerTurns=${decision.speakerTurns}, chars=${decision.chars})`,
-  );
-
-  return (
-    "<ingest-reply-assist>\n" +
-    "The latest user input looks like a multi-speaker transcript used for memory ingestion.\n" +
-    "Reply with 1-2 concise sentences to acknowledge or summarize key points.\n" +
-    "Do not output NO_REPLY or an empty reply.\n" +
-    "Do not fabricate facts beyond the provided transcript and recalled memories.\n" +
-    "</ingest-reply-assist>"
-  );
 }

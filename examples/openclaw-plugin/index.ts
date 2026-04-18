@@ -38,7 +38,6 @@ import {
   prepareLocalPort,
 } from "./process-manager.js";
 import {
-  buildIngestReplyAssistSection,
   buildMemoryLines,
   buildMemoryLinesWithBudget,
   estimateTokenCount,
@@ -1443,15 +1442,6 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
               prependContextParts.push(recallPrompt.section);
             }
           }
-        }
-
-        const ingestReplyAssist = buildIngestReplyAssistSection(
-          queryText,
-          cfg,
-          verboseRoutingInfo,
-        );
-        if (ingestReplyAssist) {
-          prependContextParts.push(ingestReplyAssist);
         }
 
         if (prependContextParts.length > 0) {

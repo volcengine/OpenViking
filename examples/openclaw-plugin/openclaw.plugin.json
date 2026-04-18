@@ -186,21 +186,6 @@
           "type": "string"
         }
       },
-      "ingestReplyAssist": {
-        "type": "boolean"
-      },
-      "ingestReplyAssistMinSpeakerTurns": {
-        "type": "number"
-      },
-      "ingestReplyAssistMinChars": {
-        "type": "number"
-      },
-      "ingestReplyAssistIgnoreSessionPatterns": {
-        "type": "array",
-        "items": {
-          "type": "string"
-        }
-      },
       "emitStandardDiagnostics": {
         "type": "boolean"
       },

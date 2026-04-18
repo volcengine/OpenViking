@@ -14,7 +14,6 @@ import {
   toJsonLog,
 } from "./memory-ranking.js";
 import {
-  buildIngestReplyAssistSection,
   buildRecallPromptSection,
   prepareRecallQuery,
 } from "./recall-context.js";
@@ -868,12 +867,6 @@ export function createMemoryOpenVikingContextEngine(params: {
           ? (message: string) => logger.info(message)
           : undefined;
 
-        const ingestReplyAssist = buildIngestReplyAssistSection(
-          recallQuery.query,
-          cfg,
-          runtimeLog,
-        );
-
         const [ctxSettled, recallSettled] = await Promise.allSettled([
           withTimeout(
             client.getSessionContext(
@@ -920,7 +913,6 @@ export function createMemoryOpenVikingContextEngine(params: {
             : null;
         const passthroughSystemPrompt = joinSystemPromptSections([
           recallPrompt.section,
-          ingestReplyAssist,
         ]);
         const passthroughResult = (): AssembleResult => ({
           messages,
@@ -968,7 +960,6 @@ export function createMemoryOpenVikingContextEngine(params: {
         const assembledSystemPrompt = joinSystemPromptSections([
           hasArchives ? buildSystemPromptAddition() : undefined,
           recallPrompt.section,
-          ingestReplyAssist,
         ]);
 
         diag("assemble_result", OVSessionId, {

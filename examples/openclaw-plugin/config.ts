@@ -158,10 +158,6 @@ export const memoryOpenVikingConfigSchema = {
         "recallTokenBudget",
         "commitTokenThreshold",
         "bypassSessionPatterns",
-        "ingestReplyAssist",
-        "ingestReplyAssistMinSpeakerTurns",
-        "ingestReplyAssistMinChars",
-        "ingestReplyAssistIgnoreSessionPatterns",
         "emitStandardDiagnostics",
         "logFindRequests",
       ],
@@ -239,10 +235,7 @@ export const memoryOpenVikingConfigSchema = {
       ),
       bypassSessionPatterns: toStringArray(
         cfg.bypassSessionPatterns,
-        toStringArray(
-          cfg.ingestReplyAssistIgnoreSessionPatterns,
-          DEFAULT_BYPASS_SESSION_PATTERNS,
-        ),
+        DEFAULT_BYPASS_SESSION_PATTERNS,
       ),
       emitStandardDiagnostics:
         typeof cfg.emitStandardDiagnostics === "boolean"
