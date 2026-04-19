@@ -602,3 +602,113 @@ class ContentWriteCoordinator:
         if "/skills/" in uri or uri.startswith("viking://agent/skills/"):
             return "skill"
         return "resource"
+
+    async def create_memory(
+        self,
+        *,
+        uri: str,
+        content: str,
+        ctx: RequestContext,
+        mode: str = "replace",
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Create or update a memory file at an arbitrary (scope, bucket) path.
+
+        Unlike ``write``, this does not require the target file to exist. The
+        parent directory tree is created on demand and the file is written with
+        verbatim content, then indexed via the standard memory-refresh path.
+        """
+        normalized_uri = VikingURI.normalize(uri)
+        self._validate_mode(mode)
+        self._validate_target_uri(normalized_uri)
+
+        if self._context_type_for_uri(normalized_uri) != "memory":
+            raise InvalidArgumentError(
+                f"create_memory requires a memory URI (viking://<scope>/<id>/memories/...): {uri}"
+            )
+
+        existing_stat: Dict[str, Any] = {}
+        try:
+            existing_stat = await self._viking_fs.stat(normalized_uri, ctx=ctx)
+        except Exception:
+            existing_stat = {}
+        if existing_stat.get("isDir"):
+            raise InvalidArgumentError(f"create_memory only supports files, got directory: {uri}")
+
+        existed_before = bool(existing_stat)
+        if not existed_before and mode == "append":
+            mode = "replace"
+
+        root_uri = await self._resolve_memory_root_uri(normalized_uri)
+        written_bytes = len(content.encode("utf-8"))
+        telemetry_id = get_current_telemetry().telemetry_id
+
+        lock_manager = get_lock_manager()
+        handle = lock_manager.create_handle()
+        lock_path = self._viking_fs._uri_to_path(root_uri, ctx=ctx)
+        acquired = await lock_manager.acquire_subtree(handle, lock_path)
+        if not acquired:
+            await lock_manager.release(handle)
+            raise InvalidArgumentError(
+                f"resource is busy and cannot be written now: {normalized_uri}"
+            )
+
+        lock_transferred = False
+        try:
+            if wait and telemetry_id:
+                get_request_wait_tracker().register_request(telemetry_id)
+            if existed_before:
+                await self._write_in_place(normalized_uri, content, mode=mode, ctx=ctx)
+            else:
+                await self._viking_fs.write_file(normalized_uri, content, ctx=ctx)
+            await self._vectorize_single_file(normalized_uri, context_type="memory", ctx=ctx)
+            await self._enqueue_memory_refresh(
+                root_uri=root_uri,
+                modified_uri=normalized_uri,
+                ctx=ctx,
+                lifecycle_lock_handle_id=handle.id,
+            )
+            lock_transferred = True
+            queue_status = (
+                await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
+                if wait
+                else None
+            )
+            return {
+                "uri": normalized_uri,
+                "root_uri": root_uri,
+                "context_type": "memory",
+                "mode": mode,
+                "created": not existed_before,
+                "written_bytes": written_bytes,
+                "semantic_updated": True,
+                "vector_updated": True,
+                "queue_status": queue_status,
+            }
+        except Exception:
+            if not lock_transferred:
+                await lock_manager.release(handle)
+            raise
+        finally:
+            if wait and telemetry_id:
+                get_request_wait_tracker().cleanup(telemetry_id)
+
+    async def _resolve_memory_root_uri(self, uri: str) -> str:
+        parsed = VikingURI(uri)
+        parts = [part for part in parsed.full_path.split("/") if part]
+        try:
+            memories_idx = parts.index("memories")
+        except ValueError as exc:
+            raise InvalidArgumentError(
+                f"memory uri must contain a 'memories' segment: {uri}"
+            ) from exc
+        tail = parts[memories_idx + 1 :]
+        if not tail:
+            raise InvalidArgumentError(f"memory uri must include a bucket or singleton file: {uri}")
+        # Singleton memory file (e.g. profile.md) lives directly under memories/;
+        # its root is the memories directory itself. Bucket subdirectories
+        # (preferences/, entities/, etc.) use the bucket dir as the root.
+        if len(tail) == 1:
+            return VikingURI.build(*parts[: memories_idx + 1])
+        return VikingURI.build(*parts[: memories_idx + 2])

@@ -249,3 +249,24 @@ class FSService:
             wait=wait,
             timeout=timeout,
         )
+
+    async def create_memory(
+        self,
+        uri: str,
+        content: str,
+        ctx: RequestContext,
+        mode: str = "replace",
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Create or update a memory file with verbatim content and index it."""
+        viking_fs = self._ensure_initialized()
+        coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
+        return await coordinator.create_memory(
+            uri=uri,
+            content=content,
+            ctx=ctx,
+            mode=mode,
+            wait=wait,
+            timeout=timeout,
+        )
