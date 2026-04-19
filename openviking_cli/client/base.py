@@ -146,6 +146,19 @@ class BaseClient(ABC):
         """Write text content to an existing file and refresh semantics/vectors."""
         ...
 
+    @abstractmethod
+    async def import_memory(
+        self,
+        uri: str,
+        content: str,
+        mode: str = "replace",
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Create or update a memory file and refresh semantics/vectors."""
+        ...
+
     # ============= Search =============
 
     @abstractmethod

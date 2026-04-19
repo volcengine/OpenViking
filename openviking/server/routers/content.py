@@ -34,6 +34,19 @@ class WriteContentRequest(BaseModel):
     telemetry: TelemetryRequest = False
 
 
+class ImportMemoryRequest(BaseModel):
+    """Request to create or update a memory file."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    uri: str
+    content: str
+    mode: str = "replace"
+    wait: bool = False
+    timeout: float | None = None
+    telemetry: TelemetryRequest = False
+
+
 router = APIRouter(prefix="/api/v1/content", tags=["content"])
 
 
@@ -158,6 +171,30 @@ async def write(
         operation="content.write",
         telemetry=request.telemetry,
         fn=lambda: service.fs.write(
+            uri=request.uri,
+            content=request.content,
+            ctx=_ctx,
+            mode=request.mode,
+            wait=request.wait,
+            timeout=request.timeout,
+        ),
+    )
+    return Response(
+        status="ok",
+        result=execution.result,
+        telemetry=execution.telemetry,
+    ).model_dump(exclude_none=True)
+@router.post("/import-memory")
+async def import_memory(
+    request: ImportMemoryRequest = Body(...),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Create or update a memory file and refresh semantics/vectors."""
+    service = get_service()
+    execution = await run_operation(
+        operation="content.import_memory",
+        telemetry=request.telemetry,
+        fn=lambda: service.fs.import_memory(
             uri=request.uri,
             content=request.content,
             ctx=_ctx,

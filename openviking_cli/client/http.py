@@ -584,6 +584,32 @@ class AsyncHTTPClient(BaseClient):
         response_data = self._handle_response_data(response)
         return self._attach_telemetry(response_data.get("result") or {}, response_data)
 
+    async def import_memory(
+        self,
+        uri: str,
+        content: str,
+        mode: str = "replace",
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Create or update a memory file and refresh semantics/vectors."""
+        telemetry = self._validate_telemetry(telemetry)
+        uri = VikingURI.normalize(uri)
+        response = await self._http.post(
+            "/api/v1/content/import-memory",
+            json={
+                "uri": uri,
+                "content": content,
+                "mode": mode,
+                "wait": wait,
+                "timeout": timeout,
+                "telemetry": telemetry,
+            },
+        )
+        response_data = self._handle_response_data(response)
+        return self._attach_telemetry(response_data.get("result") or {}, response_data)
+
     # ============= Search =============
 
     async def find(

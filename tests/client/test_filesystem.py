@@ -204,3 +204,36 @@ async def test_sync_openviking_write_updates_existing_file(test_data_dir, sample
     finally:
         client.close()
         await AsyncOpenViking.reset()
+
+
+async def test_sync_openviking_import_memory_delegates_to_async_client(test_data_dir):
+    """Sync OpenViking exposes import_memory() and delegates to the async client."""
+    await AsyncOpenViking.reset()
+    client = OpenViking(path=str(test_data_dir))
+
+    try:
+        client._async_client.import_memory = AsyncMock(
+            return_value={"uri": "viking://user/memories/profile.md"}
+        )
+
+        result = client.import_memory(
+            "viking://user/memories/profile.md",
+            "imported",
+            mode="replace",
+            wait=True,
+            timeout=5.0,
+            telemetry=False,
+        )
+
+        assert result == {"uri": "viking://user/memories/profile.md"}
+        client._async_client.import_memory.assert_awaited_once_with(
+            uri="viking://user/memories/profile.md",
+            content="imported",
+            mode="replace",
+            wait=True,
+            timeout=5.0,
+            telemetry=False,
+        )
+    finally:
+        client.close()
+        await AsyncOpenViking.reset()

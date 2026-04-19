@@ -22,6 +22,11 @@ async def test_write_endpoint_registered(client):
     assert resp.status_code == 405
 
 
+async def test_import_memory_endpoint_registered(client):
+    resp = await client.get("/api/v1/content/import-memory")
+    assert resp.status_code == 405
+
+
 async def test_write_rejects_directory_uri(client_with_resource):
     client, uri = client_with_resource
     resp = await client.post(
@@ -113,3 +118,37 @@ async def test_write_rejects_removed_semantic_flags(client_with_resource):
     )
 
     assert resp.status_code == 422
+
+
+async def test_import_memory_creates_profile_file(client):
+    uri = "viking://user/memories/profile.md"
+    resp = await client.post(
+        "/api/v1/content/import-memory",
+        json={
+            "uri": uri,
+            "content": "# Imported Profile\n\nOpenClaw durable memory.",
+            "wait": True,
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["uri"] == uri
+    assert body["result"]["mode"] == "replace"
+
+    read_resp = await client.get("/api/v1/content/read", params={"uri": uri})
+    assert read_resp.status_code == 200
+    assert read_resp.json()["result"] == "# Imported Profile\n\nOpenClaw durable memory."
+
+
+async def test_import_memory_rejects_resource_uri(client):
+    resp = await client.post(
+        "/api/v1/content/import-memory",
+        json={"uri": "viking://resources/demo.md", "content": "nope"},
+    )
+
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
