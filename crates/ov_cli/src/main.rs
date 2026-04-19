@@ -801,6 +801,8 @@ async fn main() {
             let cmd = commands::chat::ChatCommand {
                 endpoint,
                 api_key,
+                account: ctx.config.account.clone(),
+                user: ctx.config.user.clone(),
                 session: session_id,
                 sender,
                 message,

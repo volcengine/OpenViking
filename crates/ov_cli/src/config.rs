@@ -27,7 +27,9 @@ pub struct Config {
     #[serde(default = "default_url")]
     pub url: String,
     pub api_key: Option<String>,
+    #[serde(alias = "account_id")]
     pub account: Option<String>,
+    #[serde(alias = "user_id")]
     pub user: Option<String>,
     pub agent_id: Option<String>,
     #[serde(default = "default_timeout")]
@@ -180,6 +182,21 @@ mod tests {
         assert!(config.upload.ignore_dirs.is_none());
         assert!(config.upload.include.is_none());
         assert!(config.upload.exclude.is_none());
+    }
+
+    #[test]
+    fn config_deserializes_account_id_and_user_id_aliases() {
+        let config: Config = serde_json::from_str(
+            r#"{
+                "url": "http://localhost:1933",
+                "account_id": "acme",
+                "user_id": "alice"
+            }"#,
+        )
+        .expect("config should deserialize aliases");
+
+        assert_eq!(config.account.as_deref(), Some("acme"));
+        assert_eq!(config.user.as_deref(), Some("alice"));
     }
 
     #[test]
