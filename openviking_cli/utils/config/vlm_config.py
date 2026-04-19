@@ -34,7 +34,13 @@ class VLMConfig(BaseModel):
     thinking: bool = Field(default=False, description="Enable thinking mode for VolcEngine models")
 
     max_concurrent: int = Field(
-        default=100, description="Maximum number of concurrent LLM calls for semantic processing"
+        default=100,
+        description=(
+            "Maximum number of concurrent async LLM calls per VLM instance. "
+            "Caps all get_completion_async / get_vision_completion_async calls, "
+            "including semantic queue processing and session archive summary "
+            "generation. Set <= 0 to disable."
+        ),
     )
 
     api_version: Optional[str] = Field(

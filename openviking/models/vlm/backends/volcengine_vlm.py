@@ -161,9 +161,10 @@ class VolcEngineVLM(OpenAIVLM):
         last_error = None
         for attempt in range(self.max_retries + 1):
             try:
-                t0 = time.perf_counter()
-                response = await client.chat.completions.create(**kwargs)
-                elapsed = time.perf_counter() - t0
+                async with self._acquire_call_slot():
+                    t0 = time.perf_counter()
+                    response = await client.chat.completions.create(**kwargs)
+                    elapsed = time.perf_counter() - t0
                 self._update_token_usage_from_response(response, duration_seconds=elapsed)
                 result = self._build_vlm_response(response, has_tools=bool(tools))
                 if tools:
@@ -366,9 +367,10 @@ class VolcEngineVLM(OpenAIVLM):
             kwargs["tool_choice"] = "auto"
 
         client = self.get_async_client()
-        t0 = time.perf_counter()
-        response = await client.chat.completions.create(**kwargs)
-        elapsed = time.perf_counter() - t0
+        async with self._acquire_call_slot():
+            t0 = time.perf_counter()
+            response = await client.chat.completions.create(**kwargs)
+            elapsed = time.perf_counter() - t0
         self._update_token_usage_from_response(response, duration_seconds=elapsed)
         result = self._build_vlm_response(response, has_tools=bool(tools))
         if tools:

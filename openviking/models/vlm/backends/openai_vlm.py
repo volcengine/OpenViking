@@ -364,9 +364,10 @@ class OpenAIVLM(VLMBase):
         kwargs = self._build_text_kwargs(prompt, tools, tool_choice, messages, thinking)
 
         async def _call() -> Union[str, VLMResponse]:
-            t0 = time.perf_counter()
-            response = await client.chat.completions.create(**kwargs)
-            elapsed = time.perf_counter() - t0
+            async with self._acquire_call_slot():
+                t0 = time.perf_counter()
+                response = await client.chat.completions.create(**kwargs)
+                elapsed = time.perf_counter() - t0
             if tools:
                 self._update_token_usage_from_response(response, duration_seconds=elapsed)
                 return self._build_vlm_response(response, has_tools=True)
@@ -474,9 +475,10 @@ class OpenAIVLM(VLMBase):
         kwargs = self._build_vision_kwargs(prompt, images, tools, None, messages, thinking)
 
         async def _call() -> Union[str, VLMResponse]:
-            t0 = time.perf_counter()
-            response = await client.chat.completions.create(**kwargs)
-            elapsed = time.perf_counter() - t0
+            async with self._acquire_call_slot():
+                t0 = time.perf_counter()
+                response = await client.chat.completions.create(**kwargs)
+                elapsed = time.perf_counter() - t0
             if tools:
                 self._update_token_usage_from_response(response, duration_seconds=elapsed)
                 return self._build_vlm_response(response, has_tools=True)

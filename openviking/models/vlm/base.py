@@ -2,12 +2,14 @@
 # SPDX-License-Identifier: AGPL-3.0
 """VLM base interface and abstract classes"""
 
+import asyncio
 import logging
 import re
 from abc import ABC, abstractmethod
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, AsyncIterator, Dict, List, Optional, Union
 
 from openviking.utils.time_utils import format_iso8601
 
@@ -64,9 +66,29 @@ class VLMBase(ABC):
         self.max_tokens = config.get("max_tokens")
         self.extra_headers = config.get("extra_headers")
         self.stream = config.get("stream", False)
+        self.max_concurrent = config.get("max_concurrent", 100)
 
         # Token usage tracking
         self._token_tracker = TokenUsageTracker()
+
+        # Lazy-created per-instance semaphore that caps concurrent async calls.
+        # Created on first use so the semaphore binds to the running event loop.
+        self._call_semaphore: Optional[asyncio.Semaphore] = None
+
+    @asynccontextmanager
+    async def _acquire_call_slot(self) -> AsyncIterator[None]:
+        """Cap concurrent async LLM calls at ``max_concurrent``.
+
+        The semaphore is created lazily on first use so it attaches to the
+        running event loop. Values <= 0 disable capping.
+        """
+        if self.max_concurrent is None or self.max_concurrent <= 0:
+            yield
+            return
+        if self._call_semaphore is None:
+            self._call_semaphore = asyncio.Semaphore(self.max_concurrent)
+        async with self._call_semaphore:
+            yield
 
     @abstractmethod
     def get_completion(
