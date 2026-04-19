@@ -14,7 +14,6 @@ import {
   toJsonLog,
 } from "./memory-ranking.js";
 import {
-  buildIngestReplyAssistSection,
   buildRecallPromptSection,
   prepareRecallQuery,
 } from "./recall-context.js";
@@ -905,11 +904,6 @@ export function createMemoryOpenVikingContextEngine(params: {
         }
         const runtimeLog = (message: string) => warnOrInfo(logger, message);
 
-        const ingestReplyAssist = buildIngestReplyAssistSection(
-          recallQuery.query,
-          cfg,
-          runtimeLog,
-        );
         const recallCacheKey = makeRecallCacheKey({
           queryText: recallQuery.query,
           agentId,
@@ -991,7 +985,6 @@ export function createMemoryOpenVikingContextEngine(params: {
             : null;
         const passthroughSystemPrompt = joinSystemPromptSections([
           recallPrompt.section,
-          ingestReplyAssist,
         ]);
         const passthroughResult = (): AssembleResult => ({
           messages,
@@ -1073,7 +1066,6 @@ export function createMemoryOpenVikingContextEngine(params: {
         const assembledSystemPrompt = joinSystemPromptSections([
           hasArchives ? buildSystemPromptAddition() : undefined,
           recallPrompt.section,
-          ingestReplyAssist,
         ]);
 
         diag("assemble_result", OVSessionId, {

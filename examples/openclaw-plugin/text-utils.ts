@@ -27,8 +27,6 @@ const SUBAGENT_CONTEXT_RE = /^\s*\[Subagent Context\]/i;
 const MEMORY_INTENT_RE = /记住|记下|remember|save|store|偏好|preference|规则|rule|事实|fact/i;
 const QUESTION_CUE_RE =
   /[?？]|\b(?:what|when|where|who|why|how|which|can|could|would|did|does|is|are)\b|^(?:请问|能否|可否|怎么|如何|什么时候|谁|什么|哪|是否)/i;
-const SPEAKER_TAG_RE = /(?:^|\s)([A-Za-z\u4e00-\u9fa5][A-Za-z0-9_\u4e00-\u9fa5-]{1,30}):\s/g;
-
 export const CAPTURE_LIMIT = 3;
 
 function resolveCaptureMinLength(text: string): number {
@@ -88,14 +86,6 @@ export function looksLikeQuestionOnlyText(text: string): boolean {
   return true;
 }
 
-export type TranscriptLikeIngestDecision = {
-  shouldAssist: boolean;
-  reason: string;
-  normalizedText: string;
-  speakerTurns: number;
-  chars: number;
-};
-
 export function compileSessionPattern(pattern: string): RegExp {
   const escaped = pattern
     .replace(/[.+^${}()|[\]\\]/g, "\\$&")
@@ -140,113 +130,6 @@ export function shouldBypassSession(
     return false;
   }
   return matchesSessionPattern(candidate, patterns);
-}
-
-export function shouldSkipIngestReplyAssistSession(
-  params: {
-    sessionId?: string;
-    sessionKey?: string;
-  },
-  patterns: RegExp[],
-): boolean {
-  return shouldBypassSession(params, patterns);
-}
-
-function countSpeakerTurns(text: string): number {
-  let count = 0;
-  for (const _match of text.matchAll(SPEAKER_TAG_RE)) {
-    count += 1;
-  }
-  return count;
-}
-
-export function isTranscriptLikeIngest(
-  text: string,
-  options: {
-    minSpeakerTurns: number;
-    minChars: number;
-  },
-): TranscriptLikeIngestDecision {
-  const normalizedText = sanitizeUserTextForCapture(text.trim());
-  if (!normalizedText) {
-    return {
-      shouldAssist: false,
-      reason: "empty_text",
-      normalizedText,
-      speakerTurns: 0,
-      chars: 0,
-    };
-  }
-
-  if (COMMAND_TEXT_RE.test(normalizedText)) {
-    return {
-      shouldAssist: false,
-      reason: "command_text",
-      normalizedText,
-      speakerTurns: 0,
-      chars: normalizedText.length,
-    };
-  }
-
-  if (SUBAGENT_CONTEXT_RE.test(normalizedText)) {
-    return {
-      shouldAssist: false,
-      reason: "subagent_context",
-      normalizedText,
-      speakerTurns: 0,
-      chars: normalizedText.length,
-    };
-  }
-
-  if (NON_CONTENT_TEXT_RE.test(normalizedText)) {
-    return {
-      shouldAssist: false,
-      reason: "non_content_text",
-      normalizedText,
-      speakerTurns: 0,
-      chars: normalizedText.length,
-    };
-  }
-
-  if (looksLikeQuestionOnlyText(normalizedText)) {
-    return {
-      shouldAssist: false,
-      reason: "question_text",
-      normalizedText,
-      speakerTurns: 0,
-      chars: normalizedText.length,
-    };
-  }
-
-  const chars = normalizedText.length;
-  if (chars < options.minChars) {
-    return {
-      shouldAssist: false,
-      reason: "chars_below_threshold",
-      normalizedText,
-      speakerTurns: 0,
-      chars,
-    };
-  }
-
-  const speakerTurns = countSpeakerTurns(normalizedText);
-  if (speakerTurns < options.minSpeakerTurns) {
-    return {
-      shouldAssist: false,
-      reason: "speaker_turns_below_threshold",
-      normalizedText,
-      speakerTurns,
-      chars,
-    };
-  }
-
-  return {
-    shouldAssist: true,
-    reason: "transcript_like_ingest",
-    normalizedText,
-    speakerTurns,
-    chars,
-  };
 }
 
 function normalizeDedupeText(text: string): string {

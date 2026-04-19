@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import select
+import socket
 import sys
 import time
 import warnings
@@ -81,6 +82,32 @@ def get_or_create_machine_id() -> str:
 def _init_bot_data(config):
     """Initialize bot data directory and set global paths."""
     set_bot_data_path(config.bot_data_path)
+
+
+def _abort_if_port_in_use(port: int, label: str) -> None:
+    """Exit with a clear message if anything is already listening on ``port``.
+
+    Without this check, a stale process holding the port keeps serving
+    traffic while a freshly-started gateway silently fails to bind — the
+    operator believes they upgraded but the old (potentially unpatched)
+    binary is still answering requests.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        try:
+            s.connect(("127.0.0.1", port))
+            in_use = True
+        except (ConnectionRefusedError, socket.timeout, OSError):
+            in_use = False
+    if in_use:
+        print(
+            f"Error: {label} port {port} is already in use.\n"
+            f"  A previous process is still bound — refusing to start a duplicate.\n"
+            f"  Identify it:  lsof -nP -iTCP:{port} -sTCP:LISTEN\n"
+            f"  Kill it, then retry.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +275,8 @@ def gateway(
     config_path: str = typer.Option(None, "--config", "-c", help="ov.conf path"),
 ):
     """Start the vikingbot gateway with OpenAPI chat enabled by default."""
+
+    _abort_if_port_in_use(port, "vikingbot gateway")
 
     if verbose:
         import logging

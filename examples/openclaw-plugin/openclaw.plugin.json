@@ -108,29 +108,6 @@
       "advanced": true,
       "help": "Minimum estimated pending tokens before auto-commit triggers. Set to 0 to commit every turn."
     },
-    "ingestReplyAssist": {
-      "label": "Ingest Reply Assist",
-      "help": "When transcript-like memory ingestion is detected, add a lightweight reply instruction to reduce NO_REPLY.",
-      "advanced": true
-    },
-    "ingestReplyAssistMinSpeakerTurns": {
-      "label": "Ingest Min Speaker Turns",
-      "placeholder": "2",
-      "help": "Minimum speaker-tag turns (e.g. Name:) to detect transcript-like ingest text.",
-      "advanced": true
-    },
-    "ingestReplyAssistMinChars": {
-      "label": "Ingest Min Chars",
-      "placeholder": "120",
-      "help": "Minimum sanitized text length required before ingest reply assist can trigger.",
-      "advanced": true
-    },
-    "ingestReplyAssistIgnoreSessionPatterns": {
-      "label": "Deprecated Ingest Ignore Session Patterns",
-      "placeholder": "agent:*:cron:**",
-      "help": "Deprecated alias for bypassSessionPatterns. Matching sessions now bypass OpenViking entirely.",
-      "advanced": true
-    },
     "emitStandardDiagnostics": {
       "label": "Standard diagnostics (diag JSON lines)",
       "advanced": true,
@@ -204,21 +181,6 @@
         "type": "number"
       },
       "bypassSessionPatterns": {
-        "type": "array",
-        "items": {
-          "type": "string"
-        }
-      },
-      "ingestReplyAssist": {
-        "type": "boolean"
-      },
-      "ingestReplyAssistMinSpeakerTurns": {
-        "type": "number"
-      },
-      "ingestReplyAssistMinChars": {
-        "type": "number"
-      },
-      "ingestReplyAssistIgnoreSessionPatterns": {
         "type": "array",
         "items": {
           "type": "string"

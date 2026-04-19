@@ -30,7 +30,6 @@ function makeEngine() {
     autoCapture: false,
     autoRecall: true,
     adaptiveRecall: true,
-    ingestReplyAssist: false,
   });
   const logger = makeLogger();
   const client = {

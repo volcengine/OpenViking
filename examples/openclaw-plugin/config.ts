@@ -37,11 +37,6 @@ export type MemoryOpenVikingConfig = {
   };
   commitTokenThreshold?: number;
   bypassSessionPatterns?: string[];
-  ingestReplyAssist?: boolean;
-  ingestReplyAssistMinSpeakerTurns?: number;
-  ingestReplyAssistMinChars?: number;
-  /** Deprecated alias for bypassSessionPatterns. */
-  ingestReplyAssistIgnoreSessionPatterns?: string[];
   /**
    * When true (default), emit structured `openviking: diag {...}` lines (and any future
    * standard-diagnostics file writes) for assemble/afterTurn. Set false to disable.
@@ -70,10 +65,6 @@ const DEFAULT_RECALL_BACKGROUND_REFRESH = true;
 const DEFAULT_RECALL_TIER_OVERRIDES = { full: [] as string[], none: [] as string[] };
 const DEFAULT_COMMIT_TOKEN_THRESHOLD = 20000;
 const DEFAULT_BYPASS_SESSION_PATTERNS: string[] = [];
-const DEFAULT_INGEST_REPLY_ASSIST = true;
-const DEFAULT_INGEST_REPLY_ASSIST_MIN_SPEAKER_TURNS = 2;
-const DEFAULT_INGEST_REPLY_ASSIST_MIN_CHARS = 120;
-const DEFAULT_INGEST_REPLY_ASSIST_IGNORE_SESSION_PATTERNS: string[] = [];
 const DEFAULT_EMIT_STANDARD_DIAGNOSTICS = false;
 const DEFAULT_LOCAL_CONFIG_PATH = join(homedir(), ".openviking", "ov.conf");
 
@@ -229,10 +220,6 @@ export const memoryOpenVikingConfigSchema = {
         "recallTierOverrides",
         "commitTokenThreshold",
         "bypassSessionPatterns",
-        "ingestReplyAssist",
-        "ingestReplyAssistMinSpeakerTurns",
-        "ingestReplyAssistMinChars",
-        "ingestReplyAssistIgnoreSessionPatterns",
         "emitStandardDiagnostics",
         "logFindRequests",
       ],
@@ -338,34 +325,7 @@ export const memoryOpenVikingConfigSchema = {
       ),
       bypassSessionPatterns: toStringArray(
         cfg.bypassSessionPatterns,
-        toStringArray(
-          cfg.ingestReplyAssistIgnoreSessionPatterns,
-          DEFAULT_BYPASS_SESSION_PATTERNS,
-        ),
-      ),
-      ingestReplyAssist: cfg.ingestReplyAssist === true,
-      ingestReplyAssistMinSpeakerTurns: Math.max(
-        1,
-        Math.min(
-          12,
-          Math.floor(
-            toNumber(
-              cfg.ingestReplyAssistMinSpeakerTurns,
-              DEFAULT_INGEST_REPLY_ASSIST_MIN_SPEAKER_TURNS,
-            ),
-          ),
-        ),
-      ),
-      ingestReplyAssistMinChars: Math.max(
-        32,
-        Math.min(
-          10000,
-          Math.floor(toNumber(cfg.ingestReplyAssistMinChars, DEFAULT_INGEST_REPLY_ASSIST_MIN_CHARS)),
-        ),
-      ),
-      ingestReplyAssistIgnoreSessionPatterns: toStringArray(
-        cfg.ingestReplyAssistIgnoreSessionPatterns,
-        DEFAULT_INGEST_REPLY_ASSIST_IGNORE_SESSION_PATTERNS,
+        DEFAULT_BYPASS_SESSION_PATTERNS,
       ),
       emitStandardDiagnostics:
         typeof cfg.emitStandardDiagnostics === "boolean"
@@ -520,29 +480,6 @@ export const memoryOpenVikingConfigSchema = {
       placeholder: String(DEFAULT_COMMIT_TOKEN_THRESHOLD),
       advanced: true,
       help: "Minimum estimated pending tokens before auto-commit triggers. Set to 0 to commit every turn.",
-    },
-    ingestReplyAssist: {
-      label: "Ingest Reply Assist",
-      help: "When transcript-like memory ingestion is detected, add a lightweight reply instruction to reduce NO_REPLY.",
-      advanced: true,
-    },
-    ingestReplyAssistMinSpeakerTurns: {
-      label: "Ingest Min Speaker Turns",
-      placeholder: String(DEFAULT_INGEST_REPLY_ASSIST_MIN_SPEAKER_TURNS),
-      help: "Minimum speaker-tag turns (e.g. Name:) to detect transcript-like ingest text.",
-      advanced: true,
-    },
-    ingestReplyAssistMinChars: {
-      label: "Ingest Min Chars",
-      placeholder: String(DEFAULT_INGEST_REPLY_ASSIST_MIN_CHARS),
-      help: "Minimum sanitized text length required before ingest reply assist can trigger.",
-      advanced: true,
-    },
-    ingestReplyAssistIgnoreSessionPatterns: {
-      label: "Deprecated Ingest Ignore Session Patterns",
-      placeholder: "agent:*:cron:**",
-      help: "Deprecated alias for bypassSessionPatterns. Matching sessions now bypass OpenViking entirely.",
-      advanced: true,
     },
     emitStandardDiagnostics: {
       label: "Standard diagnostics (diag JSON lines)",
