@@ -51,17 +51,21 @@ class UsageObserver(BaseObserver):
         """Synchronous wrapper for get_usage_async."""
         return run_async(self.get_usage_async(ctx=ctx))
 
-    def get_status_table(self, ctx: Optional[RequestContext] = None) -> str:
-        """Format usage metrics as a table."""
+    async def get_status_table_async(self, ctx: Optional[RequestContext] = None) -> str:
+        """Format usage metrics as a table (async variant for async call sites)."""
         from tabulate import tabulate
 
-        usage = self.get_usage(ctx=ctx)
+        usage = await self.get_usage_async(ctx=ctx)
 
         data = [
             {"Metric": "Total Vectors", "Value": usage.get("total_vectors", 0)},
         ]
 
         return tabulate(data, headers="keys", tablefmt="pretty")
+
+    def get_status_table(self, ctx: Optional[RequestContext] = None) -> str:
+        """Synchronous wrapper around get_status_table_async for BaseObserver compatibility."""
+        return run_async(self.get_status_table_async(ctx=ctx))
 
     def is_healthy(self) -> bool:
         """Usage observer is healthy if VikingDB is available."""

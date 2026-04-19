@@ -98,7 +98,7 @@ async def observer_usage(
 ):
     """Get context usage metrics (vector count, breakdowns)."""
     service = get_service()
-    component = service.debug.observer.usage(ctx=ctx)
+    component = await service.debug.observer.usage(ctx=ctx)
     return Response(status="ok", result=_component_to_dict(component))
 
 
