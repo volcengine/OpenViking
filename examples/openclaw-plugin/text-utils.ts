@@ -566,6 +566,11 @@ export function extractNewTurnTexts(
     if (!text) {
       continue;
     }
+    // Mirror extractNewTurnMessages: skip heartbeat content so callers never
+    // see synthetic keep-alive turns as real text.
+    if (HEARTBEAT_RE.test(text)) {
+      continue;
+    }
     if (role === "toolResult") {
       texts.push(text);
     } else {

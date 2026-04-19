@@ -1399,8 +1399,8 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
         const eventObj = (event ?? {}) as { messages?: unknown[]; prompt?: string };
         const latestUserText = extractLatestUserText(eventObj.messages);
         const rawRecallQuery =
-          latestUserText ||
-          (typeof eventObj.prompt === "string" ? sanitizeUserTextForCapture(eventObj.prompt) : "");
+          latestUserText || (typeof eventObj.prompt === "string" ? eventObj.prompt : "");
+        // prepareRecallQuery runs sanitizeUserTextForCapture internally.
         const recallQuery = prepareRecallQuery(rawRecallQuery);
         const queryText = recallQuery.query;
         if (!queryText) {

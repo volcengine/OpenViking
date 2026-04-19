@@ -112,8 +112,15 @@ async function resolveMemoryContent(
     content = item.abstract?.trim() || item.uri;
   }
 
+  // recallMaxContentChars is a hard upper bound on the returned string length,
+  // including the "..." marker.
   if (content.length > options.recallMaxContentChars) {
-    content = content.slice(0, options.recallMaxContentChars) + "...";
+    const ELLIPSIS = "...";
+    const max = options.recallMaxContentChars;
+    content =
+      max > ELLIPSIS.length
+        ? content.slice(0, max - ELLIPSIS.length) + ELLIPSIS
+        : content.slice(0, max);
   }
 
   return content;
@@ -136,9 +143,14 @@ export async function buildMemoryLinesWithBudget(
   memories: FindResultItem[],
   readFn: (uri: string) => Promise<string>,
   options: BuildMemoryLinesWithBudgetOptions,
-): Promise<{ lines: string[]; estimatedTokens: number }> {
+): Promise<{
+  lines: string[];
+  includedMemories: FindResultItem[];
+  estimatedTokens: number;
+}> {
   let budgetRemaining = options.recallTokenBudget;
   const lines: string[] = [];
+  const includedMemories: FindResultItem[] = [];
   let totalTokens = 0;
 
   for (const item of memories) {
@@ -155,11 +167,12 @@ export async function buildMemoryLinesWithBudget(
     }
 
     lines.push(line);
+    includedMemories.push(item);
     totalTokens += lineTokens;
     budgetRemaining -= lineTokens;
   }
 
-  return { lines, estimatedTokens: totalTokens };
+  return { lines, includedMemories, estimatedTokens: totalTokens };
 }
 
 export async function buildRecallPromptSection(
@@ -245,28 +258,26 @@ export async function buildRecallPromptSection(
           return { estimatedTokens: 0, memories: [] };
         }
 
-        const { estimatedTokens, lines } = await buildMemoryLinesWithBudget(
-          memories,
-          (uri) => client.read(uri, agentId),
-          {
+        const { estimatedTokens, lines, includedMemories } =
+          await buildMemoryLinesWithBudget(memories, (uri) => client.read(uri, agentId), {
             recallPreferAbstract: cfg.recallPreferAbstract,
             recallMaxContentChars: cfg.recallMaxContentChars,
             recallTokenBudget: cfg.recallTokenBudget,
             logger,
-          },
-        );
+          });
 
         if (lines.length === 0) {
           return { estimatedTokens: 0, memories: [] };
         }
 
         verboseLog?.(
-          `openviking: injecting ${lines.length} memories (~${estimatedTokens} tokens, budget=${cfg.recallTokenBudget})`,
+          `openviking: injecting ${includedMemories.length} memories (~${estimatedTokens} tokens, budget=${cfg.recallTokenBudget})`,
         );
         verboseLog?.(
           `openviking: inject-detail ${toJsonLog({
-            count: memories.length,
-            memories: summarizeInjectionMemories(memories),
+            candidateCount: memories.length,
+            injectedCount: includedMemories.length,
+            memories: summarizeInjectionMemories(includedMemories),
           })}`,
         );
 
@@ -276,7 +287,7 @@ export async function buildRecallPromptSection(
             `${lines.join("\n")}\n` +
             "</relevant-memories>",
           estimatedTokens,
-          memories,
+          memories: includedMemories,
         };
       })(),
       AUTO_RECALL_TIMEOUT_MS,
