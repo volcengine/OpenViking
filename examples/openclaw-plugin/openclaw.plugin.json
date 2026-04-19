@@ -1,6 +1,8 @@
 {
   "id": "openviking",
+  "name": "OpenViking",
   "kind": "context-engine",
+  "description": "OpenClaw context-engine plugin for memory management — powered by OpenViking",
   "uiHints": {
     "mode": {
       "label": "Mode",

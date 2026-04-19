@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { resolve as resolvePath } from "node:path";
+import { getEnv } from "./runtime-utils.js";
 
 export type MemoryOpenVikingConfig = {
   /** "local" = plugin starts OpenViking server as child process (like Claude Code); "remote" = use existing HTTP server */
@@ -61,7 +62,7 @@ function resolveAgentId(configured: unknown): string {
 
 function resolveEnvVars(value: string): string {
   return value.replace(/\$\{([^}]+)\}/g, (_, envVar) => {
-    const envValue = process.env[envVar];
+    const envValue = getEnv(envVar);
     if (!envValue) {
       throw new Error(`Environment variable ${envVar} is not set`);
     }
@@ -100,7 +101,7 @@ function toStringArray(value: unknown, fallback: string[]): string[] {
 
 /** True when env is 1 / true / yes (case-insensitive). Used for debug flags without editing plugin JSON. */
 function envFlag(name: string): boolean {
-  const v = process.env[name];
+  const v = getEnv(name);
   if (v == null || v === "") {
     return false;
   }
@@ -117,7 +118,7 @@ function assertAllowedKeys(value: Record<string, unknown>, allowed: string[], la
 }
 
 function resolveDefaultBaseUrl(): string {
-  const fromEnv = process.env.OPENVIKING_BASE_URL || process.env.OPENVIKING_URL;
+  const fromEnv = getEnv("OPENVIKING_BASE_URL") || getEnv("OPENVIKING_URL");
   if (fromEnv) {
     return fromEnv;
   }
@@ -178,7 +179,7 @@ export const memoryOpenVikingConfigSchema = {
     const rawBaseUrl =
       mode === "local" ? localBaseUrl : (typeof cfg.baseUrl === "string" ? cfg.baseUrl : resolveDefaultBaseUrl());
     const resolvedBaseUrl = resolveEnvVars(rawBaseUrl).replace(/\/+$/, "");
-    const rawApiKey = typeof cfg.apiKey === "string" ? cfg.apiKey : process.env.OPENVIKING_API_KEY;
+    const rawApiKey = typeof cfg.apiKey === "string" ? cfg.apiKey : getEnv("OPENVIKING_API_KEY");
     const captureMode = cfg.captureMode;
     if (
       typeof captureMode !== "undefined" &&
