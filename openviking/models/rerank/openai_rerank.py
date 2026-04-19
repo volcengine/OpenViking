@@ -59,7 +59,8 @@ class OpenAIRerankClient(RerankBase):
         # empty strings with HTTP 400.
         valid_indices = [i for i, d in enumerate(documents) if d and d.strip()]
         if not valid_indices:
-            return [0.0] * len(documents)
+            # All documents are empty -- signal caller to fall back to vector scores.
+            return None
 
         if len(valid_indices) < len(documents):
             filtered_docs = [documents[i] for i in valid_indices]
