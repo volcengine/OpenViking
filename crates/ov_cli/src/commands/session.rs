@@ -122,6 +122,18 @@ pub async fn commit_session(
     Ok(())
 }
 
+pub async fn extract_session(
+    client: &HttpClient,
+    session_id: &str,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let path = format!("/api/v1/sessions/{}/extract", url_encode(session_id));
+    let response: serde_json::Value = client.post(&path, &json!({})).await?;
+    output_success(&response, output_format, compact);
+    Ok(())
+}
+
 /// Add memory in one shot: creates a session, adds messages, and commits.
 ///
 /// Input can be:

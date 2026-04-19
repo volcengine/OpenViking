@@ -604,6 +604,11 @@ enum SessionCommands {
         /// Session ID
         session_id: String,
     },
+    /// Re-run memory extraction against a session's archived messages
+    Extract {
+        /// Session ID
+        session_id: String,
+    },
 }
 
 #[derive(Subcommand)]
