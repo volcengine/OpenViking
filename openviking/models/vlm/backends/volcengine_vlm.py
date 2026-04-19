@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from openviking.telemetry import tracer
+
 from ..base import ToolCall, VLMResponse
 from .openai_vlm import OpenAIVLM
 

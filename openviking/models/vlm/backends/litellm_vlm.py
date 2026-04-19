@@ -15,11 +15,8 @@ os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 import litellm
 from litellm import acompletion, completion
 
-
 from openviking.telemetry import tracer
-
 from openviking.utils.model_retry import retry_async, retry_sync
-
 
 from ..base import ToolCall, VLMBase, VLMResponse
 
@@ -322,7 +319,7 @@ class LiteLLMVLMProvider(VLMBase):
             response = completion(**kwargs)
             elapsed = time.perf_counter() - t0
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
-            tracer.info(f'response={response}')
+            tracer.info(f"response={response}")
             if tools:
                 return self._build_vlm_response(response, has_tools=True)
             return self._clean_response(self._extract_content_from_response(response))
@@ -354,7 +351,7 @@ class LiteLLMVLMProvider(VLMBase):
                 response = await acompletion(**kwargs)
                 elapsed = time.perf_counter() - t0
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
-            tracer.info(f'response={response}')
+            tracer.info(f"response={response}")
             if tools:
                 return self._build_vlm_response(response, has_tools=True)
             return self._clean_response(self._extract_content_from_response(response))

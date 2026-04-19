@@ -7,6 +7,7 @@ that invoked ``get_completion_async`` directly (for example the session
 archive summary generator at ``openviking/session/session.py``) bypassed the
 cap. These tests lock in that the cap now applies to every async VLM call.
 """
+
 import asyncio
 
 import pytest
