@@ -28,6 +28,37 @@ openviking-server --port 1933
 INFO:     Uvicorn running on http://0.0.0.0:1933
 ```
 
+## 使用 systemd 用户服务运行（Linux 推荐）
+
+`openviking-server` 默认以前台方式运行。对于需要长期驻留的 Linux 会话，建议使用 user-level systemd unit，而不是依赖 shell 后台包装。
+
+1. 复制示例 unit 文件：
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp docs/en/getting-started/examples/openviking-server.service ~/.config/systemd/user/openviking.service
+```
+
+2. 按实际环境修改 unit 配置：
+
+- 将 `WorkingDirectory` 改为 OpenViking 工作目录
+- 将 `Environment=OPENVIKING_CONFIG_FILE=...` 改为你的 `ov.conf` 路径
+- 如果需要 CLI 配置文件，可额外添加 `Environment=OPENVIKING_CLI_CONFIG_FILE=...`
+
+3. 启用并启动服务：
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now openviking.service
+systemctl --user status openviking.service
+```
+
+4. 查看日志：
+
+```bash
+journalctl --user -u openviking.service -f
+```
+
 ## 验证
 
 ```bash
