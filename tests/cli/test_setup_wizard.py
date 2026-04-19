@@ -6,11 +6,11 @@ import json
 from unittest.mock import MagicMock, patch
 
 from openviking_cli.setup_wizard import (
+    _DEFAULT_WORKSPACE,
     CLOUD_PROVIDERS,
     EMBEDDING_PRESETS,
     LOCAL_GGUF_PRESETS,
     VLM_PRESETS,
-    _DEFAULT_WORKSPACE,
     _build_cloud_config,
     _build_local_config,
     _build_ollama_config,

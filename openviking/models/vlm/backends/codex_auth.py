@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import httpx
+
 from openviking_cli.utils.config.consts import DEFAULT_CONFIG_DIR
 
 try:

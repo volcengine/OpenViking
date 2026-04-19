@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: AGPL-3.0
 """VLM (Vision-Language Model) module"""
 
-from .backends.litellm_vlm import LiteLLMVLMProvider
 from .backends.codex_vlm import CodexVLM
 from .backends.glm_vlm import GLMVLM
 from .backends.kimi_vlm import KimiVLM
+from .backends.litellm_vlm import LiteLLMVLMProvider
 from .backends.openai_vlm import OpenAIVLM
 from .backends.volcengine_vlm import VolcEngineVLM
 from .base import VLMBase, VLMFactory

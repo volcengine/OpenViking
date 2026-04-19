@@ -1,8 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-import json
 import base64
+import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
