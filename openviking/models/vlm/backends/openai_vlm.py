@@ -78,6 +78,7 @@ class OpenAIVLM(VLMBase):
                 self.api_base,
                 self.api_version,
                 self.extra_headers,
+                self.timeout,
             )
             if self.provider == "azure":
                 self._sync_client = openai.AzureOpenAI(**kwargs)
@@ -96,6 +97,7 @@ class OpenAIVLM(VLMBase):
                 self.api_base,
                 self.api_version,
                 self.extra_headers,
+                self.timeout,
             )
             if self.provider == "azure":
                 self._async_client = openai.AsyncAzureOpenAI(**kwargs)

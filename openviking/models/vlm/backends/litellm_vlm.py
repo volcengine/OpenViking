@@ -209,6 +209,7 @@ class LiteLLMVLMProvider(VLMBase):
             "model": model,
             "messages": messages,
             "temperature": self.temperature,
+            "timeout": self.timeout,
         }
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
