@@ -14,6 +14,7 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
   it("empty object uses all defaults", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({});
     expect(cfg.mode).toBe("local");
+    expect(cfg.serverAuthMode).toBe("api_key");
     expect(cfg.port).toBe(1933);
     expect(cfg.recallLimit).toBe(6);
     expect(cfg.recallScoreThreshold).toBe(0.15);
@@ -193,6 +194,21 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
   it("defaults agentScopeMode to user_agent", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({});
     expect(cfg.agentScopeMode).toBe("user_agent");
+  });
+
+  it("defaults serverAuthMode to api_key", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({});
+    expect(cfg.serverAuthMode).toBe("api_key");
+  });
+
+  it("accepts serverAuthMode trusted", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ serverAuthMode: "trusted" });
+    expect(cfg.serverAuthMode).toBe("trusted");
+  });
+
+  it("falls back to api_key for invalid serverAuthMode", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ serverAuthMode: "invalid" });
+    expect(cfg.serverAuthMode).toBe("api_key");
   });
 
   it("accepts agentScopeMode 'agent'", () => {

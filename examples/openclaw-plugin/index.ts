@@ -539,13 +539,22 @@ const contextEnginePlugin = {
         api.logger.info(message);
       }
     };
+    const hasApiKey = cfg.apiKey.trim().length > 0;
     verboseRoutingInfo(
       `openviking: loaded plugin config agentId="${cfg.agentId}" ` +
         `(raw plugins.entries.openviking.config.agentId=${JSON.stringify(rawAgentId ?? "(missing)")}; ` +
         `${
           cfg.agentId !== "default"
-            ? "non-default → X-OpenViking-Agent is <configAgentId>_<ctx.agentId> (sanitized to [a-zA-Z0-9_-]) when hooks expose session agent; config-only if ctx.agentId unknown"
+            ? "non-default → X-OpenViking-Agent is <ctx.agentId>_<agentId> (sanitized to [a-zA-Z0-9_-]); agentId acts as the suffix of ctx.agentId when hooks expose session agent; config-only if ctx.agentId unknown"
             : 'default → X-OpenViking-Agent follows OpenClaw ctx.agentId per session (e.g. "main")'
+        }; serverAuthMode=${cfg.serverAuthMode}; authBehavior=${
+          cfg.serverAuthMode === "trusted"
+            ? hasApiKey
+              ? 'trusted: send configured accountId/userId and also send X-API-Key'
+              : 'trusted: send configured accountId/userId only (fallback default/default)'
+            : hasApiKey
+              ? 'api_key: send X-API-Key only; tenant identity derived by server from key'
+              : 'api_key without apiKey: dev fallback to X-OpenViking-Account/User = default/default'
         })`,
     );
     const routingDebugLog = cfg.logFindRequests
@@ -553,9 +562,20 @@ const contextEnginePlugin = {
           api.logger.info(msg);
         }
       : undefined;
-    const tenantAccount = cfg.accountId;
-    const tenantUser = cfg.userId;
-    const localCacheKey = `${cfg.mode}:${cfg.baseUrl}:${cfg.configPath}:${cfg.apiKey}:${tenantAccount}:${tenantUser}:${cfg.agentId}:${cfg.agentScopeMode}:${cfg.logFindRequests ? "1" : "0"}`;
+    const effectiveApiKey = cfg.apiKey;
+    const tenantAccount =
+      cfg.serverAuthMode === "trusted"
+        ? (cfg.accountId || "default")
+        : hasApiKey
+          ? ""
+          : (cfg.accountId || "default");
+    const tenantUser =
+      cfg.serverAuthMode === "trusted"
+        ? (cfg.userId || "default")
+        : hasApiKey
+          ? ""
+          : (cfg.userId || "default");
+    const localCacheKey = `${cfg.mode}:${cfg.baseUrl}:${cfg.configPath}:${cfg.serverAuthMode}:${effectiveApiKey}:${tenantAccount}:${tenantUser}:${cfg.agentId}:${cfg.agentScopeMode}:${cfg.logFindRequests ? "1" : "0"}`;
 
     let clientPromise: Promise<OpenVikingClient>;
     let localProcess: ReturnType<typeof spawn> | null = null;
@@ -605,13 +625,14 @@ const contextEnginePlugin = {
       clientPromise = Promise.resolve(
         new OpenVikingClient(
           cfg.baseUrl,
-          cfg.apiKey,
+          effectiveApiKey,
           cfg.agentId,
           cfg.timeoutMs,
           tenantAccount,
           tenantUser,
           routingDebugLog,
           cfg.agentScopeMode,
+          cfg.serverAuthMode,
         ),
       );
     }
@@ -1732,13 +1753,14 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
             await waitForHealthOrExit(baseUrl, timeoutMs, intervalMs, child);
             const client = new OpenVikingClient(
               baseUrl,
-              cfg.apiKey,
+              effectiveApiKey,
               cfg.agentId,
               cfg.timeoutMs,
               tenantAccount,
               tenantUser,
               routingDebugLog,
               cfg.agentScopeMode,
+              cfg.serverAuthMode,
             );
             localClientCache.set(localCacheKey, { client, process: child });
             resolveLocalClient!(client);
@@ -1808,7 +1830,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
               });
               try {
                 await waitForHealthOrExit(baseUrl, timeoutMs, intervalMs, child);
-                const client = new OpenVikingClient(baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs, tenantAccount, tenantUser, undefined, cfg.agentScopeMode);
+                const client = new OpenVikingClient(baseUrl, effectiveApiKey, cfg.agentId, cfg.timeoutMs, tenantAccount, tenantUser, undefined, cfg.agentScopeMode, cfg.serverAuthMode);
                 localClientCache.set(localCacheKey, { client, process: child });
                 if (resolveLocalClient) {
                   resolveLocalClient(client);

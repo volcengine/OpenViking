@@ -28,6 +28,7 @@ export type FindResult = {
 export type CaptureMode = "semantic" | "keyword";
 export type ScopeName = "user" | "agent";
 export type AgentScopeMode = "user_agent" | "agent";
+export type ServerAuthMode = "api_key" | "trusted";
 export type RuntimeIdentity = {
   userId: string;
   agentId: string;
@@ -231,7 +232,30 @@ export class OpenVikingClient {
      * "agent": space = md5(agentId) — same agentId shares space across users within account.
      */
     private readonly agentScopeMode: AgentScopeMode = "user_agent",
+    private readonly serverAuthMode: ServerAuthMode = "api_key",
   ) {}
+
+  private resolveTenantHeaders(): { accountId: string | null; userId: string | null } {
+    const accountId = this.accountId.trim();
+    const userId = this.userId.trim();
+    if (this.serverAuthMode === "trusted") {
+      return {
+        accountId: accountId || "default",
+        userId: userId || "default",
+      };
+    }
+    // api_key mode:
+    // - with API key: let the server derive tenant identity from the key
+    // - without API key: dev fallback to default/default/default headers
+    if (this.apiKey.trim()) {
+      return { accountId: null, userId: null };
+    }
+    return { accountId: accountId || "default", userId: userId || "default" };
+  }
+
+  private shouldSendApiKey(): boolean {
+    return this.apiKey.trim().length > 0;
+  }
 
   getDefaultAgentId(): string {
     return this.defaultAgentId;
@@ -247,13 +271,14 @@ export class OpenVikingClient {
     }
     const effectiveAgentId = agentId ?? this.defaultAgentId;
     const identity = await this.getRuntimeIdentity(agentId);
+    const tenantHeaders = this.resolveTenantHeaders();
     this.routingDebugLog(
       `openviking: ${label} ` +
         JSON.stringify({
           ...detail,
           X_OpenViking_Agent: effectiveAgentId,
-          X_OpenViking_Account: this.accountId.trim() || null,
-          X_OpenViking_User: this.userId.trim() || null,
+          X_OpenViking_Account: tenantHeaders.accountId,
+          X_OpenViking_User: tenantHeaders.userId,
           resolved_user_id: identity.userId,
           session_vfs_hint: detail.sessionId
             ? `viking://session/${identity.userId}/${String(detail.sessionId)}`
@@ -273,11 +298,10 @@ export class OpenVikingClient {
     const timer = setTimeout(() => controller.abort(), requestTimeoutMs ?? this.timeoutMs);
     try {
       const headers = new Headers(init.headers ?? {});
-      if (this.apiKey) {
+      if (this.shouldSendApiKey()) {
         headers.set("X-API-Key", this.apiKey);
       }
-      const accountId = this.accountId.trim();
-      const userId = this.userId.trim();
+      const { accountId, userId } = this.resolveTenantHeaders();
       if (accountId) {
         headers.set("X-OpenViking-Account", accountId);
       }
@@ -444,8 +468,8 @@ export class OpenVikingClient {
       `openviking: find POST ${this.baseUrl}/api/v1/search/find ` +
         JSON.stringify({
           X_OpenViking_Agent: effectiveAgentId,
-          X_OpenViking_Account: this.accountId.trim() || null,
-          X_OpenViking_User: this.userId.trim() || null,
+          X_OpenViking_Account: this.resolveTenantHeaders().accountId,
+          X_OpenViking_User: this.resolveTenantHeaders().userId,
           resolved_user_id: identity.userId,
           target_uri: normalizedTargetUri,
           target_uri_input: options.targetUri,

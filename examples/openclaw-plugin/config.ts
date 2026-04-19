@@ -5,6 +5,8 @@ import { resolve as resolvePath } from "node:path";
 export type MemoryOpenVikingConfig = {
   /** "local" = plugin starts OpenViking server as child process (like Claude Code); "remote" = use existing HTTP server */
   mode?: "local" | "remote";
+  /** Server-side auth mode. Plugin cannot infer this reliably from OpenViking, so configure it explicitly. */
+  serverAuthMode?: "api_key" | "trusted";
   /** Path to ov.conf; used when mode is "local". Default ~/.openviking/ov.conf */
   configPath?: string;
   /** Port for local server when mode is "local". Ignored when mode is "remote". */
@@ -156,6 +158,7 @@ export const memoryOpenVikingConfigSchema = {
       cfg,
       [
         "mode",
+        "serverAuthMode",
         "configPath",
         "port",
         "baseUrl",
@@ -191,6 +194,9 @@ export const memoryOpenVikingConfigSchema = {
     const mode = (cfg.mode === "local" || cfg.mode === "remote" ? cfg.mode : "local") as
       | "local"
       | "remote";
+    const rawServerAuthMode = cfg.serverAuthMode ?? process.env.OPENVIKING_SERVER_AUTH_MODE;
+    const serverAuthMode =
+      rawServerAuthMode === "trusted" ? ("trusted" as const) : ("api_key" as const);
     const port = Math.max(1, Math.min(65535, Math.floor(toNumber(cfg.port, DEFAULT_PORT))));
     const rawConfigPath =
       typeof cfg.configPath === "string" && cfg.configPath.trim()
@@ -229,6 +235,7 @@ export const memoryOpenVikingConfigSchema = {
 
     return {
       mode,
+      serverAuthMode,
       configPath,
       port,
       baseUrl: resolvedBaseUrl,
@@ -311,6 +318,13 @@ export const memoryOpenVikingConfigSchema = {
       label: "Mode",
       help: "local = plugin starts OpenViking server (like Claude Code); remote = use existing HTTP server",
     },
+    serverAuthMode: {
+      label: "Server Auth Mode",
+      placeholder: "api_key",
+      help:
+        'How the OpenViking server authenticates requests. "api_key": with apiKey → send X-API-Key only and let the server derive identity from the key; without apiKey → dev fallback to X-OpenViking-Account/User = default/default. "trusted": always send configured accountId/userId as tenant headers, and optionally send X-API-Key when apiKey is configured (needed when the server also requires a root key in trusted mode).',
+      advanced: true,
+    },
     configPath: {
       label: "Config path (local)",
       placeholder: DEFAULT_LOCAL_CONFIG_PATH,
@@ -329,8 +343,8 @@ export const memoryOpenVikingConfigSchema = {
     },
     agentId: {
       label: "Agent ID",
-      placeholder: "auto-generated",
-      help: 'OpenViking X-OpenViking-Agent: non-default values combine with OpenClaw ctx.agentId as "<config>_<sessionAgent>" (then sanitized to [a-zA-Z0-9_-]). Use "default" to send only ctx.agentId.',
+      placeholder: "default",
+      help: 'OpenViking agent suffix. "default" means X-OpenViking-Agent follows OpenClaw ctx.agentId directly. Non-default means X-OpenViking-Agent becomes "<ctx.agentId>_<agentId>" (sanitized to [a-zA-Z0-9_-]); that is, agentId is used as the suffix of ctx.agentId.',
     },
     apiKey: {
       label: "OpenViking API Key",
@@ -340,14 +354,14 @@ export const memoryOpenVikingConfigSchema = {
     },
     accountId: {
       label: "Account ID",
-      placeholder: "(derived from API key)",
-      help: "Tenant account ID. Only needed when using root key or trusted auth mode. With a user key the server derives identity from the key.",
+      placeholder: "(derived from API key or default)",
+      help: 'Tenant account ID. In "trusted" mode this is sent as X-OpenViking-Account. In "api_key" mode it is only used for no-key dev fallback; with a user key the server derives identity from the key.',
       advanced: true,
     },
     userId: {
       label: "User ID",
-      placeholder: "(derived from API key)",
-      help: "Tenant user ID. Only needed when using root key or trusted auth mode.",
+      placeholder: "(derived from API key or default)",
+      help: 'Tenant user ID. In "trusted" mode this is sent as X-OpenViking-User. In "api_key" mode it is only used for no-key dev fallback.',
       advanced: true,
     },
     agentScopeMode: {
