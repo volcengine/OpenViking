@@ -280,8 +280,8 @@ def test_embedding_validation():
     except ValueError as e:
         print(f"   Fail: {e}")
 
-    # Test 5: Ollama provider (no API key required)
-    print("\n5. Test Ollama provider (no API key required)...")
+    # Test 6: Ollama provider (no API key required)
+    print("\n6. Test Ollama provider (no API key required)...")
     try:
         _ = EmbeddingConfig(
             dense=EmbeddingModelConfig(
@@ -294,8 +294,8 @@ def test_embedding_validation():
     except ValueError as e:
         print(f"   Fail: {e}")
 
-    # Test 6: Ollama provider with custom api_base
-    print("\n6. Test Ollama provider with custom api_base...")
+    # Test 7: Ollama provider with custom api_base
+    print("\n7. Test Ollama provider with custom api_base...")
     try:
         _ = EmbeddingConfig(
             dense=EmbeddingModelConfig(
@@ -309,8 +309,8 @@ def test_embedding_validation():
     except ValueError as e:
         print(f"   Fail: {e}")
 
-    # Test 7: OpenAI provider with api_base but no api_key (local OpenAI-compatible server)
-    print("\n7. Test OpenAI provider with api_base but no api_key...")
+    # Test 8: OpenAI provider with api_base but no api_key (local OpenAI-compatible server)
+    print("\n8. Test OpenAI provider with api_base but no api_key...")
     try:
         _ = EmbeddingConfig(
             dense=EmbeddingModelConfig(
