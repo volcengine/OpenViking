@@ -1,0 +1,95 @@
+metadata:
+  id: "compression.cluster_consolidate"
+  name: "Memory Cluster Consolidation Decision"
+  description: "Decide cluster outcome over N existing similar memories (no fresh candidate)"
+  version: "0.1.0"
+  language: "en"
+  category: "compression"
+
+variables:
+  - name: "scope_uri"
+    type: "string"
+    description: "URI of the memory scope being consolidated"
+    required: true
+  - name: "scope_overview"
+    type: "string"
+    description: "Current .overview.md content for the scope, or '(none)'"
+    required: true
+  - name: "cluster_members"
+    type: "string"
+    description: "Formatted list of cluster members with uri, abstract, content, updated_at, active_count"
+    required: true
+
+template: |
+  You are consolidating a cluster of similar existing memories under scope
+  {{ scope_uri }}. There is no fresh candidate. All members are already
+  stored. Decide the consolidation outcome.
+
+  Scope overview:
+  {{ scope_overview }}
+
+  Cluster members:
+  {{ cluster_members }}
+
+  Goal:
+  Reduce duplication and resolve contradictions while preserving every
+  unique fact and minimizing destructive edits.
+
+  Cluster-level decision:
+  - keep_and_merge:
+    Members are about the same subject. Pick one keeper uri, fold the
+    others into the keeper's content via merge. Use for redundant
+    paraphrases, complementary details, or refinements.
+  - keep_and_delete:
+    One member fully invalidates one or more others (not just partial
+    conflict). Pick a keeper, delete the fully-invalidated ones. Use only
+    when entire existing memories are obsolete.
+  - archive_all:
+    The whole cluster is stale and unlikely to be useful. Move all members
+    to the scope's _archive subdir. Recoverable but excluded from default
+    retrieval.
+  - keep_all:
+    Members are not actually duplicates. Cluster was a false positive from
+    similarity scoring. Take no action.
+
+  Critical boundaries:
+  - Never delete a member because of a partial conflict. Use merge so
+    non-conflicting facts survive.
+  - Never merge across distinct facets (preferences vs entities vs tools).
+    A vector-similarity hit between different facets is a false positive
+    -> use keep_all.
+  - Convert relative dates ("yesterday", "last month", "recently") to
+    absolute dates in any merged content. Relative references rot over
+    time.
+  - When members disagree on a fact, prefer the most recent unless an
+    older member is explicitly more specific or authoritative.
+
+  Output constraints:
+  - Merged content per memory: <= 200 lines, <= 25KB
+  - Abstract per memory: <= 150 chars
+  - Use uri values exactly as listed in cluster_members
+  - keeper_uri must be one of the cluster member uris
+  - merge_into is a list of source uris (must not include keeper_uri)
+  - delete is a list of source uris (must not include keeper_uri)
+  - archive is a list of source uris
+  - For keep_and_merge: provide merged_content (the post-merge body of
+    the keeper) and merged_abstract (post-merge abstract)
+  - For keep_and_delete: leave merged_content / merged_abstract empty
+  - For archive_all: keeper_uri is empty; archive lists every member
+  - For keep_all: all lists empty
+  - Return JSON only, no prose.
+
+  Return JSON in this exact structure:
+  {
+    "decision": "keep_and_merge|keep_and_delete|archive_all|keep_all",
+    "reason": "short reason for the cluster decision",
+    "keeper_uri": "<uri or empty>",
+    "merge_into": ["<uri>", "..."],
+    "delete": ["<uri>", "..."],
+    "archive": ["<uri>", "..."],
+    "merged_content": "<post-merge body or empty>",
+    "merged_abstract": "<post-merge abstract or empty>"
+  }
+
+llm_config:
+  temperature: 0.0

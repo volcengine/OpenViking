@@ -107,23 +107,37 @@ async def reindex(
         )
 
 
+async def _do_reindex_locked(
+    service,
+    uri: str,
+    regenerate: bool,
+    ctx: RequestContext,
+) -> dict:
+    """Execute reindex assuming the path lock is already held by the caller.
+
+    Callers that already hold a LockContext on the URI's path (e.g.
+    MemoryConsolidator under its own scope lock) should call this directly
+    to avoid deadlocking on a non-reentrant LockContext re-acquire.
+    """
+    if regenerate:
+        return await service.resources.summarize([uri], ctx=ctx)
+    return await service.resources.build_index([uri], ctx=ctx)
+
+
 async def _do_reindex(
     service,
     uri: str,
     regenerate: bool,
     ctx: RequestContext,
 ) -> dict:
-    """Execute reindex within a lock scope."""
+    """Acquire a point lock on the URI's path, then run reindex."""
     from openviking.storage.transaction import LockContext, get_lock_manager
 
     viking_fs = service.viking_fs
     path = viking_fs._uri_to_path(uri, ctx=ctx)
 
     async with LockContext(get_lock_manager(), [path], lock_mode="point"):
-        if regenerate:
-            return await service.resources.summarize([uri], ctx=ctx)
-        else:
-            return await service.resources.build_index([uri], ctx=ctx)
+        return await _do_reindex_locked(service, uri, regenerate, ctx)
 
 
 async def _background_reindex_tracked(

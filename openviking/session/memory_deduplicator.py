@@ -65,6 +65,44 @@ class DedupResult:
     query_vector: list[float] | None = None  # For batch-internal dedup tracking
 
 
+class ClusterDecisionType(str, Enum):
+    """Outcome of consolidating a cluster of existing memories."""
+
+    KEEP_AND_MERGE = "keep_and_merge"
+    KEEP_AND_DELETE = "keep_and_delete"
+    ARCHIVE_ALL = "archive_all"
+    KEEP_ALL = "keep_all"
+
+
+@dataclass
+class ClusterDecision:
+    """LLM-decided ops over a cluster of existing similar memories.
+
+    Distinct from DedupResult: there is no fresh candidate. All cluster
+    members are already stored. Used by periodic consolidation (the
+    janitor pass) to fold duplicates that escaped per-write dedup,
+    resolve contradictions, or archive stale clusters.
+    """
+
+    decision: ClusterDecisionType
+    cluster: List[Context]
+    keeper_uri: str = ""
+    merge_into: List[str] = None  # type: ignore[assignment]
+    delete: List[str] = None  # type: ignore[assignment]
+    archive: List[str] = None  # type: ignore[assignment]
+    merged_content: str = ""
+    merged_abstract: str = ""
+    reason: str = ""
+
+    def __post_init__(self) -> None:
+        if self.merge_into is None:
+            self.merge_into = []
+        if self.delete is None:
+            self.delete = []
+        if self.archive is None:
+            self.archive = []
+
+
 class MemoryDeduplicator:
     """Handles memory deduplication with LLM decision making."""
 
@@ -440,3 +478,177 @@ class MemoryDeduplicator:
             return 0.0
 
         return dot / (mag_a * mag_b)
+
+    async def consolidate_cluster(
+        self,
+        cluster: List[Context],
+        scope_uri: str,
+        scope_overview: str = "",
+        cluster_contents: Optional[Dict[str, str]] = None,
+    ) -> ClusterDecision:
+        """Decide ops over a cluster of existing similar memories.
+
+        Distinct from deduplicate(). deduplicate() takes one
+        CandidateMemory plus N similar existing memories and decides
+        skip/create/none plus per-existing merge/delete -- the write-path
+        dedup pipeline. consolidate_cluster() takes N existing memories
+        with no fresh candidate and decides which to keep, which to fold
+        into the keeper, which to delete (only when fully invalidated),
+        and which to archive. Used by the periodic consolidator over
+        clusters that escaped per-write dedup.
+
+        Reuses the VLM access pattern from _llm_decision but renders a
+        different prompt template (compression.cluster_consolidate).
+
+        Context.abstract is on the object; full content lives in the
+        underlying file. Callers must pre-fetch content via
+        viking_fs.read(uri) and pass via cluster_contents (uri -> body).
+        Missing entries are sent as the abstract only.
+
+        Args:
+            cluster: Existing memories that belong to one cluster.
+            scope_uri: URI of the scope being consolidated (for prompt context).
+            scope_overview: Current .overview.md text or '' / '(none)'.
+            cluster_contents: Optional uri -> body dict from viking_fs.read.
+
+        Returns:
+            ClusterDecision with the cluster and the LLM-chosen ops.
+            Returns KEEP_ALL when LLM is unavailable or the cluster has
+            fewer than 2 members (defensive no-op).
+        """
+        if len(cluster) < 2:
+            return ClusterDecision(
+                decision=ClusterDecisionType.KEEP_ALL,
+                cluster=cluster,
+                reason="Cluster has fewer than 2 members; no consolidation needed.",
+            )
+
+        vlm = get_openviking_config().vlm
+        if not vlm or not vlm.is_available():
+            return ClusterDecision(
+                decision=ClusterDecisionType.KEEP_ALL,
+                cluster=cluster,
+                reason="LLM not available; defaulting to keep_all (conservative).",
+            )
+
+        contents = cluster_contents or {}
+        formatted_members: List[str] = []
+        for i, mem in enumerate(cluster):
+            abstract = (
+                getattr(mem, "abstract", "")
+                or getattr(mem, "_abstract_cache", "")
+                or (mem.meta or {}).get("abstract", "")
+            )
+            updated = getattr(mem, "updated_at", None)
+            updated_text = updated.isoformat() if updated is not None else "n/a"
+            active = getattr(mem, "active_count", 0) or 0
+            body = contents.get(mem.uri, "")
+            body_preview = body[:1000] + ("...[truncated]" if len(body) > 1000 else "")
+            formatted_members.append(
+                f"{i + 1}. uri={mem.uri}\n"
+                f"   abstract={abstract}\n"
+                f"   updated_at={updated_text}\n"
+                f"   active_count={active}\n"
+                f"   content={body_preview if body_preview else '(content not pre-fetched)'}"
+            )
+
+        prompt = render_prompt(
+            "compression.cluster_consolidate",
+            {
+                "scope_uri": scope_uri,
+                "scope_overview": scope_overview or "(none)",
+                "cluster_members": "\n\n".join(formatted_members),
+            },
+        )
+
+        try:
+            from openviking_cli.utils.llm import parse_json_from_response
+
+            with bind_telemetry_stage("memory_consolidate"):
+                response = await vlm.get_completion_async(prompt)
+            data = parse_json_from_response(response) or {}
+            return self._parse_cluster_decision(data, cluster)
+        except asyncio.CancelledError as e:
+            if not self._is_shutdown_in_progress():
+                raise
+            logger.warning(f"Cluster consolidation LLM cancelled: {e}")
+            return ClusterDecision(
+                decision=ClusterDecisionType.KEEP_ALL,
+                cluster=cluster,
+                reason=f"LLM cancelled: {e}",
+            )
+        except Exception as e:
+            logger.warning(f"Cluster consolidation LLM failed: {e}")
+            return ClusterDecision(
+                decision=ClusterDecisionType.KEEP_ALL,
+                cluster=cluster,
+                reason=f"LLM failed: {e}",
+            )
+
+    @staticmethod
+    def _parse_cluster_decision(
+        data: dict,
+        cluster: List[Context],
+    ) -> ClusterDecision:
+        """Normalize LLM payload into a ClusterDecision.
+
+        Defensive: unknown decision strings collapse to KEEP_ALL. URIs
+        that are not members of the cluster are dropped from action
+        lists. keeper_uri must be a cluster member or it falls back to
+        the first member.
+        """
+        cluster_uris = {m.uri for m in cluster}
+        decision_str = str(data.get("decision", "keep_all")).lower().strip()
+
+        decision_map = {
+            "keep_and_merge": ClusterDecisionType.KEEP_AND_MERGE,
+            "keep_and_delete": ClusterDecisionType.KEEP_AND_DELETE,
+            "archive_all": ClusterDecisionType.ARCHIVE_ALL,
+            "keep_all": ClusterDecisionType.KEEP_ALL,
+        }
+        decision = decision_map.get(decision_str, ClusterDecisionType.KEEP_ALL)
+
+        def _filter_uris(field: str) -> List[str]:
+            raw = data.get(field, []) or []
+            if not isinstance(raw, list):
+                return []
+            return [u for u in raw if isinstance(u, str) and u in cluster_uris]
+
+        keeper_uri = str(data.get("keeper_uri", "") or "").strip()
+        if keeper_uri and keeper_uri not in cluster_uris:
+            keeper_uri = ""
+
+        merge_into = _filter_uris("merge_into")
+        delete = _filter_uris("delete")
+        archive = _filter_uris("archive")
+
+        if decision == ClusterDecisionType.ARCHIVE_ALL:
+            keeper_uri = ""
+            archive = list(cluster_uris)
+            merge_into = []
+            delete = []
+        elif decision in (
+            ClusterDecisionType.KEEP_AND_MERGE,
+            ClusterDecisionType.KEEP_AND_DELETE,
+        ):
+            if not keeper_uri:
+                keeper_uri = cluster[0].uri
+            merge_into = [u for u in merge_into if u != keeper_uri]
+            delete = [u for u in delete if u != keeper_uri]
+        elif decision == ClusterDecisionType.KEEP_ALL:
+            keeper_uri = ""
+            merge_into = []
+            delete = []
+            archive = []
+
+        return ClusterDecision(
+            decision=decision,
+            cluster=cluster,
+            keeper_uri=keeper_uri,
+            merge_into=merge_into,
+            delete=delete,
+            archive=archive,
+            merged_content=str(data.get("merged_content", "") or ""),
+            merged_abstract=str(data.get("merged_abstract", "") or ""),
+            reason=str(data.get("reason", "") or ""),
+        )
