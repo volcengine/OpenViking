@@ -727,7 +727,7 @@ async fn main() {
 
     // Check if --sudo is used with non-admin command
     if ctx.sudo && !cli.command.is_admin_command() {
-        eprintln!("Error: --sudo is only supported for admin commands (admin, system, export, import, reindex)");
+        eprintln!("Error: --sudo is only supported for admin commands (admin, system, reindex)");
         std::process::exit(2);
     };
 
