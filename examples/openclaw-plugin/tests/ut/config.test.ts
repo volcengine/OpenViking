@@ -17,6 +17,8 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.port).toBe(1933);
     expect(cfg.recallLimit).toBe(6);
     expect(cfg.recallScoreThreshold).toBe(0.15);
+    expect(cfg.accountId).toBe("");
+    expect(cfg.userId).toBe("");
     expect(cfg.autoCapture).toBe(true);
     expect(cfg.autoRecall).toBe(true);
     expect(cfg.recallPreferAbstract).toBe(false);
@@ -61,6 +63,16 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     });
     expect(cfg.apiKey).toBe("sk-test-key-123");
     delete process.env.TEST_OV_API_KEY;
+  });
+
+  it("resolves accountId and userId from environment defaults", () => {
+    process.env.OPENVIKING_ACCOUNT = "acme";
+    process.env.OPENVIKING_USER = "alice";
+
+    const cfg = memoryOpenVikingConfigSchema.parse({});
+
+    expect(cfg.accountId).toBe("acme");
+    expect(cfg.userId).toBe("alice");
   });
 
   it("throws when referenced env var is not set", () => {
@@ -157,6 +169,19 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
   it("resolves agentId from configured value", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({ agentId: "  my-agent  " });
     expect(cfg.agentId).toBe("my-agent");
+  });
+
+  it("prefers configured accountId/userId over environment defaults", () => {
+    process.env.OPENVIKING_ACCOUNT = "env-account";
+    process.env.OPENVIKING_USER = "env-user";
+
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      accountId: "cfg-account",
+      userId: "cfg-user",
+    });
+
+    expect(cfg.accountId).toBe("cfg-account");
+    expect(cfg.userId).toBe("cfg-user");
   });
 
   it("falls back to 'default' for empty agentId", () => {

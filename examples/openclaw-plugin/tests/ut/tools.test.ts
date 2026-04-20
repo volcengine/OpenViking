@@ -563,6 +563,38 @@ describe("Plugin registration", () => {
     expect(headers.get("X-OpenViking-Agent")).toBe("worker");
   });
 
+  it("search command propagates configured account and user headers", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/v1/search/find")) {
+        return okResponse({ memories: [], resources: [], skills: [], total: 0 });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { commands, api } = setupPlugin();
+    api.pluginConfig = {
+      ...api.pluginConfig,
+      accountId: "acme",
+      userId: "alice",
+    };
+    contextEnginePlugin.register(api as any);
+
+    await commands.get("ov-search")!.handler({
+      args: "test query --uri viking://resources",
+      commandBody: "/ov-search",
+      agentId: "worker",
+      sessionId: "session-1",
+      sessionKey: "agent:worker:session-1",
+    });
+
+    const [, init] = fetchMock.mock.calls.find((call) => String(call[0]).endsWith("/api/v1/search/find")) as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.get("X-OpenViking-Account")).toBe("acme");
+    expect(headers.get("X-OpenViking-User")).toBe("alice");
+    expect(headers.get("X-OpenViking-Agent")).toBe("worker");
+  });
+
   it("slash commands honor bypassSessionPatterns", async () => {
     const fetchMock = vi.fn(async () => okResponse({}));
     vi.stubGlobal("fetch", fetchMock);

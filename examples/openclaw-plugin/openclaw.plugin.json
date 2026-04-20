@@ -22,6 +22,16 @@
       "placeholder": "http://127.0.0.1:1933",
       "help": "HTTP URL when mode is remote (or ${OPENVIKING_BASE_URL})"
     },
+    "accountId": {
+      "label": "Account ID",
+      "placeholder": "${OPENVIKING_ACCOUNT}",
+      "help": "Optional OpenViking account header. Needed for tenant-scoped production routing with root_api_key."
+    },
+    "userId": {
+      "label": "User ID",
+      "placeholder": "${OPENVIKING_USER}",
+      "help": "Optional OpenViking user header. Needed for tenant-scoped production routing with root_api_key."
+    },
     "agentId": {
       "label": "Agent ID",
       "placeholder": "random unique ID",
@@ -127,6 +137,12 @@
         "type": "number"
       },
       "baseUrl": {
+        "type": "string"
+      },
+      "accountId": {
+        "type": "string"
+      },
+      "userId": {
         "type": "string"
       },
       "agentId": {

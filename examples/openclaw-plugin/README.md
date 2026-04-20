@@ -47,6 +47,7 @@ The main rules are:
 - normalize unsafe path characters, or fall back to a stable SHA-256 when needed
 - resolve `X-OpenViking-Agent` per session, not per process
 - when `plugins.entries.openviking.config.agentId` is not `default`, prefix the session agent as `<configAgentId>_<sessionAgent>`
+- allow explicit tenant routing through `plugins.entries.openviking.config.accountId` and `userId`
 - add `X-OpenViking-Account`, `X-OpenViking-User`, and `X-OpenViking-Agent` in the client layer
 
 This matters because the plugin is built to support multi-agent and multi-session OpenClaw usage without mixing memories across sessions.
@@ -183,7 +184,7 @@ That is why this plugin is not only “memory logic”. It is also a local runti
 In `remote` mode, the plugin behaves as a pure HTTP client:
 
 - no local subprocess is started
-- `baseUrl` and optional `apiKey` come from plugin config
+- `baseUrl`, optional `apiKey`, and optional tenant headers (`accountId` / `userId`) come from plugin config
 - session context, memory find/read, commit, and archive expansion behavior stays the same
 
 The main difference between `local` and `remote` is who is responsible for bringing up the OpenViking service, not the higher-level context model.

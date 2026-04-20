@@ -212,6 +212,8 @@ openclaw config get plugins.entries.openviking.config
 Core OpenClaw plugin fields:
 
 - `mode=local`
+- `accountId`
+- `userId`
 - `configPath`
 - `port`
 - `agentId`
@@ -237,6 +239,8 @@ Core OpenClaw plugin fields:
 - `mode=remote`
 - `baseUrl`
 - `apiKey`
+- `accountId`
+- `userId`
 - `agentId`
 
 ## Uninstall
