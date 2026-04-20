@@ -257,7 +257,7 @@ _TRUSTED_MODE_ADMIN_API_MESSAGE = (
 
 _DEV_MODE_ADMIN_API_MESSAGE = (
     "Admin API requires api_key mode with root_api_key configured. Development mode does not "
-    "support account or user management."
+    'support account or user management. You should set server.auth_mode = "api_key" in ov.conf'
 )
 
 

@@ -15,6 +15,7 @@ use rustyline::error::ReadlineError;
 use serde::{Deserialize, Serialize};
 use termimad::MadSkin;
 
+use crate::config::Config;
 use crate::utils;
 
 use crate::error::{Error, Result};
@@ -32,6 +33,14 @@ pub struct ChatCommand {
     /// API key for authentication
     #[arg(short, long, env = "VIKINGBOT_API_KEY")]
     pub api_key: Option<String>,
+
+    /// Account identifier to send as X-OpenViking-Account
+    #[arg(long)]
+    pub account: Option<String>,
+
+    /// User identifier to send as X-OpenViking-User
+    #[arg(long)]
+    pub user: Option<String>,
 
     /// Session ID to use (creates new if not provided)
     #[arg(short, long)]
@@ -95,9 +104,16 @@ struct ChatStreamEvent {
     timestamp: Option<String>,
 }
 
+struct ChatAuth {
+    api_key: Option<String>,
+    account: Option<String>,
+    user: Option<String>,
+}
+
 impl ChatCommand {
     /// Execute the chat command
     pub async fn execute(&self) -> Result<()> {
+        let auth = self.resolve_auth()?;
         let client = Client::builder()
             .timeout(Duration::from_secs(300))
             .build()
@@ -105,24 +121,55 @@ impl ChatCommand {
 
         if let Some(message) = &self.message {
             // Single message mode
-            self.send_message(&client, message).await
+            self.send_message(&client, message, &auth).await
         } else {
             // Interactive mode
-            self.run_interactive(&client).await
+            self.run_interactive(&client, &auth).await
         }
     }
 
+    fn resolve_auth(&self) -> Result<ChatAuth> {
+        let config = Config::load()?;
+        Ok(ChatAuth {
+            api_key: self.api_key.clone().or(config.api_key),
+            account: self.account.clone().or(config.account),
+            user: self.user.clone().or(config.user),
+        })
+    }
+
+    fn apply_auth_headers(
+        &self,
+        mut req_builder: reqwest::RequestBuilder,
+        auth: &ChatAuth,
+    ) -> reqwest::RequestBuilder {
+        if let Some(api_key) = &auth.api_key {
+            req_builder = req_builder.header("X-API-Key", api_key);
+        }
+        if let Some(account) = &auth.account {
+            req_builder = req_builder.header("X-OpenViking-Account", account);
+        }
+        if let Some(user) = &auth.user {
+            req_builder = req_builder.header("X-OpenViking-User", user);
+        }
+        req_builder
+    }
+
     /// Send a single message and get response
-    async fn send_message(&self, client: &Client, message: &str) -> Result<()> {
+    async fn send_message(&self, client: &Client, message: &str, auth: &ChatAuth) -> Result<()> {
         if self.stream {
-            self.send_message_stream(client, message).await
+            self.send_message_stream(client, message, auth).await
         } else {
-            self.send_message_non_stream(client, message).await
+            self.send_message_non_stream(client, message, auth).await
         }
     }
 
     /// Send a single message with non-streaming response
-    async fn send_message_non_stream(&self, client: &Client, message: &str) -> Result<()> {
+    async fn send_message_non_stream(
+        &self,
+        client: &Client,
+        message: &str,
+        auth: &ChatAuth,
+    ) -> Result<()> {
         let url = format!("{}/chat", self.endpoint);
 
         let request = ChatRequest {
@@ -133,11 +180,7 @@ impl ChatCommand {
             context: None,
         };
 
-        let mut req_builder = client.post(&url).json(&request);
-
-        if let Some(api_key) = &self.api_key {
-            req_builder = req_builder.header("X-API-Key", api_key);
-        }
+        let req_builder = self.apply_auth_headers(client.post(&url).json(&request), auth);
 
         let response = req_builder
             .send()
@@ -165,7 +208,12 @@ impl ChatCommand {
     }
 
     /// Send a single message with streaming response
-    async fn send_message_stream(&self, client: &Client, message: &str) -> Result<()> {
+    async fn send_message_stream(
+        &self,
+        client: &Client,
+        message: &str,
+        auth: &ChatAuth,
+    ) -> Result<()> {
         let url = format!("{}/chat/stream", self.endpoint);
 
         let request = ChatRequest {
@@ -176,11 +224,7 @@ impl ChatCommand {
             context: None,
         };
 
-        let mut req_builder = client.post(&url).json(&request);
-
-        if let Some(api_key) = &self.api_key {
-            req_builder = req_builder.header("X-API-Key", api_key);
-        }
+        let req_builder = self.apply_auth_headers(client.post(&url).json(&request), auth);
 
         let response = req_builder
             .send()
@@ -246,7 +290,7 @@ impl ChatCommand {
     }
 
     /// Run interactive chat mode with rustyline
-    async fn run_interactive(&self, client: &Client) -> Result<()> {
+    async fn run_interactive(&self, client: &Client, auth: &ChatAuth) -> Result<()> {
         println!("Vikingbot Chat - Interactive Mode");
         println!("Endpoint: {}", self.endpoint);
         if let Some(session) = &self.session {
@@ -296,7 +340,7 @@ impl ChatCommand {
 
                     // Send message
                     match self
-                        .send_interactive_message(client, input, &mut session_id)
+                        .send_interactive_message(client, input, &mut session_id, auth)
                         .await
                     {
                         Ok(_) => {}
@@ -336,12 +380,13 @@ impl ChatCommand {
         client: &Client,
         input: &str,
         session_id: &mut Option<String>,
+        auth: &ChatAuth,
     ) -> Result<()> {
         if self.stream {
-            self.send_interactive_message_stream(client, input, session_id)
+            self.send_interactive_message_stream(client, input, session_id, auth)
                 .await
         } else {
-            self.send_interactive_message_non_stream(client, input, session_id)
+            self.send_interactive_message_non_stream(client, input, session_id, auth)
                 .await
         }
     }
@@ -352,6 +397,7 @@ impl ChatCommand {
         client: &Client,
         input: &str,
         session_id: &mut Option<String>,
+        auth: &ChatAuth,
     ) -> Result<()> {
         let url = format!("{}/chat", self.endpoint);
 
@@ -363,11 +409,7 @@ impl ChatCommand {
             context: None,
         };
 
-        let mut req_builder = client.post(&url).json(&request);
-
-        if let Some(api_key) = &self.api_key {
-            req_builder = req_builder.header("X-API-Key", api_key);
-        }
+        let req_builder = self.apply_auth_headers(client.post(&url).json(&request), auth);
 
         let response = req_builder
             .send()
@@ -407,6 +449,7 @@ impl ChatCommand {
         client: &Client,
         input: &str,
         session_id: &mut Option<String>,
+        auth: &ChatAuth,
     ) -> Result<()> {
         let url = format!("{}/chat/stream", self.endpoint);
 
@@ -418,11 +461,7 @@ impl ChatCommand {
             context: None,
         };
 
-        let mut req_builder = client.post(&url).json(&request);
-
-        if let Some(api_key) = &self.api_key {
-            req_builder = req_builder.header("X-API-Key", api_key);
-        }
+        let req_builder = self.apply_auth_headers(client.post(&url).json(&request), auth);
 
         let response = req_builder
             .send()
@@ -641,6 +680,8 @@ impl ChatCommand {
         Self {
             endpoint,
             api_key,
+            account: None,
+            user: None,
             session,
             sender,
             message,

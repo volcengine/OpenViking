@@ -116,6 +116,16 @@ def get_viking_path(config: Dict[str, Any]) -> Path:
     return storage_path / "viking"
 
 
+def _internal_error_response(message: str = "Internal server error") -> JSONResponse:
+    """Return a generic server error without leaking exception details."""
+    return JSONResponse(content={"error": message}, status_code=500)
+
+
+def _failed_operation_response(message: str) -> JSONResponse:
+    """Return a generic operation failure without surfacing raw exception text."""
+    return JSONResponse(content={"success": False, "error": message})
+
+
 # ============================================================================
 # API Client
 # ============================================================================
@@ -1554,8 +1564,9 @@ def create_fastapi_app(state: GameState) -> FastAPI:
 
         try:
             await start_current_game(state)
-        except ValueError as e:
-            return JSONResponse(content={"success": False, "error": str(e)})
+        except ValueError:
+            logger.warning("Failed to start game")
+            return _failed_operation_response("Failed to start game")
 
         return JSONResponse(content={"success": True, "session_id": state.session_id, "game_mode": state.game_mode})
 
@@ -1570,8 +1581,9 @@ def create_fastapi_app(state: GameState) -> FastAPI:
 
         try:
             session_id = await restart_game_session(state)
-        except ValueError as e:
-            return JSONResponse(content={"success": False, "error": str(e)})
+        except ValueError:
+            logger.warning("Failed to restart game")
+            return _failed_operation_response("Failed to restart game")
 
         return JSONResponse(content={"success": True, "session_id": session_id, "game_mode": state.game_mode})
 
@@ -1586,8 +1598,9 @@ def create_fastapi_app(state: GameState) -> FastAPI:
 
         try:
             await continue_current_game(state)
-        except ValueError as e:
-            return JSONResponse(content={"success": False, "error": str(e)})
+        except ValueError:
+            logger.warning("Failed to continue game")
+            return _failed_operation_response("Failed to continue game")
 
         return JSONResponse(content={"success": True, "session_id": state.session_id})
 
@@ -1706,8 +1719,9 @@ def create_fastapi_app(state: GameState) -> FastAPI:
                 "content": content,
                 "name": file_path.name
             })
-        except Exception as e:
-            return JSONResponse(content={"error": str(e)}, status_code=500)
+        except Exception:
+            logger.exception("Failed to read OpenViking file")
+            return _internal_error_response("Failed to read file")
 
     @fastapi_app.get("/api/conversations")
     async def get_conversations():
@@ -1751,8 +1765,9 @@ def create_fastapi_app(state: GameState) -> FastAPI:
                 "content": content,
                 "filename": file_path.name
             })
-        except Exception as e:
-            return JSONResponse(content={"error": str(e)}, status_code=500)
+        except Exception:
+            logger.exception("Failed to read conversation file")
+            return _internal_error_response("Failed to read conversation")
 
     @fastapi_app.get("/api/replay-state/{session_id}")
     async def get_replay_state(session_id: str):
@@ -1764,8 +1779,9 @@ def create_fastapi_app(state: GameState) -> FastAPI:
         try:
             payload = json.loads(replay_state_path.read_text(encoding="utf-8"))
             return JSONResponse(content=payload)
-        except Exception as e:
-            return JSONResponse(content={"error": str(e)}, status_code=500)
+        except Exception:
+            logger.exception("Failed to load replay state")
+            return _internal_error_response("Failed to load replay state")
 
     @fastapi_app.get("/api/bot-sessions")
     async def get_bot_sessions():
@@ -1856,8 +1872,9 @@ def create_fastapi_app(state: GameState) -> FastAPI:
                 "content": content,
                 "raw_content": file_path.read_text(encoding="utf-8")
             })
-        except Exception as e:
-            return JSONResponse(content={"error": str(e)}, status_code=500)
+        except Exception:
+            logger.exception("Failed to read bot session file")
+            return _internal_error_response("Failed to read session file")
 
     @fastapi_app.get("/api/game-file/{channel_id}/{filename}")
     async def get_game_file(channel_id: str, filename: str):
@@ -1879,8 +1896,9 @@ def create_fastapi_app(state: GameState) -> FastAPI:
                 "filename": filename,
                 "content": content
             })
-        except Exception as e:
-            return JSONResponse(content={"error": str(e)}, status_code=500)
+        except Exception:
+            logger.exception("Failed to read game file")
+            return _internal_error_response("Failed to read game file")
 
     @fastapi_app.get("/api/leaderboard")
     async def get_leaderboard():

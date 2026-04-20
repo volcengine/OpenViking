@@ -17,6 +17,7 @@ pub struct CliContext {
     pub config: Config,
     pub output_format: OutputFormat,
     pub compact: bool,
+    pub sudo: bool,
 }
 
 impl CliContext {
@@ -26,6 +27,7 @@ impl CliContext {
         account: Option<String>,
         user: Option<String>,
         agent_id: Option<String>,
+        sudo: bool,
     ) -> Result<Self> {
         let config = Config::load()?;
         Ok(Self::from_config(
@@ -35,6 +37,7 @@ impl CliContext {
             account,
             user,
             agent_id,
+            sudo,
         ))
     }
 
@@ -45,6 +48,7 @@ impl CliContext {
         account: Option<String>,
         user: Option<String>,
         agent_id: Option<String>,
+        sudo: bool,
     ) -> Self {
         if account.is_some() {
             config.account = account;
@@ -59,13 +63,19 @@ impl CliContext {
             config,
             output_format,
             compact,
+            sudo,
         }
     }
 
     pub fn get_client(&self) -> client::HttpClient {
+        let api_key = if self.sudo {
+            self.config.root_api_key.clone()
+        } else {
+            self.config.api_key.clone()
+        };
         client::HttpClient::new(
             &self.config.url,
-            self.config.api_key.clone(),
+            api_key,
             self.config.agent_id.clone(),
             self.config.account.clone(),
             self.config.user.clone(),
@@ -122,9 +132,14 @@ struct Cli {
     #[arg(long = "agent-id", global = true)]
     agent_id: Option<String>,
 
+    /// Use root API key for admin privileges
+    #[arg(long, global = true)]
+    sudo: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
+
 
 #[derive(Subcommand)]
 enum Commands {
@@ -539,6 +554,18 @@ enum Commands {
     Version,
 }
 
+impl Commands {
+    /// Returns true if this is an admin command that supports --sudo
+    fn is_admin_command(&self) -> bool {
+        match self {
+            Self::Admin { .. }
+            | Self::System { .. }
+            | Self::Reindex { .. } => true,
+            _ => false,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum SystemCommands {
     /// Wait for queued async processing to complete
@@ -686,12 +713,25 @@ async fn main() {
         cli.account.clone(),
         cli.user.clone(),
         cli.agent_id.clone(),
+        cli.sudo,
     ) {
         Ok(ctx) => ctx,
         Err(e) => {
             eprintln!("Error: {}", e);
             std::process::exit(2);
         }
+    };
+
+    // Check if --sudo is used but root_api_key is not configured
+    if ctx.sudo && ctx.config.root_api_key.is_none() {
+        eprintln!("Error: --sudo requires root_api_key to be configured in ~/.openviking/ovcli.conf");
+        std::process::exit(2);
+    }
+
+    // Check if --sudo is used with non-admin command
+    if ctx.sudo && !cli.command.is_admin_command() {
+        eprintln!("Error: --sudo is only supported for admin commands (admin, system, reindex)");
+        std::process::exit(2);
     };
 
     let result = match cli.command {
@@ -800,6 +840,8 @@ async fn main() {
             let cmd = commands::chat::ChatCommand {
                 endpoint,
                 api_key: std::env::var("VIKINGBOT_API_KEY").ok(),
+                account: ctx.config.account.clone(),
+                user: ctx.config.user.clone(),
                 session: session_id,
                 sender,
                 message,
@@ -1468,6 +1510,7 @@ mod tests {
         let config = Config {
             url: "http://localhost:1933".to_string(),
             api_key: Some("test-key".to_string()),
+            root_api_key: None,
             account: Some("from-config-account".to_string()),
             user: Some("from-config-user".to_string()),
             agent_id: Some("from-config-agent".to_string()),
@@ -1484,11 +1527,54 @@ mod tests {
             Some("from-cli-account".to_string()),
             Some("from-cli-user".to_string()),
             Some("from-cli-agent".to_string()),
+            false,
         );
 
         assert_eq!(ctx.config.account.as_deref(), Some("from-cli-account"));
         assert_eq!(ctx.config.user.as_deref(), Some("from-cli-user"));
         assert_eq!(ctx.config.agent_id.as_deref(), Some("from-cli-agent"));
+    }
+
+    #[test]
+    fn cli_context_uses_root_api_key_with_sudo() {
+        let config = Config {
+            url: "http://localhost:1933".to_string(),
+            api_key: Some("user-key".to_string()),
+            root_api_key: Some("root-key".to_string()),
+            account: None,
+            user: None,
+            agent_id: None,
+            timeout: 60.0,
+            output: "table".to_string(),
+            echo_command: true,
+            upload: Default::default(),
+        };
+
+        // Without sudo: use api_key
+        let ctx = CliContext::from_config(
+            config.clone(),
+            OutputFormat::Json,
+            true,
+            None,
+            None,
+            None,
+            false,
+        );
+        let client = ctx.get_client();
+        assert_eq!(client.api_key(), Some("user-key"));
+
+        // With sudo: use root_api_key
+        let ctx = CliContext::from_config(
+            config,
+            OutputFormat::Json,
+            true,
+            None,
+            None,
+            None,
+            true,
+        );
+        let client = ctx.get_client();
+        assert_eq!(client.api_key(), Some("root-key"));
     }
 
     #[test]

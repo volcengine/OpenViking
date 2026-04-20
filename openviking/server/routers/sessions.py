@@ -133,14 +133,6 @@ def _resolve_message_role_id(
     if not _ROLE_ID_PATTERN.match(role_id):
         raise InvalidArgumentError("role_id must be alpha-numeric string.")
 
-    if request.role == "user":
-        api_key_manager = getattr(http_request.app.state, "api_key_manager", None)
-        has_user = getattr(api_key_manager, "has_user", None)
-        if callable(has_user) and not has_user(ctx.account_id, role_id):
-            raise InvalidArgumentError(
-                f"role_id '{role_id}' is not a registered user in account '{ctx.account_id}'."
-            )
-
     return role_id
 
 

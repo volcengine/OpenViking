@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse
 
-
 from openviking.telemetry import tracer
 
 try:
@@ -30,6 +29,20 @@ _DASHSCOPE_HOSTS = {
     "dashscope.aliyuncs.com",
     "dashscope-intl.aliyuncs.com",
 }
+
+
+_REASONING_MODEL_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+
+
+def _is_reasoning_model(model: Optional[str]) -> bool:
+    """OpenAI reasoning-model families reject `max_tokens` and non-default `temperature`.
+
+    They require `max_completion_tokens` and only accept `temperature=1` (server default).
+    """
+    if not model:
+        return False
+    name = model.lower()
+    return any(name.startswith(p) for p in _REASONING_MODEL_PREFIXES)
 
 
 def _build_openai_client_kwargs(
@@ -66,6 +79,7 @@ class OpenAIVLM(VLMBase):
         self._sync_client = None
         self._async_client = None
         self.api_version = config.get("api_version")
+        self.reasoning_effort = config.get("reasoning_effort", "low")
 
     def get_client(self):
         """Get sync client"""
@@ -78,6 +92,7 @@ class OpenAIVLM(VLMBase):
                 self.api_base,
                 self.api_version,
                 self.extra_headers,
+                self.timeout,
             )
             if self.provider == "azure":
                 self._sync_client = openai.AzureOpenAI(**kwargs)
@@ -96,6 +111,7 @@ class OpenAIVLM(VLMBase):
                 self.api_base,
                 self.api_version,
                 self.extra_headers,
+                self.timeout,
             )
             if self.provider == "azure":
                 self._async_client = openai.AsyncAzureOpenAI(**kwargs)
@@ -259,15 +275,20 @@ class OpenAIVLM(VLMBase):
         thinking: bool = False,
     ) -> Dict[str, Any]:
         kwargs_messages = messages or [{"role": "user", "content": prompt}]
-        kwargs = {
-            "model": self.model or "gpt-4o-mini",
+        model = self.model or "gpt-4o-mini"
+        is_reasoning = _is_reasoning_model(model)
+        kwargs: Dict[str, Any] = {
+            "model": model,
             "messages": kwargs_messages,
-            "temperature": self.temperature,
             "stream": self.stream,
         }
+        if is_reasoning:
+            kwargs["reasoning_effort"] = self.reasoning_effort
+        else:
+            kwargs["temperature"] = self.temperature
         self._apply_provider_specific_extra_body(kwargs, thinking)
         if self.max_tokens is not None:
-            kwargs["max_tokens"] = self.max_tokens
+            kwargs["max_completion_tokens" if is_reasoning else "max_tokens"] = self.max_tokens
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
@@ -292,15 +313,20 @@ class OpenAIVLM(VLMBase):
                 content.append({"type": "text", "text": prompt})
             kwargs_messages = [{"role": "user", "content": content}]
 
-        kwargs = {
-            "model": self.model or "gpt-4o-mini",
+        model = self.model or "gpt-4o-mini"
+        is_reasoning = _is_reasoning_model(model)
+        kwargs: Dict[str, Any] = {
+            "model": model,
             "messages": kwargs_messages,
-            "temperature": self.temperature,
             "stream": self.stream,
         }
+        if is_reasoning:
+            kwargs["reasoning_effort"] = self.reasoning_effort
+        else:
+            kwargs["temperature"] = self.temperature
         self._apply_provider_specific_extra_body(kwargs, thinking)
         if self.max_tokens is not None:
-            kwargs["max_tokens"] = self.max_tokens
+            kwargs["max_completion_tokens" if is_reasoning else "max_tokens"] = self.max_tokens
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"

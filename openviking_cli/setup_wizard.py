@@ -110,6 +110,11 @@ def _prompt_confirm(prompt: str, default: bool = True) -> bool:
     return raw in ("y", "yes")
 
 
+def _configured_hint(enabled: bool) -> str:
+    """Return a non-sensitive summary label for setup output."""
+    return "configured" if enabled else _dim("(not configured)")
+
+
 # ---------------------------------------------------------------------------
 # System info
 # ---------------------------------------------------------------------------
@@ -868,20 +873,15 @@ def run_init() -> int:
     # Summary
     emb = config_dict.get("embedding", {}).get("dense", {})
     vlm = config_dict.get("vlm", {})
-    ws = config_dict.get("storage", {}).get("workspace", _DEFAULT_WORKSPACE)
 
     print(f"\n  {_bold('Summary:')}")
-    print(
-        f"    Embedding:  {emb.get('provider', '')} / {emb.get('model', '')} ({emb.get('dimension', '')}d)"
-    )
+    print(f"    Embedding:  {_configured_hint(bool(emb))}")
     if emb.get("model_path"):
-        print(f"    Model path: {emb['model_path']}")
-    vlm_summary = (
-        f"{vlm.get('provider', '')} / {vlm.get('model', '')}" if vlm else _dim("(not configured)")
-    )
+        print("    Model path: custom local model (hidden)")
+    vlm_summary = _configured_hint(bool(vlm))
     print(f"    VLM:        {vlm_summary}")
-    print(f"    Workspace:  {ws}")
-    print(f"    Config:     {_DEFAULT_CONFIG_PATH}")
+    print("    Workspace:  configured (hidden)")
+    print("    Config:     default config location")
 
     if not _prompt_confirm("\n  Save configuration?"):
         print("\n  Setup cancelled.\n")
@@ -891,7 +891,7 @@ def run_init() -> int:
     if not _write_config(config_dict, _DEFAULT_CONFIG_PATH):
         return 1
 
-    print(f"  {_green('OK')} Configuration written to {_DEFAULT_CONFIG_PATH}\n")
+    print(f"  {_green('OK')} Configuration written to the default config location\n")
 
     # Post-init tips
     print(f"  {_bold('Next steps:')}")

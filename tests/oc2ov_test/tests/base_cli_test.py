@@ -94,17 +94,21 @@ class BaseOpenClawCLITest(unittest.TestCase):
         """
         return SessionIdManager.generate_session_id(prefix=prefix)
 
-    def wait_for_sync(self, seconds: int = None):
+    def wait_for_sync(self, seconds: int = None, session_id: str = None):
         """
         等待记忆同步（锁释放 + 最小等待）
 
         Args:
             seconds: 等待秒数，默认使用配置的 wait_time，最小 MIN_SYNC_WAIT_SECONDS
+            session_id: 等待的 session ID，默认使用当前测试类的 session_id
         """
+        target_session_id = session_id or self.current_session_id
         wait_seconds = max(seconds or self.wait_time, MIN_SYNC_WAIT_SECONDS)
-        self.logger.info(f"等待记忆同步 (锁释放 + {wait_seconds}秒)...")
+        self.logger.info(
+            f"等待记忆同步 (锁释放 + {wait_seconds}秒)... [session={target_session_id}]"
+        )
 
-        lock_ok = _wait_for_session_lock_release(self.current_session_id)
+        lock_ok = _wait_for_session_lock_release(target_session_id)
         if not lock_ok:
             self.logger.warning("Session lock 未释放，额外等待 5 秒...")
             time.sleep(5)
@@ -117,6 +121,7 @@ class BaseOpenClawCLITest(unittest.TestCase):
         keywords: list = None,
         timeout: float = None,
         poll_interval: float = 3.0,
+        session_id: str = None,
     ) -> bool:
         """
         智能等待记忆同步（锁释放 + 轮询检查）
@@ -126,25 +131,28 @@ class BaseOpenClawCLITest(unittest.TestCase):
             keywords: 期望响应中包含的关键词
             timeout: 超时时间（秒）
             poll_interval: 轮询间隔（秒），最小 3.0
+            session_id: 等待和检查的 session ID，默认使用当前测试类的 session_id
 
         Returns:
             bool: 是否成功同步
         """
+        target_session_id = session_id or self.current_session_id
+
         if not check_message or not keywords:
-            self.wait_for_sync()
+            self.wait_for_sync(session_id=target_session_id)
             return True
 
         poll_interval = max(poll_interval, 3.0)
         timeout = timeout or self.wait_time * 3
 
-        lock_ok = _wait_for_session_lock_release(self.current_session_id)
+        lock_ok = _wait_for_session_lock_release(target_session_id)
         if not lock_ok:
             self.logger.warning("Session lock 未释放，额外等待 5 秒...")
             time.sleep(5)
 
         def check_response() -> bool:
-            _wait_for_session_lock_release(self.current_session_id)
-            response = self.client.send_message(check_message, session_id=self.current_session_id)
+            _wait_for_session_lock_release(target_session_id)
+            response = self.client.send_message(check_message, session_id=target_session_id)
             return self.assertion.assert_keywords_in_response(
                 response, keywords, require_all=True, case_sensitive=False
             )
@@ -153,7 +161,7 @@ class BaseOpenClawCLITest(unittest.TestCase):
             check_response,
             timeout=timeout,
             poll_interval=poll_interval,
-            message=f"等待记忆同步 (关键词: {keywords})",
+            message=f"等待记忆同步 (关键词: {keywords}) [session={target_session_id}]",
         )
 
     def send_and_log(
@@ -203,6 +211,71 @@ class BaseOpenClawCLITest(unittest.TestCase):
         self.logger.info(f"响应文本: {response_text}")
 
         self.logger.info("◂" * 40 + "\n")
+        return response
+
+    def _is_llm_timeout(self, response) -> bool:
+        text = self.assertion.extract_response_text(response)
+        timeout_indicators = [
+            "idle timeout",
+            "did not produce a response",
+            "LLM idle timeout",
+            "timed out",
+        ]
+        return any(ind.lower() in text.lower() for ind in timeout_indicators)
+
+    def _is_empty_response(self, response) -> bool:
+        text = self.assertion.extract_response_text(response)
+        return not text.strip()
+
+    def _is_tool_result_only(self, response) -> bool:
+        text = self.assertion.extract_response_text(response).strip()
+        if not text:
+            return False
+        tool_result_prefixes = [
+            '[{"name"',
+            '[{"id"',
+            '[{"type"',
+            '{"name":',
+            '{"id":',
+            '{"type":',
+        ]
+        if any(text.startswith(p) for p in tool_result_prefixes):
+            return True
+        tool_result_patterns = [
+            '"name":"none"',
+        ]
+        return any(p in text for p in tool_result_patterns) and len(text) < 200
+
+    def send_and_retry_on_timeout(
+        self,
+        message: str,
+        session_id: str = None,
+        agent_id: str = None,
+        max_retries: int = 2,
+        retry_delay: float = 5.0,
+    ):
+        target_session_id = session_id or self.current_session_id
+        for attempt in range(max_retries + 1):
+            response = self.send_and_log(message, session_id=target_session_id, agent_id=agent_id)
+            is_timeout = self._is_llm_timeout(response)
+            is_empty = self._is_empty_response(response)
+            is_tool_result = self._is_tool_result_only(response)
+            if not is_timeout and not is_empty and not is_tool_result:
+                return response
+            if is_timeout:
+                reason = "LLM idle timeout"
+            elif is_empty:
+                reason = "empty response (no text)"
+            else:
+                reason = "tool result only (no natural language answer)"
+            self.logger.warning(
+                f"{reason} (attempt {attempt + 1}/{max_retries + 1}), retrying in {retry_delay}s..."
+            )
+            if attempt < max_retries:
+                time.sleep(retry_delay)
+        self.logger.warning(
+            f"Retry exhausted after {max_retries + 1} attempts, returning last response"
+        )
         return response
 
     def send_with_retry(
