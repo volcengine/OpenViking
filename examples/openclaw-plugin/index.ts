@@ -513,6 +513,8 @@ function totalCommitMemories(r: CommitSessionResult): number {
   return Object.values(m).reduce((sum, n) => sum + (n ?? 0), 0);
 }
 
+let _registered = false;
+
 const contextEnginePlugin = {
   id: "openviking",
   name: "Context Engine (OpenViking)",
@@ -521,6 +523,26 @@ const contextEnginePlugin = {
   configSchema: memoryOpenVikingConfigSchema,
 
   register(api: OpenClawPluginApi) {
+    // Idempotency on re-register: the lookup paths below already handle
+    // both found and not-found states for localClientCache (resolved
+    // client) and localClientPendingPromises (pending startup entry), so
+    // a second register() with the same or a different cacheKey reuses
+    // state correctly for the #1210 reload case.
+    //
+    // Do NOT clear these maps here. The first registration's clientPromise
+    // closure is bound to a specific pending-entry instance; clearing and
+    // letting the second register() install a fresh entry under the same
+    // cacheKey orphans the first closure — service startup resolves the
+    // replacement entry while the first registration's getClient() hangs.
+    // Clearing localClientCache has the same hazard post-startup: the
+    // second registration falls into the pending path even though the
+    // process is already running, so no new resolve() ever fires. See the
+    // review discussion on #1214.
+    if (_registered) {
+      api.logger.info("openviking: plugin re-loaded (cacheKey-keyed state reused)");
+    }
+    _registered = true;
+
     const rawCfg =
       api.pluginConfig && typeof api.pluginConfig === "object" && !Array.isArray(api.pluginConfig)
         ? (api.pluginConfig as Record<string, unknown>)
@@ -1019,11 +1041,14 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
             ]);
             const userResult = userSettled.status === "fulfilled" ? userSettled.value : { memories: [] };
             const agentResult = agentSettled.status === "fulfilled" ? agentSettled.value : { memories: [] };
-            // 合并两个位置的结果，去重
+            // 合并两个位置的结果，去重 (linear time via Set)
             const allMemories = [...(userResult.memories ?? []), ...(agentResult.memories ?? [])];
-            const uniqueMemories = allMemories.filter((memory, index, self) =>
-              index === self.findIndex((m) => m.uri === memory.uri)
-            );
+            const seenUris = new Set<string>();
+            const uniqueMemories = allMemories.filter((memory) => {
+              if (seenUris.has(memory.uri)) return false;
+              seenUris.add(memory.uri);
+              return true;
+            });
             const leafOnly = uniqueMemories.filter((m) => m.level === 2);
             result = {
               memories: leafOnly,
@@ -1491,9 +1516,12 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
                 }
 
                 const allMemories = [...(userResult.memories ?? []), ...(agentResult.memories ?? [])];
-                const uniqueMemories = allMemories.filter((memory, index, self) =>
-                  index === self.findIndex((m) => m.uri === memory.uri)
-                );
+                const seenUris = new Set<string>();
+                const uniqueMemories = allMemories.filter((memory) => {
+                  if (seenUris.has(memory.uri)) return false;
+                  seenUris.add(memory.uri);
+                  return true;
+                });
                 const leafOnly = uniqueMemories.filter((m) => m.level === 2);
                 const processed = postProcessMemories(leafOnly, {
                   limit: candidateLimit,
@@ -1761,7 +1789,15 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
               });
               try {
                 await waitForHealthOrExit(baseUrl, timeoutMs, intervalMs, child);
-                const client = new OpenVikingClient(baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs);
+                const client = new OpenVikingClient(
+                  baseUrl,
+                  cfg.apiKey,
+                  cfg.agentId,
+                  cfg.timeoutMs,
+                  tenantAccount,
+                  tenantUser,
+                  routingDebugLog,
+                );
                 localClientCache.set(localCacheKey, { client, process: child });
                 if (resolveLocalClient) {
                   resolveLocalClient(client);
