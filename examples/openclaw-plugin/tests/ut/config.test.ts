@@ -14,6 +14,7 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
   it("empty object uses all defaults", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({});
     expect(cfg.mode).toBe("local");
+    expect(cfg.serverAuthMode).toBe("api_key");
     expect(cfg.port).toBe(1933);
     expect(cfg.recallLimit).toBe(6);
     expect(cfg.recallScoreThreshold).toBe(0.15);
@@ -162,5 +163,77 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
   it("falls back to 'default' for empty agentId", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({ agentId: "  " });
     expect(cfg.agentId).toBe("default");
+  });
+
+  it("parses accountId and trims whitespace", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ accountId: "  acct-123  " });
+    expect(cfg.accountId).toBe("acct-123");
+  });
+
+  it("defaults accountId to empty string when missing", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({});
+    expect(cfg.accountId).toBe("");
+  });
+
+  it("defaults accountId to empty string for whitespace-only value", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ accountId: "   " });
+    expect(cfg.accountId).toBe("");
+  });
+
+  it("parses userId and trims whitespace", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ userId: "  user-456  " });
+    expect(cfg.userId).toBe("user-456");
+  });
+
+  it("defaults userId to empty string when missing", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({});
+    expect(cfg.userId).toBe("");
+  });
+
+  it("defaults agentScopeMode to user_agent", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({});
+    expect(cfg.agentScopeMode).toBe("user_agent");
+  });
+
+  it("defaults serverAuthMode to api_key", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({});
+    expect(cfg.serverAuthMode).toBe("api_key");
+  });
+
+  it("accepts serverAuthMode trusted", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ serverAuthMode: "trusted" });
+    expect(cfg.serverAuthMode).toBe("trusted");
+  });
+
+  it("falls back to api_key for invalid serverAuthMode", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ serverAuthMode: "invalid" });
+    expect(cfg.serverAuthMode).toBe("api_key");
+  });
+
+  it("accepts agentScopeMode 'agent'", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ agentScopeMode: "agent" });
+    expect(cfg.agentScopeMode).toBe("agent");
+  });
+
+  it("falls back to user_agent for invalid agentScopeMode", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ agentScopeMode: "invalid" });
+    expect(cfg.agentScopeMode).toBe("user_agent");
+  });
+
+  it("defaults recallResources to false", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({});
+    expect(cfg.recallResources).toBe(false);
+  });
+
+  it("enables recallResources when set to true", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ recallResources: true });
+    expect(cfg.recallResources).toBe(true);
+  });
+
+  it("recallResources only accepts boolean true", () => {
+    const cfg1 = memoryOpenVikingConfigSchema.parse({ recallResources: "true" });
+    expect(cfg1.recallResources).toBe(false);
+    const cfg2 = memoryOpenVikingConfigSchema.parse({ recallResources: 1 });
+    expect(cfg2.recallResources).toBe(false);
   });
 });

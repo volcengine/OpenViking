@@ -5,6 +5,8 @@ import { resolve as resolvePath } from "node:path";
 export type MemoryOpenVikingConfig = {
   /** "local" = plugin starts OpenViking server as child process (like Claude Code); "remote" = use existing HTTP server */
   mode?: "local" | "remote";
+  /** Server-side auth mode. Plugin cannot infer this reliably from OpenViking, so configure it explicitly. */
+  serverAuthMode?: "api_key" | "trusted";
   /** Path to ov.conf; used when mode is "local". Default ~/.openviking/ov.conf */
   configPath?: string;
   /** Port for local server when mode is "local". Ignored when mode is "remote". */
@@ -12,12 +14,25 @@ export type MemoryOpenVikingConfig = {
   baseUrl?: string;
   agentId?: string;
   apiKey?: string;
+  /** Tenant account ID. Only needed when using root key or trusted auth mode. With a user key the server derives identity from the key. */
+  accountId?: string;
+  /** Tenant user ID. Only needed when using root key or trusted auth mode. */
+  userId?: string;
+  /**
+   * Controls how agent space is computed.
+   * "user_agent" (default): space = hash(userId + agentId) — per-user per-agent isolation.
+   * "agent": space = hash(agentId) — same agentId shares space across users within account.
+   * Must match the server's memory.agent_scope_mode setting.
+   */
+  agentScopeMode?: "user_agent" | "agent";
   targetUri?: string;
   timeoutMs?: number;
   autoCapture?: boolean;
   captureMode?: "semantic" | "keyword";
   captureMaxLength?: number;
   autoRecall?: boolean;
+  /** Include resources in auto-recall and default memory_recall search. Default false. */
+  recallResources?: boolean;
   recallLimit?: number;
   recallScoreThreshold?: number;
   recallMaxContentChars?: number;
@@ -134,17 +149,22 @@ export const memoryOpenVikingConfigSchema = {
       cfg,
       [
         "mode",
+        "serverAuthMode",
         "configPath",
         "port",
         "baseUrl",
         "agentId",
         "apiKey",
+        "accountId",
+        "userId",
+        "agentScopeMode",
         "targetUri",
         "timeoutMs",
         "autoCapture",
         "captureMode",
         "captureMaxLength",
         "autoRecall",
+        "recallResources",
         "recallLimit",
         "recallScoreThreshold",
         "recallMaxContentChars",
@@ -165,6 +185,9 @@ export const memoryOpenVikingConfigSchema = {
     const mode = (cfg.mode === "local" || cfg.mode === "remote" ? cfg.mode : "local") as
       | "local"
       | "remote";
+    const rawServerAuthMode = cfg.serverAuthMode ?? process.env.OPENVIKING_SERVER_AUTH_MODE;
+    const serverAuthMode =
+      rawServerAuthMode === "trusted" ? ("trusted" as const) : ("api_key" as const);
     const port = Math.max(1, Math.min(65535, Math.floor(toNumber(cfg.port, DEFAULT_PORT))));
     const rawConfigPath =
       typeof cfg.configPath === "string" && cfg.configPath.trim()
@@ -188,13 +211,30 @@ export const memoryOpenVikingConfigSchema = {
       throw new Error(`openviking captureMode must be "semantic" or "keyword"`);
     }
 
+    const accountId =
+      typeof cfg.accountId === "string" && cfg.accountId.trim()
+        ? cfg.accountId.trim()
+        : (process.env.OPENVIKING_ACCOUNT_ID?.trim() || "");
+    const userId =
+      typeof cfg.userId === "string" && cfg.userId.trim()
+        ? cfg.userId.trim()
+        : (process.env.OPENVIKING_USER_ID?.trim() || "");
+
+    const rawAgentScope = cfg.agentScopeMode ?? process.env.OPENVIKING_AGENT_SCOPE_MODE;
+    const agentScopeMode =
+      rawAgentScope === "agent" ? "agent" as const : "user_agent" as const;
+
     return {
       mode,
+      serverAuthMode,
       configPath,
       port,
       baseUrl: resolvedBaseUrl,
       agentId: resolveAgentId(cfg.agentId),
       apiKey: rawApiKey ? resolveEnvVars(rawApiKey) : "",
+      accountId,
+      userId,
+      agentScopeMode,
       targetUri: typeof cfg.targetUri === "string" ? cfg.targetUri : DEFAULT_TARGET_URI,
       timeoutMs: Math.max(1000, Math.floor(toNumber(cfg.timeoutMs, DEFAULT_TIMEOUT_MS))),
       autoCapture: cfg.autoCapture !== false,
@@ -204,6 +244,7 @@ export const memoryOpenVikingConfigSchema = {
         Math.min(200_000, Math.floor(toNumber(cfg.captureMaxLength, DEFAULT_CAPTURE_MAX_LENGTH))),
       ),
       autoRecall: cfg.autoRecall !== false,
+      recallResources: cfg.recallResources === true || envFlag("OPENVIKING_RECALL_RESOURCES"),
       recallLimit: Math.max(1, Math.floor(toNumber(cfg.recallLimit, DEFAULT_RECALL_LIMIT))),
       recallScoreThreshold: Math.min(
         1,
@@ -244,6 +285,13 @@ export const memoryOpenVikingConfigSchema = {
       label: "Mode",
       help: "local = plugin starts OpenViking server (like Claude Code); remote = use existing HTTP server",
     },
+    serverAuthMode: {
+      label: "Server Auth Mode",
+      placeholder: "api_key",
+      help:
+        'How the OpenViking server authenticates requests. "api_key": with apiKey → send X-API-Key only and let the server derive identity from the key; without apiKey → dev fallback to X-OpenViking-Account/User = default/default. "trusted": always send configured accountId/userId as tenant headers, and optionally send X-API-Key when apiKey is configured (needed when the server also requires a root key in trusted mode).',
+      advanced: true,
+    },
     configPath: {
       label: "Config path (local)",
       placeholder: DEFAULT_LOCAL_CONFIG_PATH,
@@ -262,14 +310,32 @@ export const memoryOpenVikingConfigSchema = {
     },
     agentId: {
       label: "Agent ID",
-      placeholder: "auto-generated",
-      help: 'OpenViking X-OpenViking-Agent: non-default values combine with OpenClaw ctx.agentId as "<config>_<sessionAgent>" (then sanitized to [a-zA-Z0-9_-]). Use "default" to send only ctx.agentId.',
+      placeholder: "default",
+      help: 'OpenViking agent suffix. "default" means X-OpenViking-Agent follows OpenClaw ctx.agentId directly. Non-default means X-OpenViking-Agent becomes "<ctx.agentId>_<agentId>" (sanitized to [a-zA-Z0-9_-]); that is, agentId is used as the suffix of ctx.agentId.',
     },
     apiKey: {
       label: "OpenViking API Key",
       sensitive: true,
       placeholder: "${OPENVIKING_API_KEY}",
       help: "Optional API key for OpenViking server",
+    },
+    accountId: {
+      label: "Account ID",
+      placeholder: "(derived from API key or default)",
+      help: 'Tenant account ID. In "trusted" mode this is sent as X-OpenViking-Account. In "api_key" mode it is only used for no-key dev fallback; with a user key the server derives identity from the key.',
+      advanced: true,
+    },
+    userId: {
+      label: "User ID",
+      placeholder: "(derived from API key or default)",
+      help: 'Tenant user ID. In "trusted" mode this is sent as X-OpenViking-User. In "api_key" mode it is only used for no-key dev fallback.',
+      advanced: true,
+    },
+    agentScopeMode: {
+      label: "Agent Scope Mode",
+      placeholder: "user_agent",
+      help: 'Controls agent space isolation. "user_agent" (default): each user+agent pair gets a separate space. "agent": same agentId shares space across users. Must match server memory.agent_scope_mode.',
+      advanced: true,
     },
     targetUri: {
       label: "Search Target URI",
@@ -300,6 +366,11 @@ export const memoryOpenVikingConfigSchema = {
     autoRecall: {
       label: "Auto-Recall",
       help: "Inject relevant OpenViking memories into agent context",
+    },
+    recallResources: {
+      label: "Recall Resources",
+      help: "Include resources (viking://resources) in auto-recall and default memory_recall search. Enables account-level shared knowledge retrieval.",
+      advanced: true,
     },
     recallLimit: {
       label: "Recall Limit",

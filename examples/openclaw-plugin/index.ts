@@ -538,13 +538,22 @@ const contextEnginePlugin = {
         api.logger.info(message);
       }
     };
+    const hasApiKey = cfg.apiKey.trim().length > 0;
     verboseRoutingInfo(
       `openviking: loaded plugin config agentId="${cfg.agentId}" ` +
         `(raw plugins.entries.openviking.config.agentId=${JSON.stringify(rawAgentId ?? "(missing)")}; ` +
         `${
           cfg.agentId !== "default"
-            ? "non-default → X-OpenViking-Agent is <configAgentId>_<ctx.agentId> (sanitized to [a-zA-Z0-9_-]) when hooks expose session agent; config-only if ctx.agentId unknown"
+            ? "non-default → X-OpenViking-Agent is <ctx.agentId>_<agentId> (sanitized to [a-zA-Z0-9_-]); agentId acts as the suffix of ctx.agentId when hooks expose session agent; config-only if ctx.agentId unknown"
             : 'default → X-OpenViking-Agent follows OpenClaw ctx.agentId per session (e.g. "main")'
+        }; serverAuthMode=${cfg.serverAuthMode}; authBehavior=${
+          cfg.serverAuthMode === "trusted"
+            ? hasApiKey
+              ? 'trusted: send configured accountId/userId and also send X-API-Key'
+              : 'trusted: send configured accountId/userId only (fallback default/default)'
+            : hasApiKey
+              ? 'api_key: send X-API-Key only; tenant identity derived by server from key'
+              : 'api_key without apiKey: dev fallback to X-OpenViking-Account/User = default/default'
         })`,
     );
     const routingDebugLog = cfg.logFindRequests
@@ -552,9 +561,20 @@ const contextEnginePlugin = {
           api.logger.info(msg);
         }
       : undefined;
-    const tenantAccount = "";
-    const tenantUser = "";
-    const localCacheKey = `${cfg.mode}:${cfg.baseUrl}:${cfg.configPath}:${cfg.apiKey}:${tenantAccount}:${tenantUser}:${cfg.agentId}:${cfg.logFindRequests ? "1" : "0"}`;
+    const effectiveApiKey = cfg.apiKey;
+    const tenantAccount =
+      cfg.serverAuthMode === "trusted"
+        ? (cfg.accountId || "default")
+        : hasApiKey
+          ? ""
+          : (cfg.accountId || "default");
+    const tenantUser =
+      cfg.serverAuthMode === "trusted"
+        ? (cfg.userId || "default")
+        : hasApiKey
+          ? ""
+          : (cfg.userId || "default");
+    const localCacheKey = `${cfg.mode}:${cfg.baseUrl}:${cfg.configPath}:${cfg.serverAuthMode}:${effectiveApiKey}:${tenantAccount}:${tenantUser}:${cfg.agentId}:${cfg.agentScopeMode}:${cfg.logFindRequests ? "1" : "0"}`;
 
     let clientPromise: Promise<OpenVikingClient>;
     let localProcess: ReturnType<typeof spawn> | null = null;
@@ -604,12 +624,14 @@ const contextEnginePlugin = {
       clientPromise = Promise.resolve(
         new OpenVikingClient(
           cfg.baseUrl,
-          cfg.apiKey,
+          effectiveApiKey,
           cfg.agentId,
           cfg.timeoutMs,
           tenantAccount,
           tenantUser,
           routingDebugLog,
+          cfg.agentScopeMode,
+          cfg.serverAuthMode,
         ),
       );
     }
@@ -996,8 +1018,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
               agentId,
             );
           } else {
-            // 默认同时检索 user 和 agent 两个位置的记忆
-            const [userSettled, agentSettled] = await Promise.allSettled([
+            const searchPromises: Promise<FindResult>[] = [
               recallClient.find(
                 query,
                 {
@@ -1016,15 +1037,31 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
                 },
                 agentId,
               ),
-            ]);
-            const userResult = userSettled.status === "fulfilled" ? userSettled.value : { memories: [] };
-            const agentResult = agentSettled.status === "fulfilled" ? agentSettled.value : { memories: [] };
-            // 合并两个位置的结果，去重
-            const allMemories = [...(userResult.memories ?? []), ...(agentResult.memories ?? [])];
+            ];
+            if (cfg.recallResources) {
+              searchPromises.push(
+                recallClient.find(
+                  query,
+                  {
+                    targetUri: "viking://resources",
+                    limit: requestLimit,
+                    scoreThreshold: 0,
+                  },
+                  agentId,
+                ),
+              );
+            }
+            const settled = await Promise.allSettled(searchPromises);
+            const allMemories: FindResultItem[] = [];
+            for (const s of settled) {
+              if (s.status === "fulfilled") {
+                allMemories.push(...(s.value.memories ?? []), ...(s.value.resources ?? []));
+              }
+            }
             const uniqueMemories = allMemories.filter((memory, index, self) =>
               index === self.findIndex((m) => m.uri === memory.uri)
             );
-            const leafOnly = uniqueMemories.filter((m) => m.level === 2);
+            const leafOnly = uniqueMemories.filter((m) => !m.level || m.level === 2);
             result = {
               memories: leafOnly,
               total: leafOnly.length,
@@ -1468,7 +1505,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
             await withTimeout(
               (async () => {
                 const candidateLimit = Math.max(cfg.recallLimit * 4, 20);
-                const [userSettled, agentSettled] = await Promise.allSettled([
+                const autoRecallPromises: Promise<FindResult>[] = [
                   client.find(queryText, {
                     targetUri: "viking://user/memories",
                     limit: candidateLimit,
@@ -1479,22 +1516,31 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
                     limit: candidateLimit,
                     scoreThreshold: 0,
                   }, agentId),
-                ]);
-
-                const userResult = userSettled.status === "fulfilled" ? userSettled.value : { memories: [] };
-                const agentResult = agentSettled.status === "fulfilled" ? agentSettled.value : { memories: [] };
-                if (userSettled.status === "rejected") {
-                  api.logger.warn(`openviking: user memories search failed: ${String(userSettled.reason)}`);
+                ];
+                if (cfg.recallResources) {
+                  autoRecallPromises.push(
+                    client.find(queryText, {
+                      targetUri: "viking://resources",
+                      limit: candidateLimit,
+                      scoreThreshold: 0,
+                    }, agentId),
+                  );
                 }
-                if (agentSettled.status === "rejected") {
-                  api.logger.warn(`openviking: agent memories search failed: ${String(agentSettled.reason)}`);
+                const autoRecallSettled = await Promise.allSettled(autoRecallPromises);
+
+                const allMemories: FindResultItem[] = [];
+                for (const s of autoRecallSettled) {
+                  if (s.status === "fulfilled") {
+                    allMemories.push(...(s.value.memories ?? []), ...(s.value.resources ?? []));
+                  } else {
+                    api.logger.warn(`openviking: auto-recall search failed: ${String(s.reason)}`);
+                  }
                 }
 
-                const allMemories = [...(userResult.memories ?? []), ...(agentResult.memories ?? [])];
                 const uniqueMemories = allMemories.filter((memory, index, self) =>
                   index === self.findIndex((m) => m.uri === memory.uri)
                 );
-                const leafOnly = uniqueMemories.filter((m) => m.level === 2);
+                const leafOnly = uniqueMemories.filter((m) => !m.level || m.level === 2);
                 const processed = postProcessMemories(leafOnly, {
                   limit: candidateLimit,
                   scoreThreshold: cfg.recallScoreThreshold,
@@ -1686,12 +1732,14 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
             await waitForHealthOrExit(baseUrl, timeoutMs, intervalMs, child);
             const client = new OpenVikingClient(
               baseUrl,
-              cfg.apiKey,
+              effectiveApiKey,
               cfg.agentId,
               cfg.timeoutMs,
               tenantAccount,
               tenantUser,
               routingDebugLog,
+              cfg.agentScopeMode,
+              cfg.serverAuthMode,
             );
             localClientCache.set(localCacheKey, { client, process: child });
             resolveLocalClient!(client);
@@ -1761,7 +1809,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
               });
               try {
                 await waitForHealthOrExit(baseUrl, timeoutMs, intervalMs, child);
-                const client = new OpenVikingClient(baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs);
+                const client = new OpenVikingClient(baseUrl, effectiveApiKey, cfg.agentId, cfg.timeoutMs, tenantAccount, tenantUser, undefined, cfg.agentScopeMode, cfg.serverAuthMode);
                 localClientCache.set(localCacheKey, { client, process: child });
                 if (resolveLocalClient) {
                   resolveLocalClient(client);

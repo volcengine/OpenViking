@@ -6,6 +6,12 @@
       "label": "Mode",
       "help": "local = plugin starts OpenViking (like Claude Code); remote = use existing HTTP server"
     },
+    "serverAuthMode": {
+      "label": "Server Auth Mode",
+      "placeholder": "api_key",
+      "help": "Server-side auth mode. api_key: with apiKey send X-API-Key only and let the server derive identity from the key; without apiKey use X-OpenViking-Account/User = default/default as dev fallback. trusted: always send configured accountId/userId as tenant headers, and optionally send X-API-Key when apiKey is configured.",
+      "advanced": true
+    },
     "configPath": {
       "label": "Config path (local)",
       "placeholder": "~/.openviking/ov.conf",
@@ -24,14 +30,32 @@
     },
     "agentId": {
       "label": "Agent ID",
-      "placeholder": "random unique ID",
-      "help": "Instance prefix for X-OpenViking-Agent. Non-default: `<this>_<OpenClaw ctx.agentId>` (sanitized to letters/digits/_/-). default: use OpenClaw session agent only."
+      "placeholder": "default",
+      "help": "OpenViking agent suffix. default: X-OpenViking-Agent follows OpenClaw ctx.agentId directly. Non-default: X-OpenViking-Agent becomes `<ctx.agentId>_<agentId>` (sanitized to letters/digits/_/-), i.e. agentId is used as the suffix of ctx.agentId."
     },
     "apiKey": {
       "label": "OpenViking API Key",
       "sensitive": true,
       "placeholder": "${OPENVIKING_API_KEY}",
       "help": "Optional API key for OpenViking server"
+    },
+    "accountId": {
+      "label": "Account ID",
+      "placeholder": "(derived from API key or default)",
+      "help": "In trusted mode this is sent as X-OpenViking-Account. In api_key mode it is only used for no-key dev fallback.",
+      "advanced": true
+    },
+    "userId": {
+      "label": "User ID",
+      "placeholder": "(derived from API key or default)",
+      "help": "In trusted mode this is sent as X-OpenViking-User. In api_key mode it is only used for no-key dev fallback.",
+      "advanced": true
+    },
+    "agentScopeMode": {
+      "label": "Agent Scope Mode",
+      "placeholder": "user_agent",
+      "help": "Controls agent space isolation. user_agent: hash(userId + agentId). agent: hash(agentId). Must match server memory.agent_scope_mode.",
+      "advanced": true
     },
     "targetUri": {
       "label": "Search Target URI",
@@ -120,6 +144,9 @@
       "mode": {
         "type": "string"
       },
+      "serverAuthMode": {
+        "type": "string"
+      },
       "configPath": {
         "type": "string"
       },
@@ -133,6 +160,15 @@
         "type": "string"
       },
       "apiKey": {
+        "type": "string"
+      },
+      "accountId": {
+        "type": "string"
+      },
+      "userId": {
+        "type": "string"
+      },
+      "agentScopeMode": {
         "type": "string"
       },
       "targetUri": {
