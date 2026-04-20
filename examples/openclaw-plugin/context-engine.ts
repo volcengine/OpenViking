@@ -219,6 +219,34 @@ const OPENVIKING_OV_SESSION_UUID =
 
 const WINDOWS_BAD_SESSION_SEGMENT = /[:<>"\\/|?\u0000-\u001f]/;
 
+export type ExtractedSender = {
+  found: boolean;
+  senderId?: string;
+};
+
+/**
+ * Extract a senderId from a plugin runtimeContext.
+ *
+ * Only reads `runtimeContext.senderId`. Only non-empty string values count as
+ * a hit. Does not throw, does not infer, does not fall back to other fields.
+ */
+export function extractSenderId(
+  runtimeContext: Record<string, unknown> | undefined,
+): ExtractedSender {
+  if (!runtimeContext) {
+    return { found: false };
+  }
+  const raw = (runtimeContext as Record<string, unknown>).senderId;
+  if (typeof raw !== "string") {
+    return { found: false };
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { found: false };
+  }
+  return { found: true, senderId: trimmed };
+}
+
 /**
  * Map OpenClaw session identity to an OpenViking session_id that is safe as a single
  * AGFS path segment on Windows (no `:` etc.). Prefer UUID sessionId when present;
@@ -790,6 +818,7 @@ export function createMemoryOpenVikingContextEngine(params: {
       const { messages } = assembleParams;
       const tokenBudget = validTokenBudget(assembleParams.tokenBudget) ?? 128_000;
       const sessionKey = extractAssembleSessionKey(assembleParams);
+      const sender = extractSenderId(assembleParams.runtimeContext);
 
       const originalTokens = roughEstimate(messages);
 
@@ -805,6 +834,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         inputTokenEstimate: originalTokens,
         tokenBudget,
         sessionKey: sessionKey ?? null,
+        senderId: sender.found ? sender.senderId ?? null : null,
         messages: messageDigest(messages),
       });
 
@@ -903,6 +933,9 @@ export function createMemoryOpenVikingContextEngine(params: {
         const sessionKey =
           (typeof afterTurnParams.sessionKey === "string" && afterTurnParams.sessionKey.trim()) ||
           extractSessionKey(afterTurnParams.runtimeContext);
+        const sender = extractSenderId(afterTurnParams.runtimeContext);
+        const roleId =
+          cfg.userMode === "multi-user" && sender.found ? sender.senderId : undefined;
         const OVSessionId = openClawSessionToOvStorageId(
           afterTurnParams.sessionId,
           sessionKey,
@@ -1009,6 +1042,7 @@ export function createMemoryOpenVikingContextEngine(params: {
               ovParts,
               agentId,
               createdAt,
+              roleId,
             );
           }
         }

@@ -645,14 +645,19 @@ export class OpenVikingClient {
     }>,
     agentId?: string,
     createdAt?: string,
+    roleId?: string,
   ): Promise<void> {
     const body: {
       role: string;
       parts: typeof parts;
       created_at?: string;
+      role_id?: string;
     } = { role, parts };
     if (createdAt) {
       body.created_at = createdAt;
+    }
+    if (typeof roleId === "string" && roleId.trim()) {
+      body.role_id = roleId.trim();
     }
     await this.emitRoutingDebug(
       "session message POST (with parts)",
@@ -662,6 +667,7 @@ export class OpenVikingClient {
         role,
         partCount: parts.length,
         created_at: createdAt ?? null,
+        role_id: body.role_id ?? null,
       },
       agentId,
     );

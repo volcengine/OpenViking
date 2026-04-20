@@ -32,6 +32,13 @@ export type MemoryOpenVikingConfig = {
   emitStandardDiagnostics?: boolean;
   /** When true, log tenant routing for semantic find and session writes (messages/commit) to the plugin logger. */
   logFindRequests?: boolean;
+  /**
+   * Identity model for incoming messages.
+   * - "single-user" (default): legacy behavior; all messages from one user.
+   * - "multi-user": group-chat style; each message may originate from a different user,
+   *   and the plugin forwards `runtimeContext.senderId` as `role_id` when present.
+   */
+  userMode?: "single-user" | "multi-user";
 };
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:1933";
@@ -158,6 +165,7 @@ export const memoryOpenVikingConfigSchema = {
         "ingestReplyAssistIgnoreSessionPatterns",
         "emitStandardDiagnostics",
         "logFindRequests",
+        "userMode",
       ],
       "openviking config",
     );
@@ -186,6 +194,15 @@ export const memoryOpenVikingConfigSchema = {
       captureMode !== "keyword"
     ) {
       throw new Error(`openviking captureMode must be "semantic" or "keyword"`);
+    }
+
+    const userMode = cfg.userMode;
+    if (
+      typeof userMode !== "undefined" &&
+      userMode !== "single-user" &&
+      userMode !== "multi-user"
+    ) {
+      throw new Error(`openviking userMode must be "single-user" or "multi-user"`);
     }
 
     return {
@@ -237,6 +254,7 @@ export const memoryOpenVikingConfigSchema = {
         cfg.logFindRequests === true ||
         envFlag("OPENVIKING_LOG_ROUTING") ||
         envFlag("OPENVIKING_DEBUG"),
+      userMode: userMode ?? "single-user",
     };
   },
   uiHints: {
@@ -350,6 +368,14 @@ export const memoryOpenVikingConfigSchema = {
       help:
         "Log tenant routing: POST /api/v1/search/find (query, target_uri) and session POST .../messages + .../commit (sessionId, X-OpenViking-*). Never logs apiKey. " +
         "Or set env OPENVIKING_LOG_ROUTING=1 or OPENVIKING_DEBUG=1 (no JSON edit). When on, local-mode OpenViking subprocess stderr is also logged at info.",
+      advanced: true,
+    },
+    userMode: {
+      label: "User Mode",
+      help:
+        'Identity model for incoming messages. "single-user" (default) keeps legacy behavior. ' +
+        '"multi-user" enables group-chat mode: when runtimeContext.senderId is present, it is ' +
+        "forwarded as role_id on session message writes.",
       advanced: true,
     },
   },
