@@ -12,13 +12,17 @@ Mirrors SDK's client.observer API:
 
 from fastapi import APIRouter, Depends
 
-from openviking.server.auth import get_request_context
+from openviking.server.auth import get_request_context, require_role
 from openviking.server.dependencies import get_service
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
 from openviking.service.debug_service import ComponentStatus, SystemStatus
 
-router = APIRouter(prefix="/api/v1/observer", tags=["observer"])
+router = APIRouter(
+    prefix="/api/v1/observer",
+    tags=["observer"],
+    dependencies=[require_role(Role.ROOT, Role.ADMIN)],
+)
 
 
 def _component_to_dict(component: ComponentStatus) -> dict:
@@ -43,9 +47,7 @@ def _system_to_dict(status: SystemStatus) -> dict:
 
 
 @router.get("/queue")
-async def observer_queue(
-    _ctx: RequestContext = Depends(get_request_context),
-):
+async def observer_queue():
     """Get queue system status."""
     service = get_service()
     component = service.debug.observer.queue
@@ -63,9 +65,7 @@ async def observer_vikingdb(
 
 
 @router.get("/models")
-async def observer_models(
-    _ctx: RequestContext = Depends(get_request_context),
-):
+async def observer_models():
     """Get models status (VLM, Embedding, Rerank)."""
     service = get_service()
     component = service.debug.observer.models
@@ -73,9 +73,7 @@ async def observer_models(
 
 
 @router.get("/lock")
-async def observer_lock(
-    _ctx: RequestContext = Depends(get_request_context),
-):
+async def observer_lock():
     """Get lock system status."""
     service = get_service()
     component = service.debug.observer.lock
@@ -83,9 +81,7 @@ async def observer_lock(
 
 
 @router.get("/retrieval")
-async def observer_retrieval(
-    _ctx: RequestContext = Depends(get_request_context),
-):
+async def observer_retrieval():
     """Get retrieval quality metrics."""
     service = get_service()
     component = service.debug.observer.retrieval
