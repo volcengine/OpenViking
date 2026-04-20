@@ -3,17 +3,20 @@
 """Search endpoints for OpenViking HTTP Server."""
 
 import math
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
+from openviking.utils.search_filters import merge_time_filter
+from openviking_cli.exceptions import NotFoundError
 
 
 def _sanitize_floats(obj: Any) -> Any:
@@ -30,6 +33,28 @@ def _sanitize_floats(obj: Any) -> Any:
 
 
 router = APIRouter(prefix="/api/v1/search", tags=["search"])
+TimeField = Literal["updated_at", "created_at"]
+
+
+def _resolve_search_limit(limit: int, node_limit: Optional[int]) -> int:
+    return node_limit if node_limit is not None else limit
+
+
+def _resolve_search_filter(
+    request_filter: Optional[Dict[str, Any]],
+    since: Optional[str],
+    until: Optional[str],
+    time_field: Optional[TimeField],
+) -> Optional[Dict[str, Any]]:
+    try:
+        return merge_time_filter(
+            request_filter,
+            since=since,
+            until=until,
+            time_field=time_field,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 class FindRequest(BaseModel):
@@ -42,6 +67,10 @@ class FindRequest(BaseModel):
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None
     include_provenance: bool = False
+
+    since: Optional[str] = None
+    until: Optional[str] = None
+    time_field: Optional[TimeField] = None
     telemetry: TelemetryRequest = False
 
 
@@ -56,6 +85,10 @@ class SearchRequest(BaseModel):
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None
     include_provenance: bool = False
+
+    since: Optional[str] = None
+    until: Optional[str] = None
+    time_field: Optional[TimeField] = None
     telemetry: TelemetryRequest = False
 
 
@@ -85,7 +118,13 @@ async def find(
 ):
     """Semantic search without session context."""
     service = get_service()
-    actual_limit = request.node_limit if request.node_limit is not None else request.limit
+    actual_limit = _resolve_search_limit(request.limit, request.node_limit)
+    effective_filter = _resolve_search_filter(
+        request.filter,
+        request.since,
+        request.until,
+        request.time_field,
+    )
     execution = await run_operation(
         operation="search.find",
         telemetry=request.telemetry,
@@ -95,7 +134,7 @@ async def find(
             target_uri=request.target_uri,
             limit=actual_limit,
             score_threshold=request.score_threshold,
-            filter=request.filter,
+            filter=effective_filter,
         ),
     )
     result = execution.result
@@ -116,13 +155,19 @@ async def search(
 ):
     """Semantic search with optional session context."""
     service = get_service()
+    actual_limit = _resolve_search_limit(request.limit, request.node_limit)
+    effective_filter = _resolve_search_filter(
+        request.filter,
+        request.since,
+        request.until,
+        request.time_field,
+    )
 
     async def _search():
         session = None
         if request.session_id:
             session = service.sessions.session(_ctx, request.session_id)
             await session.load()
-        actual_limit = request.node_limit if request.node_limit is not None else request.limit
         return await service.search.search(
             query=request.query,
             ctx=_ctx,
@@ -130,7 +175,7 @@ async def search(
             session=session,
             limit=actual_limit,
             score_threshold=request.score_threshold,
-            filter=request.filter,
+            filter=effective_filter,
         )
 
     execution = await run_operation(
@@ -156,15 +201,24 @@ async def grep(
 ):
     """Content search with pattern."""
     service = get_service()
-    result = await service.fs.grep(
-        request.uri,
-        request.pattern,
-        ctx=_ctx,
-        exclude_uri=request.exclude_uri,
-        case_insensitive=request.case_insensitive,
-        node_limit=request.node_limit,
-        level_limit=request.level_limit,
-    )
+    try:
+        result = await service.fs.grep(
+            request.uri,
+            request.pattern,
+            ctx=_ctx,
+            exclude_uri=request.exclude_uri,
+            case_insensitive=request.case_insensitive,
+            node_limit=request.node_limit,
+            level_limit=request.level_limit,
+        )
+    except AGFSNotFoundError:
+        raise NotFoundError(request.uri, "file")
+    except AGFSClientError as e:
+        # Fallback for older versions without typed exceptions
+        err_msg = str(e).lower()
+        if "not found" in err_msg or "no such file or directory" in err_msg:
+            raise NotFoundError(request.uri, "file")
+        raise
     return Response(status="ok", result=result)
 
 
@@ -175,7 +229,16 @@ async def glob(
 ):
     """File pattern matching."""
     service = get_service()
-    result = await service.fs.glob(
-        request.pattern, ctx=_ctx, uri=request.uri, node_limit=request.node_limit
-    )
+    try:
+        result = await service.fs.glob(
+            request.pattern, ctx=_ctx, uri=request.uri, node_limit=request.node_limit
+        )
+    except AGFSNotFoundError:
+        raise NotFoundError(request.uri or request.pattern, "file")
+    except AGFSClientError as e:
+        # Fallback for older versions without typed exceptions
+        err_msg = str(e).lower()
+        if "not found" in err_msg or "no such file or directory" in err_msg:
+            raise NotFoundError(request.uri or request.pattern, "file")
+        raise
     return Response(status="ok", result=result)

@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1.9
 
 # Stage 1: provide Rust toolchain (required by setup.py -> build_ov_cli_artifact -> cargo build)
-FROM rust:1.88-trixie AS rust-toolchain
+# ragfs-python's default S3-enabled dependency set currently requires rustc >= 1.91.1.
+FROM rust:1.91.1-trixie AS rust-toolchain
 
 # Stage 2: build Python environment with uv (builds Rust CLI + C++ extension from source)
 FROM ghcr.io/astral-sh/uv:python3.13-trixie-slim AS py-builder
@@ -37,6 +38,7 @@ COPY crates/ crates/
 COPY openviking/ openviking/
 COPY openviking_cli/ openviking_cli/
 COPY src/ src/
+COPY third_party/ third_party/
 
 # Install project and dependencies (triggers setup.py artifact builds + build_extension).
 # Default to auto-refreshing uv.lock inside the ephemeral build context when it is
@@ -112,6 +114,7 @@ COPY docker/openviking-console-entrypoint.sh /usr/local/bin/openviking-console-e
 RUN chmod +x /usr/local/bin/openviking-console-entrypoint
 ENV PATH="/app/.venv/bin:$PATH"
 ENV OPENVIKING_CONFIG_FILE="/app/ov.conf"
+ENV OPENVIKING_CLI_CONFIG_FILE="/app/ovcli.conf"
 
 EXPOSE 1933 8020
 
@@ -119,5 +122,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl -fsS http://127.0.0.1:1933/health || exit 1
 
 # Default runs server + console; override command to run CLI, e.g.:
-# docker run --rm <image> -v "$HOME/.openviking/ovcli.conf:/root/.openviking/ovcli.conf" openviking --help
+# docker run --rm -v "$HOME/.openviking/ovcli.conf:/app/ovcli.conf" <image> openviking --help
 ENTRYPOINT ["openviking-console-entrypoint"]

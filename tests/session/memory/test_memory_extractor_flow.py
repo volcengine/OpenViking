@@ -540,9 +540,8 @@ class TestMemoryExtractorFlow:
         with patch(
             "openviking.session.memory.memory_updater.get_viking_fs", return_value=viking_fs
         ):
-            updater = MemoryUpdater()
-            # Pass the registry from orchestrator
-            result = await updater.apply_operations(operations, ctx, registry=orchestrator.registry)
+            updater = MemoryUpdater(registry=orchestrator.registry)
+            result = await updater.apply_operations(operations, ctx)
 
             assert isinstance(result, MemoryUpdateResult)
 
@@ -658,9 +657,8 @@ class TestMemoryExtractorFlow:
         with patch(
             "openviking.session.memory.memory_updater.get_viking_fs", return_value=viking_fs
         ):
-            updater = MemoryUpdater()
-            # Pass the registry from orchestrator
-            result = await updater.apply_operations(operations, ctx, registry=orchestrator.registry)
+            updater = MemoryUpdater(registry=orchestrator.registry)
+            result = await updater.apply_operations(operations, ctx)
 
             assert isinstance(result, MemoryUpdateResult)
 

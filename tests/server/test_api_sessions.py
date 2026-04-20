@@ -19,6 +19,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import sessions as sessions_router
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 from tests.utils.mock_agfs import MockLocalAGFS
 
@@ -75,7 +76,7 @@ def _configure_test_env(monkeypatch, tmp_path):
 
     mock_agfs = MockLocalAGFS(root_path=tmp_path / "mock_agfs_root")
 
-    monkeypatch.setenv("OPENVIKING_CONFIG_FILE", str(config_path))
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, str(config_path))
     OpenVikingConfigSingleton.reset_instance()
 
     with patch("openviking.utils.agfs_utils.create_agfs_client", return_value=mock_agfs):

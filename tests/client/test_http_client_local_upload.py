@@ -8,6 +8,7 @@ import json
 import pytest
 
 from openviking_cli.client.http import AsyncHTTPClient
+from openviking_cli.utils.config import OPENVIKING_CLI_CONFIG_ENV
 
 
 class _FakeHTTPClient:
@@ -23,7 +24,7 @@ class _FakeHTTPClient:
 def isolated_ovcli_config(tmp_path, monkeypatch):
     config_path = tmp_path / "ovcli.conf"
     config_path.write_text(json.dumps({"url": "http://localhost:1933"}))
-    monkeypatch.setenv("OPENVIKING_CLI_CONFIG_FILE", str(config_path))
+    monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
 
 
 @pytest.mark.asyncio

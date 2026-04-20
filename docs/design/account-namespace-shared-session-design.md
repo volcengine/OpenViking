@@ -869,7 +869,26 @@ viking://session/{user_id}/{session_id}
 - 不继续让 `memory.agent_scope_mode` 参与服务端命名空间决策
 - 如需保留旧 agent 数据，可在升级前自行使用现有 `ovpack` 做离线备份
 
-原因：
+推荐迁移方式：
+
+- 升级前：在旧版本中从 legacy hash namespace 导出，例如：
+
+```bash
+ov export viking://agent/{legacy_agent_space_hash}/memories ./agent_memory.ovpack
+```
+
+- 升级后：在新版本中按目标 account policy 导入到 agent space 的父目录：
+
+```bash
+# isolate_agent_scope_by_user = false
+ov import ./agent_memory.ovpack viking://agent/{agent_id}/ --force
+
+# isolate_agent_scope_by_user = true
+ov import ./agent_memory.ovpack viking://agent/{agent_id}/user/{user_id}/ --force
+```
+
+- 不要把 `.ovpack` 直接导入到 `.../memories/` 本身，否则会得到 `.../memories/memories/...`
+- 当 `isolate_agent_scope_by_user = true` 时，`viking://agent/{agent_id}/user/` 不是合法目标；必须显式提供 `user_id}`
 
 - 当前 agent root 是 hash space，而不是显式 `agent_id`
 - hash 值不能从结果稳定反推出原始 `user_id / agent_id`

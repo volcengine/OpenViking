@@ -11,6 +11,7 @@ Implements Envelope Encryption pattern:
 
 import secrets
 import struct
+import time
 from typing import Tuple
 
 from openviking.crypto.exceptions import (
@@ -78,24 +79,45 @@ class FileEncryptor:
         Returns:
             Encrypted content (Envelope format)
         """
-        # 1. Generate random File Key
-        file_key = secrets.token_bytes(32)
+        start = time.perf_counter()
+        # Metrics must be best-effort: encryption must succeed/fail solely based on crypto logic,
+        # not on observability availability. Therefore all metrics emissions are wrapped in try/except.
+        try:
+            from openviking.metrics.datasources.encryption import EncryptionEventDataSource
 
-        # 2. Encrypt file content
-        data_iv = secrets.token_bytes(12)
-        encrypted_content = await self._aes_gcm_encrypt(file_key, data_iv, plaintext)
+            EncryptionEventDataSource.record_payload_size(
+                operation="encrypt", size_bytes=len(plaintext)
+            )
+            EncryptionEventDataSource.record_bytes(operation="encrypt", size_bytes=len(plaintext))
+        except Exception:
+            pass
 
-        # 3. Encrypt File Key (all providers now return (encrypted_key, iv)
-        encrypted_file_key, key_iv = await self.provider.encrypt_file_key(file_key, account_id)
+        status = "ok"
+        try:
+            file_key = secrets.token_bytes(32)
+            data_iv = secrets.token_bytes(12)
+            encrypted_content = await self._aes_gcm_encrypt(file_key, data_iv, plaintext)
+            encrypted_file_key, key_iv = await self.provider.encrypt_file_key(file_key, account_id)
+            return self._build_envelope(
+                self._provider_type,
+                encrypted_file_key,
+                key_iv,
+                data_iv,
+                encrypted_content,
+            )
+        except Exception:
+            status = "error"
+            raise
+        finally:
+            elapsed = time.perf_counter() - start
+            try:
+                from openviking.metrics.datasources.encryption import EncryptionEventDataSource
 
-        # 4. Build Envelope
-        return self._build_envelope(
-            self._provider_type,
-            encrypted_file_key,
-            key_iv,
-            data_iv,
-            encrypted_content,
-        )
+                EncryptionEventDataSource.record_operation(
+                    operation="encrypt", status=status, duration_seconds=elapsed
+                )
+            except Exception:
+                pass
 
     async def decrypt(self, account_id: str, ciphertext: bytes) -> bytes:
         """
@@ -130,17 +152,50 @@ class FileEncryptor:
         except Exception as e:
             raise CorruptedCiphertextError(f"Failed to parse envelope: {e}")
 
+        start = time.perf_counter()
+        status = "ok"
         try:
-            # 3. Decrypt File Key (all providers now use (encrypted_key, iv, account_id)
             file_key = await self.provider.decrypt_file_key(encrypted_file_key, key_iv, account_id)
         except Exception as e:
+            status = "error"
             raise KeyMismatchError(f"Failed to decrypt file key: {e}")
 
         try:
-            # 4. Decrypt file content
-            return await self._aes_gcm_decrypt(file_key, data_iv, encrypted_content)
-        except Exception as e:
+            plaintext = await self._aes_gcm_decrypt(file_key, data_iv, encrypted_content)
+            try:
+                from openviking.metrics.datasources.encryption import EncryptionEventDataSource
+
+                EncryptionEventDataSource.record_payload_size(
+                    operation="decrypt", size_bytes=len(ciphertext)
+                )
+                EncryptionEventDataSource.record_bytes(
+                    operation="decrypt", size_bytes=len(ciphertext)
+                )
+            except Exception:
+                pass
+            return plaintext
+        except AuthenticationFailedError as e:
+            status = "error"
+            try:
+                from openviking.metrics.datasources.encryption import EncryptionEventDataSource
+
+                EncryptionEventDataSource.record_auth_failed()
+            except Exception:
+                pass
             raise AuthenticationFailedError(f"Authentication failed: {e}")
+        except Exception as e:
+            status = "error"
+            raise AuthenticationFailedError(f"Authentication failed: {e}")
+        finally:
+            elapsed = time.perf_counter() - start
+            try:
+                from openviking.metrics.datasources.encryption import EncryptionEventDataSource
+
+                EncryptionEventDataSource.record_operation(
+                    operation="decrypt", status=status, duration_seconds=elapsed
+                )
+            except Exception:
+                pass
 
     def _build_envelope(
         self,

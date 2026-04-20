@@ -19,10 +19,10 @@ import type {
 import { formatMessageFaithful } from "./context-engine.js";
 import {
   compileSessionPatterns,
-  isTranscriptLikeIngest,
   extractLatestUserText,
   sanitizeUserTextForCapture,
   shouldBypassSession,
+  extractNewTurnMessages,
 } from "./text-utils.js";
 import {
   clampScore,
@@ -789,12 +789,20 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
           client.find(query, { targetUri: "viking://resources", limit }, agentId),
           client.find(query, { targetUri: "viking://agent/skills", limit }, agentId),
         ]);
-        const successful = [
-          resourcesSettled.status === "fulfilled" ? resourcesSettled.value : null,
-          skillsSettled.status === "fulfilled" ? skillsSettled.value : null,
-        ].filter((value): value is FindResult => value !== null);
+        const successful: FindResult[] = [];
+        if (resourcesSettled.status === "fulfilled") {
+          successful.push(resourcesSettled.value);
+        }
+        if (skillsSettled.status === "fulfilled") {
+          successful.push(skillsSettled.value);
+        }
         if (successful.length === 0) {
-          const firstError = resourcesSettled.status === "rejected" ? resourcesSettled.reason : skillsSettled.reason;
+          const firstError =
+            resourcesSettled.status === "rejected"
+              ? resourcesSettled.reason
+              : skillsSettled.status === "rejected"
+                ? skillsSettled.reason
+                : "Both searches failed";
           throw firstError instanceof Error ? firstError : new Error(String(firstError));
         }
         if (resourcesSettled.status === "rejected") {
@@ -1092,7 +1100,12 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
               usedTempSession = true;
             }
             sessionId = openClawSessionToOvStorageId(sessionId, ctx.sessionKey);
-            await c.addSessionMessage(sessionId, role, text, storeAgentId);
+            await c.addSessionMessage(
+              sessionId,
+              role,
+              [{ type: "text" as const, text }],
+              storeAgentId,
+            );
             const commitResult = await c.commitSession(sessionId, { wait: true, agentId: storeAgentId });
             const memoriesCount = totalCommitMemories(commitResult);
             if (commitResult.status === "failed") {
@@ -1429,7 +1442,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
       const latestUserText = extractLatestUserText(eventObj.messages);
       const rawRecallQuery =
         latestUserText ||
-        (typeof eventObj.prompt === "string" ? eventObj.prompt.trim() : "");
+        (typeof eventObj.prompt === "string" ? sanitizeUserTextForCapture(eventObj.prompt) : "");
       const recallQuery = prepareRecallQuery(rawRecallQuery);
       const queryText = recallQuery.query;
       if (!queryText) {
@@ -1518,26 +1531,6 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
           } catch (err) {
             api.logger.warn(`openviking: auto-recall failed: ${String(err)}`);
           }
-        }
-      }
-
-      if (cfg.ingestReplyAssist) {
-        const decision = isTranscriptLikeIngest(queryText, {
-          minSpeakerTurns: cfg.ingestReplyAssistMinSpeakerTurns,
-          minChars: cfg.ingestReplyAssistMinChars,
-        });
-        if (decision.shouldAssist) {
-          verboseRoutingInfo(
-            `openviking: ingest-reply-assist applied (reason=${decision.reason}, speakerTurns=${decision.speakerTurns}, chars=${decision.chars})`,
-          );
-          prependContextParts.push(
-            "<ingest-reply-assist>\n" +
-              "The latest user input looks like a multi-speaker transcript used for memory ingestion.\n" +
-              "Reply with 1-2 concise sentences to acknowledge or summarize key points.\n" +
-              "Do not output NO_REPLY or an empty reply.\n" +
-              "Do not fabricate facts beyond the provided transcript and recalled memories.\n" +
-              "</ingest-reply-assist>",
-          );
         }
       }
 

@@ -66,7 +66,12 @@ class APIKeyManager:
     Uses Argon2id for secure API key hashing.
     """
 
-    def __init__(self, root_key: str, viking_fs: VikingFS, encryption_enabled: bool = False):
+    def __init__(
+        self,
+        root_key: str,
+        viking_fs: VikingFS,
+        encryption_enabled: bool = False,
+    ):
         """Initialize APIKeyManager.
 
         Args:
@@ -84,6 +89,7 @@ class APIKeyManager:
     async def load(self) -> None:
         """Load accounts and user keys from VikingFS into memory."""
         accounts_data = await self._read_json(ACCOUNTS_PATH)
+        fresh_workspace = accounts_data is None
         if accounts_data is None:
             # First run: create default account
             now = datetime.now(timezone.utc).isoformat()
@@ -96,8 +102,11 @@ class APIKeyManager:
             users = users_data.get("users", {}) if users_data else {}
             settings_path = SETTINGS_PATH_TEMPLATE.format(account_id=account_id)
             settings_data = await self._read_json(settings_path)
-            namespace_policy = AccountNamespacePolicy.from_dict(
-                (settings_data or {}).get("namespace")
+            namespace_policy, should_persist_settings, inferred_from_legacy = (
+                self._resolve_namespace_policy(
+                    settings_data,
+                    allow_legacy_inference=not fresh_workspace,
+                )
             )
 
             self._accounts[account_id] = AccountInfo(
@@ -105,8 +114,14 @@ class APIKeyManager:
                 users=users,
                 namespace_policy=namespace_policy,
             )
-            if settings_data is None:
-                await self._save_settings_json(account_id)
+            if should_persist_settings:
+                await self._save_settings_json(account_id, settings_data=settings_data)
+                if inferred_from_legacy:
+                    logger.info(
+                        "Inferred namespace policy for legacy account %s using the historical "
+                        "default user-shared/agent-shared layout",
+                        account_id,
+                    )
 
             for user_id, user_info in users.items():
                 key_or_hash = user_info.get("key", "")
@@ -156,6 +171,28 @@ class APIKeyManager:
             "APIKeyManager loaded: %d accounts, %d user keys",
             len(self._accounts),
             sum(len(info.users) for info in self._accounts.values()),
+        )
+
+    def _resolve_namespace_policy(
+        self,
+        settings_data: Optional[dict],
+        *,
+        allow_legacy_inference: bool,
+    ) -> tuple[AccountNamespacePolicy, bool, bool]:
+        """Resolve persisted namespace policy, with one-time inference for legacy accounts."""
+        namespace_data = settings_data.get("namespace") if isinstance(settings_data, dict) else None
+        if isinstance(namespace_data, dict):
+            return AccountNamespacePolicy.from_dict(namespace_data), False, False
+
+        if allow_legacy_inference:
+            return self._infer_legacy_namespace_policy(), True, True
+        return AccountNamespacePolicy(), True, False
+
+    def _infer_legacy_namespace_policy(self) -> AccountNamespacePolicy:
+        """Map pre-policy accounts to the compatibility default namespace policy."""
+        return AccountNamespacePolicy(
+            isolate_user_scope_by_agent=False,
+            isolate_agent_scope_by_user=False,
         )
 
     def resolve(self, api_key: str) -> ResolvedIdentity:
@@ -595,10 +632,17 @@ class APIKeyManager:
         path = USERS_PATH_TEMPLATE.format(account_id=account_id)
         await self._write_json(path, data)
 
-    async def _save_settings_json(self, account_id: str) -> None:
+    async def _save_settings_json(
+        self,
+        account_id: str,
+        *,
+        settings_data: Optional[dict] = None,
+    ) -> None:
         """Persist account namespace settings."""
         account = self._accounts.get(account_id)
         if account is None:
             return
         path = SETTINGS_PATH_TEMPLATE.format(account_id=account_id)
-        await self._write_json(path, {"namespace": account.namespace_policy.to_dict()})
+        merged_settings = dict(settings_data) if isinstance(settings_data, dict) else {}
+        merged_settings["namespace"] = account.namespace_policy.to_dict()
+        await self._write_json(path, merged_settings)

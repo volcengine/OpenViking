@@ -110,14 +110,22 @@ impl HttpClient {
         // Remove Content-Type: application/json, let reqwest set multipart/form-data automatically
         headers.remove(reqwest::header::CONTENT_TYPE);
 
-        let response = self
-            .http
+        // Use a separate HTTP client with a long timeout for large file uploads
+        // - Connect timeout: 30 seconds (to fail fast if server is unreachable)
+        // - Total request timeout: 30 minutes (to allow large file transfers)
+        let long_timeout_client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(1800))
+            .build()
+            .map_err(|e| Error::Network(format!("Failed to build long-timeout HTTP client: {}", e)))?;
+
+        let response = long_timeout_client
             .post(&url)
             .headers(headers)
             .multipart(form)
             .send()
             .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+            .map_err(|e| Error::Network(format!("File upload failed: {}", e)))?;
 
         let result: Value = self.handle_response(response).await?;
         result
@@ -267,6 +275,10 @@ impl HttpClient {
 
         // Handle HTTP errors
         if !status.is_success() {
+            let error_code = json
+                .get("error")
+                .and_then(|e| e.get("code"))
+                .and_then(|c| c.as_str());
             let error_msg = json
                 .get("error")
                 .and_then(|e| e.get("message"))
@@ -278,7 +290,10 @@ impl HttpClient {
                         .map(|s| s.to_string())
                 })
                 .unwrap_or_else(|| format!("HTTP error {}", status));
-            return Err(Error::Api(error_msg));
+            return Err(Error::Api(match error_code {
+                Some(code) => format!("[{}] {}", code, error_msg),
+                None => error_msg,
+            }));
         }
 
         // Handle API errors (status == success but body has error)
@@ -457,8 +472,11 @@ impl HttpClient {
         self.get("/api/v1/fs/tree", &params).await
     }
 
-    pub async fn mkdir(&self, uri: &str) -> Result<()> {
-        let body = serde_json::json!({ "uri": uri });
+    pub async fn mkdir(&self, uri: &str, description: Option<&str>) -> Result<()> {
+        let body = match description {
+            Some(description) => serde_json::json!({ "uri": uri, "description": description }),
+            None => serde_json::json!({ "uri": uri }),
+        };
         let _: serde_json::Value = self.post("/api/v1/fs/mkdir", &body).await?;
         Ok(())
     }
@@ -494,12 +512,18 @@ impl HttpClient {
         uri: String,
         node_limit: i32,
         threshold: Option<f64>,
+        since: Option<String>,
+        until: Option<String>,
+        time_field: Option<String>,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "query": query,
             "target_uri": uri,
             "limit": node_limit,
             "score_threshold": threshold,
+            "since": since,
+            "until": until,
+            "time_field": time_field,
         });
         self.post("/api/v1/search/find", &body).await
     }
@@ -511,6 +535,9 @@ impl HttpClient {
         session_id: Option<String>,
         node_limit: i32,
         threshold: Option<f64>,
+        since: Option<String>,
+        until: Option<String>,
+        time_field: Option<String>,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "query": query,
@@ -518,6 +545,9 @@ impl HttpClient {
             "session_id": session_id,
             "limit": node_limit,
             "score_threshold": threshold,
+            "since": since,
+            "until": until,
+            "time_field": time_field,
         });
         self.post("/api/v1/search/search", &body).await
     }

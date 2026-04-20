@@ -8,7 +8,7 @@ OV_CLI_DIR := crates/ov_cli
 # Dependency Versions
 MIN_PYTHON_VERSION := 3.10
 MIN_CMAKE_VERSION := 3.12
-MIN_RUST_VERSION := 1.88
+MIN_RUST_VERSION := 1.91.1
 MIN_GCC_VERSION := 9
 MIN_CLANG_VERSION := 11
 
@@ -64,7 +64,7 @@ check-deps:
 	@# Rust check
 	@command -v rustc > /dev/null 2>&1 || (echo "Error: Rust is not installed."; exit 1)
 	@RUST_VER=$$(rustc --version | awk '{print $$2}'); \
-	$(PYTHON) -c "v='$$RUST_VER'.split('.'); exit(0 if int(v[0]) > 1 or (int(v[0]) == 1 and int(v[1]) >= 88) else 1)" || (echo "Error: Rust >= $(MIN_RUST_VERSION) is required. Found $$RUST_VER"; exit 1); \
+	$(PYTHON) -c "import sys; parse=lambda v: tuple(int(x) for x in v.split('.')); raise SystemExit(0 if parse(sys.argv[1]) >= parse(sys.argv[2]) else 1)" "$$RUST_VER" "$(MIN_RUST_VERSION)" || (echo "Error: Rust >= $(MIN_RUST_VERSION) is required. Found $$RUST_VER"; exit 1); \
 	echo "  [OK] Rust $$RUST_VER"
 	@# C++ Compiler check
 	@if command -v clang++ > /dev/null 2>&1; then \

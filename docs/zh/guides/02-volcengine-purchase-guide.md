@@ -9,7 +9,7 @@ OpenViking 需要以下模型服务：
 | 模型类型 | 用途 | 推荐模型 |
 |---------|------|---------|
 | VLM（视觉语言模型） | 内容理解、语义生成 | `doubao-seed-2-0-pro-260215` |
-| Embedding | 向量化、语义检索 | `doubao-embedding-vision-250615` |
+| Embedding | 向量化、语义检索 | `doubao-embedding-vision-251215` |
 
 ## 前置条件
 
@@ -84,7 +84,7 @@ OpenViking 需要以下模型服务：
 <img src="../../images/activate_emb_model.gif" width="80%">
 </div>
 
-开通后使用模型 ID：`doubao-embedding-vision-250615`
+开通后使用模型 ID：`doubao-embedding-vision-251215`
 
 ## 配置 OpenViking
 
@@ -134,7 +134,7 @@ OpenViking 需要以下模型服务：
 |------|------|------|------|
 | `provider` | string | 是 | 模型服务提供商，火山引擎填 `"volcengine"` |
 | `api_key` | string | 是 | 火山方舟 API Key |
-| `model` | string | 是 | 模型 ID，如 `doubao-embedding-vision-250615` |
+| `model` | string | 是 | 模型 ID，如 `doubao-embedding-vision-251215` |
 | `api_base` | string | 否 | API 端点地址，默认为北京区域端点，具体可见附录-区域端点 |
 | `dimension` | int | 是 | 向量维度，取决于模型（通常为 1024 或 768） |
 | `input` | string | 否 | 输入类型：`"multimodal"`（多模态）或 `"text"`（纯文本），默认`"multimodal"` |
@@ -157,7 +157,7 @@ OpenViking 需要以下模型服务：
     "dense": {
       "provider": "volcengine",
       "api_key": "sk-1234567890abcdef1234567890abcdef",
-      "model": "doubao-embedding-vision-250615",
+      "model": "doubao-embedding-vision-251215",
       "api_base": "https://ark.cn-beijing.volces.com/api/v3",
       "dimension": 1024,
       "input": "multimodal"
@@ -280,6 +280,6 @@ Error: Connection timeout
 | 模型名称 | 当前版本 | 发布日期 |
 |---------|---------|---------|
 | Doubao-Seed-1.8 | `doubao-seed-2-0-pro-260215` | 2025-12-28 |
-| Doubao-Embedding-Vision | `doubao-embedding-vision-250615` | 2025-06-15 |
+| Doubao-Embedding-Vision | `doubao-embedding-vision-251215` | 2025-06-15 |
 
 > 注：模型版本可能更新，请以火山方舟控制台显示为准。

@@ -415,7 +415,7 @@ class MarkdownConfig(ParserConfig):
 
 
 @dataclass
-class HTMLConfig(CodeHostingConfig):
+class HTMLConfig(ParserConfig):
     """
     Configuration for HTML parsing.
 

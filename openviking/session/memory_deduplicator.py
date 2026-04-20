@@ -20,7 +20,7 @@ from openviking.models.embedder.base import EmbedResult, embed_compat
 from openviking.prompts import render_prompt
 from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager
-from openviking.telemetry import get_current_telemetry
+from openviking.telemetry import bind_telemetry_stage, get_current_telemetry
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
@@ -285,7 +285,8 @@ class MemoryDeduplicator:
                 ],
             }
             logger.debug("Dedup LLM request summary: %s", request_summary)
-            response = await vlm.get_completion_async(prompt)
+            with bind_telemetry_stage("memory_extract"):
+                response = await vlm.get_completion_async(prompt)
             logger.debug("Dedup LLM raw response: %s", response)
             data = parse_json_from_response(response) or {}
             logger.debug("Dedup LLM parsed payload: %s", data)

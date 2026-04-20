@@ -19,7 +19,7 @@ from openviking.core.namespace import canonical_agent_root, canonical_user_root
 from openviking.prompts import render_prompt
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import get_viking_fs
-from openviking.telemetry import get_current_telemetry
+from openviking.telemetry import bind_telemetry_stage, get_current_telemetry
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
@@ -313,7 +313,8 @@ class MemoryExtractor:
             }
             logger.debug("Memory extraction LLM request summary: %s", request_summary)
             with telemetry.measure("memory.extract.stage.llm_extract"):
-                response = await vlm.get_completion_async(prompt)
+                with bind_telemetry_stage("memory_extract"):
+                    response = await vlm.get_completion_async(prompt)
             logger.debug("Memory extraction LLM raw response: %s", response)
             with telemetry.measure("memory.extract.stage.normalize_candidates"):
                 data = parse_json_from_response(response) or {}
@@ -591,7 +592,8 @@ class MemoryExtractor:
         try:
             from openviking_cli.utils.llm import parse_json_from_response
 
-            response = await vlm.get_completion_async(prompt)
+            with bind_telemetry_stage("memory_extract"):
+                response = await vlm.get_completion_async(prompt)
             data = parse_json_from_response(response) or {}
             if not isinstance(data, dict):
                 logger.error("Memory merge bundle parse failed: non-dict payload")
@@ -1003,7 +1005,8 @@ class MemoryExtractor:
         )
 
         try:
-            response = await vlm.get_completion_async(prompt)
+            with bind_telemetry_stage("memory_extract"):
+                response = await vlm.get_completion_async(prompt)
             compressed = response.strip()
             if len(compressed) <= max_length:
                 logger.info(

@@ -13,6 +13,7 @@ from loguru import logger
 
 from vikingbot.agent.context import ContextBuilder
 from vikingbot.agent.memory import MemoryStore
+from vikingbot.heartbeat.service import HEARTBEAT_METADATA_KEY, is_heartbeat_noop_response
 from vikingbot.agent.subagent import SubagentManager
 from vikingbot.agent.tools import register_default_tools
 from vikingbot.agent.tools.registry import ToolRegistry
@@ -478,6 +479,16 @@ class AgentLoop:
             skip_heartbeat = session_key.type == "cli"
             session = self.sessions.get_or_create(session_key, skip_heartbeat=skip_heartbeat)
 
+            ov_tools_enable = self._get_ov_tools_enable(session_key)
+            # Get profile_user_list from channel config
+            profile_user_list = []
+            memory_user = ""
+            channel_config = self._get_channel_config(session_key)
+
+            if channel_config and ov_tools_enable:
+                profile_user_list = getattr(channel_config, "profile_user_list", [])
+                memory_user = getattr(channel_config, "memory_user", "")
+
             # Handle slash commands
             is_group_chat = msg.metadata.get("chat_type") == "group" if msg.metadata else False
             if is_group_chat:
@@ -517,8 +528,9 @@ class AgentLoop:
                         session_key=msg.session_key, content="🐈 Sorry, you are not authorized to use this command.",
                         metadata=msg.metadata
                     )
-                session_clone = session.clone()
-                await self._consolidate_viking_memory(session_clone)
+                if ov_tools_enable:
+                    session_clone = session.clone()
+                    await self._consolidate_viking_memory(session_clone)
                 return OutboundMessage(
                     session_key=msg.session_key, content="This conversation has been submitted to memory storage.", metadata=msg.metadata
                 )
@@ -567,11 +579,11 @@ class AgentLoop:
                 message_workspace,
                 sandbox_manager=self.sandbox_manager,
                 sender_id=msg.sender_id,
+                sender_name=msg.sender_name,
                 is_group_chat=is_group_chat,
                 eval=self._eval,
             )
 
-            ov_tools_enable = self._get_ov_tools_enable(session_key)
             # Build initial messages (use get_history for LLM-formatted messages)
             messages = await message_context.build_messages(
                 history=session.get_history(),
@@ -579,8 +591,10 @@ class AgentLoop:
                 media=msg.media if msg.media else None,
                 session_key=msg.session_key,
                 ov_tools_enable=ov_tools_enable,
+                profile_user_list=profile_user_list,
+                memory_user=memory_user,
             )
-            logger.info(f"New messages: {messages}")
+            # logger.info(f"New messages: {json.dumps(messages, indent=4)}")
 
             # Run agent loop
             final_content, tools_used, token_usage, iteration = await self._run_agent_loop(
@@ -595,13 +609,14 @@ class AgentLoop:
             preview = final_content[:300] + "..." if len(final_content) > 300 else final_content
             logger.info(f"Response to {msg.session_key}: {preview}")
 
-            # Save to session (include tool names so consolidation sees what happened)
-            session.add_message("user", msg.content, sender_id=msg.sender_id)
-            session.add_message(
-                "assistant", final_content, tools_used=tools_used if tools_used else None, token_usage=token_usage,
-                sender_id=msg.sender_id,
-            )
-            await self.sessions.save(session)
+            is_heartbeat = bool(msg.metadata.get(HEARTBEAT_METADATA_KEY))
+            if not (is_heartbeat and is_heartbeat_noop_response(final_content)):
+                session.add_message("user", msg.content, sender_id=msg.sender_id)
+                session.add_message(
+                    "assistant", final_content, tools_used=tools_used if tools_used else None, token_usage=token_usage,
+                    sender_id=msg.sender_id,
+                )
+                await self.sessions.save(session)
 
             time_cost = round(time.time() - start_time, 2)
             if tools_used is not None:
@@ -659,17 +674,21 @@ class AgentLoop:
 
         session = self.sessions.get_or_create(msg.session_key)
 
-        # Build messages with the announce content
+        # Get channel config
         ov_tools_enable = self._get_ov_tools_enable(msg.session_key)
+        profile_user_list = []
+        channel_config = self._get_channel_config(msg.session_key)
+        if channel_config and ov_tools_enable:
+            profile_user_list = getattr(channel_config, "profile_user_list", [])
+
+        # Build messages with the announce content
         messages = await self.context.build_messages(
             history=session.get_history(),
             current_message=msg.content,
             session_key=msg.session_key,
             ov_tools_enable=ov_tools_enable,
+            profile_user_list=profile_user_list,
         )
-
-        # Check channel config for ov_tools_enable setting
-        ov_tools_enable = self._get_ov_tools_enable(msg.session_key)
 
         # Run agent loop (no events published)
         final_content, tools_used, token_usage, iteration = await self._run_agent_loop(
@@ -848,6 +867,7 @@ Respond with ONLY valid JSON, no markdown fences."""
         self,
         content: str,
         session_key: SessionKey = SessionKey(type="cli", channel_id="default", chat_id="direct"),
+        metadata: dict[str, object] | None = None,
     ) -> str:
         """
         Process a message directly (for CLI or cron usage).
@@ -860,7 +880,12 @@ Respond with ONLY valid JSON, no markdown fences."""
             The agent's response.
         """
         await self._connect_mcp()
-        msg = InboundMessage(session_key=session_key, sender_id="user", content=content)
+        msg = InboundMessage(
+            session_key=session_key,
+            sender_id="user",
+            content=content,
+            metadata=metadata or {},
+        )
 
         response = await self._process_message(msg)
         return response.content if response else ""

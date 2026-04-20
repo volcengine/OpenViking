@@ -306,6 +306,14 @@ class Session:
                 self._usage_records.append(usage)
                 self._stats.contexts_used += 1
                 logger.debug(f"Tracked context usage: {uri}")
+            try:
+                from openviking.metrics.datasources.session import SessionLifecycleDataSource
+
+                SessionLifecycleDataSource.record_contexts_used(
+                    action="context", delta=len(contexts)
+                )
+            except Exception:
+                pass
 
         if skill:
             usage = Usage(
@@ -318,6 +326,12 @@ class Session:
             self._usage_records.append(usage)
             self._stats.skills_used += 1
             logger.debug(f"Tracked skill usage: {skill.get('uri')}")
+            try:
+                from openviking.metrics.datasources.session import SessionLifecycleDataSource
+
+                SessionLifecycleDataSource.record_contexts_used(action="skill", delta=1)
+            except Exception:
+                pass
 
     def add_message(
         self,
@@ -444,8 +458,9 @@ class Session:
 
             try:
                 await self._write_to_agfs_async(messages=[])
-            except Exception:
+            except Exception as e:
                 # Rollback: restore messages so they aren't lost
+                logger.error(f"[commit] Failed to write empty messages.jsonl: {e}")
                 self._messages.extend(messages_to_archive)
                 self._compression.compression_index -= 1
                 raise
@@ -475,8 +490,6 @@ class Session:
 
         # Snapshot mutable state for Phase 2
         usage_snapshot = self._usage_records.copy()
-        first_message_id = messages_to_archive[0].id if messages_to_archive else ""
-        last_message_id = messages_to_archive[-1].id if messages_to_archive else ""
 
         # Create TaskRecord for tracking Phase 2
         tracker = get_task_tracker()
@@ -493,8 +506,8 @@ class Session:
                 archive_uri=archive_uri,
                 messages=messages_to_archive,
                 usage_records=usage_snapshot,
-                first_message_id=first_message_id,
-                last_message_id=last_message_id,
+                first_message_id=messages_to_archive[0].id if messages_to_archive else "",
+                last_message_id=messages_to_archive[-1].id if messages_to_archive else "",
             )
         )
 
@@ -762,7 +775,15 @@ class Session:
         """Get assembled session context with the latest summary archive and merged messages."""
         context = await self._collect_session_context_components()
         merged_messages = context["messages"]
+
         message_tokens = sum(m.estimated_tokens for m in merged_messages)
+
+        # 精简日志：只打印关键信息
+        logger.info(
+            f"[get_session_context] session_id={self.session_id}, "
+            f"messages={len(merged_messages)}, tokens={message_tokens}"
+        )
+
         remaining_budget = max(0, token_budget - message_tokens)
 
         latest_archive = context["latest_archive"]
@@ -773,16 +794,9 @@ class Session:
         if include_latest_overview:
             remaining_budget -= latest_archive_tokens
 
+        # pre_archive_abstracts: 保留字段返回空数组，保持 API 向下兼容
         included_pre_archive_abstracts: List[Dict[str, str]] = []
         pre_archive_tokens = 0
-        for item in context["pre_archive_abstracts"]:
-            if item["tokens"] > remaining_budget:
-                break
-            included_pre_archive_abstracts.append(
-                {"archive_id": item["archive_id"], "abstract": item["abstract"]}
-            )
-            pre_archive_tokens += item["tokens"]
-            remaining_budget -= item["tokens"]
 
         archive_tokens = latest_archive_tokens + pre_archive_tokens
         included_archives = len(included_pre_archive_abstracts)
@@ -794,7 +808,7 @@ class Session:
             "latest_archive_overview": (
                 latest_archive["overview"] if include_latest_overview else ""
             ),
-            "pre_archive_abstracts": included_pre_archive_abstracts,
+            "pre_archive_abstracts": [],  # 保持 API 向后兼容，返回空数组
             "messages": [m.to_dict() for m in merged_messages],
             "estimatedTokens": message_tokens + archive_tokens,
             "stats": {

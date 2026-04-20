@@ -32,7 +32,15 @@ class VikingURI:
     """
 
     SCHEME = "viking"
-    VALID_SCOPES = {"resources", "user", "agent", "session", "queue", "temp"}
+    # SCOPES that can be listed in root directory (ov ls)
+    LISTABLE_SCOPES = {
+        "resources",
+        "user",
+        "agent",
+        "session",
+    }
+    # All valid scopes that can be visited/accessed
+    VISITABLE_SCOPES = LISTABLE_SCOPES | {"temp", "queue"}
 
     def __init__(self, uri: str):
         """
@@ -70,8 +78,8 @@ class VikingURI:
 
         # Parse scope
         scope = path.split("/")[0]
-        if scope not in self.VALID_SCOPES:
-            raise ValueError(f"Invalid scope '{scope}'. Must be one of {self.VALID_SCOPES}")
+        if scope not in self.VISITABLE_SCOPES:
+            raise ValueError(f"Invalid scope '{scope}'. Must be one of {self.VISITABLE_SCOPES}")
 
         return {
             "scheme": self.SCHEME,
@@ -178,14 +186,16 @@ class VikingURI:
         Build a Viking URI from components.
 
         Args:
-            scope: Scope (resources, user, agent, session, queue)
+            scope: Scope (resources, user, agent, session, queue, temp)
             *path_parts: Additional path components
 
         Returns:
             Viking URI string
         """
-        if scope not in VikingURI.VALID_SCOPES:
-            raise ValueError(f"Invalid scope '{scope}'. Must be one of {VikingURI.VALID_SCOPES}")
+        if scope not in VikingURI.VISITABLE_SCOPES:
+            raise ValueError(
+                f"Invalid scope '{scope}'. Must be one of {VikingURI.VISITABLE_SCOPES}"
+            )
 
         parts = [scope] + list(path_parts)
         # Filter out empty parts
@@ -227,21 +237,23 @@ class VikingURI:
             URI-safe string
         """
         # Preserve:
-        # - Letters, numbers, underscores, hyphens (\w includes [a-zA-Z0-9_])
+        # - Letters, numbers, underscores, hyphens, dots (\w includes [a-zA-Z0-9_])
+        # - Latin-1 Supplement, Latin Extended-A/B (Western European languages: Spanish, Portuguese, French, German, etc.)
+        # - Cyrillic (Russian, Bulgarian, Serbian, etc.)
+        # - Arabic (Arabic, Persian, Urdu, etc.)
         # - CJK Unified Ideographs (Chinese, Japanese Kanji, Korean Hanja)
         # - Hiragana and Katakana (Japanese)
         # - Hangul Syllables (Korean)
-        # - CJK Unified Ideographs Extension A
-        # - CJK Unified Ideographs Extension B
+        # - CJK Unified Ideographs Extension A/B
         safe = re.sub(
-            r"[^\w\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af\u3400-\u4dbf\U00020000-\U0002a6df\-]",
+            r"[^\w\u0080-\u02af\u0400-\u052f\u0600-\u077f\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af\u3400-\u4dbf\U00020000-\U0002a6df\-.]",
             "_",
             text,
         )
         # Merge consecutive underscores
         safe = re.sub(r"_+", "_", safe)
-        # Strip leading/trailing underscores and limit length
-        safe = safe.strip("_")[:50]
+        # Strip leading/trailing underscores and dots, limit length
+        safe = safe.strip("_.")[:50]
         return safe or "unnamed"
 
     def __str__(self) -> str:
@@ -286,10 +298,23 @@ class VikingURI:
         return f"{VikingURI.SCHEME}://{uri}"
 
     @classmethod
-    def create_temp_uri(cls) -> str:
-        """Create temp directory URI like viking://temp/MMDDHHMM_XXXXXX"""
+    def create_temp_uri(cls, space: Optional[str] = None) -> str:
+        """Create temp directory URI.
+
+        When ``space`` is provided, generate a user-scoped temp URI like
+        ``viking://temp/<space>/MMDDHHMM_XXXXXX``. This preserves isolation
+        between users sharing the same account while keeping temp data in the
+        temp scope.
+
+        When ``space`` is omitted, fall back to the legacy shape
+        ``viking://temp/MMDDHHMM_XXXXXX`` for compatibility with callers that
+        do not have a user context.
+        """
         import datetime
         import uuid
 
         temp_id = uuid.uuid4().hex[:6]
-        return f"viking://temp/{datetime.datetime.now().strftime('%m%d%H%M')}_{temp_id}"
+        temp_leaf = f"{datetime.datetime.now().strftime('%m%d%H%M')}_{temp_id}"
+        if space:
+            return f"viking://temp/{space}/{temp_leaf}"
+        return f"viking://temp/{temp_leaf}"

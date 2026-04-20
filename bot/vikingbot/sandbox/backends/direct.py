@@ -157,8 +157,6 @@ class DirectBackend(SandboxBackend):
 
         if self.restrict_workspaces and self.session_key in self.restrict_workspaces:
             restrict_path = Path(self.restrict_workspaces[self.session_key]).resolve()
-            logger.info(f"Restricted workspace: {restrict_path}")
-            logger.info(f"Checking path: {resolved}")
             if resolved != restrict_path and restrict_path not in resolved.parents:
                 raise PermissionError(f"Path outside restricted workspace: {path}")
             return

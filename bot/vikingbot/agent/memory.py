@@ -1,5 +1,6 @@
 """Memory system for persistent agent memory."""
 
+import asyncio
 from pathlib import Path
 from typing import Any
 from loguru import logger
@@ -159,3 +160,48 @@ class MemoryStore:
         if not result:
             return ""
         return result
+
+    async def get_viking_user_profiles(self, workspace_id: str, user_ids: list[str]) -> str:
+        """Get multiple user profiles concurrently.
+
+        Args:
+            workspace_id: Workspace ID
+            user_ids: List of user IDs to get profiles for
+
+        Returns:
+            Formatted string with all user profiles
+        """
+        if not user_ids:
+            return ""
+
+        client = await VikingClient.create(agent_id=workspace_id)
+
+        async def fetch_profile(user_id: str) -> tuple[str, str]:
+            """Fetch a single user profile."""
+            try:
+                start_time = time.time()
+                profile = await client.read_user_profile(user_id)
+                cost = round(time.time() - start_time, 2)
+                logger.info(
+                    f"[READ_USER_PROFILE]: user_id={user_id}, cost {cost}s, "
+                    f"profile={profile[:50] if profile else 'None'}"
+                )
+                return (user_id, profile or "")
+            except Exception as e:
+                logger.error(f"[READ_USER_PROFILE]: user_id={user_id}, error. {e}")
+                return (user_id, "")
+
+        # Fetch all profiles concurrently
+        tasks = [fetch_profile(user_id) for user_id in user_ids]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Build the result string
+        parts = []
+        for result in results:
+            if isinstance(result, Exception):
+                continue
+            user_id, profile = result
+            if profile:
+                parts.append(f"## User profile for {user_id}: \n{profile}")
+
+        return "\n\n".join(parts) if parts else ""

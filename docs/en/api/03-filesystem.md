@@ -2,6 +2,27 @@
 
 OpenViking provides Unix-like file system operations for managing context.
 
+## WebDAV (Phase 1)
+
+OpenViking Server also exposes a minimal WebDAV adapter for resource files:
+
+```text
+/webdav/resources
+```
+
+Phase 1 intentionally keeps the scope narrow:
+
+- Resources only. Memories, skills, sessions, and other namespaces are not exposed.
+- Text-first writes. `PUT` currently accepts UTF-8 text content only.
+- WebDAV subset only. `OPTIONS`, `PROPFIND`, `GET`, `HEAD`, `PUT`, `DELETE`, `MKCOL`, and `MOVE` are supported.
+- Semantic sidecars stay internal. Derived files such as `.abstract.md`, `.overview.md`, `.relations.json`, and `.path.ovlock` are hidden from listings and cannot be accessed directly through WebDAV.
+
+Behavior notes:
+
+- Creating a new file through WebDAV triggers OpenViking semantic generation for that file path.
+- Replacing an existing file through WebDAV refreshes related semantics and vectors, same as `write()`.
+- User-created dot-directories and dot-files remain visible unless they match one of the reserved internal filenames above.
+
 ## API Reference
 
 ### abstract()
@@ -106,6 +127,8 @@ Read L2 full content.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI |
+| offset | int | No | 0 | Starting line number (0-indexed) |
+| limit | int | No | -1 | Number of lines to read, `-1` means read to end |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -243,6 +266,11 @@ List directory contents.
 | uri | str | Yes | - | Viking URI |
 | simple | bool | No | False | Return only relative paths |
 | recursive | bool | No | False | List all subdirectories recursively |
+| output | str | No | `agent` | Output format: `agent` or `original` |
+| abs_limit | int | No | 256 | Abstract length limit for `agent` output |
+| show_all_hidden | bool | No | False | Include hidden files like `-a` |
+| node_limit | int | No | 1000 | Maximum number of nodes to return |
+| limit | int | No | None | Alias for `node_limit` |
 
 **Entry Structure**
 
@@ -323,6 +351,12 @@ Get directory tree structure.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI |
+| output | str | No | `agent` | Output format: `agent` or `original` |
+| abs_limit | int | No | 256 | Abstract length limit for `agent` output |
+| show_all_hidden | bool | No | False | Include hidden files like `-a` |
+| node_limit | int | No | 1000 | Maximum number of nodes to return |
+| limit | int | No | None | Alias for `node_limit` |
+| level_limit | int | No | 3 | Maximum directory depth to traverse |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -440,11 +474,13 @@ Create a directory.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI for the new directory |
+| description | str | No | `null` | Initial directory description. When provided, it is written to `.abstract.md` and queued for L0 vectorization. |
 
 **Python SDK (Embedded / HTTP)**
 
 ```python
 client.mkdir("viking://resources/new-project/")
+client.mkdir("viking://resources/new-project/", description="API docs directory")
 ```
 
 **HTTP API**
@@ -458,7 +494,8 @@ curl -X POST http://localhost:1933/api/v1/fs/mkdir \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
   -d '{
-    "uri": "viking://resources/new-project/"
+    "uri": "viking://resources/new-project/",
+    "description": "API docs directory"
   }'
 ```
 
@@ -466,6 +503,7 @@ curl -X POST http://localhost:1933/api/v1/fs/mkdir \
 
 ```bash
 openviking mkdir viking://resources/new-project/
+openviking mkdir viking://resources/new-project/ --description "API docs directory"
 ```
 
 **Response**
@@ -607,6 +645,9 @@ Search content by pattern.
 | uri | str | Yes | - | Viking URI to search in |
 | pattern | str | Yes | - | Search pattern (regex) |
 | case_insensitive | bool | No | False | Ignore case |
+| exclude_uri | str | No | None | URI prefix to exclude from search |
+| node_limit | int | No | None | Maximum number of nodes to search |
+| level_limit | int | No | 5 | Maximum directory depth to traverse |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -677,6 +718,7 @@ Match files by pattern.
 |-----------|------|----------|---------|-------------|
 | pattern | str | Yes | - | Glob pattern (e.g., `**/*.md`) |
 | uri | str | No | "viking://" | Starting URI |
+| node_limit | int | No | None | Maximum number of matches to return |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -741,7 +783,7 @@ Create relations between resources.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | from_uri | str | Yes | - | Source URI |
-| uris | str or List[str] | Yes | - | Target URI(s) |
+| to_uris | str or List[str] | Yes | - | Target URI(s) |
 | reason | str | No | "" | Reason for the link |
 
 **Python SDK (Embedded / HTTP)**
@@ -874,7 +916,7 @@ Remove a relation.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | from_uri | str | Yes | - | Source URI |
-| uri | str | Yes | - | Target URI to unlink |
+| to_uri | str | Yes | - | Target URI to unlink |
 
 **Python SDK (Embedded / HTTP)**
 

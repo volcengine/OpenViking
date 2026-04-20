@@ -5,12 +5,12 @@
 import os
 import tempfile
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict
 from starlette.background import BackgroundTask
 
-from openviking.server.auth import get_request_context
+from openviking.server.auth import get_request_context, require_auth_root_or_admin
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import resolve_uploaded_temp_file_id
@@ -45,9 +45,11 @@ class ImportRequest(BaseModel):
 
 
 @router.post("/export")
+@require_auth_root_or_admin
 async def export_ovpack(
-    request: ExportRequest,
-    _ctx: RequestContext = Depends(get_request_context),
+    request: Request,
+    body: ExportRequest,
+    ctx: RequestContext = Depends(get_request_context),
 ):
     """Export context as .ovpack file and stream it to client."""
     service = get_service()
@@ -58,10 +60,10 @@ async def export_ovpack(
 
     try:
         # Export to temp file
-        await service.pack.export_ovpack(request.uri, temp_file, ctx=_ctx)
+        await service.pack.export_ovpack(body.uri, temp_file, ctx=ctx)
 
         # Determine filename from URI
-        base_name = request.uri.strip().rstrip("/").split("/")[-1]
+        base_name = body.uri.strip().rstrip("/").split("/")[-1]
         if not base_name:
             base_name = "export"
         filename = f"{base_name}.ovpack"
@@ -86,21 +88,23 @@ async def export_ovpack(
 
 
 @router.post("/import")
+@require_auth_root_or_admin
 async def import_ovpack(
-    request: ImportRequest,
-    _ctx: RequestContext = Depends(get_request_context),
+    request: Request,
+    body: ImportRequest,
+    ctx: RequestContext = Depends(get_request_context),
 ):
     """Import .ovpack file."""
     service = get_service()
 
     upload_temp_dir = get_openviking_config().storage.get_upload_temp_dir()
-    file_path = resolve_uploaded_temp_file_id(request.temp_file_id, upload_temp_dir)
+    file_path, _ = resolve_uploaded_temp_file_id(body.temp_file_id, upload_temp_dir)
 
     result = await service.pack.import_ovpack(
         file_path,
-        request.parent,
-        ctx=_ctx,
-        force=request.force,
-        vectorize=request.vectorize,
+        body.parent,
+        ctx=ctx,
+        force=body.force,
+        vectorize=body.vectorize,
     )
     return Response(status="ok", result={"uri": result})

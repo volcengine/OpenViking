@@ -36,7 +36,39 @@ openviking health
 
 ```json
 {
-  "status": "ok"
+  "status": "ok",
+  "healthy": true,
+  "version": "0.1.x"
+}
+```
+
+---
+
+### ready()
+
+Readiness probe for deployment environments. Returns `200` when core subsystems are ready and `503` otherwise.
+
+**HTTP API**
+
+```
+GET /ready
+```
+
+```bash
+curl -X GET http://localhost:1933/ready
+```
+
+**Response**
+
+```json
+{
+  "status": "ready",
+  "checks": {
+    "agfs": "ok",
+    "vectordb": "ok",
+    "api_key_manager": "ok",
+    "ollama": "not_configured"
+  }
 }
 ```
 
@@ -132,10 +164,18 @@ openviking wait [--timeout 60]
 {
   "status": "ok",
   "result": {
-    "pending": 0,
-    "in_progress": 0,
-    "processed": 20,
-    "errors": 0
+    "Embedding": {
+      "processed": 10,
+      "requeue_count": 0,
+      "error_count": 0,
+      "errors": []
+    },
+    "Semantic": {
+      "processed": 10,
+      "requeue_count": 0,
+      "error_count": 0,
+      "errors": []
+    }
   },
   "time": 0.1
 }
@@ -250,36 +290,37 @@ openviking observer vikingdb
 
 ---
 
-### observer.vlm
+### observer.models
 
-Get VLM (Vision Language Model) token usage status.
+Get aggregated model subsystem status (VLM, embedding, rerank).
 
 **Python SDK (Embedded / HTTP)**
 
 ```python
-print(client.observer.vlm)
+print(client.observer.models)
 # Output:
-# [vlm] (healthy)
-# Model                          Provider      Prompt  Completion  Total  Last Updated
-# doubao-1-5-vision-pro-32k      volcengine    1000    500         1500   2024-01-01 12:00:00
-# TOTAL                                        1000    500         1500
+# [models] (healthy)
+# provider_model         healthy  detail
+# dense_embedding        yes      ...
+# rerank                 yes      ...
+# vlm                    yes      ...
 ```
 
 **HTTP API**
 
 ```
-GET /api/v1/observer/vlm
+GET /api/v1/observer/models
 ```
 
 ```bash
-curl -X GET http://localhost:1933/api/v1/observer/vlm \
+curl -X GET http://localhost:1933/api/v1/observer/models \
   -H "X-API-Key: your-key"
 ```
 
 **CLI**
 
 ```bash
-openviking observer vlm
+openviking observer models
 ```
 
 **Response**
@@ -288,16 +329,21 @@ openviking observer vlm
 {
   "status": "ok",
   "result": {
-    "name": "vlm",
+    "name": "models",
     "is_healthy": true,
     "has_errors": false,
-    "status": "Model  Provider  Prompt  Completion  Total  Last Updated\ndoubao-1-5-vision-pro-32k  volcengine  1000  500  1500  2024-01-01 12:00:00\nTOTAL  1000  500  1500"
+    "status": "provider_model  healthy  detail\ndense_embedding  yes  ...\nrerank  yes  ...\nvlm  yes  ..."
   },
   "time": 0.1
 }
 ```
 
 ---
+
+Additional HTTP observer endpoints are also available:
+
+- `GET /api/v1/observer/lock`
+- `GET /api/v1/observer/retrieval`
 
 ### observer.system
 
@@ -314,7 +360,7 @@ print(client.observer.system())
 # [vikingdb] (healthy)
 # ...
 #
-# [vlm] (healthy)
+# [models] (healthy)
 # ...
 #
 # [system] (healthy)

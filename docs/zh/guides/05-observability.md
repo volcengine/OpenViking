@@ -6,6 +6,7 @@
 - 请求级 `telemetry`
 - 终端侧 `ov tui`
 - Web 侧 `OpenViking Console`
+- `/metrics` 时序指标
 
 如果你只想快速判断“该看哪里”，先看下面这张表。
 
@@ -17,6 +18,7 @@
 | `ov tui` | `viking://` 文件树、目录摘要、文件正文、向量记录 | 开发调试、核对资源是否真正落库 |
 | `OpenViking Console` | Web UI 里的文件浏览、检索、资源导入、租户与系统状态 | 不想手敲命令时做交互式排查 |
 | `telemetry` | 单次请求耗时、token、向量检索、资源处理阶段 | 排查一次具体调用为什么慢、为什么结果异常 |
+| `/metrics` | 请求量趋势、错误率、时延分布、队列与探针状态 | Prometheus 抓取、Grafana 看板、告警规则 |
 
 ## 服务健康与组件状态
 
@@ -230,9 +232,142 @@ curl -X POST http://localhost:1933/api/v1/search/find \
 
 - [操作级 Telemetry 参考](07-operation-telemetry.md)
 
+## 用 `/metrics` 做时序观测
+
+`/metrics` 是 OpenViking 面向 Prometheus 抓取模型提供的时序指标端点，适合回答这类问题：
+
+- 最近一段时间 HTTP 请求量是不是突然升高了
+- 某个接口或操作的错误率是不是在持续上升
+- 请求耗时分布是否变差
+- 队列是否开始堆积
+- 关键依赖、探针或模型提供方是否进入不健康状态
+
+和前面的 `observer/*` 相比，`/metrics` 更适合看**趋势、聚合和告警**；而 `observer/*` 更适合人工查看某一时刻的瞬时状态。
+
+和前面的 `telemetry` 相比，`/metrics` 关注的是**聚合后的时间序列**；`telemetry` 关注的是**某一次请求内部到底发生了什么**。
+
+### 快速开启 metrics
+
+`/metrics` 默认是关闭的：当指标体系未启用时，访问会返回 `404`，并提示 `Prometheus metrics are disabled.`。
+
+开启方式不需要完整配置，只需要在 `ov.conf` 的 `server` 段打开总开关即可。
+
+**最小配置（推荐）**
+
+在 `~/.openviking/ov.conf`（或你启动时通过 `--config` 指定的路径）里加入：
+
+```json
+{
+  "server": {
+    "observability": {
+      "metrics": {
+        "enabled": true
+      }
+    }
+  }
+}
+```
+改完配置后需要**重启 OpenViking Server** 才会生效。
+
+完整字段、支持范围和更多示例见：
+
+- [指标](../concepts/12-metrics.md) 
+
+### 直接访问 `/metrics`
+
+当前实现中，`/metrics` 未接入 `get_request_context` 等鉴权依赖，因此从代码行为上看，它当前等价于公开抓取端点：
+
+```bash
+curl http://localhost:1933/metrics
+```
+
+如果你的部署环境通过网关、反向代理或服务发现层对 `/metrics` 做了保护，则应按部署方式附加鉴权。
+
+### Prometheus 抓取示例
+
+最常见的使用方式是让 Prometheus 定时抓取：
+
+```yaml
+scrape_configs:
+  - job_name: openviking
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["localhost:1933"]
+```
+
+### 在 Grafana 中导入和查看 Dashboard
+
+如果你已经让 Prometheus 成功抓取 `/metrics`，下一步最常见的做法就是在 Grafana 中导入 OpenViking 的 demo dashboard。
+
+**第 1 步：先确认 Prometheus 已经抓到 `/metrics`**
+
+在导入 Grafana dashboard 之前，先确认 Prometheus 数据源里已经能查到 OpenViking 指标。最简单的判断方式是：
+
+- 在 Prometheus UI 里执行 `openviking_http_requests_total`
+- 或执行 `openviking_service_readiness`
+- 如果已经能返回时间序列，说明 Grafana 后续就能正常出图
+
+如果这一步没有数据，先回到上面的 Prometheus 抓取配置，确认 `targets`、`metrics_path` 和网络连通性。
+
+**第 2 步：在 Grafana 导入官方 demo dashboard**
+
+OpenViking 仓库里已经提供了可直接导入的 dashboard JSON：
+
+- [openviking_demo_dashboard.json](../../../examples/grafana/openviking_demo_dashboard.json)
+- [openviking_token_demo_dashboard.json](../../../examples/grafana/openviking_token_demo_dashboard.json) （注意，该 dashboard 依赖 `tim012432-calendarheatmap-panel` grafana 插件，需要先安装才能正常工作）
+
+导入步骤可以按下面做：
+
+1. 登录你的 Grafana。
+2. 在左侧菜单进入 `Dashboards`。
+3. 点击右上角的 `New` 或 `Import`。
+4. 选择上传 JSON 文件，或把上面链接对应文件的内容粘贴进去。
+5. 在导入页面选择 Prometheus 作为数据源。
+6. 点击 `Import` 完成导入。
+
+如果导入后面板为空，通常优先检查两件事：
+
+- Grafana 绑定的数据源是不是正确的 Prometheus
+- Prometheus 里是否真的已经抓到了 `openviking_*` 指标
+
+**第 3 步：打开 dashboard 后重点看什么**
+
+接入之后，通常就可以在 Grafana 里重点观察这些指标族对应的面板：
+
+- `openviking_http_*`：HTTP 请求量、耗时、inflight
+- `openviking_operation_*`：结构化操作的成功率和耗时
+- `openviking_queue_*`：队列处理量、积压和执行中数量
+- `openviking_*_readiness`：依赖与探针健康状态
+
+**第 4 步：最终效果长什么样**
+
+导入成功后，你最终会看到一个以 OpenViking 请求、队列、探针、模型调用和系统状态为主的总览 dashboard。效果示意可以参考：
+
+- [grafana-demo-dashboard.png](../../images/grafana-demo-dashboard.png)
+
+这张图可以帮助你快速确认“导入后的面板布局是不是正常”。如果你的 dashboard 基本结构和它一致，但局部面板没有数据，通常说明是对应指标当前没有产生样本，或者筛选条件与实际流量不匹配。
+
+### 如何理解常见标签
+
+排查看板时，最常见的几个标签是：
+
+- `account_id`：租户维度标签。只在受控白名单指标上开启，未识别请求会被归到 `__unknown__`，超出活跃租户预算时会落到 `__overflow__`
+- `route`：HTTP 路由模板，例如 `/api/v1/search/find`
+- `status`：请求或阶段状态，例如 `200`、`ok`、`error`
+- `valid`：当前样本是否是本次成功刷新得到的有效值；`valid="0"` 通常表示失败回退值或 stale fallback
+
+### 什么时候看 `/metrics`，什么时候看别的入口
+
+- 看服务是否整体健康、哪个组件当前不通：先看 `/health` 和 `observer/*`
+- 看资源是否真的落库、向量是否真的写进去：看 `ov tui`
+- 看某一次具体请求为什么慢、token 花在哪、资源处理卡在哪个阶段：看 `telemetry`
+- 看一段时间内请求量、错误率、时延是否持续恶化：看 `/metrics`
+
 ## 相关文档
 
 - [部署](03-deployment.md) - 服务器设置
 - [认证](04-authentication.md) - API Key 设置
 - [操作级 Telemetry 参考](07-operation-telemetry.md) - 请求级结构化追踪
 - [系统 API](../api/07-system.md) - 系统与 observer 接口参考
+- [指标](../concepts/12-metrics.md) - 时序指标与配置
+

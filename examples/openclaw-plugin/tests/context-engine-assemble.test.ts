@@ -9,11 +9,14 @@ const cfg = memoryOpenVikingConfigSchema.parse({
   baseUrl: "http://127.0.0.1:1933",
   autoCapture: false,
   autoRecall: false,
-  ingestReplyAssist: false,
 });
 
 function roughEstimate(messages: unknown[]): number {
   return Math.ceil(JSON.stringify(messages).length / 4);
+}
+
+function systemPromptTokens(text?: string): number {
+  return text ? Math.ceil(text.length / 4) : 0;
 }
 
 function makeLogger() {
@@ -110,7 +113,9 @@ describe("context-engine assemble()", () => {
 
     expect(resolveAgentId).toHaveBeenCalledWith("session-1", undefined, "session-1");
     expect(client.getSessionContext).toHaveBeenCalledWith("session-1", 4096, "agent:session-1");
-    expect(result.estimatedTokens).toBe(321);
+    expect(result.estimatedTokens).toBe(
+      roughEstimate(result.messages) + systemPromptTokens(result.systemPromptAddition),
+    );
     expect(result.systemPromptAddition).toContain("Session Context Guide");
     expect(result.messages).toEqual([
       {
@@ -285,5 +290,45 @@ describe("context-engine assemble()", () => {
       messages: liveMessages,
       estimatedTokens: roughEstimate(liveMessages),
     });
+  });
+
+  it("keeps assembled output within the requested token budget", async () => {
+    const longText = "A".repeat(2500);
+    const { engine } = makeEngine({
+      latest_archive_overview: "# Session Summary\nA short overview",
+      pre_archive_abstracts: [],
+      messages: [
+        {
+          id: "msg_long_1",
+          role: "user",
+          created_at: "2026-03-24T00:00:00Z",
+          parts: [{ type: "text", text: longText }],
+        },
+        {
+          id: "msg_long_2",
+          role: "assistant",
+          created_at: "2026-03-24T00:00:01Z",
+          parts: [{ type: "text", text: longText }],
+        },
+      ],
+      estimatedTokens: 2000,
+      stats: {
+        ...makeStats(),
+        totalArchives: 1,
+        includedArchives: 1,
+        activeTokens: 2000,
+        archiveTokens: 10,
+      },
+    });
+
+    const result = await engine.assemble({
+      sessionId: "session-budgeted",
+      messages: [],
+      tokenBudget: 1024,
+    });
+
+    expect(result.estimatedTokens).toBeLessThanOrEqual(1024);
+    expect(result.messages.length).toBeGreaterThan(0);
+    expect(result.systemPromptAddition).toContain("Session Context Guide");
   });
 });

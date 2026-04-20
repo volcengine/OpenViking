@@ -79,7 +79,7 @@ class PDFParser(BaseParser):
         if self._markdown_parser is None:
             from openviking.parse.parsers.markdown import MarkdownParser
 
-            self._markdown_parser = MarkdownParser()
+            self._markdown_parser = MarkdownParser(config=self.config)
         return self._markdown_parser
 
     @property
@@ -93,7 +93,7 @@ class PDFParser(BaseParser):
 
         Args:
             source: Path to PDF file
-            **kwargs: Additional options (currently unused)
+            **kwargs: Additional options (resource_name/source_name for original filename)
 
         Returns:
             ParseResult with document tree
@@ -104,6 +104,9 @@ class PDFParser(BaseParser):
         """
         start_time = time.time()
         pdf_path = Path(source)
+
+        # Get resource name from kwargs, prefer original filename from upload
+        resource_name = kwargs.get("resource_name") or kwargs.get("source_name")
 
         if not pdf_path.exists():
             return create_parse_result(
@@ -117,11 +120,19 @@ class PDFParser(BaseParser):
 
         try:
             # Step 1: Convert PDF to Markdown
-            markdown_content, conversion_meta = await self._convert_to_markdown(pdf_path)
+            markdown_content, conversion_meta = await self._convert_to_markdown(
+                pdf_path,
+                resource_name=resource_name,
+            )
 
-            # Step 2: Parse Markdown using MarkdownParser
+            # Step 2: Parse Markdown using MarkdownParser, pass through resource name
             md_parser = self._get_markdown_parser()
-            result = await md_parser.parse_content(markdown_content, source_path=str(pdf_path))
+            result = await md_parser.parse_content(
+                markdown_content,
+                source_path=str(pdf_path),
+                resource_name=resource_name,
+                source_name=resource_name,
+            )
 
             # Step 3: Update metadata for PDF origin
             result.source_format = "pdf"  # Override markdown format
@@ -152,12 +163,17 @@ class PDFParser(BaseParser):
                 warnings=[f"Failed to parse PDF: {e}"],
             )
 
-    async def _convert_to_markdown(self, pdf_path: Path) -> tuple[str, Dict[str, Any]]:
+    async def _convert_to_markdown(
+        self,
+        pdf_path: Path,
+        resource_name: Optional[str] = None,
+    ) -> tuple[str, Dict[str, Any]]:
         """
         Convert PDF to Markdown using configured strategy.
 
         Args:
             pdf_path: Path to PDF file
+            resource_name: Optional resource name for organizing saved images
 
         Returns:
             Tuple of (markdown_content, metadata_dict)
@@ -166,22 +182,22 @@ class PDFParser(BaseParser):
             ValueError: If all conversion strategies fail
         """
         if self.config.strategy == "local":
-            return await self._convert_local(pdf_path)
+            return await self._convert_local(pdf_path, resource_name=resource_name)
 
         elif self.config.strategy == "mineru":
-            return await self._convert_mineru(pdf_path)
+            return await self._convert_mineru(pdf_path, resource_name=resource_name)
 
         elif self.config.strategy == "auto":
             # Try local first
             try:
-                return await self._convert_local(pdf_path)
+                return await self._convert_local(pdf_path, resource_name=resource_name)
             except Exception as e:
                 logger.warning(f"Local conversion failed: {e}")
 
                 # Fallback to MinerU if configured
                 if self.config.mineru_endpoint:
                     logger.info("Falling back to MinerU API")
-                    return await self._convert_mineru(pdf_path)
+                    return await self._convert_mineru(pdf_path, resource_name=resource_name)
                 else:
                     raise ValueError(
                         f"Local conversion failed and no MinerU endpoint configured: {e}"
@@ -232,6 +248,9 @@ class PDFParser(BaseParser):
             "images_extracted": 0,
             "tables_extracted": 0,
             "bookmarks_found": 0,
+            "bookmarks_resolved": 0,
+            "bookmarks_unresolved": 0,
+            "headings_found": 0,
             "heading_source": "none",
         }
 
@@ -242,27 +261,48 @@ class PDFParser(BaseParser):
                 # Extract structure (bookmarks → font fallback)
                 detection_mode = self.config.heading_detection
                 bookmarks = []
+                raw_bookmarks = []
                 heading_source = "none"
 
                 if detection_mode in ("bookmarks", "auto"):
-                    bookmarks = self._extract_bookmarks(pdf)
+                    raw_bookmarks = self._extract_bookmarks(pdf)
+                    meta["bookmarks_found"] = len(raw_bookmarks)
+                    bookmarks = [bm for bm in raw_bookmarks if bm["page_num"] is not None]
+                    meta["bookmarks_resolved"] = len(bookmarks)
+                    meta["bookmarks_unresolved"] = len(raw_bookmarks) - len(bookmarks)
+
                     if bookmarks:
                         heading_source = "bookmarks"
+                    elif raw_bookmarks:
+                        logger.info(
+                            "Bookmark detection found %d entries but none resolved to pages; "
+                            "ignoring bookmark headings",
+                            len(raw_bookmarks),
+                        )
 
                 if not bookmarks and detection_mode in ("font", "auto"):
                     bookmarks = self._detect_headings_by_font(pdf)
                     if bookmarks:
                         heading_source = "font_analysis"
 
-                meta["bookmarks_found"] = len(bookmarks)
+                meta["headings_found"] = len(bookmarks)
                 meta["heading_source"] = heading_source
-                logger.info(f"Heading detection: {heading_source}, found {len(bookmarks)} headings")
+                logger.info(
+                    "Heading detection: source=%s, headings=%d, bookmarks=%d, resolved=%d, "
+                    "unresolved=%d",
+                    heading_source,
+                    len(bookmarks),
+                    meta["bookmarks_found"],
+                    meta["bookmarks_resolved"],
+                    meta["bookmarks_unresolved"],
+                )
 
                 # Group bookmarks by page_num
                 bookmarks_by_page = defaultdict(list)
                 for bm in bookmarks:
-                    # Fall back to page 1 for unresolvable destinations
-                    page = bm["page_num"] or 1
+                    page = bm["page_num"]
+                    if page is None:
+                        continue
                     bookmarks_by_page[page].append(bm)
 
                 for page_num, page in enumerate(pdf.pages, 1):
@@ -315,8 +355,6 @@ class PDFParser(BaseParser):
                                 f"Failed to extract image {img_idx + 1} on page {page_num}: {img_err}"
                             )
 
-                # Note: bookmarks with unresolvable page numbers are injected at page 1
-
             if not parts:
                 logger.warning(f"No content extracted from {pdf_path}")
                 return "", meta
@@ -324,7 +362,9 @@ class PDFParser(BaseParser):
             markdown_content = "\n\n".join(parts)
             logger.info(
                 f"Local conversion: {meta['pages_processed']}/{meta['total_pages']} pages, "
-                f"{meta['bookmarks_found']} bookmarks ({meta['heading_source']}), "
+                f"{meta['headings_found']} headings ({meta['heading_source']}, "
+                f"bookmarks={meta['bookmarks_found']}, "
+                f"resolved={meta['bookmarks_resolved']}), "
                 f"{meta['images_extracted']} images, {meta['tables_extracted']} tables → "
                 f"{len(markdown_content)} chars"
             )
@@ -344,16 +384,11 @@ class PDFParser(BaseParser):
             if not hasattr(pdf, "doc") or not hasattr(pdf.doc, "get_outlines"):
                 return []
 
-            outlines = pdf.doc.get_outlines()
+            outlines = list(pdf.doc.get_outlines())
             if not outlines:
                 return []
 
-            # Build objid → page_number mapping
-            objid_to_num = {
-                page.page_obj.objid: i + 1
-                for i, page in enumerate(pdf.pages)
-                if hasattr(page, "page_obj") and hasattr(page.page_obj, "objid")
-            }
+            page_ref_to_num = self._build_page_number_map(pdf)
 
             bookmarks = []
             for level, title, dest, _action, _se in outlines:
@@ -363,18 +398,9 @@ class PDFParser(BaseParser):
                 page_num = None
                 try:
                     if dest and len(dest) > 0:
-                        page_ref = dest[0]
-                        if hasattr(page_ref, "objid"):
-                            page_num = objid_to_num.get(page_ref.objid)
-                        elif hasattr(page_ref, "resolve"):
-                            resolved = page_ref.resolve()
-                            if hasattr(resolved, "objid"):
-                                page_num = objid_to_num.get(resolved.objid)
-                        elif isinstance(page_ref, int):
-                            # 0-based integer page index (common in many PDF producers)
-                            candidate = page_ref + 1
-                            if 1 <= candidate <= len(pdf.pages):
-                                page_num = candidate
+                        page_num = self._resolve_bookmark_page(
+                            dest[0], page_ref_to_num, len(pdf.pages)
+                        )
                 except Exception:
                     pass
 
@@ -391,6 +417,50 @@ class PDFParser(BaseParser):
         except Exception as e:
             logger.warning(f"Failed to extract bookmarks: {e}")
             return []
+
+    def _build_page_number_map(self, pdf) -> Dict[int, int]:
+        """Build a lookup from PDF page object ids to 1-based page numbers.
+
+        pdfminer outlines and link annotations reference page objects by object id.
+        In pdfplumber these ids are exposed as ``page.page_obj.pageid``; some mocks
+        or alternate inputs may still expose ``objid``, so we keep both.
+        """
+        page_ref_to_num: Dict[int, int] = {}
+        for page_num, page in enumerate(pdf.pages, 1):
+            page_obj = getattr(page, "page_obj", None)
+            if page_obj is None:
+                continue
+
+            for attr_name in ("pageid", "objid"):
+                ref_id = getattr(page_obj, attr_name, None)
+                if isinstance(ref_id, int):
+                    page_ref_to_num.setdefault(ref_id, page_num)
+
+        return page_ref_to_num
+
+    def _resolve_bookmark_page(
+        self, page_ref: Any, page_ref_to_num: Dict[int, int], total_pages: int
+    ) -> Optional[int]:
+        """Resolve a bookmark destination to a 1-based page number."""
+        ref_id = getattr(page_ref, "objid", None)
+        if isinstance(ref_id, int):
+            return page_ref_to_num.get(ref_id)
+
+        if isinstance(page_ref, int):
+            # 0-based integer page index (common in many PDF producers)
+            candidate = page_ref + 1
+            if 1 <= candidate <= total_pages:
+                return candidate
+            return None
+
+        if hasattr(page_ref, "resolve"):
+            resolved = page_ref.resolve()
+            for attr_name in ("pageid", "objid"):
+                resolved_id = getattr(resolved, attr_name, None)
+                if isinstance(resolved_id, int):
+                    return page_ref_to_num.get(resolved_id)
+
+        return None
 
     def _detect_headings_by_font(self, pdf) -> List[Dict[str, Any]]:
         """Detect headings by font size analysis.
@@ -540,12 +610,17 @@ class PDFParser(BaseParser):
             logger.debug(f"Image extraction error: {e}")
             return None
 
-    async def _convert_mineru(self, pdf_path: Path) -> tuple[str, Dict[str, Any]]:
+    async def _convert_mineru(
+        self,
+        pdf_path: Path,
+        resource_name: Optional[str] = None,
+    ) -> tuple[str, Dict[str, Any]]:
         """
         Convert PDF to Markdown using MinerU API.
 
         Args:
             pdf_path: Path to PDF file
+            resource_name: Optional resource name (unused in MinerU conversion)
 
         Returns:
             Tuple of (markdown_content, metadata)

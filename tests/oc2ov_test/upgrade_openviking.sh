@@ -2,42 +2,39 @@
 
 set -e
 
-# Trap signals for cleanup on interruption
-trap 'cleanup_on_exit' INT TERM EXIT
+UPGRADE_SUCCESS=false
 
 cleanup_on_exit() {
+    if [ "$UPGRADE_SUCCESS" = true ]; then
+        return 0
+    fi
     log ""
     log "========================================="
     log "Cleanup: Script interrupted or failed"
     log "========================================="
     
-    # Stop OpenClaw if running
     if command -v openclaw &> /dev/null; then
         log "Stopping OpenClaw gateway..."
         openclaw gateway stop 2>&1 | tee -a "$LOG_FILE" || true
         sleep 2
     fi
     
-    # Kill any remaining OpenClaw processes
     if ps aux | grep -v grep | grep -q "[o]penclaw"; then
         log "Killing remaining OpenClaw processes..."
         pkill -9 -f "openclaw" || true
         sleep 1
     fi
     
-    # Clean up backup if exists
     if [ -d "/root/project/OpenViking_backup" ]; then
         log "Removing backup directory..."
         rm -rf "/root/project/OpenViking_backup" || true
     fi
     
-    # Clean up build artifacts
     if [ -d "/root/project/OpenViking/build" ]; then
         log "Removing build artifacts..."
         rm -rf "/root/project/OpenViking/build" || true
     fi
     
-    # Clean up venv if created by tests
     if [ -d "/root/project/OpenViking/tests/oc2ov_test/venv" ]; then
         log "Removing test virtual environment..."
         rm -rf "/root/project/OpenViking/tests/oc2ov_test/venv" || true
@@ -47,10 +44,16 @@ cleanup_on_exit() {
     log "========================================="
 }
 
+trap 'cleanup_on_exit' INT TERM EXIT
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="/root/project/OpenViking"
+if [ -n "$GITHUB_WORKSPACE" ]; then
+    PROJECT_DIR="$GITHUB_WORKSPACE"
+else
+    PROJECT_DIR="/root/project/OpenViking"
+fi
 BACKUP_DIR="/root/project/OpenViking_backup"
-LOG_FILE="/var/log/openviking_upgrade.log"
+LOG_FILE="/tmp/openviking_upgrade.log"
 MAX_RETRIES=3
 RETRY_DELAY=10
 VENV_DIR="/root/.openviking/venv"
@@ -63,6 +66,24 @@ log() {
 log "========================================="
 log "OpenViking Upgrade Script Started"
 log "========================================="
+
+log "[0/8] Checking disk space..."
+AVAILABLE_GB=$(df -BG / | tail -1 | awk '{print $4}' | tr -d 'G')
+if [ "$AVAILABLE_GB" -lt 3 ]; then
+    log "⚠️  Low disk space: ${AVAILABLE_GB}GB available, cleaning up caches..."
+    rm -rf /root/.cache/uv 2>/dev/null || true
+    rm -rf /root/.cache/go-build 2>/dev/null || true
+    rm -rf /root/.npm/_cacache 2>/dev/null || true
+    rm -rf /root/.cargo/registry/cache 2>/dev/null || true
+    rm -rf /root/.cargo/registry/src 2>/dev/null || true
+    rm -rf "$PROJECT_DIR/target" 2>/dev/null || true
+    rm -rf /tmp/openviking*.log /tmp/openclaw* /tmp/npm-* 2>/dev/null || true
+    pip cache purge 2>/dev/null || true
+    npm cache clean --force 2>/dev/null || true
+    AVAILABLE_GB=$(df -BG / | tail -1 | awk '{print $4}' | tr -d 'G')
+    log "After cleanup: ${AVAILABLE_GB}GB available"
+fi
+log "Disk space: ${AVAILABLE_GB}GB available"
 
 log "[1/8] Checking prerequisites and activating virtual environment..."
 
@@ -98,13 +119,22 @@ fi
 cd "$PROJECT_DIR" || exit 1
 
 log "[2/8] Backing up current version..."
-if [ -d "$BACKUP_DIR" ]; then
-    rm -rf "$BACKUP_DIR"
+if [ -n "$GITHUB_WORKSPACE" ]; then
+    log "CI environment detected, skipping backup"
+else
+    if [ -d "$BACKUP_DIR" ]; then
+        rm -rf "$BACKUP_DIR"
+    fi
+    cp -r "$PROJECT_DIR" "$BACKUP_DIR"
+    log "Backup created at: $BACKUP_DIR"
 fi
-cp -r "$PROJECT_DIR" "$BACKUP_DIR"
-log "Backup created at: $BACKUP_DIR"
 
 log "[3/8] Configuring Git remote and pulling latest code..."
+if [ -n "$GITHUB_WORKSPACE" ]; then
+    log "CI environment detected, skipping git fetch/reset (checkout already done)"
+    CURRENT_COMMIT=$(git rev-parse HEAD)
+    log "Current commit: $CURRENT_COMMIT"
+else
 CURRENT_REMOTE=$(git remote get-url origin 2>/dev/null || echo "")
 log "Current remote URL: $CURRENT_REMOTE"
 
@@ -123,6 +153,7 @@ git reset --hard origin/main
 git clean -fd
 CURRENT_COMMIT=$(git rev-parse HEAD)
 log "Current commit: $CURRENT_COMMIT"
+fi
 
 log "[4/8] Checking OpenViking installation mode..."
 
@@ -191,6 +222,43 @@ else
     log "⚠️  Rust toolchain setup failed, build may fail"
 fi
 
+log "[5.55/8] Checking maturin for ragfs-python build..."
+MATURIN_OK=false
+
+if python -c "import maturin" 2>/dev/null; then
+    MATURIN_VERSION=$(python -m maturin --version 2>/dev/null | awk '{print $2}' || echo "unknown")
+    log "✅ maturin is already available (Python module): $MATURIN_VERSION"
+    MATURIN_OK=true
+elif command -v maturin &> /dev/null; then
+    MATURIN_VERSION=$(maturin --version 2>/dev/null | awk '{print $2}' || echo "unknown")
+    log "✅ maturin is already available (CLI): $MATURIN_VERSION"
+    MATURIN_OK=true
+fi
+
+if [ "$MATURIN_OK" = false ]; then
+    log "maturin not found, installing..."
+    if command -v uv &> /dev/null && uv pip --help &> /dev/null; then
+        if uv pip install maturin 2>&1 | tee -a "$LOG_FILE"; then
+            log "✅ maturin installed via uv pip"
+            MATURIN_OK=true
+        fi
+    fi
+
+    if [ "$MATURIN_OK" = false ]; then
+        if pip install maturin 2>&1 | tee -a "$LOG_FILE"; then
+            log "✅ maturin installed via pip"
+            MATURIN_OK=true
+        else
+            log "⚠️  Failed to install maturin, ragfs-python will not be built"
+        fi
+    fi
+fi
+
+if [ "$MATURIN_OK" = true ]; then
+    MATURIN_VERSION=$(python -m maturin --version 2>/dev/null || maturin --version 2>/dev/null || echo "unknown")
+    log "maturin version: $MATURIN_VERSION"
+fi
+
 log "[5.6/8] Checking Python build dependencies..."
 
 # Check if setuptools-scm is already installed
@@ -216,25 +284,116 @@ make clean 2>/dev/null || true
 log "Clean completed"
 
 log "[7/8] Building and installing OpenViking in development mode..."
+export OV_SKIP_OV_BUILD=1
+export OV_SKIP_OV_BUILD=1
+log "OV_SKIP_OV_BUILD=1 set, skipping ov CLI Rust build (ragfs build still needed for server)"
+
+mkdir -p "$PROJECT_DIR/openviking/bin"
+touch "$PROJECT_DIR/openviking/bin/ov"
+chmod +x "$PROJECT_DIR/openviking/bin/ov"
+log "Created dummy ov binary so OV_SKIP_OV_BUILD won't fallback to cargo"
+
+if [ -n "$GITHUB_WORKSPACE" ]; then
+    if [ -z "$SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING" ]; then
+        PRETEND_VERSION=$(python -c "
+import re, subprocess
+try:
+    desc = subprocess.check_output(['git', 'describe', '--tags', '--always'], stderr=subprocess.DEVNULL).decode().strip()
+    m = re.match(r'^(?:v)?([0-9]+(?:\.[0-9]+)*)', desc)
+    if m:
+        base = m.group(1)
+        print(base + '.dev0')
+    else:
+        print('0.0.0.dev0')
+except Exception:
+    print('0.0.0.dev0')
+" 2>/dev/null || echo "0.0.0.dev0")
+        export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING="$PRETEND_VERSION"
+        log "CI shallow clone detected, using pretend version: $PRETEND_VERSION"
+    fi
+fi
 BUILD_SUCCESS=false
 for i in $(seq 1 $MAX_RETRIES); do
     log "Build attempt $i/$MAX_RETRIES..."
     
-    if make build 2>&1 | tee -a "$LOG_FILE"; then
-        BUILD_SUCCESS=true
-        log "Build completed successfully on attempt $i"
-        
-        INSTALL_PATH=$(python -c "import openviking; print(openviking.__file__)" 2>/dev/null || echo "unknown")
-        log "OpenViking installed at: $INSTALL_PATH"
-        
-        if [[ "$INSTALL_PATH" == *"$PROJECT_DIR"* ]]; then
-            log "✅ Confirmed: Using development mode (source code directory)"
-        else
-            log "⚠️  Warning: Not using source code directory"
-            log "Expected path to contain: $PROJECT_DIR"
-            log "Actual path: $INSTALL_PATH"
+    if python setup.py build_ext --inplace 2>&1 | tee -a "$LOG_FILE"; then
+        log "build_ext completed"
+
+        RAGFS_LIB_DIR="$PROJECT_DIR/openviking/lib"
+        RAGFS_SO_COUNT=$(ls -1 "$RAGFS_LIB_DIR"/ragfs_python*.so "$RAGFS_LIB_DIR"/ragfs_python*.pyd "$RAGFS_LIB_DIR"/ragfs_python*.dylib 2>/dev/null | wc -l | xargs || echo "0")
+        if [ "$RAGFS_SO_COUNT" -eq 0 ] && [ "$MATURIN_OK" = true ] && [ -d "$PROJECT_DIR/crates/ragfs-python" ]; then
+            log "ragfs_python native lib not found after build_ext, building via maturin..."
+            TMPDIR_RAGFS=$(mktemp -d)
+            if (cd "$PROJECT_DIR/crates/ragfs-python" && python -m maturin build --release --features s3 --out "$TMPDIR_RAGFS" 2>&1 | tee -a "$LOG_FILE"); then
+                WHL_FILE=$(ls -1 "$TMPDIR_RAGFS"/ragfs_python-*.whl 2>/dev/null | head -1)
+                if [ -n "$WHL_FILE" ]; then
+                    mkdir -p "$RAGFS_LIB_DIR"
+                    python -c "
+import zipfile, os, sys, stat
+with zipfile.ZipFile('$WHL_FILE') as zf:
+    for name in zf.namelist():
+        bn = os.path.basename(name)
+        if bn.startswith('ragfs_python') and (bn.endswith('.so') or bn.endswith('.pyd') or bn.endswith('.dylib')):
+            dst = os.path.join('$RAGFS_LIB_DIR', bn)
+            with zf.open(name) as src, open(dst, 'wb') as f:
+                f.write(src.read())
+            os.chmod(dst, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+            print(f'  [OK] ragfs-python: extracted {bn} -> {dst}')
+            sys.exit(0)
+print('[ERROR] No ragfs_python native library found in wheel')
+sys.exit(1)
+" 2>&1 | tee -a "$LOG_FILE"
+                else
+                    log "⚠️  maturin produced no wheel"
+                fi
+            else
+                log "⚠️  maturin build failed, ragfs-python may not be available"
+            fi
+            rm -rf "$TMPDIR_RAGFS"
         fi
-        break
+
+        RAGFS_SO_FINAL=$(ls -1 "$RAGFS_LIB_DIR"/ragfs_python*.so "$RAGFS_LIB_DIR"/ragfs_python*.pyd "$RAGFS_LIB_DIR"/ragfs_python*.dylib 2>/dev/null | head -1 || true)
+        if [ -n "$RAGFS_SO_FINAL" ]; then
+            log "✅ ragfs_python native extension verified: $RAGFS_SO_FINAL"
+        else
+            log "⚠️  WARNING: ragfs_python native extension not found in $RAGFS_LIB_DIR, server may fail to start"
+        fi
+
+        log "Installing dependencies..."
+        UV_EXTRA_ARGS=""
+        if [ -n "$GITHUB_WORKSPACE" ]; then
+            UV_EXTRA_ARGS="--index-url https://pypi.tuna.tsinghua.edu.cn/simple"
+            log "Using Tsinghua PyPI mirror for faster downloads in CI"
+        fi
+        if command -v uv &> /dev/null && uv pip --help &> /dev/null; then
+            if uv pip install -e . --no-build-isolation $UV_EXTRA_ARGS 2>&1 | tee -a "$LOG_FILE"; then
+                BUILD_SUCCESS=true
+            fi
+        else
+            PIP_EXTRA_ARGS=""
+            if [ -n "$GITHUB_WORKSPACE" ]; then
+                PIP_EXTRA_ARGS="-i https://pypi.tuna.tsinghua.edu.cn/simple"
+            fi
+            if pip install -e . --no-build-isolation $PIP_EXTRA_ARGS 2>&1 | tee -a "$LOG_FILE"; then
+                BUILD_SUCCESS=true
+            fi
+        fi
+        
+        if [ "$BUILD_SUCCESS" = true ]; then
+            log "Build completed successfully on attempt $i"
+            
+            INSTALL_PATH=$(python -c "import openviking; print(openviking.__file__)" 2>/dev/null || echo "unknown")
+            log "OpenViking installed at: $INSTALL_PATH"
+            
+            if [[ "$INSTALL_PATH" == *"$PROJECT_DIR"* ]]; then
+                log "✅ Confirmed: Using development mode (source code directory)"
+            else
+                log "⚠️  Warning: Not using source code directory"
+                log "Expected path to contain: $PROJECT_DIR"
+                log "Actual path: $INSTALL_PATH"
+            fi
+            break
+        fi
     else
         if [ $i -lt $MAX_RETRIES ]; then
             log "Build failed on attempt $i, retrying in ${RETRY_DELAY}s..."
@@ -251,6 +410,26 @@ if [ "$BUILD_SUCCESS" = false ]; then
     mv "$BACKUP_DIR" "$PROJECT_DIR"
     log "Backup restored"
     exit 1
+fi
+
+log "[7.5/8] Installing OpenClaw openviking plugin dependencies..."
+PLUGIN_DIR="$PROJECT_DIR/examples/openclaw-plugin"
+
+if [ -d "$PLUGIN_DIR" ]; then
+    log "Plugin directory: $PLUGIN_DIR"
+    if command -v npm &> /dev/null; then
+        cd "$PLUGIN_DIR"
+        if npm install --omit=dev 2>&1 | tee -a "$LOG_FILE"; then
+            log "✅ Plugin npm dependencies installed"
+        else
+            log "⚠️  WARNING: npm install --omit=dev failed, continuing anyway"
+        fi
+        cd "$PROJECT_DIR"
+    else
+        log "⚠️  npm command not found, skipping plugin dependency install"
+    fi
+else
+    log "⚠️  Plugin directory not found: $PLUGIN_DIR, skipping"
 fi
 
 log "[8/8] Restarting OpenClaw service to load latest OpenViking..."
@@ -272,19 +451,53 @@ fi
 
 sleep 3
 
-# Verify gateway is stopped
-if ps aux | grep -v grep | grep -q "[o]penclaw"; then
-    log "⚠️  OpenClaw process still running, killing forcefully..."
+# Verify gateway is stopped - kill ALL openclaw processes to prevent multi-instance conflicts
+REMAINING_PIDS=$(ps aux | grep -v grep | grep "[o]penclaw" | awk '{print $2}' || true)
+if [ -n "$REMAINING_PIDS" ]; then
+    REMAINING_COUNT=$(echo "$REMAINING_PIDS" | wc -l)
+    log "⚠️  $REMAINING_COUNT OpenClaw process(es) still running, killing forcefully..."
+    log "PIDs: $REMAINING_PIDS"
     pkill -9 -f "openclaw" || true
     sleep 2
+
+    STILL_RUNNING=$(ps aux | grep -v grep | grep "[o]penclaw" | awk '{print $2}' || true)
+    if [ -n "$STILL_RUNNING" ]; then
+        log "⚠️  WARNING: Some processes could not be killed: $STILL_RUNNING"
+    else
+        log "✅ All OpenClaw processes terminated"
+    fi
 fi
 log "✅ OpenClaw gateway stopped"
 
-# Step 2: Clear OpenClaw cache to force reload Python packages
-log "Step 2: Clearing OpenClaw cache..."
+# Step 2: Clean up OpenClaw stale state (lock files, session locks, cache)
+log "Step 2: Pre-start cleanup for OpenClaw..."
+
+LOCK_COUNT=0
+SESSION_LOCK_COUNT=0
+
+if [ -d ~/.openclaw ]; then
+    LOCK_COUNT=$(find ~/.openclaw -name "*.lock" -type f 2>/dev/null | wc -l)
+    if [ "$LOCK_COUNT" -gt 0 ]; then
+        log "Found $LOCK_COUNT stale lock file(s), removing..."
+        find ~/.openclaw -name "*.lock" -type f -delete 2>/dev/null || true
+        log "✅ Stale lock files removed"
+    else
+        log "No stale lock files found"
+    fi
+
+    SESSION_LOCK_COUNT=$(find ~/.openclaw/agents -name "*.jsonl.lock" -type f 2>/dev/null | wc -l)
+    if [ "$SESSION_LOCK_COUNT" -gt 0 ]; then
+        log "Found $SESSION_LOCK_COUNT stale session lock(s), removing..."
+        find ~/.openclaw/agents -name "*.jsonl.lock" -type f -delete 2>/dev/null || true
+        log "✅ Stale session locks removed"
+    fi
+else
+    log "~/.openclaw directory not found, skipping lock cleanup"
+fi
+
 rm -rf ~/.openclaw/cache/* 2>/dev/null || true
 rm -rf ~/.openclaw/tmp/* 2>/dev/null || true
-log "✅ Cache cleared"
+log "✅ Pre-start cleanup completed (locks: $LOCK_COUNT, session locks: $SESSION_LOCK_COUNT, cache cleared)"
 
 # Step 3: Verify OpenViking installation path before starting
 log "Step 3: Verifying OpenViking installation path..."
@@ -297,6 +510,120 @@ else
     log "⚠️  WARNING: OpenViking is not in development mode!"
     log "Expected path to contain: $PROJECT_DIR"
     log "Actual path: $OV_PATH"
+fi
+
+# Step 3.5: Ensure OpenViking server is running on port 1933
+log "Step 3.5: Ensuring OpenViking server is running..."
+OV_SERVER_RUNNING=false
+
+if command -v ss &> /dev/null; then
+    if ss -tuln 2>/dev/null | grep -q ":1933 "; then
+        OV_SERVER_RUNNING=true
+        log "✅ OpenViking server is already listening on port 1933"
+    fi
+elif command -v netstat &> /dev/null; then
+    if netstat -tuln 2>/dev/null | grep -q ":1933 "; then
+        OV_SERVER_RUNNING=true
+        log "✅ OpenViking server is already listening on port 1933"
+    fi
+fi
+
+if [ "$OV_SERVER_RUNNING" = false ]; then
+    log "OpenViking server not running, starting it..."
+
+    pkill -f "openviking.server.bootstrap" 2>/dev/null || true
+    sleep 1
+
+    OV_CONF=""
+    for conf_candidate in "$PROJECT_DIR/ov.conf.temp" "$PROJECT_DIR/ov.conf" "$HOME/.openviking/ov.conf"; do
+        if [ -f "$conf_candidate" ]; then
+            OV_CONF="$conf_candidate"
+            break
+        fi
+    done
+
+    if [ -n "$OV_CONF" ]; then
+        log "Cleaning unknown config fields from: $OV_CONF"
+        python -c "
+import json, sys
+try:
+    with open('$OV_CONF') as f:
+        cfg = json.load(f)
+    changed = False
+    for key in ['port', 'log_level', 'retry_times', 'mode']:
+        if cfg.get('storage', {}).get('agfs', {}).pop(key, None) is not None:
+            changed = True
+    for section in ['embedding', 'vlm']:
+        if section in cfg and 'dense' in cfg.get(section, {}):
+            val = cfg[section]['dense'].get('api_base', '')
+            cleaned = val.strip().strip('\`').strip()
+            if cleaned != val:
+                cfg[section]['dense']['api_base'] = cleaned
+                changed = True
+        elif section in cfg:
+            val = cfg[section].get('api_base', '')
+            cleaned = val.strip().strip('\`').strip()
+            if cleaned != val:
+                cfg[section]['api_base'] = cleaned
+                changed = True
+    if changed:
+        with open('$OV_CONF', 'w') as f:
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+        print('Config cleaned')
+    else:
+        print('Config OK, no changes needed')
+except Exception as e:
+    print(f'Config cleanup error: {e}', file=sys.stderr)
+" 2>&1 | tee -a "$LOG_FILE"
+    fi
+
+    OV_PYTHON=$(command -v python 2>/dev/null || echo "python")
+    log "Using Python: $OV_PYTHON ($($OV_PYTHON --version 2>&1))"
+
+    > /tmp/openviking.log
+
+    if [ -n "$OV_CONF" ]; then
+        nohup $OV_PYTHON -u -m openviking.server.bootstrap --config "$OV_CONF" > /tmp/openviking.log 2>&1 &
+        OV_SERVER_PID=$!
+        log "Started OpenViking server with config: $OV_CONF (PID: $OV_SERVER_PID)"
+    else
+        nohup $OV_PYTHON -u -m openviking.server.bootstrap > /tmp/openviking.log 2>&1 &
+        OV_SERVER_PID=$!
+        log "Started OpenViking server without explicit config (PID: $OV_SERVER_PID)"
+    fi
+
+    for i in $(seq 1 20); do
+        sleep 3
+        if ! kill -0 $OV_SERVER_PID 2>/dev/null; then
+            log "⚠️  OpenViking server process (PID: $OV_SERVER_PID) exited prematurely after ${i}x3s"
+            break
+        fi
+        if command -v ss &> /dev/null; then
+            if ss -tuln 2>/dev/null | grep -q ":1933 "; then
+                OV_SERVER_RUNNING=true
+                log "✅ OpenViking server is listening on port 1933 (after ${i}x3s)"
+                break
+            fi
+        elif command -v netstat &> /dev/null; then
+            if netstat -tuln 2>/dev/null | grep -q ":1933 "; then
+                OV_SERVER_RUNNING=true
+                log "✅ OpenViking server is listening on port 1933 (after ${i}x3s)"
+                break
+            fi
+        fi
+    done
+
+    if [ "$OV_SERVER_RUNNING" = false ]; then
+        log "❌ ERROR: OpenViking server failed to start on port 1933"
+        log "   Server log:"
+        cat /tmp/openviking.log 2>/dev/null | tee -a "$LOG_FILE" || true
+        log ""
+        log "This likely indicates a data compatibility issue between the new code"
+        log "and existing vectordb data. Check the error above for details."
+        log "Do NOT delete /root/.openviking/data/ - this error should be reported and fixed."
+        log "Caches, build artifacts, and temp files are safe to clean."
+        exit 1
+    fi
 fi
 
 # Step 4: Start OpenClaw gateway
@@ -388,5 +715,7 @@ log "OpenViking version: $OPENVIKING_VERSION"
 OPENCLAW_VERSION=$(openclaw --version 2>/dev/null || echo "unknown")
 log "OpenClaw version: $OPENCLAW_VERSION"
 log "Backup: $BACKUP_DIR"
+
+UPGRADE_SUCCESS=true
 
 exit 0

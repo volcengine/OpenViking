@@ -302,7 +302,6 @@ class TestCompressorV2:
                     SimpleNamespace(
                         write_uris=[],
                         edit_uris=[],
-                        edit_overview_uris=[],
                         delete_uris=[],
                     ),
                     [],
@@ -447,7 +446,6 @@ class TestCompressorV2:
                     SimpleNamespace(
                         write_uris=[],
                         edit_uris=[],
-                        edit_overview_uris=[],
                         delete_uris=[],
                     ),
                     [],

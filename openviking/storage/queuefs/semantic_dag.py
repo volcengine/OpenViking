@@ -352,6 +352,12 @@ class SemanticDagExecutor:
                 return None
 
             if parent_uri not in self._overview_cache:
+                try:
+                    from openviking.metrics.datasources.cache import CacheEventDataSource
+
+                    CacheEventDataSource.record_miss("L1")
+                except Exception:
+                    pass
                 async with self._overview_cache_lock:
                     if parent_uri not in self._overview_cache:
                         overview_path = f"{parent_uri}/.overview.md"
@@ -364,6 +370,13 @@ class SemanticDagExecutor:
                             )
                         else:
                             self._overview_cache[parent_uri] = {}
+            else:
+                try:
+                    from openviking.metrics.datasources.cache import CacheEventDataSource
+
+                    CacheEventDataSource.record_hit("L1")
+                except Exception:
+                    pass
 
             existing_summaries = self._overview_cache.get(parent_uri, {})
             file_name = file_path.split("/")[-1]

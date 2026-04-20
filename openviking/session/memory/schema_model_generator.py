@@ -16,7 +16,7 @@ from pydantic.config import ConfigDict
 from openviking.session.memory.dataclass import FaultTolerantBaseModel, MemoryTypeSchema
 from openviking.session.memory.memory_isolation_handler import RoleScope
 from openviking.session.memory.merge_op import MergeOp, MergeOpFactory
-from openviking.session.memory.merge_op.base import FieldType, StrPatch, get_python_type_for_field
+from openviking.session.memory.merge_op.base import FieldType, get_python_type_for_field
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -39,14 +39,10 @@ class SchemaModelGenerator:
     for polymorphic memory data.
     """
 
-    # Generic overview edit model shared by all memory types
-    _generic_overview_edit_model: Optional[Type[BaseModel]] = None
-
     def __init__(self, schemas: List[MemoryTypeSchema]):
         self.schemas = schemas
         self._model_cache: Dict[str, Type[BaseModel]] = {}
         self._flat_data_models: Dict[str, Type[BaseModel]] = {}
-        self._overview_edit_models: Dict[str, Type[BaseModel]] = {}
         self._union_model: Optional[Type[BaseModel]] = None
         self._operations_model: Optional[Type[BaseModel]] = None
 
@@ -144,7 +140,6 @@ class SchemaModelGenerator:
         for memory_type in self.schemas:
             models[memory_type.memory_type] = self.create_flat_data_model(memory_type)
         return models
-
 
     def create_discriminated_union_model(self) -> Type[BaseModel]:
         """
@@ -268,7 +263,7 @@ class SchemaModelGenerator:
                     else:
                         # Single value (not None)
                         return False
-            return len(self.edit_overview_uris) == 0 and len(self.delete_uris) == 0
+            return len(self.delete_uris) == 0
 
         def to_legacy_operations(self) -> Dict[str, Any]:
             """Convert new per-type structure to legacy write_uris/edit_uris format."""
@@ -294,7 +289,6 @@ class SchemaModelGenerator:
             return {
                 "write_uris": write_uris,
                 "edit_uris": edit_uris,
-                #"edit_overview_uris": self.edit_overview_uris,
                 "delete_uris": self.delete_uris,
             }
 
