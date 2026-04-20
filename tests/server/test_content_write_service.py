@@ -308,7 +308,7 @@ class _FakeVikingFSForCreate:
         self.write_file_calls.append((uri, content))
 
 
-# Create-mode tests (TDD Red Phase - should FAIL because _validate_mode rejects "create")
+# Create-mode tests
 
 
 @pytest.mark.asyncio

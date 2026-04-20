@@ -116,7 +116,7 @@ async def test_write_rejects_removed_semantic_flags(client_with_resource):
 
 
 async def test_api_create_mode_new_file_success(client):
-    """Test create mode with a new file - should fail in Red phase."""
+    """Test create mode with a new file."""
     resp = await client.post(
         "/api/v1/content/write",
         json={
@@ -126,7 +126,6 @@ async def test_api_create_mode_new_file_success(client):
             "wait": True,
         },
     )
-    # Should fail in Red phase because create mode not implemented
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
@@ -134,7 +133,7 @@ async def test_api_create_mode_new_file_success(client):
 
 
 async def test_api_create_mode_existing_file_409(client_with_resource):
-    """Test create mode on an existing file should return 409 - should fail in Red phase."""
+    """Test create mode on an existing file should return 409."""
     client, uri = client_with_resource
     file_uri = await _first_file_uri(client, uri)
 
@@ -147,7 +146,6 @@ async def test_api_create_mode_existing_file_409(client_with_resource):
             "wait": True,
         },
     )
-    # Should fail in Red phase because create mode not implemented
     assert resp.status_code == 409
     body = resp.json()
     assert body["status"] == "error"
@@ -155,7 +153,7 @@ async def test_api_create_mode_existing_file_409(client_with_resource):
 
 
 async def test_api_create_mode_invalid_extension_400(client):
-    """Test create mode with .exe extension should return 400 - should fail in Red phase."""
+    """Test create mode with .exe extension should return 400."""
     resp = await client.post(
         "/api/v1/content/write",
         json={
@@ -165,7 +163,6 @@ async def test_api_create_mode_invalid_extension_400(client):
             "wait": True,
         },
     )
-    # Should fail in Red phase because create mode not implemented
     assert resp.status_code == 400
     body = resp.json()
     assert body["status"] == "error"
@@ -173,7 +170,7 @@ async def test_api_create_mode_invalid_extension_400(client):
 
 
 async def test_api_create_mode_empty_content_success(client):
-    """Test create mode with empty content should succeed - should fail in Red phase."""
+    """Test create mode with empty content should succeed."""
     resp = await client.post(
         "/api/v1/content/write",
         json={
@@ -183,7 +180,6 @@ async def test_api_create_mode_empty_content_success(client):
             "wait": True,
         },
     )
-    # Should fail in Red phase because create mode not implemented
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
@@ -191,7 +187,7 @@ async def test_api_create_mode_empty_content_success(client):
 
 
 async def test_api_create_mode_regression_replace_unchanged(client_with_resource):
-    """Test replace mode still works (regression test) - should PASS even now."""
+    """Test replace mode still works (regression test)."""
     client, uri = client_with_resource
     file_uri = await _first_file_uri(client, uri)
     original = (await client.get("/api/v1/content/read", params={"uri": file_uri})).json()["result"]
@@ -205,7 +201,6 @@ async def test_api_create_mode_regression_replace_unchanged(client_with_resource
             "wait": True,
         },
     )
-    # This should PASS even in Red phase - replace mode already works
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
