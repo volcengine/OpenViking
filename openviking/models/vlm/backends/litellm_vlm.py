@@ -9,6 +9,7 @@ import os
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
+from urllib.parse import urlparse
 
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
@@ -21,6 +22,17 @@ from openviking.utils.model_retry import retry_async, retry_sync
 from ..base import ToolCall, VLMBase, VLMResponse
 
 logger = logging.getLogger(__name__)
+
+
+def _is_google_generate_language_endpoint(api_base: str) -> bool:
+    """Check whether the configured API base is Gemini's native endpoint."""
+    parsed = urlparse(api_base)
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    if hostname != "generativelanguage.googleapis.com":
+        return False
+    normalized_path = parsed.path.rstrip("/")
+    return normalized_path.startswith("/v1") or normalized_path.startswith("/v1beta")
+
 
 PROVIDER_CONFIGS: Dict[str, Dict[str, Any]] = {
     "openrouter": {
@@ -214,9 +226,7 @@ class LiteLLMVLMProvider(VLMBase):
         if self.api_key:
             kwargs["api_key"] = self.api_key
         if self.api_base:
-            is_google_endpoint = "generativelanguage.googleapis.com" in self.api_base and (
-                "/v1" in self.api_base or "/v1beta" in self.api_base
-            )
+            is_google_endpoint = _is_google_generate_language_endpoint(self.api_base)
             if not is_google_endpoint:
                 kwargs["api_base"] = self.api_base
         if self._extra_headers:

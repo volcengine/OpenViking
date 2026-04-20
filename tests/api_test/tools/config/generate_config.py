@@ -18,4 +18,11 @@ with open(config_path, "w") as f:
     json.dump(config, f, indent=2)
 
 print(f"Generated config at {config_path}")
-print(json.dumps(config, indent=2))
+redacted_config = {
+    **config,
+    "server": {
+        **config["server"],
+        "root_api_key": "<redacted>",
+    },
+}
+print(json.dumps(redacted_config, indent=2))

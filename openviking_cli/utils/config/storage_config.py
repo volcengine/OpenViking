@@ -24,15 +24,15 @@ class StorageConfig(BaseModel):
 
     workspace: str = Field(default="./data", description="Local data storage path (primary)")
 
-    agfs: AGFSConfig = Field(default_factory=lambda: AGFSConfig(), description="AGFS configuration")
+    agfs: AGFSConfig = Field(default_factory=AGFSConfig, description="AGFS configuration")
 
     transaction: TransactionConfig = Field(
-        default_factory=lambda: TransactionConfig(),
+        default_factory=TransactionConfig,
         description="Transaction mechanism configuration",
     )
 
     vectordb: VectorDBBackendConfig = Field(
-        default_factory=lambda: VectorDBBackendConfig(),
+        default_factory=VectorDBBackendConfig,
         description="VectorDB backend configuration",
     )
 

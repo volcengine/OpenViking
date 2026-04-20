@@ -139,7 +139,7 @@ def mount_agfs_backend(agfs: Any, agfs_config: Any) -> None:
         if plugin_name == "localfs" and "local_dir" in plugin_config.get("config", {}):
             local_dir = plugin_config["config"]["local_dir"]
             os.makedirs(local_dir, exist_ok=True)
-            logger.debug(f"[RAGFSUtils] Ensured local directory exists: {local_dir}")
+            logger.debug("[RAGFSUtils] Ensured localfs storage directory exists")
         # Ensure queuefs db_path parent directory exists before mounting
         if plugin_name == "queuefs" and "db_path" in plugin_config.get("config", {}):
             db_path = plugin_config["config"]["db_path"]
@@ -151,6 +151,6 @@ def mount_agfs_backend(agfs: Any, agfs_config: Any) -> None:
             pass
         try:
             agfs.mount(plugin_name, mount_path, plugin_config.get("config", {}))
-            logger.debug(f"[RAGFSUtils] Successfully mounted {plugin_name} at {mount_path}")
-        except Exception as e:
-            logger.error(f"[RAGFSUtils] Failed to mount {plugin_name} at {mount_path}: {e}")
+            logger.debug(f"[RAGFSUtils] Successfully mounted {plugin_name}")
+        except Exception:
+            logger.error(f"[RAGFSUtils] Failed to mount {plugin_name}")
