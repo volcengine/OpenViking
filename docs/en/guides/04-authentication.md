@@ -133,7 +133,7 @@ The CLI supports configuring both `api_key` (for regular user operations) and `r
 }
 ```
 
-When you need to perform admin commands (`admin`, `system`, `export`, `import`, `reindex`), use the `--sudo` flag to elevate privileges:
+When you need to perform admin commands (`admin`, `system`, `reindex`), use the `--sudo` flag to elevate privileges:
 
 ```bash
 # List all accounts (requires root privileges)
@@ -142,18 +142,12 @@ ov --sudo admin list-accounts
 # Reindex content
 ov --sudo reindex viking://
 
-# Export context
-ov --sudo export viking:/// ./backup.ovpack
-
-# Import context
-ov --sudo import ./backup.ovpack viking:///
-
 # System commands
 ov --sudo system status
 ```
 
 The `--sudo` flag:
-- Only works with admin commands: `admin`, `system`, `export`, `import`, `reindex`
+- Only works with admin commands: `admin`, `system`, `reindex`
 - Will error if used with non-admin commands
 - Will error if `root_api_key` is not configured in `ovcli.conf`
 - Uses `root_api_key` instead of `api_key` for the request
