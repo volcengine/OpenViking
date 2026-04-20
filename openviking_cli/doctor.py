@@ -9,6 +9,7 @@ native vector engine, AGFS, embedding provider, VLM provider, and disk space.
 
 from __future__ import annotations
 
+import argparse
 import importlib
 import json
 import os
@@ -16,7 +17,7 @@ import platform
 import shutil
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from openviking_cli.utils.config.config_loader import resolve_config_path
 from openviking_cli.utils.config.consts import OPENVIKING_CONFIG_ENV
@@ -58,6 +59,99 @@ def _load_config_json(config_path: Path) -> Optional[dict]:
         return json.loads(raw)
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def _is_placeholder_secret(value: Any) -> bool:
+    return not value or (isinstance(value, str) and value.startswith("{"))
+
+
+def _configured_dimension(dense: dict[str, Any]) -> Optional[int]:
+    value = dense.get("dimension")
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_dense_embedder_for_live_validation(dense: dict[str, Any]):
+    from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
+
+    dense_config = EmbeddingModelConfig.model_validate(dense)
+    embedding_config = EmbeddingConfig.model_validate({"dense": dense_config.model_dump()})
+    return embedding_config.get_embedder()
+
+
+def _get_local_embedding_helpers():
+    from openviking.models.embedder.local_embedders import (
+        get_local_model_cache_path,
+        get_local_model_spec,
+    )
+
+    return get_local_model_cache_path, get_local_model_spec
+
+
+def _format_live_embedding_fix(provider: str, dense: dict[str, Any], exc: Exception) -> str:
+    provider_label = provider or "embedding"
+    api_base = dense.get("api_base")
+    model = dense.get("model")
+    lines = [f"Check embedding.dense.model for {provider_label} in ov.conf"]
+    if api_base:
+        lines.append(f"Verify embedding.dense.api_base is reachable: {api_base}")
+    if model:
+        lines.append(f"Confirm model '{model}' exists and supports embeddings")
+    lines.append(f"Provider error: {type(exc).__name__}: {exc}")
+    return "\n".join(lines)
+
+
+def _run_live_embedding_validation(
+    provider: str,
+    model: str,
+    dense: dict[str, Any],
+) -> tuple[bool, str, Optional[str]]:
+    embedder = None
+    try:
+        embedder = _build_dense_embedder_for_live_validation(dense)
+        result = embedder.embed("OpenViking doctor validation probe", is_query=False)
+        vector = getattr(result, "dense_vector", None)
+        if not vector:
+            return (
+                False,
+                f"{provider}/{model} (live validation returned no dense vector)",
+                "Check embedding provider credentials, endpoint, and model configuration in ov.conf",
+            )
+
+        actual_dimension = len(vector)
+        configured_dimension = _configured_dimension(dense)
+        if configured_dimension is not None and configured_dimension != actual_dimension:
+            return (
+                False,
+                (
+                    f"{provider}/{model} "
+                    f"(live dimension mismatch: config={configured_dimension}, actual={actual_dimension})"
+                ),
+                (
+                    "Update embedding.dense.dimension to match the provider output "
+                    f"({actual_dimension}) or switch to a model that returns {configured_dimension} dimensions"
+                ),
+            )
+
+        detail = f"{provider}/{model} (live OK, dim={actual_dimension})"
+        if configured_dimension is not None:
+            detail = f"{provider}/{model} (live OK, dim={actual_dimension} matches config)"
+        return True, detail, None
+    except Exception as exc:
+        return (
+            False,
+            f"{provider}/{model} (live validation failed: {type(exc).__name__})",
+            _format_live_embedding_fix(provider, dense, exc),
+        )
+    finally:
+        if embedder is not None:
+            close = getattr(embedder, "close", None)
+            if callable(close):
+                close()
 
 
 def check_config() -> tuple[bool, str, Optional[str]]:
@@ -142,7 +236,7 @@ def check_agfs() -> tuple[bool, str, Optional[str]]:
         )
 
 
-def check_embedding() -> tuple[bool, str, Optional[str]]:
+def check_embedding(live: bool = False) -> tuple[bool, str, Optional[str]]:
     """Load embedding config and verify provider connectivity."""
     config_path = _find_config()
     if config_path is None:
@@ -158,10 +252,7 @@ def check_embedding() -> tuple[bool, str, Optional[str]]:
     model = dense.get("model", "bge-small-zh-v1.5-f16")
 
     if provider == "local":
-        from openviking.models.embedder.local_embedders import (
-            get_local_model_cache_path,
-            get_local_model_spec,
-        )
+        get_local_model_cache_path, get_local_model_spec = _get_local_embedding_helpers()
 
         try:
             get_local_model_spec(model)
@@ -197,21 +288,29 @@ def check_embedding() -> tuple[bool, str, Optional[str]]:
             return True, f"{provider}/{model} ({cached_file})", None
         return (
             True,
-            f"{provider}/{model} (will auto-download during startup initialization)",
+            (
+                f"{provider}/{model} "
+                "(will auto-download during startup initialization)"
+            ),
             None,
         )
 
     # Ollama doesn't need an API key
     if provider == "ollama":
-        return True, f"{provider}/{model}", None
+        if not live:
+            return True, f"{provider}/{model}", None
+        return _run_live_embedding_validation(provider, model, dense)
 
     api_key = dense.get("api_key", "")
-    if not api_key or api_key.startswith("{"):
+    if _is_placeholder_secret(api_key):
         return (
             False,
             f"{provider}/{model} (no API key)",
             "Set embedding.dense.api_key in ov.conf",
         )
+
+    if live:
+        return _run_live_embedding_validation(provider, model, dense)
 
     return True, f"{provider}/{model}", None
 
@@ -321,24 +420,34 @@ _CHECKS = [
     ("Python", check_python),
     ("Native Engine", check_native_engine),
     ("AGFS", check_agfs),
-    ("Embedding", check_embedding),
     ("VLM", check_vlm),
     ("Ollama", check_ollama),
     ("Disk", check_disk),
 ]
 
 
-def run_doctor() -> int:
+def run_doctor(*, live_embedding: bool = False) -> int:
     """Run all diagnostic checks and print a formatted report.
 
     Returns 0 if all checks pass, 1 otherwise.
     """
     print("\nOpenViking Doctor\n")
 
-    failed = 0
-    max_label = max(len(label) for label, _ in _CHECKS)
+    checks = [
+        ("Config", check_config),
+        ("Python", check_python),
+        ("Native Engine", check_native_engine),
+        ("AGFS", check_agfs),
+        ("Embedding", lambda: check_embedding(live=live_embedding)),
+        ("VLM", check_vlm),
+        ("Ollama", check_ollama),
+        ("Disk", check_disk),
+    ]
 
-    for label, check_fn in _CHECKS:
+    failed = 0
+    max_label = max(len(label) for label, _ in checks)
+
+    for label, check_fn in checks:
         try:
             ok, detail, fix = check_fn()
         except Exception as exc:
@@ -365,6 +474,29 @@ def run_doctor() -> int:
     return 0
 
 
-def main() -> int:
+def _normalize_argv(argv: Optional[list[str]]) -> list[str]:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if args and args[0] == "doctor":
+        return args[1:]
+    return args
+
+
+def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="openviking-server doctor")
+    parser.add_argument("--config", help="Path to ov.conf")
+    parser.add_argument(
+        "--live",
+        "--live-embedding",
+        dest="live_embedding",
+        action="store_true",
+        help="Perform a small live embedding validation for endpoint/model checks",
+    )
+    return parser.parse_args(_normalize_argv(argv))
+
+
+def main(argv: Optional[list[str]] = None) -> int:
     """Entry point for ``openviking-server doctor``."""
-    return run_doctor()
+    args = _parse_args(argv)
+    if args.config:
+        os.environ[OPENVIKING_CONFIG_ENV] = args.config
+    return run_doctor(live_embedding=args.live_embedding)

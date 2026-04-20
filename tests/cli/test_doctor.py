@@ -19,6 +19,7 @@ from openviking_cli.doctor import (
     check_ollama,
     check_python,
     check_vlm,
+    main as doctor_main,
     run_doctor,
 )
 
@@ -139,16 +140,51 @@ class TestCheckAgfs:
 
 
 class TestCheckEmbedding:
+    class _FakeEmbedResult:
+        def __init__(self, vector: list[float]):
+            self.dense_vector = vector
+
+    class _FakeDenseEmbedder:
+        def __init__(self, vector: list[float]):
+            self.vector = vector
+            self.closed = False
+
+        def embed(self, text: str, is_query: bool = False):
+            return TestCheckEmbedding._FakeEmbedResult(self.vector)
+
+        def close(self):
+            self.closed = True
+
+    @staticmethod
+    def _local_helpers(model_path: Path):
+        def get_local_model_cache_path(_model: str, _cache_dir: str) -> Path:
+            return model_path
+
+        def get_local_model_spec(model: str):
+            return {"model": model}
+
+        return get_local_model_cache_path, get_local_model_spec
+
     def test_fail_local_default_when_optional_dependency_missing(self, tmp_path: Path):
         config = tmp_path / "ov.conf"
         config.write_text(json.dumps({}))
+        real_import = __import__
+
+        def import_side_effect(name):
+            if name == "llama_cpp":
+                raise ImportError("No module named 'llama_cpp'")
+            return real_import(name)
 
         with patch("openviking_cli.doctor._find_config", return_value=config):
             with patch(
-                "openviking_cli.doctor.importlib.import_module",
-                side_effect=ImportError("No module named 'llama_cpp'"),
+                "openviking_cli.doctor._get_local_embedding_helpers",
+                return_value=self._local_helpers(tmp_path / "unused.gguf"),
             ):
-                ok, detail, fix = check_embedding()
+                with patch(
+                    "openviking_cli.doctor.importlib.import_module",
+                    side_effect=import_side_effect,
+                ):
+                    ok, detail, fix = check_embedding()
 
         assert not ok
         assert "missing llama-cpp-python" in detail
@@ -164,8 +200,8 @@ class TestCheckEmbedding:
 
         with patch("openviking_cli.doctor._find_config", return_value=config):
             with patch(
-                "openviking.models.embedder.local_embedders.get_local_model_cache_path",
-                return_value=cached_model,
+                "openviking_cli.doctor._get_local_embedding_helpers",
+                return_value=self._local_helpers(cached_model),
             ):
                 with patch.object(Path, "exists", autospec=True, return_value=True):
                     with patch(
@@ -186,12 +222,18 @@ class TestCheckEmbedding:
         real_import = __import__
 
         with patch("openviking_cli.doctor._find_config", return_value=config):
-            with patch.object(Path, "exists", autospec=True, return_value=False):
-                with patch(
-                    "openviking_cli.doctor.importlib.import_module",
-                    side_effect=lambda name: object() if name == "llama_cpp" else real_import(name),
-                ):
-                    ok, detail, fix = check_embedding()
+            with patch(
+                "openviking_cli.doctor._get_local_embedding_helpers",
+                return_value=self._local_helpers(tmp_path / "missing.gguf"),
+            ):
+                with patch.object(Path, "exists", autospec=True, return_value=False):
+                    with patch(
+                        "openviking_cli.doctor.importlib.import_module",
+                        side_effect=lambda name: object()
+                        if name == "llama_cpp"
+                        else real_import(name),
+                    ):
+                        ok, detail, fix = check_embedding()
 
         assert ok
         assert "startup initialization" in detail
@@ -213,11 +255,138 @@ class TestCheckEmbedding:
         )
 
         with patch("openviking_cli.doctor._find_config", return_value=config):
-            ok, detail, fix = check_embedding()
+            with patch(
+                "openviking_cli.doctor._get_local_embedding_helpers",
+                return_value=(
+                    lambda _model, _cache_dir: tmp_path / "unused.gguf",
+                    lambda _model: (_ for _ in ()).throw(
+                        ValueError("Unknown local embedding model: unknown-local-model")
+                    ),
+                ),
+            ):
+                ok, detail, fix = check_embedding()
 
         assert not ok
         assert "unsupported local model" in detail
         assert "Unknown local embedding model" in fix
+
+    def test_live_remote_validation_passes_and_matches_dimension(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps(
+                {
+                    "embedding": {
+                        "dense": {
+                            "provider": "openai",
+                            "model": "text-embedding-3-small",
+                            "api_key": "sk-test123",
+                            "dimension": 3,
+                        }
+                    }
+                }
+            )
+        )
+        fake_embedder = self._FakeDenseEmbedder([0.1, 0.2, 0.3])
+
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            with patch(
+                "openviking_cli.doctor._build_dense_embedder_for_live_validation",
+                return_value=fake_embedder,
+            ):
+                ok, detail, fix = check_embedding(live=True)
+
+        assert ok
+        assert "live OK" in detail
+        assert "matches config" in detail
+        assert fix is None
+        assert fake_embedder.closed
+
+    def test_live_remote_validation_fails_on_dimension_mismatch(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps(
+                {
+                    "embedding": {
+                        "dense": {
+                            "provider": "openai",
+                            "model": "text-embedding-3-small",
+                            "api_key": "sk-test123",
+                            "dimension": 5,
+                        }
+                    }
+                }
+            )
+        )
+
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            with patch(
+                "openviking_cli.doctor._build_dense_embedder_for_live_validation",
+                return_value=self._FakeDenseEmbedder([0.1, 0.2, 0.3]),
+            ):
+                ok, detail, fix = check_embedding(live=True)
+
+        assert not ok
+        assert "live dimension mismatch" in detail
+        assert "Update embedding.dense.dimension" in fix
+
+    def test_live_remote_validation_surfaces_actionable_provider_error(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps(
+                {
+                    "embedding": {
+                        "dense": {
+                            "provider": "openai",
+                            "model": "text-embedding-3-small",
+                            "api_key": "sk-test123",
+                            "api_base": "https://example.invalid/v1",
+                        }
+                    }
+                }
+            )
+        )
+
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            with patch(
+                "openviking_cli.doctor._build_dense_embedder_for_live_validation",
+                side_effect=RuntimeError("401 unauthorized"),
+            ):
+                ok, detail, fix = check_embedding(live=True)
+
+        assert not ok
+        assert "live validation failed" in detail
+        assert "embedding.dense.api_base" in fix
+        assert "401 unauthorized" in fix
+
+    def test_live_local_validation_keeps_static_local_checks(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(json.dumps({}))
+        cached_model = (
+            Path.home() / ".cache" / "openviking" / "models" / "bge-small-zh-v1.5-f16.gguf"
+        )
+        real_import = __import__
+
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            with patch(
+                "openviking_cli.doctor._get_local_embedding_helpers",
+                return_value=self._local_helpers(cached_model),
+            ):
+                with patch.object(Path, "exists", autospec=True, return_value=True):
+                    with patch(
+                        "openviking_cli.doctor.importlib.import_module",
+                        side_effect=lambda name: object()
+                        if name == "llama_cpp"
+                        else real_import(name),
+                    ):
+                        with patch(
+                            "openviking_cli.doctor._build_dense_embedder_for_live_validation"
+                        ) as live_builder:
+                            ok, detail, fix = check_embedding(live=True)
+
+        assert ok
+        assert "local/bge-small-zh-v1.5-f16" in detail
+        assert fix is None
+        live_builder.assert_not_called()
 
     def test_pass_with_api_key(self, tmp_path: Path):
         config = tmp_path / "ov.conf"
@@ -447,6 +616,20 @@ class TestRunDoctor:
         assert code == 1
         captured = capsys.readouterr()
         assert "FAIL" in captured.out
+
+
+class TestDoctorMain:
+    def test_main_parses_live_and_config_flags(self, tmp_path: Path):
+        config = tmp_path / "doctor.conf"
+        config.write_text(json.dumps({"embedding": {"dense": {}}}))
+
+        with patch("openviking_cli.doctor.run_doctor", return_value=0) as run:
+            with patch.dict(os.environ, {}, clear=False):
+                exit_code = doctor_main(["doctor", "--config", str(config), "--live"])
+                assert os.environ["OPENVIKING_CONFIG_FILE"] == str(config)
+
+        assert exit_code == 0
+        run.assert_called_once_with(live_embedding=True)
 
 
 def _import_fail(blocked_name: str):
