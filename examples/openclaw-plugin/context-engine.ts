@@ -1184,7 +1184,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           });
         }
 
-        const { messages: compressedMessages, stats: compressionStats } = compressToolResults(
+        const { messages: compressedMessages, stats: compressionStats } = await compressToolResults(
           sanitized,
           cfg,
         );

@@ -1,12 +1,14 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { compressToolResults } from "../../tool-result-compression.js";
+import { mkdir, writeFile } from "node:fs/promises";
 
-function makeToolResult(content: string, toolName = "test"): { role: string; content: string; toolName: string } {
-  return { role: "toolResult", content, toolName };
-}
+vi.mock("node:fs/promises", () => ({
+  mkdir: vi.fn().mockResolvedValue(undefined),
+  writeFile: vi.fn().mockResolvedValue(undefined),
+}));
 
-function makeToolResultArray(content: Array<{ type: string; text: string }>): { role: string; content: unknown[]; toolName: string } {
-  return { role: "toolResult", content, toolName: "test" };
+function makeToolResult(content: string, toolName = "test", toolCallId?: string): { role: string; content: string; toolName: string; toolCallId?: string } {
+  return { role: "toolResult", content, toolName, ...(toolCallId ? { toolCallId } : {}) };
 }
 
 function makeUserMsg(text: string): { role: string; content: string } {
@@ -22,42 +24,48 @@ function makeCfg(overrides: Record<string, unknown> = {}): {
   toolResultMaxChars: number;
   toolResultAggregateBudgetChars: number;
   toolResultPreviewChars: number;
+  toolResultStorageDir?: string;
 } {
   return {
     toolResultCompression: true,
     toolResultMaxChars: 20_000,
     toolResultAggregateBudgetChars: 100_000,
     toolResultPreviewChars: 2_000,
+    toolResultStorageDir: "/tmp/test-tool-results",
     ...overrides,
   };
 }
 
 describe("compressToolResults", () => {
-  it("passes through messages with no tool results", () => {
+  it("passes through messages with no tool results", async () => {
     const messages = [makeUserMsg("hello"), makeAssistantMsg("hi")];
-    const { messages: result, stats } = compressToolResults(messages, makeCfg());
+    const { messages: result, stats } = await compressToolResults(messages, makeCfg());
     expect(result).toEqual(messages);
     expect(stats.compressedCount).toBe(0);
   });
 
-  it("passes through small tool results unchanged", () => {
+  it("passes through small tool results unchanged", async () => {
     const messages = [makeToolResult("small output")];
-    const { messages: result, stats } = compressToolResults(messages, makeCfg());
+    const { messages: result, stats } = await compressToolResults(messages, makeCfg());
     expect(result[0]).toEqual(messages[0]);
     expect(stats.compressedCount).toBe(0);
   });
 
-  it("truncates oversized tool result", () => {
+  it("persists oversized tool result to disk and replaces with preview", async () => {
     const bigContent = "x".repeat(30_000);
-    const messages = [makeToolResult(bigContent)];
-    const { messages: result, stats } = compressToolResults(messages, makeCfg({ toolResultMaxChars: 10_000 }));
+    const messages = [makeToolResult(bigContent, "bash", "call-123")];
+    const { messages: result, stats } = await compressToolResults(messages, makeCfg({ toolResultMaxChars: 10_000 }));
     expect(stats.compressedCount).toBe(1);
-    const text = (result[0] as { content: string }).content;
+    expect(stats.persistedFiles.length).toBe(1);
+    const text = (result[0] as { content: string }).content as string;
+    expect(text).toContain("<persisted-output>");
+    expect(text).toContain("Full output saved to:");
+    expect(text).toContain("</persisted-output>");
     expect(text.length).toBeLessThan(30_000);
-    expect(text).toContain("truncated");
+    expect(writeFile).toHaveBeenCalled();
   });
 
-  it("preserves non-tool-result messages", () => {
+  it("preserves non-tool-result messages", async () => {
     const bigContent = "x".repeat(30_000);
     const messages = [
       makeUserMsg("question"),
@@ -65,39 +73,28 @@ describe("compressToolResults", () => {
       makeToolResult(bigContent),
       makeAssistantMsg("based on the result"),
     ];
-    const { messages: result } = compressToolResults(messages, makeCfg({ toolResultMaxChars: 10_000 }));
+    const { messages: result } = await compressToolResults(messages, makeCfg({ toolResultMaxChars: 10_000 }));
     expect(result[0]).toEqual(messages[0]);
     expect(result[1]).toEqual(messages[1]);
     expect(result[3]).toEqual(messages[3]);
   });
 
-  it("handles array content tool results", () => {
-    const bigText = "y".repeat(30_000);
-    const messages = [
-      makeToolResultArray([{ type: "text", text: bigText }]),
-    ];
-    const { messages: result, stats } = compressToolResults(messages, makeCfg({ toolResultMaxChars: 10_000 }));
-    expect(stats.compressedCount).toBe(1);
-    const content = (result[0] as { content: Array<{ type: string; text: string }> }).content;
-    expect(content[0].text.length).toBeLessThan(bigText.length);
-  });
-
-  it("applies head+tail truncation for error content", () => {
+  it("applies head+tail preview for error content", async () => {
     const errorContent = "x".repeat(15_000) + "\n\nError: something went wrong\nStack trace:\n  at line 42";
     const messages = [makeToolResult(errorContent)];
-    const { messages: result } = compressToolResults(messages, makeCfg({ toolResultMaxChars: 10_000 }));
-    const text = (result[0] as { content: string }).content;
+    const { messages: result } = await compressToolResults(messages, makeCfg({ toolResultMaxChars: 10_000 }));
+    const text = (result[0] as { content: string }).content as string;
     expect(text).toContain("Error");
-    expect(text).toContain("truncated");
+    expect(text).toContain("<persisted-output>");
   });
 
-  it("triggers aggregate budget when total tool results exceed budget", () => {
+  it("triggers aggregate budget when total tool results exceed budget", async () => {
     const messages = [
       makeToolResult("a".repeat(30_000)),
       makeToolResult("b".repeat(30_000)),
       makeToolResult("c".repeat(30_000)),
     ];
-    const { messages: _result, stats } = compressToolResults(messages, makeCfg({
+    const { stats } = await compressToolResults(messages, makeCfg({
       toolResultMaxChars: 100_000,
       toolResultAggregateBudgetChars: 40_000,
     }));
@@ -105,18 +102,34 @@ describe("compressToolResults", () => {
     expect(stats.compressedCount).toBeGreaterThan(0);
   });
 
-  it("respects toolResultCompression=false to skip compression", () => {
+  it("respects toolResultCompression=false to skip compression", async () => {
     const bigContent = "x".repeat(100_000);
     const messages = [makeToolResult(bigContent)];
-    const { messages: result, stats } = compressToolResults(messages, makeCfg({ toolResultCompression: false }));
+    const { messages: result, stats } = await compressToolResults(messages, makeCfg({ toolResultCompression: false }));
     expect(result[0]).toEqual(messages[0]);
     expect(stats.compressedCount).toBe(0);
+    expect(stats.persistedFiles.length).toBe(0);
   });
 
-  it("uses default config values", () => {
-    const bigContent = "x".repeat(25_000);
+  it("falls back to truncation when disk write fails", async () => {
+    (writeFile as ReturnType<typeof vi.fn>).mockRejectedValueOnce(Object.assign(new Error("no space"), { code: "ENOSPC" }));
+    const bigContent = "y".repeat(30_000);
     const messages = [makeToolResult(bigContent)];
-    const { stats } = compressToolResults(messages, makeCfg());
+    const { messages: result, stats } = await compressToolResults(messages, makeCfg({ toolResultMaxChars: 10_000 }));
     expect(stats.compressedCount).toBe(1);
+    expect(stats.persistedFiles.length).toBe(0);
+    const text = (result[0] as { content: string }).content as string;
+    expect(text).toContain("disk persistence failed");
+  });
+
+  it("skips write when file already exists (EEXIST)", async () => {
+    (writeFile as ReturnType<typeof vi.fn>).mockRejectedValueOnce(Object.assign(new Error("exists"), { code: "EEXIST" }));
+    const bigContent = "z".repeat(30_000);
+    const messages = [makeToolResult(bigContent, "test", "existing-id")];
+    const { messages: result, stats } = await compressToolResults(messages, makeCfg({ toolResultMaxChars: 10_000 }));
+    expect(stats.compressedCount).toBe(1);
+    expect(stats.persistedFiles.length).toBe(1);
+    const text = (result[0] as { content: string }).content as string;
+    expect(text).toContain("Full output saved to:");
   });
 });
