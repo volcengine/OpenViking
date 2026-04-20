@@ -247,6 +247,9 @@ class FeishuParser(BaseParser):
         Returns:
             (doc_type, token) e.g. ("docx", "doxcnABC123")
         """
+        if not _is_allowed_feishu_url(url):
+            raise ValueError(f"Feishu host not allowed: {url}")
+
         parsed = urlparse(url)
         path_parts = [p for p in parsed.path.split("/") if p]
         if len(path_parts) < 2:

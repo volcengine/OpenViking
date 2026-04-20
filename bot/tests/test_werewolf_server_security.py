@@ -49,3 +49,25 @@ def test_conversation_endpoint_hides_internal_exception_details(tmp_path):
     assert response.status_code == 500
     assert response.json() == {"error": "Failed to read conversation"}
     assert "secret stack detail" not in response.text
+
+
+def test_openviking_file_rejects_path_traversal(tmp_path):
+    workspace = tmp_path / "level1" / "level2" / "workspace"
+    (workspace / "viking" / "default").mkdir(parents=True, exist_ok=True)
+    secret_file = workspace.parent / "secret.txt"
+    secret_file.write_text("TOPSECRET", encoding="utf-8")
+
+    state = GameState(
+        game_id="test-game",
+        vikingbot_url="http://127.0.0.1:18790",
+        config_path=tmp_path / "ov.conf",
+        config={"storage": {"workspace": str(workspace)}},
+        storage_path=workspace,
+    )
+    client = TestClient(create_fastapi_app(state))
+
+    response = client.get("/api/openviking/file", params={"path": "../../../secret.txt"})
+
+    assert response.status_code == 404
+    assert response.json() == {"error": "File not found"}
+    assert "TOPSECRET" not in response.text

@@ -1850,8 +1850,14 @@ def create_fastapi_app(state: GameState) -> FastAPI:
 
         Path format: "agent/subpath/file.md" or "user/subpath/file.md"
         """
-        viking_path = get_viking_path(state.config)
-        file_path = viking_path / "default" / path
+        default_root = (get_viking_path(state.config) / "default").resolve()
+        try:
+            file_path = (default_root / path).resolve()
+        except OSError:
+            return JSONResponse(content={"error": "File not found"}, status_code=404)
+
+        if not file_path.is_relative_to(default_root):
+            return JSONResponse(content={"error": "File not found"}, status_code=404)
 
         if not file_path.exists():
             return JSONResponse(content={"error": "File not found"}, status_code=404)
