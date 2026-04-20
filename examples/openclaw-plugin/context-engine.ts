@@ -18,6 +18,7 @@ import {
   toJsonLog,
 } from "./memory-ranking.js";
 import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
+import { compressToolResults } from "./tool-result-compression.js";
 
 type AgentMessage = {
   role?: string;
@@ -1183,7 +1184,13 @@ export function createMemoryOpenVikingContextEngine(params: {
           });
         }
 
-        const assembledTokens = roughEstimate(sanitized) + instruction.tokens;
+        const { messages: compressedMessages, stats: compressionStats } = compressToolResults(
+          sanitized,
+          cfg,
+        );
+        const finalMessages = compressionStats.compressedCount > 0 ? compressedMessages : sanitized;
+
+        const assembledTokens = roughEstimate(finalMessages) + instruction.tokens;
         const tokensSaved = originalTokens - assembledTokens;
         const savingPct = originalTokens > 0 ? Math.round((tokensSaved / originalTokens) * 100) : 0;
 
@@ -1191,7 +1198,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           passthrough: false,
           archiveCount: preAbstracts.length,
           activeCount,
-          outputMessagesCount: sanitized.length,
+          outputMessagesCount: finalMessages.length,
           inputTokenEstimate: originalTokens,
           estimatedTokens: assembledTokens,
           tokensSaved,
@@ -1203,11 +1210,14 @@ export function createMemoryOpenVikingContextEngine(params: {
           reservedBudget: budgets.reserved,
           senderIdFound: sender.found,
           senderId: sender.senderId ?? null,
-          messages: messageDigest(sanitized),
+          toolResultCompression: compressionStats.compressedCount > 0
+            ? { compressedCount: compressionStats.compressedCount, originalChars: compressionStats.totalOriginalChars, compressedChars: compressionStats.totalCompressedChars, aggregateBudgetTriggered: compressionStats.aggregateBudgetTriggered }
+            : undefined,
+          messages: messageDigest(finalMessages),
         });
 
         return {
-          messages: sanitized,
+          messages: finalMessages,
           estimatedTokens: assembledTokens,
           ...(instruction.text ? { systemPromptAddition: instruction.text } : {}),
         };

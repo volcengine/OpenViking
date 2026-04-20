@@ -53,6 +53,14 @@ export type MemoryOpenVikingConfig = {
   emitStandardDiagnostics?: boolean;
   /** When true, log tenant routing for semantic find and session writes (messages/commit) to the plugin logger. */
   logFindRequests?: boolean;
+  /** When true (default), compress oversized tool results during assemble. */
+  toolResultCompression?: boolean;
+  /** Maximum characters per individual tool result before truncation. Default: 20000 */
+  toolResultMaxChars?: number;
+  /** Maximum aggregate characters for all tool results in one assembled context. Default: 100000 */
+  toolResultAggregateBudgetChars?: number;
+  /** Preview characters to keep when truncating a tool result. Default: 2000 */
+  toolResultPreviewChars?: number;
 };
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:1933";
@@ -70,6 +78,13 @@ const DEFAULT_COMMIT_KEEP_RECENT_COUNT = 10;
 const DEFAULT_BYPASS_SESSION_PATTERNS: string[] = [];
 const DEFAULT_EMIT_STANDARD_DIAGNOSTICS = false;
 const DEFAULT_AGENT_PREFIX = "";
+
+const DEFAULT_TOOL_RESULT_MAX_CHARS = 20_000;
+const DEFAULT_TOOL_RESULT_AGGREGATE_BUDGET_CHARS = 100_000;
+const DEFAULT_TOOL_RESULT_PREVIEW_CHARS = 2_000;
+
+const DEFAULT_AGENT_ID = "default";
+const DEFAULT_SERVER_AUTH_MODE = "api_key";
 
 function resolveAgentPrefix(configured: unknown): string {
   if (typeof configured === "string" && configured.trim()) {
@@ -192,6 +207,10 @@ export const memoryOpenVikingConfigSchema = {
         "ingestReplyAssistIgnoreSessionPatterns",
         "emitStandardDiagnostics",
         "logFindRequests",
+        "toolResultCompression",
+        "toolResultMaxChars",
+        "toolResultAggregateBudgetChars",
+        "toolResultPreviewChars",
       ],
       "openviking config",
     );
@@ -323,6 +342,19 @@ export const memoryOpenVikingConfigSchema = {
         cfg.logFindRequests === true ||
         envFlag("OPENVIKING_LOG_ROUTING") ||
         envFlag("OPENVIKING_DEBUG"),
+      toolResultCompression: cfg.toolResultCompression !== false,
+      toolResultMaxChars: Math.max(
+        2_000,
+        Math.floor(toNumber(cfg.toolResultMaxChars, DEFAULT_TOOL_RESULT_MAX_CHARS)),
+      ),
+      toolResultAggregateBudgetChars: Math.max(
+        20_000,
+        Math.floor(toNumber(cfg.toolResultAggregateBudgetChars, DEFAULT_TOOL_RESULT_AGGREGATE_BUDGET_CHARS)),
+      ),
+      toolResultPreviewChars: Math.max(
+        200,
+        Math.floor(toNumber(cfg.toolResultPreviewChars, DEFAULT_TOOL_RESULT_PREVIEW_CHARS)),
+      ),
     };
   },
   uiHints: {
