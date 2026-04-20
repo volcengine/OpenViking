@@ -145,3 +145,9 @@ def test_observer_endpoints_reject_user_keys_but_allow_admin_and_root():
 
         root_resp = client.get(path, headers={"X-API-Key": ROOT_KEY})
         assert root_resp.status_code == 200, f"{path} should allow ROOT keys"
+
+    admin_system = client.get("/api/v1/observer/system", headers={"X-API-Key": ADMIN_KEY})
+    assert (
+        admin_system.json()["result"]["components"]["vikingdb"]["status"]
+        == "global vikingdb stats for admin_user"
+    )
