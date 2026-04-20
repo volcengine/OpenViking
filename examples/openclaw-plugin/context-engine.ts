@@ -1225,7 +1225,13 @@ export function createMemoryOpenVikingContextEngine(params: {
 
         for (const group of groups) {
           await withTimeout(
-            client.addSessionMessage(OVSessionId, group.role, group.texts.join("\n"), agentId, createdAt),
+            client.addSessionMessage(
+              OVSessionId,
+              group.role,
+              [{ type: "text", text: group.texts.join("\n") }],
+              agentId,
+              createdAt,
+            ),
             captureTimeoutMs,
             "openviking: afterTurn addSessionMessage timeout",
           );

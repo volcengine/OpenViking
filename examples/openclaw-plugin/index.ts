@@ -1297,7 +1297,7 @@ const contextEnginePlugin = {
               usedTempSession = true;
             }
             sessionId = openClawSessionToOvStorageId(sessionId, ctx.sessionKey);
-            await c.addSessionMessage(sessionId, role, text, storeAgentId);
+            await c.addSessionMessage(sessionId, role, [{ type: "text", text }], storeAgentId);
             const commitResult = await c.commitSession(sessionId, { wait: true, agentId: storeAgentId });
             const memoriesCount = totalCommitMemories(commitResult);
             if (commitResult.status === "failed") {
