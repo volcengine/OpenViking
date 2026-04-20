@@ -19,6 +19,7 @@ def test_consolidate_request_defaults():
     assert body.uri == "viking://agent/x/memories/patterns/"
     assert body.dry_run is False
     assert body.wait is True
+    assert body.canaries is None
 
 
 def test_consolidate_request_overrides():
@@ -29,6 +30,21 @@ def test_consolidate_request_overrides():
     )
     assert body.dry_run is True
     assert body.wait is False
+
+
+def test_consolidate_request_accepts_canaries_with_top_n():
+    from openviking.server.routers.maintenance import CanarySpec
+
+    body = ConsolidateRequest(
+        uri="viking://agent/x/memories/patterns/",
+        canaries=[
+            CanarySpec(query="strict", expected_top_uri="viking://x/a.md", top_n=1),
+            CanarySpec(query="loose", expected_top_uri="viking://x/b.md"),
+        ],
+    )
+    assert body.canaries is not None
+    assert body.canaries[0].top_n == 1
+    assert body.canaries[1].top_n == 5
 
 
 def test_consolidation_payload_serializes_dataclass():

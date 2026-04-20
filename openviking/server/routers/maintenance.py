@@ -6,8 +6,9 @@ import asyncio
 from typing import List, Optional
 
 from fastapi import APIRouter, Body, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from openviking.maintenance.memory_consolidator import DEFAULT_CANARY_LIMIT
 from openviking.server.auth import (
     get_request_context,
     require_auth_root_or_admin,
@@ -172,10 +173,16 @@ CONSOLIDATE_TASK_TYPE = "memory_consolidation"
 
 
 class CanarySpec(BaseModel):
-    """One canary entry on the consolidate request."""
+    """One canary entry on the consolidate request.
+
+    top_n is the per-canary sensitivity knob. Set to 1 for strict
+    canaries that must remain at position 0 post-consolidation; larger
+    values allow the expected URI to live anywhere in top-N.
+    """
 
     query: str
     expected_top_uri: str
+    top_n: int = Field(default=DEFAULT_CANARY_LIMIT, ge=1)
 
 
 class ConsolidateRequest(BaseModel):
@@ -380,9 +387,20 @@ def _consolidation_payload(result) -> dict:
 
 
 def _canaries_from_request(specs):
-    """Translate request CanarySpec entries into Canary domain objects."""
+    """Translate request CanarySpec entries into Canary domain objects.
+
+    CanarySpec.top_n is already validated (ge=1) by Pydantic at the
+    HTTP boundary, so no defensive clamping needed here.
+    """
     if not specs:
         return None
     from openviking.maintenance import Canary
 
-    return [Canary(query=s.query, expected_top_uri=s.expected_top_uri) for s in specs]
+    return [
+        Canary(
+            query=s.query,
+            expected_top_uri=s.expected_top_uri,
+            top_n=s.top_n,
+        )
+        for s in specs
+    ]

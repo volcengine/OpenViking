@@ -60,16 +60,30 @@ DEFAULT_CANARY_LIMIT = 5
 
 @dataclass
 class Canary:
-    """User-defined recall canary: 'this query should still find this URI.'"""
+    """User-defined recall canary: 'this query should still find this URI.'
+
+    top_n is the per-canary sensitivity knob. A critical canary can set
+    top_n=1 to demand position 0; a broader canary can stay at the
+    default to only flag when the expected URI disappears from top-5
+    entirely. Acts as "strict vs loose" without introducing a separate
+    soft-regression concept.
+    """
 
     query: str
     expected_top_uri: str
+    top_n: int = DEFAULT_CANARY_LIMIT
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Canary":
+        raw_top_n = data.get("top_n", DEFAULT_CANARY_LIMIT)
+        try:
+            top_n = int(raw_top_n)
+        except (TypeError, ValueError):
+            top_n = DEFAULT_CANARY_LIMIT
         return cls(
             query=str(data.get("query", "")),
             expected_top_uri=str(data.get("expected_top_uri", "")),
+            top_n=max(1, top_n),
         )
 
 
@@ -79,6 +93,7 @@ class CanaryResult:
 
     query: str
     expected_top_uri: str
+    top_n: int = DEFAULT_CANARY_LIMIT
     found_top_uri: str = ""
     found_in_top_n: bool = False
     found_position: int = -1
@@ -580,9 +595,11 @@ class MemoryConsolidator:
         scope_uri: str,
         canaries: List[Canary],
         ctx: RequestContext,
-        limit: int = DEFAULT_CANARY_LIMIT,
     ) -> List[Dict[str, Any]]:
         """Run each canary query against the scope; record top-N hits.
+
+        Each canary uses its own top_n as the search limit, so strict
+        canaries (top_n=1) and loose canaries (top_n=5) can coexist.
 
         Returns a list of CanaryResult-as-dict entries suitable for
         embedding directly in the audit record.
@@ -592,9 +609,12 @@ class MemoryConsolidator:
             result = CanaryResult(
                 query=canary.query,
                 expected_top_uri=canary.expected_top_uri,
+                top_n=canary.top_n,
             )
             try:
-                hits = await self._search_top_uris(scope_uri, canary.query, ctx, limit)
+                hits = await self._search_top_uris(
+                    scope_uri, canary.query, ctx, canary.top_n
+                )
                 if hits:
                     result.found_top_uri = hits[0]
                     if canary.expected_top_uri in hits:
