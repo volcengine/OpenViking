@@ -59,15 +59,94 @@ pub fn create_router(state: AppState, enable_cors: bool) -> Router {
 mod tests {
     use super::*;
     use crate::core::MountableFS;
+    use crate::plugins::MemFSPlugin;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use serde_json::json;
     use std::sync::Arc;
+    use tower::util::ServiceExt;
 
     #[test]
     fn test_router_creation() {
         let state = AppState {
             fs: Arc::new(MountableFS::new()),
+            mount_api_key: String::new(),
         };
 
         let _router = create_router(state, true);
         // If this compiles and runs, the router is correctly configured
+    }
+
+    #[tokio::test]
+    async fn test_mount_routes_require_api_key_when_unconfigured() {
+        let fs = Arc::new(MountableFS::new());
+        fs.register_plugin(MemFSPlugin).await;
+        let state = AppState {
+            fs,
+            mount_api_key: String::new(),
+        };
+        let app = create_router(state, false);
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/v1/mount")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"plugin":"memfs","path":"/mem"}).to_string(),
+            ))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn test_mount_routes_accept_valid_api_key() {
+        let fs = Arc::new(MountableFS::new());
+        fs.register_plugin(MemFSPlugin).await;
+        let state = AppState {
+            fs,
+            mount_api_key: "secret-key".to_string(),
+        };
+        let app = create_router(state, false);
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/v1/mount")
+            .header("content-type", "application/json")
+            .header("X-API-Key", "secret-key")
+            .body(Body::from(
+                json!({"plugin":"memfs","path":"/mem"}).to_string(),
+            ))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_mount_routes_reject_invalid_api_key() {
+        let fs = Arc::new(MountableFS::new());
+        fs.register_plugin(MemFSPlugin).await;
+        let state = AppState {
+            fs,
+            mount_api_key: "secret-key".to_string(),
+        };
+        let app = create_router(state, false);
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/v1/mount")
+            .header("content-type", "application/json")
+            .header("X-API-Key", "wrong-key")
+            .body(Body::from(
+                json!({"plugin":"memfs","path":"/mem"}).to_string(),
+            ))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 }
