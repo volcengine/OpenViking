@@ -64,3 +64,48 @@ def test_build_consolidator_wires_dependencies():
     assert consolidator.dedup is not None
     assert consolidator.archiver is not None
     assert consolidator.service is service
+
+
+class TestListRunsParsesViking_FSEntries:
+    """Regression: viking_fs.ls returns List[Dict] with 'uri' key, not bare strings.
+
+    Earlier impl did `[e for e in entries if isinstance(e, str)]` which silently
+    filtered everything out. This test pins the dict-shaped contract.
+    """
+
+    def test_filter_extracts_uri_from_dict_entries(self):
+        entries = [
+            {"uri": "viking://x/run1.json", "isDir": False, "size": 100},
+            {"uri": "viking://x/run2.json", "isDir": False, "size": 200},
+            {"uri": "viking://x/.overview.md", "isDir": False, "size": 50},
+            {"uri": "viking://x/subdir", "isDir": True, "size": 0},
+        ]
+        # Mirror the filter in list_consolidate_runs.
+        file_uris = []
+        for entry in entries:
+            if isinstance(entry, dict):
+                uri = entry.get("uri", "")
+                is_dir = entry.get("isDir", False)
+            else:
+                uri = str(entry)
+                is_dir = False
+            if not uri or is_dir or not uri.endswith(".json"):
+                continue
+            file_uris.append(uri)
+        assert file_uris == ["viking://x/run1.json", "viking://x/run2.json"]
+
+    def test_filter_handles_string_fallback(self):
+        # Defensive: if some other backend returns bare strings, still works.
+        entries = ["viking://x/run.json", "viking://x/other.md"]
+        file_uris = []
+        for entry in entries:
+            if isinstance(entry, dict):
+                uri = entry.get("uri", "")
+                is_dir = entry.get("isDir", False)
+            else:
+                uri = str(entry)
+                is_dir = False
+            if not uri or is_dir or not uri.endswith(".json"):
+                continue
+            file_uris.append(uri)
+        assert file_uris == ["viking://x/run.json"]

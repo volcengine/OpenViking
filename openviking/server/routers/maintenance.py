@@ -318,14 +318,26 @@ async def list_consolidate_runs(
     except Exception:
         return Response(status="ok", result={"scope": scope, "runs": []})
 
-    files = [e for e in entries if isinstance(e, str) and e.endswith(".json")]
-    files.sort(reverse=True)
+    # viking_fs.ls returns List[Dict] with a 'uri' key per entry, not bare
+    # strings. Extract the URI and filter to .json audit files.
+    file_uris = []
+    for entry in entries:
+        if isinstance(entry, dict):
+            uri = entry.get("uri", "")
+            is_dir = entry.get("isDir", False)
+        else:
+            uri = str(entry)
+            is_dir = False
+        if not uri or is_dir or not uri.endswith(".json"):
+            continue
+        file_uris.append(uri)
+
+    file_uris.sort(reverse=True)
     capped_limit = min(max(0, limit), 100)
-    files = files[:capped_limit]
+    file_uris = file_uris[:capped_limit]
 
     runs = []
-    for fname in files:
-        run_uri = f"{audit_dir}/{fname}" if not fname.startswith("viking://") else fname
+    for run_uri in file_uris:
         try:
             body_text = await viking_fs.read(run_uri, ctx=_ctx)
             if isinstance(body_text, bytes):
