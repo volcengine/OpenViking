@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import secrets
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -353,6 +354,18 @@ def _check_gguf_model_cached(model_name: str, cache_dir: str | None = None) -> b
     return get_local_model_cache_path(model_name, cache_dir).exists()
 
 
+@dataclass(frozen=True)
+class RootAPIKeySelection:
+    value: str | None
+    generated: bool = False
+
+
+@dataclass(frozen=True)
+class BootstrapSmokeResult:
+    ok: bool
+    detail: str
+
+
 # ---------------------------------------------------------------------------
 # Config building
 # ---------------------------------------------------------------------------
@@ -448,6 +461,58 @@ def _build_cloud_config(
     }
 
 
+def _generate_root_api_key(num_bytes: int = 32) -> str:
+    """Generate a high-entropy root API key for server authentication."""
+    return f"ovk_{secrets.token_urlsafe(num_bytes)}"
+
+
+def _mask_secret(secret: str) -> str:
+    """Mask a secret for summary output without hiding its identity entirely."""
+    if len(secret) <= 12:
+        return "*" * len(secret)
+    return f"{secret[:6]}...{secret[-4:]}"
+
+
+def _with_root_api_key(config_dict: dict[str, Any], root_api_key: str | None) -> dict[str, Any]:
+    """Return a shallow-cloned config dict with ``server.root_api_key`` applied."""
+    if not root_api_key:
+        return config_dict
+
+    updated = dict(config_dict)
+    server_config = dict(updated.get("server") or {})
+    server_config["root_api_key"] = root_api_key
+    updated["server"] = server_config
+    return updated
+
+
+def _prompt_root_api_key_setup() -> RootAPIKeySelection:
+    """Prompt for optional API key bootstrap, defaulting to secure generation."""
+    choice = _prompt_choice(
+        "Server authentication:",
+        [
+            ("Generate secure root API key", "(recommended for shared or remote access)"),
+            ("Enter root API key manually", "(use an existing secret)"),
+            ("Skip for localhost-only dev mode", "(authentication disabled)"),
+        ],
+        default=1,
+    )
+
+    if choice == 1:
+        root_api_key = _generate_root_api_key()
+        print(f"\n  {_green('OK')} Generated root API key")
+        print(f"  {_yellow('Keep this key secret:')} {_bold(root_api_key)}")
+        return RootAPIKeySelection(value=root_api_key, generated=True)
+
+    if choice == 2:
+        while True:
+            root_api_key = _prompt_input("Root API Key").strip()
+            if root_api_key:
+                return RootAPIKeySelection(value=root_api_key, generated=False)
+            print(f"  {_red('Root API key cannot be empty.')}")
+
+    return RootAPIKeySelection(value=None, generated=False)
+
+
 # ---------------------------------------------------------------------------
 # Config I/O
 # ---------------------------------------------------------------------------
@@ -472,6 +537,39 @@ def _write_config(config_dict: dict[str, Any], config_path: Path) -> bool:
     except OSError as exc:
         print(f"  {_red(f'Failed to write config: {exc}')}")
         return False
+
+
+def _run_bootstrap_smoke(
+    config_path: Path,
+    *,
+    load_server_config_fn: Any | None = None,
+    validate_server_config_fn: Any | None = None,
+    config_singleton_cls: Any | None = None,
+) -> BootstrapSmokeResult:
+    """Exercise bootstrap config loading without starting the server."""
+    if load_server_config_fn is None or validate_server_config_fn is None or config_singleton_cls is None:
+        from openviking.server.config import load_server_config, validate_server_config
+        from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+
+        load_server_config_fn = load_server_config
+        validate_server_config_fn = validate_server_config
+        config_singleton_cls = OpenVikingConfigSingleton
+
+    reset_instance = getattr(config_singleton_cls, "reset_instance", None)
+
+    try:
+        if callable(reset_instance):
+            reset_instance()
+        server_config = load_server_config_fn(str(config_path))
+        validate_server_config_fn(server_config)
+        config_singleton_cls.initialize(config_path=str(config_path))
+        return BootstrapSmokeResult(ok=True, detail="bootstrap config load passed")
+    except (FileNotFoundError, RuntimeError, ValueError, SystemExit) as exc:
+        detail = str(exc).strip() or exc.__class__.__name__
+        return BootstrapSmokeResult(ok=False, detail=detail)
+    finally:
+        if callable(reset_instance):
+            reset_instance()
 
 
 # ---------------------------------------------------------------------------
@@ -865,10 +963,19 @@ def run_init() -> int:
         print("\n  Setup cancelled.\n")
         return 0
 
+    root_api_key = _prompt_root_api_key_setup()
+    config_dict = _with_root_api_key(config_dict, root_api_key.value)
+
     # Summary
     emb = config_dict.get("embedding", {}).get("dense", {})
     vlm = config_dict.get("vlm", {})
     ws = config_dict.get("storage", {}).get("workspace", _DEFAULT_WORKSPACE)
+    server_cfg = config_dict.get("server", {})
+    auth_summary = (
+        f"api_key / {_mask_secret(server_cfg['root_api_key'])}"
+        if server_cfg.get("root_api_key")
+        else "dev / localhost only"
+    )
 
     print(f"\n  {_bold('Summary:')}")
     print(
@@ -880,6 +987,7 @@ def run_init() -> int:
         f"{vlm.get('provider', '')} / {vlm.get('model', '')}" if vlm else _dim("(not configured)")
     )
     print(f"    VLM:        {vlm_summary}")
+    print(f"    Auth:       {auth_summary}")
     print(f"    Workspace:  {ws}")
     print(f"    Config:     {_DEFAULT_CONFIG_PATH}")
 
@@ -893,12 +1001,22 @@ def run_init() -> int:
 
     print(f"  {_green('OK')} Configuration written to {_DEFAULT_CONFIG_PATH}\n")
 
+    smoke = _run_bootstrap_smoke(_DEFAULT_CONFIG_PATH)
+    if smoke.ok:
+        print(f"  {_green('OK')} Bootstrap smoke passed ({smoke.detail})\n")
+    else:
+        print(f"  {_yellow('Warning:')} bootstrap smoke failed: {smoke.detail}")
+        print(f"  {_dim('Configuration was written, but bootstrap validation did not pass.')}\n")
+        return 1
+
     # Post-init tips
     print(f"  {_bold('Next steps:')}")
     if emb.get("provider") == "local":
         print(f"    Install runtime:   {_cyan(_PIP_LOCAL_EMBED)}")
     print(f"    Start the server:  {_cyan('openviking-server')}")
     print(f"    Validate setup:    {_cyan('openviking-server doctor')}")
+    if root_api_key.generated and root_api_key.value:
+        print(f"    Root API key:      {_cyan(_mask_secret(root_api_key.value))} (saved in ov.conf)")
     print()
 
     return 0

@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock, patch
 
+import openviking_cli.setup_wizard as setup_wizard
 from openviking_cli.setup_wizard import (
+    BootstrapSmokeResult,
     CLOUD_PROVIDERS,
     EMBEDDING_PRESETS,
     LOCAL_GGUF_PRESETS,
@@ -13,8 +15,11 @@ from openviking_cli.setup_wizard import (
     _build_cloud_config,
     _build_local_config,
     _build_ollama_config,
+    _generate_root_api_key,
     _get_recommended_indices,
     _is_llamacpp_installed,
+    _run_bootstrap_smoke,
+    _with_root_api_key,
     _write_config,
 )
 from openviking_cli.utils.ollama import (
@@ -152,6 +157,38 @@ class TestConfigBuilding:
                 assert config["embedding"]["dense"]["dimension"] > 0
 
 
+class TestRootAPIKeyHelpers:
+    def test_generate_root_api_key_uses_secure_prefix_and_entropy(self):
+        key1 = _generate_root_api_key()
+        key2 = _generate_root_api_key()
+
+        assert key1.startswith("ovk_")
+        assert len(key1) >= 32
+        assert key1 != key2
+
+    def test_with_root_api_key_adds_server_section_without_mutating_input(self):
+        config = {"storage": {"workspace": "/tmp/ov_test"}}
+
+        updated = _with_root_api_key(config, "ovk-test-root-key")
+
+        assert updated["server"]["root_api_key"] == "ovk-test-root-key"
+        assert "server" not in config
+
+    def test_with_root_api_key_preserves_existing_server_fields(self):
+        config = {
+            "storage": {"workspace": "/tmp/ov_test"},
+            "server": {"host": "0.0.0.0"},
+        }
+
+        updated = _with_root_api_key(config, "ovk-test-root-key")
+
+        assert updated["server"] == {
+            "host": "0.0.0.0",
+            "root_api_key": "ovk-test-root-key",
+        }
+        assert config["server"] == {"host": "0.0.0.0"}
+
+
 # ---------------------------------------------------------------------------
 # RAM-based recommendations
 # ---------------------------------------------------------------------------
@@ -210,6 +247,101 @@ class TestConfigWriting:
 
         assert _write_config(config, config_path) is True
         assert config_path.exists()
+
+
+class TestBootstrapSmoke:
+    def test_bootstrap_smoke_passes_with_mocked_loader_and_singleton(self, tmp_path):
+        config_path = tmp_path / "ov.conf"
+
+        class FakeSingleton:
+            reset_calls = 0
+            initialize_calls: list[str] = []
+
+            @classmethod
+            def reset_instance(cls):
+                cls.reset_calls += 1
+
+            @classmethod
+            def initialize(cls, config_path: str):
+                cls.initialize_calls.append(config_path)
+
+        load_server_config = MagicMock(return_value="server-config")
+        validate_server_config = MagicMock()
+
+        result = _run_bootstrap_smoke(
+            config_path,
+            load_server_config_fn=load_server_config,
+            validate_server_config_fn=validate_server_config,
+            config_singleton_cls=FakeSingleton,
+        )
+
+        assert result == BootstrapSmokeResult(ok=True, detail="bootstrap config load passed")
+        load_server_config.assert_called_once_with(str(config_path))
+        validate_server_config.assert_called_once_with("server-config")
+        assert FakeSingleton.initialize_calls == [str(config_path)]
+        assert FakeSingleton.reset_calls == 2
+
+    def test_bootstrap_smoke_reports_loader_failure(self, tmp_path):
+        config_path = tmp_path / "ov.conf"
+
+        class FakeSingleton:
+            reset_calls = 0
+
+            @classmethod
+            def reset_instance(cls):
+                cls.reset_calls += 1
+
+            @classmethod
+            def initialize(cls, config_path: str):
+                raise AssertionError("should not be called")
+
+        result = _run_bootstrap_smoke(
+            config_path,
+            load_server_config_fn=MagicMock(side_effect=ValueError("invalid ov.conf")),
+            validate_server_config_fn=MagicMock(),
+            config_singleton_cls=FakeSingleton,
+        )
+
+        assert result.ok is False
+        assert "invalid ov.conf" in result.detail
+        assert FakeSingleton.reset_calls == 2
+
+
+class TestRunInitWiring:
+    def test_run_init_generates_root_key_and_runs_bootstrap_smoke(self, tmp_path):
+        config_path = tmp_path / "ov.conf"
+        base_config = _build_ollama_config(
+            EMBEDDING_PRESETS[0],
+            VLM_PRESETS[0],
+            str(tmp_path / "data"),
+        )
+
+        with patch.object(setup_wizard, "_DEFAULT_CONFIG_PATH", config_path):
+            with patch.object(setup_wizard, "_prompt_choice", side_effect=[2, 1]):
+                with patch.object(setup_wizard, "_prompt_confirm", return_value=True):
+                    with patch.object(setup_wizard, "_wizard_ollama", return_value=base_config):
+                        with patch.object(
+                            setup_wizard,
+                            "_generate_root_api_key",
+                            return_value="ovk-generated-test-key",
+                        ):
+                            with patch.object(setup_wizard, "_write_config", return_value=True) as write_mock:
+                                with patch.object(
+                                    setup_wizard,
+                                    "_run_bootstrap_smoke",
+                                    return_value=BootstrapSmokeResult(
+                                        ok=True,
+                                        detail="bootstrap config load passed",
+                                    ),
+                                ) as smoke_mock:
+                                    exit_code = setup_wizard.run_init()
+
+        assert exit_code == 0
+        assert "server" not in base_config
+
+        written_config = write_mock.call_args.args[0]
+        assert written_config["server"]["root_api_key"] == "ovk-generated-test-key"
+        smoke_mock.assert_called_once_with(config_path)
 
 
 # ---------------------------------------------------------------------------
