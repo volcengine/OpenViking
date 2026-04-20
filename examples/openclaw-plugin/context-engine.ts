@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { DEFAULT_PHASE2_POLL_TIMEOUT_MS } from "./client.js";
-import type { OpenVikingClient, OVMessage } from "./client.js";
+import type { OpenVikingClient, OVMessage, SessionContextResult } from "./client.js";
 import type { MemoryOpenVikingConfig } from "./config.js";
 import {
   compileSessionPatterns,
@@ -211,6 +211,20 @@ function validTokenBudget(raw: unknown): number | undefined {
     return raw;
   }
   return undefined;
+}
+
+function preferredWorkingMemoryMarkdown(
+  ctx: Pick<SessionContextResult, "latest_archive_overview" | "working_memory"> | undefined,
+): string {
+  const markdown = ctx?.working_memory?.markdown;
+  if (typeof markdown === "string" && markdown.trim()) {
+    return markdown.trim();
+  }
+  const legacyOverview = ctx?.latest_archive_overview;
+  if (typeof legacyOverview === "string" && legacyOverview.trim()) {
+    return legacyOverview.trim();
+  }
+  return "";
 }
 
 /** OpenClaw session UUID (path-safe on Windows). */
@@ -820,6 +834,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         const routingRef = assembleParams.sessionId ?? sessionKey ?? OVSessionId;
         const agentId = resolveAgentId(routingRef, sessionKey, OVSessionId);
         const ctx = await client.getSessionContext(OVSessionId, tokenBudget, agentId);
+        const workingMemoryMarkdown = preferredWorkingMemoryMarkdown(ctx);
 
         const preAbstracts = ctx?.pre_archive_abstracts ?? [];
         const hasArchives = !!ctx?.latest_archive_overview || preAbstracts.length > 0;
@@ -837,7 +852,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         }
 
         const { sanitized, archive, session, budgets, instruction } = buildAssembledContext(
-          ctx.latest_archive_overview,
+          workingMemoryMarkdown,
           preAbstracts,
           ctx.messages,
           tokenBudget,
@@ -1218,14 +1233,13 @@ export function createMemoryOpenVikingContextEngine(params: {
         let ctx: Awaited<ReturnType<typeof client.getSessionContext>> | undefined;
         try {
           ctx = await client.getSessionContext(OVSessionId, tokenBudget, agentId);
+          const workingMemoryMarkdown = preferredWorkingMemoryMarkdown(ctx);
           // 打印完整的 getSessionContext 结果
           logger.info(
             `openviking: compact getSessionContext raw result for ${OVSessionId}: ` +
               JSON.stringify(ctx, null, 2),
           );
-          if (typeof ctx.latest_archive_overview === "string") {
-            summary = ctx.latest_archive_overview.trim();
-          }
+          summary = workingMemoryMarkdown;
           if (
             typeof ctx.estimatedTokens === "number" &&
             Number.isFinite(ctx.estimatedTokens)

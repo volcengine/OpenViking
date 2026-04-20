@@ -160,6 +160,40 @@ describe("context-engine assemble()", () => {
     });
   });
 
+  it("prefers working_memory.markdown over latest_archive_overview when both are present", async () => {
+    const { engine } = makeEngine({
+      latest_archive_overview: "# Session Summary\nLegacy overview",
+      working_memory: {
+        markdown: "# Session Summary\nPreferred working memory\n\n## Current Conversation Tail\n### User\nRecent tail",
+      },
+      pre_archive_abstracts: [],
+      messages: [],
+      estimatedTokens: 64,
+      stats: {
+        ...makeStats(),
+        totalArchives: 1,
+        includedArchives: 1,
+        archiveTokens: 64,
+      },
+    });
+
+    const result = await engine.assemble({
+      sessionId: "session-working-memory",
+      messages: [],
+      tokenBudget: 4096,
+    });
+
+    expect(result.messages[0]).toEqual({
+      role: "user",
+      content:
+        "[Session History Summary]\n# Session Summary\nPreferred working memory\n\n## Current Conversation Tail\n### User\nRecent tail",
+    });
+    expect(result.messages[0]).not.toEqual({
+      role: "user",
+      content: "[Session History Summary]\n# Session Summary\nLegacy overview",
+    });
+  });
+
   it("passes through live messages when the session matches bypassSessionPatterns", async () => {
     const { engine, client, getClient } = makeEngine(
       {

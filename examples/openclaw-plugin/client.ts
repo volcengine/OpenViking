@@ -92,8 +92,13 @@ export type PreArchiveAbstract = {
   abstract: string;
 };
 
+export type WorkingMemoryResult = {
+  markdown: string;
+};
+
 export type SessionContextResult = {
   latest_archive_overview: string;
+  working_memory?: WorkingMemoryResult;
   pre_archive_abstracts: PreArchiveAbstract[];
   messages: OVMessage[];
   estimatedTokens: number;
