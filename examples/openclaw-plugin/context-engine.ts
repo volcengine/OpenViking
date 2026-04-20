@@ -943,18 +943,23 @@ export function createMemoryOpenVikingContextEngine(params: {
             ? afterTurnParams.prePromptMessageCount
             : 0;
 
-        const { messages: extractedMessages, newCount } = extractNewTurnMessages(messages, start);
+        const {
+          messages: extractedMessages,
+          newCount,
+          effectiveStartIndex,
+        } = extractNewTurnMessages(messages, start);
 
         if (extractedMessages.length === 0) {
           diag("afterTurn_skip", OVSessionId, {
             reason: "no_new_turn_messages",
             totalMessages: messages.length,
             prePromptMessageCount: start,
+            captureStartIndex: effectiveStartIndex,
           });
           return;
         }
 
-        const turnMessages = messages.slice(start) as AgentMessage[];
+        const turnMessages = messages.slice(effectiveStartIndex) as AgentMessage[];
         const newMessages = turnMessages.filter((m: any) => {
           const r = (m as Record<string, unknown>).role as string;
           return r === "user" || r === "assistant";
@@ -966,6 +971,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           totalMessages: messages.length,
           newMessageCount: newCount,
           prePromptMessageCount: start,
+          captureStartIndex: effectiveStartIndex,
           newTurnTokens,
           messages: newMsgFull,
         });
@@ -974,6 +980,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           totalMessages: messages.length,
           newMessageCount: newCount,
           prePromptMessageCount: start,
+          captureStartIndex: effectiveStartIndex,
         }))) {
           return;
         }
@@ -984,11 +991,13 @@ export function createMemoryOpenVikingContextEngine(params: {
         for (const msg of extractedMessages) {
           const ovParts = msg.parts.map((part) => {
             if (part.type === "text") {
-              // 清理 relevant-memories 块
-              const cleaned = part.text
-                .replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>/gi, " ")
-                .replace(/\s+/g, " ")
-                .trim();
+              const cleaned =
+                msg.role === "user"
+                  ? part.text
+                      .replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>/gi, " ")
+                      .replace(/\s+/g, " ")
+                      .trim()
+                  : part.text;
               return { type: "text" as const, text: cleaned };
             } else {
               return {

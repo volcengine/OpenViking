@@ -381,6 +381,80 @@ export type ExtractedMessage = {
   }>;
 };
 
+function findEffectiveTurnStartIndex(messages: unknown[], startIndex: number): number {
+  const clampedStart = Math.max(0, Math.min(startIndex, messages.length));
+
+  let firstRelevantIndex = -1;
+  for (let i = clampedStart; i < messages.length; i += 1) {
+    const msg = messages[i] as Record<string, unknown>;
+    const role = typeof msg?.role === "string" ? msg.role : "";
+    if (role && role !== "system") {
+      firstRelevantIndex = i;
+      break;
+    }
+  }
+
+  if (firstRelevantIndex < 0) {
+    return clampedStart;
+  }
+
+  const firstRelevant = messages[firstRelevantIndex] as Record<string, unknown>;
+  const firstRole = typeof firstRelevant?.role === "string" ? firstRelevant.role : "";
+  if (firstRole !== "assistant" && firstRole !== "toolResult") {
+    return clampedStart;
+  }
+
+  for (let i = firstRelevantIndex - 1; i >= 0; i -= 1) {
+    const msg = messages[i] as Record<string, unknown>;
+    const role = typeof msg?.role === "string" ? msg.role : "";
+    if (!role || role === "system") {
+      continue;
+    }
+    if (role === "user") {
+      let earliestUserIndex = i;
+      for (let j = i - 1; j >= 0; j -= 1) {
+        const prev = messages[j] as Record<string, unknown>;
+        const prevRole = typeof prev?.role === "string" ? prev.role : "";
+        if (!prevRole || prevRole === "system") {
+          continue;
+        }
+        if (prevRole !== "user") {
+          break;
+        }
+        earliestUserIndex = j;
+      }
+      return earliestUserIndex;
+    }
+  }
+
+  return clampedStart;
+}
+
+function pushExtractedPart(
+  result: ExtractedMessage[],
+  role: "user" | "assistant",
+  part:
+    | {
+        type: "text";
+        text: string;
+      }
+    | {
+        type: "tool";
+        toolCallId?: string;
+        toolName: string;
+        toolInput?: Record<string, unknown>;
+        toolOutput: string;
+        toolStatus: string;
+      },
+): void {
+  const last = result[result.length - 1];
+  if (last?.role === role) {
+    last.parts.push(part);
+    return;
+  }
+  result.push({ role, parts: [part] });
+}
+
 /**
  * 提取从 startIndex 开始的新消息，返回结构化消息。
  * - 用户输入 → type: "text"
@@ -391,9 +465,10 @@ export type ExtractedMessage = {
 export function extractNewTurnMessages(
   messages: unknown[],
   startIndex: number,
-): { messages: ExtractedMessage[]; newCount: number } {
+): { messages: ExtractedMessage[]; newCount: number; effectiveStartIndex: number } {
   const result: ExtractedMessage[] = [];
   let count = 0;
+  const effectiveStartIndex = findEffectiveTurnStartIndex(messages, startIndex);
 
   // First pass: collect toolUse inputs indexed by toolCallId/toolUseId
   // Scan all messages (including after startIndex) to find toolUse before each toolResult
@@ -421,7 +496,7 @@ export function extractNewTurnMessages(
     }
   }
 
-  for (let i = startIndex; i < messages.length; i++) {
+  for (let i = effectiveStartIndex; i < messages.length; i++) {
     const msg = messages[i] as Record<string, unknown>;
     if (!msg || typeof msg !== "object") continue;
 
@@ -442,44 +517,37 @@ export function extractNewTurnMessages(
           ? msg.toolInput as Record<string, unknown>
           : undefined);
       if (output) {
-        result.push({
-          role: "user",
-          parts: [{
-            type: "tool",
-            toolCallId: toolCallId || undefined,
-            toolName,
-            toolInput,
-            toolOutput: output,
-            toolStatus: "completed",
-          }],
+        pushExtractedPart(result, "user", {
+          type: "tool",
+          toolCallId: toolCallId || undefined,
+          toolName,
+          toolInput,
+          toolOutput: `[${toolName} result]: ${output}`,
+          toolStatus: "completed",
         });
       }
       continue;
     }
 
     // user/assistant -> type: "text"
-    // 统一 role 为 user
-    const content = msg.content;
-    const text = extractPartText(content);
+    const text = extractSingleMessageText(msg);
 
     if (text) {
-      // 使用 sanitizeUserTextForCapture 清理所有噪音（Sender 元数据、时间戳等）
-      const cleanedText = sanitizeUserTextForCapture(text);
+      const cleanedText =
+        role === "assistant"
+          ? (HEARTBEAT_RE.test(text) ? "" : text.trim())
+          : sanitizeUserTextForCapture(text);
       if (cleanedText) {
-        // 保持原始 role，assistant 保持 assistant，user 保持 user
         const ovRole: "user" | "assistant" = role === "assistant" ? "assistant" : "user";
-        result.push({
-          role: ovRole,
-          parts: [{
-            type: "text",
-            text: cleanedText,
-          }],
+        pushExtractedPart(result, ovRole, {
+          type: "text",
+          text: cleanedText,
         });
       }
     }
   }
 
-  return { messages: result, newCount: count };
+  return { messages: result, newCount: count, effectiveStartIndex };
 }
 
 export function extractLatestUserText(messages: unknown[] | undefined): string {
