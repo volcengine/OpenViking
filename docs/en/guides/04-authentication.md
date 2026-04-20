@@ -1,6 +1,6 @@
 # Authentication
 
-OpenViking Server supports two authentication modes with role-based access control: `api_key` and `trusted`. The default mode is `api_key`.
+OpenViking Server supports three authentication modes with role-based access control: `api_key`, `trusted`, and `dev`. The mode is auto-detected if not explicitly configured.
 
 ## Overview
 
@@ -19,8 +19,13 @@ All API keys are plain random tokens with no embedded identity. The server resol
 |------|--------------------|-----------------|-------------|
 | API key mode | `"api_key"` | API key, with optional tenant headers for root requests | Standard multi-tenant deployment |
 | Trusted mode | `"trusted"` | `X-OpenViking-Account` / `X-OpenViking-User` / optional `X-OpenViking-Agent` headers, plus `root_api_key` on non-localhost deployments | Behind a trusted gateway or internal network boundary |
+| Dev mode | `"dev"` | No authentication, always ROOT | Local development only |
 
-`api_key` is the default and standard production mode. `trusted` is an alternative mode for deployments where an upstream gateway or trusted internal caller injects identity headers on every request. In `trusted` mode, running without `root_api_key` is allowed only when the server binds to localhost; non-localhost `trusted` deployments must configure `root_api_key`.
+If `auth_mode` is not explicitly configured:
+- If `root_api_key` is set (non-empty): auto-selects `api_key` mode
+- If `root_api_key` is not set: auto-selects `dev` mode
+
+> **Note:** Setting `root_api_key` to an empty string `""` is invalid. Either set a non-empty value or remove the setting entirely.
 
 ## Setting Up (Server Side)
 
@@ -113,6 +118,40 @@ When you use a regular user key, `account` and `user` are optional because the s
 openviking --account acme --user alice --agent-id my-agent ls viking://
 ```
 
+### Using --sudo with Root API Key
+
+The CLI supports configuring both `api_key` (for regular user operations) and `root_api_key` (for admin operations) in `ovcli.conf`:
+
+```json
+{
+  "url": "http://localhost:1933",
+  "api_key": "<user-key>",
+  "root_api_key": "<root-key>",
+  "account": "acme",
+  "user": "alice",
+  "agent_id": "my-agent"
+}
+```
+
+When you need to perform admin commands (`admin`, `system`, `reindex`), use the `--sudo` flag to elevate privileges:
+
+```bash
+# List all accounts (requires root privileges)
+ov --sudo admin list-accounts
+
+# Reindex content
+ov --sudo reindex viking://
+
+# System commands
+ov --sudo system status
+```
+
+The `--sudo` flag:
+- Only works with admin commands: `admin`, `system`, `reindex`
+- Will error if used with non-admin commands
+- Will error if `root_api_key` is not configured in `ovcli.conf`
+- Uses `root_api_key` instead of `api_key` for the request
+
 ### Accessing Tenant Data with Root Key
 
 When using the root key to access tenant-scoped data APIs (e.g. `ls`, `find`, `sessions`), you must specify the target account and user. The server will reject the request otherwise. Admin API and system status endpoints are not affected.
@@ -201,21 +240,9 @@ client = ov.SyncHTTPClient(
 )
 ```
 
-## Roles and Permissions
+## Dev Mode
 
-| Role | Scope | Capabilities |
-|------|-------|-------------|
-| ROOT | Global | All operations + Admin API (create/delete accounts, manage users) |
-| ADMIN | Own account | Regular operations + manage users in own account |
-| USER | Own account | Regular operations (ls, read, find, sessions, etc.) |
-
-In `trusted` mode, requests are resolved as `USER`, so the usual ROOT/ADMIN registration flow does not apply to ordinary traffic.
-
-## Development Mode
-
-When `auth_mode = "api_key"` and no `root_api_key` is configured, authentication is disabled. All requests are accepted as ROOT with the default account. **This is only allowed when the server binds to localhost** (`127.0.0.1`, `localhost`, or `::1`). If `host` is set to a non-loopback address (e.g. `0.0.0.0`) without a `root_api_key`, the server will refuse to start.
-
-Development mode only exists in `api_key` mode. `trusted` mode never falls back to development mode.
+When `auth_mode = "dev"` (or auto-detected when no `root_api_key` is configured), authentication is disabled. All requests are accepted as ROOT with the default account. **This is only allowed when the server binds to localhost** (`127.0.0.1`, `localhost`, or `::1`). If `host` is set to a non-loopback address (e.g. `0.0.0.0`) in `dev` mode, the server will refuse to start.
 
 ```json
 {
@@ -226,7 +253,29 @@ Development mode only exists in `api_key` mode. `trusted` mode never falls back 
 }
 ```
 
+Or explicitly:
+
+```json
+{
+  "server": {
+    "auth_mode": "dev",
+    "host": "127.0.0.1",
+    "port": 1933
+  }
+}
+```
+
 > **Security note:** The default `host` is `127.0.0.1`. If you need to expose the server on the network, you **must** configure `root_api_key`.
+
+## Roles and Permissions
+
+| Role | Scope | Capabilities |
+|------|-------|-------------|
+| ROOT | Global | All operations + Admin API (create/delete accounts, manage users) |
+| ADMIN | Own account | Regular operations + manage users in own account |
+| USER | Own account | Regular operations (ls, read, find, sessions, etc.) |
+
+In `trusted` mode, requests are resolved as `USER`, so the usual ROOT/ADMIN registration flow does not apply to ordinary traffic.
 
 ## Unauthenticated Endpoints
 

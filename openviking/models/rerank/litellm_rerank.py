@@ -6,6 +6,7 @@ LiteLLM Rerank API Client.
 
 # For logging, use Python's built-in logging
 import logging
+import time
 from typing import List, Optional
 
 from openviking.models.rerank.base import RerankBase
@@ -51,6 +52,7 @@ class LiteLLMRerankClient(RerankBase):
         try:
             import litellm
 
+            started = time.monotonic()
             response = litellm.rerank(
                 model=self.model_name,
                 query=query,
@@ -63,7 +65,12 @@ class LiteLLMRerankClient(RerankBase):
             response_dict = (
                 response.model_dump() if hasattr(response, "model_dump") else response.__dict__
             )
-            self._extract_and_update_token_usage(response_dict, query, documents)
+            self._extract_and_update_token_usage(
+                response_dict,
+                query,
+                documents,
+                duration_seconds=time.monotonic() - started,
+            )
 
             results = response.results
             if not results:

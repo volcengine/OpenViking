@@ -27,8 +27,16 @@ import os
 import sys
 
 from openviking_cli.utils import get_logger
+from openviking.storage.vectordb.utils.path_safety import resolve_storage_path
 
 logger = get_logger(__name__)
+_LOG_ESCAPE_TABLE = str.maketrans(
+    {
+        "\n": r"\n",
+        "\r": r"\r",
+        "\t": r"\t",
+    }
+)
 
 # RocksDB creates a LOCK file inside the store directory.
 # The standard layout is: <data_dir>/vectordb/<collection>/store/LOCK
@@ -38,6 +46,13 @@ _LOCK_GLOB_PATTERNS = [
     os.path.join("**", "LOCK"),
 ]
 _CONTAINER_MARKERS = ("/.dockerenv", "/run/.containerenv")
+
+
+def _safe_log_text(value: object, max_length: int = 160) -> str:
+    text = str(value).translate(_LOG_ESCAPE_TABLE)
+    if len(text) > max_length:
+        return text[: max_length - 3] + "..."
+    return text
 
 
 def _is_containerized() -> bool:
@@ -59,7 +74,10 @@ def _can_reclaim_posix_lock(lock_path: str) -> bool:
     try:
         import fcntl
     except ImportError:
-        logger.debug("fcntl unavailable, skipping RocksDB LOCK probe: %s", lock_path)
+        logger.debug(
+            "fcntl unavailable, skipping RocksDB LOCK probe: %s",
+            _safe_log_text(lock_path),
+        )
         return False
 
     try:
@@ -67,10 +85,17 @@ def _can_reclaim_posix_lock(lock_path: str) -> bool:
             try:
                 fcntl.lockf(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
-                logger.debug("RocksDB LOCK is held by a live process, skipping: %s", lock_path)
+                logger.debug(
+                    "RocksDB LOCK is held by a live process, skipping: %s",
+                    _safe_log_text(lock_path),
+                )
                 return False
             except OSError as exc:
-                logger.debug("Could not probe RocksDB LOCK %s: %s", lock_path, exc)
+                logger.debug(
+                    "Could not probe RocksDB LOCK %s: %s",
+                    _safe_log_text(lock_path),
+                    _safe_log_text(exc),
+                )
                 return False
 
             try:
@@ -79,7 +104,11 @@ def _can_reclaim_posix_lock(lock_path: str) -> bool:
                 pass
             return True
     except OSError as exc:
-        logger.debug("Could not open RocksDB LOCK %s for probe: %s", lock_path, exc)
+        logger.debug(
+            "Could not open RocksDB LOCK %s for probe: %s",
+            _safe_log_text(lock_path),
+            _safe_log_text(exc),
+        )
         return False
 
 
@@ -100,11 +129,12 @@ def clean_stale_rocksdb_locks(data_dir: str) -> int:
     if not _should_clean_stale_rocksdb_locks():
         return 0
 
+    data_root = resolve_storage_path(data_dir)
     removed = 0
     seen: set[str] = set()
 
     for pattern in _LOCK_GLOB_PATTERNS:
-        full_pattern = os.path.join(data_dir, pattern)
+        full_pattern = os.path.join(str(data_root), pattern)
         for lock_path in glob.glob(full_pattern, recursive=True):
             # Normalize to avoid processing the same file twice from
             # overlapping glob patterns.
@@ -118,7 +148,7 @@ def clean_stale_rocksdb_locks(data_dir: str) -> int:
                     continue
                 os.remove(lock_path)
                 removed += 1
-                logger.info("Removed stale RocksDB LOCK: %s", lock_path)
+                logger.info("Removed stale RocksDB LOCK: %s", _safe_log_text(lock_path))
             except FileNotFoundError:
                 # Another startup path may have removed it already.
                 continue
@@ -126,12 +156,20 @@ def clean_stale_rocksdb_locks(data_dir: str) -> int:
                 # File is held by a live process — leave it alone.
                 logger.debug(
                     "RocksDB LOCK is held by a live process, skipping: %s",
-                    lock_path,
+                    _safe_log_text(lock_path),
                 )
             except OSError as exc:
-                logger.warning("Could not remove RocksDB LOCK %s: %s", lock_path, exc)
+                logger.warning(
+                    "Could not remove RocksDB LOCK %s: %s",
+                    _safe_log_text(lock_path),
+                    _safe_log_text(exc),
+                )
 
     if removed:
-        logger.info("Cleaned %d stale RocksDB LOCK file(s) under %s", removed, data_dir)
+        logger.info(
+            "Cleaned %d stale RocksDB LOCK file(s) under %s",
+            removed,
+            _safe_log_text(data_root),
+        )
 
     return removed

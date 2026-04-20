@@ -25,7 +25,6 @@ function makeEngine(opts?: {
     baseUrl: "http://127.0.0.1:1933",
     autoCapture: opts?.autoCapture ?? true,
     autoRecall: false,
-    ingestReplyAssist: false,
     commitTokenThreshold: opts?.commitTokenThreshold ?? 20000,
     emitStandardDiagnostics: true,
     ...(opts?.cfgOverrides ?? {}),

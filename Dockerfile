@@ -114,6 +114,7 @@ COPY docker/openviking-console-entrypoint.sh /usr/local/bin/openviking-console-e
 RUN chmod +x /usr/local/bin/openviking-console-entrypoint
 ENV PATH="/app/.venv/bin:$PATH"
 ENV OPENVIKING_CONFIG_FILE="/app/ov.conf"
+ENV OPENVIKING_CLI_CONFIG_FILE="/app/ovcli.conf"
 
 EXPOSE 1933 8020
 
@@ -121,5 +122,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl -fsS http://127.0.0.1:1933/health || exit 1
 
 # Default runs server + console; override command to run CLI, e.g.:
-# docker run --rm <image> -v "$HOME/.openviking/ovcli.conf:/root/.openviking/ovcli.conf" openviking --help
+# docker run --rm -v "$HOME/.openviking/ovcli.conf:/app/ovcli.conf" <image> openviking --help
 ENTRYPOINT ["openviking-console-entrypoint"]

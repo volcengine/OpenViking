@@ -10,26 +10,22 @@ from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel, ConfigDict
 
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
-from openviking.server.auth import get_request_context
+from openviking.server.auth import get_request_context, require_role
 from openviking.server.dependencies import get_service
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking.server.models import ErrorInfo, Response
+from openviking.server.routers.maintenance import (
+    REINDEX_TASK_TYPE,
+    ReindexRequest,
+    _background_reindex_tracked,
+    _do_reindex,
+)
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
-
-REINDEX_TASK_TYPE = "resource_reindex"
-
-
-class ReindexRequest(BaseModel):
-    """Request to reindex content at a URI."""
-
-    uri: str
-    regenerate: bool = False
-    wait: bool = True
 
 
 class WriteContentRequest(BaseModel):
@@ -184,28 +180,19 @@ async def write(
     ).model_dump(exclude_none=True)
 
 
-@router.post("/reindex")
+@router.post("/reindex", deprecated=True)
 async def reindex(
-    request: ReindexRequest = Body(...),
-    _ctx: RequestContext = Depends(get_request_context),
+    body: ReindexRequest = Body(...),
+    ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN),
 ):
-    """Reindex content at a URI.
-
-    Re-embeds existing .abstract.md/.overview.md content into the vector
-    database. If regenerate=True, also regenerates L0/L1 summaries via LLM
-    before re-embedding.
-
-    Uses path locking to prevent concurrent reindexes on the same URI.
-    Set wait=False to run in the background and track progress via task API.
-    """
+    """Compatibility alias for older clients that still call /api/v1/content/reindex."""
     from openviking.service.task_tracker import get_task_tracker
     from openviking.storage.viking_fs import get_viking_fs
 
-    uri = request.uri
+    uri = body.uri
     viking_fs = get_viking_fs()
 
-    # Validate URI exists
-    if not await viking_fs.exists(uri, ctx=_ctx):
+    if not await viking_fs.exists(uri, ctx=ctx):
         return Response(
             status="error",
             error=ErrorInfo(code="NOT_FOUND", message=f"URI not found: {uri}"),
@@ -214,13 +201,12 @@ async def reindex(
     service = get_service()
     tracker = get_task_tracker()
 
-    if request.wait:
-        # Synchronous path: block until reindex completes
+    if body.wait:
         if tracker.has_running(
             REINDEX_TASK_TYPE,
             uri,
-            owner_account_id=_ctx.account_id,
-            owner_user_id=_ctx.user.user_id,
+            owner_account_id=ctx.account_id,
+            owner_user_id=ctx.user.user_id,
         ):
             return Response(
                 status="error",
@@ -229,73 +215,32 @@ async def reindex(
                     message=f"URI {uri} already has a reindex in progress",
                 ),
             )
-        result = await _do_reindex(service, uri, request.regenerate, _ctx)
+        result = await _do_reindex(service, uri, body.regenerate, ctx)
         return Response(status="ok", result=result)
-    else:
-        # Async path: run in background, return task_id for polling
-        task = tracker.create_if_no_running(
-            REINDEX_TASK_TYPE,
-            uri,
-            owner_account_id=_ctx.account_id,
-            owner_user_id=_ctx.user.user_id,
-        )
-        if task is None:
-            return Response(
-                status="error",
-                error=ErrorInfo(
-                    code="CONFLICT",
-                    message=f"URI {uri} already has a reindex in progress",
-                ),
-            )
-        asyncio.create_task(
-            _background_reindex_tracked(service, uri, request.regenerate, _ctx, task.task_id)
-        )
+
+    task = tracker.create_if_no_running(
+        REINDEX_TASK_TYPE,
+        uri,
+        owner_account_id=ctx.account_id,
+        owner_user_id=ctx.user.user_id,
+    )
+    if task is None:
         return Response(
-            status="ok",
-            result={
-                "uri": uri,
-                "status": "accepted",
-                "task_id": task.task_id,
-                "message": "Reindex is processing in the background",
-            },
+            status="error",
+            error=ErrorInfo(
+                code="CONFLICT",
+                message=f"URI {uri} already has a reindex in progress",
+            ),
         )
-
-
-async def _do_reindex(
-    service,
-    uri: str,
-    regenerate: bool,
-    ctx: RequestContext,
-) -> dict:
-    """Execute reindex within a lock scope."""
-    from openviking.storage.transaction import LockContext, get_lock_manager
-
-    viking_fs = service.viking_fs
-    path = viking_fs._uri_to_path(uri, ctx=ctx)
-
-    async with LockContext(get_lock_manager(), [path], lock_mode="point"):
-        if regenerate:
-            return await service.resources.summarize([uri], ctx=ctx)
-        else:
-            return await service.resources.build_index([uri], ctx=ctx)
-
-
-async def _background_reindex_tracked(
-    service,
-    uri: str,
-    regenerate: bool,
-    ctx: RequestContext,
-    task_id: str,
-) -> None:
-    """Run reindex in background with task tracking."""
-    from openviking.service.task_tracker import get_task_tracker
-
-    tracker = get_task_tracker()
-    tracker.start(task_id)
-    try:
-        result = await _do_reindex(service, uri, regenerate, ctx)
-        tracker.complete(task_id, {"uri": uri, **result})
-        logger.info("Background reindex completed: uri=%s task=%s", uri, task_id)
-    except Exception as exc:
-        tracker.fail(task_id, str(exc))
-        logger.exception("Background reindex failed: uri=%s task=%s", uri, task_id)
+    asyncio.create_task(
+        _background_reindex_tracked(service, uri, body.regenerate, ctx, task.task_id)
+    )
+    return Response(
+        status="ok",
+        result={
+            "uri": uri,
+            "status": "accepted",
+            "task_id": task.task_id,
+            "message": "Reindex is processing in the background",
+        },
+    )

@@ -19,7 +19,6 @@ import type {
 import { formatMessageFaithful, toRoleId } from "./context-engine.js";
 import {
   compileSessionPatterns,
-  isTranscriptLikeIngest,
   extractLatestUserText,
   sanitizeUserTextForCapture,
   shouldBypassSession,
@@ -1592,26 +1591,6 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
           } catch (err) {
             api.logger.warn(`openviking: auto-recall failed: ${String(err)}`);
           }
-        }
-      }
-
-      if (cfg.ingestReplyAssist) {
-        const decision = isTranscriptLikeIngest(queryText, {
-          minSpeakerTurns: cfg.ingestReplyAssistMinSpeakerTurns,
-          minChars: cfg.ingestReplyAssistMinChars,
-        });
-        if (decision.shouldAssist) {
-          verboseRoutingInfo(
-            `openviking: ingest-reply-assist applied (reason=${decision.reason}, speakerTurns=${decision.speakerTurns}, chars=${decision.chars})`,
-          );
-          prependContextParts.push(
-            "<ingest-reply-assist>\n" +
-              "The latest user input looks like a multi-speaker transcript used for memory ingestion.\n" +
-              "Reply with 1-2 concise sentences to acknowledge or summarize key points.\n" +
-              "Do not output NO_REPLY or an empty reply.\n" +
-              "Do not fabricate facts beyond the provided transcript and recalled memories.\n" +
-              "</ingest-reply-assist>",
-          );
         }
       }
 

@@ -12,7 +12,7 @@ from .base import (
 from .cache import CacheEventDataSource
 from .encryption import EncryptionEventDataSource
 from .http import HttpRequestLifecycleDataSource
-from .model_usage import EmbeddingEventDataSource, VLMEventDataSource
+from .model_usage import EmbeddingEventDataSource, RerankEventDataSource, VLMEventDataSource
 from .resource import ResourceIngestionEventDataSource
 from .retrieval import RetrievalStatsDataSource
 from .session import SessionLifecycleDataSource
@@ -25,6 +25,7 @@ __all__ = [
     "ProbeMetricDataSource",
     "RetrievalStatsDataSource",
     "EmbeddingEventDataSource",
+    "RerankEventDataSource",
     "VLMEventDataSource",
     "SessionLifecycleDataSource",
     "HttpRequestLifecycleDataSource",

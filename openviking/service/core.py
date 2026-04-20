@@ -282,7 +282,10 @@ class OpenVikingService:
             logger.info("QueueManager workers started")
 
         # Initialize directories
-        directory_initializer = DirectoryInitializer(vikingdb=self._vikingdb_manager)
+        directory_initializer = DirectoryInitializer(
+            vikingdb=self._vikingdb_manager,
+            viking_fs=self._viking_fs,
+        )
         self._directory_initializer = directory_initializer
         default_ctx = RequestContext(user=self._user, role=Role.ROOT)
         account_count = await directory_initializer.initialize_account_directories(default_ctx)

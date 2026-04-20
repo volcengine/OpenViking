@@ -134,10 +134,12 @@ const RESERVED_MIN = 20_000;
 const RESERVED_RATIO = 0.15;
 const ARCHIVE_INDEX_TRIM_LIMIT = 10;
 
-function allocateContextBudget(totalBudget: number): ContextBudgets {
-  const reserved = Math.max(totalBudget * RESERVED_RATIO, RESERVED_MIN);
-  const archiveMemory = Math.min(totalBudget * ARCHIVE_BUDGET_RATIO, ARCHIVE_BUDGET_CAP);
-  const sessionContext = Math.max(totalBudget - archiveMemory - reserved, 0);
+function allocateContextBudget(totalBudget: number, instructionTokens = 0): ContextBudgets {
+  const reserveFloor = totalBudget >= RESERVED_MIN * 2 ? RESERVED_MIN : 0;
+  const reserved = Math.min(totalBudget, Math.max(totalBudget * RESERVED_RATIO, reserveFloor));
+  const usableBudget = Math.max(totalBudget - reserved - instructionTokens, 0);
+  const archiveMemory = Math.min(usableBudget * ARCHIVE_BUDGET_RATIO, ARCHIVE_BUDGET_CAP);
+  const sessionContext = Math.max(usableBudget - archiveMemory, 0);
   return { archiveMemory, sessionContext, reserved };
 }
 
@@ -372,8 +374,10 @@ export function convertToAgentMessages(msg: { role: string; parts: unknown[] }):
     const texts = contentBlocks
       .filter((b) => b.type === "text")
       .map((b) => b.text as string);
-    if (texts.length > 0 || toolUseBlocks.length === 0) {
-      result.push({ role: msg.role, content: texts.join("\n") || "" });
+    if (texts.length > 0) {
+      result.push({ role: msg.role, content: texts.join("\n") });
+    } else if (toolUseBlocks.length === 0) {
+      result.push({ role: msg.role, content: "" });
     }
     if (toolUseBlocks.length > 0) {
       result.push({ role: "assistant", content: toolUseBlocks });
@@ -766,15 +770,21 @@ export function createMemoryOpenVikingContextEngine(params: {
     budgets: ContextBudgets;
     instruction: { text: string; tokens: number };
   } {
-    // 4-layer context partitioning (budget computed for diag; BUDGET_UNLIMITED bypasses limits):
+    const hasArchives = Boolean(overview) || preAbstracts.length > 0;
+    const instruction = hasArchives ? buildInstructionPrompt() : { text: "", tokens: 0 };
+
+    // 4-layer context partitioning:
     //   Instruction — system prompt guide (Archive Index / Session History usage)
     //   Archive     — session history summary + per-archive one-line abstracts
     //   Session     — active OV messages converted to AgentMessage format
     //   Reserved    — headroom for model output (not consumed here)
-    const budgets = allocateContextBudget(tokenBudget);
-    const instruction = buildInstructionPrompt();
-    const archive = buildArchiveMemory(overview, preAbstracts, BUDGET_UNLIMITED);
-    const session = buildSessionContext(ovMessages, BUDGET_UNLIMITED);
+    const budgets = allocateContextBudget(tokenBudget, instruction.tokens);
+    const archive = buildArchiveMemory(overview, preAbstracts, budgets.archiveMemory);
+    const sessionBudget = Math.max(
+      tokenBudget - budgets.reserved - instruction.tokens - archive.tokens,
+      0,
+    );
+    const session = buildSessionContext(ovMessages, sessionBudget);
     const assembled = [...archive.messages, ...session.messages];
 
     logger.info(
@@ -878,7 +888,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           });
         }
 
-        const assembledTokens = roughEstimate(sanitized);
+        const assembledTokens = roughEstimate(sanitized) + instruction.tokens;
         const tokensSaved = originalTokens - assembledTokens;
         const savingPct = originalTokens > 0 ? Math.round((tokensSaved / originalTokens) * 100) : 0;
 
@@ -904,7 +914,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         return {
           messages: sanitized,
           estimatedTokens: assembledTokens,
-          ...(hasArchives ? { systemPromptAddition: instruction.text } : {}),
+          ...(instruction.text ? { systemPromptAddition: instruction.text } : {}),
         };
       } catch (err) {
         logger.warn?.(

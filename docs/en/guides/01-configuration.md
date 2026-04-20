@@ -119,7 +119,7 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 |-----------|------|-------------|
 | `max_concurrent` | int | Maximum concurrent embedding requests (`embedding.max_concurrent`, default: `10`) |
 | `max_retries` | int | Maximum retry attempts for transient embedding provider errors (`embedding.max_retries`, default: `3`; `0` disables retry) |
-| `provider` | str | `"volcengine"`, `"openai"`, `"vikingdb"`, `"jina"`, `"voyage"`, or `"gemini"` |
+| `provider` | str | `"volcengine"`, `"openai"`, `"vikingdb"`, `"jina"`, `"voyage"`, `"dashscope"`, or `"gemini"` |
 | `api_key` | str | API key |
 | `model` | str | Model name |
 | `dimension` | int | Vector dimension. For Voyage, this maps to `output_dimension` |
@@ -300,6 +300,52 @@ Recommended dimensions: `768`, `1536`, or `3072` (default: `3072`).
 
 Get your API key at https://aistudio.google.com/apikey
 
+**DashScope (Alibaba Tongyi) provider:**
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "dashscope",
+      "api_key": "${DASHSCOPE_API_KEY}",
+      "model": "text-embedding-v4",
+      "dimension": 1024
+    }
+  }
+}
+```
+
+**Available DashScope models:**
+
+| Model | Dimension | Input Type | Notes |
+|-------|-----------|------------|-------|
+| `text-embedding-v3` | 1024 | text | Optimized for Chinese |
+| `text-embedding-v4` | 1024 | text | Optimized for Chinese |
+| `tongyi-embedding-vision-plus` | 1152 | multimodal | Supports fusion via `enable_fusion` |
+| `tongyi-embedding-vision-flash` | 768 | multimodal | Faster, lower cost |
+| `qwen3-vl-embedding` | 2560 | multimodal | Text + image + video |
+| `qwen2.5-vl-embedding` | 1024 | multimodal | Text + image + video |
+
+**Multimodal parameters** (text+image/video models only):
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `input_type` | str | `"multimodal"` or `"text"` | Embedding mode (default: `"multimodal"`) |
+| `enable_fusion` | bool | `false` | Enable fusion vectors for `tongyi-embedding-vision-*` models |
+| `res_level` | int | `2` | Image resolution level (1=high, 2=medium, 3=low) |
+| `max_video_frames` | int | `16` | Maximum video frames to embed |
+
+**Endpoint selection** — DashScope provides `api_base` defaults for China (`cn`) and international (`intl`) regions:
+
+| Region | `api_base` | Notes |
+|--------|-----------|-------|
+| China | `https://dashscope.aliyuncs.com` (default) | Recommended for users in mainland China |
+| International | `https://dashscope-intl.aliyuncs.com` | For users outside China |
+
+Custom endpoint URLs are also supported by setting a full URL.
+
+Get your API key at https://dashscope.console.aliyun.com/api-key
+
 **Non-symmetric retrieval** (different task types for indexing vs. query):
 
 ```json
@@ -399,6 +445,7 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 | `thinking` | bool | Enable thinking mode for VolcEngine models (default: `false`) |
 | `max_concurrent` | int | Maximum concurrent semantic LLM calls (default: `100`) |
 | `max_retries` | int | Maximum retry attempts for transient VLM provider errors (default: `3`; `0` disables retry) |
+| `timeout` | float | Per-request HTTP timeout in seconds passed to the underlying OpenAI/LiteLLM client. Increase for slow endpoints (e.g., DashScope, local inference). Must be `> 0` (default: `60.0`) |
 | `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
 | `stream` | bool | Enable streaming mode (for OpenAI-compatible providers, default: `false`) |
 
@@ -780,9 +827,9 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 
 | Field | Description | Default |
 |-------|-------------|---------|
-| `agent_scope_mode` | Agent memory namespace mode: `"user+agent"` isolates by `(user_id, agent_id)`, while `"agent"` isolates only by `agent_id` and shares agent memories across users of the same agent | `"user+agent"` |
+| `agent_scope_mode` | Deprecated and ignored. Kept only for backward compatibility with older `ov.conf` files. Agent/user namespace behavior is now controlled by per-account namespace policy. | `"user+agent"` |
 
-`agent_scope_mode` only affects agent-level namespaces such as `viking://agent/{agent_space}/memories/...`. User memories under `viking://user/{user_space}/memories/...` are not affected.
+`agent_scope_mode` no longer changes namespace behavior. The server now uses account-level namespace policy to choose between `viking://agent/{agent_id}/...` and `viking://agent/{agent_id}/user/{user_id}/...`.
 
 ### ovcli.conf
 

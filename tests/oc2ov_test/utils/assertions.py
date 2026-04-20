@@ -27,13 +27,35 @@ class AssertionHelper:
         if isinstance(response, dict):
             if "output" in response:
                 return str(response["output"])
-            elif "message" in response:
+            if "message" in response:
                 return str(response["message"])
-            elif "content" in response:
+            if "content" in response:
                 return str(response["content"])
-            elif "text" in response:
+            if "text" in response:
                 return str(response["text"])
-            elif "choices" in response and len(response["choices"]) > 0:
+            if "result" in response and isinstance(response["result"], dict):
+                result = response["result"]
+                payloads = result.get("payloads")
+                if isinstance(payloads, list) and len(payloads) > 0:
+                    texts = []
+                    for p in payloads:
+                        if isinstance(p, dict) and "text" in p:
+                            texts.append(str(p["text"]))
+                    if texts:
+                        return "\n".join(texts)
+                for key in ("output", "text", "content", "message", "response"):
+                    if key in result and result[key]:
+                        return str(result[key])
+                messages = result.get("messages")
+                if isinstance(messages, list) and len(messages) > 0:
+                    for msg in reversed(messages):
+                        if isinstance(msg, dict):
+                            role = msg.get("role", "")
+                            if role == "assistant":
+                                c = msg.get("content", "")
+                                if c:
+                                    return str(c)
+            if "choices" in response and len(response["choices"]) > 0:
                 choice = response["choices"][0]
                 if isinstance(choice, dict):
                     if "message" in choice:
@@ -44,8 +66,11 @@ class AssertionHelper:
                     elif "text" in choice:
                         return str(choice["text"])
                 return str(choice)
+            if "error" in response:
+                return str(response["error"])
 
-        return str(response)
+        logger.warning("extract_response_text: no text found in response, returning empty string")
+        return ""
 
     @staticmethod
     def assert_keywords_in_response(

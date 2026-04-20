@@ -15,11 +15,8 @@ os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 import litellm
 from litellm import acompletion, completion
 
-
 from openviking.telemetry import tracer
-
 from openviking.utils.model_retry import retry_async, retry_sync
-
 
 from ..base import ToolCall, VLMBase, VLMResponse
 
@@ -209,6 +206,7 @@ class LiteLLMVLMProvider(VLMBase):
             "model": model,
             "messages": messages,
             "temperature": self.temperature,
+            "timeout": self.timeout,
         }
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
@@ -233,6 +231,20 @@ class LiteLLMVLMProvider(VLMBase):
             extra = kwargs.get("extra_body", {})
             extra["enable_thinking"] = thinking
             kwargs["extra_body"] = extra
+
+        # Workaround for LiteLLM bug where Gemini context-caching path emits
+        # both `cachedContent` and `toolConfig`, which Gemini rejects with a
+        # 400 "CachedContent can not be used with GenerateContent request
+        # setting system_instruction, tools or tool_config".
+        # See BerriAI/litellm#17304 and PR #25659. Remove when LiteLLM ships
+        # the fix.
+        if provider == "gemini" and tools:
+            kwargs["messages"] = [
+                {k: v for k, v in msg.items() if k != "cache_control"}
+                if isinstance(msg, dict)
+                else msg
+                for msg in messages
+            ]
 
         return kwargs
 
@@ -322,7 +334,7 @@ class LiteLLMVLMProvider(VLMBase):
             response = completion(**kwargs)
             elapsed = time.perf_counter() - t0
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
-            tracer.info(f'response={response}')
+            tracer.info(f"response={response}")
             if tools:
                 return self._build_vlm_response(response, has_tools=True)
             return self._clean_response(self._extract_content_from_response(response))
@@ -353,7 +365,7 @@ class LiteLLMVLMProvider(VLMBase):
             response = await acompletion(**kwargs)
             elapsed = time.perf_counter() - t0
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
-            tracer.info(f'response={response}')
+            tracer.info(f"response={response}")
             if tools:
                 return self._build_vlm_response(response, has_tools=True)
             return self._clean_response(self._extract_content_from_response(response))

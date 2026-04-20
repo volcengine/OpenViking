@@ -246,6 +246,34 @@ Compared with `observer/*`, `/metrics` is better for **trends, aggregation, and 
 
 Compared with `telemetry`, `/metrics` focuses on **aggregated time series**, while `telemetry` focuses on **what happened inside one specific request**.
 
+### Enable metrics quickly
+
+`/metrics` may be disabled by default. When the metrics subsystem is not enabled, the endpoint returns `404` with the message `Prometheus metrics are disabled.`.
+
+You do not need the full configuration to get started. Enabling the master switch under the `server` section is enough.
+
+**Minimal config (recommended)**
+
+Add the following to `~/.openviking/ov.conf` (or the path passed via `--config`):
+
+```json
+{
+  "server": {
+    "observability": {
+      "metrics": {
+        "enabled": true
+      }
+    }
+  }
+}
+```
+
+Restart OpenViking Server after editing the config.
+
+For full fields, supported ranges, and more examples, see:
+
+- [Metrics](../concepts/12-metrics.md)
+
 ### Access `/metrics` directly
 
 In the current implementation, `/metrics` is not wired to `get_request_context` or other auth dependencies, so from the code-path perspective it currently behaves as a public scrape endpoint:
@@ -284,9 +312,10 @@ If there is no data yet, go back to the Prometheus scrape configuration above an
 
 **Step 2: Import the official demo dashboard into Grafana**
 
-The OpenViking repository already includes a ready-to-import dashboard JSON:
+The OpenViking repository already includes ready-to-import dashboard JSON:
 
 - [openviking_demo_dashboard.json](../../../examples/grafana/openviking_demo_dashboard.json)
+- [openviking_token_demo_dashboard.json](../../../examples/grafana/openviking_token_demo_dashboard.json) (Note: this dashboard depends on the `tim012432-calendarheatmap-panel` Grafana plugin. Install it before importing to ensure panels render correctly.)
 
 You can import it with the following steps:
 

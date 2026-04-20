@@ -32,7 +32,15 @@ class VikingURI:
     """
 
     SCHEME = "viking"
-    VALID_SCOPES = {"resources", "user", "agent", "session", "queue", "temp"}
+    # SCOPES that can be listed in root directory (ov ls)
+    LISTABLE_SCOPES = {
+        "resources",
+        "user",
+        "agent",
+        "session",
+    }
+    # All valid scopes that can be visited/accessed
+    VISITABLE_SCOPES = LISTABLE_SCOPES | {"temp", "queue"}
 
     def __init__(self, uri: str):
         """
@@ -70,8 +78,8 @@ class VikingURI:
 
         # Parse scope
         scope = path.split("/")[0]
-        if scope not in self.VALID_SCOPES:
-            raise ValueError(f"Invalid scope '{scope}'. Must be one of {self.VALID_SCOPES}")
+        if scope not in self.VISITABLE_SCOPES:
+            raise ValueError(f"Invalid scope '{scope}'. Must be one of {self.VISITABLE_SCOPES}")
 
         return {
             "scheme": self.SCHEME,
@@ -178,14 +186,16 @@ class VikingURI:
         Build a Viking URI from components.
 
         Args:
-            scope: Scope (resources, user, agent, session, queue)
+            scope: Scope (resources, user, agent, session, queue, temp)
             *path_parts: Additional path components
 
         Returns:
             Viking URI string
         """
-        if scope not in VikingURI.VALID_SCOPES:
-            raise ValueError(f"Invalid scope '{scope}'. Must be one of {VikingURI.VALID_SCOPES}")
+        if scope not in VikingURI.VISITABLE_SCOPES:
+            raise ValueError(
+                f"Invalid scope '{scope}'. Must be one of {VikingURI.VISITABLE_SCOPES}"
+            )
 
         parts = [scope] + list(path_parts)
         # Filter out empty parts

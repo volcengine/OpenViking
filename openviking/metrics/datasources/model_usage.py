@@ -8,7 +8,8 @@ This file provides two categories of DataSource APIs:
 1) DomainStats (pull): `ModelUsageDataSource.read_model_usage()` reads aggregated cumulative
    usage from in-process model instances / shared token trackers. This is used by
    `ModelUsageCollector` which converts cumulative stats into Prometheus Counters via deltas.
-2) Event (push): `VLMEventDataSource` and `EmbeddingEventDataSource` emit per-call events.
+2) Event (push): `VLMEventDataSource`, `EmbeddingEventDataSource`, and
+   `RerankEventDataSource` emit per-call events.
    These events are routed to Event collectors via `try_dispatch_event`.
 
 Note: DataSources are not allowed to write into MetricRegistry directly in this architecture.
@@ -159,6 +160,29 @@ class EmbeddingEventDataSource(EventMetricDataSource):
     """
 
     @staticmethod
+    def record_call(
+        *,
+        provider: str,
+        model_name: str,
+        duration_seconds: float,
+        prompt_tokens: int,
+        completion_tokens: int,
+        account_id: str | None = None,
+    ) -> None:
+        """Emit one embedding provider call with tokens, latency, and optional account context."""
+        EventMetricDataSource._emit(
+            "embedding.call",
+            {
+                "provider": str(provider),
+                "model_name": str(model_name),
+                "duration_seconds": float(duration_seconds),
+                "prompt_tokens": int(prompt_tokens),
+                "completion_tokens": int(completion_tokens),
+                "account_id": None if account_id is None else str(account_id),
+            },
+        )
+
+    @staticmethod
     def record_success(*, latency_seconds: float, account_id: str | None = None) -> None:
         """
         Emit an embedding success event with the observed end-to-end latency.
@@ -186,6 +210,33 @@ class EmbeddingEventDataSource(EventMetricDataSource):
             "embedding.error",
             {
                 "error_code": str(error_code or "unknown"),
+                "account_id": None if account_id is None else str(account_id),
+            },
+        )
+
+
+class RerankEventDataSource(EventMetricDataSource):
+    """Event datasource for per-call rerank usage events."""
+
+    @staticmethod
+    def record_call(
+        *,
+        provider: str,
+        model_name: str,
+        duration_seconds: float,
+        prompt_tokens: int,
+        completion_tokens: int,
+        account_id: str | None = None,
+    ) -> None:
+        """Emit one rerank provider call with tokens, latency, and optional account context."""
+        EventMetricDataSource._emit(
+            "rerank.call",
+            {
+                "provider": str(provider),
+                "model_name": str(model_name),
+                "duration_seconds": float(duration_seconds),
+                "prompt_tokens": int(prompt_tokens),
+                "completion_tokens": int(completion_tokens),
                 "account_id": None if account_id is None else str(account_id),
             },
         )

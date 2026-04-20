@@ -97,18 +97,6 @@ The reranking logic is not pure vector-score sorting. The current implementation
 - whether it looks like an event memory
 - lexical overlap with the current query
 
-### Transcript ingest assist
-
-This path also includes a special transcript-oriented branch.
-
-When the latest user input looks like pasted multi-speaker transcript content:
-
-- metadata blocks, command text, and pure question text are filtered out
-- the cleaned text is checked against speaker-turn and length thresholds
-- if it matches, the plugin prepends a lightweight `<ingest-reply-assist>` instruction
-
-The goal is not to change memory logic. It is to reduce the chance that the model responds with `NO_REPLY` when the user pastes chat history, meeting notes, or conversation transcripts for ingestion.
-
 ## Session Lifecycle
 
 ![Session lifecycle and compaction boundary](./images/openclaw-plugin-session-lifecycle.png)

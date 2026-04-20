@@ -16,6 +16,7 @@ from openviking_cli.setup_wizard import (
     _get_recommended_indices,
     _is_llamacpp_installed,
     _write_config,
+    run_init,
 )
 from openviking_cli.utils.ollama import (
     check_ollama_running,
@@ -210,6 +211,44 @@ class TestConfigWriting:
 
         assert _write_config(config, config_path) is True
         assert config_path.exists()
+
+    def test_run_init_redacts_summary_output(self, tmp_path):
+        config_path = tmp_path / "ov.conf"
+        config = {
+            "embedding": {
+                "dense": {
+                    "provider": "local",
+                    "model": "secret-model",
+                    "dimension": 1024,
+                    "model_path": "/very/secret/model.gguf",
+                }
+            },
+            "vlm": {
+                "provider": "openai",
+                "model": "secret-vlm",
+            },
+            "storage": {
+                "workspace": "/very/secret/workspace",
+            },
+        }
+
+        with patch("openviking_cli.setup_wizard._DEFAULT_CONFIG_PATH", config_path), patch(
+            "openviking_cli.setup_wizard._prompt_choice", return_value=2
+        ), patch("openviking_cli.setup_wizard._wizard_ollama", return_value=config), patch(
+            "openviking_cli.setup_wizard._prompt_confirm", return_value=True
+        ), patch("openviking_cli.setup_wizard._write_config", return_value=True), patch(
+            "builtins.print"
+        ) as mock_print:
+            assert run_init() == 0
+
+        output = "\n".join(
+            " ".join(str(arg) for arg in call.args) for call in mock_print.call_args_list
+        )
+        assert "/very/secret/model.gguf" not in output
+        assert "/very/secret/workspace" not in output
+        assert str(config_path) not in output
+        assert "custom local model (hidden)" in output
+        assert "default config location" in output
 
 
 # ---------------------------------------------------------------------------
