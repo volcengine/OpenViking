@@ -70,6 +70,26 @@ impl LocalFileSystem {
             }
         }
 
+        let boundary = if resolved.exists() {
+            resolved
+                .canonicalize()
+                .map_err(|e| Error::plugin(format!("failed to canonicalize path: {}", e)))?
+        } else {
+            let parent = resolved.parent().ok_or_else(|| Error::invalid_path(path.to_string()))?;
+            let canonical_parent = parent
+                .canonicalize()
+                .map_err(|e| Error::plugin(format!("failed to canonicalize parent path: {}", e)))?;
+            canonical_parent.join(
+                resolved
+                    .file_name()
+                    .ok_or_else(|| Error::invalid_path(path.to_string()))?,
+            )
+        };
+
+        if !boundary.starts_with(&self.base_path) {
+            return Err(Error::permission_denied(path.to_string()));
+        }
+
         Ok(resolved)
     }
 }
@@ -487,6 +507,23 @@ mod tests {
 
         let fs = LocalFileSystem::new(base.to_str().unwrap()).unwrap();
         let err = fs.read("../outside.txt", 0, 0).await.unwrap_err();
+        assert!(matches!(err, Error::PermissionDenied(_)));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_localfs_rejects_symlink_escape() {
+        let tmp = tempdir().unwrap();
+        let base = tmp.path().join("safe");
+        let escaped_dir = tmp.path().join("escaped");
+        let outside = escaped_dir.join("outside.txt");
+        std::fs::create_dir(&base).unwrap();
+        std::fs::create_dir(&escaped_dir).unwrap();
+        std::fs::write(&outside, b"secret").unwrap();
+        std::os::unix::fs::symlink(&escaped_dir, base.join("link_out")).unwrap();
+
+        let fs = LocalFileSystem::new(base.to_str().unwrap()).unwrap();
+        let err = fs.read("link_out/outside.txt", 0, 0).await.unwrap_err();
         assert!(matches!(err, Error::PermissionDenied(_)));
     }
 }

@@ -112,6 +112,20 @@ pub struct MountInfo {
     pub plugin: String,
 }
 
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    let a_bytes = a.as_bytes();
+    let b_bytes = b.as_bytes();
+    if a_bytes.len() != b_bytes.len() {
+        return false;
+    }
+
+    let mut diff = 0u8;
+    for (x, y) in a_bytes.iter().zip(b_bytes.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 fn authorize_mount_management(headers: &HeaderMap, state: &AppState) -> Option<Response> {
     if state.mount_api_key.is_empty() {
         return Some(
@@ -138,7 +152,7 @@ fn authorize_mount_management(headers: &HeaderMap, state: &AppState) -> Option<R
         }
     };
 
-    if supplied != state.mount_api_key {
+    if !constant_time_eq(supplied, &state.mount_api_key) {
         return Some(
             (
                 StatusCode::FORBIDDEN,
