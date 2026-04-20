@@ -27,6 +27,7 @@ pub struct Config {
     #[serde(default = "default_url")]
     pub url: String,
     pub api_key: Option<String>,
+    pub root_api_key: Option<String>,
     #[serde(alias = "account_id")]
     pub account: Option<String>,
     #[serde(alias = "user_id")]
@@ -63,6 +64,7 @@ impl Default for Config {
         Self {
             url: "http://localhost:1933".to_string(),
             api_key: None,
+            root_api_key: None,
             account: None,
             user: None,
             agent_id: None,
@@ -182,6 +184,21 @@ mod tests {
         assert!(config.upload.ignore_dirs.is_none());
         assert!(config.upload.include.is_none());
         assert!(config.upload.exclude.is_none());
+    }
+
+    #[test]
+    fn config_deserializes_root_api_key() {
+        let config: Config = serde_json::from_str(
+            r#"{
+                "url": "http://localhost:1933",
+                "api_key": "user-key",
+                "root_api_key": "root-key"
+            }"#,
+        )
+        .expect("config should deserialize with root_api_key");
+
+        assert_eq!(config.api_key.as_deref(), Some("user-key"));
+        assert_eq!(config.root_api_key.as_deref(), Some("root-key"));
     }
 
     #[test]
