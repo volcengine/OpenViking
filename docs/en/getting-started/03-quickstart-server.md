@@ -142,7 +142,7 @@ Once configured, use the CLI to manage resources and query your Agent's memory:
 
 ```bash
 # Check system health
-openviking observer system
+openviking system status
 
 # Add a resource to memory
 openviking add-resource https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md
@@ -364,7 +364,7 @@ vim ~/.openviking/ovcli.conf
 * **Monitor System Health:**
 
 ```bash
-openviking observer system
+openviking system status
 ```
 
 * **Functional Testing (Upload & Search):**
