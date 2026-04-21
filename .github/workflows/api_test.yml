@@ -452,7 +452,7 @@ jobs:
             uv run python -m pytest . -v --html=api-test-report.html --self-contained-html \
               --ignore=retrieval/ --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py \
               --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py \
-              --ignore=scenarios/resources_retrieval_slow/ --ignore=sessions/ -k "not test_observer"
+              --ignore=scenarios/ -k "not test_observer"
           fi
         continue-on-error: true
 
@@ -470,7 +470,7 @@ jobs:
             uv run python -m pytest . -v --html=api-test-report.html --self-contained-html --ignore=filesystem/ --ignore=scenarios/resources_retrieval_slow/
           } else {
             Write-Host "Running basic tests only (no VLM/Embedding, Windows: skipping filesystem tests)"
-            uv run python -m pytest . -v --html=api-test-report.html --self-contained-html --ignore=retrieval/ --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py --ignore=filesystem/ --ignore=scenarios/resources_retrieval_slow/ --ignore=sessions/ -k "not test_observer"
+            uv run python -m pytest . -v --html=api-test-report.html --self-contained-html --ignore=retrieval/ --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py --ignore=filesystem/ --ignore=scenarios/ -k "not test_observer"
           }
         continue-on-error: true
 
