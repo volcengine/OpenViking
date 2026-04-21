@@ -141,6 +141,16 @@ class OpenVikingConfig(BaseModel):
         ),
     )
 
+    output_language_override: str = Field(
+        default="",
+        description=(
+            "When non-empty, bypasses content-based language detection for memory extraction "
+            "and semantic summaries/overviews and forces this language instead. Use when your "
+            "corpus is mixed-language but you want summaries pinned to a single language "
+            "(e.g., 'en', 'zh-CN', 'ja'). Leave empty (default) to auto-detect per content."
+        ),
+    )
+
     allow_private_networks: bool = Field(
         default=False,
         description=(

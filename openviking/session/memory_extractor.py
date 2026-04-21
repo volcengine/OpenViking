@@ -279,10 +279,14 @@ class MemoryExtractor:
                 return []
 
             config = get_openviking_config()
-            fallback_language = (config.language_fallback or "en").strip() or "en"
-            output_language = self._detect_output_language(
-                messages, fallback_language=fallback_language
-            )
+            override = (getattr(config, "output_language_override", None) or "").strip()
+            if override:
+                output_language = override
+            else:
+                fallback_language = (config.language_fallback or "en").strip() or "en"
+                output_language = self._detect_output_language(
+                    messages, fallback_language=fallback_language
+                )
             history_summary = str(context.get("summary") or "")
 
             prompt = render_prompt(

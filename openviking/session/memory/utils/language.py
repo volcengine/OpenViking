@@ -46,6 +46,41 @@ def _detect_language_from_text(user_text: str, fallback_language: str) -> str:
     return fallback
 
 
+def resolve_output_language(text: str, config=None) -> str:
+    """Resolve output language, honoring config override before content detection.
+
+    When `output_language_override` is set in OpenViking config, returns it directly
+    and skips content-based detection entirely. Otherwise falls back to
+    `_detect_language_from_text` using the configured `language_fallback`.
+    """
+    if config is None:
+        from openviking_cli.utils.config import get_openviking_config
+
+        config = get_openviking_config()
+    override = (getattr(config, "output_language_override", None) or "").strip()
+    if override:
+        return override
+    fallback = (getattr(config, "language_fallback", None) or "en").strip() or "en"
+    return _detect_language_from_text(text, fallback)
+
+
+def resolve_output_language_from_conversation(conversation: str, config=None) -> str:
+    """Resolve output language for a conversation, honoring config override.
+
+    Mirrors `resolve_output_language` but uses `detect_language_from_conversation`
+    (user-only extraction) when no override is set.
+    """
+    if config is None:
+        from openviking_cli.utils.config import get_openviking_config
+
+        config = get_openviking_config()
+    override = (getattr(config, "output_language_override", None) or "").strip()
+    if override:
+        return override
+    fallback = (getattr(config, "language_fallback", None) or "en").strip() or "en"
+    return detect_language_from_conversation(conversation, fallback_language=fallback)
+
+
 def detect_language_from_conversation(conversation: str, fallback_language: str = "en") -> str:
     """Detect dominant language from user messages in conversation.
 

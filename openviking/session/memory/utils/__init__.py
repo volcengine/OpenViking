@@ -23,6 +23,8 @@ from openviking.session.memory.utils.json_parser import (
 )
 from openviking.session.memory.utils.language import (
     detect_language_from_conversation,
+    resolve_output_language,
+    resolve_output_language_from_conversation,
 )
 from openviking.session.memory.utils.messages import (
     parse_memory_file_with_fields,
@@ -56,6 +58,8 @@ __all__ = [
     "truncate_content",
     # Language
     "detect_language_from_conversation",
+    "resolve_output_language",
+    "resolve_output_language_from_conversation",
     # Messages
     "pretty_print_messages",
     "parse_memory_file_with_fields",
