@@ -373,6 +373,7 @@ CLOUD_PROVIDERS: list[CloudProvider] = [
     ),
 ]
 
+
 def _get_cloud_provider(provider_name: str) -> CloudProvider:
     for provider in CLOUD_PROVIDERS:
         if provider.provider == provider_name:

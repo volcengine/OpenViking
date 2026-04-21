@@ -342,7 +342,9 @@ class TestConfigBuilding:
         assert config["vlm"]["model"] == _DEFAULT_CODEX_MODEL
         prompt_input.assert_any_call("Model", default=CLOUD_PROVIDERS[1].default_embedding_model)
         prompt_input.assert_any_call("Model", default=_DEFAULT_CODEX_MODEL)
-        prompt_int.assert_called_once_with("Dimension", default=CLOUD_PROVIDERS[1].default_embedding_dim)
+        prompt_int.assert_called_once_with(
+            "Dimension", default=CLOUD_PROVIDERS[1].default_embedding_dim
+        )
 
     def test_cloud_wizard_kimi_uses_requested_default_model(self):
         with patch(
