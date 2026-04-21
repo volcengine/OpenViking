@@ -122,6 +122,26 @@ def _build_app() -> FastAPI:
     return app
 
 
+def _build_trusted_app() -> FastAPI:
+    app = FastAPI()
+    app.state.config = ServerConfig(auth_mode="trusted")
+
+    @app.exception_handler(OpenVikingError)
+    async def openviking_error_handler(request, exc: OpenVikingError):
+        http_status = ERROR_CODE_TO_HTTP_STATUS.get(exc.code, 500)
+        return JSONResponse(
+            status_code=http_status,
+            content=Response(
+                status="error",
+                error=ErrorInfo(code=exc.code, message=exc.message, details=exc.details),
+            ).model_dump(),
+        )
+
+    set_service(FakeService())
+    app.include_router(observer_router.router)
+    return app
+
+
 def test_observer_endpoints_reject_user_keys_but_allow_admin_and_root():
     app = _build_app()
     client = TestClient(app)
@@ -151,3 +171,19 @@ def test_observer_endpoints_reject_user_keys_but_allow_admin_and_root():
         admin_system.json()["result"]["components"]["vikingdb"]["status"]
         == "global vikingdb stats for admin_user"
     )
+
+
+def test_observer_endpoints_reject_trusted_mode_user_requests():
+    app = _build_trusted_app()
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/v1/observer/system",
+        headers={
+            "X-OpenViking-Account": "acct1",
+            "X-OpenViking-User": "trusted_user",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "PERMISSION_DENIED"

@@ -247,6 +247,8 @@ ov system wait --timeout 60
 
 The observer API provides detailed component-level monitoring.
 
+When server auth is enabled, observer endpoints are a privileged monitoring surface. In `api_key` mode they require an `ADMIN`/`ROOT` context. In `trusted` mode each request resolves to `USER`, so observer endpoints are denied. Use `openviking --sudo observer ...` when the CLI is configured with `root_api_key`.
+
 ### observer.queue
 
 #### 1. API Implementation Overview
@@ -291,7 +293,7 @@ print(client.observer.queue)
 **CLI**
 
 ```bash
-ov observer queue
+ov --sudo observer queue
 ```
 
 **Response Example**
@@ -358,7 +360,7 @@ print(client.observer.vikingdb().status)      # Status table string
 **CLI**
 
 ```bash
-ov observer vikingdb
+ov --sudo observer vikingdb
 ```
 
 **Response Example**
@@ -422,7 +424,7 @@ print(client.observer.models)
 **CLI**
 
 ```bash
-ov observer models
+ov --sudo observer models
 ```
 
 **Response Example**
@@ -606,7 +608,7 @@ print(client.observer.system())
 **CLI**
 
 ```bash
-ov observer system
+ov --sudo observer system
 ```
 
 **Response Example**

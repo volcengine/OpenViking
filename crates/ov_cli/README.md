@@ -89,9 +89,11 @@ ov read viking://resources/...
 - `system wait` - Wait for async processing
 - `system status` - Component status
 - `system health` - Health check
-- `observer queue` - Queue status
-- `observer vikingdb` - VikingDB status
-- `observer vlm` - VLM status
+- `observer queue` - Queue status (admin/root; use `--sudo` with a configured `root_api_key`)
+- `observer vikingdb` - VikingDB status (admin/root; use `--sudo` with a configured `root_api_key`)
+- `observer vlm` - VLM status (admin/root; use `--sudo` with a configured `root_api_key`)
+
+When server auth is enabled, observer commands are a privileged monitoring surface. In `api_key` mode they require an `ADMIN`/`ROOT` context; in `trusted` mode requests resolve to `USER` and observer endpoints are denied.
 
 ### Session
 - `session new` - Create session

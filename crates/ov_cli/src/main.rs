@@ -552,6 +552,7 @@ impl Commands {
         match self {
             Self::Admin { .. }
             | Self::System { .. }
+            | Self::Observer { .. }
             | Self::Reindex { .. } => true,
             _ => false,
         }
@@ -990,7 +991,7 @@ async fn main() {
         }
         Commands::Status => {
             let client = ctx.get_client();
-            commands::observer::system(&client, ctx.output_format, ctx.compact).await
+            commands::system::status(&client, ctx.output_format, ctx.compact).await
         }
         Commands::Health => handlers::handle_health(ctx).await,
         Commands::System { action } => handlers::handle_system(action, ctx).await,
