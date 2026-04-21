@@ -3,13 +3,11 @@ import shutil
 import tempfile
 import uuid
 
-import pytest
-
 from build_test_helpers import (
-    assert_root_uri_valid,
-    create_test_file,
-    cleanup_temp_dir,
     _extract_error_message,
+    assert_root_uri_valid,
+    cleanup_temp_dir,
+    create_test_file,
 )
 
 
@@ -25,9 +23,10 @@ class TestBuildErrorHandling:
         data = response.json()
         if data.get("status") == "error":
             error_msg = _extract_error_message(data).lower()
-            assert "404" in error_msg or "not found" in error_msg or "error" in error_msg, \
+            assert "404" in error_msg or "not found" in error_msg or "error" in error_msg, (
                 f"404错误信息应包含 404/not found/error, 实际: {error_msg}"
-            print(f"✓ TC-E01 远端404不存在处理通过(返回error)")
+            )
+            print("✓ TC-E01 远端404不存在处理通过(返回error)")
             return
 
         if data.get("status") == "ok":
@@ -35,10 +34,10 @@ class TestBuildErrorHandling:
             root_uri = result.get("root_uri")
             if root_uri:
                 assert_root_uri_valid(root_uri)
-            print(f"✓ TC-E01 远端404处理通过(降级为空资源)")
+            print("✓ TC-E01 远端404处理通过(降级为空资源)")
             return
 
-        assert False, f"404 URL 应返回 error 或 ok, 实际: {data.get('status')}"
+        raise AssertionError(f"404 URL 应返回 error 或 ok, 实际: {data.get('status')}")
 
     def test_error_dns_resolve_failure(self, api_client):
         """TC-E08 DNS解析失败：验证不存在的域名返回错误且不挂起"""
@@ -49,9 +48,13 @@ class TestBuildErrorHandling:
         data = response.json()
         if data.get("status") == "error":
             error_msg = _extract_error_message(data).lower()
-            assert "resolve" in error_msg or "hostname" in error_msg or "dns" in error_msg or "error" in error_msg, \
-                f"DNS失败错误信息应包含 resolve/hostname/dns/error, 实际: {error_msg}"
-            print(f"✓ TC-E08 DNS解析失败处理通过(返回error)")
+            assert (
+                "resolve" in error_msg
+                or "hostname" in error_msg
+                or "dns" in error_msg
+                or "error" in error_msg
+            ), f"DNS失败错误信息应包含 resolve/hostname/dns/error, 实际: {error_msg}"
+            print("✓ TC-E08 DNS解析失败处理通过(返回error)")
             return
 
         if data.get("status") == "ok":
@@ -59,10 +62,10 @@ class TestBuildErrorHandling:
             root_uri = result.get("root_uri")
             if root_uri:
                 assert_root_uri_valid(root_uri)
-            print(f"✓ TC-E08 DNS解析失败处理通过(降级为空资源)")
+            print("✓ TC-E08 DNS解析失败处理通过(降级为空资源)")
             return
 
-        assert False, f"DNS失败 URL 应返回 error 或 ok, 实际: {data.get('status')}"
+        raise AssertionError(f"DNS失败 URL 应返回 error 或 ok, 实际: {data.get('status')}")
 
     def test_error_ssh_url_invalid_format(self, api_client):
         """TC-E09 SSH URL格式错误：验证 git@invalid (无冒号) 返回 InvalidArgumentError"""
@@ -73,17 +76,22 @@ class TestBuildErrorHandling:
         data = response.json()
         if data.get("status") == "error":
             error_msg = _extract_error_message(data).lower()
-            assert ("invalid" in error_msg or "ssh" in error_msg or "uri" in error_msg
-                    or "colon" in error_msg or "error" in error_msg or "permission" in error_msg), \
-                f"SSH格式错误应包含 invalid/ssh/uri/colon/error/permission, 实际: {error_msg}"
-            print(f"✓ TC-E09 SSH URL格式错误处理通过")
+            assert (
+                "invalid" in error_msg
+                or "ssh" in error_msg
+                or "uri" in error_msg
+                or "colon" in error_msg
+                or "error" in error_msg
+                or "permission" in error_msg
+            ), f"SSH格式错误应包含 invalid/ssh/uri/colon/error/permission, 实际: {error_msg}"
+            print("✓ TC-E09 SSH URL格式错误处理通过")
             return
 
         if data.get("status") == "ok":
-            print(f"✓ TC-E09 SSH URL格式错误处理通过(服务端降级)")
+            print("✓ TC-E09 SSH URL格式错误处理通过(服务端降级)")
             return
 
-        assert False, f"SSH URL格式错误应返回 error 或降级, 实际: {data.get('status')}"
+        raise AssertionError(f"SSH URL格式错误应返回 error 或降级, 实际: {data.get('status')}")
 
     def test_error_non_resources_scope_rejected(self, api_client):
         """TC-E11 非resources scope拒绝：验证 to=viking://sessions/xxx 返回错误"""
@@ -100,18 +108,23 @@ class TestBuildErrorHandling:
             data = response.json()
             if data.get("status") == "error":
                 error_msg = _extract_error_message(data).lower()
-                assert ("scope" in error_msg or "resources" in error_msg or "invalid" in error_msg
-                        or "permission" in error_msg or "internal" in error_msg), \
-                    f"scope拒绝应包含 scope/resources/invalid/permission/internal, 实际: {error_msg}"
-                print(f"✓ TC-E11 非resources scope拒绝通过")
+                assert (
+                    "scope" in error_msg
+                    or "resources" in error_msg
+                    or "invalid" in error_msg
+                    or "permission" in error_msg
+                    or "internal" in error_msg
+                ), f"scope拒绝应包含 scope/resources/invalid/permission/internal, 实际: {error_msg}"
+                print("✓ TC-E11 非resources scope拒绝通过")
                 return
 
             if data.get("status") == "ok":
                 result = data.get("result", {})
                 root_uri = result.get("root_uri", "")
-                assert "sessions" not in root_uri, \
+                assert "sessions" not in root_uri, (
                     f"非resources scope不应成功写入sessions, root_uri: {root_uri}"
-                print(f"✓ TC-E11 非resources scope处理通过(服务端重定向)")
+                )
+                print("✓ TC-E11 非resources scope处理通过(服务端重定向)")
                 return
         finally:
             cleanup_temp_dir(temp_dir)
@@ -130,8 +143,9 @@ class TestBuildErrorHandling:
             assert response.status_code == 200
 
             data = response.json()
-            assert data.get("status") in ("ok", "error"), \
+            assert data.get("status") in ("ok", "error"), (
                 f"损坏ZIP应返回 ok 或 error, 实际: {data.get('status')}"
+            )
 
             if data.get("status") == "ok":
                 result = data.get("result", {})
@@ -139,6 +153,6 @@ class TestBuildErrorHandling:
                 if root_uri:
                     assert_root_uri_valid(root_uri)
 
-            print(f"✓ TC-E16 损坏的ZIP文件处理通过")
+            print("✓ TC-E16 损坏的ZIP文件处理通过")
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)

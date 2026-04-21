@@ -4,12 +4,11 @@ import tempfile
 import uuid
 
 import pytest
-
 from build_test_helpers import (
-    assert_root_uri_valid,
-    assert_resource_indexed,
-    assert_source_format,
     assert_content_no_html_tags,
+    assert_resource_indexed,
+    assert_root_uri_valid,
+    assert_source_format,
 )
 
 

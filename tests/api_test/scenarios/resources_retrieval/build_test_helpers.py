@@ -1,5 +1,4 @@
 import os
-import re
 import shutil
 import tempfile
 import uuid
@@ -7,7 +6,9 @@ import uuid
 
 def create_test_file(content=None, suffix=".txt", filename=None):
     if content is None:
-        content = f"测试文件内容 - {uuid.uuid4()}\n这是一个用于构建测试的临时文件。\n包含一些测试数据。"
+        content = (
+            f"测试文件内容 - {uuid.uuid4()}\n这是一个用于构建测试的临时文件。\n包含一些测试数据。"
+        )
 
     temp_dir = tempfile.mkdtemp()
     fname = filename or f"test_file_{str(uuid.uuid4())[:8]}{suffix}"
@@ -58,8 +59,9 @@ def cleanup_temp_dir(temp_dir):
 
 def assert_root_uri_valid(root_uri):
     assert root_uri, "add_resource 必须返回 root_uri"
-    assert root_uri.startswith("viking://resources/"), \
+    assert root_uri.startswith("viking://resources/"), (
         f"root_uri 应以 viking://resources/ 开头, 实际: {root_uri}"
+    )
 
 
 def assert_resource_findable(api_client, root_uri, keyword, timeout=90, poll_interval=3):
@@ -127,8 +129,9 @@ def assert_source_format(api_client, root_uri, expected_format):
     if isinstance(stat_result, dict):
         actual_format = stat_result.get("source_format")
         if actual_format:
-            assert actual_format in expected_format, \
+            assert actual_format in expected_format, (
                 f"source_format 应为 {expected_format}, 实际: {actual_format}"
+            )
             return
 
     tree_resp = api_client.fs_tree(root_uri)
@@ -138,8 +141,9 @@ def assert_source_format(api_client, root_uri, expected_format):
         if isinstance(tree_result, dict):
             actual_format = tree_result.get("source_format")
             if actual_format:
-                assert actual_format in expected_format, \
+                assert actual_format in expected_format, (
                     f"source_format 应为 {expected_format}, 实际: {actual_format}"
+                )
                 return
             children = tree_result.get("children", [])
         elif isinstance(tree_result, list):
@@ -151,8 +155,9 @@ def assert_source_format(api_client, root_uri, expected_format):
             if isinstance(child, dict):
                 actual_format = child.get("source_format")
                 if actual_format:
-                    assert actual_format in expected_format, \
+                    assert actual_format in expected_format, (
                         f"source_format 应为 {expected_format}, 实际: {actual_format}"
+                    )
                     return
 
     ls_resp = api_client.fs_ls(root_uri, recursive=True)
@@ -164,19 +169,30 @@ def assert_source_format(api_client, root_uri, expected_format):
             if isinstance(item, dict):
                 actual_format = item.get("source_format")
                 if actual_format:
-                    assert actual_format in expected_format, \
+                    assert actual_format in expected_format, (
                         f"source_format 应为 {expected_format}, 实际: {actual_format}"
+                    )
                     return
 
     ext_format_map = {
-        ".txt": ["text", "markdown"], ".text": ["text"],
-        ".md": ["markdown"], ".markdown": ["markdown"],
-        ".pdf": ["pdf"], ".html": ["html"], ".htm": ["html"],
-        ".docx": ["docx"], ".doc": ["doc"],
-        ".pptx": ["pptx"], ".xlsx": ["xlsx"],
-        ".epub": ["epub"], ".zip": ["zip"],
-        ".png": ["image"], ".jpg": ["image"], ".jpeg": ["image"],
-        ".mp3": ["audio"], ".wav": ["audio"],
+        ".txt": ["text", "markdown"],
+        ".text": ["text"],
+        ".md": ["markdown"],
+        ".markdown": ["markdown"],
+        ".pdf": ["pdf"],
+        ".html": ["html"],
+        ".htm": ["html"],
+        ".docx": ["docx"],
+        ".doc": ["doc"],
+        ".pptx": ["pptx"],
+        ".xlsx": ["xlsx"],
+        ".epub": ["epub"],
+        ".zip": ["zip"],
+        ".png": ["image"],
+        ".jpg": ["image"],
+        ".jpeg": ["image"],
+        ".mp3": ["audio"],
+        ".wav": ["audio"],
         ".mp4": ["video"],
     }
     if ls_resp.status_code == 200:
@@ -189,8 +205,9 @@ def assert_source_format(api_client, root_uri, expected_format):
                 uri = item.get("uri", "")
                 for ext, fmt_list in ext_format_map.items():
                     if rel_path.endswith(ext) or uri.endswith(ext):
-                        assert any(f in expected_format for f in fmt_list), \
+                        assert any(f in expected_format for f in fmt_list), (
                             f"根据扩展名 {ext} 推断 source_format 应为 {fmt_list}, 期望: {expected_format}"
+                        )
                         return
 
 
@@ -207,8 +224,9 @@ def assert_tree_has_child_nodes(api_client, root_uri, min_nodes=1):
     else:
         children = []
 
-    assert len(children) >= min_nodes, \
+    assert len(children) >= min_nodes, (
         f"tree 应至少包含 {min_nodes} 个子节点, 实际: {len(children)}"
+    )
 
 
 def assert_content_no_html_tags(api_client, root_uri):
@@ -219,11 +237,14 @@ def assert_content_no_html_tags(api_client, root_uri):
     grep_result = grep_data.get("result", {})
     matches = grep_result.get("matches", [])
     html_matches = [m for m in matches if isinstance(m, dict) and "<" in str(m.get("line", ""))]
-    assert len(html_matches) == 0, \
-        f"HTML内容应被剥离, 但仍包含HTML标签: {[m.get('line','')[:80] for m in html_matches[:3]]}"
+    assert len(html_matches) == 0, (
+        f"HTML内容应被剥离, 但仍包含HTML标签: {[m.get('line', '')[:80] for m in html_matches[:3]]}"
+    )
 
 
-def assert_overview_or_abstract_contains(api_client, root_uri, keyword, timeout=60, poll_interval=3):
+def assert_overview_or_abstract_contains(
+    api_client, root_uri, keyword, timeout=60, poll_interval=3
+):
     import time
 
     start = time.time()

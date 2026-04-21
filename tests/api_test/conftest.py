@@ -275,10 +275,10 @@ def format_memory_delta(delta_bytes):
 
 def get_test_category(nodeid):
     parts = nodeid.split(os.sep)
-    
+
     # 优先匹配更具体的路径（倒序匹配）
     priority_categories = ["stability_error", "resources_retrieval", "filesystem", "sessions"]
-    
+
     for part in parts:
         if part in priority_categories:
             # 特殊处理：将子目录映射到正确的分类
@@ -290,12 +290,12 @@ def get_test_category(nodeid):
                 return "文件系统API"
             elif part == "sessions":
                 return "会话管理API"
-    
+
     # 如果没有匹配到优先分类，则按原逻辑匹配
     for part in parts:
         if part in CATEGORY_NAMES:
             return CATEGORY_NAMES[part]
-    
+
     return "其他"
 
 
@@ -376,7 +376,7 @@ def pytest_runtest_makereport(item, call):
                 curl = fixture_value.to_curl()
                 if curl:
                     report.sections.append(("cURL Command", curl))
-            
+
             # 添加 Response Body 显示
             if hasattr(fixture_value, "last_response") and fixture_value.last_response:
                 response = fixture_value.last_response
@@ -385,9 +385,14 @@ def pytest_runtest_makereport(item, call):
                     if response_text:
                         try:
                             import json
+
                             response_json = json.loads(response_text)
-                            formatted_response = json.dumps(response_json, indent=2, ensure_ascii=False)
-                            report.sections.append(("Response Body", f"<pre>{formatted_response}</pre>"))
+                            formatted_response = json.dumps(
+                                response_json, indent=2, ensure_ascii=False
+                            )
+                            report.sections.append(
+                                ("Response Body", f"<pre>{formatted_response}</pre>")
+                            )
                         except Exception:
                             report.sections.append(("Response Body", f"<pre>{response_text}</pre>"))
 

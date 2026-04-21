@@ -1,12 +1,11 @@
 import os
 import shutil
+import struct
 import tempfile
 import uuid
 import wave
-import struct
 
 import pytest
-
 from build_test_helpers import assert_root_uri_valid, assert_source_format
 
 
@@ -36,7 +35,7 @@ def _create_audio_file(ext=".wav"):
         wf.setsampwidth(2)
         wf.setframerate(44100)
         frames = b""
-        for i in range(44100):
+        for _i in range(44100):
             value = int(32767 * 0.5)
             frames += struct.pack("<h", value)
         wf.writeframes(frames)
@@ -60,8 +59,7 @@ class TestBuildMediaResources:
             result = data.get("result", {})
             root_uri = result.get("root_uri")
             assert_root_uri_valid(root_uri)
-            assert "/images/" in root_uri, \
-                f"图片 root_uri 应含 /images/, 实际: {root_uri}"
+            assert "/images/" in root_uri, f"图片 root_uri 应含 /images/, 实际: {root_uri}"
 
             stat_resp = api_client.fs_stat(root_uri)
             assert stat_resp.status_code == 200
@@ -85,8 +83,7 @@ class TestBuildMediaResources:
             result = data.get("result", {})
             root_uri = result.get("root_uri")
             assert_root_uri_valid(root_uri)
-            assert "/audio/" in root_uri, \
-                f"音频 root_uri 应含 /audio/, 实际: {root_uri}"
+            assert "/audio/" in root_uri, f"音频 root_uri 应含 /audio/, 实际: {root_uri}"
 
             stat_resp = api_client.fs_stat(root_uri)
             assert stat_resp.status_code == 200

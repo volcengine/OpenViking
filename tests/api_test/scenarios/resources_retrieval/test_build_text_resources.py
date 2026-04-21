@@ -1,12 +1,12 @@
 import uuid
 
 from build_test_helpers import (
-    create_test_file,
-    cleanup_temp_dir,
-    assert_root_uri_valid,
     assert_resource_indexed,
+    assert_root_uri_valid,
     assert_source_format,
     assert_tree_has_child_nodes,
+    cleanup_temp_dir,
+    create_test_file,
 )
 
 
@@ -58,8 +58,9 @@ class TestBuildTextResources:
             assert response.status_code == 200
 
             data = response.json()
-            assert data.get("status") in ("ok", "error"), \
+            assert data.get("status") in ("ok", "error"), (
                 f"空文件构建应返回 ok 或 error, 实际: {data.get('status')}"
+            )
 
             if data.get("status") == "ok":
                 result = data.get("result", {})
@@ -67,6 +68,6 @@ class TestBuildTextResources:
                 if root_uri:
                     assert_root_uri_valid(root_uri)
 
-            print(f"✓ TC-B15 空文件构建通过")
+            print("✓ TC-B15 空文件构建通过")
         finally:
             cleanup_temp_dir(temp_dir)
