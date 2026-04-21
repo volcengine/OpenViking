@@ -48,6 +48,12 @@ def parse_args() -> argparse.Namespace:
         default=180,
         help="Seconds to wait between major phases, default: 180",
     )
+    parser.add_argument(
+        "--eval-timeout",
+        type=int,
+        default=300,
+        help="Per-question timeout in seconds for run_eval.py, default: 300",
+    )
     return parser.parse_args()
 
 
@@ -59,6 +65,7 @@ def build_steps(
     skip_import: bool,
     threads: int = 20,
     judge_parallel: int = 10,
+    eval_timeout: int = 300,
 ) -> list[dict]:
     steps: list[dict] = []
     if not skip_import:
@@ -87,6 +94,8 @@ def build_steps(
                     output_path,
                     "--threads",
                     str(threads),
+                    "--timeout",
+                    str(eval_timeout),
                 ],
             },
             {
@@ -132,6 +141,7 @@ def main() -> int:
         skip_import=args.skip_import,
         threads=args.threads,
         judge_parallel=args.judge_parallel,
+        eval_timeout=args.eval_timeout,
     )
 
     total_steps = len(steps)

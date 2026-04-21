@@ -30,6 +30,14 @@ def build_sample_agent_id(sample_id: str | int, mode: str) -> str:
     return f"lm_{digest}"
 
 
+def build_sample_user_id(sample_id: str | int, mode: str) -> str:
+    """Return the user_id used for one sample import."""
+    if mode == "shared":
+        return "default"
+    digest = hashlib.md5(f"user:{sample_id}".encode("utf-8")).hexdigest()[:12]
+    return f"lm_user_{digest}"
+
+
 def load_longmemeval_data(
     path: str,
     sample_index: Optional[int] = None,
@@ -222,12 +230,22 @@ def _parse_token_usage(commit_result: Dict[str, Any]) -> Dict[str, int]:
     }
 
 
+def _resolve_parallel(value: Optional[int], fallback: int) -> int:
+    resolved = fallback if value is None else value
+    if resolved < 1:
+        raise ValueError("Parallelism must be >= 1")
+    return resolved
+
+
 async def submit_viking_ingest(
     messages: List[Dict[str, Any]],
     openviking_url: str,
-    semaphore: asyncio.Semaphore,
+    submit_semaphore: asyncio.Semaphore,
     session_time: Optional[str] = None,
     agent_id: str = "default",
+    user_id: str = "default",
+    sample_id: Optional[str | int] = None,
+    session_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     base_datetime = None
     if session_time:
@@ -236,10 +254,9 @@ async def submit_viking_ingest(
         except ValueError:
             print(f"Warning: Failed to parse session_time: {session_time}", file=sys.stderr)
 
-    async with semaphore:
-        client = ov.AsyncHTTPClient(url=openviking_url, agent_id=agent_id)
+    async with submit_semaphore:
+        client = ov.AsyncHTTPClient(url=openviking_url, agent_id=agent_id, user=user_id)
         await client.initialize()
-
         try:
             create_res = await client.create_session()
             session_id = create_res["session_id"]
@@ -266,6 +283,7 @@ async def submit_viking_ingest(
                 "task_id": result.get("task_id"),
                 "trace_id": trace_id,
                 "agent_id": agent_id,
+                "user_id": user_id,
                 "session_id": session_id,
             }
         finally:
@@ -275,14 +293,17 @@ async def submit_viking_ingest(
 async def wait_for_viking_task(
     openviking_url: str,
     task_id: Optional[str],
-    semaphore: asyncio.Semaphore,
+    wait_semaphore: asyncio.Semaphore,
     agent_id: str = "default",
+    user_id: str = "default",
+    sample_id: Optional[str | int] = None,
+    session_key: Optional[str] = None,
 ) -> Dict[str, int]:
     if not task_id:
         return {"embedding": 0, "vlm": 0, "llm_input": 0, "llm_output": 0, "total": 0}
 
-    async with semaphore:
-        client = ov.AsyncHTTPClient(url=openviking_url, agent_id=agent_id)
+    async with wait_semaphore:
+        client = ov.AsyncHTTPClient(url=openviking_url, agent_id=agent_id, user=user_id)
         await client.initialize()
         try:
             while True:
@@ -300,22 +321,32 @@ async def wait_for_viking_task(
 async def viking_ingest(
     messages: List[Dict[str, Any]],
     openviking_url: str,
-    semaphore: asyncio.Semaphore,
+    submit_semaphore: asyncio.Semaphore,
+    wait_semaphore: asyncio.Semaphore,
     session_time: Optional[str] = None,
     agent_id: str = "default",
+    user_id: str = "default",
+    sample_id: Optional[str | int] = None,
+    session_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     submit_result = await submit_viking_ingest(
         messages=messages,
         openviking_url=openviking_url,
-        semaphore=semaphore,
+        submit_semaphore=submit_semaphore,
         session_time=session_time,
         agent_id=agent_id,
+        user_id=user_id,
+        sample_id=sample_id,
+        session_key=session_key,
     )
     token_usage = await wait_for_viking_task(
         openviking_url=openviking_url,
         task_id=submit_result.get("task_id"),
-        semaphore=semaphore,
+        wait_semaphore=wait_semaphore,
         agent_id=agent_id,
+        user_id=user_id,
+        sample_id=sample_id,
+        session_key=session_key,
     )
     submit_result["token_usage"] = token_usage
     return submit_result
@@ -337,16 +368,22 @@ async def process_single_session(
     run_time: str,
     ingest_record: Dict[str, Any],
     args: argparse.Namespace,
-    semaphore: asyncio.Semaphore,
+    submit_semaphore: asyncio.Semaphore,
+    wait_semaphore: asyncio.Semaphore,
 ) -> Dict[str, Any]:
     try:
         agent_id = build_sample_agent_id(sample_id, args.agent_id_mode)
+        user_id = build_sample_user_id(sample_id, args.user_id_mode)
         result = await viking_ingest(
             messages,
             args.openviking_url,
-            semaphore,
+            submit_semaphore,
+            wait_semaphore,
             meta.get("date_time"),
             agent_id=agent_id,
+            user_id=user_id,
+            sample_id=sample_id,
+            session_key=session_key,
         )
         token_usage = result["token_usage"]
         task_id = result.get("task_id")
@@ -354,7 +391,7 @@ async def process_single_session(
         embedding_tokens = token_usage.get("embedding", 0)
         vlm_tokens = token_usage.get("vlm", 0)
         print(
-            f"    -> [COMPLETED] [{sample_id}/{session_key}] embed={embedding_tokens}, vlm={vlm_tokens}, task_id={task_id}, trace_id={trace_id}",
+            f"    -> [COMPLETED] [{sample_id}/{session_key}] embed={embedding_tokens}, vlm={vlm_tokens}, task_id={task_id}, trace_id={trace_id}, user_id={user_id}, agent_id={agent_id}",
             file=sys.stderr,
         )
 
@@ -369,6 +406,8 @@ async def process_single_session(
             "vlm_tokens": vlm_tokens,
             "task_id": task_id,
             "trace_id": trace_id,
+            "user_id": user_id,
+            "agent_id": agent_id,
         }
         write_success_record(record, args.success_csv)
         mark_ingested(sample_id, session_key, ingest_record, meta)
@@ -393,7 +432,7 @@ async def finalize_deferred_session(
     run_time: str,
     ingest_record: Dict[str, Any],
     args: argparse.Namespace,
-    semaphore: asyncio.Semaphore,
+    wait_semaphore: asyncio.Semaphore,
 ) -> Dict[str, Any]:
     sample_id = pending["sample_id"]
     session_key = pending["session_key"]
@@ -401,19 +440,23 @@ async def finalize_deferred_session(
     task_id = pending.get("task_id")
     trace_id = pending.get("trace_id", "")
     agent_id = pending.get("agent_id", "default")
+    user_id = pending.get("user_id", "default")
 
     try:
         token_usage = await wait_for_viking_task(
             openviking_url=args.openviking_url,
             task_id=task_id,
-            semaphore=semaphore,
+            wait_semaphore=wait_semaphore,
             agent_id=agent_id,
+            user_id=user_id,
+            sample_id=sample_id,
+            session_key=session_key,
         )
         embedding_tokens = token_usage.get("embedding", 0)
         vlm_tokens = token_usage.get("vlm", 0)
         print(
             f"    -> [COMPLETED] [{sample_id}/{session_key}] embed={embedding_tokens}, "
-            f"vlm={vlm_tokens}, task_id={task_id}, trace_id={trace_id}, agent_id={agent_id}",
+            f"vlm={vlm_tokens}, task_id={task_id}, trace_id={trace_id}, user_id={user_id}, agent_id={agent_id}",
             file=sys.stderr,
         )
         record = {
@@ -427,6 +470,7 @@ async def finalize_deferred_session(
             "vlm_tokens": vlm_tokens,
             "task_id": task_id,
             "trace_id": trace_id,
+            "user_id": user_id,
             "agent_id": agent_id,
         }
         write_success_record(record, args.success_csv)
@@ -443,6 +487,7 @@ async def finalize_deferred_session(
             "status": "error",
             "error": str(e),
             "task_id": task_id,
+            "user_id": user_id,
             "agent_id": agent_id,
         }
         write_error_record(record, args.error_log)
@@ -450,7 +495,10 @@ async def finalize_deferred_session(
 
 
 async def run_import(args: argparse.Namespace) -> None:
-    semaphore = asyncio.Semaphore(args.parallel)
+    submit_parallel = _resolve_parallel(getattr(args, "submit_parallel", None), args.parallel)
+    wait_parallel = _resolve_parallel(getattr(args, "wait_parallel", None), args.parallel)
+    submit_semaphore = asyncio.Semaphore(submit_parallel)
+    wait_semaphore = asyncio.Semaphore(wait_parallel)
     session_range = parse_session_range(args.sessions) if args.sessions else None
     deferred_tasks: List[Dict[str, Any]] = []
 
@@ -475,11 +523,12 @@ async def run_import(args: argparse.Namespace) -> None:
     async def process_sample(item):
         sample_id = item["question_id"]
         agent_id = build_sample_agent_id(sample_id, args.agent_id_mode)
+        user_id = build_sample_user_id(sample_id, args.user_id_mode)
         sessions = build_session_messages(item, session_range)
 
         print(f"\n=== Sample {sample_id} ===", file=sys.stderr)
         print(
-            f"    {len(sessions)} session(s) to import with agent_id={agent_id}",
+            f"    {len(sessions)} session(s) to import with user_id={user_id}, agent_id={agent_id}",
             file=sys.stderr,
         )
 
@@ -507,7 +556,8 @@ async def run_import(args: argparse.Namespace) -> None:
                     run_time=run_time,
                     ingest_record=ingest_record,
                     args=args,
-                    semaphore=semaphore,
+                    submit_semaphore=submit_semaphore,
+                    wait_semaphore=wait_semaphore,
                 )
                 continue
 
@@ -515,9 +565,12 @@ async def run_import(args: argparse.Namespace) -> None:
                 submit_result = await submit_viking_ingest(
                     messages=messages,
                     openviking_url=args.openviking_url,
-                    semaphore=semaphore,
+                    submit_semaphore=submit_semaphore,
                     session_time=meta.get("date_time"),
                     agent_id=agent_id,
+                    user_id=user_id,
+                    sample_id=sample_id,
+                    session_key=session_key,
                 )
                 deferred_tasks.append(
                     {
@@ -526,12 +579,13 @@ async def run_import(args: argparse.Namespace) -> None:
                         "meta": meta,
                         "task_id": submit_result.get("task_id"),
                         "trace_id": submit_result.get("trace_id", ""),
+                        "user_id": user_id,
                         "agent_id": agent_id,
                     }
                 )
                 print(
                     f"    -> [SUBMITTED] [{sample_id}/{session_key}] "
-                    f"task_id={submit_result.get('task_id')}, agent_id={agent_id}",
+                    f"task_id={submit_result.get('task_id')}, user_id={user_id}, agent_id={agent_id}",
                     file=sys.stderr,
                 )
             except Exception as e:
@@ -548,7 +602,8 @@ async def run_import(args: argparse.Namespace) -> None:
 
     tasks = [asyncio.create_task(process_sample(item)) for item in samples]
     print(
-        f"\n[INFO] Starting import with {args.parallel} concurrent workers, {len(tasks)} tasks to process",
+        f"\n[INFO] Starting import with submit_parallel={submit_parallel}, "
+        f"wait_parallel={wait_parallel}, {len(tasks)} sample task(s) to process",
         file=sys.stderr,
     )
     await asyncio.gather(*tasks, return_exceptions=True)
@@ -566,7 +621,7 @@ async def run_import(args: argparse.Namespace) -> None:
                         run_time=run_time,
                         ingest_record=ingest_record,
                         args=args,
-                        semaphore=semaphore,
+                        wait_semaphore=wait_semaphore,
                     )
                 )
                 for pending in deferred_tasks
@@ -600,7 +655,19 @@ def main():
         "--parallel",
         type=int,
         default=5,
-        help="Number of concurrent import workers",
+        help="Shared default for submit/wait concurrency when dedicated flags are not set.",
+    )
+    parser.add_argument(
+        "--submit-parallel",
+        type=int,
+        default=None,
+        help="Max concurrent session submissions across samples. Defaults to --parallel.",
+    )
+    parser.add_argument(
+        "--wait-parallel",
+        type=int,
+        default=None,
+        help="Max concurrent background task waiters. Defaults to --parallel.",
     )
     parser.add_argument(
         "--sample",
@@ -636,6 +703,12 @@ def main():
         choices=("shared", "per-sample"),
         default="per-sample",
         help="Whether all samples share one agent_id or each sample gets its own.",
+    )
+    parser.add_argument(
+        "--user-id-mode",
+        choices=("shared", "per-sample"),
+        default="per-sample",
+        help="Whether all samples share one user_id or each sample gets its own.",
     )
     args = parser.parse_args()
 

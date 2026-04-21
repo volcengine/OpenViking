@@ -1,5 +1,6 @@
 import argparse
 import csv
+import hashlib
 import json
 import os
 import subprocess
@@ -17,6 +18,22 @@ def parse_longmemeval_datetime(date_str: str) -> datetime | None:
         return datetime.strptime(date_str.strip(), LONGMEMEVAL_TIME_FORMAT)
     except ValueError:
         return None
+
+
+def build_sample_agent_id(sample_id: str | int, mode: str) -> str:
+    """Return the agent_id used for one sample eval."""
+    if mode == "shared":
+        return "default"
+    digest = hashlib.md5(str(sample_id).encode("utf-8")).hexdigest()[:12]
+    return f"lm_{digest}"
+
+
+def build_sample_user_id(sample_id: str | int, mode: str) -> str:
+    """Return the user_id used for one sample eval."""
+    if mode == "shared":
+        return "default"
+    digest = hashlib.md5(f"user:{sample_id}".encode("utf-8")).hexdigest()[:12]
+    return f"lm_user_{digest}"
 
 
 def load_csv_qa(
@@ -80,17 +97,41 @@ def load_longmemeval_qa(
     return qa_list
 
 
-def run_vikingbot_chat(
-    question: str, question_time: str | None = None
-) -> tuple[str, dict, float, int, list]:
+def build_vikingbot_chat_cmd(
+    question: str,
+    question_time: str | None = None,
+    sender_id: str | None = None,
+    session_id: str | None = None,
+) -> list[str]:
     if question_time:
         input_text = f"Current date: {question_time}. Answer the question directly: {question}"
     else:
         input_text = f"Answer the question directly: {question}"
-    cmd = ["vikingbot", "chat", "-m", input_text, "-e"]
+    cmd = ["vikingbot", "chat", "-m", input_text]
+    if sender_id:
+        cmd.extend(["--sender", sender_id])
+    if session_id:
+        cmd.extend(["--session", session_id])
+    cmd.append("-e")
+    return cmd
+
+
+def run_vikingbot_chat(
+    question: str,
+    question_time: str | None = None,
+    sender_id: str | None = None,
+    session_id: str | None = None,
+    timeout: int = 300,
+) -> tuple[str, dict, float, int, list]:
+    cmd = build_vikingbot_chat_cmd(
+        question=question,
+        question_time=question_time,
+        sender_id=sender_id,
+        session_id=session_id,
+    )
     start_time = time.time()
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=300)
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=timeout)
         elapsed = time.time() - start_time
         output = result.stdout.strip()
         try:
@@ -156,6 +197,12 @@ def main():
     parser.add_argument(
         "--threads", type=int, default=5, help="Number of concurrent threads, default: 5"
     )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=300,
+        help="Per-question timeout in seconds for the vikingbot subprocess, default: 300",
+    )
     args = parser.parse_args()
 
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
@@ -207,16 +254,23 @@ def main():
             nonlocal processed_count
             question = qa_item["question"]
             answer = qa_item["answer"]
+            sample_id = qa_item["sample_id"]
             question_time = qa_item.get("question_time")
             print(f"Processing {idx}/{total_count}: {question[:60]}...")
             if question_time:
                 print(f"  [time context: {question_time}]")
 
+            sender_id = build_sample_user_id(sample_id, "per-sample")
+            session_id = build_sample_agent_id(sample_id, "per-sample")
             response, token_usage, time_cost, iteration, tools_used_names = run_vikingbot_chat(
-                question, question_time
+                question,
+                question_time,
+                sender_id=sender_id,
+                session_id=session_id,
+                timeout=args.timeout,
             )
             row = {
-                "sample_id": qa_item["sample_id"],
+                "sample_id": sample_id,
                 "question": question,
                 "answer": answer,
                 "question_type": qa_item.get("question_type", ""),

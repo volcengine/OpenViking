@@ -79,6 +79,18 @@ class VikingListTool(OVFileTool):
 class VikingSearchTool(OVFileTool):
     """Tool to search Viking resources."""
 
+    @staticmethod
+    def _should_scope_to_sample_memory(
+        tool_context: "ToolContext", target_uri: Optional[str]
+    ) -> bool:
+        return (
+            not target_uri
+            and bool(getattr(tool_context, "workspace_id", ""))
+            and bool(getattr(tool_context, "sender_id", ""))
+            and str(tool_context.workspace_id).startswith("lm_")
+            and str(tool_context.sender_id).startswith("lm_user_")
+        )
+
     @property
     def name(self) -> str:
         return "openviking_search"
@@ -112,6 +124,34 @@ class VikingSearchTool(OVFileTool):
     ) -> str:
         try:
             client = await self._get_client(tool_context)
+            if self._should_scope_to_sample_memory(tool_context, target_uri):
+                results = await client.search_memory(
+                    query=query,
+                    user_id=tool_context.sender_id,
+                    agent_user_id=client.admin_user_id,
+                    limit=30,
+                )
+                user_results = results.get("user_memory", [])
+                agent_results = results.get("agent_memory", [])
+                if not user_results and not agent_results:
+                    return f"No results found for query: {query}"
+
+                result_lines = []
+                index = 1
+                for scope_name, scoped_results in (
+                    ("user_memory", user_results),
+                    ("agent_memory", agent_results),
+                ):
+                    for result in scoped_results:
+                        uri = getattr(result, "uri", "")
+                        score = getattr(result, "score", 0.0)
+                        abstract = getattr(result, "abstract", "")
+                        result_lines.append(
+                            f"{index}. [{scope_name}] uri={uri} score={score} abstract={abstract}"
+                        )
+                        index += 1
+                return "\n".join(result_lines)
+
             search_client = getattr(client, 'admin_user_client', client)
             results = await search_client.search(query, target_uri=target_uri)
 

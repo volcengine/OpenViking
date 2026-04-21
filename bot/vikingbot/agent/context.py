@@ -14,6 +14,7 @@ from vikingbot.agent.memory import MemoryStore
 from vikingbot.agent.skills import SkillsLoader
 from vikingbot.config.schema import SessionKey
 from vikingbot.sandbox import SandboxManager
+from vikingbot.utils.openviking_routing import resolve_openviking_workspace_id
 from vikingbot.utils.helpers import ensure_non_empty_assistant_content
 
 
@@ -81,7 +82,11 @@ class ContextBuilder:
         """
         # Ensure workspace templates exist only when first needed
         self._ensure_templates_once()
-        workspace_id = self.sandbox_manager.to_workspace_id(session_key)
+        workspace_id = resolve_openviking_workspace_id(
+            session_key=session_key,
+            sandbox_manager=self.sandbox_manager,
+            eval_mode=self._eval,
+        )
 
         parts = []
 
@@ -167,8 +172,11 @@ Skills with available="false" need dependencies installed first - you can try in
                 )
         parts.append(session_context)
 
-        workspace_id = self.sandbox_manager.to_workspace_id(session_key)
-
+        workspace_id = resolve_openviking_workspace_id(
+            session_key=session_key,
+            sandbox_manager=self.sandbox_manager,
+            eval_mode=self._eval,
+        )
         # Viking agent memory (only if ov tools are enabled)
         if ov_tools_enable:
             start = _time.time()
@@ -203,7 +211,7 @@ Skills with available="false" need dependencies installed first - you can try in
         else:
             workspace_display = workspace_path
 
-        return f"""# vikingbot 🐈
+        identity = f"""# vikingbot 🐈
 
 You are VikingBot, an AI assistant built based on the OpenViking context database.
 When acquiring information, data, and knowledge, you **prioritize using openviking tools to read and search OpenViking (a context database) above all other sources**.
@@ -231,6 +239,34 @@ IMPORTANT:
 
 ## Memory
 - Remember important facts: using openviking_memory_commit tool to commit"""
+
+        if self._eval:
+            identity += """
+
+## Eval Retrieval Policy
+- You are answering benchmark questions about the user's stored memories.
+- For personal-memory questions, search OpenViking memory before concluding that information is missing.
+- Before giving a final answer, you should normally use `openviking_search` at least once unless the answer is already explicitly present in the preloaded OpenViking memory context above.
+- Do not say you lack information, ask the user for missing context, or claim there is no record until you have searched the relevant OpenViking memory.
+- For multi-event, update, temporal, or personalized recommendation questions, do not answer from general intuition; retrieve supporting OpenViking evidence first.
+- Base every benchmark answer on concrete OpenViking evidence, not intuition.
+- If multiple tool results are available, reconcile them before answering instead of picking one arbitrarily.
+- Before answering, extract the key supported slots from the evidence, such as dates, numbers, entities, and the current/latest state, then answer from those extracted facts.
+- Prefer the shortest answer that is fully supported by the retrieved evidence.
+- Search results are summaries; when a result looks relevant, inspect the full content of the most relevant result before finalizing your answer.
+- If search returns a clear fact, answer directly from that evidence instead of giving a generic response."""
+
+            identity += """
+
+## Eval Question-Type Templates
+When the user message explicitly includes `Question type: multi-session`, apply the template below.
+
+- `multi-session`
+  Search across relevant memories, read the most relevant supporting memories, extract candidate items, deduplicate overlapping items, exclude irrelevant items, recompute the final count or final list from the deduplicated items, and only then answer. Do not answer from a partial list.
+
+For other question types, follow the general Eval Retrieval Policy above instead of applying a specialized template."""
+
+        return identity
 
     def _load_bootstrap_files(self) -> str:
         """Load all bootstrap files from workspace."""

@@ -6,10 +6,13 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
-from openai import AsyncOpenAI
+from openai import AsyncAzureOpenAI, AsyncOpenAI
 
 env_file = Path.home() / ".openviking_benchmark_env"
 load_dotenv(env_file)
+
+
+DEFAULT_AZURE_API_VERSION = "2025-01-01-preview"
 
 
 async def grade_answer(
@@ -71,6 +74,31 @@ def load_answers(input_path: str) -> tuple[list[dict], list[str]]:
     return rows, fieldnames
 
 
+def create_llm_client(
+    provider: str,
+    *,
+    base_url: str,
+    token: str,
+    api_version: str | None = None,
+):
+    if provider == "azure":
+        return AsyncAzureOpenAI(
+            api_key=token,
+            azure_endpoint=base_url,
+            api_version=api_version or DEFAULT_AZURE_API_VERSION,
+        )
+    return AsyncOpenAI(base_url=base_url, api_key=token)
+
+
+def get_ungraded_rows(rows: list[dict], force: bool = False) -> list[int]:
+    if force:
+        for row in rows:
+            row["result"] = ""
+            row["reasoning"] = ""
+        return list(range(len(rows)))
+    return [i for i, row in enumerate(rows) if not row.get("result")]
+
+
 async def main():
     parser = argparse.ArgumentParser(description="VikingBot LongMemEval judge script")
     parser.add_argument(
@@ -84,9 +112,20 @@ async def main():
         help="Judge model base URL",
     )
     parser.add_argument(
+        "--provider",
+        default=os.getenv("LONGMEMEVAL_JUDGE_PROVIDER", "openai"),
+        choices=("openai", "azure"),
+        help="Judge provider type, default: openai",
+    )
+    parser.add_argument(
         "--token",
         default=os.getenv("ARK_API_KEY", os.getenv("OPENAI_API_KEY", "")),
         help="Judge API token",
+    )
+    parser.add_argument(
+        "--api-version",
+        default=os.getenv("LONGMEMEVAL_JUDGE_API_VERSION"),
+        help=f"Azure API version, default: {DEFAULT_AZURE_API_VERSION} for provider=azure",
     )
     parser.add_argument(
         "--model",
@@ -96,6 +135,11 @@ async def main():
     parser.add_argument(
         "--parallel", type=int, default=5, help="Parallel request count, default: 5"
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force re-grade all rows even if result already exists",
+    )
     args = parser.parse_args()
 
     if not args.token:
@@ -104,14 +148,19 @@ async def main():
 
     rows, fieldnames = load_answers(args.input)
     total = len(rows)
-    ungraded = [i for i, row in enumerate(rows) if not row.get("result")]
+    ungraded = get_ungraded_rows(rows, force=args.force)
     print(f"Total answers: {total}, ungraded: {len(ungraded)}")
 
     if not ungraded:
         print("All answers already graded, exit")
         return
 
-    client = AsyncOpenAI(base_url=args.base_url, api_key=args.token)
+    client = create_llm_client(
+        args.provider,
+        base_url=args.base_url,
+        token=args.token,
+        api_version=args.api_version,
+    )
     semaphore = asyncio.Semaphore(args.parallel)
     file_lock = asyncio.Lock()
 
