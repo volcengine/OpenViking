@@ -17,6 +17,8 @@
       "client.ts",
       "process-manager.ts",
       "memory-ranking.ts",
+      "recall-context.ts",
+      "adaptive-recall.ts",
       "text-utils.ts",
       "tool-call-id.ts",
       "session-transcript-repair.ts",
