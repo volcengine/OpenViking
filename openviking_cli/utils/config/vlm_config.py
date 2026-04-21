@@ -240,6 +240,7 @@ class VLMConfig(BaseModel):
             "model": self.model,
             "temperature": self.temperature,
             "max_retries": self.max_retries,
+            "timeout": self.timeout,
             "provider": name,
             "thinking": self.thinking,
             "max_tokens": self.max_tokens,

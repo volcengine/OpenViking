@@ -53,6 +53,7 @@ class CodexVLM(OpenAIVLM):
             api_base,
             self.api_version,
             self.extra_headers,
+            self.timeout,
         )
         return openai.OpenAI(**kwargs)
 

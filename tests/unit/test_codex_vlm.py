@@ -255,6 +255,7 @@ def test_codex_auth_takeover_refreshes_when_external_store_missing(tmp_path, mon
                 "auth_mode": "chatgpt",
                 "auth_owner": "external",
                 "imported_from": str(missing_external),
+                "client_id": "app_testclient",
                 "tokens": {
                     "access_token": expiring_access_token,
                     "refresh_token": "refresh-token",
@@ -286,3 +287,95 @@ def test_codex_auth_takeover_refreshes_when_external_store_missing(tmp_path, mon
     assert persisted["auth_owner"] == "openviking"
     assert "imported_from" not in persisted
     assert persisted["tokens"]["refresh_token"] == "new-refresh"
+
+
+def test_codex_auth_refresh_uses_persisted_client_id(tmp_path, monkeypatch):
+    ov_auth_path = tmp_path / "codex_auth.json"
+    access_token = _make_jwt_token({"exp": 0, "aud": "app_from_aud"})
+    ov_auth_path.write_text(
+        json.dumps(
+            {
+                "provider": "openai-codex",
+                "auth_mode": "chatgpt",
+                "auth_owner": "openviking",
+                "client_id": "app_persisted_client",
+                "tokens": {
+                    "access_token": access_token,
+                    "refresh_token": "refresh-token",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENVIKING_CODEX_AUTH_PATH", str(ov_auth_path))
+    recorded: dict[str, str] = {}
+
+    class _Response:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "access_token": _make_jwt_token({"exp": 9999999999}),
+                "refresh_token": "new-refresh",
+            }
+
+    def _fake_post(*_args, **kwargs):
+        recorded["client_id"] = kwargs["data"]["client_id"]
+        return _Response()
+
+    monkeypatch.setattr(codex_auth.httpx, "post", _fake_post)
+
+    creds = resolve_codex_runtime_credentials(force_refresh=True)
+
+    assert creds["source"] == "openviking"
+    assert recorded["client_id"] == "app_persisted_client"
+
+
+def test_codex_auth_refresh_requires_persisted_client_id(tmp_path, monkeypatch):
+    ov_auth_path = tmp_path / "codex_auth.json"
+    access_token = _make_jwt_token({"exp": 0, "aud": "app_from_aud"})
+    ov_auth_path.write_text(
+        json.dumps(
+            {
+                "provider": "openai-codex",
+                "auth_mode": "chatgpt",
+                "auth_owner": "openviking",
+                "tokens": {
+                    "access_token": access_token,
+                    "refresh_token": "refresh-token",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENVIKING_CODEX_AUTH_PATH", str(ov_auth_path))
+
+    with pytest.raises(codex_auth.CodexAuthError, match="client_id"):
+        resolve_codex_runtime_credentials(force_refresh=True)
+
+
+@patch("openviking.models.vlm.backends.codex_vlm.openai.OpenAI")
+@patch("openviking.models.vlm.backends.codex_vlm.resolve_codex_runtime_credentials")
+def test_codex_streaming_is_rejected(mock_resolve, mock_openai_class):
+    mock_resolve.return_value = {
+        "api_key": "oauth-token",
+        "base_url": "https://chatgpt.com/backend-api/codex",
+    }
+    mock_real_client = MagicMock()
+    mock_openai_class.return_value = mock_real_client
+
+    vlm = CodexVLM(
+        {
+            "provider": "openai-codex",
+            "model": "gpt-5.3-codex",
+            "stream": True,
+        }
+    )
+
+    with pytest.raises(NotImplementedError, match="Streaming is not supported"):
+        vlm.get_completion("hello")
+
+    mock_real_client.responses.stream.assert_not_called()

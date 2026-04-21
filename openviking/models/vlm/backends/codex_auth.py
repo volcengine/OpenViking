@@ -32,6 +32,7 @@ except ImportError:
 
 DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 CODEX_OAUTH_ISSUER = "https://auth.openai.com"
+# Public Codex device-auth client_id, not a secret; env or existing auth is preferred, and this is only a compatibility fallback.
 DEFAULT_CODEX_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 CODEX_ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 300
 CODEX_AUTH_OWNER_OPENVIKING = "openviking"
@@ -223,13 +224,6 @@ def _extract_codex_oauth_client_id(payload: Dict[str, Any]) -> Optional[str]:
                 value = claims.get(claim_key)
                 if isinstance(value, str) and value.strip():
                     return value.strip()
-            audience = claims.get("aud")
-            if isinstance(audience, str) and audience.strip().startswith("app_"):
-                return audience.strip()
-            if isinstance(audience, list):
-                for item in audience:
-                    if isinstance(item, str) and item.strip().startswith("app_"):
-                        return item.strip()
     return None
 
 
@@ -315,9 +309,11 @@ def _write_tokens_to_ov_store(
             payload["imported_from"] = imported_from
         else:
             payload.pop("imported_from", None)
-        resolved_client_id = client_id or _extract_codex_oauth_client_id(
-            {"tokens": {"access_token": access_token}}
-        )
+        resolved_client_id = client_id
+        if not resolved_client_id:
+            existing_client_id = payload.get("client_id")
+            if isinstance(existing_client_id, str) and existing_client_id.strip():
+                resolved_client_id = existing_client_id.strip()
         if resolved_client_id:
             payload["client_id"] = resolved_client_id
         _atomic_write_json_file(path, payload)
@@ -495,13 +491,14 @@ def login_codex_with_device_code(
 
 
 def refresh_codex_oauth(
-    access_token: str,
     refresh_token: str,
     *,
+    client_id: str,
     timeout_seconds: float = 20.0,
 ) -> Dict[str, str]:
-    client_id = _extract_codex_oauth_client_id({"tokens": {"access_token": access_token}})
-    client_id = client_id or _resolve_codex_oauth_client_id()
+    client_id = str(client_id or "").strip()
+    if not client_id:
+        raise CodexAuthError("Codex OAuth client_id is missing.")
     if not isinstance(refresh_token, str) or not refresh_token.strip():
         raise CodexAuthError("Codex OAuth refresh_token is missing.")
     try:
@@ -652,7 +649,10 @@ def resolve_codex_runtime_credentials(
                 and _codex_access_token_is_expiring(access_token, refresh_skew_seconds)
             )
             if should_refresh and external_missing:
-                refreshed = refresh_codex_oauth(access_token, refresh_token)
+                refreshed = refresh_codex_oauth(
+                    refresh_token,
+                    client_id=str(payload.get("client_id", "") or ""),
+                )
                 access_token = refreshed["access_token"]
                 refresh_token = refreshed["refresh_token"]
                 _write_tokens_to_ov_store(
@@ -693,7 +693,10 @@ def resolve_codex_runtime_credentials(
             and _codex_access_token_is_expiring(access_token, refresh_skew_seconds)
         )
         if should_refresh:
-            refreshed = refresh_codex_oauth(access_token, refresh_token)
+            refreshed = refresh_codex_oauth(
+                refresh_token,
+                client_id=str(payload.get("client_id", "") or ""),
+            )
             access_token = refreshed["access_token"]
             refresh_token = refreshed["refresh_token"]
             _write_tokens_to_ov_store(

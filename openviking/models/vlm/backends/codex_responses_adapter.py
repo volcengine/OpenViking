@@ -115,30 +115,6 @@ def _build_chat_completion_like_response(final_response: Any, model: str) -> Any
     )
 
 
-def _response_to_stream_chunks(response: Any) -> Any:
-    content = ""
-    if getattr(response, "choices", None):
-        message = getattr(response.choices[0], "message", None)
-        content = getattr(message, "content", "") or ""
-    usage = getattr(response, "usage", None)
-    chunks: List[Any] = []
-    if content:
-        chunks.append(
-            SimpleNamespace(
-                choices=[SimpleNamespace(delta=SimpleNamespace(content=content))],
-                usage=None,
-            )
-        )
-    if usage is not None:
-        chunks.append(SimpleNamespace(choices=[], usage=usage))
-    return iter(chunks)
-
-
-async def _response_to_async_stream_chunks(response: Any):
-    for chunk in _response_to_stream_chunks(response):
-        yield chunk
-
-
 class CodexCompletionsAdapter:
     def __init__(self, client_factory: Callable[[], Any], model: str):
         self._client_factory = client_factory
@@ -211,9 +187,9 @@ class CodexCompletionsAdapter:
         return _build_chat_completion_like_response(final_response, model)
 
     def create(self, **kwargs) -> Any:
-        response = self._create_response(**kwargs)
         if kwargs.get("stream"):
-            return _response_to_stream_chunks(response)
+            raise NotImplementedError("Streaming is not supported for openai-codex.")
+        response = self._create_response(**kwargs)
         return response
 
 
@@ -227,9 +203,9 @@ class CodexAsyncCompletionsAdapter:
         self._sync_adapter = sync_adapter
 
     async def create(self, **kwargs) -> Any:
-        response = await asyncio.to_thread(self._sync_adapter._create_response, **kwargs)
         if kwargs.get("stream"):
-            return _response_to_async_stream_chunks(response)
+            raise NotImplementedError("Streaming is not supported for openai-codex.")
+        response = await asyncio.to_thread(self._sync_adapter._create_response, **kwargs)
         return response
 
 

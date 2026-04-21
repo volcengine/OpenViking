@@ -359,13 +359,14 @@ class TestConfigWriting:
             },
         }
 
-        with patch("openviking_cli.setup_wizard._DEFAULT_CONFIG_PATH", config_path), patch(
-            "openviking_cli.setup_wizard._prompt_choice", return_value=2
-        ), patch("openviking_cli.setup_wizard._wizard_ollama", return_value=config), patch(
-            "openviking_cli.setup_wizard._prompt_confirm", return_value=True
-        ), patch("openviking_cli.setup_wizard._write_config", return_value=True), patch(
-            "builtins.print"
-        ) as mock_print:
+        with (
+            patch("openviking_cli.setup_wizard._DEFAULT_CONFIG_PATH", config_path),
+            patch("openviking_cli.setup_wizard._prompt_choice", return_value=2),
+            patch("openviking_cli.setup_wizard._wizard_ollama", return_value=config),
+            patch("openviking_cli.setup_wizard._prompt_confirm", return_value=True),
+            patch("openviking_cli.setup_wizard._write_config", return_value=True),
+            patch("builtins.print") as mock_print,
+        ):
             assert run_init() == 0
 
         output = "\n".join(
