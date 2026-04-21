@@ -9,12 +9,13 @@ This example intentionally stays MCP-only:
 - no writes to `~/.codex`
 - no checked-in build output
 
-Codex gets four tools:
+Codex gets five tools:
 
-- `openviking_recall`
-- `openviking_store`
-- `openviking_forget`
-- `openviking_health`
+- `memory_recall`
+- `memory_store`
+- `memory_write`
+- `memory_forget`
+- `memory_health`
 
 ## Files
 
@@ -72,7 +73,7 @@ Supported environment overrides:
 
 ## Tools
 
-### `openviking_recall`
+### `memory_recall`
 
 Search OpenViking memory.
 
@@ -83,7 +84,7 @@ Parameters:
 - `limit`: optional max results
 - `score_threshold`: optional minimum score
 
-### `openviking_store`
+### `memory_store`
 
 Store a memory by creating a short OpenViking session, adding the text, and
 committing the session. Memory creation is extraction-dependent; the tool
@@ -94,16 +95,28 @@ Parameters:
 - `text`: information to store
 - `role`: optional message role, default `user`
 
-### `openviking_forget`
+### `memory_write`
+
+Save text verbatim at a specified memory URI and return the URI. Unlike
+`memory_store`, does not run the extractor — content lands as-is, one file
+per call. Prefer this for explicit "remember this fact" saves.
+
+Parameters:
+
+- `uri`: target memory URI (e.g. `viking://user/<id>/memories/preferences/mem_foo.md`)
+- `content`: text to store verbatim
+- `mode`: `replace` (default) or `append`
+
+### `memory_forget`
 
 Delete an exact memory URI. This example intentionally does not auto-delete by
-query; use `openviking_recall` first, then pass the exact URI.
+query; use `memory_recall` first, then pass the exact URI.
 
 Parameters:
 
 - `uri`: exact `viking://user/.../memories/...` or `viking://agent/.../memories/...` URI
 
-### `openviking_health`
+### `memory_health`
 
 Check server reachability.
 

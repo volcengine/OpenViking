@@ -304,7 +304,7 @@ const client = new OpenVikingClient(
 const server = new McpServer({ name: "openviking-memory-codex", version: "0.1.0" })
 
 server.tool(
-  "openviking_recall",
+  "memory_recall",
   "Search OpenViking long-term memory.",
   {
     query: z.string().describe("Search query"),
@@ -330,7 +330,7 @@ server.tool(
 )
 
 server.tool(
-  "openviking_store",
+  "memory_store",
   "Store information in OpenViking long-term memory.",
   {
     text: z.string().describe("Information to store"),
@@ -372,8 +372,8 @@ server.tool(
 )
 
 server.tool(
-  "openviking_write",
-  "Save text verbatim at a specified memory URI and return the URI. Use for explicit 'remember this fact' saves when you already know the target URI (scope, bucket, filename). Unlike openviking_store, does NOT run the extractor — content lands as-is, one file per call. Response includes the written URI so you can verify or reference it downstream without guessing.",
+  "memory_write",
+  "Save text verbatim at a specified memory URI and return the URI. Use for explicit 'remember this fact' saves when you already know the target URI (scope, bucket, filename). Unlike memory_store, does NOT run the extractor — content lands as-is, one file per call. Response includes the written URI so you can verify or reference it downstream without guessing.",
   {
     uri: z
       .string()
@@ -394,8 +394,8 @@ server.tool(
 )
 
 server.tool(
-  "openviking_forget",
-  "Delete an exact OpenViking memory URI. Use openviking_recall first if you only have a query.",
+  "memory_forget",
+  "Delete an exact OpenViking memory URI. Use memory_recall first if you only have a query.",
   {
     uri: z.string().describe("Exact memory URI to delete"),
   },
@@ -410,7 +410,7 @@ server.tool(
 )
 
 server.tool(
-  "openviking_health",
+  "memory_health",
   "Check whether the OpenViking server is reachable.",
   {},
   async () => {
