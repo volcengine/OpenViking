@@ -104,7 +104,9 @@ class BaseOpenClawCLITest(unittest.TestCase):
         """
         target_session_id = session_id or self.current_session_id
         wait_seconds = max(seconds or self.wait_time, MIN_SYNC_WAIT_SECONDS)
-        self.logger.info(f"等待记忆同步 (锁释放 + {wait_seconds}秒)... [session={target_session_id}]")
+        self.logger.info(
+            f"等待记忆同步 (锁释放 + {wait_seconds}秒)... [session={target_session_id}]"
+        )
 
         lock_ok = _wait_for_session_lock_release(target_session_id)
         if not lock_ok:
@@ -229,27 +231,39 @@ class BaseOpenClawCLITest(unittest.TestCase):
         return not text.strip()
 
     def _is_tool_result_only(self, response) -> bool:
-        text = self.assertion.extract_response_text(response)
-        stripped = text.strip()
-        if not stripped:
+        text = self.assertion.extract_response_text(response).strip()
+        if not text:
             return False
+        tool_result_prefixes = [
+            '[{"name"',
+            '[{"id"',
+            '[{"type"',
+            '{"name":',
+            '{"id":',
+            '{"type":',
+        ]
+        if any(text.startswith(p) for p in tool_result_prefixes):
+            return True
         import re
 
         tool_result_pattern = r"^\[?\{[^}]*\"name\"\s*:\s*\"none\"[^}]*\}\]?[\s]*$"
-        if re.match(tool_result_pattern, stripped):
+        if re.match(tool_result_pattern, text):
             return True
-        if stripped.startswith("[{") and stripped.endswith("}]"):
+        if text.startswith("[{") and text.endswith("}]"):
             try:
                 import json
 
-                parsed = json.loads(stripped)
+                parsed = json.loads(text)
                 if isinstance(parsed, list) and all(
                     isinstance(item, dict) and "name" in item for item in parsed
                 ):
                     return True
             except (json.JSONDecodeError, ValueError):
                 pass
-        return False
+        tool_result_patterns = [
+            '"name":"none"',
+        ]
+        return any(p in text for p in tool_result_patterns) and len(text) < 200
 
     def send_and_retry_on_timeout(
         self,
@@ -264,19 +278,23 @@ class BaseOpenClawCLITest(unittest.TestCase):
             response = self.send_and_log(message, session_id=target_session_id, agent_id=agent_id)
             is_timeout = self._is_llm_timeout(response)
             is_empty = self._is_empty_response(response)
-            is_tool_only = self._is_tool_result_only(response)
-            if not is_timeout and not is_empty and not is_tool_only:
+            is_tool_result = self._is_tool_result_only(response)
+            if not is_timeout and not is_empty and not is_tool_result:
                 return response
-            if is_tool_only:
-                reason = "tool result only (no natural language answer)"
-            elif is_timeout:
+            if is_timeout:
                 reason = "LLM idle timeout"
-            else:
+            elif is_empty:
                 reason = "empty response (no text)"
-            self.logger.warning(f"{reason} (attempt {attempt + 1}/{max_retries + 1}), retrying in {retry_delay}s...")
+            else:
+                reason = "tool result only (no natural language answer)"
+            self.logger.warning(
+                f"{reason} (attempt {attempt + 1}/{max_retries + 1}), retrying in {retry_delay}s..."
+            )
             if attempt < max_retries:
                 time.sleep(retry_delay)
-        self.logger.warning(f"Retry exhausted after {max_retries + 1} attempts, returning last response")
+        self.logger.warning(
+            f"Retry exhausted after {max_retries + 1} attempts, returning last response"
+        )
         return response
 
     def send_with_retry(

@@ -8,6 +8,10 @@ from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 
+def _new_lock_id() -> str:
+    return str(uuid.uuid4())
+
+
 @runtime_checkable
 class LockOwner(Protocol):
     """Minimal interface that PathLock requires from its caller."""
@@ -15,8 +19,11 @@ class LockOwner(Protocol):
     id: str
     locks: list[str]
 
-    def add_lock(self, path: str) -> None: ...
-    def remove_lock(self, path: str) -> None: ...
+    def add_lock(self, path: str) -> None:
+        raise NotImplementedError
+
+    def remove_lock(self, path: str) -> None:
+        raise NotImplementedError
 
 
 @dataclass
@@ -24,7 +31,7 @@ class LockHandle:
     """Identifies a lock holder. PathLock uses ``id`` to generate fencing tokens
     and ``locks`` to track acquired lock files."""
 
-    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    id: str = field(default_factory=_new_lock_id)
     locks: list[str] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
     last_active_at: float = field(init=False)

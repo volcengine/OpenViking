@@ -9,6 +9,8 @@ const cfg = memoryOpenVikingConfigSchema.parse({
   baseUrl: "http://127.0.0.1:1933",
   autoCapture: false,
   autoRecall: false,
+  ingestReplyAssist: false,
+  emitStandardDiagnostics: true,
 });
 
 function roughEstimate(messages: unknown[]): number {
@@ -254,6 +256,29 @@ describe("context-engine assemble()", () => {
         ],
       },
     ]);
+  });
+
+  it("records senderId from runtimeContext in assemble diagnostics", async () => {
+    const { engine, logger } = makeEngine({
+      latest_archive_overview: "",
+      pre_archive_abstracts: [],
+      messages: [],
+      estimatedTokens: 0,
+      stats: makeStats(),
+    });
+
+    await engine.assemble({
+      sessionId: "session-with-sender",
+      messages: [{ role: "user", content: "hello" }],
+      runtimeContext: { senderId: "telegram:12345" },
+    });
+
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("\"senderIdFound\":true"),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("\"senderId\":\"telegram:12345\""),
+    );
   });
 
   it("falls back to live messages when assembled active messages look truncated", async () => {

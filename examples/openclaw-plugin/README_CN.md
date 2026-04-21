@@ -51,6 +51,32 @@
 
 这样做是为了支持多 agent、多 session 并发时的记忆隔离，避免不同 OpenClaw 会话串用同一套长期上下文。
 
+默认推荐的远程模式配置只有：
+
+- `baseUrl`
+- `apiKey`
+- `agentId`
+
+其中：
+
+- `apiKey` 推荐使用某个 user 的 user key
+- `accountId` / `userId` 仅在 root key 或 `trusted` 模式下作为高级选项使用
+- 使用 PR #1356 canonical namespace 模型时，`isolateUserScopeByAgent` / `isolateAgentScopeByUser` 必须与服务端 account namespace policy 保持一致
+- `agentScopeMode` 已退化为兼容旧 hash 路由的 deprecated alias，仅应在旧服务端上使用
+
+### Canonical namespace policy
+
+对于包含 PR #1356 的 OpenViking 服务端，插件不再在本地计算 user 或 agent scope hash，而是根据配置的 namespace policy 将别名 URI 展开为 canonical URI：
+
+- `viking://user/memories`
+  - `isolateUserScopeByAgent=false` 时展开为 `viking://user/<user_id>/memories`
+  - `isolateUserScopeByAgent=true` 时展开为 `viking://user/<user_id>/agent/<agent_id>/memories`
+- `viking://agent/memories`
+  - `isolateAgentScopeByUser=false` 时展开为 `viking://agent/<agent_id>/memories`
+  - `isolateAgentScopeByUser=true` 时展开为 `viking://agent/<agent_id>/user/<user_id>/memories`
+
+插件当前无法从 `/api/v1/system/status` 自动发现这两个 policy，因此需要显式配置，使其与服务端 account policy 保持一致。
+
 ## Prompt 前召回链路
 
 ![Prompt 前的自动召回流程](./images/openclaw-plugin-recall-flow.png)

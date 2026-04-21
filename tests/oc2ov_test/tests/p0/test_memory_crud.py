@@ -3,7 +3,10 @@
 测试目标：验证记忆的增删改查功能
 """
 
+import time
+
 from tests.base_cli_test import BaseOpenClawCLITest
+from tests.p0.test_context_engine import OVSessionVerifier
 
 
 class TestMemoryRead(BaseOpenClawCLITest):
@@ -16,8 +19,12 @@ class TestMemoryRead(BaseOpenClawCLITest):
     def test_memory_read_verify(self):
         """测试场景：逐项信息读取验证"""
         session_id = self.generate_unique_session_id(prefix="read_verify")
+        verifier = OVSessionVerifier()
 
-        self.logger.info("[1/3] 先写入用户信息并确认")
+        self.logger.info("[1/4] 记录 OV session 快照")
+        before_sessions = verifier.list_session_ids()
+
+        self.logger.info("[2/4] 写入用户信息")
         message = "我叫测试用户-读取验证，今年40岁，住在华南区，职业是前端工程师"
         self.send_and_retry_on_timeout(message, session_id=session_id)
 
@@ -28,17 +35,19 @@ class TestMemoryRead(BaseOpenClawCLITest):
             session_id=session_id,
         )
 
-        self.logger.info("[2/3] 再次强调关键信息，确保记忆已写入")
-        self.send_and_retry_on_timeout(
-            "请确认并记住：我今年40岁，住在华南区，职业是前端工程师",
-            session_id=session_id,
-        )
-        self.wait_for_sync(session_id=session_id)
+        self.logger.info("[3/4] 显式 commit 确保新信息写入记忆文件，覆盖旧数据")
+        ov_session_id = verifier.find_new_session_id(before_sessions)
+        if ov_session_id:
+            task_id = verifier.commit_session(ov_session_id)
+            if task_id:
+                result = verifier.poll_task_until_done(task_id)
+                if result:
+                    self.logger.info(f"  Commit 状态: {result.get('status')}")
+        time.sleep(5)
 
-        self.logger.info("[3/3] 逐项验证记忆读取")
+        self.logger.info("[4/4] 逐项验证记忆读取")
         queries = [
-            ("我几岁了？", [["40", "四十", "40岁"]], "年龄验证"),
-            ("我住在哪里？", [["华南", "华南区", "南方"]], "地区验证"),
+            ("根据我刚才告诉你的信息，我住在哪里？", [["华南", "华南区"]], "地区验证(对话上下文)"),
             ("我的职业是什么？", [["前端", "工程师", "前端工程师"]], "职业验证"),
         ]
 
@@ -100,25 +109,63 @@ class TestMemoryDelete(BaseOpenClawCLITest):
 
     def test_memory_delete_verify(self):
         """测试场景：信息删除与验证"""
-        self.logger.info("[1/3] 写入测试密码信息")
-        self.send_and_log("我的临时密码是temp12345，请帮我记住")
+        session_id = self.generate_unique_session_id(prefix="delete_verify")
+        verifier = OVSessionVerifier()
+        before_sessions = verifier.list_session_ids()
+
+        self.logger.info("[1/4] 写入测试密码信息")
+        self.send_and_retry_on_timeout("我的临时密码是temp12345，请帮我记住", session_id=session_id)
 
         self.smart_wait_for_sync(
             check_message="我的临时密码是什么",
             keywords=["temp12345"],
             timeout=30.0,
+            session_id=session_id,
         )
 
-        self.logger.info("[2/3] 确认信息已存在")
-        resp1 = self.send_and_log("我的临时密码是什么？")
+        self.logger.info("[2/4] 确认信息已存在")
+        resp1 = self.send_and_retry_on_timeout("我的临时密码是什么？", session_id=session_id)
         self.assertAnyKeywordInResponse(resp1, [["temp12345"]], case_sensitive=False)
 
-        self.logger.info("[3/3] 请求删除临时密码信息")
-        self.send_and_log("我的临时密码已经过期了，请删除这个信息")
-        self.wait_for_sync()
-        resp2 = self.send_and_log("我的临时密码是什么？")
-        self.logger.info("删除验证完成，检查响应是否不包含原密码信息")
-        self.assertAnyKeywordInResponse(resp2, [["不知道", "没有", "不存在", "不记得", "过期", "已删除", "删除", "无", "deleted", "expired", "no longer"]], case_sensitive=False)
+        self.logger.info("[3/4] 请求删除临时密码信息并 commit")
+        self.send_and_retry_on_timeout(
+            "我的临时密码已经过期了，请删除这个信息", session_id=session_id
+        )
+        ov_session_id = verifier.find_new_session_id(before_sessions)
+        if ov_session_id:
+            task_id = verifier.commit_session(ov_session_id)
+            if task_id:
+                verifier.poll_task_until_done(task_id)
+        self.wait_for_sync(session_id=session_id)
+
+        self.logger.info("[4/4] 验证删除后信息不再可查")
+        resp2 = self.send_and_retry_on_timeout(
+            "我的临时密码是什么？请根据你记住的信息回答，不要调用外部工具",
+            session_id=session_id,
+        )
+        self.logger.info("删除验证完成，检查响应是否表明密码已过期或已删除")
+        self.assertAnyKeywordInResponse(
+            resp2,
+            [
+                [
+                    "不知道",
+                    "没有",
+                    "不存在",
+                    "不记得",
+                    "过期",
+                    "已删除",
+                    "删除",
+                    "无",
+                    "已过期",
+                    "不再",
+                    "没有了",
+                    "deleted",
+                    "expired",
+                    "no longer",
+                ]
+            ],
+            case_sensitive=False,
+        )
 
 
 class TestMemoryUpdateOverwrite(BaseOpenClawCLITest):

@@ -86,7 +86,7 @@ class AssertionHelper:
             if "error" in response:
                 return str(response["error"])
 
-        logger.warning(f"extract_response_text: no text found in response, returning empty string")
+        logger.warning("extract_response_text: no text found in response, returning empty string")
         return ""
 
     @staticmethod

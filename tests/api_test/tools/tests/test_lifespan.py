@@ -13,7 +13,7 @@ async def test_lifespan():
         print("load_server_config result:")
         print(f"  host: {config.host}")
         print(f"  port: {config.port}")
-        print(f"  root_api_key: {config.root_api_key}")
+        print(f"  root_api_key configured: {bool(config.root_api_key)}")
 
         print("\nCreating app...")
         app = create_app(config)

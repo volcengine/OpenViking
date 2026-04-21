@@ -1,6 +1,8 @@
 {
   "id": "openviking",
+  "name": "OpenViking",
   "kind": "context-engine",
+  "description": "OpenClaw context-engine plugin for memory management — powered by OpenViking",
   "uiHints": {
     "mode": {
       "label": "Mode",
@@ -25,13 +27,48 @@
     "agentId": {
       "label": "Agent ID",
       "placeholder": "random unique ID",
-      "help": "Instance prefix for X-OpenViking-Agent. Non-default: `<this>_<OpenClaw ctx.agentId>` (sanitized to letters/digits/_/-). default: use OpenClaw session agent only."
+      "help": "OpenViking agent identity. default: follow OpenClaw ctx.agentId. Non-default: use `<this>_<OpenClaw ctx.agentId>` (sanitized to letters/digits/_/-), so the configured value acts as a prefix."
+    },
+    "serverAuthMode": {
+      "label": "Server Auth Mode",
+      "placeholder": "api_key",
+      "help": "api_key (default): send X-API-Key when configured, otherwise dev fallback to default/default tenant headers. trusted: always send accountId/userId and optionally send apiKey when configured."
     },
     "apiKey": {
       "label": "OpenViking API Key",
       "sensitive": true,
       "placeholder": "${OPENVIKING_API_KEY}",
       "help": "Optional API key for OpenViking server"
+    },
+    "accountId": {
+      "label": "Account ID",
+      "placeholder": "(derived from API key)",
+      "help": "Advanced option. Tenant account ID. Only needed when using root key or trusted auth mode. With a user key the server derives identity from the key.",
+      "advanced": true
+    },
+    "userId": {
+      "label": "User ID",
+      "placeholder": "(derived from API key)",
+      "help": "Advanced option. Tenant user ID. Only needed when using root key or trusted auth mode.",
+      "advanced": true
+    },
+    "isolateUserScopeByAgent": {
+      "label": "Isolate User Scope By Agent",
+      "placeholder": "false",
+      "help": "Canonical namespace policy. false (default): user alias expands to viking://user/<user_id>/... . true: expands to viking://user/<user_id>/agent/<agent_id>/... . Must match the server-side account namespace policy.",
+      "advanced": true
+    },
+    "isolateAgentScopeByUser": {
+      "label": "Isolate Agent Scope By User",
+      "placeholder": "false",
+      "help": "Canonical namespace policy. false (default): agent alias expands to viking://agent/<agent_id>/... . true: expands to viking://agent/<agent_id>/user/<user_id>/... . Must match the server-side account namespace policy.",
+      "advanced": true
+    },
+    "agentScopeMode": {
+      "label": "Deprecated Agent Scope Mode",
+      "placeholder": "agent",
+      "help": "Deprecated compatibility alias for older routing. Prefer isolateUserScopeByAgent / isolateAgentScopeByUser. Explicit user_agent => false/true, explicit agent => false/false. When fully unset, the plugin defaults to false/false to match the current server-side policy.",
+      "advanced": true
     },
     "targetUri": {
       "label": "Search Target URI",
@@ -62,6 +99,11 @@
     "autoRecall": {
       "label": "Auto-Recall",
       "help": "Inject relevant OpenViking memories into agent context"
+    },
+    "recallResources": {
+      "label": "Recall Resources",
+      "help": "Include resources (viking://resources) in auto-recall and default memory_recall search. Enables account-level shared knowledge retrieval.",
+      "advanced": true
     },
     "recallLimit": {
       "label": "Recall Limit",
@@ -132,7 +174,25 @@
       "agentId": {
         "type": "string"
       },
+      "serverAuthMode": {
+        "type": "string"
+      },
       "apiKey": {
+        "type": "string"
+      },
+      "accountId": {
+        "type": "string"
+      },
+      "userId": {
+        "type": "string"
+      },
+      "isolateUserScopeByAgent": {
+        "type": "boolean"
+      },
+      "isolateAgentScopeByUser": {
+        "type": "boolean"
+      },
+      "agentScopeMode": {
         "type": "string"
       },
       "targetUri": {
@@ -151,6 +211,9 @@
         "type": "number"
       },
       "autoRecall": {
+        "type": "boolean"
+      },
+      "recallResources": {
         "type": "boolean"
       },
       "recallLimit": {

@@ -99,13 +99,13 @@ class VectorDBBackendConfig(BaseModel):
     )
 
     volcengine: Optional[VolcengineConfig] = Field(
-        default_factory=lambda: VolcengineConfig(),
+        default_factory=VolcengineConfig,
         description="Volcengine VikingDB configuration for 'volcengine' type",
     )
 
     # VikingDB private deployment mode
     vikingdb: Optional[VikingDBConfig] = Field(
-        default_factory=lambda: VikingDBConfig(),
+        default_factory=VikingDBConfig,
         description="VikingDB private deployment configuration for 'vikingdb' type",
     )
 

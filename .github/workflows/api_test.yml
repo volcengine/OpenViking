@@ -2,22 +2,8 @@ name: 06. API Integration Tests
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - 'api_test'
-      - 'main'
-    paths-ignore:
-      - 'docs/**'
-      - '**.md'
-      - 'LICENSE'
-      - 'CONTRIBUTING.md'
-      - '**.png'
-      - '**.jpg'
-      - '**.jpeg'
-      - '**.gif'
-      - '**.svg'
-      - '.gitignore'
-      - '.editorconfig'
+  schedule:
+    - cron: '0 1,4,7,10,13 * * *'
   pull_request:
     branches:
       - 'main'

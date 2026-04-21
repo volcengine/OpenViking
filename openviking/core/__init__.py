@@ -3,7 +3,17 @@
 """Core context abstractions for OpenViking."""
 
 from importlib import import_module
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from openviking.core.building_tree import BuildingTree
+    from openviking.core.context import Context, ContextType, ResourceContentType
+    from openviking.core.directories import (
+        PRESET_DIRECTORIES,
+        DirectoryDefinition,
+        DirectoryInitializer,
+    )
+    from openviking.core.skill_loader import SkillLoader
 
 _EXPORTS = {
     "BuildingTree": ("openviking.core.building_tree", "BuildingTree"),

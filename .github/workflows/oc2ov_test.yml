@@ -3,9 +3,8 @@ name: 05. OpenClaw2OpenViking Memory Tests
 on:
   release:
     types: [prereleased, released]
-  push:
-    branches:
-      - main
+  schedule:
+    - cron: '0 1,4,7,10,13 * * *'
   workflow_dispatch:
     inputs:
       skip_tests:

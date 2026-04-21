@@ -38,6 +38,18 @@ type IngestResult = {
   ingested: boolean;
 };
 
+export function toRoleId(senderId: string | undefined): string | undefined {
+  if (!senderId) {
+    return undefined;
+  }
+  const normalized = senderId
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .replace(/_+/g, "_");
+  return normalized || undefined;
+}
+
 type IngestBatchResult = {
   ingestedCount: number;
 };
@@ -102,6 +114,11 @@ type Logger = {
   info: (msg: string) => void;
   warn?: (msg: string) => void;
   error: (msg: string) => void;
+};
+
+type ExtractedSender = {
+  found: boolean;
+  senderId?: string;
 };
 
 interface ContextBudgets {
@@ -211,6 +228,24 @@ function validTokenBudget(raw: unknown): number | undefined {
     return raw;
   }
   return undefined;
+}
+
+function extractRuntimeSenderId(
+  runtimeContext: Record<string, unknown> | undefined,
+): ExtractedSender {
+  if (runtimeContext) {
+    const senderId = runtimeContext.senderId;
+    if (typeof senderId === "string") {
+      const trimmed = senderId.trim();
+      if (trimmed) {
+        return {
+          found: true,
+          senderId: trimmed,
+        };
+      }
+    }
+  }
+  return { found: false };
 }
 
 /** OpenClaw session UUID (path-safe on Windows). */
@@ -790,6 +825,7 @@ export function createMemoryOpenVikingContextEngine(params: {
       const { messages } = assembleParams;
       const tokenBudget = validTokenBudget(assembleParams.tokenBudget) ?? 128_000;
       const sessionKey = extractAssembleSessionKey(assembleParams);
+      const sender = extractRuntimeSenderId(assembleParams.runtimeContext);
 
       const originalTokens = roughEstimate(messages);
 
@@ -805,6 +841,8 @@ export function createMemoryOpenVikingContextEngine(params: {
         inputTokenEstimate: originalTokens,
         tokenBudget,
         sessionKey: sessionKey ?? null,
+        senderIdFound: sender.found,
+        senderId: sender.senderId ?? null,
         messages: messageDigest(messages),
       });
 
@@ -868,6 +906,8 @@ export function createMemoryOpenVikingContextEngine(params: {
           sessionTokens: session.tokens,
           sessionBudget: budgets.sessionContext,
           reservedBudget: budgets.reserved,
+          senderIdFound: sender.found,
+          senderId: sender.senderId ?? null,
           messages: messageDigest(sanitized),
         });
 
@@ -885,6 +925,8 @@ export function createMemoryOpenVikingContextEngine(params: {
           error: String(err),
           tokenBudget,
           agentId: resolveAgentId(OVSessionId),
+          senderIdFound: sender.found,
+          senderId: sender.senderId ?? null,
         });
         return { messages, estimatedTokens: roughEstimate(messages) };
       }
@@ -900,6 +942,7 @@ export function createMemoryOpenVikingContextEngine(params: {
       }
 
       try {
+      const sender = extractRuntimeSenderId(afterTurnParams.runtimeContext);
         const sessionKey =
           (typeof afterTurnParams.sessionKey === "string" && afterTurnParams.sessionKey.trim()) ||
           extractSessionKey(afterTurnParams.runtimeContext);
@@ -924,6 +967,8 @@ export function createMemoryOpenVikingContextEngine(params: {
           diag("afterTurn_skip", OVSessionId, {
             reason: "session_bypassed",
             totalMessages: afterTurnParams.messages?.length ?? 0,
+            senderIdFound: sender.found,
+            senderId: sender.senderId ?? null,
           });
           return;
         }
@@ -933,6 +978,8 @@ export function createMemoryOpenVikingContextEngine(params: {
           diag("afterTurn_skip", OVSessionId, {
             reason: "no_messages",
             totalMessages: 0,
+            senderIdFound: sender.found,
+            senderId: sender.senderId ?? null,
           });
           return;
         }
@@ -950,6 +997,8 @@ export function createMemoryOpenVikingContextEngine(params: {
             reason: "no_new_turn_messages",
             totalMessages: messages.length,
             prePromptMessageCount: start,
+            senderIdFound: sender.found,
+            senderId: sender.senderId ?? null,
           });
           return;
         }
@@ -967,6 +1016,8 @@ export function createMemoryOpenVikingContextEngine(params: {
           newMessageCount: newCount,
           prePromptMessageCount: start,
           newTurnTokens,
+          senderIdFound: sender.found,
+          senderId: sender.senderId ?? null,
           messages: newMsgFull,
         });
 
@@ -979,7 +1030,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         }
         const client = await getClient();
         const createdAt = pickLatestCreatedAt(turnMessages);
-
+        const senderRoleId = toRoleId(sender.senderId);
         // 发送结构化消息：统一 role 为 user，通过 parts 区分类型
         for (const msg of extractedMessages) {
           const ovParts = msg.parts.map((part) => {
@@ -1009,6 +1060,7 @@ export function createMemoryOpenVikingContextEngine(params: {
               ovParts,
               agentId,
               createdAt,
+              msg.role === "user" ? senderRoleId : undefined,
             );
           }
         }
@@ -1021,6 +1073,8 @@ export function createMemoryOpenVikingContextEngine(params: {
             reason: "below_threshold",
             pendingTokens,
             commitTokenThreshold: cfg.commitTokenThreshold,
+            senderIdFound: sender.found,
+            senderId: sender.senderId ?? null,
           });
           return;
         }
@@ -1039,6 +1093,8 @@ export function createMemoryOpenVikingContextEngine(params: {
           archived: commitResult.archived ?? false,
           taskId: commitResult.task_id ?? null,
           extractedMemories: totalExtractedMemories(commitResult.memories_extracted),
+          senderIdFound: sender.found,
+          senderId: sender.senderId ?? null,
         });
         if (commitResult.task_id && cfg.logFindRequests) {
           logger.info(
@@ -1057,8 +1113,11 @@ export function createMemoryOpenVikingContextEngine(params: {
         }
       } catch (err) {
         logger.warn?.(`openviking: afterTurn failed: ${String(err)}`);
+        const sender = extractRuntimeSenderId(afterTurnParams.runtimeContext);
         diag("afterTurn_error", afterTurnParams.sessionId ?? "(unknown)", {
           error: String(err),
+          senderIdFound: sender.found,
+          senderId: sender.senderId ?? null,
         });
       }
     },

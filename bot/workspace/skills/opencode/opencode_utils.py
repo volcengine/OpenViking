@@ -5,15 +5,14 @@ import json
 import os
 import subprocess
 import sys
-import traceback
 import time
+import traceback
 
 from opencode_ai import Opencode
 
 
 def execute_cmd(cmd):
     try:
-        # 同时捕获stdout和stderr，排查输出位置
         result = subprocess.run(
             cmd,
             shell=True,
@@ -24,7 +23,6 @@ def execute_cmd(cmd):
             check=True,  # 等价于check_output的行为，命令失败会抛异常
         )
         stdout = result.stdout.strip()  # 去除空白符（换行/空格）
-        stderr = result.stderr.strip()
         return stdout
     except subprocess.CalledProcessError as e:
         # 捕获命令执行失败的异常（返回码非0）
@@ -57,14 +55,15 @@ def start_opencode():
             # 先fork一次，再启动进程，确保脱离所有父进程关联
             cmd = ["opencode", "serve"]
             # 创建新会话 + 重定向所有输出
-            proc = subprocess.Popen(
-                cmd,
-                preexec_fn=os.setsid,  # 关键：创建新的会话ID
-                stdout=open("opencode.log", "a"),
-                stderr=subprocess.STDOUT,
-                stdin=subprocess.DEVNULL,
-            )
-            pid = proc.pid
+            with open("opencode.log", "a", encoding="utf-8") as log_file:
+                proc = subprocess.Popen(
+                    cmd,
+                    preexec_fn=os.setsid,  # 关键：创建新的会话ID
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL,
+                )
+                pid = proc.pid
 
         print(f"opencode serve已启动，PID: {pid}")
         # 短暂等待确保进程启动成功
@@ -80,7 +79,7 @@ def check_serve_status():
     """测试opencode连接，失败则启动服务并重试"""
     try:
         client = Opencode(base_url="http://127.0.0.1:4096")
-        modes = client.app.modes()
+        client.app.modes()
     except Exception as e:
         print(f"连接opencode失败，错误: {e}")
         # 启动服务

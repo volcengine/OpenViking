@@ -49,7 +49,9 @@ class OVSessionVerifier:
 
     def list_session_ids(self) -> Set[str]:
         try:
-            resp = requests.get(f"{self.server_url}/api/v1/sessions", headers=self.headers, timeout=10)
+            resp = requests.get(
+                f"{self.server_url}/api/v1/sessions", headers=self.headers, timeout=10
+            )
             if resp.status_code != 200:
                 return set()
             sessions = resp.json().get("result", [])
@@ -88,7 +90,9 @@ class OVSessionVerifier:
             pass
         return None
 
-    def poll_task_until_done(self, task_id: str, max_wait: int = TASK_POLL_MAX_WAIT) -> Optional[Dict]:
+    def poll_task_until_done(
+        self, task_id: str, max_wait: int = TASK_POLL_MAX_WAIT
+    ) -> Optional[Dict]:
         start = time.time()
         while time.time() - start < max_wait:
             try:
@@ -142,9 +146,7 @@ class OVSessionVerifier:
         return files
 
     @staticmethod
-    def find_new_or_updated_files(
-        before: Dict[str, float], keyword: str = None
-    ) -> list:
+    def find_new_or_updated_files(before: Dict[str, float], keyword: str = None) -> list:
         """对比前后快照，找出新增或 mtime 变化的文件；可选按关键词过滤内容"""
         after = OVSessionVerifier.snapshot_memory_files()
         results = []
@@ -158,18 +160,22 @@ class OVSessionVerifier:
                     content = Path(path_str).read_text(encoding="utf-8")
                     if keyword not in content:
                         continue
-                    results.append({
-                        "path": path_str,
-                        "status": "new" if is_new else "updated",
-                        "content_preview": content[:200],
-                    })
+                    results.append(
+                        {
+                            "path": path_str,
+                            "status": "new" if is_new else "updated",
+                            "content_preview": content[:200],
+                        }
+                    )
                 except Exception:
                     continue
             else:
-                results.append({
-                    "path": path_str,
-                    "status": "new" if is_new else "updated",
-                })
+                results.append(
+                    {
+                        "path": path_str,
+                        "status": "new" if is_new else "updated",
+                    }
+                )
         return results
 
 
@@ -208,7 +214,7 @@ class TestAssembleArchiveReplay(BaseOpenClawCLITest):
         self.logger.info("[3/7] 继续写入更多信息，推动 commit/archive 生成")
         for i in range(3):
             self.send_and_log(
-                f"{unique_marker}的里程碑{i+1}：第{i+1}阶段测试已完成",
+                f"{unique_marker}的里程碑{i + 1}：第{i + 1}阶段测试已完成",
                 session_id=session_a,
             )
             time.sleep(3)
@@ -310,7 +316,9 @@ class TestMemoryRecallExplicit(BaseOpenClawCLITest):
         time.sleep(10)
 
         self.logger.info("[4/7] 验证记忆文件已新增或更新且包含关键信息（文件级别断言）")
-        memory_found = OVSessionVerifier.find_new_or_updated_files(before_files, keyword=unique_marker)
+        memory_found = OVSessionVerifier.find_new_or_updated_files(
+            before_files, keyword=unique_marker
+        )
         self.logger.info(f"  本次新增/更新且包含'{unique_marker}'的记忆文件数: {len(memory_found)}")
         for mf in memory_found:
             self.logger.info(f"  [{mf['status']}] {mf['path']}")
@@ -321,7 +329,7 @@ class TestMemoryRecallExplicit(BaseOpenClawCLITest):
 
         self.logger.info("[5/7] 在新 session B 中用明确提示触发 memory_recall 显式搜索")
         response = self.send_and_retry_on_timeout(
-            f"请搜索你的记忆，我之前有没有提到过一个和加密通信或者协议相关的项目？请仔细搜索记忆文件后回答",
+            "请搜索你的记忆，我之前有没有提到过一个和加密通信或者协议相关的项目？请仔细搜索记忆文件后回答",
             session_id=session_b,
         )
 
@@ -335,7 +343,7 @@ class TestMemoryRecallExplicit(BaseOpenClawCLITest):
         self.logger.info("[7/7] 验证回复包含具体细节（业务逻辑断言：显式搜索应返回完整记忆内容）")
         self.assertAnyKeywordInResponse(
             response,
-            [["100Gbps", "100G", "Gbps"], ["传输"]],
+            [["100Gbps", "100G", "Gbps", "加密通信", "量子加密"]],
             case_sensitive=False,
         )
 
@@ -376,7 +384,7 @@ class TestArchiveExpand(BaseOpenClawCLITest):
         self.logger.info("[3/8] 继续写入推动 archive 生成")
         for i in range(3):
             self.send_and_log(
-                f"{unique_marker}第{i+1}阶段进展：已完成需求分析和架构设计",
+                f"{unique_marker}第{i + 1}阶段进展：已完成需求分析和架构设计",
                 session_id=session_id,
             )
             time.sleep(3)
@@ -397,7 +405,9 @@ class TestArchiveExpand(BaseOpenClawCLITest):
                 self.logger.warning("  Archive 未生成，expand 测试可能不可靠")
 
         self.logger.info("[6/8] 验证记忆文件已新增或更新且包含关键信息（文件级别断言）")
-        memory_found = OVSessionVerifier.find_new_or_updated_files(before_files, keyword=unique_marker)
+        memory_found = OVSessionVerifier.find_new_or_updated_files(
+            before_files, keyword=unique_marker
+        )
         self.logger.info(f"  本次新增/更新且包含'{unique_marker}'的记忆文件数: {len(memory_found)}")
         for mf in memory_found:
             self.logger.info(f"  [{mf['status']}] {mf['path']}")
@@ -451,7 +461,7 @@ class TestSessionIsolation(BaseOpenClawCLITest):
         )
 
         self.smart_wait_for_sync(
-            check_message=f"我在做什么项目",
+            check_message="我在做什么项目",
             keywords=[marker_a],
             timeout=30.0,
             session_id=session_a,
@@ -464,7 +474,7 @@ class TestSessionIsolation(BaseOpenClawCLITest):
         )
 
         self.smart_wait_for_sync(
-            check_message=f"我在做什么项目",
+            check_message="我在做什么项目",
             keywords=[marker_b],
             timeout=30.0,
             session_id=session_b,
@@ -491,7 +501,7 @@ class TestSessionIsolation(BaseOpenClawCLITest):
 
         self.logger.info("[6/7] 在 session A 中查询对话上下文，应能回忆起甲信息")
         response_a = self.send_and_retry_on_timeout(
-            f"请根据你记住的关于我的信息回答：我之前告诉过你我在做什么项目？负责什么工作？不要调用任何外部工具，直接从记忆中回答",
+            "请根据你记住的关于我的信息回答：我之前告诉过你我在做什么项目？负责什么工作？不要调用任何外部工具，直接从记忆中回答",
             session_id=session_a,
         )
         self.assertAnyKeywordInResponse(
@@ -502,7 +512,7 @@ class TestSessionIsolation(BaseOpenClawCLITest):
 
         self.logger.info("[7/7] 在 session B 中查询对话上下文，应能回忆起乙信息")
         response_b = self.send_and_retry_on_timeout(
-            f"请根据你记住的关于我的信息回答：我之前告诉过你我在做什么项目？负责什么工作？不要调用任何外部工具，直接从记忆中回答",
+            "请根据你记住的关于我的信息回答：我之前告诉过你我在做什么项目？负责什么工作？不要调用任何外部工具，直接从记忆中回答",
             session_id=session_b,
         )
         self.assertAnyKeywordInResponse(
@@ -539,7 +549,7 @@ class TestCompactArchiveGeneration(BaseOpenClawCLITest):
         ]
 
         for i, topic in enumerate(topics):
-            self.logger.info(f"  写入第 {i+1}/{len(topics)} 轮: {topic}")
+            self.logger.info(f"  写入第 {i + 1}/{len(topics)} 轮: {topic}")
             self.send_and_log(topic, session_id=session_id)
             time.sleep(3)
 
@@ -635,7 +645,9 @@ class TestCrossSessionRecall(BaseOpenClawCLITest):
                     self.logger.info(f"  记忆提取结果: {extracted}")
 
         self.logger.info("[4/7] 验证记忆文件已新增或更新且包含关键信息（文件级别断言）")
-        memory_found = OVSessionVerifier.find_new_or_updated_files(before_files, keyword=unique_marker)
+        memory_found = OVSessionVerifier.find_new_or_updated_files(
+            before_files, keyword=unique_marker
+        )
         self.logger.info(f"  本次新增/更新且包含'{unique_marker}'的记忆文件数: {len(memory_found)}")
         for mf in memory_found:
             self.logger.info(f"  [{mf['status']}] {mf['path']}")

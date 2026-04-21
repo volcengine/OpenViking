@@ -50,6 +50,35 @@ class SessionService:
         if not self._viking_fs:
             raise NotInitializedError("VikingFS")
 
+    @staticmethod
+    def _record_lifecycle_metric(action: str, status: str) -> None:
+        """Best-effort session lifecycle metrics should never break the main flow."""
+        try:
+            from openviking.metrics.datasources.session import SessionLifecycleDataSource
+
+            SessionLifecycleDataSource.record_lifecycle(action=action, status=status)
+        except Exception:
+            logger.debug(
+                "Failed to record session lifecycle metric action=%s status=%s",
+                action,
+                status,
+                exc_info=True,
+            )
+
+    @staticmethod
+    def _record_archive_metric(status: str) -> None:
+        """Best-effort archive metrics should never break the main flow."""
+        try:
+            from openviking.metrics.datasources.session import SessionLifecycleDataSource
+
+            SessionLifecycleDataSource.record_archive(status=status)
+        except Exception:
+            logger.debug(
+                "Failed to record session archive metric status=%s",
+                status,
+                exc_info=True,
+            )
+
     def session(self, ctx: RequestContext, session_id: Optional[str] = None) -> Session:
         """Create a new session or load an existing one.
 
@@ -80,12 +109,7 @@ class SessionService:
         Raises:
             AlreadyExistsError: If a session with the given ID already exists
         """
-        try:
-            from openviking.metrics.datasources.session import SessionLifecycleDataSource
-
-            SessionLifecycleDataSource.record_lifecycle(action="create", status="attempt")
-        except Exception:
-            pass
+        self._record_lifecycle_metric("create", "attempt")
         try:
             if session_id:
                 existing = self.session(ctx, session_id)
@@ -93,20 +117,10 @@ class SessionService:
                     raise AlreadyExistsError(f"Session '{session_id}' already exists")
             session = self.session(ctx, session_id)
             await session.ensure_exists()
-            try:
-                from openviking.metrics.datasources.session import SessionLifecycleDataSource
-
-                SessionLifecycleDataSource.record_lifecycle(action="create", status="ok")
-            except Exception:
-                pass
+            self._record_lifecycle_metric("create", "ok")
             return session
         except Exception:
-            try:
-                from openviking.metrics.datasources.session import SessionLifecycleDataSource
-
-                SessionLifecycleDataSource.record_lifecycle(action="create", status="error")
-            except Exception:
-                pass
+            self._record_lifecycle_metric("create", "error")
             raise
 
     async def get(
@@ -127,20 +141,10 @@ class SessionService:
                     raise NotFoundError(session_id, "session")
                 await session.ensure_exists()
             await session.load()
-            try:
-                from openviking.metrics.datasources.session import SessionLifecycleDataSource
-
-                SessionLifecycleDataSource.record_lifecycle(action="get", status="ok")
-            except Exception:
-                pass
+            self._record_lifecycle_metric("get", "ok")
             return session
         except Exception:
-            try:
-                from openviking.metrics.datasources.session import SessionLifecycleDataSource
-
-                SessionLifecycleDataSource.record_lifecycle(action="get", status="error")
-            except Exception:
-                pass
+            self._record_lifecycle_metric("get", "error")
             raise
 
     async def sessions(self, ctx: RequestContext) -> List[Dict[str, Any]]:
@@ -168,6 +172,7 @@ class SessionService:
                 )
             return sessions
         except Exception:
+            logger.debug("Failed to list sessions", exc_info=True)
             return []
 
     async def delete(self, session_id: str, ctx: RequestContext) -> bool:
@@ -190,21 +195,11 @@ class SessionService:
         try:
             await self._viking_fs.rm(session_uri, recursive=True, ctx=ctx)
             logger.info(f"Deleted session: {session_id}")
-            try:
-                from openviking.metrics.datasources.session import SessionLifecycleDataSource
-
-                SessionLifecycleDataSource.record_lifecycle(action="delete", status="ok")
-            except Exception:
-                pass
+            self._record_lifecycle_metric("delete", "ok")
             return True
         except Exception as e:
             logger.error(f"Failed to delete session {session_id}: {e}")
-            try:
-                from openviking.metrics.datasources.session import SessionLifecycleDataSource
-
-                SessionLifecycleDataSource.record_lifecycle(action="delete", status="error")
-            except Exception:
-                pass
+            self._record_lifecycle_metric("delete", "error")
             raise NotFoundError(session_id, "session")
 
     async def commit(self, session_id: str, ctx: RequestContext) -> Dict[str, Any]:
@@ -236,17 +231,8 @@ class SessionService:
         self._ensure_initialized()
         session = await self.get(session_id, ctx)
         result = await session.commit_async()
-        try:
-            from openviking.metrics.datasources.session import SessionLifecycleDataSource
-
-            SessionLifecycleDataSource.record_lifecycle(
-                action="commit", status="ok" if result.get("status") else "error"
-            )
-            SessionLifecycleDataSource.record_archive(
-                status="ok" if result.get("archived") else "skip"
-            )
-        except Exception:
-            pass
+        self._record_lifecycle_metric("commit", "ok" if result.get("status") else "error")
+        self._record_archive_metric("ok" if result.get("archived") else "skip")
         return result
 
     async def get_commit_task(self, task_id: str, ctx: RequestContext) -> Optional[Dict[str, Any]]:
@@ -278,10 +264,5 @@ class SessionService:
             session_id=session_id,
             ctx=ctx,
         )
-        try:
-            from openviking.metrics.datasources.session import SessionLifecycleDataSource
-
-            SessionLifecycleDataSource.record_lifecycle(action="extract", status="ok")
-        except Exception:
-            pass
+        self._record_lifecycle_metric("extract", "ok")
         return memories

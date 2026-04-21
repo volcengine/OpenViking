@@ -1,8 +1,16 @@
 {
   "name": "@openclaw/openviking",
-  "version": "2026.3.25",
-  "description": "OpenClaw OpenViking-backed long-term memory plugin (install to ~/.openclaw/extensions)",
+  "version": "2026.4.30",
+  "displayName": "OpenViking",
+  "description": "OpenClaw context-engine plugin for memory management — powered by OpenViking",
   "type": "module",
+  "files": [
+    "*.ts",
+    "commands/setup.ts",
+    "!vitest.config.ts",
+    "openclaw.plugin.json",
+    "package.json"
+  ],
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest"
@@ -17,7 +25,15 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "compat": {
+      "pluginApi": ">=2026.3.7",
+      "minGatewayVersion": "2026.3.7"
+    },
+    "build": {
+      "openclawVersion": "2026.3.7",
+      "pluginSdkVersion": "2026.3.7"
+    }
   },
   "devDependencies": {
     "@types/node": "^25.3.5",

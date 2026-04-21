@@ -202,7 +202,7 @@ openclaw config set plugins.entries.openviking.config.agentId "<agent-id>"
 
 - 接入简单，插件不需要管理 account/user 生命周期
 - 最适合“一个 OpenClaw 实例对应一个 OpenViking 用户”的场景
-- `agentId` 决定 agent 级空间，便于区分不同 OpenClaw 实例或不同 agent 角色
+- `agentId` 参与决定 agent 级空间，便于区分不同 OpenClaw 实例或不同 agent 角色
 - 同一 account 内的 `resources` 可共享，`user` / `agent` memory 会按身份隔离
 
 ### OpenClaw 插件为何通常不配 `account` / `user`

@@ -41,6 +41,11 @@ from openviking.storage.vectordb.utils.constants import (
 from openviking.storage.vectordb.utils.data_processor import DataProcessor
 from openviking.storage.vectordb.utils.dict_utils import ThreadSafeDictManager
 from openviking.storage.vectordb.utils.id_generator import generate_auto_id
+from openviking.storage.vectordb.utils.path_safety import (
+    resolve_storage_path,
+    safe_join,
+    safe_join_name,
+)
 from openviking.storage.vectordb.utils.str_to_uint64 import str_to_uint64
 from openviking.storage.vectordb.vectorize.base import BaseVectorizer
 from openviking.storage.vectordb.vectorize.vectorizer import VectorizerAdapter
@@ -107,18 +112,19 @@ def get_or_create_local_collection(
         )
         return Collection(collection)
     else:
-        os.makedirs(path, exist_ok=True)
-        meta_path = os.path.join(path, "collection_meta.json")
+        collection_dir = str(resolve_storage_path(path))
+        os.makedirs(collection_dir, exist_ok=True)
+        meta_path = str(safe_join(collection_dir, "collection_meta.json"))
         meta = create_collection_meta(meta_path, meta_data)
         vectorizer = (
             VectorizerFactory.create(meta.vectorize)
             if meta.vectorize and vectorizer is None
             else vectorizer
         )
-        storage_path = os.path.join(path, STORAGE_DIR_NAME)
+        storage_path = str(safe_join(collection_dir, STORAGE_DIR_NAME))
         store_mgr = create_store_manager("local", storage_path)
         collection = PersistCollection(
-            path=path, meta=meta, store=store_mgr, vectorizer=vectorizer, config=config
+            path=collection_dir, meta=meta, store=store_mgr, vectorizer=vectorizer, config=config
         )
         return Collection(collection)
 
@@ -358,7 +364,9 @@ class LocalCollection(ICollection):
             return SearchResult()
         cands = cands_list[0]
         sparse_vector = (
-            dict(zip(cands.sparse_raw_terms, cands.sparse_values)) if cands.sparse_raw_terms else {}
+            dict(zip(cands.sparse_raw_terms, cands.sparse_values, strict=False))
+            if cands.sparse_raw_terms
+            else {}
         )
 
         return self.search_by_vector(
@@ -607,7 +615,9 @@ class LocalCollection(ICollection):
             if not self.vectorizer_adapter:
                 raw_data[vk] = list(cand_data.vector)
                 if svk and cand_data.sparse_raw_terms and cand_data.sparse_values:
-                    raw_data[svk] = dict(zip(cand_data.sparse_raw_terms, cand_data.sparse_values))
+                    raw_data[svk] = dict(
+                        zip(cand_data.sparse_raw_terms, cand_data.sparse_values, strict=False)
+                    )
             raw_data = validation.fix_fields_data(raw_data, self.meta.fields_dict)
             raw_data_list.append(raw_data)
 
@@ -927,28 +937,41 @@ class PersistCollection(LocalCollection):
         vectorizer: Optional[BaseVectorizer] = None,
         config: Optional[Dict[str, Any]] = None,
     ):
-        self.collection_dir = path
+        self.collection_dir = str(resolve_storage_path(path))
         os.makedirs(self.collection_dir, exist_ok=True)
-        self.index_dir = os.path.join(self.collection_dir, "index")
+        self.index_dir = str(safe_join(self.collection_dir, "index"))
         os.makedirs(self.index_dir, exist_ok=True)
         super().__init__(meta, store, vectorizer, config)
         self._recover()
         LocalCollection._register_scheduler_job(self)  # TTL expiration data cleanup
 
     def _recover(self):
-        index_names = [
-            folder
-            for folder in os.listdir(self.index_dir)
-            if os.path.isdir(os.path.join(self.index_dir, folder))
-        ]
-        for index_name in index_names:
-            meta_path = os.path.join(self.index_dir, index_name, "index_meta.json")
-            if not os.path.exists(meta_path):
+        for folder in os.listdir(self.index_dir):
+            try:
+                index_dir = safe_join(self.index_dir, folder)
+            except ValueError:
+                logger.warning(f"Skipping invalid index directory under {self.index_dir}: {folder}")
+                continue
+
+            if not index_dir.is_dir():
+                continue
+
+            try:
+                validation.validate_name_str(folder)
+            except ValueError:
+                logger.warning(
+                    f"Skipping index directory with invalid name under {self.index_dir}: {folder}"
+                )
+                continue
+
+            index_name = folder
+            meta_path = safe_join(index_dir, "index_meta.json")
+            if not meta_path.exists():
                 logger.warning(
                     f"Index metadata file not found at {meta_path}, skipping recovery for index {index_name}"
                 )
                 continue
-            meta = create_index_meta(self.meta, meta_path)
+            meta = create_index_meta(self.meta, str(meta_path))
             # When recovering an existing index, pass initial_timestamp=0.
             # This ensures the index's base version starts at 0, allowing it to ingest
             # all data from the delta log (CandidateData) regardless of when that data was created.
@@ -1021,9 +1044,9 @@ class PersistCollection(LocalCollection):
         cands_list: List[CandidateData],
         force_rebuild: bool = False,
     ):
-        new_index_dir = os.path.join(self.index_dir, index_name)
+        new_index_dir = str(safe_join_name(self.index_dir, index_name))
         os.makedirs(new_index_dir, exist_ok=True)
-        meta_path = os.path.join(new_index_dir, "index_meta.json")
+        meta_path = str(safe_join(new_index_dir, "index_meta.json"))
         meta = create_index_meta(self.meta, meta_path, meta_data)
         index = PersistentIndex(
             name=index_name,
