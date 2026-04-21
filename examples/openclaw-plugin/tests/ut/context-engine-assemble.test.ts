@@ -162,6 +162,43 @@ describe("context-engine assemble()", () => {
     });
   });
 
+  it("does not log assembled content by default", async () => {
+    const { engine, logger } = makeEngine({
+      latest_archive_overview: "SECRET_ARCHIVE_SUMMARY",
+      pre_archive_abstracts: [
+        {
+          archive_id: "archive_001",
+          abstract: "SECRET_ARCHIVE_ABSTRACT",
+        },
+      ],
+      messages: [
+        {
+          id: "msg_1",
+          role: "assistant",
+          created_at: "2026-03-24T00:00:00Z",
+          parts: [{ type: "text", text: "SECRET_ACTIVE_MESSAGE" }],
+        },
+      ],
+      estimatedTokens: 321,
+      stats: {
+        ...makeStats(),
+        activeTokens: 281,
+        archiveTokens: 40,
+      },
+    });
+
+    await engine.assemble({
+      sessionId: "session-logs",
+      messages: [{ role: "user", content: "fallback live message" }],
+      tokenBudget: 4096,
+    });
+
+    const infoLogs = logger.info.mock.calls.flat().join("\n");
+    expect(infoLogs).not.toContain("SECRET_ARCHIVE_SUMMARY");
+    expect(infoLogs).not.toContain("SECRET_ARCHIVE_ABSTRACT");
+    expect(infoLogs).not.toContain("SECRET_ACTIVE_MESSAGE");
+  });
+
   it("passes through live messages when the session matches bypassSessionPatterns", async () => {
     const { engine, client, getClient } = makeEngine(
       {

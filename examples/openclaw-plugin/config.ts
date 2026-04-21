@@ -3,6 +3,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { resolve as resolvePath } from "node:path";
 
+export const RECALL_PATHS = { assemble: "assemble", hook: "hook" } as const;
+export type RecallPath = (typeof RECALL_PATHS)[keyof typeof RECALL_PATHS];
+
 export type MemoryOpenVikingConfig = {
   /** "local" = plugin starts OpenViking server as child process (like Claude Code); "remote" = use existing HTTP server */
   mode?: "local" | "remote";
@@ -21,7 +24,7 @@ export type MemoryOpenVikingConfig = {
   captureMode?: "semantic" | "keyword";
   captureMaxLength?: number;
   autoRecall?: boolean;
-  recallPath?: "assemble" | "hook";
+  recallPath?: RecallPath;
   recallLimit?: number;
   recallScoreThreshold?: number;
   recallMaxContentChars?: number;
@@ -53,7 +56,7 @@ const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_CAPTURE_MODE = "semantic";
 const DEFAULT_CAPTURE_MAX_LENGTH = 24000;
 const DEFAULT_RECALL_LIMIT = 6;
-const DEFAULT_RECALL_PATH = "assemble";
+const DEFAULT_RECALL_PATH: RecallPath = RECALL_PATHS.assemble;
 const DEFAULT_RECALL_SCORE_THRESHOLD = 0.15;
 const DEFAULT_RECALL_MAX_CONTENT_CHARS = 500;
 const DEFAULT_RECALL_PREFER_ABSTRACT = true;
@@ -255,8 +258,8 @@ export const memoryOpenVikingConfigSchema = {
     const recallPath = cfg.recallPath;
     if (
       typeof recallPath !== "undefined" &&
-      recallPath !== "assemble" &&
-      recallPath !== "hook"
+      recallPath !== RECALL_PATHS.assemble &&
+      recallPath !== RECALL_PATHS.hook
     ) {
       throw new Error(`openviking recallPath must be "assemble" or "hook"`);
     }
@@ -287,7 +290,7 @@ export const memoryOpenVikingConfigSchema = {
         Math.min(200_000, Math.floor(toNumber(cfg.captureMaxLength, DEFAULT_CAPTURE_MAX_LENGTH))),
       ),
       autoRecall: cfg.autoRecall !== false,
-      recallPath: recallPath ?? DEFAULT_RECALL_PATH,
+      recallPath: (recallPath as RecallPath | undefined) ?? DEFAULT_RECALL_PATH,
       recallLimit: Math.max(1, Math.floor(toNumber(cfg.recallLimit, DEFAULT_RECALL_LIMIT))),
       recallScoreThreshold: Math.min(
         1,

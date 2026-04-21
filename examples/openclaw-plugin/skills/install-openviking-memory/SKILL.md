@@ -68,6 +68,7 @@ Example: User says "Forget my phone number"
 | `captureMode` | `semantic` | Capture mode: `semantic` / `keyword` |
 | `captureMaxLength` | `24000` | Maximum text length per capture |
 | `autoRecall` | `true` | Automatically recall and inject context |
+| `recallPath` | `assemble` | Where auto-recall runs: `assemble` (default context-engine path) or `hook` (legacy `before_prompt_build` compatibility mode) |
 | `recallLimit` | `6` | Maximum memories injected during auto-recall |
 | `recallScoreThreshold` | `0.01` | Minimum relevance score for recall |
 

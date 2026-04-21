@@ -81,13 +81,18 @@ describe("buildMemoryLines", () => {
   it("falls back to abstract when readFn throws", async () => {
     const memories = [makeMemory({ level: 2, abstract: "Fallback abstract" })];
     const readFn = vi.fn().mockRejectedValue(new Error("network error"));
+    const logger = { warn: vi.fn() };
 
     const lines = await buildMemoryLines(memories, readFn, {
       recallPreferAbstract: false,
       recallMaxContentChars: 500,
+      logger,
     });
 
     expect(lines[0]).toContain("Fallback abstract");
+    expect(logger.warn).toHaveBeenCalledWith(
+      "openviking: memory read failed for viking://user/memories/test-1: Error: network error",
+    );
   });
 
   it("falls back to abstract when readFn returns empty", async () => {

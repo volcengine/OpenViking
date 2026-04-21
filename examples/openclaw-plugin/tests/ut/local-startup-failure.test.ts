@@ -142,4 +142,5 @@ describe("local OpenViking startup failure", () => {
       process.off("unhandledRejection", onUnhandledRejection);
     }
   });
+
 });

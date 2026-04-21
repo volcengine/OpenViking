@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { OpenVikingClient } from "../../client.js";
 import { memoryOpenVikingConfigSchema } from "../../config.js";
-import { createMemoryOpenVikingContextEngine } from "../../context-engine.js";
+import {
+  convertToAgentMessages,
+  createMemoryOpenVikingContextEngine,
+  mergeConsecutiveAssistants,
+} from "../../context-engine.js";
 
 function makeLogger() {
   return {
@@ -17,6 +21,7 @@ function makeEngine(opts?: {
   commitTokenThreshold?: number;
   getSession?: Record<string, unknown>;
   addSessionMessageError?: Error;
+  hangingAddSessionMessage?: boolean;
   cfgOverrides?: Record<string, unknown>;
   quickPrecheck?: () => Promise<{ ok: true } | { ok: false; reason: string }>;
 }) {
@@ -33,7 +38,9 @@ function makeEngine(opts?: {
 
   const addSessionMessage = opts?.addSessionMessageError
     ? vi.fn().mockRejectedValue(opts.addSessionMessageError)
-    : vi.fn().mockResolvedValue(undefined);
+    : opts?.hangingAddSessionMessage
+      ? vi.fn(() => new Promise(() => {}))
+      : vi.fn().mockResolvedValue(undefined);
 
   const client = {
     addSessionMessage,
@@ -321,6 +328,35 @@ describe("context-engine afterTurn()", () => {
     );
   });
 
+  it("fails open when capture work exceeds the afterTurn timeout budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const { engine, client, logger } = makeEngine({
+        hangingAddSessionMessage: true,
+        cfgOverrides: {
+          timeoutMs: 1_500,
+        },
+      });
+
+      const runPromise = engine.afterTurn!({
+        sessionId: "s1",
+        sessionFile: "",
+        messages: [{ role: "user", content: "this capture hangs" }],
+        prePromptMessageCount: 0,
+      });
+
+      await vi.advanceTimersByTimeAsync(1_500);
+      await expect(runPromise).resolves.toBeUndefined();
+
+      expect(client.getSession).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("afterTurn timeout after 1500ms"),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("commit uses OV session ID derived from sessionId", async () => {
     const { engine, client } = makeEngine({
       commitTokenThreshold: 100,
@@ -435,15 +471,15 @@ describe("context-engine afterTurn()", () => {
     expect(client.getSession).toHaveBeenCalled();
   });
 
-  it("maps toolResult to user role", async () => {
+  it("stores matching toolResult on the assistant tool part", async () => {
     const { engine, client } = makeEngine();
 
     const messages = [
       { role: "assistant", content: [
         { type: "text", text: "running tool" },
-        { type: "toolUse", name: "bash", input: { cmd: "ls" } },
+        { type: "toolUse", id: "call_bash", name: "bash", input: { cmd: "ls" } },
       ] },
-      { role: "toolResult", toolName: "bash", content: "file1.txt\nfile2.txt" },
+      { role: "toolResult", toolCallId: "call_bash", toolName: "bash", content: "file1.txt\nfile2.txt" },
       { role: "assistant", content: "done" },
     ];
 
@@ -454,13 +490,19 @@ describe("context-engine afterTurn()", () => {
       prePromptMessageCount: 0,
     });
 
-    expect(client.addSessionMessage).toHaveBeenCalledTimes(3);
-    // assistant → user(toolResult) → assistant
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
     expect(client.addSessionMessage.mock.calls[0][1]).toBe("assistant");
-    expect(client.addSessionMessage.mock.calls[1][1]).toBe("user");
-    expect(client.addSessionMessage.mock.calls[1][2][0].tool_output).toContain("[bash result]:");
-    expect(client.addSessionMessage.mock.calls[1][2][0].tool_output).toContain("file1.txt");
-    expect(client.addSessionMessage.mock.calls[2][1]).toBe("assistant");
+    expect(client.addSessionMessage.mock.calls[0][2][1]).toMatchObject({
+      type: "tool",
+      tool_id: "call_bash",
+      tool_name: "bash",
+      tool_input: { cmd: "ls" },
+      tool_status: "completed",
+    });
+    expect(client.addSessionMessage.mock.calls[0][2][1].tool_output).toContain("[bash result]:");
+    expect(client.addSessionMessage.mock.calls[0][2][1].tool_output).toContain("file1.txt");
+    expect(client.addSessionMessage.mock.calls[1][1]).toBe("assistant");
+    expect(client.addSessionMessage.mock.calls[1][2][0].text).toContain("done");
   });
 
   it("merges adjacent same-role messages", async () => {
@@ -511,9 +553,9 @@ describe("context-engine afterTurn()", () => {
     expect(client.addSessionMessage.mock.calls[0][1]).toBe("assistant");
     // Two toolResults merged into one user call
     expect(client.addSessionMessage.mock.calls[1][1]).toBe("user");
-    const toolParts = (client.addSessionMessage.mock.calls[1][2] as Array<{ tool_output?: string }>).filter(p => p.tool_output);
-    expect(toolParts.map(p => p.tool_output).join(" ")).toContain("[read result]:");
-    expect(toolParts.map(p => p.tool_output).join(" ")).toContain("[write result]:");
+    const toolTexts = (client.addSessionMessage.mock.calls[1][2] as Array<{ text?: string }>).map(p => p.text).join(" ");
+    expect(toolTexts).toContain("[read result]:");
+    expect(toolTexts).toContain("[write result]:");
     expect(client.addSessionMessage.mock.calls[2][1]).toBe("assistant");
   });
 
@@ -591,5 +633,81 @@ describe("context-engine afterTurn()", () => {
     });
 
     expect(client.addSessionMessage).not.toHaveBeenCalled();
+  });
+
+  it("round-trips toolUse + toolResult: afterTurn() → convertToAgentMessages()", async () => {
+    // End-to-end coverage for the regression Mijamind719 flagged on #1424:
+    // assistant messages with toolUse + their matching toolResult must
+    // survive the afterTurn → OV store → assemble read path without losing
+    // tool call history.
+    const { engine, client } = makeEngine();
+
+    const sourceMessages = [
+      { role: "user", content: "ignore me, pre-prompt" },
+      { role: "user", content: "list the files" },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Let me check." },
+          {
+            type: "toolCall",
+            id: "call_abc",
+            name: "exec",
+            arguments: { command: "ls" },
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_abc",
+        toolName: "exec",
+        content: [{ type: "text", text: "file1.txt\nfile2.txt" }],
+      },
+    ];
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages: sourceMessages,
+      prePromptMessageCount: 1,
+    });
+
+    // Reconstruct the stored messages in the snake_case shape OV persists.
+    const storedMessages = client.addSessionMessage.mock.calls.map(
+      (call) => ({ role: call[1] as string, parts: call[2] as unknown[] }),
+    );
+    expect(storedMessages.length).toBeGreaterThan(0);
+
+    // Confirm the assistant message carried the tool part through the
+    // shim. This guards against the shim drifting out of sync with the
+    // extracted (camelCase) format that extractNewTurnMessages emits.
+    const assistantStored = storedMessages.find((m) => m.role === "assistant");
+    expect(assistantStored).toBeDefined();
+    const toolPart = (assistantStored!.parts as Array<Record<string, unknown>>).find(
+      (p) => p.type === "tool",
+    );
+    expect(toolPart).toBeDefined();
+    expect(toolPart!.tool_id).toBe("call_abc");
+    expect(toolPart!.tool_name).toBe("exec");
+    expect(toolPart!.tool_status).toBe("completed");
+
+    // Read path: feed each stored message through convertToAgentMessages
+    // and merge, which is what assemble() does when rehydrating a session.
+    const roundTripped = mergeConsecutiveAssistants(
+      storedMessages.flatMap((m) => convertToAgentMessages(m)),
+    );
+
+    const assistantOut = roundTripped.find((m) => m.role === "assistant");
+    expect(assistantOut).toBeDefined();
+    const blocks = assistantOut!.content as Array<Record<string, unknown>>;
+    expect(blocks.some((b) => b.type === "text" && b.text === "Let me check.")).toBe(true);
+    const toolUseBlock = blocks.find((b) => b.type === "toolUse");
+    expect(toolUseBlock).toBeDefined();
+    expect(toolUseBlock!.id).toBe("call_abc");
+    expect(toolUseBlock!.name).toBe("exec");
+
+    const toolResultOut = roundTripped.find((m) => m.role === "toolResult");
+    expect(toolResultOut).toBeDefined();
+    expect((toolResultOut as Record<string, unknown>).toolCallId).toBe("call_abc");
   });
 });

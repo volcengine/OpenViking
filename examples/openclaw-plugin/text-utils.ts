@@ -19,7 +19,7 @@ const SENDER_METADATA_BLOCK_RE = /Sender\s*\([^)]*\)\s*:\s*```[\s\S]*?```/gi;
 const FENCED_JSON_BLOCK_RE = /```json\s*([\s\S]*?)```/gi;
 const METADATA_JSON_KEY_RE =
   /"(session|sessionid|sessionkey|conversationid|channel|sender|userid|agentid|timestamp|timezone)"\s*:/gi;
-const LEADING_TIMESTAMP_PREFIX_RE = /^\s*(?!\[\[)\[(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*\s+)?(?:\d{4}[-/]\d{2}[-/]\d{2}|\d{2}[-/]\d{2}[-/]\d{2,4})(?:\s+\d{1,2}:\d{2}(?::\d{2})?(?:\s*[A-Z]{1,5}(?:[+-]\d{1,2})?)?)?\s*\]\s*/i;
+const LEADING_TIMESTAMP_PREFIX_RE = /^\s*(?!\[\[)\[(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*\s+)?(?:\d{4}[-/]\d{2}[-/]\d{2}|\d{2}[-/]\d{2}[-/]\d{2,4})(?:[T\s]+\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|\s*[A-Z]{1,5}(?:[+-]\d{1,2})?)?)?\s*\]\s*/i;
 const COMPACTED_SYSTEM_MSG_RE = /^System:\s*\[.*?\]\s*Compacted\s*(.+)$/i;
 const COMMAND_TEXT_RE = /^\/[a-z0-9_-]{1,64}\b/i;
 const NON_CONTENT_TEXT_RE = /^[\p{P}\p{S}\s]+$/u;
@@ -65,6 +65,7 @@ export function sanitizeUserTextForCapture(text: string): string {
     .replace(RELEVANT_MEMORIES_BLOCK_RE, " ")
     .replace(CONVERSATION_METADATA_BLOCK_RE, " ")
     .replace(SENDER_METADATA_BLOCK_RE, " ")
+    .replace(SUBAGENT_CONTEXT_RE, " ")
     .replace(FENCED_JSON_BLOCK_RE, (full, inner) =>
       looksLikeMetadataJsonBlock(String(inner ?? "")) ? " " : full,
     )
@@ -343,9 +344,6 @@ export function extractSingleMessageText(msg: unknown): string {
   return "";
 }
 
-/**
- * 提取消息中的一个 part 的文本内容，并清理时间戳等噪音
- */
 function extractPartText(content: unknown): string {
   if (typeof content === "string") {
     return content.trim();
@@ -381,6 +379,45 @@ export type ExtractedMessage = {
   }>;
 };
 
+type ToolResultSnapshot = {
+  toolName: string;
+  output: string;
+};
+
+function extractToolCallId(value: Record<string, unknown>): string {
+  return String(value.toolCallId ?? value.toolUseId ?? value.tool_call_id ?? value.id ?? "");
+}
+
+function extractToolName(value: Record<string, unknown>, fallback = "tool"): string {
+  return String(value.toolName ?? value.name ?? value.tool_name ?? fallback);
+}
+
+function extractToolInput(value: Record<string, unknown>): Record<string, unknown> | undefined {
+  const input = value.arguments ?? value.input ?? value.toolInput ?? value.tool_input;
+  return input && typeof input === "object" ? input as Record<string, unknown> : undefined;
+}
+
+function isToolUseBlock(value: Record<string, unknown>): boolean {
+  return value.type === "toolCall" || value.type === "toolUse" || value.type === "tool_call";
+}
+
+function appendExtractedMessage(
+  messages: ExtractedMessage[],
+  role: "user" | "assistant",
+  parts: ExtractedMessage["parts"],
+  forceNew = false,
+): void {
+  if (parts.length === 0) {
+    return;
+  }
+  const last = messages[messages.length - 1];
+  if (!forceNew && last && last.role === role) {
+    last.parts.push(...parts);
+    return;
+  }
+  messages.push({ role, parts });
+}
+
 /**
  * 提取从 startIndex 开始的新消息，返回结构化消息。
  * - 用户输入 → type: "text"
@@ -395,31 +432,25 @@ export function extractNewTurnMessages(
   const result: ExtractedMessage[] = [];
   let count = 0;
 
-  // First pass: collect toolUse inputs indexed by toolCallId/toolUseId
-  // Scan all messages (including after startIndex) to find toolUse before each toolResult
-  const toolUseInputs: Record<string, Record<string, unknown>> = {};
+  // First pass: collect tool results so assistant toolUse blocks can carry
+  // their matching result when the pair is captured in the same afterTurn.
+  const toolResultsById = new Map<string, ToolResultSnapshot>();
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i] as Record<string, unknown>;
     if (!msg || typeof msg !== "object") continue;
     const role = msg.role as string;
-    if (role === "assistant") {
-      const content = msg.content;
-      if (Array.isArray(content)) {
-        for (const block of content) {
-          const b = block as Record<string, unknown>;
-          // Handle toolCall, toolUse, tool_call types
-          if (b?.type === "toolCall" || b?.type === "toolUse" || b?.type === "tool_call") {
-            const id = (b.id as string) || (b.toolUseId as string) || (b.toolCallId as string);
-            // Try multiple field names for tool input: arguments, input, toolInput
-            const input = b.arguments ?? b.input ?? b.toolInput;
-            if (id && input && typeof input === "object") {
-              toolUseInputs[id] = input as Record<string, unknown>;
-            }
-          }
-        }
+    if (role === "toolResult") {
+      const toolCallId = extractToolCallId(msg);
+      const output = formatToolResultContent(msg.content);
+      if (toolCallId && output) {
+        const toolName = extractToolName(msg);
+        toolResultsById.set(toolCallId, { toolName, output });
       }
     }
   }
+
+  const attachedToolResultIds = new Set<string>();
+  let shouldSeparateNextMessage = false;
 
   for (let i = startIndex; i < messages.length; i++) {
     const msg = messages[i] as Record<string, unknown>;
@@ -430,52 +461,80 @@ export function extractNewTurnMessages(
 
     count++;
 
-    // toolResult -> type: "tool"
-    if (role === "toolResult") {
-      const toolName = typeof msg.toolName === "string" ? msg.toolName : "tool";
-      const output = formatToolResultContent(msg.content) || "";
-      // Try multiple field names for tool call ID
-      const toolCallId = (msg.toolCallId as string) || (msg.toolUseId as string) || (msg.tool_call_id as string);
-      const toolInput = toolCallId && toolUseInputs[toolCallId]
-        ? toolUseInputs[toolCallId]
-        : (typeof msg.toolInput === "object" && msg.toolInput !== null
-          ? msg.toolInput as Record<string, unknown>
-          : undefined);
-      if (output) {
-        result.push({
-          role: "user",
-          parts: [{
-            type: "tool",
-            toolCallId: toolCallId || undefined,
-            toolName,
-            toolInput,
-            toolOutput: output,
-            toolStatus: "completed",
-          }],
+    if (role === "assistant" && Array.isArray(msg.content)) {
+      const parts: ExtractedMessage["parts"] = [];
+      for (const block of msg.content) {
+        const b = block as Record<string, unknown>;
+        if (b?.type === "text" && typeof b.text === "string") {
+          const text = b.text.trim();
+          if (text && !HEARTBEAT_RE.test(text)) {
+            parts.push({ type: "text", text });
+          }
+          continue;
+        }
+        if (!isToolUseBlock(b)) {
+          continue;
+        }
+
+        const toolCallId = extractToolCallId(b);
+        const matchedResult = toolCallId ? toolResultsById.get(toolCallId) : undefined;
+        if (toolCallId && matchedResult) {
+          attachedToolResultIds.add(toolCallId);
+        }
+        const toolName = extractToolName(b, matchedResult?.toolName ?? "tool");
+        parts.push({
+          type: "tool",
+          toolCallId: toolCallId || undefined,
+          toolName,
+          toolInput: extractToolInput(b),
+          toolOutput: matchedResult ? `[${toolName} result]: ${matchedResult.output}` : "",
+          toolStatus: matchedResult ? "completed" : "running",
         });
+      }
+      appendExtractedMessage(result, "assistant", parts, shouldSeparateNextMessage);
+      shouldSeparateNextMessage = false;
+      continue;
+    }
+
+    // Orphan toolResult -> user text. Matching assistant toolUse pairs are
+    // already attached to their assistant message above.
+    if (role === "toolResult") {
+      const toolName = extractToolName(msg);
+      const output = formatToolResultContent(msg.content);
+      const toolCallId = extractToolCallId(msg);
+      if (toolCallId && attachedToolResultIds.has(toolCallId)) {
+        shouldSeparateNextMessage = true;
+        continue;
+      }
+      if (output) {
+        appendExtractedMessage(result, "user", [{
+          type: "text",
+          text: `[${toolName} result]: ${output}`,
+        }]);
       }
       continue;
     }
 
     // user/assistant -> type: "text"
-    // 统一 role 为 user
+    // 保留原始 user/assistant 角色，并合并相邻同角色片段
     const content = msg.content;
     const text = extractPartText(content);
 
     if (text) {
+      if (HEARTBEAT_RE.test(text)) {
+        continue;
+      }
       // Sanitize user text (sender metadata, timestamps, injected
       // <relevant-memories>) but leave assistant content intact so the
       // extraction pipeline still sees referenced context.
       const ovRole: "user" | "assistant" = role === "assistant" ? "assistant" : "user";
       const cleanedText = ovRole === "user" ? sanitizeUserTextForCapture(text) : text.trim();
       if (cleanedText) {
-        result.push({
-          role: ovRole,
-          parts: [{
-            type: "text",
-            text: cleanedText,
-          }],
-        });
+        appendExtractedMessage(result, ovRole, [{
+          type: "text",
+          text: cleanedText,
+        }], shouldSeparateNextMessage);
+        shouldSeparateNextMessage = false;
       }
     }
   }
@@ -489,52 +548,32 @@ export function extractNewTurnTexts(
 ): { texts: string[]; newCount: number } {
   const texts: string[] = [];
   let count = 0;
-
-  for (let i = startIndex; i < messages.length; i += 1) {
+  for (let i = startIndex; i < messages.length; i++) {
     const msg = messages[i] as Record<string, unknown>;
-    if (!msg || typeof msg !== "object") continue;
-
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
     const role = msg.role as string;
-    if (!role || role === "system") continue;
-    count += 1;
+    if (!role || role === "system") {
+      continue;
+    }
+    count++;
 
+    const text = extractSingleMessageText(msg);
+    if (!text) {
+      continue;
+    }
+    // Mirror extractNewTurnMessages: skip heartbeat content so callers never
+    // see synthetic keep-alive turns as real text.
+    if (HEARTBEAT_RE.test(text)) {
+      continue;
+    }
     if (role === "toolResult") {
-      const toolName = typeof msg.toolName === "string" ? msg.toolName : "tool";
-      const output = formatToolResultContent(msg.content);
-      if (output) {
-        texts.push(`[${toolName} result]: ${output}`);
-      }
-      continue;
-    }
-
-    const content = msg.content;
-    if (typeof content === "string") {
-      const cleaned = sanitizeUserTextForCapture(content);
-      if (cleaned) {
-        texts.push(`[${role}]: ${cleaned}`);
-      }
-      continue;
-    }
-
-    if (!Array.isArray(content)) continue;
-    for (const block of content) {
-      const part = block as Record<string, unknown>;
-      if (part?.type === "text" && typeof part.text === "string") {
-        const cleaned = sanitizeUserTextForCapture(part.text);
-        if (cleaned) {
-          texts.push(`[${role}]: ${cleaned}`);
-        }
-        continue;
-      }
-      if (
-        role === "assistant" &&
-        (part?.type === "toolUse" || part?.type === "toolCall" || part?.type === "tool_call")
-      ) {
-        texts.push(formatToolUseBlock(part));
-      }
+      texts.push(text);
+    } else {
+      texts.push(`[${role}]: ${text}`);
     }
   }
-
   return { texts, newCount: count };
 }
 

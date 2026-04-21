@@ -31,6 +31,10 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+// Mirror of RECALL_PATHS in ../config.ts. Keep string values in sync with the plugin
+// config so `openclaw config set` writes a value the plugin actually accepts.
+const RECALL_PATHS = Object.freeze({ assemble: "assemble", hook: "hook" });
+
 let REPO = process.env.REPO || "volcengine/OpenViking";
 // PLUGIN_VERSION takes precedence over BRANCH (legacy). If omitted, resolve the latest tag from GitHub.
 const pluginVersionEnv = (process.env.PLUGIN_VERSION || process.env.BRANCH || "").trim();
@@ -2147,7 +2151,7 @@ async function configureOpenClawPlugin({
     await oc(["config", "set", `plugins.entries.${pluginId}.config.autoCapture`, "true", "--json"]);
   }
   if (pluginId === "openviking" && resolvedPluginKind === "context-engine") {
-    await oc(["config", "set", `plugins.entries.${pluginId}.config.recallPath`, "assemble"]);
+    await oc(["config", "set", `plugins.entries.${pluginId}.config.recallPath`, RECALL_PATHS.assemble]);
     await oc([
       "config",
       "set",

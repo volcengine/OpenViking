@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 
 import { Type } from "@sinclair/typebox";
-import { memoryOpenVikingConfigSchema } from "./config.js";
+import { memoryOpenVikingConfigSchema, RECALL_PATHS } from "./config.js";
 
 import { OpenVikingClient, localClientCache, localClientPendingPromises, isMemoryUri } from "./client.js";
 import type {
@@ -755,14 +755,14 @@ const contextEnginePlugin = {
       };
       const memories = deduplicate(results.flatMap((result) => result.memories ?? []));
       const resources = deduplicate(results.flatMap((result) => result.resources ?? []));
-      const skills = deduplicate(results.flatMap((result) => result.skills ?? []));
-      return {
-        memories,
-        resources,
-        skills,
-        total: memories.length + resources.length + skills.length,
+    const skills = deduplicate(results.flatMap((result) => result.skills ?? []));
+    return {
+      memories,
+      resources,
+          skills,
+          total: memories.length + resources.length + skills.length,
+        };
       };
-    };
 
     const formatSearchRows = (result: FindResult): string[] => {
       const truncateSummary = (value: string, maxChars = 220): string => {
@@ -1675,7 +1675,7 @@ const contextEnginePlugin = {
     api.on("session_end", async (_event: unknown, ctx?: HookAgentContext) => {
       rememberSessionAgentId(ctx ?? {});
     });
-    if (cfg.recallPath === "hook") {
+    if (cfg.recallPath === RECALL_PATHS.hook) {
       api.on("before_prompt_build", async (event: unknown, ctx?: HookAgentContext) => {
         rememberSessionAgentId(ctx ?? {});
 
@@ -1698,8 +1698,8 @@ const contextEnginePlugin = {
         const eventObj = (event ?? {}) as { messages?: unknown[]; prompt?: string };
         const latestUserText = extractLatestUserText(eventObj.messages);
         const rawRecallQuery =
-          latestUserText ||
-          (typeof eventObj.prompt === "string" ? eventObj.prompt.trim() : "");
+          latestUserText || (typeof eventObj.prompt === "string" ? eventObj.prompt : "");
+        // prepareRecallQuery runs sanitizeUserTextForCapture internally.
         const recallQuery = prepareRecallQuery(rawRecallQuery);
         const queryText = recallQuery.query;
         if (!queryText) {

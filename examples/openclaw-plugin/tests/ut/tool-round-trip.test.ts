@@ -4,7 +4,7 @@ import { extractNewTurnMessages } from "../../text-utils.js";
 import { convertToAgentMessages, mergeConsecutiveAssistants } from "../../context-engine.js";
 
 describe("extractNewTurnMessages: toolCallId propagation", () => {
-  it("propagates toolCallId from toolResult to extracted tool part", () => {
+  it("attaches a matching toolResult to the assistant toolUse", () => {
     const messages = [
       {
         role: "assistant",
@@ -23,23 +23,22 @@ describe("extractNewTurnMessages: toolCallId propagation", () => {
 
     const { messages: extracted } = extractNewTurnMessages(messages, 0);
 
-    const toolMsg = extracted.find(
-      (m) => m.parts.some((p) => p.type === "tool"),
-    );
-    expect(toolMsg).toBeDefined();
-
-    const toolPart = toolMsg!.parts.find((p) => p.type === "tool");
-    expect(toolPart).toBeDefined();
-    expect(toolPart!.type).toBe("tool");
-    if (toolPart!.type === "tool") {
-      expect(toolPart!.toolCallId).toBe("call_abc123");
-      expect(toolPart!.toolName).toBe("exec");
-      expect(toolPart!.toolInput).toEqual({ command: "ls" });
-      expect(toolPart!.toolOutput).toContain("file1.txt");
-    }
+    expect(extracted).toHaveLength(1);
+    expect(extracted[0]!.role).toBe("assistant");
+    expect(extracted[0]!.parts[0]).toEqual({ type: "text", text: "Let me check." });
+    expect(extracted[0]!.parts[1]).toMatchObject({
+      type: "tool",
+      toolCallId: "call_abc123",
+      toolName: "exec",
+      toolInput: { command: "ls" },
+      toolStatus: "completed",
+    });
+    expect(extracted[0]!.parts[1]).toMatchObject({
+      toolOutput: expect.stringContaining("file1.txt"),
+    });
   });
 
-  it("sets toolCallId to undefined when original message has no toolCallId", () => {
+  it("degrades orphan toolResult without toolCallId to user text", () => {
     const messages = [
       {
         role: "toolResult",
@@ -50,13 +49,13 @@ describe("extractNewTurnMessages: toolCallId propagation", () => {
 
     const { messages: extracted } = extractNewTurnMessages(messages, 0);
     const toolPart = extracted[0]!.parts[0]!;
-    expect(toolPart.type).toBe("tool");
-    if (toolPart.type === "tool") {
-      expect(toolPart.toolCallId).toBeUndefined();
-    }
+    expect(toolPart).toEqual({
+      type: "text",
+      text: "[search result]: no results",
+    });
   });
 
-  it("maps toolResult to role=user", () => {
+  it("degrades orphan toolResult with toolCallId to user text", () => {
     const messages = [
       {
         role: "toolResult",
@@ -68,6 +67,10 @@ describe("extractNewTurnMessages: toolCallId propagation", () => {
 
     const { messages: extracted } = extractNewTurnMessages(messages, 0);
     expect(extracted[0]!.role).toBe("user");
+    expect(extracted[0]!.parts[0]).toEqual({
+      type: "text",
+      text: "[exec result]: hello",
+    });
   });
 });
 
