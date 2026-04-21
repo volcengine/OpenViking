@@ -18,7 +18,12 @@ from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import build_queue_status_payload
 from openviking.utils.embedding_utils import vectorize_file
-from openviking_cli.exceptions import DeadlineExceededError, InvalidArgumentError, NotFoundError
+from openviking_cli.exceptions import (
+    AlreadyExistsError,
+    DeadlineExceededError,
+    InvalidArgumentError,
+    NotFoundError,
+)
 from openviking_cli.utils import VikingURI
 from openviking_cli.utils.logger import get_logger
 
@@ -128,9 +133,106 @@ class ContentWriteCoordinator:
             if wait and telemetry_id:
                 get_request_wait_tracker().cleanup(telemetry_id)
 
+    async def create_agent_memory_carrier(
+        self,
+        *,
+        uri: str,
+        content: str,
+        ctx: RequestContext,
+        create_mode: str = "create_if_missing",
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Create an agent-scoped memory carrier file.
+
+        The dedicated API is intentionally scoped to agent memory carriers and
+        preserves the existing semantics of the generic ``content/write``
+        endpoint, which still only writes existing files.
+        """
+        normalized_uri = VikingURI.normalize(uri)
+        self._validate_create_mode(create_mode)
+        self._validate_agent_memory_carrier_uri(normalized_uri)
+
+        exists_before = await self._viking_fs.exists(normalized_uri, ctx=ctx)
+        if exists_before:
+            stat = await self._safe_stat(normalized_uri, ctx=ctx)
+            if stat.get("isDir"):
+                raise InvalidArgumentError(
+                    f"agent content create only supports files, got directory: {uri}"
+                )
+            if create_mode == "error_if_exists":
+                raise AlreadyExistsError(normalized_uri, "file")
+            return {
+                "uri": normalized_uri,
+                "root_uri": await self._resolve_root_uri(
+                    normalized_uri, ctx=ctx, allow_missing=True
+                ),
+                "context_type": "memory",
+                "mode": "create",
+                "written_bytes": 0,
+                "semantic_updated": False,
+                "vector_updated": False,
+                "queue_status": None,
+                "created": False,
+                "exists_before": True,
+            }
+
+        return await self._write_agent_memory_carrier(
+            uri=normalized_uri,
+            content=content,
+            ctx=ctx,
+            mode="replace",
+            wait=wait,
+            timeout=timeout,
+            reported_mode="create",
+            exists_before=False,
+        )
+
+    async def write_agent_memory_carrier(
+        self,
+        *,
+        uri: str,
+        content: str,
+        ctx: RequestContext,
+        mode: str = "replace",
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Write an agent-scoped stable memory carrier file."""
+        normalized_uri = VikingURI.normalize(uri)
+        self._validate_agent_memory_mode(mode)
+        self._validate_agent_memory_carrier_uri(normalized_uri)
+
+        exists_before = await self._viking_fs.exists(normalized_uri, ctx=ctx)
+        if exists_before:
+            stat = await self._safe_stat(normalized_uri, ctx=ctx)
+            if stat.get("isDir"):
+                raise InvalidArgumentError(
+                    f"agent content write only supports files, got directory: {uri}"
+                )
+
+        return await self._write_agent_memory_carrier(
+            uri=normalized_uri,
+            content=content,
+            ctx=ctx,
+            mode=mode,
+            wait=wait,
+            timeout=timeout,
+            reported_mode=mode,
+            exists_before=exists_before,
+        )
+
     def _validate_mode(self, mode: str) -> None:
         if mode not in {"replace", "append"}:
             raise InvalidArgumentError(f"unsupported write mode: {mode}")
+
+    def _validate_create_mode(self, create_mode: str) -> None:
+        if create_mode not in {"create_if_missing", "error_if_exists"}:
+            raise InvalidArgumentError(f"unsupported create mode: {create_mode}")
+
+    def _validate_agent_memory_mode(self, mode: str) -> None:
+        if mode not in {"replace", "append", "merge"}:
+            raise InvalidArgumentError(f"unsupported agent content mode: {mode}")
 
     def _validate_target_uri(self, uri: str) -> None:
         name = uri.rstrip("/").split("/")[-1]
@@ -142,6 +244,36 @@ class ContentWriteCoordinator:
         parsed = VikingURI(uri)
         if parsed.scope not in {"resources", "user", "agent"}:
             raise InvalidArgumentError(f"write is not supported for scope: {parsed.scope}")
+
+    def _validate_agent_memory_carrier_uri(self, uri: str) -> None:
+        self._validate_target_uri(uri)
+
+        parsed = VikingURI(uri)
+        if parsed.scope != "agent":
+            raise InvalidArgumentError(
+                f"agent content only supports agent-scoped memory URIs: {uri}"
+            )
+
+        parts = [part for part in parsed.full_path.split("/") if part]
+        try:
+            memories_idx = parts.index("memories")
+        except ValueError as exc:
+            raise InvalidArgumentError(
+                f"agent content only supports files under agent memories: {uri}"
+            ) from exc
+
+        if len(parts) <= memories_idx + 2:
+            raise InvalidArgumentError(
+                f"agent content target must be a file inside an agent memory category: {uri}"
+            )
+
+        name = parts[-1]
+        if not name.endswith(".md"):
+            raise InvalidArgumentError(
+                f"agent content only supports markdown memory carrier files: {uri}"
+            )
+        if name.startswith("."):
+            raise InvalidArgumentError(f"agent content cannot target hidden files: {uri}")
 
     async def _safe_stat(self, uri: str, *, ctx: RequestContext) -> Dict[str, Any]:
         try:
@@ -159,23 +291,20 @@ class ContentWriteCoordinator:
         mode: str,
         ctx: RequestContext,
     ) -> None:
-        if mode == "replace" and self._context_type_for_uri(uri) == "memory":
-            existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
-            _, metadata = deserialize_full(existing_raw)
-            if metadata:
-                content = serialize_with_metadata(content, metadata)
-            await self._viking_fs.write_file(uri, content, ctx=ctx)
+        if self._context_type_for_uri(uri) == "memory":
+            updated_raw = await self._build_memory_write_payload(
+                uri=uri,
+                content=content,
+                mode=mode,
+                ctx=ctx,
+            )
+            await self._viking_fs.write_file(uri, updated_raw, ctx=ctx)
             return
 
         if mode == "append":
             existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
-            existing_content, metadata = deserialize_full(existing_raw)
-            updated_content = existing_content + content
-            if metadata:
-                updated_raw = serialize_with_metadata(updated_content, metadata)
-            else:
-                updated_raw = updated_content
-            await self._viking_fs.write_file(uri, updated_raw, ctx=ctx)
+            updated_content = existing_raw + content
+            await self._viking_fs.write_file(uri, updated_content, ctx=ctx)
             return
         await self._viking_fs.write_file(uri, content, ctx=ctx)
 
@@ -366,6 +495,9 @@ class ContentWriteCoordinator:
         ctx: RequestContext,
         written_bytes: int,
         telemetry_id: str,
+        reported_mode: Optional[str] = None,
+        created: Optional[bool] = None,
+        exists_before: Optional[bool] = None,
     ) -> Dict[str, Any]:
         lock_manager = get_lock_manager()
         handle = lock_manager.create_handle()
@@ -393,16 +525,21 @@ class ContentWriteCoordinator:
                 if wait
                 else None
             )
-            return {
+            result = {
                 "uri": uri,
                 "root_uri": root_uri,
                 "context_type": "memory",
-                "mode": mode,
+                "mode": reported_mode or mode,
                 "written_bytes": written_bytes,
                 "semantic_updated": True,
                 "vector_updated": True,
                 "queue_status": queue_status,
             }
+            if created is not None:
+                result["created"] = created
+            if exists_before is not None:
+                result["exists_before"] = exists_before
+            return result
         except Exception:
             if not lock_transferred:
                 await lock_manager.release(handle)
@@ -411,7 +548,13 @@ class ContentWriteCoordinator:
             if wait and telemetry_id:
                 get_request_wait_tracker().cleanup(telemetry_id)
 
-    async def _resolve_root_uri(self, uri: str, *, ctx: RequestContext) -> str:
+    async def _resolve_root_uri(
+        self,
+        uri: str,
+        *,
+        ctx: RequestContext,
+        allow_missing: bool = False,
+    ) -> str:
         parsed = VikingURI(uri)
         parts = [part for part in parsed.full_path.split("/") if part]
         if not parts:
@@ -449,13 +592,153 @@ class ContentWriteCoordinator:
                     )
                 root_uri = VikingURI.build(*parts[: memories_idx + 2])
 
-        stat = await self._safe_stat(root_uri, ctx=ctx)
+        try:
+            stat = await self._safe_stat(root_uri, ctx=ctx)
+        except NotFoundError:
+            if allow_missing:
+                return root_uri
+            raise
         if not stat.get("isDir"):
             parent = VikingURI(uri).parent
             if parent is None:
                 raise InvalidArgumentError(f"could not resolve write root for {uri}")
             root_uri = parent.uri
         return root_uri
+
+    async def _write_agent_memory_carrier(
+        self,
+        *,
+        uri: str,
+        content: str,
+        ctx: RequestContext,
+        mode: str,
+        wait: bool,
+        timeout: Optional[float],
+        reported_mode: str,
+        exists_before: bool,
+    ) -> Dict[str, Any]:
+        root_uri = await self._resolve_root_uri(uri, ctx=ctx, allow_missing=True)
+        content_body = self._memory_body(content)
+        written_bytes = len(content_body.encode("utf-8"))
+        telemetry_id = get_current_telemetry().telemetry_id
+        return await self._write_memory_with_refresh(
+            uri=uri,
+            root_uri=root_uri,
+            content=content_body,
+            mode=mode,
+            wait=wait,
+            timeout=timeout,
+            ctx=ctx,
+            written_bytes=written_bytes,
+            telemetry_id=telemetry_id,
+            reported_mode=reported_mode,
+            created=not exists_before,
+            exists_before=exists_before,
+        )
+
+    async def _build_memory_write_payload(
+        self,
+        *,
+        uri: str,
+        content: str,
+        mode: str,
+        ctx: RequestContext,
+    ) -> str:
+        new_content = self._memory_body(content)
+
+        existing_raw = ""
+        try:
+            existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
+        except NotFoundError:
+            existing_raw = ""
+
+        if not existing_raw:
+            return new_content
+
+        existing_content, metadata = deserialize_full(existing_raw)
+        if mode == "replace":
+            return self._serialize_memory_content(new_content, metadata)
+        if mode == "append":
+            updated_content = existing_content + new_content
+            return self._serialize_memory_content(updated_content, metadata)
+        if mode == "merge":
+            merged_content = await self._merge_memory_content(
+                uri=uri,
+                existing_content=existing_content,
+                new_content=new_content,
+            )
+            return self._serialize_memory_content(merged_content, metadata)
+        raise InvalidArgumentError(f"unsupported write mode: {mode}")
+
+    def _memory_body(self, content: str) -> str:
+        body, _ = deserialize_full(content)
+        return body
+
+    def _serialize_memory_content(
+        self,
+        content: str,
+        metadata: Optional[Dict[str, Any]],
+    ) -> str:
+        if not metadata:
+            return content
+
+        payload = dict(metadata)
+        payload["content"] = content
+        return serialize_with_metadata(payload)
+
+    async def _merge_memory_content(
+        self,
+        *,
+        uri: str,
+        existing_content: str,
+        new_content: str,
+    ) -> str:
+        if not new_content.strip():
+            return existing_content
+        if not existing_content.strip():
+            return new_content
+        if new_content in existing_content:
+            return existing_content
+
+        from openviking.session.memory_extractor import MemoryExtractor
+
+        extractor = MemoryExtractor()
+        payload = await extractor._merge_memory_bundle(
+            existing_abstract="",
+            existing_overview="",
+            existing_content=existing_content,
+            new_abstract="",
+            new_overview="",
+            new_content=new_content,
+            category=self._memory_category_for_uri(uri),
+        )
+        if payload and payload.content:
+            return payload.content.strip()
+        return self._fallback_merge_memory_content(existing_content, new_content)
+
+    def _fallback_merge_memory_content(self, existing_content: str, new_content: str) -> str:
+        if not existing_content.strip():
+            return new_content
+        if not new_content.strip():
+            return existing_content
+        if existing_content.endswith("\n\n") or new_content.startswith("\n\n"):
+            separator = ""
+        elif existing_content.endswith("\n") or new_content.startswith("\n"):
+            separator = "\n"
+        else:
+            separator = "\n\n"
+        return existing_content + separator + new_content
+
+    def _memory_category_for_uri(self, uri: str) -> str:
+        parsed = VikingURI(uri)
+        parts = [part for part in parsed.full_path.split("/") if part]
+        try:
+            memories_idx = parts.index("memories")
+        except ValueError as exc:
+            raise InvalidArgumentError(f"uri is not a memory path: {uri}") from exc
+        if len(parts) <= memories_idx + 1:
+            raise InvalidArgumentError(f"uri is missing memory category: {uri}")
+        return parts[memories_idx + 1]
 
     def _context_type_for_uri(self, uri: str) -> str:
         if "/memories/" in uri:

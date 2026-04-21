@@ -270,6 +270,60 @@ class LocalClient(BaseClient):
             execution.telemetry,
         )
 
+    async def create_agent_content(
+        self,
+        uri: str,
+        content: str = "",
+        create_mode: str = "create_if_missing",
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Create/register a stable named agent memory carrier."""
+        execution = await run_with_telemetry(
+            operation="agent_content.create",
+            telemetry=telemetry,
+            fn=lambda: self._service.fs.create_agent_content(
+                uri=uri,
+                content=content,
+                ctx=self._ctx,
+                create_mode=create_mode,
+                wait=wait,
+                timeout=timeout,
+            ),
+        )
+        return attach_telemetry_payload(
+            execution.result,
+            execution.telemetry,
+        )
+
+    async def write_agent_content(
+        self,
+        uri: str,
+        content: str,
+        mode: str = "replace",
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Write or merge a stable named agent memory carrier."""
+        execution = await run_with_telemetry(
+            operation="agent_content.write",
+            telemetry=telemetry,
+            fn=lambda: self._service.fs.write_agent_content(
+                uri=uri,
+                content=content,
+                ctx=self._ctx,
+                mode=mode,
+                wait=wait,
+                timeout=timeout,
+            ),
+        )
+        return attach_telemetry_payload(
+            execution.result,
+            execution.telemetry,
+        )
+
     # ============= Search =============
 
     async def find(

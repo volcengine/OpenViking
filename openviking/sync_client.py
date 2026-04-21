@@ -248,6 +248,48 @@ class SyncOpenViking:
             )
         )
 
+    def create_agent_content(
+        self,
+        uri: str,
+        content: str = "",
+        create_mode: str = "create_if_missing",
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Create/register a stable named agent memory carrier."""
+        return run_async(
+            self._async_client.create_agent_content(
+                uri=uri,
+                content=content,
+                create_mode=create_mode,
+                wait=wait,
+                timeout=timeout,
+                telemetry=telemetry,
+            )
+        )
+
+    def write_agent_content(
+        self,
+        uri: str,
+        content: str,
+        mode: str = "replace",
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Write or merge a stable named agent memory carrier."""
+        return run_async(
+            self._async_client.write_agent_content(
+                uri=uri,
+                content=content,
+                mode=mode,
+                wait=wait,
+                timeout=timeout,
+                telemetry=telemetry,
+            )
+        )
+
     def ls(self, uri: str, **kwargs) -> List[Any]:
         """
         List directory contents.
