@@ -158,7 +158,7 @@ Register a new user in a workspace.
 |-----------|------|----------|---------|-------------|
 | account_id | str | Yes | - | Workspace ID |
 | user_id | str | Yes | - | User ID |
-| role | str | No | "user" | Role: "admin" or "user" |
+| role | str | No | "user" | Role to assign. `ROOT` may register `"user"` or `"admin"`; `ADMIN` may only register `"user"`. `"root"` must be assigned through the dedicated role-change endpoint. |
 
 **HTTP API**
 
