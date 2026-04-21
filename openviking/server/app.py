@@ -81,11 +81,7 @@ def create_app(
 
         # Initialize APIKeyManager after service (needs VikingFS)
         effective_auth_mode = config.get_effective_auth_mode()
-        if (
-            effective_auth_mode == AuthMode.API_KEY
-            and config.root_api_key
-            and config.root_api_key != ""
-        ):
+        if config.root_api_key and config.root_api_key != "":
             api_key_manager = APIKeyManager(
                 root_key=config.root_api_key,
                 viking_fs=service.viking_fs,

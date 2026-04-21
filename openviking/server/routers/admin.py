@@ -11,6 +11,7 @@ from openviking.server.auth import (
     require_auth_root,
     require_auth_root_or_admin,
 )
+from openviking.server.config import ServerConfig
 from openviking.server.dependencies import get_service
 from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
 from openviking.server.models import Response
@@ -43,6 +44,13 @@ class SetRoleRequest(BaseModel):
 def _get_api_key_manager(request: Request):
     """Get APIKeyManager from app state."""
     return get_api_key_manager_or_raise(request)
+
+
+def _should_expose_user_key(request: Request) -> bool:
+    config = getattr(request.app.state, "config", None)
+    if not isinstance(config, ServerConfig):
+        return True
+    return config.get_effective_auth_mode() != "trusted"
 
 
 def _check_account_access(ctx: RequestContext, account_id: str) -> None:
@@ -80,15 +88,14 @@ async def create_account(
     )
     await service.initialize_account_directories(account_ctx)
     await service.initialize_user_directories(account_ctx)
-    return Response(
-        status="ok",
-        result={
-            "account_id": body.account_id,
-            "admin_user_id": body.admin_user_id,
-            "user_key": user_key,
-            **policy.to_dict(),
-        },
-    )
+    result = {
+        "account_id": body.account_id,
+        "admin_user_id": body.admin_user_id,
+        **policy.to_dict(),
+    }
+    if _should_expose_user_key(request):
+        result["user_key"] = user_key
+    return Response(status="ok", result=result)
 
 
 @router.get("/accounts")
@@ -169,14 +176,13 @@ async def register_user(
         namespace_policy=manager.get_account_policy(account_id),
     )
     await service.initialize_user_directories(user_ctx)
-    return Response(
-        status="ok",
-        result={
-            "account_id": account_id,
-            "user_id": body.user_id,
-            "user_key": user_key,
-        },
-    )
+    result = {
+        "account_id": account_id,
+        "user_id": body.user_id,
+    }
+    if _should_expose_user_key(request):
+        result["user_key"] = user_key
+    return Response(status="ok", result=result)
 
 
 @router.get("/accounts/{account_id}/users")

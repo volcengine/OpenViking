@@ -529,6 +529,19 @@ class APIKeyManager:
             return False
         return user_id in account.users
 
+    def get_user_role(self, account_id: str, user_id: str) -> Role:
+        """Return the role of the given user in the given account.
+
+        Returns Role.USER if the account or user doesn't exist.
+        """
+        account = self._accounts.get(account_id)
+        if account is None:
+            return Role.USER
+        user = account.users.get(user_id)
+        if user is None:
+            return Role.USER
+        return Role(user.get("role", "user"))
+
     # ---- internal helpers ----
 
     def _generate_api_key(self) -> str:

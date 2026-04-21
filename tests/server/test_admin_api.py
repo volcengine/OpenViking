@@ -57,6 +57,21 @@ def root_headers():
     return {"X-API-Key": ROOT_KEY}
 
 
+def trusted_headers(
+    *,
+    account: str,
+    user: str,
+    include_api_key: bool = False,
+):
+    headers = {
+        "X-OpenViking-Account": account,
+        "X-OpenViking-User": user,
+    }
+    if include_api_key:
+        headers["X-API-Key"] = ROOT_KEY
+    return headers
+
+
 # ---- Account CRUD ----
 
 
@@ -348,9 +363,15 @@ async def test_no_auth_admin_api_returns_401(admin_client: httpx.AsyncClient):
 
 @pytest_asyncio.fixture(scope="function")
 async def trusted_admin_app(admin_service):
-    config = ServerConfig(auth_mode="trusted")
+    config = ServerConfig(auth_mode="trusted", root_api_key=ROOT_KEY)
     app = create_app(config=config, service=admin_service)
     set_service(admin_service)
+    manager = APIKeyManager(root_key=ROOT_KEY, viking_fs=admin_service.viking_fs)
+    await manager.load()
+    # Create test users for trusted mode tests if they don't exist
+    if "platform" not in manager._accounts:
+        await manager.create_account("platform", "gateway-admin")
+    app.state.api_key_manager = manager
     return app
 
 
@@ -361,41 +382,260 @@ async def trusted_admin_client(trusted_admin_app):
         yield c
 
 
-async def test_trusted_mode_create_account_returns_mode_specific_error(
+async def test_trusted_mode_root_can_create_account(
     trusted_admin_client: httpx.AsyncClient,
+    trusted_admin_app,
 ):
-    """Trusted mode should explain why account management is unavailable."""
+    """Trusted ROOT requests should be able to create accounts."""
+    # Set gateway-admin to ROOT role
+    manager = trusted_admin_app.state.api_key_manager
+    await manager.set_role("platform", "gateway-admin", "root")
+
+    acct = _uid()
+    resp = await trusted_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={
+            "account_id": acct,
+            "admin_user_id": "alice",
+            "isolate_user_scope_by_agent": True,
+            "isolate_agent_scope_by_user": True,
+        },
+        headers=trusted_headers(
+            account="platform",
+            user="gateway-admin",
+            include_api_key=True,
+        ),
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["result"]["account_id"] == acct
+    assert body["result"]["admin_user_id"] == "alice"
+    assert body["result"]["isolate_user_scope_by_agent"] is True
+    assert body["result"]["isolate_agent_scope_by_user"] is True
+    assert "user_key" not in body["result"]
+
+
+async def test_trusted_mode_admin_can_register_user_in_own_account(
+    trusted_admin_client: httpx.AsyncClient,
+    trusted_admin_app,
+):
+    """Trusted ADMIN requests should be able to manage users in their own account."""
+    # Set gateway-admin to ROOT role first
+    manager = trusted_admin_app.state.api_key_manager
+    await manager.set_role("platform", "gateway-admin", "root")
+
+    acct = _uid()
+    create_resp = await trusted_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=trusted_headers(
+            account="platform",
+            user="gateway-admin",
+            include_api_key=True,
+        ),
+    )
+    assert create_resp.status_code == 200
+
+    resp = await trusted_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={"user_id": "bob", "role": "user"},
+        headers=trusted_headers(
+            account=acct,
+            user="alice",
+            include_api_key=True,
+        ),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["result"]["account_id"] == acct
+    assert resp.json()["result"]["user_id"] == "bob"
+    assert "user_key" not in resp.json()["result"]
+
+
+async def test_trusted_mode_admin_can_list_users_with_account_only_in_url(
+    trusted_admin_client: httpx.AsyncClient,
+    trusted_admin_app,
+):
+    """Trusted ADMIN requests may omit X-OpenViking-Account when the URL already provides it."""
+    # Set gateway-admin to ROOT role first
+    manager = trusted_admin_app.state.api_key_manager
+    await manager.set_role("platform", "gateway-admin", "root")
+
+    acct = _uid()
+    create_resp = await trusted_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=trusted_headers(
+            account="platform",
+            user="gateway-admin",
+            include_api_key=True,
+        ),
+    )
+    assert create_resp.status_code == 200
+
+    resp = await trusted_admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/users",
+        headers={
+            "X-API-Key": ROOT_KEY,
+            "X-OpenViking-User": "alice",
+            "X-OpenViking-Account": acct,
+        },
+    )
+    assert resp.status_code == 200
+    assert any(user["user_id"] == "alice" for user in resp.json()["result"])
+
+
+async def test_trusted_mode_admin_can_list_users_without_account_or_user_headers(
+    trusted_admin_client: httpx.AsyncClient,
+    trusted_admin_app,
+):
+    """Trusted admin routes may omit caller account/user when the route itself identifies the target."""
+    # Set gateway-admin to ROOT role first
+    manager = trusted_admin_app.state.api_key_manager
+    await manager.set_role("platform", "gateway-admin", "root")
+
+    acct = _uid()
+    create_resp = await trusted_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=trusted_headers(
+            account="platform",
+            user="gateway-admin",
+            include_api_key=True,
+        ),
+    )
+    assert create_resp.status_code == 200
+
+    resp = await trusted_admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/users",
+        headers={
+            "X-API-Key": ROOT_KEY,
+            "X-OpenViking-Account": acct,
+            "X-OpenViking-User": "alice",
+        },
+    )
+    assert resp.status_code == 200
+    assert any(user["user_id"] == "alice" for user in resp.json()["result"])
+
+
+async def test_trusted_mode_admin_cannot_register_user_in_other_account(
+    trusted_admin_client: httpx.AsyncClient,
+    trusted_admin_app,
+):
+    """Trusted ADMIN requests should reject conflicting account identity."""
+    # Set gateway-admin to ROOT role first
+    manager = trusted_admin_app.state.api_key_manager
+    await manager.set_role("platform", "gateway-admin", "root")
+
+    acct = _uid()
+    other = _uid()
+    for account_id, admin_user_id in ((acct, "alice"), (other, "eve")):
+        create_resp = await trusted_admin_client.post(
+            "/api/v1/admin/accounts",
+            json={"account_id": account_id, "admin_user_id": admin_user_id},
+            headers=trusted_headers(
+                account="platform",
+                user="gateway-admin",
+                include_api_key=True,
+            ),
+        )
+        assert create_resp.status_code == 200
+
+    resp = await trusted_admin_client.post(
+        f"/api/v1/admin/accounts/{other}/users",
+        json={"user_id": "bob", "role": "user"},
+        headers=trusted_headers(
+            account=acct,
+            user="alice",
+            include_api_key=True,
+        ),
+    )
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "INVALID_ARGUMENT"
+
+
+async def test_trusted_mode_user_cannot_call_admin_api(
+    trusted_admin_client: httpx.AsyncClient,
+    trusted_admin_app,
+):
+    """Trusted USER requests should still be denied by Admin API role checks."""
+    # Set gateway-admin to ROOT role first
+    manager = trusted_admin_app.state.api_key_manager
+    await manager.set_role("platform", "gateway-admin", "root")
+
+    acct = _uid()
+    create_resp = await trusted_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=trusted_headers(
+            account="platform",
+            user="gateway-admin",
+            include_api_key=True,
+        ),
+    )
+    assert create_resp.status_code == 200
+
+    # Change alice to USER role
+    await manager.set_role(acct, "alice", "user")
+
+    resp = await trusted_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={"user_id": "bob", "role": "user"},
+        headers=trusted_headers(
+            account=acct,
+            user="alice",
+            include_api_key=True,
+        ),
+    )
+    assert resp.status_code == 403
+
+
+async def test_trusted_mode_requires_matching_api_key_for_admin_api(
+    trusted_admin_client: httpx.AsyncClient,
+    trusted_admin_app,
+):
+    """Trusted admin requests should require the configured server API key when present."""
+    # Set gateway-admin to ROOT role first
+    manager = trusted_admin_app.state.api_key_manager
+    await manager.set_role("platform", "gateway-admin", "root")
+
     resp = await trusted_admin_client.post(
         "/api/v1/admin/accounts",
         json={"account_id": _uid(), "admin_user_id": "alice"},
-        headers={
-            "X-OpenViking-Account": "acme",
-            "X-OpenViking-User": "alice",
-        },
+        headers=trusted_headers(
+            account="platform",
+            user="gateway-admin",
+            include_api_key=False,
+        ),
     )
-    assert resp.status_code == 403
-    body = resp.json()
-    assert body["error"]["code"] == "PERMISSION_DENIED"
-    assert "trusted mode" in body["error"]["message"].lower()
-    assert "user-key registration" in body["error"]["message"].lower()
-    assert "api_key mode" in body["error"]["message"].lower()
+    assert resp.status_code == 401
 
 
-async def test_trusted_mode_register_user_returns_mode_specific_error(
+async def test_trusted_mode_create_account_persists_namespace_policy(
     trusted_admin_client: httpx.AsyncClient,
+    trusted_admin_app,
 ):
-    """Trusted mode should explain why user registration is unavailable."""
+    """Trusted account creation should persist namespace policy for later requests."""
+    # Set gateway-admin to ROOT role first
+    manager = trusted_admin_app.state.api_key_manager
+    await manager.set_role("platform", "gateway-admin", "root")
+
+    acct = _uid()
     resp = await trusted_admin_client.post(
-        "/api/v1/admin/accounts/acme/users",
-        json={"user_id": "bob", "role": "user"},
-        headers={
-            "X-OpenViking-Account": "acme",
-            "X-OpenViking-User": "alice",
+        "/api/v1/admin/accounts",
+        json={
+            "account_id": acct,
+            "admin_user_id": "alice",
+            "isolate_user_scope_by_agent": True,
+            "isolate_agent_scope_by_user": False,
         },
+        headers=trusted_headers(
+            account="platform",
+            user="gateway-admin",
+            include_api_key=True,
+        ),
     )
-    assert resp.status_code == 403
-    body = resp.json()
-    assert body["error"]["code"] == "PERMISSION_DENIED"
-    assert "trusted mode" in body["error"]["message"].lower()
-    assert "resolved as user" in body["error"]["message"].lower()
-    assert "root_api_key" in body["error"]["message"].lower()
+    assert resp.status_code == 200
+
+    manager = trusted_admin_app.state.api_key_manager
+    assert manager.get_account_policy(acct).isolate_user_scope_by_agent is True
+    assert manager.get_account_policy(acct).isolate_agent_scope_by_user is False
