@@ -44,7 +44,6 @@ class CodexVLM(OpenAIVLM):
         if not normalized.get("api_base"):
             normalized["api_base"] = DEFAULT_CODEX_BASE_URL
         super().__init__(normalized)
-        self._client_signature: tuple[str, str] | None = None
 
     def _build_responses_client(self, api_key: str, api_base: str):
         kwargs = _build_openai_client_kwargs(
@@ -58,15 +57,12 @@ class CodexVLM(OpenAIVLM):
         return openai.OpenAI(**kwargs)
 
     def _get_or_create_sync_responses_client(self):
-        api_key, api_base = self._resolve_runtime_credentials()
-        signature = (api_key, api_base)
-        if self._sync_client is None or self._client_signature != signature:
+        if self._sync_client is None:
             adapter = CodexCompletionsAdapter(
-                lambda: self._build_responses_client(api_key, api_base),
+                lambda: self._build_responses_client(*self._resolve_runtime_credentials()),
                 self.model or "gpt-5.3-codex",
             )
             self._sync_client = SimpleNamespace(chat=CodexChatShim(adapter))
-            self._client_signature = signature
         return self._sync_client
 
     def _get_or_create_async_responses_client(self):

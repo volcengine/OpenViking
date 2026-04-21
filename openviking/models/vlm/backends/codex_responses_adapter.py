@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional
 
@@ -60,6 +61,75 @@ def _convert_tools_for_responses(tools: Any) -> Optional[List[Dict[str, Any]]]:
             }
         )
     return converted or None
+
+
+def _stringify_response_payload(value: Any, *, default: str = "") -> str:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        text_parts: List[str] = []
+        for part in value:
+            if not isinstance(part, dict):
+                continue
+            part_type = part.get("type")
+            if part_type in {"text", "input_text", "output_text"}:
+                text = part.get("text")
+                if text is not None:
+                    text_parts.append(str(text))
+        if text_parts:
+            return "".join(text_parts)
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except TypeError:
+        return str(value)
+
+
+def _convert_tool_call_history(tool_calls: Any) -> List[Dict[str, Any]]:
+    if not isinstance(tool_calls, list):
+        return []
+    converted: List[Dict[str, Any]] = []
+    for tool_call in tool_calls:
+        if not isinstance(tool_call, dict):
+            continue
+        function = tool_call.get("function")
+        if not isinstance(function, dict):
+            continue
+        name = str(function.get("name", "") or "").strip()
+        if not name:
+            continue
+        converted.append(
+            {
+                "type": "function_call",
+                "call_id": str(tool_call.get("id", "") or tool_call.get("call_id", "") or ""),
+                "name": name,
+                "arguments": _stringify_response_payload(function.get("arguments"), default="{}"),
+            }
+        )
+    return converted
+
+
+def _convert_message_for_responses(message: Dict[str, Any]) -> List[Dict[str, Any]]:
+    role = str(message.get("role", "user") or "user")
+    content = message.get("content")
+    if role == "tool":
+        return [
+            {
+                "type": "function_call_output",
+                "call_id": str(message.get("tool_call_id", "") or message.get("call_id", "") or ""),
+                "output": _stringify_response_payload(content),
+            }
+        ]
+    if role == "assistant":
+        converted: List[Dict[str, Any]] = []
+        converted_content = _convert_content_for_responses(content)
+        if converted_content not in ("", []):
+            converted.append({"role": "assistant", "content": converted_content})
+        converted.extend(_convert_tool_call_history(message.get("tool_calls")))
+        return converted
+    normalized_role = role if role in {"user", "assistant"} else "user"
+    return [{"role": normalized_role, "content": _convert_content_for_responses(content)}]
 
 
 def _item_get(obj: Any, key: str, default: Any = None) -> Any:
@@ -134,12 +204,7 @@ class CodexCompletionsAdapter:
             if role in {"system", "developer"}:
                 instructions_parts.append(content if isinstance(content, str) else str(content))
                 continue
-            input_messages.append(
-                {
-                    "role": role,
-                    "content": _convert_content_for_responses(content),
-                }
-            )
+            input_messages.extend(_convert_message_for_responses(message))
         response_kwargs: Dict[str, Any] = {
             "model": model,
             "instructions": "\n\n".join(part for part in instructions_parts if part).strip()

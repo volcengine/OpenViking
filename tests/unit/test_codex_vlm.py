@@ -43,6 +43,12 @@ def _build_final_response(text: str):
     )
 
 
+def _build_fake_openai_client(text: str):
+    client = MagicMock()
+    client.responses.stream.return_value = _MockResponsesStream(_build_final_response(text))
+    return client
+
+
 @patch("openviking.models.vlm.backends.codex_vlm.openai.OpenAI")
 @patch("openviking.models.vlm.backends.codex_vlm.resolve_codex_runtime_credentials")
 def test_codex_text_completion_uses_responses_api(mock_resolve, mock_openai_class):
@@ -379,3 +385,120 @@ def test_codex_streaming_is_rejected(mock_resolve, mock_openai_class):
         vlm.get_completion("hello")
 
     mock_real_client.responses.stream.assert_not_called()
+
+
+@patch("openviking.models.vlm.backends.codex_vlm.openai.OpenAI")
+@patch("openviking.models.vlm.backends.codex_vlm.resolve_codex_runtime_credentials")
+def test_codex_sync_client_re_resolves_credentials_per_request(mock_resolve, mock_openai_class):
+    mock_resolve.side_effect = [
+        {
+            "api_key": "oauth-token-a",
+            "base_url": "https://chatgpt.com/backend-api/codex",
+        },
+        {
+            "api_key": "oauth-token-b",
+            "base_url": "https://chatgpt.com/backend-api/codex",
+        },
+    ]
+    mock_openai_class.side_effect = [
+        _build_fake_openai_client("first"),
+        _build_fake_openai_client("second"),
+    ]
+
+    vlm = CodexVLM({"provider": "openai-codex", "model": "gpt-5.3-codex"})
+    client = vlm.get_client()
+
+    first = client.chat.completions.create(
+        messages=[{"role": "user", "content": "hello"}],
+        model="gpt-5.3-codex",
+    )
+    second = client.chat.completions.create(
+        messages=[{"role": "user", "content": "hello again"}],
+        model="gpt-5.3-codex",
+    )
+
+    assert first.choices[0].message.content == "first"
+    assert second.choices[0].message.content == "second"
+    assert mock_openai_class.call_args_list[0].kwargs["api_key"] == "oauth-token-a"
+    assert mock_openai_class.call_args_list[1].kwargs["api_key"] == "oauth-token-b"
+
+
+@patch("openviking.models.vlm.backends.codex_vlm.openai.OpenAI")
+@patch("openviking.models.vlm.backends.codex_vlm.resolve_codex_runtime_credentials")
+def test_codex_translates_tool_history_into_responses_input(mock_resolve, mock_openai_class):
+    mock_resolve.return_value = {
+        "api_key": "oauth-token",
+        "base_url": "https://chatgpt.com/backend-api/codex",
+    }
+    mock_real_client = MagicMock()
+    mock_real_client.responses.stream.return_value = _MockResponsesStream(
+        _build_final_response("final answer")
+    )
+    mock_openai_class.return_value = mock_real_client
+
+    vlm = CodexVLM({"provider": "openai-codex", "model": "gpt-5.3-codex"})
+    response = vlm.get_completion(
+        messages=[
+            {"role": "user", "content": "What is the weather?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"city":"SF"}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": '{"temperature":72}',
+            },
+        ],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                    },
+                },
+            }
+        ],
+    )
+
+    assert response.content == "final answer"
+    input_items = mock_real_client.responses.stream.call_args.kwargs["input"]
+    assert input_items == [
+        {"role": "user", "content": "What is the weather?"},
+        {
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "get_weather",
+            "arguments": '{"city":"SF"}',
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": '{"temperature":72}',
+        },
+    ]
+
+
+def test_codex_auth_invalid_exp_claim_is_treated_as_expiring():
+    assert codex_auth._codex_access_token_is_expiring("not-a-jwt", skew_seconds=60) is True
+    assert (
+        codex_auth._codex_access_token_is_expiring(
+            _make_jwt_token({"exp": "not-a-number"}),
+            skew_seconds=60,
+        )
+        is True
+    )
