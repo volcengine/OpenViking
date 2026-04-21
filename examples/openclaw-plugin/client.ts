@@ -255,7 +255,11 @@ export class OpenVikingClient {
       };
     }
     if (apiKey) {
-      return { apiKey };
+      return {
+        apiKey,
+        ...(accountId ? { accountId } : {}),
+        ...(userId ? { userId } : {}),
+      };
     }
     return {
       accountId: accountId || "default",

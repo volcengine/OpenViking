@@ -351,7 +351,7 @@ describe("OpenVikingClient tenant headers (advanced accountId / userId overrides
     expect(headers.get("X-OpenViking-User")).toBe("user-456");
   });
 
-  it("keeps api_key flow with configured apiKey free of explicit tenant overrides", async () => {
+  it("keeps api_key user-key flow free of explicit tenant overrides when accountId/userId are not configured", async () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse({ status: "ok" }));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -367,6 +367,24 @@ describe("OpenVikingClient tenant headers (advanced accountId / userId overrides
     expect(headers.get("X-OpenViking-Account")).toBeNull();
     expect(headers.get("X-OpenViking-User")).toBeNull();
     expect(headers.get("X-API-Key")).toBe("sk-user");
+  });
+
+  it("preserves explicit tenant headers for api_key root-key style flows", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse({ status: "ok" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenVikingClient(
+      "http://127.0.0.1:1933", "sk-root", "agent", 5000,
+      "api_key",
+      "acct-123", "user-456",
+    );
+    await client.healthCheck();
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.get("X-API-Key")).toBe("sk-root");
+    expect(headers.get("X-OpenViking-Account")).toBe("acct-123");
+    expect(headers.get("X-OpenViking-User")).toBe("user-456");
   });
 
   it("falls back to default/default in api_key dev mode when apiKey is missing", async () => {
