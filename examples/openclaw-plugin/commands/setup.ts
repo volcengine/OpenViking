@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as readline from "node:readline";
-import { launchProcess, sysEnv, getEnv } from "../runtime-utils.js";
+import { launchProcess, sysEnv, getEnv, parseWindowsEnvBatPythonPath, parsePosixEnvPythonPath } from "../runtime-utils.js";
 
 const IS_WIN = os.platform() === "win32";
 const HOME = os.homedir();
@@ -85,10 +85,10 @@ async function resolvePythonCmd(): Promise<string> {
     if (fs.existsSync(envFile)) {
       try {
         const content = fs.readFileSync(envFile, "utf-8");
-        const m = IS_WIN
-          ? content.match(/set\s+OPENVIKING_PYTHON=(.+)/i)
-          : content.match(/OPENVIKING_PYTHON=['"]([^'"]+)['"]/);
-        if (m?.[1]) return m[1].trim();
+        const parsed = IS_WIN
+          ? parseWindowsEnvBatPythonPath(content)
+          : parsePosixEnvPythonPath(content);
+        if (parsed) return parsed;
       } catch { /* ignore */ }
     }
   }
@@ -134,24 +134,131 @@ async function checkOpenVikingInstalled(): Promise<{ ok: boolean; version: strin
 function writeOpenvikingEnv(pythonPath: string): void {
   if (!fs.existsSync(OPENCLAW_DIR)) fs.mkdirSync(OPENCLAW_DIR, { recursive: true });
   if (IS_WIN) {
-    fs.writeFileSync(path.join(OPENCLAW_DIR, "openviking.env.bat"), `@echo off\r\nset "OPENVIKING_PYTHON=${pythonPath}"\r\n`, "utf-8");
-    fs.writeFileSync(path.join(OPENCLAW_DIR, "openviking.env.ps1"), `$env:OPENVIKING_PYTHON = "${pythonPath.replace(/\\/g, "\\\\")}"\n`, "utf-8");
+    const batSafe = pythonPath.replace(/"/g, '""');
+    const ps1Safe = pythonPath.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\$/g, '`$');
+    fs.writeFileSync(path.join(OPENCLAW_DIR, "openviking.env.bat"), `@echo off\r\nset "OPENVIKING_PYTHON=${batSafe}"\r\n`, "utf-8");
+    fs.writeFileSync(path.join(OPENCLAW_DIR, "openviking.env.ps1"), `$env:OPENVIKING_PYTHON = "${ps1Safe}"\n`, "utf-8");
   } else {
-    fs.writeFileSync(path.join(OPENCLAW_DIR, "openviking.env"), `export OPENVIKING_PYTHON='${pythonPath}'\n`, "utf-8");
+    const shSafe = pythonPath.replace(/'/g, "'\"'\"'");
+    fs.writeFileSync(path.join(OPENCLAW_DIR, "openviking.env"), `export OPENVIKING_PYTHON='${shSafe}'\n`, "utf-8");
   }
 }
 
+type LocalConfigValidationResult = {
+  ok: boolean;
+  error: string;
+  usedPythonValidation: boolean;
+};
+
+function getErrorMessage(error: unknown): string {
+  return String(error instanceof Error ? error.message : error);
+}
+
+function summarizeValidationOutput(output: string): string {
+  const lines = output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!lines.length) return output.trim();
+  const preferred = lines.find((line) => /^((ValueError|FileNotFoundError|SystemExit|RuntimeError):|Invalid )/.test(line));
+  return preferred || lines[lines.length - 1];
+}
+
+async function validateLocalConfigPath(configPath: string, pythonCmd?: string): Promise<LocalConfigValidationResult> {
+  if (!fs.existsSync(configPath)) {
+    return {
+      ok: false,
+      error: `Config file not found: ${configPath}`,
+      usedPythonValidation: false,
+    };
+  }
+
+  let raw = "";
+  try {
+    raw = fs.readFileSync(configPath, "utf-8");
+  } catch (error) {
+    return {
+      ok: false,
+      error: `Failed to read config file: ${getErrorMessage(error)}`,
+      usedPythonValidation: false,
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {
+        ok: false,
+        error: "Invalid ov.conf: top-level JSON value must be an object",
+        usedPythonValidation: false,
+      };
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      error: `Invalid ov.conf JSON: ${getErrorMessage(error)}`,
+      usedPythonValidation: false,
+    };
+  }
+
+  if (!pythonCmd) {
+    return { ok: true, error: "", usedPythonValidation: false };
+  }
+
+  const validationCode = [
+    "import sys",
+    "from openviking.server.config import load_server_config, validate_server_config",
+    "validate_server_config(load_server_config(sys.argv[1]))",
+    "print('ok')",
+  ].join(";");
+  const result = await capture(pythonCmd, ["-c", validationCode, configPath]);
+  if (result.code === 0) {
+    return { ok: true, error: "", usedPythonValidation: true };
+  }
+
+  const detail = summarizeValidationOutput(result.err || result.out || `exit code ${result.code}`);
+  return {
+    ok: false,
+    error: `ov.conf failed OpenViking validation: ${detail}`,
+    usedPythonValidation: true,
+  };
+}
+
+function printLocalConfigFixHint(zh: boolean, configPath: string, validationError: string): void {
+  console.log("");
+  console.log(`  ⚠ ${tr(zh,
+    validationError,
+    validationError,
+  )}`);
+  console.log(`    ${tr(zh,
+    "OpenViking requires a valid ov.conf before local mode can be saved.",
+    "OpenViking 本地模式需要有效的 ov.conf，配置向导不会保存无效配置。",
+  )}`);
+  console.log(`    ${tr(zh,
+    "  Option 1: Run 'openviking init' to generate a default config",
+    "  方式 1：运行 'openviking init' 生成默认配置",
+  )}`);
+  console.log(`    ${tr(zh,
+    "  Option 2: Copy from examples/ov.conf.example",
+    "  方式 2：从 examples/ov.conf.example 复制",
+  )}`);
+  console.log(`    ${tr(zh,
+    `  Target path: ${configPath}`,
+    `  目标路径: ${configPath}`,
+  )}`);
+  console.log("");
+}
+
 async function checkServiceHealth(baseUrl: string, apiKey?: string): Promise<{ ok: boolean; version: string; error: string }> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10_000);
   try {
     const headers: Record<string, string> = {};
     if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10_000);
     const response = await fetch(`${baseUrl.replace(/\/+$/, "")}/health`, {
       headers,
       signal: controller.signal,
     });
-    clearTimeout(timeoutId);
     if (response.ok) {
       try {
         const data = await response.json() as Record<string, unknown>;
@@ -163,6 +270,8 @@ async function checkServiceHealth(baseUrl: string, apiKey?: string): Promise<{ o
     return { ok: false, version: "", error: `HTTP ${response.status}` };
   } catch (err) {
     return { ok: false, version: "", error: String(err instanceof Error ? err.message : err) };
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
@@ -211,6 +320,22 @@ function detectLangZh(options: Record<string, unknown>): boolean {
   const lang = getEnv("LANG") || getEnv("LC_ALL") || "";
   return /^zh/i.test(lang);
 }
+
+type SetupLocalDeps = {
+  checkOpenVikingInstalled: typeof checkOpenVikingInstalled;
+  writeOpenvikingEnv: typeof writeOpenvikingEnv;
+  checkServiceHealth: typeof checkServiceHealth;
+  validateLocalConfigPath: typeof validateLocalConfigPath;
+  writeConfig: typeof writeConfig;
+};
+
+const defaultSetupLocalDeps: SetupLocalDeps = {
+  checkOpenVikingInstalled,
+  writeOpenvikingEnv,
+  checkServiceHealth,
+  validateLocalConfigPath,
+  writeConfig,
+};
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function registerSetupCli(api: any): void {
@@ -315,7 +440,15 @@ export function registerSetupCli(api: any): void {
             const mode = modeInput.toLowerCase() === "remote" ? "remote" : "local";
 
             if (mode === "local") {
-              await setupLocal(zh, configPath, existing, q);
+              const setupOk = await setupLocal(zh, configPath, existing, q);
+              if (!setupOk) {
+                console.log(tr(
+                  zh,
+                  "Local setup aborted. Fix the ov.conf issue above, then rerun `openclaw openviking setup`.",
+                  "本地模式配置已中止。请先修复上面的 ov.conf 问题，再重新运行 `openclaw openviking setup`。",
+                ));
+                console.log("");
+              }
             } else {
               await setupRemote(zh, configPath, existing, q);
             }
@@ -339,7 +472,6 @@ async function runLocalChecks(
     console.log(`  OpenViking: ${ov.version} ✓`);
     console.log(`  Python:     ${ov.pythonPath}`);
     writeOpenvikingEnv(ov.pythonPath);
-    console.log(`  ✓ ${tr(zh, "Saved OPENVIKING_PYTHON to ~/.openclaw/openviking.env", "已将 OPENVIKING_PYTHON 写入 ~/.openclaw/openviking.env")}`);
   } else {
     console.log(`  ℹ ${tr(zh,
       "OpenViking Python package not detected (service may still work if installed separately)",
@@ -347,6 +479,13 @@ async function runLocalChecks(
     )}`);
   }
   console.log("");
+
+  const configPath = String(existing.configPath ?? DEFAULT_CONFIG_PATH);
+  const configValidation = await validateLocalConfigPath(configPath, ov.ok ? ov.pythonPath : undefined);
+  if (!configValidation.ok) {
+    printLocalConfigFixHint(zh, configPath, configValidation.error);
+    return false;
+  }
 
   const port = Number(existing.port) || DEFAULT_PORT;
   console.log(tr(zh, `Checking OpenViking service on port ${port}...`, `正在检查 OpenViking 服务 (端口 ${port})...`));
@@ -386,16 +525,17 @@ async function setupLocal(
   configPath: string,
   existing: Record<string, unknown> | null,
   q: (prompt: string, def?: string) => Promise<string>,
-): Promise<void> {
+  deps: Partial<SetupLocalDeps> = {},
+): Promise<boolean> {
+  const resolvedDeps = { ...defaultSetupLocalDeps, ...deps };
   // Environment check (non-blocking)
   console.log("");
   console.log(tr(zh, "Checking environment...", "正在检查环境..."));
-  const ov = await checkOpenVikingInstalled();
+  const ov = await resolvedDeps.checkOpenVikingInstalled();
   if (ov.ok) {
     console.log(`  OpenViking: ${ov.version} ✓`);
     console.log(`  Python:     ${ov.pythonPath}`);
-    writeOpenvikingEnv(ov.pythonPath);
-    console.log(`  ✓ ${tr(zh, "Saved OPENVIKING_PYTHON to ~/.openclaw/openviking.env", "已将 OPENVIKING_PYTHON 写入 ~/.openclaw/openviking.env")}`);
+    resolvedDeps.writeOpenvikingEnv(ov.pythonPath);
   } else {
     console.log(`  ⚠ ${tr(zh,
       "OpenViking Python package not detected. Make sure it is installed:",
@@ -413,6 +553,12 @@ async function setupLocal(
   const defaultPort = existing?.port ? String(existing.port) : String(DEFAULT_PORT);
 
   const cfgPath = await q(tr(zh, "Config path", "配置文件路径"), defaultConfigPath);
+  const configValidation = await resolvedDeps.validateLocalConfigPath(cfgPath, ov.ok ? ov.pythonPath : undefined);
+  if (!configValidation.ok) {
+    printLocalConfigFixHint(zh, cfgPath, configValidation.error);
+    return false;
+  }
+
   const portStr = await q(tr(zh, "Port", "端口"), defaultPort);
   const port = Math.max(1, Math.min(65535, parseInt(portStr, 10) || DEFAULT_PORT));
 
@@ -420,7 +566,7 @@ async function setupLocal(
 
   // Service health check (non-blocking)
   console.log(tr(zh, `Checking OpenViking service on port ${port}...`, `正在检查 OpenViking 服务 (端口 ${port})...`));
-  const health = await checkServiceHealth(`http://127.0.0.1:${port}`);
+  const health = await resolvedDeps.checkServiceHealth(`http://127.0.0.1:${port}`);
   if (health.ok) {
     const ver = health.version ? ` (version: ${health.version})` : "";
     console.log(`  ✓ ${tr(zh, `OpenViking service is running${ver}`, `OpenViking 服务正在运行${ver}`)}`);
@@ -441,9 +587,8 @@ async function setupLocal(
   };
   delete pluginCfg.baseUrl;
 
-  writeConfig(configPath, pluginCfg);
+  resolvedDeps.writeConfig(configPath, pluginCfg);
 
-  console.log(tr(zh, "✓ Configuration saved to ~/.openclaw/openclaw.json", "✓ 配置已保存至 ~/.openclaw/openclaw.json"));
   console.log("");
   console.log(`  ${tr(zh, "mode:", "模式:")}       local`);
   console.log(`  ${tr(zh, "configPath:", "配置文件:")}  ${cfgPath}`);
@@ -454,6 +599,7 @@ async function setupLocal(
     "运行 `openclaw gateway --force` 以激活插件。",
   ));
   console.log("");
+  return true;
 }
 
 async function setupRemote(
@@ -507,7 +653,6 @@ async function setupRemote(
 
   writeConfig(configPath, pluginCfg);
 
-  console.log(tr(zh, "✓ Configuration saved to ~/.openclaw/openclaw.json", "✓ 配置已保存至 ~/.openclaw/openclaw.json"));
   console.log("");
   console.log(`  ${tr(zh, "mode:", "模式:")}    remote`);
   console.log(`  baseUrl: ${baseUrl}`);
@@ -520,3 +665,10 @@ async function setupRemote(
   ));
   console.log("");
 }
+
+export const __test__ = {
+  parseWindowsEnvBatPythonPath,
+  parsePosixEnvPythonPath,
+  validateLocalConfigPath,
+  setupLocal,
+};

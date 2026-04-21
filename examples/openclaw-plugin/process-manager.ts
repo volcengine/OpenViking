@@ -1,7 +1,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { Socket } from "node:net";
 import { platform } from "node:os";
-import { launchProcess, runSync, sysEnv, getEnv } from "./runtime-utils.js";
+import { launchProcess, runSync, sysEnv, getEnv, parseWindowsEnvBatPythonPath, parsePosixEnvPythonPath } from "./runtime-utils.js";
 
 export const IS_WIN = platform() === "win32";
 
@@ -312,8 +312,8 @@ export function resolvePythonCommand(logger: ProcessLogger): string {
         if (existsSync(envBat)) {
           try {
             const content = readFileSync(envBat, "utf-8");
-            const m = content.match(/set\s+OPENVIKING_PYTHON=(.+)/i);
-            if (m?.[1]) pythonCmd = m[1].trim();
+            const parsed = parseWindowsEnvBatPythonPath(content);
+            if (parsed) pythonCmd = parsed;
           } catch { /* ignore */ }
         }
       } else {
@@ -321,8 +321,8 @@ export function resolvePythonCommand(logger: ProcessLogger): string {
         if (existsSync(envFile)) {
           try {
             const content = readFileSync(envFile, "utf-8");
-            const m = content.match(/OPENVIKING_PYTHON=['"]([^'"]+)['"]/);
-            if (m?.[1]) pythonCmd = m[1];
+            const parsed = parsePosixEnvPythonPath(content);
+            if (parsed) pythonCmd = parsed;
           } catch { /* ignore */ }
         }
       }
@@ -358,6 +358,10 @@ export function resolvePythonCommand(logger: ProcessLogger): string {
 
   return pythonCmd;
 }
+
+export const __test__ = {
+  parseWindowsEnvBatPythonPath,
+};
 
 // ---------------------------------------------------------------------------
 // Local runtime pre-flight check (detect only, never auto-install)

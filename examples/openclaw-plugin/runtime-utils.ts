@@ -28,3 +28,13 @@ export function sysEnv(): NodeJS.ProcessEnv {
 export function getEnv(key: string): string | undefined {
   return _env.env[key];
 }
+
+export function parseWindowsEnvBatPythonPath(content: string): string | null {
+  const match = content.match(/set\s+"?OPENVIKING_PYTHON=([^"\r\n]+)"?/i);
+  return match?.[1]?.trim() || null;
+}
+
+export function parsePosixEnvPythonPath(content: string): string | null {
+  const match = content.match(/OPENVIKING_PYTHON=['"]([^'"]+)['"]/);
+  return match?.[1]?.trim() || null;
+}

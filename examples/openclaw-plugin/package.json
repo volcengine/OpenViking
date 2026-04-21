@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/openviking",
-  "version": "2026.4.30",
+  "version": "2026.4.33",
   "displayName": "OpenViking",
   "description": "OpenClaw context-engine plugin for memory management — powered by OpenViking",
   "type": "module",
