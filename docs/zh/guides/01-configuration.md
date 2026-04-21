@@ -9,7 +9,7 @@ openviking-server init
 openviking-server doctor
 ```
 
-如果你希望使用 Codex 作为 VLM，请在 `openviking-server init` 中选择 `OpenAI Codex`。向导会自动帮你处理已有 Codex 鉴权的导入，或直接引导你完成登录。
+`openviking-server init` 会分别引导你填写 Embedding 和 VLM 的配置。对于 `OpenAI`、`Volcengine`、`Kimi`、`GLM` 这类 API 型 VLM，按提示填写对应的 VLM API Key；如果要使用 Codex 作为 VLM，请选择 `OpenAI Codex`，向导会自动帮你处理已有 Codex 鉴权的导入，或直接引导你完成登录。
 
 ## 快速开始
 
@@ -69,7 +69,7 @@ openviking-server doctor
     "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
     "api_key"  : "your-volcengine-api-key",
     "provider" : "volcengine",
-    "model"    : "doubao-seed-2-0-pro-260215"
+    "model"    : "doubao-seed-2-0-code-preview-260215"
   }
 }
 ```
@@ -86,15 +86,15 @@ openviking-server doctor
       "api_base" : "https://api.openai.com/v1",
       "api_key"  : "your-openai-api-key",
       "provider" : "openai",
-      "dimension": 3072,
-      "model"    : "text-embedding-3-large"
+      "dimension": 1536,
+      "model"    : "text-embedding-3-small"
     }
   },
   "vlm": {
     "api_base" : "https://api.openai.com/v1",
     "api_key"  : "your-openai-api-key",
     "provider" : "openai",
-    "model"    : "gpt-4-vision-preview"
+    "model"    : "gpt-5.4"
   }
 }
 ```
@@ -119,7 +119,7 @@ openviking-server doctor
   },
   "vlm": {
     "provider" : "openai-codex",
-    "model"    : "gpt-5.3-codex",
+    "model"    : "gpt-5.4",
     "api_base" : "https://chatgpt.com/backend-api/codex"
   }
 }

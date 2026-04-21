@@ -6,6 +6,9 @@ import json
 from unittest.mock import MagicMock, patch
 
 from openviking_cli.setup_wizard import (
+    _DEFAULT_CODEX_MODEL,
+    _DEFAULT_GLM_MODEL,
+    _DEFAULT_KIMI_MODEL,
     _DEFAULT_WORKSPACE,
     CLOUD_PROVIDERS,
     EMBEDDING_PRESETS,
@@ -16,6 +19,8 @@ from openviking_cli.setup_wizard import (
     _build_ollama_config,
     _get_recommended_indices,
     _is_llamacpp_installed,
+    _prompt_required_input,
+    _prompt_required_int,
     _wizard_cloud,
     _write_config,
     run_init,
@@ -169,7 +174,7 @@ class TestConfigBuilding:
     def test_cloud_wizard_codex_uses_default_base_and_workspace(self):
         with patch(
             "openviking_cli.setup_wizard._prompt_choice",
-            side_effect=[2, 2],
+            side_effect=[2, 3],
         ):
             with patch(
                 "openviking_cli.setup_wizard._prompt_required_input",
@@ -192,7 +197,7 @@ class TestConfigBuilding:
         assert config["vlm"]["api_base"] == "https://chatgpt.com/backend-api/codex"
         assert "api_key" not in config["vlm"]
 
-    def test_cloud_wizard_reuses_embedding_key_for_same_provider_vlm(self):
+    def test_cloud_wizard_supports_openai_vlm_option(self):
         with patch(
             "openviking_cli.setup_wizard._prompt_choice",
             side_effect=[1, 1],
@@ -200,9 +205,10 @@ class TestConfigBuilding:
             with patch(
                 "openviking_cli.setup_wizard._prompt_required_input",
                 side_effect=[
-                    "sk-test",
+                    "embed-test",
                     "text-embedding-3-small",
-                    "gpt-4o-mini",
+                    "openai-vlm-test",
+                    "gpt-5.4",
                 ],
             ):
                 with patch(
@@ -214,12 +220,40 @@ class TestConfigBuilding:
         assert config is not None
         assert config["storage"]["workspace"] == _DEFAULT_WORKSPACE
         assert config["vlm"]["provider"] == "openai"
-        assert config["vlm"]["api_key"] == "sk-test"
+        assert config["vlm"]["api_key"] == "openai-vlm-test"
+        assert config["vlm"]["api_base"] == CLOUD_PROVIDERS[0].default_api_base
+
+    def test_cloud_wizard_supports_volcengine_vlm_option(self):
+        with patch(
+            "openviking_cli.setup_wizard._prompt_choice",
+            side_effect=[1, 2],
+        ):
+            with patch(
+                "openviking_cli.setup_wizard._prompt_required_input",
+                side_effect=[
+                    "embed-test",
+                    "text-embedding-3-small",
+                    "ve-vlm-test",
+                    "doubao-seed-2-0-code-preview-260215",
+                ],
+            ):
+                with patch(
+                    "openviking_cli.setup_wizard._prompt_required_int",
+                    return_value=1536,
+                ):
+                    config = _wizard_cloud()
+
+        assert config is not None
+        assert config["storage"]["workspace"] == _DEFAULT_WORKSPACE
+        assert config["vlm"]["provider"] == "volcengine"
+        assert config["vlm"]["api_key"] == "ve-vlm-test"
+        assert config["vlm"]["api_base"] == CLOUD_PROVIDERS[1].default_api_base
+        assert config["vlm"]["model"] == "doubao-seed-2-0-code-preview-260215"
 
     def test_cloud_wizard_supports_kimi_vlm(self):
         with patch(
             "openviking_cli.setup_wizard._prompt_choice",
-            side_effect=[2, 3],
+            side_effect=[2, 4],
         ):
             with patch(
                 "openviking_cli.setup_wizard._prompt_required_input",
@@ -246,7 +280,7 @@ class TestConfigBuilding:
     def test_cloud_wizard_supports_glm_vlm(self):
         with patch(
             "openviking_cli.setup_wizard._prompt_choice",
-            side_effect=[2, 4],
+            side_effect=[2, 5],
         ):
             with patch(
                 "openviking_cli.setup_wizard._prompt_required_input",
@@ -269,6 +303,120 @@ class TestConfigBuilding:
         assert config["vlm"]["model"] == "glm-4.6v"
         assert config["vlm"]["api_base"] == "https://api.z.ai/api/coding/paas/v4"
         assert config["storage"]["workspace"] == _DEFAULT_WORKSPACE
+
+    def test_prompt_required_input_uses_default_on_empty(self):
+        with patch("builtins.input", return_value=""):
+            value = _prompt_required_input("Model", default=_DEFAULT_KIMI_MODEL)
+
+        assert value == _DEFAULT_KIMI_MODEL
+
+    def test_prompt_required_int_uses_default_on_empty(self):
+        with patch("builtins.input", return_value=""):
+            value = _prompt_required_int("Dimension", default=1024)
+
+        assert value == 1024
+
+    def test_cloud_wizard_uses_requested_defaults_when_inputs_are_empty(self):
+        with patch(
+            "openviking_cli.setup_wizard._prompt_choice",
+            side_effect=[2, 3],
+        ):
+            with patch(
+                "openviking_cli.setup_wizard._prompt_required_input",
+                side_effect=[
+                    "ve-test",
+                    CLOUD_PROVIDERS[1].default_embedding_model,
+                    _DEFAULT_CODEX_MODEL,
+                ],
+            ) as prompt_input:
+                with patch(
+                    "openviking_cli.setup_wizard._prompt_required_int",
+                    return_value=CLOUD_PROVIDERS[1].default_embedding_dim,
+                ) as prompt_int:
+                    with patch("openviking_cli.setup_wizard._ensure_codex_auth", return_value=True):
+                        config = _wizard_cloud()
+
+        assert config is not None
+        assert config["embedding"]["dense"]["model"] == CLOUD_PROVIDERS[1].default_embedding_model
+        assert config["embedding"]["dense"]["dimension"] == CLOUD_PROVIDERS[1].default_embedding_dim
+        assert config["vlm"]["model"] == _DEFAULT_CODEX_MODEL
+        prompt_input.assert_any_call("Model", default=CLOUD_PROVIDERS[1].default_embedding_model)
+        prompt_input.assert_any_call("Model", default=_DEFAULT_CODEX_MODEL)
+        prompt_int.assert_called_once_with("Dimension", default=CLOUD_PROVIDERS[1].default_embedding_dim)
+
+    def test_cloud_wizard_kimi_uses_requested_default_model(self):
+        with patch(
+            "openviking_cli.setup_wizard._prompt_choice",
+            side_effect=[2, 4],
+        ):
+            with patch(
+                "openviking_cli.setup_wizard._prompt_required_input",
+                side_effect=[
+                    "ve-test",
+                    CLOUD_PROVIDERS[1].default_embedding_model,
+                    "kimi-test",
+                    _DEFAULT_KIMI_MODEL,
+                ],
+            ) as prompt_input:
+                with patch(
+                    "openviking_cli.setup_wizard._prompt_required_int",
+                    return_value=CLOUD_PROVIDERS[1].default_embedding_dim,
+                ):
+                    config = _wizard_cloud()
+
+        assert config is not None
+        assert config["vlm"]["model"] == _DEFAULT_KIMI_MODEL
+        prompt_input.assert_any_call("Model", default=_DEFAULT_KIMI_MODEL)
+
+    def test_cloud_wizard_glm_uses_requested_default_model(self):
+        with patch(
+            "openviking_cli.setup_wizard._prompt_choice",
+            side_effect=[2, 5],
+        ):
+            with patch(
+                "openviking_cli.setup_wizard._prompt_required_input",
+                side_effect=[
+                    "ve-test",
+                    CLOUD_PROVIDERS[1].default_embedding_model,
+                    "glm-test",
+                    _DEFAULT_GLM_MODEL,
+                ],
+            ) as prompt_input:
+                with patch(
+                    "openviking_cli.setup_wizard._prompt_required_int",
+                    return_value=CLOUD_PROVIDERS[1].default_embedding_dim,
+                ):
+                    config = _wizard_cloud()
+
+        assert config is not None
+        assert config["vlm"]["model"] == _DEFAULT_GLM_MODEL
+        prompt_input.assert_any_call("Model", default=_DEFAULT_GLM_MODEL)
+
+    def test_cloud_wizard_volcengine_uses_requested_default_model(self):
+        with patch(
+            "openviking_cli.setup_wizard._prompt_choice",
+            side_effect=[1, 2],
+        ):
+            with patch(
+                "openviking_cli.setup_wizard._prompt_required_input",
+                side_effect=[
+                    "embed-test",
+                    CLOUD_PROVIDERS[0].default_embedding_model,
+                    "ve-vlm-test",
+                    CLOUD_PROVIDERS[1].default_vlm_model,
+                ],
+            ) as prompt_input:
+                with patch(
+                    "openviking_cli.setup_wizard._prompt_required_int",
+                    return_value=CLOUD_PROVIDERS[0].default_embedding_dim,
+                ):
+                    config = _wizard_cloud()
+
+        assert config is not None
+        assert config["vlm"]["provider"] == "volcengine"
+        assert config["vlm"]["api_key"] == "ve-vlm-test"
+        assert config["vlm"]["model"] == CLOUD_PROVIDERS[1].default_vlm_model
+        prompt_input.assert_any_call("Model", default=CLOUD_PROVIDERS[1].default_vlm_model)
 
     def test_all_presets_valid(self):
         """Every preset should produce a config with required fields."""

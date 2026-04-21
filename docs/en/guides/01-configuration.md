@@ -9,7 +9,7 @@ openviking-server init
 openviking-server doctor
 ```
 
-If you want to use Codex as the VLM provider, choose `OpenAI Codex` inside `openviking-server init`. The wizard can import existing Codex auth or guide you through login directly.
+`openviking-server init` prompts for embedding and VLM settings separately. For API-based VLM choices such as `OpenAI`, `Volcengine`, `Kimi`, and `GLM`, enter the VLM API key when prompted. If you want to use Codex as the VLM provider, choose `OpenAI Codex`; the wizard can import existing Codex auth or guide you through login directly.
 
 ## Configuration File
 
@@ -68,7 +68,7 @@ For `provider: "openai-codex"`, `vlm.api_key` is optional when Codex OAuth is al
     "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
     "api_key"  : "your-volcengine-api-key",
     "provider" : "volcengine",
-    "model"    : "doubao-seed-2-0-pro-260215"
+    "model"    : "doubao-seed-2-0-code-preview-260215"
   }
 }
 ```
@@ -85,15 +85,15 @@ For `provider: "openai-codex"`, `vlm.api_key` is optional when Codex OAuth is al
       "api_base" : "https://api.openai.com/v1",
       "api_key"  : "your-openai-api-key",
       "provider" : "openai",
-      "dimension": 3072,
-      "model"    : "text-embedding-3-large"
+      "dimension": 1536,
+      "model"    : "text-embedding-3-small"
     }
   },
   "vlm": {
     "api_base" : "https://api.openai.com/v1",
     "api_key"  : "your-openai-api-key",
     "provider" : "openai",
-    "model"    : "gpt-4-vision-preview"
+    "model"    : "gpt-5.4"
   }
 }
 ```
@@ -118,7 +118,7 @@ Use `openviking-server init` to complete the Codex login/import step, then run `
   },
   "vlm": {
     "provider" : "openai-codex",
-    "model"    : "gpt-5.3-codex",
+    "model"    : "gpt-5.4",
     "api_base" : "https://chatgpt.com/backend-api/codex"
   }
 }
