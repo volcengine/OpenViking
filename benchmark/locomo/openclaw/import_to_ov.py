@@ -153,6 +153,7 @@ def write_success_record(
         "session",
         "date_time",
         "speakers",
+        "elapsed_seconds",
         "embedding_tokens",
         "vlm_tokens",
         "llm_input_tokens",
@@ -172,6 +173,7 @@ def write_success_record(
                 "session": record["session"],
                 "date_time": record.get("meta", {}).get("date_time", ""),
                 "speakers": record.get("meta", {}).get("speakers", ""),
+                "elapsed_seconds": f"{record.get('elapsed_seconds', 0.0):.3f}",
                 "embedding_tokens": record["token_usage"].get("embedding", 0),
                 "vlm_tokens": record["token_usage"].get("vlm", 0),
                 "llm_input_tokens": record["token_usage"].get("llm_input", 0),
@@ -344,6 +346,7 @@ async def process_single_session(
     args: argparse.Namespace,
 ) -> Dict[str, Any]:
     """处理单个会话的导入任务"""
+    started_at = time.perf_counter()
     try:
         # 根据参数决定是否使用 sample_id 作为 user_id 和 agent_id
         user_id = str(sample_id) if not args.no_user_agent_id else None
@@ -355,13 +358,14 @@ async def process_single_session(
             user_id=user_id,
             agent_id=agent_id,
         )
+        elapsed_seconds = time.perf_counter() - started_at
         token_usage = result["token_usage"]
         task_id = result.get("task_id")
         trace_id = result.get("trace_id", "")
         embedding_tokens = token_usage.get("embedding", 0)
         vlm_tokens = token_usage.get("vlm", 0)
         print(
-            f"    -> [COMPLETED] [{sample_id}/{session_key}] embed={embedding_tokens}, vlm={vlm_tokens}, task_id={task_id}, trace_id={trace_id}",
+            f"    -> [COMPLETED] [{sample_id}/{session_key}] elapsed={elapsed_seconds:.3f}s, embed={embedding_tokens}, vlm={vlm_tokens}, task_id={task_id}, trace_id={trace_id}",
             file=sys.stderr,
         )
 
@@ -372,6 +376,7 @@ async def process_single_session(
             "session": session_key,
             "status": "success",
             "meta": meta,
+            "elapsed_seconds": elapsed_seconds,
             "token_usage": token_usage,
             "embedding_tokens": embedding_tokens,
             "vlm_tokens": vlm_tokens,
@@ -385,7 +390,8 @@ async def process_single_session(
         return result
 
     except Exception as e:
-        print(f"    -> [ERROR] [{sample_id}/{session_key}] {e}", file=sys.stderr)
+        elapsed_seconds = time.perf_counter() - started_at
+        print(f"    -> [ERROR] [{sample_id}/{session_key}] elapsed={elapsed_seconds:.3f}s, {e}", file=sys.stderr)
         traceback.print_exc(file=sys.stderr)
 
         # Write error record

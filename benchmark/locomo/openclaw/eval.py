@@ -408,8 +408,8 @@ def reset_session(session_path: str, agent_id: str = "main") -> str | None:
         return None
 
 
-def calculate_usage_from_jsonl(jsonl_filename: str, agent_id: str = "main") -> dict:
-    """Calculate token usage from archived JSONL file."""
+def calculate_session_metrics_from_jsonl(jsonl_filename: str, agent_id: str = "main") -> dict:
+    """Calculate token usage and rounds from archived JSONL file."""
     # Check if jsonl_filename is already a full path
     if os.path.isabs(jsonl_filename) and os.path.exists(jsonl_filename):
         jsonl_full_path = jsonl_filename
@@ -423,6 +423,7 @@ def calculate_usage_from_jsonl(jsonl_filename: str, agent_id: str = "main") -> d
         "cacheRead": 0,
         "cacheWrite": 0,
         "total_tokens": 0,
+        "rounds": 0,
     }
 
     if not os.path.exists(jsonl_full_path):
@@ -435,6 +436,7 @@ def calculate_usage_from_jsonl(jsonl_filename: str, agent_id: str = "main") -> d
                     continue
                 entry = json.loads(line)
                 if entry.get("type") == "message" and entry.get("message", {}).get("role") == "assistant":
+                    usage["rounds"] += 1
                     entry_usage = entry.get("message", {}).get("usage", {})
                     usage["input_tokens"] += entry_usage.get("input", 0)
                     usage["output_tokens"] += entry_usage.get("output", 0)
@@ -686,10 +688,14 @@ def process_single_question(
         input_msg = f"Answer the question directly: {question}"
 
     jsonl_filename = ""
+    elapsed_seconds = 0.0
+    rounds = 0
+    started_at = time.perf_counter()
     try:
         response, api_usage = send_message_with_retry(
             args.base_url, args.token, sample_id, input_msg, 2, args.agent_id, session_key
         )
+        elapsed_seconds = time.perf_counter() - started_at
         print(f"  [{sample_idx}]   A: {response[:60]}{'...' if len(response) > 60 else ''}", file=sys.stderr)
 
         # Get sessionFile path from sessions.json using session_key
@@ -700,11 +706,14 @@ def process_single_question(
         if session_file_path:
             jsonl_filename = reset_session(session_file_path, args.agent_id)
 
-        # Calculate usage from JSONL file if available, otherwise use API usage
+        # Calculate usage/rounds from JSONL file if available, otherwise use API usage
         if jsonl_filename and session_file_path:
-            # Use the directory from session_file_path and the archived filename
-            usage = calculate_usage_from_jsonl(os.path.join(os.path.dirname(session_file_path), jsonl_filename), args.agent_id)
-            print(f"  [{sample_idx}]   tokens (from JSONL): in={usage['input_tokens']} out={usage['output_tokens']} cacheRead={usage['cacheRead']} cacheWrite={usage['cacheWrite']} total={usage['total_tokens']}", file=sys.stderr)
+            usage = calculate_session_metrics_from_jsonl(
+                os.path.join(os.path.dirname(session_file_path), jsonl_filename),
+                args.agent_id,
+            )
+            rounds = usage.pop("rounds", 0)
+            print(f"  [{sample_idx}]   tokens (from JSONL): in={usage['input_tokens']} out={usage['output_tokens']} cacheRead={usage['cacheRead']} cacheWrite={usage['cacheWrite']} total={usage['total_tokens']} rounds={rounds}", file=sys.stderr)
         else:
             usage = {
                 "input_tokens": api_usage.get("input_tokens", 0),
@@ -713,9 +722,11 @@ def process_single_question(
                 "cacheWrite": api_usage.get("cacheWrite", 0),
                 "total_tokens": api_usage.get("total_tokens", 0),
             }
-            print(f"  [{sample_idx}]   tokens (from API): in={usage['input_tokens']} out={usage['output_tokens']} cacheRead={usage['cacheRead']} cacheWrite={usage['cacheWrite']} total={usage['total_tokens']}", file=sys.stderr)
+            rounds = 1 if response and not response.startswith("[ERROR]") else 0
+            print(f"  [{sample_idx}]   tokens (from API): in={usage['input_tokens']} out={usage['output_tokens']} cacheRead={usage['cacheRead']} cacheWrite={usage['cacheWrite']} total={usage['total_tokens']} rounds={rounds}", file=sys.stderr)
 
     except Exception as e:
+        elapsed_seconds = time.perf_counter() - started_at
         response = f"[ERROR] {e}"
         usage = {}
         jsonl_filename = ""
@@ -731,6 +742,8 @@ def process_single_question(
         "category": category,
         "evidence": evidence,
         "usage": usage,
+        "elapsed_seconds": elapsed_seconds,
+        "rounds": rounds,
         "jsonl_filename": jsonl_filename,
     }
 
@@ -826,7 +839,7 @@ def save_record_to_csv(csv_path: str, record: dict) -> None:
     file_exists = os.path.exists(csv_path)
     fieldnames = [
         "sample_id", "sample_idx", "qi", "question", "expected",
-        "response", "category", "evidence", "input_tokens",
+        "response", "category", "evidence", "elapsed_seconds", "rounds", "input_tokens",
         "output_tokens", "cacheRead", "cacheWrite", "total_tokens",
         "timestamp", "jsonl_filename", "result", "reasoning"
     ]
@@ -834,6 +847,8 @@ def save_record_to_csv(csv_path: str, record: dict) -> None:
     # Flatten usage fields
     flat_record = record.copy()
     usage = flat_record.pop("usage", {})
+    flat_record["elapsed_seconds"] = f"{flat_record.get('elapsed_seconds', 0.0):.3f}"
+    flat_record["rounds"] = flat_record.get("rounds", 0)
     flat_record["input_tokens"] = usage.get("input_tokens", 0)
     flat_record["output_tokens"] = usage.get("output_tokens", 0)
     flat_record["cacheRead"] = usage.get("cacheRead", 0)
