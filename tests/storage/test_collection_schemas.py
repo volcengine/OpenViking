@@ -34,8 +34,19 @@ class _DummyEmbedder:
 
 
 class _DummyConfig:
-    def __init__(self, embedder: _DummyEmbedder, backend: str = "volcengine"):
-        self.storage = SimpleNamespace(vectordb=SimpleNamespace(name="context", backend=backend))
+    def __init__(
+        self,
+        embedder: _DummyEmbedder,
+        backend: str = "volcengine",
+        volcengine_data_api_key: str | None = None,
+    ):
+        self.storage = SimpleNamespace(
+            vectordb=SimpleNamespace(
+                name="context",
+                backend=backend,
+                volcengine=SimpleNamespace(api_key=volcengine_data_api_key),
+            )
+        )
         self.embedding = SimpleNamespace(
             dimension=2,
             get_embedder=lambda: embedder,
@@ -534,7 +545,9 @@ async def test_init_context_collection_excludes_parent_uri_for_local_backend(mon
 
 
 @pytest.mark.asyncio
-async def test_init_context_collection_skips_bootstrap_for_volcengine_api_key(monkeypatch):
+async def test_init_context_collection_skips_bootstrap_for_api_key_auth_mode_on_volcengine(
+    monkeypatch,
+):
     class _Storage:
         async def create_collection(self, name, schema):  # pragma: no cover
             del name, schema
@@ -552,7 +565,11 @@ async def test_init_context_collection_skips_bootstrap_for_volcengine_api_key(mo
     embedder = _DummyEmbedder()
     monkeypatch.setattr(
         "openviking_cli.utils.config.get_openviking_config",
-        lambda: _DummyConfig(embedder, backend="volcengine_api_key"),
+        lambda: _DummyConfig(
+            embedder,
+            backend="volcengine",
+            volcengine_data_api_key="vk-test-token",
+        ),
     )
 
     created = await init_context_collection(_Storage())

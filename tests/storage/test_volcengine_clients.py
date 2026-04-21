@@ -6,13 +6,9 @@ from openviking.storage.vectordb.collection.volcengine_clients import (
     ClientForDataApi,
     ClientForDataApiWithApiKey,
 )
-from openviking.storage.vectordb_adapters.volcengine_api_key_adapter import (
-    VolcengineApiKeyCollectionAdapter,
-)
 from openviking.storage.vectordb.collection.volcengine_collection import VolcengineCollection
 from openviking.storage.vectordb_adapters.volcengine_adapter import VolcengineCollectionAdapter
 from openviking_cli.utils.config.vectordb_config import (
-    VolcengineApiKeyConfig,
     VolcengineConfig,
     VectorDBBackendConfig,
 )
@@ -147,6 +143,26 @@ def test_volcengine_adapter_preserves_session_token_from_config():
     assert adapter._config()["SessionToken"] == "test-session-token"
 
 
+def test_volcengine_adapter_supports_api_key_mode_from_config():
+    config = VectorDBBackendConfig(
+        backend="volcengine",
+        name="context",
+        project="default",
+        volcengine=VolcengineConfig(
+            api_key="vk-test-token",
+            host="api-vikingdb.vikingdb.cn-beijing.volces.com",
+        ),
+    )
+
+    adapter = VolcengineCollectionAdapter.from_config(config)
+
+    assert adapter.mode == "volcengine"
+    assert adapter.collection_name == "context"
+    assert adapter.index_name == "default"
+    assert adapter.collection_exists() is True
+    assert adapter._config()["ApiKey"] == "vk-test-token"
+
+
 def test_volcengine_collection_get_meta_data_returns_empty_on_signature_error(monkeypatch):
     class _Response:
         status_code = 403
@@ -221,36 +237,47 @@ def test_volcengine_adapter_compiles_pathscope_to_prefix_filter():
     assert compiled == {"op": "prefix", "field": "uri", "prefix": "viking://resources/demo"}
 
 
-def test_volcengine_api_key_adapter_from_config():
+def test_volcengine_adapter_supports_api_key_mode_with_region_only():
     config = VectorDBBackendConfig(
-        backend="volcengine_api_key",
+        backend="volcengine",
         name="context",
         project="default",
-        volcengine_api_key=VolcengineApiKeyConfig(
+        volcengine=VolcengineConfig(
             api_key="vk-test-token",
-            host="api-vikingdb.vikingdb.cn-beijing.volces.com",
+            region="cn-beijing",
         ),
     )
 
-    adapter = VolcengineApiKeyCollectionAdapter.from_config(config)
+    adapter = VolcengineCollectionAdapter.from_config(config)
 
-    assert adapter.mode == "volcengine_api_key"
+    assert adapter.mode == "volcengine"
     assert adapter.collection_name == "context"
     assert adapter.index_name == "default"
     assert adapter.collection_exists() is True
+    assert adapter._config()["Region"] == "cn-beijing"
 
 
-def test_volcengine_api_key_adapter_compiles_pathscope_to_prefix_filter():
+def test_removed_volcengine_api_key_backend_name_is_rejected():
+    try:
+        VectorDBBackendConfig(
+            backend="volcengine_api_key",
+        )
+        raise AssertionError("Expected ValueError for removed backend name")
+    except ValueError as e:
+        assert "volcengine_api_key" in str(e)
+
+
+def test_volcengine_api_key_auth_compiles_pathscope_to_prefix_filter():
     config = VectorDBBackendConfig(
-        backend="volcengine_api_key",
+        backend="volcengine",
         name="context",
-        volcengine_api_key=VolcengineApiKeyConfig(
+        volcengine=VolcengineConfig(
             api_key="vk-test-token",
             host="api-vikingdb.vikingdb.cn-beijing.volces.com",
         ),
     )
 
-    adapter = VolcengineApiKeyCollectionAdapter.from_config(config)
+    adapter = VolcengineCollectionAdapter.from_config(config)
 
     compiled = adapter.compile_filter(PathScope("uri", "viking://resources/demo", depth=-1))
 

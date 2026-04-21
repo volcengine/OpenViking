@@ -16,6 +16,7 @@ from openviking.storage.vectordb.collection.result import (
     SearchResult,
 )
 from openviking.storage.vectordb.collection.volcengine_clients import (
+    ClientForDataApi,
     ClientForDataApiWithApiKey,
 )
 from openviking_cli.utils.logger import default_logger as logger
@@ -27,10 +28,18 @@ class VolcengineApiKeyCollection(ICollection):
     def __init__(
         self,
         api_key: str,
-        host: str,
+        host: Optional[str] = None,
+        region: Optional[str] = None,
         meta_data: Optional[Dict[str, Any]] = None,
     ):
-        self.data_client = ClientForDataApiWithApiKey(api_key, host)
+        resolved_host = (host or "").rstrip("/") or (
+            ClientForDataApi._global_host.get(region or "") if region else None
+        )
+        if not resolved_host:
+            raise ValueError(
+                "host or region is required for Volcengine API key data-plane access"
+            )
+        self.data_client = ClientForDataApiWithApiKey(api_key, resolved_host)
         self.meta_data = meta_data if meta_data is not None else {}
         self.project_name = self.meta_data.get("ProjectName", "default")
         self.collection_name = self.meta_data.get("CollectionName", "")
@@ -230,7 +239,7 @@ class VolcengineApiKeyCollection(ICollection):
         description: Optional[str] = None,
     ):
         raise NotImplementedError(
-            "volcengine_api_key backend is data-plane only; update is not supported"
+            "volcengine api_key mode is data-plane only; update is not supported"
         )
 
     def get_meta_data(self):
@@ -246,12 +255,12 @@ class VolcengineApiKeyCollection(ICollection):
 
     def drop(self):
         raise NotImplementedError(
-            "volcengine_api_key backend is data-plane only; drop is not supported"
+            "volcengine api_key mode is data-plane only; drop is not supported"
         )
 
     def create_index(self, index_name: str, meta_data: Dict[str, Any]):
         raise NotImplementedError(
-            "volcengine_api_key backend is data-plane only; create_index is not supported"
+            "volcengine api_key mode is data-plane only; create_index is not supported"
         )
 
     def has_index(self, index_name: str):
@@ -270,7 +279,7 @@ class VolcengineApiKeyCollection(ICollection):
         description: Optional[str] = None,
     ):
         raise NotImplementedError(
-            "volcengine_api_key backend is data-plane only; update_index is not supported"
+            "volcengine api_key mode is data-plane only; update_index is not supported"
         )
 
     def get_index_meta_data(self, index_name: str):
@@ -283,7 +292,7 @@ class VolcengineApiKeyCollection(ICollection):
 
     def drop_index(self, index_name: str):
         raise NotImplementedError(
-            "volcengine_api_key backend is data-plane only; drop_index is not supported"
+            "volcengine api_key mode is data-plane only; drop_index is not supported"
         )
 
     def upsert_data(self, data_list: List[Dict[str, Any]], ttl: int = 0):
