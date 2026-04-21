@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 _ARCHIVE_WAIT_POLL_SECONDS = 0.1
+_PHASE2_QUEUE_WAIT_TIMEOUT_SECONDS = 1800.0
 
 
 @dataclass
@@ -660,7 +661,22 @@ class Session:
                                 f"Updated active_count for {active_count_updated} contexts/skills"
                             )
 
-                await request_wait_tracker.wait_for_request(telemetry.telemetry_id)
+                try:
+                    await request_wait_tracker.wait_for_request(
+                        telemetry.telemetry_id,
+                        timeout=_PHASE2_QUEUE_WAIT_TIMEOUT_SECONDS,
+                    )
+                except TimeoutError as exc:
+                    telemetry.set_error(
+                        "session.commit.phase2.wait_for_request",
+                        "DEADLINE_EXCEEDED",
+                        str(exc),
+                    )
+                    logger.warning(
+                        "Timed out waiting for request-scoped queues for telemetry_id=%s after %.1fs; continuing phase2 completion",
+                        telemetry.telemetry_id,
+                        _PHASE2_QUEUE_WAIT_TIMEOUT_SECONDS,
+                    )
             finally:
                 request_wait_tracker.cleanup(telemetry.telemetry_id)
                 unregister_telemetry(telemetry.telemetry_id)

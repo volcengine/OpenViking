@@ -98,9 +98,16 @@ def process_qa_results(input_path: str) -> list[str]:
             except (ValueError, TypeError):
                 pass
 
-            # 统计耗时
+            # 统计耗时（仅在字段存在且可解析时计入，避免缺失值按 0 拉低均值）
             try:
-                elapsed_seconds = float(row.get("elapsed_seconds", 0) or 0)
+                elapsed_raw = row.get("elapsed_seconds")
+                if elapsed_raw is None:
+                    continue
+                elapsed_text = str(elapsed_raw).strip()
+                if not elapsed_text:
+                    continue
+
+                elapsed_seconds = float(elapsed_text)
                 total_elapsed_seconds += elapsed_seconds
                 min_elapsed_seconds = (
                     elapsed_seconds
