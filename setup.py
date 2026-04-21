@@ -34,6 +34,39 @@ ENGINE_SOURCE_DIR = "src/"
 ENGINE_BUILD_CONFIG = get_host_engine_build_config(platform.machine())
 
 
+def _sanitize_native_build_env(env):
+    """Keep Rust native builds from accidentally linking against Linuxbrew libs.
+
+    On older glibc systems, Homebrew-provided native libraries can require a newer
+    libc than the host linker/runtime supports. When pkg-config resolves xz/bzip2
+    from Linuxbrew, Cargo inherits those library search paths and link fails.
+    """
+
+    sanitized_env = env.copy()
+
+    pkg_config = sanitized_env.get("PKG_CONFIG") or shutil.which("pkg-config")
+    if pkg_config and "linuxbrew" in os.path.realpath(pkg_config).lower():
+        system_pkg_config = "/usr/bin/pkg-config"
+        if Path(system_pkg_config).exists():
+            sanitized_env["PKG_CONFIG"] = system_pkg_config
+
+    for key in ("PKG_CONFIG_PATH", "LIBRARY_PATH", "LD_LIBRARY_PATH"):
+        value = sanitized_env.get(key)
+        if not value:
+            continue
+        kept_paths = [
+            path
+            for path in value.split(os.pathsep)
+            if path and "linuxbrew" not in os.path.realpath(path).lower()
+        ]
+        if kept_paths:
+            sanitized_env[key] = os.pathsep.join(kept_paths)
+        else:
+            sanitized_env.pop(key, None)
+
+    return sanitized_env
+
+
 def _get_windows_python_sabi_library() -> Path:
     """Return the stable-ABI Python library path for Windows abi3 extensions."""
     candidate_roots = []
@@ -171,7 +204,7 @@ class OpenVikingBuildExt(build_ext):
         if ov_cli_dir.exists() and shutil.which("cargo"):
             print("Building ov CLI from source...")
             try:
-                env = os.environ.copy()
+                env = _sanitize_native_build_env(os.environ.copy())
                 env["OPENVIKING_VERSION"] = resolve_openviking_version(
                     env=env, project_root=SETUP_DIR
                 )
@@ -262,7 +295,7 @@ class OpenVikingBuildExt(build_ext):
         with tempfile.TemporaryDirectory() as tmpdir:
             try:
                 print("Building ragfs-python (Rust RAGFS binding) via maturin...")
-                env = os.environ.copy()
+                env = _sanitize_native_build_env(os.environ.copy())
                 build_args = [
                     sys.executable,
                     "-m",
