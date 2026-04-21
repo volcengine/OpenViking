@@ -14,7 +14,6 @@ from loguru import logger
 
 from vikingbot.agent.context import ContextBuilder
 from vikingbot.agent.memory import MemoryStore
-from vikingbot.heartbeat.service import HEARTBEAT_METADATA_KEY, is_heartbeat_noop_response
 from vikingbot.agent.subagent import SubagentManager
 from vikingbot.agent.tools import register_default_tools
 from vikingbot.agent.tools.registry import ToolRegistry
@@ -22,6 +21,7 @@ from vikingbot.bus.events import InboundMessage, OutboundEventType, OutboundMess
 from vikingbot.bus.queue import MessageBus
 from vikingbot.config import load_config
 from vikingbot.config.schema import BotMode, Config, SessionKey
+from vikingbot.heartbeat.service import HEARTBEAT_METADATA_KEY, is_heartbeat_noop_response
 from vikingbot.hooks import HookContext
 from vikingbot.hooks.manager import hook_manager
 from vikingbot.providers.base import LLMProvider
@@ -169,7 +169,7 @@ class AgentLoop:
         if self._mcp_stack:
             try:
                 await self._mcp_stack.aclose()
-            except (RuntimeError, BaseExceptionGroup):
+            except Exception:
                 pass  # MCP SDK cancel scope cleanup is noisy but harmless
             self._mcp_stack = None
         self._mcp_connected = False
@@ -329,7 +329,7 @@ class AgentLoop:
                             "arguments": json.dumps(args),
                         },
                     }
-                    for tc, args in zip(response.tool_calls, args_list)
+                    for tc, args in zip(response.tool_calls, args_list, strict=False)
                 ]
                 messages = self.context.add_assistant_message(
                     messages,
@@ -404,9 +404,7 @@ class AgentLoop:
                 final_content = response.content
                 break
 
-        if final_content is None or (
-            isinstance(final_content, str) and not final_content.strip()
-        ):
+        if final_content is None or (isinstance(final_content, str) and not final_content.strip()):
             if iteration >= self.max_iterations:
                 final_content = f"Reached {self.max_iterations} iterations without completion."
             else:
@@ -494,7 +492,7 @@ class AgentLoop:
             is_group_chat = msg.metadata.get("chat_type") == "group" if msg.metadata else False
             if is_group_chat:
                 cmd = msg.content
-                cmd = re.sub(r'^\[[^\]]+\]:\s*', '', cmd)
+                cmd = re.sub(r"^\[[^\]]+\]:\s*", "", cmd)
                 cmd = cmd.replace(f"@{msg.sender_id}", "").strip().lower()
             else:
                 cmd = msg.content.strip().lower()
@@ -502,20 +500,24 @@ class AgentLoop:
                 # Clone session for async consolidation, then immediately clear original
                 if not self._check_cmd_auth(msg):
                     return OutboundMessage(
-                        session_key=msg.session_key, content="🐈 Sorry, you are not authorized to use this command.",
-                        metadata=msg.metadata
+                        session_key=msg.session_key,
+                        content="🐈 Sorry, you are not authorized to use this command.",
+                        metadata=msg.metadata,
                     )
                 session.clear()
                 await self.sessions.save(session)
                 return OutboundMessage(
-                    session_key=msg.session_key, content="🐈 New session started. Session history droped.", metadata=msg.metadata
+                    session_key=msg.session_key,
+                    content="🐈 New session started. Session history droped.",
+                    metadata=msg.metadata,
                 )
             elif cmd == "/compact":
                 # Clone session for async consolidation, then immediately clear original
                 if not self._check_cmd_auth(msg):
                     return OutboundMessage(
-                        session_key=msg.session_key, content="🐈 Sorry, you are not authorized to use this command.",
-                        metadata=msg.metadata
+                        session_key=msg.session_key,
+                        content="🐈 Sorry, you are not authorized to use this command.",
+                        metadata=msg.metadata,
                     )
                 session_clone = session.clone()
                 session.clear()
@@ -523,25 +525,30 @@ class AgentLoop:
                 # Run consolidation in background
                 await self._safe_consolidate_memory(session_clone, archive_all=True)
                 return OutboundMessage(
-                    session_key=msg.session_key, content="🐈 New session started. Memory consolidated.", metadata=msg.metadata
+                    session_key=msg.session_key,
+                    content="🐈 New session started. Memory consolidated.",
+                    metadata=msg.metadata,
                 )
             if cmd == "/remember":
                 if not self._check_cmd_auth(msg):
                     return OutboundMessage(
-                        session_key=msg.session_key, content="🐈 Sorry, you are not authorized to use this command.",
-                        metadata=msg.metadata
+                        session_key=msg.session_key,
+                        content="🐈 Sorry, you are not authorized to use this command.",
+                        metadata=msg.metadata,
                     )
                 if ov_tools_enable:
                     session_clone = session.clone()
                     await self._consolidate_viking_memory(session_clone)
                 return OutboundMessage(
-                    session_key=msg.session_key, content="This conversation has been submitted to memory storage.", metadata=msg.metadata
+                    session_key=msg.session_key,
+                    content="This conversation has been submitted to memory storage.",
+                    metadata=msg.metadata,
                 )
             if cmd == "/help":
                 return OutboundMessage(
                     session_key=msg.session_key,
                     content="🐈 vikingbot commands:\n/new — Start a new conversation\n/remember — Submit current session to memories and start new session\n/help — Show available commands",
-                    metadata=msg.metadata
+                    metadata=msg.metadata,
                 )
 
             # Debug mode handling
@@ -616,7 +623,10 @@ class AgentLoop:
             if not (is_heartbeat and is_heartbeat_noop_response(final_content)):
                 session.add_message("user", msg.content, sender_id=msg.sender_id)
                 session.add_message(
-                    "assistant", final_content, tools_used=tools_used if tools_used else None, token_usage=token_usage,
+                    "assistant",
+                    final_content,
+                    tools_used=tools_used if tools_used else None,
+                    token_usage=token_usage,
                     sender_id=msg.sender_id,
                 )
                 await self.sessions.save(session)
@@ -633,7 +643,7 @@ class AgentLoop:
                 token_usage=token_usage,
                 time_cost=time_cost,
                 iteration=iteration,
-                tools_used_names=tools_used_names
+                tools_used_names=tools_used_names,
             )
         finally:
             long_running_notified = True
@@ -701,9 +711,7 @@ class AgentLoop:
             ov_tools_enable=ov_tools_enable,
         )
 
-        if final_content is None or (
-            isinstance(final_content, str) and not final_content.strip()
-        ):
+        if final_content is None or (isinstance(final_content, str) and not final_content.strip()):
             final_content = "Background task completed."
 
         # Save to session (mark as system message in history)
@@ -818,7 +826,9 @@ Respond with ONLY valid JSON, no markdown fences."""
         """Consolidate old messages into MEMORY.md + HISTORY.md. Works on a cloned session."""
         try:
             if not session.messages:
-                logger.info(f"No messages to commit openviking for session {session.key.safe_name()} (allow_from filter applied)")
+                logger.info(
+                    f"No messages to commit openviking for session {session.key.safe_name()} (allow_from filter applied)"
+                )
                 return
 
             # use openviking tools to extract memory
@@ -856,13 +866,15 @@ Respond with ONLY valid JSON, no markdown fences."""
             allow_from.append(self.config.ov_server.admin_user_id)
         channel_config = self._get_channel_config(msg.session_key)
         if channel_config:
-            allow_cmd = getattr(channel_config, 'allow_cmd_from', [])
+            allow_cmd = getattr(channel_config, "allow_cmd_from", [])
             if allow_cmd:
                 allow_from.extend(allow_cmd)
 
         # If channel not found or sender not in allow_from list, ignore message
         if msg.sender_id not in allow_from:
-            logger.debug(f"Sender {msg.sender_id} not allowed in channel {msg.session_key.channel_key()}")
+            logger.debug(
+                f"Sender {msg.sender_id} not allowed in channel {msg.session_key.channel_key()}"
+            )
             return False
         return True
 

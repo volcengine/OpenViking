@@ -42,6 +42,7 @@ csv_lock = Lock()
 # Txt-based test file parsing (original format)
 # ---------------------------------------------------------------------------
 
+
 def parse_test_file(path: str) -> list[dict]:
     """Parse txt test file into sessions.
 
@@ -71,7 +72,7 @@ def parse_test_file(path: str) -> list[dict]:
         evals = []
         for line in lines:
             if line.startswith("eval:"):
-                evals.append(line[len("eval:"):].strip())
+                evals.append(line[len("eval:") :].strip())
             else:
                 messages.append(line)
 
@@ -84,6 +85,7 @@ def parse_test_file(path: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 # LoCoMo JSON parsing
 # ---------------------------------------------------------------------------
+
 
 def format_locomo_message(msg: dict) -> str:
     """Format a single LoCoMo message into a natural chat-style string.
@@ -131,7 +133,10 @@ def load_locomo_data(
 
     if sample_index is not None:
         if sample_index < 0 or sample_index >= len(data):
-            print(f"Error: sample index {sample_index} out of range (0-{len(data)-1})", file=sys.stderr)
+            print(
+                f"Error: sample index {sample_index} out of range (0-{len(data) - 1})",
+                file=sys.stderr,
+            )
             sys.exit(1)
         return [data[sample_index]]
     return data
@@ -172,15 +177,17 @@ def build_session_messages(
             parts.append(tail)
         combined = "\n\n".join(parts)
 
-        sessions.append({
-            "message": combined,
-            "meta": {
-                "sample_id": item["sample_id"],
-                "session_key": sk,
-                "date_time": date_time,
-                "speakers": speakers,
-            },
-        })
+        sessions.append(
+            {
+                "message": combined,
+                "meta": {
+                    "sample_id": item["sample_id"],
+                    "session_key": sk,
+                    "date_time": date_time,
+                    "speakers": speakers,
+                },
+            }
+        )
 
     return sessions
 
@@ -188,6 +195,7 @@ def build_session_messages(
 # ---------------------------------------------------------------------------
 # Question time helpers
 # ---------------------------------------------------------------------------
+
 
 def parse_locomo_datetime(date_str: str) -> datetime | None:
     """解析 LoCoMo 时间格式，如 '1:56 pm on 8 May, 2023'"""
@@ -238,6 +246,7 @@ def get_sample_question_time(sample: dict) -> str | None:
 # ---------------------------------------------------------------------------
 # Ingest record helpers (avoid duplicate ingestion)
 # ---------------------------------------------------------------------------
+
 
 def load_ingest_record(record_path: str = DEFAULT_INGEST_RECORD_PATH) -> dict:
     """Load existing ingest record file, return empty dict if not exists."""
@@ -296,6 +305,7 @@ def mark_ingested(
 # API helpers
 # ---------------------------------------------------------------------------
 
+
 def extract_response_text(response_json: dict) -> str:
     """Extract assistant text from the /v1/responses API response."""
     try:
@@ -346,7 +356,10 @@ def get_session_id_from_key(session_key: str, user: str, agent_id: str = "main")
                 if session_key in key and isinstance(value, dict):
                     session_file = value.get("sessionFile")
                     if session_file:
-                        print(f"    [session] Found sessionFile in agent '{agent_name}': {session_file}", file=sys.stderr)
+                        print(
+                            f"    [session] Found sessionFile in agent '{agent_name}': {session_file}",
+                            file=sys.stderr,
+                        )
                         return session_file
 
         except json.JSONDecodeError as e:
@@ -356,7 +369,10 @@ def get_session_id_from_key(session_key: str, user: str, agent_id: str = "main")
             print(f"    [session] Error reading {sessions_file}: {e}", file=sys.stderr)
             continue
 
-    print(f"    [session] session_key '{session_key}' not found in any agent's sessions.json", file=sys.stderr)
+    print(
+        f"    [session] session_key '{session_key}' not found in any agent's sessions.json",
+        file=sys.stderr,
+    )
     return None
 
 
@@ -435,7 +451,10 @@ def calculate_session_metrics_from_jsonl(jsonl_filename: str, agent_id: str = "m
                 if not line.strip():
                     continue
                 entry = json.loads(line)
-                if entry.get("type") == "message" and entry.get("message", {}).get("role") == "assistant":
+                if (
+                    entry.get("type") == "message"
+                    and entry.get("message", {}).get("role") == "assistant"
+                ):
                     usage["rounds"] += 1
                     entry_usage = entry.get("message", {}).get("usage", {})
                     usage["input_tokens"] += entry_usage.get("input", 0)
@@ -452,8 +471,13 @@ def calculate_session_metrics_from_jsonl(jsonl_filename: str, agent_id: str = "m
 
 
 def send_message_with_retry(
-    base_url: str, token: str, user: str, message: str, retries: int = 2,
-    agent_id: str = DEFAULT_AGENT_ID, session_key: str | None = None
+    base_url: str,
+    token: str,
+    user: str,
+    message: str,
+    retries: int = 2,
+    agent_id: str = DEFAULT_AGENT_ID,
+    session_key: str | None = None,
 ) -> tuple[str, dict]:
     """Call send_message with up to `retries` retries on failure."""
     last_exc = None
@@ -468,8 +492,12 @@ def send_message_with_retry(
 
 
 def send_message(
-    base_url: str, token: str, user: str, message: str,
-    agent_id: str = DEFAULT_AGENT_ID, session_key: str | None = None
+    base_url: str,
+    token: str,
+    user: str,
+    message: str,
+    agent_id: str = DEFAULT_AGENT_ID,
+    session_key: str | None = None,
 ) -> tuple[str, dict]:
     """Send a single message to the OpenClaw responses API.
 
@@ -479,7 +507,7 @@ def send_message(
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {token}",
-        "X-OpenClaw-Agent-ID": agent_id
+        "X-OpenClaw-Agent-ID": agent_id,
     }
     if session_key:
         headers["X-OpenClaw-Session-Key"] = session_key
@@ -505,13 +533,16 @@ def send_message(
         raise RuntimeError(f"Error parsing response from {base_url}: {e}")
 
     print(body)
-    usage = body.get("usage", {"input_tokens": 0, "output_tokens": 0, "cacheRead": 0, "total_tokens": 0})
+    usage = body.get(
+        "usage", {"input_tokens": 0, "output_tokens": 0, "cacheRead": 0, "total_tokens": 0}
+    )
     return extract_response_text(body), usage
 
 
 # ---------------------------------------------------------------------------
 # Ingest: load conversations into openclaw
 # ---------------------------------------------------------------------------
+
 
 def run_ingest(
     args: argparse.Namespace,
@@ -522,7 +553,7 @@ def run_ingest(
     if args.clear_ingest_record:
         ingest_record = {}
         save_ingest_record(ingest_record)
-        print(f"[INFO] All existing ingest records cleared", file=sys.stderr)
+        print("[INFO] All existing ingest records cleared", file=sys.stderr)
     else:
         ingest_record = load_ingest_record()
 
@@ -548,8 +579,13 @@ def run_ingest(
                 label = f"{meta['session_key']} ({meta['date_time']})"
 
                 # Skip already ingested sessions unless force-ingest is enabled
-                if not args.force_ingest and is_already_ingested(args.agent_id, user_key, sample_id, meta['session_key'], ingest_record):
-                    print(f"  [{label}] [SKIP] already ingested (use --force-ingest to reprocess)", file=sys.stderr)
+                if not args.force_ingest and is_already_ingested(
+                    args.agent_id, user_key, sample_id, meta["session_key"], ingest_record
+                ):
+                    print(
+                        f"  [{label}] [SKIP] already ingested (use --force-ingest to reprocess)",
+                        file=sys.stderr,
+                    )
                     skipped_count += 1
                     continue
 
@@ -557,30 +593,39 @@ def run_ingest(
                 print(f"  [{label}] {preview}...", file=sys.stderr)
 
                 try:
-                    reply, usage = send_message(args.base_url, args.token, user_key, msg, args.agent_id)
+                    reply, usage = send_message(
+                        args.base_url, args.token, user_key, msg, args.agent_id
+                    )
                     print(f"    -> {reply[:80]}{'...' if len(reply) > 80 else ''}", file=sys.stderr)
-                    results.append({
-                        "sample_id": sample_id,
-                        "session": meta["session_key"],
-                        "user": user_key,
-                        "reply": reply,
-                        "usage": usage,
-                    })
+                    results.append(
+                        {
+                            "sample_id": sample_id,
+                            "session": meta["session_key"],
+                            "user": user_key,
+                            "reply": reply,
+                            "usage": usage,
+                        }
+                    )
                     # Mark as successfully ingested
-                    mark_ingested(args.agent_id, user_key, sample_id, meta['session_key'], ingest_record, {
-                        "mode": "openclaw",
-                        "date_time": meta['date_time'],
-                        "usage": usage
-                    })
+                    mark_ingested(
+                        args.agent_id,
+                        user_key,
+                        sample_id,
+                        meta["session_key"],
+                        ingest_record,
+                        {"mode": "openclaw", "date_time": meta["date_time"], "usage": usage},
+                    )
                 except Exception as e:
                     print(f"    -> [ERROR] {e}", file=sys.stderr)
-                    results.append({
-                        "sample_id": sample_id,
-                        "session": meta["session_key"],
-                        "user": user_key,
-                        "reply": f"[ERROR] {e}",
-                        "usage": {},
-                    })
+                    results.append(
+                        {
+                            "sample_id": sample_id,
+                            "session": meta["session_key"],
+                            "user": user_key,
+                            "reply": f"[ERROR] {e}",
+                            "usage": {},
+                        }
+                    )
 
                 if session_id is None:
                     session_id = get_session_id(user_key, args.agent_id)
@@ -605,7 +650,7 @@ def run_ingest(
         # Save ingest record
         save_ingest_record(ingest_record)
         total_processed = len(results) + skipped_count
-        print(f"\n=== Ingest summary ===", file=sys.stderr)
+        print("\n=== Ingest summary ===", file=sys.stderr)
         print(f"Total sessions: {total_processed}", file=sys.stderr)
         print(f"Completed: {len(results)}", file=sys.stderr)
         print(f"Skipped (already ingested): {skipped_count}", file=sys.stderr)
@@ -625,8 +670,13 @@ def run_ingest(
             for msg in session["messages"]:
                 print(f"  [user] {msg}", file=sys.stderr)
                 try:
-                    reply, _usage = send_message(args.base_url, args.token, session_key, msg, args.agent_id)
-                    print(f"  [assistant] {reply[:80]}{'...' if len(reply) > 80 else ''}", file=sys.stderr)
+                    reply, _usage = send_message(
+                        args.base_url, args.token, session_key, msg, args.agent_id
+                    )
+                    print(
+                        f"  [assistant] {reply[:80]}{'...' if len(reply) > 80 else ''}",
+                        file=sys.stderr,
+                    )
                     turns.append(("user", msg))
                     turns.append(("assistant", reply))
                 except Exception as e:
@@ -661,6 +711,7 @@ def run_ingest(
 # QA: run QA questions and compare with expected answers
 # ---------------------------------------------------------------------------
 
+
 def process_single_question(
     sample_id: str,
     sample_idx: int,
@@ -680,7 +731,10 @@ def process_single_question(
     session_key = f"qa-{sample_id}-q{original_qi}"
     user_key = args.user or f"eval-{sample_idx}"
 
-    print(f"  [{sample_idx}] Q{original_qi}: {question[:60]}{'...' if len(question) > 60 else ''}", file=sys.stderr)
+    print(
+        f"  [{sample_idx}] Q{original_qi}: {question[:60]}{'...' if len(question) > 60 else ''}",
+        file=sys.stderr,
+    )
     # 如果有 question_time，注入到 prompt 中
     if question_time:
         input_msg = f"Current date: {question_time}. Answer the question directly: {question}"
@@ -696,7 +750,10 @@ def process_single_question(
             args.base_url, args.token, sample_id, input_msg, 2, args.agent_id, session_key
         )
         elapsed_seconds = time.perf_counter() - started_at
-        print(f"  [{sample_idx}]   A: {response[:60]}{'...' if len(response) > 60 else ''}", file=sys.stderr)
+        print(
+            f"  [{sample_idx}]   A: {response[:60]}{'...' if len(response) > 60 else ''}",
+            file=sys.stderr,
+        )
 
         # Get sessionFile path from sessions.json using session_key
         session_file_path = get_session_id_from_key(session_key, user_key, args.agent_id)
@@ -713,7 +770,10 @@ def process_single_question(
                 args.agent_id,
             )
             rounds = usage.pop("rounds", 0)
-            print(f"  [{sample_idx}]   tokens (from JSONL): in={usage['input_tokens']} out={usage['output_tokens']} cacheRead={usage['cacheRead']} cacheWrite={usage['cacheWrite']} total={usage['total_tokens']} rounds={rounds}", file=sys.stderr)
+            print(
+                f"  [{sample_idx}]   tokens (from JSONL): in={usage['input_tokens']} out={usage['output_tokens']} cacheRead={usage['cacheRead']} cacheWrite={usage['cacheWrite']} total={usage['total_tokens']} rounds={rounds}",
+                file=sys.stderr,
+            )
         else:
             usage = {
                 "input_tokens": api_usage.get("input_tokens", 0),
@@ -723,7 +783,10 @@ def process_single_question(
                 "total_tokens": api_usage.get("total_tokens", 0),
             }
             rounds = 1 if response and not response.startswith("[ERROR]") else 0
-            print(f"  [{sample_idx}]   tokens (from API): in={usage['input_tokens']} out={usage['output_tokens']} cacheRead={usage['cacheRead']} cacheWrite={usage['cacheWrite']} total={usage['total_tokens']} rounds={rounds}", file=sys.stderr)
+            print(
+                f"  [{sample_idx}]   tokens (from API): in={usage['input_tokens']} out={usage['output_tokens']} cacheRead={usage['cacheRead']} cacheWrite={usage['cacheWrite']} total={usage['total_tokens']} rounds={rounds}",
+                file=sys.stderr,
+            )
 
     except Exception as e:
         elapsed_seconds = time.perf_counter() - started_at
@@ -768,7 +831,7 @@ def run_sample_qa(
     question_time = get_sample_question_time(item)
     qas = [q for q in item.get("qa", []) if str(q.get("category", "")) != "5"]
     if args.count is not None:
-        qas = qas[:args.count]
+        qas = qas[: args.count]
 
     # Filter out already executed questions
     filtered_qas = []
@@ -781,16 +844,31 @@ def run_sample_qa(
     qas = filtered_qas
     if not qas:
         print(f"\n=== Sample {sample_id} [{sample_idx}] (user={user_key}) ===", file=sys.stderr)
-        print(f"    All QA questions already executed, skipping sample.", file=sys.stderr)
-        return [], {"input_tokens": 0, "output_tokens": 0, "cacheRead": 0, "cacheWrite": 0, "total_tokens": 0}
+        print("    All QA questions already executed, skipping sample.", file=sys.stderr)
+        return [], {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total_tokens": 0,
+        }
 
     print(f"\n=== Sample {sample_id} [{sample_idx}] (user={user_key}) ===", file=sys.stderr)
     if question_time:
         print(f"    Question time context: {question_time}", file=sys.stderr)
-    print(f"    Running {len(qas)} QA question(s) with max {args.parallel} workers...", file=sys.stderr)
+    print(
+        f"    Running {len(qas)} QA question(s) with max {args.parallel} workers...",
+        file=sys.stderr,
+    )
 
     records = []
-    sample_usage = {"input_tokens": 0, "output_tokens": 0, "cacheRead": 0, "cacheWrite": 0, "total_tokens": 0}
+    sample_usage = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "total_tokens": 0,
+    }
 
     # Use ThreadPoolExecutor for concurrent question execution
     with ThreadPoolExecutor(max_workers=args.parallel) as executor:
@@ -798,7 +876,13 @@ def run_sample_qa(
         for original_qi, qa in qas:
             future = executor.submit(
                 process_single_question,
-                sample_id, sample_idx, original_qi, qa, args, csv_path, question_time
+                sample_id,
+                sample_idx,
+                original_qi,
+                qa,
+                args,
+                csv_path,
+                question_time,
             )
             futures.append(future)
 
@@ -838,10 +922,25 @@ def save_record_to_csv(csv_path: str, record: dict) -> None:
     """Save a single QA record to CSV file."""
     file_exists = os.path.exists(csv_path)
     fieldnames = [
-        "sample_id", "sample_idx", "qi", "question", "expected",
-        "response", "category", "evidence", "elapsed_seconds", "rounds", "input_tokens",
-        "output_tokens", "cacheRead", "cacheWrite", "total_tokens",
-        "timestamp", "jsonl_filename", "result", "reasoning"
+        "sample_id",
+        "sample_idx",
+        "qi",
+        "question",
+        "expected",
+        "response",
+        "category",
+        "evidence",
+        "elapsed_seconds",
+        "rounds",
+        "input_tokens",
+        "output_tokens",
+        "cacheRead",
+        "cacheWrite",
+        "total_tokens",
+        "timestamp",
+        "jsonl_filename",
+        "result",
+        "reasoning",
     ]
 
     # Flatten usage fields
@@ -892,19 +991,31 @@ def run_qa(
     # 确保输出目录存在
     os.makedirs(os.path.dirname(csv_path), exist_ok=True)
     executed_records = load_executed_records(csv_path)
-    print(f"    Loaded {len(executed_records)} already executed records from {csv_path}", file=sys.stderr)
+    print(
+        f"    Loaded {len(executed_records)} already executed records from {csv_path}",
+        file=sys.stderr,
+    )
 
     results_list = []
     for idx, item in enumerate(samples):
         result = run_sample_qa(item, idx + 1, args, executed_records, csv_path)
         results_list.append(result)
 
-    total_usage = {"input_tokens": 0, "output_tokens": 0, "cacheRead": 0, "cacheWrite": 0, "total_tokens": 0}
+    total_usage = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "total_tokens": 0,
+    }
     for _, sample_usage in results_list:
         for k in total_usage:
             total_usage[k] += sample_usage[k]
 
-    print(f"\n    total tokens: in={total_usage['input_tokens']} out={total_usage['output_tokens']} total={total_usage['total_tokens']}", file=sys.stderr)
+    print(
+        f"\n    total tokens: in={total_usage['input_tokens']} out={total_usage['output_tokens']} total={total_usage['total_tokens']}",
+        file=sys.stderr,
+    )
 
     # Generate timestamp once for all backups
     timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -913,7 +1024,9 @@ def run_qa(
     # Backup CSV file with timestamp
     if os.path.exists(csv_path):
         csv_path_obj = Path(csv_path)
-        backup_csv_path = csv_path_obj.parent / f"{csv_path_obj.stem}_{timestamp}{csv_path_obj.suffix}"
+        backup_csv_path = (
+            csv_path_obj.parent / f"{csv_path_obj.stem}_{timestamp}{csv_path_obj.suffix}"
+        )
         try:
             shutil.copy2(csv_path, backup_csv_path)
             print(f"    CSV backed up to: {backup_csv_path}", file=sys.stderr)
@@ -924,7 +1037,10 @@ def run_qa(
         # Backup output summary file too
         if os.path.exists(args.output):
             output_path_obj = Path(args.output)
-            backup_output_path = output_path_obj.parent / f"{output_path_obj.stem}_{timestamp}{output_path_obj.suffix}"
+            backup_output_path = (
+                output_path_obj.parent
+                / f"{output_path_obj.stem}_{timestamp}{output_path_obj.suffix}"
+            )
             try:
                 shutil.copy2(args.output, backup_output_path)
                 print(f"    Summary backed up to: {backup_output_path}", file=sys.stderr)
@@ -948,6 +1064,7 @@ def run_qa(
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def parse_session_range(s: str) -> tuple[int, int]:
     """Parse '1-4' or '3' into (lo, hi) inclusive tuple."""
     if "-" in s:
@@ -963,7 +1080,11 @@ def main():
     default_csv_path = str(script_dir / "result" / "qa_results.csv")
 
     parser = argparse.ArgumentParser(description="Evaluate OpenClaw responses")
-    parser.add_argument("mode", choices=["ingest", "qa"], help="Mode: ingest (load conversations) or qa (run QA eval)")
+    parser.add_argument(
+        "mode",
+        choices=["ingest", "qa"],
+        help="Mode: ingest (load conversations) or qa (run QA eval)",
+    )
     parser.add_argument("input", help="Path to test file (.txt or .json)")
     parser.add_argument(
         "--output",
@@ -1008,7 +1129,8 @@ def main():
         help="QA mode: user UUID from a prior ingest run to target.",
     )
     parser.add_argument(
-        "-p", "--parallel",
+        "-p",
+        "--parallel",
         type=int,
         default=10,
         metavar="N",

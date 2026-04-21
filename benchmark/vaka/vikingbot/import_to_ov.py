@@ -23,7 +23,6 @@ from vaka_utils import (
     select_cases,
 )
 
-
 SCRIPT_DIR = Path(__file__).parent.resolve()
 DEFAULT_RESULT_DIR = SCRIPT_DIR / "result"
 DEFAULT_SUCCESS_CSV = str(DEFAULT_RESULT_DIR / "import_success.csv")
@@ -323,7 +322,9 @@ async def viking_ingest(
             "for example: uv run python benchmark/vaka/vikingbot/import_to_ov.py"
         ) from exc
 
-    client = ov.AsyncHTTPClient(url=openviking_url, account=account, user=user_id, agent_id=agent_id)
+    client = ov.AsyncHTTPClient(
+        url=openviking_url, account=account, user=user_id, agent_id=agent_id
+    )
     await client.initialize()
     try:
         create_res = await client.create_session()

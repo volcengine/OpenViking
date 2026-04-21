@@ -58,7 +58,9 @@ def map_exception(
         if exc.status_code == 409:
             return ConflictError(str(exc), resource=resource)
         if exc.status_code == 400:
-            return InvalidArgumentError(str(exc), details={"resource": resource} if resource else None)
+            return InvalidArgumentError(
+                str(exc), details={"resource": resource} if resource else None
+            )
         if exc.status_code in {500, 502, 503, 504}:
             return UnavailableError("storage backend", reason=str(exc))
     if isinstance(exc, AGFSClientError):

@@ -641,7 +641,9 @@ class Session:
                     if self._viking_fs:
                         for usage in usage_records:
                             try:
-                                await self._viking_fs.link(self._session_uri, usage.uri, ctx=self.ctx)
+                                await self._viking_fs.link(
+                                    self._session_uri, usage.uri, ctx=self.ctx
+                                )
                             except Exception as e:
                                 logger.warning(f"Failed to create relation to {usage.uri}: {e}")
 
@@ -651,8 +653,8 @@ class Session:
                     if self._vikingdb_manager:
                         uris = [u.uri for u in usage_records if u.uri]
                         try:
-                            active_count_updated = await self._vikingdb_manager.increment_active_count(
-                                self.ctx, uris
+                            active_count_updated = (
+                                await self._vikingdb_manager.increment_active_count(self.ctx, uris)
                             )
                         except Exception as e:
                             logger.debug(f"Could not update active_count for usage URIs: {e}")

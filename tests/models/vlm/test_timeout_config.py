@@ -118,7 +118,7 @@ def test_vlm_config_propagates_timeout_to_codex_backend():
 
 def test_codex_vlm_propagates_config_timeout():
     from openviking.models.vlm.backends.codex_vlm import CodexVLM
-    from tests.unit.test_codex_vlm import _MockResponsesStream, _build_final_response
+    from tests.unit.test_codex_vlm import _build_final_response, _MockResponsesStream
 
     vlm = CodexVLM(
         {

@@ -15,6 +15,7 @@ except ImportError:
     def load_dotenv(*args, **kwargs) -> bool:
         return False
 
+
 try:
     from openai import AsyncOpenAI
 except ImportError:

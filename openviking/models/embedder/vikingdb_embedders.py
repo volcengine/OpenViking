@@ -487,7 +487,9 @@ class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
 
         def _call() -> EmbedResult:
             results = self._call_api(
-                [text], dense_model=self.dense_model, sparse_model=self.sparse_model,
+                [text],
+                dense_model=self.dense_model,
+                sparse_model=self.sparse_model,
                 input_type=input_type,
             )
             if not results:
@@ -525,7 +527,9 @@ class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
 
         def _call() -> List[EmbedResult]:
             raw_results = self._call_api(
-                texts, dense_model=self.dense_model, sparse_model=self.sparse_model,
+                texts,
+                dense_model=self.dense_model,
+                sparse_model=self.sparse_model,
                 input_type=input_type,
             )
             results = []
