@@ -218,12 +218,38 @@ class BaseOpenClawCLITest(unittest.TestCase):
             "did not produce a response",
             "LLM idle timeout",
             "timed out",
+            "couldn't generate a response",
+            "couldn't generate",
+            "please try again",
         ]
         return any(ind.lower() in text.lower() for ind in timeout_indicators)
 
     def _is_empty_response(self, response) -> bool:
         text = self.assertion.extract_response_text(response)
         return not text.strip()
+
+    def _is_tool_result_only(self, response) -> bool:
+        text = self.assertion.extract_response_text(response)
+        stripped = text.strip()
+        if not stripped:
+            return False
+        import re
+
+        tool_result_pattern = r"^\[?\{[^}]*\"name\"\s*:\s*\"none\"[^}]*\}\]?[\s]*$"
+        if re.match(tool_result_pattern, stripped):
+            return True
+        if stripped.startswith("[{") and stripped.endswith("}]"):
+            try:
+                import json
+
+                parsed = json.loads(stripped)
+                if isinstance(parsed, list) and all(
+                    isinstance(item, dict) and "name" in item for item in parsed
+                ):
+                    return True
+            except (json.JSONDecodeError, ValueError):
+                pass
+        return False
 
     def send_and_retry_on_timeout(
         self,
@@ -238,9 +264,15 @@ class BaseOpenClawCLITest(unittest.TestCase):
             response = self.send_and_log(message, session_id=target_session_id, agent_id=agent_id)
             is_timeout = self._is_llm_timeout(response)
             is_empty = self._is_empty_response(response)
-            if not is_timeout and not is_empty:
+            is_tool_only = self._is_tool_result_only(response)
+            if not is_timeout and not is_empty and not is_tool_only:
                 return response
-            reason = "LLM idle timeout" if is_timeout else "empty response (no text)"
+            if is_tool_only:
+                reason = "tool result only (no natural language answer)"
+            elif is_timeout:
+                reason = "LLM idle timeout"
+            else:
+                reason = "empty response (no text)"
             self.logger.warning(f"{reason} (attempt {attempt + 1}/{max_retries + 1}), retrying in {retry_delay}s...")
             if attempt < max_retries:
                 time.sleep(retry_delay)
