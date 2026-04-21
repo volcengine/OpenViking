@@ -4,6 +4,7 @@
   "description": "OpenClaw OpenViking-backed long-term memory plugin (install to ~/.openclaw/extensions)",
   "type": "module",
   "scripts": {
+    "check-manifest": "node scripts/check-manifest.mjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },

@@ -42,6 +42,10 @@ jobs:
         working-directory: examples/openclaw-plugin
         run: npm ci --no-audit --no-fund
 
+      - name: Check install-manifest covers runtime imports
+        working-directory: examples/openclaw-plugin
+        run: npm run check-manifest
+
       - name: Run contract tests (afterTurn, compact)
         working-directory: examples/openclaw-plugin
         run: >-
