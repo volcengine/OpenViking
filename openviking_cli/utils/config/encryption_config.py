@@ -84,17 +84,17 @@ class EncryptionConfig(BaseModel):
     )
 
     local: LocalEncryptionProviderConfig = Field(
-        default_factory=lambda: LocalEncryptionProviderConfig(),
+        default_factory=LocalEncryptionProviderConfig,
         description="Local provider configuration",
     )
 
     vault: VaultEncryptionProviderConfig = Field(
-        default_factory=lambda: VaultEncryptionProviderConfig(),
+        default_factory=VaultEncryptionProviderConfig,
         description="Vault provider configuration",
     )
 
     volcengine_kms: VolcengineKMSEncryptionProviderConfig = Field(
-        default_factory=lambda: VolcengineKMSEncryptionProviderConfig(),
+        default_factory=VolcengineKMSEncryptionProviderConfig,
         description="Volcengine KMS provider configuration",
     )
 

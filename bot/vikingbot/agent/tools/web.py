@@ -3,24 +3,52 @@
 import html
 import json
 import re
-from typing import Any
+from html.parser import HTMLParser
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 import httpx
 
 from vikingbot.agent.tools.base import Tool
 
+if TYPE_CHECKING:
+    from vikingbot.agent.tools.base import ToolContext
+
 # Shared constants
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36"
 MAX_REDIRECTS = 5  # Limit redirects to prevent DoS attacks
 
 
+class _HTMLTextExtractor(HTMLParser):
+    """Extract text content while ignoring script/style blocks."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self._parts: list[str] = []
+        self._ignored_tag_stack = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]):
+        if tag.lower() in {"script", "style"}:
+            self._ignored_tag_stack += 1
+
+    def handle_endtag(self, tag: str):
+        if tag.lower() in {"script", "style"} and self._ignored_tag_stack:
+            self._ignored_tag_stack -= 1
+
+    def handle_data(self, data: str):
+        if not self._ignored_tag_stack:
+            self._parts.append(data)
+
+    def get_text(self) -> str:
+        return "".join(self._parts)
+
+
 def _strip_tags(text: str) -> str:
     """Remove HTML tags and decode entities."""
-    text = re.sub(r"<script[\s\S]*?</script>", "", text, flags=re.I)
-    text = re.sub(r"<style[\s\S]*?</style>", "", text, flags=re.I)
-    text = re.sub(r"<[^>]+>", "", text)
-    return html.unescape(text).strip()
+    parser = _HTMLTextExtractor()
+    parser.feed(text)
+    parser.close()
+    return html.unescape(parser.get_text()).strip()
 
 
 def _normalize(text: str) -> str:

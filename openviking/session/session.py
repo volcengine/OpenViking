@@ -17,6 +17,7 @@ from openviking.core.namespace import canonical_session_uri
 from openviking.message import Message, Part
 from openviking.server.identity import RequestContext, Role
 from openviking.telemetry import get_current_telemetry, tracer
+from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.time_utils import get_current_timestamp
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger, run_async
@@ -30,6 +31,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 _ARCHIVE_WAIT_POLL_SECONDS = 0.1
+_PHASE2_QUEUE_WAIT_TIMEOUT_SECONDS = 1800.0
 
 
 @dataclass
@@ -535,12 +537,14 @@ class Session:
         from openviking.service.task_tracker import get_task_tracker
         from openviking.storage.transaction import get_lock_manager
         from openviking.telemetry import OperationTelemetry, bind_telemetry
+        from openviking.telemetry.registry import register_telemetry, unregister_telemetry
 
         tracker = get_task_tracker()
 
         memories_extracted: Dict[str, int] = {}
         active_count_updated = 0
         telemetry = OperationTelemetry(operation="session_commit_phase2", enabled=True)
+        request_wait_tracker = get_request_wait_tracker()
         archive_index = self._archive_index_from_uri(archive_uri)
         redo_task_id: Optional[str] = None
 
@@ -563,96 +567,119 @@ class Session:
                 return
 
             tracker.start(task_id)
-            with bind_telemetry(telemetry):
-                # redo-log protection
-                redo_task_id = str(uuid.uuid4())
-                redo_log = get_lock_manager().redo_log
-                redo_log.write_pending(
-                    redo_task_id,
-                    {
-                        "archive_uri": archive_uri,
-                        "session_uri": self._session_uri,
-                        "account_id": self.ctx.account_id,
-                        "user_id": self.ctx.user.user_id,
-                        "agent_id": self.ctx.user.agent_id,
-                        "role": self.ctx.role.value,
-                    },
-                )
-
-                latest_archive_overview = await self._get_latest_completed_archive_overview(
-                    exclude_archive_uri=archive_uri
-                )
-
-                # Generate summary and write L0/L1 to archive
-                summary = await self._generate_archive_summary_async(
-                    messages,
-                    latest_archive_overview=latest_archive_overview,
-                )
-                if self._viking_fs and summary:
-                    abstract = self._extract_abstract_from_summary(summary)
-                    await self._viking_fs.write_file(
-                        uri=f"{archive_uri}/.abstract.md",
-                        content=abstract,
-                        ctx=self.ctx,
-                    )
-                    await self._viking_fs.write_file(
-                        uri=f"{archive_uri}/.overview.md",
-                        content=summary,
-                        ctx=self.ctx,
-                    )
-                    await self._viking_fs.write_file(
-                        uri=f"{archive_uri}/.meta.json",
-                        content=json.dumps(
-                            {
-                                "overview_tokens": -(-len(summary) // 4),
-                                "abstract_tokens": -(-len(abstract) // 4),
-                            }
-                        ),
-                        ctx=self.ctx,
+            request_wait_tracker.register_request(telemetry.telemetry_id)
+            register_telemetry(telemetry)
+            try:
+                with bind_telemetry(telemetry):
+                    # redo-log protection
+                    redo_task_id = str(uuid.uuid4())
+                    redo_log = get_lock_manager().redo_log
+                    redo_log.write_pending(
+                        redo_task_id,
+                        {
+                            "archive_uri": archive_uri,
+                            "session_uri": self._session_uri,
+                            "account_id": self.ctx.account_id,
+                            "user_id": self.ctx.user.user_id,
+                            "agent_id": self.ctx.user.agent_id,
+                            "role": self.ctx.role.value,
+                        },
                     )
 
-                # Memory extraction
-                if self._session_compressor:
-                    logger.info(
-                        f"Starting memory extraction from {len(messages)} archived messages"
+                    latest_archive_overview = await self._get_latest_completed_archive_overview(
+                        exclude_archive_uri=archive_uri
                     )
-                    extracted = await self._session_compressor.extract_long_term_memories(
-                        messages=messages,
-                        user=self.user,
-                        session_id=self.session_id,
-                        ctx=self.ctx,
+
+                    # Generate summary and write L0/L1 to archive
+                    summary = await self._generate_archive_summary_async(
+                        messages,
                         latest_archive_overview=latest_archive_overview,
                     )
-                    logger.info(f"Extracted {len(extracted)} memories")
-                    for ctx_item in extracted:
-                        cat = getattr(ctx_item, "category", "") or "unknown"
-                        memories_extracted[cat] = memories_extracted.get(cat, 0) + 1
-                    self._stats.memories_extracted += len(extracted)
-                    get_current_telemetry().set("memory.extracted", len(extracted))
-
-                # Write relations (using snapshot, not self._usage_records)
-                if self._viking_fs:
-                    for usage in usage_records:
-                        try:
-                            await self._viking_fs.link(self._session_uri, usage.uri, ctx=self.ctx)
-                        except Exception as e:
-                            logger.warning(f"Failed to create relation to {usage.uri}: {e}")
-
-                redo_log.mark_done(redo_task_id)
-
-                # Update active_count (using snapshot, not self._usage_records)
-                if self._vikingdb_manager:
-                    uris = [u.uri for u in usage_records if u.uri]
-                    try:
-                        active_count_updated = await self._vikingdb_manager.increment_active_count(
-                            self.ctx, uris
+                    if self._viking_fs and summary:
+                        abstract = self._extract_abstract_from_summary(summary)
+                        await self._viking_fs.write_file(
+                            uri=f"{archive_uri}/.abstract.md",
+                            content=abstract,
+                            ctx=self.ctx,
                         )
-                    except Exception as e:
-                        logger.debug(f"Could not update active_count for usage URIs: {e}")
-                    if active_count_updated > 0:
+                        await self._viking_fs.write_file(
+                            uri=f"{archive_uri}/.overview.md",
+                            content=summary,
+                            ctx=self.ctx,
+                        )
+                        await self._viking_fs.write_file(
+                            uri=f"{archive_uri}/.meta.json",
+                            content=json.dumps(
+                                {
+                                    "overview_tokens": -(-len(summary) // 4),
+                                    "abstract_tokens": -(-len(abstract) // 4),
+                                }
+                            ),
+                            ctx=self.ctx,
+                        )
+
+                    # Memory extraction
+                    if self._session_compressor:
                         logger.info(
-                            f"Updated active_count for {active_count_updated} contexts/skills"
+                            f"Starting memory extraction from {len(messages)} archived messages"
                         )
+                        extracted = await self._session_compressor.extract_long_term_memories(
+                            messages=messages,
+                            user=self.user,
+                            session_id=self.session_id,
+                            ctx=self.ctx,
+                            latest_archive_overview=latest_archive_overview,
+                        )
+                        logger.info(f"Extracted {len(extracted)} memories")
+                        for ctx_item in extracted:
+                            cat = getattr(ctx_item, "category", "") or "unknown"
+                            memories_extracted[cat] = memories_extracted.get(cat, 0) + 1
+                        self._stats.memories_extracted += len(extracted)
+                        get_current_telemetry().set("memory.extracted", len(extracted))
+
+                    # Write relations (using snapshot, not self._usage_records)
+                    if self._viking_fs:
+                        for usage in usage_records:
+                            try:
+                                await self._viking_fs.link(self._session_uri, usage.uri, ctx=self.ctx)
+                            except Exception as e:
+                                logger.warning(f"Failed to create relation to {usage.uri}: {e}")
+
+                    redo_log.mark_done(redo_task_id)
+
+                    # Update active_count (using snapshot, not self._usage_records)
+                    if self._vikingdb_manager:
+                        uris = [u.uri for u in usage_records if u.uri]
+                        try:
+                            active_count_updated = await self._vikingdb_manager.increment_active_count(
+                                self.ctx, uris
+                            )
+                        except Exception as e:
+                            logger.debug(f"Could not update active_count for usage URIs: {e}")
+                        if active_count_updated > 0:
+                            logger.info(
+                                f"Updated active_count for {active_count_updated} contexts/skills"
+                            )
+
+                try:
+                    await request_wait_tracker.wait_for_request(
+                        telemetry.telemetry_id,
+                        timeout=_PHASE2_QUEUE_WAIT_TIMEOUT_SECONDS,
+                    )
+                except TimeoutError as exc:
+                    telemetry.set_error(
+                        "session.commit.phase2.wait_for_request",
+                        "DEADLINE_EXCEEDED",
+                        str(exc),
+                    )
+                    logger.warning(
+                        "Timed out waiting for request-scoped queues for telemetry_id=%s after %.1fs; continuing phase2 completion",
+                        telemetry.telemetry_id,
+                        _PHASE2_QUEUE_WAIT_TIMEOUT_SECONDS,
+                    )
+            finally:
+                request_wait_tracker.cleanup(telemetry.telemetry_id)
+                unregister_telemetry(telemetry.telemetry_id)
 
             # Phase 2 complete — update meta with telemetry and commit info
             snapshot = telemetry.finish("ok")

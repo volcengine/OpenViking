@@ -1,8 +1,7 @@
-import { execSync } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
 import { Socket } from "node:net";
 import { platform } from "node:os";
-import type { spawn } from "node:child_process";
+import { launchProcess, runSync, sysEnv, getEnv } from "./runtime-utils.js";
 
 export const IS_WIN = platform() === "win32";
 
@@ -33,7 +32,7 @@ export function waitForHealthOrExit(
   baseUrl: string,
   timeoutMs: number,
   intervalMs: number,
-  child: ReturnType<typeof spawn>,
+  child: ReturnType<typeof launchProcess>,
 ): Promise<void> {
   const exited =
     child.killed || child.exitCode !== null || child.signalCode !== null;
@@ -155,7 +154,7 @@ export async function quickRecallPrecheck(
   mode: "local" | "remote",
   baseUrl: string,
   defaultPort: number,
-  localProcess: ReturnType<typeof spawn> | null,
+  localProcess: ReturnType<typeof launchProcess> | null,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
   const healthOk = await quickHealthCheck(baseUrl, 500);
   if (healthOk) {
@@ -244,7 +243,7 @@ function killProcessOnPort(port: number, logger: ProcessLogger): Promise<void> {
 
 async function killProcessOnPortWin(port: number, logger: ProcessLogger): Promise<void> {
   try {
-    const netstatOut = execSync(
+    const netstatOut = runSync(
       `netstat -ano | findstr "LISTENING" | findstr ":${port}"`,
       { encoding: "utf-8", shell: "cmd.exe" },
     ).trim();
@@ -257,7 +256,7 @@ async function killProcessOnPortWin(port: number, logger: ProcessLogger): Promis
     for (const pid of pids) {
       if (pid > 0) {
         logger.info?.(`openviking: killing pid ${pid} on port ${port}`);
-        try { execSync(`taskkill /PID ${pid} /F`, { shell: "cmd.exe" }); } catch { /* already gone */ }
+        try { runSync(`taskkill /PID ${pid} /F`, { encoding: "utf-8", shell: "cmd.exe" }); } catch { /* already gone */ }
       }
     }
     if (pids.size) await new Promise((r) => setTimeout(r, 500));
@@ -268,7 +267,7 @@ async function killProcessOnPortUnix(port: number, logger: ProcessLogger): Promi
   try {
     let pids: number[] = [];
     try {
-      const lsofOut = execSync(`lsof -ti tcp:${port} -s tcp:listen 2>/dev/null || true`, {
+      const lsofOut = runSync(`lsof -ti tcp:${port} -s tcp:listen 2>/dev/null || true`, {
         encoding: "utf-8",
         shell: "/bin/sh",
       }).trim();
@@ -276,7 +275,7 @@ async function killProcessOnPortUnix(port: number, logger: ProcessLogger): Promi
     } catch { /* lsof not available */ }
     if (pids.length === 0) {
       try {
-        const ssOut = execSync(
+        const ssOut = runSync(
           `ss -tlnp 2>/dev/null | awk -v p=":${port}" '$4 ~ p {gsub(/.*pid=/,""); gsub(/,.*/,""); print; exit}'`,
           { encoding: "utf-8", shell: "/bin/sh" },
         ).trim();
@@ -288,7 +287,7 @@ async function killProcessOnPortUnix(port: number, logger: ProcessLogger): Promi
     }
     for (const pid of pids) {
       logger.info?.(`openviking: killing pid ${pid} on port ${port}`);
-      try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+      try { globalThis["process"].kill(pid, "SIGKILL"); } catch { /* already gone */ }
     }
     if (pids.length) await new Promise((r) => setTimeout(r, 500));
   } catch { /* port check failed */ }
@@ -296,31 +295,35 @@ async function killProcessOnPortUnix(port: number, logger: ProcessLogger): Promi
 
 export function resolvePythonCommand(logger: ProcessLogger): string {
   const defaultPy = IS_WIN ? "python" : "python3";
-  let pythonCmd = process.env.OPENVIKING_PYTHON;
+  let pythonCmd = getEnv("OPENVIKING_PYTHON");
 
   if (!pythonCmd) {
-    if (IS_WIN) {
-      const { join } = require("node:path") as typeof import("node:path");
-      const { homedir } = require("node:os") as typeof import("node:os");
-      const envBat = join(homedir(), ".openclaw", "openviking.env.bat");
-      if (existsSync(envBat)) {
-        try {
-          const content = readFileSync(envBat, "utf-8");
-          const m = content.match(/set\s+OPENVIKING_PYTHON=(.+)/i);
-          if (m?.[1]) pythonCmd = m[1].trim();
-        } catch { /* ignore */ }
-      }
-    } else {
-      const { join } = require("node:path") as typeof import("node:path");
-      const { homedir } = require("node:os") as typeof import("node:os");
-      const envFile = join(homedir(), ".openclaw", "openviking.env");
-      if (existsSync(envFile)) {
-        try {
-          const content = readFileSync(envFile, "utf-8");
-          const m = content.match(/OPENVIKING_PYTHON=['"]([^'"]+)['"]/);
-          if (m?.[1]) pythonCmd = m[1];
-        } catch {
-          /* ignore */
+    const { join } = require("node:path") as typeof import("node:path");
+    const { homedir } = require("node:os") as typeof import("node:os");
+    const defaultDir = join(homedir(), ".openclaw");
+    const profileDir = getEnv("OPENCLAW_STATE_DIR");
+    const searchDirs = profileDir && profileDir !== defaultDir
+      ? [profileDir, defaultDir]
+      : [defaultDir];
+    for (const dir of searchDirs) {
+      if (pythonCmd) break;
+      if (IS_WIN) {
+        const envBat = join(dir, "openviking.env.bat");
+        if (existsSync(envBat)) {
+          try {
+            const content = readFileSync(envBat, "utf-8");
+            const m = content.match(/set\s+OPENVIKING_PYTHON=(.+)/i);
+            if (m?.[1]) pythonCmd = m[1].trim();
+          } catch { /* ignore */ }
+        }
+      } else {
+        const envFile = join(dir, "openviking.env");
+        if (existsSync(envFile)) {
+          try {
+            const content = readFileSync(envFile, "utf-8");
+            const m = content.match(/OPENVIKING_PYTHON=['"]([^'"]+)['"]/);
+            if (m?.[1]) pythonCmd = m[1];
+          } catch { /* ignore */ }
         }
       }
     }
@@ -329,15 +332,15 @@ export function resolvePythonCommand(logger: ProcessLogger): string {
   if (!pythonCmd) {
     if (IS_WIN) {
       try {
-        pythonCmd = execSync("where python", { encoding: "utf-8", shell: "cmd.exe" }).split(/\r?\n/)[0].trim();
+        pythonCmd = runSync("where python", { encoding: "utf-8", shell: "cmd.exe" }).split(/\r?\n/)[0].trim();
       } catch {
         pythonCmd = "python";
       }
     } else {
       try {
-        pythonCmd = execSync("command -v python3 || which python3", {
+        pythonCmd = runSync("command -v python3 || which python3", {
           encoding: "utf-8",
-          env: process.env,
+          env: sysEnv(),
           shell: "/bin/sh",
         }).trim();
       } catch {
@@ -354,4 +357,68 @@ export function resolvePythonCommand(logger: ProcessLogger): string {
   }
 
   return pythonCmd;
+}
+
+// ---------------------------------------------------------------------------
+// Local runtime pre-flight check (detect only, never auto-install)
+// ---------------------------------------------------------------------------
+
+function checkPythonVersion(pythonCmd: string): { ok: boolean; version?: string; error?: string } {
+  try {
+    const out = runSync(
+      `"${pythonCmd}" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"`,
+      { encoding: "utf-8", shell: IS_WIN ? "cmd.exe" : "/bin/sh" },
+    ).trim();
+    const [major, minor] = out.split(".").map(Number);
+    if (major < 3 || (major === 3 && minor < 10)) {
+      return { ok: false, error: `Python ${out} too old, need >= 3.10` };
+    }
+    return { ok: true, version: out };
+  } catch {
+    return { ok: false, error: "Python not found or failed to execute" };
+  }
+}
+
+function isOpenVikingImportable(pythonCmd: string): boolean {
+  try {
+    runSync(`"${pythonCmd}" -c "import openviking"`, {
+      encoding: "utf-8",
+      shell: IS_WIN ? "cmd.exe" : "/bin/sh",
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export interface CheckRuntimeResult {
+  pythonCmd: string;
+  installed: boolean;
+  configExists: boolean;
+}
+
+/**
+ * Pre-startup check for local mode: verify Python >= 3.10 and that the
+ * openviking package is importable. Does NOT auto-install anything — if
+ * the package is missing, the caller should warn the user to install it
+ * manually (e.g. `pip install openviking`).
+ */
+export function checkLocalRuntime(
+  pythonCmd: string,
+  configPath: string,
+  logger: ProcessLogger,
+): CheckRuntimeResult {
+  const pyCheck = checkPythonVersion(pythonCmd);
+  if (!pyCheck.ok) {
+    logger.warn?.(`openviking: runtime check — ${pyCheck.error}`);
+    return { pythonCmd, installed: false, configExists: existsSync(configPath) };
+  }
+  logger.info?.(`openviking: Python ${pyCheck.version} ✓`);
+
+  const installed = isOpenVikingImportable(pythonCmd);
+  if (installed) {
+    logger.info?.("openviking: package detected ✓");
+  }
+
+  return { pythonCmd, installed, configExists: existsSync(configPath) };
 }

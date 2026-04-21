@@ -1,13 +1,12 @@
 import json
 import sys
-import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import gradio as gr
 
-from vikingbot.config.loader import load_config, save_config, get_config_path
-from vikingbot.config.schema import Config, ChannelType, SandboxBackend, SandboxMode
+from vikingbot.config.loader import get_config_path, load_config, save_config
+from vikingbot.config.schema import Config
 
 
 def resolve_schema_ref(
@@ -215,7 +214,7 @@ def collect_values_from_components(
                     elif isinstance(value, str):
                         try:
                             value = json.loads(value)
-                        except:
+                        except Exception:
                             value = []
 
                 result[field_name] = value
@@ -338,7 +337,7 @@ def create_sessions_tab():
                                 lines.append(
                                     f'<div style="color: black;"><b>{role}:</b> {content}</div>'
                                 )
-                        except:
+                        except Exception:
                             lines.append(f'<div style="color: black;">{line}</div>')
             elif session_file_json.exists():
                 with open(session_file_json, "r") as f:
@@ -361,6 +360,7 @@ def create_workspace_tab():
         workspace_path = config.workspace_path
         # Create workspace directory if it doesn't exist
         workspace_path.mkdir(parents=True, exist_ok=True)
+        workspace_root = workspace_path.resolve()
         workspace_path_str = str(workspace_path)
 
         with gr.Row():
@@ -381,14 +381,22 @@ def create_workspace_tab():
             if not selected_file:
                 return "", "Please select a file to view"
 
-            if Path(selected_file).is_file():
+            try:
+                candidate = Path(selected_file).resolve()
+            except OSError:
+                return "", "File not found"
+
+            if not candidate.is_relative_to(workspace_root):
+                return "", "Access denied"
+
+            if candidate.is_file():
                 try:
-                    with open(selected_file, "r") as f:
-                        return f.read(), f"Loaded {Path(selected_file).name}"
-                except:
+                    with open(candidate, "r") as f:
+                        return f.read(), f"Loaded {candidate.name}"
+                except Exception:
                     return "Cannot read file (binary or encoding error)", ""
-            elif Path(selected_file).is_dir():
-                return "", f"{Path(selected_file).name} is a directory"
+            elif candidate.is_dir():
+                return "", f"{candidate.name} is a directory"
             return "", "File not found"
 
         file_explorer.change(

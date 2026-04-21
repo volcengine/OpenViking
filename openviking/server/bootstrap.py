@@ -5,6 +5,7 @@
 import argparse
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -32,6 +33,34 @@ def _get_version() -> str:
         return __version__
     except ImportError:
         return "unknown"
+
+
+VIKINGBOT_DEFAULT_PORT = 18790
+
+
+def _abort_if_port_in_use(port: int, label: str) -> None:
+    """Exit with a clear message if anything is already listening on ``port``.
+
+    Without this, ``--with-bot`` would spawn a vikingbot subprocess that
+    silently fails to bind while a stale process keeps serving traffic —
+    the operator believes they upgraded but the old binary still answers.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        try:
+            s.connect(("127.0.0.1", port))
+            in_use = True
+        except (ConnectionRefusedError, socket.timeout, OSError):
+            in_use = False
+    if in_use:
+        print(
+            f"Error: {label} port {port} is already in use.\n"
+            f"  A previous process is still bound — refusing to start a duplicate.\n"
+            f"  Identify it:  lsof -nP -iTCP:{port} -sTCP:LISTEN\n"
+            f"  Kill it, then retry.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 def _normalize_host_arg(host: Optional[str]) -> Optional[str]:
@@ -170,6 +199,7 @@ def main():
 
     bot_process: Optional[BotProcess] = None
     if config.with_bot:
+        _abort_if_port_in_use(VIKINGBOT_DEFAULT_PORT, "vikingbot gateway")
         print(f"Bot API proxy enabled, forwarding to {config.bot_api_url}")
         # Determine if bot logging should be enabled
         enable_bot_logging = args.enable_bot_logging

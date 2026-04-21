@@ -170,7 +170,7 @@ impl RAGFSBindingClient {
         rt.block_on(async {
             fs.register_plugin(MemFSPlugin).await;
             fs.register_plugin(KVFSPlugin).await;
-            fs.register_plugin(QueueFSPlugin).await;
+            fs.register_plugin(QueueFSPlugin::new()).await;
             fs.register_plugin(SQLFSPlugin::new()).await;
             fs.register_plugin(LocalFSPlugin::new()).await;
             fs.register_plugin(ServerInfoFSPlugin::new()).await;

@@ -9,21 +9,30 @@ import os
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
+from urllib.parse import urlparse
 
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
 import litellm
 from litellm import acompletion, completion
 
-
 from openviking.telemetry import tracer
-
 from openviking.utils.model_retry import retry_async, retry_sync
-
 
 from ..base import ToolCall, VLMBase, VLMResponse
 
 logger = logging.getLogger(__name__)
+
+
+def _is_google_generate_language_endpoint(api_base: str) -> bool:
+    """Check whether the configured API base is Gemini's native endpoint."""
+    parsed = urlparse(api_base)
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    if hostname != "generativelanguage.googleapis.com":
+        return False
+    normalized_path = parsed.path.rstrip("/")
+    return normalized_path.startswith("/v1") or normalized_path.startswith("/v1beta")
+
 
 PROVIDER_CONFIGS: Dict[str, Dict[str, Any]] = {
     "openrouter": {
@@ -209,6 +218,7 @@ class LiteLLMVLMProvider(VLMBase):
             "model": model,
             "messages": messages,
             "temperature": self.temperature,
+            "timeout": self.timeout,
         }
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
@@ -216,9 +226,7 @@ class LiteLLMVLMProvider(VLMBase):
         if self.api_key:
             kwargs["api_key"] = self.api_key
         if self.api_base:
-            is_google_endpoint = "generativelanguage.googleapis.com" in self.api_base and (
-                "/v1" in self.api_base or "/v1beta" in self.api_base
-            )
+            is_google_endpoint = _is_google_generate_language_endpoint(self.api_base)
             if not is_google_endpoint:
                 kwargs["api_base"] = self.api_base
         if self._extra_headers:
@@ -233,6 +241,20 @@ class LiteLLMVLMProvider(VLMBase):
             extra = kwargs.get("extra_body", {})
             extra["enable_thinking"] = thinking
             kwargs["extra_body"] = extra
+
+        # Workaround for LiteLLM bug where Gemini context-caching path emits
+        # both `cachedContent` and `toolConfig`, which Gemini rejects with a
+        # 400 "CachedContent can not be used with GenerateContent request
+        # setting system_instruction, tools or tool_config".
+        # See BerriAI/litellm#17304 and PR #25659. Remove when LiteLLM ships
+        # the fix.
+        if provider == "gemini" and tools:
+            kwargs["messages"] = [
+                {k: v for k, v in msg.items() if k != "cache_control"}
+                if isinstance(msg, dict)
+                else msg
+                for msg in messages
+            ]
 
         return kwargs
 
@@ -322,7 +344,7 @@ class LiteLLMVLMProvider(VLMBase):
             response = completion(**kwargs)
             elapsed = time.perf_counter() - t0
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
-            tracer.info(f'response={response}')
+            tracer.info(f"response={response}")
             if tools:
                 return self._build_vlm_response(response, has_tools=True)
             return self._clean_response(self._extract_content_from_response(response))
@@ -353,7 +375,7 @@ class LiteLLMVLMProvider(VLMBase):
             response = await acompletion(**kwargs)
             elapsed = time.perf_counter() - t0
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
-            tracer.info(f'response={response}')
+            tracer.info(f"response={response}")
             if tools:
                 return self._build_vlm_response(response, has_tools=True)
             return self._clean_response(self._extract_content_from_response(response))

@@ -33,12 +33,24 @@ from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+_ALLOWED_FEISHU_HOSTS = ("feishu.cn", "larksuite.com")
+
 
 def _getattr_safe(obj, key: str, default=None):
     """Get attribute from SDK object or dict, with safe fallback."""
     if isinstance(obj, dict):
         return obj.get(key, default)
     return getattr(obj, key, default)
+
+
+def _is_allowed_feishu_url(source_path: str) -> bool:
+    """Return True for Feishu/Lark URLs on allowed hosts."""
+    parsed = urlparse(source_path)
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    return any(
+        hostname == allowed_host or hostname.endswith(f".{allowed_host}")
+        for allowed_host in _ALLOWED_FEISHU_HOSTS
+    )
 
 
 class FeishuParser(BaseParser):
@@ -235,6 +247,9 @@ class FeishuParser(BaseParser):
         Returns:
             (doc_type, token) e.g. ("docx", "doxcnABC123")
         """
+        if not _is_allowed_feishu_url(url):
+            raise ValueError(f"Feishu host not allowed: {url}")
+
         parsed = urlparse(url)
         path_parts = [p for p in parsed.path.split("/") if p]
         if len(path_parts) < 2:
@@ -298,7 +313,7 @@ class FeishuParser(BaseParser):
         **kwargs,
     ) -> ParseResult:
         """Not typically used for Feishu (URL-based parser)."""
-        if source_path and ("feishu.cn" in source_path or "larksuite.com" in source_path):
+        if source_path and _is_allowed_feishu_url(source_path):
             return await self.parse(source_path, instruction=instruction, **kwargs)
         raise NotImplementedError("FeishuParser requires a Feishu URL. Use parse() instead.")
 

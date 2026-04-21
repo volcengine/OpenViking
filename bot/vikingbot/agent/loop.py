@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from contextlib import AsyncExitStack
 from pathlib import Path
@@ -492,7 +493,9 @@ class AgentLoop:
             # Handle slash commands
             is_group_chat = msg.metadata.get("chat_type") == "group" if msg.metadata else False
             if is_group_chat:
-                cmd = msg.content.replace(f"@{msg.sender_id}", "").strip().lower()
+                cmd = msg.content
+                cmd = re.sub(r'^\[[^\]]+\]:\s*', '', cmd)
+                cmd = cmd.replace(f"@{msg.sender_id}", "").strip().lower()
             else:
                 cmd = msg.content.strip().lower()
             if cmd == "/new":

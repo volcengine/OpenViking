@@ -118,6 +118,40 @@ When you use a regular user key, `account` and `user` are optional because the s
 openviking --account acme --user alice --agent-id my-agent ls viking://
 ```
 
+### Using --sudo with Root API Key
+
+The CLI supports configuring both `api_key` (for regular user operations) and `root_api_key` (for admin operations) in `ovcli.conf`:
+
+```json
+{
+  "url": "http://localhost:1933",
+  "api_key": "<user-key>",
+  "root_api_key": "<root-key>",
+  "account": "acme",
+  "user": "alice",
+  "agent_id": "my-agent"
+}
+```
+
+When you need to perform admin commands (`admin`, `system`, `reindex`), use the `--sudo` flag to elevate privileges:
+
+```bash
+# List all accounts (requires root privileges)
+ov --sudo admin list-accounts
+
+# Reindex content
+ov --sudo reindex viking://
+
+# System commands
+ov --sudo system status
+```
+
+The `--sudo` flag:
+- Only works with admin commands: `admin`, `system`, `reindex`
+- Will error if used with non-admin commands
+- Will error if `root_api_key` is not configured in `ovcli.conf`
+- Uses `root_api_key` instead of `api_key` for the request
+
 ### Accessing Tenant Data with Root Key
 
 When using the root key to access tenant-scoped data APIs (e.g. `ls`, `find`, `sessions`), you must specify the target account and user. The server will reject the request otherwise. Admin API and system status endpoints are not affected.

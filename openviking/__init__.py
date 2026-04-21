@@ -6,6 +6,8 @@ OpenViking - An Agent-native context database
 Data in, Context out.
 """
 
+from typing import TYPE_CHECKING
+
 try:
     from ._version import version as __version__
 except ImportError:
@@ -23,6 +25,16 @@ except ImportError as exc:
         "Bundled OpenViking AGFS client is unavailable. "
         "Reinstall openviking or run 'pip install -e .' from the project root."
     ) from exc
+
+if TYPE_CHECKING:
+    from openviking.async_client import AsyncOpenViking
+    from openviking.session import Session
+    from openviking.sync_client import SyncOpenViking
+    from openviking_cli.client.http import AsyncHTTPClient
+    from openviking_cli.client.sync_http import SyncHTTPClient
+    from openviking_cli.session.user_id import UserIdentifier
+
+    OpenViking = SyncOpenViking
 
 
 def __getattr__(name: str):

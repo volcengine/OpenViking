@@ -4,12 +4,12 @@
 
 import asyncio
 
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Body
 from pydantic import BaseModel
 
-from openviking.server.auth import get_request_context, require_auth_root_or_admin
+from openviking.server.auth import require_role
 from openviking.server.dependencies import get_service
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking.server.models import ErrorInfo, Response
 from openviking_cli.utils import get_logger
 
@@ -30,10 +30,9 @@ router = APIRouter(prefix="/api/v1/maintenance", tags=["maintenance"])
 
 
 @router.post("/reindex")
-@require_auth_root_or_admin
 async def reindex(
-    request: ReindexRequest = Body(...),
-    _ctx: RequestContext = Depends(get_request_context),
+    body: ReindexRequest = Body(...),
+    ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN),
 ):
     """Reindex content at a URI.
 
@@ -47,11 +46,11 @@ async def reindex(
     from openviking.service.task_tracker import get_task_tracker
     from openviking.storage.viking_fs import get_viking_fs
 
-    uri = request.uri
+    uri = body.uri
     viking_fs = get_viking_fs()
 
     # Validate URI exists
-    if not await viking_fs.exists(uri, ctx=_ctx):
+    if not await viking_fs.exists(uri, ctx=ctx):
         return Response(
             status="error",
             error=ErrorInfo(code="NOT_FOUND", message=f"URI not found: {uri}"),
@@ -60,13 +59,13 @@ async def reindex(
     service = get_service()
     tracker = get_task_tracker()
 
-    if request.wait:
+    if body.wait:
         # Synchronous path: block until reindex completes
         if tracker.has_running(
             REINDEX_TASK_TYPE,
             uri,
-            owner_account_id=_ctx.account_id,
-            owner_user_id=_ctx.user.user_id,
+            owner_account_id=ctx.account_id,
+            owner_user_id=ctx.user.user_id,
         ):
             return Response(
                 status="error",
@@ -75,15 +74,15 @@ async def reindex(
                     message=f"URI {uri} already has a reindex in progress",
                 ),
             )
-        result = await _do_reindex(service, uri, request.regenerate, _ctx)
+        result = await _do_reindex(service, uri, body.regenerate, ctx)
         return Response(status="ok", result=result)
     else:
         # Async path: run in background, return task_id for polling
         task = tracker.create_if_no_running(
             REINDEX_TASK_TYPE,
             uri,
-            owner_account_id=_ctx.account_id,
-            owner_user_id=_ctx.user.user_id,
+            owner_account_id=ctx.account_id,
+            owner_user_id=ctx.user.user_id,
         )
         if task is None:
             return Response(
@@ -94,7 +93,7 @@ async def reindex(
                 ),
             )
         asyncio.create_task(
-            _background_reindex_tracked(service, uri, request.regenerate, _ctx, task.task_id)
+            _background_reindex_tracked(service, uri, body.regenerate, ctx, task.task_id)
         )
         return Response(
             status="ok",

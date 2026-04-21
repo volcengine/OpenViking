@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Document parsers for various formats."""
 
+from openviking.core.building_tree import BuildingTree
 from openviking.parse.base import NodeType, ParseResult, ResourceNode, create_parse_result
 from openviking.parse.converter import DocumentConverter
 from openviking.parse.custom import CallbackParserWrapper, CustomParserProtocol, CustomParserWrapper

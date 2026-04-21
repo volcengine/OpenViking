@@ -118,6 +118,40 @@ client = ov.SyncHTTPClient(
 openviking --account acme --user alice --agent-id my-agent ls viking://
 ```
 
+### 使用 --sudo 和 Root API Key
+
+CLI 支持在 `ovcli.conf` 中同时配置 `api_key`（用于普通用户操作）和 `root_api_key`（用于管理员操作）：
+
+```json
+{
+  "url": "http://localhost:1933",
+  "api_key": "<user-key>",
+  "root_api_key": "<root-key>",
+  "account": "acme",
+  "user": "alice",
+  "agent_id": "my-agent"
+}
+```
+
+当需要执行管理员命令（`admin`、`system`、`reindex`）时，使用 `--sudo` 标志提升权限：
+
+```bash
+# 列出所有账户（需要 root 权限）
+ov --sudo admin list-accounts
+
+# 重新索引内容
+ov --sudo reindex viking://
+
+# 系统命令
+ov --sudo system status
+```
+
+`--sudo` 标志：
+- 仅适用于管理员命令：`admin`、`system`、`reindex`
+- 用于非管理员命令时会报错
+- `ovcli.conf` 中未配置 `root_api_key` 时会报错
+- 请求时使用 `root_api_key` 替代 `api_key`
+
 ### 使用 Root Key 访问租户数据
 
 使用 root key 访问租户级数据 API（如 `ls`、`find`、`sessions` 等）时，必须指定目标 account 和 user，否则服务端将拒绝请求。Admin API 和系统状态端点不受此限制。

@@ -62,6 +62,10 @@ def process_qa_results(input_path: str) -> list[str]:
     total_cache_read_tokens = 0  # cacheRead
     total_output_tokens = 0  # output_tokens
     total_input_tokens = 0  # no_cache + cacheRead
+    total_elapsed_seconds = 0.0
+    min_elapsed_seconds = None
+    max_elapsed_seconds = None
+    elapsed_rows = 0
     valid_rows = 0
 
     with open(input_path, "r", encoding="utf-8", newline="") as f:
@@ -94,6 +98,31 @@ def process_qa_results(input_path: str) -> list[str]:
             except (ValueError, TypeError):
                 pass
 
+            # 统计耗时（仅在字段存在且可解析时计入，避免缺失值按 0 拉低均值）
+            try:
+                elapsed_raw = row.get("elapsed_seconds")
+                if elapsed_raw is None:
+                    continue
+                elapsed_text = str(elapsed_raw).strip()
+                if not elapsed_text:
+                    continue
+
+                elapsed_seconds = float(elapsed_text)
+                total_elapsed_seconds += elapsed_seconds
+                min_elapsed_seconds = (
+                    elapsed_seconds
+                    if min_elapsed_seconds is None
+                    else min(min_elapsed_seconds, elapsed_seconds)
+                )
+                max_elapsed_seconds = (
+                    elapsed_seconds
+                    if max_elapsed_seconds is None
+                    else max(max_elapsed_seconds, elapsed_seconds)
+                )
+                elapsed_rows += 1
+            except (ValueError, TypeError):
+                pass
+
     total_graded = correct + wrong
     accuracy = correct / total_graded if total_graded > 0 else 0.0
 
@@ -102,6 +131,7 @@ def process_qa_results(input_path: str) -> list[str]:
     avg_cache_read = total_cache_read_tokens / valid_rows if valid_rows > 0 else 0.0
     avg_output = total_output_tokens / valid_rows if valid_rows > 0 else 0.0
     avg_total_input = total_input_tokens / valid_rows if valid_rows > 0 else 0.0
+    avg_elapsed_seconds = total_elapsed_seconds / elapsed_rows if elapsed_rows > 0 else 0.0
 
     return [
         "=== Judge Result Statistics (excluding category=5) ===",
@@ -110,6 +140,11 @@ def process_qa_results(input_path: str) -> list[str]:
         f"Correct: {correct:,}",
         f"Wrong: {wrong:,}",
         f"Accuracy: {accuracy:.2%}",
+        f"\nElapsed time (QA):",
+        f"  Total elapsed seconds: {total_elapsed_seconds:,.3f}",
+        f"  Avg elapsed seconds: {avg_elapsed_seconds:,.3f}",
+        f"  Min elapsed seconds: {(min_elapsed_seconds or 0.0):,.3f}",
+        f"  Max elapsed seconds: {(max_elapsed_seconds or 0.0):,.3f}",
         f"\nToken usage (QA):",
         f"  Total no-cache tokens (input_tokens): {total_no_cache_tokens:,}",
         f"  Total cacheRead tokens: {total_cache_read_tokens:,}",

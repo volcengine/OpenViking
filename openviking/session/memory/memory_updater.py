@@ -27,6 +27,7 @@ from openviking.session.memory.utils import (
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
 from openviking.utils.time_utils import parse_iso_datetime
+from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
 
@@ -500,6 +501,7 @@ class MemoryUpdater:
             return
 
         viking_fs = self._get_viking_fs()
+        request_wait_tracker = get_request_wait_tracker()
 
         # Collect all URIs to vectorize (skip .overview.md and .abstract.md - they are handled separately)
         uris_to_vectorize = []
@@ -544,7 +546,11 @@ class MemoryUpdater:
                 # Convert to embedding msg and enqueue
                 embedding_msg = EmbeddingMsgConverter.from_context(memory_context)
                 if embedding_msg:
-                    await self._vikingdb.enqueue_embedding_msg(embedding_msg)
+                    enqueued = await self._vikingdb.enqueue_embedding_msg(embedding_msg)
+                    if enqueued and embedding_msg.telemetry_id:
+                        request_wait_tracker.register_embedding_root(
+                            embedding_msg.telemetry_id, embedding_msg.id
+                        )
                     logger.debug(f"Enqueued memory for vectorization: {uri}")
 
             except Exception as e:

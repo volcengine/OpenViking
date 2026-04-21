@@ -1,0 +1,11 @@
+setup-helper/
+tests/
+__tests__/
+images/
+health_check_tools/
+upgrade_scripts/
+skills/
+INSTALL*.md
+README*.md
+install.sh
+vitest.config.ts
