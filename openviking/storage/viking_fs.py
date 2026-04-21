@@ -391,15 +391,13 @@ class VikingFS:
         path = self._uri_to_path(uri, ctx=ctx)
         # Always ensure parent directories exist before creating this directory
         await self._ensure_parent_dirs(path)
-
-        if exist_ok:
-            try:
-                await self.stat(uri, ctx=ctx)
-                return None
-            except Exception:
-                pass
-
-        self.agfs.mkdir(path)
+        try:
+            self.agfs.mkdir(path)
+        except Exception as exc:
+            message = str(exc).lower()
+            already_exists = "exist" in message or "already" in message
+            if exist_ok and already_exists:
+                return
 
     async def rm(
         self,
