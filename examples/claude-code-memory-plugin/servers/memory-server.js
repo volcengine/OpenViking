@@ -462,11 +462,11 @@ async function searchBothScopes(client, query, limit) {
 // ---------------------------------------------------------------------------
 const client = new OpenVikingClient(config.baseUrl, config.apiKey, config.agentId, config.timeoutMs, config.accountId, config.userId);
 // MCP server name becomes the tool prefix exposed to Claude:
-//   mcp__viking__{search,read,list}_context, mcp__viking__memory_{recall,store,forget,health}
-// Picked short + aligned with the viking:// URI scheme so the model sees
-// lexical symmetry between tool names and the resources they operate on.
+//   mcp__openviking__{search,read,list}_context, mcp__openviking__memory_{recall,store,forget,health}
+// Aligns with the viking:// URI scheme and the OpenViking brand; avoids
+// collision with any hypothetical other "viking" MCP server.
 const server = new McpServer({
-    name: "viking",
+    name: "openviking",
     version: "0.2.0",
 });
 // -- Tool: memory_recall --------------------------------------------------
