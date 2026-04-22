@@ -7,7 +7,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from openviking.parse.parsers.markdown import MarkdownParser
-from openviking_cli.utils.config.parser_config import ParserConfig, load_parser_configs_from_dict
+from openviking_cli.utils.config.parser_config import (
+    FeishuConfig,
+    ParserConfig,
+    load_parser_configs_from_dict,
+)
 
 # ---------------------------------------------------------------------------
 # ParserConfig
@@ -52,6 +56,29 @@ class TestParserConfigMaxSectionChars:
     def test_validate_accepts_positive(self):
         config = ParserConfig(max_section_chars=1)
         config.validate()  # must not raise
+
+
+class TestFeishuConfigValidation:
+    def test_validate_accepts_defaults(self):
+        config = FeishuConfig()
+        config.validate()
+
+    @pytest.mark.parametrize(
+        ("field", "value", "message"),
+        [
+            ("domain", "", "domain"),
+            ("max_rows_per_sheet", 0, "max_rows_per_sheet"),
+            ("max_rows_per_sheet", -1, "max_rows_per_sheet"),
+            ("max_records_per_table", 0, "max_records_per_table"),
+            ("max_records_per_table", -1, "max_records_per_table"),
+            ("request_timeout", 0, "request_timeout"),
+            ("request_timeout", -0.1, "request_timeout"),
+        ],
+    )
+    def test_validate_rejects_invalid_values(self, field, value, message):
+        config = FeishuConfig(**{field: value})
+        with pytest.raises(ValueError, match=message):
+            config.validate()
 
 
 # ---------------------------------------------------------------------------
