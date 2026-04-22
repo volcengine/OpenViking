@@ -314,7 +314,22 @@ export function openClawSessionRefToOvStorageId(ref: string): string {
  * 1. The assistant message with canonical toolCall blocks in its content array
  * 2. A separate toolResult message per ToolPart (carrying tool_output)
  */
-function convertToAgentMessages(msg: { role: string; parts: unknown[] }): AgentMessage[] {
+export function mergeConsecutiveAssistants(messages: AgentMessage[]): AgentMessage[] {
+  const result: AgentMessage[] = [];
+  for (const msg of messages) {
+    const prev = result[result.length - 1];
+    if (msg.role === "assistant" && prev?.role === "assistant") {
+      const prevContent = Array.isArray(prev.content) ? prev.content : [{ type: "text", text: prev.content }];
+      const currContent = Array.isArray(msg.content) ? msg.content : [{ type: "text", text: msg.content }];
+      prev.content = [...prevContent, ...currContent] as typeof prev.content;
+    } else {
+      result.push({ ...msg });
+    }
+  }
+  return result;
+}
+
+export function convertToAgentMessages(msg: { role: string; parts: unknown[] }): AgentMessage[] {
   const parts = msg.parts ?? [];
   const contentBlocks: Record<string, unknown>[] = [];
   const toolResults: AgentMessage[] = [];
@@ -1376,14 +1391,14 @@ export function createMemoryOpenVikingContextEngine(params: {
           await withTimeout(
             client.addSessionMessage(OVSessionId, group.role, group.parts, agentId, createdAt),
             captureTimeoutMs,
-            "openviking: afterTurn addSessionMessage timeout",
+            `openviking: afterTurn timeout after ${captureTimeoutMs}ms (addSessionMessage)`,
           );
         }
 
         const session = await withTimeout(
           client.getSession(OVSessionId, agentId),
           captureTimeoutMs,
-          "openviking: afterTurn getSession timeout",
+          `openviking: afterTurn timeout after ${captureTimeoutMs}ms (getSession)`,
         );
         const pendingTokens = session.pending_tokens ?? 0;
 
@@ -1399,7 +1414,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         const commitResult = await withTimeout(
           client.commitSession(OVSessionId, { wait: false, agentId }),
           captureTimeoutMs,
-          "openviking: afterTurn commitSession timeout",
+          `openviking: afterTurn timeout after ${captureTimeoutMs}ms (commitSession)`,
         );
         const allTexts = capturedTextsForLog.join("\n");
         const commitExtra = cfg.logFindRequests
