@@ -140,6 +140,14 @@ async function pushTurns(ovSessionId, ovAgentId, turns) {
 }
 
 async function main() {
+  // Write-path hook: gated by autoCapture so that disabling capture also
+  // suppresses the subagent transcript push + commit.
+  if (!cfg.autoCapture) {
+    log("skip", { reason: "autoCapture disabled" });
+    approve();
+    return;
+  }
+
   let input = {};
   try {
     const chunks = [];

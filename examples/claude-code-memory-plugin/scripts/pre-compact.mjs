@@ -28,6 +28,14 @@ function approve() {
 }
 
 async function main() {
+  // Write-path hook: gated by autoCapture so that disabling capture also
+  // disables the pending-message commits triggered here.
+  if (!cfg.autoCapture) {
+    log("skip", { reason: "autoCapture disabled" });
+    approve();
+    return;
+  }
+
   let input = {};
   try {
     const chunks = [];

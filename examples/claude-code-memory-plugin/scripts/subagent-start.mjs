@@ -44,6 +44,14 @@ function stateFile(agentId) {
 }
 
 async function main() {
+  // Paired with subagent-stop.mjs (a write path): when capture is off the
+  // stop hook will skip, so there's no point stashing start state either.
+  if (!cfg.autoCapture) {
+    log("skip", { reason: "autoCapture disabled" });
+    approve();
+    return;
+  }
+
   let input = {};
   try {
     const chunks = [];
