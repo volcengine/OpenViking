@@ -117,7 +117,7 @@ let pluginVersionArgExplicit = false;
 let openvikingVersionArgExplicit = false;
 let showCurrentVersion = false;
 
-let selectedMode = "local";
+let selectedMode = "remote";
 let selectedServerPort = DEFAULT_SERVER_PORT;
 let remoteBaseUrl = "http://127.0.0.1:1933";
 let remoteApiKey = "";
@@ -590,10 +590,10 @@ async function selectWorkdir() {
 
 async function selectMode() {
   if (installYes) {
-    selectedMode = "local";
+    selectedMode = "remote";
     return;
   }
-  const mode = (await question(tr("Plugin mode - local or remote", "插件模式 - local 或 remote"), "local")).toLowerCase();
+  const mode = (await question(tr("Plugin mode - local or remote", "插件模式 - local 或 remote"), "remote")).toLowerCase();
   selectedMode = mode === "remote" ? "remote" : "local";
 }
 

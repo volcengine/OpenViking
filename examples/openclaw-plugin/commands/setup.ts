@@ -432,7 +432,7 @@ export function registerSetupCli(api: any): void {
               console.log("");
             }
 
-            const modeDefault = String(existing?.mode ?? "local");
+            const modeDefault = String(existing?.mode ?? "remote");
             const modeInput = await q(
               tr(zh, "Plugin mode - local or remote", "插件模式 - local 或 remote"),
               modeDefault,
