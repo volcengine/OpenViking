@@ -143,6 +143,14 @@ def test_parse_code_hosting_url_azure_rule_not_applied_to_github():
     assert parse_code_hosting_url("https://github.com/org/repo/tree/main/_git/config") == "org/repo"
 
 
+def test_parse_code_hosting_url_azure_devops_non_repo_page():
+    assert parse_code_hosting_url("https://dev.azure.com/org/project/_build") is None
+
+
+def test_parse_code_hosting_url_azure_devops_pull_request_page():
+    assert parse_code_hosting_url("https://dev.azure.com/org/project/_git/repo/pullrequest/123") is None
+
+
 # --- validate_git_ssh_uri ---
 
 

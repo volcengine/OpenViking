@@ -156,6 +156,7 @@ def parse_code_hosting_url(url: str) -> Optional[str]:
             azure_repo_parts = _extract_azure_devops_ssh_repo_parts(path_parts)
         if azure_repo_parts:
             return "/".join(_sanitize_segment(part.removesuffix(".git")) for part in azure_repo_parts)
+        return None
 
     # For code hosting URLs with org/repo structure
     if _domain_matches(parsed, all_domains) and len(path_parts) >= 2:
