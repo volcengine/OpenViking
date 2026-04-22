@@ -322,7 +322,7 @@ export function convertToAgentMessages(msg: { role: string; parts: unknown[] }):
       }
     } else if (p.type === "tool") {
       const toolId = typeof p.tool_id === "string" ? p.tool_id : "";
-      const toolName = typeof p.tool_name === "string" ? p.tool_name : "unknown";
+      const toolName = typeof p.tool_name === "string" ? p.tool_name : undefined;
       const status = typeof p.tool_status === "string" ? p.tool_status : "unknown";
       const output = typeof p.tool_output === "string" ? p.tool_output : "";
 
@@ -331,23 +331,27 @@ export function convertToAgentMessages(msg: { role: string; parts: unknown[] }):
         toolCallBlocks.push({
           type: "toolCall",
           id: toolId,
-          name: toolName,
+          name: toolName ?? "unknown",
           arguments: p.tool_input ?? {},
         });
 
         const resultText = (status === "completed" || status === "error")
           ? (output || "(no output)")
           : "(interrupted — tool did not complete)";
-        toolResults.push({
+        const resultPayload: Record<string, unknown> = {
           role: "toolResult",
           toolCallId: toolId,
-          toolName,
           content: [{ type: "text", text: resultText }],
           isError: status === "error",
-        } as unknown as AgentMessage);
+        };
+        if (toolName) {
+          resultPayload.toolName = toolName;
+        }
+        toolResults.push(resultPayload as unknown as AgentMessage);
       } else {
         // No tool_id: degrade to text block
-        const segments = [`[${toolName}] (${status})`];
+        const fallbackName = toolName ?? "unknown";
+        const segments = [`[${fallbackName}] (${status})`];
         if (p.tool_input) {
           try {
             segments.push(`Input: ${JSON.stringify(p.tool_input)}`);
@@ -459,12 +463,12 @@ function canonicalizeAgentMessages(messages: AgentMessage[]): AgentMessage[] {
       const toolName =
         typeof raw.toolName === "string" && raw.toolName.trim()
           ? raw.toolName.trim()
-          : "unknown";
+          : undefined;
 
       const nextMsg = {
         ...msg,
         ...(toolCallId ? { toolCallId } : {}),
-        toolName,
+        ...(toolName ? { toolName } : {}),
       } as AgentMessage;
 
       if (nextMsg !== msg) {

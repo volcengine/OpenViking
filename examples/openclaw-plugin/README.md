@@ -110,7 +110,7 @@ Session handling is the main axis of this design. In the current implementation 
 - `latest_archive_overview` becomes `[Session History Summary]`
 - `pre_archive_abstracts` becomes `[Archive Index]`
 - active session messages stay in message-block form
-- assistant tool parts become `toolUse`
+- assistant tool parts become `toolCall` (input compatible: `toolUse`/`input` is normalized to `toolCall`/`arguments`)
 - tool output becomes separate `toolResult`
 - the final message list goes through a tool-use/result pairing repair pass
 
@@ -122,7 +122,7 @@ That means OpenClaw sees “compressed history summary + archive index + active 
 
 - it slices only the newly added messages
 - it keeps only `user` / `assistant` capture text
-- it preserves `toolUse` / `toolResult` content in the serialized turn text
+- it preserves `toolCall` / `toolResult` content in the serialized turn text
 - it strips injected `<relevant-memories>` blocks and metadata noise before capture
 - it appends the sanitized turn text into the OpenViking session
 
