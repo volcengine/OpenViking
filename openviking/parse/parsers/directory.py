@@ -481,30 +481,16 @@ class DirectoryParser(BaseParser):
 
     @staticmethod
     async def _add_git_metadata(source_path: Path, kwargs: dict) -> None:
-        """Add git metadata (branch, commit, repo_name) to kwargs dictionary."""
+        """Add git metadata (branch, commit) from .git directory if available."""
         try:
             from openviking.parse.accessors.git_accessor import GitAccessor
 
+            git_dir = source_path / ".git"
+            if not git_dir.exists():
+                return  # No .git directory, skip (we already have meta from accessor)
+
             git_accessor = GitAccessor()
 
-            # First try to read from .git_source_repo marker if available
-            marker_file = source_path / ".git_source_repo"
-            if marker_file.exists():
-                try:
-                    remote_url = marker_file.read_text(encoding="utf-8").strip()
-                    if remote_url:
-                        repo_name = git_accessor._get_repo_name(remote_url)
-                        if repo_name and repo_name != "repository":
-                            kwargs["repo_name"] = repo_name
-                        # If original_source not already in kwargs, set it from marker
-                        if "original_source" not in kwargs:
-                            kwargs["original_source"] = remote_url
-                        logger.debug(f"Got repo info from marker file: {repo_name}")
-                        return
-                except Exception as e:
-                    logger.debug(f"Failed to read marker file: {e}")
-
-            # Fallback to git commands if marker not available or failed
             # Get branch
             try:
                 branch = await git_accessor._run_git(
@@ -523,24 +509,10 @@ class DirectoryParser(BaseParser):
             except Exception as e:
                 logger.debug(f"Failed to get git commit: {e}")
 
-            # Get repo name from git remote
-            try:
-                remote_url = await git_accessor._run_git(
-                    ["git", "-C", str(source_path), "config", "--get", "remote.origin.url"]
-                )
-                if remote_url:
-                    repo_name = git_accessor._get_repo_name(remote_url)
-                    if repo_name and repo_name != "repository":
-                        kwargs["repo_name"] = repo_name
-                else:
-                    kwargs["repo_name"] = source_path.name
-            except Exception as e:
-                logger.debug(f"Failed to get git remote info: {e}")
-                kwargs["repo_name"] = source_path.name
+            # repo_name and original_source are already set from accessor, no need to get from git
 
         except Exception as e:
             logger.debug(f"Failed to get git metadata: {e}")
-            kwargs["repo_name"] = source_path.name
 
     @staticmethod
     async def _recursive_move(
