@@ -471,9 +471,11 @@ class DirectoryParser(BaseParser):
 
     @staticmethod
     async def _is_git_repository(source_path: Path) -> bool:
-        """Check if the directory contains a git repository."""
+        """Check if the directory contains a git repository (or has our .git_source_repo marker)."""
         try:
-            return (source_path / ".git").exists() and (source_path / ".git").is_dir()
+            git_dir = source_path / ".git"
+            marker_file = source_path / ".git_source_repo"
+            return (git_dir.exists() and git_dir.is_dir()) or marker_file.exists()
         except (OSError, PermissionError):
             return False
 
@@ -485,6 +487,24 @@ class DirectoryParser(BaseParser):
 
             git_accessor = GitAccessor()
 
+            # First try to read from .git_source_repo marker if available
+            marker_file = source_path / ".git_source_repo"
+            if marker_file.exists():
+                try:
+                    remote_url = marker_file.read_text(encoding="utf-8").strip()
+                    if remote_url:
+                        repo_name = git_accessor._get_repo_name(remote_url)
+                        if repo_name and repo_name != "repository":
+                            kwargs["repo_name"] = repo_name
+                        # If original_source not already in kwargs, set it from marker
+                        if "original_source" not in kwargs:
+                            kwargs["original_source"] = remote_url
+                        logger.debug(f"Got repo info from marker file: {repo_name}")
+                        return
+                except Exception as e:
+                    logger.debug(f"Failed to read marker file: {e}")
+
+            # Fallback to git commands if marker not available or failed
             # Get branch
             try:
                 branch = await git_accessor._run_git(
@@ -503,7 +523,7 @@ class DirectoryParser(BaseParser):
             except Exception as e:
                 logger.debug(f"Failed to get git commit: {e}")
 
-            # Get repo name
+            # Get repo name from git remote
             try:
                 remote_url = await git_accessor._run_git(
                     ["git", "-C", str(source_path), "config", "--get", "remote.origin.url"]
