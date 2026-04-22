@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { spawn } from "node:child_process";
 import { once } from "node:events";
 import { createWriteStream } from "node:fs";
