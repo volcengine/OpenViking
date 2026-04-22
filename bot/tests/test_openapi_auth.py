@@ -71,7 +71,7 @@ class TestOpenAPIAuth:
             OpenAPIChannelConfig(),
             message_bus,
             workspace_path=temp_workspace,
-            global_config=SimpleNamespace(gateway=SimpleNamespace(api_key="secret123")),
+            global_config=SimpleNamespace(gateway=SimpleNamespace(token="secret123")),
         )
 
         async def fake_handle_chat(request):
@@ -90,6 +90,22 @@ class TestOpenAPIAuth:
 
         assert response.status_code == 200
         assert response.json()["message"] == "ok"
+
+    def test_chat_rejects_when_non_localhost_and_token_not_configured(
+        self, message_bus, temp_workspace
+    ):
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+            global_config=SimpleNamespace(gateway=SimpleNamespace(host="0.0.0.0", token="")),
+        )
+        client = _make_client(channel)
+
+        response = client.post("/bot/v1/chat", json={"message": "hello"})
+
+        assert response.status_code == 503
+        assert response.json()["detail"] == "OpenAPI gateway token is required when host is non-localhost"
 
     def test_bot_channel_rejects_requests_when_channel_api_key_not_configured(
         self, message_bus, temp_workspace

@@ -27,7 +27,7 @@ from vikingbot.agent.loop import AgentLoop
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.manager import ChannelManager
 from vikingbot.config.loader import ensure_config, get_config_path, get_data_dir, load_config
-from vikingbot.config.schema import SessionKey
+from vikingbot.config.schema import SessionKey, requires_gateway_token
 from vikingbot.cron.service import CronService
 from vikingbot.cron.types import CronJob
 from vikingbot.heartbeat.service import HeartbeatService
@@ -110,6 +110,12 @@ def _abort_if_port_in_use(port: int, label: str) -> None:
         )
         sys.exit(1)
 
+
+def _get_gateway_token(config) -> str:
+    gateway = getattr(config, "gateway", None)
+    if gateway is None:
+        return ""
+    return getattr(gateway, "token", "") or ""
 
 # ---------------------------------------------------------------------------
 # CLI input: prompt_toolkit for editing, paste, history, and display
@@ -281,6 +287,16 @@ def gateway(
     config = ensure_config(path)
     effective_host = host if host is not None else config.gateway.host
     effective_port = port if port is not None else config.gateway.port
+    gateway_token = _get_gateway_token(config)
+    if requires_gateway_token(effective_host, gateway_token):
+        print(
+            "SECURITY: bot.gateway.token is required when gateway.host is non-localhost.\n"
+            "Set bot.gateway.token in ov.conf, or bind gateway.host to 127.0.0.1/localhost.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    config.gateway.host = effective_host
+    config.gateway.port = effective_port
     _abort_if_port_in_use(effective_port, "vikingbot gateway")
     _init_bot_data(config)
     session_manager = SessionManager(config.bot_data_path)

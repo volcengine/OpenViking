@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from openviking.server.config import load_bot_gateway_api_key, load_server_config
+from openviking.server.config import load_bot_gateway_token, load_server_config
 
 
 def test_load_server_config_rejects_unknown_field(tmp_path):
@@ -69,21 +69,21 @@ def test_load_server_config_preserves_supported_fields(tmp_path):
     assert config.encryption_enabled is True
 
 
-def test_load_bot_gateway_api_key_reads_from_bot_gateway_section(tmp_path):
+def test_load_bot_gateway_token_reads_token_from_bot_gateway_section(tmp_path):
     config_path = tmp_path / "ov.conf"
     config_path.write_text(
         json.dumps(
             {
                 "bot": {
                     "gateway": {
-                        "api_key": "gateway-secret"
+                        "token": "gateway-token"
                     }
                 }
             }
         )
     )
 
-    assert load_bot_gateway_api_key(str(config_path)) == "gateway-secret"
+    assert load_bot_gateway_token(str(config_path)) == "gateway-token"
 
 
 def test_load_server_config_preserves_metrics_account_dimension_fields(tmp_path):

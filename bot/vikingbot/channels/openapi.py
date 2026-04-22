@@ -31,6 +31,7 @@ from vikingbot.config.schema import (
     BotChannelConfig,
     Config,
     SessionKey,
+    requires_gateway_token,
 )
 
 
@@ -231,16 +232,23 @@ class OpenAPIChannel(BaseChannel):
 
         async def verify_api_key(x_api_key: Optional[str] = Header(None)) -> bool:
             """Verify API key for privileged HTTP chat/session routes."""
-            gateway_api_key = ""
+            gateway_token = ""
+            gateway_host = "127.0.0.1"
             if channel._global_config is not None:
                 gateway = getattr(channel._global_config, "gateway", None)
-                gateway_api_key = getattr(gateway, "api_key", "") or ""
-            if not gateway_api_key:
+                gateway_host = getattr(gateway, "host", "127.0.0.1") or "127.0.0.1"
+                gateway_token = getattr(gateway, "token", "") or ""
+            if not gateway_token:
+                if requires_gateway_token(gateway_host, gateway_token):
+                    raise HTTPException(
+                        status_code=503,
+                        detail="OpenAPI gateway token is required when host is non-localhost",
+                    )
                 return True
             if not x_api_key:
                 raise HTTPException(status_code=401, detail="X-API-Key header required")
             # Use secrets.compare_digest for timing-safe comparison
-            if not secrets.compare_digest(x_api_key, gateway_api_key):
+            if not secrets.compare_digest(x_api_key, gateway_token):
                 raise HTTPException(status_code=403, detail="Invalid API key")
             return True
 

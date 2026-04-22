@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from openviking.server.api_keys import APIKeyManager
 from openviking.server.config import (
     ServerConfig,
-    load_bot_gateway_api_key,
+    load_bot_gateway_token,
     load_server_config,
     validate_server_config,
 )
@@ -241,7 +241,7 @@ def create_app(
         import openviking.server.routers.bot as bot_module
 
         bot_module.set_bot_api_url(config.bot_api_url)
-        bot_module.set_bot_api_key(load_bot_gateway_api_key())
+        bot_module.set_bot_api_key(load_bot_gateway_token())
         logger.info(f"Bot API proxy enabled, forwarding to {config.bot_api_url}")
     else:
         logger.info("Bot API proxy disabled (use --with-bot to enable)")

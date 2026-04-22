@@ -476,12 +476,23 @@ class HeartbeatConfig(BaseModel):
     interval_seconds: int = 10 * 60  # Default: 5 minutes
 
 
+LOCALHOST_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def is_localhost_host(host: str) -> bool:
+    return host in LOCALHOST_HOSTS
+
+
+def requires_gateway_token(host: str, token: str) -> bool:
+    return not is_localhost_host(host) and not token
+
+
 class GatewayConfig(BaseModel):
     """Gateway/server configuration."""
 
     host: str = "127.0.0.1"
     port: int = 18790
-    api_key: str = ""
+    token: str = ""
 
 
 class WebSearchConfig(BaseModel):
