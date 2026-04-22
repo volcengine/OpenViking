@@ -30,7 +30,7 @@ jobs:
     name: P0 Memory Tests
     runs-on: [self-hosted, linux, x64]
     timeout-minutes: 70
-    if: inputs.skip_tests != true
+    if: inputs.skip_tests != true && (github.event_name != 'schedule' || github.repository == 'volcengine/OpenViking')
     
     steps:
       - name: Clean up previous artifacts

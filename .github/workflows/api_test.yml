@@ -29,6 +29,7 @@ jobs:
     name: API Integration Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    if: github.event_name != 'schedule' || github.repository == 'volcengine/OpenViking'
     strategy:
       fail-fast: false
       max-parallel: 1
