@@ -193,7 +193,7 @@ function messageDigest(messages: AgentMessage[], maxCharsPerMsg = 2000): Array<{
       text = (raw as Record<string, unknown>[])
         .map((b) => {
           if (b.type === "text") return String(b.text ?? "");
-          if (b.type === "toolUse") return `[toolUse: ${String(b.name)}(${JSON.stringify(b.arguments ?? {}).slice(0, 200)})]`;
+          if (b.type === "toolCall") return `[toolCall: ${String(b.name)}(${JSON.stringify(b.arguments ?? {}).slice(0, 200)})]`;
           if (b.type === "toolResult") return `[toolResult: ${JSON.stringify(b.content ?? "").slice(0, 200)}]`;
           return `[${String(b.type)}]`;
         })
@@ -301,13 +301,13 @@ export function openClawSessionRefToOvStorageId(ref: string): string {
  * OpenClaw AgentMessages (content-blocks format).
  *
  * For assistant messages with ToolParts, this produces:
- * 1. The assistant message with toolUse blocks in its content array
+ * 1. The assistant message with canonical toolCall blocks in its content array
  * 2. A separate toolResult message per ToolPart (carrying tool_output)
  */
 export function convertToAgentMessages(msg: { role: string; parts: unknown[] }): AgentMessage[] {
   const parts = msg.parts ?? [];
   const contentBlocks: Record<string, unknown>[] = [];
-  const toolUseBlocks: Record<string, unknown>[] = [];
+  const toolCallBlocks: Record<string, unknown>[] = [];
   const toolResults: AgentMessage[] = [];
 
   for (const part of parts) {
@@ -327,12 +327,12 @@ export function convertToAgentMessages(msg: { role: string; parts: unknown[] }):
       const output = typeof p.tool_output === "string" ? p.tool_output : "";
 
       if (toolId) {
-        // Structured path: emit toolUse + toolResult pair (works for any role)
-        toolUseBlocks.push({
-          type: "toolUse",
+        // Structured path: emit canonical toolCall + toolResult pair (works for any role)
+        toolCallBlocks.push({
+          type: "toolCall",
           id: toolId,
           name: toolName,
-          input: p.tool_input ?? {},
+          arguments: p.tool_input ?? {},
         });
 
         const resultText = (status === "completed" || status === "error")
@@ -366,21 +366,21 @@ export function convertToAgentMessages(msg: { role: string; parts: unknown[] }):
   const result: AgentMessage[] = [];
 
   if (msg.role === "assistant") {
-    // Assistant: text + toolUse in one message, then toolResults
-    result.push({ role: "assistant", content: [...contentBlocks, ...toolUseBlocks] });
+    // Assistant: text + toolCall in one message, then toolResults
+    result.push({ role: "assistant", content: [...contentBlocks, ...toolCallBlocks] });
     result.push(...toolResults);
   } else {
-    // Non-assistant: emit text as original role, then synthesize assistant(toolUse) + toolResult
+    // Non-assistant: emit text as original role, then synthesize assistant(toolCall) + toolResult
     const texts = contentBlocks
       .filter((b) => b.type === "text")
       .map((b) => b.text as string);
     if (texts.length > 0) {
       result.push({ role: msg.role, content: texts.join("\n") });
-    } else if (toolUseBlocks.length === 0) {
+    } else if (toolCallBlocks.length === 0) {
       result.push({ role: msg.role, content: "" });
     }
-    if (toolUseBlocks.length > 0) {
-      result.push({ role: "assistant", content: toolUseBlocks });
+    if (toolCallBlocks.length > 0) {
+      result.push({ role: "assistant", content: toolCallBlocks });
       result.push(...toolResults);
     }
   }
@@ -398,6 +398,85 @@ function normalizeAssistantContent(messages: AgentMessage[]): void {
       };
     }
   }
+}
+
+function canonicalizeAssistantBlock(block: unknown): unknown {
+  if (!block || typeof block !== "object") {
+    return block;
+  }
+
+  const rec = block as Record<string, unknown>;
+  const type = typeof rec.type === "string" ? rec.type : "";
+  if (type === "toolCall") {
+    if (rec.arguments !== undefined) {
+      return rec;
+    }
+    return {
+      ...rec,
+      arguments: rec.input ?? rec.toolInput ?? {},
+    };
+  }
+
+  if (type === "toolUse" || type === "functionCall" || type === "tool_call") {
+    return {
+      type: "toolCall",
+      id: rec.id ?? rec.toolCallId ?? rec.toolUseId,
+      name: rec.name,
+      arguments: rec.arguments ?? rec.input ?? rec.toolInput ?? {},
+    };
+  }
+
+  return rec;
+}
+
+function canonicalizeAgentMessages(messages: AgentMessage[]): AgentMessage[] {
+  let changed = false;
+  const next = messages.map((msg) => {
+    if (!msg || typeof msg !== "object") {
+      return msg;
+    }
+
+    if (msg.role === "assistant") {
+      const content = Array.isArray(msg.content)
+        ? msg.content.map((block) => canonicalizeAssistantBlock(block))
+        : typeof msg.content === "string"
+          ? [{ type: "text", text: msg.content }]
+          : msg.content;
+
+      if (content !== msg.content) {
+        changed = true;
+        return { ...msg, content };
+      }
+      return msg;
+    }
+
+    if (msg.role === "toolResult") {
+      const raw = msg as Record<string, unknown>;
+      const toolCallId =
+        (typeof raw.toolCallId === "string" && raw.toolCallId) ||
+        (typeof raw.toolUseId === "string" && raw.toolUseId) ||
+        undefined;
+      const toolName =
+        typeof raw.toolName === "string" && raw.toolName.trim()
+          ? raw.toolName.trim()
+          : "unknown";
+
+      const nextMsg = {
+        ...msg,
+        ...(toolCallId ? { toolCallId } : {}),
+        toolName,
+      } as AgentMessage;
+
+      if (nextMsg !== msg) {
+        changed = true;
+      }
+      return nextMsg;
+    }
+
+    return msg;
+  });
+
+  return changed ? next : messages;
 }
 
 export function formatMessageFaithful(msg: OVMessage): string {
@@ -796,7 +875,8 @@ export function createMemoryOpenVikingContextEngine(params: {
     );
 
     normalizeAssistantContent(assembled);
-    const sanitized = sanitizeToolUseResultPairing(assembled as never[]) as AgentMessage[];
+    const canonical = canonicalizeAgentMessages(assembled);
+    const sanitized = sanitizeToolUseResultPairing(canonical as never[]) as AgentMessage[];
 
     return { sanitized, archive, session, budgets, instruction };
   }
