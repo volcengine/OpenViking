@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 
 import json
+import os
 import sys
 from pathlib import Path
 
 from openviking_cli.utils.config.config_loader import resolve_config_path
-from openviking_cli.utils.config.consts import DEFAULT_OVCLI_CONF, OPENVIKING_CLI_CONFIG_ENV
+from openviking_cli.utils.config.consts import (
+    DEFAULT_OVCLI_CONF,
+    DEFAULT_OV_CONF,
+    OPENVIKING_CLI_CONFIG_ENV,
+    OPENVIKING_CONFIG_ENV,
+)
 
 _USE_COLOR = hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
 
@@ -76,7 +82,13 @@ def _backup_and_write_json(path: Path, data: dict) -> None:
 
 
 def _resolve_ov_conf_path() -> Path:
-    default_path = str(Path.home() / ".openviking" / "ov.conf")
+    configured_path = os.environ.get(OPENVIKING_CONFIG_ENV, "").strip()
+    if configured_path:
+        return Path(configured_path).expanduser()
+
+    resolved = resolve_config_path(None, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
+    default_path = str(resolved) if resolved is not None else str(Path.home() / ".openviking" / "ov.conf")
+
     if _is_interactive():
         _log_info(f"OpenViking 配置默认路径: {default_path}")
         chosen = _prompt_text("直接回车使用默认，或输入新路径", default=default_path)
