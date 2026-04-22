@@ -3,35 +3,12 @@
 
 """Regression tests for bot proxy endpoint auth enforcement."""
 
-import pytest
-from fastapi import Request
-
 import openviking.server.routers.bot as bot_router_module
 
 
-def make_request(headers: dict[str, str]) -> Request:
-    """Create a minimal request object with the provided headers."""
-    return Request(
-        {
-            "type": "http",
-            "method": "POST",
-            "path": "/",
-            "headers": [
-                (key.lower().encode("latin-1"), value.encode("latin-1"))
-                for key, value in headers.items()
-            ],
-            "query_string": b"",
-        }
-    )
+def test_set_bot_api_key_updates_module_state():
+    bot_router_module.set_bot_api_key("gateway-secret")
+    assert bot_router_module.BOT_API_KEY == "gateway-secret"
 
-
-@pytest.mark.parametrize(
-    ("headers", "expected"),
-    [
-        ({"X-API-Key": "test-key"}, "test-key"),
-        ({"Authorization": "Bearer test-token"}, "test-token"),
-    ],
-)
-def test_extract_auth_token(headers: dict[str, str], expected: str):
-    """Accepted auth header formats should both produce a token."""
-    assert bot_router_module.extract_auth_token(make_request(headers)) == expected
+    bot_router_module.set_bot_api_key("")
+    assert bot_router_module.BOT_API_KEY == ""

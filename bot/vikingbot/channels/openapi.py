@@ -64,7 +64,6 @@ class OpenAPIChannelConfig(BaseChannelConfig):
 
     enabled: bool = True
     type: str = "cli"
-    api_key: str = ""  # If empty, no auth required
     allow_from: list[str] = []
     max_concurrent_requests: int = 100
     _channel_id: str = "default"
@@ -232,15 +231,16 @@ class OpenAPIChannel(BaseChannel):
 
         async def verify_api_key(x_api_key: Optional[str] = Header(None)) -> bool:
             """Verify API key for privileged HTTP chat/session routes."""
-            if not channel.config.api_key:
-                raise HTTPException(
-                    status_code=503,
-                    detail="OpenAPI channel API key is not configured",
-                )
+            gateway_api_key = ""
+            if channel._global_config is not None:
+                gateway = getattr(channel._global_config, "gateway", None)
+                gateway_api_key = getattr(gateway, "api_key", "") or ""
+            if not gateway_api_key:
+                return True
             if not x_api_key:
                 raise HTTPException(status_code=401, detail="X-API-Key header required")
             # Use secrets.compare_digest for timing-safe comparison
-            if not secrets.compare_digest(x_api_key, channel.config.api_key):
+            if not secrets.compare_digest(x_api_key, gateway_api_key):
                 raise HTTPException(status_code=403, detail="Invalid API key")
             return True
 

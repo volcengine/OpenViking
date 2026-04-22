@@ -4,6 +4,7 @@
 
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -34,7 +35,7 @@ def _make_client(channel: OpenAPIChannel) -> TestClient:
 class TestOpenAPIAuth:
     def test_health_remains_available_without_api_key(self, message_bus, temp_workspace):
         channel = OpenAPIChannel(
-            OpenAPIChannelConfig(api_key=""),
+            OpenAPIChannelConfig(),
             message_bus,
             workspace_path=temp_workspace,
         )
@@ -44,26 +45,33 @@ class TestOpenAPIAuth:
 
         assert response.status_code == 200
 
-    def test_chat_rejects_requests_when_api_key_not_configured(self, message_bus, temp_workspace):
+    def test_chat_accepts_requests_when_api_key_not_configured(self, message_bus, temp_workspace, monkeypatch):
         channel = OpenAPIChannel(
-            OpenAPIChannelConfig(api_key=""),
+            OpenAPIChannelConfig(),
             message_bus,
             workspace_path=temp_workspace,
         )
+        async def fake_handle_chat(request):
+            return ChatResponse(
+                session_id=request.session_id or "default", message="ok", events=None
+            )
+
+        monkeypatch.setattr(channel, "_handle_chat", fake_handle_chat)
         client = _make_client(channel)
 
         response = client.post("/bot/v1/chat", json={"message": "hello"})
 
-        assert response.status_code == 503
-        assert response.json()["detail"] == "OpenAPI channel API key is not configured"
+        assert response.status_code == 200
+        assert response.json()["message"] == "ok"
 
     def test_chat_accepts_request_with_configured_valid_api_key(
         self, message_bus, temp_workspace, monkeypatch
     ):
         channel = OpenAPIChannel(
-            OpenAPIChannelConfig(api_key="secret123"),
+            OpenAPIChannelConfig(),
             message_bus,
             workspace_path=temp_workspace,
+            global_config=SimpleNamespace(gateway=SimpleNamespace(api_key="secret123")),
         )
 
         async def fake_handle_chat(request):
@@ -87,7 +95,7 @@ class TestOpenAPIAuth:
         self, message_bus, temp_workspace
     ):
         channel = OpenAPIChannel(
-            OpenAPIChannelConfig(api_key="gateway-secret"),
+            OpenAPIChannelConfig(),
             message_bus,
             workspace_path=temp_workspace,
         )
@@ -106,7 +114,7 @@ class TestOpenAPIAuth:
         self, message_bus, temp_workspace, monkeypatch
     ):
         channel = OpenAPIChannel(
-            OpenAPIChannelConfig(api_key="gateway-secret"),
+            OpenAPIChannelConfig(),
             message_bus,
             workspace_path=temp_workspace,
         )

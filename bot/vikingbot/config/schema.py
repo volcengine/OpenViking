@@ -272,7 +272,6 @@ class OpenAPIChannelConfig(BaseChannelConfig):
 
     type: ChannelType = ChannelType.OPENAPI
     enabled: bool = True
-    api_key: str = ""  # Empty disables privileged HTTP routes until configured
     allow_from: list[str] = Field(default_factory=list)
     max_concurrent_requests: int = 100
     _channel_id: str = "default"
@@ -480,8 +479,9 @@ class HeartbeatConfig(BaseModel):
 class GatewayConfig(BaseModel):
     """Gateway/server configuration."""
 
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = 18790
+    api_key: str = ""
 
 
 class WebSearchConfig(BaseModel):

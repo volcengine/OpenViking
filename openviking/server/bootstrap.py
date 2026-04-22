@@ -3,6 +3,7 @@
 """Bootstrap script for OpenViking HTTP Server."""
 
 import argparse
+import json
 import os
 import shutil
 import socket
@@ -10,6 +11,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import uvicorn
@@ -17,6 +19,8 @@ import uvicorn
 from openviking.server.app import create_app
 from openviking.server.config import load_server_config
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
+from openviking_cli.utils.config.config_loader import resolve_config_path
+from openviking_cli.utils.config.consts import DEFAULT_CONFIG_DIR, DEFAULT_OV_CONF
 from openviking_cli.utils.logger import configure_uvicorn_logging
 
 
@@ -70,6 +74,28 @@ def _normalize_host_arg(host: Optional[str]) -> Optional[str]:
     if host.strip().lower() == "all":
         return None
     return host
+
+
+def _resolve_default_bot_log_dir(config_path: Optional[str]) -> str:
+    """Resolve default bot log directory from current ov.conf storage.workspace."""
+    default_storage = DEFAULT_CONFIG_DIR / "data"
+    default_log_dir = default_storage / "bot" / "logs"
+
+    resolved_path = resolve_config_path(config_path, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
+    if resolved_path is None:
+        return str(default_log_dir)
+
+    try:
+        with open(resolved_path, "r", encoding="utf-8-sig") as f:
+            raw = os.path.expandvars(f.read())
+        data = json.loads(raw)
+        storage = data.get("storage", {})
+        workspace = storage.get("workspace") if isinstance(storage, dict) else None
+        if not workspace:
+            return str(default_log_dir)
+        return str(Path(workspace).expanduser().resolve() / "bot" / "logs")
+    except Exception:
+        return str(default_log_dir)
 
 
 def main():
@@ -140,8 +166,8 @@ def main():
     parser.add_argument(
         "--bot-log-dir",
         type=str,
-        default=os.path.expanduser("~/.openviking/data/bot/logs"),
-        help="Directory to store vikingbot log files",
+        default=None,
+        help="Directory to store vikingbot log files (default: {storage.workspace or ~/.openviking/data}/bot/logs)",
     )
 
     args = parser.parse_args()
@@ -205,8 +231,9 @@ def main():
         enable_bot_logging = args.enable_bot_logging
         if enable_bot_logging is None:
             enable_bot_logging = args.with_bot
+        bot_log_dir = args.bot_log_dir or _resolve_default_bot_log_dir(args.config)
         # Start vikingbot gateway if --with-bot is set
-        bot_process = _start_vikingbot_gateway(enable_bot_logging, args.bot_log_dir)
+        bot_process = _start_vikingbot_gateway(enable_bot_logging, bot_log_dir)
 
     # Create and run server app
     app = create_app(config)
