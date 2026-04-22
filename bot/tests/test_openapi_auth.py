@@ -84,7 +84,7 @@ class TestOpenAPIAuth:
 
         response = client.post(
             "/bot/v1/chat",
-            headers={"X-API-Key": "secret123"},
+            headers={"X-Gateway-Token": "secret123"},
             json={"message": "hello"},
         )
 
@@ -107,26 +107,7 @@ class TestOpenAPIAuth:
         assert response.status_code == 503
         assert response.json()["detail"] == "OpenAPI gateway token is required when host is non-localhost"
 
-    def test_bot_channel_rejects_requests_when_channel_api_key_not_configured(
-        self, message_bus, temp_workspace
-    ):
-        channel = OpenAPIChannel(
-            OpenAPIChannelConfig(),
-            message_bus,
-            workspace_path=temp_workspace,
-        )
-        channel._bot_configs["alpha"] = BotChannelConfig(id="alpha", api_key="")
-        client = _make_client(channel)
-
-        response = client.post(
-            "/bot/v1/chat/channel",
-            json={"message": "hello", "channel_id": "alpha"},
-        )
-
-        assert response.status_code == 503
-        assert response.json()["detail"] == "Bot channel 'alpha' API key is not configured"
-
-    def test_bot_channel_accepts_request_with_valid_api_key(
+    def test_bot_channel_accepts_requests_without_channel_api_key(
         self, message_bus, temp_workspace, monkeypatch
     ):
         channel = OpenAPIChannel(
@@ -134,7 +115,7 @@ class TestOpenAPIAuth:
             message_bus,
             workspace_path=temp_workspace,
         )
-        channel._bot_configs["alpha"] = BotChannelConfig(id="alpha", api_key="bot-secret")
+        channel._bot_configs["alpha"] = BotChannelConfig(id="alpha", api_key="")
 
         async def fake_handle_bot_chat(channel_id, request):
             return ChatResponse(
@@ -146,9 +127,42 @@ class TestOpenAPIAuth:
 
         response = client.post(
             "/bot/v1/chat/channel",
-            headers={"X-API-Key": "bot-secret"},
             json={"message": "hello", "channel_id": "alpha"},
         )
 
         assert response.status_code == 200
         assert response.json()["message"] == "ok:alpha"
+
+    def test_bot_channel_requires_global_gateway_token_when_configured(
+        self, message_bus, temp_workspace, monkeypatch
+    ):
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+            global_config=SimpleNamespace(gateway=SimpleNamespace(token="secret123")),
+        )
+        channel._bot_configs["alpha"] = BotChannelConfig(id="alpha", api_key="bot-secret")
+
+        async def fake_handle_bot_chat(channel_id, request):
+            return ChatResponse(
+                session_id=request.session_id or "default", message=f"ok:{channel_id}"
+            )
+
+        monkeypatch.setattr(channel, "_handle_bot_chat", fake_handle_bot_chat)
+        client = _make_client(channel)
+
+        unauthorized = client.post(
+            "/bot/v1/chat/channel",
+            json={"message": "hello", "channel_id": "alpha"},
+        )
+        assert unauthorized.status_code == 401
+        assert unauthorized.json()["detail"] == "X-Gateway-Token header required"
+
+        authorized = client.post(
+            "/bot/v1/chat/channel",
+            headers={"X-Gateway-Token": "secret123"},
+            json={"message": "hello", "channel_id": "alpha"},
+        )
+        assert authorized.status_code == 200
+        assert authorized.json()["message"] == "ok:alpha"

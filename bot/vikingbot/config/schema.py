@@ -493,6 +493,8 @@ class GatewayConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 18790
     token: str = ""
+    # 已废弃，使用token替代
+    api_key: str = ""
 
 
 class WebSearchConfig(BaseModel):

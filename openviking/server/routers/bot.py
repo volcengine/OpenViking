@@ -103,7 +103,7 @@ async def chat(
             # Build headers for bot gateway
             headers = {"Content-Type": "application/json"}
             if BOT_API_KEY:
-                headers["X-API-Key"] = BOT_API_KEY
+                headers["X-Gateway-Token"] = BOT_API_KEY
 
             # Forward to Vikingbot OpenAPIChannel chat endpoint
             response = await client.post(
@@ -161,7 +161,7 @@ async def chat_stream(
                 # Build headers for bot gateway
                 headers = {"Content-Type": "application/json"}
                 if BOT_API_KEY:
-                    headers["X-API-Key"] = BOT_API_KEY
+                    headers["X-Gateway-Token"] = BOT_API_KEY
 
                 # Forward to Vikingbot OpenAPIChannel stream endpoint
                 async with client.stream(
