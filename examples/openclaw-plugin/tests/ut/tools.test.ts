@@ -84,7 +84,6 @@ function setupPlugin(clientOverrides?: Record<string, unknown>) {
       baseUrl: "http://127.0.0.1:1933",
       autoCapture: false,
       autoRecall: false,
-      ingestReplyAssist: false,
     },
     logger: {
       info: vi.fn(),
@@ -181,6 +180,48 @@ describe("Tool: memory_store (behavioral)", () => {
     expect(store).toBeDefined();
     expect(store!.name).toBe("memory_store");
     expect(store!.description).toContain("Store text");
+  });
+
+  it("uses requesterSenderId to populate role_id for user writes", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "default" });
+      }
+      if (url.includes("/messages")) {
+        return okResponse({ session_id: "sess-1" });
+      }
+      if (url.endsWith("/commit")) {
+        return okResponse({
+          status: "completed",
+          archived: false,
+          memories_extracted: { core: 1 },
+        });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { factoryTools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const factory = factoryTools.get("memory_store");
+    expect(factory).toBeDefined();
+
+    const tool = factory!({
+      sessionId: "runtime-session",
+      sessionKey: "agent:main:main",
+      requesterSenderId: "wx/user-01@abc",
+    });
+
+    await tool.execute("tc-memory-store", { text: "hello from tool" });
+
+    const messageCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).includes("/api/v1/sessions/") && String(url).includes("/messages"),
+    );
+    expect(messageCall).toBeDefined();
+    const [, init] = messageCall as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    expect(body.role).toBe("user");
+    expect(body.role_id).toBe("wx_user-01_abc");
   });
 });
 
@@ -562,6 +603,66 @@ describe("Plugin registration", () => {
     const [, init] = fetchMock.mock.calls.find((call) => String(call[0]).endsWith("/api/v1/search/find")) as [string, RequestInit];
     const headers = new Headers(init.headers);
     expect(headers.get("X-OpenViking-Agent")).toBe("worker");
+  });
+
+  it("search command propagates configured tenant headers", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/v1/search/find")) {
+        return okResponse({ memories: [], resources: [], skills: [], total: 0 });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { commands, api } = setupPlugin();
+    api.pluginConfig = {
+      ...api.pluginConfig,
+      accountId: "acct-shared",
+      userId: "alice",
+    };
+    contextEnginePlugin.register(api as any);
+
+    await commands.get("ov-search")!.handler({
+      args: "test query --uri viking://resources",
+      commandBody: "/ov-search",
+      agentId: "worker",
+      sessionId: "session-1",
+      sessionKey: "agent:worker:session-1",
+    });
+
+    const [, init] = fetchMock.mock.calls.find((call) => String(call[0]).endsWith("/api/v1/search/find")) as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.get("X-OpenViking-Account")).toBe("acct-shared");
+    expect(headers.get("X-OpenViking-User")).toBe("alice");
+    expect(headers.get("X-OpenViking-Agent")).toBe("worker");
+  });
+
+  it("import tool propagates configured tenant headers for resource imports", async () => {
+    const fetchMock = vi.fn(async () =>
+      okResponse({ root_uri: "viking://resources/shared-docs", status: "success" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { tools, api } = setupPlugin();
+    api.pluginConfig = {
+      ...api.pluginConfig,
+      accountId: "acct-shared",
+      userId: "alice",
+    };
+    contextEnginePlugin.register(api as any);
+
+    const tool = tools.get("ov_import")!;
+    await tool.execute("tc-import", {
+      kind: "resource",
+      source: "https://example.com/docs",
+      to: "viking://resources/shared-docs",
+      wait: true,
+    });
+
+    const [, init] = fetchMock.mock.calls.find((call) => String(call[0]).endsWith("/api/v1/resources")) as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.get("X-OpenViking-Account")).toBe("acct-shared");
+    expect(headers.get("X-OpenViking-User")).toBe("alice");
   });
 
   it("slash commands honor bypassSessionPatterns", async () => {

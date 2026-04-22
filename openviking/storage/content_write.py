@@ -18,17 +18,25 @@ from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import build_queue_status_payload
 from openviking.utils.embedding_utils import vectorize_file
-from openviking_cli.exceptions import DeadlineExceededError, InvalidArgumentError, NotFoundError
+from openviking_cli.exceptions import (
+    AlreadyExistsError,
+    DeadlineExceededError,
+    InvalidArgumentError,
+    NotFoundError,
+)
 from openviking_cli.utils import VikingURI
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 _DERIVED_FILENAMES = frozenset({".abstract.md", ".overview.md", ".relations.json"})
+_CREATE_ALLOWED_EXTENSIONS = frozenset(
+    {".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".py", ".js", ".ts"}
+)
 
 
 class ContentWriteCoordinator:
-    """Write an existing file and trigger downstream maintenance."""
+    """Write a file (create or modify) and trigger downstream maintenance."""
 
     def __init__(self, viking_fs: VikingFS):
         self._viking_fs = viking_fs
@@ -46,6 +54,15 @@ class ContentWriteCoordinator:
         normalized_uri = VikingURI.normalize(uri)
         self._validate_mode(mode)
         self._validate_target_uri(normalized_uri)
+
+        if mode == "create":
+            return await self._create_and_write(
+                uri=normalized_uri,
+                content=content,
+                ctx=ctx,
+                wait=wait,
+                timeout=timeout,
+            )
 
         stat = await self._safe_stat(normalized_uri, ctx=ctx)
         if stat.get("isDir"):
@@ -129,7 +146,7 @@ class ContentWriteCoordinator:
                 get_request_wait_tracker().cleanup(telemetry_id)
 
     def _validate_mode(self, mode: str) -> None:
-        if mode not in {"replace", "append"}:
+        if mode not in {"replace", "append", "create"}:
             raise InvalidArgumentError(f"unsupported write mode: {mode}")
 
     def _validate_target_uri(self, uri: str) -> None:
@@ -143,13 +160,129 @@ class ContentWriteCoordinator:
         if parsed.scope not in {"resources", "user", "agent"}:
             raise InvalidArgumentError(f"write is not supported for scope: {parsed.scope}")
 
-    async def _safe_stat(self, uri: str, *, ctx: RequestContext) -> Dict[str, Any]:
+    def _is_not_found(self, exc: Exception) -> bool:
+        """Check if an exception indicates a not-found error (OpenViking or AGFS)."""
+        if isinstance(exc, NotFoundError):
+            return True
+        # AGFS raises its own AGFSNotFoundError which is unrelated to our NotFoundError
+        try:
+            from openviking.pyagfs import AGFSNotFoundError
+
+            return isinstance(exc, AGFSNotFoundError)
+        except ImportError:
+            return False
+
+    async def _safe_stat(
+        self, uri: str, *, ctx: RequestContext, allow_not_found: bool = False
+    ) -> Dict[str, Any]:
         try:
             return await self._viking_fs.stat(uri, ctx=ctx)
         except Exception as exc:
-            if isinstance(exc, NotFoundError):
-                raise
+            if self._is_not_found(exc):
+                if allow_not_found:
+                    return {"not_found": True}
+                if isinstance(exc, NotFoundError):
+                    raise
+                raise NotFoundError(uri, "file") from exc
             raise NotFoundError(uri, "file") from exc
+
+    def _validate_create_extension(self, uri: str) -> None:
+        _, ext = os.path.splitext(uri)
+        if ext.lower() not in _CREATE_ALLOWED_EXTENSIONS:
+            raise InvalidArgumentError(f"create mode does not allow extension '{ext}': {uri}")
+
+    async def _create_and_write(
+        self,
+        *,
+        uri: str,
+        content: str,
+        ctx: RequestContext,
+        wait: bool,
+        timeout: Optional[float],
+    ) -> Dict[str, Any]:
+        self._validate_create_extension(uri)
+
+        stat = await self._safe_stat(uri, ctx=ctx, allow_not_found=True)
+        if not stat.get("not_found"):
+            raise AlreadyExistsError(uri, "file")
+
+        # VikingFS.write_file auto-creates parent directories
+        await self._viking_fs.write_file(uri, content, ctx=ctx)
+
+        context_type = self._context_type_for_uri(uri)
+        root_uri = await self._resolve_root_uri(uri, ctx=ctx, _allow_not_found=True)
+        written_bytes = len(content.encode("utf-8"))
+        telemetry_id = get_current_telemetry().telemetry_id
+
+        if context_type == "memory":
+            return await self._write_memory_with_refresh(
+                uri=uri,
+                root_uri=root_uri,
+                content=content,
+                mode="create",
+                wait=wait,
+                timeout=timeout,
+                ctx=ctx,
+                written_bytes=written_bytes,
+                telemetry_id=telemetry_id,
+            )
+
+        lock_manager = get_lock_manager()
+        handle = lock_manager.create_handle()
+        lock_path = self._viking_fs._uri_to_path(root_uri, ctx=ctx)
+        acquired = await lock_manager.acquire_subtree(handle, lock_path)
+        if not acquired:
+            await lock_manager.release(handle)
+            raise InvalidArgumentError(f"resource is busy and cannot be written now: {uri}")
+
+        temp_root_uri = ""
+        lock_transferred = False
+        try:
+            if wait and telemetry_id:
+                get_request_wait_tracker().register_request(telemetry_id)
+            temp_root_uri, temp_target_uri = await self._prepare_temp_write(
+                uri=uri,
+                root_uri=root_uri,
+                content=content,
+                mode="create",
+                ctx=ctx,
+            )
+            await self._enqueue_semantic_refresh(
+                temp_root_uri=temp_root_uri,
+                target_root_uri=root_uri,
+                temp_target_uri=temp_target_uri,
+                context_type=context_type,
+                ctx=ctx,
+                lifecycle_lock_handle_id=handle.id,
+            )
+            lock_transferred = True
+            queue_status = (
+                await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
+                if wait
+                else None
+            )
+            return {
+                "uri": uri,
+                "root_uri": root_uri,
+                "context_type": context_type,
+                "mode": "create",
+                "written_bytes": written_bytes,
+                "semantic_updated": True,
+                "vector_updated": True,
+                "queue_status": queue_status,
+            }
+        except Exception:
+            if not lock_transferred and temp_root_uri:
+                try:
+                    await self._viking_fs.delete_temp(temp_root_uri, ctx=ctx)
+                except Exception:
+                    logger.debug("Failed to clean temp tree after write failure", exc_info=True)
+            if not lock_transferred:
+                await lock_manager.release(handle)
+            raise
+        finally:
+            if wait and telemetry_id:
+                get_request_wait_tracker().cleanup(telemetry_id)
 
     async def _write_in_place(
         self,
@@ -411,7 +544,13 @@ class ContentWriteCoordinator:
             if wait and telemetry_id:
                 get_request_wait_tracker().cleanup(telemetry_id)
 
-    async def _resolve_root_uri(self, uri: str, *, ctx: RequestContext) -> str:
+    async def _resolve_root_uri(
+        self,
+        uri: str,
+        *,
+        ctx: RequestContext,
+        _allow_not_found: bool = False,
+    ) -> str:
         parsed = VikingURI(uri)
         parts = [part for part in parsed.full_path.split("/") if part]
         if not parts:
@@ -449,8 +588,8 @@ class ContentWriteCoordinator:
                     )
                 root_uri = VikingURI.build(*parts[: memories_idx + 2])
 
-        stat = await self._safe_stat(root_uri, ctx=ctx)
-        if not stat.get("isDir"):
+        stat = await self._safe_stat(root_uri, ctx=ctx, allow_not_found=_allow_not_found)
+        if stat.get("not_found") or not stat.get("isDir"):
             parent = VikingURI(uri).parent
             if parent is None:
                 raise InvalidArgumentError(f"could not resolve write root for {uri}")

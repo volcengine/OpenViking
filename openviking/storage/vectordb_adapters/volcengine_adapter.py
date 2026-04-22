@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from openviking.storage.expr import PathScope
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.volcengine_api_key_collection import (
     VolcengineApiKeyCollection,
@@ -173,16 +172,6 @@ class VolcengineCollectionAdapter(CollectionAdapter):
             index_meta["VectorIndex"]["EnableSparse"] = True
             index_meta["VectorIndex"]["SearchWithSparseLogitAlpha"] = sparse_weight
         return index_meta
-
-    def _compile_filter(self, expr):
-        if isinstance(expr, PathScope):
-            path = (
-                self._encode_uri_field_value(expr.path)
-                if expr.field in self._URI_FIELD_NAMES
-                else expr.path
-            )
-            return {"op": "must", "field": expr.field, "conds": [path]}
-        return super()._compile_filter(expr)
 
     def _normalize_record_for_read(self, record: Dict[str, Any]) -> Dict[str, Any]:
         return super()._normalize_record_for_read(record)

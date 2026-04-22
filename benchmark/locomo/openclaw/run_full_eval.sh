@@ -94,8 +94,6 @@ if [ "$SKIP_IMPORT" = false ]; then
         python "$SCRIPT_DIR/import_to_ov.py" --no-user-agent-id --input "$INPUT_FILE" $FORCE_INGEST_ARG $SAMPLE_ARG
     fi
 
-    echo "导入完成，等待 1 分钟..."
-    sleep 60
 else
     echo "[1/5] 跳过导入数据..."
 fi

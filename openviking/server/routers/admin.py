@@ -5,7 +5,12 @@
 from fastapi import APIRouter, Depends, Path, Request
 from pydantic import BaseModel
 
-from openviking.server.auth import get_request_context
+from openviking.server.auth import (
+    get_api_key_manager_or_raise,
+    get_request_context,
+    require_auth_root,
+    require_auth_root_or_admin,
+)
 from openviking.server.dependencies import get_service
 from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
 from openviking.server.models import Response
@@ -17,17 +22,6 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
-
-_TRUSTED_MODE_ADMIN_API_MESSAGE = (
-    "Admin API is unavailable in trusted mode. In trusted mode, each request is resolved as USER "
-    "from X-OpenViking-Account/X-OpenViking-User headers and does not use user-key "
-    "registration. Switch to api_key mode with root_api_key for account and user management."
-)
-
-_DEV_MODE_ADMIN_API_MESSAGE = (
-    "Admin API requires api_key mode with root_api_key configured. Development mode does not "
-    "support account or user management."
-)
 
 
 class CreateAccountRequest(BaseModel):
@@ -48,35 +42,7 @@ class SetRoleRequest(BaseModel):
 
 def _get_api_key_manager(request: Request):
     """Get APIKeyManager from app state."""
-    manager = getattr(request.app.state, "api_key_manager", None)
-    if manager is None:
-        raise PermissionDeniedError(_DEV_MODE_ADMIN_API_MESSAGE)
-    return manager
-
-
-def require_admin_role(*allowed_roles: Role):
-    """Dependency factory for Admin API routes with mode-aware errors."""
-
-    async def _check(
-        request: Request,
-        ctx: RequestContext = Depends(get_request_context),
-    ) -> RequestContext:
-        config = getattr(request.app.state, "config", None)
-        auth_mode = getattr(config, "auth_mode", "api_key")
-        if auth_mode == "trusted":
-            raise PermissionDeniedError(_TRUSTED_MODE_ADMIN_API_MESSAGE)
-
-        manager = getattr(request.app.state, "api_key_manager", None)
-        if manager is None:
-            raise PermissionDeniedError(_DEV_MODE_ADMIN_API_MESSAGE)
-
-        if ctx.role not in allowed_roles:
-            raise PermissionDeniedError(
-                f"Requires role: {', '.join(r.value for r in allowed_roles)}"
-            )
-        return ctx
-
-    return Depends(_check)
+    return get_api_key_manager_or_raise(request)
 
 
 def _check_account_access(ctx: RequestContext, account_id: str) -> None:
@@ -89,10 +55,11 @@ def _check_account_access(ctx: RequestContext, account_id: str) -> None:
 
 
 @router.post("/accounts")
+@require_auth_root
 async def create_account(
     body: CreateAccountRequest,
     request: Request,
-    ctx: RequestContext = require_admin_role(Role.ROOT),
+    ctx: RequestContext = Depends(get_request_context),
 ):
     """Create a new account (workspace) with its first admin user."""
     manager = _get_api_key_manager(request)
@@ -125,9 +92,10 @@ async def create_account(
 
 
 @router.get("/accounts")
+@require_auth_root
 async def list_accounts(
     request: Request,
-    ctx: RequestContext = require_admin_role(Role.ROOT),
+    ctx: RequestContext = Depends(get_request_context),
 ):
     """List all accounts."""
     manager = _get_api_key_manager(request)
@@ -136,10 +104,11 @@ async def list_accounts(
 
 
 @router.delete("/accounts/{account_id}")
+@require_auth_root
 async def delete_account(
     request: Request,
     account_id: str = Path(..., description="Account ID"),
-    ctx: RequestContext = require_admin_role(Role.ROOT),
+    ctx: RequestContext = Depends(get_request_context),
 ):
     """Delete an account and cascade-clean its storage (AGFS + VectorDB)."""
     manager = _get_api_key_manager(request)
@@ -182,11 +151,12 @@ async def delete_account(
 
 
 @router.post("/accounts/{account_id}/users")
+@require_auth_root_or_admin
 async def register_user(
     body: RegisterUserRequest,
     request: Request,
     account_id: str = Path(..., description="Account ID"),
-    ctx: RequestContext = require_admin_role(Role.ROOT, Role.ADMIN),
+    ctx: RequestContext = Depends(get_request_context),
 ):
     """Register a new user in an account."""
     _check_account_access(ctx, account_id)
@@ -210,10 +180,11 @@ async def register_user(
 
 
 @router.get("/accounts/{account_id}/users")
+@require_auth_root_or_admin
 async def list_users(
     request: Request,
     account_id: str = Path(..., description="Account ID"),
-    ctx: RequestContext = require_admin_role(Role.ROOT, Role.ADMIN),
+    ctx: RequestContext = Depends(get_request_context),
 ):
     """List all users in an account."""
     _check_account_access(ctx, account_id)
@@ -223,11 +194,12 @@ async def list_users(
 
 
 @router.delete("/accounts/{account_id}/users/{user_id}")
+@require_auth_root_or_admin
 async def remove_user(
     request: Request,
     account_id: str = Path(..., description="Account ID"),
     user_id: str = Path(..., description="User ID"),
-    ctx: RequestContext = require_admin_role(Role.ROOT, Role.ADMIN),
+    ctx: RequestContext = Depends(get_request_context),
 ):
     """Remove a user from an account."""
     _check_account_access(ctx, account_id)
@@ -237,12 +209,13 @@ async def remove_user(
 
 
 @router.put("/accounts/{account_id}/users/{user_id}/role")
+@require_auth_root
 async def set_user_role(
     body: SetRoleRequest,
     request: Request,
     account_id: str = Path(..., description="Account ID"),
     user_id: str = Path(..., description="User ID"),
-    ctx: RequestContext = require_admin_role(Role.ROOT),
+    ctx: RequestContext = Depends(get_request_context),
 ):
     """Change a user's role (ROOT only)."""
     manager = _get_api_key_manager(request)
@@ -258,11 +231,12 @@ async def set_user_role(
 
 
 @router.post("/accounts/{account_id}/users/{user_id}/key")
+@require_auth_root_or_admin
 async def regenerate_key(
     request: Request,
     account_id: str = Path(..., description="Account ID"),
     user_id: str = Path(..., description="User ID"),
-    ctx: RequestContext = require_admin_role(Role.ROOT, Role.ADMIN),
+    ctx: RequestContext = Depends(get_request_context),
 ):
     """Regenerate a user's API key. Old key is immediately invalidated."""
     _check_account_access(ctx, account_id)

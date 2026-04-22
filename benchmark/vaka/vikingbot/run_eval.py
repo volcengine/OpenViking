@@ -22,7 +22,6 @@ from vaka_utils import (
     select_cases,
 )
 
-
 SCRIPT_DIR = Path(__file__).parent.resolve()
 DEFAULT_OUTPUT = str(SCRIPT_DIR / "result" / "vaka_qa_result.csv")
 
@@ -144,13 +143,9 @@ def main() -> None:
     for case in cases:
         if args.strict_complete_case and not case_has_all_sessions(case, args.case_size):
             present = ",".join(str(sid) for sid in sorted(present_session_ids(case)))
-            raise ValueError(
-                f"{case['case_id']} is incomplete. Present local sessions: {present}"
-            )
+            raise ValueError(f"{case['case_id']} is incomplete. Present local sessions: {present}")
 
-        eval_rows = [
-            row for row in case["rows"] if row["_global_session_id"] in eval_sessions
-        ]
+        eval_rows = [row for row in case["rows"] if row["_global_session_id"] in eval_sessions]
         eval_rows.sort(key=lambda row: row["_row_index"])
         for question_index, row in enumerate(eval_rows):
             if args.count is not None and len(output_rows) >= args.count:

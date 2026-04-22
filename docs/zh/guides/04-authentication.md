@@ -1,6 +1,6 @@
 # 认证
 
-OpenViking Server 支持两种认证模式，并带有基于角色的访问控制：`api_key` 和 `trusted`。默认模式是 `api_key`。
+OpenViking Server 支持三种认证模式，并带有基于角色的访问控制：`api_key`、`trusted` 和 `dev`。如果未显式配置，模式会自动推导。
 
 ## 概述
 
@@ -19,8 +19,13 @@ OpenViking 使用两层 API Key 体系：
 |------|--------------------|----------|--------------|
 | API Key 模式 | `"api_key"` | API Key，root 请求可附带租户请求头 | 标准多租户部署 |
 | Trusted 模式 | `"trusted"` | `X-OpenViking-Account` / `X-OpenViking-User` / 可选 `X-OpenViking-Agent` 请求头；非 localhost 部署还必须配置 `root_api_key` | 部署在受信网关或内网边界之后 |
+| Dev 模式 | `"dev"` | 无认证，始终为 ROOT | 仅限本地开发 |
 
-`api_key` 是默认模式，也是标准生产部署方式。`trusted` 是替代模式，适合由上游网关或受信内网调用方在每个请求里显式注入身份头。在 `trusted` 模式下，只有服务绑定到 localhost 时才允许不配置 `root_api_key`；只要是非 localhost 部署，就必须配置 `root_api_key`。
+如果未显式配置 `auth_mode`：
+- 如果设置了 `root_api_key`（非空）：自动选择 `api_key` 模式
+- 如果未设置 `root_api_key`：自动选择 `dev` 模式
+
+> **注意：** 将 `root_api_key` 设置为空字符串 `""` 是非法的。请要么设置一个非空值，要么完全移除该配置项。
 
 ## 服务端配置
 
@@ -113,6 +118,40 @@ client = ov.SyncHTTPClient(
 openviking --account acme --user alice --agent-id my-agent ls viking://
 ```
 
+### 使用 --sudo 和 Root API Key
+
+CLI 支持在 `ovcli.conf` 中同时配置 `api_key`（用于普通用户操作）和 `root_api_key`（用于管理员操作）：
+
+```json
+{
+  "url": "http://localhost:1933",
+  "api_key": "<user-key>",
+  "root_api_key": "<root-key>",
+  "account": "acme",
+  "user": "alice",
+  "agent_id": "my-agent"
+}
+```
+
+当需要执行管理员命令（`admin`、`system`、`reindex`）时，使用 `--sudo` 标志提升权限：
+
+```bash
+# 列出所有账户（需要 root 权限）
+ov --sudo admin list-accounts
+
+# 重新索引内容
+ov --sudo reindex viking://
+
+# 系统命令
+ov --sudo system status
+```
+
+`--sudo` 标志：
+- 仅适用于管理员命令：`admin`、`system`、`reindex`
+- 用于非管理员命令时会报错
+- `ovcli.conf` 中未配置 `root_api_key` 时会报错
+- 请求时使用 `root_api_key` 替代 `api_key`
+
 ### 使用 Root Key 访问租户数据
 
 使用 root key 访问租户级数据 API（如 `ls`、`find`、`sessions` 等）时，必须指定目标 account 和 user，否则服务端将拒绝请求。Admin API 和系统状态端点不受此限制。
@@ -201,21 +240,9 @@ client = ov.SyncHTTPClient(
 )
 ```
 
-## 角色与权限
+## Dev 模式
 
-| 角色 | 作用域 | 能力 |
-|------|--------|------|
-| ROOT | 全局 | 全部操作 + Admin API（创建/删除工作区、管理用户） |
-| ADMIN | 所属 account | 常规操作 + 管理所属 account 的用户 |
-| USER | 所属 account | 常规操作（ls、read、find、sessions 等） |
-
-在 `trusted` 模式下，请求角色会解析为 `USER`，因此普通流量不适用 ROOT/ADMIN 的注册式管理语义。
-
-## 开发模式
-
-当 `auth_mode = "api_key"` 且未配置 `root_api_key` 时，认证禁用，所有请求以 ROOT 身份访问 default account。**此模式仅允许在服务器绑定 localhost 时使用**（`127.0.0.1`、`localhost` 或 `::1`）。如果 `host` 设置为非回环地址（如 `0.0.0.0`）且未配置 `root_api_key`，服务器将拒绝启动。
-
-开发模式只存在于 `api_key` 模式中；`trusted` 不会退化成开发模式。
+当 `auth_mode = "dev"`（或未配置 `root_api_key` 时自动推导）时，认证禁用，所有请求以 ROOT 身份访问 default account。**此模式仅允许在服务器绑定 localhost 时使用**（`127.0.0.1`、`localhost` 或 `::1`）。如果 `host` 设置为非回环地址（如 `0.0.0.0`）且使用 `dev` 模式，服务器将拒绝启动。
 
 ```json
 {
@@ -226,7 +253,29 @@ client = ov.SyncHTTPClient(
 }
 ```
 
+或显式配置：
+
+```json
+{
+  "server": {
+    "auth_mode": "dev",
+    "host": "127.0.0.1",
+    "port": 1933
+  }
+}
+```
+
 > **安全提示：** 默认 `host` 为 `127.0.0.1`。如需将服务暴露到网络，**必须**配置 `root_api_key`。
+
+## 角色与权限
+
+| 角色 | 作用域 | 能力 |
+|------|--------|------|
+| ROOT | 全局 | 全部操作 + Admin API（创建/删除工作区、管理用户） |
+| ADMIN | 所属 account | 常规操作 + 管理所属 account 的用户 |
+| USER | 所属 account | 常规操作（ls、read、find、sessions 等） |
+
+在 `trusted` 模式下，请求角色会解析为 `USER`，因此普通流量不适用 ROOT/ADMIN 的注册式管理语义。
 
 ## 无需认证的端点
 

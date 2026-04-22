@@ -18,7 +18,6 @@ function makeEngine(commitResult: unknown, opts?: { throwError?: Error }) {
     baseUrl: "http://127.0.0.1:1933",
     autoCapture: false,
     autoRecall: false,
-    ingestReplyAssist: false,
   });
   const logger = makeLogger();
 
@@ -133,7 +132,6 @@ describe("context-engine commitOVSession()", () => {
       baseUrl: "http://127.0.0.1:1933",
       autoCapture: false,
       autoRecall: false,
-      ingestReplyAssist: false,
       bypassSessionPatterns: ["agent:*:cron:**"],
     });
     const logger = makeLogger();
@@ -167,7 +165,6 @@ describe("context-engine compact()", () => {
       baseUrl: "http://127.0.0.1:1933",
       autoCapture: false,
       autoRecall: false,
-      ingestReplyAssist: false,
       bypassSessionPatterns: ["agent:*:cron:**"],
     });
     const logger = makeLogger();

@@ -40,6 +40,10 @@ _propagator: Any = None
 _trace_id_filter_added: bool = False
 
 
+def _log_trace_internal_failure(message: str) -> None:
+    logger.debug(message, exc_info=True)
+
+
 class TraceIdLoggingFilter(logging.Filter):
     """日志过滤器：注入 TraceID"""
 
@@ -64,7 +68,7 @@ def _setup_logging():
         )
         _trace_id_filter_added = True
     except Exception:
-        pass
+        _log_trace_internal_failure("[TRACER] failed to configure loguru trace_id patcher")
 
     # Also setup standard logging filter
     try:
@@ -73,7 +77,7 @@ def _setup_logging():
             if not any(isinstance(f, TraceIdLoggingFilter) for f in handler.filters):
                 handler.addFilter(TraceIdLoggingFilter())
     except Exception:
-        pass
+        _log_trace_internal_failure("[TRACER] failed to attach standard logging trace_id filter")
 
 
 def init_tracer_from_config() -> Any:
@@ -223,7 +227,7 @@ def get_trace_id() -> str:
             trace_id = "{:032x}".format(current_span.context.trace_id)
             return trace_id
     except Exception:
-        pass
+        _log_trace_internal_failure("[TRACER] failed to resolve current trace id")
     return ""
 
 
@@ -435,7 +439,7 @@ class tracer:
                 trace_id = "{:032x}".format(current_span.context.trace_id)
                 return trace_id
         except Exception:
-            pass
+            _log_trace_internal_failure("[TRACER] failed to resolve decorator trace id")
         return ""
 
     @staticmethod
@@ -457,7 +461,7 @@ class tracer:
                     return  # span 已结束，不设置 attribute
                 current_span.set_attribute(key, str(value))
         except Exception:
-            pass
+            _log_trace_internal_failure(f"[TRACER] failed to set span attribute key={key}")
 
     @staticmethod
     def info(line: str, console: bool = False) -> None:
@@ -472,9 +476,9 @@ class tracer:
                 if hasattr(current_span, "end_time") and current_span.end_time:
                     return  # span 已结束，不添加 event
                 current_span.add_event(line)
-        except Exception as e:
-
+        except Exception:
             import traceback
+
             traceback.print_stack()
 
     @staticmethod
@@ -506,7 +510,7 @@ class tracer:
                     current_span.set_status(Status(StatusCode.ERROR))
                     current_span.add_event(line)
         except Exception:
-            pass
+            _log_trace_internal_failure("[TRACER] failed to record span error")
 
 
 class _DummySpanContext:

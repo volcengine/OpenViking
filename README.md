@@ -12,12 +12,12 @@ English / [中文](README_CN.md) / [日本語](README_JA.md)
 
 <a href="https://www.openviking.ai">Website</a> · <a href="https://github.com/volcengine/OpenViking">GitHub</a> · <a href="https://github.com/volcengine/OpenViking/issues">Issues</a> · <a href="./docs">Docs</a>
 
-[![][release-shield]][release-link]
-[![][github-stars-shield]][github-stars-link]
-[![][github-issues-shield]][github-issues-shield-link]
-[![][github-contributors-shield]][github-contributors-link]
-[![][license-shield]][license-shield-link]
-[![][last-commit-shield]][last-commit-shield-link]
+[![](https://img.shields.io/github/v/release/volcengine/OpenViking?color=369eff\&labelColor=black\&logo=github\&style=flat-square)](https://github.com/volcengine/OpenViking/releases)
+[![](https://img.shields.io/github/stars/volcengine/OpenViking?labelColor\&style=flat-square\&color=ffcb47)](https://github.com/volcengine/OpenViking)
+[![](https://img.shields.io/github/issues/volcengine/OpenViking?labelColor=black\&style=flat-square\&color=ff80eb)](https://github.com/volcengine/OpenViking/issues)
+[![](https://img.shields.io/github/contributors/volcengine/OpenViking?color=c4f042\&labelColor=black\&style=flat-square)](https://github.com/volcengine/OpenViking/graphs/contributors)
+[![](https://img.shields.io/badge/license-AGPLv3-white?labelColor=black\&style=flat-square)](https://github.com/volcengine/OpenViking/blob/main/LICENSE)
+[![](https://img.shields.io/github/last-commit/volcengine/OpenViking?color=c4f042\&labelColor=black\&style=flat-square)](https://github.com/volcengine/OpenViking/commits/main)
 
 👋 Join our Community
 
@@ -27,7 +27,7 @@ English / [中文](README_CN.md) / [日本語](README_JA.md)
 
 </div>
 
----
+***
 
 ## Overview
 
@@ -55,7 +55,7 @@ With OpenViking, developers can build an Agent's brain just like managing local 
 - **Visualized Retrieval Trajectory** → **Observable Context**: Supports visualization of directory retrieval trajectories, allowing users to clearly observe the root cause of issues and guide retrieval logic optimization.
 - **Automatic Session Management** → **Context Self-Iteration**: Automatically compresses content, resource references, tool calls, etc., in conversations, extracting long-term memory, making the Agent smarter with use.
 
----
+***
 
 ## Quick Start
 
@@ -92,22 +92,21 @@ cargo install --git https://github.com/volcengine/OpenViking ov_cli
 ### 2. Model Preparation
 
 OpenViking requires the following model capabilities:
+
 - **VLM Model**: For image and content understanding
 - **Embedding Model**: For vectorization and semantic retrieval
 
 #### Supported VLM Providers
 
-OpenViking supports three VLM providers:
+OpenViking supports multiple VLM providers:
 
-| Provider | Description | Get API Key |
-|----------|-------------|-------------|
-| `volcengine` | Volcengine Doubao Models | [Volcengine Console](https://console.volcengine.com/ark/region:ark+cn-beijing/overview?briefPage=0&briefType=introduce&type=new&utm_content=OpenViking&utm_medium=devrel&utm_source=OWO&utm_term=OpenViking) |
-| `openai` | OpenAI Official API | [OpenAI Platform](https://platform.openai.com) |
-| `litellm` | Unified access to various third-party models (Anthropic, DeepSeek, Gemini, vLLM, Ollama, etc.) | See [LiteLLM Providers](https://docs.litellm.ai/docs/providers) |
-
-> 💡 **Tip**:
-> - `litellm` supports unified access to various models. The `model` field must follow the [LiteLLM format specification](https://docs.litellm.ai/docs/providers)
-> - The system auto-detects common models (e.g., `claude-*`, `deepseek-*`, `gemini-*`, `hosted_vllm/*`, `ollama/*`, etc.). For other models, use the full prefix according to LiteLLM format
+| Provider       | Description              | Setup                                                                                                                                                                                                              |
+| -------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `volcengine`   | Volcengine Doubao Models | [Volcengine Console](https://console.volcengine.com/ark/region:ark+cn-beijing/overview?briefPage=0\&briefType=introduce\&type=new\&utm_content=OpenViking\&utm_medium=devrel\&utm_source=OWO\&utm_term=OpenViking) |
+| `openai`       | OpenAI Official API      | [OpenAI Platform](https://platform.openai.com)                                                                                                                                                                     |
+| `openai-codex` | Codex VLM                | Use `openviking-server init`                                                                                                                                                                                       |
+| `kimi`         | Kimi Code Membership     | Use `openviking-server init`                                                                                                                                                                                       |
+| `glm`          | GLM Coding Plan          | Use `openviking-server init`                                                                                                                                                                                       |
 
 #### Provider-Specific Notes
 
@@ -127,7 +126,7 @@ Volcengine supports both model names and endpoint IDs. Using model names is reco
 }
 ```
 
-You can also use endpoint IDs (found in [Volcengine ARK Console](https://console.volcengine.com/ark/region:ark+cn-beijing/overview?briefPage=0&briefType=introduce&type=new&utm_content=OpenViking&utm_medium=devrel&utm_source=OWO&utm_term=OpenViking):
+You can also use endpoint IDs (found in [Volcengine ARK Console](https://console.volcengine.com/ark/region:ark+cn-beijing/overview?briefPage=0\&briefType=introduce\&type=new\&utm_content=OpenViking\&utm_medium=devrel\&utm_source=OWO\&utm_term=OpenViking):
 
 ```json
 {
@@ -174,71 +173,97 @@ You can also use a custom OpenAI-compatible endpoint:
 </details>
 
 <details>
-<summary><b>LiteLLM (Anthropic, DeepSeek, Gemini, Qwen, vLLM, Ollama, etc.)</b></summary>
+<summary><b>OpenAI Codex (OAuth)</b></summary>
 
-LiteLLM provides unified access to various models. The `model` field should follow LiteLLM's naming convention. Here we use Claude and Qwen as examples:
-
-**Anthropic:**
-
-```json
-{
-  "vlm": {
-    "provider": "litellm",
-    "model": "claude-3-5-sonnet-20240620",
-    "api_key": "your-anthropic-api-key"
-  }
-}
-```
-
-**Qwen (DashScope):**
-
-```json
-{
-  "vlm": {
-    "provider": "litellm",
-    "model": "dashscope/qwen-turbo", // see https://docs.litellm.ai/docs/providers/dashscope for more details
-    "api_key": "your-dashscope-api-key",
-    "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1"
-  }
-}
-```
-
-> 💡 **Tip for Qwen**: 
-> - For **China/Beijing** region, use `api_base`: `https://dashscope.aliyuncs.com/compatible-mode/v1`
-> - For **International** region, use `api_base`: `https://dashscope-intl.aliyuncs.com/compatible-mode/v1`
-
-**Common model formats:**
-
-| Provider | Model Example | Notes |
-|----------|---------------|-------|
-| Anthropic | `claude-3-5-sonnet-20240620` | Auto-detected, uses `ANTHROPIC_API_KEY` |
-| DeepSeek | `deepseek-chat` | Auto-detected, uses `DEEPSEEK_API_KEY` |
-| Gemini | `gemini-pro` | Auto-detected, uses `GEMINI_API_KEY` |
-| Qwen | `dashscope/qwen-turbo` | Set `api_base` based on region (see above) |
-| OpenRouter | `openrouter/openai/gpt-4o` | Full prefix required |
-| vLLM | `hosted_vllm/llama-3.1-8b` | Set `api_base` to vLLM server |
-| Ollama | `ollama/llama3.1` | Set `api_base` to Ollama server |
-
-**Local Models (vLLM / Ollama):**
+Use this provider when you want OpenViking to call Codex VLM through your ChatGPT/Codex OAuth session instead of a standard OpenAI API key:
 
 ```bash
-
-# Start Ollama
-ollama serve
+openviking-server init
+# choose OpenAI Codex when prompted
+openviking-server doctor
 ```
 
 ```json
-// Ollama
 {
   "vlm": {
-    "provider": "litellm",
-    "model": "ollama/llama3.1",
-    "api_base": "http://localhost:11434"
+    "provider": "openai-codex",
+    "model": "gpt-5.3-codex",
+    "api_base": "https://chatgpt.com/backend-api/codex",
+    "temperature": 0.0,
+    "max_retries": 2
   }
 }
 ```
 
-For complete model support, see [LiteLLM Providers Documentation](https://docs.litellm.ai/docs/providers).
+> 💡 **Tip**:
+>
+> - `openai-codex` does not require `vlm.api_key` when Codex OAuth is available
+> - OpenViking stores its own Codex auth state at `~/.openviking/codex_auth.json`
+> - `openviking-server doctor` validates that the current Codex auth is usable
+
+</details>
+
+<details>
+<summary><b>Kimi Coding (Subscription)</b></summary>
+
+Use this provider when you want OpenViking to call the dedicated Kimi Coding subscription endpoint directly:
+
+```bash
+openviking-server init
+# choose Kimi Coding when prompted
+openviking-server doctor
+```
+
+```json
+{
+  "vlm": {
+    "provider": "kimi",
+    "model": "kimi-code",
+    "api_key": "your-kimi-subscription-api-key",
+    "api_base": "https://api.kimi.com/coding",
+    "temperature": 0.0,
+    "max_retries": 2
+  }
+}
+```
+
+> 💡 **Tip**:
+>
+> - `kimi` applies the recommended Kimi Coding defaults automatically, including the default Kimi Coding user agent
+> - `kimi-code` and `kimi-coding` are accepted aliases for the provider name
+> - `kimi-code` is normalized to Kimi's upstream coding model automatically
+
+</details>
+
+<details>
+<summary><b>GLM Coding Plan (Subscription)</b></summary>
+
+Use this provider when you want OpenViking to call Z.AI's OpenAI-compatible Coding Plan endpoint directly:
+
+```bash
+openviking-server init
+# choose GLM Coding Plan when prompted
+openviking-server doctor
+```
+
+```json
+{
+  "vlm": {
+    "provider": "glm",
+    "model": "glm-4.6v",
+    "api_key": "your-zai-api-key",
+    "api_base": "https://api.z.ai/api/coding/paas/v4",
+    "temperature": 0.0,
+    "max_retries": 2
+  }
+}
+```
+
+> 💡 **Tip**:
+>
+> - `glm`, `zhipu`, `zai`, `z-ai`, and `z.ai` all resolve to the same first-class GLM provider
+> - The default endpoint is the Coding Plan endpoint, not the general Z.AI endpoint
+> - Use a vision-capable model such as `glm-4.6v` or `glm-5v-turbo` for multimodal parsing
 
 </details>
 
@@ -253,6 +278,7 @@ openviking-server init
 ```
 
 The wizard will:
+
 - Detect and install Ollama if needed
 - Recommend and pull suitable embedding and VLM models for your hardware
 - Generate a ready-to-use `ov.conf` configuration file
@@ -269,7 +295,16 @@ openviking-server doctor
 
 #### Server Configuration Template
 
-Create a configuration file `~/.openviking/ov.conf`, remove the comments before copy:
+The recommended first-time flow is:
+
+```bash
+openviking-server init
+openviking-server doctor
+```
+
+If you choose `OpenAI Codex` inside `openviking-server init`, the wizard can import existing Codex auth or start the Codex sign-in flow for you.
+
+If you prefer manual configuration, create `~/.openviking/ov.conf`, remove the comments before copy:
 
 ```json
 {
@@ -292,15 +327,15 @@ Create a configuration file `~/.openviking/ov.conf`, remove the comments before 
   },
   "vlm": {
     "api_base" : "<api-endpoint>",     // API endpoint address
-    "api_key"  : "<your-api-key>",     // Model service API Key
-    "provider" : "<provider-type>",    // Provider type (volcengine, openai, deepseek, anthropic, etc.)
+    "api_key"  : "<your-api-key>",     // Model service API Key (optional for openai-codex)
+    "provider" : "<provider-type>",    // Provider type (volcengine, openai, openai-codex, kimi, glm, etc.)
     "model"    : "<model-name>",       // VLM model name (e.g., doubao-seed-2-0-pro-260215 or gpt-4-vision-preview)
     "max_concurrent": 100              // Max concurrent LLM calls for semantic processing (default: 100)
   }
 }
 ```
 
-> **Note**: For embedding models, supported providers are `volcengine` (Doubao), `openai`, `jina`, `voyage`, `minimax`, `vikingdb`, and `gemini` (requires `pip install "google-genai>=1.0.0"`). For VLM models, we support three providers: `volcengine`, `openai`, and `litellm`. The `litellm` provider supports various models including Anthropic (Claude), DeepSeek, Gemini, Moonshot, Zhipu, DashScope, MiniMax, vLLM, Ollama, and more.
+> **Note**: For embedding models, supported providers are `volcengine` (Doubao), `openai`, `jina`, `voyage`, `minimax`, `vikingdb`, and `gemini` (requires `pip install "google-genai>=1.0.0"`). For VLM models, common providers include `volcengine`, `openai`, `openai-codex`, `kimi`, and `glm`.
 
 #### Server Configuration Examples
 
@@ -407,7 +442,37 @@ pip install "google-genai>=1.0.0"
 }
 ```
 
-Get your Google API key at https://aistudio.google.com/apikey
+Get your Google API key at <https://aistudio.google.com/apikey>
+
+</details>
+
+<details>
+<summary><b>Example 4: Using Volcengine Embedding + Codex VLM</b></summary>
+
+Use `openviking-server init` and choose `OpenAI Codex`, then run `openviking-server doctor`.
+
+```json
+{
+  "storage": {
+    "workspace": "/home/your-name/openviking_workspace"
+  },
+  "embedding": {
+    "dense": {
+      "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
+      "api_key"  : "your-volcengine-api-key",
+      "provider" : "volcengine",
+      "dimension": 1024,
+      "model"    : "doubao-embedding-vision-251215"
+    }
+  },
+  "vlm": {
+    "api_base" : "https://chatgpt.com/backend-api/codex",
+    "provider" : "openai-codex",
+    "model"    : "gpt-5.3-codex",
+    "max_concurrent": 100
+  }
+}
+```
 
 </details>
 
@@ -478,8 +543,11 @@ Now let's run a complete example to experience the core features of OpenViking.
 #### Launch Server
 
 ```bash
+openviking-server doctor
 openviking-server
 ```
+
+If you configured `provider=openai-codex`, `openviking-server doctor` already validates Codex auth.
 
 or you can run in background
 
@@ -521,7 +589,7 @@ ov chat
 
 If you use the official Docker image, `vikingbot` is already bundled in the image and starts by default together with the OpenViking server and console UI. You can disable it at runtime with either `--without-bot` or `-e OPENVIKING_WITH_BOT=0`.
 
----
+***
 
 ## Server Deployment Details
 
@@ -532,26 +600,26 @@ To ensure optimal storage performance and data security, we recommend deploying 
 
 👉 **[View: Server Deployment & ECS Setup Guide](./docs/en/getting-started/03-quickstart-server.md)**
 
-
 ## OpenClaw Context Plugin Details
 
-* Test Dataset: Effect testing based on LoCoMo10 (https://github.com/snap-research/locomo) long-range dialogues (1,540 cases in total after removing category5 without ground truth)
-* Experimental Groups: Since users may not disable OpenClaw's native memory when using OpenViking, we added experimental groups with native memory enabled or disabled
-* OpenViking Version: 0.1.18
-* Model: seed-2.0-code
-* Evaluation Script: https://github.com/ZaynJarvis/openclaw-eval/tree/main
+- Test Dataset: Effect testing based on LoCoMo10 (<https://github.com/snap-research/locomo>) long-range dialogues (1,540 cases in total after removing category5 without ground truth)
+- Experimental Groups: Since users may not disable OpenClaw's native memory when using OpenViking, we added experimental groups with native memory enabled or disabled
+- OpenViking Version: 0.1.18
+- Model: seed-2.0-code
+- Evaluation Script: <https://github.com/ZaynJarvis/openclaw-eval/tree/main>
 
-| Experimental Group | Task Completion Rate | Cost: Input Tokens (Total) |
-|----------|------------------|------------------|
-| OpenClaw(memory-core) |	35.65% |	24,611,530 |
-| OpenClaw + LanceDB (-memory-core) |	44.55% |	51,574,530 |
-| OpenClaw + OpenViking Plugin (-memory-core) |	52.08% |	4,264,396 |
-| OpenClaw + OpenViking Plugin (+memory-core) |	51.23% |	2,099,622 |
+| Experimental Group                          | Task Completion Rate | Cost: Input Tokens (Total) |
+| ------------------------------------------- | -------------------- | -------------------------- |
+| OpenClaw(memory-core)                       | 35.65%               | 24,611,530                 |
+| OpenClaw + LanceDB (-memory-core)           | 44.55%               | 51,574,530                 |
+| OpenClaw + OpenViking Plugin (-memory-core) | 52.08%               | 4,264,396                  |
+| OpenClaw + OpenViking Plugin (+memory-core) | 51.23%               | 2,099,622                  |
 
-* Experimental Conclusions:
-After integrating OpenViking:
-- With native memory enabled: 43% improvement over original OpenClaw with 91% reduction in input token cost; 15% improvement over LanceDB with 96% reduction in input token cost.
-- With native memory disabled: 49% improvement over original OpenClaw with 83% reduction in input token cost; 17% improvement over LanceDB with 92% reduction in input token cost.
+- Experimental Conclusions:
+  After integrating OpenViking:
+
+* With native memory enabled: 43% improvement over original OpenClaw with 91% reduction in input token cost; 15% improvement over LanceDB with 96% reduction in input token cost.
+* With native memory disabled: 49% improvement over original OpenClaw with 83% reduction in input token cost; 17% improvement over LanceDB with 92% reduction in input token cost.
 
 👉 **[View: OpenClaw Context Plugin](examples/openclaw-plugin/README.md)**
 
@@ -559,7 +627,7 @@ After integrating OpenViking:
 
 👉 **[View: Claude Code Memory Plugin Example](examples/claude-code-memory-plugin/README.md)**
 
---
+\--
 
 ## Core Concepts
 
@@ -598,6 +666,7 @@ viking://
 ### 2. Tiered Context Loading → Reduces Token Consumption
 
 Stuffing massive amounts of context into a prompt all at once is not only expensive but also prone to exceeding model windows and introducing noise. OpenViking automatically processes context into three levels upon writing:
+
 - **L0 (Abstract)**: A one-sentence summary for quick retrieval and identification.
 - **L1 (Overview)**: Contains core information and usage scenarios for Agent decision-making during the planning phase.
 - **L2 (Details)**: The full original data, for deep reading by the Agent when absolutely necessary.
@@ -648,7 +717,7 @@ OpenViking has a built-in memory self-iteration loop. At the end of each session
 
 This allows the Agent to get "smarter with use" through interactions with the world, achieving self-evolution. Learn more: [Session Management](./docs/en/concepts/08-session.md)
 
----
+***
 
 ## Advanced Reading
 
@@ -665,7 +734,7 @@ For more details, please see: **[About Us](./docs/en/about/01-about-us.md)**
 OpenViking is still in its early stages, and there are many areas for improvement and exploration. We sincerely invite every developer passionate about AI Agent technology:
 
 - Light up a precious **Star** for us to give us the motivation to move forward.
-- Visit our [**Website**](https://www.openviking.ai) to understand the philosophy we convey, and use it in your projects via the [**Documentation**](https://www.openviking.ai/docs). Feel the change it brings and give us feedback on your truest experience.
+- Visit our **[Website](https://www.openviking.ai)** to understand the philosophy we convey, and use it in your projects via the **[Documentation](https://www.openviking.ai/docs)**. Feel the change it brings and give us feedback on your truest experience.
 - Join our community to share your insights, help answer others' questions, and jointly create an open and mutually helpful technical atmosphere:
   - 📱 **Lark Group**: Scan the QR code to join → [View QR Code](./docs/en/about/01-about-us.md#lark-group)
   - 💬 **WeChat Group**: Scan the QR code to add assistant → [View QR Code](./docs/en/about/01-about-us.md#wechat-group)
@@ -677,29 +746,15 @@ Let's work together to define and build the future of AI Agent context managemen
 
 ### Star Trend
 
-[![Star History Chart](https://api.star-history.com/svg?repos=volcengine/OpenViking&type=timeline&legend=top-left)](https://www.star-history.com/#volcengine/OpenViking&type=timeline&legend=top-left)
+[![Star History Chart](https://api.star-history.com/svg?repos=volcengine/OpenViking\&type=timeline\&legend=top-left)](https://www.star-history.com/#volcengine/OpenViking\&type=timeline\&legend=top-left)
 
 ## License
 
 The OpenViking project uses different licenses for different components:
 
 - **Main Project**: AGPLv3 - see the [LICENSE](./LICENSE) file for details
-- **crates/ov_cli**: Apache 2.0 - see the [LICENSE](./crates/ov_cli/LICENSE) for details
+- **crates/ov\_cli**: Apache 2.0 - see the [LICENSE](./crates/ov_cli/LICENSE) for details
 - **examples**: Apache 2.0 - see the [LICENSE](./examples/LICENSE) for details
-- **third_party**: Respective original licenses of third-party projects
-
+- **third\_party**: Respective original licenses of third-party projects
 
 <!-- Link Definitions -->
-
-[release-shield]: https://img.shields.io/github/v/release/volcengine/OpenViking?color=369eff&labelColor=black&logo=github&style=flat-square
-[release-link]: https://github.com/volcengine/OpenViking/releases
-[license-shield]: https://img.shields.io/badge/license-AGPLv3-white?labelColor=black&style=flat-square
-[license-shield-link]: https://github.com/volcengine/OpenViking/blob/main/LICENSE
-[last-commit-shield]: https://img.shields.io/github/last-commit/volcengine/OpenViking?color=c4f042&labelColor=black&style=flat-square
-[last-commit-shield-link]: https://github.com/volcengine/OpenViking/commits/main
-[github-stars-shield]: https://img.shields.io/github/stars/volcengine/OpenViking?labelColor&style=flat-square&color=ffcb47
-[github-stars-link]: https://github.com/volcengine/OpenViking
-[github-issues-shield]: https://img.shields.io/github/issues/volcengine/OpenViking?labelColor=black&style=flat-square&color=ff80eb
-[github-issues-shield-link]: https://github.com/volcengine/OpenViking/issues
-[github-contributors-shield]: https://img.shields.io/github/contributors/volcengine/OpenViking?color=c4f042&labelColor=black&style=flat-square
-[github-contributors-link]: https://github.com/volcengine/OpenViking/graphs/contributors

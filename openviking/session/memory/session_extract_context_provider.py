@@ -19,13 +19,14 @@ from openviking.session.memory.tools import (
     get_tool,
 )
 from openviking.storage.viking_fs import VikingFS
+from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
-logger = get_logger(__name__)
-
 if TYPE_CHECKING:
     from openviking.session.memory.memory_updater import ExtractContext
+
+logger = get_logger(__name__)
 
 
 class SessionExtractContextProvider(ExtractContextProvider):
@@ -111,7 +112,7 @@ The system automatically generates URIs based on memory_type and fields. Just pr
             last_msg_time = None
 
         if first_msg_time:
-            session_time = datetime.fromisoformat(first_msg_time)
+            session_time = parse_iso_datetime(first_msg_time)
         else:
             session_time = datetime.now()
 
@@ -120,7 +121,7 @@ The system automatically generates URIs based on memory_type and fields. Just pr
 
         # 检查是否需要显示范围
         if last_msg_time and last_msg_time != first_msg_time:
-            last_time = datetime.fromisoformat(last_msg_time)
+            last_time = parse_iso_datetime(last_msg_time)
             time_display = f"{session_time_str} - {last_time.strftime('%Y-%m-%d %H:%M')}"
         else:
             time_display = session_time_str

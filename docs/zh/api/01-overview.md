@@ -35,7 +35,7 @@ export OPENVIKING_CONFIG_FILE=/path/to/ov.conf
     "dense": {
       "api_base": "<api-endpoint>",
       "api_key": "<your-api-key>",
-      "provider": "<volcengine|openai|jina>",
+      "provider": "<volcengine|openai|jina|...>",
       "dimension": 1024,
       "model": "<model-name>"
     }
@@ -43,11 +43,13 @@ export OPENVIKING_CONFIG_FILE=/path/to/ov.conf
   "vlm": {
     "api_base": "<api-endpoint>",
     "api_key": "<your-api-key>",
-    "provider": "<volcengine|openai|jina>",
+    "provider": "<volcengine|openai|openai-codex|kimi|glm>",
     "model": "<model-name>"
   }
 }
 ```
+
+当 `provider: "openai-codex"` 时，只要通过 `openviking-server init` 完成 Codex OAuth，就可以不填写 `vlm.api_key`。
 
 完整配置选项和各服务商示例见 [配置指南](../guides/01-configuration.md)。
 

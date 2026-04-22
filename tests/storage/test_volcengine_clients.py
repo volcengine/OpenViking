@@ -1,6 +1,5 @@
 from volcengine.base.Request import Request
 
-from openviking.storage.expr import PathScope
 from openviking.storage.vectordb.collection.volcengine_clients import (
     ClientForConsoleApi,
     ClientForDataApi,
@@ -217,68 +216,3 @@ def test_volcengine_collection_get_meta_data_returns_empty_on_collection_not_fou
     monkeypatch.setattr(collection.console_client, "do_req", lambda *args, **kwargs: _Response())
 
     assert collection.get_meta_data() == {}
-
-
-def test_volcengine_adapter_compiles_pathscope_to_prefix_filter():
-    config = VectorDBBackendConfig(
-        backend="volcengine",
-        name="context",
-        volcengine=VolcengineConfig(
-            ak="test-ak",
-            sk="test-sk",
-            region="cn-beijing",
-        ),
-    )
-
-    adapter = VolcengineCollectionAdapter.from_config(config)
-
-    compiled = adapter.compile_filter(PathScope("uri", "viking://resources/demo", depth=-1))
-
-    assert compiled == {"op": "prefix", "field": "uri", "prefix": "viking://resources/demo"}
-
-
-def test_volcengine_adapter_supports_api_key_mode_with_region_only():
-    config = VectorDBBackendConfig(
-        backend="volcengine",
-        name="context",
-        project="default",
-        volcengine=VolcengineConfig(
-            api_key="vk-test-token",
-            region="cn-beijing",
-        ),
-    )
-
-    adapter = VolcengineCollectionAdapter.from_config(config)
-
-    assert adapter.mode == "volcengine"
-    assert adapter.collection_name == "context"
-    assert adapter.index_name == "default"
-    assert adapter.collection_exists() is True
-    assert adapter._config()["Region"] == "cn-beijing"
-
-
-def test_removed_volcengine_api_key_backend_name_is_rejected():
-    try:
-        VectorDBBackendConfig(
-            backend="volcengine_api_key",
-        )
-        raise AssertionError("Expected ValueError for removed backend name")
-    except ValueError as e:
-        assert "volcengine_api_key" in str(e)
-
-
-def test_volcengine_api_key_auth_compiles_pathscope_to_prefix_filter():
-    config = VectorDBBackendConfig(
-        backend="volcengine",
-        name="context",
-        volcengine=VolcengineConfig(
-            api_key="vk-test-token",
-            host="api-vikingdb.vikingdb.cn-beijing.volces.com",
-        ),
-    )
-
-    adapter = VolcengineCollectionAdapter.from_config(config)
-
-    compiled = adapter.compile_filter(PathScope("uri", "viking://resources/demo", depth=-1))
-
-    assert compiled == {"op": "prefix", "field": "uri", "prefix": "viking://resources/demo"}

@@ -1,6 +1,6 @@
 {
   "manifestVersion": "1.0",
-  "pluginVersion": "2026.3.25",
+  "pluginVersion": "2026.4.9",
   "plugin": {
     "id": "openviking",
     "kind": "context-engine",
@@ -20,6 +20,8 @@
       "text-utils.ts",
       "tool-call-id.ts",
       "session-transcript-repair.ts",
+      "runtime-utils.ts",
+      "commands/setup.ts",
       "openclaw.plugin.json",
       "tsconfig.json",
       "package-lock.json",
