@@ -125,6 +125,7 @@ async def _seed(viking_fs, scope_uri: str, ctx) -> list[str]:
 async def _wait_for_index(vikingdb, scope_uri: str, expected_count: int, timeout_s: float = 30.0):
     """Poll the vector index until expected_count L2 entries are visible."""
     import time as _t
+
     from openviking.storage.expr import And, Eq
 
     deadline = _t.monotonic() + timeout_s

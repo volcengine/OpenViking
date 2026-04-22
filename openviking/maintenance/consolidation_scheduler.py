@@ -14,7 +14,7 @@ to call it.
 import asyncio
 import time
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
+from typing import Awaitable, Callable, Dict, List, Optional, Set
 
 from openviking.maintenance.memory_consolidator import MemoryConsolidator
 from openviking.server.identity import RequestContext, Role, UserIdentifier

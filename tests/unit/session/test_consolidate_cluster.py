@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from openviking.session.memory_deduplicator import (
-    ClusterDecision,
     ClusterDecisionType,
     MemoryDeduplicator,
 )

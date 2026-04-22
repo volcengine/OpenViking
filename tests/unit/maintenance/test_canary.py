@@ -6,11 +6,15 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from openviking.maintenance import Canary, CanaryResult
+from openviking.maintenance import Canary
 from openviking.maintenance.memory_consolidator import MemoryConsolidator
 from tests.unit.maintenance.conftest import (
     make_consolidator as _make_consolidator,
+)
+from tests.unit.maintenance.conftest import (
     make_request_ctx as _make_request_ctx,
+)
+from tests.unit.maintenance.conftest import (
     noop_lock as _noop_lock,
 )
 

@@ -9,8 +9,6 @@ import pytest
 
 from openviking.maintenance.memory_consolidator import (
     AUDIT_PATH_FRAGMENT,
-    ConsolidationResult,
-    MemoryConsolidator,
 )
 from openviking.session.memory_deduplicator import (
     ClusterDecision,
