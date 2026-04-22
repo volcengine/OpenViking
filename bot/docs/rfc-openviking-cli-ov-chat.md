@@ -329,8 +329,8 @@ Vikingbot 的配置项统一放在 `ov.conf` 的 `bot` 字段下：
 # Enable Bot API proxy
 openviking-server --with-bot
 
-# Custom bot URL
-openviking-server --with-bot --bot-url http://localhost:8080
+# Custom bot port
+openviking-server --with-bot --bot-port 8080
 
 # With config file
 openviking-server --config /path/to/ov.conf
