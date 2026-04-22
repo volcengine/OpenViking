@@ -272,7 +272,6 @@ class OpenAPIChannelConfig(BaseChannelConfig):
 
     type: ChannelType = ChannelType.OPENAPI
     enabled: bool = True
-    api_key: str = ""  # Empty disables privileged HTTP routes until configured
     allow_from: list[str] = Field(default_factory=list)
     max_concurrent_requests: int = 100
     _channel_id: str = "default"
@@ -477,11 +476,25 @@ class HeartbeatConfig(BaseModel):
     interval_seconds: int = 10 * 60  # Default: 5 minutes
 
 
+LOCALHOST_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def is_localhost_host(host: str) -> bool:
+    return host in LOCALHOST_HOSTS
+
+
+def requires_gateway_token(host: str, token: str) -> bool:
+    return not is_localhost_host(host) and not token
+
+
 class GatewayConfig(BaseModel):
     """Gateway/server configuration."""
 
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = 18790
+    token: str = ""
+    # 已废弃，使用token替代
+    api_key: str = ""
 
 
 class WebSearchConfig(BaseModel):

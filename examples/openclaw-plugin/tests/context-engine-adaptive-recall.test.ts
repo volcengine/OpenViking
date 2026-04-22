@@ -108,8 +108,11 @@ describe("context-engine adaptive recall", () => {
     });
 
     expect(client.find).toHaveBeenCalledTimes(2);
-    expect(result.systemPromptAddition).toContain("<relevant-memories>");
-    expect(result.systemPromptAddition).toContain("User prefers concrete evidence.");
+    const firstUser = result.messages.find((m) => m.role === "user");
+    const firstUserContent =
+      typeof firstUser?.content === "string" ? firstUser.content : JSON.stringify(firstUser?.content);
+    expect(firstUserContent).toContain("<relevant-memories>");
+    expect(firstUserContent).toContain("User prefers concrete evidence.");
   });
 
   it("reuses exact cached recall results", async () => {
@@ -135,7 +138,10 @@ describe("context-engine adaptive recall", () => {
     });
 
     expect(client.find).toHaveBeenCalledTimes(2);
-    expect(result.systemPromptAddition).toContain("User prefers concrete evidence.");
+    const firstUser = result.messages.find((m) => m.role === "user");
+    const firstUserContent =
+      typeof firstUser?.content === "string" ? firstUser.content : JSON.stringify(firstUser?.content);
+    expect(firstUserContent).toContain("User prefers concrete evidence.");
   });
 
   it("coalesces duplicate background refreshes for fast turns", async () => {

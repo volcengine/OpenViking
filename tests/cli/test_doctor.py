@@ -170,9 +170,9 @@ class TestCheckEmbedding:
                 with patch.object(Path, "exists", autospec=True, return_value=True):
                     with patch(
                         "openviking_cli.doctor.importlib.import_module",
-                        side_effect=lambda name: object()
-                        if name == "llama_cpp"
-                        else real_import(name),
+                        side_effect=lambda name: (
+                            object() if name == "llama_cpp" else real_import(name)
+                        ),
                     ):
                         ok, detail, fix = check_embedding()
 
@@ -318,6 +318,65 @@ class TestCheckVlm:
         assert not ok
         assert "unreadable" in detail
 
+    def test_pass_with_codex_oauth(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps({"vlm": {"provider": "openai-codex", "model": "gpt-5.3-codex"}})
+        )
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            with patch(
+                "openviking.models.vlm.backends.codex_auth.resolve_codex_runtime_credentials",
+                return_value={"source": "openviking"},
+            ):
+                ok, detail, fix = check_vlm()
+        assert ok
+        assert "oauth via openviking" in detail
+
+    def test_fail_with_codex_oauth_missing_auth(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps({"vlm": {"provider": "openai-codex", "model": "gpt-5.3-codex"}})
+        )
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            with patch(
+                "openviking.models.vlm.backends.codex_auth.resolve_codex_runtime_credentials",
+                side_effect=RuntimeError("missing auth"),
+            ):
+                with patch(
+                    "openviking.models.vlm.backends.codex_auth.get_codex_auth_status",
+                    return_value={
+                        "store_path": "/tmp/ov-codex.json",
+                        "bootstrap_path": "/tmp/codex/auth.json",
+                    },
+                ):
+                    ok, detail, fix = check_vlm()
+        assert not ok
+        assert "missing auth" in detail
+        assert "openviking-server init" in fix
+
+    def test_pass_with_default_provider_codex_oauth(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps(
+                {
+                    "vlm": {
+                        "model": "gpt-5.3-codex",
+                        "default_provider": "openai-codex",
+                        "providers": {"openai": {"api_key": "sk-test"}, "openai-codex": {}},
+                    }
+                }
+            )
+        )
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            with patch(
+                "openviking.models.vlm.backends.codex_auth.resolve_codex_runtime_credentials",
+                return_value={"source": "openviking"},
+            ):
+                ok, detail, fix = check_vlm()
+        assert ok
+        assert "openai-codex/gpt-5.3-codex" in detail
+        assert "oauth via openviking" in detail
+
 
 class TestCheckOllama:
     def test_pass_when_config_is_missing(self):
@@ -364,7 +423,9 @@ class TestCheckOllama:
             )
         )
         with patch("openviking_cli.doctor._find_config", return_value=config):
-            with patch("openviking_cli.utils.ollama.check_ollama_running", return_value=True) as running:
+            with patch(
+                "openviking_cli.utils.ollama.check_ollama_running", return_value=True
+            ) as running:
                 ok, detail, fix = check_ollama()
         running.assert_called_once_with("embedding-host", 11435)
         assert ok
@@ -385,7 +446,9 @@ class TestCheckOllama:
             )
         )
         with patch("openviking_cli.doctor._find_config", return_value=config):
-            with patch("openviking_cli.utils.ollama.check_ollama_running", return_value=True) as running:
+            with patch(
+                "openviking_cli.utils.ollama.check_ollama_running", return_value=True
+            ) as running:
                 ok, detail, fix = check_ollama()
         running.assert_called_once_with("vlm-host", 11436)
         assert ok

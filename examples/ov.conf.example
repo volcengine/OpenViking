@@ -27,6 +27,8 @@
         "region": "cn-beijing",
         "ak": null,
         "sk": null,
+        "api_key": null,
+        "host": "api-vikingdb.vikingdb.cn-beijing.volces.com",
         "session_token": null
       }
     },
@@ -78,6 +80,32 @@
     "max_retries": 2,
     "provider": "volcengine",
     "thinking": false
+  },
+  "vlm_codex_example": {
+    "_comment": "For Codex OAuth via subscription. Complete sign-in from `openviking-server init`. OV stores tokens in ~/.openviking/codex_auth.json and can bootstrap from an existing Codex CLI auth file if needed.",
+    "provider": "openai-codex",
+    "model": "gpt-5.3-codex",
+    "api_base": "https://chatgpt.com/backend-api/codex",
+    "temperature": 0.0,
+    "max_retries": 2
+  },
+  "vlm_kimi_example": {
+    "_comment": "For Kimi Coding subscription. OpenViking applies the recommended provider defaults automatically.",
+    "provider": "kimi",
+    "model": "kimi-code",
+    "api_key": "{your-kimi-subscription-api-key}",
+    "api_base": "https://api.kimi.com/coding",
+    "temperature": 0.0,
+    "max_retries": 2
+  },
+  "vlm_glm_example": {
+    "_comment": "For GLM Coding Plan via Z.AI subscription API key. Use a vision-capable model for multimodal parsing.",
+    "provider": "glm",
+    "model": "glm-4.6v",
+    "api_key": "{your-zai-api-key}",
+    "api_base": "https://api.z.ai/api/coding/paas/v4",
+    "temperature": 0.0,
+    "max_retries": 2
   },
   "rerank": {
     "provider": "vikingdb",

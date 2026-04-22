@@ -118,7 +118,7 @@ class FaultTolerantBaseModel(BaseModel):
         origin = get_origin(annotation)
         if origin is Union:
             args = get_args(annotation)
-            if len(args) == 2 and args[1] == type(None):
+            if len(args) == 2 and args[1] is type(None):
                 return cls.get_origin_type(args[0])
         elif origin is list:
             return list
@@ -130,7 +130,7 @@ class FaultTolerantBaseModel(BaseModel):
         origin = get_origin(annotation)
         if origin is Union:
             args = get_args(annotation)
-            if len(args) == 2 and args[1] == type(None):
+            if len(args) == 2 and args[1] is type(None):
                 return cls.get_arg_type(args[0])
         elif origin is list:
             args = get_args(annotation)
@@ -240,11 +240,7 @@ class StructuredMemoryOperations(FaultTolerantBaseModel):
 
     def is_empty(self) -> bool:
         """Check if there are any operations."""
-        return (
-            len(self.write_uris) == 0
-            and len(self.edit_uris) == 0
-            and len(self.delete_uris) == 0
-        )
+        return len(self.write_uris) == 0 and len(self.edit_uris) == 0 and len(self.delete_uris) == 0
 
     def to_legacy_operations(self) -> Dict[str, Any]:
         """Convert to legacy format (identity for fallback)."""

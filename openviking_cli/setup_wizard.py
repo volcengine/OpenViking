@@ -26,6 +26,13 @@ from openviking_cli.utils.ollama import (
     start_ollama,
 )
 
+_DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
+_DEFAULT_KIMI_BASE_URL = "https://api.kimi.com/coding"
+_DEFAULT_GLM_BASE_URL = "https://api.z.ai/api/coding/paas/v4"
+_DEFAULT_CODEX_MODEL = "gpt-5.4"
+_DEFAULT_KIMI_MODEL = "kimi-code"
+_DEFAULT_GLM_MODEL = "glm-4.6v"
+
 # ---------------------------------------------------------------------------
 # ANSI helpers (same pattern as doctor.py)
 # ---------------------------------------------------------------------------
@@ -88,14 +95,38 @@ def _prompt_choice(prompt: str, options: list[tuple[str, str]], default: int = 1
         print(f"  {_red('Please enter a number between 1 and ' + str(len(options)))}")
 
 
-def _prompt_input(prompt: str, default: str = "") -> str:
-    """Prompt for free-text input with optional default."""
-    suffix = f" [{default}]" if default else ""
-    try:
-        raw = input(f"  {prompt}{suffix}: ").strip()
-    except EOFError:
-        return default
-    return raw or default
+def _prompt_required_input(prompt: str, default: str | None = None) -> str:
+    """Prompt for a required free-text value."""
+    while True:
+        try:
+            prompt_text = f"  {prompt} [{default}]: " if default is not None else f"  {prompt}: "
+            raw = input(prompt_text).strip()
+        except EOFError:
+            return default or ""
+        if not raw and default is not None:
+            return default
+        if raw:
+            return raw
+        print(f"  {_red(prompt + ' is required')}")
+
+
+def _prompt_required_int(prompt: str, default: int | None = None) -> int | None:
+    """Prompt for a required integer value."""
+    while True:
+        try:
+            prompt_text = f"  {prompt} [{default}]: " if default is not None else f"  {prompt}: "
+            raw = input(prompt_text).strip()
+        except EOFError:
+            return default
+        if not raw:
+            if default is not None:
+                return default
+            print(f"  {_red(prompt + ' is required')}")
+            continue
+        try:
+            return int(raw)
+        except ValueError:
+            print(f"  {_red('Please enter a valid integer')}")
 
 
 def _prompt_confirm(prompt: str, default: bool = True) -> bool:
@@ -201,6 +232,50 @@ def _ensure_ollama() -> bool:
     return result.success
 
 
+def _ensure_codex_auth() -> bool:
+    import importlib
+
+    importlib.import_module("openviking.models.vlm")
+    codex_auth = importlib.import_module("openviking.models.vlm.backends.codex_auth")
+
+    print("\n  Checking Codex OAuth...", end=" ", flush=True)
+    try:
+        creds = codex_auth.resolve_codex_runtime_credentials(refresh_if_expiring=False)
+        source = creds.get("source", "unknown")
+        print(_green(f"ready via {source}"))
+        return True
+    except Exception:
+        print(_yellow("not ready"))
+
+    status = codex_auth.get_codex_auth_status()
+    bootstrap_path = status.get("bootstrap_path")
+
+    if status.get("bootstrap_available") and bootstrap_path:
+        if _prompt_confirm(f"Import existing Codex CLI auth from {bootstrap_path}?"):
+            try:
+                path = codex_auth.bootstrap_codex_auth()
+            except codex_auth.CodexAuthError as exc:
+                print(f"  {_yellow(str(exc))}")
+            else:
+                if path is not None:
+                    print(f"  {_green('OK')} Imported Codex OAuth into {path}")
+                    return True
+
+    if _prompt_confirm("Sign in to Codex now?"):
+        try:
+            path = codex_auth.login_codex_with_device_code()
+        except codex_auth.CodexAuthError as exc:
+            print(f"  {_yellow(str(exc))}")
+        else:
+            print(f"  {_green('OK')} Codex OAuth stored in {path}")
+            return True
+
+    print(
+        f"  {_dim('You can finish setup now and re-run `openviking-server init` later to complete Codex sign-in.')}"
+    )
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Model presets
 # ---------------------------------------------------------------------------
@@ -286,7 +361,7 @@ CLOUD_PROVIDERS: list[CloudProvider] = [
         "https://api.openai.com/v1",
         "text-embedding-3-small",
         1536,
-        "gpt-4o-mini",
+        "gpt-5.4",
     ),
     CloudProvider(
         "Volcengine (Doubao)",
@@ -294,8 +369,24 @@ CLOUD_PROVIDERS: list[CloudProvider] = [
         "https://ark.cn-beijing.volces.com/api/v3",
         "doubao-embedding-vision-251215",
         1024,
-        "doubao-seed-2-0-pro-260215",
+        "doubao-seed-2-0-code-preview-260215",
     ),
+]
+
+
+def _get_cloud_provider(provider_name: str) -> CloudProvider:
+    for provider in CLOUD_PROVIDERS:
+        if provider.provider == provider_name:
+            return provider
+    raise ValueError(f"Unknown cloud provider: {provider_name}")
+
+
+_WIZARD_VLM_OPTIONS: list[tuple[str, str]] = [
+    ("OpenAI", "(API)"),
+    ("Volcengine", "(API)"),
+    ("OpenAI Codex", "(Subscription)"),
+    ("Kimi", "(Subscription API Key)"),
+    ("GLM", "(Subscription API Key)"),
 ]
 
 
@@ -424,13 +515,25 @@ def _build_cloud_config(
     embedding_api_key: str,
     embedding_model: str,
     embedding_dim: int,
-    vlm_api_key: str,
     vlm_model: str,
     workspace: str,
     embedding_api_base: str | None = None,
+    vlm_provider: str | None = None,
+    vlm_api_key: str | None = None,
     vlm_api_base: str | None = None,
 ) -> dict[str, Any]:
-    """Build ov.conf dict for cloud API setup."""
+    resolved_vlm_provider = vlm_provider or provider.provider
+    resolved_vlm_api_base = vlm_api_base or provider.default_api_base
+    vlm_config: dict[str, Any] = {
+        "provider": resolved_vlm_provider,
+        "model": vlm_model,
+        "api_base": resolved_vlm_api_base,
+        "temperature": 0.0,
+        "max_retries": 2,
+    }
+    if vlm_api_key:
+        vlm_config["api_key"] = vlm_api_key
+
     return {
         "storage": {"workspace": workspace},
         "embedding": {
@@ -442,14 +545,7 @@ def _build_cloud_config(
                 "dimension": embedding_dim,
             },
         },
-        "vlm": {
-            "provider": provider.provider,
-            "model": vlm_model,
-            "api_key": vlm_api_key,
-            "api_base": vlm_api_base or provider.default_api_base,
-            "temperature": 0.0,
-            "max_retries": 2,
-        },
+        "vlm": vlm_config,
     }
 
 
@@ -560,10 +656,7 @@ def _wizard_ollama() -> dict[str, Any] | None:
             else:
                 print(f"  {_green('OK')} {vlm.ollama_model} pulled successfully")
 
-    # Workspace
-    workspace = _prompt_input("Workspace", default=_DEFAULT_WORKSPACE)
-
-    return _build_ollama_config(embedding, vlm, workspace)
+    return _build_ollama_config(embedding, vlm, _DEFAULT_WORKSPACE)
 
 
 def _wizard_llamacpp() -> dict[str, Any] | None:
@@ -721,12 +814,12 @@ def _wizard_llamacpp() -> dict[str, Any] | None:
         choice = _prompt_choice("Cloud provider for VLM:", provider_options, default=1)
         provider = CLOUD_PROVIDERS[choice - 1]
 
-        vlm_api_key = _prompt_input("VLM API Key")
+        vlm_api_key = _prompt_required_input("VLM API Key")
         if not vlm_api_key:
             print(f"  {_red('API key is required')}")
             return None
-        vlm_model = _prompt_input("VLM Model", default=provider.default_vlm_model)
-        vlm_api_base = _prompt_input("API Base", default=provider.default_api_base)
+        vlm_model = _prompt_required_input("Vision Model")
+        vlm_api_base = provider.default_api_base
 
         vlm_config = {
             "provider": provider.provider,
@@ -737,13 +830,10 @@ def _wizard_llamacpp() -> dict[str, Any] | None:
             "max_retries": 2,
         }
 
-    # --- Step 4: workspace ---
-    workspace = _prompt_input("Workspace", default=_DEFAULT_WORKSPACE)
-
     return _build_local_config(
         model_name=model_name,
         dimension=dimension,
-        workspace=workspace,
+        workspace=_DEFAULT_WORKSPACE,
         model_path=custom_model_path,
         vlm_config=vlm_config,
     )
@@ -754,7 +844,7 @@ def _wizard_cloud() -> dict[str, Any] | None:
     # Provider selection
     provider_options = [(p.label, "") for p in CLOUD_PROVIDERS]
     provider_options.append(("Other (manual)", ""))
-    choice = _prompt_choice("Cloud provider:", provider_options, default=1)
+    choice = _prompt_choice("Embedding provider:", provider_options, default=1)
 
     if choice > len(CLOUD_PROVIDERS):
         # Manual / Other
@@ -766,37 +856,81 @@ def _wizard_cloud() -> dict[str, Any] | None:
 
     # Embedding config
     print(f"\n  {_bold('Embedding configuration')}")
-    embedding_api_key = _prompt_input("API Key")
+    embedding_api_key = _prompt_required_input("API Key")
     if not embedding_api_key:
         print(f"  {_red('API key is required')}")
         return None
-    embedding_model = _prompt_input("Model", default=provider.default_embedding_model)
-    embedding_dim_str = _prompt_input("Dimension", default=str(provider.default_embedding_dim))
-    try:
-        embedding_dim = int(embedding_dim_str)
-    except ValueError:
-        embedding_dim = provider.default_embedding_dim
-    embedding_api_base = _prompt_input("API Base", default=provider.default_api_base)
+    embedding_model = _prompt_required_input("Model", default=provider.default_embedding_model)
+    embedding_dim = _prompt_required_int("Dimension", default=provider.default_embedding_dim)
+    if embedding_dim is None:
+        print(f"  {_red('Dimension is required')}")
+        return None
+    embedding_api_base = provider.default_api_base
 
-    # VLM config
-    print(f"\n  {_bold('VLM configuration')}")
-    vlm_api_key = _prompt_input("API Key (same as above?)", default=embedding_api_key)
-    vlm_model = _prompt_input("Model", default=provider.default_vlm_model)
-    vlm_api_base = _prompt_input("API Base", default=provider.default_api_base)
+    vlm_mode = _prompt_choice("VLM provider:", _WIZARD_VLM_OPTIONS, default=1)
 
-    # Workspace
-    workspace = _prompt_input("Workspace", default=_DEFAULT_WORKSPACE)
+    if vlm_mode == 1:
+        vlm_choice = _get_cloud_provider("openai")
+        print(f"\n  {_bold('VLM configuration')}")
+        vlm_api_key = _prompt_required_input("API Key")
+        if not vlm_api_key:
+            print(f"  {_red('API key is required')}")
+            return None
+        vlm_model = _prompt_required_input("Model", default=vlm_choice.default_vlm_model)
+        vlm_api_base = vlm_choice.default_api_base
+        vlm_provider = vlm_choice.provider
+        workspace = _DEFAULT_WORKSPACE
+    elif vlm_mode == 2:
+        vlm_choice = _get_cloud_provider("volcengine")
+        print(f"\n  {_bold('VLM configuration')}")
+        vlm_api_key = _prompt_required_input("API Key")
+        if not vlm_api_key:
+            print(f"  {_red('API key is required')}")
+            return None
+        vlm_model = _prompt_required_input("Model", default=vlm_choice.default_vlm_model)
+        vlm_api_base = vlm_choice.default_api_base
+        vlm_provider = vlm_choice.provider
+        workspace = _DEFAULT_WORKSPACE
+    elif vlm_mode == 3:
+        _ensure_codex_auth()
+        print(f"\n  {_bold('Codex VLM configuration')}")
+        vlm_model = _prompt_required_input("Model", default=_DEFAULT_CODEX_MODEL)
+        vlm_api_base = _DEFAULT_CODEX_BASE_URL
+        vlm_api_key = None
+        vlm_provider = "openai-codex"
+        workspace = _DEFAULT_WORKSPACE
+    elif vlm_mode == 4:
+        print(f"\n  {_bold('Kimi VLM configuration')}")
+        vlm_api_key = _prompt_required_input("API Key")
+        if not vlm_api_key:
+            print(f"  {_red('API key is required')}")
+            return None
+        vlm_model = _prompt_required_input("Model", default=_DEFAULT_KIMI_MODEL)
+        vlm_api_base = _DEFAULT_KIMI_BASE_URL
+        vlm_provider = "kimi"
+        workspace = _DEFAULT_WORKSPACE
+    else:
+        print(f"\n  {_bold('GLM VLM configuration')}")
+        vlm_api_key = _prompt_required_input("API Key")
+        if not vlm_api_key:
+            print(f"  {_red('API key is required')}")
+            return None
+        vlm_model = _prompt_required_input("Model", default=_DEFAULT_GLM_MODEL)
+        vlm_api_base = _DEFAULT_GLM_BASE_URL
+        vlm_provider = "glm"
+        workspace = _DEFAULT_WORKSPACE
 
     return _build_cloud_config(
         provider,
         embedding_api_key,
         embedding_model,
         embedding_dim,
-        vlm_api_key,
         vlm_model,
         workspace,
-        embedding_api_base,
-        vlm_api_base,
+        embedding_api_base=embedding_api_base,
+        vlm_provider=vlm_provider,
+        vlm_api_key=vlm_api_key,
+        vlm_api_base=vlm_api_base,
     )
 
 
@@ -834,6 +968,9 @@ def run_init() -> int:
     """Run the interactive setup wizard."""
     print(f"\n  {_bold('OpenViking Setup')}")
     print(f"  {'=' * 16}\n")
+    print(
+        f"  {_dim('Data will be stored under ~/.openviking/data unless you edit ov.conf later.')}\n"
+    )
 
     # Check for existing config
     if _DEFAULT_CONFIG_PATH.exists():

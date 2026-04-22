@@ -220,6 +220,9 @@ class BaseOpenClawCLITest(unittest.TestCase):
             "did not produce a response",
             "LLM idle timeout",
             "timed out",
+            "couldn't generate a response",
+            "couldn't generate",
+            "please try again",
         ]
         return any(ind.lower() in text.lower() for ind in timeout_indicators)
 
@@ -241,6 +244,22 @@ class BaseOpenClawCLITest(unittest.TestCase):
         ]
         if any(text.startswith(p) for p in tool_result_prefixes):
             return True
+        import re
+
+        tool_result_pattern = r"^\[?\{[^}]*\"name\"\s*:\s*\"none\"[^}]*\}\]?[\s]*$"
+        if re.match(tool_result_pattern, text):
+            return True
+        if text.startswith("[{") and text.endswith("}]"):
+            try:
+                import json
+
+                parsed = json.loads(text)
+                if isinstance(parsed, list) and all(
+                    isinstance(item, dict) and "name" in item for item in parsed
+                ):
+                    return True
+            except (json.JSONDecodeError, ValueError):
+                pass
         tool_result_patterns = [
             '"name":"none"',
         ]

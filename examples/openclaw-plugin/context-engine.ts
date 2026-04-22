@@ -191,7 +191,7 @@ function messageDigest(messages: AgentMessage[], maxCharsPerMsg = 2000): Array<{
       text = (raw as Record<string, unknown>[])
         .map((b) => {
           if (b.type === "text") return String(b.text ?? "");
-          if (b.type === "toolUse") return `[toolUse: ${String(b.name)}(${JSON.stringify(b.arguments ?? {}).slice(0, 200)})]`;
+          if (b.type === "toolCall") return `[toolCall: ${String(b.name)}(${JSON.stringify(b.arguments ?? {}).slice(0, 200)})]`;
           if (b.type === "toolResult") return `[toolResult: ${JSON.stringify(b.content ?? "").slice(0, 200)}]`;
           return `[${String(b.type)}]`;
         })
@@ -311,7 +311,7 @@ export function openClawSessionRefToOvStorageId(ref: string): string {
  * OpenClaw AgentMessages (content-blocks format).
  *
  * For assistant messages with ToolParts, this produces:
- * 1. The assistant message with toolUse blocks in its content array
+ * 1. The assistant message with canonical toolCall blocks in its content array
  * 2. A separate toolResult message per ToolPart (carrying tool_output)
  */
 function convertToAgentMessages(msg: { role: string; parts: unknown[] }): AgentMessage[] {
@@ -331,42 +331,35 @@ function convertToAgentMessages(msg: { role: string; parts: unknown[] }): AgentM
       }
     } else if (p.type === "tool" && msg.role === "assistant") {
       const toolId = typeof p.tool_id === "string" ? p.tool_id : "";
-      const toolName = typeof p.tool_name === "string" ? p.tool_name : "unknown";
+      const toolName = typeof p.tool_name === "string" ? p.tool_name : undefined;
+      const status = typeof p.tool_status === "string" ? p.tool_status : "unknown";
+      const output = typeof p.tool_output === "string" ? p.tool_output : "";
 
       if (toolId) {
         contentBlocks.push({
-          type: "toolUse",
+          type: "toolCall",
           id: toolId,
-          name: toolName,
-          input: p.tool_input ?? {},
+          name: toolName ?? "unknown",
+          arguments: p.tool_input ?? {},
         });
 
-        const status = typeof p.tool_status === "string" ? p.tool_status : "";
-        const output = typeof p.tool_output === "string" ? p.tool_output : "";
-
-        if (status === "completed" || status === "error") {
-          toolResults.push({
-            role: "toolResult",
-            toolCallId: toolId,
-            toolName,
-            content: [{ type: "text", text: output || "(no output)" }],
-            isError: status === "error",
-          } as unknown as AgentMessage);
-        } else {
-          toolResults.push({
-            role: "toolResult",
-            toolCallId: toolId,
-            toolName,
-            content: [{ type: "text", text: "(interrupted — tool did not complete)" }],
-            isError: false,
-          } as unknown as AgentMessage);
+        const resultText =
+          status === "completed" || status === "error"
+            ? output || "(no output)"
+            : "(interrupted — tool did not complete)";
+        const resultPayload: Record<string, unknown> = {
+          role: "toolResult",
+          toolCallId: toolId,
+          content: [{ type: "text", text: resultText }],
+          isError: status === "error",
+        };
+        if (toolName) {
+          resultPayload.toolName = toolName;
         }
+        toolResults.push(resultPayload as unknown as AgentMessage);
       } else {
-        // No tool_id: degrade to text block to preserve information.
-        // Cannot emit toolUse/toolResult without a valid id.
-        const status = typeof p.tool_status === "string" ? p.tool_status : "unknown";
-        const output = typeof p.tool_output === "string" ? p.tool_output : "";
-        const segments = [`[${toolName}] (${status})`];
+        const fallbackName = toolName ?? "unknown";
+        const segments = [`[${fallbackName}] (${status})`];
         if (p.tool_input) {
           try {
             segments.push(`Input: ${JSON.stringify(p.tool_input)}`);
@@ -407,6 +400,85 @@ function normalizeAssistantContent(messages: AgentMessage[]): void {
       };
     }
   }
+}
+
+function canonicalizeAssistantBlock(block: unknown): unknown {
+  if (!block || typeof block !== "object") {
+    return block;
+  }
+
+  const rec = block as Record<string, unknown>;
+  const type = typeof rec.type === "string" ? rec.type : "";
+  if (type === "toolCall") {
+    if (rec.arguments !== undefined) {
+      return rec;
+    }
+    return {
+      ...rec,
+      arguments: rec.input ?? rec.toolInput ?? {},
+    };
+  }
+
+  if (type === "toolUse" || type === "functionCall" || type === "tool_call") {
+    return {
+      type: "toolCall",
+      id: rec.id ?? rec.toolCallId ?? rec.toolUseId,
+      name: rec.name,
+      arguments: rec.arguments ?? rec.input ?? rec.toolInput ?? {},
+    };
+  }
+
+  return rec;
+}
+
+function canonicalizeAgentMessages(messages: AgentMessage[]): AgentMessage[] {
+  let changed = false;
+  const next = messages.map((msg) => {
+    if (!msg || typeof msg !== "object") {
+      return msg;
+    }
+
+    if (msg.role === "assistant") {
+      const content = Array.isArray(msg.content)
+        ? msg.content.map((block) => canonicalizeAssistantBlock(block))
+        : typeof msg.content === "string"
+          ? [{ type: "text", text: msg.content }]
+          : msg.content;
+
+      if (content !== msg.content) {
+        changed = true;
+        return { ...msg, content };
+      }
+      return msg;
+    }
+
+    if (msg.role === "toolResult") {
+      const raw = msg as Record<string, unknown>;
+      const toolCallId =
+        (typeof raw.toolCallId === "string" && raw.toolCallId) ||
+        (typeof raw.toolUseId === "string" && raw.toolUseId) ||
+        undefined;
+      const toolName =
+        typeof raw.toolName === "string" && raw.toolName.trim()
+          ? raw.toolName.trim()
+          : undefined;
+
+      const nextMsg = {
+        ...msg,
+        ...(toolCallId ? { toolCallId } : {}),
+        ...(toolName ? { toolName } : {}),
+      } as AgentMessage;
+
+      if (nextMsg !== msg) {
+        changed = true;
+      }
+      return nextMsg;
+    }
+
+    return msg;
+  });
+
+  return changed ? next : messages;
 }
 
 export function formatMessageFaithful(msg: OVMessage): string {
@@ -494,6 +566,37 @@ function joinSystemPromptSections(sections: Array<string | undefined>): string |
     return undefined;
   }
   return filtered.join("\n\n");
+}
+
+// OpenClaw 4.14+ installContextEngineLoopHook only forwards assembled.messages
+// out of transformContext; systemPromptAddition is discarded. Inject recall as
+// a leading text block on the first user message so the model sees it.
+function injectRecallIntoMessages(
+  msgs: AgentMessage[],
+  recallSection: string | undefined,
+): AgentMessage[] {
+  if (!recallSection) {
+    return msgs;
+  }
+  const result = [...msgs];
+  const userIdx = result.findIndex((m) => m.role === "user");
+  if (userIdx < 0) {
+    return result;
+  }
+  const msg = result[userIdx];
+  const content = (msg as { content?: unknown }).content;
+  if (typeof content === "string") {
+    result[userIdx] = { ...msg, content: `${recallSection}\n\n${content}` };
+  } else if (Array.isArray(content)) {
+    result[userIdx] = {
+      ...msg,
+      content: [
+        { type: "text", text: recallSection },
+        ...(content as Array<Record<string, unknown>>),
+      ],
+    };
+  }
+  return result;
 }
 
 function warnOrInfo(logger: Logger, message: string): void {
@@ -1012,15 +1115,9 @@ export function createMemoryOpenVikingContextEngine(params: {
           ctxSettled.status === "fulfilled"
             ? ctxSettled.value
             : null;
-        const passthroughSystemPrompt = joinSystemPromptSections([
-          recallPrompt.section,
-        ]);
         const passthroughResult = (): AssembleResult => ({
-          messages,
+          messages: injectRecallIntoMessages(messages, recallPrompt.section),
           estimatedTokens: passthroughEstimatedTokens,
-          ...(passthroughSystemPrompt
-            ? { systemPromptAddition: passthroughSystemPrompt }
-            : {}),
         });
 
         const preAbstracts = ctx?.pre_archive_abstracts ?? [];
@@ -1073,7 +1170,8 @@ export function createMemoryOpenVikingContextEngine(params: {
         assembled.push(...ctx.messages.flatMap((m) => convertToAgentMessages(m)));
 
         normalizeAssistantContent(assembled);
-        const sanitized = sanitizeToolUseResultPairing(assembled as never[]) as AgentMessage[];
+        const canonical = canonicalizeAgentMessages(assembled);
+        const sanitized = sanitizeToolUseResultPairing(canonical as never[]) as AgentMessage[];
 
         if (sanitized.length === 0 && messages.length > 0) {
           diag("assemble_result", OVSessionId, {
@@ -1088,33 +1186,29 @@ export function createMemoryOpenVikingContextEngine(params: {
           return passthroughResult();
         }
 
-        const assembledTokens = roughEstimate(sanitized);
+        const withRecall = injectRecallIntoMessages(sanitized, recallPrompt.section);
+        const assembledTokens = roughEstimate(withRecall);
         const archiveCount = preAbstracts.length;
         const tokensSaved = originalTokens - assembledTokens;
         const savingPct = originalTokens > 0 ? Math.round((tokensSaved / originalTokens) * 100) : 0;
-        const assembledSystemPrompt = joinSystemPromptSections([
-          hasArchives ? buildSystemPromptAddition() : undefined,
-          recallPrompt.section,
-        ]);
+        const archiveGuidance = hasArchives ? buildSystemPromptAddition() : undefined;
 
         diag("assemble_result", OVSessionId, {
           passthrough: false,
           archiveCount,
           activeCount,
-          outputMessagesCount: sanitized.length,
+          outputMessagesCount: withRecall.length,
           inputTokenEstimate: originalTokens,
           estimatedTokens: assembledTokens,
           tokensSaved,
           savingPct,
-          messages: messageDigest(sanitized),
+          messages: messageDigest(withRecall),
         });
 
         return {
-          messages: sanitized,
+          messages: withRecall,
           estimatedTokens: ctx.estimatedTokens,
-          ...(assembledSystemPrompt
-            ? { systemPromptAddition: assembledSystemPrompt }
-            : {}),
+          ...(archiveGuidance ? { systemPromptAddition: archiveGuidance } : {}),
         };
       } catch (err) {
         warnOrInfo(

@@ -1,19 +1,21 @@
 """Werewolf game server with message routing and Web UI."""
 
 import asyncio
+import html
 import json
 import re
 import time
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 import httpx
 import typer
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from loguru import logger
-from dataclasses import dataclass, field
 
 app = typer.Typer()
 
@@ -26,15 +28,17 @@ app = typer.Typer()
 @dataclass
 class ChatMessage:
     """A chat message in the history."""
+
     channel_id: str
     content: str
     is_user: bool
-    timestamp: float = field(default_factory=lambda: __import__('time').time())
+    timestamp: float = field(default_factory=lambda: __import__("time").time())
 
 
 @dataclass
 class PendingReply:
     """Track pending player replies."""
+
     channel_id: str
     message_id: str
     timestamp: float
@@ -43,6 +47,7 @@ class PendingReply:
 @dataclass
 class GameState:
     """Shared game state."""
+
     game_id: str
     vikingbot_url: str
     config_path: Path
@@ -106,7 +111,9 @@ def get_storage_path(config: Dict[str, Any]) -> Path:
     storage_config = config.get("storage", {})
     bot_config = config.get("bot", {})
     sandbox_config = bot_config.get("sandbox", {})
-    storage_workspace = sandbox_config.get("storage_workspace") or storage_config.get("workspace", "~/.openviking/data")
+    storage_workspace = sandbox_config.get("storage_workspace") or storage_config.get(
+        "workspace", "~/.openviking/data"
+    )
     return Path(storage_workspace).expanduser()
 
 
@@ -195,7 +202,14 @@ def extract_content_without_mentions(content: str) -> str:
 def is_waiting_like_reply(content: str) -> bool:
     """Check whether god reply is an initialization/paused-state reply."""
     text = str(content or "")
-    waiting_markers = ["初始化完成", "初始化已完成", "等待开始", "等待指令", "等待继续",'等待"开始"指令']
+    waiting_markers = [
+        "初始化完成",
+        "初始化已完成",
+        "等待开始",
+        "等待指令",
+        "等待继续",
+        '等待"开始"指令',
+    ]
     return any(marker in text for marker in waiting_markers)
 
 
@@ -210,12 +224,7 @@ def parse_game_record(game_record_path: Path) -> Dict[str, Any]:
         - game_time: "白天", "黑夜", or None
         - players: list of dicts with "id", "role", "status"
     """
-    result = {
-        "game_status": None,
-        "game_result": None,
-        "game_time": None,
-        "players": []
-    }
+    result = {"game_status": None, "game_result": None, "game_time": None, "players": []}
 
     if not game_record_path.exists():
         logger.warning(f"GAME_RECORD.md not found at {game_record_path}")
@@ -249,12 +258,10 @@ def parse_game_record(game_record_path: Path) -> Dict[str, Any]:
                         player_id = cells[1]
                         role = cells[2]
                         status = cells[3].strip("[]")
-                        if player_id and not all(c == '-' for c in player_id):
-                            result["players"].append({
-                                "id": player_id,
-                                "role": role,
-                                "status": status
-                            })
+                        if player_id and not all(c == "-" for c in player_id):
+                            result["players"].append(
+                                {"id": player_id, "role": role, "status": status}
+                            )
 
     except Exception as e:
         logger.warning(f"Error parsing GAME_RECORD.md: {e}")
@@ -290,7 +297,16 @@ def normalize_leaderboard_game_result(game_result: Any) -> str:
 
 def is_wolf_role_for_leaderboard(role: Any) -> bool:
     role_str = str(role or "").strip()
-    return role_str in {"Werewolf", "WhiteWolfKing", "WolfCub", "WolfBeauty", "狼人", "白狼王", "狼美人", "狼崽"}
+    return role_str in {
+        "Werewolf",
+        "WhiteWolfKing",
+        "WolfCub",
+        "WolfBeauty",
+        "狼人",
+        "白狼王",
+        "狼美人",
+        "狼崽",
+    }
 
 
 def is_dead_status_for_leaderboard(status: Any) -> bool:
@@ -298,21 +314,27 @@ def is_dead_status_for_leaderboard(status: Any) -> bool:
     return any(token in status_str for token in ("死亡", "出局", "淘汰"))
 
 
-def build_leaderboard_game_from_record(parsed_record: Dict[str, Any], *, session_id: str, game_mode: str) -> Dict[str, Any]:
+def build_leaderboard_game_from_record(
+    parsed_record: Dict[str, Any], *, session_id: str, game_mode: str
+) -> Dict[str, Any]:
     winner = normalize_leaderboard_game_result(parsed_record.get("game_result"))
     players = []
     for player in parsed_record.get("players", []):
         role = player.get("role", "")
         dead = is_dead_status_for_leaderboard(player.get("status", ""))
-        won = (winner == "狼人胜利" and is_wolf_role_for_leaderboard(role)) or (winner == "好人胜利" and not is_wolf_role_for_leaderboard(role))
+        won = (winner == "狼人胜利" and is_wolf_role_for_leaderboard(role)) or (
+            winner == "好人胜利" and not is_wolf_role_for_leaderboard(role)
+        )
         score = (2 if won else 0) + (1 if not dead else 0)
-        players.append({
-            "id": player.get("id", ""),
-            "role": role,
-            "won": won,
-            "dead": dead,
-            "score": score,
-        })
+        players.append(
+            {
+                "id": player.get("id", ""),
+                "role": role,
+                "won": won,
+                "dead": dead,
+                "score": score,
+            }
+        )
 
     return {
         "session_id": session_id,
@@ -350,7 +372,11 @@ def save_game_to_leaderboard_from_record(
     game_mode: str,
 ) -> Dict[str, Any]:
     if str(game_mode or "") == "human_player":
-        return {"success": True, "skipped": True, "reason": "human_player games are excluded from leaderboard"}
+        return {
+            "success": True,
+            "skipped": True,
+            "reason": "human_player games are excluded from leaderboard",
+        }
 
     if not session_id:
         return {"success": False, "error": "missing_session_id"}
@@ -371,15 +397,24 @@ def save_game_to_leaderboard_from_record(
         return {"success": False, "error": "missing_players"}
 
     leaderboard = load_leaderboard(storage_path)
-    if any(str(game.get("session_id") or "") == session_id for game in leaderboard.get("games", [])):
-        return {"success": True, "skipped": True, "reason": "already_saved", "leaderboard": leaderboard}
+    if any(
+        str(game.get("session_id") or "") == session_id for game in leaderboard.get("games", [])
+    ):
+        return {
+            "success": True,
+            "skipped": True,
+            "reason": "already_saved",
+            "leaderboard": leaderboard,
+        }
 
-    leaderboard["games"].append({
-        "session_id": session_id,
-        "timestamp": time.time(),
-        "winner": game_data.get("winner", ""),
-        "players": game_data.get("players", []),
-    })
+    leaderboard["games"].append(
+        {
+            "session_id": session_id,
+            "timestamp": time.time(),
+            "winner": game_data.get("winner", ""),
+            "players": game_data.get("players", []),
+        }
+    )
 
     for player in game_data.get("players", []):
         player_id = player.get("id", "")
@@ -436,7 +471,9 @@ def save_conversation_to_file(storage_path: Path, session_id: str, messages: Lis
     logger.info(f"Conversation saved to {file_path}")
 
 
-def get_player_game_md_path(storage_path: Path, channel_id: str, human_player_channel: str = "human") -> Path:
+def get_player_game_md_path(
+    storage_path: Path, channel_id: str, human_player_channel: str = "human"
+) -> Path:
     """Get GAME.md path for a player channel."""
     bot_workspace = storage_path / "bot" / "workspace"
     if channel_id == human_player_channel:
@@ -444,7 +481,9 @@ def get_player_game_md_path(storage_path: Path, channel_id: str, human_player_ch
     return bot_workspace / f"bot_api__{channel_id}" / "GAME.md"
 
 
-def get_players_snapshot(storage_path: Path, channels: List[str], human_player_channel: str = "human") -> List[Dict[str, Any]]:
+def get_players_snapshot(
+    storage_path: Path, channels: List[str], human_player_channel: str = "human"
+) -> List[Dict[str, Any]]:
     """Read current players info from GAME.md files."""
     players = []
     player_idx = 1
@@ -462,11 +501,13 @@ def get_players_snapshot(storage_path: Path, channels: List[str], human_player_c
             if role_match:
                 role = role_match.group(1).strip()
 
-        players.append({
-            "id": ch,
-            "seat": player_idx,
-            "role": role,
-        })
+        players.append(
+            {
+                "id": ch,
+                "seat": player_idx,
+                "role": role,
+            }
+        )
         player_idx += 1
     return players
 
@@ -492,7 +533,9 @@ def save_runtime_state(storage_path: Path, *, game_mode: str) -> Path:
         "saved_at": time.time(),
         "game_mode": game_mode,
     }
-    runtime_state_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    runtime_state_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     return runtime_state_path
 
 
@@ -509,7 +552,9 @@ def load_runtime_state(storage_path: Path) -> Dict[str, Any]:
         return {}
 
 
-def build_replay_base_info(game_record_text: str, parsed_record: Dict[str, Any], players: List[Dict[str, Any]]) -> Dict[str, Any]:
+def build_replay_base_info(
+    game_record_text: str, parsed_record: Dict[str, Any], players: List[Dict[str, Any]]
+) -> Dict[str, Any]:
     """Build minimal replay base info from archived game record and players."""
     dead = []
     record_player_by_id = {player.get("id"): player for player in parsed_record.get("players", [])}
@@ -536,7 +581,9 @@ def build_replay_base_info(game_record_text: str, parsed_record: Dict[str, Any],
     }
 
 
-def archive_replay_state(storage_path: Path, channels: List[str], session_id: str, force: bool = False) -> Optional[Path]:
+def archive_replay_state(
+    storage_path: Path, channels: List[str], session_id: str, force: bool = False
+) -> Optional[Path]:
     """Archive replay state for a session so replay does not depend on live files."""
     if not session_id:
         return None
@@ -561,7 +608,9 @@ def archive_replay_state(storage_path: Path, channels: List[str], session_id: st
         "players": players,
         "base_info": build_replay_base_info(game_record, parsed_record, players),
     }
-    replay_state_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    replay_state_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     logger.info(f"Replay state archived to {replay_state_path}")
     return replay_state_path
 
@@ -572,7 +621,9 @@ def build_restart_message(state: GameState) -> str:
     player_idx = 1
     for ch in state.channels:
         if ch != "god" and player_idx <= 8:
-            game_md_path = get_player_game_md_path(state.storage_path, ch, state.human_player_channel)
+            game_md_path = get_player_game_md_path(
+                state.storage_path, ch, state.human_player_channel
+            )
             player_list.append(f"{player_idx}号: {ch}，GAME.md地址：{game_md_path}")
             player_idx += 1
 
@@ -583,7 +634,7 @@ def build_restart_message(state: GameState) -> str:
 游戏配置：
 - 玩家数: {len(player_list)}
 - 玩家列表:
-{chr(10).join(f'  - {p}' for p in player_list)}
+{chr(10).join(f"  - {p}" for p in player_list)}
 - GAME_RECORD.md 位置：{bot_workspace}/bot_api__god/GAME_RECORD.md
 - 对话记录位置：{bot_workspace}/werewolf/CONVERSATION_{state.session_id}.md
 
@@ -596,11 +647,15 @@ def ensure_human_workspace(storage_path: Path, human_channel: str = "human") -> 
     human_workspace.mkdir(parents=True, exist_ok=True)
     human_game_md = human_workspace / "GAME.md"
     if not human_game_md.exists():
-        human_game_md.write_text("# 真实玩家游戏文件\n\n请编辑此文件来设置你的角色和状态。\n", encoding="utf-8")
+        human_game_md.write_text(
+            "# 真实玩家游戏文件\n\n请编辑此文件来设置你的角色和状态。\n", encoding="utf-8"
+        )
     return human_game_md
 
 
-def build_channels_for_game_mode(config: Dict[str, Any], game_mode: str, human_channel: str = "human") -> List[str]:
+def build_channels_for_game_mode(
+    config: Dict[str, Any], game_mode: str, human_channel: str = "human"
+) -> List[str]:
     """Build channel list for the requested game mode."""
     channels = get_bot_channels(config)
     if game_mode != "human_player":
@@ -619,7 +674,9 @@ def apply_game_mode_to_state(state: GameState, game_mode: str) -> None:
     state.game_mode = game_mode
     state.has_human_player = game_mode == "human_player"
     state.human_player_channel = "human"
-    state.channels = build_channels_for_game_mode(state.config, game_mode, state.human_player_channel)
+    state.channels = build_channels_for_game_mode(
+        state.config, game_mode, state.human_player_channel
+    )
     state.waiting_for_human = False
     state.human_player_message = None
     state.human_messages.clear()
@@ -633,7 +690,11 @@ def apply_game_mode_to_state(state: GameState, game_mode: str) -> None:
 def cancel_auto_start_task(state: GameState):
     """Cancel pending auto-start task if any."""
     current_task = asyncio.current_task()
-    if state.auto_start_task and not state.auto_start_task.done() and state.auto_start_task is not current_task:
+    if (
+        state.auto_start_task
+        and not state.auto_start_task.done()
+        and state.auto_start_task is not current_task
+    ):
         state.auto_start_task.cancel()
     if state.auto_start_task is not current_task:
         state.auto_start_task = None
@@ -646,7 +707,11 @@ def get_completed_games_in_auto_run(state: GameState) -> int:
 
 def get_remaining_auto_run_games(state: GameState) -> Optional[int]:
     """Return remaining games in fixed mode, None for non-fixed modes."""
-    if not state.auto_run_enabled or state.auto_run_mode != "fixed" or not state.auto_run_target_games:
+    if (
+        not state.auto_run_enabled
+        or state.auto_run_mode != "fixed"
+        or not state.auto_run_target_games
+    ):
         return None
     return max(0, state.auto_run_target_games - get_completed_games_in_auto_run(state))
 
@@ -686,7 +751,9 @@ async def stop_router_task(state: GameState):
     state.router_task = None
 
 
-async def begin_game_loop(state: GameState, initial_message: str, *, reset_game_flags: bool = False) -> None:
+async def begin_game_loop(
+    state: GameState, initial_message: str, *, reset_game_flags: bool = False
+) -> None:
     """Start the router loop with a god message."""
     if "god" not in state.channels:
         raise ValueError("god channel not found")
@@ -742,7 +809,11 @@ async def continue_current_game(state: GameState) -> None:
 
 def schedule_next_game(state: GameState, delay_seconds: float = 1.5):
     """Schedule automatic restart + start for the next game."""
-    if not should_continue_auto_run(state) or state.auto_restart_scheduled or state.starting_next_game:
+    if (
+        not should_continue_auto_run(state)
+        or state.auto_restart_scheduled
+        or state.starting_next_game
+    ):
         return
 
     state.auto_restart_scheduled = True
@@ -794,9 +865,7 @@ def load_latest_conversation(storage_path: Path) -> tuple[List[ChatMessage], Opt
 
     # Find all conversation files
     conversation_files = sorted(
-        bot_workspace.glob("CONVERSATION_*.md"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True
+        bot_workspace.glob("CONVERSATION_*.md"), key=lambda p: p.stat().st_mtime, reverse=True
     )
 
     if not conversation_files:
@@ -813,13 +882,12 @@ def load_latest_conversation(storage_path: Path) -> tuple[List[ChatMessage], Opt
 
     # Parse the markdown format
     current_speaker = None
-    current_timestamp = None
     current_content = []
 
     for line in content.split("\n"):
         line = line.rstrip()
         # Match section header: ## [HH:MM:SS] speaker
-        match = re.match(r'^## \[([0-9:]+)\] (.+)$', line)
+        match = re.match(r"^## \[([0-9:]+)\] (.+)$", line)
         if match:
             # Save previous message
             if current_speaker and current_content:
@@ -830,15 +898,16 @@ def load_latest_conversation(storage_path: Path) -> tuple[List[ChatMessage], Opt
                 except ValueError:
                     ts = time.time()
 
-                messages.append(ChatMessage(
-                    channel_id=current_speaker,
-                    content="\n".join(current_content).strip(),
-                    is_user=(current_speaker == "admin"),
-                    timestamp=ts
-                ))
+                messages.append(
+                    ChatMessage(
+                        channel_id=current_speaker,
+                        content="\n".join(current_content).strip(),
+                        is_user=(current_speaker == "admin"),
+                        timestamp=ts,
+                    )
+                )
 
             # Start new message
-            time_str = match.group(1)
             current_speaker = match.group(2)
             current_content = []
         elif line and not line.startswith("# "):
@@ -853,14 +922,18 @@ def load_latest_conversation(storage_path: Path) -> tuple[List[ChatMessage], Opt
         except ValueError:
             ts = time.time()
 
-        messages.append(ChatMessage(
-            channel_id=current_speaker,
-            content="\n".join(current_content).strip(),
-            is_user=(current_speaker == "admin"),
-            timestamp=ts
-        ))
+        messages.append(
+            ChatMessage(
+                channel_id=current_speaker,
+                content="\n".join(current_content).strip(),
+                is_user=(current_speaker == "admin"),
+                timestamp=ts,
+            )
+        )
 
-    logger.info(f"Loaded {len(messages)} messages from latest conversation, session_id={session_id}")
+    logger.info(
+        f"Loaded {len(messages)} messages from latest conversation, session_id={session_id}"
+    )
     return messages, session_id
 
 
@@ -900,6 +973,7 @@ async def broadcast_to_players(
         List of replies from mentioned players
     """
     import time
+
     tasks = []
     reply_channels = []
     all_player_channels = []
@@ -925,7 +999,7 @@ async def broadcast_to_players(
     if state.has_human_player and state.human_player_channel in mentioned_players:
         human_mentioned = True
         mentioned_players = [ch for ch in mentioned_players if ch != state.human_player_channel]
-        logger.info(f"Human player mentioned, will wait for user input")
+        logger.info("Human player mentioned, will wait for user input")
 
     for ch in state.channels:
         if ch == "god":
@@ -954,7 +1028,9 @@ async def broadcast_to_players(
         if is_mentioned:
             reply_channels.append(ch)
 
-    logger.info(f"Broadcasting to {len(all_player_channels)} players, {len(reply_channels)} need reply: {reply_channels}")
+    logger.info(
+        f"Broadcasting to {len(all_player_channels)} players, {len(reply_channels)} need reply: {reply_channels}"
+    )
 
     # Send all messages concurrently (don't record internal broadcasts)
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -973,30 +1049,31 @@ async def broadcast_to_players(
         # If this player was mentioned and replied successfully, record the reply
         if is_mentioned and not isinstance(result, Exception):
             response_content = result.get("message", "") or ""
-            state.messages.append(ChatMessage(
-                channel_id=ch,
-                content=response_content,
-                is_user=False,
-                timestamp=time.time(),
-            ))
+            state.messages.append(
+                ChatMessage(
+                    channel_id=ch,
+                    content=response_content,
+                    is_user=False,
+                    timestamp=time.time(),
+                )
+            )
             logger.info(f"Received reply from {ch}: {response_content[:100]}...")
-            replies.append({
-                "channel_id": ch,
-                "response": result
-            })
+            replies.append({"channel_id": ch, "response": result})
 
     # Handle human player
     if human_mentioned:
-        logger.info(f"Waiting for human player input...")
+        logger.info("Waiting for human player input...")
         state.waiting_for_human = True
 
         human_message = f"{sender_prefix}{message}"
-        state.human_messages.append(ChatMessage(
-            channel_id="god",
-            content=human_message,
-            is_user=False,
-            timestamp=time.time(),
-        ))
+        state.human_messages.append(
+            ChatMessage(
+                channel_id="god",
+                content=human_message,
+                is_user=False,
+                timestamp=time.time(),
+            )
+        )
 
         # Wait for human player to respond
         while state.waiting_for_human and state.running:
@@ -1005,10 +1082,9 @@ async def broadcast_to_players(
         if state.human_player_message:
             reply_content = state.human_player_message
             state.human_player_message = None
-            replies.append({
-                "channel_id": state.human_player_channel,
-                "response": {"message": reply_content}
-            })
+            replies.append(
+                {"channel_id": state.human_player_channel, "response": {"message": reply_content}}
+            )
             logger.info(f"Received human player reply: {reply_content[:100]}...")
 
     # Save after receiving player replies
@@ -1088,7 +1164,7 @@ def build_message_for_god(player_replies: List[Dict[str, Any]], all_channels: Li
     parts = []
     for reply in player_replies:
         content = reply.get("response", {}).get("message", "")
-        channel_id = reply['channel_id']
+        channel_id = reply["channel_id"]
         if channel_id == "god":
             parts.append(f"god：{content}")
         else:
@@ -1139,18 +1215,22 @@ async def message_router_loop(
             # 0. Record admin message only for the first round (admin -> god)
             if loop_count == 1:
                 msg_timestamp = time.time()
-                state.messages.append(ChatMessage(
-                    channel_id="admin",
-                    content=current_message,
-                    is_user=True,
-                    timestamp=msg_timestamp,
-                ))
+                state.messages.append(
+                    ChatMessage(
+                        channel_id="admin",
+                        content=current_message,
+                        is_user=True,
+                        timestamp=msg_timestamp,
+                    )
+                )
                 # Save immediately so UI can show it
                 if state.session_id:
                     save_conversation_to_file(state.storage_path, state.session_id, state.messages)
 
             # 1. Send message to current channel (usually god)
-            logger.info(f"Sending to {current_channel} (from {current_sender_id}): {current_message[:100]}...")
+            logger.info(
+                f"Sending to {current_channel} (from {current_sender_id}): {current_message[:100]}..."
+            )
             try:
                 response = await send_to_channel(
                     vikingbot_url=state.vikingbot_url,
@@ -1170,12 +1250,14 @@ async def message_router_loop(
             logger.info(f"Received from {current_channel}: {response_content[:100]}...")
 
             # 3. Record agent's reply (always record agent responses)
-            state.messages.append(ChatMessage(
-                channel_id=current_channel,
-                content=response_content,
-                is_user=False,
-                timestamp=time.time(),
-            ))
+            state.messages.append(
+                ChatMessage(
+                    channel_id=current_channel,
+                    content=response_content,
+                    is_user=False,
+                    timestamp=time.time(),
+                )
+            )
 
             # 4. Parse mentions and pure content early (needed for game end broadcasting)
             mentions = parse_mentions(response_content)
@@ -1184,7 +1266,9 @@ async def message_router_loop(
                 pure_content = current_message
 
             # Check if game has ended by parsing GAME_RECORD.md
-            god_record_path = state.storage_path / "bot" / "workspace" / "bot_api__god" / "GAME_RECORD.md"
+            god_record_path = (
+                state.storage_path / "bot" / "workspace" / "bot_api__god" / "GAME_RECORD.md"
+            )
             has_game_ended, game_result = is_game_ended_from_record(god_record_path)
             valid_mentions = [m for m in mentions if m in state.channels and m != "god"]
             if valid_mentions:
@@ -1192,9 +1276,16 @@ async def message_router_loop(
 
             # Only treat the game as fully ended after god has produced the final conclusion
             # and no longer asks any player for follow-up actions.
-            if current_channel == "god" and has_game_ended and not state.remember_sent and not valid_mentions:
+            if (
+                current_channel == "god"
+                and has_game_ended
+                and not state.remember_sent
+                and not valid_mentions
+            ):
                 state.game_ended = True
-                logger.info(f"Game ended detected from GAME_RECORD.md after final god reply, result: {game_result}")
+                logger.info(
+                    f"Game ended detected from GAME_RECORD.md after final god reply, result: {game_result}"
+                )
 
                 if pure_content:
                     await broadcast_message_to_players(
@@ -1207,7 +1298,9 @@ async def message_router_loop(
 
                 if state.session_id:
                     save_conversation_to_file(state.storage_path, state.session_id, state.messages)
-                    archive_replay_state(state.storage_path, state.channels, state.session_id, force=True)
+                    archive_replay_state(
+                        state.storage_path, state.channels, state.session_id, force=True
+                    )
 
                 leaderboard_result = save_game_to_leaderboard_from_record(
                     storage_path=state.storage_path,
@@ -1216,11 +1309,15 @@ async def message_router_loop(
                 )
                 if leaderboard_result.get("success"):
                     if leaderboard_result.get("skipped"):
-                        logger.info(f"Leaderboard save skipped: {leaderboard_result.get('reason', 'unknown')}")
+                        logger.info(
+                            f"Leaderboard save skipped: {leaderboard_result.get('reason', 'unknown')}"
+                        )
                     else:
                         logger.info("Leaderboard saved from authoritative GAME_RECORD.md")
                 else:
-                    logger.warning(f"Failed to save leaderboard from GAME_RECORD.md: {leaderboard_result.get('error', 'unknown')}")
+                    logger.warning(
+                        f"Failed to save leaderboard from GAME_RECORD.md: {leaderboard_result.get('error', 'unknown')}"
+                    )
 
                 try:
                     await send_to_channel(
@@ -1249,7 +1346,9 @@ async def message_router_loop(
 
                     state.remember_sent = True
                     state.completed_games += 1
-                    logger.info(f"/remember sent to all, game complete! completed_games={state.completed_games}")
+                    logger.info(
+                        f"/remember sent to all, game complete! completed_games={state.completed_games}"
+                    )
                 except Exception as e:
                     logger.exception(f"Error sending /remember: {e}")
 
@@ -1271,9 +1370,16 @@ async def message_router_loop(
                 save_conversation_to_file(state.storage_path, state.session_id, state.messages)
 
             waiting_like_reply = is_waiting_like_reply(response_content)
-            if not valid_mentions and current_channel == "god" and not has_game_ended and not waiting_like_reply:
+            if (
+                not valid_mentions
+                and current_channel == "god"
+                and not has_game_ended
+                and not waiting_like_reply
+            ):
                 if state.god_no_mention_retry_count >= 2:
-                    logger.warning("God reply still has no valid player mention after fallback retries; stopping router")
+                    logger.warning(
+                        "God reply still has no valid player mention after fallback retries; stopping router"
+                    )
                     break
 
                 state.god_no_mention_retry_count += 1
@@ -1298,7 +1404,9 @@ async def message_router_loop(
 
             # Validate mentioned channels exist
             if not valid_mentions:
-                logger.warning(f"No valid player mentions in: {mentions}, available: {state.channels}")
+                logger.warning(
+                    f"No valid player mentions in: {mentions}, available: {state.channels}"
+                )
                 break
 
             logger.info(f"Mentioned players: {valid_mentions}")
@@ -1318,7 +1426,7 @@ async def message_router_loop(
             # 7. First, broadcast player replies to all other players (need_reply=False)
             if player_replies:
                 for reply in player_replies:
-                    reply_channel = reply['channel_id']
+                    reply_channel = reply["channel_id"]
                     reply_content = reply.get("response", {}).get("message", "")
                     if reply_content and reply_channel != state.human_player_channel:
                         await broadcast_message_to_players(
@@ -1337,7 +1445,7 @@ async def message_router_loop(
             current_message = god_message
             # Use specific player_id as sender_id (use first player if multiple replies)
             if player_replies:
-                current_sender_id = player_replies[0]['channel_id']
+                current_sender_id = player_replies[0]["channel_id"]
             else:
                 current_sender_id = "players"
 
@@ -1405,8 +1513,12 @@ def create_fastapi_app(state: GameState) -> FastAPI:
     @fastapi_app.get("/fonts/{filename}")
     async def serve_font(filename: str):
         """Serve font files."""
-        font_path = Path(__file__).parent / filename
-        if font_path.exists():
+        font_root = Path(__file__).parent.resolve()
+        try:
+            font_path = (font_root / filename).resolve()
+        except OSError:
+            return HTMLResponse(content="", status_code=404)
+        if font_path.is_relative_to(font_root) and font_path.is_file():
             return FileResponse(font_path)
         return HTMLResponse(content="", status_code=404)
 
@@ -1417,27 +1529,29 @@ def create_fastapi_app(state: GameState) -> FastAPI:
         # The router loop owns the end-of-game transition so god's final reply
         # can still be received, broadcast to players, and followed by /remember.
 
-        return JSONResponse(content={
-            "game_id": state.game_id,
-            "session_id": state.session_id,
-            "running": state.running,
-            "channels": state.channels,
-            "message_count": len(state.messages),
-            "smart_buttons": state.config.get("smart_buttons", False),
-            "game_ended": state.game_ended,
-            "force_restarted": state.force_restarted,
-            "game_mode": state.game_mode,
-            "has_human_player": state.has_human_player,
-            "human_player_channel": state.human_player_channel,
-            "waiting_for_human": state.waiting_for_human,
-            "auto_run_enabled": state.auto_run_enabled,
-            "auto_run_mode": state.auto_run_mode,
-            "auto_run_target_games": state.auto_run_target_games,
-            "auto_run_remaining_games": get_remaining_auto_run_games(state),
-            "auto_restart_scheduled": state.auto_restart_scheduled,
-            "starting_next_game": state.starting_next_game,
-            "completed_games": state.completed_games,
-        })
+        return JSONResponse(
+            content={
+                "game_id": state.game_id,
+                "session_id": state.session_id,
+                "running": state.running,
+                "channels": state.channels,
+                "message_count": len(state.messages),
+                "smart_buttons": state.config.get("smart_buttons", False),
+                "game_ended": state.game_ended,
+                "force_restarted": state.force_restarted,
+                "game_mode": state.game_mode,
+                "has_human_player": state.has_human_player,
+                "human_player_channel": state.human_player_channel,
+                "waiting_for_human": state.waiting_for_human,
+                "auto_run_enabled": state.auto_run_enabled,
+                "auto_run_mode": state.auto_run_mode,
+                "auto_run_target_games": state.auto_run_target_games,
+                "auto_run_remaining_games": get_remaining_auto_run_games(state),
+                "auto_restart_scheduled": state.auto_restart_scheduled,
+                "starting_next_game": state.starting_next_game,
+                "completed_games": state.completed_games,
+            }
+        )
 
     @fastapi_app.get("/api/human/messages")
     async def get_human_messages():
@@ -1445,23 +1559,27 @@ def create_fastapi_app(state: GameState) -> FastAPI:
         if not state.has_human_player:
             return JSONResponse(content={"messages": []})
 
-        return JSONResponse(content={
-            "messages": [
-                {
-                    "channel_id": msg.channel_id,
-                    "content": msg.content,
-                    "is_user": msg.is_user,
-                    "timestamp": msg.timestamp,
-                }
-                for msg in state.human_messages
-            ]
-        })
+        return JSONResponse(
+            content={
+                "messages": [
+                    {
+                        "channel_id": msg.channel_id,
+                        "content": msg.content,
+                        "is_user": msg.is_user,
+                        "timestamp": msg.timestamp,
+                    }
+                    for msg in state.human_messages
+                ]
+            }
+        )
 
     @fastapi_app.post("/api/human/send")
     async def send_human_message(payload: dict):
         """Send a message from human player."""
         if not state.has_human_player:
-            return JSONResponse(content={"success": False, "error": "Human player mode not enabled"})
+            return JSONResponse(
+                content={"success": False, "error": "Human player mode not enabled"}
+            )
         if not state.waiting_for_human:
             return JSONResponse(content={"success": False, "error": "Not waiting for human input"})
 
@@ -1474,21 +1592,26 @@ def create_fastapi_app(state: GameState) -> FastAPI:
             return JSONResponse(content={"success": False, "error": "Invalid target"})
 
         import time
-        timestamp = time.time()
-        state.human_messages.append(ChatMessage(
-            channel_id=state.human_player_channel,
-            content=message,
-            is_user=True,
-            timestamp=timestamp,
-        ))
 
-        if target == "all":
-            state.messages.append(ChatMessage(
+        timestamp = time.time()
+        state.human_messages.append(
+            ChatMessage(
                 channel_id=state.human_player_channel,
                 content=message,
-                is_user=False,
+                is_user=True,
                 timestamp=timestamp,
-            ))
+            )
+        )
+
+        if target == "all":
+            state.messages.append(
+                ChatMessage(
+                    channel_id=state.human_player_channel,
+                    content=message,
+                    is_user=False,
+                    timestamp=timestamp,
+                )
+            )
             await broadcast_message_to_players(
                 state,
                 message,
@@ -1512,7 +1635,9 @@ def create_fastapi_app(state: GameState) -> FastAPI:
 
         human_game_md = state.storage_path / "bot" / "workspace" / "human" / "GAME.md"
         if not human_game_md.exists():
-            return JSONResponse(content={"content": "# 真实玩家游戏文件\n\n请编辑此文件来设置你的角色和状态。\n"})
+            return JSONResponse(
+                content={"content": "# 真实玩家游戏文件\n\n请编辑此文件来设置你的角色和状态。\n"}
+            )
 
         return JSONResponse(content={"content": human_game_md.read_text(encoding="utf-8")})
 
@@ -1532,22 +1657,26 @@ def create_fastapi_app(state: GameState) -> FastAPI:
     @fastapi_app.get("/api/messages")
     async def get_messages():
         """Get full message history."""
-        return JSONResponse(content={
-            "messages": [
-                {
-                    "channel_id": msg.channel_id,
-                    "content": msg.content,
-                    "is_user": msg.is_user,
-                    "timestamp": msg.timestamp
-                }
-                for msg in state.messages
-            ]
-        })
+        return JSONResponse(
+            content={
+                "messages": [
+                    {
+                        "channel_id": msg.channel_id,
+                        "content": msg.content,
+                        "is_user": msg.is_user,
+                        "timestamp": msg.timestamp,
+                    }
+                    for msg in state.messages
+                ]
+            }
+        )
 
     @fastapi_app.get("/api/players")
     async def get_players():
         """Get player info, reading roles from GAME.md."""
-        players = get_players_snapshot(state.storage_path, state.channels, state.human_player_channel)
+        players = get_players_snapshot(
+            state.storage_path, state.channels, state.human_player_channel
+        )
         return JSONResponse(content={"players": players})
 
     @fastapi_app.post("/api/start")
@@ -1556,7 +1685,9 @@ def create_fastapi_app(state: GameState) -> FastAPI:
         if state.running or (state.router_task and not state.router_task.done()):
             return JSONResponse(content={"success": False, "error": "Game already running"})
 
-        requested_game_mode = str((payload or {}).get("game_mode") or state.game_mode or "all_agents").strip()
+        requested_game_mode = str(
+            (payload or {}).get("game_mode") or state.game_mode or "all_agents"
+        ).strip()
         if requested_game_mode not in {"all_agents", "human_player"}:
             return JSONResponse(content={"success": False, "error": "Invalid game_mode"})
 
@@ -1568,12 +1699,16 @@ def create_fastapi_app(state: GameState) -> FastAPI:
             logger.warning("Failed to start game")
             return _failed_operation_response("Failed to start game")
 
-        return JSONResponse(content={"success": True, "session_id": state.session_id, "game_mode": state.game_mode})
+        return JSONResponse(
+            content={"success": True, "session_id": state.session_id, "game_mode": state.game_mode}
+        )
 
     @fastapi_app.post("/api/restart")
     async def restart_game(payload: Optional[Dict[str, Any]] = None):
         """Restart the game."""
-        requested_game_mode = str((payload or {}).get("game_mode") or state.game_mode or "all_agents").strip()
+        requested_game_mode = str(
+            (payload or {}).get("game_mode") or state.game_mode or "all_agents"
+        ).strip()
         if requested_game_mode not in {"all_agents", "human_player"}:
             return JSONResponse(content={"success": False, "error": "Invalid game_mode"})
 
@@ -1585,7 +1720,9 @@ def create_fastapi_app(state: GameState) -> FastAPI:
             logger.warning("Failed to restart game")
             return _failed_operation_response("Failed to restart game")
 
-        return JSONResponse(content={"success": True, "session_id": session_id, "game_mode": state.game_mode})
+        return JSONResponse(
+            content={"success": True, "session_id": session_id, "game_mode": state.game_mode}
+        )
 
     @fastapi_app.post("/api/continue")
     async def continue_game():
@@ -1621,31 +1758,39 @@ def create_fastapi_app(state: GameState) -> FastAPI:
         enabled = bool(payload.get("enabled", False))
         if not enabled:
             disable_auto_run(state)
-            return JSONResponse(content={
-                "success": True,
-                "auto_run_enabled": state.auto_run_enabled,
-                "auto_run_mode": state.auto_run_mode,
-                "auto_run_target_games": state.auto_run_target_games,
-                "auto_run_remaining_games": get_remaining_auto_run_games(state),
-                "auto_restart_scheduled": state.auto_restart_scheduled,
-                "starting_next_game": state.starting_next_game,
-                "completed_games": state.completed_games,
-            })
+            return JSONResponse(
+                content={
+                    "success": True,
+                    "auto_run_enabled": state.auto_run_enabled,
+                    "auto_run_mode": state.auto_run_mode,
+                    "auto_run_target_games": state.auto_run_target_games,
+                    "auto_run_remaining_games": get_remaining_auto_run_games(state),
+                    "auto_restart_scheduled": state.auto_restart_scheduled,
+                    "starting_next_game": state.starting_next_game,
+                    "completed_games": state.completed_games,
+                }
+            )
 
         mode = str(payload.get("mode") or "fixed").strip().lower()
         target_games_raw = payload.get("target_games")
 
         if mode not in {"fixed", "infinite"}:
-            return JSONResponse(content={"success": False, "error": "auto-run mode must be 'fixed' or 'infinite'"})
+            return JSONResponse(
+                content={"success": False, "error": "auto-run mode must be 'fixed' or 'infinite'"}
+            )
 
         target_games = None
         if mode == "fixed":
             try:
                 target_games = int(target_games_raw)
             except (TypeError, ValueError):
-                return JSONResponse(content={"success": False, "error": "target_games must be an integer >= 1"})
+                return JSONResponse(
+                    content={"success": False, "error": "target_games must be an integer >= 1"}
+                )
             if target_games < 1:
-                return JSONResponse(content={"success": False, "error": "target_games must be an integer >= 1"})
+                return JSONResponse(
+                    content={"success": False, "error": "target_games must be an integer >= 1"}
+                )
 
         state.auto_run_enabled = True
         state.auto_run_mode = mode
@@ -1658,16 +1803,18 @@ def create_fastapi_app(state: GameState) -> FastAPI:
         if not state.running and (not state.router_task or state.router_task.done()):
             schedule_next_game(state, delay_seconds=0.1)
 
-        return JSONResponse(content={
-            "success": True,
-            "auto_run_enabled": state.auto_run_enabled,
-            "auto_run_mode": state.auto_run_mode,
-            "auto_run_target_games": state.auto_run_target_games,
-            "auto_run_remaining_games": get_remaining_auto_run_games(state),
-            "auto_restart_scheduled": state.auto_restart_scheduled,
-            "starting_next_game": state.starting_next_game,
-            "completed_games": state.completed_games,
-        })
+        return JSONResponse(
+            content={
+                "success": True,
+                "auto_run_enabled": state.auto_run_enabled,
+                "auto_run_mode": state.auto_run_mode,
+                "auto_run_target_games": state.auto_run_target_games,
+                "auto_run_remaining_games": get_remaining_auto_run_games(state),
+                "auto_restart_scheduled": state.auto_restart_scheduled,
+                "starting_next_game": state.starting_next_game,
+                "completed_games": state.completed_games,
+            }
+        )
 
     @fastapi_app.get("/api/openviking/tree")
     async def get_openviking_tree():
@@ -1682,7 +1829,7 @@ def create_fastapi_app(state: GameState) -> FastAPI:
 
         tree = {
             "agent": {"path": str(default_path / "agent"), "files": []},
-            "user": {"path": str(default_path / "user"), "files": []}
+            "user": {"path": str(default_path / "user"), "files": []},
         }
 
         # Scan agent directory
@@ -1703,8 +1850,14 @@ def create_fastapi_app(state: GameState) -> FastAPI:
 
         Path format: "agent/subpath/file.md" or "user/subpath/file.md"
         """
-        viking_path = get_viking_path(state.config)
-        file_path = viking_path / "default" / path
+        default_root = (get_viking_path(state.config) / "default").resolve()
+        try:
+            file_path = (default_root / path).resolve()
+        except OSError:
+            return JSONResponse(content={"error": "File not found"}, status_code=404)
+
+        if not file_path.is_relative_to(default_root):
+            return JSONResponse(content={"error": "File not found"}, status_code=404)
 
         if not file_path.exists():
             return JSONResponse(content={"error": "File not found"}, status_code=404)
@@ -1714,11 +1867,7 @@ def create_fastapi_app(state: GameState) -> FastAPI:
 
         try:
             content = file_path.read_text(encoding="utf-8")
-            return JSONResponse(content={
-                "path": path,
-                "content": content,
-                "name": file_path.name
-            })
+            return JSONResponse(content={"path": path, "content": content, "name": file_path.name})
         except Exception:
             logger.exception("Failed to read OpenViking file")
             return _internal_error_response("Failed to read file")
@@ -1732,20 +1881,20 @@ def create_fastapi_app(state: GameState) -> FastAPI:
             return JSONResponse(content={"files": []})
 
         conversation_files = sorted(
-            bot_workspace.glob("CONVERSATION_*.md"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True
+            bot_workspace.glob("CONVERSATION_*.md"), key=lambda p: p.stat().st_mtime, reverse=True
         )
 
         files = []
         for f in conversation_files:
             session_id = f.stem.replace("CONVERSATION_", "")
-            files.append({
-                "session_id": session_id,
-                "filename": f.name,
-                "modified": f.stat().st_mtime,
-                "size": f.stat().st_size
-            })
+            files.append(
+                {
+                    "session_id": session_id,
+                    "filename": f.name,
+                    "modified": f.stat().st_mtime,
+                    "size": f.stat().st_size,
+                }
+            )
 
         return JSONResponse(content={"files": files, "current_session_id": state.session_id})
 
@@ -1760,11 +1909,9 @@ def create_fastapi_app(state: GameState) -> FastAPI:
 
         try:
             content = file_path.read_text(encoding="utf-8")
-            return JSONResponse(content={
-                "session_id": session_id,
-                "content": content,
-                "filename": file_path.name
-            })
+            return JSONResponse(
+                content={"session_id": session_id, "content": content, "filename": file_path.name}
+            )
         except Exception:
             logger.exception("Failed to read conversation file")
             return _internal_error_response("Failed to read conversation")
@@ -1792,9 +1939,7 @@ def create_fastapi_app(state: GameState) -> FastAPI:
             return JSONResponse(content={"files": [], "current_session_id": state.session_id})
 
         session_files = sorted(
-            sessions_path.glob("bot_api__*.jsonl"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True
+            sessions_path.glob("bot_api__*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True
         )
 
         files = []
@@ -1808,13 +1953,15 @@ def create_fastapi_app(state: GameState) -> FastAPI:
                 channel_id = "unknown"
                 file_session_id = f.stem
 
-            files.append({
-                "channel_id": channel_id,
-                "session_id": file_session_id,
-                "filename": f.name,
-                "modified": f.stat().st_mtime,
-                "size": f.stat().st_size
-            })
+            files.append(
+                {
+                    "channel_id": channel_id,
+                    "session_id": file_session_id,
+                    "filename": f.name,
+                    "modified": f.stat().st_mtime,
+                    "size": f.stat().st_size,
+                }
+            )
 
         return JSONResponse(content={"files": files, "current_session_id": state.session_id})
 
@@ -1836,7 +1983,7 @@ def create_fastapi_app(state: GameState) -> FastAPI:
                     try:
                         data = json.loads(line)
                         if data.get("_type") == "metadata":
-                            formatted_lines.append(f"# 会话元数据\n")
+                            formatted_lines.append("# 会话元数据\n")
                             formatted_lines.append(f"- 创建时间: {data.get('created_at', '')}")
                             formatted_lines.append(f"- 更新时间: {data.get('updated_at', '')}")
                             formatted_lines.append("")
@@ -1860,18 +2007,22 @@ def create_fastapi_app(state: GameState) -> FastAPI:
                             token_usage = data.get("token_usage")
                             if token_usage:
                                 formatted_lines.append("")
-                                formatted_lines.append(f"*Token使用: prompt={token_usage.get('prompt_tokens', 0)}, completion={token_usage.get('completion_tokens', 0)}, total={token_usage.get('total_tokens', 0)}*")
+                                formatted_lines.append(
+                                    f"*Token使用: prompt={token_usage.get('prompt_tokens', 0)}, completion={token_usage.get('completion_tokens', 0)}, total={token_usage.get('total_tokens', 0)}*"
+                                )
 
                             formatted_lines.append("")
                     except json.JSONDecodeError:
                         formatted_lines.append(line)
 
             content = "\n".join(formatted_lines)
-            return JSONResponse(content={
-                "filename": filename,
-                "content": content,
-                "raw_content": file_path.read_text(encoding="utf-8")
-            })
+            return JSONResponse(
+                content={
+                    "filename": filename,
+                    "content": content,
+                    "raw_content": file_path.read_text(encoding="utf-8"),
+                }
+            )
         except Exception:
             logger.exception("Failed to read bot session file")
             return _internal_error_response("Failed to read session file")
@@ -1891,11 +2042,9 @@ def create_fastapi_app(state: GameState) -> FastAPI:
 
         try:
             content = file_path.read_text(encoding="utf-8")
-            return JSONResponse(content={
-                "channel_id": channel_id,
-                "filename": filename,
-                "content": content
-            })
+            return JSONResponse(
+                content={"channel_id": channel_id, "filename": filename, "content": content}
+            )
         except Exception:
             logger.exception("Failed to read game file")
             return _internal_error_response("Failed to read game file")
@@ -1922,27 +2071,31 @@ def create_fastapi_app(state: GameState) -> FastAPI:
 
         try:
             for item in sorted(root_path.iterdir()):
-                if item.name.startswith('.') and item.is_file():
+                if item.name.startswith(".") and item.is_file():
                     # Skip hidden files but include .abstract.md and .overview.md
-                    if item.name not in ['.abstract.md', '.overview.md']:
+                    if item.name not in [".abstract.md", ".overview.md"]:
                         continue
 
                 item_rel_path = f"{relative_path}/{item.name}" if relative_path else item.name
 
                 if item.is_dir():
-                    result.append({
-                        "name": item.name,
-                        "path": item_rel_path,
-                        "type": "directory",
-                        "children": scan_directory_tree(item, item_rel_path)
-                    })
+                    result.append(
+                        {
+                            "name": item.name,
+                            "path": item_rel_path,
+                            "type": "directory",
+                            "children": scan_directory_tree(item, item_rel_path),
+                        }
+                    )
                 else:
-                    result.append({
-                        "name": item.name,
-                        "path": item_rel_path,
-                        "type": "file",
-                        "size": item.stat().st_size
-                    })
+                    result.append(
+                        {
+                            "name": item.name,
+                            "path": item_rel_path,
+                            "type": "file",
+                            "size": item.stat().st_size,
+                        }
+                    )
         except Exception as e:
             logger.warning(f"Error scanning directory {root_path}: {e}")
 
@@ -1958,7 +2111,17 @@ def create_fastapi_app(state: GameState) -> FastAPI:
         3. /data/* -> bot/workspace/*
         4. /data/* -> storage_path/*
         """
-        bot_workspace = state.storage_path / "bot" / "workspace"
+        storage_root = state.storage_path.resolve()
+        bot_workspace = (storage_root / "bot" / "workspace").resolve()
+
+        def resolve_under(base_dir: Path, relative_path: str) -> Optional[Path]:
+            try:
+                candidate = (base_dir / relative_path).resolve()
+            except OSError:
+                return None
+            if not candidate.is_relative_to(base_dir):
+                return None
+            return candidate
 
         # Special case: root path - list bot/workspace
         if path == "" or path == "/":
@@ -1966,47 +2129,57 @@ def create_fastapi_app(state: GameState) -> FastAPI:
 
         # Special handling for werewolf/GAME_RECORD.md - map to god's GAME_RECORD.md
         if path == "werewolf/GAME_RECORD.md":
-            god_record_path = bot_workspace / "bot_api__god" / "GAME_RECORD.md"
-            if god_record_path.exists():
+            god_record_path = resolve_under(bot_workspace, "bot_api__god/GAME_RECORD.md")
+            if god_record_path and god_record_path.is_file():
                 return FileResponse(god_record_path)
 
         # First try: bot/workspace/{path}
-        workspace_path = bot_workspace / path
-        if workspace_path.exists():
+        workspace_path = resolve_under(bot_workspace, path)
+        if workspace_path and workspace_path.exists():
             if workspace_path.is_file():
                 return FileResponse(workspace_path)
             elif workspace_path.is_dir():
                 return await list_directory(workspace_path, path)
 
         # Second try: storage_path/{path}
-        file_path = state.storage_path / path
-        if file_path.exists() and file_path.is_file():
+        file_path = resolve_under(storage_root, path)
+        if file_path and file_path.exists() and file_path.is_file():
             return FileResponse(file_path)
 
-        dir_path = state.storage_path / path
-        if dir_path.exists() and dir_path.is_dir():
+        dir_path = resolve_under(storage_root, path)
+        if dir_path and dir_path.exists() and dir_path.is_dir():
             return await list_directory(dir_path, path)
 
         return HTMLResponse(content="", media_type="text/markdown", status_code=404)
 
     async def list_directory(dir_path: Path, url_path: str):
         """Generate a simple HTML directory listing."""
+        clean_segments = [segment for segment in url_path.split("/") if segment]
+        parent_segments = clean_segments[:-1]
+        parent_href = "/data/" + "/".join(quote(segment, safe="") for segment in parent_segments)
+        if not parent_segments:
+            parent_href = "/data/"
         entries = []
         for item in sorted(dir_path.iterdir()):
-            name = item.name
+            href_segments = clean_segments + [item.name]
+            href = "/data/" + "/".join(quote(segment, safe="") for segment in href_segments)
+            display_name = item.name
             if item.is_dir():
-                name += "/"
-            entries.append(f'<a href="{url_path.rstrip("/")}/{name}">{name}</a><br>')
+                href += "/"
+                display_name += "/"
+            entries.append(
+                f'<a href="{html.escape(href, quote=True)}">{html.escape(display_name)}</a><br>'
+            )
 
-        html = f"""
+        html_content = f"""
         <!DOCTYPE html>
         <html><body>
-        <h1>/{url_path}</h1>
-        {'<a href="../">../</a><br>' if url_path else ''}
-        {''.join(entries)}
+        <h1>/{html.escape(url_path)}</h1>
+        {f'<a href="{html.escape(parent_href, quote=True)}">../</a><br>' if url_path else ""}
+        {"".join(entries)}
         </body></html>
         """
-        return HTMLResponse(content=html)
+        return HTMLResponse(content=html_content)
 
     return fastapi_app
 
@@ -2019,19 +2192,18 @@ def create_fastapi_app(state: GameState) -> FastAPI:
 def main(
     port: int = typer.Option(1995, "--port", "-p", help="UI port"),
     vikingbot_url: str = typer.Option(
-        "http://localhost:18790",
-        "--vikingbot-url",
-        help="Vikingbot API URL"
+        "http://localhost:18790", "--vikingbot-url", help="Vikingbot API URL"
     ),
     config_path: str = typer.Option(
-        "~/.openviking/ov-multi.conf",
-        "--config",
-        "-c",
-        help="Config file path"
+        "~/.openviking/ov-multi.conf", "--config", "-c", help="Config file path"
     ),
     game_id: str = typer.Option("default", "--game-id", help="Game ID"),
-    smart_buttons: bool = typer.Option(False, "--smart-buttons", "-s", help="Enable smart button visibility control"),
-    game_mode: str = typer.Option("all_agents", "--game-mode", "-m", help="Game mode: all_agents or human_player"),
+    smart_buttons: bool = typer.Option(
+        False, "--smart-buttons", "-s", help="Enable smart button visibility control"
+    ),
+    game_mode: str = typer.Option(
+        "all_agents", "--game-mode", "-m", help="Game mode: all_agents or human_player"
+    ),
 ):
     """Start the werewolf game server."""
     import uvicorn
@@ -2101,7 +2273,9 @@ def main(
     logger.info(f"UI will be available at http://localhost:{port}")
     logger.info(f"Storage path: {storage_path}")
     logger.info(f"Bot workspace: {storage_path / 'bot' / 'workspace'}")
-    logger.info(f"Checking for GAME_RECORD.md: {storage_path / 'bot' / 'workspace' / 'bot_api__god' / 'GAME_RECORD.md'}")
+    logger.info(
+        f"Checking for GAME_RECORD.md: {storage_path / 'bot' / 'workspace' / 'bot_api__god' / 'GAME_RECORD.md'}"
+    )
 
     uvicorn.run(
         fastapi_app,

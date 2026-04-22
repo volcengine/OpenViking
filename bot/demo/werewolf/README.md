@@ -61,7 +61,7 @@ openviking-server \
   --host 127.0.0.1 \
   --port 1933 \
   --with-bot \
-  --bot-url http://localhost:18790
+  --bot-port 18790
 ```
 
 ### 3.2 启动狼人杀 UI 服务

@@ -34,8 +34,19 @@ class _DummyEmbedder:
 
 
 class _DummyConfig:
-    def __init__(self, embedder: _DummyEmbedder, backend: str = "volcengine"):
-        self.storage = SimpleNamespace(vectordb=SimpleNamespace(name="context", backend=backend))
+    def __init__(
+        self,
+        embedder: _DummyEmbedder,
+        backend: str = "volcengine",
+        volcengine_data_api_key: str | None = None,
+    ):
+        self.storage = SimpleNamespace(
+            vectordb=SimpleNamespace(
+                name="context",
+                backend=backend,
+                volcengine=SimpleNamespace(api_key=volcengine_data_api_key),
+            )
+        )
         self.embedding = SimpleNamespace(
             dimension=2,
             get_embedder=lambda: embedder,
@@ -531,6 +542,39 @@ async def test_init_context_collection_excludes_parent_uri_for_local_backend(mon
     field_names = [field["FieldName"] for field in captured["schema"]["Fields"]]
     assert "parent_uri" not in field_names
     assert "parent_uri" not in captured["schema"]["ScalarIndex"]
+
+
+@pytest.mark.asyncio
+async def test_init_context_collection_skips_bootstrap_for_api_key_auth_mode_on_volcengine(
+    monkeypatch,
+):
+    class _Storage:
+        async def create_collection(self, name, schema):  # pragma: no cover
+            del name, schema
+            raise AssertionError("create_collection should not be called for data-plane backend")
+
+        async def get_collection_meta(self):  # pragma: no cover
+            raise AssertionError("get_collection_meta should not be called for data-plane backend")
+
+        async def update_collection_description(self, description):  # pragma: no cover
+            del description
+            raise AssertionError(
+                "update_collection_description should not be called for data-plane backend"
+            )
+
+    embedder = _DummyEmbedder()
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(
+            embedder,
+            backend="volcengine",
+            volcengine_data_api_key="vk-test-token",
+        ),
+    )
+
+    created = await init_context_collection(_Storage())
+
+    assert created is False
 
 
 def test_single_account_backend_filters_parent_uri_against_current_schema():

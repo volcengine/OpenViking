@@ -6,7 +6,6 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
-
 DEFAULT_INPUT = "data/vaka_locomo.csv"
 DEFAULT_CASE_SIZE = 10
 DEFAULT_MEMORY_SESSIONS = "1-70"

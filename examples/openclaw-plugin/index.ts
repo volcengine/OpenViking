@@ -1,8 +1,9 @@
-import { spawn } from "node:child_process";
+import { launchProcess, sysEnv, getEnv } from "./runtime-utils.js";
 import { tmpdir } from "node:os";
 
 import { Type } from "@sinclair/typebox";
 import { memoryOpenVikingConfigSchema, RECALL_PATHS } from "./config.js";
+import { registerSetupCli } from "./commands/setup.js";
 
 import { OpenVikingClient, localClientCache, localClientPendingPromises, isMemoryUri } from "./client.js";
 import type {
@@ -16,7 +17,7 @@ import type {
   CommitSessionResult,
   OVMessage,
 } from "./client.js";
-import { formatMessageFaithful } from "./context-engine.js";
+import { formatMessageFaithful, toRoleId } from "./context-engine.js";
 import {
   compileSessionPatterns,
   extractLatestUserText,
@@ -35,6 +36,7 @@ import {
   withTimeout,
   resolvePythonCommand,
   prepareLocalPort,
+  checkLocalRuntime,
 } from "./process-manager.js";
 import {
   buildMemoryLines,
@@ -96,6 +98,7 @@ type ToolContext = {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  senderId?: string;
 };
 
 type PluginCommandContext = {
@@ -179,6 +182,10 @@ type OpenClawPluginApi = {
     stop?: (ctx?: unknown) => void | Promise<void>;
   }) => void;
   registerContextEngine?: (id: string, factory: () => unknown) => void;
+  registerCli?: (
+    factory: (ctx: { program: unknown; workspaceDir?: string }) => void,
+    opts?: { commands?: string[] },
+  ) => void;
   on: (
     hookName: string,
     handler: (event: unknown, ctx?: HookAgentContext) => unknown,
@@ -324,6 +331,26 @@ function parseImportKind(value: string | undefined): OvImportKind {
     return value;
   }
   throw new Error("--kind must be resource or skill");
+}
+
+function extractToolSenderId(ctx: unknown): string | undefined {
+  if (!ctx || typeof ctx !== "object") {
+    return undefined;
+  }
+  const toolCtx = ctx as Record<string, unknown>;
+  if (typeof toolCtx.requesterSenderId === "string") {
+    const trimmed = toolCtx.requesterSenderId.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  if (typeof toolCtx.senderId === "string") {
+    const trimmed = toolCtx.senderId.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  return undefined;
 }
 
 export function parseOvImportCommandArgs(args: string): OvImportInput {
@@ -537,6 +564,15 @@ const contextEnginePlugin = {
             : 'default → X-OpenViking-Agent follows OpenClaw ctx.agentId per session (e.g. "main")'
         })`,
     );
+    verboseRoutingInfo(
+      `openviking: auth/namespace config ` +
+        JSON.stringify({
+          serverAuthMode: cfg.serverAuthMode,
+          isolateUserScopeByAgent: cfg.isolateUserScopeByAgent,
+          isolateAgentScopeByUser: cfg.isolateAgentScopeByUser,
+          deprecatedAgentScopeMode: cfg.agentScopeMode,
+        }),
+    );
     const routingDebugLog = cfg.logFindRequests
       ? (msg: string) => {
           api.logger.info(msg);
@@ -557,7 +593,7 @@ const contextEnginePlugin = {
       );
 
     let clientPromise: Promise<OpenVikingClient>;
-    let localProcess: ReturnType<typeof spawn> | null = null;
+    let localProcess: ReturnType<typeof launchProcess> | null = null;
     let resolveLocalClient: ((c: OpenVikingClient) => void) | null = null;
     let rejectLocalClient: ((err: unknown) => void) | null = null;
     let localUnavailableReason: string | null = null;
@@ -1164,7 +1200,7 @@ const contextEnginePlugin = {
           let result;
           try {
             if (targetUri) {
-              // 如果指定了目标 URI，只检索该位置
+              // Targeted-URI search path
               result = await withTimeout(
                 recallClient.find(
                   query,
@@ -1179,8 +1215,7 @@ const contextEnginePlugin = {
                 "OpenViking memory_recall request timed out",
               );
             } else {
-              // 默认同时检索 user 和 agent 两个位置的记忆
-              const [userSettled, agentSettled] = await Promise.allSettled([
+              const searchPromises: Promise<FindResult>[] = [
                 withTimeout(
                   recallClient.find(
                     query,
@@ -1207,18 +1242,39 @@ const contextEnginePlugin = {
                   interactiveToolTimeoutMs,
                   "OpenViking agent memory search timed out",
                 ),
-              ]);
-              const userResult = userSettled.status === "fulfilled" ? userSettled.value : { memories: [] };
-              const agentResult = agentSettled.status === "fulfilled" ? agentSettled.value : { memories: [] };
-              if (userSettled.status === "rejected" && agentSettled.status === "rejected") {
-                throw userSettled.reason instanceof Error ? userSettled.reason : new Error(String(userSettled.reason));
+              ];
+              if (cfg.recallResources) {
+                searchPromises.push(
+                  withTimeout(
+                    recallClient.find(
+                      query,
+                      {
+                        targetUri: "viking://resources",
+                        limit: requestLimit,
+                        scoreThreshold: 0,
+                      },
+                      agentId,
+                    ),
+                    interactiveToolTimeoutMs,
+                    "OpenViking resources search timed out",
+                  ),
+                );
               }
-              // 合并两个位置的结果，去重
-              const allMemories = [...(userResult.memories ?? []), ...(agentResult.memories ?? [])];
+              const settled = await Promise.allSettled(searchPromises);
+              if (settled.every((s) => s.status === "rejected")) {
+                const first = settled[0] as PromiseRejectedResult;
+                throw first.reason instanceof Error ? first.reason : new Error(String(first.reason));
+              }
+              const allMemories: FindResultItem[] = [];
+              for (const s of settled) {
+                if (s.status === "fulfilled") {
+                  allMemories.push(...(s.value.memories ?? []), ...(s.value.resources ?? []));
+                }
+              }
               const uniqueMemories = allMemories.filter((memory, index, self) =>
                 index === self.findIndex((m) => m.uri === memory.uri)
               );
-              const leafOnly = uniqueMemories.filter((m) => m.level === 2);
+              const leafOnly = uniqueMemories.filter((m) => !m.level || m.level === 2);
               result = {
                 memories: leafOnly,
                 total: leafOnly.length,
@@ -1803,6 +1859,8 @@ const contextEnginePlugin = {
       );
     }
 
+    registerSetupCli(api);
+
     api.registerService({
       id: "openviking",
       start: async () => {
@@ -1823,11 +1881,26 @@ const contextEnginePlugin = {
           const actualPort = await prepareLocalPort(cfg.port, api.logger);
           const baseUrl = `http://127.0.0.1:${actualPort}`;
 
-          const pythonCmd = resolvePythonCommand(api.logger);
+          const rawPythonCmd = resolvePythonCommand(api.logger);
+
+          const runtimeCheck = checkLocalRuntime(rawPythonCmd, cfg.configPath, api.logger);
+          if (!runtimeCheck.installed) {
+            api.logger.warn(
+              "openviking: package not detected — please run `pip install openviking` first. " +
+              "Server spawn will proceed but may fail.",
+            );
+          }
+          if (!runtimeCheck.configExists) {
+            api.logger.warn(
+              `openviking: config file ${cfg.configPath} not found — ` +
+              "please run `ov-install` or create it manually. See https://github.com/volcengine/OpenViking",
+            );
+          }
+          const pythonCmd = runtimeCheck.pythonCmd;
 
           // Inherit system environment; optionally override Go/Python paths via env vars
           const pathSep = IS_WIN ? ";" : ":";
-          const { ALL_PROXY, all_proxy, HTTP_PROXY, http_proxy, HTTPS_PROXY, https_proxy, ...filteredEnv } = process.env;
+          const { ALL_PROXY, all_proxy, HTTP_PROXY, http_proxy, HTTPS_PROXY, https_proxy, ...filteredEnv } = sysEnv();
           const env = {
             ...filteredEnv,
             PYTHONUNBUFFERED: "1",
@@ -1836,14 +1909,14 @@ const contextEnginePlugin = {
             OPENVIKING_START_CONFIG: cfg.configPath,
             OPENVIKING_START_HOST: "127.0.0.1",
             OPENVIKING_START_PORT: String(actualPort),
-            ...(process.env.OPENVIKING_GO_PATH && { PATH: `${process.env.OPENVIKING_GO_PATH}${pathSep}${process.env.PATH || ""}` }),
-            ...(process.env.OPENVIKING_GOPATH && { GOPATH: process.env.OPENVIKING_GOPATH }),
-            ...(process.env.OPENVIKING_GOPROXY && { GOPROXY: process.env.OPENVIKING_GOPROXY }),
+            ...(getEnv("OPENVIKING_GO_PATH") && { PATH: `${getEnv("OPENVIKING_GO_PATH")}${pathSep}${getEnv("PATH") || ""}` }),
+            ...(getEnv("OPENVIKING_GOPATH") && { GOPATH: getEnv("OPENVIKING_GOPATH") }),
+            ...(getEnv("OPENVIKING_GOPROXY") && { GOPROXY: getEnv("OPENVIKING_GOPROXY") }),
           };
           // Run OpenViking server: use run_path on the module file to avoid RuntimeWarning from
           // "parent package import loads submodule before execution" (exit 3). Fallback to run_module with warning suppressed.
           const runpyCode = `import sys,os,warnings; warnings.filterwarnings('ignore', category=RuntimeWarning, message='.*sys.modules.*'); sys.argv=['openviking.server.bootstrap','--config',os.environ['OPENVIKING_START_CONFIG'],'--host',os.environ.get('OPENVIKING_START_HOST','127.0.0.1'),'--port',os.environ['OPENVIKING_START_PORT']]; import runpy, importlib.util; spec=importlib.util.find_spec('openviking.server.bootstrap'); (runpy.run_path(spec.origin, run_name='__main__') if spec and getattr(spec,'origin',None) else runpy.run_module('openviking.server.bootstrap', run_name='__main__', alter_sys=True))`;
-          const child = spawn(
+          const child = launchProcess(
             pythonCmd,
             ["-c", runpyCode],
             { env, cwd: IS_WIN ? tmpdir() : "/tmp", stdio: ["ignore", "pipe", "pipe"] },
@@ -1899,9 +1972,12 @@ const contextEnginePlugin = {
               cfg.apiKey,
               cfg.agentId,
               cfg.timeoutMs,
+              cfg.serverAuthMode,
               tenantAccount,
               tenantUser,
               routingDebugLog,
+              cfg.isolateUserScopeByAgent,
+              cfg.isolateAgentScopeByUser,
             );
             localClientCache.set(localCacheKey, { client, process: child });
             resolveLocalClient!(client);
@@ -1940,19 +2016,19 @@ const contextEnginePlugin = {
               const pythonCmd = resolvePythonCommand(api.logger);
               const pathSep = IS_WIN ? ";" : ":";
               const env = {
-                ...process.env,
+                ...sysEnv(),
                 PYTHONUNBUFFERED: "1",
                 PYTHONWARNINGS: "ignore::RuntimeWarning",
                 OPENVIKING_CONFIG_FILE: cfg.configPath,
                 OPENVIKING_START_CONFIG: cfg.configPath,
                 OPENVIKING_START_HOST: "127.0.0.1",
                 OPENVIKING_START_PORT: String(actualPort),
-                ...(process.env.OPENVIKING_GO_PATH && { PATH: `${process.env.OPENVIKING_GO_PATH}${pathSep}${process.env.PATH || ""}` }),
-                ...(process.env.OPENVIKING_GOPATH && { GOPATH: process.env.OPENVIKING_GOPATH }),
-                ...(process.env.OPENVIKING_GOPROXY && { GOPROXY: process.env.OPENVIKING_GOPROXY }),
+                ...(getEnv("OPENVIKING_GO_PATH") && { PATH: `${getEnv("OPENVIKING_GO_PATH")}${pathSep}${getEnv("PATH") || ""}` }),
+                ...(getEnv("OPENVIKING_GOPATH") && { GOPATH: getEnv("OPENVIKING_GOPATH") }),
+                ...(getEnv("OPENVIKING_GOPROXY") && { GOPROXY: getEnv("OPENVIKING_GOPROXY") }),
               };
               const runpyCode = `import sys,os,warnings; warnings.filterwarnings('ignore', category=RuntimeWarning, message='.*sys.modules.*'); sys.argv=['openviking.server.bootstrap','--config',os.environ['OPENVIKING_START_CONFIG'],'--host',os.environ.get('OPENVIKING_START_HOST','127.0.0.1'),'--port',os.environ['OPENVIKING_START_PORT']]; import runpy, importlib.util; spec=importlib.util.find_spec('openviking.server.bootstrap'); (runpy.run_path(spec.origin, run_name='__main__') if spec and getattr(spec,'origin',None) else runpy.run_module('openviking.server.bootstrap', run_name='__main__', alter_sys=True))`;
-              const child = spawn(
+              const child = launchProcess(
                 pythonCmd,
                 ["-c", runpyCode],
                 { env, cwd: IS_WIN ? tmpdir() : "/tmp", stdio: ["ignore", "pipe", "pipe"] },
@@ -1971,7 +2047,18 @@ const contextEnginePlugin = {
               });
               try {
                 await waitForHealthOrExit(baseUrl, timeoutMs, intervalMs, child);
-                const client = new OpenVikingClient(baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs);
+                const client = new OpenVikingClient(
+                  baseUrl,
+                  cfg.apiKey,
+                  cfg.agentId,
+                  cfg.timeoutMs,
+                  cfg.serverAuthMode,
+                  tenantAccount,
+                  tenantUser,
+                  undefined,
+                  cfg.isolateUserScopeByAgent,
+                  cfg.isolateAgentScopeByUser,
+                );
                 localClientCache.set(localCacheKey, { client, process: child });
                 if (resolveLocalClient) {
                   resolveLocalClient(client);

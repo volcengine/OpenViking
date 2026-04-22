@@ -3,6 +3,7 @@
 """Bootstrap script for OpenViking HTTP Server."""
 
 import argparse
+import json
 import os
 import shutil
 import socket
@@ -10,6 +11,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import uvicorn
@@ -17,6 +19,8 @@ import uvicorn
 from openviking.server.app import create_app
 from openviking.server.config import load_server_config
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
+from openviking_cli.utils.config.config_loader import resolve_config_path
+from openviking_cli.utils.config.consts import DEFAULT_CONFIG_DIR, DEFAULT_OV_CONF
 from openviking_cli.utils.logger import configure_uvicorn_logging
 
 
@@ -35,6 +39,7 @@ def _get_version() -> str:
         return "unknown"
 
 
+VIKINGBOT_DEFAULT_HOST = "127.0.0.1"
 VIKINGBOT_DEFAULT_PORT = 18790
 
 
@@ -70,6 +75,28 @@ def _normalize_host_arg(host: Optional[str]) -> Optional[str]:
     if host.strip().lower() == "all":
         return None
     return host
+
+
+def _resolve_default_bot_log_dir(config_path: Optional[str]) -> str:
+    """Resolve default bot log directory from current ov.conf storage.workspace."""
+    default_storage = DEFAULT_CONFIG_DIR / "data"
+    default_log_dir = default_storage / "bot" / "logs"
+
+    resolved_path = resolve_config_path(config_path, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
+    if resolved_path is None:
+        return str(default_log_dir)
+
+    try:
+        with open(resolved_path, "r", encoding="utf-8-sig") as f:
+            raw = os.path.expandvars(f.read())
+        data = json.loads(raw)
+        storage = data.get("storage", {})
+        workspace = storage.get("workspace") if isinstance(storage, dict) else None
+        if not workspace:
+            return str(default_log_dir)
+        return str(Path(workspace).expanduser().resolve() / "bot" / "logs")
+    except Exception:
+        return str(default_log_dir)
 
 
 def main():
@@ -119,10 +146,11 @@ def main():
         help="Enable Bot API proxy to Vikingbot (requires Vikingbot running)",
     )
     parser.add_argument(
-        "--bot-url",
-        default="http://localhost:18790",
-        dest="bot_url",
-        help="Vikingbot OpenAPIChannel URL (default: http://localhost:18790)",
+        "--bot-port",
+        type=int,
+        default=VIKINGBOT_DEFAULT_PORT,
+        dest="bot_port",
+        help=f"Vikingbot gateway port (default: {VIKINGBOT_DEFAULT_PORT})",
     )
     parser.add_argument(
         "--enable-bot-logging",
@@ -140,8 +168,8 @@ def main():
     parser.add_argument(
         "--bot-log-dir",
         type=str,
-        default=os.path.expanduser("~/.openviking/data/bot/logs"),
-        help="Directory to store vikingbot log files",
+        default=None,
+        help="Directory to store vikingbot log files (default: {storage.workspace or ~/.openviking/data}/bot/logs)",
     )
 
     args = parser.parse_args()
@@ -191,22 +219,27 @@ def main():
         config.workers = args.workers
     if args.with_bot:
         config.with_bot = True
-    if args.bot_url:
-        config.bot_api_url = args.bot_url
 
     # Configure logging for Uvicorn
     configure_uvicorn_logging()
 
     bot_process: Optional[BotProcess] = None
     if config.with_bot:
-        _abort_if_port_in_use(VIKINGBOT_DEFAULT_PORT, "vikingbot gateway")
+        bot_port = args.bot_port
+        config.bot_api_url = f"http://{VIKINGBOT_DEFAULT_HOST}:{bot_port}"
+        _abort_if_port_in_use(bot_port, "vikingbot gateway")
         print(f"Bot API proxy enabled, forwarding to {config.bot_api_url}")
         # Determine if bot logging should be enabled
         enable_bot_logging = args.enable_bot_logging
         if enable_bot_logging is None:
             enable_bot_logging = args.with_bot
+        bot_log_dir = args.bot_log_dir or _resolve_default_bot_log_dir(args.config)
         # Start vikingbot gateway if --with-bot is set
-        bot_process = _start_vikingbot_gateway(enable_bot_logging, args.bot_log_dir)
+        bot_process = _start_vikingbot_gateway(
+            enable_bot_logging,
+            bot_log_dir,
+            bot_port,
+        )
 
     # Create and run server app
     app = create_app(config)
@@ -255,7 +288,11 @@ def _handle_vikingbot_failure(output: str, returncode: int) -> None:
         print(f"\nDetailed error:\n{output}", file=sys.stderr)
 
 
-def _start_vikingbot_gateway(enable_logging: bool, log_dir: str) -> Optional[BotProcess]:
+def _start_vikingbot_gateway(
+    enable_logging: bool,
+    log_dir: str,
+    port: int = VIKINGBOT_DEFAULT_PORT,
+) -> Optional[BotProcess]:
     """Start vikingbot gateway as a subprocess."""
     print("Starting vikingbot gateway...")
 
@@ -279,6 +316,8 @@ def _start_vikingbot_gateway(enable_logging: bool, log_dir: str) -> Optional[Bot
         print("Warning: vikingbot not found. Please install vikingbot first.")
         print("  uv pip install -e '.[bot,dev]'")
         return None
+
+    vikingbot_cmd.extend(["--host", VIKINGBOT_DEFAULT_HOST, "--port", str(port)])
 
     # Prepare logging
     log_file = None

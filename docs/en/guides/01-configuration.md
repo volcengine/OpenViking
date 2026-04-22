@@ -2,6 +2,15 @@
 
 OpenViking uses a JSON configuration file (`~/.openviking/ov.conf`) for settings.
 
+For a first-time setup, the recommended flow is:
+
+```bash
+openviking-server init
+openviking-server doctor
+```
+
+`openviking-server init` prompts for embedding and VLM settings separately. For API-based VLM choices such as `OpenAI`, `Volcengine`, `Kimi`, and `GLM`, enter the VLM API key when prompted. If you want to use Codex as the VLM provider, choose `OpenAI Codex`; the wizard can import existing Codex auth or guide you through login directly.
+
 ## Configuration File
 
 Create `~/.openviking/ov.conf` in your project directory:
@@ -36,6 +45,8 @@ Create `~/.openviking/ov.conf` in your project directory:
 }
 ```
 
+For `provider: "openai-codex"`, `vlm.api_key` is optional when Codex OAuth is already available.
+
 ## Configuration Examples
 
 <details>
@@ -57,7 +68,7 @@ Create `~/.openviking/ov.conf` in your project directory:
     "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
     "api_key"  : "your-volcengine-api-key",
     "provider" : "volcengine",
-    "model"    : "doubao-seed-2-0-pro-260215"
+    "model"    : "doubao-seed-2-0-code-preview-260215"
   }
 }
 ```
@@ -74,18 +85,98 @@ Create `~/.openviking/ov.conf` in your project directory:
       "api_base" : "https://api.openai.com/v1",
       "api_key"  : "your-openai-api-key",
       "provider" : "openai",
-      "dimension": 3072,
-      "model"    : "text-embedding-3-large"
+      "dimension": 1536,
+      "model"    : "text-embedding-3-small"
     }
   },
   "vlm": {
     "api_base" : "https://api.openai.com/v1",
     "api_key"  : "your-openai-api-key",
     "provider" : "openai",
-    "model"    : "gpt-4-vision-preview"
+    "model"    : "gpt-5.4"
   }
 }
 ```
+
+</details>
+
+<details>
+<summary><b>Volcengine Embedding + Codex VLM</b></summary>
+
+Use `openviking-server init` to complete the Codex login/import step, then run `openviking-server doctor`.
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
+      "api_key"  : "your-volcengine-api-key",
+      "provider" : "volcengine",
+      "dimension": 1024,
+      "model"    : "doubao-embedding-vision-251215"
+    }
+  },
+  "vlm": {
+    "provider" : "openai-codex",
+    "model"    : "gpt-5.4",
+    "api_base" : "https://chatgpt.com/backend-api/codex"
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><b>Volcengine Embedding + Kimi Coding VLM</b></summary>
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
+      "api_key"  : "your-volcengine-api-key",
+      "provider" : "volcengine",
+      "dimension": 1024,
+      "model"    : "doubao-embedding-vision-251215"
+    }
+  },
+  "vlm": {
+    "provider" : "kimi",
+    "model"    : "kimi-code",
+    "api_key"  : "your-kimi-subscription-api-key",
+    "api_base" : "https://api.kimi.com/coding"
+  }
+}
+```
+
+`kimi` applies the Kimi Coding defaults automatically, including the default Kimi Coding user agent.
+
+</details>
+
+<details>
+<summary><b>Volcengine Embedding + GLM Coding Plan VLM</b></summary>
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
+      "api_key"  : "your-volcengine-api-key",
+      "provider" : "volcengine",
+      "dimension": 1024,
+      "model"    : "doubao-embedding-vision-251215"
+    }
+  },
+  "vlm": {
+    "provider" : "glm",
+    "model"    : "glm-4.6v",
+    "api_key"  : "your-zai-api-key",
+    "api_base" : "https://api.z.ai/api/coding/paas/v4"
+  }
+}
+```
+
+Use a vision-capable GLM model such as `glm-4.6v` or `glm-5v-turbo` when OpenViking needs image understanding.
 
 </details>
 
@@ -439,14 +530,14 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `api_key` | str | API key |
+| `api_key` | str | API key. Optional for `openai-codex` when Codex OAuth is available |
 | `model` | str | Model name |
 | `api_base` | str | API endpoint (optional) |
 | `thinking` | bool | Enable thinking mode for VolcEngine models (default: `false`) |
 | `max_concurrent` | int | Maximum concurrent semantic LLM calls (default: `100`) |
 | `max_retries` | int | Maximum retry attempts for transient VLM provider errors (default: `3`; `0` disables retry) |
 | `timeout` | float | Per-request HTTP timeout in seconds passed to the underlying OpenAI/LiteLLM client. Increase for slow endpoints (e.g., DashScope, local inference). Must be `> 0` (default: `60.0`) |
-| `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
+| `extra_headers` | object | Custom HTTP headers for compatible HTTP providers. `kimi` also accepts header overrides, but already injects the required subscription headers by default |
 | `stream` | bool | Enable streaming mode (for OpenAI-compatible providers, default: `false`) |
 
 `vlm.max_retries` only applies to transient errors such as `429`, `5xx`, timeouts, and connection failures. Permanent authentication, authorization, and billing errors are not retried automatically. The backoff strategy is exponential backoff with jitter, starting at `0.5s` and capped at `8s`.
@@ -464,6 +555,15 @@ When resources are added, VLM generates:
 2. **L1 (Overview)**: ~2k token overview with navigation
 
 If VLM is not configured, L0/L1 will be generated from content directly (less semantic), and multimodal resources may have limited descriptions.
+
+**Supported providers:**
+- `volcengine`: Volcengine VLM API
+- `openai`: OpenAI-compatible VLM API
+- `openai-codex`: Codex VLM via ChatGPT/Codex OAuth
+- `kimi`: Kimi Coding subscription endpoint with built-in provider defaults
+- `glm`: Z.AI GLM Coding Plan endpoint with OpenAI-compatible requests
+
+For `openai-codex`, authenticate through `openviking-server init`, then verify with `openviking-server doctor`.
 
 **Custom HTTP Headers**
 
@@ -486,6 +586,7 @@ For OpenAI-compatible providers (e.g., OpenRouter), you can add custom HTTP head
 
 Common use cases:
 - **OpenRouter**: Requires `HTTP-Referer` and `X-Title` to identify your application
+- **Kimi Coding**: Override or extend the default subscription headers when you need a custom user agent
 - **Custom proxies**: Add authentication or tracing headers
 - **API gateways**: Add version or routing identifiers
 
@@ -571,7 +672,7 @@ See [Code Skeleton Extraction](../concepts/06-extraction.md#code-skeleton-extrac
 
 ### rerank
 
-Reranking model for search result refinement. Supports VikingDB (Volcengine), Cohere, OpenAI-compatible APIs, and LiteLLM.
+Reranking model for search result refinement. Supports VikingDB (Volcengine), Cohere, and OpenAI-compatible APIs.
 
 **Volcengine (VikingDB):**
 
@@ -605,13 +706,13 @@ Reranking model for search result refinement. Supports VikingDB (Volcengine), Co
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `provider` | str | `"vikingdb"`, `"cohere"`, `"openai"`, or `"litellm"`. Auto-detected if omitted. |
+| `provider` | str | `"vikingdb"`, `"cohere"`, or `"openai"`. Auto-detected if omitted. |
 | `ak` | str | VikingDB Access Key (vikingdb provider only) |
 | `sk` | str | VikingDB Secret Key (vikingdb provider only) |
 | `model_name` | str | Model name (vikingdb provider only, default: `doubao-seed-rerank`) |
-| `api_key` | str | API key (for `openai`, `cohere`, or `litellm` providers) |
+| `api_key` | str | API key (for `openai` or `cohere` providers) |
 | `api_base` | str | Endpoint URL (for `openai` provider) |
-| `model` | str | Model name (for `openai` or `litellm` providers) |
+| `model` | str | Model name (for `openai` providers) |
 | `threshold` | float | Score threshold between `0.0` and `1.0`; results below this are filtered out. Default: `0.1` |
 | `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
 
@@ -619,7 +720,6 @@ Reranking model for search result refinement. Supports VikingDB (Volcengine), Co
 - `vikingdb`: Volcengine VikingDB Rerank API (uses AK/SK)
 - `cohere`: Cohere Rerank API
 - `openai`: OpenAI-compatible Rerank API
-- `litellm`: Rerank services via LiteLLM (requires `litellm` package)
 
 If rerank is not configured, search uses vector similarity only.
 

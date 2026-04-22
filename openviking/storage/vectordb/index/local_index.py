@@ -218,7 +218,6 @@ class LocalIndex(IIndex):
         )
         self.meta = meta
         self.field_type_converter = DataProcessor(self.meta.collection_meta.fields_dict)
-        pass
 
     def update(
         self,
@@ -311,7 +310,7 @@ class LocalIndex(IIndex):
         return agg_data
 
     def close(self):
-        pass
+        return None
 
     def drop(self):
         if self.engine_proxy:
@@ -428,13 +427,7 @@ class VolatileIndex(LocalIndex):
         index_config_dict["UpdateTimeStamp"] = version_int
         index_config_json = json.dumps(index_config_dict)
 
-        # Get the vector normalization flag from meta
-        normalize_vector_flag = meta.inner_meta.get("VectorIndex", {}).get("NormalizeVector", False)
-
-        # Directly initialize engine_proxy without calling parent __init__
-        self.engine_proxy = IndexEngineProxy(index_config_json, normalize_vector_flag)
-        self.meta = meta
-        self.field_type_converter = DataProcessor(self.meta.collection_meta.fields_dict)
+        super().__init__(index_config_json, meta)
         self.engine_proxy.add_data(self._convert_candidate_list_for_index(cands_list))
 
     def need_rebuild(self) -> bool:

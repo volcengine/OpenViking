@@ -279,6 +279,7 @@ async def viking_ingest(
     session_time: Optional[str] = None,
     user_id: Optional[str] = None,
     agent_id: Optional[str] = None,
+    account: str = "default",
 ) -> Dict[str, int]:
     """Save messages to OpenViking via OpenViking SDK client.
     Returns token usage dict with embedding and vlm token counts.
@@ -289,6 +290,7 @@ async def viking_ingest(
         session_time: Session time string (e.g., "9:36 am on 2 April, 2023")
         user_id: User identifier for separate userspace (e.g., "conv-26")
         agent_id: Agent identifier for separate agentspace (e.g., "conv-26")
+        account: OpenViking account identifier
     """
     # 解析 session_time - 为每条消息计算递增的时间戳
     base_datetime = None
@@ -303,6 +305,7 @@ async def viking_ingest(
         url=openviking_url,
         user=user_id,
         agent_id=agent_id,
+        account=account,
     )
     await client.initialize()
 
@@ -387,6 +390,7 @@ async def process_single_session(
             meta.get("date_time"),
             user_id=str(sample_id),
             agent_id=str(sample_id),
+            account=args.account,
         )
         token_usage = result["token_usage"]
         task_id = result.get("task_id")
@@ -667,6 +671,11 @@ def main():
         "--openviking-url",
         default="http://localhost:1933",
         help="OpenViking service URL (default: http://localhost:1933)",
+    )
+    parser.add_argument(
+        "--account",
+        default="default",
+        help="OpenViking account identifier (default: default)",
     )
     parser.add_argument(
         "--sample",

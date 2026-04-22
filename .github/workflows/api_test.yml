@@ -29,11 +29,12 @@ jobs:
     name: API Integration Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    if: github.event_name != 'schedule' || github.repository == 'volcengine/OpenViking'
     strategy:
       fail-fast: false
       max-parallel: 1
       matrix:
-        os: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && fromJSON('["ubuntu-24.04", "macos-14", "windows-latest"]') || fromJSON('["ubuntu-24.04"]') }}
+        os: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && fromJSON('["ubuntu-24.04", "macos-14", "windows-latest"]') || fromJSON('["ubuntu-24.04"]') }}
     
     steps:
       - uses: actions/checkout@v6
@@ -67,12 +68,12 @@ jobs:
       - name: Install system dependencies (Ubuntu)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update -y && sudo apt-get install -y cmake build-essential --no-install-recommends
+          sudo apt-get update -y && sudo apt-get install -y cmake build-essential ffmpeg --no-install-recommends
 
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install cmake
+          brew install cmake ffmpeg
 
       - name: Install system dependencies (Windows)
         if: runner.os == 'Windows'
@@ -127,7 +128,7 @@ jobs:
         shell: bash
         run: |
           RAGFS_LIB_DIR="openviking/lib"
-          RAGFS_SO_COUNT=$(ls -1 "$RAGFS_LIB_DIR"/ragfs_python*.so "$RAGFS_LIB_DIR"/ragfs_python*.pyd "$RAGFS_LIB_DIR"/ragfs_python*.dylib 2>/dev/null | wc -l | xargs || echo "0")
+          RAGFS_SO_COUNT=$(ls -1 "$RAGFS_LIB_DIR"/ragfs_python*.so "$RAGFS_LIB_DIR"/ragfs_python*.pyd "$RAGFS_LIB_DIR"/ragfs_python*.dylib 2>/dev/null | wc -l | tr -d '[:space:]' || echo "0")
           
           if [ "$RAGFS_SO_COUNT" -gt 0 ]; then
             echo "✅ ragfs_python native extension already exists:"
@@ -150,13 +151,15 @@ jobs:
           
           echo "Extracting ragfs_python from wheel: $WHL_FILE"
           mkdir -p "$RAGFS_LIB_DIR"
+          WHL_FILE_PY=$(echo "$WHL_FILE" | sed 's/\\/\\\\/g')
+          RAGFS_LIB_DIR_PY=$(echo "$RAGFS_LIB_DIR" | sed 's/\\/\\\\/g')
           uv run python -c "
           import zipfile, os, sys, stat
-          with zipfile.ZipFile('$WHL_FILE') as zf:
+          with zipfile.ZipFile('${WHL_FILE_PY}') as zf:
               for name in zf.namelist():
                   bn = os.path.basename(name)
                   if bn.startswith('ragfs_python') and (bn.endswith('.so') or bn.endswith('.pyd') or bn.endswith('.dylib')):
-                      dst = os.path.join('$RAGFS_LIB_DIR', bn)
+                      dst = os.path.join('${RAGFS_LIB_DIR_PY}', bn)
                       with zf.open(name) as src, open(dst, 'wb') as f:
                           f.write(src.read())
                       os.chmod(dst, 0o755)
@@ -443,13 +446,14 @@ jobs:
           
           if [ "${{ env.HAS_SECRETS }}" = "true" ]; then
             echo "Running full test suite with VLM/Embedding"
-            uv run python -m pytest . -v --html=api-test-report.html --self-contained-html
+            uv run python -m pytest . -v --html=api-test-report.html --self-contained-html \
+              --ignore=scenarios/resources_retrieval_slow/
           else
             echo "Running basic tests only (no VLM/Embedding)"
             uv run python -m pytest . -v --html=api-test-report.html --self-contained-html \
               --ignore=retrieval/ --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py \
               --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py \
-              --ignore=scenarios/ --ignore=sessions/ -k "not test_observer"
+              --ignore=scenarios/ -k "not test_observer"
           fi
         continue-on-error: true
 
@@ -464,10 +468,10 @@ jobs:
           
           if ($env:HAS_SECRETS -eq "true") {
             Write-Host "Running full test suite with VLM/Embedding (Windows: skipping filesystem tests)"
-            uv run python -m pytest . -v --html=api-test-report.html --self-contained-html --ignore=filesystem/
+            uv run python -m pytest . -v --html=api-test-report.html --self-contained-html --ignore=filesystem/ --ignore=scenarios/resources_retrieval_slow/
           } else {
             Write-Host "Running basic tests only (no VLM/Embedding, Windows: skipping filesystem tests)"
-            uv run python -m pytest . -v --html=api-test-report.html --self-contained-html --ignore=retrieval/ --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py --ignore=filesystem/ --ignore=scenarios/ --ignore=sessions/ -k "not test_observer"
+            uv run python -m pytest . -v --html=api-test-report.html --self-contained-html --ignore=retrieval/ --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py --ignore=filesystem/ --ignore=scenarios/ -k "not test_observer"
           }
         continue-on-error: true
 

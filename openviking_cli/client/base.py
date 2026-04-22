@@ -45,6 +45,7 @@ class BaseClient(ABC):
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
+        ...
 
     @abstractmethod
     async def add_skill(

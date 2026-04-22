@@ -21,12 +21,19 @@ logger = get_logger(__name__)
 
 # Bot API configuration - set when --with-bot is enabled
 BOT_API_URL: Optional[str] = None  # e.g., "http://localhost:18791"
+BOT_API_KEY: str = ""
 
 
 def set_bot_api_url(url: str) -> None:
     """Set the Bot API URL. Called by app.py when --with-bot is enabled."""
     global BOT_API_URL
     BOT_API_URL = url
+
+
+def set_bot_api_key(api_key: str) -> None:
+    """Set the Bot API key used by proxy requests to bot gateway."""
+    global BOT_API_KEY
+    BOT_API_KEY = api_key or ""
 
 
 def get_bot_url() -> str:
@@ -71,21 +78,6 @@ async def health_check(request: Request):
         )
 
 
-def extract_auth_token(request: Request) -> Optional[str]:
-    """Extract and return authorization token from request."""
-    # Try X-API-Key header first
-    api_key = request.headers.get("X-API-Key")
-    if api_key:
-        return api_key
-
-    # Try Authorization header (Bearer token)
-    auth_header = request.headers.get("Authorization")
-    if auth_header and auth_header.startswith("Bearer "):
-        return auth_header[7:]  # Remove "Bearer " prefix
-
-    return None
-
-
 @router.post("/chat")
 async def chat(
     request: Request,
@@ -96,7 +88,6 @@ async def chat(
     Proxies the request to Vikingbot OpenAPIChannel.
     """
     bot_url = get_bot_url()
-    auth_token = extract_auth_token(request)
 
     # Read request body
     try:
@@ -109,10 +100,10 @@ async def chat(
 
     try:
         async with httpx.AsyncClient() as client:
-            # Build headers - only include X-API-Key if provided
+            # Build headers for bot gateway
             headers = {"Content-Type": "application/json"}
-            if auth_token:
-                headers["X-API-Key"] = auth_token
+            if BOT_API_KEY:
+                headers["X-Gateway-Token"] = BOT_API_KEY
 
             # Forward to Vikingbot OpenAPIChannel chat endpoint
             response = await client.post(
@@ -153,7 +144,6 @@ async def chat_stream(
     Proxies the request to Vikingbot OpenAPIChannel with SSE streaming.
     """
     bot_url = get_bot_url()
-    auth_token = extract_auth_token(request)
 
     # Read request body
     try:
@@ -168,10 +158,10 @@ async def chat_stream(
         """Generate SSE events from bot response stream."""
         try:
             async with httpx.AsyncClient() as client:
-                # Build headers - only include X-API-Key if provided
+                # Build headers for bot gateway
                 headers = {"Content-Type": "application/json"}
-                if auth_token:
-                    headers["X-API-Key"] = auth_token
+                if BOT_API_KEY:
+                    headers["X-Gateway-Token"] = BOT_API_KEY
 
                 # Forward to Vikingbot OpenAPIChannel stream endpoint
                 async with client.stream(

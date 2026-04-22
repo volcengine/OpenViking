@@ -32,9 +32,23 @@ curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples
 bash cleanup-memory-openviking.sh
 ```
 
-## Install
+## Install via ClawHub (Recommended)
 
-The recommended path is `npm` + `ov-install`.
+```bash
+openclaw plugins install clawhub:@openclaw/openviking
+```
+
+After installation, run the interactive setup wizard:
+
+```bash
+openclaw openviking setup
+```
+
+The wizard detects your Python environment, verifies the OpenViking package, and writes configuration to `$OPENCLAW_STATE_DIR/openclaw.json` (default: `~/.openclaw/openclaw.json`).
+
+## Install via ov-install (Alternative)
+
+The `ov-install` helper automates both the Python/OpenViking installation and plugin deployment:
 
 ```bash
 npm install -g openclaw-openviking-setup-helper

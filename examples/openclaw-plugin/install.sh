@@ -74,7 +74,7 @@ DEFAULT_VLM_MODEL="doubao-seed-2-0-pro-260215"
 DEFAULT_EMBED_MODEL="doubao-embedding-vision-251215"
 SELECTED_SERVER_PORT="${DEFAULT_SERVER_PORT}"
 SELECTED_CONFIG_PATH=""
-SELECTED_MODE="local"
+SELECTED_MODE="remote"
 LANG_UI="en"
 
 # Plugin config (set by resolve_plugin_config)
@@ -1018,12 +1018,12 @@ select_workdir() {
 
 select_mode() {
   if [[ "$INSTALL_YES" == "1" ]]; then
-    SELECTED_MODE="local"
+    SELECTED_MODE="remote"
     return 0
   fi
   echo ""
-  read -r -p "$(tr "Plugin mode - local or remote [local]: " "插件模式 - local 或 remote [local]: ")" _mode < /dev/tty || true
-  _mode="${_mode:-local}"
+  read -r -p "$(tr "Plugin mode - local or remote [remote]: " "插件模式 - local 或 remote [remote]: ")" _mode < /dev/tty || true
+  _mode="${_mode:-remote}"
   if [[ "$_mode" == "remote" ]]; then
     SELECTED_MODE="remote"
   else

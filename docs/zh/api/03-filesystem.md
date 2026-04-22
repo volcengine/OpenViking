@@ -168,7 +168,7 @@ openviking read viking://resources/docs/api.md
 
 ### write()
 
-修改一个已存在的文件，并自动刷新相关语义与向量。
+修改一个已存在的文件，或在 `mode="create"` 时创建新文件，并自动刷新相关语义与向量。
 
 **参数**
 
@@ -176,13 +176,14 @@ openviking read viking://resources/docs/api.md
 |------|------|------|--------|------|
 | uri | str | 是 | - | 已存在文件的 URI |
 | content | str | 是 | - | 要写入的新内容 |
-| mode | str | 否 | `replace` | `replace` 或 `append` |
+| mode | str | 否 | `replace` | `replace`、`append` 或 `create` |
 | wait | bool | 否 | `false` | 是否等待后台语义/向量刷新完成 |
 | timeout | float | 否 | `null` | 当 `wait=true` 时的超时时间（秒） |
 
 **说明**
 
-- 只支持已存在文件；目录会被拒绝。
+- `replace` 和 `append` 要求文件已存在；`create` 仅用于创建新文件，目标路径已存在时返回 `409 Conflict`。目录始终会被拒绝。
+- `create` 只允许以下文本类扩展名：`.md`、`.txt`、`.json`、`.yaml`、`.yml`、`.toml`、`.py`、`.js`、`.ts`。父目录会自动创建。
 - 不允许直接写入派生语义文件：`.abstract.md`、`.overview.md`、`.relations.json`。
 - 公共 API 已不再接受 `regenerate_semantics` 或 `revectorize`；写入后一定会自动刷新相关语义与向量。
 

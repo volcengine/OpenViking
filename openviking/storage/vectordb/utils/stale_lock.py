@@ -26,8 +26,8 @@ import glob
 import os
 import sys
 
-from openviking_cli.utils import get_logger
 from openviking.storage.vectordb.utils.path_safety import resolve_storage_path
+from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 _LOG_ESCAPE_TABLE = str.maketrans(

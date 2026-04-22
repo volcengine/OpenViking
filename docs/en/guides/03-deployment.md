@@ -5,6 +5,14 @@ OpenViking can run as a standalone HTTP server, allowing multiple clients to con
 ## Quick Start
 
 ```bash
+# Create or refresh ~/.openviking/ov.conf with the setup wizard
+openviking-server init
+
+# If you select OpenAI Codex in the wizard, init can import/login Codex for you
+
+# Validate local config, model access, and auth before starting
+openviking-server doctor
+
 # Start server (reads ~/.openviking/ov.conf by default)
 openviking-server
 

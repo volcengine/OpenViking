@@ -7,7 +7,6 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-
 SCRIPT_DIR = Path(__file__).parent.resolve()
 DEFAULT_INPUT = str(SCRIPT_DIR / "result" / "vaka_qa_result.csv")
 

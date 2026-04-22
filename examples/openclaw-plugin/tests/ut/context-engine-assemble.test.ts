@@ -146,10 +146,10 @@ describe("context-engine assemble()", () => {
         { type: "text", text: "I checked the latest context." },
         { type: "text", text: "User prefers concise answers." },
         {
-          type: "toolUse",
+          type: "toolCall",
           id: "tool_123",
           name: "read_file",
-          input: { path: "src/app.ts" },
+          arguments: { path: "src/app.ts" },
         },
       ],
     });
@@ -311,10 +311,10 @@ describe("context-engine assemble()", () => {
       role: "assistant",
       content: [
         {
-          type: "toolUse",
+          type: "toolCall",
           id: "tool_running",
           name: "bash",
-          input: { command: "npm test" },
+          arguments: { command: "npm test" },
         },
       ],
     });
@@ -480,10 +480,13 @@ describe("context-engine assemble()", () => {
       messages: liveMessages,
     });
 
-    expect(result.messages).toBe(liveMessages);
+    expect(result.messages).toHaveLength(liveMessages.length);
     expect(result.estimatedTokens).toBe(roughEstimate(liveMessages));
-    expect(result.systemPromptAddition).toContain("<relevant-memories>");
-    expect(result.systemPromptAddition).toContain("User prefers Rust for backend tasks.");
+    const firstUser = result.messages.find((m) => m.role === "user");
+    const firstUserContent =
+      typeof firstUser?.content === "string" ? firstUser.content : JSON.stringify(firstUser?.content);
+    expect(firstUserContent).toContain("<relevant-memories>");
+    expect(firstUserContent).toContain("User prefers Rust for backend tasks.");
     expect(client.find).toHaveBeenCalledTimes(2);
   });
 
