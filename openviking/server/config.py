@@ -152,6 +152,22 @@ def _is_localhost(host: str) -> bool:
     return host in _LOCALHOST_HOSTS
 
 
+def load_bot_gateway_token(config_path: Optional[str] = None) -> str:
+    """Load bot gateway token from ov.conf bot.gateway.token."""
+    path = resolve_config_path(config_path, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
+    if path is None:
+        return ""
+
+    data = load_json_config(path)
+    bot_config = data.get("bot", {})
+    if not isinstance(bot_config, dict):
+        return ""
+    gateway_config = bot_config.get("gateway", {})
+    if not isinstance(gateway_config, dict):
+        return ""
+    return gateway_config.get("token", "") or ""
+
+
 def validate_server_config(config: ServerConfig) -> None:
     """Validate server config for safe startup.
 

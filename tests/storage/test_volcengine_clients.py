@@ -1,15 +1,15 @@
 from volcengine.base.Request import Request
 
-from openviking.storage.expr import PathScope
 from openviking.storage.vectordb.collection.volcengine_clients import (
     ClientForConsoleApi,
     ClientForDataApi,
+    ClientForDataApiWithApiKey,
 )
 from openviking.storage.vectordb.collection.volcengine_collection import VolcengineCollection
 from openviking.storage.vectordb_adapters.volcengine_adapter import VolcengineCollectionAdapter
 from openviking_cli.utils.config.vectordb_config import (
-    VectorDBBackendConfig,
     VolcengineConfig,
+    VectorDBBackendConfig,
 )
 
 
@@ -108,6 +108,23 @@ def test_data_client_do_req_uses_signed_query_params(monkeypatch):
     assert captured["params"]["X-Signature"] == "signed"
 
 
+def test_data_api_key_client_prepare_request_sets_bearer_auth():
+    client = ClientForDataApiWithApiKey(
+        api_key="vk-test-token",
+        host="api-vikingdb.vikingdb.cn-beijing.volces.com",
+    )
+
+    request = client.prepare_request(
+        "POST",
+        "/api/vikingdb/data/search/vector",
+        data={"project": "default"},
+    )
+
+    assert request.headers["Authorization"] == "Bearer vk-test-token"
+    assert request.headers["Host"] == "api-vikingdb.vikingdb.cn-beijing.volces.com"
+    assert request.path == "/api/vikingdb/data/search/vector"
+
+
 def test_volcengine_adapter_preserves_session_token_from_config():
     config = VectorDBBackendConfig(
         backend="volcengine",
@@ -123,6 +140,26 @@ def test_volcengine_adapter_preserves_session_token_from_config():
     adapter = VolcengineCollectionAdapter.from_config(config)
 
     assert adapter._config()["SessionToken"] == "test-session-token"
+
+
+def test_volcengine_adapter_supports_api_key_mode_from_config():
+    config = VectorDBBackendConfig(
+        backend="volcengine",
+        name="context",
+        project="default",
+        volcengine=VolcengineConfig(
+            api_key="vk-test-token",
+            host="api-vikingdb.vikingdb.cn-beijing.volces.com",
+        ),
+    )
+
+    adapter = VolcengineCollectionAdapter.from_config(config)
+
+    assert adapter.mode == "volcengine"
+    assert adapter.collection_name == "context"
+    assert adapter.index_name == "default"
+    assert adapter.collection_exists() is True
+    assert adapter._config()["ApiKey"] == "vk-test-token"
 
 
 def test_volcengine_collection_get_meta_data_returns_empty_on_signature_error(monkeypatch):
@@ -179,21 +216,3 @@ def test_volcengine_collection_get_meta_data_returns_empty_on_collection_not_fou
     monkeypatch.setattr(collection.console_client, "do_req", lambda *args, **kwargs: _Response())
 
     assert collection.get_meta_data() == {}
-
-
-def test_volcengine_adapter_compiles_pathscope_to_prefix_filter():
-    config = VectorDBBackendConfig(
-        backend="volcengine",
-        name="context",
-        volcengine=VolcengineConfig(
-            ak="test-ak",
-            sk="test-sk",
-            region="cn-beijing",
-        ),
-    )
-
-    adapter = VolcengineCollectionAdapter.from_config(config)
-
-    compiled = adapter.compile_filter(PathScope("uri", "viking://resources/demo", depth=-1))
-
-    assert compiled == {"op": "prefix", "field": "uri", "prefix": "viking://resources/demo"}

@@ -370,4 +370,3 @@ OpenViking 仓库里已经提供了可直接导入的 dashboard JSON：
 - [操作级 Telemetry 参考](07-operation-telemetry.md) - 请求级结构化追踪
 - [系统 API](../api/07-system.md) - 系统与 observer 接口参考
 - [指标](../concepts/12-metrics.md) - 时序指标与配置
-

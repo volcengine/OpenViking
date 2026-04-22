@@ -1,0 +1,17 @@
+{
+  "name": "openviking",
+  "owner": {
+    "name": "0xble"
+  },
+  "plugins": [
+    {
+      "name": "claude-code-memory-plugin",
+      "source": "./examples/claude-code-memory-plugin",
+      "description": "Persistent memory for Claude Code powered by OpenViking sessions",
+      "version": "0.1.5-0xble.0.1.0",
+      "author": {
+        "name": "canlantiancai"
+      }
+    }
+  ]
+}

@@ -3,6 +3,7 @@
 """OpenAI Embedder Implementation"""
 
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 import openai
@@ -112,7 +113,11 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         """
         super().__init__(model_name, config)
 
-        self.api_key = api_key
+        self.api_key = (
+            api_key
+            or os.environ.get("OPENVIKING_EMBEDDING_API_KEY")
+            or os.environ.get("OPENAI_API_KEY")
+        )
         self.api_base = api_base
         self.api_version = api_version
         self.dimension = dimension
@@ -417,6 +422,10 @@ class OpenAISparseEmbedder(SparseEmbedderBase):
     """
 
     def __init__(self, *args, **kwargs):
+        model_name = kwargs.get("model_name")
+        if model_name is None and args:
+            model_name = str(args[0])
+        super().__init__(model_name=model_name or "openai-sparse-unsupported")
         raise NotImplementedError(
             "OpenAI does not support sparse embeddings. "
             "Consider using VolcengineSparseEmbedder or other providers."
@@ -433,6 +442,10 @@ class OpenAIHybridEmbedder(HybridEmbedderBase):
     """
 
     def __init__(self, *args, **kwargs):
+        model_name = kwargs.get("model_name")
+        if model_name is None and args:
+            model_name = str(args[0])
+        super().__init__(model_name=model_name or "openai-hybrid-unsupported")
         raise NotImplementedError(
             "OpenAI does not support hybrid embeddings. "
             "Consider using VolcengineHybridEmbedder or other providers."

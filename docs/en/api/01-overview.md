@@ -35,7 +35,7 @@ Minimal configuration example:
     "dense": {
       "api_base": "<api-endpoint>",
       "api_key": "<your-api-key>",
-      "provider": "<volcengine|openai|jina>",
+      "provider": "<volcengine|openai|jina|...>",
       "dimension": 1024,
       "model": "<model-name>"
     }
@@ -43,11 +43,13 @@ Minimal configuration example:
   "vlm": {
     "api_base": "<api-endpoint>",
     "api_key": "<your-api-key>",
-    "provider": "<volcengine|openai|jina>",
+    "provider": "<volcengine|openai|openai-codex|kimi|glm>",
     "model": "<model-name>"
   }
 }
 ```
+
+For `provider: "openai-codex"`, `vlm.api_key` is optional once Codex OAuth is available through `openviking-server init`.
 
 For full configuration options and provider-specific examples, see the [Configuration Guide](../guides/01-configuration.md).
 

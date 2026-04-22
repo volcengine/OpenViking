@@ -198,11 +198,18 @@ async def test_sdk_commit_raises_failed_precondition_after_failed_archive(http_c
     session_info = await client.create_session()
     session_id = session_info["session_id"]
 
-    async def failing_extract(*args, **kwargs):
+    async def failing_summary(*args, **kwargs):
         del args, kwargs
-        raise RuntimeError("synthetic extraction failure")
+        raise RuntimeError("synthetic summary failure")
 
-    svc.session_compressor.extract_long_term_memories = failing_extract
+    original_session = svc.sessions.session
+
+    def session_with_failing_summary(*args, **kwargs):
+        session = original_session(*args, **kwargs)
+        session._generate_archive_summary_async = failing_summary
+        return session
+
+    svc.sessions.session = session_with_failing_summary
 
     await client.add_message(session_id, "user", "First round")
     commit_result = await client.commit_session(session_id)

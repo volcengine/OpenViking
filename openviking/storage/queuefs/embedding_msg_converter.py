@@ -29,11 +29,26 @@ class EmbeddingMsgConverter:
             return None
 
         context_data = context.to_dict()
+        uri = context_data.get("uri", "")
 
         # Backfill tenant fields for legacy writers that only set user/uri.
         if not context_data.get("account_id"):
             user = context_data.get("user") or {}
             context_data["account_id"] = user.get("account_id", "default")
+        if not context_data.get("owner_space"):
+            user = context_data.get("user") or {}
+            account = user.get("account_id", "default")
+            user_id = user.get("user_id", "default")
+            agent_id = user.get("agent_id", "default")
+            from openviking_cli.session.user_id import UserIdentifier
+
+            owner_user = UserIdentifier(account, user_id, agent_id)
+            if uri.startswith("viking://agent/"):
+                context_data["owner_space"] = owner_user.agent_space_name()
+            elif uri.startswith("viking://user/") or uri.startswith("viking://session/"):
+                context_data["owner_space"] = owner_user.user_space_name()
+            else:
+                context_data["owner_space"] = ""
         if context_data.get("owner_user_id") is None and context_data.get("owner_agent_id") is None:
             owner_fields = owner_fields_for_uri(
                 context_data.get("uri", ""),
@@ -44,7 +59,6 @@ class EmbeddingMsgConverter:
             context_data["owner_agent_id"] = owner_fields["owner_agent_id"]
 
         # Derive level field for hierarchical retrieval.
-        uri = context_data.get("uri", "")
         context_level = getattr(context, "level", None)
         if context_level is not None:
             resolved_level = context_level

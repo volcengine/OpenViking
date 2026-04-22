@@ -5,13 +5,16 @@
 import asyncio
 import json
 import time
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.pyagfs import AGFSClient
 from openviking.storage.transaction.lock_handle import LockHandle
 from openviking.storage.transaction.path_lock import PathLock
 from openviking.storage.transaction.redo_log import RedoLog
 from openviking_cli.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from openviking.storage import VikingDBManager
 
 logger = get_logger(__name__)
 
@@ -26,8 +29,10 @@ class LockManager:
         agfs: AGFSClient,
         lock_timeout: float = 0.0,
         lock_expire: float = 300.0,
+        vikingdb: Optional["VikingDBManager"] = None,
     ):
         self._agfs = agfs
+        self._vikingdb = vikingdb
         self._path_lock = PathLock(agfs, lock_expire=lock_expire)
         self._lock_timeout = lock_timeout
         self._redo_log = RedoLog(agfs)
@@ -300,35 +305,26 @@ class LockManager:
         except Exception as e:
             logger.warning(f"Cannot read archive for redo: {agfs_path}: {e}")
 
-        # 3. Re-extract memories (best-effort, only if archive was readable)
+        # Redo requires a real VikingDBManager so strict-dedup is honored.
         if messages:
             session_id = session_uri.rstrip("/").rsplit("/", 1)[-1]
-            try:
-                from openviking.session import create_session_compressor
+            if self._vikingdb is None:
+                raise RuntimeError("Cannot redo session_memory: VikingDBManager not available")
 
-                compressor = create_session_compressor(vikingdb=None)
-                memories = await asyncio.wait_for(
-                    compressor.extract_long_term_memories(
-                        messages=messages,
-                        user=user,
-                        session_id=session_id,
-                        ctx=ctx,
-                    ),
-                    timeout=60.0,
-                )
-                logger.info(f"Redo: extracted {len(memories)} memories from {archive_uri}")
-            except Exception as e:
-                logger.warning(f"Redo: memory extraction failed ({e}), falling back to queue")
+            from openviking.session import create_session_compressor
 
-        # 4. Always enqueue semantic processing as fallback
-        await self._enqueue_semantic(
-            uri=session_uri,
-            context_type="memory",
-            account_id=account_id,
-            user_id=user_id,
-            agent_id=agent_id,
-            role=role_str,
-        )
+            compressor = create_session_compressor(vikingdb=self._vikingdb)
+            memories = await asyncio.wait_for(
+                compressor.extract_long_term_memories(
+                    messages=messages,
+                    user=user,
+                    session_id=session_id,
+                    ctx=ctx,
+                    strict_dedup_errors=True,
+                ),
+                timeout=60.0,
+            )
+            logger.info(f"Redo: extracted {len(memories)} memories from {archive_uri}")
 
     async def _enqueue_semantic(self, **params: Any) -> None:
         from openviking.storage.queuefs import get_queue_manager
@@ -367,9 +363,15 @@ def init_lock_manager(
     agfs: AGFSClient,
     lock_timeout: float = 0.0,
     lock_expire: float = 300.0,
+    vikingdb: Optional["VikingDBManager"] = None,
 ) -> LockManager:
     global _lock_manager
-    _lock_manager = LockManager(agfs=agfs, lock_timeout=lock_timeout, lock_expire=lock_expire)
+    _lock_manager = LockManager(
+        agfs=agfs,
+        lock_timeout=lock_timeout,
+        lock_expire=lock_expire,
+        vikingdb=vikingdb,
+    )
     return _lock_manager
 
 

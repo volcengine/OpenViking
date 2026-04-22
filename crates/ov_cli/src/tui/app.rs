@@ -424,19 +424,19 @@ impl App {
     /// Reload the entire tree and restore state
     async fn reload_tree_and_restore_state(&mut self, client: &HttpClient, expanded_nodes: &[String], target_uri: &str) {
         self.tree.load_root(client, "viking://").await;
-        
+
         // Restore expanded state for previously expanded nodes
         for uri in expanded_nodes {
             self.tree.expand_node_by_uri(client, uri).await;
         }
-        
+
         // Ensure parent directories of target URI are expanded
         self.ensure_parent_directories_expanded(client, target_uri).await;
-        
+
         // Find and set cursor to target URI
         let cursor = self.find_cursor_for_uri(target_uri);
         self.tree.cursor = cursor;
-        
+
         // Load content for selected node
         self.load_content_for_selected().await;
     }
@@ -446,13 +446,13 @@ impl App {
         let selected_node = self.tree.selected_uri()
             .map(|uri| uri.to_string())
             .unwrap_or_else(|| "viking://".to_string());
-        
+
         // Collect expanded nodes before refresh
         let expanded_nodes = self.collect_expanded_nodes();
-        
+
         // Reload tree and restore state
         self.reload_tree_and_restore_state(&client, &expanded_nodes, &selected_node).await;
-        
+
         self.set_status_message("Tree refreshed".to_string());
     }
 

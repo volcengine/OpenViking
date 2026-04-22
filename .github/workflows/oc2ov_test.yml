@@ -3,9 +3,8 @@ name: 05. OpenClaw2OpenViking Memory Tests
 on:
   release:
     types: [prereleased, released]
-  push:
-    branches:
-      - main
+  schedule:
+    - cron: '0 1,4,7,10,13 * * *'
   workflow_dispatch:
     inputs:
       skip_tests:
@@ -31,30 +30,30 @@ jobs:
     name: P0 Memory Tests
     runs-on: [self-hosted, linux, x64]
     timeout-minutes: 70
-    if: inputs.skip_tests != true
+    if: inputs.skip_tests != true && (github.event_name != 'schedule' || github.repository == 'volcengine/OpenViking')
     
     steps:
       - name: Clean up previous artifacts
         run: |
           echo "🧹 Cleaning up previous artifacts..."
-          
+
           # Clean up old test reports
           echo "  - Removing old test reports..."
           rm -rf tests/oc2ov_test/reports/*.html || true
-          
+
           # Clean up old logs
           echo "  - Removing old logs..."
           rm -rf tests/oc2ov_test/logs/*.log || true
-          
+
           # Clean up pip cache (optional, saves disk space)
           echo "  - Cleaning pip cache..."
           pip3 cache purge 2>/dev/null || echo "    (pip cache not available or already clean)"
-          
+
           # Clean up old pytest cache
           echo "  - Removing pytest cache..."
           rm -rf .pytest_cache || true
           rm -rf tests/oc2ov_test/.pytest_cache || true
-          
+
           # Clean up __pycache__ directories
           echo "  - Removing __pycache__ directories..."
           find tests/oc2ov_test -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
@@ -94,10 +93,10 @@ jobs:
           # Wait for services to be fully ready
           echo "⏳ Waiting for services to be ready..."
           sleep 10
-          
+
           # Health check
           echo "🏥 Performing health check..."
-          
+
           echo "Checking OpenViking server (port 1933)..."
           for i in {1..10}; do
             if curl -sf http://127.0.0.1:1933/health 2>/dev/null | grep -q "healthy"; then
@@ -108,7 +107,7 @@ jobs:
               sleep 5
             fi
           done
-          
+
           echo "Checking OpenClaw gateway (port 18789)..."
           for i in {1..10}; do
             if ss -tuln 2>/dev/null | grep -q ":18789 "; then

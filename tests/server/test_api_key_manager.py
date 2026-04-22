@@ -11,7 +11,12 @@ import pytest_asyncio
 from openviking.server.api_keys import APIKeyManager
 from openviking.server.identity import AccountNamespacePolicy, Role
 from openviking.service.core import OpenVikingService
-from openviking_cli.exceptions import AlreadyExistsError, NotFoundError, UnauthenticatedError
+from openviking_cli.exceptions import (
+    AlreadyExistsError,
+    InvalidArgumentError,
+    NotFoundError,
+    UnauthenticatedError,
+)
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -27,7 +32,7 @@ ROOT_KEY = "test-root-key-abcdef1234567890abcdef1234567890"
 async def manager_service(temp_dir):
     """OpenVikingService for APIKeyManager tests."""
     svc = OpenVikingService(
-        path=str(temp_dir / "mgr_data"), user=UserIdentifier.the_default_user("mgr_user")
+        path=str(temp_dir / "mgr_data"), user=UserIdentifier("manager", "mgr_user", "default")
     )
     await svc.initialize()
     yield svc
@@ -107,11 +112,17 @@ async def test_delete_nonexistent_account_raises(manager: APIKeyManager):
         await manager.delete_account("nonexistent")
 
 
-async def test_default_account_exists(manager: APIKeyManager):
-    """Default account should be created on load."""
+async def test_default_account_not_created(manager: APIKeyManager):
+    """The disabled default account namespace should not be created on load."""
     accounts = manager.get_accounts()
-    assert any(a["account_id"] == "default" for a in accounts)
+    assert not any(a["account_id"] == "default" for a in accounts)
     assert manager.get_account_policy("default") == AccountNamespacePolicy()
+
+
+async def test_create_default_account_raises(manager: APIKeyManager):
+    """The literal default account namespace is reserved and disabled."""
+    with pytest.raises(InvalidArgumentError, match="default OpenViking account"):
+        await manager.create_account("default", "alice")
 
 
 # ---- User lifecycle tests ----
@@ -141,6 +152,14 @@ async def test_register_user_in_nonexistent_account_raises(manager: APIKeyManage
     """Registering user in nonexistent account should raise NotFoundError."""
     with pytest.raises(NotFoundError):
         await manager.register_user("nonexistent", "bob", "user")
+
+
+async def test_register_default_user_raises(manager: APIKeyManager):
+    """The literal default user namespace is reserved and disabled."""
+    acct = _uid()
+    await manager.create_account(acct, "alice")
+    with pytest.raises(InvalidArgumentError, match="default OpenViking user"):
+        await manager.register_user(acct, "default", "user")
 
 
 async def test_remove_user(manager: APIKeyManager):

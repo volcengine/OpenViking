@@ -283,6 +283,10 @@ pub async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()>
             commands::session::commit_session(&client, &session_id, ctx.output_format, ctx.compact)
                 .await
         }
+        SessionCommands::Extract { session_id } => {
+            commands::session::extract_session(&client, &session_id, ctx.output_format, ctx.compact)
+                .await
+        }
     }
 }
 
@@ -422,7 +426,7 @@ pub async fn handle_write(
     uri: String,
     content: Option<String>,
     from_file: Option<String>,
-    append: bool,
+    mode: String,
     wait: bool,
     timeout: Option<f64>,
     ctx: CliContext,
@@ -442,7 +446,7 @@ pub async fn handle_write(
         &client,
         &uri,
         &payload,
-        append,
+        &mode,
         wait,
         timeout,
         ctx.output_format,

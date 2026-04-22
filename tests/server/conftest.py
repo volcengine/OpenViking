@@ -3,12 +3,14 @@
 
 """Shared fixtures for OpenViking server tests."""
 
+import json
 import shutil
 import socket
 import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -22,6 +24,7 @@ from openviking.server.config import ServerConfig
 from openviking.server.identity import RequestContext, Role
 from openviking.service.core import OpenVikingService
 from openviking.storage.transaction import reset_lock_manager
+from openviking_cli.client.http import AsyncHTTPClient
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig
 from openviking_cli.utils.config.vlm_config import VLMConfig
@@ -68,6 +71,104 @@ def _install_fake_embedder(monkeypatch):
 
     monkeypatch.setattr(EmbeddingConfig, "get_embedder", lambda self: FakeEmbedder())
     return FakeEmbedder
+
+
+class _DummyEmbedResult:
+    def __init__(self, dense_vector: list[float]):
+        self.dense_vector = dense_vector
+        self.sparse_vector = None
+
+
+class _DummyEmbedder:
+    def __init__(self, dimension: int = 2048):
+        self.dimension = dimension
+        self.is_sparse = False
+        self.is_hybrid = False
+
+    def get_dimension(self) -> int:
+        return self.dimension
+
+    def _embed(self, text: str) -> list[float]:
+        base = sum(ord(char) for char in text) or 1
+        return [float((base + index) % 17) for index in range(self.dimension)]
+
+    def embed(self, text: str) -> _DummyEmbedResult:
+        return _DummyEmbedResult(self._embed(text))
+
+    def embed_batch(self, texts: list[str]) -> list[_DummyEmbedResult]:
+        return [self.embed(text) for text in texts]
+
+
+class _DummyVLM:
+    def get_completion(self, _prompt: str, thinking: bool = False) -> str:
+        return "dummy completion"
+
+    async def get_completion_async(
+        self, _prompt: str, thinking: bool = False, max_retries: int = 0
+    ) -> str:
+        return "dummy completion"
+
+    def get_vision_completion(self, _prompt: str, images: list, thinking: bool = False) -> str:
+        return "dummy completion"
+
+    async def get_vision_completion_async(
+        self, _prompt: str, images: list, thinking: bool = False
+    ) -> str:
+        return "dummy completion"
+
+
+@pytest.fixture(scope="function", autouse=True)
+def test_openviking_config(temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
+    """Provide an isolated ov.conf and dummy model backends for server tests."""
+    config_path = temp_dir / "ov.conf"
+    ovcli_config_path = temp_dir / "ovcli.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "storage": {"workspace": str(temp_dir / "workspace")},
+                "embedding": {
+                    "dense": {
+                        "provider": "openai",
+                        "model": "text-embedding-3-small",
+                        "api_key": "test-key",
+                        "dimension": 2048,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    ovcli_config_path.write_text(
+        json.dumps(
+            {
+                "url": "http://127.0.0.1:1933",
+                "timeout": 120.0,
+                "agent_id": "test-agent",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("OPENVIKING_CONFIG_FILE", str(config_path))
+    monkeypatch.setenv("OPENVIKING_CLI_CONFIG_FILE", str(ovcli_config_path))
+
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+
+    OpenVikingConfigSingleton.reset_instance()
+
+    with (
+        patch(
+            "openviking_cli.utils.config.EmbeddingConfig.get_embedder",
+            return_value=_DummyEmbedder(),
+        ),
+        patch(
+            "openviking_cli.utils.config.VLMConfig.get_vlm_instance",
+            return_value=_DummyVLM(),
+        ),
+    ):
+        yield
+
+    OpenVikingConfigSingleton.reset_instance()
 
 
 def _install_fake_vlm(monkeypatch):
@@ -221,3 +322,15 @@ async def running_server(temp_dir: Path, monkeypatch):
     thread.join(timeout=5)
     await svc.close()
     await AsyncOpenViking.reset()
+
+
+@pytest_asyncio.fixture(scope="function")
+async def http_client(running_server):
+    """Create an AsyncHTTPClient connected to the running server."""
+    port, svc = running_server
+    client = AsyncHTTPClient(
+        url=f"http://127.0.0.1:{port}",
+    )
+    await client.initialize()
+    yield client, svc
+    await client.close()

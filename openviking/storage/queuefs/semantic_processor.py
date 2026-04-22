@@ -872,10 +872,9 @@ class SemanticProcessor(DequeueHandlerBase):
             logger.warning("VLM not available, using empty summary")
             return {"name": file_name, "summary": ""}
 
-        from openviking.session.memory.utils.language import _detect_language_from_text
+        from openviking.session.memory.utils.language import resolve_output_language
 
-        fallback_language = (get_openviking_config().language_fallback or "en").strip() or "en"
-        output_language = _detect_language_from_text(content, fallback_language)
+        output_language = resolve_output_language(content)
 
         # Detect file type and select appropriate prompt
         file_type = self._detect_file_type(file_name)
@@ -1079,9 +1078,7 @@ class SemanticProcessor(DequeueHandlerBase):
             logger.warning("VLM not available, using default overview")
             return f"# {dir_uri.split('/')[-1]}\n\n[Directory overview is not ready]"
 
-        from openviking.session.memory.utils.language import _detect_language_from_text
-
-        fallback_language = (config.language_fallback or "en").strip() or "en"
+        from openviking.session.memory.utils.language import resolve_output_language
 
         # Build file index mapping and summary string
         file_index_map = {}
@@ -1091,7 +1088,7 @@ class SemanticProcessor(DequeueHandlerBase):
             file_summaries_lines.append(f"[{idx}] {item['name']}: {item['summary']}")
         file_summaries_str = "\n".join(file_summaries_lines) if file_summaries_lines else "None"
 
-        output_language = _detect_language_from_text(file_summaries_str, fallback_language)
+        output_language = resolve_output_language(file_summaries_str, config=config)
 
         # Build subdirectory summary string
         children_abstracts_str = (

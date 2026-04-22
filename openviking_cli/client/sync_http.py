@@ -210,6 +210,9 @@ class SyncHTTPClient:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         telemetry: TelemetryRequest = False,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
     ):
         """Semantic search with optional session context."""
         return run_async(
@@ -223,6 +226,9 @@ class SyncHTTPClient:
                 score_threshold=score_threshold,
                 filter=filter,
                 telemetry=telemetry,
+                since=since,
+                until=until,
+                time_field=time_field,
             )
         )
 
@@ -235,6 +241,9 @@ class SyncHTTPClient:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         telemetry: TelemetryRequest = False,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
     ):
         """Semantic search without session context."""
         return run_async(
@@ -246,6 +255,9 @@ class SyncHTTPClient:
                 score_threshold,
                 filter,
                 telemetry=telemetry,
+                since=since,
+                until=until,
+                time_field=time_field,
             )
         )
 

@@ -12,6 +12,7 @@ This design simplifies PDF handling by delegating structure analysis
 to the MarkdownParser after conversion.
 """
 
+import asyncio
 import logging
 import re
 import time
@@ -207,6 +208,16 @@ class PDFParser(BaseParser):
             raise ValueError(f"Unknown strategy: {self.config.strategy}")
 
     async def _convert_local(
+        self, pdf_path: Path, storage=None, resource_name: Optional[str] = None
+    ) -> tuple[str, Dict[str, Any]]:
+        return await asyncio.to_thread(
+            self._convert_local_sync,
+            pdf_path,
+            storage,
+            resource_name,
+        )
+
+    def _convert_local_sync(
         self, pdf_path: Path, storage=None, resource_name: Optional[str] = None
     ) -> tuple[str, Dict[str, Any]]:
         """

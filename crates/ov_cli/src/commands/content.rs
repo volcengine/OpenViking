@@ -42,7 +42,7 @@ pub async fn write(
     client: &HttpClient,
     uri: &str,
     content: &str,
-    append: bool,
+    mode: &str,
     wait: bool,
     timeout: Option<f64>,
     output_format: OutputFormat,
@@ -52,7 +52,7 @@ pub async fn write(
         .write(
             uri,
             content,
-            if append { "append" } else { "replace" },
+            mode,
             wait,
             timeout,
         )

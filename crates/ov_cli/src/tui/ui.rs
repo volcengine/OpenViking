@@ -357,14 +357,14 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) 
 
     hints.extend_from_slice(&[
         Span::styled(
-            "d", 
+            "d",
             Style::default()
                 .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD)), 
+                .add_modifier(Modifier::BOLD)),
         Span::raw(":delete  "),
 
         Span::styled(
-            "r", 
+            "r",
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD)),

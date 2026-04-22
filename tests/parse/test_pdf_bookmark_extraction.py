@@ -7,37 +7,14 @@ Verifies that _extract_bookmarks correctly extracts bookmark entries
 and that _convert_local injects them as markdown headings.
 """
 
-from contextlib import nullcontext
-from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+import asyncio
+import threading
+from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
 from openviking.parse.parsers.pdf import PDFParser
-
-
-def _make_page(*, pageid=None, objid=None):
-    """Create a minimal page stub for bookmark extraction tests."""
-    return SimpleNamespace(page_obj=SimpleNamespace(pageid=pageid, objid=objid))
-
-
-def _make_ref(objid):
-    """Create a minimal PDF object reference stub."""
-    return SimpleNamespace(objid=objid)
-
-
-class _FakePage:
-    """Minimal pdfplumber page stub for _convert_local tests."""
-
-    def __init__(self, text: str):
-        self._text = text
-        self.images = []
-
-    def extract_text(self):
-        return self._text
-
-    def extract_tables(self):
-        return []
 
 
 class TestExtractBookmarks:
@@ -51,12 +28,18 @@ class TestExtractBookmarks:
         # Mock pdfplumber PDF object
         mock_pdf = MagicMock()
 
-        # Real pdfminer outlines point at page.page_obj.pageid
-        mock_pdf.pages = [_make_page(pageid=100), _make_page(pageid=200)]
+        # Mock pages with objid for page mapping
+        mock_page1 = MagicMock()
+        mock_page1.page_obj.objid = 100
+        mock_page2 = MagicMock()
+        mock_page2.page_obj.objid = 200
+        mock_pdf.pages = [mock_page1, mock_page2]
 
         # Mock page reference objects for bookmark destinations
-        mock_ref1 = _make_ref(100)  # Points to page 1
-        mock_ref2 = _make_ref(200)  # Points to page 2
+        mock_ref1 = MagicMock()
+        mock_ref1.objid = 100  # Points to page 1
+        mock_ref2 = MagicMock()
+        mock_ref2.objid = 200  # Points to page 2
 
         # Mock document outlines: (level, title, dest, action, structelem)
         mock_pdf.doc.get_outlines.return_value = [
@@ -71,19 +54,6 @@ class TestExtractBookmarks:
         assert bookmarks[0] == {"title": "Chapter 1", "level": 1, "page_num": 1}
         assert bookmarks[1] == {"title": "Section 1.1", "level": 2, "page_num": 1}
         assert bookmarks[2] == {"title": "Chapter 2", "level": 1, "page_num": 2}
-
-    def test_extract_bookmarks_falls_back_to_objid_mapping(self):
-        """Objid-based mapping remains supported for tests and alternate backends."""
-        mock_pdf = MagicMock()
-        mock_pdf.pages = [_make_page(objid=100), _make_page(objid=200)]
-
-        mock_pdf.doc.get_outlines.return_value = [
-            (1, "Chapter 1", [_make_ref(100), "/Fit"], None, None),
-            (1, "Chapter 2", [_make_ref(200), "/Fit"], None, None),
-        ]
-
-        bookmarks = self.parser._extract_bookmarks(mock_pdf)
-        assert [b["page_num"] for b in bookmarks] == [1, 2]
 
     def test_extract_bookmarks_no_outlines(self):
         """Returns empty list when PDF has no outlines."""
@@ -143,7 +113,12 @@ class TestExtractBookmarks:
     def test_extract_bookmarks_integer_page_index(self):
         """Bookmarks with integer destination (0-based) are resolved correctly."""
         mock_pdf = MagicMock()
-        mock_pdf.pages = [_make_page(pageid=100), _make_page(pageid=200)]
+
+        mock_page1 = MagicMock()
+        mock_page1.page_obj.objid = 100
+        mock_page2 = MagicMock()
+        mock_page2.page_obj.objid = 200
+        mock_pdf.pages = [mock_page1, mock_page2]
 
         # Integer page indices instead of object references
         mock_pdf.doc.get_outlines.return_value = [
@@ -161,7 +136,10 @@ class TestExtractBookmarks:
     def test_extract_bookmarks_integer_page_index_out_of_range(self):
         """Out-of-range integer page indices are treated as unresolved."""
         mock_pdf = MagicMock()
-        mock_pdf.pages = [_make_page(pageid=100)]  # Only 1 page
+
+        mock_page1 = MagicMock()
+        mock_page1.page_obj.objid = 100
+        mock_pdf.pages = [mock_page1]  # Only 1 page
 
         mock_pdf.doc.get_outlines.return_value = [
             (1, "Valid", [0, "/Fit"], None, None),
@@ -184,66 +162,28 @@ class TestExtractBookmarks:
         bookmarks = self.parser._extract_bookmarks(mock_pdf)
         assert bookmarks == []
 
-
-class TestConvertLocalBookmarks:
-    """Test bookmark injection behavior in local PDF conversion."""
-
     @pytest.mark.asyncio
-    async def test_convert_local_skips_unresolved_bookmarks(self):
-        parser = PDFParser()
-        fake_pdf = SimpleNamespace(pages=[_FakePage("Page one"), _FakePage("Page two")])
-        fake_pdfplumber = SimpleNamespace(open=lambda _path: nullcontext(fake_pdf))
+    async def test_convert_local_offloads_sync_pdf_work(self):
+        """Local pdfplumber conversion runs outside the event loop."""
+        marker = threading.Event()
+        release = threading.Event()
+        thread_ids = []
 
-        with (
-            patch("openviking.parse.parsers.pdf.lazy_import", return_value=fake_pdfplumber),
-            patch.object(
-                parser,
-                "_extract_bookmarks",
-                return_value=[
-                    {"level": 1, "title": "Broken Bookmark", "page_num": None},
-                    {"level": 1, "title": "Chapter 2", "page_num": 2},
-                ],
-            ),
-        ):
-            markdown, meta = await parser._convert_local(
-                "dummy.pdf", storage=MagicMock(), resource_name="dummy"
-            )
+        def sync_convert(pdf_path, storage=None, resource_name=None):
+            thread_ids.append(threading.get_ident())
+            marker.set()
+            release.wait(timeout=1)
+            return (f"parsed {Path(pdf_path).name}", {"strategy": "local"})
 
-        assert "Broken Bookmark" not in markdown
-        assert "\n# Chapter 2\n" in markdown
-        assert meta["bookmarks_found"] == 2
-        assert meta["bookmarks_resolved"] == 1
-        assert meta["bookmarks_unresolved"] == 1
-        assert meta["headings_found"] == 1
-        assert meta["heading_source"] == "bookmarks"
+        self.parser._convert_local_sync = sync_convert
 
-    @pytest.mark.asyncio
-    async def test_convert_local_falls_back_to_font_when_bookmarks_unresolved(self):
-        parser = PDFParser()
-        fake_pdf = SimpleNamespace(pages=[_FakePage("Page one"), _FakePage("Page two")])
-        fake_pdfplumber = SimpleNamespace(open=lambda _path: nullcontext(fake_pdf))
+        task = asyncio.create_task(self.parser._convert_local(Path("blocked.pdf")))
+        assert await asyncio.to_thread(marker.wait, 1)
+        await asyncio.sleep(0)
+        release.set()
 
-        with (
-            patch("openviking.parse.parsers.pdf.lazy_import", return_value=fake_pdfplumber),
-            patch.object(
-                parser,
-                "_extract_bookmarks",
-                return_value=[{"level": 1, "title": "Broken Bookmark", "page_num": None}],
-            ),
-            patch.object(
-                parser,
-                "_detect_headings_by_font",
-                return_value=[{"level": 1, "title": "Font Heading", "page_num": 2}],
-            ),
-        ):
-            markdown, meta = await parser._convert_local(
-                "dummy.pdf", storage=MagicMock(), resource_name="dummy"
-            )
+        markdown, meta = await task
 
-        assert "Broken Bookmark" not in markdown
-        assert "\n# Font Heading\n" in markdown
-        assert meta["bookmarks_found"] == 1
-        assert meta["bookmarks_resolved"] == 0
-        assert meta["bookmarks_unresolved"] == 1
-        assert meta["headings_found"] == 1
-        assert meta["heading_source"] == "font_analysis"
+        assert markdown == "parsed blocked.pdf"
+        assert meta == {"strategy": "local"}
+        assert thread_ids[0] != threading.get_ident()

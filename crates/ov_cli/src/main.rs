@@ -2,14 +2,13 @@ mod client;
 mod commands;
 mod config;
 mod error;
-mod handlers;
 mod output;
 mod tui;
 mod utils;
 
-use clap::{ArgAction, Parser, Subcommand};
-use config::Config;
-use error::Result;
+use clap::{ArgAction, Parser, Subcommand, ValueEnum};
+use config::{Config, merge_csv_options};
+use error::{Error, Result};
 use output::OutputFormat;
 
 /// CLI context shared across commands
@@ -18,6 +17,7 @@ pub struct CliContext {
     pub config: Config,
     pub output_format: OutputFormat,
     pub compact: bool,
+    pub sudo: bool,
 }
 
 impl CliContext {
@@ -27,6 +27,7 @@ impl CliContext {
         account: Option<String>,
         user: Option<String>,
         agent_id: Option<String>,
+        sudo: bool,
     ) -> Result<Self> {
         let config = Config::load()?;
         Ok(Self::from_config(
@@ -36,6 +37,7 @@ impl CliContext {
             account,
             user,
             agent_id,
+            sudo,
         ))
     }
 
@@ -46,6 +48,7 @@ impl CliContext {
         account: Option<String>,
         user: Option<String>,
         agent_id: Option<String>,
+        sudo: bool,
     ) -> Self {
         if account.is_some() {
             config.account = account;
@@ -60,22 +63,46 @@ impl CliContext {
             config,
             output_format,
             compact,
+            sudo,
         }
     }
 
     pub fn get_client(&self) -> client::HttpClient {
-        self.get_client_with_timeout(None)
-    }
-
-    pub fn get_client_with_timeout(&self, timeout_secs: Option<f64>) -> client::HttpClient {
+        let api_key = if self.sudo {
+            self.config.root_api_key.clone()
+        } else {
+            self.config.api_key.clone()
+        };
         client::HttpClient::new(
             &self.config.url,
-            self.config.api_key.clone(),
+            api_key,
             self.config.agent_id.clone(),
             self.config.account.clone(),
             self.config.user.clone(),
-            timeout_secs.unwrap_or(self.config.timeout),
+            self.config.timeout,
         )
+    }
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum RetrievalTimeField {
+    Updated,
+    Created,
+}
+
+impl RetrievalTimeField {
+    fn api_value(self) -> &'static str {
+        match self {
+            Self::Updated => "updated_at",
+            Self::Created => "created_at",
+        }
+    }
+
+    fn cli_value(self) -> &'static str {
+        match self {
+            Self::Updated => "updated",
+            Self::Created => "created",
+        }
     }
 }
 
@@ -105,26 +132,18 @@ struct Cli {
     #[arg(long = "agent-id", global = true)]
     agent_id: Option<String>,
 
+    /// Use root API key for admin privileges
+    #[arg(long, global = true)]
+    sudo: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
 
-// Commands are organized with category tags in their doc comments.
-//
-// # Command Tagging System
-//
-// Tags are added at the beginning of command doc comments, e.g.:
-// - `[Data]` - Data operations category
-// - `[Interactive]` - Interactive tools category
-// - `[Status]` - Status & observability category
-// - `[Admin]` - Admin tools category
-// - `[Experimental]` - Experimental/preview features (API may change)
-//
-// Some tags can be combined, e.g. `[Experimental][Data]`
+
 #[derive(Subcommand)]
 enum Commands {
-    // --- Data Operations ---
-    /// [Data] Add resources into OpenViking
+    /// Add resources into OpenViking
     AddResource {
         /// Local path or URL to import
         path: String,
@@ -165,7 +184,7 @@ enum Commands {
         #[arg(long, default_value = "0")]
         watch_interval: f64,
     },
-    /// [Data] Add a skill into OpenViking
+    /// Add a skill into OpenViking
     AddSkill {
         /// Skill directory, SKILL.md, or raw content
         data: String,
@@ -176,7 +195,79 @@ enum Commands {
         #[arg(long)]
         timeout: Option<f64>,
     },
-    /// [Data] List directory contents
+    /// List relations of a resource
+    Relations {
+        /// Viking URI
+        uri: String,
+    },
+    /// Create relation links from one URI to one or more targets
+    Link {
+        /// Source URI
+        from_uri: String,
+        /// One or more target URIs
+        to_uris: Vec<String>,
+        /// Reason for linking
+        #[arg(long, default_value = "")]
+        reason: String,
+    },
+    /// Remove a relation link
+    Unlink {
+        /// Source URI
+        from_uri: String,
+        /// Target URI to unlink
+        to_uri: String,
+    },
+    /// Export context as .ovpack
+    Export {
+        /// Source URI
+        uri: String,
+        /// Output .ovpack file path
+        to: String,
+    },
+    /// Import .ovpack into target URI
+    Import {
+        /// Input .ovpack file path
+        file_path: String,
+        /// Target parent URI
+        target_uri: String,
+        /// Overwrite when conflicts exist
+        #[arg(long)]
+        force: bool,
+        /// Disable vectorization after import
+        #[arg(long)]
+        no_vectorize: bool,
+    },
+    /// Wait for queued async processing to complete
+    Wait {
+        /// Wait timeout in seconds
+        #[arg(long)]
+        timeout: Option<f64>,
+    },
+    /// Show OpenViking component status
+    Status,
+    /// Quick health check
+    Health,
+    /// System utility commands
+    System {
+        #[command(subcommand)]
+        action: SystemCommands,
+    },
+    /// Observer status commands
+    Observer {
+        #[command(subcommand)]
+        action: ObserverCommands,
+    },
+    /// Session management commands
+    Session {
+        #[command(subcommand)]
+        action: SessionCommands,
+    },
+    /// Account and user management commands (multi-tenant)
+    Admin {
+        #[command(subcommand)]
+        action: AdminCommands,
+    },
+    /// List directory contents
     #[command(alias = "list")]
     Ls {
         /// Viking URI to list (default: viking://)
@@ -203,7 +294,7 @@ enum Commands {
         )]
         node_limit: i32,
     },
-    /// [Data] Get directory tree
+    /// Get directory tree
     Tree {
         /// Viking URI to get tree for
         uri: String,
@@ -225,7 +316,7 @@ enum Commands {
         #[arg(short = 'L', long = "level-limit", default_value = "3")]
         level_limit: i32,
     },
-    /// [Data] Create directory
+    /// Create directory
     Mkdir {
         /// Directory URI to create
         uri: String,
@@ -233,7 +324,7 @@ enum Commands {
         #[arg(long)]
         description: Option<String>,
     },
-    /// [Data] Remove resource
+    /// Remove resource
     #[command(alias = "del", alias = "delete")]
     Rm {
         /// Viking URI to remove
@@ -242,7 +333,7 @@ enum Commands {
         #[arg(short, long)]
         recursive: bool,
     },
-    /// [Data] Move or rename resource
+    /// Move or rename resource
     #[command(alias = "rename")]
     Mv {
         /// Source URI
@@ -250,27 +341,27 @@ enum Commands {
         /// Target URI
         to_uri: String,
     },
-    /// [Data] Get resource metadata
+    /// Get resource metadata
     Stat {
         /// Viking URI to get metadata for
         uri: String,
     },
-    /// [Data] Read file content (L2)
+    /// Read file content (L2)
     Read {
         /// Viking URI
         uri: String,
     },
-    /// [Data] Read abstract content (L0)
+    /// Read abstract content (L0)
     Abstract {
-        /// Directory URI
+        /// Viking URI
         uri: String,
     },
-    /// [Data] Read overview content (L1)
+    /// Read overview content (L1)
     Overview {
-        /// Directory URI
+        /// Viking URI
         uri: String,
     },
-    /// [Data] Write text content to an existing file
+    /// Write text content to an existing file
     Write {
         /// Viking URI
         uri: String,
@@ -283,6 +374,9 @@ enum Commands {
         /// Append instead of replacing the file
         #[arg(long)]
         append: bool,
+        /// Write mode: replace, append, or create (default: replace)
+        #[arg(long, value_name = "MODE", conflicts_with = "append")]
+        mode: Option<String>,
         /// Wait for async processing to finish
         #[arg(long, default_value = "false")]
         wait: bool,
@@ -290,14 +384,25 @@ enum Commands {
         #[arg(long)]
         timeout: Option<f64>,
     },
-    /// [Data] Download file to local path (supports binaries/images)
+    /// Reindex content at URI (regenerates .abstract.md and .overview.md)
+    Reindex {
+        /// Viking URI
+        uri: String,
+        /// Force regenerate summaries even if they exist
+        #[arg(short, long)]
+        regenerate: bool,
+        /// Wait for reindex to complete
+        #[arg(long, default_value = "true")]
+        wait: bool,
+    },
+    /// Download file to local path (supports binaries/images)
     Get {
         /// Viking URI
         uri: String,
         /// Local path (must not exist yet)
         local_path: String,
     },
-    /// [Data] Run semantic retrieval
+    /// Run semantic retrieval
     Find {
         /// Search query
         query: String,
@@ -316,13 +421,22 @@ enum Commands {
         #[arg(short, long)]
         threshold: Option<f64>,
         /// Only include results on or after this time (e.g. 48h, 7d, 2026-03-10, ISO-8601)
-        #[arg(long = "after")]
-        after: Option<String>,
+        #[arg(long)]
+        since: Option<String>,
         /// Only include results on or before this time (e.g. 24h, 2026-03-15, ISO-8601)
-        #[arg(long = "before")]
-        before: Option<String>,
+        #[arg(long)]
+        until: Option<String>,
+        /// Time field to filter on
+        #[arg(long, value_enum, default_value = "updated")]
+        time_field: RetrievalTimeField,
+        /// Only include results from the last duration (e.g. 48h, 7d, 2w)
+        #[arg(long, conflicts_with = "since")]
+        last: Option<String>,
+        /// Results from a single day (e.g. 2026-03-15)
+        #[arg(long, conflicts_with_all = ["since", "until", "last"])]
+        on: Option<String>,
     },
-    /// [Experimental][Data] Run context-aware retrieval
+    /// Run context-aware retrieval
     Search {
         /// Search query
         query: String,
@@ -344,13 +458,22 @@ enum Commands {
         #[arg(short, long)]
         threshold: Option<f64>,
         /// Only include results on or after this time (e.g. 48h, 7d, 2026-03-10, ISO-8601)
-        #[arg(long = "after")]
-        after: Option<String>,
+        #[arg(long)]
+        since: Option<String>,
         /// Only include results on or before this time (e.g. 24h, 2026-03-15, ISO-8601)
-        #[arg(long = "before")]
-        before: Option<String>,
+        #[arg(long)]
+        until: Option<String>,
+        /// Time field to filter on
+        #[arg(long, value_enum, default_value = "updated")]
+        time_field: RetrievalTimeField,
+        /// Only include results from the last duration (e.g. 48h, 7d, 2w)
+        #[arg(long, conflicts_with = "since")]
+        last: Option<String>,
+        /// Results from a single day (e.g. 2026-03-15)
+        #[arg(long, conflicts_with_all = ["since", "until", "last"])]
+        on: Option<String>,
     },
-    /// [Data] Run content pattern search
+    /// Run content pattern search
     Grep {
         /// Target URI
         #[arg(short, long, default_value = "viking://")]
@@ -375,7 +498,7 @@ enum Commands {
         #[arg(short = 'L', long = "level-limit", default_value = "10")]
         level_limit: i32,
     },
-    /// [Data] Run file glob pattern search
+    /// Run file glob pattern search
     Glob {
         /// Glob pattern
         pattern: String,
@@ -391,48 +514,20 @@ enum Commands {
         )]
         node_limit: i32,
     },
-    /// [Data] Session management commands
-    Session {
-        #[command(subcommand)]
-        action: SessionCommands,
-    },
-    /// [Experimental][Data] Add memory in one shot (creates session, adds messages, commits)
+    /// Add memory in one shot (creates session, adds messages, commits)
     AddMemory {
         /// Content to memorize. Plain string (treated as user message),
         /// JSON {"role":"...","content":"..."} for a single message,
         /// or JSON array of such objects for multiple messages.
         content: String,
     },
-    /// [Experimental][Data] List relations of a resource
-    Relations {
-        /// Viking URI
-        uri: String,
-    },
-    /// [Experimental][Data] Create relation links from one URI to one or more targets
-    Link {
-        /// Source URI
-        from_uri: String,
-        /// One or more target URIs
-        to_uris: Vec<String>,
-        /// Reason for linking
-        #[arg(long, default_value = "")]
-        reason: String,
-    },
-    /// [Experimental][Data] Remove a relation link
-    Unlink {
-        /// Source URI
-        from_uri: String,
-        /// Target URI to unlink
-        to_uri: String,
-    },
-    // --- Interactive Tools ---
-    /// [Interactive] Interactive TUI file explorer
+    /// Interactive TUI file explorer
     Tui {
         /// Viking URI to start browsing (default: /)
         #[arg(default_value = "/")]
         uri: String,
     },
-    /// [Interactive] Chat with vikingbot agent
+    /// Chat with vikingbot agent
     Chat {
         /// Message to send to the agent
         #[arg(short, long)]
@@ -453,73 +548,25 @@ enum Commands {
         #[arg(long)]
         no_history: bool,
     },
-
-    // --- Status & Observability ---
-    /// [Status] Wait for queued async processing to complete
-    Wait {
-        /// Wait timeout in seconds
-        #[arg(long)]
-        timeout: Option<f64>,
-    },
-    /// [Status] All OpenViking Server components status
-    Status,
-    /// [Status] Observe OpenViking Server components status
-    Observer {
-        #[command(subcommand)]
-        action: ObserverCommands,
-    },
-    /// [Status] Quick health check
-    Health,
-    /// [Status] Configuration management
+    /// Configuration management
     Config {
         #[command(subcommand)]
         action: ConfigCommands,
     },
-    /// [Status] Show CLI version
+    /// Show CLI version
     Version,
+}
 
-    // --- Admin Tools ---
-    /// [Admin] Account and user management commands (multi-tenant)
-    Admin {
-        #[command(subcommand)]
-        action: AdminCommands,
-    },
-    /// [Admin] System utility commands
-    System {
-        #[command(subcommand)]
-        action: SystemCommands,
-    },
-    /// [Admin][Data] Export context as .ovpack
-    Export {
-        /// Source URI
-        uri: String,
-        /// Output .ovpack file path
-        to: String,
-    },
-    /// [Admin][Data] Import .ovpack into target URI
-    Import {
-        /// Input .ovpack file path
-        file_path: String,
-        /// Target parent URI
-        target_uri: String,
-        /// Overwrite when conflicts exist
-        #[arg(long)]
-        force: bool,
-        /// Disable vectorization after import
-        #[arg(long)]
-        no_vectorize: bool,
-    },
-    /// [Admin] Reindex content at URI (regenerates .abstract.md and .overview.md)
-    Reindex {
-        /// Viking URI
-        uri: String,
-        /// Force regenerate summaries even if they exist
-        #[arg(short, long)]
-        regenerate: bool,
-        /// Wait for reindex to complete
-        #[arg(long, default_value = "true")]
-        wait: bool,
-    },
+impl Commands {
+    /// Returns true if this is an admin command that supports --sudo
+    fn is_admin_command(&self) -> bool {
+        match self {
+            Self::Admin { .. }
+            | Self::System { .. }
+            | Self::Reindex { .. } => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -568,21 +615,6 @@ enum SessionCommands {
         /// Session ID
         session_id: String,
     },
-    /// Get full merged session context
-    GetSessionContext {
-        /// Session ID
-        session_id: String,
-        /// Token budget for latest archive overview inclusion
-        #[arg(long = "token-budget", default_value = "128000")]
-        token_budget: i32,
-    },
-    /// Get one completed archive for a session
-    GetSessionArchive {
-        /// Session ID
-        session_id: String,
-        /// Archive ID
-        archive_id: String,
-    },
     /// Delete a session
     Delete {
         /// Session ID
@@ -601,6 +633,11 @@ enum SessionCommands {
     },
     /// Commit a session (archive messages and extract memories)
     Commit {
+        /// Session ID
+        session_id: String,
+    },
+    /// Re-run memory extraction against a session's archived messages
+    Extract {
         /// Session ID
         session_id: String,
     },
@@ -684,12 +721,25 @@ async fn main() {
         cli.account.clone(),
         cli.user.clone(),
         cli.agent_id.clone(),
+        cli.sudo,
     ) {
         Ok(ctx) => ctx,
         Err(e) => {
             eprintln!("Error: {}", e);
             std::process::exit(2);
         }
+    };
+
+    // Check if --sudo is used but root_api_key is not configured
+    if ctx.sudo && ctx.config.root_api_key.is_none() {
+        eprintln!("Error: --sudo requires root_api_key to be configured in ~/.openviking/ovcli.conf");
+        std::process::exit(2);
+    }
+
+    // Check if --sudo is used with non-admin command
+    if ctx.sudo && !cli.command.is_admin_command() {
+        eprintln!("Error: --sudo is only supported for admin commands (admin, system, reindex)");
+        std::process::exit(2);
     };
 
     let result = match cli.command {
@@ -708,7 +758,7 @@ async fn main() {
             no_directly_upload_media,
             watch_interval,
         } => {
-            handlers::handle_add_resource(
+            handle_add_resource(
                 path,
                 to,
                 parent,
@@ -730,21 +780,21 @@ async fn main() {
             data,
             wait,
             timeout,
-        } => handlers::handle_add_skill(data, wait, timeout, ctx).await,
-        Commands::Relations { uri } => handlers::handle_relations(uri, ctx).await,
+        } => handle_add_skill(data, wait, timeout, ctx).await,
+        Commands::Relations { uri } => handle_relations(uri, ctx).await,
         Commands::Link {
             from_uri,
             to_uris,
             reason,
-        } => handlers::handle_link(from_uri, to_uris, reason, ctx).await,
-        Commands::Unlink { from_uri, to_uri } => handlers::handle_unlink(from_uri, to_uri, ctx).await,
-        Commands::Export { uri, to } => handlers::handle_export(uri, to, ctx).await,
+        } => handle_link(from_uri, to_uris, reason, ctx).await,
+        Commands::Unlink { from_uri, to_uri } => handle_unlink(from_uri, to_uri, ctx).await,
+        Commands::Export { uri, to } => handle_export(uri, to, ctx).await,
         Commands::Import {
             file_path,
             target_uri,
             force,
             no_vectorize,
-        } => handlers::handle_import(file_path, target_uri, force, no_vectorize, ctx).await,
+        } => handle_import(file_path, target_uri, force, no_vectorize, ctx).await,
         Commands::Wait { timeout } => {
             let client = ctx.get_client();
             commands::system::wait(&client, timeout, ctx.output_format, ctx.compact).await
@@ -753,11 +803,11 @@ async fn main() {
             let client = ctx.get_client();
             commands::observer::system(&client, ctx.output_format, ctx.compact).await
         }
-        Commands::Health => handlers::handle_health(ctx).await,
-        Commands::System { action } => handlers::handle_system(action, ctx).await,
-        Commands::Observer { action } => handlers::handle_observer(action, ctx).await,
-        Commands::Session { action } => handlers::handle_session(action, ctx).await,
-        Commands::Admin { action } => handlers::handle_admin(action, ctx).await,
+        Commands::Health => handle_health(ctx).await,
+        Commands::System { action } => handle_system(action, ctx).await,
+        Commands::Observer { action } => handle_observer(action, ctx).await,
+        Commands::Session { action } => handle_session(action, ctx).await,
+        Commands::Admin { action } => handle_admin(action, ctx).await,
         Commands::Ls {
             uri,
             simple,
@@ -765,20 +815,20 @@ async fn main() {
             abs_limit,
             all,
             node_limit,
-        } => handlers::handle_ls(uri, simple, recursive, abs_limit, all, node_limit, ctx).await,
+        } => handle_ls(uri, simple, recursive, abs_limit, all, node_limit, ctx).await,
         Commands::Tree {
             uri,
             abs_limit,
             all,
             node_limit,
             level_limit,
-        } => handlers::handle_tree(uri, abs_limit, all, node_limit, level_limit, ctx).await,
-        Commands::Mkdir { uri, description } => handlers::handle_mkdir(uri, description, ctx).await,
-        Commands::Rm { uri, recursive } => handlers::handle_rm(uri, recursive, ctx).await,
-        Commands::Mv { from_uri, to_uri } => handlers::handle_mv(from_uri, to_uri, ctx).await,
-        Commands::Stat { uri } => handlers::handle_stat(uri, ctx).await,
-        Commands::AddMemory { content } => handlers::handle_add_memory(content, ctx).await,
-        Commands::Tui { uri } => handlers::handle_tui(uri, ctx).await,
+        } => handle_tree(uri, abs_limit, all, node_limit, level_limit, ctx).await,
+        Commands::Mkdir { uri, description } => handle_mkdir(uri, description, ctx).await,
+        Commands::Rm { uri, recursive } => handle_rm(uri, recursive, ctx).await,
+        Commands::Mv { from_uri, to_uri } => handle_mv(from_uri, to_uri, ctx).await,
+        Commands::Stat { uri } => handle_stat(uri, ctx).await,
+        Commands::AddMemory { content } => handle_add_memory(content, ctx).await,
+        Commands::Tui { uri } => handle_tui(uri, ctx).await,
         Commands::Chat {
             message,
             session,
@@ -795,12 +845,11 @@ async fn main() {
             } else {
                 format!("{}/bot/v1", ctx.config.url)
             };
-            let api_key = std::env::var("VIKINGBOT_API_KEY")
-                .ok()
-                .or_else(|| ctx.config.api_key.clone());
             let cmd = commands::chat::ChatCommand {
                 endpoint,
-                api_key,
+                api_key: std::env::var("VIKINGBOT_API_KEY").ok(),
+                account: ctx.config.account.clone(),
+                user: ctx.config.user.clone(),
                 session: session_id,
                 sender,
                 message,
@@ -810,60 +859,69 @@ async fn main() {
             };
             cmd.run().await
         }
-        Commands::Config { action } => handlers::handle_config(action, ctx).await,
+        Commands::Config { action } => handle_config(action, ctx).await,
         Commands::Version => {
-            println!("CLI:     {}", env!("OPENVIKING_CLI_VERSION"));
-
-            // Try to get server version from /health endpoint with a short timeout (3 seconds)
-            let client = ctx.get_client_with_timeout(Some(3.0));
-            match client.get::<serde_json::Value>("/health", &[]).await {
-                Ok(health) => {
-                    if let Some(version) = health.get("version").and_then(|v| v.as_str()) {
-                        println!("Server:  {}", version);
-                    }
-                }
-                Err(_) => {
-                    // If can't connect to server, just don't print server version
-                }
-            }
+            println!("{}", env!("OPENVIKING_CLI_VERSION"));
             Ok(())
         }
-        Commands::Read { uri } => handlers::handle_read(uri, ctx).await,
-        Commands::Abstract { uri } => handlers::handle_abstract(uri, ctx).await,
-        Commands::Overview { uri } => handlers::handle_overview(uri, ctx).await,
+        Commands::Read { uri } => handle_read(uri, ctx).await,
+        Commands::Abstract { uri } => handle_abstract(uri, ctx).await,
+        Commands::Overview { uri } => handle_overview(uri, ctx).await,
         Commands::Write {
             uri,
             content,
             from_file,
             append,
+            mode,
             wait,
             timeout,
-        } => handlers::handle_write(uri, content, from_file, append, wait, timeout, ctx).await,
+        } => {
+            let effective_mode = if let Some(m) = mode {
+                m
+            } else if append {
+                "append".to_string()
+            } else {
+                "replace".to_string()
+            };
+            handlers::handle_write(uri, content, from_file, effective_mode, wait, timeout, ctx).await
+        }
         Commands::Reindex {
             uri,
             regenerate,
             wait,
-        } => handlers::handle_reindex(uri, regenerate, wait, ctx).await,
-        Commands::Get { uri, local_path } => handlers::handle_get(uri, local_path, ctx).await,
+        } => handle_reindex(uri, regenerate, wait, ctx).await,
+        Commands::Get { uri, local_path } => handle_get(uri, local_path, ctx).await,
         Commands::Find {
             query,
             uri,
             node_limit,
             threshold,
-            after,
-            before,
-        } => handlers::handle_find(query, uri, node_limit, threshold, after, before, ctx).await,
+            since,
+            until,
+            time_field,
+            last,
+            on,
+        } => {
+            handle_find(
+                query, uri, node_limit, threshold, since, until, time_field, last, on, ctx,
+            )
+            .await
+        }
         Commands::Search {
             query,
             uri,
             session_id,
             node_limit,
             threshold,
-            after,
-            before,
+            since,
+            until,
+            time_field,
+            last,
+            on,
         } => {
-            handlers::handle_search(
-                query, uri, session_id, node_limit, threshold, after, before, ctx,
+            handle_search(
+                query, uri, session_id, node_limit, threshold, since, until, time_field, last, on,
+                ctx,
             )
             .await
         }
@@ -875,7 +933,7 @@ async fn main() {
             node_limit,
             level_limit,
         } => {
-            handlers::handle_grep(
+            handle_grep(
                 uri,
                 exclude_uri,
                 pattern,
@@ -891,7 +949,7 @@ async fn main() {
             pattern,
             uri,
             node_limit,
-        } => handlers::handle_glob(pattern, uri, node_limit, ctx).await,
+        } => handle_glob(pattern, uri, node_limit, ctx).await,
     };
 
     if let Err(e) = result {
@@ -900,11 +958,558 @@ async fn main() {
     }
 }
 
+async fn handle_add_resource(
+    mut path: String,
+    to: Option<String>,
+    parent: Option<String>,
+    reason: String,
+    instruction: String,
+    wait: bool,
+    timeout: Option<f64>,
+    strict_mode: bool,
+    ignore_dirs: Option<String>,
+    include: Option<String>,
+    exclude: Option<String>,
+    no_directly_upload_media: bool,
+    watch_interval: f64,
+    ctx: CliContext,
+) -> Result<()> {
+    let is_url =
+        path.starts_with("http://") || path.starts_with("https://") || path.starts_with("git@");
+
+    if !is_url {
+        use std::path::Path;
+
+        // Unescape path: replace backslash followed by space with just space
+        let unescaped_path = path.replace("\\ ", " ");
+        let path_obj = Path::new(&unescaped_path);
+        if !path_obj.exists() {
+            eprintln!("Error: Path '{}' does not exist.", path);
+
+            // Check if there might be unquoted spaces
+            use std::env;
+            let args: Vec<String> = env::args().collect();
+
+            if let Some(add_resource_pos) =
+                args.iter().position(|s| s == "add-resource" || s == "add")
+            {
+                if args.len() > add_resource_pos + 2 {
+                    let extra_args = &args[add_resource_pos + 2..];
+                    let suggested_path = format!("{} {}", path, extra_args.join(" "));
+                    eprintln!(
+                        "\nIt looks like you may have forgotten to quote a path with spaces."
+                    );
+                    eprintln!("Suggested command: ov add-resource \"{}\"", suggested_path);
+                }
+            }
+
+            std::process::exit(1);
+        }
+        path = unescaped_path;
+    }
+
+    // Check that only one of --to or --parent is set
+    if to.is_some() && parent.is_some() {
+        eprintln!("Error: Cannot specify both --to and --parent at the same time.");
+        std::process::exit(1);
+    }
+
+    let strict = strict_mode;
+    let directly_upload_media = !no_directly_upload_media;
+
+    let effective_ignore_dirs =
+        merge_csv_options(ctx.config.upload.ignore_dirs.clone(), ignore_dirs);
+    let effective_include = merge_csv_options(ctx.config.upload.include.clone(), include);
+    let effective_exclude = merge_csv_options(ctx.config.upload.exclude.clone(), exclude);
+
+    let effective_timeout = if wait {
+        timeout.unwrap_or(60.0).max(ctx.config.timeout)
+    } else {
+        ctx.config.timeout
+    };
+    let client = client::HttpClient::new(
+        &ctx.config.url,
+        ctx.config.api_key.clone(),
+        ctx.config.agent_id.clone(),
+        ctx.config.account.clone(),
+        ctx.config.user.clone(),
+        effective_timeout,
+    );
+    commands::resources::add_resource(
+        &client,
+        &path,
+        to,
+        parent,
+        reason,
+        instruction,
+        wait,
+        timeout,
+        strict,
+        effective_ignore_dirs,
+        effective_include,
+        effective_exclude,
+        directly_upload_media,
+        watch_interval,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
+}
+
+async fn handle_add_skill(
+    data: String,
+    wait: bool,
+    timeout: Option<f64>,
+    ctx: CliContext,
+) -> Result<()> {
+    let client = ctx.get_client();
+    commands::resources::add_skill(
+        &client,
+        &data,
+        wait,
+        timeout,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
+}
+
+async fn handle_relations(uri: String, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    commands::relations::list_relations(&client, &uri, ctx.output_format, ctx.compact).await
+}
+
+async fn handle_link(
+    from_uri: String,
+    to_uris: Vec<String>,
+    reason: String,
+    ctx: CliContext,
+) -> Result<()> {
+    let client = ctx.get_client();
+    commands::relations::link(
+        &client,
+        &from_uri,
+        &to_uris,
+        &reason,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
+}
+
+async fn handle_unlink(from_uri: String, to_uri: String, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    commands::relations::unlink(&client, &from_uri, &to_uri, ctx.output_format, ctx.compact).await
+}
+
+async fn handle_export(uri: String, to: String, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    commands::pack::export(&client, &uri, &to, ctx.output_format, ctx.compact).await
+}
+
+async fn handle_import(
+    file_path: String,
+    target_uri: String,
+    force: bool,
+    no_vectorize: bool,
+    ctx: CliContext,
+) -> Result<()> {
+    let client = ctx.get_client();
+    commands::pack::import(
+        &client,
+        &file_path,
+        &target_uri,
+        force,
+        no_vectorize,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
+}
+
+async fn handle_system(cmd: SystemCommands, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    match cmd {
+        SystemCommands::Wait { timeout } => {
+            commands::system::wait(&client, timeout, ctx.output_format, ctx.compact).await
+        }
+        SystemCommands::Status => {
+            commands::system::status(&client, ctx.output_format, ctx.compact).await
+        }
+        SystemCommands::Health => {
+            let _ = commands::system::health(&client, ctx.output_format, ctx.compact).await?;
+            Ok(())
+        }
+        SystemCommands::Crypto { action } => commands::crypto::handle_crypto(action).await,
+    }
+}
+
+async fn handle_observer(cmd: ObserverCommands, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    match cmd {
+        ObserverCommands::Queue => {
+            commands::observer::queue(&client, ctx.output_format, ctx.compact).await
+        }
+        ObserverCommands::Vikingdb => {
+            commands::observer::vikingdb(&client, ctx.output_format, ctx.compact).await
+        }
+        ObserverCommands::Models => {
+            commands::observer::models(&client, ctx.output_format, ctx.compact).await
+        }
+        ObserverCommands::Transaction => {
+            commands::observer::transaction(&client, ctx.output_format, ctx.compact).await
+        }
+        ObserverCommands::Retrieval => {
+            commands::observer::retrieval(&client, ctx.output_format, ctx.compact).await
+        }
+        ObserverCommands::System => {
+            commands::observer::system(&client, ctx.output_format, ctx.compact).await
+        }
+    }
+}
+
+async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    match cmd {
+        SessionCommands::New => {
+            commands::session::new_session(&client, ctx.output_format, ctx.compact).await
+        }
+        SessionCommands::List => {
+            commands::session::list_sessions(&client, ctx.output_format, ctx.compact).await
+        }
+        SessionCommands::Get { session_id } => {
+            commands::session::get_session(&client, &session_id, ctx.output_format, ctx.compact)
+                .await
+        }
+        SessionCommands::Delete { session_id } => {
+            commands::session::delete_session(&client, &session_id, ctx.output_format, ctx.compact)
+                .await
+        }
+        SessionCommands::AddMessage {
+            session_id,
+            role,
+            content,
+        } => {
+            commands::session::add_message(
+                &client,
+                &session_id,
+                &role,
+                &content,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+        SessionCommands::Commit { session_id } => {
+            commands::session::commit_session(&client, &session_id, ctx.output_format, ctx.compact)
+                .await
+        }
+        SessionCommands::Extract { session_id } => {
+            commands::session::extract_session(
+                &client,
+                &session_id,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+    }
+}
+
+async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    match cmd {
+        AdminCommands::CreateAccount {
+            account_id,
+            admin_user_id,
+        } => {
+            commands::admin::create_account(
+                &client,
+                &account_id,
+                &admin_user_id,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+        AdminCommands::ListAccounts => {
+            commands::admin::list_accounts(&client, ctx.output_format, ctx.compact).await
+        }
+        AdminCommands::DeleteAccount { account_id } => {
+            commands::admin::delete_account(&client, &account_id, ctx.output_format, ctx.compact)
+                .await
+        }
+        AdminCommands::RegisterUser {
+            account_id,
+            user_id,
+            role,
+        } => {
+            commands::admin::register_user(
+                &client,
+                &account_id,
+                &user_id,
+                &role,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+        AdminCommands::ListUsers { account_id } => {
+            commands::admin::list_users(&client, &account_id, ctx.output_format, ctx.compact).await
+        }
+        AdminCommands::RemoveUser {
+            account_id,
+            user_id,
+        } => {
+            commands::admin::remove_user(
+                &client,
+                &account_id,
+                &user_id,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+        AdminCommands::SetRole {
+            account_id,
+            user_id,
+            role,
+        } => {
+            commands::admin::set_role(
+                &client,
+                &account_id,
+                &user_id,
+                &role,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+        AdminCommands::RegenerateKey {
+            account_id,
+            user_id,
+        } => {
+            commands::admin::regenerate_key(
+                &client,
+                &account_id,
+                &user_id,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+    }
+}
+
+async fn handle_add_memory(content: String, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    commands::session::add_memory(&client, &content, ctx.output_format, ctx.compact).await
+}
+
+async fn handle_config(cmd: ConfigCommands, _ctx: CliContext) -> Result<()> {
+    match cmd {
+        ConfigCommands::Show => {
+            let config = Config::load()?;
+            output::output_success(
+                &serde_json::to_value(config).unwrap(),
+                output::OutputFormat::Json,
+                true,
+            );
+            Ok(())
+        }
+        ConfigCommands::Validate => match Config::load() {
+            Ok(_) => {
+                println!("Configuration is valid");
+                Ok(())
+            }
+            Err(e) => Err(Error::Config(e.to_string())),
+        },
+    }
+}
+
+async fn handle_read(uri: String, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    commands::content::read(&client, &uri, ctx.output_format, ctx.compact).await
+}
+
+async fn handle_abstract(uri: String, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    commands::content::abstract_content(&client, &uri, ctx.output_format, ctx.compact).await
+}
+
+async fn handle_overview(uri: String, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    commands::content::overview(&client, &uri, ctx.output_format, ctx.compact).await
+}
+
+async fn handle_write(
+    uri: String,
+    content: Option<String>,
+    from_file: Option<String>,
+    append: bool,
+    wait: bool,
+    timeout: Option<f64>,
+    ctx: CliContext,
+) -> Result<()> {
+    let client = ctx.get_client();
+    let payload = match (content, from_file) {
+        (Some(value), None) => value,
+        (None, Some(path)) => std::fs::read_to_string(path)
+            .map_err(|e| Error::Client(format!("Failed to read --from-file: {}", e)))?,
+        _ => {
+            return Err(Error::Client(
+                "Specify exactly one of --content or --from-file".into(),
+            ));
+        }
+    };
+    commands::content::write(
+        &client,
+        &uri,
+        &payload,
+        append,
+        wait,
+        timeout,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
+}
+
+async fn handle_reindex(uri: String, regenerate: bool, wait: bool, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    commands::content::reindex(
+        &client,
+        &uri,
+        regenerate,
+        wait,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
+}
+
+async fn handle_get(uri: String, local_path: String, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    commands::content::get(&client, &uri, &local_path).await
+}
+
+async fn handle_find(
+    query: String,
+    uri: String,
+    node_limit: i32,
+    threshold: Option<f64>,
+    since: Option<String>,
+    until: Option<String>,
+    time_field: RetrievalTimeField,
+    last: Option<String>,
+    on: Option<String>,
+    ctx: CliContext,
+) -> Result<()> {
+    let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
+    if let Some(t) = threshold {
+        params.push(format!("--threshold {}", t));
+    }
+    append_time_filter_params(&mut params, time_field, &since, &until, &last, &on);
+    params.push(format!("\"{}\"", query));
+    print_command_echo("ov find", &params.join(" "), ctx.config.echo_command);
+    let (since, until) = resolve_time_flags(since, until, last, on);
+    let client = ctx.get_client();
+    commands::search::find(
+        &client,
+        &query,
+        &uri,
+        node_limit,
+        threshold,
+        since.as_deref(),
+        until.as_deref(),
+        Some(time_field.api_value()),
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
+}
+
+async fn handle_search(
+    query: String,
+    uri: String,
+    session_id: Option<String>,
+    node_limit: i32,
+    threshold: Option<f64>,
+    since: Option<String>,
+    until: Option<String>,
+    time_field: RetrievalTimeField,
+    last: Option<String>,
+    on: Option<String>,
+    ctx: CliContext,
+) -> Result<()> {
+    let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
+    if let Some(s) = &session_id {
+        params.push(format!("--session-id {}", s));
+    }
+    if let Some(t) = threshold {
+        params.push(format!("--threshold {}", t));
+    }
+    append_time_filter_params(&mut params, time_field, &since, &until, &last, &on);
+    params.push(format!("\"{}\"", query));
+    print_command_echo("ov search", &params.join(" "), ctx.config.echo_command);
+    let (since, until) = resolve_time_flags(since, until, last, on);
+    let client = ctx.get_client();
+    commands::search::search(
+        &client,
+        &query,
+        &uri,
+        session_id,
+        node_limit,
+        threshold,
+        since.as_deref(),
+        until.as_deref(),
+        Some(time_field.api_value()),
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
+}
+
+fn append_time_filter_params(
+    params: &mut Vec<String>,
+    time_field: RetrievalTimeField,
+    since: &Option<String>,
+    until: &Option<String>,
+    last: &Option<String>,
+    on: &Option<String>,
+) {
+    params.push(format!("--time-field {}", time_field.cli_value()));
+    if let Some(day) = on {
+        params.push(format!("--on {}", day));
+        return;
+    }
+    if let Some(value) = last {
+        params.push(format!("--last {}", value));
+    } else if let Some(value) = since {
+        params.push(format!("--since {}", value));
+    }
+    if let Some(value) = until {
+        params.push(format!("--until {}", value));
+    }
+}
+
+/// Resolve --since/--until/--last/--on into canonical API bounds.
+fn resolve_time_flags(
+    since: Option<String>,
+    until: Option<String>,
+    last: Option<String>,
+    on: Option<String>,
+) -> (Option<String>, Option<String>) {
+    if let Some(date) = on {
+        return (Some(date.clone()), Some(date));
+    }
+    let resolved_since = last.or(since);
+    (resolved_since, until)
+}
 #[cfg(test)]
 mod tests {
-    use super::{Cli, CliContext};
+    use super::{Cli, CliContext, RetrievalTimeField, resolve_time_flags};
     use crate::config::Config;
-    use crate::handlers;
     use crate::output::OutputFormat;
     use clap::Parser;
 
@@ -932,6 +1537,7 @@ mod tests {
         let config = Config {
             url: "http://localhost:1933".to_string(),
             api_key: Some("test-key".to_string()),
+            root_api_key: None,
             account: Some("from-config-account".to_string()),
             user: Some("from-config-user".to_string()),
             agent_id: Some("from-config-agent".to_string()),
@@ -948,11 +1554,54 @@ mod tests {
             Some("from-cli-account".to_string()),
             Some("from-cli-user".to_string()),
             Some("from-cli-agent".to_string()),
+            false,
         );
 
         assert_eq!(ctx.config.account.as_deref(), Some("from-cli-account"));
         assert_eq!(ctx.config.user.as_deref(), Some("from-cli-user"));
         assert_eq!(ctx.config.agent_id.as_deref(), Some("from-cli-agent"));
+    }
+
+    #[test]
+    fn cli_context_uses_root_api_key_with_sudo() {
+        let config = Config {
+            url: "http://localhost:1933".to_string(),
+            api_key: Some("user-key".to_string()),
+            root_api_key: Some("root-key".to_string()),
+            account: None,
+            user: None,
+            agent_id: None,
+            timeout: 60.0,
+            output: "table".to_string(),
+            echo_command: true,
+            upload: Default::default(),
+        };
+
+        // Without sudo: use api_key
+        let ctx = CliContext::from_config(
+            config.clone(),
+            OutputFormat::Json,
+            true,
+            None,
+            None,
+            None,
+            false,
+        );
+        let client = ctx.get_client();
+        assert_eq!(client.api_key(), Some("user-key"));
+
+        // With sudo: use root_api_key
+        let ctx = CliContext::from_config(
+            config,
+            OutputFormat::Json,
+            true,
+            None,
+            None,
+            None,
+            true,
+        );
+        let client = ctx.get_client();
+        assert_eq!(client.api_key(), Some("root-key"));
     }
 
     #[test]
@@ -971,13 +1620,235 @@ mod tests {
     }
 
     #[test]
-    fn append_time_filter_params_only_emits_after_and_before() {
-        let mut params = Vec::new();
-        let after = Some("7d".to_string());
-        let before = Some("2026-03-12".to_string());
+    fn resolve_time_flags_prefers_last_for_since() {
+        let (since, until) = resolve_time_flags(
+            Some("2026-03-10".to_string()),
+            Some("2026-03-12".to_string()),
+            Some("7d".to_string()),
+            None,
+        );
 
-        handlers::append_time_filter_params(&mut params, after.as_deref(), before.as_deref());
-
-        assert_eq!(params, vec!["--after 7d", "--before 2026-03-12"]);
+        assert_eq!(since.as_deref(), Some("7d"));
+        assert_eq!(until.as_deref(), Some("2026-03-12"));
     }
+
+    #[test]
+    fn resolve_time_flags_expands_on_to_both_bounds() {
+        let (since, until) = resolve_time_flags(
+            None,
+            None,
+            Some("7d".to_string()),
+            Some("2026-03-15".to_string()),
+        );
+
+        assert_eq!(since.as_deref(), Some("2026-03-15"));
+        assert_eq!(until.as_deref(), Some("2026-03-15"));
+    }
+
+    #[test]
+    fn cli_find_rejects_removed_after_before_flags() {
+        let result = Cli::try_parse_from(["ov", "find", "invoice", "--after", "7d"]);
+        assert!(result.is_err(), "removed retrieval flags should not parse");
+    }
+
+    #[test]
+    fn retrieval_time_field_maps_to_api_values() {
+        assert_eq!(RetrievalTimeField::Updated.api_value(), "updated_at");
+        assert_eq!(RetrievalTimeField::Created.api_value(), "created_at");
+    }
+}
+
+/// Print command with specified parameters for debugging
+fn print_command_echo(command: &str, params: &str, echo_enabled: bool) {
+    if echo_enabled {
+        println!("cmd: {} {}", command, params);
+    }
+}
+
+async fn handle_ls(
+    uri: String,
+    simple: bool,
+    recursive: bool,
+    abs_limit: i32,
+    show_all_hidden: bool,
+    node_limit: i32,
+    ctx: CliContext,
+) -> Result<()> {
+    let mut params = vec![
+        uri.clone(),
+        format!("-l {}", abs_limit),
+        format!("-n {}", node_limit),
+    ];
+    if simple {
+        params.push("-s".to_string());
+    }
+    if recursive {
+        params.push("-r".to_string());
+    }
+    if show_all_hidden {
+        params.push("-a".to_string());
+    }
+    print_command_echo("ov ls", &params.join(" "), ctx.config.echo_command);
+
+    let client = ctx.get_client();
+    let api_output = if ctx.compact { "agent" } else { "original" };
+    commands::filesystem::ls(
+        &client,
+        &uri,
+        simple,
+        recursive,
+        api_output,
+        abs_limit,
+        show_all_hidden,
+        node_limit,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
+}
+
+async fn handle_tree(
+    uri: String,
+    abs_limit: i32,
+    show_all_hidden: bool,
+    node_limit: i32,
+    level_limit: i32,
+    ctx: CliContext,
+) -> Result<()> {
+    let mut params = vec![
+        uri.clone(),
+        format!("-l {}", abs_limit),
+        format!("-n {}", node_limit),
+        format!("-L {}", level_limit),
+    ];
+    if show_all_hidden {
+        params.push("-a".to_string());
+    }
+    print_command_echo("ov tree", &params.join(" "), ctx.config.echo_command);
+
+    let client = ctx.get_client();
+    let api_output = if ctx.compact { "agent" } else { "original" };
+    commands::filesystem::tree(
+        &client,
+        &uri,
+        api_output,
+        abs_limit,
+        show_all_hidden,
+        node_limit,
+        level_limit,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
+}
+
+async fn handle_mkdir(uri: String, description: Option<String>, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    commands::filesystem::mkdir(
+        &client,
+        &uri,
+        description.as_deref(),
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
+}
+
+async fn handle_rm(uri: String, recursive: bool, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    commands::filesystem::rm(&client, &uri, recursive, ctx.output_format, ctx.compact).await
+}
+
+async fn handle_mv(from_uri: String, to_uri: String, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    commands::filesystem::mv(&client, &from_uri, &to_uri, ctx.output_format, ctx.compact).await
+}
+
+async fn handle_stat(uri: String, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    commands::filesystem::stat(&client, &uri, ctx.output_format, ctx.compact).await
+}
+
+async fn handle_grep(
+    uri: String,
+    exclude_uri: Option<String>,
+    pattern: String,
+    ignore_case: bool,
+    node_limit: i32,
+    level_limit: i32,
+    ctx: CliContext,
+) -> Result<()> {
+    // Prevent grep from root directory to avoid excessive server load and timeouts
+    if uri == "viking://" || uri == "viking:///" {
+        eprintln!(
+            "Error: Cannot grep from root directory 'viking://'.\n\
+             Grep from root would search across all scopes (resources, user, agent, session, queue, temp),\n\
+             which may cause server timeout or excessive load.\n\
+             Please specify a more specific scope, e.g.:\n\
+               ov grep --uri=viking://resources '{}'\n\
+               ov grep --uri=viking://user '{}'",
+            pattern, pattern
+        );
+        std::process::exit(1);
+    }
+
+    let mut params = vec![
+        format!("--uri={}", uri),
+        format!("-n {}", node_limit),
+        format!("-L {}", level_limit),
+    ];
+    if let Some(excluded) = &exclude_uri {
+        params.push(format!("-x {}", excluded));
+    }
+    if ignore_case {
+        params.push("-i".to_string());
+    }
+    params.push(format!("\"{}\"", pattern));
+    print_command_echo("ov grep", &params.join(" "), ctx.config.echo_command);
+    let client = ctx.get_client();
+    commands::search::grep(
+        &client,
+        &uri,
+        exclude_uri,
+        &pattern,
+        ignore_case,
+        node_limit,
+        level_limit,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
+}
+
+async fn handle_glob(pattern: String, uri: String, node_limit: i32, ctx: CliContext) -> Result<()> {
+    let params = vec![
+        format!("--uri={}", uri),
+        format!("-n {}", node_limit),
+        format!("\"{}\"", pattern),
+    ];
+    print_command_echo("ov glob", &params.join(" "), ctx.config.echo_command);
+    let client = ctx.get_client();
+    commands::search::glob(
+        &client,
+        &pattern,
+        &uri,
+        node_limit,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
+}
+
+async fn handle_health(ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    let is_healthy = commands::system::health(&client, ctx.output_format, ctx.compact).await?;
+    if !is_healthy {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+async fn handle_tui(uri: String, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    tui::run_tui(client, &uri).await
 }

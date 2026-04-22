@@ -75,7 +75,7 @@ describe("extractNewTurnMessages: toolCallId propagation", () => {
 });
 
 describe("convertToAgentMessages: structured tool round-trip", () => {
-  it("user-role tool with tool_id → assistant(toolUse) + toolResult", () => {
+  it("user-role tool with tool_id → assistant(toolCall) + toolResult", () => {
     const msg = {
       role: "user",
       parts: [
@@ -96,10 +96,10 @@ describe("convertToAgentMessages: structured tool round-trip", () => {
     const assistantMsg = result[0]!;
     expect(assistantMsg.role).toBe("assistant");
     const blocks = assistantMsg.content as Array<Record<string, unknown>>;
-    expect(blocks[0]!.type).toBe("toolUse");
+    expect(blocks[0]!.type).toBe("toolCall");
     expect(blocks[0]!.id).toBe("call_abc123");
     expect(blocks[0]!.name).toBe("read");
-    expect(blocks[0]!.input).toEqual({ path: "/tmp/test.txt" });
+    expect(blocks[0]!.arguments).toEqual({ path: "/tmp/test.txt" });
 
     const toolResult = result[1]!;
     expect(toolResult.role).toBe("toolResult");
@@ -107,7 +107,7 @@ describe("convertToAgentMessages: structured tool round-trip", () => {
     expect((toolResult as Record<string, unknown>).isError).toBe(false);
   });
 
-  it("assistant-role tool with tool_id → toolUse + toolResult (unchanged)", () => {
+  it("assistant-role tool with tool_id → toolCall + toolResult", () => {
     const msg = {
       role: "assistant",
       parts: [
@@ -131,7 +131,7 @@ describe("convertToAgentMessages: structured tool round-trip", () => {
     const blocks = assistantMsg.content as Array<Record<string, unknown>>;
     expect(blocks).toHaveLength(2);
     expect(blocks[0]!.type).toBe("text");
-    expect(blocks[1]!.type).toBe("toolUse");
+    expect(blocks[1]!.type).toBe("toolCall");
     expect(blocks[1]!.id).toBe("call_abc123");
 
     expect(result[1]!.role).toBe("toolResult");
@@ -211,7 +211,7 @@ describe("convertToAgentMessages: structured tool round-trip", () => {
 
     expect(result[1]!.role).toBe("assistant");
     const blocks = result[1]!.content as Array<Record<string, unknown>>;
-    expect(blocks[0]!.type).toBe("toolUse");
+    expect(blocks[0]!.type).toBe("toolCall");
 
     expect(result[2]!.role).toBe("toolResult");
   });
@@ -266,7 +266,7 @@ describe("mergeConsecutiveAssistants", () => {
   it("merges two consecutive assistant messages", () => {
     const messages = [
       { role: "assistant", content: [{ type: "text", text: "Hello" }] },
-      { role: "assistant", content: [{ type: "toolUse", id: "c1", name: "read", input: {} }] },
+      { role: "assistant", content: [{ type: "toolCall", id: "c1", name: "read", arguments: {} }] },
     ] as Array<{ role: string; content: unknown }>;
 
     const merged = mergeConsecutiveAssistants(messages);
@@ -276,7 +276,7 @@ describe("mergeConsecutiveAssistants", () => {
     const blocks = merged[0]!.content as Array<Record<string, unknown>>;
     expect(blocks).toHaveLength(2);
     expect(blocks[0]!.type).toBe("text");
-    expect(blocks[1]!.type).toBe("toolUse");
+    expect(blocks[1]!.type).toBe("toolCall");
   });
 
   it("does not merge non-consecutive assistants", () => {
@@ -293,7 +293,7 @@ describe("mergeConsecutiveAssistants", () => {
   it("handles string content in assistant messages", () => {
     const messages = [
       { role: "assistant", content: "Hello" },
-      { role: "assistant", content: [{ type: "toolUse", id: "c1", name: "read", input: {} }] },
+      { role: "assistant", content: [{ type: "toolCall", id: "c1", name: "read", arguments: {} }] },
     ] as Array<{ role: string; content: unknown }>;
 
     const merged = mergeConsecutiveAssistants(messages);
@@ -302,7 +302,7 @@ describe("mergeConsecutiveAssistants", () => {
     const blocks = merged[0]!.content as Array<Record<string, unknown>>;
     expect(blocks).toHaveLength(2);
     expect(blocks[0]!.text).toBe("Hello");
-    expect(blocks[1]!.type).toBe("toolUse");
+    expect(blocks[1]!.type).toBe("toolCall");
   });
 
   it("simulates real OV sequence: assistant(text) + user(tool→assistant+toolResult)", () => {
@@ -331,7 +331,7 @@ describe("mergeConsecutiveAssistants", () => {
     expect(blocks).toHaveLength(2);
     expect(blocks[0]!.type).toBe("text");
     expect(blocks[0]!.text).toBe("Let me check.");
-    expect(blocks[1]!.type).toBe("toolUse");
+    expect(blocks[1]!.type).toBe("toolCall");
     expect(blocks[1]!.id).toBe("call_abc");
 
     expect(merged[1]!.role).toBe("toolResult");

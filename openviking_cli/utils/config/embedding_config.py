@@ -1,5 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
+import os
 from typing import Any, Optional, cast
 
 from pydantic import BaseModel, Field, model_validator
@@ -136,11 +137,11 @@ class EmbeddingModelConfig(BaseModel):
         # Provider-specific validation
         if self.provider == "openai":
             # Allow missing api_key when api_base is set (e.g. local OpenAI-compatible servers)
-            if not self.api_key and not self.api_base:
+            if not self.get_effective_api_key() and not self.api_base:
                 raise ValueError("OpenAI provider requires 'api_key' to be set")
 
         elif self.provider == "azure":
-            if not self.api_key:
+            if not self.get_effective_api_key():
                 raise ValueError("Azure provider requires 'api_key' to be set")
             if not self.api_base:
                 raise ValueError("Azure provider requires 'api_base' (Azure endpoint) to be set")
@@ -232,6 +233,19 @@ class EmbeddingModelConfig(BaseModel):
             get_local_model_spec(self.model)
 
         return self
+
+    def get_effective_api_key(self) -> Optional[str]:
+        """Resolve the API key, including supported environment fallbacks."""
+        if self.api_key:
+            return self.api_key
+
+        provider = (self.provider or "").lower()
+        if provider in {"openai", "azure"}:
+            return os.environ.get("OPENVIKING_EMBEDDING_API_KEY") or os.environ.get(
+                "OPENAI_API_KEY"
+            )
+
+        return None
 
     def get_effective_dimension(self) -> int:
         """Resolve the dimension used for schema creation and validation."""
@@ -449,7 +463,7 @@ class EmbeddingConfig(BaseModel):
                 OpenAIDenseEmbedder,
                 lambda cfg: {
                     "model_name": cfg.model,
-                    "api_key": cfg.api_key
+                    "api_key": cfg.get_effective_api_key()
                     or "no-key",  # Placeholder for local OpenAI-compatible servers
                     "api_base": cfg.api_base,
                     "api_version": cfg.api_version,
@@ -466,7 +480,7 @@ class EmbeddingConfig(BaseModel):
                 OpenAIDenseEmbedder,
                 lambda cfg: {
                     "model_name": cfg.model,
-                    "api_key": cfg.api_key,
+                    "api_key": cfg.get_effective_api_key(),
                     "api_base": cfg.api_base,
                     "api_version": cfg.api_version,
                     "dimension": cfg.dimension,

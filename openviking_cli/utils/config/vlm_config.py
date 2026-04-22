@@ -1,5 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
+import os
+
 from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field, model_validator
@@ -13,6 +15,15 @@ class VLMConfig(BaseModel):
     api_base: Optional[str] = Field(default=None, description="API base URL")
     temperature: float = Field(default=0.0, description="Generation temperature")
     max_retries: int = Field(default=3, description="Maximum retry attempts")
+    timeout: float = Field(
+        default=60.0,
+        gt=0.0,
+        description=(
+            "Per-request HTTP timeout in seconds for VLM API calls. Applied to "
+            "the underlying OpenAI/Azure/LiteLLM clients. Increase for slow or "
+            "high-latency endpoints (e.g., DashScope, local inference servers)."
+        ),
+    )
 
     provider: Optional[str] = Field(default=None, description="Provider type")
     backend: Optional[str] = Field(
@@ -110,6 +121,12 @@ class VLMConfig(BaseModel):
             return config["api_key"]
         return None
 
+    def _get_env_api_key(self, provider: str | None) -> str | None:
+        normalized_provider = (provider or "").lower()
+        if normalized_provider in {"openai", "azure"}:
+            return os.environ.get("OPENAI_API_KEY")
+        return None
+
     def _match_provider(self, model: str | None = None) -> tuple[Dict[str, Any] | None, str | None]:
         """Match provider config.
 
@@ -117,13 +134,24 @@ class VLMConfig(BaseModel):
             (provider_config_dict, provider_name)
         """
         if self.provider:
-            p = self.providers.get(self.provider)
-            if p and p.get("api_key"):
-                return p, self.provider
+            resolved = dict(self.providers.get(self.provider) or {})
+            env_api_key = self._get_env_api_key(self.provider)
+            if env_api_key and not resolved.get("api_key"):
+                resolved["api_key"] = env_api_key
+            if resolved.get("api_key"):
+                return resolved, self.provider
 
         for name, config in self.providers.items():
-            if config.get("api_key"):
-                return config, name
+            resolved = dict(config)
+            env_api_key = self._get_env_api_key(name)
+            if env_api_key and not resolved.get("api_key"):
+                resolved["api_key"] = env_api_key
+            if resolved.get("api_key"):
+                return resolved, name
+
+        env_api_key = self._get_env_api_key(self.provider or self.default_provider)
+        if env_api_key:
+            return {"api_key": env_api_key}, self.provider or self.default_provider
 
         return None, None
 

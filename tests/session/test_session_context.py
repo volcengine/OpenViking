@@ -5,6 +5,7 @@
 
 import asyncio
 import json
+from typing import Optional
 from unittest.mock import patch
 
 import pytest
@@ -58,7 +59,7 @@ def _write_test_config(tmp_path):
             {
                 "storage": {
                     "workspace": str(tmp_path / "workspace"),
-                    "agfs": {"backend": "local", "mode": "binding-client"},
+                    "agfs": {"backend": "local"},
                     "vectordb": {"backend": "local"},
                 },
                 "embedding": {
@@ -110,6 +111,13 @@ async def _wait_for_task(task_id: str, timeout: float = 30.0) -> dict:
             return task.to_dict()
         await asyncio.sleep(0.1)
     raise TimeoutError(f"Task {task_id} did not complete within {timeout}s")
+
+
+async def _wait_for_memory_task(commit_task: dict, timeout: float = 30.0) -> Optional[dict]:
+    memory_task_id = ((commit_task.get("result") or {}).get("memory_task_id"))
+    if not memory_task_id:
+        return None
+    return await _wait_for_task(memory_task_id, timeout=timeout)
 
 
 class TestGetContextForSearch:
@@ -272,17 +280,21 @@ class TestGetContextForSearch:
         second_gate = asyncio.Event()
         second_started = asyncio.Event()
 
-        async def gated_extract(messages, **kwargs):
-            del kwargs
+        async def gated_generate(messages, latest_archive_overview=""):
             contents = " ".join(m.content for m in messages)
             if "First round" in contents:
                 await first_gate.wait()
-                return []
+                return f"# Session Summary\n\n**Overview**: {contents}"
             second_started.set()
             await second_gate.wait()
+            return f"# Session Summary\n\n**Overview**: {contents}"
+
+        async def fast_extract(*args, **kwargs):
+            del args, kwargs
             return []
 
-        session._session_compressor.extract_long_term_memories = gated_extract
+        session._generate_archive_summary_async = gated_generate
+        session._session_compressor.extract_long_term_memories = fast_extract
 
         session.add_message("user", [TextPart("First round user")])
         session.add_message("assistant", [TextPart("First round assistant")])
@@ -316,8 +328,10 @@ class TestGetContextForSearch:
         ]
 
         second_gate.set()
-        await _wait_for_task(result1["task_id"])
-        await _wait_for_task(result2["task_id"])
+        commit_task1 = await _wait_for_task(result1["task_id"])
+        commit_task2 = await _wait_for_task(result2["task_id"])
+        await _wait_for_memory_task(commit_task1)
+        await _wait_for_memory_task(commit_task2)
 
         second_overview = await session._viking_fs.read_file(
             f"{result2['archive_uri']}/.overview.md",

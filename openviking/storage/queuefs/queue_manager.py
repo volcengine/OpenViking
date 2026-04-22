@@ -54,8 +54,7 @@ def init_queue_manager(
 def get_queue_manager() -> "QueueManager":
     """Get QueueManager singleton."""
     if _instance is None:
-        # If not initialized, try to initialize with default configuration
-        return init_queue_manager()
+        raise RuntimeError("QueueManager is not initialized. Call init_queue_manager() first.")
     return _instance
 
 

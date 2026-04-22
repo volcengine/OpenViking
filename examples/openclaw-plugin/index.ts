@@ -1,8 +1,9 @@
-import { spawn } from "node:child_process";
+import { launchProcess, sysEnv, getEnv } from "./runtime-utils.js";
 import { tmpdir } from "node:os";
 
 import { Type } from "@sinclair/typebox";
 import { memoryOpenVikingConfigSchema, RECALL_PATHS } from "./config.js";
+import { registerSetupCli } from "./commands/setup.js";
 
 import { OpenVikingClient, localClientCache, localClientPendingPromises, isMemoryUri } from "./client.js";
 import type {
@@ -16,12 +17,11 @@ import type {
   CommitSessionResult,
   OVMessage,
 } from "./client.js";
-import { formatMessageFaithful } from "./context-engine.js";
+import { formatMessageFaithful, toRoleId } from "./context-engine.js";
 import {
   compileSessionPatterns,
   extractLatestUserText,
   shouldBypassSession,
-  extractNewTurnMessages,
 } from "./text-utils.js";
 import {
   clampScore,
@@ -36,6 +36,7 @@ import {
   withTimeout,
   resolvePythonCommand,
   prepareLocalPort,
+  checkLocalRuntime,
 } from "./process-manager.js";
 import {
   buildMemoryLines,
@@ -97,6 +98,7 @@ type ToolContext = {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  senderId?: string;
 };
 
 type PluginCommandContext = {
@@ -141,6 +143,17 @@ type OvSearchInput = {
   limit?: number;
 };
 
+type CliCommand = {
+  description(text: string): CliCommand;
+  argument(flags: string, description?: string): CliCommand;
+  option(flags: string, description?: string): CliCommand;
+  action(handler: (...args: unknown[]) => unknown): CliCommand;
+};
+
+type CliProgram = {
+  command(nameAndArgs: string): CliCommand;
+};
+
 type OpenClawPluginApi = {
   pluginConfig?: unknown;
   logger: PluginLogger;
@@ -152,12 +165,27 @@ type OpenClawPluginApi = {
     ): void;
   };
   registerCommand?: (command: CommandDefinition) => void;
+  registerCli?: (
+    registrar: (ctx: { program: CliProgram }) => void | Promise<void>,
+    opts?: {
+      commands?: string[];
+      descriptors?: Array<{
+        name: string;
+        description: string;
+        hasSubcommands?: boolean;
+      }>;
+    },
+  ) => void;
   registerService: (service: {
     id: string;
     start: (ctx?: unknown) => void | Promise<void>;
     stop?: (ctx?: unknown) => void | Promise<void>;
   }) => void;
   registerContextEngine?: (id: string, factory: () => unknown) => void;
+  registerCli?: (
+    factory: (ctx: { program: unknown; workspaceDir?: string }) => void,
+    opts?: { commands?: string[] },
+  ) => void;
   on: (
     hookName: string,
     handler: (event: unknown, ctx?: HookAgentContext) => unknown,
@@ -303,6 +331,26 @@ function parseImportKind(value: string | undefined): OvImportKind {
     return value;
   }
   throw new Error("--kind must be resource or skill");
+}
+
+function extractToolSenderId(ctx: unknown): string | undefined {
+  if (!ctx || typeof ctx !== "object") {
+    return undefined;
+  }
+  const toolCtx = ctx as Record<string, unknown>;
+  if (typeof toolCtx.requesterSenderId === "string") {
+    const trimmed = toolCtx.requesterSenderId.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  if (typeof toolCtx.senderId === "string") {
+    const trimmed = toolCtx.senderId.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  return undefined;
 }
 
 export function parseOvImportCommandArgs(args: string): OvImportInput {
@@ -516,17 +564,36 @@ const contextEnginePlugin = {
             : 'default → X-OpenViking-Agent follows OpenClaw ctx.agentId per session (e.g. "main")'
         })`,
     );
+    verboseRoutingInfo(
+      `openviking: auth/namespace config ` +
+        JSON.stringify({
+          serverAuthMode: cfg.serverAuthMode,
+          isolateUserScopeByAgent: cfg.isolateUserScopeByAgent,
+          isolateAgentScopeByUser: cfg.isolateAgentScopeByUser,
+          deprecatedAgentScopeMode: cfg.agentScopeMode,
+        }),
+    );
     const routingDebugLog = cfg.logFindRequests
       ? (msg: string) => {
           api.logger.info(msg);
         }
       : undefined;
-    const tenantAccount = "";
-    const tenantUser = "";
+    const tenantAccount = cfg.account;
+    const tenantUser = cfg.user;
     const localCacheKey = `${cfg.mode}:${cfg.baseUrl}:${cfg.configPath}:${cfg.apiKey}:${tenantAccount}:${tenantUser}:${cfg.agentId}:${cfg.logFindRequests ? "1" : "0"}`;
+    const createConfiguredClient = () =>
+      new OpenVikingClient(
+        cfg.baseUrl,
+        cfg.apiKey,
+        cfg.agentId,
+        cfg.timeoutMs,
+        tenantAccount,
+        tenantUser,
+        routingDebugLog,
+      );
 
     let clientPromise: Promise<OpenVikingClient>;
-    let localProcess: ReturnType<typeof spawn> | null = null;
+    let localProcess: ReturnType<typeof launchProcess> | null = null;
     let resolveLocalClient: ((c: OpenVikingClient) => void) | null = null;
     let rejectLocalClient: ((err: unknown) => void) | null = null;
     let localUnavailableReason: string | null = null;
@@ -570,20 +637,12 @@ const contextEnginePlugin = {
         }
       }
     } else {
-      clientPromise = Promise.resolve(
-        new OpenVikingClient(
-          cfg.baseUrl,
-          cfg.apiKey,
-          cfg.agentId,
-          cfg.timeoutMs,
-          tenantAccount,
-          tenantUser,
-          routingDebugLog,
-        ),
-      );
+      clientPromise = Promise.resolve(createConfiguredClient());
     }
 
     const getClient = (): Promise<OpenVikingClient> => clientPromise;
+    type ClientGetter = () => Promise<OpenVikingClient>;
+    type InteractiveClientGetter = (toolName: string) => Promise<OpenVikingClient>;
 
     const isBypassedSession = (ctx?: {
       sessionId?: string;
@@ -604,6 +663,47 @@ const contextEnginePlugin = {
       },
     });
 
+    const interactiveToolTimeoutMs = Math.min(cfg.timeoutMs, 5_000);
+    const interactiveHealthTimeoutMs = Math.min(interactiveToolTimeoutMs, 2_000);
+
+    const makeUnavailableToolResult = (toolName: string, reason: string) => ({
+      content: [
+        {
+          type: "text" as const,
+          text: `OpenViking is temporarily unavailable; ${toolName} was skipped. Reason: ${reason}`,
+        },
+      ],
+      details: {
+        action: "unavailable",
+        reason,
+        toolName,
+      },
+    });
+
+    const assertInteractiveClientHealthy = async (
+      client: OpenVikingClient,
+      toolName: string,
+    ): Promise<OpenVikingClient> => {
+      await withTimeout(
+        client.healthCheck(),
+        interactiveHealthTimeoutMs,
+        `OpenViking ${toolName} health check timed out`,
+      );
+      return client;
+    };
+
+    const getClientForInteractiveTool: InteractiveClientGetter = async (toolName) => {
+      const client = await withTimeout(
+        getClient(),
+        interactiveToolTimeoutMs,
+        `OpenViking ${toolName} client initialization timed out`,
+      );
+      return assertInteractiveClientHealthy(client, toolName);
+    };
+
+    const getStandaloneClientForInteractiveTool: InteractiveClientGetter = (toolName) =>
+      assertInteractiveClientHealthy(createConfiguredClient(), toolName);
+
     const formatResourceImportText = (result: AddResourceResult): string => {
       const root = result.root_uri ? ` ${result.root_uri}` : "";
       const warnings = result.warnings?.length ? ` Warnings: ${result.warnings.join("; ")}` : "";
@@ -616,8 +716,12 @@ const contextEnginePlugin = {
       return `Imported OpenViking skill${name}.${uri}`.trim();
     };
 
-    const importResource = async (input: AddResourceInput, agentId?: string) => {
-      const client = await getClient();
+    const importResource = async (
+      input: AddResourceInput,
+      agentId?: string,
+      getImportClient: ClientGetter = getClient,
+    ) => {
+      const client = await getImportClient();
       const result = await client.addResource(input, agentId);
       return {
         content: [{ type: "text" as const, text: formatResourceImportText(result) }],
@@ -628,8 +732,12 @@ const contextEnginePlugin = {
       };
     };
 
-    const importSkill = async (input: AddSkillInput, agentId?: string) => {
-      const client = await getClient();
+    const importSkill = async (
+      input: AddSkillInput,
+      agentId?: string,
+      getImportClient: ClientGetter = getClient,
+    ) => {
+      const client = await getImportClient();
       const result = await client.addSkill(input, agentId);
       return {
         content: [{ type: "text" as const, text: formatSkillImportText(result) }],
@@ -640,7 +748,11 @@ const contextEnginePlugin = {
       };
     };
 
-    const executeImport = async (input: OvImportInput, agentId?: string) => {
+    const executeImport = async (
+      input: OvImportInput,
+      agentId?: string,
+      getImportClient: ClientGetter = getClient,
+    ) => {
       const kind = input.kind ?? "resource";
       if (kind === "skill") {
         if (input.to || input.parent || input.reason || input.instruction) {
@@ -651,7 +763,7 @@ const contextEnginePlugin = {
           data: input.data,
           wait: input.wait,
           timeout: input.timeout,
-        }, agentId);
+        }, agentId, getImportClient);
       }
       if (input.data !== undefined && input.data !== null) {
         throw new Error("data is only supported for skill imports.");
@@ -664,29 +776,29 @@ const contextEnginePlugin = {
         instruction: input.instruction,
         wait: input.wait,
         timeout: input.timeout,
-      }, agentId);
+      }, agentId, getImportClient);
     };
 
-const mergeFindResults = (results: FindResult[]): FindResult => {
-    const deduplicate = (items: FindResultItem[]): FindResultItem[] => {
-      const seen = new Map<string, FindResultItem>();
-      for (const item of items) {
-        if (!seen.has(item.uri)) {
-          seen.set(item.uri, item);
+    const mergeFindResults = (results: FindResult[]): FindResult => {
+      const deduplicate = (items: FindResultItem[]): FindResultItem[] => {
+        const seen = new Map<string, FindResultItem>();
+        for (const item of items) {
+          if (!seen.has(item.uri)) {
+            seen.set(item.uri, item);
+          }
         }
-      }
-      return Array.from(seen.values());
-    };
-    const memories = deduplicate(results.flatMap((result) => result.memories ?? []));
-    const resources = deduplicate(results.flatMap((result) => result.resources ?? []));
-    const skills = deduplicate(results.flatMap((result) => result.skills ?? []));
-    return {
-      memories,
-      resources,
-          skills,
-          total: memories.length + resources.length + skills.length,
-        };
+        return Array.from(seen.values());
       };
+      const memories = deduplicate(results.flatMap((result) => result.memories ?? []));
+      const resources = deduplicate(results.flatMap((result) => result.resources ?? []));
+      const skills = deduplicate(results.flatMap((result) => result.skills ?? []));
+      return {
+        memories,
+        resources,
+        skills,
+        total: memories.length + resources.length + skills.length,
+      };
+    };
 
     const formatSearchRows = (result: FindResult): string[] => {
       const truncateSummary = (value: string, maxChars = 220): string => {
@@ -743,44 +855,66 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
       return lines.join("\n");
     };
 
-    const searchOpenViking = async (input: OvSearchInput, agentId?: string) => {
+    const searchOpenViking = async (
+      input: OvSearchInput,
+      agentId?: string,
+      getSearchClient: InteractiveClientGetter = getClientForInteractiveTool,
+    ) => {
       const query = input.query.trim();
       if (!query) {
         throw new Error("query is required");
       }
       const limit = Math.max(1, Math.floor(input.limit ?? 10));
-      const client = await getClient();
+      let client: OpenVikingClient;
+      try {
+        client = await getSearchClient("ov_search");
+      } catch (err) {
+        return makeUnavailableToolResult("ov_search", err instanceof Error ? err.message : String(err));
+      }
       let result: FindResult;
-      if (input.uri) {
-        result = await client.find(query, { targetUri: input.uri, limit }, agentId);
-      } else {
-        const [resourcesSettled, skillsSettled] = await Promise.allSettled([
-          client.find(query, { targetUri: "viking://resources", limit }, agentId),
-          client.find(query, { targetUri: "viking://agent/skills", limit }, agentId),
-        ]);
-        const successful: FindResult[] = [];
-        if (resourcesSettled.status === "fulfilled") {
-          successful.push(resourcesSettled.value);
+      try {
+        if (input.uri) {
+          result = await withTimeout(
+            client.find(query, { targetUri: input.uri, limit }, agentId),
+            interactiveToolTimeoutMs,
+            "OpenViking ov_search request timed out",
+          );
+        } else {
+          const [resourcesSettled, skillsSettled] = await Promise.allSettled([
+            withTimeout(
+              client.find(query, { targetUri: "viking://resources", limit }, agentId),
+              interactiveToolTimeoutMs,
+              "OpenViking resource search timed out",
+            ),
+            withTimeout(
+              client.find(query, { targetUri: "viking://agent/skills", limit }, agentId),
+              interactiveToolTimeoutMs,
+              "OpenViking skill search timed out",
+            ),
+          ]);
+          const successful = [
+            resourcesSettled.status === "fulfilled" ? resourcesSettled.value : null,
+            skillsSettled.status === "fulfilled" ? skillsSettled.value : null,
+          ].filter((value): value is FindResult => value !== null);
+          if (successful.length === 0) {
+            const firstError =
+              resourcesSettled.status === "rejected"
+                ? resourcesSettled.reason
+                : skillsSettled.status === "rejected"
+                  ? skillsSettled.reason
+                  : new Error("OpenViking search failed");
+            throw firstError instanceof Error ? firstError : new Error(String(firstError));
+          }
+          if (resourcesSettled.status === "rejected") {
+            api.logger.warn?.(`openviking: resource search failed: ${String(resourcesSettled.reason)}`);
+          }
+          if (skillsSettled.status === "rejected") {
+            api.logger.warn?.(`openviking: skill search failed: ${String(skillsSettled.reason)}`);
+          }
+          result = mergeFindResults(successful);
         }
-        if (skillsSettled.status === "fulfilled") {
-          successful.push(skillsSettled.value);
-        }
-        if (successful.length === 0) {
-          const firstError =
-            resourcesSettled.status === "rejected"
-              ? resourcesSettled.reason
-              : skillsSettled.status === "rejected"
-                ? skillsSettled.reason
-                : "Both searches failed";
-          throw firstError instanceof Error ? firstError : new Error(String(firstError));
-        }
-        if (resourcesSettled.status === "rejected") {
-          api.logger.warn?.(`openviking: resource search failed: ${String(resourcesSettled.reason)}`);
-        }
-        if (skillsSettled.status === "rejected") {
-          api.logger.warn?.(`openviking: skill search failed: ${String(skillsSettled.reason)}`);
-        }
-        result = mergeFindResults(successful);
+      } catch (err) {
+        return makeUnavailableToolResult("ov_search", err instanceof Error ? err.message : String(err));
       }
       return {
         content: [{ type: "text" as const, text: formatSearchText(query, input.uri, result) }],
@@ -795,6 +929,112 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
         },
       };
     };
+
+    const parseCliNumber = (value: unknown, flagName: string): number | undefined => {
+      if (value === undefined || value === null || value === "") {
+        return undefined;
+      }
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) {
+        throw new Error(`--${flagName} must be a number`);
+      }
+      return parsed;
+    };
+
+    const getCliStringOption = (options: unknown, name: string): string | undefined => {
+      if (!options || typeof options !== "object") {
+        return undefined;
+      }
+      const value = (options as Record<string, unknown>)[name];
+      return typeof value === "string" ? value : undefined;
+    };
+
+    const getCliBoolOption = (options: unknown, name: string): boolean | undefined => {
+      if (!options || typeof options !== "object") {
+        return undefined;
+      }
+      const value = (options as Record<string, unknown>)[name];
+      return typeof value === "boolean" ? value : undefined;
+    };
+
+    const joinCliParts = (parts: unknown): string =>
+      Array.isArray(parts) ? parts.join(" ") : String(parts ?? "");
+
+    const printCommandText = (result: { content: Array<{ text: string }> }) => {
+      const text = result.content[0]?.text;
+      if (text) {
+        console.log(text);
+      }
+    };
+
+    api.registerCli?.(
+      ({ program }: { program: CliProgram }) => {
+        program
+          .command("ov-search")
+          .description("Search OpenViking resources and skills.")
+          .argument("<query...>", "Search query")
+          .option("--uri <uri>", "Optional search URI")
+          .option("--limit <number>", "Max results per search scope")
+          .action(async (queryParts: unknown, options: unknown) => {
+            const result = await searchOpenViking(
+              {
+                query: joinCliParts(queryParts),
+                uri: getCliStringOption(options, "uri"),
+                limit: parseCliNumber(getCliStringOption(options, "limit"), "limit"),
+              },
+              resolveAgentId(),
+              getStandaloneClientForInteractiveTool,
+            );
+            printCommandText(result);
+          });
+
+        program
+          .command("ov-import")
+          .description("Import a resource or skill into OpenViking.")
+          .argument("<source...>", "Local path, public URL, Git URL, or raw skill source")
+          .option("--kind <kind>", "Import kind: resource or skill")
+          .option("--to <uri>", "Resource target URI")
+          .option("--parent <uri>", "Resource parent URI")
+          .option("--reason <text>", "Resource import reason")
+          .option("--instruction <text>", "Resource processing instruction")
+          .option("--wait", "Wait for processing to complete")
+          .option("--timeout <seconds>", "Timeout in seconds when --wait is set")
+          .action(async (sourceParts: unknown, options: unknown) => {
+            const rawKind = getCliStringOption(options, "kind");
+            const kind = rawKind === "skill" ? "skill" : "resource";
+            if (rawKind && rawKind !== "skill" && rawKind !== "resource") {
+              throw new Error("--kind must be resource or skill");
+            }
+            const result = await executeImport(
+              {
+                kind,
+                source: joinCliParts(sourceParts),
+                to: getCliStringOption(options, "to"),
+                parent: getCliStringOption(options, "parent"),
+                reason: getCliStringOption(options, "reason"),
+                instruction: getCliStringOption(options, "instruction"),
+                wait: getCliBoolOption(options, "wait"),
+                timeout: parseCliNumber(getCliStringOption(options, "timeout"), "timeout"),
+              },
+              resolveAgentId(),
+              () => getStandaloneClientForInteractiveTool("ov_import"),
+            );
+            printCommandText(result);
+          });
+      },
+      {
+        descriptors: [
+          {
+            name: "ov-search",
+            description: "Search OpenViking resources and skills",
+          },
+          {
+            name: "ov-import",
+            description: "Import a resource or skill into OpenViking",
+          },
+        ],
+      },
+    );
 
     api.registerTool(
       (ctx: ToolContext) => ({
@@ -944,7 +1184,12 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
               : undefined;
           const requestLimit = Math.max(limit * 4, 20);
 
-          const recallClient = await getClient();
+          let recallClient: OpenVikingClient;
+          try {
+            recallClient = await getClientForInteractiveTool("memory_recall");
+          } catch (err) {
+            return makeUnavailableToolResult("memory_recall", err instanceof Error ? err.message : String(err));
+          }
           if (cfg.logFindRequests) {
             api.logger.info(
               `openviking: memory_recall X-OpenViking-Agent="${agentId}" ` +
@@ -953,51 +1198,90 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
           }
 
           let result;
-          if (targetUri) {
-            // 如果指定了目标 URI，只检索该位置
-            result = await recallClient.find(
-              query,
-              {
-                targetUri,
-                limit: requestLimit,
-                scoreThreshold: 0,
-              },
-              agentId,
-            );
-          } else {
-            // 默认同时检索 user 和 agent 两个位置的记忆
-            const [userSettled, agentSettled] = await Promise.allSettled([
-              recallClient.find(
-                query,
-                {
-                  targetUri: "viking://user/memories",
-                  limit: requestLimit,
-                  scoreThreshold: 0,
-                },
-                agentId,
-              ),
-              recallClient.find(
-                query,
-                {
-                  targetUri: "viking://agent/memories",
-                  limit: requestLimit,
-                  scoreThreshold: 0,
-                },
-                agentId,
-              ),
-            ]);
-            const userResult = userSettled.status === "fulfilled" ? userSettled.value : { memories: [] };
-            const agentResult = agentSettled.status === "fulfilled" ? agentSettled.value : { memories: [] };
-            // 合并两个位置的结果，去重
-            const allMemories = [...(userResult.memories ?? []), ...(agentResult.memories ?? [])];
-            const uniqueMemories = allMemories.filter((memory, index, self) =>
-              index === self.findIndex((m) => m.uri === memory.uri)
-            );
-            const leafOnly = uniqueMemories.filter((m) => m.level === 2);
-            result = {
-              memories: leafOnly,
-              total: leafOnly.length,
-            };
+          try {
+            if (targetUri) {
+              // Targeted-URI search path
+              result = await withTimeout(
+                recallClient.find(
+                  query,
+                  {
+                    targetUri,
+                    limit: requestLimit,
+                    scoreThreshold: 0,
+                  },
+                  agentId,
+                ),
+                interactiveToolTimeoutMs,
+                "OpenViking memory_recall request timed out",
+              );
+            } else {
+              const searchPromises: Promise<FindResult>[] = [
+                withTimeout(
+                  recallClient.find(
+                    query,
+                    {
+                      targetUri: "viking://user/memories",
+                      limit: requestLimit,
+                      scoreThreshold: 0,
+                    },
+                    agentId,
+                  ),
+                  interactiveToolTimeoutMs,
+                  "OpenViking user memory search timed out",
+                ),
+                withTimeout(
+                  recallClient.find(
+                    query,
+                    {
+                      targetUri: "viking://agent/memories",
+                      limit: requestLimit,
+                      scoreThreshold: 0,
+                    },
+                    agentId,
+                  ),
+                  interactiveToolTimeoutMs,
+                  "OpenViking agent memory search timed out",
+                ),
+              ];
+              if (cfg.recallResources) {
+                searchPromises.push(
+                  withTimeout(
+                    recallClient.find(
+                      query,
+                      {
+                        targetUri: "viking://resources",
+                        limit: requestLimit,
+                        scoreThreshold: 0,
+                      },
+                      agentId,
+                    ),
+                    interactiveToolTimeoutMs,
+                    "OpenViking resources search timed out",
+                  ),
+                );
+              }
+              const settled = await Promise.allSettled(searchPromises);
+              if (settled.every((s) => s.status === "rejected")) {
+                const first = settled[0] as PromiseRejectedResult;
+                throw first.reason instanceof Error ? first.reason : new Error(String(first.reason));
+              }
+              const allMemories: FindResultItem[] = [];
+              for (const s of settled) {
+                if (s.status === "fulfilled") {
+                  allMemories.push(...(s.value.memories ?? []), ...(s.value.resources ?? []));
+                }
+              }
+              const uniqueMemories = allMemories.filter((memory, index, self) =>
+                index === self.findIndex((m) => m.uri === memory.uri)
+              );
+              const leafOnly = uniqueMemories.filter((m) => !m.level || m.level === 2);
+              result = {
+                memories: leafOnly,
+                total: leafOnly.length,
+              };
+            }
+          } catch (err) {
+            return makeUnavailableToolResult("memory_recall", err instanceof Error ? err.message : String(err));
           }
 
           const memories = postProcessMemories(result.memories ?? [], {
@@ -1069,12 +1353,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
               usedTempSession = true;
             }
             sessionId = openClawSessionToOvStorageId(sessionId, ctx.sessionKey);
-            await c.addSessionMessage(
-              sessionId,
-              role,
-              [{ type: "text" as const, text }],
-              storeAgentId,
-            );
+            await c.addSessionMessage(sessionId, role, [{ type: "text", text }], storeAgentId);
             const commitResult = await c.commitSession(sessionId, { wait: true, agentId: storeAgentId });
             const memoriesCount = totalCommitMemories(commitResult);
             if (commitResult.status === "failed") {
@@ -1138,6 +1417,82 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
         },
       }),
       { name: "memory_store" },
+    );
+
+    api.registerTool(
+      (ctx: ToolContext) => ({
+        name: "memory_write",
+        label: "Memory Write (OpenViking)",
+        description:
+          "Save text verbatim at a specified memory URI and return the URI. " +
+          "Use for explicit 'remember this fact' saves when you already know the target URI " +
+          "(scope, bucket, filename). Unlike memory_store, does NOT run the extractor — " +
+          "content lands as-is, one file per call. Response includes the written URI so you " +
+          "can verify or reference it downstream without guessing.",
+        parameters: Type.Object({
+          uri: Type.String({
+            description:
+              "Memory URI to write (e.g. viking://user/<id>/memories/preferences/mem_foo.md " +
+              "or viking://agent/<id>/memories/profile.md).",
+          }),
+          content: Type.String({ description: "Content to store verbatim" }),
+          mode: Type.Optional(
+            Type.Union([Type.Literal("replace"), Type.Literal("append")], {
+              description: "replace (default) or append",
+            }),
+          ),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          if (isBypassedSession(ctx)) {
+            return makeBypassedToolResult("memory_write");
+          }
+          rememberSessionAgentId(ctx);
+          const writeAgentId = resolveAgentId(ctx.sessionId, ctx.sessionKey);
+          const { uri, content } = params as { uri: string; content: string };
+          const mode =
+            (params as { mode?: "replace" | "append" }).mode === "append" ? "append" : "replace";
+
+          if (cfg.logFindRequests) {
+            api.logger.info?.(
+              `openviking: memory_write invoked (uri=${uri}, mode=${mode}, contentLength=${content?.length ?? 0})`,
+            );
+          }
+
+          if (!isMemoryUri(uri)) {
+            return {
+              content: [{ type: "text", text: `Refusing to write non-memory URI: ${uri}` }],
+              details: { action: "rejected", uri },
+            };
+          }
+
+          try {
+            const c = await getClient();
+            const result = await c.writeContent(uri, content, {
+              mode,
+              wait: true,
+              agentId: writeAgentId,
+            });
+            const verb = result.created ? "created" : "updated";
+            api.logger.info?.(
+              `openviking: memory_write ${verb} ${result.uri} (${result.written_bytes} bytes)`,
+            );
+            return {
+              content: [{ type: "text", text: `${verb} ${result.uri}` }],
+              details: {
+                action: "stored",
+                uri: result.uri,
+                created: result.created ?? false,
+                mode: result.mode,
+                writtenBytes: result.written_bytes,
+              },
+            };
+          } catch (err) {
+            api.logger.warn(`openviking: memory_write failed: ${String(err)}`);
+            throw err;
+          }
+        },
+      }),
+      { name: "memory_write" },
     );
 
     api.registerTool(
@@ -1504,6 +1859,8 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
       );
     }
 
+    registerSetupCli(api);
+
     api.registerService({
       id: "openviking",
       start: async () => {
@@ -1524,11 +1881,26 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
           const actualPort = await prepareLocalPort(cfg.port, api.logger);
           const baseUrl = `http://127.0.0.1:${actualPort}`;
 
-          const pythonCmd = resolvePythonCommand(api.logger);
+          const rawPythonCmd = resolvePythonCommand(api.logger);
+
+          const runtimeCheck = checkLocalRuntime(rawPythonCmd, cfg.configPath, api.logger);
+          if (!runtimeCheck.installed) {
+            api.logger.warn(
+              "openviking: package not detected — please run `pip install openviking` first. " +
+              "Server spawn will proceed but may fail.",
+            );
+          }
+          if (!runtimeCheck.configExists) {
+            api.logger.warn(
+              `openviking: config file ${cfg.configPath} not found — ` +
+              "please run `ov-install` or create it manually. See https://github.com/volcengine/OpenViking",
+            );
+          }
+          const pythonCmd = runtimeCheck.pythonCmd;
 
           // Inherit system environment; optionally override Go/Python paths via env vars
           const pathSep = IS_WIN ? ";" : ":";
-          const { ALL_PROXY, all_proxy, HTTP_PROXY, http_proxy, HTTPS_PROXY, https_proxy, ...filteredEnv } = process.env;
+          const { ALL_PROXY, all_proxy, HTTP_PROXY, http_proxy, HTTPS_PROXY, https_proxy, ...filteredEnv } = sysEnv();
           const env = {
             ...filteredEnv,
             PYTHONUNBUFFERED: "1",
@@ -1537,14 +1909,14 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
             OPENVIKING_START_CONFIG: cfg.configPath,
             OPENVIKING_START_HOST: "127.0.0.1",
             OPENVIKING_START_PORT: String(actualPort),
-            ...(process.env.OPENVIKING_GO_PATH && { PATH: `${process.env.OPENVIKING_GO_PATH}${pathSep}${process.env.PATH || ""}` }),
-            ...(process.env.OPENVIKING_GOPATH && { GOPATH: process.env.OPENVIKING_GOPATH }),
-            ...(process.env.OPENVIKING_GOPROXY && { GOPROXY: process.env.OPENVIKING_GOPROXY }),
+            ...(getEnv("OPENVIKING_GO_PATH") && { PATH: `${getEnv("OPENVIKING_GO_PATH")}${pathSep}${getEnv("PATH") || ""}` }),
+            ...(getEnv("OPENVIKING_GOPATH") && { GOPATH: getEnv("OPENVIKING_GOPATH") }),
+            ...(getEnv("OPENVIKING_GOPROXY") && { GOPROXY: getEnv("OPENVIKING_GOPROXY") }),
           };
           // Run OpenViking server: use run_path on the module file to avoid RuntimeWarning from
           // "parent package import loads submodule before execution" (exit 3). Fallback to run_module with warning suppressed.
           const runpyCode = `import sys,os,warnings; warnings.filterwarnings('ignore', category=RuntimeWarning, message='.*sys.modules.*'); sys.argv=['openviking.server.bootstrap','--config',os.environ['OPENVIKING_START_CONFIG'],'--host',os.environ.get('OPENVIKING_START_HOST','127.0.0.1'),'--port',os.environ['OPENVIKING_START_PORT']]; import runpy, importlib.util; spec=importlib.util.find_spec('openviking.server.bootstrap'); (runpy.run_path(spec.origin, run_name='__main__') if spec and getattr(spec,'origin',None) else runpy.run_module('openviking.server.bootstrap', run_name='__main__', alter_sys=True))`;
-          const child = spawn(
+          const child = launchProcess(
             pythonCmd,
             ["-c", runpyCode],
             { env, cwd: IS_WIN ? tmpdir() : "/tmp", stdio: ["ignore", "pipe", "pipe"] },
@@ -1600,9 +1972,12 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
               cfg.apiKey,
               cfg.agentId,
               cfg.timeoutMs,
+              cfg.serverAuthMode,
               tenantAccount,
               tenantUser,
               routingDebugLog,
+              cfg.isolateUserScopeByAgent,
+              cfg.isolateAgentScopeByUser,
             );
             localClientCache.set(localCacheKey, { client, process: child });
             resolveLocalClient!(client);
@@ -1641,19 +2016,19 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
               const pythonCmd = resolvePythonCommand(api.logger);
               const pathSep = IS_WIN ? ";" : ":";
               const env = {
-                ...process.env,
+                ...sysEnv(),
                 PYTHONUNBUFFERED: "1",
                 PYTHONWARNINGS: "ignore::RuntimeWarning",
                 OPENVIKING_CONFIG_FILE: cfg.configPath,
                 OPENVIKING_START_CONFIG: cfg.configPath,
                 OPENVIKING_START_HOST: "127.0.0.1",
                 OPENVIKING_START_PORT: String(actualPort),
-                ...(process.env.OPENVIKING_GO_PATH && { PATH: `${process.env.OPENVIKING_GO_PATH}${pathSep}${process.env.PATH || ""}` }),
-                ...(process.env.OPENVIKING_GOPATH && { GOPATH: process.env.OPENVIKING_GOPATH }),
-                ...(process.env.OPENVIKING_GOPROXY && { GOPROXY: process.env.OPENVIKING_GOPROXY }),
+                ...(getEnv("OPENVIKING_GO_PATH") && { PATH: `${getEnv("OPENVIKING_GO_PATH")}${pathSep}${getEnv("PATH") || ""}` }),
+                ...(getEnv("OPENVIKING_GOPATH") && { GOPATH: getEnv("OPENVIKING_GOPATH") }),
+                ...(getEnv("OPENVIKING_GOPROXY") && { GOPROXY: getEnv("OPENVIKING_GOPROXY") }),
               };
               const runpyCode = `import sys,os,warnings; warnings.filterwarnings('ignore', category=RuntimeWarning, message='.*sys.modules.*'); sys.argv=['openviking.server.bootstrap','--config',os.environ['OPENVIKING_START_CONFIG'],'--host',os.environ.get('OPENVIKING_START_HOST','127.0.0.1'),'--port',os.environ['OPENVIKING_START_PORT']]; import runpy, importlib.util; spec=importlib.util.find_spec('openviking.server.bootstrap'); (runpy.run_path(spec.origin, run_name='__main__') if spec and getattr(spec,'origin',None) else runpy.run_module('openviking.server.bootstrap', run_name='__main__', alter_sys=True))`;
-              const child = spawn(
+              const child = launchProcess(
                 pythonCmd,
                 ["-c", runpyCode],
                 { env, cwd: IS_WIN ? tmpdir() : "/tmp", stdio: ["ignore", "pipe", "pipe"] },
@@ -1672,7 +2047,18 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
               });
               try {
                 await waitForHealthOrExit(baseUrl, timeoutMs, intervalMs, child);
-                const client = new OpenVikingClient(baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs);
+                const client = new OpenVikingClient(
+                  baseUrl,
+                  cfg.apiKey,
+                  cfg.agentId,
+                  cfg.timeoutMs,
+                  cfg.serverAuthMode,
+                  tenantAccount,
+                  tenantUser,
+                  undefined,
+                  cfg.isolateUserScopeByAgent,
+                  cfg.isolateAgentScopeByUser,
+                );
                 localClientCache.set(localCacheKey, { client, process: child });
                 if (resolveLocalClient) {
                   resolveLocalClient(client);

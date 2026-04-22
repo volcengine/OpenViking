@@ -168,7 +168,7 @@ openviking read viking://resources/docs/api.md
 
 ### write()
 
-Update an existing file and automatically refresh related semantics and vectors.
+Update an existing file, or create a new one when `mode="create"`, and automatically refresh related semantics and vectors.
 
 **Parameters**
 
@@ -176,13 +176,14 @@ Update an existing file and automatically refresh related semantics and vectors.
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Existing file URI |
 | content | str | Yes | - | New content to write |
-| mode | str | No | `replace` | `replace` or `append` |
+| mode | str | No | `replace` | `replace`, `append`, or `create` |
 | wait | bool | No | `false` | Wait for background semantic/vector refresh |
 | timeout | float | No | `null` | Timeout in seconds when `wait=true` |
 
 **Notes**
 
-- Only existing files are supported; directories are rejected.
+- `replace` and `append` require the file to exist; `create` targets a new file and returns `409 Conflict` when the path already exists. Directories are always rejected.
+- `create` only accepts text-writable extensions: `.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.toml`, `.py`, `.js`, `.ts`. Parent directories are created automatically.
 - Derived semantic files cannot be written directly: `.abstract.md`, `.overview.md`, `.relations.json`.
 - The public API no longer accepts `regenerate_semantics` or `revectorize`; write always refreshes related semantics and vectors.
 

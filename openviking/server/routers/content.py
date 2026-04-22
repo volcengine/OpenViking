@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Content endpoints for OpenViking HTTP Server."""
 
+import asyncio
 from urllib.parse import quote
 
 from fastapi import APIRouter, Body, Depends, Query
@@ -9,10 +10,16 @@ from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel, ConfigDict
 
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
-from openviking.server.auth import get_request_context
+from openviking.server.auth import get_request_context, require_role
 from openviking.server.dependencies import get_service
-from openviking.server.identity import RequestContext
-from openviking.server.models import Response
+from openviking.server.identity import RequestContext, Role
+from openviking.server.models import ErrorInfo, Response
+from openviking.server.routers.maintenance import (
+    REINDEX_TASK_TYPE,
+    ReindexRequest,
+    _background_reindex_tracked,
+    _do_reindex,
+)
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import NotFoundError
@@ -152,7 +159,12 @@ async def write(
     request: WriteContentRequest = Body(...),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Write text content to an existing file and refresh semantics/vectors."""
+    """Write text content to a file and refresh semantics/vectors.
+
+    For memory URIs, creates the file (and missing parent dirs) when it does
+    not yet exist; non-memory scopes require the target file to exist. The
+    response ``result.created`` is ``true`` only when a new file was written.
+    """
     service = get_service()
     execution = await run_operation(
         operation="content.write",
@@ -171,3 +183,69 @@ async def write(
         result=execution.result,
         telemetry=execution.telemetry,
     ).model_dump(exclude_none=True)
+
+
+@router.post("/reindex", deprecated=True)
+async def reindex(
+    body: ReindexRequest = Body(...),
+    ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN),
+):
+    """Compatibility alias for older clients that still call /api/v1/content/reindex."""
+    from openviking.service.task_tracker import get_task_tracker
+    from openviking.storage.viking_fs import get_viking_fs
+
+    uri = body.uri
+    viking_fs = get_viking_fs()
+
+    if not await viking_fs.exists(uri, ctx=ctx):
+        return Response(
+            status="error",
+            error=ErrorInfo(code="NOT_FOUND", message=f"URI not found: {uri}"),
+        )
+
+    service = get_service()
+    tracker = get_task_tracker()
+
+    if body.wait:
+        if tracker.has_running(
+            REINDEX_TASK_TYPE,
+            uri,
+            owner_account_id=ctx.account_id,
+            owner_user_id=ctx.user.user_id,
+        ):
+            return Response(
+                status="error",
+                error=ErrorInfo(
+                    code="CONFLICT",
+                    message=f"URI {uri} already has a reindex in progress",
+                ),
+            )
+        result = await _do_reindex(service, uri, body.regenerate, ctx)
+        return Response(status="ok", result=result)
+
+    task = tracker.create_if_no_running(
+        REINDEX_TASK_TYPE,
+        uri,
+        owner_account_id=ctx.account_id,
+        owner_user_id=ctx.user.user_id,
+    )
+    if task is None:
+        return Response(
+            status="error",
+            error=ErrorInfo(
+                code="CONFLICT",
+                message=f"URI {uri} already has a reindex in progress",
+            ),
+        )
+    asyncio.create_task(
+        _background_reindex_tracked(service, uri, body.regenerate, ctx, task.task_id)
+    )
+    return Response(
+        status="ok",
+        result={
+            "uri": uri,
+            "status": "accepted",
+            "task_id": task.task_id,
+            "message": "Reindex is processing in the background",
+        },
+    )

@@ -143,7 +143,7 @@ def _build_task_http_test_app(identity: ResolvedIdentity | None) -> FastAPI:
 async def auth_service(temp_dir):
     """Service for auth tests."""
     svc = OpenVikingService(
-        path=str(temp_dir / "auth_data"), user=UserIdentifier.the_default_user("auth_user")
+        path=str(temp_dir / "auth_data"), user=UserIdentifier("auth", "auth_user", "default")
     )
     await svc.initialize()
     yield svc
@@ -280,8 +280,8 @@ async def test_auth_on_multiple_endpoints(auth_client: httpx.AsyncClient):
         "/api/v1/fs/ls?uri=viking://",
         headers={
             "X-API-Key": ROOT_KEY,
-            "X-OpenViking-Account": "default",
-            "X-OpenViking-User": "default",
+            "X-OpenViking-Account": "auth",
+            "X-OpenViking-User": "auth_user",
         },
     )
     assert tenant_resp.status_code == 200
@@ -580,16 +580,26 @@ async def test_root_debug_vector_requests_require_explicit_identity():
         await get_request_context(request, identity)
 
 
-async def test_dev_mode_root_tenant_scoped_requests_allow_implicit_identity():
-    """Dev mode should keep the existing implicit ROOT/default behavior."""
+async def test_dev_mode_root_tenant_scoped_requests_reject_default_namespace():
+    """Dev mode must not create or use the literal default tenant namespace."""
     request = _make_request("/api/v1/resources", auth_enabled=False)
     identity = ResolvedIdentity(role=Role.ROOT, account_id="default", user_id="default")
 
+    with pytest.raises(InvalidArgumentError, match="default OpenViking namespace"):
+        await get_request_context(request, identity)
+
+
+async def test_dev_mode_resolve_identity_uses_configured_default_user():
+    """Dev mode should use the configured service identity instead of default/default."""
+    request = _make_request("/api/v1/resources", auth_enabled=False)
+    request.app.state.default_user = UserIdentifier("acct", "alice", "main")
+
+    identity = await resolve_identity(request)
     ctx = await get_request_context(request, identity)
 
     assert ctx.role == Role.ROOT
-    assert ctx.user.account_id == "default"
-    assert ctx.user.user_id == "default"
+    assert ctx.user.account_id == "acct"
+    assert ctx.user.user_id == "alice"
 
 
 async def test_root_tenant_scoped_requests_return_structured_400_via_http():
@@ -652,8 +662,8 @@ async def test_root_debug_vector_requests_return_structured_400_via_http():
     assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
 
 
-async def test_dev_mode_root_tenant_scoped_requests_keep_200_via_http():
-    """Dev mode HTTP routes should keep the existing implicit ROOT/default behavior."""
+async def test_dev_mode_root_tenant_scoped_requests_reject_default_via_http():
+    """Dev mode HTTP routes should reject literal default tenant fallback."""
     app = _build_auth_http_test_app(
         ResolvedIdentity(role=Role.ROOT, account_id="default", user_id="default"),
         auth_enabled=False,
@@ -663,8 +673,8 @@ async def test_dev_mode_root_tenant_scoped_requests_keep_200_via_http():
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         response = await client.get("/api/v1/fs/ls")
 
-    assert response.status_code == 200
-    assert response.json()["status"] == "ok"
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
 
 
 async def test_trusted_mode_allows_header_identity_without_api_key():

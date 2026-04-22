@@ -2,6 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0
 """OpenViking HTTP Server module."""
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from openviking.server.app import create_app
+    from openviking.server.bootstrap import main as run_server
+
 
 def __getattr__(name: str):
     if name == "create_app":

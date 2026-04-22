@@ -148,6 +148,10 @@ class UnifiedResourceProcessor:
             parse_kwargs["vlm_processor"] = self._get_vlm_processor()
             parse_kwargs["storage"] = self.storage
             parse_kwargs["_source_meta"] = local_resource.meta
+            # CRITICAL: Pass along the original_source!
+            # This is the full URL the user provided (e.g. "https://github.com/volcengine/OpenViking")
+            # CodeRepositoryParser and TreeBuilder need this to extract the org/repo format
+            # Without it, we'd only get the repo name without the org prefix!
             parse_kwargs["original_source"] = local_resource.original_source
 
             # Set resource_name from source_name or path

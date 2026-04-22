@@ -5,6 +5,14 @@ OpenViking 可以作为独立的 HTTP 服务器运行，允许多个客户端通
 ## 快速开始
 
 ```bash
+# 使用初始化向导创建或刷新 ~/.openviking/ov.conf
+openviking-server init
+
+# 如果你在向导中选择 OpenAI Codex，init 会帮你处理 Codex 登录/导入
+
+# 启动前校验本地配置、模型访问和鉴权状态
+openviking-server doctor
+
 # 配置文件在默认路径 ~/.openviking/ov.conf 时，直接启动
 openviking-server
 

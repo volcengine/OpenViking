@@ -147,6 +147,13 @@ class TreeBuilder:
             logger.debug(f"[TreeBuilder] Sanitized doc name: {original_name!r} -> {doc_name!r}")
 
         # Check if source_path is a GitHub/GitLab URL and extract org/repo
+        # This is critical for getting the full "org/repo" path instead of just repo name!
+        # For example:
+        #   - source_path = "https://github.com/volcengine/OpenViking"
+        #   - parsed_org_repo = "volcengine/OpenViking"
+        #   - final root_uri = "viking://resources/volcengine/OpenViking"
+        #
+        # Without this, we'd just get "viking://resources/OpenViking" without the org prefix
         final_doc_name = doc_name
         if source_path and source_format == "repository":
             parsed_org_repo = parse_code_hosting_url(source_path)

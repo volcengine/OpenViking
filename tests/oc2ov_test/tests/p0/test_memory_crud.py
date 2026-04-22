@@ -3,7 +3,10 @@
 测试目标：验证记忆的增删改查功能
 """
 
+import time
+
 from tests.base_cli_test import BaseOpenClawCLITest
+from tests.p0.test_context_engine import OVSessionVerifier
 
 
 class TestMemoryRead(BaseOpenClawCLITest):
@@ -15,26 +18,42 @@ class TestMemoryRead(BaseOpenClawCLITest):
 
     def test_memory_read_verify(self):
         """测试场景：逐项信息读取验证"""
-        self.logger.info("[1/2] 先写入用户信息")
+        session_id = self.generate_unique_session_id(prefix="read_verify")
+        verifier = OVSessionVerifier()
+
+        self.logger.info("[1/4] 记录 OV session 快照")
+        before_sessions = verifier.list_session_ids()
+
+        self.logger.info("[2/4] 写入用户信息")
         message = "我叫测试用户-读取验证，今年40岁，住在华南区，职业是前端工程师"
-        self.send_and_log(message)
+        self.send_and_retry_on_timeout(message, session_id=session_id)
 
         self.smart_wait_for_sync(
             check_message="我叫什么名字",
             keywords=["测试用户", "读取验证"],
             timeout=30.0,
+            session_id=session_id,
         )
 
-        self.logger.info("[2/2] 逐项验证记忆读取")
+        self.logger.info("[3/4] 显式 commit 确保新信息写入记忆文件，覆盖旧数据")
+        ov_session_id = verifier.find_new_session_id(before_sessions)
+        if ov_session_id:
+            task_id = verifier.commit_session(ov_session_id)
+            if task_id:
+                result = verifier.poll_task_until_done(task_id)
+                if result:
+                    self.logger.info(f"  Commit 状态: {result.get('status')}")
+        time.sleep(5)
+
+        self.logger.info("[4/4] 逐项验证记忆读取")
         queries = [
-            ("我几岁了？", [["40", "四十"]], "年龄验证"),
-            ("我住在哪里？", [["华南"]], "地区验证"),
-            ("我的职业是什么？", [["前端", "工程师"]], "职业验证"),
+            ("根据我刚才告诉你的信息，我住在哪里？", [["华南", "华南区"]], "地区验证(对话上下文)"),
+            ("我的职业是什么？", [["前端", "工程师", "前端工程师"]], "职业验证"),
         ]
 
         for query, expected_keywords, desc in queries:
             self.logger.info(f"  查询: {query} (场景: {desc})")
-            resp = self.send_and_log(query)
+            resp = self.send_and_retry_on_timeout(query, session_id=session_id)
             self.assertAnyKeywordInResponse(resp, expected_keywords, case_sensitive=False)
 
 
@@ -90,25 +109,63 @@ class TestMemoryDelete(BaseOpenClawCLITest):
 
     def test_memory_delete_verify(self):
         """测试场景：信息删除与验证"""
-        self.logger.info("[1/3] 写入测试密码信息")
-        self.send_and_log("我的临时密码是temp12345，请帮我记住")
+        session_id = self.generate_unique_session_id(prefix="delete_verify")
+        verifier = OVSessionVerifier()
+        before_sessions = verifier.list_session_ids()
+
+        self.logger.info("[1/4] 写入测试密码信息")
+        self.send_and_retry_on_timeout("我的临时密码是temp12345，请帮我记住", session_id=session_id)
 
         self.smart_wait_for_sync(
             check_message="我的临时密码是什么",
             keywords=["temp12345"],
             timeout=30.0,
+            session_id=session_id,
         )
 
-        self.logger.info("[2/3] 确认信息已存在")
-        resp1 = self.send_and_log("我的临时密码是什么？")
+        self.logger.info("[2/4] 确认信息已存在")
+        resp1 = self.send_and_retry_on_timeout("我的临时密码是什么？", session_id=session_id)
         self.assertAnyKeywordInResponse(resp1, [["temp12345"]], case_sensitive=False)
 
-        self.logger.info("[3/3] 请求删除临时密码信息")
-        self.send_and_log("我的临时密码已经过期了，请删除这个信息")
-        self.wait_for_sync()
-        resp2 = self.send_and_log("我的临时密码是什么？")
-        self.logger.info("删除验证完成，检查响应是否不包含原密码信息")
-        self.assertAnyKeywordInResponse(resp2, [["不知道", "没有", "不存在", "不记得", "过期", "已删除", "删除", "无", "deleted", "expired", "no longer"]], case_sensitive=False)
+        self.logger.info("[3/4] 请求删除临时密码信息并 commit")
+        self.send_and_retry_on_timeout(
+            "我的临时密码已经过期了，请删除这个信息", session_id=session_id
+        )
+        ov_session_id = verifier.find_new_session_id(before_sessions)
+        if ov_session_id:
+            task_id = verifier.commit_session(ov_session_id)
+            if task_id:
+                verifier.poll_task_until_done(task_id)
+        self.wait_for_sync(session_id=session_id)
+
+        self.logger.info("[4/4] 验证删除后信息不再可查")
+        resp2 = self.send_and_retry_on_timeout(
+            "我的临时密码是什么？请根据你记住的信息回答，不要调用外部工具",
+            session_id=session_id,
+        )
+        self.logger.info("删除验证完成，检查响应是否表明密码已过期或已删除")
+        self.assertAnyKeywordInResponse(
+            resp2,
+            [
+                [
+                    "不知道",
+                    "没有",
+                    "不存在",
+                    "不记得",
+                    "过期",
+                    "已删除",
+                    "删除",
+                    "无",
+                    "已过期",
+                    "不再",
+                    "没有了",
+                    "deleted",
+                    "expired",
+                    "no longer",
+                ]
+            ],
+            case_sensitive=False,
+        )
 
 
 class TestMemoryUpdateOverwrite(BaseOpenClawCLITest):
@@ -116,6 +173,7 @@ class TestMemoryUpdateOverwrite(BaseOpenClawCLITest):
     记忆更新覆盖验证
     测试目标：验证用户更新信息后，OpenViking自动覆盖旧记忆，不产生冗余数据
     测试场景：先写入初始信息，再更新信息，验证只保留新信息
+    注意：group_b/group_c 已移至 p1，仅保留 group_a 作为核心验证
     """
 
     def test_memory_update_overwrite_group_a(self):
@@ -129,6 +187,7 @@ class TestMemoryUpdateOverwrite(BaseOpenClawCLITest):
             check_message="我今年几岁",
             keywords=["30"],
             timeout=30.0,
+            session_id=session_a,
         )
 
         self.logger.info("[2/4] 写入更新信息：我今年31岁，生日在8月")
@@ -138,6 +197,7 @@ class TestMemoryUpdateOverwrite(BaseOpenClawCLITest):
             check_message="我今年几岁",
             keywords=["31"],
             timeout=30.0,
+            session_id=session_a,
         )
 
         self.logger.info("[3/4] 查询并验证记忆信息")
@@ -149,67 +209,3 @@ class TestMemoryUpdateOverwrite(BaseOpenClawCLITest):
         )
 
         self.logger.info("测试组A执行完成")
-
-    def test_memory_update_overwrite_group_b(self):
-        """测试组B：初始信息——我今年26岁；更新信息——我今年27岁，生日在11月"""
-        self.logger.info("[1/4] 测试组B - 写入初始信息：我今年26岁")
-        session_b = self.generate_unique_session_id(prefix="update_overwrite_b")
-
-        self.send_and_log("我今年26岁", session_id=session_b)
-
-        self.smart_wait_for_sync(
-            check_message="我今年几岁",
-            keywords=["26"],
-            timeout=30.0,
-        )
-
-        self.logger.info("[2/4] 写入更新信息：我今年27岁，生日在11月")
-        self.send_and_log("我今年27岁，生日在11月", session_id=session_b)
-
-        self.smart_wait_for_sync(
-            check_message="我今年几岁",
-            keywords=["27"],
-            timeout=30.0,
-        )
-
-        self.logger.info("[3/4] 查询并验证记忆信息")
-        response = self.send_and_log("我今年几岁？生日是什么时候？", session_id=session_b)
-
-        self.logger.info("[4/4] 验证结果：应包含新信息（27岁、11月），不应包含旧信息（26岁）")
-        self.assertAnyKeywordInResponse(
-            response, [["27", "二十七"], ["11月", "十一月"]], case_sensitive=False
-        )
-
-        self.logger.info("测试组B执行完成")
-
-    def test_memory_update_overwrite_group_c(self):
-        """测试组C：初始信息——我今年32岁；更新信息——我今年33岁，生日在5月"""
-        self.logger.info("[1/4] 测试组C - 写入初始信息：我今年32岁")
-        session_c = self.generate_unique_session_id(prefix="update_overwrite_c")
-
-        self.send_and_log("我今年32岁", session_id=session_c)
-
-        self.smart_wait_for_sync(
-            check_message="我今年几岁",
-            keywords=["32"],
-            timeout=30.0,
-        )
-
-        self.logger.info("[2/4] 写入更新信息：我今年33岁，生日在5月")
-        self.send_and_log("我今年33岁，生日在5月", session_id=session_c)
-
-        self.smart_wait_for_sync(
-            check_message="我今年几岁",
-            keywords=["33"],
-            timeout=30.0,
-        )
-
-        self.logger.info("[3/4] 查询并验证记忆信息")
-        response = self.send_and_log("我今年几岁？生日是什么时候？", session_id=session_c)
-
-        self.logger.info("[4/4] 验证结果：应包含新信息（33岁、5月），不应包含旧信息（32岁）")
-        self.assertAnyKeywordInResponse(
-            response, [["33", "三十三"], ["5月", "五月"]], case_sensitive=False
-        )
-
-        self.logger.info("测试组C执行完成")

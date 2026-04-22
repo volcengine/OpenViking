@@ -16,6 +16,7 @@ from openviking.server.identity import AccountNamespacePolicy, ResolvedIdentity,
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import (
     AlreadyExistsError,
+    InvalidArgumentError,
     NotFoundError,
     UnauthenticatedError,
 )
@@ -25,6 +26,7 @@ logger = get_logger(__name__)
 
 ACCOUNTS_PATH = "/local/_system/accounts.json"
 USERS_PATH_TEMPLATE = "/local/{account_id}/_system/users.json"
+DISABLED_DEFAULT_NAMESPACE = "default"
 SETTINGS_PATH_TEMPLATE = "/local/{account_id}/_system/setting.json"
 
 
@@ -53,6 +55,17 @@ class AccountInfo:
     created_at: str
     users: Dict[str, dict] = field(default_factory=dict)
     namespace_policy: AccountNamespacePolicy = field(default_factory=AccountNamespacePolicy)
+
+
+def _is_disabled_default_namespace(value: str) -> bool:
+    return value == DISABLED_DEFAULT_NAMESPACE
+
+
+def _reject_default_namespace(account_id: str, user_id: Optional[str] = None) -> None:
+    if _is_disabled_default_namespace(account_id):
+        raise InvalidArgumentError("The literal default OpenViking account namespace is disabled.")
+    if user_id is not None and _is_disabled_default_namespace(user_id):
+        raise InvalidArgumentError("The literal default OpenViking user namespace is disabled.")
 
 
 class APIKeyManager:
@@ -91,12 +104,16 @@ class APIKeyManager:
         accounts_data = await self._read_json(ACCOUNTS_PATH)
         fresh_workspace = accounts_data is None
         if accounts_data is None:
-            # First run: create default account
-            now = datetime.now(timezone.utc).isoformat()
-            accounts_data = {"accounts": {"default": {"created_at": now}}}
+            accounts_data = {"accounts": {}}
             await self._write_json(ACCOUNTS_PATH, accounts_data)
 
-        for account_id, info in accounts_data.get("accounts", {}).items():
+        accounts = accounts_data.get("accounts", {})
+        if DISABLED_DEFAULT_NAMESPACE in accounts:
+            accounts.pop(DISABLED_DEFAULT_NAMESPACE, None)
+            await self._write_json(ACCOUNTS_PATH, accounts_data)
+            logger.warning("Removed disabled default account namespace from API key registry")
+
+        for account_id, info in accounts.items():
             users_path = USERS_PATH_TEMPLATE.format(account_id=account_id)
             users_data = await self._read_json(users_path)
             users = users_data.get("users", {}) if users_data else {}
@@ -240,6 +257,7 @@ class APIKeyManager:
 
         Returns the admin user's API key.
         """
+        _reject_default_namespace(account_id, admin_user_id)
         if account_id in self._accounts:
             raise AlreadyExistsError(account_id, "account")
 
@@ -320,6 +338,7 @@ class APIKeyManager:
 
     async def register_user(self, account_id: str, user_id: str, role: str = "user") -> str:
         """Register a new user in an account. Returns the user's API key."""
+        _reject_default_namespace(account_id, user_id)
         account = self._accounts.get(account_id)
         if account is None:
             raise NotFoundError(account_id, "account")

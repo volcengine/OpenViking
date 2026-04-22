@@ -116,7 +116,9 @@ async def test_stat_not_found(client: httpx.AsyncClient):
     assert body["status"] == "error"
 
 
-async def test_rm_directory_without_recursive_returns_failed_precondition(client: httpx.AsyncClient):
+async def test_rm_directory_without_recursive_returns_failed_precondition(
+    client: httpx.AsyncClient,
+):
     await client.post(
         "/api/v1/fs/mkdir",
         json={"uri": "viking://resources/rm_dir_without_recursive/"},

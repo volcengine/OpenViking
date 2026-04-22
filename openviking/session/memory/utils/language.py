@@ -5,8 +5,10 @@ Language detection utilities.
 """
 
 import re
+from typing import Callable
 
 from openviking_cli.utils import get_logger
+from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
@@ -15,7 +17,7 @@ def _detect_language_from_text(user_text: str, fallback_language: str) -> str:
     """Internal shared helper to detect dominant language from text."""
     fallback = (fallback_language or "en").strip() or "en"
 
-    #return "zh-CN"
+    # return "zh-CN"
 
     if not user_text:
         return fallback
@@ -44,6 +46,44 @@ def _detect_language_from_text(user_text: str, fallback_language: str) -> str:
         return "zh-CN"
 
     return fallback
+
+
+def resolve_with_override(config, detect_with_fallback: Callable[[str], str]) -> str:
+    """Return config override if set, else call `detect_with_fallback(fallback)`.
+
+    The callable receives the resolved fallback language and returns the
+    detected output language, letting callers choose the detector (text vs
+    conversation vs messages) without duplicating the override/fallback
+    resolution logic.
+    """
+    if config is None:
+        config = get_openviking_config()
+    override = (getattr(config, "output_language_override", None) or "").strip()
+    if override:
+        return override
+    fallback = (getattr(config, "language_fallback", None) or "en").strip() or "en"
+    return detect_with_fallback(fallback)
+
+
+def resolve_output_language(text: str, config=None) -> str:
+    """Resolve output language from text, honoring config override before detection."""
+    return resolve_with_override(
+        config, lambda fallback: _detect_language_from_text(text, fallback)
+    )
+
+
+def resolve_output_language_from_conversation(conversation: str, config=None) -> str:
+    """Resolve output language from a conversation, honoring config override.
+
+    When no override is set, uses `detect_language_from_conversation` which
+    scopes detection to user-role content only.
+    """
+    return resolve_with_override(
+        config,
+        lambda fallback: detect_language_from_conversation(
+            conversation, fallback_language=fallback
+        ),
+    )
 
 
 def detect_language_from_conversation(conversation: str, fallback_language: str = "en") -> str:

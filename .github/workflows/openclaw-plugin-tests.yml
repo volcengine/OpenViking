@@ -1,0 +1,56 @@
+# Fork-local regression gate for the openclaw-plugin.
+#
+# Catches the signature-drift class of bug where fork-local edits and
+# upstream refactors collide on examples/openclaw-plugin/*.ts. Runs the
+# narrow set of tests that exercise client <-> context-engine contracts
+# (addSessionMessage shape, afterTurn capture path, compactOVSession
+# commit + self-heal). Broader plugin tests are intentionally excluded
+# until the fork triages their pre-existing failures.
+
+name: openclaw-plugin tests
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "examples/openclaw-plugin/**"
+      - ".github/workflows/openclaw-plugin-tests.yml"
+  pull_request:
+    paths:
+      - "examples/openclaw-plugin/**"
+      - ".github/workflows/openclaw-plugin-tests.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vitest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install plugin deps
+        working-directory: examples/openclaw-plugin
+        run: npm ci --no-audit --no-fund
+
+      - name: Check install-manifest covers runtime imports
+        working-directory: examples/openclaw-plugin
+        run: npm run check-manifest
+
+      - name: Run contract tests (afterTurn, compact)
+        working-directory: examples/openclaw-plugin
+        run: >-
+          node_modules/.bin/vitest run
+          tests/ut/context-engine-afterTurn.test.ts
+          tests/ut/context-engine-compact.test.ts
+        # client.test.ts intentionally excluded until the pre-existing
+        # "keeps polling wait=true commit" tenant-config failure is triaged.

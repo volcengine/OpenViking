@@ -25,14 +25,11 @@ Basic vector similarity search.
 | query | str | Yes | - | Search query string |
 | target_uri | str | No | "" | Limit search to specific URI prefix |
 | limit | int | No | 10 | Maximum number of results |
-| node_limit | int | No | None | Optional HTTP alias that overrides `limit` when provided |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filters |
-| since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--after` maps to this field |
-| until | str | No | None | Upper time bound, accepts `30m` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--before` maps to this field |
-| time_field | `"updated_at"` or `"created_at"` | No | `"updated_at"` | Metadata time field used by `since` / `until` |
-| include_provenance | bool | No | False | Include provenance/query-plan details in the serialized result |
-| telemetry | bool or object | No | False | Attach telemetry data to the response |
+| since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`, timezone-less values use local time. CLI `--last 7d` maps to `since="7d"` |
+| until | str | No | None | Upper time bound, accepts `30m` or ISO 8601 / `YYYY-MM-DD`, timezone-less values use local time |
+| time_field | `"updated_at"` or `"created_at"` | No | `"updated_at"` | Metadata time field used by `since` / `until`. CLI `--time-field updated|created` maps to `updated_at|created_at` |
 
 **FindResult Structure**
 
@@ -100,10 +97,11 @@ curl -X POST http://localhost:1933/api/v1/search/find \
 
 ```bash
 openviking find "how to authenticate users" [--uri viking://resources/] [--limit 10]
-openviking find "invoice" --after 7d
+openviking find "invoice" --time-field created --last 7d
 ```
 
-`--after` maps to API `since`, and `--before` maps to API `until`.
+`--time-field created` maps to API `time_field="created_at"` and `--time-field updated`
+maps to `time_field="updated_at"`. `--last 7d` is CLI sugar for `--since 7d`.
 
 **Response**
 
@@ -149,7 +147,7 @@ results = client.find(
 # Search only in skills
 results = client.find(
     "web search",
-    target_uri="viking://agent/skills/"
+    target_uri="viking://skills/"
 )
 
 # Search in specific project
@@ -198,14 +196,11 @@ Search with session context and intent analysis.
 | session | Session | No | None | Session for context-aware search (SDK) |
 | session_id | str | No | None | Session ID for context-aware search (HTTP) |
 | limit | int | No | 10 | Maximum number of results |
-| node_limit | int | No | None | Optional HTTP alias that overrides `limit` when provided |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filters |
-| since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--after` maps to this field |
-| until | str | No | None | Upper time bound, accepts `30m` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--before` maps to this field |
-| time_field | `"updated_at"` or `"created_at"` | No | `"updated_at"` | Metadata time field used by `since` / `until` |
-| include_provenance | bool | No | False | Include provenance/query-plan details in the serialized result |
-| telemetry | bool or object | No | False | Attach telemetry data to the response |
+| since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`, timezone-less values use local time. CLI `--last 7d` maps to `since="7d"` |
+| until | str | No | None | Upper time bound, accepts `30m` or ISO 8601 / `YYYY-MM-DD`, timezone-less values use local time |
+| time_field | `"updated_at"` or `"created_at"` | No | `"updated_at"` | Metadata time field used by `since` / `until`. CLI `--time-field updated|created` maps to `updated_at|created_at` |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -256,10 +251,12 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 
 ```bash
 openviking search "best practices" [--session-id abc123] [--limit 10]
-openviking search "watch vs scheduled" --after 2026-03-15 --before 2026-03-15
+openviking search "watch vs scheduled" --time-field created --on 2026-03-15
 ```
 
-`--after` maps to API `since`, and `--before` maps to API `until`.
+`--time-field created` maps to API `time_field="created_at"` and `--time-field updated`
+maps to `time_field="updated_at"`. `--last 7d` is CLI sugar for `--since 7d`.
+`--on 2026-03-15` is CLI sugar for `since="2026-03-15"` plus `until="2026-03-15"`.
 
 **Response**
 
@@ -327,9 +324,8 @@ Search content by pattern (regex).
 | uri | str | Yes | - | Viking URI to search in |
 | pattern | str | Yes | - | Search pattern (regex) |
 | case_insensitive | bool | No | False | Ignore case |
-| exclude_uri | str | No | None | URI prefix to exclude from search |
 | node_limit | int | No | None | Maximum number of nodes to search |
-| level_limit | int | No | 5 | Maximum directory depth to traverse |
+| exclude_uri | str | No | None | URI prefix to exclude from search |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -400,7 +396,6 @@ Match files by glob pattern.
 |-----------|------|----------|---------|-------------|
 | pattern | str | Yes | - | Glob pattern (e.g., `**/*.md`) |
 | uri | str | No | "viking://" | Starting URI |
-| node_limit | int | No | None | Maximum number of matches to return |
 
 **Python SDK (Embedded / HTTP)**
 

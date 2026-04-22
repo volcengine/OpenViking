@@ -5,6 +5,7 @@
 
 import asyncio
 import json
+from typing import Optional
 
 import pytest
 
@@ -26,11 +27,36 @@ async def _wait_for_task(task_id: str, timeout: float = 30.0) -> dict:
     raise TimeoutError(f"Task {task_id} did not complete within {timeout}s")
 
 
+async def _wait_for_memory_task(commit_task: dict, timeout: float = 30.0) -> Optional[dict]:
+    """Wait for the detached memory follow-up task when one was spawned."""
+    memory_task_id = ((commit_task.get("result") or {}).get("memory_task_id"))
+    if not memory_task_id:
+        return None
+    return await _wait_for_task(memory_task_id, timeout=timeout)
+
+
+async def _no_memories(*args, **kwargs):
+    del args, kwargs
+    return []
+
+
+async def _fast_summary(messages, latest_archive_overview=""):
+    del latest_archive_overview
+    return f"# Session Summary\n\n**Overview**: {len(messages)} messages"
+
+
+def _use_fast_commit_pipeline(session: Session, extract=_no_memories) -> None:
+    session._generate_archive_summary_async = _fast_summary
+    session._session_compressor.extract_long_term_memories = extract
+
+
 class TestCommit:
     """Test commit"""
 
     async def test_commit_success(self, session_with_messages: Session):
         """Test successful commit returns accepted with task_id"""
+        _use_fast_commit_pipeline(session_with_messages)
+
         result = await session_with_messages.commit_async()
 
         assert isinstance(result, dict)
@@ -42,15 +68,20 @@ class TestCommit:
     async def test_commit_extracts_memories(
         self, session_with_messages: Session, client: AsyncOpenViking
     ):
-        """Test commit kicks off background memory extraction"""
-        result = await session_with_messages.commit_async()
-        task_id = result["task_id"]
+        """Test commit spawns detached memory extraction."""
+        _use_fast_commit_pipeline(session_with_messages)
 
-        # Wait for background memory extraction to complete
-        task_result = await _wait_for_task(task_id)
-        assert task_result["status"] == "completed"
-        assert "memories_extracted" in task_result["result"]
-        memory_counts = task_result["result"]["memories_extracted"]
+        result = await session_with_messages.commit_async()
+        commit_task = await _wait_for_task(result["task_id"])
+        assert commit_task["status"] == "completed"
+        assert commit_task["result"]["archive_ready"] is True
+        assert commit_task["result"]["memory_task_id"] is not None
+
+        memory_task = await _wait_for_memory_task(commit_task)
+        assert memory_task is not None
+        assert memory_task["status"] == "completed"
+        assert "memories_extracted" in memory_task["result"]
+        memory_counts = memory_task["result"]["memories_extracted"]
         assert isinstance(memory_counts, dict)
 
         # Wait for semantic/embedding queues
@@ -58,6 +89,8 @@ class TestCommit:
 
     async def test_commit_archives_messages(self, session_with_messages: Session):
         """Test commit archives messages"""
+        _use_fast_commit_pipeline(session_with_messages)
+
         initial_message_count = len(session_with_messages.messages)
         assert initial_message_count > 0
 
@@ -79,6 +112,8 @@ class TestCommit:
         """Test multiple commits"""
         session = client.session(session_id="multi_commit_test")
 
+        _use_fast_commit_pipeline(session)
+
         # First round of conversation
         session.add_message("user", [TextPart("First round message")])
         session.add_message("assistant", [TextPart("First round response")])
@@ -86,7 +121,7 @@ class TestCommit:
         assert result1.get("status") == "accepted"
         assert result1.get("task_id") is not None
 
-        # Wait for first commit's background task to finish
+        # Wait for first commit's archive to finalize
         await _wait_for_task(result1["task_id"])
 
         # Second round of conversation
@@ -99,11 +134,13 @@ class TestCommit:
     async def test_commit_uses_latest_archive_overview_for_summary_and_extraction(
         self, client: AsyncOpenViking
     ):
-        """Second commit should pass the latest completed archive overview into Phase 2."""
+        """Second commit should pass the latest completed archive overview into both stages."""
         session = client.session(session_id="latest_overview_threading_test")
 
         session.add_message("user", [TextPart("First round message")])
         session.add_message("assistant", [TextPart("First round response")])
+
+        _use_fast_commit_pipeline(session)
         result1 = await session.commit_async()
         await _wait_for_task(result1["task_id"])
 
@@ -113,13 +150,9 @@ class TestCommit:
         )
         seen: dict[str, str] = {}
 
-        original_generate = session._generate_archive_summary_async
-
         async def capture_generate(messages, latest_archive_overview=""):
             seen["summary"] = latest_archive_overview
-            return await original_generate(
-                messages, latest_archive_overview=latest_archive_overview
-            )
+            return await _fast_summary(messages, latest_archive_overview=latest_archive_overview)
 
         async def capture_extract(*args, **kwargs):
             seen["extract"] = kwargs.get("latest_archive_overview", "")
@@ -131,15 +164,19 @@ class TestCommit:
         session.add_message("user", [TextPart("Second round message")])
         session.add_message("assistant", [TextPart("Second round response")])
         result2 = await session.commit_async()
-        task_result = await _wait_for_task(result2["task_id"])
+        commit_task = await _wait_for_task(result2["task_id"])
+        memory_task = await _wait_for_memory_task(commit_task)
 
-        assert task_result["status"] == "completed"
+        assert commit_task["status"] == "completed"
+        assert memory_task is not None
+        assert memory_task["status"] == "completed"
         assert seen["summary"] == previous_overview
         assert seen["extract"] == previous_overview
 
     async def test_commit_with_usage_records(self, client: AsyncOpenViking):
         """Test commit with usage records"""
         session = client.session(session_id="usage_commit_test")
+        _use_fast_commit_pipeline(session)
 
         session.add_message("user", [TextPart("Test message")])
         session.used(contexts=["viking://user/test/resources/doc.md"])
@@ -150,9 +187,11 @@ class TestCommit:
         assert result.get("status") == "accepted"
         assert result.get("task_id") is not None
 
-        # active_count_updated is now in the background task result
-        task_result = await _wait_for_task(result["task_id"])
-        assert task_result["status"] == "completed"
+        commit_task = await _wait_for_task(result["task_id"])
+        memory_task = await _wait_for_memory_task(commit_task)
+        assert commit_task["status"] == "completed"
+        assert memory_task is not None
+        assert memory_task["status"] == "completed"
 
     async def test_active_count_incremented_after_commit(self, client_with_resource_sync: tuple):
         """Regression test: active_count must actually increment after commit.
@@ -187,15 +226,18 @@ class TestCommit:
 
         # Mark as used and commit
         session = client.session(session_id="active_count_regression_test")
+        _use_fast_commit_pipeline(session)
         session.add_message("user", [TextPart("Query")])
         session.used(contexts=[uri])
         session.add_message("assistant", [TextPart("Answer")])
         result = await session.commit_async()
 
-        # Wait for background task to complete (active_count is updated there)
-        task_result = await _wait_for_task(result["task_id"])
-        assert task_result["status"] == "completed"
-        assert task_result["result"]["active_count_updated"] == 1
+        commit_task = await _wait_for_task(result["task_id"])
+        memory_task = await _wait_for_memory_task(commit_task)
+        assert commit_task["status"] == "completed"
+        assert memory_task is not None
+        assert memory_task["status"] == "completed"
+        assert memory_task["result"]["active_count_updated"] == 1
 
         # Verify the count actually changed in storage
         records_after = await vikingdb.get_context_by_uri(
@@ -209,15 +251,82 @@ class TestCommit:
             f"active_count not incremented: before={count_before}, after={count_after}"
         )
 
-    async def test_commit_blocks_after_failed_archive(self, client: AsyncOpenViking):
-        """A failed archive should block the next commit until it is resolved."""
-        session = client.session(session_id="failed_archive_blocks_new_commit")
+    async def test_commit_succeeds_while_memory_followup_is_blocked(self, client: AsyncOpenViking):
+        """Commit completion should not wait for detached memory extraction."""
+        session = client.session(session_id="archive_ready_before_memory_followup")
+        extraction_gate = asyncio.Event()
+        extraction_started = asyncio.Event()
+
+        async def gated_extract(*args, **kwargs):
+            del args, kwargs
+            extraction_started.set()
+            await extraction_gate.wait()
+            return []
+
+        _use_fast_commit_pipeline(session, gated_extract)
+
+        session.add_message("user", [TextPart("First round message")])
+        result = await session.commit_async()
+        commit_task = await _wait_for_task(result["task_id"])
+
+        assert commit_task["status"] == "completed"
+        assert commit_task["result"]["archive_ready"] is True
+        await asyncio.wait_for(extraction_started.wait(), timeout=5.0)
+
+        memory_task_id = commit_task["result"]["memory_task_id"]
+        assert memory_task_id is not None
+        memory_task = get_task_tracker().get(memory_task_id)
+        assert memory_task is not None
+        assert memory_task.status.value != "completed"
+
+        extraction_gate.set()
+        memory_task = await _wait_for_memory_task(commit_task)
+        assert memory_task is not None
+        assert memory_task["status"] == "completed"
+
+    async def test_memory_followup_failure_does_not_block_next_commit(
+        self, client: AsyncOpenViking
+    ):
+        """Detached extraction failure should not create a blocking archive failure."""
+        session = client.session(session_id="memory_followup_failure_does_not_block")
 
         async def failing_extract(*args, **kwargs):
             del args, kwargs
             raise RuntimeError("synthetic extraction failure")
 
-        session._session_compressor.extract_long_term_memories = failing_extract
+        _use_fast_commit_pipeline(session, failing_extract)
+
+        session.add_message("user", [TextPart("First round message")])
+        result = await session.commit_async()
+        commit_task = await _wait_for_task(result["task_id"])
+        memory_task = await _wait_for_memory_task(commit_task)
+
+        assert commit_task["status"] == "completed"
+        assert memory_task is not None
+        assert memory_task["status"] == "failed"
+
+        failed_marker = await session._viking_fs.read_file(
+            f"{result['archive_uri']}/.memory.failed.json",
+            ctx=session.ctx,
+        )
+        failed_payload = json.loads(failed_marker)
+        assert failed_payload["stage"] == "memory_extraction"
+        assert "synthetic extraction failure" in failed_payload["error"]
+
+        session.add_message("user", [TextPart("Second round message")])
+        next_result = await session.commit_async()
+        next_commit_task = await _wait_for_task(next_result["task_id"])
+        assert next_commit_task["status"] == "completed"
+
+    async def test_commit_blocks_after_archive_finalization_failure(self, client: AsyncOpenViking):
+        """Archive-finalization failure should still block the next commit."""
+        session = client.session(session_id="failed_archive_blocks_new_commit")
+
+        async def failing_summary(*args, **kwargs):
+            del args, kwargs
+            raise RuntimeError("synthetic summary failure")
+
+        session._generate_archive_summary_async = failing_summary
 
         session.add_message("user", [TextPart("First round message")])
         result = await session.commit_async()
@@ -230,8 +339,8 @@ class TestCommit:
             ctx=session.ctx,
         )
         failed_payload = json.loads(failed_marker)
-        assert failed_payload["stage"] == "memory_extraction"
-        assert "synthetic extraction failure" in failed_payload["error"]
+        assert failed_payload["stage"] == "archive_finalize"
+        assert "synthetic summary failure" in failed_payload["error"]
 
         session.add_message("user", [TextPart("Second round message")])
         with pytest.raises(FailedPreconditionError, match="unresolved failed archive"):

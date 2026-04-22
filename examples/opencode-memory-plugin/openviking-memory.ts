@@ -2199,6 +2199,57 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
         },
       }),
 
+      memwrite: tool({
+        description:
+          "Save text verbatim at a specified memory URI and return the URI.\n\nUse for explicit 'remember this fact' saves when you already know the target URI (scope, bucket, filename). Unlike memcommit, does NOT run the extractor — content lands as-is, one file per call. Response includes the written URI so you can verify or reference it downstream without guessing.\n\nParameters:\n- uri: target memory URI (e.g. viking://user/<id>/memories/preferences/mem_foo.md)\n- content: text to store verbatim\n- mode: 'replace' (default) or 'append'",
+        args: {
+          uri: z
+            .string()
+            .describe(
+              "Memory URI to write (e.g. viking://user/<id>/memories/preferences/mem_foo.md or viking://agent/<id>/memories/profile.md).",
+            ),
+          content: z.string().describe("Content to store verbatim"),
+          mode: z.enum(["replace", "append"]).optional().describe("replace (default) or append"),
+        },
+        async execute(args, context) {
+          const isMemory = /^viking:\/\/(?:user|agent)\/[^/]+\/memories(?:\/|$)/.test(args.uri)
+          if (!isMemory) {
+            return `Error: Refusing to write non-memory URI: ${args.uri}`
+          }
+
+          const mode = args.mode ?? "replace"
+          try {
+            const response = await makeRequest<
+              OpenVikingResponse<{
+                uri: string
+                created?: boolean
+                mode: string
+                written_bytes: number
+              }>
+            >(config, {
+              method: "POST",
+              endpoint: "/api/v1/content/write",
+              body: { uri: args.uri, content: args.content, mode, wait: true },
+              abortSignal: context.abort,
+            })
+            const result = unwrapResponse(response)
+            if (!result) {
+              return "Error: /content/write returned no result"
+            }
+            const verb = result.created ? "created" : "updated"
+            log("INFO", "memwrite", `${verb} ${result.uri}`, {
+              uri: result.uri,
+              mode: result.mode,
+              written_bytes: result.written_bytes,
+            })
+            return `${verb} ${result.uri}`
+          } catch (error: any) {
+            log("ERROR", "memwrite", "Write failed", { error: error.message, uri: args.uri })
+            return `Error: ${error.message}`
+          }
+        },
+      }),
+
       memsearch: tool(
         {
           description:

@@ -2,10 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for OpenAIRerankClient extra_headers support."""
 from unittest.mock import Mock, patch
-import pytest
 
-from openviking_cli.utils.config.rerank_config import RerankConfig
 from openviking.models.rerank.openai_rerank import OpenAIRerankClient
+from openviking_cli.utils.config.rerank_config import RerankConfig
 
 
 def test_openai_rerank_client_init_with_extra_headers():
@@ -85,7 +84,7 @@ def test_rerank_batch_includes_extra_headers(mock_post):
     )
 
     # Call rerank_batch
-    result = client.rerank_batch(
+    client.rerank_batch(
         query="test query",
         documents=["doc1", "doc2"]
     )
@@ -122,7 +121,7 @@ def test_rerank_batch_without_extra_headers(mock_post):
         model_name="gpt-4"
     )
 
-    result = client.rerank_batch(
+    client.rerank_batch(
         query="test query",
         documents=["doc1"]
     )
@@ -136,6 +135,35 @@ def test_rerank_batch_without_extra_headers(mock_post):
     assert headers["Content-Type"] == "application/json"
     # No extra headers
     assert "x-gw-apikey" not in headers
+
+
+@patch("openviking.models.rerank.openai_rerank.requests.post")
+def test_rerank_batch_accepts_voyage_data_response(mock_post):
+    """Test that Voyage-style data responses are parsed as rerank results."""
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "object": "list",
+        "data": [
+            {"index": 1, "relevance_score": 0.91},
+            {"index": 0, "relevance_score": 0.12},
+        ],
+        "model": "rerank-2.5-lite",
+    }
+    mock_post.return_value = mock_response
+
+    client = OpenAIRerankClient(
+        api_key="test-key",
+        api_base="https://api.voyageai.com/v1/rerank",
+        model_name="rerank-2.5-lite",
+    )
+
+    result = client.rerank_batch(
+        query="test query",
+        documents=["unrelated", "relevant"],
+    )
+
+    assert result == [0.12, 0.91]
 
 
 @patch("openviking.models.rerank.openai_rerank.requests.post")

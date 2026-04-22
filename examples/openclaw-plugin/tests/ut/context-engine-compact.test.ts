@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { OpenVikingClient } from "../../client.js";
 import { memoryOpenVikingConfigSchema } from "../../config.js";
-import { createMemoryOpenVikingContextEngine } from "../../context-engine.js";
+import {
+  categorizeCommitError,
+  createMemoryOpenVikingContextEngine,
+} from "../../context-engine.js";
 
 function makeLogger() {
   return {
@@ -352,9 +355,9 @@ describe("context-engine compact()", () => {
     });
   });
 
-  it("returns ok=false with reason=commit_error when commit throws", async () => {
+  it("returns reason=commit_error for uncategorizable commit failures", async () => {
     const { engine, logger } = makeEngine(null, {
-      throwError: new Error("network unreachable"),
+      throwError: new Error("opaque problem"),
     });
 
     const result = await engine.compact({
@@ -365,8 +368,186 @@ describe("context-engine compact()", () => {
     expect(result.ok).toBe(false);
     expect(result.compacted).toBe(false);
     expect(result.reason).toBe("commit_error");
+    expect((result.result?.details as { category?: string })?.category).toBe("unknown");
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("commit failed"),
     );
+  });
+
+  it("enriches reason with error category for HTTP failures", async () => {
+    const { engine } = makeEngine(null, {
+      throwError: new Error("OpenViking request failed: HTTP 500"),
+    });
+
+    const result = await engine.compact({
+      sessionId: "s6",
+      sessionFile: "",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("commit_error: HTTP 500");
+    expect((result.result?.details as { category?: string })?.category).toBe("HTTP 500");
+  });
+
+  it("enriches reason with OV error code when bracketed", async () => {
+    const { engine } = makeEngine(null, {
+      throwError: new Error("OpenViking request failed [PERMISSION_DENIED]: forbidden"),
+    });
+
+    const result = await engine.compact({
+      sessionId: "s7",
+      sessionFile: "",
+    });
+
+    expect(result.reason).toBe("commit_error: PERMISSION_DENIED");
+  });
+});
+
+describe("categorizeCommitError", () => {
+  it("extracts bracketed OV error code", () => {
+    expect(
+      categorizeCommitError(new Error("OpenViking request failed [NOT_FOUND]: Session not found")),
+    ).toBe("NOT_FOUND");
+    expect(
+      categorizeCommitError(new Error("OpenViking request failed [INTERNAL_ERROR]: boom")),
+    ).toBe("INTERNAL_ERROR");
+  });
+
+  it("extracts HTTP status when no bracketed code is present", () => {
+    expect(categorizeCommitError(new Error("OpenViking request failed: HTTP 422"))).toBe("HTTP 422");
+    expect(categorizeCommitError(new Error("HTTP 503 Service Unavailable"))).toBe("HTTP 503");
+  });
+
+  it("classifies timeout and network errors", () => {
+    expect(categorizeCommitError(new Error("commit timeout"))).toBe("timeout");
+    expect(categorizeCommitError(new Error("fetch failed: ECONNREFUSED"))).toBe("network_error");
+    expect(categorizeCommitError(new Error("getaddrinfo ENOTFOUND"))).toBe("network_error");
+  });
+
+  it("falls back to unknown when no category matches", () => {
+    expect(categorizeCommitError(new Error("some strange problem"))).toBe("unknown");
+    expect(categorizeCommitError("plain string with no cues")).toBe("unknown");
+  });
+});
+
+describe("context-engine compact() dormant-session self-heal", () => {
+  function makeSelfHealEngine(params: {
+    commitResponses: Array<Error | unknown>;
+  }) {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      mode: "remote",
+      baseUrl: "http://127.0.0.1:1933",
+      autoCapture: false,
+      autoRecall: false,
+    });
+    const logger = makeLogger();
+
+    const commitSession = vi.fn();
+    for (const response of params.commitResponses) {
+      if (response instanceof Error) {
+        commitSession.mockRejectedValueOnce(response);
+      } else {
+        commitSession.mockResolvedValueOnce(response);
+      }
+    }
+
+    const addSessionMessage = vi.fn().mockResolvedValue(undefined);
+
+    const client = {
+      commitSession,
+      addSessionMessage,
+      getSessionContext: vi.fn().mockResolvedValue({
+        latest_archive_overview: "",
+        latest_archive_id: "",
+        pre_archive_abstracts: [],
+        messages: [],
+        estimatedTokens: 0,
+        stats: { totalArchives: 0, includedArchives: 0, droppedArchives: 0, failedArchives: 0, activeTokens: 0, archiveTokens: 0 },
+      }),
+    } as unknown as OpenVikingClient;
+
+    const getClient = vi.fn().mockResolvedValue(client);
+    const resolveAgentId = vi.fn((_sid: string) => "test-agent");
+
+    const engine = createMemoryOpenVikingContextEngine({
+      id: "openviking",
+      name: "Test Engine",
+      version: "test",
+      cfg,
+      logger,
+      getClient,
+      resolveAgentId,
+    });
+
+    return {
+      engine,
+      commitSession,
+      addSessionMessage,
+      logger,
+    };
+  }
+
+  it("seeds and retries commit once when server returns NOT_FOUND", async () => {
+    const notFoundErr = new Error(
+      "OpenViking request failed [NOT_FOUND]: Session not found: s-dormant",
+    );
+    const { engine, commitSession, addSessionMessage, logger } = makeSelfHealEngine({
+      commitResponses: [
+        notFoundErr,
+        {
+          status: "completed",
+          archived: true,
+          task_id: "task-seed",
+          memories_extracted: {},
+          archive_uri: "viking://session/s-dormant/history/archive_001",
+        },
+      ],
+    });
+
+    const result = await engine.compact({ sessionId: "s-dormant", sessionFile: "" });
+
+    expect(result.ok).toBe(true);
+    expect(result.reason).toBe("commit_completed");
+    expect(commitSession).toHaveBeenCalledTimes(2);
+    expect(addSessionMessage).toHaveBeenCalledTimes(1);
+    expect(addSessionMessage.mock.calls[0][0]).toBe("s-dormant");
+    expect(addSessionMessage.mock.calls[0][1]).toBe("user");
+    const parts = addSessionMessage.mock.calls[0][2] as Array<{ type: string; text: string }>;
+    expect(parts).toHaveLength(1);
+    expect(parts[0].type).toBe("text");
+    expect(parts[0].text).toContain("dormant-seed");
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("seeding dormant session"),
+    );
+  });
+
+  it("does not seed or retry when commit throws a non-NOT_FOUND error", async () => {
+    const { engine, commitSession, addSessionMessage } = makeSelfHealEngine({
+      commitResponses: [new Error("fetch failed: ECONNREFUSED")],
+    });
+
+    const result = await engine.compact({ sessionId: "s-net", sessionFile: "" });
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("commit_error: network_error");
+    expect(commitSession).toHaveBeenCalledTimes(1);
+    expect(addSessionMessage).not.toHaveBeenCalled();
+  });
+
+  it("returns commit_error with category when the retry after seeding also fails", async () => {
+    const notFoundErr = new Error(
+      "OpenViking request failed [NOT_FOUND]: Session not found: s-double",
+    );
+    const retryErr = new Error("OpenViking request failed: HTTP 500");
+    const { engine, commitSession, addSessionMessage } = makeSelfHealEngine({
+      commitResponses: [notFoundErr, retryErr],
+    });
+
+    const result = await engine.compact({ sessionId: "s-double", sessionFile: "" });
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("commit_error: HTTP 500");
+    expect(commitSession).toHaveBeenCalledTimes(2);
+    expect(addSessionMessage).toHaveBeenCalledTimes(1);
   });
 });

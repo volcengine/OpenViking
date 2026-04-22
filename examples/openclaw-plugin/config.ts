@@ -1,6 +1,9 @@
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { resolve as resolvePath } from "node:path";
+
+import { getEnv } from "./runtime-utils.js";
 
 export const RECALL_PATHS = { assemble: "assemble", hook: "hook" } as const;
 export type RecallPath = (typeof RECALL_PATHS)[keyof typeof RECALL_PATHS];
@@ -13,8 +16,26 @@ export type MemoryOpenVikingConfig = {
   /** Port for local server when mode is "local". Ignored when mode is "remote". */
   port?: number;
   baseUrl?: string;
+  account?: string;
+  user?: string;
   agentId?: string;
+  serverAuthMode?: "api_key" | "trusted";
   apiKey?: string;
+  /** Advanced option. Only needed when using root key or trusted auth mode. With a user key the server derives identity from the key. */
+  accountId?: string;
+  /** Advanced option. Only needed when using root key or trusted auth mode. */
+  userId?: string;
+  /**
+   * Canonical namespace policy. Must match the server-side account namespace
+   * policy because current /system/status does not expose it.
+   */
+  isolateUserScopeByAgent?: boolean;
+  isolateAgentScopeByUser?: boolean;
+  /**
+   * Deprecated compatibility alias for older hash-based agent space behavior.
+   * Prefer isolateUserScopeByAgent / isolateAgentScopeByUser.
+   */
+  agentScopeMode?: "user_agent" | "agent";
   targetUri?: string;
   timeoutMs?: number;
   autoCapture?: boolean;
@@ -22,11 +43,21 @@ export type MemoryOpenVikingConfig = {
   captureMaxLength?: number;
   autoRecall?: boolean;
   recallPath?: RecallPath;
+  /** Include resources in auto-recall and default memory_recall search. Default false. */
+  recallResources?: boolean;
   recallLimit?: number;
   recallScoreThreshold?: number;
   recallMaxContentChars?: number;
   recallPreferAbstract?: boolean;
   recallTokenBudget?: number;
+  adaptiveRecall?: boolean;
+  recallCacheTtlMs?: number;
+  recallFastMaxAgeMs?: number;
+  recallBackgroundRefresh?: boolean;
+  recallTierOverrides?: {
+    full?: string[];
+    none?: string[];
+  };
   commitTokenThreshold?: number;
   bypassSessionPatterns?: string[];
   /**
@@ -47,15 +78,49 @@ const DEFAULT_CAPTURE_MAX_LENGTH = 24000;
 const DEFAULT_RECALL_LIMIT = 6;
 const DEFAULT_RECALL_PATH: RecallPath = RECALL_PATHS.assemble;
 const DEFAULT_RECALL_SCORE_THRESHOLD = 0.15;
-const DEFAULT_RECALL_MAX_CONTENT_CHARS = 500;
+const DEFAULT_RECALL_MAX_CONTENT_CHARS = 5000;
 const DEFAULT_RECALL_PREFER_ABSTRACT = true;
-const DEFAULT_RECALL_TOKEN_BUDGET = 2000;
+const DEFAULT_RECALL_TOKEN_BUDGET = 8000;
+const DEFAULT_ADAPTIVE_RECALL = true;
+const DEFAULT_RECALL_CACHE_TTL_MS = 600_000;
+const DEFAULT_RECALL_FAST_MAX_AGE_MS = 600_000;
+const DEFAULT_RECALL_BACKGROUND_REFRESH = true;
+const DEFAULT_RECALL_TIER_OVERRIDES = { full: [] as string[], none: [] as string[] };
 const DEFAULT_COMMIT_TOKEN_THRESHOLD = 20000;
 const DEFAULT_BYPASS_SESSION_PATTERNS: string[] = [];
 const DEFAULT_EMIT_STANDARD_DIAGNOSTICS = false;
 const DEFAULT_LOCAL_CONFIG_PATH = join(homedir(), ".openviking", "ov.conf");
 
 const DEFAULT_AGENT_ID = "default";
+
+const DEFAULT_SERVER_AUTH_MODE = "api_key";
+
+type OpenVikingConfigIdentity = {
+  account?: string;
+  user?: string;
+  agent?: string;
+};
+
+function toNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readOpenVikingConfigIdentity(configPath: string): OpenVikingConfigIdentity {
+  try {
+    const raw = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
+    return {
+      account: toNonEmptyString(raw.default_account),
+      user: toNonEmptyString(raw.default_user),
+      agent: toNonEmptyString(raw.default_agent),
+    };
+  } catch {
+    return {};
+  }
+}
+
+function resolveIdentityField(configured: unknown, envValue: unknown, fileValue?: string): string {
+  return toNonEmptyString(configured) ?? toNonEmptyString(envValue) ?? fileValue ?? "";
+}
 
 function resolveAgentId(configured: unknown): string {
   if (typeof configured === "string" && configured.trim()) {
@@ -66,7 +131,7 @@ function resolveAgentId(configured: unknown): string {
 
 function resolveEnvVars(value: string): string {
   return value.replace(/\$\{([^}]+)\}/g, (_, envVar) => {
-    const envValue = process.env[envVar];
+    const envValue = getEnv(envVar);
     if (!envValue) {
       throw new Error(`Environment variable ${envVar} is not set`);
     }
@@ -103,9 +168,24 @@ function toStringArray(value: unknown, fallback: string[]): string[] {
   return fallback;
 }
 
+function toRecallTierOverrides(value: unknown): { full: string[]; none: string[] } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {
+      full: [...DEFAULT_RECALL_TIER_OVERRIDES.full],
+      none: [...DEFAULT_RECALL_TIER_OVERRIDES.none],
+    };
+  }
+  const raw = value as Record<string, unknown>;
+  assertAllowedKeys(raw, ["full", "none"], "openviking recallTierOverrides");
+  return {
+    full: toStringArray(raw.full, DEFAULT_RECALL_TIER_OVERRIDES.full),
+    none: toStringArray(raw.none, DEFAULT_RECALL_TIER_OVERRIDES.none),
+  };
+}
+
 /** True when env is 1 / true / yes (case-insensitive). Used for debug flags without editing plugin JSON. */
 function envFlag(name: string): boolean {
-  const v = process.env[name];
+  const v = getEnv(name);
   if (v == null || v === "") {
     return false;
   }
@@ -122,7 +202,7 @@ function assertAllowedKeys(value: Record<string, unknown>, allowed: string[], la
 }
 
 function resolveDefaultBaseUrl(): string {
-  const fromEnv = process.env.OPENVIKING_BASE_URL || process.env.OPENVIKING_URL;
+  const fromEnv = getEnv("OPENVIKING_BASE_URL") || getEnv("OPENVIKING_URL");
   if (fromEnv) {
     return fromEnv;
   }
@@ -142,8 +222,16 @@ export const memoryOpenVikingConfigSchema = {
         "configPath",
         "port",
         "baseUrl",
+        "account",
+        "user",
         "agentId",
+        "serverAuthMode",
         "apiKey",
+        "accountId",
+        "userId",
+        "isolateUserScopeByAgent",
+        "isolateAgentScopeByUser",
+        "agentScopeMode",
         "targetUri",
         "timeoutMs",
         "autoCapture",
@@ -151,11 +239,17 @@ export const memoryOpenVikingConfigSchema = {
         "captureMaxLength",
         "autoRecall",
         "recallPath",
+        "recallResources",
         "recallLimit",
         "recallScoreThreshold",
         "recallMaxContentChars",
         "recallPreferAbstract",
         "recallTokenBudget",
+        "adaptiveRecall",
+        "recallCacheTtlMs",
+        "recallFastMaxAgeMs",
+        "recallBackgroundRefresh",
+        "recallTierOverrides",
         "commitTokenThreshold",
         "bypassSessionPatterns",
         "emitStandardDiagnostics",
@@ -164,7 +258,7 @@ export const memoryOpenVikingConfigSchema = {
       "openviking config",
     );
 
-    const mode = (cfg.mode === "local" || cfg.mode === "remote" ? cfg.mode : "local") as
+    const mode = (cfg.mode === "local" || cfg.mode === "remote" ? cfg.mode : "remote") as
       | "local"
       | "remote";
     const port = Math.max(1, Math.min(65535, Math.floor(toNumber(cfg.port, DEFAULT_PORT))));
@@ -175,12 +269,17 @@ export const memoryOpenVikingConfigSchema = {
     const configPath = resolvePath(
       resolveEnvVars(rawConfigPath).replace(/^~/, homedir()),
     );
+    const configIdentity = readOpenVikingConfigIdentity(configPath);
 
     const localBaseUrl = `http://127.0.0.1:${port}`;
     const rawBaseUrl =
       mode === "local" ? localBaseUrl : (typeof cfg.baseUrl === "string" ? cfg.baseUrl : resolveDefaultBaseUrl());
     const resolvedBaseUrl = resolveEnvVars(rawBaseUrl).replace(/\/+$/, "");
     const rawApiKey = typeof cfg.apiKey === "string" ? cfg.apiKey : process.env.OPENVIKING_API_KEY;
+    const rawServerAuthMode =
+      cfg.serverAuthMode ?? process.env.OPENVIKING_SERVER_AUTH_MODE;
+    const serverAuthMode =
+      rawServerAuthMode === "trusted" ? "trusted" as const : "api_key" as const;
     const captureMode = cfg.captureMode;
     if (
       typeof captureMode !== "undefined" &&
@@ -198,13 +297,70 @@ export const memoryOpenVikingConfigSchema = {
       throw new Error(`openviking recallPath must be "assemble" or "hook"`);
     }
 
+    const accountId =
+      typeof cfg.accountId === "string" && cfg.accountId.trim()
+        ? cfg.accountId.trim()
+        : (process.env.OPENVIKING_ACCOUNT_ID?.trim() || "");
+    const userId =
+      typeof cfg.userId === "string" && cfg.userId.trim()
+        ? cfg.userId.trim()
+        : (process.env.OPENVIKING_USER_ID?.trim() || "");
+
+    const hasExplicitAgentScopeMode =
+      typeof cfg.agentScopeMode === "string" || process.env.OPENVIKING_AGENT_SCOPE_MODE !== undefined;
+    const rawAgentScope = cfg.agentScopeMode ?? process.env.OPENVIKING_AGENT_SCOPE_MODE;
+    const agentScopeMode =
+      rawAgentScope === "user_agent" ? "user_agent" as const : "agent" as const;
+    const explicitIsolateUserScopeByAgent =
+      typeof cfg.isolateUserScopeByAgent === "boolean"
+        ? cfg.isolateUserScopeByAgent
+        : undefined;
+    const explicitIsolateAgentScopeByUser =
+      typeof cfg.isolateAgentScopeByUser === "boolean"
+        ? cfg.isolateAgentScopeByUser
+        : undefined;
+    const envIsolateUserScopeByAgent =
+      explicitIsolateUserScopeByAgent === undefined &&
+      process.env.OPENVIKING_ISOLATE_USER_SCOPE_BY_AGENT !== undefined
+        ? envFlag("OPENVIKING_ISOLATE_USER_SCOPE_BY_AGENT")
+        : undefined;
+    const envIsolateAgentScopeByUser =
+      explicitIsolateAgentScopeByUser === undefined &&
+      process.env.OPENVIKING_ISOLATE_AGENT_SCOPE_BY_USER !== undefined
+        ? envFlag("OPENVIKING_ISOLATE_AGENT_SCOPE_BY_USER")
+        : undefined;
+    const isolateUserScopeByAgent =
+      explicitIsolateUserScopeByAgent ??
+      envIsolateUserScopeByAgent ??
+      false;
+    const isolateAgentScopeByUser =
+      explicitIsolateAgentScopeByUser ??
+      envIsolateAgentScopeByUser ??
+      (hasExplicitAgentScopeMode && agentScopeMode === "user_agent" ? true : false);
+
     return {
       mode,
       configPath,
       port,
       baseUrl: resolvedBaseUrl,
+      account: resolveIdentityField(
+        cfg.account,
+        process.env.OPENVIKING_ACCOUNT ?? process.env.OPENVIKING_ACCOUNT_ID,
+        configIdentity.account,
+      ),
+      user: resolveIdentityField(
+        cfg.user,
+        process.env.OPENVIKING_USER ?? process.env.OPENVIKING_USER_ID,
+        configIdentity.user,
+      ),
       agentId: resolveAgentId(cfg.agentId),
+      serverAuthMode,
       apiKey: rawApiKey ? resolveEnvVars(rawApiKey) : "",
+      accountId,
+      userId,
+      isolateUserScopeByAgent,
+      isolateAgentScopeByUser,
+      agentScopeMode,
       targetUri: typeof cfg.targetUri === "string" ? cfg.targetUri : DEFAULT_TARGET_URI,
       timeoutMs: Math.max(1000, Math.floor(toNumber(cfg.timeoutMs, DEFAULT_TIMEOUT_MS))),
       autoCapture: cfg.autoCapture !== false,
@@ -215,6 +371,7 @@ export const memoryOpenVikingConfigSchema = {
       ),
       autoRecall: cfg.autoRecall !== false,
       recallPath: (recallPath as RecallPath | undefined) ?? DEFAULT_RECALL_PATH,
+      recallResources: cfg.recallResources === true || envFlag("OPENVIKING_RECALL_RESOURCES"),
       recallLimit: Math.max(1, Math.floor(toNumber(cfg.recallLimit, DEFAULT_RECALL_LIMIT))),
       recallScoreThreshold: Math.min(
         1,
@@ -229,6 +386,23 @@ export const memoryOpenVikingConfigSchema = {
         100,
         Math.min(50000, Math.floor(toNumber(cfg.recallTokenBudget, DEFAULT_RECALL_TOKEN_BUDGET))),
       ),
+      adaptiveRecall:
+        typeof cfg.adaptiveRecall === "boolean"
+          ? cfg.adaptiveRecall
+          : DEFAULT_ADAPTIVE_RECALL,
+      recallCacheTtlMs: Math.max(
+        0,
+        Math.min(3_600_000, Math.floor(toNumber(cfg.recallCacheTtlMs, DEFAULT_RECALL_CACHE_TTL_MS))),
+      ),
+      recallFastMaxAgeMs: Math.max(
+        0,
+        Math.min(3_600_000, Math.floor(toNumber(cfg.recallFastMaxAgeMs, DEFAULT_RECALL_FAST_MAX_AGE_MS))),
+      ),
+      recallBackgroundRefresh:
+        typeof cfg.recallBackgroundRefresh === "boolean"
+          ? cfg.recallBackgroundRefresh
+          : DEFAULT_RECALL_BACKGROUND_REFRESH,
+      recallTierOverrides: toRecallTierOverrides(cfg.recallTierOverrides),
       commitTokenThreshold: Math.max(
         0,
         Math.min(100_000, Math.floor(toNumber(cfg.commitTokenThreshold, DEFAULT_COMMIT_TOKEN_THRESHOLD))),
@@ -268,16 +442,61 @@ export const memoryOpenVikingConfigSchema = {
       placeholder: DEFAULT_BASE_URL,
       help: "HTTP URL when mode is remote (or use ${OPENVIKING_BASE_URL})",
     },
+    account: {
+      label: "OpenViking Account",
+      placeholder: "from ov.conf default_account",
+      help: "Tenant account sent as X-OpenViking-Account. Defaults to ov.conf default_account or OPENVIKING_ACCOUNT.",
+    },
+    user: {
+      label: "OpenViking User",
+      placeholder: "from ov.conf default_user",
+      help: "Tenant user sent as X-OpenViking-User. Defaults to ov.conf default_user or OPENVIKING_USER.",
+    },
     agentId: {
       label: "Agent ID",
       placeholder: "auto-generated",
-      help: 'OpenViking X-OpenViking-Agent: non-default values combine with OpenClaw ctx.agentId as "<config>_<sessionAgent>" (then sanitized to [a-zA-Z0-9_-]). Use "default" to send only ctx.agentId.',
+      help: 'OpenViking X-OpenViking-Agent. "default" follows OpenClaw ctx.agentId. Non-default values are prepended as "<config>_<ctx.agentId>" (sanitized to [a-zA-Z0-9_-]).',
+    },
+    serverAuthMode: {
+      label: "Server Auth Mode",
+      placeholder: DEFAULT_SERVER_AUTH_MODE,
+      help: 'OpenViking auth behavior. "api_key" (default): send X-API-Key when configured, otherwise dev fallback to X-OpenViking-Account/User default/default. "trusted": always send accountId/userId and optionally send apiKey when configured.',
     },
     apiKey: {
       label: "OpenViking API Key",
       sensitive: true,
       placeholder: "${OPENVIKING_API_KEY}",
       help: "Optional API key for OpenViking server",
+    },
+    accountId: {
+      label: "Account ID",
+      placeholder: "(derived from API key)",
+      help: "Advanced option. Tenant account ID. Only needed when using root key or trusted auth mode. With a user key the server derives identity from the key.",
+      advanced: true,
+    },
+    userId: {
+      label: "User ID",
+      placeholder: "(derived from API key)",
+      help: "Advanced option. Tenant user ID. Only needed when using root key or trusted auth mode.",
+      advanced: true,
+    },
+    isolateUserScopeByAgent: {
+      label: "Isolate User Scope By Agent",
+      placeholder: "false",
+      help: "Canonical namespace policy. false (default): user alias expands to viking://user/<user_id>/... . true: expands to viking://user/<user_id>/agent/<agent_id>/... . Must match the server-side account namespace policy.",
+      advanced: true,
+    },
+    isolateAgentScopeByUser: {
+      label: "Isolate Agent Scope By User",
+      placeholder: "false",
+      help: "Canonical namespace policy. false (default): agent alias expands to viking://agent/<agent_id>/... . true: expands to viking://agent/<agent_id>/user/<user_id>/... . Must match the server-side account namespace policy.",
+      advanced: true,
+    },
+    agentScopeMode: {
+      label: "Deprecated Agent Scope Mode",
+      placeholder: "agent",
+      help: 'Deprecated compatibility alias for older routing behavior. Prefer isolateUserScopeByAgent / isolateAgentScopeByUser. Mapping: explicit "user_agent" => false/true, explicit "agent" => false/false. When fully unset, the plugin defaults to false/false to match the current server-side default policy.',
+      advanced: true,
     },
     targetUri: {
       label: "Search Target URI",
@@ -315,6 +534,17 @@ export const memoryOpenVikingConfigSchema = {
       advanced: true,
       help: '"assemble" keeps memory injection inside the context-engine path; "hook" preserves legacy before_prompt_build recall.',
     },
+    recallResources: {
+      label: "Recall Resources",
+      help: "Include resources (viking://resources) in auto-recall and default memory_recall search. Enables account-level shared knowledge retrieval.",
+      advanced: true,
+    },
+    recallPath: {
+      label: "Recall Path",
+      placeholder: DEFAULT_RECALL_PATH,
+      advanced: true,
+      help: '"assemble" keeps memory injection inside the context-engine path; "hook" preserves legacy before_prompt_build recall.',
+    },
     recallLimit: {
       label: "Recall Limit",
       placeholder: String(DEFAULT_RECALL_LIMIT),
@@ -341,6 +571,33 @@ export const memoryOpenVikingConfigSchema = {
       placeholder: String(DEFAULT_RECALL_TOKEN_BUDGET),
       advanced: true,
       help: "Maximum estimated tokens for auto-recall memory injection. Injection stops when budget is exhausted.",
+    },
+    adaptiveRecall: {
+      label: "Adaptive Recall",
+      advanced: true,
+      help: "Skip or cache OpenViking memory recall for mechanical turns while preserving full recall for substantive memory-needed prompts.",
+    },
+    recallCacheTtlMs: {
+      label: "Recall Cache TTL (ms)",
+      placeholder: String(DEFAULT_RECALL_CACHE_TTL_MS),
+      advanced: true,
+      help: "How long exact recall results can be reused for repeated prompts.",
+    },
+    recallFastMaxAgeMs: {
+      label: "Fast Recall Max Age (ms)",
+      placeholder: String(DEFAULT_RECALL_FAST_MAX_AGE_MS),
+      advanced: true,
+      help: "How long a session's latest recall can be reused for short follow-up prompts.",
+    },
+    recallBackgroundRefresh: {
+      label: "Recall Background Refresh",
+      advanced: true,
+      help: "Refresh recall cache in the background for fast-tier follow-up prompts without blocking the current response.",
+    },
+    recallTierOverrides: {
+      label: "Recall Tier Overrides",
+      advanced: true,
+      help: "Optional substring overrides: { full: [...], none: [...] }.",
     },
     bypassSessionPatterns: {
       label: "Bypass Session Patterns",

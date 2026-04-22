@@ -17,7 +17,6 @@ from openviking.server.api_keys import APIKeyManager
 from openviking.server.config import ServerConfig
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import sessions as sessions_router
-from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
@@ -57,7 +56,7 @@ def _configure_test_env(monkeypatch, tmp_path):
             {
                 "storage": {
                     "workspace": str(tmp_path / "workspace"),
-                    "agfs": {"backend": "local", "mode": "binding-client"},
+                    "agfs": {"backend": "local"},
                     "vectordb": {"backend": "local"},
                 },
                 "embedding": {
@@ -308,20 +307,25 @@ async def test_add_message_admin_request_allows_registered_user_role_id(service,
     assert session.messages[-1].role_id == "alice"
 
 
-async def test_add_message_user_request_rejects_explicit_role_id(service, monkeypatch):
+async def test_add_message_user_request_allows_explicit_role_id(service, monkeypatch):
+    session_id = "user-explicit-role-id"
     ctx = RequestContext(
         user=UserIdentifier("acct_session_user", "alice", "assistant-user"),
         role=Role.USER,
     )
 
-    with pytest.raises(InvalidArgumentError, match="cannot explicitly set role_id"):
-        await _call_add_message_route(
-            service,
-            monkeypatch,
-            ctx=ctx,
-            payload=_message_request("user", content="hello user", role_id="alice"),
-            session_id="user-explicit-role-id",
-        )
+    response = await _call_add_message_route(
+        service,
+        monkeypatch,
+        ctx=ctx,
+        payload=_message_request("user", content="hello user", role_id="wx/user-01@abc"),
+        session_id=session_id,
+    )
+
+    assert response.result["message_count"] == 1
+    session = await service.sessions.get(session_id, ctx, auto_create=False)
+    await session.load()
+    assert session.messages[-1].role_id == "wx/user-01@abc"
 
 
 async def test_add_message_user_request_autofills_role_id(service, monkeypatch):
@@ -345,7 +349,7 @@ async def test_add_message_user_request_autofills_role_id(service, monkeypatch):
     assert session.messages[-1].role_id == "assistant-user"
 
 
-async def test_add_message_rejects_unregistered_user_role_id(service, monkeypatch):
+async def test_add_message_admin_request_allows_unregistered_user_role_id(service, monkeypatch):
     manager = APIKeyManager(root_key=TEST_ROOT_KEY, viking_fs=service.viking_fs)
     await manager.load()
     account_id = "acct_session_invalid"
@@ -356,15 +360,19 @@ async def test_add_message_rejects_unregistered_user_role_id(service, monkeypatc
         role=Role.ADMIN,
     )
 
-    with pytest.raises(InvalidArgumentError, match="not a registered user"):
-        await _call_add_message_route(
-            service,
-            monkeypatch,
-            ctx=ctx,
-            payload=_message_request("user", content="hello invalid", role_id="ghost"),
-            api_key_manager=manager,
-            session_id="invalid-user-role-id",
-        )
+    response = await _call_add_message_route(
+        service,
+        monkeypatch,
+        ctx=ctx,
+        payload=_message_request("user", content="hello invalid", role_id="ghost"),
+        api_key_manager=manager,
+        session_id="invalid-user-role-id",
+    )
+
+    assert response.result["message_count"] == 1
+    session = await service.sessions.get("invalid-user-role-id", ctx, auto_create=False)
+    await session.load()
+    assert session.messages[-1].role_id == "ghost"
 
 
 async def test_add_multiple_messages(client: httpx.AsyncClient):
@@ -463,6 +471,83 @@ async def test_compress_session(client: httpx.AsyncClient):
     assert body["result"]["status"] == "accepted"
     assert "usage" not in body
     assert "telemetry" not in body
+
+
+async def test_extract_uses_archived_messages_after_commit(
+    client: httpx.AsyncClient,
+    service,
+):
+    """After commit, extract reads the session's archive instead of the empty live queue.
+
+    Regression: previously `extract` called the extractor with `session.messages`,
+    which is the live queue. The live queue is empty after commit, so `extract`
+    was a no-op for any already-committed session — blocking recovery when
+    commit's Phase 2 extraction failed silently.
+    """
+    captured_messages: list = []
+
+    async def recording_extract(*, messages, **kwargs):
+        del kwargs
+        captured_messages.append(messages)
+        return []
+
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json=_message_request("user", content="archived question"),
+    )
+    await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json=_message_request("assistant", content="archived answer"),
+    )
+    commit_resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
+    task_id = commit_resp.json()["result"]["task_id"]
+    await _wait_for_task(client, task_id)
+
+    # Swap extractor after commit so the archive is written normally by Phase 2.
+    # This isolates what `extract` passes to the extractor when invoked later.
+    service.sessions._session_compressor.extract_long_term_memories = recording_extract
+
+    resp = await client.post(f"/api/v1/sessions/{session_id}/extract")
+    assert resp.status_code == 200
+
+    assert len(captured_messages) == 1
+    received = captured_messages[0]
+    texts = [m.parts[0].text for m in received]
+    assert texts == ["archived question", "archived answer"]
+
+
+async def test_extract_falls_back_to_live_messages_when_no_archive(
+    client: httpx.AsyncClient,
+    service,
+):
+    """Sessions without a completed archive still extract from the live queue."""
+    captured_messages: list = []
+
+    async def recording_extract(*, messages, **kwargs):
+        del kwargs
+        captured_messages.append(messages)
+        return []
+
+    service.sessions._session_compressor.extract_long_term_memories = recording_extract
+
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json=_message_request("user", content="before commit"),
+    )
+
+    resp = await client.post(f"/api/v1/sessions/{session_id}/extract")
+    assert resp.status_code == 200
+
+    assert len(captured_messages) == 1
+    received = captured_messages[0]
+    assert len(received) == 1
+    assert received[0].parts[0].text == "before commit"
 
 
 async def test_extract_session_jsonable_regression(client: httpx.AsyncClient, service, monkeypatch):
@@ -580,11 +665,18 @@ async def test_commit_endpoint_rejects_after_failed_archive(
     create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
 
-    async def failing_extract(*args, **kwargs):
+    async def failing_summary(*args, **kwargs):
         del args, kwargs
-        raise RuntimeError("synthetic extraction failure")
+        raise RuntimeError("synthetic summary failure")
 
-    service.sessions._session_compressor.extract_long_term_memories = failing_extract
+    original_session = service.sessions.session
+
+    def session_with_failing_summary(*args, **kwargs):
+        session = original_session(*args, **kwargs)
+        session._generate_archive_summary_async = failing_summary
+        return session
+
+    service.sessions.session = session_with_failing_summary
 
     await client.post(
         f"/api/v1/sessions/{session_id}/messages",

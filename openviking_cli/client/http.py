@@ -595,6 +595,9 @@ class AsyncHTTPClient(BaseClient):
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
     ) -> FindResult:
         """Semantic search without session context."""
         telemetry = self._validate_telemetry(telemetry)
@@ -610,6 +613,9 @@ class AsyncHTTPClient(BaseClient):
                 "score_threshold": score_threshold,
                 "filter": filter,
                 "telemetry": telemetry,
+                "since": since,
+                "until": until,
+                "time_field": time_field,
             },
         )
         response_data = self._handle_response_data(response)
@@ -626,6 +632,9 @@ class AsyncHTTPClient(BaseClient):
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
     ) -> FindResult:
         """Semantic search with optional session context."""
         telemetry = self._validate_telemetry(telemetry)
@@ -643,6 +652,9 @@ class AsyncHTTPClient(BaseClient):
                 "score_threshold": score_threshold,
                 "filter": filter,
                 "telemetry": telemetry,
+                "since": since,
+                "until": until,
+                "time_field": time_field,
             },
         )
         response_data = self._handle_response_data(response)

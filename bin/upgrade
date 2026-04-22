@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+install_link="$HOME/.local/bin/ov"
+install_path="$(python3 - <<'PY' "$install_link"
+import os
+import sys
+
+print(os.path.realpath(sys.argv[1]))
+PY
+)"
+signing_env="$HOME/.config/secrets/shell.env"
+signing_bootstrap="$HOME/.local/bin/signing-bootstrap"
+signing_identity="Developer ID Application: Brian Le (MWNX6V232Y)"
+
+sign_installed_binary() {
+  local path="$1"
+
+  if [[ "$(uname -s)" != "Darwin" ]]; then
+    return 0
+  fi
+
+  if [[ -f "$signing_env" ]]; then
+    set -a
+    . "$signing_env"
+    set +a
+  fi
+
+  if [[ ! -x "$signing_bootstrap" ]]; then
+    echo "warning: skipping codesign for $path because $signing_bootstrap is missing" >&2
+    return 0
+  fi
+
+  if [[ -z "${SIGNING_BUILD_KEYCHAIN_PATH:-}" || -z "${SIGNING_BUILD_KEYCHAIN_PASSWORD:-}" ]]; then
+    echo "warning: skipping codesign for $path because signing env is incomplete" >&2
+    return 0
+  fi
+
+  "$signing_bootstrap" sign-paths \
+    --path "$path" \
+    --identity "$signing_identity" \
+    --keychain "$SIGNING_BUILD_KEYCHAIN_PATH" \
+    --keychain-password "$SIGNING_BUILD_KEYCHAIN_PASSWORD"
+
+  codesign --verify --deep --strict "$path"
+}
+
+cd "$repo_root"
+cargo build --release -p ov_cli
+mkdir -p "$(dirname "$install_path")"
+cp target/release/ov "$install_path"
+sign_installed_binary "$install_path"
+
+echo "installed ov from $(git describe --tags --always 2>/dev/null || git rev-parse --short HEAD)"
+"$install_link" --version

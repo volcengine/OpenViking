@@ -106,6 +106,7 @@ function setupPlugin(clientOverrides?: Record<string, unknown>) {
       const cmd = command as CommandDef;
       commands.set(cmd.name, cmd);
     }),
+    registerCli: vi.fn(),
     registerService: vi.fn(),
     registerContextEngine: vi.fn(),
     on: vi.fn(),
@@ -180,6 +181,60 @@ describe("Tool: memory_store (behavioral)", () => {
     expect(store).toBeDefined();
     expect(store!.name).toBe("memory_store");
     expect(store!.description).toContain("Store text");
+  });
+});
+
+describe("Tool: memory_write (behavioral)", () => {
+  it("registers with correct name and description", () => {
+    const { factoryTools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const factory = factoryTools.get("memory_write");
+    expect(factory).toBeDefined();
+    const tool = factory!({ sessionId: "test-session", sessionKey: "sk" });
+    expect(tool.name).toBe("memory_write");
+    expect(tool.description).toContain("verbatim");
+  });
+
+  it("uses requesterSenderId to populate role_id for user writes", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "default" });
+      }
+      if (url.includes("/messages")) {
+        return okResponse({ session_id: "sess-1" });
+      }
+      if (url.endsWith("/commit")) {
+        return okResponse({
+          status: "completed",
+          archived: false,
+          memories_extracted: { core: 1 },
+        });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { factoryTools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const factory = factoryTools.get("memory_store");
+    expect(factory).toBeDefined();
+
+    const tool = factory!({
+      sessionId: "runtime-session",
+      sessionKey: "agent:main:main",
+      requesterSenderId: "wx/user-01@abc",
+    });
+
+    await tool.execute("tc-memory-store", { text: "hello from tool" });
+
+    const messageCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).includes("/api/v1/sessions/") && String(url).includes("/messages"),
+    );
+    expect(messageCall).toBeDefined();
+    const [, init] = messageCall as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    expect(body.role).toBe("user");
+    expect(body.role_id).toBe("wx_user-01_abc");
   });
 });
 
@@ -415,6 +470,46 @@ describe("Tool: ov_search (behavioral)", () => {
     expect(result.content[0]!.text).toContain("memory");
     expect(result.content[0]!.text).toContain("User prefers dark theme");
   });
+
+  it("returns unavailable without searching when health fails", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/health")) {
+        return new Response(JSON.stringify({ status: "down" }), { status: 503 });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { tools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const search = tools.get("ov_search")!;
+    const result = await search.execute("tc1", { query: "OpenViking install" }) as ToolResult;
+
+    expect(result.content[0]!.text).toContain("temporarily unavailable");
+    expect(result.details.action).toBe("unavailable");
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).endsWith("/api/v1/search/find"))).toBe(false);
+  });
+});
+
+describe("Tool: memory_recall (behavioral)", () => {
+  it("returns unavailable without searching when health fails", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/health")) {
+        return new Response(JSON.stringify({ status: "down" }), { status: 503 });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { tools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const recall = tools.get("memory_recall")!;
+    const result = await recall.execute("tc1", { query: "preferences" }) as ToolResult;
+
+    expect(result.content[0]!.text).toContain("temporarily unavailable");
+    expect(result.details.action).toBe("unavailable");
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).endsWith("/api/v1/search/find"))).toBe(false);
+  });
 });
 
 describe("OpenViking import command parsing", () => {
@@ -504,10 +599,10 @@ describe("OpenViking search command parsing", () => {
 });
 
 describe("Plugin registration", () => {
-  it("registers all 6 tools", () => {
+  it("registers all 7 tools", () => {
     const { api } = setupPlugin();
     contextEnginePlugin.register(api as any);
-    expect(api.registerTool).toHaveBeenCalledTimes(6);
+    expect(api.registerTool).toHaveBeenCalledTimes(7);
   });
 
   it("registers import and search commands", () => {
@@ -521,6 +616,20 @@ describe("Plugin registration", () => {
       acceptsArgs: true,
       description: "Search OpenViking resources and skills.",
     });
+  });
+
+  it("registers import and search CLI commands", () => {
+    const { api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    expect(api.registerCli).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.objectContaining({
+        descriptors: expect.arrayContaining([
+          expect.objectContaining({ name: "ov-import" }),
+          expect.objectContaining({ name: "ov-search" }),
+        ]),
+      }),
+    );
   });
 
   it("import and search commands return usage errors when args are missing", async () => {
@@ -561,6 +670,66 @@ describe("Plugin registration", () => {
     const [, init] = fetchMock.mock.calls.find((call) => String(call[0]).endsWith("/api/v1/search/find")) as [string, RequestInit];
     const headers = new Headers(init.headers);
     expect(headers.get("X-OpenViking-Agent")).toBe("worker");
+  });
+
+  it("search command propagates configured tenant headers", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/v1/search/find")) {
+        return okResponse({ memories: [], resources: [], skills: [], total: 0 });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { commands, api } = setupPlugin();
+    api.pluginConfig = {
+      ...api.pluginConfig,
+      accountId: "acct-shared",
+      userId: "alice",
+    };
+    contextEnginePlugin.register(api as any);
+
+    await commands.get("ov-search")!.handler({
+      args: "test query --uri viking://resources",
+      commandBody: "/ov-search",
+      agentId: "worker",
+      sessionId: "session-1",
+      sessionKey: "agent:worker:session-1",
+    });
+
+    const [, init] = fetchMock.mock.calls.find((call) => String(call[0]).endsWith("/api/v1/search/find")) as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.get("X-OpenViking-Account")).toBe("acct-shared");
+    expect(headers.get("X-OpenViking-User")).toBe("alice");
+    expect(headers.get("X-OpenViking-Agent")).toBe("worker");
+  });
+
+  it("import tool propagates configured tenant headers for resource imports", async () => {
+    const fetchMock = vi.fn(async () =>
+      okResponse({ root_uri: "viking://resources/shared-docs", status: "success" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { tools, api } = setupPlugin();
+    api.pluginConfig = {
+      ...api.pluginConfig,
+      accountId: "acct-shared",
+      userId: "alice",
+    };
+    contextEnginePlugin.register(api as any);
+
+    const tool = tools.get("ov_import")!;
+    await tool.execute("tc-import", {
+      kind: "resource",
+      source: "https://example.com/docs",
+      to: "viking://resources/shared-docs",
+      wait: true,
+    });
+
+    const [, init] = fetchMock.mock.calls.find((call) => String(call[0]).endsWith("/api/v1/resources")) as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.get("X-OpenViking-Account")).toBe("acct-shared");
+    expect(headers.get("X-OpenViking-User")).toBe("alice");
   });
 
   it("slash commands honor bypassSessionPatterns", async () => {

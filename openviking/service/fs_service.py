@@ -238,7 +238,11 @@ class FSService:
         wait: bool = False,
         timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Write to an existing file and refresh semantics/vectors."""
+        """Write file content and refresh semantics/vectors.
+
+        For memory URIs, creates the file (and missing parent dirs) when it
+        does not yet exist. For other scopes, the target file must exist.
+        """
         viking_fs = self._ensure_initialized()
         coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
         return await coordinator.write(

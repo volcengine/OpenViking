@@ -149,8 +149,45 @@ async def test_reindex_uses_request_tenant_for_exists(monkeypatch):
     )
     monkeypatch.setattr("openviking.server.routers.content._do_reindex", fake_do_reindex)
 
-    response = await reindex(request=request, _ctx=ctx)
+    response = await reindex(body=request, ctx=ctx)
 
     assert response.status == "ok"
     assert seen["uri"] == "viking://resources/demo/demo-note.md"
     assert seen["ctx"] == ctx
+
+
+async def test_maintenance_reindex_sync_success_returns_ok_payload(client, monkeypatch):
+    async def fake_do_reindex(service, uri, regenerate, ctx):
+        return {"status": "success", "message": "Indexed 1 resources"}
+
+    class FakeVikingFS:
+        async def exists(self, uri, ctx=None):
+            return True
+
+    class FakeTracker:
+        def has_running(self, task_type, uri, owner_account_id=None, owner_user_id=None):
+            return False
+
+    monkeypatch.setattr(
+        "openviking.storage.viking_fs.get_viking_fs",
+        lambda: FakeVikingFS(),
+    )
+    monkeypatch.setattr(
+        "openviking.service.task_tracker.get_task_tracker",
+        lambda: FakeTracker(),
+    )
+    monkeypatch.setattr(
+        "openviking.server.routers.maintenance.get_service",
+        lambda: SimpleNamespace(),
+    )
+    monkeypatch.setattr("openviking.server.routers.maintenance._do_reindex", fake_do_reindex)
+
+    response = await client.post(
+        "/api/v1/maintenance/reindex",
+        json={"uri": "viking://resources/demo", "wait": True},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["result"]["status"] == "success"

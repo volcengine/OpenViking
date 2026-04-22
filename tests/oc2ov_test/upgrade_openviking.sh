@@ -95,11 +95,11 @@ if [ -d "$VENV_DIR" ]; then
     if [ -f "$VENV_DIR/bin/activate" ]; then
         source "$VENV_DIR/bin/activate"
         log "✅ Virtual environment activated"
-        
+
         # Verify Python is from venv
         PYTHON_PATH=$(which python3 || which python)
         log "Using Python: $PYTHON_PATH"
-        
+
         if [[ "$PYTHON_PATH" != *"$VENV_DIR"* ]]; then
             log "⚠️  Warning: Python is not from the virtual environment"
         fi
@@ -192,7 +192,7 @@ if [ "$RUST_OK" = false ]; then
         
         if rustup install stable 2>&1 | tee -a "$LOG_FILE"; then
             log "✅ Stable toolchain installed"
-            
+
             if rustup default stable 2>&1 | tee -a "$LOG_FILE"; then
                 log "✅ Stable set as default"
                 RUST_OK=true
@@ -378,13 +378,13 @@ sys.exit(1)
                 BUILD_SUCCESS=true
             fi
         fi
-        
+
         if [ "$BUILD_SUCCESS" = true ]; then
             log "Build completed successfully on attempt $i"
-            
+
             INSTALL_PATH=$(python -c "import openviking; print(openviking.__file__)" 2>/dev/null || echo "unknown")
             log "OpenViking installed at: $INSTALL_PATH"
-            
+
             if [[ "$INSTALL_PATH" == *"$PROJECT_DIR"* ]]; then
                 log "✅ Confirmed: Using development mode (source code directory)"
             else

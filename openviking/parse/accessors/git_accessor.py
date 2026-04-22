@@ -182,6 +182,8 @@ class GitAccessor(DataAccessor):
                 raise ValueError(f"Unsupported source for GitAccessor: {source}")
 
             # Build metadata
+            # repo_name is in "org/repo" format (e.g. "volcengine/OpenViking")
+            # This is extracted via parse_code_hosting_url() from the original URL
             meta = {"repo_name": repo_name}
             if branch:
                 meta["repo_ref"] = branch
@@ -191,7 +193,7 @@ class GitAccessor(DataAccessor):
             return LocalResource(
                 path=local_dir,
                 source_type=SourceType.GIT,
-                original_source=source_str,
+                original_source=source_str,  # Full original URL (critical for TreeBuilder!)
                 meta=meta,
                 is_temporary=True,
             )
@@ -283,7 +285,15 @@ class GitAccessor(DataAccessor):
         return url
 
     def _get_repo_name(self, url: str) -> str:
-        """Get repository name with organization for GitHub/GitLab URLs."""
+        """Get repository name with organization for GitHub/GitLab URLs.
+
+        Returns repo name in "org/repo" format (e.g. "volcengine/OpenViking")
+        when possible. This is important for the final root_uri in VikingFS.
+
+        Example:
+          - Input: "https://github.com/volcengine/OpenViking"
+          - Returns: "volcengine/OpenViking"
+        """
         # First try to parse as code hosting URL
         parsed_org_repo = parse_code_hosting_url(url)
         if parsed_org_repo:
@@ -404,6 +414,13 @@ class GitAccessor(DataAccessor):
                         raise RuntimeError(f"Failed to fetch commit {commit} from {url}")
             await self._run_git(["git", "-C", target_dir, "checkout", commit])
 
+        # Add .git_source_repo marker file with original URL (for consistency)
+        def _write_marker():
+            marker_file = Path(target_dir) / ".git_source_repo"
+            marker_file.write_text(url, encoding="utf-8")
+
+        await asyncio.to_thread(_write_marker)
+
         return name
 
     async def _github_zip_download(
@@ -492,6 +509,13 @@ class GitAccessor(DataAccessor):
 
         content_dir = await asyncio.to_thread(_find_content_dir)
 
+        # Add .git_source_repo marker file with original URL
+        def _write_marker():
+            marker_file = content_dir / ".git_source_repo"
+            marker_file.write_text(repo_url, encoding="utf-8")
+
+        await asyncio.to_thread(_write_marker)
+
         logger.info(f"[GitAccessor] GitHub ZIP extracted to {content_dir} ({repo_name})")
         return content_dir, repo_name
 
@@ -577,6 +601,13 @@ class GitAccessor(DataAccessor):
             return top_level[0] if len(top_level) == 1 else Path(extract_dir)
 
         content_dir = await asyncio.to_thread(_find_content_dir)
+
+        # Add .git_source_repo marker file with original URL
+        def _write_marker():
+            marker_file = content_dir / ".git_source_repo"
+            marker_file.write_text(repo_url, encoding="utf-8")
+
+        await asyncio.to_thread(_write_marker)
 
         logger.info(f"[GitAccessor] GitLab ZIP extracted to {content_dir} ({repo_name})")
         return content_dir, repo_name

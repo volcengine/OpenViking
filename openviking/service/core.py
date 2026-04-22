@@ -145,6 +145,7 @@ class OpenVikingService:
             agfs=self._agfs_client,
             lock_timeout=tx_cfg.lock_timeout,
             lock_expire=tx_cfg.lock_expire,
+            vikingdb=self._vikingdb_manager,
         )
 
     @property

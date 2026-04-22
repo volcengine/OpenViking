@@ -524,14 +524,11 @@ export function extractNewTurnMessages(
       if (HEARTBEAT_RE.test(text)) {
         continue;
       }
-      // 保持原始 role，assistant 保持 assistant，user 保持 user
+      // Sanitize user text (sender metadata, timestamps, injected
+      // <relevant-memories>) but leave assistant content intact so the
+      // extraction pipeline still sees referenced context.
       const ovRole: "user" | "assistant" = role === "assistant" ? "assistant" : "user";
-      const cleanedText = ovRole === "user"
-        ? (
-          // 使用 sanitizeUserTextForCapture 清理所有噪音（Sender 元数据、时间戳等）
-          sanitizeUserTextForCapture(text)
-        )
-        : text.trim();
+      const cleanedText = ovRole === "user" ? sanitizeUserTextForCapture(text) : text.trim();
       if (cleanedText) {
         appendExtractedMessage(result, ovRole, [{
           type: "text",

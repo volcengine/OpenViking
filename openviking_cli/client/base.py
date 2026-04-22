@@ -45,6 +45,7 @@ class BaseClient(ABC):
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
+        ...
 
     @abstractmethod
     async def add_skill(
@@ -157,6 +158,9 @@ class BaseClient(ABC):
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         telemetry: TelemetryRequest = False,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
     ) -> Any:
         """Semantic search without session context."""
         ...
@@ -171,6 +175,9 @@ class BaseClient(ABC):
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         telemetry: TelemetryRequest = False,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
     ) -> Any:
         """Semantic search with optional session context."""
         ...

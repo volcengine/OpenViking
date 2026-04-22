@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import shutil
+from urllib.parse import urlparse
 import subprocess
 import sys
 import time
@@ -253,8 +254,8 @@ def start_processes(args: argparse.Namespace, config_path: Path) -> int:
         "--port",
         str(args.server_port),
         "--with-bot",
-        "--bot-url",
-        args.vikingbot_url,
+        "--bot-port",
+        str(urlparse(args.vikingbot_url).port or 18790),
     ]
     werewolf_cmd = [
         sys.executable,

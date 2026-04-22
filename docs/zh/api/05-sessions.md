@@ -622,12 +622,14 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
 
 ### commit()
 
-提交会话。归档消息（Phase 1）立即完成，摘要生成和记忆提取（Phase 2）在后台异步执行。返回 `task_id` 用于查询后台任务进度。
+提交会话。归档消息（Phase 1）立即完成；commit 任务在 archive 摘要写入并生成 `.done` 后完成。记忆提取与 usage bookkeeping 会在独立后台任务中继续执行。返回 `task_id` 用于查询 commit 任务进度。
 
 说明：
-- 同一 session 的多次快速连续 commit 会被接受；每次请求都会拿到独立的 `task_id`。
-- 后台 Phase 2 会按 archive 顺序串行推进：`archive N+1` 会等待 `archive N` 写出 `.done` 后再继续。
-- 如果更早的 archive 已失败且没有 `.done`，后续 commit 会直接返回 `FAILED_PRECONDITION`，直到该失败被处理。
+- 同一 session 的多次快速连续 commit 会被接受；每次请求都会拿到独立的 commit `task_id`。
+- archive finalize 会按 archive 顺序推进：`archive N+1` 会等待 `archive N` 写出 `.done` 后再继续。
+- commit 任务完成只表示 archive 已可用于 `get_session_context()` / `get_session_archive()`；`memory_task_id` 对应的独立任务可能仍在运行。
+- 如果更早的 archive finalize 已失败且没有 `.done`，后续 commit 会直接返回 `FAILED_PRECONDITION`，直到该失败被处理。
+- detached memory follow-up 失败不会阻塞后续 commit；失败会写入 `.memory.failed.json` 供排查。
 
 **参数**
 
@@ -641,15 +643,16 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
 session = client.session(session_id="a1b2c3d4")
 session.load()
 
-# commit 立即返回 task_id，后台异步执行摘要生成和记忆提取
+# commit 立即返回 task_id；archive ready 后 commit 任务完成，记忆提取继续在独立任务中执行
 result = session.commit()
 print(f"Status: {result['status']}")       # "accepted"
 print(f"Task ID: {result['task_id']}")
 
-# 查询后台任务进度
+# 查询 commit 任务进度
 task = client.get_task(result["task_id"])
 if task["status"] == "completed":
-    print(f"Memories extracted: {sum(task['result']['memories_extracted'].values())}")
+    print(f"Archive ready: {task['result']['archive_ready']}")
+    print(f"Memory task: {task['result']['memory_task_id']}")
 ```
 
 **HTTP API**
@@ -664,7 +667,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/commit \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key"
 
-# 查询任务状态
+# 查询 commit 任务状态
 curl -X GET http://localhost:1933/api/v1/tasks/{task_id} \
   -H "X-API-Key: your-key"
 ```
@@ -722,7 +725,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/extract \
 
 ### get_task()
 
-查询后台任务状态（如 commit 的摘要生成和记忆提取进度）。
+查询后台任务状态。`session_commit` 表示 archive finalize 进度；`session_memory_extract` 表示 detached 记忆提取任务。
 
 **参数**
 
@@ -773,19 +776,17 @@ curl -X GET http://localhost:1933/api/v1/tasks/uuid-xxx \
     "result": {
       "session_id": "a1b2c3d4",
       "archive_uri": "viking://session/a1b2c3d4/history/archive_001",
-      "memories_extracted": {
-        "profile": 1,
-        "preferences": 2,
-        "entities": 1,
-        "cases": 1
-      },
-      "active_count_updated": 2
+      "archive_ready": true,
+      "memories_extracted": {},
+      "active_count_updated": 0,
+      "memory_task_id": "uuid-memory-xxx",
+      "memory_status": "queued"
     }
   }
 }
 ```
 
-完成态任务结果里的 `memories_extracted` 表示本次 commit 的分类计数；如果只需要本次 commit 的总数，请把这些值求和。
+完成态 `session_commit` 结果里的 `memories_extracted` 可能为空，因为真正的记忆提取在 `memory_task_id` 对应的后台任务中执行。需要本次提取结果时，请继续查询该任务。
 
 ---
 

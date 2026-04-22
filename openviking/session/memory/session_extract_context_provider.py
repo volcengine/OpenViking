@@ -54,12 +54,10 @@ class SessionExtractContextProvider(ExtractContextProvider):
 
     def _detect_language(self) -> str:
         """检测输出语言"""
-        from openviking.session.memory.utils import detect_language_from_conversation
+        from openviking.session.memory.utils import resolve_output_language_from_conversation
 
         conversation = self._assemble_conversation(self.messages)
-        config = get_openviking_config()
-        fallback_language = (config.language_fallback or "en").strip() or "en"
-        return detect_language_from_conversation(conversation, fallback_language=fallback_language)
+        return resolve_output_language_from_conversation(conversation)
 
     def instruction(self) -> str:
         output_language = self._output_language

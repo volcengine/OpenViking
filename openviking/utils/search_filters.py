@@ -39,8 +39,6 @@ def merge_time_filter(
 
     if not existing_filter:
         return time_filter
-    # Preserve any caller-supplied metadata predicates by AND-ing the time range
-    # into the existing filter tree instead of replacing it.
     return {"op": "and", "conds": [existing_filter, time_filter]}
 
 
@@ -124,26 +122,23 @@ def _parse_time_value(value: str, now: datetime, *, is_upper_bound: bool) -> dat
             return combined.replace(tzinfo=now.tzinfo)
         return combined
 
-    dt = parse_iso_datetime(value)
-    # Ensure it's in UTC for consistency
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    elif dt.tzinfo != timezone.utc:
-        dt = dt.astimezone(timezone.utc)
-    return dt
+    return parse_iso_datetime(value)
 
 
 def _serialize_time_value(value: datetime) -> str:
-    """Serialize datetime to ISO 8601 format, always in UTC."""
+    if value.tzinfo is None:
+        return value.isoformat(timespec="milliseconds")
     return format_iso8601(value)
 
 
 def _comparison_datetime(value: datetime) -> datetime:
-    """Normalize datetime for comparison: always timezone-aware, in UTC."""
     if value.tzinfo is not None:
-        return value.astimezone(timezone.utc)
-    # Naive datetime is treated as UTC for consistency with Context and time_utils
-    return value.replace(tzinfo=timezone.utc)
+        return value
+
+    local_tz = datetime.now().astimezone().tzinfo
+    if local_tz is None:
+        raise ValueError("Could not determine local timezone for time filter comparison")
+    return value.replace(tzinfo=local_tz)
 
 
 def _duration_from_unit(amount: int, unit: str) -> timedelta:

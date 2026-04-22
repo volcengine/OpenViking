@@ -17,8 +17,10 @@ from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
+from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
+from openviking_cli.utils.config import get_openviking_config
 
 from .memory_deduplicator import DedupDecision, MemoryActionDecision, MemoryDeduplicator
 from .memory_extractor import (
@@ -116,6 +118,8 @@ class SessionCompressor:
 
             queue_manager = get_queue_manager()
             semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
+            telemetry = get_current_telemetry()
+            request_wait_tracker = get_request_wait_tracker()
 
             for parent_uri, changes in self._pending_semantic_changes.items():
                 changes_dict = {
@@ -132,8 +136,11 @@ class SessionCompressor:
                     agent_id=ctx.user.agent_id,
                     role=ctx.role.value,
                     changes=changes_dict,
+                    telemetry_id=telemetry.telemetry_id,
                 )
                 await semantic_queue.enqueue(msg)
+                if msg.telemetry_id:
+                    request_wait_tracker.register_semantic_root(msg.telemetry_id, msg.id)
                 logger.info(
                     f"Enqueued semantic generation for {parent_uri} with changes: "
                     f"added={len(changes['added'])}, modified={len(changes['modified'])}, "
@@ -147,7 +154,7 @@ class SessionCompressor:
 
     async def _index_memory(
         self, memory: Context, ctx: RequestContext, change_type: str = "added"
-    ) -> bool:
+    ) -> list[str]:
         """Add memory to vectorization queue and record semantic change.
 
         For long memories, splits content into chunks and enqueues each chunk
@@ -157,12 +164,21 @@ class SessionCompressor:
             memory: The memory context to index
             ctx: Request context
             change_type: One of "added" or "modified"
+
+        Returns:
+            List of chunk URIs that were enqueued (empty for unchunked memories).
+            Also stashed on ``memory._indexed_chunk_uris`` so rollback can reach
+            partial state if the enqueue raises mid-loop.
         """
         from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
-        from openviking_cli.utils.config import get_openviking_config
 
         semantic = get_openviking_config().semantic
+        request_wait_tracker = get_request_wait_tracker()
         vectorize_text = memory.get_vectorization_text()
+        chunk_uris: list[str] = []
+        # Stash incrementally so _rollback_created_memory can read partial state
+        # via the memory attr even if this call raises mid-loop.
+        memory._indexed_chunk_uris = chunk_uris  # type: ignore[attr-defined]
 
         if vectorize_text and len(vectorize_text) > semantic.memory_chunk_chars:
             # Chunk long memory into multiple vector records
@@ -184,15 +200,57 @@ class SessionCompressor:
                 chunk_memory.set_vectorize(Vectorize(text=chunk))
                 chunk_msg = EmbeddingMsgConverter.from_context(chunk_memory)
                 if chunk_msg:
-                    await self.vikingdb.enqueue_embedding_msg(chunk_msg)
+                    enqueued = await self.vikingdb.enqueue_embedding_msg(chunk_msg)
+                    if not enqueued:
+                        raise RuntimeError(f"Failed to enqueue memory chunk {chunk_memory.uri}")
+                    if chunk_msg.telemetry_id:
+                        request_wait_tracker.register_embedding_root(
+                            chunk_msg.telemetry_id, chunk_msg.id
+                        )
+                    chunk_uris.append(chunk_memory.uri)
 
         # Always enqueue the base record (uses abstract as vector text)
         embedding_msg = EmbeddingMsgConverter.from_context(memory)
-        await self.vikingdb.enqueue_embedding_msg(embedding_msg)
+        enqueued = await self.vikingdb.enqueue_embedding_msg(embedding_msg)
+        if not enqueued:
+            raise RuntimeError(f"Failed to enqueue memory {memory.uri}")
+        if embedding_msg.telemetry_id:
+            request_wait_tracker.register_embedding_root(
+                embedding_msg.telemetry_id, embedding_msg.id
+            )
         logger.info(f"Enqueued memory for vectorization: {memory.uri}")
 
         self._record_semantic_change(memory.uri, change_type, parent_uri=memory.parent_uri)
-        return True
+        return chunk_uris
+
+    async def _rollback_created_memory(
+        self, memory: Context, ctx: RequestContext, chunk_uris: list[str]
+    ) -> None:
+        """Remove a newly-created memory when indexing fails."""
+        try:
+            viking_fs = get_viking_fs()
+            await viking_fs.rm(memory.uri, recursive=False, ctx=ctx)
+        except FileNotFoundError:
+            # Nothing to roll back on disk; proceed to vector cleanup.
+            pass
+        except Exception:
+            # Re-raise to avoid leaving orphaned memory files on disk.
+            logger.error(f"Failed to rollback created memory {memory.uri}", exc_info=True)
+            raise
+
+        try:
+            await self.vikingdb.delete_uris(ctx, [memory.uri, *chunk_uris])
+        except Exception as e:
+            logger.debug(f"Failed to rollback vector records for {memory.uri}: {e}")
+
+    async def _create_and_index(self, memory: Context, ctx: RequestContext) -> None:
+        """Index a freshly-created memory, rolling back the file on failure."""
+        try:
+            await self._index_memory(memory, ctx)
+        except Exception:
+            chunk_uris = getattr(memory, "_indexed_chunk_uris", [])
+            await self._rollback_created_memory(memory, ctx, chunk_uris=chunk_uris)
+            raise
 
     @staticmethod
     def _chunk_text(text: str, chunk_size: int, overlap: int) -> list:
@@ -290,6 +348,7 @@ class SessionCompressor:
         session_id: Optional[str] = None,
         ctx: Optional[RequestContext] = None,
         strict_extract_errors: bool = False,
+        strict_dedup_errors: bool = False,
         latest_archive_overview: str = "",
     ) -> List[Context]:
         """Extract long-term memories from messages."""
@@ -302,6 +361,9 @@ class SessionCompressor:
         }
         if not ctx:
             return []
+
+        if strict_dedup_errors and self.vikingdb is None:
+            raise RuntimeError("Memory extraction requires VikingDBManager in strict dedup mode")
 
         self._pending_semantic_changes.clear()
         telemetry = get_current_telemetry()
@@ -355,9 +417,9 @@ class SessionCompressor:
                                 candidate, user, session_id, ctx=ctx
                             )
                         if memory:
+                            await self._create_and_index(memory, ctx)
                             memories.append(memory)
                             stats.created += 1
-                            await self._index_memory(memory, ctx)
                         else:
                             stats.skipped += 1
                         continue
@@ -424,7 +486,10 @@ class SessionCompressor:
                     # Dedup check for other categories
                     with telemetry.measure("memory.extract.stage.dedup"):
                         result = await self.deduplicator.deduplicate(
-                            candidate, ctx, batch_memories=batch_memories
+                            candidate,
+                            ctx,
+                            batch_memories=batch_memories,
+                            strict_errors=strict_dedup_errors,
                         )
                     actions = result.actions or []
                     decision = result.decision
@@ -521,9 +586,9 @@ class SessionCompressor:
                                 candidate, user, session_id, ctx=ctx
                             )
                         if memory:
+                            await self._create_and_index(memory, ctx)
                             memories.append(memory)
                             stats.created += 1
-                            await self._index_memory(memory, ctx)
                             # Store embedding for batch-internal dedup of subsequent candidates (#687)
                             if result.query_vector:
                                 batch_memories.append((result.query_vector, memory))

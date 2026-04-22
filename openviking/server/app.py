@@ -12,7 +12,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from openviking.server.api_keys import APIKeyManager
-from openviking.server.config import ServerConfig, load_server_config, validate_server_config
+from openviking.server.config import (
+    ServerConfig,
+    load_bot_gateway_token,
+    load_server_config,
+    validate_server_config,
+)
 from openviking.server.dependencies import set_service
 from openviking.server.error_mapping import map_exception
 from openviking.server.identity import AuthMode
@@ -73,6 +78,7 @@ def create_app(
 
         assert service is not None
         set_service(service)
+        app.state.default_user = service.user
 
         # Initialize APIKeyManager after service (needs VikingFS)
         effective_auth_mode = config.get_effective_auth_mode()
@@ -95,7 +101,7 @@ def create_app(
         elif effective_auth_mode == AuthMode.TRUSTED:
             app.state.api_key_manager = None
             if config.root_api_key and config.root_api_key != "":
-                logger.info(
+                logger.warning(
                     "Trusted mode enabled: authentication trusts X-OpenViking-Account/User/Agent "
                     "headers and requires the configured server API key on each request. "
                     "Only expose this server behind a trusted network boundary or "
@@ -153,6 +159,8 @@ def create_app(
     )
 
     app.state.config = config
+    if service is not None:
+        app.state.default_user = service.user
 
     # Add CORS middleware
     app.add_middleware(
@@ -236,6 +244,7 @@ def create_app(
         import openviking.server.routers.bot as bot_module
 
         bot_module.set_bot_api_url(config.bot_api_url)
+        bot_module.set_bot_api_key(load_bot_gateway_token())
         logger.info(f"Bot API proxy enabled, forwarding to {config.bot_api_url}")
     else:
         logger.info("Bot API proxy disabled (use --with-bot to enable)")

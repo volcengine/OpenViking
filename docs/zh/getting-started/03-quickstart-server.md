@@ -11,6 +11,16 @@
 
 确保 `ov.conf` 已配置好存储路径和模型信息（参见 [快速开始](02-quickstart.md)），然后启动服务：
 
+如果是首次配置，建议先运行 `openviking-server init`。
+
+启动前建议先做本地校验：
+
+```bash
+openviking-server doctor
+```
+
+`openviking-server doctor` 会校验当前本地配置是否可用，包括各 provider 需要的鉴权状态。
+
 ```bash
 # 配置文件在默认路径 ~/.openviking/ov.conf 时，直接启动
 openviking-server
@@ -34,6 +44,8 @@ INFO:     Uvicorn running on http://0.0.0.0:1933
 curl http://localhost:1933/health
 # {"status": "ok"}
 ```
+
+`openviking-server doctor` 用于校验本地配置、模型访问和鉴权状态；`curl /health` 只表示服务进程已经启动。
 
 ## 使用 Python SDK 连接
 

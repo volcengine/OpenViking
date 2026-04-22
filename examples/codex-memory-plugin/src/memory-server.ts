@@ -261,6 +261,26 @@ class OpenVikingClient {
   async deleteUri(uri: string): Promise<void> {
     await this.request(`/api/v1/fs?uri=${encodeURIComponent(uri)}&recursive=false`, { method: "DELETE" })
   }
+
+  async writeContent(
+    uri: string,
+    content: string,
+    mode: "replace" | "append" = "replace",
+  ): Promise<{ uri: string; created: boolean; mode: string; written_bytes: number }> {
+    const r = await this.request<Record<string, unknown>>(
+      "/api/v1/content/write",
+      {
+        method: "POST",
+        body: JSON.stringify({ uri, content, mode, wait: true }),
+      },
+    )
+    return {
+      uri: String(r.uri),
+      created: Boolean(r.created),
+      mode: String(r.mode),
+      written_bytes: Number(r.written_bytes),
+    }
+  }
 }
 
 function formatMemoryResults(items: FindResultItem[]): string {
@@ -284,7 +304,7 @@ const client = new OpenVikingClient(
 const server = new McpServer({ name: "openviking-memory-codex", version: "0.1.0" })
 
 server.tool(
-  "openviking_recall",
+  "memory_recall",
   "Search OpenViking long-term memory.",
   {
     query: z.string().describe("Search query"),
@@ -310,7 +330,7 @@ server.tool(
 )
 
 server.tool(
-  "openviking_store",
+  "memory_store",
   "Store information in OpenViking long-term memory.",
   {
     text: z.string().describe("Information to store"),
@@ -352,8 +372,30 @@ server.tool(
 )
 
 server.tool(
-  "openviking_forget",
-  "Delete an exact OpenViking memory URI. Use openviking_recall first if you only have a query.",
+  "memory_write",
+  "Save text verbatim at a specified memory URI and return the URI. Use for explicit 'remember this fact' saves when you already know the target URI (scope, bucket, filename). Unlike memory_store, does NOT run the extractor — content lands as-is, one file per call. Response includes the written URI so you can verify or reference it downstream without guessing.",
+  {
+    uri: z
+      .string()
+      .describe(
+        "Memory URI to write (e.g. viking://user/<id>/memories/preferences/mem_foo.md or viking://agent/<id>/memories/profile.md).",
+      ),
+    content: z.string().describe("Content to store verbatim"),
+    mode: z.enum(["replace", "append"]).optional().describe("replace (default) or append"),
+  },
+  async ({ uri, content, mode }) => {
+    if (!isMemoryUri(uri)) {
+      return { content: [{ type: "text" as const, text: `Refusing to write non-memory URI: ${uri}` }] }
+    }
+    const result = await client.writeContent(uri, content, mode ?? "replace")
+    const verb = result.created ? "created" : "updated"
+    return { content: [{ type: "text" as const, text: `${verb} ${result.uri}` }] }
+  },
+)
+
+server.tool(
+  "memory_forget",
+  "Delete an exact OpenViking memory URI. Use memory_recall first if you only have a query.",
   {
     uri: z.string().describe("Exact memory URI to delete"),
   },
@@ -368,7 +410,7 @@ server.tool(
 )
 
 server.tool(
-  "openviking_health",
+  "memory_health",
   "Check whether the OpenViking server is reachable.",
   {},
   async () => {

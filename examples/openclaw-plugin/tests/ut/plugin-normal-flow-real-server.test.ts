@@ -241,10 +241,16 @@ describe("plugin normal flow with healthy backend", () => {
       messages: [{ role: "user", content: "fallback" }],
     });
 
-    expect(assembled.messages[0]).toEqual({
-      role: "user",
-      content: "[Session History Summary]\nEarlier work focused on backend stack choices.",
-    });
+    expect(assembled.messages[0].role).toBe("user");
+    const firstUserContent =
+      typeof assembled.messages[0].content === "string"
+        ? assembled.messages[0].content
+        : JSON.stringify(assembled.messages[0].content);
+    expect(firstUserContent).toContain("<relevant-memories>");
+    expect(firstUserContent).toContain("User prefers Rust for backend tasks.");
+    expect(firstUserContent).toContain(
+      "[Session History Summary]\nEarlier work focused on backend stack choices.",
+    );
     expect(assembled.messages[1]).toEqual({
       role: "assistant",
       content: [{ type: "text", text: "Stored answer from OpenViking." }],

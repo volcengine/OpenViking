@@ -25,6 +25,9 @@ from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
+_DEFAULT_SESSION_MEMORY_LOCK_MAX_RETRIES = 50
+_DEFAULT_SESSION_MEMORY_LOCK_ATTEMPT_TIMEOUT_SECONDS = 1.0
+
 
 class SessionCompressorV2:
     """Session memory extractor with v2 templating system."""
@@ -88,6 +91,7 @@ class SessionCompressorV2:
         session_id: Optional[str] = None,
         ctx: Optional[RequestContext] = None,
         strict_extract_errors: bool = False,
+        strict_dedup_errors: bool = False,
         latest_archive_overview: str = "",
     ) -> List[Context]:
         """Extract long-term memories from messages using v2 templating system.
@@ -102,6 +106,15 @@ class SessionCompressorV2:
         if not ctx:
             logger.warning("No RequestContext provided, skipping memory extraction")
             return []
+
+        if strict_dedup_errors and self.vikingdb is None:
+            raise RuntimeError("Memory extraction requires VikingDBManager in strict dedup mode")
+
+        # TODO: Thread strict_dedup_errors into updater.apply_operations so v2
+        # honors strict dedup the same way v1 does. Redo recovery still calls
+        # into v1 via create_session_compressor, so this only matters once v2
+        # is reachable from the redo path.
+        assert not strict_dedup_errors or self.vikingdb is not None
 
         tracer.info("Starting v2 memory extraction from conversation")
         tracer.info(f"messages={JsonUtils.dumps(messages)}")
@@ -130,7 +143,7 @@ class SessionCompressorV2:
         lock_manager = None
         transaction_handle = None
         if viking_fs and hasattr(viking_fs, "agfs") and viking_fs.agfs:
-            init_lock_manager(viking_fs.agfs)
+            init_lock_manager(viking_fs.agfs, vikingdb=self.vikingdb)
             lock_manager = get_lock_manager()
             transaction_handle = lock_manager.create_handle()
         else:
@@ -164,28 +177,59 @@ class SessionCompressorV2:
                 logger.debug(f"Memory schema directories to lock: {memory_schema_dirs}")
 
                 retry_interval = config.memory.v2_lock_retry_interval_seconds
-                max_retries = config.memory.v2_lock_max_retries
+                configured_max_retries = config.memory.v2_lock_max_retries
+                effective_max_retries = (
+                    configured_max_retries
+                    if configured_max_retries > 0
+                    else _DEFAULT_SESSION_MEMORY_LOCK_MAX_RETRIES
+                )
+                attempt_timeout = max(
+                    retry_interval,
+                    _DEFAULT_SESSION_MEMORY_LOCK_ATTEMPT_TIMEOUT_SECONDS,
+                )
                 retry_count = 0
+                telemetry.set("memory.lock_retry_interval_seconds", retry_interval)
+                telemetry.set("memory.lock_attempt_timeout_seconds", attempt_timeout)
+                telemetry.set("memory.lock_max_retries_configured", configured_max_retries)
+                telemetry.set("memory.lock_max_retries_effective", effective_max_retries)
+                if configured_max_retries == 0:
+                    logger.warning(
+                        "memory.v2_lock_max_retries=0 is treated as a bounded retry budget "
+                        f"for session extraction (effective_max={effective_max_retries})"
+                    )
 
-                # 循环重试获取锁（机制确保不会死锁）
+                # 循环重试获取锁（机制确保不会死锁，也不会无限等待）
                 while True:
                     lock_acquired = await lock_manager.acquire_subtree_batch(
                         transaction_handle,
                         memory_schema_dirs,
-                        timeout=None,
+                        timeout=attempt_timeout,
                     )
                     if lock_acquired:
+                        telemetry.set("memory.lock_retries", retry_count)
+                        telemetry.set("memory.lock_timeout", False)
+                        if retry_count > 0:
+                            logger.info(
+                                "Acquired memory locks after retries "
+                                f"(attempts={retry_count + 1})"
+                            )
                         break
                     retry_count += 1
-                    if max_retries > 0 and retry_count >= max_retries:
+                    if retry_count >= effective_max_retries:
+                        telemetry.set("memory.lock_retries", retry_count)
+                        telemetry.set("memory.lock_timeout", True)
                         raise TimeoutError(
                             "Failed to acquire memory locks after "
-                            f"{retry_count} retries (max={max_retries})"
+                            f"{retry_count} retries (configured_max={configured_max_retries}, "
+                            f"effective_max={effective_max_retries}, "
+                            f"attempt_timeout_seconds={attempt_timeout})"
                         )
 
                     logger.warning(
                         "Failed to acquire memory locks, retrying "
-                        f"(attempt={retry_count}, max={max_retries or 'unlimited'})..."
+                        f"(attempt={retry_count}, configured_max={configured_max_retries}, "
+                        f"effective_max={effective_max_retries}, "
+                        f"attempt_timeout_seconds={attempt_timeout})..."
                     )
                     if retry_interval > 0:
                         await asyncio.sleep(retry_interval)

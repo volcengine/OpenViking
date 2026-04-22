@@ -181,6 +181,67 @@ class _SingleAccountBackend:
             logger.error("Error creating collection %s: %s", name, e)
             return False
 
+    async def ensure_collection_schema(self, schema: Dict[str, Any]) -> bool:
+        if not await self.collection_exists():
+            return False
+
+        coll = self._get_collection()
+        meta = self._get_meta_data(coll)
+        changed = False
+
+        current_fields = list(meta.get("Fields", []) or [])
+        current_by_name = {
+            field.get("FieldName"): (index, field)
+            for index, field in enumerate(current_fields)
+            if field.get("FieldName")
+        }
+        merged_fields = list(current_fields)
+        for desired_field in schema.get("Fields", []) or []:
+            field_name = desired_field.get("FieldName")
+            if not field_name:
+                continue
+            current_item = current_by_name.get(field_name)
+            if current_item is None:
+                merged_fields.append(desired_field)
+                changed = True
+                continue
+            current_index, current_field = current_item
+            if any(current_field.get(key) != value for key, value in desired_field.items()):
+                merged_fields[current_index] = desired_field
+                changed = True
+
+        if changed:
+            coll.update(fields=merged_fields, description=schema.get("Description"))
+            self._refresh_meta_data(coll)
+
+        desired_scalar_index = self._adapter.sanitize_scalar_index_fields(
+            scalar_index_fields=list(schema.get("ScalarIndex", []) or []),
+            fields_meta=merged_fields,
+        )
+        try:
+            index_meta = coll.get_index_meta_data(self._index_name) or {}
+            current_scalar_index = list(index_meta.get("ScalarIndex", []) or [])
+        except Exception:
+            current_scalar_index = []
+
+        merged_scalar_index = list(current_scalar_index)
+        for field_name in desired_scalar_index:
+            if field_name not in merged_scalar_index:
+                merged_scalar_index.append(field_name)
+                changed = True
+
+        if merged_scalar_index != current_scalar_index:
+            coll.update_index(self._index_name, merged_scalar_index)
+
+        if changed:
+            logger.info(
+                "Ensured collection schema for %s includes fields=%s scalar_index=%s",
+                self._collection_name,
+                [field.get("FieldName") for field in merged_fields],
+                merged_scalar_index,
+            )
+        return changed
+
     async def drop_collection(self) -> bool:
         try:
             dropped = self._adapter.drop_collection()
@@ -591,6 +652,76 @@ class VikingVectorIndexBackend:
 
     async def create_collection(self, name: str, schema: Dict[str, Any]) -> bool:
         return await self._get_default_backend().create_collection(name, schema)
+
+    def _get_collection(self) -> Collection:
+        return self._get_default_backend()._get_collection()
+
+    def _get_meta_data(self, coll: Collection) -> Dict[str, Any]:
+        return self._get_default_backend()._get_meta_data(coll)
+
+    def _refresh_meta_data(self, coll: Collection) -> None:
+        self._get_default_backend()._refresh_meta_data(coll)
+
+    async def ensure_collection_schema(self, schema: Dict[str, Any]) -> bool:
+        if not await self.collection_exists():
+            return False
+
+        coll = self._get_collection()
+        meta = self._get_meta_data(coll)
+        changed = False
+
+        current_fields = list(meta.get("Fields", []) or [])
+        current_by_name = {
+            field.get("FieldName"): (index, field)
+            for index, field in enumerate(current_fields)
+            if field.get("FieldName")
+        }
+        merged_fields = list(current_fields)
+        for desired_field in schema.get("Fields", []) or []:
+            field_name = desired_field.get("FieldName")
+            if not field_name:
+                continue
+            current_item = current_by_name.get(field_name)
+            if current_item is None:
+                merged_fields.append(desired_field)
+                changed = True
+                continue
+            current_index, current_field = current_item
+            if any(current_field.get(key) != value for key, value in desired_field.items()):
+                merged_fields[current_index] = desired_field
+                changed = True
+
+        if changed:
+            coll.update(fields=merged_fields, description=schema.get("Description"))
+            self._refresh_meta_data(coll)
+
+        desired_scalar_index = self._get_default_backend()._adapter.sanitize_scalar_index_fields(
+            scalar_index_fields=list(schema.get("ScalarIndex", []) or []),
+            fields_meta=merged_fields,
+        )
+        try:
+            index_meta = coll.get_index_meta_data(self._index_name) or {}
+            current_scalar_index = list(index_meta.get("ScalarIndex", []) or [])
+        except Exception:
+            current_scalar_index = []
+
+        merged_scalar_index = list(current_scalar_index)
+        for field_name in desired_scalar_index:
+            if field_name not in merged_scalar_index:
+                merged_scalar_index.append(field_name)
+                changed = True
+
+        if merged_scalar_index != current_scalar_index:
+            coll.update_index(self._index_name, merged_scalar_index)
+
+        if changed:
+            logger.info(
+                "Ensured collection schema for %s includes fields=%s scalar_index=%s",
+                self._collection_name,
+                [field.get("FieldName") for field in merged_fields],
+                merged_scalar_index,
+            )
+        return changed
 
     async def drop_collection(self) -> bool:
         return await self._get_default_backend().drop_collection()

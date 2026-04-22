@@ -3,7 +3,6 @@
 """Sessions endpoints for OpenViking HTTP Server."""
 
 import logging
-import re
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, Path, Query, Request
@@ -12,13 +11,11 @@ from pydantic import BaseModel, model_validator
 from openviking.message.part import TextPart, part_from_dict
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
-from openviking.server.identity import AuthMode, RequestContext, Role
+from openviking.server.identity import AuthMode, RequestContext
 from openviking.server.models import ErrorInfo, Response
-from openviking_cli.exceptions import InvalidArgumentError
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
 logger = logging.getLogger(__name__)
-_ROLE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
 class TextPartRequest(BaseModel):
@@ -116,30 +113,9 @@ def _resolve_message_role_id(
     if request.role not in {"user", "assistant"}:
         return request.role_id
 
-    role_id_provided = "role_id" in request.model_fields_set
-    allow_explicit_role_id = _request_auth_mode(http_request) == AuthMode.TRUSTED or ctx.role in {
-        Role.ROOT,
-        Role.ADMIN,
-    }
-    if not allow_explicit_role_id and role_id_provided:
-        raise InvalidArgumentError(
-            "USER requests cannot explicitly set role_id; it is derived from the request context."
-        )
-
-    role_id = request.role_id if allow_explicit_role_id else None
+    role_id = request.role_id
     if not role_id:
         role_id = ctx.user.user_id if request.role == "user" else ctx.user.agent_id
-
-    if not _ROLE_ID_PATTERN.match(role_id):
-        raise InvalidArgumentError("role_id must be alpha-numeric string.")
-
-    if request.role == "user":
-        api_key_manager = getattr(http_request.app.state, "api_key_manager", None)
-        has_user = getattr(api_key_manager, "has_user", None)
-        if callable(has_user) and not has_user(ctx.account_id, role_id):
-            raise InvalidArgumentError(
-                f"role_id '{role_id}' is not a registered user in account '{ctx.account_id}'."
-            )
 
     return role_id
 
@@ -185,16 +161,8 @@ async def get_session(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get session details."""
-    from openviking_cli.exceptions import NotFoundError
-
     service = get_service()
-    try:
-        session = await service.sessions.get(session_id, _ctx, auto_create=auto_create)
-    except NotFoundError:
-        return Response(
-            status="error",
-            error=ErrorInfo(code="NOT_FOUND", message=f"Session {session_id} not found"),
-        )
+    session = await service.sessions.get(session_id, _ctx, auto_create=auto_create)
     result = session.meta.to_dict()
     result["user"] = session.user.to_dict()
     pending_tokens = sum(len(m.content) // 4 for m in session.messages)
