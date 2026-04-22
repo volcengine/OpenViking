@@ -539,12 +539,6 @@ export const memoryOpenVikingConfigSchema = {
       help: "Include resources (viking://resources) in auto-recall and default memory_recall search. Enables account-level shared knowledge retrieval.",
       advanced: true,
     },
-    recallPath: {
-      label: "Recall Path",
-      placeholder: DEFAULT_RECALL_PATH,
-      advanced: true,
-      help: '"assemble" keeps memory injection inside the context-engine path; "hook" preserves legacy before_prompt_build recall.',
-    },
     recallLimit: {
       label: "Recall Limit",
       placeholder: String(DEFAULT_RECALL_LIMIT),

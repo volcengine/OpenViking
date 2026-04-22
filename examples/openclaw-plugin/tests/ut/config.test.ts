@@ -156,12 +156,6 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     ).toThrow('recallPath must be "assemble" or "hook"');
   });
 
-  it("throws on invalid recallPath", () => {
-    expect(() =>
-      memoryOpenVikingConfigSchema.parse({ recallPath: "legacy" }),
-    ).toThrow('recallPath must be "assemble" or "hook"');
-  });
-
   it("local mode auto-generates baseUrl from port", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({
       mode: "local",
