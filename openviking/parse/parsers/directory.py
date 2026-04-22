@@ -94,7 +94,14 @@ class DirectoryParser(BaseParser):
             )
             from openviking.parse.parsers.code.code import CodeRepositoryParser
 
-            await self._add_git_metadata(source_path, kwargs)
+            # Don't add git metadata if we already have _source_meta from DataAccessor
+            # This is crucial:
+            #   1. _source_meta already contains repo_name in org/repo format from GitAccessor
+            #   2. kwargs also has original_source with the full GitHub/GitLab URL
+            #   3. Calling _add_git_metadata would overwrite repo_name with just directory name
+            #      and lose the org prefix!
+            if "_source_meta" not in kwargs:
+                await self._add_git_metadata(source_path, kwargs)
             return await CodeRepositoryParser().parse(str(source_path), instruction, **kwargs)
 
         dir_name = kwargs.get("source_name") or source_path.name

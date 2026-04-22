@@ -136,14 +136,20 @@ class CodeRepositoryParser(BaseParser):
 
         try:
             # Get metadata from DataAccessor
+            # _source_meta comes from GitAccessor and contains:
+            #   - repo_name: in "org/repo" format (e.g. "volcengine/OpenViking")
+            #   - repo_ref: branch name if specified
+            #   - repo_commit: commit hash if specified
             source_meta = kwargs.get("_source_meta", {})
             repo_name = source_meta.get("repo_name", "repository")
             branch = source_meta.get("repo_ref")
             commit = source_meta.get("repo_commit")
 
             # If repo_name is still default, try to extract from original source
+            # original_source is the full GitHub/GitLab URL that the user provided
+            # (e.g. "https://github.com/volcengine/OpenViking")
             if repo_name == "repository":
-                original_source = source_meta.get("original_source") or kwargs.get(
+                original_source = kwargs.get("original_source") or source_meta.get(
                     "original_source"
                 )
                 if original_source:
@@ -176,7 +182,17 @@ class CodeRepositoryParser(BaseParser):
             )
 
             # Use original URL as source_path instead of local temp dir for proper org/repo parsing in TreeBuilder
-            original_source = source_meta.get("original_source") or kwargs.get("original_source")
+            # source_path is CRITICAL:
+            #   1. TreeBuilder uses source_path to parse org/repo via parse_code_hosting_url()
+            #   2. If source_path is a local path (like /tmp/.../OpenViking), parsing fails
+            #   3. If source_path is the original GitHub URL (https://github.com/volcengine/OpenViking),
+            #      TreeBuilder can correctly extract "volcengine/OpenViking"
+            #
+            # Priority order:
+            #   1. First check kwargs["original_source"] - this is set by media_processor
+            #   2. Then check source_meta (rarely has it)
+            #   3. Fall back to local path only as last resort
+            original_source = kwargs.get("original_source") or source_meta.get("original_source")
             result = create_parse_result(
                 root=root,
                 source_path=original_source or str(source),
@@ -196,8 +212,9 @@ class CodeRepositoryParser(BaseParser):
 
         except Exception as e:
             logger.error(f"Failed to parse repository {source}: {e}", exc_info=True)
-            # Use original URL for error case as well
-            original_source = source_meta.get("original_source") or kwargs.get("original_source")
+            # Use original URL for error case as well - still important for TreeBuilder
+            # Even on failure, we want TreeBuilder to potentially get org/repo from the URL
+            original_source = kwargs.get("original_source") or source_meta.get("original_source")
             return create_parse_result(
                 root=ResourceNode(type=NodeType.ROOT, content_path=None),
                 source_path=original_source or str(source),
