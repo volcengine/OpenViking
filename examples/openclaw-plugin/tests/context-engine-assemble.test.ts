@@ -134,10 +134,10 @@ describe("context-engine assemble()", () => {
           { type: "text", text: "I checked the latest context." },
           { type: "text", text: "User prefers concise answers." },
           {
-            type: "toolUse",
+            type: "toolCall",
             id: "tool_123",
             name: "read_file",
-            input: { path: "src/app.ts" },
+            arguments: { path: "src/app.ts" },
           },
         ],
       },
@@ -190,10 +190,10 @@ describe("context-engine assemble()", () => {
       role: "assistant",
       content: [
         {
-          type: "toolUse",
+          type: "toolCall",
           id: "tool_running",
           name: "bash",
-          input: { command: "npm test" },
+          arguments: { command: "npm test" },
         },
       ],
     });
