@@ -41,7 +41,9 @@ def _get_allowed_code_hosting_domains() -> set[str]:
         allowed.update(
             {
                 "github.com",
+                "www.github.com",
                 "gitlab.com",
+                "www.gitlab.com",
                 "dev.azure.com",
                 "ssh.dev.azure.com",
                 "vs-ssh.visualstudio.com",
