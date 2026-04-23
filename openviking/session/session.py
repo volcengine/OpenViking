@@ -440,6 +440,7 @@ class Session:
 
         # Use filesystem-based distributed lock so this works across workers/processes.
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
+        live_message_count = 0
         async with LockContext(get_lock_manager(), [session_path], lock_mode="point"):
             # Authoritative check under lock: handles the race where two concurrent
             # callers both passed the pre-check but only the first should archive.
@@ -460,12 +461,22 @@ class Session:
 
             try:
                 await self._write_to_agfs_async(messages=[])
+                live_message_count = await self._read_live_message_count(fallback_to_memory=False)
             except Exception as e:
                 # Rollback: restore messages so they aren't lost
-                logger.error(f"[commit] Failed to write empty messages.jsonl: {e}")
+                logger.error(f"[commit] Failed to clear live messages.jsonl durably: {e}")
                 self._messages.extend(messages_to_archive)
                 self._compression.compression_index -= 1
                 raise
+
+            if live_message_count != 0:
+                self._messages.extend(messages_to_archive)
+                self._compression.compression_index -= 1
+                raise FailedPreconditionError(
+                    f"Session {self.session_id} live messages.jsonl still contains "
+                    f"{live_message_count} messages after commit clear.",
+                    details={"live_message_count": live_message_count},
+                )
         # Lock released — live session is now clean.
         # Any add_message() from here appends to the fresh empty list.
 
@@ -481,7 +492,7 @@ class Session:
                 ctx=self.ctx,
             )
 
-        self._meta.message_count = 0
+        self._meta.message_count = live_message_count
         await self._save_meta()
 
         self._compression.original_count += len(messages_to_archive)
@@ -1176,7 +1187,7 @@ class Session:
         self._meta = latest_meta
         await self._save_meta()
 
-    async def _read_live_message_count(self) -> int:
+    async def _read_live_message_count(self, fallback_to_memory: bool = True) -> int:
         """Count current live session messages from persisted storage."""
         if not self._viking_fs:
             return len(self._messages)
@@ -1186,7 +1197,9 @@ class Session:
                 ctx=self.ctx,
             )
         except Exception:
-            return len(self._messages)
+            if fallback_to_memory:
+                return len(self._messages)
+            raise
         return len([line for line in content.strip().split("\n") if line.strip()])
 
     def _extract_abstract_from_summary(self, summary: str) -> str:
