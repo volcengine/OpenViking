@@ -122,7 +122,7 @@ class FeishuChannel(BaseChannel):
         self._CHAT_MEMBER_CACHE_MAX_CHATS = 30
         self._CHAT_MEMBER_FETCH_COOLDOWN_SEC = 60
         self._CHAT_MEMBER_FETCH_PAGE_SIZE = 100
-        self._CHAT_MEMBER_FETCH_MAX_PAGES = 300
+        self._CHAT_MEMBER_FETCH_MAX_PAGES = 500
 
     async def _get_tenant_access_token(self) -> str:
         """Get tenant access token for Feishu API."""
@@ -867,6 +867,7 @@ class FeishuChannel(BaseChannel):
 
         try:
             members = await self._fetch_chat_members(chat_id)
+            logger.debug(f"{chat_id} members length: {len(members)}")
             self._save_chat_member_cache(chat_id, members)
             return members.get(open_id)
         except Exception as e:
