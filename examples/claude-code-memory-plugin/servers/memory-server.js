@@ -25,7 +25,7 @@ import { createHash } from "node:crypto";
 // When no config file exists and no env-var override enables the plugin,
 // the server exits silently (code 0) so Claude Code is not disrupted.
 // ---------------------------------------------------------------------------
-import { readFileSync } from "node:fs";
+import { readFileSync, appendFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 const DEFAULT_OV_CONF_PATH = join(homedir(), ".openviking", "ov.conf");
@@ -111,6 +111,14 @@ const config = {
     recallLimit: Math.max(1, Math.floor(num(cc.recallLimit, 6))),
     scoreThreshold: Math.min(1, Math.max(0, num(cc.scoreThreshold, 0.01))),
 };
+// ---------------------------------------------------------------------------
+// MCP tool call logging (opt-in via OPENVIKING_MCP_CALL_LOG env var)
+// ---------------------------------------------------------------------------
+const MCP_CALL_LOG = process.env.OPENVIKING_MCP_CALL_LOG || join(process.env.HOME || homedir(), ".openviking", "logs", "mcp-calls.log");
+try { mkdirSync(MCP_CALL_LOG.replace(/\/[^/]+$/, ""), { recursive: true }); } catch {}
+function logMcpCall(tool, meta) {
+    try { appendFileSync(MCP_CALL_LOG, JSON.stringify({ ts: new Date().toISOString(), tool, ...meta }) + "\n"); } catch {}
+}
 // ---------------------------------------------------------------------------
 // OpenViking HTTP Client (ported from openclaw-plugin/client.ts)
 // ---------------------------------------------------------------------------
@@ -476,6 +484,7 @@ server.tool("memory_recall", "Search long-term memories from OpenViking. Use whe
     score_threshold: z.number().optional().describe("Min relevance score 0-1 (default: 0.01)"),
     target_uri: z.string().optional().describe("Search scope URI, e.g. viking://user/memories"),
 }, async ({ query, limit, score_threshold, target_uri }) => {
+    logMcpCall("memory_recall", { query: query?.slice(0, 80) });
     const recallLimit = limit ?? config.recallLimit;
     const threshold = score_threshold ?? config.scoreThreshold;
     const candidateLimit = Math.max(recallLimit * 4, 20);
@@ -558,6 +567,7 @@ server.tool("search_context", "Search OpenViking context (memories, resources, s
         .describe("Which context type to search (default: all)"),
     limit: z.number().optional().describe("Max results per scope (default: 6)"),
 }, async ({ query, scope, limit }) => {
+    logMcpCall("search_context", { query: query?.slice(0, 80), scope });
     const perLimit = limit ?? config.recallLimit;
     const scopes = scope && scope !== "all"
         ? [scope]
@@ -618,6 +628,7 @@ server.tool("search_context", "Search OpenViking context (memories, resources, s
 server.tool("read_context", "Read the full body behind a viking:// URI. Use after search_context or after seeing an <openviking-context> hint block.", {
     uri: z.string().describe("viking:// URI to read"),
 }, async ({ uri }) => {
+    logMcpCall("read_context", { uri });
     try {
         const body = await client.read(uri);
         const text = typeof body === "string" ? body : JSON.stringify(body);
@@ -639,6 +650,7 @@ server.tool("read_context", "Read the full body behind a viking:// URI. Use afte
 server.tool("list_context", "List entries under a viking:// directory URI (e.g. viking://resources or viking://agent/memories). Use for navigation when the URI structure is not known.", {
     uri: z.string().describe("viking:// directory URI to list"),
 }, async ({ uri }) => {
+    logMcpCall("list_context", { uri });
     try {
         const entries = await client.lsUri(uri);
         if (!Array.isArray(entries) || entries.length === 0) {
