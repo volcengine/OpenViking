@@ -422,6 +422,30 @@ async def test_add_resource_accepts_temp_uploaded_file(
     assert body["result"]["root_uri"].startswith("viking://")
 
 
+async def test_add_resource_accepts_legacy_target_field(
+    client: httpx.AsyncClient,
+    upload_temp_dir,
+):
+    upload_resp = await client.post(
+        "/api/v1/resources/temp_upload",
+        files={"file": ("sample.md", b"# upload\n", "text/markdown")},
+    )
+    temp_file_id = upload_resp.json()["result"]["temp_file_id"]
+
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": temp_file_id,
+            "target": "viking://resources/legacy-target.md",
+            "reason": "legacy console payload",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["root_uri"] == "viking://resources/legacy-target.md"
+
+
 async def test_add_resource_rejects_temp_file_id_directory(
     client: httpx.AsyncClient,
     upload_temp_dir,
