@@ -237,10 +237,7 @@ class TestCommit:
         with pytest.raises(FailedPreconditionError, match="unresolved failed archive"):
             await session.commit_async()
 
-
-    async def test_commit_rolls_back_when_live_messages_not_cleared(
-        self, client: AsyncOpenViking
-    ):
+    async def test_commit_rolls_back_when_live_messages_not_cleared(self, client: AsyncOpenViking):
         """Commit must fail if persisted live messages.jsonl stays non-empty."""
         session = client.session(session_id="commit_durability_guard")
         session.add_message("user", [TextPart("First round message")])
@@ -263,4 +260,7 @@ class TestCommit:
 
         assert len(session.messages) == initial_message_count
         assert session._compression.compression_index == 0
-        assert await session._read_live_message_count(fallback_to_memory=False) == initial_message_count
+        assert (
+            await session._read_live_message_count(fallback_to_memory=False)
+            == initial_message_count
+        )
