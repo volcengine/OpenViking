@@ -13,7 +13,7 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass
 
-from .account_context import get_metric_account_context
+from openviking.observability.context import get_root_observability_context
 
 UNKNOWN_ACCOUNT_ID = "__unknown__"
 OVERFLOW_ACCOUNT_ID = "__overflow__"
@@ -96,7 +96,8 @@ class MetricAccountContextResolver:
         if explicit_account_id and str(explicit_account_id).strip():
             return str(explicit_account_id).strip()
 
-        http_account_id = get_metric_account_context().http_account_id
+        root_context = get_root_observability_context()
+        http_account_id = root_context.account_id if root_context is not None else None
         if http_account_id and str(http_account_id).strip():
             return str(http_account_id).strip()
 

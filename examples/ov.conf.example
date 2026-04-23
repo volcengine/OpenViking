@@ -5,16 +5,49 @@
     "root_api_key": null,
     "cors_origins": ["*"],
     "observability": {
-      "metrics": {
-        "enabled": true,
-        "account_dimension": {
-          "enabled": true,
-          "max_active_accounts": 100,
-          "metric_allowlist": [
-            "openviking_*"
-          ]
+        "metrics": {
+            "enabled": true,
+            "account_dimension": {
+                "enabled": true,
+                "max_active_accounts": 100,
+                "metric_allowlist": [
+                    "openviking_*"
+                ]
+            },
+            "exporters": {
+                "prometheus": {
+                    "enabled": true
+                },
+                "otel": {
+                    "enabled": false,
+                    "protocol": "grpc",
+                    "tls": {
+                        "insecure": false
+                    },
+                    "endpoint": "localhost:4317",
+                    "service_name": "openviking-server",
+                    "export_interval_ms": 10000
+                }
+            }
+        },
+        "traces": {
+            "enabled": false,
+            "protocol": "grpc",
+            "tls": {
+                "insecure": false
+            },
+            "endpoint": "localhost:4317",
+            "service_name": "openviking-server"
+        },
+        "logs": {
+            "enabled": false,
+            "protocol": "grpc",
+            "tls": {
+                "insecure": false
+            },
+            "endpoint": "localhost:4317",
+            "service_name": "openviking-server"
         }
-      }
     }
   },
   "storage": {

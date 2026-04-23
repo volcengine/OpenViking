@@ -7,8 +7,8 @@ from typing import Optional
 
 from fastapi import Depends, Header, Request
 
-from openviking.metrics.account_context import set_metric_account_context
 from openviking.server.identity import AuthMode, RequestContext, ResolvedIdentity, Role
+from openviking.telemetry.span_models import update_root_span_identity
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     PermissionDeniedError,
@@ -192,8 +192,14 @@ async def get_request_context(
             else identity.namespace_policy
         ),
     )
-    request.state.metric_account_id = ctx.account_id
-    set_metric_account_context(account_id=ctx.account_id)
+    # Update the unified root observability context after authentication succeeds.
+    update_root_span_identity(
+        request_state=request.state,
+        account_id=identity.account_id,
+        user_id=identity.user_id,
+        agent_id=identity.agent_id,
+    )
+
     return ctx
 
 

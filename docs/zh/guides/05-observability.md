@@ -269,6 +269,61 @@ curl -X POST http://localhost:1933/api/v1/search/find \
 ```
 改完配置后需要**重启 OpenViking Server** 才会生效。
 
+### observability 配置层级
+
+OpenViking 将信号级别的可观测性配置统一放在 `server.observability` 下：
+
+- `server.observability.metrics`：metrics 子系统与 exporter 配置
+- `server.observability.traces`：trace 导出配置
+- `server.observability.logs`：log 导出配置
+
+示例：
+
+```json
+{
+  "server": {
+    "observability": {
+      "metrics": {
+        "enabled": true,
+        "exporters": {
+          "prometheus": {
+            "enabled": true
+          },
+          "otel": {
+            "enabled": true,
+            "protocol": "grpc",
+            "tls": {
+              "insecure": true
+            },
+            "endpoint": "otel-collector:4317",
+            "service_name": "openviking-server",
+            "export_interval_ms": 10000
+          }
+        }
+      },
+      "traces": {
+        "enabled": true,
+        "protocol": "grpc",
+        "tls": {
+          "insecure": true
+        },
+        "endpoint": "otel-collector:4317",
+        "service_name": "openviking-server"
+      },
+      "logs": {
+        "enabled": true,
+        "protocol": "grpc",
+        "tls": {
+          "insecure": true
+        },
+        "endpoint": "otel-collector:4317",
+        "service_name": "openviking-server"
+      }
+    }
+  }
+}
+```
+
 完整字段、支持范围和更多示例见：
 
 - [指标](../concepts/12-metrics.md) 

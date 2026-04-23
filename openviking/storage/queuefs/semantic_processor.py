@@ -9,9 +9,9 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from openviking.core.namespace import agent_space_fragment, user_space_fragment
-from openviking.metrics.account_context import (
-    bind_metric_account_context,
-    reset_metric_account_context,
+from openviking.observability.context import (
+    bind_root_observability_context,
+    reset_root_observability_context,
 )
 from openviking.parse.parsers.constants import (
     CODE_EXTENSIONS,
@@ -33,6 +33,7 @@ from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecuto
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import bind_telemetry, bind_telemetry_stage, resolve_telemetry
+from openviking.telemetry.span_models import create_root_span_attributes
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.circuit_breaker import (
     CircuitBreaker,
@@ -274,7 +275,16 @@ class SemanticProcessor(DequeueHandlerBase):
             collector = resolve_telemetry(msg.telemetry_id)
             telemetry_ctx = bind_telemetry(collector) if collector is not None else nullcontext()
             with telemetry_ctx:
-                metric_account_token = bind_metric_account_context(account_id=msg.account_id)
+                root_attrs = create_root_span_attributes(
+                    http_method="QUEUE",
+                    http_route=msg.context_type or "/queuefs/semantic",
+                    request_id=msg.telemetry_id or msg.id,
+                    url_path=msg.uri,
+                )
+                root_attrs.account_id = msg.account_id
+                root_attrs.user_id = msg.user_id
+                root_attrs.agent_id = msg.agent_id
+                root_context_token = bind_root_observability_context(root_attrs)
                 try:
                     self._current_msg = msg
                     self._current_ctx = self._ctx_from_semantic_msg(msg)
@@ -337,7 +347,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     self._circuit_breaker.record_success()
                     return None
                 finally:
-                    reset_metric_account_context(metric_account_token)
+                    reset_root_observability_context(root_context_token)
 
         except Exception as e:
             error_class = classify_api_error(e)

@@ -270,6 +270,61 @@ Add the following to `~/.openviking/ov.conf` (or the path passed via `--config`)
 
 Restart OpenViking Server after editing the config.
 
+### Observability config hierarchy
+
+OpenViking groups signal-level observability configuration under `server.observability`:
+
+- `server.observability.metrics`: metrics subsystem and exporters
+- `server.observability.traces`: trace export configuration
+- `server.observability.logs`: log export configuration
+
+Example:
+
+```json
+{
+  "server": {
+    "observability": {
+      "metrics": {
+        "enabled": true,
+        "exporters": {
+          "prometheus": {
+            "enabled": true
+          },
+          "otel": {
+            "enabled": true,
+            "protocol": "grpc",
+            "tls": {
+              "insecure": true
+            },
+            "endpoint": "otel-collector:4317",
+            "service_name": "openviking-server",
+            "export_interval_ms": 10000
+          }
+        }
+      },
+      "traces": {
+        "enabled": true,
+        "protocol": "grpc",
+        "tls": {
+          "insecure": true
+        },
+        "endpoint": "otel-collector:4317",
+        "service_name": "openviking-server"
+      },
+      "logs": {
+        "enabled": true,
+        "protocol": "grpc",
+        "tls": {
+          "insecure": true
+        },
+        "endpoint": "otel-collector:4317",
+        "service_name": "openviking-server"
+      }
+    }
+  }
+}
+```
+
 For full fields, supported ranges, and more examples, see:
 
 - [Metrics](../concepts/12-metrics.md)

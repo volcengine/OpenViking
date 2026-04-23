@@ -368,6 +368,48 @@ scrape_configs:
 - `server.observability.metrics.enabled`：指标体系总开关
 - `server.observability.metrics.account_dimension`：控制 `account_id` 标签是否启用以及启用范围
 
+### Exporters 配置
+
+默认情况下，OpenViking 会通过 Prometheus exposition 格式在 `/metrics` 输出指标。
+如果希望在保留 `/metrics` 的同时把同一份进程内指标导出到 OTLP 后端，可以在 `server.observability.metrics.exporters` 下启用 exporter。
+
+关键字段：
+
+- `server.observability.metrics.exporters.prometheus.enabled`：是否启用 Prometheus exporter（提供 `/metrics`）
+- `server.observability.metrics.exporters.otel.enabled`：是否启用 OTLP 导出（复用同一份 registry）
+- `server.observability.metrics.exporters.otel.protocol`：`"grpc"` 或 `"http"`
+- `server.observability.metrics.exporters.otel.tls.insecure`：仅对 OTLP/gRPC 生效；`true` 表示明文连接（无 TLS）
+- `server.observability.metrics.exporters.otel.endpoint`：OTLP 端点（gRPC 用 `host:4317`；HTTP 必须是完整 URL）
+
+示例：
+
+```json
+{
+  "server": {
+    "observability": {
+      "metrics": {
+        "enabled": true,
+        "exporters": {
+          "prometheus": {
+            "enabled": true
+          },
+          "otel": {
+            "enabled": true,
+            "protocol": "grpc",
+            "tls": {
+              "insecure": true
+            },
+            "endpoint": "otel-collector:4317",
+            "service_name": "openviking-server",
+            "export_interval_ms": 10000
+          }
+        }
+      }
+    }
+  }
+}
+```
+
 ### `account_id` 标签的使用建议
 
 - 默认开启，但仅对白名单指标启用（`metric_allowlist` 为空时仍会输出为 `__unknown__`）

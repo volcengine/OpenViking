@@ -45,6 +45,7 @@ from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
 from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.utils import get_logger
+from openviking_cli.utils.logger import init_otel_log_handler_from_server_config
 
 logger = get_logger(__name__)
 
@@ -129,17 +130,18 @@ def create_app(
         task_tracker = get_task_tracker()
         task_tracker.start_cleanup_loop()
 
-        # Initialize tracer
+        # Initialize tracing and OTLP log export from server.observability.
         from openviking.telemetry import tracer_module
 
-        tracer_module.init_tracer_from_config()
+        tracer_module.init_tracer_from_server_config(config)
+        init_otel_log_handler_from_server_config(config)
 
         yield
 
         # Cleanup
-        from openviking.metrics.global_api import shutdown_metrics
+        from openviking.metrics.global_api import shutdown_metrics_async
 
-        shutdown_metrics(app=app)
+        await shutdown_metrics_async(app=app)
         task_tracker.stop_cleanup_loop()
         if owns_service and service:
             try:
@@ -168,22 +170,43 @@ def create_app(
         allow_headers=["*"],
     )
 
-    # Add request timing middleware
+    # Add HTTP observability middleware first (metrics, tracing)
+    # Note: In FastAPI/Starlette, middleware added later executes first (outer layer).
+    # We want timing to be the outermost layer to measure the full request duration.
+    from openviking.observability.http_observability_middleware import (
+        create_http_observability_middleware,
+    )
+
+    http_observability_middleware = create_http_observability_middleware()
+
+    @app.middleware("http")
+    async def add_http_observability(request: Request, call_next: Callable):
+        return await http_observability_middleware(request, call_next)
+
+    # Add request timing middleware last (so it executes first as the outermost layer)
+    # This ensures X-Process-Time includes the full request duration including
+    # observability middleware overhead.
     @app.middleware("http")
     async def add_timing(request: Request, call_next: Callable):
-        start_time = time.time()
+        """
+        Middleware to measure request processing time.
+
+        This middleware is added last so it executes as the outermost layer,
+        ensuring X-Process-Time includes the full request duration including
+        all other middleware overhead.
+
+        Args:
+            request: The incoming HTTP request.
+            call_next: The next middleware/handler in the chain.
+
+        Returns:
+            The response with X-Process-Time header added.
+        """
+        start_time = time.perf_counter()
         response = await call_next(request)
-        process_time = time.time() - start_time
+        process_time = time.perf_counter() - start_time
         response.headers["X-Process-Time"] = str(process_time)
         return response
-
-    from openviking.metrics.http_middleware import create_http_metrics_middleware
-
-    http_metrics_middleware = create_http_metrics_middleware()
-
-    @app.middleware("http")
-    async def add_http_metrics(request: Request, call_next: Callable):
-        return await http_metrics_middleware(request, call_next)
 
     # Add exception handler for OpenVikingError
     @app.exception_handler(OpenVikingError)

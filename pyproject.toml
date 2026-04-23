@@ -75,6 +75,7 @@ dependencies = [
     "opentelemetry-api>=1.14",
     "opentelemetry-sdk>=1.14",
     "opentelemetry-exporter-otlp-proto-grpc>=1.14",
+    "opentelemetry-exporter-otlp-proto-http>=1.14",
     "opentelemetry-instrumentation-asyncio>=0.61b0",
     "loguru>=0.7.3",
     "cryptography>=42.0.0",

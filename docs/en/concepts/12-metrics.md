@@ -365,6 +365,48 @@ Recommended mental model:
 - `server.observability.metrics.enabled`: master switch for the metrics subsystem
 - `server.observability.metrics.account_dimension`: controls whether `account_id` labels are enabled and where they are allowed
 
+### Exporters
+
+By default, OpenViking exports metrics via Prometheus exposition format at `/metrics`.
+You can also enable additional exporters under `server.observability.metrics.exporters`.
+
+Key fields:
+
+- `server.observability.metrics.exporters.prometheus.enabled`: enable the Prometheus exporter (serves `/metrics`)
+- `server.observability.metrics.exporters.otel.enabled`: enable OTLP export from the same in-process registry
+- `server.observability.metrics.exporters.otel.protocol`: `"grpc"` or `"http"`
+- `server.observability.metrics.exporters.otel.tls.insecure`: OTLP/gRPC only; `true` means plaintext (no TLS)
+- `server.observability.metrics.exporters.otel.endpoint`: OTLP endpoint (for gRPC, use `host:4317`; for HTTP, use a full URL)
+
+Example:
+
+```json
+{
+  "server": {
+    "observability": {
+      "metrics": {
+        "enabled": true,
+        "exporters": {
+          "prometheus": {
+            "enabled": true
+          },
+          "otel": {
+            "enabled": true,
+            "protocol": "grpc",
+            "tls": {
+              "insecure": true
+            },
+            "endpoint": "otel-collector:4317",
+            "service_name": "openviking-server",
+            "export_interval_ms": 10000
+          }
+        }
+      }
+    }
+  }
+}
+```
+
 ### Recommended `account_id` Usage
 
 - enabled by default, but only allowlisted metric families will receive tenant ids (empty allowlist still yields `__unknown__`)

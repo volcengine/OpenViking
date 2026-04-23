@@ -17,6 +17,9 @@ only layer allowed to write into MetricRegistry, keeping the architecture consis
 
 from __future__ import annotations
 
+import asyncio
+import inspect
+import logging
 import threading
 from typing import Optional
 
@@ -41,12 +44,49 @@ from .collectors.telemetry_bridge import TelemetryBridgeCollector
 from .collectors.vlm import VLMCollector
 from .core.registry import MetricRegistry
 from .core.runtime import EventCollectorRouter
+from .exporters.otel import OTelMetricExporter
 from .exporters.prometheus import PrometheusExporter
+
+logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
 _registry: Optional[MetricRegistry] = None
-_exporter: Optional[PrometheusExporter] = None
+_exporters: list = []
 _event_router: EventCollectorRouter | None = None
+
+
+def _shutdown_exporters_best_effort(exporters: list) -> None:
+    """Shutdown exporters without raising.
+
+    This is used both for explicit shutdown and for re-initialization, to avoid leaking
+    background tasks (e.g. OTel periodic export loops) across multiple init cycles.
+
+    Note: This is a synchronous function. For proper async shutdown in async contexts,
+    use `shutdown_metrics_async()` instead, which properly awaits async shutdown methods.
+    """
+    for exporter in exporters:
+        if hasattr(exporter, "shutdown"):
+            try:
+                result = exporter.shutdown()
+                if inspect.isawaitable(result):
+                    try:
+                        loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        # No running event loop - use asyncio.run() to execute the coroutine
+                        asyncio.run(result)
+                    else:
+                        # There is a running event loop. We cannot block-wait from within
+                        # the event loop thread (would cause deadlock). Instead, schedule
+                        # the shutdown as a task and rely on the async shutdown path
+                        # (shutdown_metrics_async) for proper cleanup in async contexts.
+                        #
+                        # This is best-effort for synchronous re-initialization paths.
+                        # The proper async shutdown path is used in app.py's lifespan.
+                        loop.create_task(result)
+            except Exception as e:
+                logger.warning(
+                    "[_shutdown_exporters_best_effort] failed to shutdown exporter: %s", e
+                )
 
 
 def configure_metric_account_dimension(
@@ -76,29 +116,34 @@ def init_metrics_from_server_config(
     config: ServerConfig, *, app=None, service=None, registry: MetricRegistry | None = None
 ) -> None:
     """
-    Initialize the process-global metrics registry, router, and exporter from server config.
+    Initialize the process-global metrics registry, router, and exporters from server config.
 
     When metrics are enabled:
     - Creates a MetricRegistry (or uses provided one)
     - Registers default collectors (State/Probe/DomainStats)
     - Builds the in-process event router for Event-style metrics
-    - Creates PrometheusExporter and stores it in app.state.metrics_exporter
+    - Creates configured exporters and stores them in app.state.metrics_exporters
     When metrics are disabled:
     - Clears all global metrics state
     - Resets account-dimension runtime to its disabled defaults
-    - Detaches any exporter reference previously stored on `app.state`
+    - Detaches any exporter references previously stored on `app.state`
     """
     enabled = config.observability.metrics.enabled
-    global _registry, _exporter, _event_router
+    global _registry, _exporters, _event_router
     with _lock:
         if not enabled:
+            _shutdown_exporters_best_effort(_exporters)
             _registry = None
-            _exporter = None
+            _exporters = []
             _event_router = None
             reset_metric_account_dimension()
             if app is not None:
-                app.state.metrics_exporter = None
+                app.state.metrics_exporters = []
             return
+
+        # If re-initializing while already enabled, clean up existing exporters first.
+        if _exporters:
+            _shutdown_exporters_best_effort(_exporters)
         account_dimension = config.observability.metrics.account_dimension
         configure_metric_account_dimension(
             enabled=account_dimension.enabled,
@@ -108,26 +153,75 @@ def init_metrics_from_server_config(
         _registry = registry or MetricRegistry()
         collector_manager = create_default_collector_manager(app=app, service=service)
         _event_router = _build_event_router(_registry)
-        _exporter = PrometheusExporter(registry=_registry, collector_manager=collector_manager)
+
+        _exporters = []
+        exporters_config = config.observability.metrics.exporters
+
+        # Initialize Prometheus exporter if enabled
+        if exporters_config.prometheus.enabled:
+            prometheus_exporter = PrometheusExporter(
+                registry=_registry, collector_manager=collector_manager
+            )
+            _exporters.append(prometheus_exporter)
+
+        # Initialize OTel exporter if enabled
+        if exporters_config.otel.enabled:
+            otel_exporter = OTelMetricExporter(
+                registry=_registry,
+                collector_manager=collector_manager,
+                protocol=exporters_config.otel.protocol,
+                insecure=exporters_config.otel.tls.insecure,
+                endpoint=exporters_config.otel.endpoint,
+                service_name=exporters_config.otel.service_name,
+                export_interval_ms=exporters_config.otel.export_interval_ms,
+                enabled=True,
+            )
+            otel_exporter.start()
+            _exporters.append(otel_exporter)
+
         if app is not None:
-            app.state.metrics_exporter = _exporter
+            app.state.metrics_exporters = _exporters
 
 
 def shutdown_metrics(*, app=None) -> None:
     """
-    Clear all process-global metrics objects and detach the exporter from the application.
+    Clear all process-global metrics objects and detach the exporters from the application.
 
     Shutdown is intentionally idempotent so tests and service teardown paths can call it
     repeatedly without needing to coordinate current metrics initialization state.
     """
-    global _registry, _exporter, _event_router
+    global _registry, _exporters, _event_router
     with _lock:
+        _shutdown_exporters_best_effort(_exporters)
+
         _registry = None
-        _exporter = None
+        _exporters = []
         _event_router = None
         reset_metric_account_dimension()
         if app is not None:
-            app.state.metrics_exporter = None
+            app.state.metrics_exporters = []
+
+
+async def shutdown_metrics_async(*, app=None) -> None:
+    """Async variant of `shutdown_metrics` that awaits async exporter cleanup."""
+    global _registry, _exporters, _event_router
+    with _lock:
+        exporters = list(_exporters)
+        _registry = None
+        _exporters = []
+        _event_router = None
+        reset_metric_account_dimension()
+        if app is not None:
+            app.state.metrics_exporters = []
+
+    for exporter in exporters:
+        if hasattr(exporter, "shutdown"):
+            try:
+                result = exporter.shutdown()
+                if inspect.isawaitable(result):
+                    await result
+            except Exception as e:
+                logger.warning("[shutdown_metrics_async] failed to shutdown exporter: %s", e)
 
 
 def get_metrics_registry() -> MetricRegistry:
