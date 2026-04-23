@@ -6,8 +6,131 @@ SERVER_HEALTH_URL="${SERVER_URL}/health"
 CONSOLE_PORT="${OPENVIKING_CONSOLE_PORT:-8020}"
 CONSOLE_HOST="${OPENVIKING_CONSOLE_HOST:-0.0.0.0}"
 WITH_BOT="${OPENVIKING_WITH_BOT:-1}"
+CONFIG_FILE="${OPENVIKING_CONFIG_FILE:-/app/conf/ov.conf}"
+DATA_DIR="${OPENVIKING_DATA_DIR:-/app/data}"
+CONFIG_WAIT_SECONDS="${OPENVIKING_CONFIG_WAIT_SECONDS:-5}"
 SERVER_PID=""
 CONSOLE_PID=""
+PENDING_PID=""
+
+export OPENVIKING_CONFIG_FILE="${CONFIG_FILE}"
+export OPENVIKING_DATA_DIR="${DATA_DIR}"
+
+stop_pending_server() {
+    if [ -n "${PENDING_PID}" ] && kill -0 "${PENDING_PID}" 2>/dev/null; then
+        kill "${PENDING_PID}" 2>/dev/null || true
+        wait "${PENDING_PID}" 2>/dev/null || true
+    fi
+    PENDING_PID=""
+}
+
+print_init_instructions() {
+    cat >&2 <<EOF
+[openviking-console-entrypoint] OpenViking is waiting for initialization.
+
+Required persistent paths:
+  config: ${CONFIG_FILE}
+  data:   ${DATA_DIR}
+
+Mount persistent storage for both paths, then initialize the config inside the container:
+  mkdir -p "$(dirname "${CONFIG_FILE}")" "${DATA_DIR}"
+  openviking-server init
+
+If your platform supports only one persistent volume, mount it at ${DATA_DIR}
+and set OPENVIKING_CONFIG_FILE=${DATA_DIR}/conf/ov.conf.
+If you create ov.conf manually, set storage.workspace to "${DATA_DIR}".
+This container exposes a pending /health endpoint until ${CONFIG_FILE} exists.
+EOF
+}
+
+start_pending_http_server() {
+    python - <<'PY'
+import http.server
+import json
+import os
+import socketserver
+
+host = os.environ.get("OPENVIKING_PENDING_HEALTH_HOST", "0.0.0.0")
+port = int(os.environ.get("OPENVIKING_PENDING_HEALTH_PORT", "1933"))
+config_file = os.environ["OPENVIKING_CONFIG_FILE"]
+data_dir = os.environ["OPENVIKING_DATA_DIR"]
+
+
+def payload():
+    return {
+        "status": "pending_initialization",
+        "message": "OpenViking is waiting for persistent config initialization.",
+        "config_file": config_file,
+        "data_dir": data_dir,
+        "next_steps": [
+            "Mount persistent storage for the config and data paths.",
+            f"If only one persistent volume is available, mount it at {data_dir} "
+            f"and set OPENVIKING_CONFIG_FILE={data_dir}/conf/ov.conf.",
+            "Enter the container and run: openviking-server init",
+            f"Ensure ov.conf has storage.workspace set to {data_dir}.",
+        ],
+    }
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def _send_json(self, status_code):
+        body = json.dumps(payload(), ensure_ascii=False, indent=2).encode("utf-8")
+        self.send_response(status_code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        path = self.path.split("?", 1)[0]
+        if path in {"/", "/health"}:
+            self._send_json(200)
+            return
+        if path == "/ready":
+            self._send_json(503)
+            return
+        self._send_json(404)
+
+    def log_message(self, fmt, *args):
+        print("[openviking-pending-health] " + fmt % args, flush=True)
+
+
+class TCPServer(socketserver.TCPServer):
+    allow_reuse_address = True
+
+
+with TCPServer((host, port), Handler) as httpd:
+    print(
+        f"[openviking-pending-health] serving /health on {host}:{port}; "
+        f"waiting for {config_file}",
+        flush=True,
+    )
+    httpd.serve_forever()
+PY
+}
+
+wait_for_config() {
+    mkdir -p "$(dirname "${CONFIG_FILE}")" "${DATA_DIR}"
+    if [ -f "${CONFIG_FILE}" ]; then
+        return
+    fi
+
+    print_init_instructions
+    start_pending_http_server &
+    PENDING_PID=$!
+    trap 'stop_pending_server; exit 0' INT TERM
+
+    while [ ! -f "${CONFIG_FILE}" ]; do
+        if ! kill -0 "${PENDING_PID}" 2>/dev/null; then
+            echo "[openviking-console-entrypoint] pending /health server exited unexpectedly" >&2
+            exit 1
+        fi
+        sleep "${CONFIG_WAIT_SECONDS}"
+    done
+
+    echo "[openviking-console-entrypoint] found ${CONFIG_FILE}; starting OpenViking"
+    stop_pending_server
+}
 
 normalize_with_bot() {
     case "$1" in
@@ -41,6 +164,7 @@ if [ "$#" -gt 0 ]; then
 fi
 
 normalize_with_bot "${WITH_BOT}"
+wait_for_config
 
 forward_signal() {
     if [ -n "${SERVER_PID}" ] && kill -0 "${SERVER_PID}" 2>/dev/null; then

@@ -15,7 +15,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from openviking_cli.utils.config.consts import DEFAULT_CONFIG_DIR
+from openviking_cli.utils.config.consts import (
+    DEFAULT_CONFIG_DIR,
+    OPENVIKING_CONFIG_ENV,
+    OPENVIKING_DATA_DIR_ENV,
+)
 from openviking_cli.utils.ollama import (
     check_ollama_running,
     get_ollama_models,
@@ -553,8 +557,22 @@ def _build_cloud_config(
 # Config I/O
 # ---------------------------------------------------------------------------
 
-_DEFAULT_CONFIG_PATH = DEFAULT_CONFIG_DIR / "ov.conf"
-_DEFAULT_WORKSPACE = str(DEFAULT_CONFIG_DIR / "data")
+def _default_config_path() -> Path:
+    path = os.environ.get(OPENVIKING_CONFIG_ENV)
+    if path:
+        return Path(path).expanduser()
+    return DEFAULT_CONFIG_DIR / "ov.conf"
+
+
+def _default_workspace() -> str:
+    path = os.environ.get(OPENVIKING_DATA_DIR_ENV)
+    if path:
+        return str(Path(path).expanduser())
+    return str(DEFAULT_CONFIG_DIR / "data")
+
+
+_DEFAULT_CONFIG_PATH = _default_config_path()
+_DEFAULT_WORKSPACE = _default_workspace()
 _PIP_LOCAL_EMBED = 'pip install "openviking[local-embed]"'
 
 
@@ -968,9 +986,8 @@ def run_init() -> int:
     """Run the interactive setup wizard."""
     print(f"\n  {_bold('OpenViking Setup')}")
     print(f"  {'=' * 16}\n")
-    print(
-        f"  {_dim('Data will be stored under ~/.openviking/data unless you edit ov.conf later.')}\n"
-    )
+    storage_hint = f"Data will be stored under {_DEFAULT_WORKSPACE} unless you edit ov.conf later."
+    print(f"  {_dim(storage_hint)}\n")
 
     # Check for existing config
     if _DEFAULT_CONFIG_PATH.exists():
@@ -1018,7 +1035,7 @@ def run_init() -> int:
     vlm_summary = _configured_hint(bool(vlm))
     print(f"    VLM:        {vlm_summary}")
     print("    Workspace:  configured (hidden)")
-    print("    Config:     default config location")
+    print(f"    Config:     {_DEFAULT_CONFIG_PATH}")
 
     if not _prompt_confirm("\n  Save configuration?"):
         print("\n  Setup cancelled.\n")

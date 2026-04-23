@@ -111,16 +111,22 @@ WORKDIR /app
 
 COPY --from=py-builder /app/.venv /app/.venv
 COPY docker/openviking-console-entrypoint.sh /usr/local/bin/openviking-console-entrypoint
-RUN chmod +x /usr/local/bin/openviking-console-entrypoint
+RUN mkdir -p /app/conf /app/data \
+ && chmod +x /usr/local/bin/openviking-console-entrypoint
 ENV PATH="/app/.venv/bin:$PATH"
-ENV OPENVIKING_CONFIG_FILE="/app/ov.conf"
-ENV OPENVIKING_CLI_CONFIG_FILE="/app/ovcli.conf"
+ENV OPENVIKING_CONFIG_FILE="/app/conf/ov.conf"
+ENV OPENVIKING_CLI_CONFIG_FILE="/app/conf/ovcli.conf"
+ENV OPENVIKING_DATA_DIR="/app/data"
 
 EXPOSE 1933 8020
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl -fsS http://127.0.0.1:1933/health || exit 1
 
-# Default runs server + console; override command to run CLI, e.g.:
-# docker run --rm -v "$HOME/.openviking/ovcli.conf:/app/ovcli.conf" <image> openviking --help
+# Default runs server + console after /app/conf/ov.conf exists.
+# Mount /app/conf and /app/data on persistent storage in managed platforms.
+# If only one persistent volume is available, mount it at /app/data and set
+# OPENVIKING_CONFIG_FILE=/app/data/conf/ov.conf.
+# Override command to run CLI, e.g.:
+# docker run --rm -v "$HOME/.openviking/ovcli.conf:/app/conf/ovcli.conf" <image> openviking --help
 ENTRYPOINT ["openviking-console-entrypoint"]
