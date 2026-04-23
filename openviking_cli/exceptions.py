@@ -98,9 +98,16 @@ class UnauthenticatedError(OpenVikingError):
 class PermissionDeniedError(OpenVikingError):
     """Permission denied for the requested operation."""
 
-    def __init__(self, message: str = "Permission denied", resource: Optional[str] = None):
-        details = {"resource": resource} if resource else {}
-        super().__init__(message, code="PERMISSION_DENIED", details=details)
+    def __init__(
+        self,
+        message: str = "Permission denied",
+        resource: Optional[str] = None,
+        details: Optional[dict] = None,
+    ):
+        merged_details = dict(details or {})
+        if resource is not None:
+            merged_details.setdefault("resource", resource)
+        super().__init__(message, code="PERMISSION_DENIED", details=merged_details)
 
 
 # ============= Service Errors =============

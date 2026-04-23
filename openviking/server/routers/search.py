@@ -13,6 +13,7 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
+from openviking.server.permissions import require_data_read
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
 from openviking.utils.search_filters import merge_time_filter
@@ -117,6 +118,11 @@ async def find(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Semantic search without session context."""
+    require_data_read(
+        _ctx,
+        operation="search.find",
+        resource=request.target_uri or "viking://",
+    )
     service = get_service()
     actual_limit = _resolve_search_limit(request.limit, request.node_limit)
     effective_filter = _resolve_search_filter(
@@ -154,6 +160,11 @@ async def search(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Semantic search with optional session context."""
+    require_data_read(
+        _ctx,
+        operation="search.search",
+        resource=request.target_uri or "viking://",
+    )
     service = get_service()
     actual_limit = _resolve_search_limit(request.limit, request.node_limit)
     effective_filter = _resolve_search_filter(
@@ -200,6 +211,7 @@ async def grep(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Content search with pattern."""
+    require_data_read(_ctx, operation="search.grep", resource=request.uri)
     service = get_service()
     try:
         result = await service.fs.grep(
@@ -228,6 +240,7 @@ async def glob(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """File pattern matching."""
+    require_data_read(_ctx, operation="search.glob", resource=request.uri)
     service = get_service()
     try:
         result = await service.fs.glob(

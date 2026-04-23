@@ -5,8 +5,17 @@
 
 import httpx
 
+from openviking.server.auth import get_request_context
+from openviking.server.identity import (
+    NO_DATA_ACCESS_PERMISSION_PROFILE_ID,
+    READ_ONLY_PERMISSION_PROFILE_ID,
+    EffectivePermissions,
+    RequestContext,
+    Role,
+)
 from openviking.pyagfs.exceptions import AGFSHTTPError
 from openviking.storage.errors import ResourceBusyError
+from openviking_cli.session.user_id import UserIdentifier
 
 
 async def test_ls_root(client: httpx.AsyncClient):
@@ -208,3 +217,50 @@ async def test_rm_agfs_internal_error_does_not_look_successful(client, service, 
     body = resp.json()
     assert body["status"] == "error"
     assert body["error"]["code"] == "UNAVAILABLE"
+
+
+async def test_ls_requires_data_read_permission(client, app):
+    app.dependency_overrides[get_request_context] = lambda: RequestContext(
+        user=UserIdentifier.the_default_user(),
+        role=Role.USER,
+        permission_profile=NO_DATA_ACCESS_PERMISSION_PROFILE_ID,
+        effective_permissions=EffectivePermissions(data_read=False, data_write=False),
+    )
+    try:
+        resp = await client.get("/api/v1/fs/ls", params={"uri": "viking://"})
+    finally:
+        app.dependency_overrides.pop(get_request_context, None)
+
+    assert resp.status_code == 403
+    body = resp.json()
+    assert body["error"]["code"] == "PERMISSION_DENIED"
+    assert body["error"]["details"] == {
+        "resource": "viking://",
+        "operation": "filesystem.ls",
+        "required_permission": "data.read",
+        "permission_profile": NO_DATA_ACCESS_PERMISSION_PROFILE_ID,
+        "role": "user",
+        "effective_permissions": {"data_read": False, "data_write": False},
+    }
+
+
+async def test_mkdir_requires_data_write_permission(client, app):
+    app.dependency_overrides[get_request_context] = lambda: RequestContext(
+        user=UserIdentifier.the_default_user(),
+        role=Role.USER,
+        permission_profile=READ_ONLY_PERMISSION_PROFILE_ID,
+        effective_permissions=EffectivePermissions(data_read=True, data_write=False),
+    )
+    try:
+        resp = await client.post(
+            "/api/v1/fs/mkdir",
+            json={"uri": "viking://resources/restricted_dir"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_request_context, None)
+
+    assert resp.status_code == 403
+    body = resp.json()
+    assert body["error"]["code"] == "PERMISSION_DENIED"
+    assert body["error"]["details"]["operation"] == "filesystem.mkdir"
+    assert body["error"]["details"]["required_permission"] == "data.write"

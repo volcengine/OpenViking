@@ -8,7 +8,14 @@ from typing import Optional
 from fastapi import Depends, Header, Request
 
 from openviking.metrics.account_context import set_metric_account_context
-from openviking.server.identity import AuthMode, RequestContext, ResolvedIdentity, Role
+from openviking.server.identity import (
+    DEFAULT_PERMISSION_PROFILE_ID,
+    AuthMode,
+    EffectivePermissions,
+    RequestContext,
+    ResolvedIdentity,
+    Role,
+)
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     PermissionDeniedError,
@@ -92,6 +99,7 @@ async def resolve_identity(
             account_id=x_openviking_account or "default",
             user_id=x_openviking_user or "default",
             agent_id=x_openviking_agent or "default",
+            effective_permissions=EffectivePermissions.full_access(),
         )
 
     if auth_mode == AuthMode.TRUSTED:
@@ -114,6 +122,8 @@ async def resolve_identity(
             account_id=x_openviking_account,
             user_id=x_openviking_user,
             agent_id=x_openviking_agent or "default",
+            permission_profile=DEFAULT_PERMISSION_PROFILE_ID,
+            effective_permissions=EffectivePermissions.full_access(),
         )
 
     # AuthMode.API_KEY
@@ -160,6 +170,7 @@ async def get_request_context(
     path = request.url.path
     auth_mode = _auth_mode(request)
     api_key_manager = getattr(request.app.state, "api_key_manager", None)
+    account_policy_resolver = getattr(api_key_manager, "get_account_policy", None)
     if (
         auth_mode == AuthMode.API_KEY
         and api_key_manager is not None
@@ -187,10 +198,12 @@ async def get_request_context(
         ),
         role=identity.role,
         namespace_policy=(
-            api_key_manager.get_account_policy(identity.account_id)
-            if api_key_manager is not None
+            account_policy_resolver(identity.account_id)
+            if callable(account_policy_resolver)
             else identity.namespace_policy
         ),
+        permission_profile=identity.permission_profile,
+        effective_permissions=identity.effective_permissions,
     )
     request.state.metric_account_id = ctx.account_id
     set_metric_account_context(account_id=ctx.account_id)

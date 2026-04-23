@@ -10,7 +10,12 @@ import pytest
 
 from openviking.models.embedder.base import EmbedResult
 from openviking.server.auth import get_request_context
-from openviking.server.identity import RequestContext, Role
+from openviking.server.identity import (
+    NO_DATA_ACCESS_PERMISSION_PROFILE_ID,
+    EffectivePermissions,
+    RequestContext,
+    Role,
+)
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -68,6 +73,29 @@ async def test_find_with_inaccessible_target_uri_returns_permission_denied(
     assert body["status"] == "error"
     assert body["error"]["code"] == "PERMISSION_DENIED"
     assert "Access denied" in body["error"]["message"]
+
+
+async def test_find_requires_data_read_permission(client: httpx.AsyncClient, app):
+    app.dependency_overrides[get_request_context] = lambda: RequestContext(
+        user=UserIdentifier.the_default_user(),
+        role=Role.USER,
+        permission_profile=NO_DATA_ACCESS_PERMISSION_PROFILE_ID,
+        effective_permissions=EffectivePermissions(data_read=False, data_write=False),
+    )
+    try:
+        resp = await client.post(
+            "/api/v1/search/find",
+            json={"query": "sample", "target_uri": "viking://resources", "limit": 5},
+        )
+    finally:
+        app.dependency_overrides.pop(get_request_context, None)
+
+    assert resp.status_code == 403
+    body = resp.json()
+    assert body["error"]["code"] == "PERMISSION_DENIED"
+    assert body["error"]["details"]["operation"] == "search.find"
+    assert body["error"]["details"]["required_permission"] == "data.read"
+    assert body["error"]["details"]["permission_profile"] == NO_DATA_ACCESS_PERMISSION_PROFILE_ID
 
 
 async def test_find_with_score_threshold(client_with_resource):

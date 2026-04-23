@@ -12,7 +12,13 @@ from openviking.server.auth import (
     require_auth_root_or_admin,
 )
 from openviking.server.dependencies import get_service
-from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
+from openviking.server.identity import (
+    DEFAULT_PERMISSION_PROFILE_ID,
+    AccountNamespacePolicy,
+    EffectivePermissions,
+    RequestContext,
+    Role,
+)
 from openviking.server.models import Response
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.exceptions import PermissionDeniedError
@@ -34,10 +40,20 @@ class CreateAccountRequest(BaseModel):
 class RegisterUserRequest(BaseModel):
     user_id: str
     role: str = "user"
+    permission_profile: str = DEFAULT_PERMISSION_PROFILE_ID
 
 
 class SetRoleRequest(BaseModel):
     role: str
+
+
+class UpsertPermissionProfileRequest(BaseModel):
+    data_read: bool = True
+    data_write: bool = False
+
+
+class SetUserPermissionProfileRequest(BaseModel):
+    permission_profile: str
 
 
 def _get_api_key_manager(request: Request):
@@ -161,7 +177,12 @@ async def register_user(
     """Register a new user in an account."""
     _check_account_access(ctx, account_id)
     manager = _get_api_key_manager(request)
-    user_key = await manager.register_user(account_id, body.user_id, body.role)
+    user_key = await manager.register_user(
+        account_id,
+        body.user_id,
+        body.role,
+        permission_profile=body.permission_profile,
+    )
     service = get_service()
     user_ctx = RequestContext(
         user=UserIdentifier(account_id, body.user_id, "default"),
@@ -175,6 +196,7 @@ async def register_user(
             "account_id": account_id,
             "user_id": body.user_id,
             "user_key": user_key,
+            "permission_profile": body.permission_profile,
         },
     )
 
@@ -226,6 +248,81 @@ async def set_user_role(
             "account_id": account_id,
             "user_id": user_id,
             "role": body.role,
+        },
+    )
+
+
+@router.get("/accounts/{account_id}/permission-profiles")
+@require_auth_root_or_admin
+async def list_permission_profiles(
+    request: Request,
+    account_id: str = Path(..., description="Account ID"),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """List assignable built-in and custom permission profiles for an account."""
+    _check_account_access(ctx, account_id)
+    manager = _get_api_key_manager(request)
+    profiles = manager.get_permission_profiles(account_id)
+    return Response(status="ok", result=profiles)
+
+
+@router.put("/accounts/{account_id}/permission-profiles/{profile_id}")
+@require_auth_root_or_admin
+async def upsert_permission_profile(
+    body: UpsertPermissionProfileRequest,
+    request: Request,
+    account_id: str = Path(..., description="Account ID"),
+    profile_id: str = Path(..., description="Permission profile ID"),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Create or update a custom permission profile for an account."""
+    _check_account_access(ctx, account_id)
+    manager = _get_api_key_manager(request)
+    profile = await manager.upsert_permission_profile(
+        account_id,
+        profile_id,
+        permissions=EffectivePermissions(
+            data_read=body.data_read,
+            data_write=body.data_write,
+        ),
+    )
+    return Response(status="ok", result=profile.to_dict())
+
+
+@router.delete("/accounts/{account_id}/permission-profiles/{profile_id}")
+@require_auth_root_or_admin
+async def delete_permission_profile(
+    request: Request,
+    account_id: str = Path(..., description="Account ID"),
+    profile_id: str = Path(..., description="Permission profile ID"),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Delete a custom permission profile from an account."""
+    _check_account_access(ctx, account_id)
+    manager = _get_api_key_manager(request)
+    await manager.delete_permission_profile(account_id, profile_id)
+    return Response(status="ok", result={"deleted": True, "profile_id": profile_id})
+
+
+@router.put("/accounts/{account_id}/users/{user_id}/permission-profile")
+@require_auth_root_or_admin
+async def set_user_permission_profile(
+    body: SetUserPermissionProfileRequest,
+    request: Request,
+    account_id: str = Path(..., description="Account ID"),
+    user_id: str = Path(..., description="User ID"),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Assign a permission profile to a user."""
+    _check_account_access(ctx, account_id)
+    manager = _get_api_key_manager(request)
+    await manager.set_user_permission_profile(account_id, user_id, body.permission_profile)
+    return Response(
+        status="ok",
+        result={
+            "account_id": account_id,
+            "user_id": user_id,
+            "permission_profile": body.permission_profile,
         },
     )
 
