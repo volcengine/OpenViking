@@ -7,13 +7,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Generic, Optional, TypeVar
 
-from openviking_cli.exceptions import InvalidArgumentError
-from openviking_cli.utils import get_logger
-
 from openviking.observability.context import (
     bind_operation_observability_context,
     reset_operation_observability_context,
 )
+from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.utils import get_logger
+
 from .context import bind_telemetry
 from .operation import OperationTelemetry, TelemetrySnapshot
 from .request import TelemetryRequest, TelemetrySelection, normalize_telemetry_request
@@ -202,8 +202,6 @@ async def run_with_telemetry(
         except Exception as exc:
             collector.set_error(operation, type(exc).__name__, str(exc))
             snapshot = collector.finish(status=error_status)
-            # Get updated operation attributes (returns new object, does not modify original)
-            updated_attrs = _fill_operation_context_from_snapshot(operation_attrs, snapshot)
             _log_telemetry_summary(snapshot)
 
             # If a span exists, record exception and backfill summary (best-effort).
@@ -223,8 +221,6 @@ async def run_with_telemetry(
             raise
 
         snapshot = collector.finish(status="ok")
-        # Get updated operation attributes (returns new object, does not modify original)
-        updated_attrs = _fill_operation_context_from_snapshot(operation_attrs, snapshot)
         _log_telemetry_summary(snapshot)
 
         # If a span exists, backfill summary (best-effort).

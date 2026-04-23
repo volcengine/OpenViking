@@ -33,8 +33,8 @@ from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecuto
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import bind_telemetry, bind_telemetry_stage, resolve_telemetry
-from openviking.telemetry.span_models import create_root_span_attributes
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+from openviking.telemetry.span_models import create_root_span_attributes
 from openviking.utils.circuit_breaker import (
     CircuitBreaker,
     CircuitBreakerOpen,

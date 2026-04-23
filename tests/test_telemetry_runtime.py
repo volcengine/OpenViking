@@ -9,6 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from openviking.models.embedder.base import EmbedResult, embed_compat
+from openviking.models.vlm.base import VLMBase
 from openviking.observability.context import (
     bind_operation_observability_context,
     bind_root_observability_context,
@@ -17,8 +19,6 @@ from openviking.observability.context import (
     reset_operation_observability_context,
     reset_root_observability_context,
 )
-from openviking.models.embedder.base import EmbedResult, embed_compat
-from openviking.models.vlm.base import VLMBase
 from openviking.server.identity import RequestContext, Role
 from openviking.service.resource_service import ResourceService
 from openviking.storage.collection_schemas import TextEmbeddingHandler

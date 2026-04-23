@@ -7,17 +7,14 @@ Logging utilities for OpenViking.
 import logging
 import sys
 from contextlib import contextmanager
-from contextvars import ContextVar
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import Any, Optional, Tuple
 from uuid import uuid4
 
 from openviking.observability.context import (
-    get_operation_observability_context,
-    get_observability_context,
-    get_root_observability_context,
     bind_execution_context,
+    get_observability_context,
 )
 
 # Try to import opentelemetry - will be None if not installed

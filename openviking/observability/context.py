@@ -22,9 +22,9 @@ from __future__ import annotations
 import contextvars
 import logging
 import uuid
-from dataclasses import dataclass, field
-from typing import Optional, Dict, Any, Tuple
 from contextlib import contextmanager
+from dataclasses import dataclass, field
+from typing import Any, Dict, Optional
 
 from openviking.telemetry.span_models import OperationSpanAttributes, RootSpanAttributes
 
@@ -310,8 +310,6 @@ def bind_execution_context(
     Yields:
         A tuple of (trace_id, span_id).
     """
-    previous_ctx = _OBSERVABILITY_CONTEXT.get()
-
     # Create new context with execution trace/span IDs
     ctx = ObservabilityContext()
     ctx.bind_execution(trace_id, span_id)

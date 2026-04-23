@@ -17,7 +17,7 @@ Key features:
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional, Sequence, Union
+from typing import Any, Sequence, Union
 
 # Try to import opentelemetry - will be None if not installed
 try:

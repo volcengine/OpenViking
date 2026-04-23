@@ -17,18 +17,17 @@ import time
 import uuid
 from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import Callable, Any, Optional, Awaitable, ContextManager
+from typing import Any, Awaitable, Callable, ContextManager, Optional
 
 from starlette.requests import Request
 from starlette.responses import Response
 
+from openviking.metrics.datasources import HttpRequestLifecycleDataSource
 from openviking.observability.context import (
     bind_root_observability_context,
     reset_root_observability_context,
 )
 from openviking.telemetry.span_models import RootSpanAttributes, create_root_span_attributes
-
-from openviking.metrics.datasources import HttpRequestLifecycleDataSource
 
 # Try to import opentelemetry - will be None if not installed
 try:

@@ -8,10 +8,6 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 import openviking.observability.http_observability_middleware as http_middleware
-from openviking.observability.context import (
-    bind_root_observability_context,
-    reset_root_observability_context,
-)
 from openviking.metrics.collectors.http import HTTPCollector
 from openviking.metrics.core.registry import MetricRegistry
 from openviking.metrics.datasources.base import EventMetricDataSource
@@ -19,13 +15,17 @@ from openviking.metrics.datasources.http import HttpRequestLifecycleDataSource
 from openviking.metrics.datasources.model_usage import VLMEventDataSource
 from openviking.metrics.exporters.prometheus import PrometheusExporter
 from openviking.metrics.global_api import configure_metric_account_dimension, shutdown_metrics
+from openviking.models.vlm.base import VLMBase
+from openviking.observability.context import (
+    bind_root_observability_context,
+    reset_root_observability_context,
+)
 from openviking.observability.http_observability_middleware import (
     _INFLIGHT,
     _get_route_template,
     _inflight_delta,
     create_http_observability_middleware,
 )
-from openviking.models.vlm.base import VLMBase
 from openviking.telemetry.span_models import RootSpanAttributes
 
 

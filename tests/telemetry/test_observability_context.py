@@ -25,18 +25,18 @@ import pytest
 
 from openviking.observability.context import (
     ObservabilityContext,
-    get_observability_context,
-    set_observability_context,
-    reset_observability_context,
-    bind_root_context,
-    bind_operation_context,
     bind_execution_context,
-    get_root_observability_context,
+    bind_operation_context,
+    bind_root_context,
+    get_observability_context,
     get_operation_observability_context,
+    get_root_observability_context,
+    reset_observability_context,
+    set_observability_context,
 )
 from openviking.telemetry.span_models import (
-    RootSpanAttributes,
     OperationSpanAttributes,
+    RootSpanAttributes,
 )
 
 
