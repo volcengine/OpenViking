@@ -530,17 +530,16 @@ viking://session/{session_id}
     - `role = "assistant"` 时，默认填充 `ctx.user.agent_id`
 
 - `USER`
-  - 不接受显式传入的 `role_id`
-  - `role_id` 只能从 `ctx` 推导
-  - 具体规则为：
-    - `role = "user"` 时，写入 `ctx.user.user_id`
-    - `role = "assistant"` 时，写入 `ctx.user.agent_id`
+  - 可以显式传入 `role_id`，服务端以传入值为准
+  - 如果未显式传入：
+    - `role = "user"` 时，默认填充 `ctx.user.user_id`
+    - `role = "assistant"` 时，默认填充 `ctx.user.agent_id`
 
 额外约束：
 
-- `role = "user"` 时，最终写入的 `role_id` 必须是当前 account 下合法的 `user_id`
-- `role = "assistant"` 时，最终写入的 `role_id` 作为 `agent_id` 使用
-- 本阶段不引入独立的 agent registry；因此对 `assistant.role_id` 只做格式和上下文一致性校验
+- `role = "user"` 时，`role_id` 语义表示消息所属的 `user_id`，由调用方保证为当前 account 下合法的 `user_id`
+- `role = "assistant"` 时，`role_id` 作为 `agent_id` 使用
+- 本阶段不引入独立的 agent registry；服务端不对 `role_id` 做格式或上下文一致性校验，语义一致性由调用方承担
 
 ### 4.7 消息持久化结构
 

@@ -282,7 +282,6 @@ class TestCompressorV2:
         user = UserIdentifier.the_default_user()
         ctx = RequestContext(user=user, role=Role.ROOT)
         messages = [Message.create_user("Current task")]
-        captured: dict[str, str] = {}
 
         class DummyOrchestrator:
             registry = object()

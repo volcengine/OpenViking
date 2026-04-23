@@ -256,6 +256,7 @@ class OpenVikingAPIClient:
         path: str,
         to: Optional[str] = None,
         reason: Optional[str] = None,
+        parent: Optional[str] = None,
         wait: bool = False,
     ) -> requests.Response:
         endpoint = "/api/v1/resources"
@@ -273,6 +274,8 @@ class OpenVikingAPIClient:
             payload["to"] = to
         if reason:
             payload["reason"] = reason
+        if parent:
+            payload["parent"] = parent
         if wait:
             payload["wait"] = wait
         try:

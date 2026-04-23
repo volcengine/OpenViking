@@ -503,6 +503,27 @@ class FeishuConfig(ParserConfig):
         30.0  # TODO: not yet passed to lark-oapi client, reserved for future use
     )
 
+    def validate(self) -> None:
+        """
+        Validate configuration.
+
+        Raises:
+            ValueError: If configuration is invalid
+        """
+        super().validate()
+
+        if not self.domain:
+            raise ValueError("domain cannot be empty")
+
+        if self.max_rows_per_sheet <= 0:
+            raise ValueError("max_rows_per_sheet must be positive")
+
+        if self.max_records_per_table <= 0:
+            raise ValueError("max_records_per_table must be positive")
+
+        if self.request_timeout <= 0:
+            raise ValueError("request_timeout must be positive")
+
 
 @dataclass
 class DirectoryConfig(ParserConfig):

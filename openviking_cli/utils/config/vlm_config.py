@@ -1,8 +1,21 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
+import importlib
 from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field, model_validator
+
+
+def _load_codex_auth_module():
+    importlib.import_module("openviking.models.vlm")
+    return importlib.import_module("openviking.models.vlm.backends.codex_auth")
+
+
+def _normalize_provider_name(name: Optional[str]) -> Optional[str]:
+    if not isinstance(name, str):
+        return name
+    cleaned = name.strip().lower()
+    return cleaned or None
 
 
 class VLMConfig(BaseModel):
@@ -72,6 +85,24 @@ class VLMConfig(BaseModel):
 
             if backend is not None and provider is None:
                 data["provider"] = backend
+            data["provider"] = _normalize_provider_name(data.get("provider"))
+            data["backend"] = _normalize_provider_name(data.get("backend"))
+            data["default_provider"] = _normalize_provider_name(data.get("default_provider"))
+            providers = data.get("providers")
+            if isinstance(providers, dict):
+                normalized: Dict[str, Dict[str, Any]] = {}
+                provider_sources: Dict[str, str] = {}
+                for name, config in providers.items():
+                    normalized_name = _normalize_provider_name(name) or str(name)
+                    existing_name = provider_sources.get(normalized_name)
+                    if existing_name is not None and existing_name != str(name):
+                        raise ValueError(
+                            "Duplicate VLM provider config after normalization: "
+                            f"{existing_name} and {name}"
+                        )
+                    normalized[normalized_name] = config
+                    provider_sources[normalized_name] = str(name)
+                data["providers"] = normalized
         return data
 
     @model_validator(mode="after")
@@ -82,7 +113,15 @@ class VLMConfig(BaseModel):
         if self._has_any_config():
             if not self.model:
                 raise ValueError("VLM configuration requires 'model' to be set")
-            if not self._get_effective_api_key():
+            provider_name = self._resolve_provider_name()
+            if provider_name == "openai-codex":
+                has_codex_auth_available = _load_codex_auth_module().has_codex_auth_available
+
+                if not self._get_effective_api_key() and not has_codex_auth_available():
+                    raise ValueError(
+                        "VLM configuration requires Codex OAuth credentials in ~/.openviking/codex_auth.json or an importable Codex CLI auth file"
+                    )
+            elif not self._get_effective_api_key():
                 raise ValueError("VLM configuration requires 'api_key' to be set")
         return self
 
@@ -102,12 +141,10 @@ class VLMConfig(BaseModel):
 
     def _has_any_config(self) -> bool:
         """Check if any config is provided."""
-        if self.api_key or self.model or self.api_base:
+        if self.api_key or self.model or self.api_base or self.provider or self.default_provider:
             return True
         if self.providers:
-            for p in self.providers.values():
-                if p.get("api_key"):
-                    return True
+            return True
         return False
 
     def _get_effective_api_key(self) -> str | None:
@@ -119,22 +156,57 @@ class VLMConfig(BaseModel):
             return config["api_key"]
         return None
 
+    def _get_provider_config_by_name(self, provider_name: str) -> Dict[str, Any]:
+        config = dict(self.providers.get(provider_name) or {})
+        if self.api_key and "api_key" not in config:
+            config["api_key"] = self.api_key
+        if self.api_base and "api_base" not in config:
+            config["api_base"] = self.api_base
+        if self.extra_headers and "extra_headers" not in config:
+            config["extra_headers"] = self.extra_headers
+        if self.stream and "stream" not in config:
+            config["stream"] = self.stream
+        return config
+
+    def _provider_has_usable_credentials(self, provider_name: str, config: Dict[str, Any]) -> bool:
+        if config.get("api_key"):
+            return True
+        if provider_name == "openai-codex":
+            has_codex_auth_available = _load_codex_auth_module().has_codex_auth_available
+
+            return has_codex_auth_available()
+        return False
+
     def _match_provider(self, model: str | None = None) -> tuple[Dict[str, Any] | None, str | None]:
         """Match provider config.
 
         Returns:
             (provider_config_dict, provider_name)
         """
+        del model
         if self.provider:
-            p = self.providers.get(self.provider)
-            if p and p.get("api_key"):
-                return p, self.provider
+            return self._get_provider_config_by_name(self.provider) or {}, self.provider
 
-        for name, config in self.providers.items():
-            if config.get("api_key"):
-                return config, name
+        if self.default_provider:
+            return (
+                self._get_provider_config_by_name(self.default_provider) or {},
+                self.default_provider,
+            )
+
+        if len(self.providers) == 1:
+            provider_name = next(iter(self.providers))
+            return self._get_provider_config_by_name(provider_name), provider_name
+
+        for provider_name in self.providers:
+            config = self._get_provider_config_by_name(provider_name)
+            if self._provider_has_usable_credentials(provider_name, config):
+                return config, provider_name
 
         return None, None
+
+    def _resolve_provider_name(self) -> str | None:
+        _, name = self._match_provider()
+        return name
 
     def get_provider_config(
         self, model: str | None = None
@@ -168,6 +240,7 @@ class VLMConfig(BaseModel):
             "model": self.model,
             "temperature": self.temperature,
             "max_retries": self.max_retries,
+            "timeout": self.timeout,
             "provider": name,
             "thinking": self.thinking,
             "max_tokens": self.max_tokens,
@@ -176,9 +249,12 @@ class VLMConfig(BaseModel):
         }
 
         if config:
-            result["api_key"] = config.get("api_key")
-            result["api_base"] = config.get("api_base")
-            result["extra_headers"] = config.get("extra_headers")
+            if config.get("api_key"):
+                result["api_key"] = config.get("api_key")
+            if config.get("api_base"):
+                result["api_base"] = config.get("api_base")
+            if config.get("extra_headers"):
+                result["extra_headers"] = config.get("extra_headers")
 
         return result
 
@@ -214,6 +290,10 @@ class VLMConfig(BaseModel):
 
     def is_available(self) -> bool:
         """Check if LLM is configured."""
+        if self._resolve_provider_name() == "openai-codex":
+            has_codex_auth_available = _load_codex_auth_module().has_codex_auth_available
+
+            return bool(self._get_effective_api_key() or has_codex_auth_available())
         return self._get_effective_api_key() is not None
 
     def get_vision_completion(

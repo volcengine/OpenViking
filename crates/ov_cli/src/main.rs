@@ -297,6 +297,9 @@ enum Commands {
         /// Append instead of replacing the file
         #[arg(long)]
         append: bool,
+        /// Write mode: replace, append, or create (default: replace)
+        #[arg(long, value_name = "MODE", conflicts_with = "append")]
+        mode: Option<String>,
         /// Wait for async processing to finish
         #[arg(long, default_value = "false")]
         wait: bool,
@@ -877,9 +880,19 @@ async fn main() {
             content,
             from_file,
             append,
+            mode,
             wait,
             timeout,
-        } => handlers::handle_write(uri, content, from_file, append, wait, timeout, ctx).await,
+        } => {
+            let effective_mode = if let Some(m) = mode {
+                m
+            } else if append {
+                "append".to_string()
+            } else {
+                "replace".to_string()
+            };
+            handlers::handle_write(uri, content, from_file, effective_mode, wait, timeout, ctx).await
+        }
         Commands::Reindex {
             uri,
             regenerate,

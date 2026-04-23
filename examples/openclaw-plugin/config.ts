@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { resolve as resolvePath } from "node:path";
+import { getEnv } from "./runtime-utils.js";
 
 export type MemoryOpenVikingConfig = {
   /** "local" = plugin starts OpenViking server as child process (like Claude Code); "remote" = use existing HTTP server */
@@ -11,13 +12,31 @@ export type MemoryOpenVikingConfig = {
   port?: number;
   baseUrl?: string;
   agentId?: string;
+  serverAuthMode?: "api_key" | "trusted";
   apiKey?: string;
+  /** Advanced option. Only needed when using root key or trusted auth mode. With a user key the server derives identity from the key. */
+  accountId?: string;
+  /** Advanced option. Only needed when using root key or trusted auth mode. */
+  userId?: string;
+  /**
+   * Canonical namespace policy. Must match the server-side account namespace
+   * policy because current /system/status does not expose it.
+   */
+  isolateUserScopeByAgent?: boolean;
+  isolateAgentScopeByUser?: boolean;
+  /**
+   * Deprecated compatibility alias for older hash-based agent space behavior.
+   * Prefer isolateUserScopeByAgent / isolateAgentScopeByUser.
+   */
+  agentScopeMode?: "user_agent" | "agent";
   targetUri?: string;
   timeoutMs?: number;
   autoCapture?: boolean;
   captureMode?: "semantic" | "keyword";
   captureMaxLength?: number;
   autoRecall?: boolean;
+  /** Include resources in auto-recall and default memory_recall search. Default false. */
+  recallResources?: boolean;
   recallLimit?: number;
   recallScoreThreshold?: number;
   recallMaxContentChars?: number;
@@ -42,15 +61,16 @@ const DEFAULT_CAPTURE_MODE = "semantic";
 const DEFAULT_CAPTURE_MAX_LENGTH = 24000;
 const DEFAULT_RECALL_LIMIT = 6;
 const DEFAULT_RECALL_SCORE_THRESHOLD = 0.15;
-const DEFAULT_RECALL_MAX_CONTENT_CHARS = 500;
+const DEFAULT_RECALL_MAX_CONTENT_CHARS = 5000;
 const DEFAULT_RECALL_PREFER_ABSTRACT = true;
-const DEFAULT_RECALL_TOKEN_BUDGET = 2000;
+const DEFAULT_RECALL_TOKEN_BUDGET = 8000;
 const DEFAULT_COMMIT_TOKEN_THRESHOLD = 20000;
 const DEFAULT_BYPASS_SESSION_PATTERNS: string[] = [];
 const DEFAULT_EMIT_STANDARD_DIAGNOSTICS = false;
 const DEFAULT_LOCAL_CONFIG_PATH = join(homedir(), ".openviking", "ov.conf");
 
 const DEFAULT_AGENT_ID = "default";
+const DEFAULT_SERVER_AUTH_MODE = "api_key";
 
 function resolveAgentId(configured: unknown): string {
   if (typeof configured === "string" && configured.trim()) {
@@ -61,7 +81,7 @@ function resolveAgentId(configured: unknown): string {
 
 function resolveEnvVars(value: string): string {
   return value.replace(/\$\{([^}]+)\}/g, (_, envVar) => {
-    const envValue = process.env[envVar];
+    const envValue = getEnv(envVar);
     if (!envValue) {
       throw new Error(`Environment variable ${envVar} is not set`);
     }
@@ -100,7 +120,7 @@ function toStringArray(value: unknown, fallback: string[]): string[] {
 
 /** True when env is 1 / true / yes (case-insensitive). Used for debug flags without editing plugin JSON. */
 function envFlag(name: string): boolean {
-  const v = process.env[name];
+  const v = getEnv(name);
   if (v == null || v === "") {
     return false;
   }
@@ -117,7 +137,7 @@ function assertAllowedKeys(value: Record<string, unknown>, allowed: string[], la
 }
 
 function resolveDefaultBaseUrl(): string {
-  const fromEnv = process.env.OPENVIKING_BASE_URL || process.env.OPENVIKING_URL;
+  const fromEnv = getEnv("OPENVIKING_BASE_URL") || getEnv("OPENVIKING_URL");
   if (fromEnv) {
     return fromEnv;
   }
@@ -138,13 +158,20 @@ export const memoryOpenVikingConfigSchema = {
         "port",
         "baseUrl",
         "agentId",
+        "serverAuthMode",
         "apiKey",
+        "accountId",
+        "userId",
+        "isolateUserScopeByAgent",
+        "isolateAgentScopeByUser",
+        "agentScopeMode",
         "targetUri",
         "timeoutMs",
         "autoCapture",
         "captureMode",
         "captureMaxLength",
         "autoRecall",
+        "recallResources",
         "recallLimit",
         "recallScoreThreshold",
         "recallMaxContentChars",
@@ -162,7 +189,7 @@ export const memoryOpenVikingConfigSchema = {
       "openviking config",
     );
 
-    const mode = (cfg.mode === "local" || cfg.mode === "remote" ? cfg.mode : "local") as
+    const mode = (cfg.mode === "local" || cfg.mode === "remote" ? cfg.mode : "remote") as
       | "local"
       | "remote";
     const port = Math.max(1, Math.min(65535, Math.floor(toNumber(cfg.port, DEFAULT_PORT))));
@@ -179,6 +206,10 @@ export const memoryOpenVikingConfigSchema = {
       mode === "local" ? localBaseUrl : (typeof cfg.baseUrl === "string" ? cfg.baseUrl : resolveDefaultBaseUrl());
     const resolvedBaseUrl = resolveEnvVars(rawBaseUrl).replace(/\/+$/, "");
     const rawApiKey = typeof cfg.apiKey === "string" ? cfg.apiKey : process.env.OPENVIKING_API_KEY;
+    const rawServerAuthMode =
+      cfg.serverAuthMode ?? process.env.OPENVIKING_SERVER_AUTH_MODE;
+    const serverAuthMode =
+      rawServerAuthMode === "trusted" ? "trusted" as const : "api_key" as const;
     const captureMode = cfg.captureMode;
     if (
       typeof captureMode !== "undefined" &&
@@ -188,13 +219,60 @@ export const memoryOpenVikingConfigSchema = {
       throw new Error(`openviking captureMode must be "semantic" or "keyword"`);
     }
 
+    const accountId =
+      typeof cfg.accountId === "string" && cfg.accountId.trim()
+        ? cfg.accountId.trim()
+        : (process.env.OPENVIKING_ACCOUNT_ID?.trim() || "");
+    const userId =
+      typeof cfg.userId === "string" && cfg.userId.trim()
+        ? cfg.userId.trim()
+        : (process.env.OPENVIKING_USER_ID?.trim() || "");
+
+    const hasExplicitAgentScopeMode =
+      typeof cfg.agentScopeMode === "string" || process.env.OPENVIKING_AGENT_SCOPE_MODE !== undefined;
+    const rawAgentScope = cfg.agentScopeMode ?? process.env.OPENVIKING_AGENT_SCOPE_MODE;
+    const agentScopeMode =
+      rawAgentScope === "user_agent" ? "user_agent" as const : "agent" as const;
+    const explicitIsolateUserScopeByAgent =
+      typeof cfg.isolateUserScopeByAgent === "boolean"
+        ? cfg.isolateUserScopeByAgent
+        : undefined;
+    const explicitIsolateAgentScopeByUser =
+      typeof cfg.isolateAgentScopeByUser === "boolean"
+        ? cfg.isolateAgentScopeByUser
+        : undefined;
+    const envIsolateUserScopeByAgent =
+      explicitIsolateUserScopeByAgent === undefined &&
+      process.env.OPENVIKING_ISOLATE_USER_SCOPE_BY_AGENT !== undefined
+        ? envFlag("OPENVIKING_ISOLATE_USER_SCOPE_BY_AGENT")
+        : undefined;
+    const envIsolateAgentScopeByUser =
+      explicitIsolateAgentScopeByUser === undefined &&
+      process.env.OPENVIKING_ISOLATE_AGENT_SCOPE_BY_USER !== undefined
+        ? envFlag("OPENVIKING_ISOLATE_AGENT_SCOPE_BY_USER")
+        : undefined;
+    const isolateUserScopeByAgent =
+      explicitIsolateUserScopeByAgent ??
+      envIsolateUserScopeByAgent ??
+      false;
+    const isolateAgentScopeByUser =
+      explicitIsolateAgentScopeByUser ??
+      envIsolateAgentScopeByUser ??
+      (hasExplicitAgentScopeMode && agentScopeMode === "user_agent" ? true : false);
+
     return {
       mode,
       configPath,
       port,
       baseUrl: resolvedBaseUrl,
       agentId: resolveAgentId(cfg.agentId),
+      serverAuthMode,
       apiKey: rawApiKey ? resolveEnvVars(rawApiKey) : "",
+      accountId,
+      userId,
+      isolateUserScopeByAgent,
+      isolateAgentScopeByUser,
+      agentScopeMode,
       targetUri: typeof cfg.targetUri === "string" ? cfg.targetUri : DEFAULT_TARGET_URI,
       timeoutMs: Math.max(1000, Math.floor(toNumber(cfg.timeoutMs, DEFAULT_TIMEOUT_MS))),
       autoCapture: cfg.autoCapture !== false,
@@ -204,6 +282,7 @@ export const memoryOpenVikingConfigSchema = {
         Math.min(200_000, Math.floor(toNumber(cfg.captureMaxLength, DEFAULT_CAPTURE_MAX_LENGTH))),
       ),
       autoRecall: cfg.autoRecall !== false,
+      recallResources: cfg.recallResources === true || envFlag("OPENVIKING_RECALL_RESOURCES"),
       recallLimit: Math.max(1, Math.floor(toNumber(cfg.recallLimit, DEFAULT_RECALL_LIMIT))),
       recallScoreThreshold: Math.min(
         1,
@@ -263,13 +342,48 @@ export const memoryOpenVikingConfigSchema = {
     agentId: {
       label: "Agent ID",
       placeholder: "auto-generated",
-      help: 'OpenViking X-OpenViking-Agent: non-default values combine with OpenClaw ctx.agentId as "<config>_<sessionAgent>" (then sanitized to [a-zA-Z0-9_-]). Use "default" to send only ctx.agentId.',
+      help: 'OpenViking X-OpenViking-Agent. "default" follows OpenClaw ctx.agentId. Non-default values are prepended as "<config>_<ctx.agentId>" (sanitized to [a-zA-Z0-9_-]).',
+    },
+    serverAuthMode: {
+      label: "Server Auth Mode",
+      placeholder: DEFAULT_SERVER_AUTH_MODE,
+      help: 'OpenViking auth behavior. "api_key" (default): send X-API-Key when configured, otherwise dev fallback to X-OpenViking-Account/User default/default. "trusted": always send accountId/userId and optionally send apiKey when configured.',
     },
     apiKey: {
       label: "OpenViking API Key",
       sensitive: true,
       placeholder: "${OPENVIKING_API_KEY}",
       help: "Optional API key for OpenViking server",
+    },
+    accountId: {
+      label: "Account ID",
+      placeholder: "(derived from API key)",
+      help: "Advanced option. Tenant account ID. Only needed when using root key or trusted auth mode. With a user key the server derives identity from the key.",
+      advanced: true,
+    },
+    userId: {
+      label: "User ID",
+      placeholder: "(derived from API key)",
+      help: "Advanced option. Tenant user ID. Only needed when using root key or trusted auth mode.",
+      advanced: true,
+    },
+    isolateUserScopeByAgent: {
+      label: "Isolate User Scope By Agent",
+      placeholder: "false",
+      help: "Canonical namespace policy. false (default): user alias expands to viking://user/<user_id>/... . true: expands to viking://user/<user_id>/agent/<agent_id>/... . Must match the server-side account namespace policy.",
+      advanced: true,
+    },
+    isolateAgentScopeByUser: {
+      label: "Isolate Agent Scope By User",
+      placeholder: "false",
+      help: "Canonical namespace policy. false (default): agent alias expands to viking://agent/<agent_id>/... . true: expands to viking://agent/<agent_id>/user/<user_id>/... . Must match the server-side account namespace policy.",
+      advanced: true,
+    },
+    agentScopeMode: {
+      label: "Deprecated Agent Scope Mode",
+      placeholder: "agent",
+      help: 'Deprecated compatibility alias for older routing behavior. Prefer isolateUserScopeByAgent / isolateAgentScopeByUser. Mapping: explicit "user_agent" => false/true, explicit "agent" => false/false. When fully unset, the plugin defaults to false/false to match the current server-side default policy.',
+      advanced: true,
     },
     targetUri: {
       label: "Search Target URI",
@@ -300,6 +414,11 @@ export const memoryOpenVikingConfigSchema = {
     autoRecall: {
       label: "Auto-Recall",
       help: "Inject relevant OpenViking memories into agent context",
+    },
+    recallResources: {
+      label: "Recall Resources",
+      help: "Include resources (viking://resources) in auto-recall and default memory_recall search. Enables account-level shared knowledge retrieval.",
+      advanced: true,
     },
     recallLimit: {
       label: "Recall Limit",

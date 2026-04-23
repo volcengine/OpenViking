@@ -1,13 +1,13 @@
 #!/bin/bash
 
 # Restart OpenViking Server with Bot API enabled
-# Usage: ./restart_openviking_server.sh [--port PORT] [--bot-url URL]
+# Usage: ./restart_openviking_server.sh [--port PORT] [--bot-port PORT]
 
 set -e
 
 # Default values
 PORT="1933"
-BOT_URL="http://localhost:18790"
+BOT_PORT="18790"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -16,29 +16,22 @@ while [[ $# -gt 0 ]]; do
             PORT="$2"
             shift 2
             ;;
-        --bot-url)
-            BOT_URL="$2"
+        --bot-port)
+            BOT_PORT="$2"
             shift 2
             ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--port PORT] [--bot-url URL]"
+            echo "Usage: $0 [--port PORT] [--bot-port PORT]"
             exit 1
             ;;
     esac
 done
 
-# Parse Bot URL to extract port
-BOT_PORT=$(echo "$BOT_URL" | sed -n 's/.*:\([0-9]*\).*/\1/p')
-if [ -z "$BOT_PORT" ]; then
-    BOT_PORT="18790"
-fi
-
 echo "=========================================="
 echo "Restarting OpenViking Server with Bot API"
 echo "=========================================="
 echo "OpenViking Server Port: $PORT"
-echo "Bot URL: $BOT_URL"
 echo "Bot Port: $BOT_PORT"
 echo ""
 
@@ -88,20 +81,20 @@ echo "  ✓ Port $PORT is free"
 # Step 2: Start openviking-server with --with-bot
 echo ""
 echo "Step 2: Starting openviking-server with Bot API..."
-echo "  Command: openviking-server --with-bot --port $PORT --bot-url $BOT_URL"
+echo "  Command: openviking-server --with-bot --port $PORT --bot-port $BOT_PORT"
 echo ""
 
 # Start in background and log to file
 #nohup openviking-server \
-    --with-bot \
-    --port "$PORT" \
-    --bot-url "$BOT_URL" \
-    > /tmp/openviking-server.log 2>&1 &
+#    --with-bot \
+#    --port "$PORT" \
+#    --bot-port "$BOT_PORT" \
+#    > /tmp/openviking-server.log 2>&1 &
 
 openviking-server \
     --with-bot \
     --port "$PORT" \
-    --bot-url "$BOT_URL"
+    --bot-port "$BOT_PORT"
 
 
 SERVER_PID=$!
@@ -147,7 +140,7 @@ tail -20 /tmp/openviking-server.log 2>/dev/null || echo "(No logs available)"
 echo ""
 echo "Troubleshooting:"
 echo "  1. Check if port $PORT is in use: lsof -i :$PORT"
-echo "  2. Check Vikingbot is running on $BOT_URL"
+echo "  2. Check Vikingbot is running on port $BOT_PORT"
 echo "  3. Check logs: tail -f /tmp/openviking-server.log"
 echo ""
 exit 1

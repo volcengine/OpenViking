@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 import uuid
 from contextlib import AsyncExitStack
@@ -14,7 +15,6 @@ from loguru import logger
 
 from vikingbot.agent.context import ContextBuilder
 from vikingbot.agent.memory import MemoryStore
-from vikingbot.heartbeat.service import HEARTBEAT_METADATA_KEY, is_heartbeat_noop_response
 from vikingbot.agent.subagent import SubagentManager
 from vikingbot.agent.tools import register_default_tools
 from vikingbot.agent.tools.registry import ToolRegistry
@@ -27,6 +27,7 @@ from vikingbot.bus.events import (
 from vikingbot.bus.queue import MessageBus
 from vikingbot.config import load_config
 from vikingbot.config.schema import BotMode, Config, SessionKey
+from vikingbot.heartbeat.service import HEARTBEAT_METADATA_KEY, is_heartbeat_noop_response
 from vikingbot.hooks import HookContext
 from vikingbot.hooks.manager import hook_manager
 from vikingbot.providers.base import LLMProvider
@@ -174,7 +175,7 @@ class AgentLoop:
         if self._mcp_stack:
             try:
                 await self._mcp_stack.aclose()
-            except (RuntimeError, BaseExceptionGroup):
+            except Exception:
                 pass  # MCP SDK cancel scope cleanup is noisy but harmless
             self._mcp_stack = None
         self._mcp_connected = False
@@ -374,7 +375,7 @@ class AgentLoop:
                             "arguments": json.dumps(args),
                         },
                     }
-                    for tc, args in zip(response.tool_calls, args_list)
+                    for tc, args in zip(response.tool_calls, args_list, strict=False)
                 ]
                 messages = self.context.add_assistant_message(
                     messages,
@@ -536,7 +537,9 @@ class AgentLoop:
             # Handle slash commands
             is_group_chat = msg.metadata.get("chat_type") == "group" if msg.metadata else False
             if is_group_chat:
-                cmd = msg.content.replace(f"@{msg.sender_id}", "").strip().lower()
+                cmd = msg.content
+                cmd = re.sub(r"^\[[^\]]+\]:\s*", "", cmd)
+                cmd = cmd.replace(f"@{msg.sender_id}", "").strip().lower()
             else:
                 cmd = msg.content.strip().lower()
             if cmd == "/new":

@@ -31,10 +31,15 @@ except ImportError:
 from vikingbot.bus.events import OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
-from vikingbot.config.schema import FeishuChannelConfig, BotMode
+from vikingbot.config.schema import BotMode, FeishuChannelConfig
 
 try:
     import lark_oapi as lark
+    from lark_oapi.api.contact.v3 import (
+        BatchGetIdUserRequest,
+        BatchGetIdUserRequestBody,
+        GetUserRequest,
+    )
     from lark_oapi.api.im.v1 import (
         CreateMessageReactionRequest,
         CreateMessageReactionRequestBody,
@@ -46,12 +51,7 @@ try:
         GetMessageResourceRequest,
         P2ImMessageReceiveV1,
         ReplyMessageRequest,
-        ReplyMessageRequestBody
-    )
-    from lark_oapi.api.contact.v3 import (
-        GetUserRequest,
-        BatchGetIdUserRequest,
-        BatchGetIdUserRequestBody
+        ReplyMessageRequestBody,
     )
 
     FEISHU_AVAILABLE = True
@@ -188,7 +188,7 @@ class FeishuChannel(BaseChannel):
 
         # Handle failed response
         if not response.success():
-            raw_detail = getattr(getattr(response, 'raw', None), 'content', response.msg)
+            raw_detail = getattr(getattr(response, "raw", None), "content", response.msg)
             raise Exception(
                 f"Failed to download image: code={response.code}, msg={raw_detail}, log_id={response.get_log_id()}"
             )
@@ -215,14 +215,15 @@ class FeishuChannel(BaseChannel):
             return "group"  # 默认普通群
 
         try:
-            request: GetChatRequest = GetChatRequest.builder() \
-                .chat_id(chat_id) \
-                .user_id_type("open_id") \
-                .build()
+            request: GetChatRequest = (
+                GetChatRequest.builder().chat_id(chat_id).user_id_type("open_id").build()
+            )
             response = await self._client.im.v1.chat.aget(request)
             # 处理失败返回
             if not response.success():
-                logger.warning(f"client.im.v1.chat.get failed, code: {response.code}, msg: {response.msg}, log_id: {response.get_log_id()}")
+                logger.warning(
+                    f"client.im.v1.chat.get failed, code: {response.code}, msg: {response.msg}, log_id: {response.get_log_id()}"
+                )
                 return "group"
 
             # 处理业务结果
@@ -672,7 +673,9 @@ class FeishuChannel(BaseChannel):
     async def _download_and_save_image(self, image_key: str, message_id: str) -> str | None:
         """Download single Feishu image and save to local, return file path or None if failed."""
         try:
-            logger.info(f"Downloading Feishu image with image_key: {image_key}, message_id: {message_id}")
+            logger.info(
+                f"Downloading Feishu image with image_key: {image_key}, message_id: {message_id}"
+            )
             image_bytes = await self._download_feishu_image(image_key, message_id)
             if not image_bytes:
                 logger.warning(f"Could not download image for image_key: {image_key}")
@@ -682,6 +685,7 @@ class FeishuChannel(BaseChannel):
             media_dir.mkdir(parents=True, exist_ok=True)
 
             import uuid
+
             file_path = media_dir / f"feishu_{uuid.uuid4().hex[:16]}.png"
             file_path.write_bytes(image_bytes)
 
@@ -690,10 +694,13 @@ class FeishuChannel(BaseChannel):
         except Exception as e:
             logger.warning(f"Failed to download Feishu image {image_key}: {e}")
             import traceback
+
             logger.debug(f"Stack trace: {traceback.format_exc()}")
             return None
 
-    async def _parse_message_content(self, message: Any, msg_type: str, message_id: str) -> tuple[str, list[str]]:
+    async def _parse_message_content(
+        self, message: Any, msg_type: str, message_id: str
+    ) -> tuple[str, list[str]]:
         """Parse message content and extract media files."""
         content = ""
         media = []
@@ -737,8 +744,7 @@ class FeishuChannel(BaseChannel):
                 # Download images in parallel
                 if image_keys:
                     download_tasks = [
-                        self._download_and_save_image(img_key, message_id)
-                        for img_key in image_keys
+                        self._download_and_save_image(img_key, message_id) for img_key in image_keys
                     ]
                     results = await asyncio.gather(*download_tasks)
                     media = [path for path in results if path is not None]
@@ -750,7 +756,9 @@ class FeishuChannel(BaseChannel):
 
         return content, media
 
-    async def _check_should_process(self, chat_type: str, chat_id: str, message: Any, is_mentioned: bool) -> bool:
+    async def _check_should_process(
+        self, chat_type: str, chat_id: str, message: Any, is_mentioned: bool
+    ) -> bool:
         """Check if message should be processed based on group/thread rules."""
         if chat_type != "group":
             return True
@@ -790,7 +798,9 @@ class FeishuChannel(BaseChannel):
             # Directly get user by open_id
             if GetUserRequest:
                 # Use open_id directly with user_id_type="open_id"
-                user_request = GetUserRequest.builder().user_id(open_id).user_id_type("open_id").build()
+                user_request = (
+                    GetUserRequest.builder().user_id(open_id).user_id_type("open_id").build()
+                )
                 user_response = self._client.contact.v3.user.get(user_request)
 
                 if user_response.success() and user_response.data and user_response.data.user:
@@ -904,7 +914,10 @@ class FeishuChannel(BaseChannel):
             self._processed_message_ids[message_id] = None
 
             # 定期清理去重缓存（每100条清理一次，减少开销）
-            if len(self._processed_message_ids) % 100 == 0 and len(self._processed_message_ids) > 1000:
+            if (
+                len(self._processed_message_ids) % 100 == 0
+                and len(self._processed_message_ids) > 1000
+            ):
                 while len(self._processed_message_ids) > 500:
                     self._processed_message_ids.popitem(last=False)
 
@@ -930,14 +943,16 @@ class FeishuChannel(BaseChannel):
             # 5. 检查是否被@
             is_mentioned = False
             bot_name = self.config.bot_name
-            if hasattr(message, 'mentions') and message.mentions and bot_name:
+            if hasattr(message, "mentions") and message.mentions and bot_name:
                 for mention in message.mentions:
-                    if hasattr(mention, 'name') and mention.name == bot_name:
+                    if hasattr(mention, "name") and mention.name == bot_name:
                         is_mentioned = True
                         break
 
             # 6. 检查是否需要处理该消息
-            should_process = await self._check_should_process(chat_type, chat_id, message, is_mentioned)
+            should_process = await self._check_should_process(
+                chat_type, chat_id, message, is_mentioned
+            )
 
             # 7. 添加已读表情
             if should_process:
@@ -947,14 +962,14 @@ class FeishuChannel(BaseChannel):
 
             # 8. 处理@占位符：从 message.mentions 中直接获取 name 和 id
             mention_name_map = {}
-            if hasattr(message, 'mentions') and message.mentions:
+            if hasattr(message, "mentions") and message.mentions:
                 for idx, mention in enumerate(message.mentions):
                     placeholder = f"@_user_{idx + 1}"
-                    if hasattr(mention, 'id') and mention.id and placeholder in content:
+                    if hasattr(mention, "id") and mention.id and placeholder in content:
                         # mention.id 是 UserId 对象，直接取 open_id
                         user_id = mention.id.open_id
                         # 保存 name 供后续使用
-                        if hasattr(mention, 'name') and mention.name:
+                        if hasattr(mention, "name") and mention.name:
                             mention_name_map[user_id] = mention.name
                         # 先替换成 @open_id 格式
                         content = content.replace(placeholder, f"@{user_id}")

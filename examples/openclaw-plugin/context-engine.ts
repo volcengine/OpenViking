@@ -38,6 +38,18 @@ type IngestResult = {
   ingested: boolean;
 };
 
+export function toRoleId(senderId: string | undefined): string | undefined {
+  if (!senderId) {
+    return undefined;
+  }
+  const normalized = senderId
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .replace(/_+/g, "_");
+  return normalized || undefined;
+}
+
 type IngestBatchResult = {
   ingestedCount: number;
 };
@@ -102,6 +114,11 @@ type Logger = {
   info: (msg: string) => void;
   warn?: (msg: string) => void;
   error: (msg: string) => void;
+};
+
+type ExtractedSender = {
+  found: boolean;
+  senderId?: string;
 };
 
 interface ContextBudgets {
@@ -176,7 +193,7 @@ function messageDigest(messages: AgentMessage[], maxCharsPerMsg = 2000): Array<{
       text = (raw as Record<string, unknown>[])
         .map((b) => {
           if (b.type === "text") return String(b.text ?? "");
-          if (b.type === "toolUse") return `[toolUse: ${String(b.name)}(${JSON.stringify(b.arguments ?? {}).slice(0, 200)})]`;
+          if (b.type === "toolCall") return `[toolCall: ${String(b.name)}(${JSON.stringify(b.arguments ?? {}).slice(0, 200)})]`;
           if (b.type === "toolResult") return `[toolResult: ${JSON.stringify(b.content ?? "").slice(0, 200)}]`;
           return `[${String(b.type)}]`;
         })
@@ -211,6 +228,24 @@ function validTokenBudget(raw: unknown): number | undefined {
     return raw;
   }
   return undefined;
+}
+
+function extractRuntimeSenderId(
+  runtimeContext: Record<string, unknown> | undefined,
+): ExtractedSender {
+  if (runtimeContext) {
+    const senderId = runtimeContext.senderId;
+    if (typeof senderId === "string") {
+      const trimmed = senderId.trim();
+      if (trimmed) {
+        return {
+          found: true,
+          senderId: trimmed,
+        };
+      }
+    }
+  }
+  return { found: false };
 }
 
 /** OpenClaw session UUID (path-safe on Windows). */
@@ -266,13 +301,13 @@ export function openClawSessionRefToOvStorageId(ref: string): string {
  * OpenClaw AgentMessages (content-blocks format).
  *
  * For assistant messages with ToolParts, this produces:
- * 1. The assistant message with toolUse blocks in its content array
+ * 1. The assistant message with canonical toolCall blocks in its content array
  * 2. A separate toolResult message per ToolPart (carrying tool_output)
  */
 export function convertToAgentMessages(msg: { role: string; parts: unknown[] }): AgentMessage[] {
   const parts = msg.parts ?? [];
   const contentBlocks: Record<string, unknown>[] = [];
-  const toolUseBlocks: Record<string, unknown>[] = [];
+  const toolCallBlocks: Record<string, unknown>[] = [];
   const toolResults: AgentMessage[] = [];
 
   for (const part of parts) {
@@ -287,32 +322,36 @@ export function convertToAgentMessages(msg: { role: string; parts: unknown[] }):
       }
     } else if (p.type === "tool") {
       const toolId = typeof p.tool_id === "string" ? p.tool_id : "";
-      const toolName = typeof p.tool_name === "string" ? p.tool_name : "unknown";
+      const toolName = typeof p.tool_name === "string" ? p.tool_name : undefined;
       const status = typeof p.tool_status === "string" ? p.tool_status : "unknown";
       const output = typeof p.tool_output === "string" ? p.tool_output : "";
 
       if (toolId) {
-        // Structured path: emit toolUse + toolResult pair (works for any role)
-        toolUseBlocks.push({
-          type: "toolUse",
+        // Structured path: emit canonical toolCall + toolResult pair (works for any role)
+        toolCallBlocks.push({
+          type: "toolCall",
           id: toolId,
-          name: toolName,
-          input: p.tool_input ?? {},
+          name: toolName ?? "unknown",
+          arguments: p.tool_input ?? {},
         });
 
         const resultText = (status === "completed" || status === "error")
           ? (output || "(no output)")
           : "(interrupted — tool did not complete)";
-        toolResults.push({
+        const resultPayload: Record<string, unknown> = {
           role: "toolResult",
           toolCallId: toolId,
-          toolName,
           content: [{ type: "text", text: resultText }],
           isError: status === "error",
-        } as unknown as AgentMessage);
+        };
+        if (toolName) {
+          resultPayload.toolName = toolName;
+        }
+        toolResults.push(resultPayload as unknown as AgentMessage);
       } else {
         // No tool_id: degrade to text block
-        const segments = [`[${toolName}] (${status})`];
+        const fallbackName = toolName ?? "unknown";
+        const segments = [`[${fallbackName}] (${status})`];
         if (p.tool_input) {
           try {
             segments.push(`Input: ${JSON.stringify(p.tool_input)}`);
@@ -331,21 +370,21 @@ export function convertToAgentMessages(msg: { role: string; parts: unknown[] }):
   const result: AgentMessage[] = [];
 
   if (msg.role === "assistant") {
-    // Assistant: text + toolUse in one message, then toolResults
-    result.push({ role: "assistant", content: [...contentBlocks, ...toolUseBlocks] });
+    // Assistant: text + toolCall in one message, then toolResults
+    result.push({ role: "assistant", content: [...contentBlocks, ...toolCallBlocks] });
     result.push(...toolResults);
   } else {
-    // Non-assistant: emit text as original role, then synthesize assistant(toolUse) + toolResult
+    // Non-assistant: emit text as original role, then synthesize assistant(toolCall) + toolResult
     const texts = contentBlocks
       .filter((b) => b.type === "text")
       .map((b) => b.text as string);
     if (texts.length > 0) {
       result.push({ role: msg.role, content: texts.join("\n") });
-    } else if (toolUseBlocks.length === 0) {
+    } else if (toolCallBlocks.length === 0) {
       result.push({ role: msg.role, content: "" });
     }
-    if (toolUseBlocks.length > 0) {
-      result.push({ role: "assistant", content: toolUseBlocks });
+    if (toolCallBlocks.length > 0) {
+      result.push({ role: "assistant", content: toolCallBlocks });
       result.push(...toolResults);
     }
   }
@@ -363,6 +402,85 @@ function normalizeAssistantContent(messages: AgentMessage[]): void {
       };
     }
   }
+}
+
+function canonicalizeAssistantBlock(block: unknown): unknown {
+  if (!block || typeof block !== "object") {
+    return block;
+  }
+
+  const rec = block as Record<string, unknown>;
+  const type = typeof rec.type === "string" ? rec.type : "";
+  if (type === "toolCall") {
+    if (rec.arguments !== undefined) {
+      return rec;
+    }
+    return {
+      ...rec,
+      arguments: rec.input ?? rec.toolInput ?? {},
+    };
+  }
+
+  if (type === "toolUse" || type === "functionCall" || type === "tool_call") {
+    return {
+      type: "toolCall",
+      id: rec.id ?? rec.toolCallId ?? rec.toolUseId,
+      name: rec.name,
+      arguments: rec.arguments ?? rec.input ?? rec.toolInput ?? {},
+    };
+  }
+
+  return rec;
+}
+
+function canonicalizeAgentMessages(messages: AgentMessage[]): AgentMessage[] {
+  let changed = false;
+  const next = messages.map((msg) => {
+    if (!msg || typeof msg !== "object") {
+      return msg;
+    }
+
+    if (msg.role === "assistant") {
+      const content = Array.isArray(msg.content)
+        ? msg.content.map((block) => canonicalizeAssistantBlock(block))
+        : typeof msg.content === "string"
+          ? [{ type: "text", text: msg.content }]
+          : msg.content;
+
+      if (content !== msg.content) {
+        changed = true;
+        return { ...msg, content };
+      }
+      return msg;
+    }
+
+    if (msg.role === "toolResult") {
+      const raw = msg as Record<string, unknown>;
+      const toolCallId =
+        (typeof raw.toolCallId === "string" && raw.toolCallId) ||
+        (typeof raw.toolUseId === "string" && raw.toolUseId) ||
+        undefined;
+      const toolName =
+        typeof raw.toolName === "string" && raw.toolName.trim()
+          ? raw.toolName.trim()
+          : undefined;
+
+      const nextMsg = {
+        ...msg,
+        ...(toolCallId ? { toolCallId } : {}),
+        ...(toolName ? { toolName } : {}),
+      } as AgentMessage;
+
+      if (nextMsg !== msg) {
+        changed = true;
+      }
+      return nextMsg;
+    }
+
+    return msg;
+  });
+
+  return changed ? next : messages;
 }
 
 export function formatMessageFaithful(msg: OVMessage): string {
@@ -761,7 +879,8 @@ export function createMemoryOpenVikingContextEngine(params: {
     );
 
     normalizeAssistantContent(assembled);
-    const sanitized = sanitizeToolUseResultPairing(assembled as never[]) as AgentMessage[];
+    const canonical = canonicalizeAgentMessages(assembled);
+    const sanitized = sanitizeToolUseResultPairing(canonical as never[]) as AgentMessage[];
 
     return { sanitized, archive, session, budgets, instruction };
   }
@@ -790,6 +909,7 @@ export function createMemoryOpenVikingContextEngine(params: {
       const { messages } = assembleParams;
       const tokenBudget = validTokenBudget(assembleParams.tokenBudget) ?? 128_000;
       const sessionKey = extractAssembleSessionKey(assembleParams);
+      const sender = extractRuntimeSenderId(assembleParams.runtimeContext);
 
       const originalTokens = roughEstimate(messages);
 
@@ -805,6 +925,8 @@ export function createMemoryOpenVikingContextEngine(params: {
         inputTokenEstimate: originalTokens,
         tokenBudget,
         sessionKey: sessionKey ?? null,
+        senderIdFound: sender.found,
+        senderId: sender.senderId ?? null,
         messages: messageDigest(messages),
       });
 
@@ -868,6 +990,8 @@ export function createMemoryOpenVikingContextEngine(params: {
           sessionTokens: session.tokens,
           sessionBudget: budgets.sessionContext,
           reservedBudget: budgets.reserved,
+          senderIdFound: sender.found,
+          senderId: sender.senderId ?? null,
           messages: messageDigest(sanitized),
         });
 
@@ -885,6 +1009,8 @@ export function createMemoryOpenVikingContextEngine(params: {
           error: String(err),
           tokenBudget,
           agentId: resolveAgentId(OVSessionId),
+          senderIdFound: sender.found,
+          senderId: sender.senderId ?? null,
         });
         return { messages, estimatedTokens: roughEstimate(messages) };
       }
@@ -900,6 +1026,7 @@ export function createMemoryOpenVikingContextEngine(params: {
       }
 
       try {
+      const sender = extractRuntimeSenderId(afterTurnParams.runtimeContext);
         const sessionKey =
           (typeof afterTurnParams.sessionKey === "string" && afterTurnParams.sessionKey.trim()) ||
           extractSessionKey(afterTurnParams.runtimeContext);
@@ -924,6 +1051,8 @@ export function createMemoryOpenVikingContextEngine(params: {
           diag("afterTurn_skip", OVSessionId, {
             reason: "session_bypassed",
             totalMessages: afterTurnParams.messages?.length ?? 0,
+            senderIdFound: sender.found,
+            senderId: sender.senderId ?? null,
           });
           return;
         }
@@ -933,6 +1062,8 @@ export function createMemoryOpenVikingContextEngine(params: {
           diag("afterTurn_skip", OVSessionId, {
             reason: "no_messages",
             totalMessages: 0,
+            senderIdFound: sender.found,
+            senderId: sender.senderId ?? null,
           });
           return;
         }
@@ -950,6 +1081,8 @@ export function createMemoryOpenVikingContextEngine(params: {
             reason: "no_new_turn_messages",
             totalMessages: messages.length,
             prePromptMessageCount: start,
+            senderIdFound: sender.found,
+            senderId: sender.senderId ?? null,
           });
           return;
         }
@@ -967,6 +1100,8 @@ export function createMemoryOpenVikingContextEngine(params: {
           newMessageCount: newCount,
           prePromptMessageCount: start,
           newTurnTokens,
+          senderIdFound: sender.found,
+          senderId: sender.senderId ?? null,
           messages: newMsgFull,
         });
 
@@ -979,7 +1114,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         }
         const client = await getClient();
         const createdAt = pickLatestCreatedAt(turnMessages);
-
+        const senderRoleId = toRoleId(sender.senderId);
         // 发送结构化消息：统一 role 为 user，通过 parts 区分类型
         for (const msg of extractedMessages) {
           const ovParts = msg.parts.map((part) => {
@@ -1009,6 +1144,7 @@ export function createMemoryOpenVikingContextEngine(params: {
               ovParts,
               agentId,
               createdAt,
+              msg.role === "user" ? senderRoleId : undefined,
             );
           }
         }
@@ -1021,6 +1157,8 @@ export function createMemoryOpenVikingContextEngine(params: {
             reason: "below_threshold",
             pendingTokens,
             commitTokenThreshold: cfg.commitTokenThreshold,
+            senderIdFound: sender.found,
+            senderId: sender.senderId ?? null,
           });
           return;
         }
@@ -1039,6 +1177,8 @@ export function createMemoryOpenVikingContextEngine(params: {
           archived: commitResult.archived ?? false,
           taskId: commitResult.task_id ?? null,
           extractedMemories: totalExtractedMemories(commitResult.memories_extracted),
+          senderIdFound: sender.found,
+          senderId: sender.senderId ?? null,
         });
         if (commitResult.task_id && cfg.logFindRequests) {
           logger.info(
@@ -1057,8 +1197,11 @@ export function createMemoryOpenVikingContextEngine(params: {
         }
       } catch (err) {
         logger.warn?.(`openviking: afterTurn failed: ${String(err)}`);
+        const sender = extractRuntimeSenderId(afterTurnParams.runtimeContext);
         diag("afterTurn_error", afterTurnParams.sessionId ?? "(unknown)", {
           error: String(err),
+          senderIdFound: sender.found,
+          senderId: sender.senderId ?? null,
         });
       }
     },

@@ -100,3 +100,40 @@ def test_litellm_build_kwargs_includes_timeout():
     )
     kwargs = vlm._build_text_kwargs(prompt="hi")
     assert kwargs["timeout"] == 90.0
+
+
+def test_vlm_config_propagates_timeout_to_codex_backend():
+    cfg = VLMConfig(
+        provider="openai-codex",
+        model="gpt-5.3-codex",
+        api_key="oauth-token",
+        api_base="https://example.invalid/codex",
+        timeout=45.0,
+    )
+
+    vlm = cfg.get_vlm_instance()
+
+    assert vlm.timeout == 45.0
+
+
+def test_codex_vlm_propagates_config_timeout():
+    from openviking.models.vlm.backends.codex_vlm import CodexVLM
+    from tests.unit.test_codex_vlm import _build_final_response, _MockResponsesStream
+
+    vlm = CodexVLM(
+        {
+            "provider": "openai-codex",
+            "model": "gpt-5.3-codex",
+            "api_key": "oauth-token",
+            "api_base": "https://example.invalid/codex",
+            "timeout": 45.0,
+        }
+    )
+
+    with mock.patch("openviking.models.vlm.backends.codex_vlm.openai.OpenAI") as fake:
+        fake.return_value.responses.stream.return_value = _MockResponsesStream(
+            _build_final_response("timeout ok")
+        )
+        assert vlm.get_completion("hello") == "timeout ok"
+
+    assert fake.call_args.kwargs.get("timeout") == 45.0

@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type { spawn } from "node:child_process";
 import { once } from "node:events";
 import { createWriteStream } from "node:fs";
@@ -27,6 +27,8 @@ export type FindResult = {
 
 export type CaptureMode = "semantic" | "keyword";
 export type ScopeName = "user" | "agent";
+export type AgentScopeMode = "user_agent" | "agent";
+export type ServerAuthMode = "api_key" | "trusted";
 export type RuntimeIdentity = {
   userId: string;
   agentId: string;
@@ -171,16 +173,19 @@ export const localClientCache = new Map<string, LocalClientCacheEntry>();
 export const localClientPendingPromises = new Map<string, PendingClientEntry>();
 
 const MEMORY_URI_PATTERNS = [
-  /^viking:\/\/user\/(?:[^/]+\/)?memories(?:\/|$)/,
-  /^viking:\/\/agent\/(?:[^/]+\/)?memories(?:\/|$)/,
+  /^viking:\/\/user\/(?:[^/]+(?:\/agent\/[^/]+)?\/)?memories(?:\/|$)/,
+  /^viking:\/\/agent\/(?:[^/]+(?:\/user\/[^/]+)?\/)?memories(?:\/|$)/,
 ];
-const USER_STRUCTURE_DIRS = new Set(["memories"]);
-const AGENT_STRUCTURE_DIRS = new Set(["memories", "skills", "instructions", "workspaces"]);
+const USER_STRUCTURE_DIRS = new Set(["memories", "profile.md", ".abstract.md", ".overview.md"]);
+const AGENT_STRUCTURE_DIRS = new Set([
+  "memories",
+  "skills",
+  "instructions",
+  "workspaces",
+  ".abstract.md",
+  ".overview.md",
+]);
 const REMOTE_RESOURCE_PREFIXES = ["http://", "https://", "git@", "ssh://", "git://"];
-
-function md5Short(input: string): string {
-  return createHash("md5").update(input).digest("hex").slice(0, 12);
-}
 
 export function isMemoryUri(uri: string): boolean {
   return MEMORY_URI_PATTERNS.some((pattern) => pattern.test(uri));
@@ -211,7 +216,6 @@ async function cleanupUploadTempPath(path?: string): Promise<void> {
 }
 
 export class OpenVikingClient {
-  private spaceCache = new Map<string, Partial<Record<ScopeName, string>>>();
   private identityCache = new Map<string, RuntimeIdentity>();
 
   constructor(
@@ -219,15 +223,48 @@ export class OpenVikingClient {
     private readonly apiKey: string,
     private readonly defaultAgentId: string,
     private readonly timeoutMs: number,
+    private readonly serverAuthMode: ServerAuthMode = "api_key",
     /** When set (or defaulted), sent so ROOT key can access tenant-scoped APIs. */
     private readonly accountId: string = "",
     private readonly userId: string = "",
     /** When set, logs routing for find + session writes (tenant headers + paths; never apiKey). */
     private readonly routingDebugLog?: (message: string) => void,
+    private readonly isolateUserScopeByAgent = false,
+    private readonly isolateAgentScopeByUser = true,
   ) {}
 
   getDefaultAgentId(): string {
     return this.defaultAgentId;
+  }
+
+  async getResolvedIdentity(agentId?: string): Promise<RuntimeIdentity> {
+    return this.getRuntimeIdentity(agentId);
+  }
+
+  private resolveTenantHeaders():
+    | { apiKey?: string; accountId?: string; userId?: string }
+  {
+    const apiKey = this.apiKey.trim();
+    const accountId = this.accountId.trim();
+    const userId = this.userId.trim();
+    if (this.serverAuthMode === "trusted") {
+      return {
+        ...(apiKey ? { apiKey } : {}),
+        accountId: accountId || "default",
+        userId: userId || "default",
+      };
+    }
+    if (apiKey) {
+      return {
+        apiKey,
+        ...(accountId ? { accountId } : {}),
+        ...(userId ? { userId } : {}),
+      };
+    }
+    return {
+      accountId: accountId || "default",
+      userId: userId || "default",
+    };
   }
 
   private async emitRoutingDebug(
@@ -240,16 +277,17 @@ export class OpenVikingClient {
     }
     const effectiveAgentId = agentId ?? this.defaultAgentId;
     const identity = await this.getRuntimeIdentity(agentId);
+    const tenantHeaders = this.resolveTenantHeaders();
     this.routingDebugLog(
       `openviking: ${label} ` +
         JSON.stringify({
           ...detail,
           X_OpenViking_Agent: effectiveAgentId,
-          X_OpenViking_Account: this.accountId.trim() || "default",
-          X_OpenViking_User: this.userId.trim() || "default",
+          X_OpenViking_Account: tenantHeaders.accountId ?? null,
+          X_OpenViking_User: tenantHeaders.userId ?? null,
           resolved_user_id: identity.userId,
           session_vfs_hint: detail.sessionId
-            ? `viking://session/${identity.userId}/${String(detail.sessionId)}`
+            ? `viking://session/${String(detail.sessionId)}`
             : undefined,
         }),
     );
@@ -266,11 +304,16 @@ export class OpenVikingClient {
     const timer = setTimeout(() => controller.abort(), requestTimeoutMs ?? this.timeoutMs);
     try {
       const headers = new Headers(init.headers ?? {});
-      if (this.apiKey) {
-        headers.set("X-API-Key", this.apiKey);
+      const tenantHeaders = this.resolveTenantHeaders();
+      if (tenantHeaders.apiKey) {
+        headers.set("X-API-Key", tenantHeaders.apiKey);
       }
-      headers.set("X-OpenViking-Account", this.accountId.trim() || "default");
-      headers.set("X-OpenViking-User", this.userId.trim() || "default");
+      if (tenantHeaders.accountId) {
+        headers.set("X-OpenViking-Account", tenantHeaders.accountId);
+      }
+      if (tenantHeaders.userId) {
+        headers.set("X-OpenViking-User", tenantHeaders.userId);
+      }
       if (effectiveAgentId) {
         headers.set("X-OpenViking-Agent", effectiveAgentId);
       }
@@ -306,14 +349,6 @@ export class OpenVikingClient {
     await this.request<{ status: string }>("/health");
   }
 
-  private async ls(uri: string, agentId?: string): Promise<Array<Record<string, unknown>>> {
-    return this.request<Array<Record<string, unknown>>>(
-      `/api/v1/fs/ls?uri=${encodeURIComponent(uri)}&output=original`,
-      {},
-      agentId,
-    );
-  }
-
   private async getRuntimeIdentity(agentId?: string): Promise<RuntimeIdentity> {
     const effectiveAgentId = agentId ?? this.defaultAgentId;
     const cached = this.identityCache.get(effectiveAgentId);
@@ -334,54 +369,18 @@ export class OpenVikingClient {
     }
   }
 
-  private async resolveScopeSpace(scope: ScopeName, agentId?: string): Promise<string> {
-    const effectiveAgentId = agentId ?? this.defaultAgentId;
-    const agentScopes = this.spaceCache.get(effectiveAgentId);
-    const cached = agentScopes?.[scope];
-    if (cached) {
-      return cached;
-    }
-
+  private async buildCanonicalRoot(scope: ScopeName, agentId?: string): Promise<string> {
     const identity = await this.getRuntimeIdentity(agentId);
-    const fallbackSpace =
-      scope === "user" ? identity.userId : md5Short(`${identity.userId}:${identity.agentId}`);
-    const reservedDirs = scope === "user" ? USER_STRUCTURE_DIRS : AGENT_STRUCTURE_DIRS;
-    const preferredSpace =
-      scope === "user" ? identity.userId : md5Short(`${identity.userId}:${identity.agentId}`);
-
-    const saveSpace = (space: string) => {
-      const existing = this.spaceCache.get(effectiveAgentId) ?? {};
-      existing[scope] = space;
-      this.spaceCache.set(effectiveAgentId, existing);
-    };
-
-    try {
-      const entries = await this.ls(`viking://${scope}`, agentId);
-      const spaces = entries
-        .filter((entry) => entry?.isDir === true)
-        .map((entry) => (typeof entry.name === "string" ? entry.name.trim() : ""))
-        .filter((name) => name && !name.startsWith(".") && !reservedDirs.has(name));
-
-      if (spaces.length > 0) {
-        if (spaces.includes(preferredSpace)) {
-          saveSpace(preferredSpace);
-          return preferredSpace;
-        }
-        if (scope === "user" && spaces.includes("default")) {
-          saveSpace("default");
-          return "default";
-        }
-        if (spaces.length === 1) {
-          saveSpace(spaces[0]!);
-          return spaces[0]!;
-        }
-      }
-    } catch {
-      // Fall back to identity-derived space when listing fails.
+    if (scope === "user") {
+      const root = this.isolateUserScopeByAgent
+        ? `viking://user/${identity.userId}/agent/${identity.agentId}`
+        : `viking://user/${identity.userId}`;
+      return root;
     }
-
-    saveSpace(fallbackSpace);
-    return fallbackSpace;
+    const root = this.isolateAgentScopeByUser
+      ? `viking://agent/${identity.agentId}/user/${identity.userId}`
+      : `viking://agent/${identity.agentId}`;
+    return root;
   }
 
   private async normalizeTargetUri(targetUri: string, agentId?: string): Promise<string> {
@@ -405,8 +404,8 @@ export class OpenVikingClient {
       return trimmed;
     }
 
-    const space = await this.resolveScopeSpace(scope, agentId);
-    return `viking://${scope}/${space}/${parts.join("/")}`;
+    const root = await this.buildCanonicalRoot(scope, agentId);
+    return `${root}/${parts.join("/")}`;
   }
 
   async find(
@@ -427,12 +426,13 @@ export class OpenVikingClient {
     };
     const effectiveAgentId = agentId ?? this.defaultAgentId;
     const identity = await this.getRuntimeIdentity(agentId);
+    const tenantHeaders = this.resolveTenantHeaders();
     this.routingDebugLog?.(
       `openviking: find POST ${this.baseUrl}/api/v1/search/find ` +
         JSON.stringify({
           X_OpenViking_Agent: effectiveAgentId,
-          X_OpenViking_Account: this.accountId.trim() || "default",
-          X_OpenViking_User: this.userId.trim() || "default",
+          X_OpenViking_Account: tenantHeaders.accountId ?? null,
+          X_OpenViking_User: tenantHeaders.userId ?? null,
           resolved_user_id: identity.userId,
           target_uri: normalizedTargetUri,
           target_uri_input: options.targetUri,
@@ -645,14 +645,19 @@ export class OpenVikingClient {
     }>,
     agentId?: string,
     createdAt?: string,
+    roleId?: string,
   ): Promise<void> {
     const body: {
       role: string;
+      role_id?: string;
       parts: typeof parts;
       created_at?: string;
     } = { role, parts };
     if (createdAt) {
       body.created_at = createdAt;
+    }
+    if (roleId) {
+      body.role_id = roleId;
     }
     await this.emitRoutingDebug(
       "session message POST (with parts)",
@@ -660,6 +665,7 @@ export class OpenVikingClient {
         path: `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`,
         sessionId,
         role,
+        role_id: roleId ?? null,
         partCount: parts.length,
         created_at: createdAt ?? null,
       },

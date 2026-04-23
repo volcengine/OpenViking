@@ -1662,7 +1662,7 @@ function bindFind() {
 
 function buildAddResourcePayload() {
   const payload = {
-    target: elements.addResourceTarget.value.trim(),
+    to: elements.addResourceTarget.value.trim(),
     reason: elements.addResourceReason.value.trim(),
     instruction: elements.addResourceInstruction.value.trim(),
     wait: elements.addResourceWait.checked,

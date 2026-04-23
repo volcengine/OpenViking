@@ -51,6 +51,32 @@
 
 这样做是为了支持多 agent、多 session 并发时的记忆隔离，避免不同 OpenClaw 会话串用同一套长期上下文。
 
+默认推荐的远程模式配置只有：
+
+- `baseUrl`
+- `apiKey`
+- `agentId`
+
+其中：
+
+- `apiKey` 推荐使用某个 user 的 user key
+- `accountId` / `userId` 仅在 root key 或 `trusted` 模式下作为高级选项使用
+- 使用 PR #1356 canonical namespace 模型时，`isolateUserScopeByAgent` / `isolateAgentScopeByUser` 必须与服务端 account namespace policy 保持一致
+- `agentScopeMode` 已退化为兼容旧 hash 路由的 deprecated alias，仅应在旧服务端上使用
+
+### Canonical namespace policy
+
+对于包含 PR #1356 的 OpenViking 服务端，插件不再在本地计算 user 或 agent scope hash，而是根据配置的 namespace policy 将别名 URI 展开为 canonical URI：
+
+- `viking://user/memories`
+  - `isolateUserScopeByAgent=false` 时展开为 `viking://user/<user_id>/memories`
+  - `isolateUserScopeByAgent=true` 时展开为 `viking://user/<user_id>/agent/<agent_id>/memories`
+- `viking://agent/memories`
+  - `isolateAgentScopeByUser=false` 时展开为 `viking://agent/<agent_id>/memories`
+  - `isolateAgentScopeByUser=true` 时展开为 `viking://agent/<agent_id>/user/<user_id>/memories`
+
+插件当前无法从 `/api/v1/system/status` 自动发现这两个 policy，因此需要显式配置，使其与服务端 account policy 保持一致。
+
 ## Prompt 前召回链路
 
 ![Prompt 前的自动召回流程](./images/openclaw-plugin-recall-flow.png)
@@ -84,9 +110,9 @@ Session 是这套设计的主轴。当前实现里，它覆盖了“历史组装
 - `latest_archive_overview` 被改写成 `[Session History Summary]`
 - `pre_archive_abstracts` 被改写成 `[Archive Index]`
 - 当前活跃消息保持 message block 形式回放
-- assistant 的 tool part 会被还原成 `toolUse`
+- assistant 的 tool part 会被还原成 `toolCall`（输入兼容 `toolUse`/`input`，输出统一规范为 `toolCall`/`arguments`）
 - tool output 会被拆成独立的 `toolResult`
-- 之后再做一轮 `toolUse/toolResult` 配对修复，降低 transcript 结构不稳定的风险
+- 之后再做一轮 `toolCall/toolResult` 配对修复，降低 transcript 结构不稳定的风险
 
 因此，OpenClaw 拿到的是“压缩后的历史摘要 + archive 索引 + 当前活跃消息”，而不是无限增长的原始 transcript。
 
@@ -96,7 +122,7 @@ Session 是这套设计的主轴。当前实现里，它覆盖了“历史组装
 
 - 只切出本轮新增消息，不重写整段对话
 - 只保留 `user` / `assistant` 相关文本内容
-- 会把 `toolUse` / `toolResult` 格式化进 capture 文本
+- 会把 `toolCall` / `toolResult` 格式化进 capture 文本
 - 会先剥掉注入过的 `<relevant-memories>` 和元数据噪音
 - 最终把清洗后的增量内容追加到 OpenViking session
 

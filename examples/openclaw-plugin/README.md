@@ -51,6 +51,32 @@ The main rules are:
 
 This matters because the plugin is built to support multi-agent and multi-session OpenClaw usage without mixing memories across sessions.
 
+The recommended remote-mode configuration only needs:
+
+- `baseUrl`
+- `apiKey`
+- `agentId`
+
+In this setup:
+
+- `apiKey` should usually be a user key
+- `accountId` / `userId` are advanced options only for root-key or `trusted` deployments
+- `isolateUserScopeByAgent` / `isolateAgentScopeByUser` must match the server-side account namespace policy when using the PR #1356 canonical namespace model
+- `agentScopeMode` is a deprecated compatibility alias for older hash-based routing and should only be used against older servers
+
+### Canonical namespace policy
+
+For OpenViking servers that include PR #1356, the plugin no longer treats agent or user scope as a locally computed hash. Instead it expands shorthand aliases into canonical URIs using the configured namespace policy:
+
+- `viking://user/memories`
+  - `viking://user/<user_id>/memories` when `isolateUserScopeByAgent=false`
+  - `viking://user/<user_id>/agent/<agent_id>/memories` when `isolateUserScopeByAgent=true`
+- `viking://agent/memories`
+  - `viking://agent/<agent_id>/memories` when `isolateAgentScopeByUser=false`
+  - `viking://agent/<agent_id>/user/<user_id>/memories` when `isolateAgentScopeByUser=true`
+
+The plugin cannot auto-discover this policy today because `/api/v1/system/status` does not expose it. Configure the two booleans explicitly so they stay aligned with the server-side account policy.
+
 ## Prompt-Front Recall Flow
 
 ![Automatic recall flow before prompt build](./images/openclaw-plugin-recall-flow.png)
@@ -84,7 +110,7 @@ Session handling is the main axis of this design. In the current implementation 
 - `latest_archive_overview` becomes `[Session History Summary]`
 - `pre_archive_abstracts` becomes `[Archive Index]`
 - active session messages stay in message-block form
-- assistant tool parts become `toolUse`
+- assistant tool parts become `toolCall` (input compatible: `toolUse`/`input` is normalized to `toolCall`/`arguments`)
 - tool output becomes separate `toolResult`
 - the final message list goes through a tool-use/result pairing repair pass
 
@@ -96,7 +122,7 @@ That means OpenClaw sees “compressed history summary + archive index + active 
 
 - it slices only the newly added messages
 - it keeps only `user` / `assistant` capture text
-- it preserves `toolUse` / `toolResult` content in the serialized turn text
+- it preserves `toolCall` / `toolResult` content in the serialized turn text
 - it strips injected `<relevant-memories>` blocks and metadata noise before capture
 - it appends the sanitized turn text into the OpenViking session
 

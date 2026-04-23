@@ -4,14 +4,79 @@
 # Usage:
 #   ./import_and_eval_one.sh 0 2                         # sample 0, question 2 (单题)
 #   ./import_and_eval_one.sh conv-26 2                   # sample_id conv-26, question 2 (单题)
-#   ./import_and_eval_one.sh conv-26                      # sample_id conv-26, 所有问题 (批量)
-#   ./import_and_eval_one.sh conv-26 2 --skip-import      # 跳过导入，直接评测
-#   ./import_and_eval_one.sh conv-26 --skip-import        # 跳过导入，批量评测
+#   ./import_and_eval_one.sh conv-26                     # sample_id conv-26, 所有问题 (批量)
+#   ./import_and_eval_one.sh conv-26 2 --skip-import     # 跳过导入，直接评测
+#   ./import_and_eval_one.sh conv-26 --skip-import       # 跳过导入，批量评测
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKIP_IMPORT=false
+
+if command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="python3"
+elif command -v python >/dev/null 2>&1; then
+    PYTHON_BIN="python"
+else
+    echo "未找到 python3/python，请先安装 Python。" >&2
+    exit 1
+fi
+
+DEFAULT_OV_CONF_PATH="$($PYTHON_BIN - <<'PY'
+from pathlib import Path
+
+from openviking_cli.utils.config.config_loader import resolve_config_path
+from openviking_cli.utils.config.consts import DEFAULT_OV_CONF, OPENVIKING_CONFIG_ENV
+
+path = resolve_config_path(None, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
+print(str(path) if path is not None else str(Path.home() / ".openviking" / "ov.conf"))
+PY
+)"
+
+if [ -t 0 ] && [ -t 1 ]; then
+    echo "[preflight] OpenViking 配置默认路径: $DEFAULT_OV_CONF_PATH"
+    printf "[preflight] 直接回车使用默认，或输入新路径 [%s]: " "$DEFAULT_OV_CONF_PATH"
+    if ! read -r OV_CONF_PATH < /dev/tty; then
+        OV_CONF_PATH="$DEFAULT_OV_CONF_PATH"
+    fi
+    if [ -z "$OV_CONF_PATH" ]; then
+        OV_CONF_PATH="$DEFAULT_OV_CONF_PATH"
+    fi
+else
+    OV_CONF_PATH="$DEFAULT_OV_CONF_PATH"
+fi
+
+if [ "$OV_CONF_PATH" = "~" ]; then
+    OV_CONF_PATH="$HOME"
+elif [[ "$OV_CONF_PATH" == ~/* ]]; then
+    OV_CONF_PATH="$HOME/${OV_CONF_PATH#~/}"
+fi
+
+export OPENVIKING_CONFIG_FILE="$OV_CONF_PATH"
+echo "[preflight] 本次使用 ov.conf: $OPENVIKING_CONFIG_FILE"
+
+# 评测前预检配置
+PRECHECK_STATUS=0
+"$PYTHON_BIN" "$SCRIPT_DIR/preflight_eval_config.py" || PRECHECK_STATUS=$?
+if [ "$PRECHECK_STATUS" -ne 0 ]; then
+    if [ "$PRECHECK_STATUS" -eq 2 ]; then
+        echo "[preflight] 已完成 root_api_key 初始化，请先重启 openviking-server，再重新执行评测脚本。" >&2
+    fi
+    exit "$PRECHECK_STATUS"
+fi
+
+RUNTIME_ENV_FILE="$(mktemp "${TMPDIR:-/tmp}/ov_eval_runtime.XXXXXX")"
+trap 'rm -f "$RUNTIME_ENV_FILE"' EXIT
+
+if [ -t 0 ] && [ -t 1 ]; then
+    INTERACTIVE=1
+else
+    INTERACTIVE=0
+fi
+
+INTERACTIVE="$INTERACTIVE" "$PYTHON_BIN" "$SCRIPT_DIR/preflight_eval_runtime.py" --output-env-file "$RUNTIME_ENV_FILE"
+# shellcheck disable=SC1090
+source "$RUNTIME_ENV_FILE"
 
 # 解析参数
 for arg in "$@"; do
@@ -47,16 +112,24 @@ if [[ "$SAMPLE" =~ ^-?[0-9]+$ ]]; then
     echo "Using sample index: $SAMPLE_INDEX"
 else
     # 通过 sample_id 查找索引
-    SAMPLE_INDEX=$(python3 -c "
+    SAMPLE_INDEX=$(SAMPLE="$SAMPLE" INPUT_FILE="$INPUT_FILE" "$PYTHON_BIN" - <<'PY'
 import json
-data = json.load(open('$INPUT_FILE'))
+import os
+
+sample = os.environ["SAMPLE"]
+input_file = os.environ["INPUT_FILE"]
+
+with open(input_file, "r", encoding="utf-8") as f:
+    data = json.load(f)
+
 for i, s in enumerate(data):
-    if s.get('sample_id') == '$SAMPLE':
+    if s.get("sample_id") == sample:
         print(i)
         break
 else:
-    print('NOT_FOUND')
-")
+    print("NOT_FOUND")
+PY
+)
     if [ "$SAMPLE_INDEX" = "NOT_FOUND" ]; then
         echo "Error: sample_id '$SAMPLE' not found"
         exit 1
@@ -75,11 +148,13 @@ if [ -n "$QUESTION_INDEX" ]; then
         echo "[1/3] Skipping import (--skip-import)"
     else
         echo "[1/3] Importing sample $SAMPLE_INDEX, question $QUESTION_INDEX..."
-        python benchmark/locomo/vikingbot/import_to_ov.py \
+        "$PYTHON_BIN" "$SCRIPT_DIR/import_to_ov.py" \
             --input "$INPUT_FILE" \
             --sample "$SAMPLE_INDEX" \
             --question-index "$QUESTION_INDEX" \
-            --force-ingest
+            --force-ingest \
+            --account "$ACCOUNT" \
+            --openviking-url "$OPENVIKING_URL"
 
         echo "Waiting for data processing..."
         sleep 3
@@ -94,7 +169,7 @@ if [ -n "$QUESTION_INDEX" ]; then
     if [[ "$SAMPLE" =~ ^-?[0-9]+$ ]]; then
         # 数字索引用默认输出文件
         OUTPUT_FILE=./result/locomo_qa_result.csv
-        python benchmark/locomo/vikingbot/run_eval.py \
+        "$PYTHON_BIN" "$SCRIPT_DIR/run_eval.py" \
             "$INPUT_FILE" \
             --sample "$SAMPLE_ID_FOR_CMD" \
             --question-index "$QUESTION_INDEX" \
@@ -102,7 +177,7 @@ if [ -n "$QUESTION_INDEX" ]; then
     else
         # sample_id 模式直接更新批量结果文件
         OUTPUT_FILE=./result/locomo_${SAMPLE}_result.csv
-        python benchmark/locomo/vikingbot/run_eval.py \
+        "$PYTHON_BIN" "$SCRIPT_DIR/run_eval.py" \
             "$INPUT_FILE" \
             --sample "$SAMPLE_ID_FOR_CMD" \
             --question-index "$QUESTION_INDEX" \
@@ -117,55 +192,62 @@ if [ -n "$QUESTION_INDEX" ]; then
     else
         echo "[3/3] Running judge..."
     fi
-    python benchmark/locomo/vikingbot/judge.py --input "$OUTPUT_FILE" --parallel 1
+    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$OUTPUT_FILE" --parallel 1
 
     # 输出结果
     echo ""
     echo "=== 评测结果 ==="
-    python3 -c "
+    OUTPUT_FILE="$OUTPUT_FILE" QUESTION_INDEX="$QUESTION_INDEX" "$PYTHON_BIN" - <<'PY'
 import csv
 import json
+import os
 
-question_index = $QUESTION_INDEX
+question_index = int(os.environ["QUESTION_INDEX"])
+output_file = os.environ["OUTPUT_FILE"]
 
-with open('$OUTPUT_FILE') as f:
+with open(output_file, "r", encoding="utf-8") as f:
     reader = csv.DictReader(f)
     rows = list(reader)
 
-# 找到指定 question_index 的结果
 row = None
 for r in rows:
-    if int(r.get('question_index', -1)) == question_index:
+    if int(r.get("question_index", -1)) == question_index:
         row = r
         break
 
 if row is None:
-    # 没找到则用最后一条
     row = rows[-1]
 
-# 解析 evidence_text
-evidence_text = json.loads(row.get('evidence_text', '[]'))
-evidence_str = '\\n'.join(evidence_text) if evidence_text else ''
+evidence_text = json.loads(row.get("evidence_text", "[]"))
+evidence_str = "\n".join(evidence_text) if evidence_text else ""
 
-print(f\"问题: {row['question']}\")
-print(f\"期望答案: {row['answer']}\")
-print(f\"模型回答: {row['response']}\")
-print(f\"证据原文:\\n{evidence_str}\")
-print(f\"结果: {row.get('result', 'N/A')}\")
-print(f\"原因: {row.get('reasoning', 'N/A')}\")
-"
+print(f"问题: {row['question']}")
+print(f"期望答案: {row['answer']}")
+print(f"模型回答: {row['response']}")
+print(f"证据原文:\n{evidence_str}")
+print(f"结果: {row.get('result', 'N/A')}")
+print(f"原因: {row.get('reasoning', 'N/A')}")
+PY
 
 else
     # ========== 批量模式 ==========
     echo "=== 批量模式: sample $SAMPLE, 所有问题 ==="
 
     # 获取该 sample 的问题数量
-    QUESTION_COUNT=$(python3 -c "
+    QUESTION_COUNT=$(SAMPLE_INDEX="$SAMPLE_INDEX" INPUT_FILE="$INPUT_FILE" "$PYTHON_BIN" - <<'PY'
 import json
-data = json.load(open('$INPUT_FILE'))
-sample = data[$SAMPLE_INDEX]
-print(len(sample.get('qa', [])))
-")
+import os
+
+sample_index = int(os.environ["SAMPLE_INDEX"])
+input_file = os.environ["INPUT_FILE"]
+
+with open(input_file, "r", encoding="utf-8") as f:
+    data = json.load(f)
+
+sample = data[sample_index]
+print(len(sample.get("qa", [])))
+PY
+)
     echo "Found $QUESTION_COUNT questions for sample $SAMPLE"
 
     # 导入所有 sessions
@@ -173,10 +255,12 @@ print(len(sample.get('qa', [])))
         echo "[1/4] Skipping import (--skip-import)"
     else
         echo "[1/4] Importing all sessions for sample $SAMPLE_INDEX..."
-        python benchmark/locomo/vikingbot/import_to_ov.py \
+        "$PYTHON_BIN" "$SCRIPT_DIR/import_to_ov.py" \
             --input "$INPUT_FILE" \
             --sample "$SAMPLE_INDEX" \
-            --force-ingest
+            --force-ingest \
+            --account "$ACCOUNT" \
+            --openviking-url "$OPENVIKING_URL"
 
         echo "Waiting for data processing..."
         sleep 10
@@ -189,7 +273,7 @@ print(len(sample.get('qa', [])))
         echo "[2/4] Running evaluation for all questions..."
     fi
     OUTPUT_FILE=./result/locomo_${SAMPLE}_result.csv
-    python benchmark/locomo/vikingbot/run_eval.py \
+    "$PYTHON_BIN" "$SCRIPT_DIR/run_eval.py" \
         "$INPUT_FILE" \
         --sample "$SAMPLE_ID_FOR_CMD" \
         --output "$OUTPUT_FILE" \
@@ -201,7 +285,7 @@ print(len(sample.get('qa', [])))
     else
         echo "[3/4] Running judge..."
     fi
-    python benchmark/locomo/vikingbot/judge.py --input "$OUTPUT_FILE" --parallel 5
+    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$OUTPUT_FILE" --parallel 5
 
     # 输出统计结果
     if [ "$SKIP_IMPORT" = "true" ]; then
@@ -209,7 +293,7 @@ print(len(sample.get('qa', [])))
     else
         echo "[4/4] Calculating statistics..."
     fi
-    python benchmark/locomo/vikingbot/stat_judge_result.py --input "$OUTPUT_FILE"
+    "$PYTHON_BIN" "$SCRIPT_DIR/stat_judge_result.py" --input "$OUTPUT_FILE"
 
     echo ""
     echo "=== 批量评测完成 ==="

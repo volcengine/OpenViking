@@ -7,7 +7,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, Optional
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -126,10 +126,30 @@ class OpenVikingConfig(BaseModel):
     language_fallback: str = Field(
         default="en",
         description=(
-            "Fallback language used by memory extraction and semantic processing when dominant "
-            "user language cannot be confidently detected"
+            "Deprecated. No longer used — detection falls back to 'en' when no language can be "
+            "inferred. Set output_language_override instead to pin an explicit language."
         ),
     )
+
+    output_language_override: str = Field(
+        default="",
+        description=(
+            "When non-empty, bypasses content-based language detection for memory extraction "
+            "and semantic summaries/overviews and forces this language instead. Use when your "
+            "corpus is mixed-language but you want summaries pinned to a single language "
+            "(e.g., 'en', 'zh-CN', 'ja'). Leave empty (default) to auto-detect per content."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _warn_on_deprecated_language_fallback(self) -> "OpenVikingConfig":
+        if self.language_fallback and self.language_fallback != "en":
+            logging.getLogger(__name__).warning(
+                "Config field 'language_fallback=%s' is deprecated and has no effect; "
+                "remove it, or set 'output_language_override' to pin an explicit language.",
+                self.language_fallback,
+            )
+        return self
 
     allow_private_networks: bool = Field(
         default=False,

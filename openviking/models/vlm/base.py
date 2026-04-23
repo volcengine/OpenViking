@@ -302,6 +302,21 @@ class VLMFactory:
 
             return OpenAIVLM(config)
 
+        elif provider == "openai-codex":
+            from .backends.codex_vlm import CodexVLM
+
+            return CodexVLM(config)
+
+        elif provider == "kimi":
+            from .backends.kimi_vlm import KimiVLM
+
+            return KimiVLM(config)
+
+        elif provider == "glm":
+            from .backends.glm_vlm import GLMVLM
+
+            return GLMVLM(config)
+
         else:
             from .backends.litellm_vlm import LiteLLMVLMProvider
 

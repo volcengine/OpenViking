@@ -189,6 +189,14 @@ class TestShouldSkipFile:
         assert skip is True
         assert ".jpg" in reason
 
+    def test_sqlite_extensions_are_ignored(self, tmp_path: Path) -> None:
+        for name in ["cache.sqlite", "cache.sqlite3"]:
+            f = tmp_path / name
+            f.write_bytes(b"SQLite format 3\x00")
+            skip, reason = should_skip_file(f)
+            assert skip is True
+            assert f.suffix in reason
+
     def test_large_file(self, tmp_path: Path) -> None:
         f = tmp_path / "big.txt"
         f.write_bytes(b"x" * 100)

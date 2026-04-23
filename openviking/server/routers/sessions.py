@@ -3,7 +3,6 @@
 """Sessions endpoints for OpenViking HTTP Server."""
 
 import logging
-import re
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, Path, Query, Request
@@ -12,13 +11,11 @@ from pydantic import BaseModel, model_validator
 from openviking.message.part import TextPart, part_from_dict
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
-from openviking.server.identity import AuthMode, RequestContext, Role
+from openviking.server.identity import AuthMode, RequestContext
 from openviking.server.models import ErrorInfo, Response
-from openviking_cli.exceptions import InvalidArgumentError
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
 logger = logging.getLogger(__name__)
-_ROLE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
 class TextPartRequest(BaseModel):
@@ -116,22 +113,9 @@ def _resolve_message_role_id(
     if request.role not in {"user", "assistant"}:
         return request.role_id
 
-    role_id_provided = "role_id" in request.model_fields_set
-    allow_explicit_role_id = _request_auth_mode(http_request) == AuthMode.TRUSTED or ctx.role in {
-        Role.ROOT,
-        Role.ADMIN,
-    }
-    if not allow_explicit_role_id and role_id_provided:
-        raise InvalidArgumentError(
-            "USER requests cannot explicitly set role_id; it is derived from the request context."
-        )
-
-    role_id = request.role_id if allow_explicit_role_id else None
+    role_id = request.role_id
     if not role_id:
         role_id = ctx.user.user_id if request.role == "user" else ctx.user.agent_id
-
-    if not _ROLE_ID_PATTERN.match(role_id):
-        raise InvalidArgumentError("role_id must be alpha-numeric string.")
 
     return role_id
 

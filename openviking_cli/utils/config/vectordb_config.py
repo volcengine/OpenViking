@@ -17,6 +17,10 @@ class VolcengineConfig(BaseModel):
 
     ak: Optional[str] = Field(default=None, description="Volcengine Access Key")
     sk: Optional[str] = Field(default=None, description="Volcengine Secret Key")
+    api_key: Optional[str] = Field(
+        default=None,
+        description="Optional VikingDB Data API key for data-plane-only access",
+    )
     session_token: Optional[str] = Field(
         default=None,
         description="Optional Volcengine STS security token for temporary credentials",
@@ -27,8 +31,8 @@ class VolcengineConfig(BaseModel):
     host: Optional[str] = Field(
         default=None,
         description=(
-            "[Deprecated] Ignored in volcengine mode. "
-            "Hosts are derived from `region` to route console/data APIs correctly."
+            "Optional VikingDB data API host. "
+            "Used together with `api_key` for data-plane-only access."
         ),
     )
 
@@ -56,7 +60,11 @@ class VectorDBBackendConfig(BaseModel):
 
     backend: str = Field(
         default="local",
-        description="VectorDB backend type: 'local' (file-based), 'http' (remote service), or 'volcengine' (VikingDB)",
+        description=(
+            "VectorDB backend type: 'local', 'http', "
+            "'volcengine' (AK/SK signed or API key data-plane only), "
+            "or 'vikingdb' (private deployment)"
+        ),
     )
 
     name: Optional[str] = Field(default=COLLECTION_NAME, description="Collection name for VectorDB")
@@ -140,15 +148,28 @@ class VectorDBBackendConfig(BaseModel):
                 raise ValueError("VectorDB http backend requires 'url' to be set")
 
         elif self.backend == "volcengine":
-            if not self.volcengine or not self.volcengine.ak or not self.volcengine.sk:
-                raise ValueError("VectorDB volcengine backend requires 'ak' and 'sk' to be set")
-            if not self.volcengine.region:
-                raise ValueError("VectorDB volcengine backend requires 'region' to be set")
-            if self.volcengine.host:
+            if self.volcengine and self.volcengine.host:
+                self.volcengine.host = self.volcengine.host.strip().rstrip("/")
+
+            uses_api_key = bool(self.volcengine and self.volcengine.api_key)
+            if uses_api_key:
+                if not self.volcengine or not (self.volcengine.host or self.volcengine.region):
+                    raise ValueError(
+                        "VectorDB volcengine backend with 'api_key' requires 'host' or 'region' to be set"
+                    )
+            else:
+                if not self.volcengine or not self.volcengine.ak or not self.volcengine.sk:
+                    raise ValueError(
+                        "VectorDB volcengine backend requires 'ak' and 'sk' to be set "
+                        "when 'api_key' is not configured"
+                    )
+                if not self.volcengine.region:
+                    raise ValueError("VectorDB volcengine backend requires 'region' to be set")
+            if self.volcengine and self.volcengine.host and not uses_api_key:
                 logger.warning(
-                    "VectorDB volcengine backend: 'volcengine.host' is deprecated and ignored. "
+                    "VectorDB volcengine backend: 'volcengine.host' is ignored in AK/SK mode. "
                     "Using region-based console/data hosts for region='%s'.",
-                    self.volcengine.region,
+                    self.volcengine.region or "",
                 )
 
         elif self.backend == "vikingdb":

@@ -12,6 +12,7 @@ import jinja2
 
 from openviking.session.memory.dataclass import MemoryTypeSchema
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+from openviking.session.memory.utils.model import model_to_dict
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -301,9 +302,6 @@ def is_uri_allowed_for_schema(
         schemas, user_space, agent_space, extract_context
     )
     return is_uri_allowed(uri, allowed_dirs, allowed_patterns)
-
-
-from openviking.session.memory.utils.model import model_to_dict
 
 
 def extract_uri_fields_from_flat_model(model: Any, schema: MemoryTypeSchema) -> Dict[str, Any]:
