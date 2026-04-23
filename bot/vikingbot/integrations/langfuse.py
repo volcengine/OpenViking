@@ -80,6 +80,100 @@ class LangfuseClient:
         if self.enabled and self._client:
             self._client.flush()
 
+    def log_event(
+        self,
+        name: str,
+        *,
+        session_id: str | None = None,
+        user_id: str | None = None,
+        trace_id: str | None = None,
+        input: Any | None = None,
+        output: Any | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Log a non-generation business event when supported by the SDK."""
+        if not self.enabled or not self._client:
+            return
+
+        event_kwargs: dict[str, Any] = {"name": name}
+        if session_id:
+            event_kwargs["session_id"] = session_id
+        if user_id:
+            event_kwargs["user_id"] = user_id
+        if trace_id:
+            event_kwargs["trace_id"] = trace_id
+        if input is not None:
+            event_kwargs["input"] = input
+        if output is not None:
+            event_kwargs["output"] = output
+        if metadata:
+            event_kwargs["metadata"] = metadata
+
+        try:
+            if hasattr(self._client, "create_event"):
+                self._client.create_event(**event_kwargs)
+                return
+            if hasattr(self._client, "event"):
+                self._client.event(**event_kwargs)
+                return
+
+            # Fall back to a span-shaped event so business events are still visible.
+            with self._client.start_as_current_span(
+                name=f"event:{name}",
+                session_id=session_id,
+                user_id=user_id,
+                input=input,
+                metadata=metadata or {},
+            ) as span:
+                if output is not None and hasattr(span, "update"):
+                    span.update(output=output)
+        except Exception as e:
+            logger.debug(f"Langfuse log event error: {e}")
+
+    def log_score(
+        self,
+        name: str,
+        value: float,
+        *,
+        trace_id: str | None = None,
+        observation_id: str | None = None,
+        session_id: str | None = None,
+        user_id: str | None = None,
+        comment: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Log a score when supported by the SDK."""
+        if not self.enabled or not self._client:
+            return
+
+        score_kwargs: dict[str, Any] = {
+            "name": name,
+            "value": value,
+        }
+        if trace_id:
+            score_kwargs["trace_id"] = trace_id
+        if observation_id:
+            score_kwargs["observation_id"] = observation_id
+        if comment:
+            score_kwargs["comment"] = comment
+        if metadata:
+            score_kwargs["metadata"] = metadata
+
+        try:
+            if hasattr(self._client, "create_score"):
+                self._client.create_score(**score_kwargs)
+                return
+            if hasattr(self._client, "score"):
+                self._client.score(**score_kwargs)
+                return
+
+            logger.debug(
+                f"[LANGFUSE] score API not available; skipped {name} "
+                f"for session_id={session_id} user_id={user_id}"
+            )
+        except Exception as e:
+            logger.debug(f"Langfuse log score error: {e}")
+
     @contextmanager
     def propagate_attributes(
         self,

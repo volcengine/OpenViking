@@ -76,6 +76,32 @@ class TestSingleTurnChannel:
         assert channel._last_response == test_response
         assert channel._response_received.is_set()
 
+    @pytest.mark.asyncio
+    async def test_outbound_message_keeps_response_metadata(self, message_bus, temp_workspace):
+        """Test that response identifiers remain attached to outbound messages."""
+
+        config = SingleTurnChannelConfig()
+        channel = SingleTurnChannel(
+            config,
+            message_bus,
+            workspace_path=temp_workspace,
+            message="Hello, test",
+            session_id="test-session",
+            markdown=True,
+        )
+
+        session_key = SessionKey(type="cli", channel_id="default", chat_id="test-session")
+
+        response = OutboundMessage(
+            session_key=session_key,
+            content="tracked response",
+            response_id="resp-123",
+        )
+
+        await channel.send(response)
+
+        assert response.response_id == "resp-123"
+
 
 class TestChatChannel:
     """Tests for ChatChannel (interactive vikingbot chat)."""

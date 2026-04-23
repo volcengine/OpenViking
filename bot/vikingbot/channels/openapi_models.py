@@ -58,11 +58,38 @@ class ChatResponse(BaseModel):
     """Response from chat endpoint (non-streaming)."""
 
     session_id: str = Field(..., description="Session ID")
+    response_id: Optional[str] = Field(default=None, description="Stable response identifier")
     message: str = Field(..., description="Assistant's response message")
     events: Optional[List[Dict[str, Any]]] = Field(
         default=None, description="Intermediate events (thinking, tool calls)"
     )
     timestamp: datetime = Field(default_factory=datetime.now, description="Response timestamp")
+
+
+class FeedbackRating(str, Enum):
+    """Explicit user feedback rating."""
+
+    POSITIVE = "positive"
+    NEGATIVE = "negative"
+
+
+class FeedbackRequest(BaseModel):
+    """Request body for feedback submission."""
+
+    response_id: str = Field(..., description="Response identifier to rate", min_length=1)
+    rating: FeedbackRating = Field(..., description="User feedback rating")
+    comment: Optional[str] = Field(default=None, description="Optional freeform feedback")
+    session_id: Optional[str] = Field(default=None, description="Optional session identifier")
+    user_id: Optional[str] = Field(default=None, description="Optional user identifier")
+
+
+class FeedbackResponse(BaseModel):
+    """Response from feedback submission."""
+
+    feedback_id: str = Field(..., description="Stored feedback identifier")
+    response_id: str = Field(..., description="Response identifier that was rated")
+    accepted: bool = Field(default=True, description="Whether the feedback was accepted")
+    timestamp: datetime = Field(default_factory=datetime.now, description="Submission timestamp")
 
 
 class ChatStreamEvent(BaseModel):
