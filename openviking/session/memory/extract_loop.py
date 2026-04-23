@@ -81,6 +81,8 @@ class ExtractLoop:
         self.context_provider = context_provider
         # Use provided isolation_handler or create one in run()
         self._isolation_handler = isolation_handler
+        # Track format error retry (max 1 retry)
+        self._format_retry_count = 0
 
         # Schema 生成器（在 run() 中初始化）
         self.schema_model_generator = None
@@ -110,6 +112,8 @@ class ExtractLoop:
         max_iterations = self.max_iterations
         final_operations = None
         tools_used: List[Dict[str, Any]] = []
+        # Reset format retry counter for each run
+        self._format_retry_count = 0
 
         # 从 provider 获取 schemas（内部自动加载 registry）
         schemas = self.context_provider.get_memory_schemas(self.ctx)
@@ -231,7 +235,12 @@ The final output of the model must strictly follow the JSON Schema format shown 
             if is_last_iteration:
                 final_operations = ResolvedOperations()
                 break
-            # Otherwise disable_tools and try again
+            # Add format error message if parse failed (max 1 retry)
+            if self._format_retry_count == 0:
+                self._format_retry_count += 1
+                max_iterations += 1
+                tracer.info(f"Extended max_iterations to {max_iterations} for format retry")
+                self._add_format_error_message(messages)
             self._disable_tools_for_iteration = True
             continue
 
@@ -519,6 +528,19 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 except Exception as e:
                     tracer.error("read tool execute fail", e)
         return refetch_uris
+
+    def _add_format_error_message(self, messages: List[Dict[str, Any]]) -> None:
+        """Add format error guidance message to prompt."""
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "Your previous output could not be parsed as valid JSON. "
+                    "Please output ONLY a valid JSON object matching the required schema. "
+                    "Do not include any explanation, markdown formatting, or text outside the JSON."
+                ),
+            }
+        )
 
     async def _add_refetch_results_to_messages(
         self,
