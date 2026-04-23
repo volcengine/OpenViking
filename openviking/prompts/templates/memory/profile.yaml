@@ -14,7 +14,7 @@ description: |
   - Merge similar items; keep latest if conflicting 
   
 
-directory: "viking://user/{{ user_space }}/memories"
+directory: "viking://user/{{ user_space }}/memories/profile"
 filename_template: "profile.md"
 enabled: true
 fields:

@@ -89,6 +89,32 @@ class MemoryData(BaseModel):
         self.fields[field_name] = value
 
 
+
+class MemoryFileContent(BaseModel):
+    uri: str
+    plain_content: str
+    memory_fields: Dict
+
+
+class ResolvedOperation(BaseModel):
+    old_memory_file_content: Optional[MemoryFileContent]
+    memory_fields: Dict
+    memory_type: str  # The memory type (e.g., 'tools', 'skills', 'events')
+    uris: List[str]
+
+    def is_edit(self):
+        return self.old_memory_file_content is not None
+
+
+class ResolvedOperations(BaseModel):
+    upsert_operations: List[ResolvedOperation]
+    delete_file_contents: List[MemoryFileContent]
+    errors: List[str]
+
+    def has_errors(self) -> bool:
+        return len(self.errors) > 0
+
+
 # ============================================================================
 # Fault Tolerant Base Model (参考 vikingdb BaseModelCompat)
 # ============================================================================

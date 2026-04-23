@@ -41,11 +41,20 @@ class MemoryConfig(BaseModel):
         ),
     )
     eager_prefetch: bool = Field(
-        default=False,
+        default=True,
         description=(
             "When enabled, prefetch will execute search + read to preload all memory file contents "
             "into the context, and no read/search tools will be provided to the LLM. "
             "When disabled (default), LLM has read tool and reads files on-demand."
+        ),
+    )
+    prefetch_search_topn: int = Field(
+        default=5,
+        ge=1,
+        description=(
+            "Number of top search results to read during prefetch. "
+            "Only applies when eager_prefetch is enabled. "
+            "When multiple directories are searched, results are merged and top-N are read."
         ),
     )
 

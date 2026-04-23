@@ -156,7 +156,7 @@ class TestMemoryUpdater:
 
         updater = MemoryUpdater(registry=registry)
         updater._get_viking_fs = MagicMock(return_value=MagicMock())
-        updater._apply_edit = AsyncMock(return_value=False)
+        updater._apply_upsert = AsyncMock(return_value=False)
         updater._vectorize_memories = AsyncMock()
         updater.generate_overview = AsyncMock()
 
@@ -240,7 +240,7 @@ Line 4"""
         mock_ctx = MagicMock()
 
         # Apply edit
-        await updater._apply_edit({"content": patch}, "viking://test/test.md", mock_ctx)
+        await updater._apply_upsert({"content": patch}, "viking://test/test.md", mock_ctx)
 
         # Verify
         assert written_content is not None
@@ -286,7 +286,7 @@ Goodbye"""
         mock_ctx = MagicMock()
 
         # Apply edit
-        await updater._apply_edit({"content": patch_dict}, "viking://test/test.md", mock_ctx)
+        await updater._apply_upsert({"content": patch_dict}, "viking://test/test.md", mock_ctx)
 
         # Verify
         assert written_content is not None
@@ -325,7 +325,7 @@ Goodbye"""
         mock_ctx = MagicMock()
 
         # Apply edit
-        await updater._apply_edit({"content": new_content}, "viking://test/test.md", mock_ctx)
+        await updater._apply_upsert({"content": new_content}, "viking://test/test.md", mock_ctx)
 
         # Verify
         assert written_content is not None

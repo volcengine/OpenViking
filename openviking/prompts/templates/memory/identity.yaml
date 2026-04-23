@@ -42,16 +42,19 @@ fields:
     type: string
     description: Vibe or temperament
     merge_op: patch
+    init_value: ""
 
   - name: emoji
     type: string
     description: Signature emoji
     merge_op: patch
+    init_value: ""
 
   - name: avatar
     type: string
     description: Avatar path or URL
     merge_op: patch
+    init_value: ""
 
   - name: introduction
     type: string

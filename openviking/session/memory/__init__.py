@@ -29,11 +29,8 @@ from openviking.session.memory.tools import (
     MemoryReadTool,
     MemorySearchTool,
     MemoryTool,
-    add_tool_call_items_to_messages,
     add_tool_call_pair_to_messages,
     get_tool,
-    get_tool_schemas,
-    list_tools,
     register_tool,
 )
 from openviking.session.memory.utils import (
@@ -41,7 +38,6 @@ from openviking.session.memory.utils import (
     generate_uri,
     is_uri_allowed,
     pretty_print_messages,
-    resolve_all_operations,
     validate_uri_template,
 )
 
@@ -74,16 +70,12 @@ __all__ = [
     "MemoryLsTool",
     "register_tool",
     "get_tool",
-    "list_tools",
-    "get_tool_schemas",
     "add_tool_call_pair_to_messages",
-    "add_tool_call_items_to_messages",
     # Language utilities and helpers
     "detect_language_from_conversation",
     "pretty_print_messages",
     # URI utilities
     "generate_uri",
     "validate_uri_template",
-    "resolve_all_operations",
     "is_uri_allowed",
 ]

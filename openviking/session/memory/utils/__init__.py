@@ -33,13 +33,9 @@ from openviking.session.memory.utils.model import (
     model_to_dict,
 )
 from openviking.session.memory.utils.uri import (
-    ResolvedOperation,
     ResolvedOperations,
-    extract_uri_fields_from_flat_model,
     generate_uri,
     is_uri_allowed,
-    resolve_all_operations,
-    resolve_flat_model_uri,
     validate_uri_template,
 )
 
@@ -59,11 +55,7 @@ __all__ = [
     "generate_uri",
     "validate_uri_template",
     "is_uri_allowed",
-    "extract_uri_fields_from_flat_model",
-    "resolve_flat_model_uri",
-    "ResolvedOperation",
     "ResolvedOperations",
-    "resolve_all_operations",
     # JSON Parser
     "extract_json_content",
     "remove_json_trailing_content",

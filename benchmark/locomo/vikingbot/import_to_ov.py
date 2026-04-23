@@ -380,13 +380,13 @@ async def process_single_session(
 ) -> Dict[str, Any]:
     """处理单个会话的导入任务"""
     try:
-        # 使用 sample_id 作为 user_id 和 agent_id，实现独立的 userspace/agentspace
+        # 使用 sample_id 作为 user_id，agent_id 加上 agent_ 前缀，实现独立的 userspace/agentspace
         result = await viking_ingest(
             messages,
             args.openviking_url,
             meta.get("date_time"),
             user_id=str(sample_id),
-            agent_id=str(sample_id),
+            agent_id=f"agent_{sample_id}",
         )
         token_usage = result["token_usage"]
         task_id = result.get("task_id")

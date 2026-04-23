@@ -11,7 +11,10 @@ import os
 from typing import TYPE_CHECKING, Any, Dict, List
 
 from openviking.core.namespace import to_user_space, to_agent_space
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, ToolContext
+from openviking.session.memory.dataclass import MemoryFileContent
+from openviking.session.memory.utils.uri import render_template
+from openviking.telemetry import tracer
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking.session.memory.core import ExtractContextProvider
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler, RoleScope
@@ -36,7 +39,13 @@ if TYPE_CHECKING:
 class SessionExtractContextProvider(ExtractContextProvider):
     """会话提取 Provider - 从会话消息中提取记忆"""
 
-    def __init__(self, messages: Any, latest_archive_overview: str = "", isolation_handler: MemoryIsolationHandler = None):
+    def __init__(self, messages: Any,
+                 latest_archive_overview: str = "",
+                 isolation_handler: MemoryIsolationHandler = None,
+                 ctx: RequestContext=None,
+                viking_fs: VikingFS=None,
+                transaction_handle=None,
+            ):
         self.messages = messages
         self.latest_archive_overview = latest_archive_overview
         self._output_language = self._detect_language()
@@ -44,12 +53,23 @@ class SessionExtractContextProvider(ExtractContextProvider):
         self._schema_directories = None
         self._extract_context = None  # 缓存 ExtractContext 实例
         self._isolation_handler = isolation_handler
-
-
-
+        self._read_file_contents: Dict[str, MemoryFileContent] = {}
         # 读取 eager_prefetch 配置
         config = get_openviking_config()
         self._eager_prefetch = config.memory.eager_prefetch if config.memory else False
+        self._prefetch_search_topn = config.memory.prefetch_search_topn if config.memory else 5
+        self._ctx = ctx
+        self._viking_fs= viking_fs
+        self._transaction_handle = transaction_handle
+
+    @property
+    def read_file_contents(self) -> Dict[str, MemoryFileContent]:
+        return self._read_file_contents
+
+    def set_transaction_handle(self, handle):
+        """Set transaction handle after lock is acquired."""
+        self._transaction_handle = handle
+
 
     def get_extract_context(self) -> "ExtractContext":
         """获取或创建 ExtractContext 实例（缓存）"""
@@ -92,20 +112,6 @@ The system automatically generates URIs based on memory_type and fields. Just pr
 
         return goal
 
-        """
-    ## Edit Overview Files
-    After writing new memories, you MUST also update the corresponding .overview.md file.
-    - Provide memory_type to identify which directory's overview to update
-
-    ## Overview Format
-    Two options:
-    1. **PREFERRED: Direct string** - Just provide the complete new overview content:
-       {{"memory_type": "events", "overview": "# Events Overview\n- [event1](event1.md) - Description"}}
-    2. **SEARCH/REPLACE** - Only use if you must modify a small portion:
-       {{"memory_type": "events", "overview": {{"blocks": [{{"search": "exact line to change", "replace": "new line"}}]}}}}
-
-    See GenericOverviewEdit in the JSON Schema below.
-        """
 
     def _build_conversation_message(self) -> Dict[str, Any]:
         """构建包含 Conversation History 的 user message"""
@@ -201,21 +207,22 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
 
         return "\n\n".join(section for section in conversation_sections if section)
 
+
+    def create_tool_context(self, default_search_uris=[]):
+        tool_ctx = ToolContext(
+            viking_fs=self._viking_fs,
+            request_ctx=self._ctx,
+            transaction_handle=self._transaction_handle,
+            default_search_uris=default_search_uris,
+            read_file_contents=self._read_file_contents
+        )
+        return tool_ctx
+
     async def prefetch(
-        self,
-        ctx: RequestContext,
-        viking_fs: VikingFS,
-        transaction_handle,
-        vlm,
+        self
     ) -> List[Dict]:
         """
         执行 prefetch - 从会话消息中提取相关记忆上下文
-
-        Args:
-            ctx: RequestContext
-            viking_fs: VikingFS
-            transaction_handle: 事务句柄
-            vlm: VLM 实例
 
         Returns:
             预取的消息列表，第一个元素是 Conversation History user message，后续是 tool call messages
@@ -240,16 +247,12 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         read_files = set()  # files to read directly (for single-file schemas)
 
         rolescope: RoleScope = self._isolation_handler.get_read_scope()
-        policy = ctx.namespace_policy
+        policy = self._ctx.namespace_policy
 
         for schema in schemas:
             if not schema.directory:
                 continue
 
-            import jinja2
-
-            env = jinja2.Environment(autoescape=False)
-            template = env.from_string(schema.directory)
 
             # 根据 operation_mode 决定是否需要 ls 和读取其他文件
             if schema.operation_mode == "add_only":
@@ -260,9 +263,10 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                 for agent_id in rolescope.agent_ids:
                     user_space = to_user_space(policy, user_id, agent_id)
                     agent_space = to_agent_space(policy, user_id, agent_id)
-                    dir_path = template.render(user_space=user_space, agent_space=agent_space)
+                    dir_path = render_template(schema.directory, {
+                        "user_space":user_space, "agent_space": agent_space
+                    })
                     schema_dirs.add(dir_path)
-
             if schema.filename_has_variables():
                 for dir_path in schema_dirs:
                     ls_dirs.add(dir_path)
@@ -278,58 +282,48 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
 
         # 首先读取所有 .overview.md 文件（截断以避免窗口过大）
         # 为 overview 读取创建一个基本的 tool_ctx
-        tool_ctx = ToolContext(
-            request_ctx=ctx, transaction_handle=transaction_handle, default_search_uris=[]
-        )
 
 
-        # 在每个之前 ls 的目录内执行 search（替换原来的 ls 操作）
+
+        # 在每个之前 ls 的目录内执行 search（替换原来的 ls操作）
         files_to_read_from_search = []  # 收集需要读取的文件（eager_prefetch 模式）
-        if search_tool and viking_fs and ls_dirs:
-            for dir_uri in ls_dirs:
-                # 创建只在该目录搜索的 tool_ctx
-                tool_ctx_dir = ToolContext(
-                    request_ctx=ctx,
-                    transaction_handle=transaction_handle,
-                    default_search_uris=[dir_uri],
-                )
-                try:
-                    search_result = await search_tool.execute(
-                        viking_fs=viking_fs,
-                        ctx=tool_ctx_dir,
-                        query="[Keywords]",
-                    )
-                    # 处理搜索结果
-                    if isinstance(search_result, list):
-                        result_value = [m.get("uri", "") for m in search_result]
-                        if self._eager_prefetch:
-                            files_to_read_from_search.extend(result_value)
-                    elif isinstance(search_result, dict):
-                        if "error" in search_result:
-                            result_value = f"Error: {search_result.get('error')}"
-                        else:
-                            uris = [m.get("uri", "") for m in search_result.get("memories", [])]
-                            result_value = uris
-                            if self._eager_prefetch:
-                                files_to_read_from_search.extend(uris)
-                    else:
-                        result_value = []
 
-                    add_tool_call_pair_to_messages(
-                        messages=pre_fetch_messages,
-                        call_id=call_id_seq,
-                        tool_name="search",
-                        params={"query": "[Keywords]", "search_uri": dir_uri},
-                        result=result_value,
-                    )
-                    call_id_seq += 1
-                except Exception as e:
-                    logger.warning(f"Failed to search in {dir_uri}: {e}")
+        # 批量 search：所有目录一次搜索
+        if ls_dirs:
+            try:
+                # 将所有目录作为 target_uri 传入（支持 List[str]）
+                dir_list = list(ls_dirs)
+                search_result = await search_tool.execute(
+                    viking_fs=self._viking_fs,
+                    ctx=self.create_tool_context(dir_list),
+                    query="[Keywords]",
+                )
+                # 处理搜索结果
+                if isinstance(search_result, list):
+                    result_value = [m.get("uri", "") for m in search_result]
+                    if self._eager_prefetch:
+                        files_to_read_from_search.extend(result_value)
+                elif isinstance(search_result, dict):
+                    if "error" in search_result:
+                        result_value = f"Error: {search_result.get('error')}"
+                else:
+                    result_value = []
+
+                add_tool_call_pair_to_messages(
+                    messages=pre_fetch_messages,
+                    call_id=call_id_seq,
+                    tool_name="search",
+                    params={"query": "[Keywords]", "search_uri": dir_list},
+                    result=result_value,
+                )
+                call_id_seq += 1
+            except Exception as e:
+                logger.warning(f"Failed to search in {ls_dirs}: {e}")
 
         # 读取单文件 schema 的文件（只对非 add_only 模式）
         for file_uri in read_files:
             try:
-                result_str = await read_tool.execute(viking_fs, tool_ctx, uri=file_uri)
+                result_str = await read_tool.execute(self.create_tool_context(), uri=file_uri)
                 add_tool_call_pair_to_messages(
                     messages=pre_fetch_messages,
                     call_id=call_id_seq,
@@ -337,17 +331,20 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                     params={"uri": file_uri},
                     result=result_str,
                 )
+                # read_file_contents
                 call_id_seq += 1
             except Exception as e:
                 logger.warning(f"Failed to read {file_uri}: {e}")
 
-        # eager_prefetch 模式：读取所有搜索到的文件内容
-        if self._eager_prefetch and read_tool and viking_fs:
-            for file_uri in files_to_read_from_search:
+        # eager_prefetch 模式：读取搜索结果 top-N
+        if self._eager_prefetch and read_tool:
+            # 只读取 top-N 个文件
+            topn_files = files_to_read_from_search[:self._prefetch_search_topn]
+            for file_uri in topn_files:
                 if not file_uri:
                     continue
                 try:
-                    result_str = await read_tool.execute(viking_fs, tool_ctx, uri=file_uri)
+                    result_str = await read_tool.execute(self.create_tool_context(), uri=file_uri)
                     add_tool_call_pair_to_messages(
                         messages=pre_fetch_messages,
                         call_id=call_id_seq,
@@ -360,6 +357,19 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                     logger.warning(f"Failed to read {file_uri}: {e}")
 
         return pre_fetch_messages
+
+    @tracer("execute_tool", ignore_result=False)
+    async def execute_tool(
+        self,
+        tool_call,
+    ) -> Any:
+        tool = get_tool(tool_call.name)
+        if not tool:
+            return {"error": f"Unknown tool: {tool_call.name}"}
+        tracer.info(f"tool_call.arguments={tool_call.arguments}")
+        result = await tool.execute(self.create_tool_context(), **tool_call.arguments)
+        return result
+
 
     def get_tools(self) -> List[str]:
         """获取可用的工具列表"""
