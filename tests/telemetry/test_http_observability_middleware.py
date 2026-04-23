@@ -43,7 +43,9 @@ def test_http_observability_middleware_updates_route_template_after_routing(monk
     monkeypatch.setattr(mw_mod, "maybe_apply_root_span_error", lambda *a, **k: None)
 
     # Force a "span" so we can validate operation_name update behavior.
-    monkeypatch.setattr(mw_mod, "maybe_start_root_span", lambda request, root_attrs: _DummySpanCM(dummy_span))
+    monkeypatch.setattr(
+        mw_mod, "maybe_start_root_span", lambda request, root_attrs: _DummySpanCM(dummy_span)
+    )
 
     captured = {}
     real_create = mw_mod.create_root_span_attributes
@@ -73,4 +75,3 @@ def test_http_observability_middleware_updates_route_template_after_routing(monk
     root_attrs = captured["root_attrs"]
     assert root_attrs.http_route == "/hello"
     assert "GET /hello" in dummy_span.updated_names
-

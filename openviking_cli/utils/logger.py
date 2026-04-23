@@ -27,7 +27,7 @@ try:
     from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
     from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
     from opentelemetry.sdk.resources import Resource
-    from opentelemetry.trace import format_span_id, format_trace_id
+    from opentelemetry.trace import Status, StatusCode, format_span_id, format_trace_id
 
     # Try to import the gRPC exporter.
     try:
@@ -53,6 +53,10 @@ except ImportError:
     OTLPGrpcLogExporter = None
     OTLPHttpLogExporter = None
     Resource = None
+    Status = None
+    StatusCode = None
+    format_span_id = None
+    format_trace_id = None
 
 
 # Global OTel log handler state
