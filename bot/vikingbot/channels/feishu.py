@@ -867,7 +867,6 @@ class FeishuChannel(BaseChannel):
 
         try:
             members = await self._fetch_chat_members(chat_id)
-            logger.debug(f"{chat_id} members length: {len(members)}")
             self._save_chat_member_cache(chat_id, members)
             return members.get(open_id)
         except Exception as e:

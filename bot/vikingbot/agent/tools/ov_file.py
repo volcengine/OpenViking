@@ -1,6 +1,7 @@
 """OpenViking file system tools: read, write, list, search resources."""
 
 import asyncio
+import json
 from abc import ABC
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -99,31 +100,157 @@ class VikingSearchTool(OVFileTool):
                     "type": "string",
                     "description": "Optional target URI to limit search scope, if is None, then search the entire range.(e.g., viking://resources/)",
                 },
+                "min_score": {
+                    "type": "number",
+                    "description": "Minimum relevance score threshold",
+                    "default": 0.35,
+                },
             },
             "required": ["query"],
         }
+
+    @staticmethod
+    def _extract_search_items(results: Any) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        group_map = {
+            "memories": "memory",
+            "resources": "resource",
+            "skills": "skill",
+        }
+
+        if isinstance(results, dict):
+            for key, item_type in group_map.items():
+                group = results.get(key, [])
+                if not isinstance(group, list):
+                    continue
+                for item in group:
+                    if isinstance(item, dict):
+                        items.append({**item, "type": item.get("type", item_type)})
+            return items
+
+        if hasattr(results, "memories") or hasattr(results, "resources") or hasattr(results, "skills"):
+            for key, item_type in group_map.items():
+                for item in getattr(results, key, []) or []:
+                    items.append(
+                        {
+                            "type": item_type,
+                            "uri": getattr(item, "uri", ""),
+                            "abstract": getattr(item, "abstract", ""),
+                            "is_leaf": getattr(item, "is_leaf", False),
+                            "score": getattr(item, "score", 0.0),
+                        }
+                    )
+            return items
+
+        if isinstance(results, list):
+            for item in results:
+                if isinstance(item, dict):
+                    raw_type = str(item.get("type") or item.get("context_type") or "").lower()
+                    item_type = "resource"
+                    if "memory" in raw_type:
+                        item_type = "memory"
+                    elif "skill" in raw_type:
+                        item_type = "skill"
+                    items.append({**item, "type": item_type})
+                else:
+                    raw_type = str(getattr(item, "context_type", "")).lower()
+                    item_type = "resource"
+                    if "memory" in raw_type:
+                        item_type = "memory"
+                    elif "skill" in raw_type:
+                        item_type = "skill"
+                    items.append(
+                        {
+                            "type": item_type,
+                            "uri": getattr(item, "uri", ""),
+                            "abstract": getattr(item, "abstract", ""),
+                            "is_leaf": getattr(item, "is_leaf", False),
+                            "score": getattr(item, "score", 0.0),
+                        }
+                    )
+
+        return items
+
+    @staticmethod
+    def _to_float(value: Any) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _filter_search_items(self, results: Any, min_score: float) -> dict[str, list[dict[str, Any]]]:
+        grouped: dict[str, list[dict[str, Any]]] = {
+            "memory": [],
+            "resource": [],
+            "skill": [],
+        }
+        for item in self._extract_search_items(results):
+            score = self._to_float(item.get("score", 0.0))
+            if score < min_score:
+                continue
+            item_type = str(item.get("type", "resource")).lower()
+            if item_type not in grouped:
+                item_type = "resource"
+            grouped[item_type].append(
+                {
+                    "uri": str(item.get("uri", "") or ""),
+                    "abstract": str(item.get("abstract", "") or ""),
+                    "is_leaf": bool(item.get("is_leaf", False)),
+                    "score": score,
+                }
+            )
+        return grouped
+
+    @staticmethod
+    def _build_group_json(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        group_items: list[dict[str, Any]] = []
+        for index, item in enumerate(items, 1):
+            group_items.append(
+                {
+                    "index": index,
+                    "uri": item["uri"],
+                    "abstract": item["abstract"],
+                    "is_leaf": item["is_leaf"],
+                    "score": round(item["score"], 6),
+                }
+            )
+        return group_items
+
+    def _format_search_items_json(self, grouped_items: dict[str, list[dict[str, Any]]], min_score: float) -> str:
+        memories = self._build_group_json(grouped_items.get("memory", []))
+        resources = self._build_group_json(grouped_items.get("resource", []))
+        skills = self._build_group_json(grouped_items.get("skill", []))
+        payload = {
+            "count": len(memories) + len(resources) + len(skills),
+            "memories": memories,
+            "resources": resources,
+            "skills": skills,
+        }
+        return json.dumps(payload, ensure_ascii=False, indent=2)
 
     async def execute(
         self,
         tool_context: "ToolContext",
         query: str,
         target_uri: Optional[str] = "",
+        min_score: float = 0.35,
         **kwargs: Any,
     ) -> str:
         try:
             client = await self._get_client(tool_context)
-            search_client = getattr(client, 'admin_user_client', client)
-            results = await search_client.search(query, target_uri=target_uri)
+            search_client = getattr(client, "admin_user_client", client)
+            results = await search_client.search(query, target_uri=target_uri, limit=20)
 
             if not results:
                 return f"No results found for query: {query}"
-            if isinstance(results, list):
-                result_strs = []
-                for i, result in enumerate(results, 1):
-                    result_strs.append(f"{i}. {str(result)}")
-                return "\n".join(result_strs)
-            else:
-                return str(results)
+
+            grouped_items = self._filter_search_items(results, min_score=min_score)
+            total = sum(len(items) for items in grouped_items.values())
+            if total == 0:
+                return f"No results found for query: {query}"
+
+            content = self._format_search_items_json(grouped_items, min_score=min_score)
+            return content
         except Exception as e:
             return f"Error searching Viking: {str(e)}"
 
