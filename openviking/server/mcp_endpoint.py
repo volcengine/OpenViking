@@ -233,7 +233,7 @@ async def store(text: str, role: str = "user") -> str:
         f"{ctx.user.account_id}|{ctx.user.user_id}|{ctx.user.agent_id}"
     )
     session = await service.sessions.get(session_id, ctx, auto_create=True)
-    from openviking.session.parts import TextPart
+    from openviking.message.part import TextPart
     session.add_message(role, [TextPart(text=text)])
     pending = getattr(session, "pending_tokens", 0)
     committed = False
