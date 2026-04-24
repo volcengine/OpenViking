@@ -619,6 +619,7 @@ class VikingFS:
             ctx: Request context
         """
         self._ensure_access(uri, ctx)
+        await self.stat(uri, ctx=ctx)
 
         flags = re.IGNORECASE if case_insensitive else 0
         compiled_pattern = re.compile(pattern, flags)

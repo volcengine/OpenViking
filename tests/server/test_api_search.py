@@ -341,6 +341,19 @@ async def test_grep_case_insensitive(client_with_resource):
     assert resp.json()["status"] == "ok"
 
 
+async def test_grep_missing_uri_returns_not_found(client: httpx.AsyncClient):
+    resp = await client.post(
+        "/api/v1/search/grep",
+        json={
+            "uri": "viking://resources/nonexistent_grep_test_xyz",
+            "pattern": "test",
+        },
+    )
+
+    assert resp.status_code == 404
+    assert resp.json()["status"] == "error"
+
+
 async def test_grep_exclude_uri_excludes_specific_uri_range(
     client: httpx.AsyncClient,
     upload_temp_dir,
