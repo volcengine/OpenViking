@@ -16,7 +16,6 @@ are extracted from HTTP request scope and propagated via contextvars.
 from __future__ import annotations
 
 import contextvars
-import hashlib
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -126,9 +125,6 @@ def _is_memory_uri(uri: str) -> bool:
     return ("viking://user/" in uri or "viking://agent/" in uri) and "/memories/" in uri
 
 
-def _md5_short(s: str) -> str:
-    return hashlib.md5(s.encode()).hexdigest()[:12]
-
 
 # -- search ----------------------------------------------------------------
 
@@ -222,27 +218,20 @@ async def read(uris: str | list[str]) -> str:
 
 # -- store -----------------------------------------------------------------
 
-_COMMIT_THRESHOLD = 4000
-
 @mcp.tool()
 async def store(text: str, role: str = "user") -> str:
     """Store information into OpenViking long-term memory. Use when the user says 'remember this', shares preferences, important facts, or decisions worth persisting."""
+    import uuid
+
+    from openviking.message.part import TextPart
+
     service = get_service()
     ctx = _get_ctx()
-    session_id = "cc-mcpstore-" + _md5_short(
-        f"{ctx.user.account_id}|{ctx.user.user_id}|{ctx.user.agent_id}"
-    )
+    session_id = f"mcp-store-{uuid.uuid4().hex[:12]}"
     session = await service.sessions.get(session_id, ctx, auto_create=True)
-    from openviking.message.part import TextPart
     session.add_message(role, [TextPart(text=text)])
-    pending = getattr(session, "pending_tokens", 0)
-    committed = False
-    if pending >= _COMMIT_THRESHOLD:
-        await service.sessions.commit_async(session_id, ctx)
-        committed = True
-    if committed:
-        return f"Stored. {pending} tokens committed for extraction."
-    return f"Stored. {pending} pending tokens (commits at {_COMMIT_THRESHOLD})."
+    await service.sessions.commit_async(session_id, ctx)
+    return "Stored and committed for memory extraction."
 
 
 # -- forget ----------------------------------------------------------------
