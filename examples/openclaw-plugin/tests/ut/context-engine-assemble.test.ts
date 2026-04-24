@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+﻿import { describe, expect, it, vi } from "vitest";
 
 import type { OpenVikingClient } from "../../client.js";
 import { memoryOpenVikingConfigSchema } from "../../config.js";
@@ -43,11 +43,20 @@ function makeEngine(
   opts?: {
     cfgOverrides?: Record<string, unknown>;
     quickPrecheck?: () => Promise<{ ok: true } | { ok: false; reason: string }>;
+    findResult?: unknown;
+    readResult?: string;
   },
 ) {
   const logger = makeLogger();
   const client = {
     getSessionContext: vi.fn().mockResolvedValue(contextResult),
+    find: vi.fn().mockResolvedValue(
+      opts?.findResult ?? {
+        memories: [],
+        total: 0,
+      },
+    ),
+    read: vi.fn().mockResolvedValue(opts?.readResult ?? ""),
   } as unknown as OpenVikingClient;
   const getClient = vi.fn().mockResolvedValue(client);
   const resolveAgentId = vi.fn((sessionId: string) => `agent:${sessionId}`);
@@ -71,7 +80,11 @@ function makeEngine(
 
   return {
     engine,
-    client: client as unknown as { getSessionContext: ReturnType<typeof vi.fn> },
+    client: client as unknown as {
+      getSessionContext: ReturnType<typeof vi.fn>;
+      find: ReturnType<typeof vi.fn>;
+      read: ReturnType<typeof vi.fn>;
+    },
     getClient,
     logger,
     resolveAgentId,
@@ -398,6 +411,62 @@ describe("context-engine assemble()", () => {
     expect(result.messages).toBe(liveMessages);
     expect(result.estimatedTokens).toBe(roughEstimate(liveMessages));
     expect(result.systemPromptAddition).toBeUndefined();
+  });
+
+  it("moves recall into assemble messages instead of prompt prepend", async () => {
+    const { engine, client } = makeEngine(
+      {
+        latest_archive_overview: "",
+        pre_archive_abstracts: [],
+        messages: [
+          {
+            id: "msg_ov_1",
+            role: "assistant",
+            created_at: "2026-03-24T00:00:00Z",
+            parts: [{ type: "text", text: "Stored answer from OpenViking." }],
+          },
+        ],
+        estimatedTokens: 32,
+        stats: {
+          ...makeStats(),
+          activeTokens: 32,
+        },
+      },
+      {
+        cfgOverrides: {
+          autoRecall: true,
+          recallLimit: 2,
+          recallPreferAbstract: true,
+        },
+        findResult: {
+          memories: [
+            {
+              uri: "viking://user/default/memories/profile.md",
+              level: 2,
+              abstract: "User works at Turing Micro Sparrow Cloud and prefers concise answers.",
+              score: 0.93,
+            },
+          ],
+          total: 1,
+        },
+      },
+    );
+
+    const result = await engine.assemble({
+      sessionId: "session-recall",
+      messages: [{ role: "user", content: "which company do I work at?" }],
+      tokenBudget: 4096,
+    });
+
+    expect(client.find).toHaveBeenCalled();
+    expect(client.read).not.toHaveBeenCalled();
+    expect(result.systemPromptAddition).toBeUndefined();
+    expect(result.messages[0]).toEqual({
+      role: "user",
+      content: expect.stringContaining("Relevant Long-Term Memory"),
+    });
+    expect(result.messages[0].content).toContain("Turing Micro Sparrow Cloud");
+    expect(result.messages[0].content).not.toContain("<relevant-memories>");
   });
 
   it("still produces non-empty output when OV messages have empty parts (overview fills it)", async () => {

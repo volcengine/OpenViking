@@ -224,15 +224,13 @@ describe("plugin normal flow with healthy backend", () => {
       { agentId: "main", sessionId: "session-normal", sessionKey: "agent:main:normal" },
     );
 
-    expect(hookResult).toMatchObject({
-      prependContext: expect.stringContaining("User prefers Rust for backend tasks."),
-    });
+    expect(hookResult).toBeUndefined();
 
     const contextEngine = contextEngineFactory!() as {
       assemble: (params: {
         sessionId: string;
         messages: Array<{ role: string; content: string }>;
-      }) => Promise<{ messages: Array<{ role: string; content: unknown }> }>;
+      }) => Promise<{ messages: Array<{ role: string; content: unknown }>; systemPromptAddition?: string }>;
       afterTurn: (params: {
         sessionId: string;
         sessionFile: string;
@@ -243,7 +241,7 @@ describe("plugin normal flow with healthy backend", () => {
 
     const assembled = await contextEngine.assemble({
       sessionId: "session-normal",
-      messages: [{ role: "user", content: "fallback" }],
+      messages: [{ role: "user", content: "what backend language should we use?" }],
     });
 
     expect(assembled.messages[0]).toEqual({
@@ -251,6 +249,12 @@ describe("plugin normal flow with healthy backend", () => {
       content: "[Session History Summary]\nEarlier work focused on backend stack choices.",
     });
     expect(assembled.messages[1]).toEqual({
+      role: "user",
+      content: expect.stringContaining("Relevant Long-Term Memory"),
+    });
+    expect(assembled.messages[1].content).toContain("User prefers Rust for backend tasks.");
+    expect(assembled.messages[1].content).not.toContain("<relevant-memories>");
+    expect(assembled.messages[2]).toEqual({
       role: "assistant",
       content: [{ type: "text", text: "Stored answer from OpenViking." }],
     });

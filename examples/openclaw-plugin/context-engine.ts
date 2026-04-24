@@ -6,12 +6,16 @@ import {
   compileSessionPatterns,
   getCaptureDecision,
   extractNewTurnMessages,
+  extractLatestUserText,
   extractSingleMessageText,
   shouldBypassSession,
 } from "./text-utils.js";
 import {
   trimForLog,
   toJsonLog,
+  postProcessMemories,
+  summarizeInjectionMemories,
+  pickMemoriesForInjection,
 } from "./memory-ranking.js";
 import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
 
@@ -116,6 +120,16 @@ const ARCHIVE_BUDGET_CAP = 8_000;
 const RESERVED_MIN = 20_000;
 const RESERVED_RATIO = 0.15;
 const ARCHIVE_INDEX_TRIM_LIMIT = 10;
+const RECALL_QUERY_MAX_CHARS = 4_000;
+const ASSEMBLE_RECALL_MAX_ITEMS = 2;
+const ASSEMBLE_RECALL_MAX_CHARS_PER_ITEM = 140;
+
+type PreparedRecallQuery = {
+  query: string;
+  truncated: boolean;
+  originalChars: number;
+  finalChars: number;
+};
 
 function allocateContextBudget(totalBudget: number, instructionTokens = 0): ContextBudgets {
   const reserveFloor = totalBudget >= RESERVED_MIN * 2 ? RESERVED_MIN : 0;
@@ -132,6 +146,83 @@ function estimateTokens(messages: AgentMessage[]): number {
 
 function roughEstimate(messages: AgentMessage[]): number {
   return Math.ceil(JSON.stringify(messages).length / 4);
+}
+
+function normalizeRecallFact(line: string): string {
+  return line
+    .replace(/^- \[[^\]]*\]\s*/u, "")
+    .replace(/[`*_#>]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function truncateRecallFact(line: string): string {
+  if (line.length <= ASSEMBLE_RECALL_MAX_CHARS_PER_ITEM) {
+    return line;
+  }
+  return `${line.slice(0, ASSEMBLE_RECALL_MAX_CHARS_PER_ITEM).trim()}...`;
+}
+
+function prepareRecallQuery(rawText: string): PreparedRecallQuery {
+  const sanitized = rawText.trim();
+  const originalChars = sanitized.length;
+  if (!sanitized) {
+    return { query: "", truncated: false, originalChars: 0, finalChars: 0 };
+  }
+
+  const query =
+    sanitized.length > RECALL_QUERY_MAX_CHARS
+      ? sanitized.slice(0, RECALL_QUERY_MAX_CHARS).trim()
+      : sanitized;
+
+  return {
+    query,
+    truncated: sanitized.length > RECALL_QUERY_MAX_CHARS,
+    originalChars,
+    finalChars: query.length,
+  };
+}
+
+async function buildRecallFactsWithBudget(
+  memories: Array<{ uri: string; abstract?: string; overview?: string }>,
+  readContent: (uri: string) => Promise<string>,
+  opts: {
+    recallPreferAbstract: boolean;
+    recallMaxContentChars: number;
+    recallTokenBudget: number;
+  },
+): Promise<{ facts: string[]; estimatedTokens: number }> {
+  const facts: string[] = [];
+  let usedTokens = 0;
+
+  for (const memory of memories) {
+    let candidate = "";
+    if (opts.recallPreferAbstract) {
+      candidate = (memory.abstract ?? memory.overview ?? "").trim();
+    }
+    if (!candidate) {
+      candidate = (await readContent(memory.uri)).trim();
+    }
+    if (!candidate) {
+      continue;
+    }
+
+    const fact = truncateRecallFact(normalizeRecallFact(candidate).slice(0, opts.recallMaxContentChars));
+    if (!fact) {
+      continue;
+    }
+    const factTokens = Math.ceil(fact.length / 4);
+    if (facts.length > 0 && usedTokens + factTokens > opts.recallTokenBudget) {
+      break;
+    }
+    facts.push(fact);
+    usedTokens += factTokens;
+    if (facts.length >= ASSEMBLE_RECALL_MAX_ITEMS) {
+      break;
+    }
+  }
+
+  return { facts, estimatedTokens: usedTokens };
 }
 
 function msgTokenEstimate(msg: AgentMessage): number {
@@ -402,7 +493,7 @@ export function formatMessageFaithful(msg: OVMessage): string {
 }
 
 function buildSystemPromptAddition(): string {
-  return [
+  const sections = [
     "## Session Context Guide",
     "",
     "Your conversation history may include:",
@@ -439,12 +530,40 @@ function buildSystemPromptAddition(): string {
     "  or state that the information comes from a compressed summary.",
     "- After expanding, cite the archive ID in your answer",
     '  (e.g. "Based on archive_003, ...").',
-  ].join("\n");
+  ];
+
+  return sections.join("\n");
 }
 
 function buildInstructionPrompt(): { text: string; tokens: number } {
   const text = buildSystemPromptAddition();
   return { text, tokens: Math.ceil(text.length / 4) };
+}
+
+function buildRecallMemory(
+  recallFacts: string[],
+  budget: number,
+): { messages: AgentMessage[]; tokens: number } {
+  if (recallFacts.length === 0) {
+    return { messages: [], tokens: 0 };
+  }
+
+  const message: AgentMessage = {
+    role: "user",
+    content: [
+      "[Relevant Long-Term Memory]",
+      "Use these facts silently when they directly help answer the current question.",
+      "Do not quote or dump them unless the user explicitly asks for stored memory details.",
+      ...recallFacts.map((fact, index) => `${index + 1}. ${fact}`),
+    ].join("\n"),
+  };
+
+  const messages = [message];
+  const tokens = roughEstimate(messages);
+  if (budget !== BUDGET_UNLIMITED && tokens > budget) {
+    return { messages: [], tokens: 0 };
+  }
+  return { messages, tokens };
 }
 
 function buildArchiveMemory(
@@ -650,6 +769,86 @@ export function createMemoryOpenVikingContextEngine(params: {
     }
   }
 
+  async function buildAssembleRecallFacts(
+    messages: AgentMessage[],
+    client: OpenVikingClient,
+    agentId: string,
+    sessionId: string,
+  ): Promise<{ facts: string[]; estimatedTokens: number }> {
+    if (!cfg.autoRecall) {
+      return { facts: [], estimatedTokens: 0 };
+    }
+
+    const rawRecallQuery = extractLatestUserText(messages as unknown[]);
+    const recallQuery = prepareRecallQuery(rawRecallQuery);
+    const queryText = recallQuery.query;
+    if (!queryText || queryText.length < 5) {
+      return { facts: [], estimatedTokens: 0 };
+    }
+    if (recallQuery.truncated) {
+      logger.info(
+        `openviking: assemble recall query truncated for session=${sessionId} ` +
+          `(chars=${recallQuery.originalChars}->${recallQuery.finalChars})`,
+      );
+    }
+
+    const candidateLimit = Math.max(cfg.recallLimit * 4, 20);
+    const [userSettled, agentSettled] = await Promise.allSettled([
+      client.find(queryText, {
+        targetUri: "viking://user/memories",
+        limit: candidateLimit,
+        scoreThreshold: 0,
+      }, agentId),
+      client.find(queryText, {
+        targetUri: "viking://agent/memories",
+        limit: candidateLimit,
+        scoreThreshold: 0,
+      }, agentId),
+    ]);
+
+    const userResult = userSettled.status === "fulfilled" ? userSettled.value : { memories: [] };
+    const agentResult = agentSettled.status === "fulfilled" ? agentSettled.value : { memories: [] };
+    if (userSettled.status === "rejected") {
+      logger.warn?.(`openviking: assemble user memories search failed: ${String(userSettled.reason)}`);
+    }
+    if (agentSettled.status === "rejected") {
+      logger.warn?.(`openviking: assemble agent memories search failed: ${String(agentSettled.reason)}`);
+    }
+
+    const allMemories = [...(userResult.memories ?? []), ...(agentResult.memories ?? [])];
+    const uniqueMemories = allMemories.filter((memory, index, self) =>
+      index === self.findIndex((m) => m.uri === memory.uri),
+    );
+    const leafOnly = uniqueMemories.filter((memory) => memory.level === 2);
+    const processed = postProcessMemories(leafOnly, {
+      limit: candidateLimit,
+      scoreThreshold: cfg.recallScoreThreshold,
+    });
+    const memories = pickMemoriesForInjection(processed, cfg.recallLimit, queryText);
+    if (memories.length === 0) {
+      return { facts: [], estimatedTokens: 0 };
+    }
+
+    const { facts, estimatedTokens } = await buildRecallFactsWithBudget(
+      memories,
+      (uri) => client.read(uri, agentId),
+      {
+        recallPreferAbstract: cfg.recallPreferAbstract,
+        recallMaxContentChars: cfg.recallMaxContentChars,
+        recallTokenBudget: cfg.recallTokenBudget,
+      },
+    );
+    if (facts.length > 0) {
+      logger.info(
+        `openviking: assemble recall using ${facts.length} memories (~${estimatedTokens} tokens, budget=${cfg.recallTokenBudget})`,
+      );
+      logger.info(
+        `openviking: assemble recall detail ${toJsonLog({ count: memories.length, memories: summarizeInjectionMemories(memories) })}`,
+      );
+    }
+    return { facts, estimatedTokens };
+  }
+
   function extractSessionKey(runtimeContext: Record<string, unknown> | undefined): string | undefined {
     if (!runtimeContext) {
       return undefined;
@@ -728,6 +927,7 @@ export function createMemoryOpenVikingContextEngine(params: {
     ovMessages: OVMessage[],
     tokenBudget: number,
     ovSessionId: string,
+    recallFacts: string[] = [],
   ): {
     sanitized: AgentMessage[];
     archive: { messages: AgentMessage[]; tokens: number };
@@ -736,7 +936,9 @@ export function createMemoryOpenVikingContextEngine(params: {
     instruction: { text: string; tokens: number };
   } {
     const hasArchives = Boolean(overview) || preAbstracts.length > 0;
-    const instruction = hasArchives ? buildInstructionPrompt() : { text: "", tokens: 0 };
+    const instruction = hasArchives
+      ? buildInstructionPrompt()
+      : { text: "", tokens: 0 };
 
     // 4-layer context partitioning:
     //   Instruction — system prompt guide (Archive Index / Session History usage)
@@ -745,12 +947,17 @@ export function createMemoryOpenVikingContextEngine(params: {
     //   Reserved    — headroom for model output (not consumed here)
     const budgets = allocateContextBudget(tokenBudget, instruction.tokens);
     const archive = buildArchiveMemory(overview, preAbstracts, budgets.archiveMemory);
-    const sessionBudget = Math.max(
+    const recallMemoryBudget = Math.max(
       tokenBudget - budgets.reserved - instruction.tokens - archive.tokens,
       0,
     );
+    const recallMemory = buildRecallMemory(recallFacts, recallMemoryBudget);
+    const sessionBudget = Math.max(
+      tokenBudget - budgets.reserved - instruction.tokens - archive.tokens - recallMemory.tokens,
+      0,
+    );
     const session = buildSessionContext(ovMessages, sessionBudget);
-    const assembled = [...archive.messages, ...session.messages];
+    const assembled = [...archive.messages, ...recallMemory.messages, ...session.messages];
 
     logger.info(
       `openviking: assemble entering session content for ${ovSessionId}: ` +
@@ -763,7 +970,16 @@ export function createMemoryOpenVikingContextEngine(params: {
     normalizeAssistantContent(assembled);
     const sanitized = sanitizeToolUseResultPairing(assembled as never[]) as AgentMessage[];
 
-    return { sanitized, archive, session, budgets, instruction };
+    return {
+      sanitized,
+      archive: {
+        messages: [...archive.messages, ...recallMemory.messages],
+        tokens: archive.tokens + recallMemory.tokens,
+      },
+      session,
+      budgets,
+      instruction,
+    };
   }
 
   return {
@@ -819,6 +1035,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         const client = await getClient();
         const routingRef = assembleParams.sessionId ?? sessionKey ?? OVSessionId;
         const agentId = resolveAgentId(routingRef, sessionKey, OVSessionId);
+        const recall = await buildAssembleRecallFacts(messages, client, agentId, OVSessionId);
         const ctx = await client.getSessionContext(OVSessionId, tokenBudget, agentId);
 
         const preAbstracts = ctx?.pre_archive_abstracts ?? [];
@@ -842,6 +1059,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           ctx.messages,
           tokenBudget,
           OVSessionId,
+          recall.facts,
         );
 
         if (sanitized.length === 0 && messages.length > 0) {
@@ -868,6 +1086,8 @@ export function createMemoryOpenVikingContextEngine(params: {
           sessionTokens: session.tokens,
           sessionBudget: budgets.sessionContext,
           reservedBudget: budgets.reserved,
+          recallFacts: recall.facts.length,
+          recallTokens: recall.estimatedTokens,
           messages: messageDigest(sanitized),
         });
 

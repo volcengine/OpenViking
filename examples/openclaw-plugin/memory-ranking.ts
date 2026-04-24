@@ -136,6 +136,20 @@ function isPreferencesMemory(item: FindResultItem): boolean {
   );
 }
 
+const INSTRUCTIONAL_PREFERENCE_RE =
+  /must|always|never|only|exactly|strict|response|reply|output|format|single[-\s]?word|禁止|必须|只能|仅|严格|回复|响应|输出|格式|单个单词/i;
+
+function isInstructionLikePreference(item: FindResultItem): boolean {
+  if (!isPreferencesMemory(item)) {
+    return false;
+  }
+  const text = `${item.abstract ?? ""} ${item.overview ?? ""}`.trim();
+  if (!text) {
+    return false;
+  }
+  return INSTRUCTIONAL_PREFERENCE_RE.test(text);
+}
+
 function isEventMemory(item: FindResultItem): boolean {
   const category = (item.category ?? "").toLowerCase();
   return category === "events" || item.uri.includes("/events/");
@@ -229,7 +243,11 @@ export function pickMemoriesForInjection(
   }
 
   const query = buildRecallQueryProfile(queryText);
-  const sorted = [...items].sort((a, b) => rankForInjection(b, query) - rankForInjection(a, query));
+  const filteredItems = query.wantsPreference
+    ? items
+    : items.filter((item) => !isInstructionLikePreference(item));
+  const candidateItems = filteredItems.length > 0 ? filteredItems : items;
+  const sorted = [...candidateItems].sort((a, b) => rankForInjection(b, query) - rankForInjection(a, query));
   const deduped: FindResultItem[] = [];
   const seen = new Set<string>();
   for (const item of sorted) {

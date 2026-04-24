@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+﻿import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 
 import { Type } from "@sinclair/typebox";
@@ -165,6 +165,42 @@ const MAX_OPENVIKING_STDERR_LINES = 200;
 const MAX_OPENVIKING_STDERR_CHARS = 256_000;
 const AUTO_RECALL_TIMEOUT_MS = 5_000;
 const RECALL_QUERY_MAX_CHARS = 4_000;
+const SILENT_RECALL_MAX_ITEMS = 2;
+const SILENT_RECALL_MAX_CHARS_PER_ITEM = 160;
+
+function normalizeRecallLine(line: string): string {
+  return line
+    .replace(/^- \[[^\]]*\]\s*/u, "")
+    .replace(/[`*_#>]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function truncateRecallLine(line: string): string {
+  if (line.length <= SILENT_RECALL_MAX_CHARS_PER_ITEM) {
+    return line;
+  }
+  return `${line.slice(0, SILENT_RECALL_MAX_CHARS_PER_ITEM).trim()}...`;
+}
+
+function buildSilentRecallContext(memoryLines: string[]): string {
+  const normalized = memoryLines
+    .map((line) => truncateRecallLine(normalizeRecallLine(line)))
+    .filter(Boolean)
+    .slice(0, SILENT_RECALL_MAX_ITEMS);
+
+  if (normalized.length === 0) {
+    return "";
+  }
+
+  return [
+    "Internal memory context for answer quality only.",
+    "Use it silently as background knowledge.",
+    "Do not quote, dump, or mention this memory context unless the user explicitly asks for stored memory details.",
+    "Only use the minimum facts needed to answer the current question.",
+    ...normalized.map((line, index) => `${index + 1}. ${line}`),
+  ].join("\n");
+}
 
 /**
  * OpenViking `UserIdentifier` allows only [a-zA-Z0-9_-] for agent_id
@@ -543,8 +579,8 @@ const contextEnginePlugin = {
         `(raw plugins.entries.openviking.config.agentId=${JSON.stringify(rawAgentId ?? "(missing)")}; ` +
         `${
           cfg.agentId !== "default"
-            ? "non-default → X-OpenViking-Agent is <configAgentId>_<ctx.agentId> (sanitized to [a-zA-Z0-9_-]) when hooks expose session agent; config-only if ctx.agentId unknown"
-            : 'default → X-OpenViking-Agent follows OpenClaw ctx.agentId per session (e.g. "main")'
+            ? "non-default -> X-OpenViking-Agent is <configAgentId>_<ctx.agentId> (sanitized to [a-zA-Z0-9_-]) when hooks expose session agent; config-only if ctx.agentId unknown"
+            : 'default -> X-OpenViking-Agent follows OpenClaw ctx.agentId per session (e.g. "main")'
         })`,
     );
     const routingDebugLog = cfg.logFindRequests
@@ -985,7 +1021,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
 
           let result;
           if (targetUri) {
-            // 如果指定了目标 URI，只检索该位置
+            // If target URI is specified, search that location only.
             result = await recallClient.find(
               query,
               {
@@ -996,7 +1032,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
               agentId,
             );
           } else {
-            // 默认同时检索 user 和 agent 两个位置的记忆
+            // By default, search both user and agent memories.
             const [userSettled, agentSettled] = await Promise.allSettled([
               recallClient.find(
                 query,
@@ -1019,7 +1055,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
             ]);
             const userResult = userSettled.status === "fulfilled" ? userSettled.value : { memories: [] };
             const agentResult = agentSettled.status === "fulfilled" ? agentSettled.value : { memories: [] };
-            // 合并两个位置的结果，去重
+            // 鍚堝苟涓や釜浣嶇疆鐨勭粨鏋滐紝鍘婚噸
             const allMemories = [...(userResult.memories ?? []), ...(agentResult.memories ?? [])];
             const uniqueMemories = allMemories.filter((memory, index, self) =>
               index === self.findIndex((m) => m.uri === memory.uri)
@@ -1369,6 +1405,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
     }));
 
     let contextEngineRef: ContextEngineWithCommit | null = null;
+    let contextEngineRegistered = false;
     const sessionAgentResolver = createSessionAgentResolver(cfg.agentId);
     const rememberSessionAgentId = (ctx: SessionAgentLookup) => {
       sessionAgentResolver.remember(ctx);
@@ -1409,6 +1446,15 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
     });
     api.on("before_prompt_build", async (event: unknown, ctx?: HookAgentContext) => {
       rememberSessionAgentId(ctx ?? {});
+
+      if (contextEngineRegistered || contextEngineRef) {
+        if (cfg.logFindRequests) {
+          api.logger.info(
+            "openviking: skipping before_prompt_build recall injection because assemble() owns recall",
+          );
+        }
+        return;
+      }
 
       if (cfg.logFindRequests) {
         api.logger.info(
@@ -1511,18 +1557,17 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
                       recallTokenBudget: cfg.recallTokenBudget,
                     },
                   );
-                  const memoryContext = memoryLines.join("\n");
+                  const memoryContext = buildSilentRecallContext(memoryLines);
+                  if (!memoryContext) {
+                    return;
+                  }
                   verboseRoutingInfo(
                     `openviking: injecting ${memoryLines.length} memories (~${estimatedTokens} tokens, budget=${cfg.recallTokenBudget})`,
                   );
                   verboseRoutingInfo(
                     `openviking: inject-detail ${toJsonLog({ count: memories.length, memories: summarizeInjectionMemories(memories) })}`,
                   );
-                  prependContextParts.push(
-                    "<relevant-memories>\nThe following OpenViking memories may be relevant:\n" +
-                      `${memoryContext}\n` +
-                    "</relevant-memories>",
-                  );
+                  prependContextParts.push(memoryContext);
                 }
               })(),
               AUTO_RECALL_TIMEOUT_MS,
@@ -1567,6 +1612,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
     });
 
     if (typeof api.registerContextEngine === "function") {
+      contextEngineRegistered = true;
       api.registerContextEngine(contextEnginePlugin.id, () => {
         contextEngineRef = createMemoryOpenVikingContextEngine({
           id: contextEnginePlugin.id,
@@ -1585,7 +1631,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
         return contextEngineRef;
       });
       api.logger.info(
-        "openviking: registered context-engine (before_prompt_build=auto-recall, afterTurn=auto-capture, assemble=archive+active, session→OV id=uuid-or-sha256 + diag/Phase2 options)",
+        "openviking: registered context-engine (assemble=auto-recall+archive+active, afterTurn=auto-capture, session->OV id=uuid-or-sha256 + diag/Phase2 options)",
       );
     } else {
       api.logger.warn(
@@ -1596,7 +1642,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
     api.registerService({
       id: "openviking",
       start: async () => {
-        // Claim the pending entry — only the first start() call to claim it spawns the process.
+        // Claim the pending entry; only the first start() call to claim it spawns the process.
         // Subsequent start() calls (from other registrations sharing the same promise) fall through.
         const pendingEntry = localClientPendingPromises.get(localCacheKey);
         const isSpawner = cfg.mode === "local" && !!pendingEntry;
@@ -1871,8 +1917,8 @@ export type BuildMemoryLinesWithBudgetOptions = BuildMemoryLinesOptions & {
  *
  * The first memory is always included even if its token count exceeds the
  * remaining budget. This is intentional (spec Section 6.2): with
- * `recallMaxContentChars=500`, a single line is at most ~128 tokens — well
- * within the 2000-token default budget — so overshoot is bounded and
+ * `recallMaxContentChars=500`, a single line is at most ~128 tokens, well
+ * within the 2000-token default budget, so overshoot is bounded and
  * guarantees at least one memory is surfaced.
  */
 export async function buildMemoryLinesWithBudget(
@@ -1893,7 +1939,7 @@ export async function buildMemoryLinesWithBudget(
     const line = `- [${item.category ?? "memory"}] ${content}`;
     const lineTokens = estimateTokenCount(line);
 
-    // First line is always included even if it exceeds the budget (spec §6.2).
+    // First line is always included even if it exceeds the budget.
     if (lineTokens > budgetRemaining && lines.length > 0) {
       break;
     }
