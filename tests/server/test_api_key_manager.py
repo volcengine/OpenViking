@@ -934,9 +934,13 @@ async def test_resolve_malformed_three_segment_key_does_not_fall_through_to_lega
     monkeypatch.setattr(LegacyAPIKeyManager, "_verify_api_key", spy_verify)
     monkeypatch.setattr(LegacyAPIKeyManager, "resolve", spy_legacy_resolve)
 
-    # Three dot-separated segments but invalid base64url characters inside,
-    # so is_new_format_key() accepts the shape but parse_api_key() raises.
-    malformed = "!@#.!@#.!@#"
+    # Three dot-separated segments that decode to non-UTF-8 bytes so
+    # parse_api_key's `.decode("utf-8")` raises UnicodeDecodeError. "_w" is
+    # base64url for a single 0xff byte, which is not a valid UTF-8 start
+    # byte. Using invalid-base64 characters like "!@#" would not work here
+    # because Python's base64.urlsafe_b64decode silently drops non-alphabet
+    # chars and returns empty bytes, which decode fine.
+    malformed = "_w._w._w"
     assert is_new_format_key(malformed), "precondition: shape check must pass"
 
     with pytest.raises(UnauthenticatedError):
