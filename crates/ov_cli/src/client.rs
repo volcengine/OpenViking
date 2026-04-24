@@ -3,6 +3,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::fs::File;
 use std::path::Path;
+use std::str::FromStr;
 use tempfile::{Builder, NamedTempFile};
 use zip::CompressionMethod;
 use zip::write::FileOptions;
@@ -18,6 +19,7 @@ pub struct HttpClient {
     account: Option<String>,
     user: Option<String>,
     agent_id: Option<String>,
+    extra_headers: Option<std::collections::HashMap<String, String>>,
 }
 
 impl HttpClient {
@@ -29,6 +31,7 @@ impl HttpClient {
         account: Option<String>,
         user: Option<String>,
         timeout_secs: f64,
+        extra_headers: Option<std::collections::HashMap<String, String>>,
     ) -> Self {
         let http = ReqwestClient::builder()
             .timeout(std::time::Duration::from_secs_f64(timeout_secs))
@@ -42,6 +45,7 @@ impl HttpClient {
             account,
             user,
             agent_id,
+            extra_headers,
         }
     }
 
@@ -163,6 +167,15 @@ impl HttpClient {
         if let Some(user) = &self.user {
             if let Ok(value) = reqwest::header::HeaderValue::from_str(user) {
                 headers.insert("X-OpenViking-User", value);
+            }
+        }
+        if let Some(extra_headers) = &self.extra_headers {
+            for (key, value) in extra_headers {
+                if let Ok(header_name) = reqwest::header::HeaderName::from_str(key) {
+                    if let Ok(header_value) = reqwest::header::HeaderValue::from_str(value) {
+                        headers.insert(header_name, header_value);
+                    }
+                }
             }
         }
         headers
@@ -918,9 +931,22 @@ impl HttpClient {
         self.post(&path, &body).await
     }
 
-    pub async fn admin_list_users(&self, account_id: &str) -> Result<Value> {
+    pub async fn admin_list_users(
+        &self,
+        account_id: &str,
+        limit: u32,
+        name: Option<String>,
+        role: Option<String>,
+    ) -> Result<Value> {
         let path = format!("/api/v1/admin/accounts/{}/users", account_id);
-        self.get(&path, &[]).await
+        let mut params = vec![("limit".to_string(), limit.to_string())];
+        if let Some(n) = name {
+            params.push(("name".to_string(), n));
+        }
+        if let Some(r) = role {
+            params.push(("role".to_string(), r));
+        }
+        self.get(&path, &params).await
     }
 
     pub async fn admin_remove_user(&self, account_id: &str, user_id: &str) -> Result<Value> {
@@ -1007,6 +1033,7 @@ impl HttpClient {
 mod tests {
     use super::HttpClient;
     use serde_json::json;
+    use std::collections::HashMap;
 
     #[test]
     fn build_headers_includes_tenant_identity_headers() {
@@ -1017,6 +1044,7 @@ mod tests {
             Some("acme".to_string()),
             Some("alice".to_string()),
             5.0,
+            None,
         );
 
         let headers = client.build_headers();
@@ -1044,6 +1072,34 @@ mod tests {
                 .get("X-OpenViking-User")
                 .and_then(|value| value.to_str().ok()),
             Some("alice")
+        );
+    }
+
+    #[test]
+    fn build_headers_includes_extra_headers() {
+        let mut extra_headers = HashMap::new();
+        extra_headers.insert("X-Custom-Header".to_string(), "custom-value".to_string());
+        extra_headers.insert("Authorization".to_string(), "Bearer token".to_string());
+
+        let client = HttpClient::new(
+            "http://localhost:1933",
+            Some("test-key".to_string()),
+            Some("assistant-1".to_string()),
+            Some("acme".to_string()),
+            Some("alice".to_string()),
+            5.0,
+            Some(extra_headers),
+        );
+
+        let headers = client.build_headers();
+
+        assert_eq!(
+            headers.get("X-Custom-Header").and_then(|value| value.to_str().ok()),
+            Some("custom-value")
+        );
+        assert_eq!(
+            headers.get("Authorization").and_then(|value| value.to_str().ok()),
+            Some("Bearer token")
         );
     }
 

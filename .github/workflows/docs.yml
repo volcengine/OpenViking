@@ -1,0 +1,43 @@
+name: 17. Docs
+
+on:
+  pull_request:
+    paths:
+      - 'docs/**'
+      - '.github/workflows/_docs.yml'
+      - '.github/workflows/_docs-deploy.yml'
+      - '.github/workflows/docs.yml'
+  push:
+    branches: [ main ]
+    paths:
+      - 'docs/**'
+      - '.github/workflows/_docs.yml'
+      - '.github/workflows/_docs-deploy.yml'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: 'Deploy docs to GitHub Pages'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  docs-check:
+    name: Build Docs
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.deploy == false)
+    uses: ./.github/workflows/_docs.yml
+    permissions:
+      contents: read
+
+  docs-deploy:
+    name: Build and Deploy Docs
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.deploy == true)
+    uses: ./.github/workflows/_docs-deploy.yml
+    permissions:
+      contents: read
+      pages: write
+      id-token: write

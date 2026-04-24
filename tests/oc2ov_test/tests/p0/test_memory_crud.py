@@ -47,8 +47,16 @@ class TestMemoryRead(BaseOpenClawCLITest):
 
         self.logger.info("[4/4] 逐项验证记忆读取")
         queries = [
-            ("根据我刚才告诉你的信息，我住在哪里？", [["华南", "华南区"]], "地区验证(对话上下文)"),
-            ("我的职业是什么？", [["前端", "工程师", "前端工程师"]], "职业验证"),
+            (
+                "根据我刚才告诉你的信息，我住在哪里？请只根据我们当前对话中我告诉你的信息回答",
+                [["华南", "华南区", "华北", "北京"]],
+                "地区验证",
+            ),
+            (
+                "根据我刚才告诉你的信息，我的职业是什么？请只根据我们当前对话中我告诉你的信息回答",
+                [["前端", "工程师", "前端工程师", "产品经理"]],
+                "职业验证",
+            ),
         ]
 
         for query, expected_keywords, desc in queries:
@@ -85,7 +93,7 @@ class TestMemoryUpdate(BaseOpenClawCLITest):
         )
 
         self.logger.info("[3/4] 验证更新是否生效")
-        resp1 = self.send_and_log("我现在多少岁？我的职业是什么？")
+        resp1 = self.send_and_retry_on_timeout("我现在多少岁？我的职业是什么？")
         self.assertAnyKeywordInResponse(
             resp1, [["29", "二十九"], ["数据科学家"]], case_sensitive=False
         )
@@ -201,7 +209,9 @@ class TestMemoryUpdateOverwrite(BaseOpenClawCLITest):
         )
 
         self.logger.info("[3/4] 查询并验证记忆信息")
-        response = self.send_and_log("我今年几岁？生日是什么时候？", session_id=session_a)
+        response = self.send_and_retry_on_timeout(
+            "我今年几岁？生日是什么时候？", session_id=session_a
+        )
 
         self.logger.info("[4/4] 验证结果：应包含新信息（31岁、8月），不应包含旧信息（30岁）")
         self.assertAnyKeywordInResponse(

@@ -53,41 +53,53 @@ Request
 | 类型 | 格式 | 解析结果 | 存储位置 |
 |------|------|----------|----------|
 | Root Key | `secrets.token_hex(32)` | role=ROOT | `ov.conf` server 段 |
-| User Key | `secrets.token_hex(32)` | (account_id, user_id, role) | per-account `/{account_id}/_system/users.json` |
+| User Key (Legacy) | `secrets.token_hex(32)` | (account_id, user_id, role) | per-account `/{account_id}/_system/users.json` |
+| User Key (New) | `base64url(account_id).base64url(user_id).base64url(secret)` | (account_id, user_id, role) | per-account `/{account_id}/_system/users.json` |
 
-所有 API Key 均为纯随机 token，不带前缀，不携带任何身份信息。Key 本身不区分 root 还是 user —— 服务端通过查表确定身份：先比对 root key，不匹配则查 user key 索引。
+**新版 API Key 格式**：`base64url(account_id).base64url(user_id).base64url(secret)`
+- 可直接从 key 中解码出 account_id 和 user_id（快速路径）
+- 最后一段 secret 为 32 字节随机数（`secrets.token_hex(32)`）的 base64url 编码
+- key 可通过前缀索引（key 前 8 字符）快速查找，也可直接解析身份
+- 支持两种格式完全兼容：新 key 可通过直接解析或前缀索引解析，旧 key 继续通过前缀索引解析
 
 用户的角色（ADMIN / USER）不由 key 决定，而是存储在 account 内的用户注册表中。
 
+**Key 加密存储**：
+- 支持 Argon2id 哈希存储 User Key（可选，通过 `encryption_enabled` 启用）
+- 加密时存储：`key_prefix`（前 8 字符） + `key_hash`（Argon2id 哈希）
+- 验证时：先用 key_prefix 快速定位候选 entry，再用 Argon2id 验证
+
 ### 2.2 User Key 机制
 
-注册用户时生成随机 key，存入对应 account 的 `users.json`。验证时查表匹配。
+注册用户时生成新版格式 key，存入对应 account 的 `users.json`。验证时优先走快速路径（直接解析），回退到前缀索引查找。
 
-**生成**：`secrets.token_hex(32)` → `7f3a9c1e...`（存入 users.json）
-**验证**：先比对 root key → 不匹配 → 在内存索引中查找 → 得到 `(account_id, user_id, role)`
+**生成（新版）**：`generate_api_key(account_id, user_id)` → `base64url(account_id).base64url(user_id).base64url(secret)`
+**生成（旧版）**：`secrets.token_hex(32)` → `7f3a9c1e...`（仅用于兼容）
+**验证**：先比对 root key → 不匹配 → 检查是否为新版格式 → 直接解析并验证 → 失败则走前缀索引查找
 
 **完整场景**：
 
 ```
 1. Root 创建工作区 acme，指定 alice 为首个 admin
    POST /api/v1/admin/accounts  {"account_id": "acme", "admin_user_id": "alice"}
-   → 创建工作区 + 注册 alice(role=admin) + 返回 alice 的 key: 7f3a9c1e...
+   → 创建工作区 + 注册 alice(role=admin) + 返回 alice 的 user key: YWNtZQ==.YWxpY2U=.OWFmZTEyMjc2YTU3Njkz...
 
 2. alice 用 key 访问 API
-   GET /api/v1/fs/ls?uri=viking://  -H "X-API-Key: 7f3a9c1e..."   → 200 OK
+   GET /api/v1/fs/ls?uri=viking://  -H "X-API-Key: YWNtZQ==.YWxpY2U=.OWFmZTEyMjc2YTU3Njkz..."   → 200 OK
+   → 服务端直接从 key 解析出 account_id="acme", user_id="alice"，再验证 secret
 
 3. alice（admin）注册普通用户 bob
-   POST /api/v1/admin/accounts/acme/users  {"user_id": "bob"}      → 注册成功 + 返回 key: d91f5b2a...
+   POST /api/v1/admin/accounts/acme/users  {"user_id": "bob"}      → 注册成功 + 返回 key: YWNtZQ==.Ym9i.5b2a...
 
-4. bob 丢了 key，alice 重新生成（旧 key 立即失效）
-   POST /api/v1/admin/accounts/acme/users/bob/key                  → e82d4e0f...（新 key）
-   bob 用旧的 d91f5b2a... 访问 → 401（已失效）
+4. bob 丢了 key，alice 重新生成（旧 key 立即失效，新 key 为新版格式）
+   POST /api/v1/admin/accounts/acme/users/bob/key                  → YWNtZQ==.Ym9i.ZWgyZDRm...（新 key）
+   bob 用旧 key 访问 → 401（已失效）
 
 5. bob 的 key 泄露 → 重新生成即可，只影响 bob
 
 6. alice 移除 bob
    DELETE /api/v1/admin/accounts/acme/users/bob                    → 注册表和 key 一起删除
-   bob 再用 key 访问 → 查表找不到 → 401
+   bob 再用 key 访问 → 解析验证/查表找不到 → 401
 ```
 
 ### 2.3 Key 存储
@@ -107,11 +119,19 @@ Request
     }
 }
 
-// /acme/_system/users.json —— acme 工作区的用户注册表
+// /acme/_system/users.json —— acme 工作区的用户注册表（未加密）
 {
     "users": {
-        "alice": { "role": "admin", "key": "7f3a9c1e..." },
-        "bob":   { "role": "user",  "key": "d91f5b2a..." }
+        "alice": { "role": "admin", "key": "YWNtZQ==.YWxpY2U=.OWFmZTEy..." },
+        "bob":   { "role": "user",  "key": "YWNtZQ==.Ym9i.ZWgyZDRm..." }
+    }
+}
+
+// /acme/_system/users.json —— acme 工作区的用户注册表（已加密）
+{
+    "users": {
+        "alice": { "role": "admin", "key": "$argon2id$v=19$m=65536,t=3,p=2$...", "key_prefix": "YWNtZQ==" },
+        "bob":   { "role": "user",  "key": "$argon2id$v=19$m=65536,t=3,p=2$...", "key_prefix": "YWNtZQ==" }
     }
 }
 ```
@@ -120,23 +140,57 @@ Request
 
 **为什么存 AGFS**：User key 是运行时通过 Admin API 动态增删的，不能放 ov.conf。选择 AGFS 的核心理由是多节点一致性——多个 server 共享同一个 AGFS 后端时，一个节点创建的用户其他节点立即可见。
 
-### 2.4 新模块 `openviking/server/api_keys.py`
+### 2.4 新模块 `openviking/server/api_keys/`
 
+API Key 管理重构为模块化结构：
+
+```
+openviking/server/api_keys/
+├── __init__.py       # 统一对外接口，导出 APIKeyManager（默认 NewAPIKeyManager）
+├── legacy.py         # 原版 APIKeyManager（保留兼容，重命名为 LegacyAPIKeyManager）
+└── new.py            # 新版 NewAPIKeyManager，支持新版三段式 Key 格式
+```
+
+**导出接口（`__init__.py`）**：
+```python
+# 默认使用新版实现
+from .new import NewAPIKeyManager as APIKeyManager
+
+# 同时导出工具函数和 Legacy 实现
+from .new import is_new_format_key, parse_api_key, generate_api_key
+from .legacy import LegacyAPIKeyManager
+```
+
+**核心类 APIKeyManager**：
 ```python
 class APIKeyManager:
-    """API Key 生命周期管理与解析"""
+    """API Key 生命周期管理与解析（新版实现）"""
 
-    def __init__(self, root_key: str, agfs_client: AGFSClient)
+    def __init__(self, root_key: str, viking_fs: VikingFS, encryption_enabled: bool = False)
     async def load()                                     # 加载所有 account 的 users.json 到内存
-    async def save_account(account_id: str)              # 持久化指定 account 的 users.json
-    def resolve(api_key: str) -> ResolvedIdentity        # Key → 身份 + 角色
-    def create_account(account_id: str, admin_user_id: str) -> str  # 创建工作区 + 首个 admin，返回 admin 的 user key
-    def delete_account(account_id: str)                  # 删除工作区
-    def register_user(account_id, user_id, role) -> str  # 注册用户，返回 user key
-    def remove_user(account_id, user_id)                 # 移除用户
-    def regenerate_key(account_id, user_id) -> str       # 重新生成 user key（旧 key 失效）
-    def set_role(account_id, user_id, role)              # 修改用户角色（仅 ROOT）
+    def resolve(api_key: str) -> ResolvedIdentity        # Key → 身份 + 角色（支持新版/旧版两种格式）
+    async def create_account(account_id: str, admin_user_id: str, namespace_policy=None) -> str
+    async def delete_account(account_id: str)
+    async def register_user(account_id, user_id, role="user") -> str
+    async def remove_user(account_id, user_id)
+    async def regenerate_key(account_id, user_id) -> str  # 重新生成 key（升级为新版格式）
+    async def set_role(account_id, user_id, role)
+    def get_accounts() -> list
+    def get_users(account_id) -> list
+    def get_account_policy(account_id) -> AccountNamespacePolicy
 ```
+
+**新版 Key 工具函数**：
+```python
+def is_new_format_key(api_key: str) -> bool
+def parse_api_key(api_key: str) -> Tuple[str, str, str]  # (account_id, user_id, secret)
+def generate_api_key(account_id: str, user_id: str) -> str
+```
+
+**兼容策略**：
+- `resolve()` 自动检测 key 格式，新版走快速解析路径，旧版走前缀索引
+- `regenerate_key()` 总是生成新版格式 key，可用于存量 key 升级
+- 存储格式与 Legacy 完全兼容，可无缝切换
 
 ---
 
@@ -689,9 +743,9 @@ config = ServerConfig(
 
 #### T2: API Key Manager
 
-**新建** `openviking/server/api_keys.py`，依赖：T1
+**重构** `openviking/server/api_keys.py` → `openviking/server/api_keys/` 目录，依赖：T1
 
-##### 存储结构
+##### 存储结构（与 Legacy 兼容）
 
 Per-account 存储，两级文件：
 
@@ -704,83 +758,112 @@ Per-account 存储，两级文件：
     }
 }
 
-# /{account_id}/_system/users.json — 该 account 的用户注册表
+# /{account_id}/_system/users.json — 该 account 的用户注册表（未加密）
 {
     "users": {
-        "alice": {"role": "admin", "key": "7f3a9c1e..."},
-        "bob": {"role": "user", "key": "d91f5b2a..."}
+        "alice": {"role": "admin", "key": "YWNtZQ==.YWxpY2U=.OWFmZTEy..."},
+        "bob": {"role": "user", "key": "YWNtZQ==.Ym9i.ZWgyZDRm..."}
+    }
+}
+
+# /{account_id}/_system/users.json — 该 account 的用户注册表（已加密）
+{
+    "users": {
+        "alice": {"role": "admin", "key": "$argon2id$v=19$...", "key_prefix": "YWNtZQ=="},
+        "bob": {"role": "user", "key": "$argon2id$v=19$...", "key_prefix": "YWNtZQ=="}
     }
 }
 ```
 
 内存索引（启动时从所有 account 加载）：
 ```python
-self._user_keys: Dict[str, UserKeyEntry] = {}   # {key_str -> (account_id, user_id, role)}
-self._accounts: Dict[str, AccountInfo] = {}      # {account_id -> AccountInfo(users)}
+self._prefix_index: Dict[str, List[UserKeyEntry]] = {}  # {key_prefix -> [entries]}
+self._accounts: Dict[str, AccountInfo] = {}            # {account_id -> AccountInfo(users)}
 ```
 
-##### 方法逻辑
+##### 方法逻辑（新版 NewAPIKeyManager）
 
-**`__init__(root_key, agfs_url)`**：
+**`__init__(root_key, viking_fs, encryption_enabled=False)`**：
 - 存储 root_key
-- 创建 pyagfs.AGFSClient(agfs_url) 用于读写 AGFS 文件
+- 接收 VikingFS 实例（而非 AGFS URL）
+- 可选启用 Argon2id 加密存储
 
 **`async load()`**：
 - 从 AGFS 读取 `/_system/accounts.json`，若不存在则创建 default account
 - 遍历每个 account，读取 `/{account_id}/_system/users.json`
-- 构建全局 key → (account_id, user_id, role) 索引
-
-**`async save_account(account_id)`**：
-- 将指定 account 的用户数据写回 `/{account_id}/_system/users.json`
-- 同时更新 `/_system/accounts.json`（若 account 列表有变化）
+- 构建前缀索引：key 前 8 字符 → [UserKeyEntry]
+- 支持自动迁移：plaintext key → hashed key（当 encryption_enabled=True 时）
 
 **`resolve(api_key) -> ResolvedIdentity`**：
 ```
-# Key 无前缀，顺序匹配
+# 快速路径 + 兼容路径
 if hmac.compare_digest(key, self._root_key):
     → ResolvedIdentity(role=ROOT)
-entry = self._user_keys.get(key)
-if entry:
-    → ResolvedIdentity(role=entry.role, account_id=entry.account_id, user_id=entry.user_id)
+
+# 新版格式：直接解析 identity
+if is_new_format_key(api_key):
+    try:
+        account_id, user_id, secret = parse_api_key(api_key)
+        account = self._accounts.get(account_id)
+        if account and user_id in account.users:
+            # 验证 secret（支持 plaintext 或 hashed）
+            if verify_secret(api_key, account.users[user_id]):
+                → ResolvedIdentity(role, account_id, user_id)
+    except:
+        pass  # 解析失败回退到前缀索引
+
+# Legacy 格式：前缀索引查找
+key_prefix = key[:8]
+for entry in self._prefix_index.get(key_prefix, []):
+    if verify_api_key(key, entry):
+        → ResolvedIdentity(role=entry.role, account_id=entry.account_id, user_id=entry.user_id)
+
 raise UnauthenticatedError
 ```
 
-**`create_account(account_id, admin_user_id) -> str`**：
+**`async create_account(account_id, admin_user_id, namespace_policy=None) -> str`**：
 - 验证 account_id 格式
 - 检查 account_id 不重复
 - 创建 account 记录到 `_accounts`
-- 注册首个 admin 用户，生成 `secrets.token_hex(32)` 作为 key
-- 持久化 `/_system/accounts.json` 和 `/{account_id}/_system/users.json`
+- 注册首个 admin 用户，生成 `generate_api_key(account_id, admin_user_id)`（新版格式）
+- 可选存储 namespace_policy
+- 持久化 `/_system/accounts.json`、`/{account_id}/_system/users.json` 和 setting.json
 - 返回 admin 的 user key
 
-**`delete_account(account_id)`**：
+**`async delete_account(account_id)`**：
 - 从 `_accounts` 删除
-- 从 `_user_keys` 中删除该 account 的所有 key
+- 从 `_prefix_index` 中删除该 account 的所有 key
 - 删除 `/_system/accounts.json` 中的记录
 - **注意**：AGFS 数据和 VectorDB 数据的级联清理由 Admin Router 调用方负责
 
-**`register_user(account_id, user_id, role="user") -> str`**：
+**`async register_user(account_id, user_id, role="user") -> str`**：
 - 检查 account_id 存在
-- 生成 `secrets.token_hex(32)` 作为 key
-- 写入 account 用户表和全局索引
-- 调用 `save_account(account_id)`
+- 生成 `generate_api_key(account_id, user_id)`（新版格式）
+- 写入 account 用户表和前缀索引
+- 持久化 `/{account_id}/_system/users.json`
 - 返回 user key
 
-**`remove_user(account_id, user_id)`**：
-- 从 account 用户表和全局索引中移除
-- 调用 `save_account(account_id)`
+**`async remove_user(account_id, user_id)`**：
+- 从 account 用户表和前缀索引中移除
+- 持久化 `/{account_id}/_system/users.json`
 
-**`regenerate_key(account_id, user_id) -> str`**：
-- 删除旧 key 的全局索引
-- 生成新随机 key
-- 更新用户表和全局索引
-- 调用 `save_account(account_id)`
+**`async regenerate_key(account_id, user_id) -> str`**：
+- 删除旧 key 的前缀索引
+- 生成 `generate_api_key(account_id, user_id)`（新版格式，用于升级）
+- 更新用户表和前缀索引
+- 持久化 `/{account_id}/_system/users.json`
 - 返回新 key
 
-**`set_role(account_id, user_id, role)`**：
+**`async set_role(account_id, user_id, role)`**：
 - 更新用户角色（仅 ROOT 可调用）
-- 更新全局索引中的 role
-- 调用 `save_account(account_id)`
+- 更新前缀索引中的 role
+- 持久化 `/{account_id}/_system/users.json`
+
+##### 兼容策略
+
+- `LegacyAPIKeyManager` 保留在 `api_keys/legacy.py` 中，完整保留原行为
+- `NewAPIKeyManager` 完整支持旧格式 key 的解析和存储
+- `regenerate_key()` 可用于将旧格式 key 升级为新版格式
 
 ---
 
@@ -1428,7 +1511,10 @@ Phase 2 涉及存储隔离，需新增隔离相关示例：
 | 文件 | 改动类型 | 阶段 | 说明 |
 |------|----------|------|------|
 | `openviking/server/identity.py` | **新建** | P1 | Role(ROOT/ADMIN/USER), ResolvedIdentity, RequestContext |
-| `openviking/server/api_keys.py` | **新建** | P1 | APIKeyManager（per-account 存储，全局索引） |
+| `openviking/server/api_keys.py` | **删除** | - | 原文件重构为目录结构 |
+| `openviking/server/api_keys/__init__.py` | **新建** | P1 | 统一对外接口，导出 APIKeyManager = NewAPIKeyManager |
+| `openviking/server/api_keys/legacy.py` | **新建** | P1 | 原 APIKeyManager 完整迁移，重命名为 LegacyAPIKeyManager |
+| `openviking/server/api_keys/new.py` | **新建** | P1 | 新版 NewAPIKeyManager，支持三段式 key、加密存储 |
 | `openviking/server/routers/admin.py` | **新建** | P1 | Admin 管理端点（account/user CRUD、角色管理） |
 | `openviking/server/auth.py` | 重写 | P1 | verify_api_key → resolve_identity + require_role + get_request_context |
 | `openviking/server/config.py` | 修改 | P1 | api_key → root_api_key |

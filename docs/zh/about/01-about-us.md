@@ -115,7 +115,7 @@ Haojie Qin, Jiahui Zhou, Linggang Wang, Maojia Sheng, Yaohui Sun
 
 扫描下方二维码加入飞书群组，与核心开发团队实时交流：
 
-![飞书扫码加群](/docs/images/lark-group-qrcode.png)
+![飞书扫码加群](/lark-group-qrcode.png)
 
 *注：加入群组前请确保已安装 [飞书客户端](https://www.feishu.cn/)*
 
@@ -123,7 +123,7 @@ Haojie Qin, Jiahui Zhou, Linggang Wang, Maojia Sheng, Yaohui Sun
 
 扫描下方二维码添加小助手微信，备注「OpenViking」后即可加入微信交流群：
 
-![微信扫码加群](/docs/images/wechat-group-qrcode.png)
+![微信扫码加群](/wechat-group-qrcode.png)
 
 **Discord**
 

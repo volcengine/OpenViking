@@ -254,7 +254,7 @@ class TestAssembleArchiveReplay(BaseOpenClawCLITest):
         time.sleep(5)
 
         self.logger.info("[7/7] 在新 session B 中查询，验证 archive 回放")
-        response = self.send_and_log(
+        response = self.send_and_retry_on_timeout(
             f"我之前提到的{unique_marker}是什么？目标是什么？请从你的记忆或上下文中搜索",
             session_id=session_b,
         )
@@ -417,7 +417,7 @@ class TestArchiveExpand(BaseOpenClawCLITest):
             self.logger.warning(f"  未找到本次新增/更新且包含'{unique_marker}'的记忆文件")
 
         self.logger.info("[7/8] 询问 archive 中的细节问题，触发 ov_archive_expand")
-        response = self.send_and_log(
+        response = self.send_and_retry_on_timeout(
             f"关于{unique_marker}，合作伙伴是谁？预算和交付时间是什么？请仔细回忆所有细节",
             session_id=session_id,
         )
@@ -579,7 +579,7 @@ class TestCompactArchiveGeneration(BaseOpenClawCLITest):
             self.logger.warning("  未找到本次新增/更新且包含'天穹'的记忆文件")
 
         self.logger.info("[6/7] 验证 archive 生成后，agent 仍能回答早期信息")
-        response = self.send_and_log(
+        response = self.send_and_retry_on_timeout(
             "我负责的项目叫什么？核心模块是什么？",
             session_id=session_id,
         )
@@ -590,7 +590,7 @@ class TestCompactArchiveGeneration(BaseOpenClawCLITest):
         )
 
         self.logger.info("[7/7] 验证 archive 生成后，agent 仍能回答近期信息")
-        response2 = self.send_and_log(
+        response2 = self.send_and_retry_on_timeout(
             "我们团队有几个人？项目截止日期是什么时候？",
             session_id=session_id,
         )
@@ -662,7 +662,7 @@ class TestCrossSessionRecall(BaseOpenClawCLITest):
             self.logger.info(f"  记忆提取成功: {has_memories}")
 
         self.logger.info("[6/7] 在全新的 session B 中查询相同信息")
-        response = self.send_and_log(
+        response = self.send_and_retry_on_timeout(
             f"我之前提到的{unique_marker}是什么？有什么特点？",
             session_id=session_b,
         )

@@ -246,6 +246,11 @@ class TestEnsurePublicRemoteTarget:
         ensure_public_remote_target("git@github.com:user/repo.git")  # should not raise
 
     @patch("openviking.utils.network_guard._resolve_host_addresses")
+    def test_allows_azure_devops_domain_from_platform_specific_config(self, mock_resolve) -> None:
+        mock_resolve.return_value = {"127.0.0.1"}
+        ensure_public_remote_target("git@ssh.dev.azure.com:v3/org/project/repo")  # should not raise
+
+    @patch("openviking.utils.network_guard._resolve_host_addresses")
     def test_allows_when_dns_returns_empty(self, mock_resolve) -> None:
         """Unresolvable host is allowed through (fail-open for DNS)."""
         mock_resolve.return_value = set()

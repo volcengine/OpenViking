@@ -85,6 +85,7 @@ impl CliContext {
             self.config.account.clone(),
             self.config.user.clone(),
             timeout_secs.unwrap_or(self.config.timeout),
+            self.config.extra_headers.clone(),
         )
     }
 }
@@ -666,6 +667,15 @@ enum AdminCommands {
     ListUsers {
         /// Account ID
         account_id: String,
+        /// Maximum number of users to list (default: 100)
+        #[arg(long, default_value = "100")]
+        limit: u32,
+        /// Filter users by name (supports wildcard * and ?)
+        #[arg(long)]
+        name: Option<String>,
+        /// Filter users by role
+        #[arg(long)]
+        role: Option<String>,
     },
     /// Remove a user from an account
     RemoveUser {
@@ -994,6 +1004,7 @@ mod tests {
             output: "table".to_string(),
             echo_command: true,
             upload: Default::default(),
+            extra_headers: None,
         };
 
         let ctx = CliContext::from_config(
@@ -1024,6 +1035,7 @@ mod tests {
             output: "table".to_string(),
             echo_command: true,
             upload: Default::default(),
+            extra_headers: None,
         };
 
         // Without sudo: use api_key

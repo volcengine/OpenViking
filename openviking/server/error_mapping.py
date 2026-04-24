@@ -12,6 +12,7 @@ from openviking_cli.exceptions import (
     ConflictError,
     FailedPreconditionError,
     InvalidArgumentError,
+    InvalidURIError,
     NotFoundError,
     OpenVikingError,
     PermissionDeniedError,
@@ -25,7 +26,26 @@ def is_not_found_error(exc: Exception) -> bool:
     if isinstance(exc, AGFSHTTPError) and exc.status_code == 404:
         return True
     message = str(exc).lower()
-    return "not found" in message or "no such file or directory" in message
+    return any(
+        marker in message
+        for marker in (
+            "not found",
+            "no such file",
+            "does not exist",
+        )
+    )
+
+
+def is_invalid_uri_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(
+        marker in message
+        for marker in (
+            "invalid uri",
+            "invalid viking uri",
+            "invalid viking://",
+        )
+    )
 
 
 def map_exception(
@@ -44,6 +64,8 @@ def map_exception(
         return NotFoundError(resource or str(exc), resource_type)
     if isinstance(exc, ValueError):
         message = str(exc)
+        if is_invalid_uri_error(exc):
+            return InvalidURIError(resource or message, message)
         if "not a directory" in message.lower():
             details = {"resource": resource} if resource else None
             return FailedPreconditionError(message, details=details)
@@ -67,6 +89,8 @@ def map_exception(
         message = str(exc)
         if is_not_found_error(exc):
             return NotFoundError(resource or message, resource_type)
+        if is_invalid_uri_error(exc):
+            return InvalidURIError(resource or message, message)
         lowered = message.lower()
         if "permission denied" in lowered:
             return PermissionDeniedError(message, resource=resource)
@@ -78,6 +102,8 @@ def map_exception(
     lowered = message.lower()
     if is_not_found_error(exc):
         return NotFoundError(resource or message, resource_type)
+    if is_invalid_uri_error(exc):
+        return InvalidURIError(resource or message, message)
     if "permission denied" in lowered or "access denied" in lowered:
         return PermissionDeniedError(message, resource=resource)
     if "timeout" in lowered or "connection refused" in lowered:

@@ -1,0 +1,31 @@
+name: 17. _Docs Build
+
+on:
+  workflow_call:
+
+jobs:
+  build:
+    name: Build Docs
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+
+      - name: Install docs dependencies
+        run: npm ci
+        working-directory: docs
+
+      - name: Build docs
+        run: npm run docs:build
+        working-directory: docs
+        env:
+          DOCS_BASE: /${{ github.event.repository.name }}/

@@ -436,6 +436,42 @@ async def test_add_message_persistence_regression(client: httpx.AsyncClient, ser
     assert session.messages[1].content == "Message B"
 
 
+async def test_get_session_pending_tokens_counts_tool_only_messages(
+    client: httpx.AsyncClient, service
+):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+    tool_output = "x" * 120
+
+    resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json=_message_request(
+            "user",
+            parts=[
+                {
+                    "type": "tool",
+                    "tool_id": "call-1",
+                    "tool_name": "shell",
+                    "tool_output": tool_output,
+                    "tool_status": "completed",
+                }
+            ],
+        ),
+    )
+    assert resp.status_code == 200
+
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    session = service.sessions.session(ctx, session_id)
+    await session.load()
+    expected_tokens = session.messages[0].estimated_tokens
+    assert expected_tokens > 0
+    assert session.messages[0].content == ""
+
+    get_resp = await client.get(f"/api/v1/sessions/{session_id}")
+    assert get_resp.status_code == 200
+    assert get_resp.json()["result"]["pending_tokens"] == expected_tokens
+
+
 async def test_delete_session(client: httpx.AsyncClient):
     create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]

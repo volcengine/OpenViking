@@ -18,7 +18,7 @@ OpenViking 使用两层 API Key 体系：
 | 模式 | `server.auth_mode` | 身份来源 | 典型使用场景 |
 |------|--------------------|----------|--------------|
 | API Key 模式 | `"api_key"` | API Key，root 请求可附带租户请求头 | 标准多租户部署 |
-| Trusted 模式 | `"trusted"` | `X-OpenViking-Account` / `X-OpenViking-User` / 可选 `X-OpenViking-Agent` 请求头；非 localhost 部署还必须配置 `root_api_key` | 部署在受信网关或内网边界之后 |
+| Trusted 模式 | `"trusted"` | `X-OpenViking-Account` / `X-OpenViking-User` / 可选 `X-OpenViking-Agent`；非 localhost 部署还必须配置 `root_api_key`。角色会从 APIKeyManager 查询（如果用户存在） | 部署在受信网关或内网边界之后 |
 | Dev 模式 | `"dev"` | 无认证，始终为 ROOT | 仅限本地开发 |
 
 如果未显式配置 `auth_mode`：
@@ -48,7 +48,7 @@ openviking-server
 
 ## 管理账户和用户
 
-本节只适用于 `api_key` 模式。在 `trusted` 模式下，普通请求不会走 user key 的注册或查找链路。
+普通读写、检索、会话等数据请求在 `api_key` 和 `trusted` 两种模式下都不依赖 Admin API 预注册。Admin API 仍然负责创建 account、注册用户、修改角色以及签发 user key。
 
 使用 root key 通过 Admin API 创建工作区和用户：
 
@@ -66,6 +66,40 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users \
   -H "Content-Type: application/json" \
   -d '{"user_id": "bob", "role": "user"}'
 # 返回: {"result": {"account_id": "acme", "user_id": "bob", "user_key": "..."}}
+```
+
+受信部署也可以通过受信网关调用 Admin API，目前支持两种方式：
+
+- 只携带受信部署自身的 `root_api_key`。对于 `/api/v1/admin/*`，即使没有 `X-OpenViking-Account` / `X-OpenViking-User`，服务端也会将请求视为 ROOT。
+- 携带 `X-OpenViking-Account` + `X-OpenViking-User`，并使用一个已注册的网关用户。此时服务端会从用户注册表查询该身份的实际角色。
+
+下面是“已注册网关用户”这种方式的示例：
+
+```bash
+# 首先，注册网关管理员（在 api_key 模式下执行一次）
+curl -X POST http://localhost:1933/api/v1/admin/accounts \
+  -H "X-API-Key: your-secret-root-key" \
+  -H "Content-Type: application/json" \
+  -d '{"account_id": "platform", "admin_user_id": "gateway-admin"}'
+
+# 如果它需要跨 account 的管理权限，再提升为 root
+curl -X PUT http://localhost:1933/api/v1/admin/accounts/platform/users/gateway-admin/role \
+  -H "X-API-Key: your-secret-root-key" \
+  -H "Content-Type: application/json" \
+  -d '{"role": "root"}'
+
+# 然后，在 trusted 模式下使用该身份调用 Admin API
+curl -X POST http://localhost:1933/api/v1/admin/accounts \
+  -H "X-API-Key: your-secret-root-key" \
+  -H "X-OpenViking-Account: platform" \
+  -H "X-OpenViking-User: gateway-admin" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "account_id": "acme",
+    "admin_user_id": "alice",
+    "isolate_user_scope_by_agent": true,
+    "isolate_agent_scope_by_user": false
+  }'
 ```
 
 ## 客户端使用
@@ -208,7 +242,9 @@ Trusted 模式规则：
 - 普通数据访问不需要先注册 user key，也不依赖 user key 分发流程
 - 租户级请求必须包含 `X-OpenViking-Account` 和 `X-OpenViking-User`
 - `X-OpenViking-Agent` 可选，缺省为 `default`
-- 每个 trusted 请求都会被解析成 `USER`，身份完全来自请求头，而不是 root key 或 user key
+- `/api/v1/admin/*` 是特例：如果没有显式身份，trusted 模式会将请求视为 ROOT，用于只通过部署级 root API key 认证的受信上游
+- 角色通过在 APIKeyManager 中查找 account/user 确定。如果用户存在，使用其配置的角色；否则默认为 `USER`
+- trusted 身份完全来自请求头，而不是 user key；如果同时配置了 `root_api_key`，它仍然只是“这个上游是被允许的 trusted 调用方”的证明
 - 如果同时配置了 `root_api_key`，每个请求仍然必须带匹配的 API Key
 - 只应部署在受信网络边界之后，或由身份注入网关统一转发
 
@@ -216,7 +252,10 @@ Trusted 模式规则：
 
 - `trusted` 不是开发模式
 - `trusted` 下的普通读写、检索、会话访问不需要先走 Admin API 注册流程
-- 创建 account、注册用户、修改角色、重新生成 key 仍然属于 `api_key` 模式下的管理链路；如果服务端运行在 `trusted` 模式而你去调用这些 Admin API，服务端会返回明确错误，说明 `trusted` 不支持这类注册式管理，并提示切换到配置了 `root_api_key` 的 `api_key` 模式
+- `trusted` 模式下，已注册并具有适当角色（root/admin）的用户仍然可以调用 Admin API
+- `trusted` 模式下，创建 account 或注册用户的 Admin API 响应不会返回 `user_key`
+- `root` 可以创建/删除 account 并修改角色；`admin` 可以管理自己 account 下的用户；`user` 不能调用 Admin API
+- 要在 trusted 模式下使用 Admin API，首先需要在 api_key 模式下使用 Admin API 注册网关服务账户并赋予适当角色
 
 **curl**
 
@@ -275,7 +314,7 @@ client = ov.SyncHTTPClient(
 | ADMIN | 所属 account | 常规操作 + 管理所属 account 的用户 |
 | USER | 所属 account | 常规操作（ls、read、find、sessions 等） |
 
-在 `trusted` 模式下，请求角色会解析为 `USER`，因此普通流量不适用 ROOT/ADMIN 的注册式管理语义。
+在 `trusted` 模式下，普通租户请求默认会解析为 `USER`；如果该 account/user 已注册更高角色，则使用注册角色。对于 Admin 路由，在没有显式身份时还支持 trusted ROOT 回退。
 
 ## 无需认证的端点
 

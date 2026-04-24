@@ -3,6 +3,7 @@
 """FastAPI application for OpenViking HTTP Server."""
 
 import asyncio
+import logging
 import time
 from contextlib import asynccontextmanager
 from typing import Callable, Optional
@@ -82,11 +83,7 @@ def create_app(
 
         # Initialize APIKeyManager after service (needs VikingFS)
         effective_auth_mode = config.get_effective_auth_mode()
-        if (
-            effective_auth_mode == AuthMode.API_KEY
-            and config.root_api_key
-            and config.root_api_key != ""
-        ):
+        if config.root_api_key and config.root_api_key != "":
             api_key_manager = APIKeyManager(
                 root_key=config.root_api_key,
                 viking_fs=service.viking_fs,
@@ -186,6 +183,20 @@ def create_app(
     # Add request timing middleware last (so it executes first as the outermost layer)
     # This ensures X-Process-Time includes the full request duration including
     # observability middleware overhead.
+    # Add request header logging middleware (for debug)
+    @app.middleware("http")
+    async def log_request_headers(request: Request, call_next: Callable):
+        access_logger = logging.getLogger("uvicorn.access")
+        if access_logger.isEnabledFor(logging.DEBUG):
+            headers = dict(request.headers)
+            header_names = ", ".join(sorted(headers.keys()))
+            access_logger.debug(
+                f"Request headers for {request.method} {request.url.path}: {header_names}"
+            )
+        response = await call_next(request)
+        return response
+
+    # Add request timing middleware
     @app.middleware("http")
     async def add_timing(request: Request, call_next: Callable):
         """

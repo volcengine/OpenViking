@@ -37,6 +37,7 @@ class InvalidURIError(InvalidArgumentError):
         if reason:
             message += f" ({reason})"
         super().__init__(message, details={"uri": uri, "reason": reason})
+        self.code = "INVALID_URI"
 
 
 class UnsupportedDirectoryFilesError(InvalidArgumentError):

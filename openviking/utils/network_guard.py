@@ -26,17 +26,29 @@ def _get_allowed_code_hosting_domains() -> set[str]:
     allowed = set()
     try:
         config = get_openviking_config()
-        # Add configured GitHub and GitLab domains
+        # Add configured code hosting domains
         if hasattr(config, "code"):
             if hasattr(config.code, "github_domains"):
                 allowed.update(config.code.github_domains)
             if hasattr(config.code, "gitlab_domains"):
                 allowed.update(config.code.gitlab_domains)
+            if hasattr(config.code, "azure_devops_domains"):
+                allowed.update(config.code.azure_devops_domains)
             if hasattr(config.code, "code_hosting_domains"):
                 allowed.update(config.code.code_hosting_domains)
     except Exception:
         # If config can't be loaded, use defaults
-        allowed.update({"github.com", "gitlab.com", "www.github.com", "www.gitlab.com"})
+        allowed.update(
+            {
+                "github.com",
+                "www.github.com",
+                "gitlab.com",
+                "www.gitlab.com",
+                "dev.azure.com",
+                "ssh.dev.azure.com",
+                "vs-ssh.visualstudio.com",
+            }
+        )
     return allowed
 
 
@@ -103,7 +115,7 @@ def ensure_public_remote_target(source: str) -> None:
 
     Skips validation if:
     - allow_private_networks is True in config
-    - Host is in configured github_domains/gitlab_domains/code_hosting_domains
+    - Host is in configured github_domains/gitlab_domains/azure_devops_domains/code_hosting_domains
     """
     host = extract_remote_host(source)
     if not host:
@@ -137,7 +149,8 @@ def ensure_public_remote_target(source: str) -> None:
         raise PermissionDeniedError(
             "HTTP server only accepts public remote resource targets; "
             f"host '{host}' resolves to non-public address '{non_public[0]}'. "
-            "To allow this, add the domain to code.gitlab_domains/code.github_domains/code.code_hosting_domains "
+            "To allow this, add the domain to code.gitlab_domains/code.github_domains/"
+            "code.azure_devops_domains/code.code_hosting_domains "
             "or set allow_private_networks=true in your ov.conf."
         )
 
