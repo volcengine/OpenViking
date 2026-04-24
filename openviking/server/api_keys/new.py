@@ -133,11 +133,13 @@ class NewAPIKeyManager:
             try:
                 account_id, user_id, _ = parse_api_key(api_key)
             except Exception:
-                # Malformed three-segment string: fall through to legacy
-                # resolver. parse_api_key only fails for bytes that cannot be
-                # base64-decoded or are not valid UTF-8, which a well-formed
-                # new-format key never is.
-                return self._legacy.resolve(api_key)
+                # Malformed three-segment string. A legacy key is
+                # `token_hex(32)` and contains no dots, and the root key was
+                # checked above, so falling through to the legacy resolver
+                # gains no compatibility but would let the first 8 chars of
+                # this garbage string hit legacy's prefix-index bucket and
+                # run Argon2 verifies against candidates. Reject directly.
+                raise UnauthenticatedError("Invalid API Key")
 
             # Verify the user exists in the account using legacy's data
             account = self._legacy._accounts.get(account_id)

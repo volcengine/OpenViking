@@ -900,3 +900,51 @@ async def test_resolve_known_user_wrong_secret_does_not_trigger_dummy_verify(
         "additional dummy verify would double the failure cost"
     )
     assert calls[0] != manager_encrypted._dummy_argon2_hash
+
+
+async def test_resolve_malformed_three_segment_key_does_not_fall_through_to_legacy(
+    manager_encrypted, monkeypatch
+):
+    """3-segment garbage that fails parse must reject directly.
+
+    Legacy keys are token_hex(32) with no dots and the root key is already
+    handled earlier in resolve(), so there is no compatibility reason to
+    fall through to LegacyAPIKeyManager.resolve() on parse failure.
+    Falling through would let the garbage string's first 8 chars hit
+    legacy's prefix-index bucket and run Argon2 verify against any
+    collision, re-exposing the oracle / DoS surface we just closed on the
+    post-parse path.
+    """
+    from openviking.server.api_keys import is_new_format_key
+    from openviking.server.api_keys.legacy import LegacyAPIKeyManager
+
+    verify_calls: list[str] = []
+    legacy_resolve_calls: list[str] = []
+    original_verify = LegacyAPIKeyManager._verify_api_key
+    original_legacy_resolve = LegacyAPIKeyManager.resolve
+
+    def spy_verify(self, api_key: str, hashed_key: str) -> bool:
+        verify_calls.append(hashed_key)
+        return original_verify(self, api_key, hashed_key)
+
+    def spy_legacy_resolve(self, api_key: str):
+        legacy_resolve_calls.append(api_key)
+        return original_legacy_resolve(self, api_key)
+
+    monkeypatch.setattr(LegacyAPIKeyManager, "_verify_api_key", spy_verify)
+    monkeypatch.setattr(LegacyAPIKeyManager, "resolve", spy_legacy_resolve)
+
+    # Three dot-separated segments but invalid base64url characters inside,
+    # so is_new_format_key() accepts the shape but parse_api_key() raises.
+    malformed = "!@#.!@#.!@#"
+    assert is_new_format_key(malformed), "precondition: shape check must pass"
+
+    with pytest.raises(UnauthenticatedError):
+        manager_encrypted.resolve(malformed)
+
+    assert not legacy_resolve_calls, (
+        "parse failure on a 3-segment key must not fall through to "
+        "LegacyAPIKeyManager.resolve(); legacy keys have no dots so this "
+        "branch gains no compatibility and only preserves a side channel"
+    )
+    assert not verify_calls, "no Argon2 verify should fire for a malformed new-format key"
