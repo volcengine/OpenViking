@@ -99,7 +99,6 @@ describe("local OpenViking startup failure", () => {
           mode: "local",
           port: 19433,
         },
-        registerContextEngine: vi.fn(),
         registerService: (entry) => {
           service = entry;
         },
@@ -128,14 +127,15 @@ describe("local OpenViking startup failure", () => {
             { messages: [{ content: "hello memory", role: "user" }], prompt: "hello memory" },
             { agentId: "main", sessionId: "test-session", sessionKey: "agent:main:test" },
           ),
-        ).then(() => ({ kind: "returned" as const })),
+        ).then((result) => ({ kind: "returned" as const, result })),
         new Promise<{ kind: "timeout" }>((resolve) => {
           setTimeout(() => resolve({ kind: "timeout" }), 500);
         }),
       ]);
 
       expect(hookOutcome.kind).toBe("returned");
-      expect(logs.some((entry) => entry.message.includes("failed to get client"))).toBe(true);
+      expect(hookOutcome).toMatchObject({ result: undefined });
+      expect(logs.some((entry) => entry.message.includes("failed to get client"))).toBe(false);
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(unhandled).toEqual([]);
     } finally {

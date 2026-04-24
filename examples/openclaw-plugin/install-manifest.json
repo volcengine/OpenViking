@@ -17,6 +17,7 @@
       "client.ts",
       "process-manager.ts",
       "memory-ranking.ts",
+      "recall-context.ts",
       "text-utils.ts",
       "tool-call-id.ts",
       "session-transcript-repair.ts",
@@ -33,7 +34,7 @@
     "omitDev": true
   },
   "compatibility": {
-    "minOpenclawVersion": "2026.3.7",
+    "minOpenclawVersion": "2026.3.22",
     "minOpenvikingVersion": "0.2.9"
   }
 }

@@ -77,6 +77,7 @@ const FALLBACK_CURRENT = {
     "client.ts",
     "process-manager.ts",
     "memory-ranking.ts",
+    "recall-context.ts",
     "text-utils.ts",
     "tool-call-id.ts",
     "session-transcript-repair.ts",
@@ -968,7 +969,7 @@ async function resolvePluginConfig() {
       }
     }
 
-    resolvedMinOpenclawVersion = compatVer || "2026.3.7";
+    resolvedMinOpenclawVersion = compatVer || "2026.3.22";
     resolvedMinOpenvikingVersion = "";
   }
 

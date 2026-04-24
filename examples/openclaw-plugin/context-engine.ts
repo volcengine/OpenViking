@@ -4,6 +4,7 @@ import type { OpenVikingClient, OVMessage } from "./client.js";
 import type { MemoryOpenVikingConfig } from "./config.js";
 import {
   compileSessionPatterns,
+  extractLatestUserText,
   getCaptureDecision,
   extractNewTurnMessages,
   extractSingleMessageText,
@@ -13,6 +14,12 @@ import {
   trimForLog,
   toJsonLog,
 } from "./memory-ranking.js";
+import {
+  buildRecallPromptSection,
+  prepareRecallQuery,
+} from "./recall-context.js";
+import type { RecallPromptSectionResult } from "./recall-context.js";
+import { withTimeout } from "./process-manager.js";
 import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
 
 type AgentMessage = {
@@ -92,6 +99,7 @@ type ContextEngine = {
     messages: AgentMessage[];
     tokenBudget?: number;
     runtimeContext?: Record<string, unknown>;
+    prompt?: string;
   }) => Promise<AssembleResult>;
   compact: (params: {
     sessionId: string;
@@ -797,12 +805,12 @@ export function createMemoryOpenVikingContextEngine(params: {
     return typeof agentId === "string" && agentId.trim() ? agentId.trim() : undefined;
   }
 
-  async function runLocalPrecheck(
+  async function runQuickPrecheck(
     stage: "assemble" | "afterTurn",
     sessionId: string,
     extra: Record<string, unknown> = {},
   ): Promise<boolean> {
-    if (cfg.mode !== "local" || !quickPrecheck) {
+    if (!quickPrecheck) {
       return true;
     }
     const result = await quickPrecheck();
@@ -885,6 +893,94 @@ export function createMemoryOpenVikingContextEngine(params: {
     return { sanitized, archive, session, budgets, instruction };
   }
 
+  function warnOrInfo(message: string): void {
+    if (typeof logger.warn === "function") {
+      logger.warn(message);
+      return;
+    }
+    logger.info(message);
+  }
+
+  function hasUserMessage(msgs: AgentMessage[]): boolean {
+    return msgs.some((msg) => msg.role === "user");
+  }
+
+  function joinSystemPromptAdditions(
+    recallSection: string | undefined,
+    instructionText: string | undefined,
+  ): string | undefined {
+    return [recallSection, instructionText].filter(Boolean).join("\n\n") || undefined;
+  }
+
+  function selectRecallWithinBudget(
+    recallSection: string | undefined,
+    recallTokens: number,
+    baseTokens: number,
+    tokenBudget: number,
+    reason: string,
+    ovSessionId: string,
+  ): string | undefined {
+    if (!recallSection) {
+      return undefined;
+    }
+    if (baseTokens + recallTokens <= tokenBudget) {
+      return recallSection;
+    }
+    warnOrInfo(
+      `openviking: dropping auto-recall for session=${ovSessionId} because ${reason} would exceed tokenBudget=${tokenBudget}`,
+    );
+    return undefined;
+  }
+
+  function attachRecallToMessages(
+    msgs: AgentMessage[],
+    recallSection: string | undefined,
+    preferSystemPrompt: boolean,
+  ): { messages: AgentMessage[]; systemPromptAddition?: string } {
+    const recallSystemPrompt =
+      preferSystemPrompt || !hasUserMessage(msgs) ? recallSection : undefined;
+    const messages = injectRecallIntoMessages(
+      msgs,
+      recallSystemPrompt ? undefined : recallSection,
+    );
+
+    return {
+      messages,
+      ...(recallSystemPrompt ? { systemPromptAddition: recallSystemPrompt } : {}),
+    };
+  }
+
+  function injectRecallIntoMessages(
+    msgs: AgentMessage[],
+    recallSection: string | undefined,
+  ): AgentMessage[] {
+    if (!recallSection) return msgs;
+    const result = [...msgs];
+    let userIdx = -1;
+    for (let i = result.length - 1; i >= 0; i--) {
+      if (result[i].role === "user") { userIdx = i; break; }
+    }
+    if (userIdx < 0) {
+      warnOrInfo("openviking: no user message found for recall injection, recall dropped");
+      return result;
+    }
+    const msg = result[userIdx];
+    const c = msg.content;
+    if (typeof c === "string") {
+      result[userIdx] = { ...msg, content: `${recallSection}\n\n${c}` };
+    } else if (Array.isArray(c)) {
+      result[userIdx] = {
+        ...msg,
+        content: [{ type: "text", text: recallSection }, ...(c as Array<Record<string, unknown>>)],
+      };
+    } else {
+      warnOrInfo(
+        `openviking: unexpected content type (${typeof c}) in user message, recall dropped`,
+      );
+    }
+    return result;
+  }
+
   return {
     info: {
       id,
@@ -910,6 +1006,13 @@ export function createMemoryOpenVikingContextEngine(params: {
       const tokenBudget = validTokenBudget(assembleParams.tokenBudget) ?? 128_000;
       const sessionKey = extractAssembleSessionKey(assembleParams);
       const sender = extractRuntimeSenderId(assembleParams.runtimeContext);
+      const hasPromptText =
+        typeof assembleParams.prompt === "string" && assembleParams.prompt.trim().length > 0;
+      const latestUserText =
+        hasPromptText
+          ? assembleParams.prompt
+          : extractLatestUserText(messages as unknown[]);
+      const recallQuery = prepareRecallQuery(latestUserText);
 
       const originalTokens = roughEstimate(messages);
 
@@ -934,55 +1037,165 @@ export function createMemoryOpenVikingContextEngine(params: {
         return assemblePassthrough(OVSessionId, "session_bypassed", messages, originalTokens);
       }
 
+      let recallText: string | undefined;
       try {
-        if (!(await runLocalPrecheck("assemble", OVSessionId, { tokenBudget }))) {
-          return { messages, estimatedTokens: roughEstimate(messages) };
+        if (!(await runQuickPrecheck("assemble", OVSessionId, {
+          tokenBudget,
+        }))) {
+          return { messages, estimatedTokens: originalTokens };
         }
-        const client = await getClient();
-        const routingRef = assembleParams.sessionId ?? sessionKey ?? OVSessionId;
+        const client = await withTimeout(
+          getClient(),
+          cfg.timeoutMs,
+          "openviking: context engine client initialization timeout",
+        );
+        const routingRef =
+          assembleParams.sessionId ?? sessionKey ?? OVSessionId;
         const agentId = resolveAgentId(routingRef, sessionKey, OVSessionId);
-        const ctx = await client.getSessionContext(OVSessionId, tokenBudget, agentId);
+        if (recallQuery.truncated) {
+          warnOrInfo(
+            `openviking: recall query truncated (chars=${recallQuery.originalChars}->${recallQuery.finalChars})`,
+          );
+        }
+        const runtimeLog = cfg.logFindRequests
+          ? (message: string) => logger.info(message)
+          : undefined;
+
+        const [ctxSettled, recallSettled] = await Promise.allSettled([
+          withTimeout(
+            client.getSessionContext(OVSessionId, tokenBudget, agentId),
+            cfg.timeoutMs,
+            "openviking: session context timeout",
+          ),
+          buildRecallPromptSection({
+            cfg,
+            client,
+            logger,
+            queryText: recallQuery.query,
+            agentId,
+            verboseLog: runtimeLog,
+          }),
+        ]);
+
+        if (ctxSettled.status === "rejected") {
+          warnOrInfo(
+            `openviking: session context unavailable for session=${OVSessionId}: ${String(ctxSettled.reason)}`,
+          );
+        }
+
+        const recallPrompt: RecallPromptSectionResult =
+          recallSettled.status === "fulfilled"
+            ? recallSettled.value
+            : { estimatedTokens: 0, memories: [] };
+        if (recallSettled.status === "rejected") {
+          warnOrInfo(
+            `openviking: assemble recall unavailable for session=${OVSessionId}: ${String(recallSettled.reason)}`,
+          );
+        }
+
+        const ctx =
+          ctxSettled.status === "fulfilled"
+            ? ctxSettled.value
+            : null;
+        recallText = recallPrompt.section;
+        const recallTokens = recallText ? Math.ceil(recallText.length / 4) : 0;
+        const passthroughResult = (): AssembleResult => {
+          const passthroughRecall = selectRecallWithinBudget(
+            recallText,
+            recallTokens,
+            originalTokens,
+            tokenBudget,
+            "passthrough",
+            OVSessionId,
+          );
+          const recalled = attachRecallToMessages(messages, passthroughRecall, hasPromptText);
+          const tokens = passthroughRecall
+            ? originalTokens + recallTokens
+            : originalTokens;
+          return {
+            messages: recalled.messages,
+            estimatedTokens: tokens,
+            ...(recalled.systemPromptAddition
+              ? { systemPromptAddition: recalled.systemPromptAddition }
+              : {}),
+          };
+        };
 
         const preAbstracts = ctx?.pre_archive_abstracts ?? [];
         const hasArchives = !!ctx?.latest_archive_overview || preAbstracts.length > 0;
         const activeCount = ctx?.messages?.length ?? 0;
 
         if (!ctx || (!hasArchives && activeCount === 0)) {
-          return assemblePassthrough(OVSessionId, "no_ov_data", messages, originalTokens, {
+          assemblePassthrough(OVSessionId, "no_ov_data", messages, originalTokens, {
             archiveCount: 0, activeCount: 0,
           });
+          return passthroughResult();
         }
         if (!hasArchives && ctx.messages.length < messages.length) {
-          return assemblePassthrough(OVSessionId, "ov_msgs_fewer_than_input", messages, originalTokens, {
+          assemblePassthrough(OVSessionId, "ov_msgs_fewer_than_input", messages, originalTokens, {
             archiveCount: 0, activeCount,
           });
+          return passthroughResult();
         }
 
-        const { sanitized, archive, session, budgets, instruction } = buildAssembledContext(
+        const contextTokenBudget = recallText
+          ? Math.max(tokenBudget - recallTokens, 0)
+          : tokenBudget;
+        let { sanitized, archive, session, budgets, instruction } = buildAssembledContext(
           ctx.latest_archive_overview,
           preAbstracts,
           ctx.messages,
-          tokenBudget,
+          contextTokenBudget,
           OVSessionId,
         );
 
         if (sanitized.length === 0 && messages.length > 0) {
-          return assemblePassthrough(OVSessionId, "sanitized_empty", messages, originalTokens, {
+          assemblePassthrough(OVSessionId, "sanitized_empty", messages, originalTokens, {
             archiveCount: preAbstracts.length, activeCount,
           });
+          return passthroughResult();
         }
 
-        const assembledTokens = roughEstimate(sanitized) + instruction.tokens;
-        const tokensSaved = originalTokens - assembledTokens;
+        let assembledTokens = roughEstimate(sanitized) + instruction.tokens;
+        let finalRecallText = selectRecallWithinBudget(
+          recallText,
+          recallTokens,
+          assembledTokens,
+          tokenBudget,
+          "assembled context",
+          OVSessionId,
+        );
+        let finalRecallTokens = finalRecallText ? recallTokens : 0;
+        if (recallText && !finalRecallText) {
+          ({ sanitized, archive, session, budgets, instruction } = buildAssembledContext(
+            ctx.latest_archive_overview,
+            preAbstracts,
+            ctx.messages,
+            tokenBudget,
+            OVSessionId,
+          ));
+          assembledTokens = roughEstimate(sanitized) + instruction.tokens;
+        }
+        const recalled = attachRecallToMessages(
+          sanitized,
+          finalRecallText,
+          hasPromptText,
+        );
+        const systemPromptAddition = joinSystemPromptAdditions(
+          recalled.systemPromptAddition,
+          instruction.text,
+        );
+        const finalTokens = assembledTokens + finalRecallTokens;
+        const tokensSaved = originalTokens - finalTokens;
         const savingPct = originalTokens > 0 ? Math.round((tokensSaved / originalTokens) * 100) : 0;
 
         diag("assemble_result", OVSessionId, {
           passthrough: false,
           archiveCount: preAbstracts.length,
           activeCount,
-          outputMessagesCount: sanitized.length,
+          outputMessagesCount: recalled.messages.length,
           inputTokenEstimate: originalTokens,
-          estimatedTokens: assembledTokens,
+          estimatedTokens: finalTokens,
           tokensSaved,
           savingPct,
           archiveTokens: archive.tokens,
@@ -992,13 +1205,14 @@ export function createMemoryOpenVikingContextEngine(params: {
           reservedBudget: budgets.reserved,
           senderIdFound: sender.found,
           senderId: sender.senderId ?? null,
-          messages: messageDigest(sanitized),
+          recallTokens: finalRecallTokens,
+          messages: messageDigest(recalled.messages),
         });
 
         return {
-          messages: sanitized,
-          estimatedTokens: assembledTokens,
-          ...(instruction.text ? { systemPromptAddition: instruction.text } : {}),
+          messages: recalled.messages,
+          estimatedTokens: finalTokens,
+          ...(systemPromptAddition ? { systemPromptAddition } : {}),
         };
       } catch (err) {
         logger.warn?.(
@@ -1012,7 +1226,26 @@ export function createMemoryOpenVikingContextEngine(params: {
           senderIdFound: sender.found,
           senderId: sender.senderId ?? null,
         });
-        return { messages, estimatedTokens: roughEstimate(messages) };
+        const recallTokens = recallText ? Math.ceil(recallText.length / 4) : 0;
+        const fallbackRecall = selectRecallWithinBudget(
+          recallText,
+          recallTokens,
+          originalTokens,
+          tokenBudget,
+          "fallback",
+          OVSessionId,
+        );
+        const recalled = attachRecallToMessages(messages, fallbackRecall, hasPromptText);
+        const tokens = fallbackRecall
+          ? originalTokens + recallTokens
+          : originalTokens;
+        return {
+          messages: recalled.messages,
+          estimatedTokens: tokens,
+          ...(recalled.systemPromptAddition
+            ? { systemPromptAddition: recalled.systemPromptAddition }
+            : {}),
+        };
       }
     },
 
@@ -1026,7 +1259,7 @@ export function createMemoryOpenVikingContextEngine(params: {
       }
 
       try {
-      const sender = extractRuntimeSenderId(afterTurnParams.runtimeContext);
+        const sender = extractRuntimeSenderId(afterTurnParams.runtimeContext);
         const sessionKey =
           (typeof afterTurnParams.sessionKey === "string" && afterTurnParams.sessionKey.trim()) ||
           extractSessionKey(afterTurnParams.runtimeContext);
@@ -1105,7 +1338,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           messages: newMsgFull,
         });
 
-        if (!(await runLocalPrecheck("afterTurn", OVSessionId, {
+        if (!(await runQuickPrecheck("afterTurn", OVSessionId, {
           totalMessages: messages.length,
           newMessageCount: newCount,
           prePromptMessageCount: start,

@@ -224,9 +224,7 @@ describe("plugin normal flow with healthy backend", () => {
       { agentId: "main", sessionId: "session-normal", sessionKey: "agent:main:normal" },
     );
 
-    expect(hookResult).toMatchObject({
-      prependContext: expect.stringContaining("User prefers Rust for backend tasks."),
-    });
+    expect(hookResult).toBeUndefined();
 
     const contextEngine = contextEngineFactory!() as {
       assemble: (params: {
@@ -246,10 +244,13 @@ describe("plugin normal flow with healthy backend", () => {
       messages: [{ role: "user", content: "fallback" }],
     });
 
-    expect(assembled.messages[0]).toEqual({
+    expect(assembled.messages[0]).toMatchObject({
       role: "user",
-      content: "[Session History Summary]\nEarlier work focused on backend stack choices.",
+      content: expect.stringContaining(
+        "[Session History Summary]\nEarlier work focused on backend stack choices.",
+      ),
     });
+    expect(assembled.messages[0].content).toContain("User prefers Rust for backend tasks.");
     expect(assembled.messages[1]).toEqual({
       role: "assistant",
       content: [{ type: "text", text: "Stored answer from OpenViking." }],
@@ -286,6 +287,56 @@ describe("plugin normal flow with healthy backend", () => {
     expect(
       requests.some((entry) => entry.method === "POST" && entry.path === "/api/v1/sessions/session-normal/commit"),
     ).toBe(true);
+
+    await service?.stop?.();
+  });
+
+  it("does not auto-recall from before_prompt_build when context engine API is unavailable", async () => {
+    const handlers = new Map<string, (event: unknown, ctx?: unknown) => unknown>();
+    let service:
+      | {
+          start: () => Promise<void>;
+          stop?: () => Promise<void> | void;
+        }
+      | null = null;
+
+    plugin.register({
+      logger: {
+        debug: () => {},
+        error: () => {},
+        info: () => {},
+        warn: () => {},
+      },
+      on: (name, handler) => {
+        handlers.set(name, handler);
+      },
+      pluginConfig: {
+        autoCapture: true,
+        autoRecall: true,
+        baseUrl,
+        mode: "remote",
+      },
+      registerService: (entry) => {
+        service = entry;
+      },
+      registerTool: () => {},
+    });
+
+    expect(service).toBeTruthy();
+    await service!.start();
+
+    const beforePromptBuild = handlers.get("before_prompt_build");
+    expect(beforePromptBuild).toBeTruthy();
+
+    const hookResult = await beforePromptBuild!(
+      { messages: [], prompt: "what backend language should we use?" },
+      { agentId: "main", sessionId: "session-fallback", sessionKey: "agent:main:fallback" },
+    );
+
+    expect(hookResult).toBeUndefined();
+    expect(
+      requests.some((entry) => entry.method === "POST" && entry.path === "/api/v1/search/find"),
+    ).toBe(false);
 
     await service?.stop?.();
   });

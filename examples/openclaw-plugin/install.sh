@@ -1284,7 +1284,7 @@ elif data is not None:
 # Format: plugin_dir|plugin_id|plugin_kind|plugin_slot|required_files|optional_files
 FALLBACK_LEGACY="openclaw-memory-plugin|memory-openviking|memory|memory|index.ts,config.ts,openclaw.plugin.json,package.json|package-lock.json,.gitignore"
 # Must match examples/openclaw-plugin/install-manifest.json files.*
-FALLBACK_CURRENT="openclaw-plugin|openviking|context-engine|contextEngine|index.ts,config.ts,package.json|context-engine.ts,client.ts,process-manager.ts,memory-ranking.ts,text-utils.ts,tool-call-id.ts,session-transcript-repair.ts,openclaw.plugin.json,tsconfig.json,package-lock.json,.gitignore"
+FALLBACK_CURRENT="openclaw-plugin|openviking|context-engine|contextEngine|index.ts,config.ts,package.json|context-engine.ts,client.ts,process-manager.ts,memory-ranking.ts,recall-context.ts,text-utils.ts,tool-call-id.ts,session-transcript-repair.ts,openclaw.plugin.json,tsconfig.json,package-lock.json,.gitignore"
 
 # Resolve plugin configuration from manifest or fallback
 resolve_plugin_config() {
@@ -1402,7 +1402,7 @@ resolve_plugin_config() {
       rm -f "$main_manifest"
     fi
 
-    RESOLVED_MIN_OPENCLAW_VERSION="${compat_ver:-2026.3.7}"
+    RESOLVED_MIN_OPENCLAW_VERSION="${compat_ver:-2026.3.22}"
   fi
 
   # Set plugin destination

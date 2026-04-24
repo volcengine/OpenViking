@@ -77,18 +77,20 @@ For OpenViking servers that include PR #1356, the plugin no longer treats agent 
 
 The plugin cannot auto-discover this policy today because `/api/v1/system/status` does not expose it. Configure the two booleans explicitly so they stay aligned with the server-side account policy.
 
-## Prompt-Front Recall Flow
+## Context-Engine Recall Flow
 
-![Automatic recall flow before prompt build](./images/openclaw-plugin-recall-flow.png)
+![Automatic recall flow through context engine assemble](./images/openclaw-plugin-recall-flow.png)
 
-Today the main recall path still lives in `before_prompt_build`:
+Automatic recall runs from the context engine's `assemble()` method. The `before_prompt_build` hook only records session routing and returns no injected context, so this plugin requires an OpenClaw host with prompt-aware context-engine support.
 
-1. Extract the latest user text from `messages` or `prompt`.
+The main `assemble()` recall flow is:
+
+1. Prefer the current `prompt` as the recall query, falling back to the latest user text in `messages` for legacy call shapes.
 2. Resolve the agent routing for the current `sessionId/sessionKey`.
-3. Run a quick availability precheck so prompt building does not stall when OpenViking is unavailable.
+3. Run a quick availability precheck so context assembly does not stall when OpenViking is unavailable.
 4. Query both `viking://user/memories` and `viking://agent/memories` in parallel.
 5. Deduplicate, threshold-filter, rerank, and trim the results under a token budget.
-6. Prepend the selected memories as a `<relevant-memories>` block.
+6. Add the selected memories as a `<relevant-memories>` block through the current-turn channel: `systemPromptAddition` when `prompt` is separate, or the latest user message only for legacy message-only calls.
 
 The reranking logic is not pure vector-score sorting. The current implementation also considers:
 
@@ -220,7 +222,7 @@ The repo also contains a more future-looking design draft at `docs/design/opencl
 
 - this README describes current implemented behavior
 - the older draft discusses a stronger future move into context-engine-owned lifecycle control
-- in the current version, the main automatic recall path still lives in `before_prompt_build`, not fully in `assemble()`
+- automatic recall is handled only by context-engine `assemble()`; `before_prompt_build` no longer injects memory context
 - in the current version, `afterTurn()` already appends to the OpenViking session, but commit remains threshold-triggered and asynchronous on that path
 - in the current version, `compact()` already uses `commit(wait=true)`, but it is still focused on synchronous commit plus readback rather than owning every orchestration concern
 

@@ -48,6 +48,8 @@ function makeEngine(
   const logger = makeLogger();
   const client = {
     getSessionContext: vi.fn().mockResolvedValue(contextResult),
+    find: vi.fn().mockResolvedValue({ memories: [] }),
+    read: vi.fn(),
   } as unknown as OpenVikingClient;
   const getClient = vi.fn().mockResolvedValue(client);
   const resolveAgentId = vi.fn((sessionId: string) => `agent:${sessionId}`);
@@ -71,7 +73,11 @@ function makeEngine(
 
   return {
     engine,
-    client: client as unknown as { getSessionContext: ReturnType<typeof vi.fn> },
+    client: client as unknown as {
+      getSessionContext: ReturnType<typeof vi.fn>;
+      find: ReturnType<typeof vi.fn>;
+      read: ReturnType<typeof vi.fn>;
+    },
     getClient,
     logger,
     resolveAgentId,
@@ -217,6 +223,41 @@ describe("context-engine assemble()", () => {
     const liveMessages = [{ role: "user", content: "fallback live message" }];
     const result = await engine.assemble({
       sessionId: "session-local",
+      messages: liveMessages,
+      tokenBudget: 4096,
+    });
+
+    expect(quickPrecheck).toHaveBeenCalledTimes(1);
+    expect(getClient).not.toHaveBeenCalled();
+    expect(client.getSessionContext).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      messages: liveMessages,
+      estimatedTokens: roughEstimate(liveMessages),
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("assemble precheck failed"),
+    );
+  });
+
+  it("falls back immediately when remote precheck reports OpenViking unavailable", async () => {
+    const quickPrecheck = vi.fn().mockResolvedValue({
+      ok: false as const,
+      reason: "health check failed",
+    });
+    const { engine, client, getClient, logger } = makeEngine(
+      {
+        latest_archive_overview: "unused",
+        pre_archive_abstracts: [],
+        messages: [],
+        estimatedTokens: 123,
+        stats: makeStats(),
+      },
+      { quickPrecheck },
+    );
+
+    const liveMessages = [{ role: "user", content: "fallback live message" }];
+    const result = await engine.assemble({
+      sessionId: "session-remote",
       messages: liveMessages,
       tokenBudget: 4096,
     });
@@ -400,6 +441,123 @@ describe("context-engine assemble()", () => {
     expect(result.systemPromptAddition).toBeUndefined();
   });
 
+  it("uses the assemble prompt as the auto-recall query for a new turn", async () => {
+    const { engine, client } = makeEngine(
+      {
+        latest_archive_overview: "",
+        latest_archive_id: "",
+        pre_archive_abstracts: [],
+        messages: [],
+        estimatedTokens: 0,
+        stats: makeStats(),
+      },
+      {
+        cfgOverrides: {
+          autoRecall: true,
+        },
+      },
+    );
+
+    await engine.assemble({
+      sessionId: "session-recall-prompt",
+      messages: [],
+      prompt: "current user request about retry policy",
+    });
+
+    expect(client.find).toHaveBeenCalledWith(
+      "current user request about retry policy",
+      expect.objectContaining({ targetUri: "viking://user/memories" }),
+      "agent:session-recall-prompt",
+    );
+    expect(client.find).toHaveBeenCalledWith(
+      "current user request about retry policy",
+      expect.objectContaining({ targetUri: "viking://agent/memories" }),
+      "agent:session-recall-prompt",
+    );
+  });
+
+  it("preserves prompt-only auto-recall in a system prompt addition", async () => {
+    const { engine, client } = makeEngine(
+      {
+        latest_archive_overview: "",
+        latest_archive_id: "",
+        pre_archive_abstracts: [],
+        messages: [],
+        estimatedTokens: 0,
+        stats: makeStats(),
+      },
+      {
+        cfgOverrides: {
+          autoRecall: true,
+        },
+      },
+    );
+    client.find.mockResolvedValue({
+      memories: [
+        {
+          uri: "viking://user/memories/preferences/retry-policy",
+          category: "preferences",
+          abstract: "Use exponential backoff for retry policy changes.",
+          level: 2,
+          score: 0.95,
+        },
+      ],
+    });
+
+    const result = await engine.assemble({
+      sessionId: "session-recall-prompt-only",
+      messages: [],
+      prompt: "current user request about retry policy",
+    });
+
+    expect(result.messages).toEqual([]);
+    expect(result.systemPromptAddition).toContain("<relevant-memories>");
+    expect(result.systemPromptAddition).toContain("Use exponential backoff");
+  });
+
+  it("keeps prompt recall out of historical user messages", async () => {
+    const { engine, client } = makeEngine(
+      {
+        latest_archive_overview: "",
+        latest_archive_id: "",
+        pre_archive_abstracts: [],
+        messages: [],
+        estimatedTokens: 0,
+        stats: makeStats(),
+      },
+      {
+        cfgOverrides: {
+          autoRecall: true,
+        },
+      },
+    );
+    client.find.mockResolvedValue({
+      memories: [
+        {
+          uri: "viking://user/memories/preferences/current-request",
+          category: "preferences",
+          abstract: "Current request should use the beta deploy memory.",
+          level: 2,
+          score: 0.95,
+        },
+      ],
+    });
+    const historicalMessages = [
+      { role: "user", content: "old question about local setup" },
+      { role: "assistant", content: "old answer" },
+    ];
+
+    const result = await engine.assemble({
+      sessionId: "session-recall-with-history",
+      messages: historicalMessages,
+      prompt: "current request about beta deploy",
+    });
+
+    expect(result.messages).toEqual(historicalMessages);
+    expect(result.systemPromptAddition).toContain("<relevant-memories>");
+    expect(result.systemPromptAddition).toContain("beta deploy memory");
+  });
+
   it("still produces non-empty output when OV messages have empty parts (overview fills it)", async () => {
     const { engine } = makeEngine({
       latest_archive_overview: "Some overview of previous sessions",
@@ -478,6 +636,61 @@ describe("context-engine assemble()", () => {
     expect(result.estimatedTokens).toBeLessThanOrEqual(1024);
     expect(result.messages.length).toBeGreaterThan(0);
     expect(result.systemPromptAddition).toContain("Session Context Guide");
+  });
+
+  it("keeps recall-enabled assembled output within the requested token budget", async () => {
+    const messageText = "A".repeat(300);
+    const { engine, client } = makeEngine(
+      {
+        latest_archive_overview: "# Session Summary\nA short overview",
+        pre_archive_abstracts: [],
+        messages: Array.from({ length: 8 }, (_, index) => ({
+          id: `msg_recall_budget_${index}`,
+          role: index % 2 === 0 ? "user" : "assistant",
+          created_at: `2026-03-24T00:00:0${index}Z`,
+          parts: [{ type: "text", text: messageText }],
+        })),
+        estimatedTokens: 2000,
+        stats: {
+          ...makeStats(),
+          totalArchives: 1,
+          includedArchives: 1,
+          activeTokens: 2000,
+          archiveTokens: 10,
+        },
+      },
+      {
+        cfgOverrides: {
+          autoRecall: true,
+          recallLimit: 1,
+          recallMaxContentChars: 1200,
+          recallTokenBudget: 400,
+        },
+      },
+    );
+    client.find.mockResolvedValue({
+      memories: [
+        {
+          uri: "viking://user/memories/preferences/budgeted-recall",
+          category: "preferences",
+          abstract: "Use the budgeted recall memory.",
+          level: 2,
+          score: 0.95,
+        },
+      ],
+    });
+    client.read.mockResolvedValue("Budgeted recall detail. ".repeat(60));
+
+    const result = await engine.assemble({
+      sessionId: "session-budgeted-recall",
+      messages: [],
+      prompt: "current request about budgeted recall",
+      tokenBudget: 1024,
+    });
+
+    expect(result.systemPromptAddition).toContain("<relevant-memories>");
+    expect(result.systemPromptAddition).toContain("Budgeted recall detail");
+    expect(result.estimatedTokens).toBeLessThanOrEqual(1024);
   });
 
   it("falls back to original messages when getClient throws", async () => {

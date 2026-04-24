@@ -10,7 +10,9 @@
 | --- | --- |
 | Python | >= 3.10 |
 | Node.js | >= 22 |
-| OpenClaw | >= 2026.3.7 |
+| OpenClaw | >= 2026.3.22 |
+
+OpenClaw `2026.3.22` 是最低支持版本，因为本插件的自动召回依赖 context-engine `assemble()` 接收当前用户 `prompt`。
 
 快速检查：
 

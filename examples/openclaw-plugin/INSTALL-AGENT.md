@@ -46,7 +46,9 @@ Requirements:
 
 - Python >= 3.10
 - Node.js >= 22
-- OpenClaw >= 2026.3.7
+- OpenClaw >= 2026.3.22
+
+OpenClaw `2026.3.22` is the minimum supported host version because the plugin's auto-recall path needs the current user `prompt` passed into context-engine `assemble()`.
 
 If OpenClaw is missing, tell the user to run:
 

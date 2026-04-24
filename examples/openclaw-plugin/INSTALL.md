@@ -10,7 +10,9 @@ Use [OpenViking](https://github.com/volcengine/OpenViking) as the long-term memo
 | --- | --- |
 | Python | >= 3.10 |
 | Node.js | >= 22 |
-| OpenClaw | >= 2026.3.7 |
+| OpenClaw | >= 2026.3.22 |
+
+OpenClaw `2026.3.22` is the minimum supported host version because this plugin relies on context-engine `assemble()` receiving the current user `prompt` for auto-recall.
 
 Quick check:
 

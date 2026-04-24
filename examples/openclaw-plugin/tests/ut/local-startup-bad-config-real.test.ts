@@ -52,7 +52,6 @@ describe("local OpenViking startup with a bad config", () => {
           mode: "local",
           port: 19439,
         },
-        registerContextEngine: () => {},
         registerService: (entry) => {
           service = entry;
         },
@@ -85,15 +84,16 @@ describe("local OpenViking startup with a bad config", () => {
             { messages: [{ content: "hello memory", role: "user" }], prompt: "hello memory" },
             { agentId: "main", sessionId: "test-session", sessionKey: "agent:main:test" },
           ),
-        ).then(() => ({ kind: "returned" as const })),
+        ).then((result) => ({ kind: "returned" as const, result })),
         new Promise<{ kind: "timeout" }>((resolve) => {
           setTimeout(() => resolve({ kind: "timeout" }), 1_500);
         }),
       ]);
 
       expect(hookOutcome.kind).toBe("returned");
+      expect(hookOutcome).toMatchObject({ result: undefined });
       expect(Date.now() - hookAt).toBeLessThan(1_500);
-      expect(logs.some((entry) => entry.message.includes("failed to get client"))).toBe(true);
+      expect(logs.some((entry) => entry.message.includes("failed to get client"))).toBe(false);
 
       await service?.stop?.();
     } finally {
