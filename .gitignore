@@ -176,6 +176,9 @@ celerybeat-schedule
 # mkdocs documentation
 /site
 docs/superpowers/
+docs/node_modules/
+docs/.vitepress/cache/
+docs/.vitepress/dist/
 
 # mypy
 .mypy_cache/

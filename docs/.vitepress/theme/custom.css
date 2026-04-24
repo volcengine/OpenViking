@@ -1,0 +1,65 @@
+:root {
+  --vp-c-brand-1: #0f766e;
+  --vp-c-brand-2: #115e59;
+  --vp-c-brand-3: #14b8a6;
+  --vp-c-brand-soft: rgba(20, 184, 166, 0.16);
+  --vp-c-bg: #fbf8ef;
+  --vp-c-bg-alt: #f3efe2;
+  --vp-c-bg-elv: #fffdf7;
+  --vp-c-bg-soft: #f1eadb;
+  --vp-c-text-1: #17211f;
+  --vp-c-text-2: #47534f;
+  --vp-font-family-base: "Avenir Next", "Gill Sans", "Trebuchet MS", sans-serif;
+  --vp-font-family-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+.dark {
+  --vp-c-brand-1: #5eead4;
+  --vp-c-brand-2: #2dd4bf;
+  --vp-c-brand-3: #0f766e;
+  --vp-c-brand-soft: rgba(45, 212, 191, 0.18);
+  --vp-c-bg: #101816;
+  --vp-c-bg-alt: #0b1210;
+  --vp-c-bg-elv: #16211e;
+  --vp-c-bg-soft: #182622;
+  --vp-c-text-1: #edf7f3;
+  --vp-c-text-2: #bbcac5;
+}
+
+.VPHome {
+  background:
+    radial-gradient(circle at 12% 18%, rgba(20, 184, 166, 0.22), transparent 28rem),
+    radial-gradient(circle at 88% 12%, rgba(234, 179, 8, 0.16), transparent 24rem),
+    linear-gradient(135deg, rgba(15, 118, 110, 0.08), transparent 36%);
+}
+
+.VPHero .name,
+.VPHero .text {
+  letter-spacing: -0.045em;
+}
+
+.VPHero .image-bg {
+  background-image: linear-gradient(135deg, rgba(20, 184, 166, 0.28), rgba(234, 179, 8, 0.18));
+  filter: blur(44px);
+}
+
+.VPFeature {
+  border-color: rgba(15, 118, 110, 0.18);
+  background: linear-gradient(180deg, rgba(255, 253, 247, 0.88), rgba(241, 234, 219, 0.72));
+}
+
+.dark .VPFeature {
+  border-color: rgba(94, 234, 212, 0.16);
+  background: linear-gradient(180deg, rgba(22, 33, 30, 0.9), rgba(16, 24, 22, 0.82));
+}
+
+@media (min-width: 960px) {
+  .VPNavBarTranslations {
+    display: flex !important;
+  }
+
+  .VPNavBarExtra .group.translations,
+  .VPNavBarExtra .translations {
+    display: none !important;
+  }
+}

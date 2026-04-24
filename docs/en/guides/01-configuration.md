@@ -790,8 +790,6 @@ Typical choices:
 - For TOS or other VirtualHostStyle backends that reject zero-byte directory markers, use `nonempty`.
 - If you want pure prefix-style behavior and do not need persisted empty directories, use `none`.
 
-</details>
-
 <details>
 <summary><b>PathStyle S3</b></summary>
 Supports S3 storage in PathStyle mode, such as MinIO, SeaweedFS.

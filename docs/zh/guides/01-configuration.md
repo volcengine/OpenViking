@@ -763,8 +763,6 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 - 对 TOS 或其他拒绝 0 字节目录 marker 的 VirtualHostStyle 后端，使用 `nonempty`。
 - 如果你想完全使用 prefix 风格行为，并且不需要持久化空目录，可以使用 `none`。
 
-</details>
-
 <details>
 <summary><b>PathStyle S3</b></summary>
 支持 PathStyle 模式的 S3 存储， 如 MinIO、SeaweedFS.
