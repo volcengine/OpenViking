@@ -18,10 +18,10 @@
   --vp-c-brand-2: #2dd4bf;
   --vp-c-brand-3: #0f766e;
   --vp-c-brand-soft: rgba(45, 212, 191, 0.18);
-  --vp-c-bg: #101816;
-  --vp-c-bg-alt: #0b1210;
-  --vp-c-bg-elv: #16211e;
-  --vp-c-bg-soft: #182622;
+  --vp-c-bg: #0f0f0f;
+  --vp-c-bg-alt: #080808;
+  --vp-c-bg-elv: #1a1a1a;
+  --vp-c-bg-soft: #1e1e1e;
   --vp-c-text-1: #edf7f3;
   --vp-c-text-2: #bbcac5;
 }
