@@ -387,6 +387,13 @@ class NewAPIKeyManager:
         """Return True when the account registry contains the given user."""
         return self._legacy.has_user(account_id, user_id)
 
+    def get_user_role(self, account_id: str, user_id: str) -> Role:
+        """Return the role of the given user in the given account.
+
+        Returns Role.USER if the account or user doesn't exist.
+        """
+        return self._legacy.get_user_role(account_id, user_id)
+
     # ---- Property proxies for backward compatibility with tests ----
 
     @property
