@@ -245,7 +245,8 @@ docker compose up -d
 - API 服务：`http://localhost:1933`
 - Console 界面：`http://localhost:8020`
 
-如需自行构建镜像：`docker build -t openviking:latest .`
+如需自行构建镜像，请显式传入 OpenViking 版本：
+`docker build --build-arg OPENVIKING_VERSION=0.3.12 -t openviking:latest .`
 
 ### Kubernetes + Helm
 

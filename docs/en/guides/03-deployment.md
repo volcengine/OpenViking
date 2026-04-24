@@ -247,7 +247,8 @@ After startup, you can access:
 - API service: `http://localhost:1933`
 - Console UI: `http://localhost:8020`
 
-To build the image yourself: `docker build -t openviking:latest .`
+To build the image yourself, pass an explicit OpenViking version:
+`docker build --build-arg OPENVIKING_VERSION=0.3.12 -t openviking:latest .`
 
 ### Kubernetes + Helm
 

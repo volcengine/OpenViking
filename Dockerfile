@@ -13,10 +13,9 @@ COPY --from=rust-toolchain /usr/local/rustup /usr/local/rustup
 ENV CARGO_HOME=/usr/local/cargo
 ENV RUSTUP_HOME=/usr/local/rustup
 ENV PATH="/app/.venv/bin:/usr/local/cargo/bin:${PATH}"
-ARG OPENVIKING_VERSION=0.0.0
+ARG OPENVIKING_VERSION=
 ARG TARGETPLATFORM
 ARG UV_LOCK_STRATEGY=auto
-ENV SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING=${OPENVIKING_VERSION}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -45,6 +44,14 @@ COPY third_party/ third_party/
 # stale, so Docker builds stay unblocked after dependency changes. Set
 # UV_LOCK_STRATEGY=locked to keep fail-fast reproducibility checks.
 RUN --mount=type=cache,target=/root/.cache/uv,id=uv-${TARGETPLATFORM} \
+    if [ -n "${OPENVIKING_VERSION:-}" ]; then \
+        export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING="${OPENVIKING_VERSION}"; \
+    elif [ -f openviking/_version.py ]; then \
+        export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING="$(python -c "import runpy; print(runpy.run_path('openviking/_version.py')['version'])")"; \
+    else \
+        echo "OPENVIKING_VERSION build arg is required when building without openviking/_version.py" >&2; \
+        exit 2; \
+    fi; \
     case "${UV_LOCK_STRATEGY}" in \
         locked) \
             uv sync --locked --no-editable --extra bot --extra gemini \
