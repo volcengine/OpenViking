@@ -799,7 +799,6 @@ Typical choices:
 - Characters such as `?`, `&`, `#`, spaces, `%`, `@`, and `+` are escaped in place without rewriting the whole segment.
 - Set `false` to keep original path segments in object keys.
 
-</details>
 <details>
 <summary><b>PathStyle S3</b></summary>
 Supports S3 storage in PathStyle mode, such as MinIO, SeaweedFS.

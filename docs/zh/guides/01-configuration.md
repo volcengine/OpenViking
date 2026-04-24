@@ -772,7 +772,6 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 - `?`、`&`、`#`、空格、`%`、`@`、`+` 等字符会在原位被转义，不会导致整个路径段一起重写。
 - 设为 `false` 时，会在 object key 中保留原始路径段。
 
-</details>
 <details>
 <summary><b>PathStyle S3</b></summary>
 支持 PathStyle 模式的 S3 存储， 如 MinIO、SeaweedFS.
