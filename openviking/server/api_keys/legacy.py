@@ -16,9 +16,11 @@ from openviking.server.identity import AccountNamespacePolicy, ResolvedIdentity,
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import (
     AlreadyExistsError,
+    InvalidArgumentError,
     NotFoundError,
     UnauthenticatedError,
 )
+from openviking_cli.session.user_id import validate_account_id, validate_user_id
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -218,6 +220,14 @@ class LegacyAPIKeyManager:
 
         Returns the admin user's API key (legacy format).
         """
+        # Validate account_id and user_id format
+        verr = validate_account_id(account_id)
+        if verr:
+            raise InvalidArgumentError(verr)
+        verr = validate_user_id(admin_user_id)
+        if verr:
+            raise InvalidArgumentError(verr)
+
         if account_id in self._accounts:
             raise AlreadyExistsError(account_id, "account")
 
@@ -295,6 +305,11 @@ class LegacyAPIKeyManager:
 
     async def register_user(self, account_id: str, user_id: str, role: str = "user") -> str:
         """Register a new user in an account. Returns the user's API key (legacy format)."""
+        # Validate user_id format
+        verr = validate_user_id(user_id)
+        if verr:
+            raise InvalidArgumentError(verr)
+
         account = self._accounts.get(account_id)
         if account is None:
             raise NotFoundError(account_id, "account")

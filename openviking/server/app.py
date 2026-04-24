@@ -3,6 +3,7 @@
 """FastAPI application for OpenViking HTTP Server."""
 
 import asyncio
+import logging
 import time
 from contextlib import asynccontextmanager
 from typing import Callable, Optional
@@ -163,6 +164,19 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Add request header logging middleware (for debug)
+    @app.middleware("http")
+    async def log_request_headers(request: Request, call_next: Callable):
+        access_logger = logging.getLogger("uvicorn.access")
+        if access_logger.isEnabledFor(logging.DEBUG):
+            headers = dict(request.headers)
+            header_names = ", ".join(sorted(headers.keys()))
+            access_logger.debug(
+                f"Request headers for {request.method} {request.url.path}: {header_names}"
+            )
+        response = await call_next(request)
+        return response
 
     # Add request timing middleware
     @app.middleware("http")

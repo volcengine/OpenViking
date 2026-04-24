@@ -41,7 +41,7 @@ pub struct Config {
     pub echo_command: bool,
     #[serde(default)]
     pub upload: UploadConfig,
-    #[serde(default)]
+    #[serde(default, alias = "extra_header")]
     pub extra_headers: Option<std::collections::HashMap<String, String>>,
 }
 
@@ -316,5 +316,23 @@ mod tests {
         .expect("config should deserialize");
 
         assert!(config.extra_headers.is_none());
+    }
+
+    #[test]
+    fn config_deserializes_extra_header_alias() {
+        let config: Config = serde_json::from_str(
+            r#"{
+                "url": "http://localhost:1933",
+                "extra_header": {
+                    "X-Custom-Header": "custom-value",
+                    "Authorization": "Bearer token"
+                }
+            }"#,
+        )
+        .expect("config should deserialize with alias");
+
+        let headers = config.extra_headers.expect("extra_headers should be present");
+        assert_eq!(headers.get("X-Custom-Header"), Some(&"custom-value".to_string()));
+        assert_eq!(headers.get("Authorization"), Some(&"Bearer token".to_string()));
     }
 }
