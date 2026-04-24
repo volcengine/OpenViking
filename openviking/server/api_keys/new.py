@@ -132,52 +132,65 @@ class NewAPIKeyManager:
         if is_new_format_key(api_key):
             try:
                 account_id, user_id, _ = parse_api_key(api_key)
-
-                # Verify the user exists in the account using legacy's data
-                account = self._legacy._accounts.get(account_id)
-                lookup_hit = False
-                if account and user_id in account.users:
-                    user_info = account.users[user_id]
-                    stored_key_or_hash = user_info.get("key", "")
-
-                    # Verify the secret part matches using legacy's verify method
-                    if stored_key_or_hash:
-                        lookup_hit = True
-                        if user_info.get("key_prefix", "").startswith(
-                            "$argon2"
-                        ) or stored_key_or_hash.startswith("$argon2"):
-                            # Hashed key
-                            if self._legacy._verify_api_key(api_key, stored_key_or_hash):
-                                return ResolvedIdentity(
-                                    role=Role(user_info.get("role", "user")),
-                                    account_id=account_id,
-                                    user_id=user_id,
-                                    namespace_policy=self.get_account_policy(account_id),
-                                )
-                        else:
-                            # Plaintext key
-                            if hmac.compare_digest(api_key, stored_key_or_hash):
-                                return ResolvedIdentity(
-                                    role=Role(user_info.get("role", "user")),
-                                    account_id=account_id,
-                                    user_id=user_id,
-                                    namespace_policy=self.get_account_policy(account_id),
-                                )
-                if not lookup_hit and self._dummy_argon2_hash is not None:
-                    # Constant-time guard: account/user lookup missed or stored
-                    # secret was empty. Run a dummy Argon2 verify so the
-                    # response time of this branch matches the real Argon2
-                    # verify above, closing a timing side channel that would
-                    # otherwise leak (account_id, user_id) existence.
-                    #
-                    # Scoped to is_new_format_key == True so arbitrary garbage
-                    # traffic cannot weaponise this as a DoS amplifier: each
-                    # Argon2 verify costs ~50-100 ms CPU + 64 MiB memory. A
-                    # follow-up infra PR will add auth-endpoint rate limiting.
-                    self._legacy._verify_api_key(api_key, self._dummy_argon2_hash)
             except Exception:
-                # If parsing fails or verification fails, fall through to try legacy path
-                pass
+                # Malformed three-segment string: fall through to legacy
+                # resolver. parse_api_key only fails for bytes that cannot be
+                # base64-decoded or are not valid UTF-8, which a well-formed
+                # new-format key never is.
+                return self._legacy.resolve(api_key)
+
+            # Verify the user exists in the account using legacy's data
+            account = self._legacy._accounts.get(account_id)
+            lookup_hit = False
+            if account and user_id in account.users:
+                user_info = account.users[user_id]
+                stored_key_or_hash = user_info.get("key", "")
+
+                # Verify the secret part matches using legacy's verify method
+                if stored_key_or_hash:
+                    lookup_hit = True
+                    if user_info.get("key_prefix", "").startswith(
+                        "$argon2"
+                    ) or stored_key_or_hash.startswith("$argon2"):
+                        # Hashed key
+                        if self._legacy._verify_api_key(api_key, stored_key_or_hash):
+                            return ResolvedIdentity(
+                                role=Role(user_info.get("role", "user")),
+                                account_id=account_id,
+                                user_id=user_id,
+                                namespace_policy=self.get_account_policy(account_id),
+                            )
+                    else:
+                        # Plaintext key
+                        if hmac.compare_digest(api_key, stored_key_or_hash):
+                            return ResolvedIdentity(
+                                role=Role(user_info.get("role", "user")),
+                                account_id=account_id,
+                                user_id=user_id,
+                                namespace_policy=self.get_account_policy(account_id),
+                            )
+
+            if not lookup_hit and self._dummy_argon2_hash is not None:
+                # Constant-time guard: account/user lookup missed or stored
+                # secret was empty. Run a dummy Argon2 verify so the response
+                # time of this branch matches the real Argon2 verify above,
+                # closing a timing side channel that would otherwise leak
+                # (account_id, user_id) existence.
+                #
+                # Scoped to is_new_format_key == True so arbitrary garbage
+                # traffic cannot weaponise this as a DoS amplifier: each
+                # Argon2 verify costs ~50-100 ms CPU + 64 MiB memory. A
+                # follow-up infra PR will add auth-endpoint rate limiting.
+                self._legacy._verify_api_key(api_key, self._dummy_argon2_hash)
+
+            # Parsed as new-format but did not authenticate. Reject here
+            # rather than falling through to the legacy resolver: the first
+            # 8 chars of a new-format key are a prefix of base64(account_id),
+            # so legacy's prefix-index lookup would hit the account's entire
+            # user bucket and run one Argon2 verify per candidate, both
+            # leaking account existence via bucket-size timing and
+            # multiplying DoS cost on the failure path.
+            raise UnauthenticatedError("Invalid API Key")
 
         # Fall back to legacy resolver for legacy keys
         return self._legacy.resolve(api_key)

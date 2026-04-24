@@ -763,7 +763,11 @@ async def test_resolve_unknown_account_runs_dummy_verify_when_encryption_enabled
     with pytest.raises(UnauthenticatedError):
         manager_encrypted.resolve(fake_key)
 
-    assert calls, "unknown account must trigger a dummy Argon2 verify"
+    assert len(calls) == 1, (
+        "unknown account must run exactly one Argon2 verify (the dummy); "
+        "additional calls would indicate the legacy resolver fall-through "
+        "is still active and leaking account-bucket size via timing"
+    )
     assert calls[0] == manager_encrypted._dummy_argon2_hash, (
         "unknown-lookup branch must verify against the precomputed dummy hash"
     )
@@ -792,7 +796,13 @@ async def test_resolve_unknown_user_runs_dummy_verify_when_encryption_enabled(
     with pytest.raises(UnauthenticatedError):
         manager_encrypted.resolve(fake_key)
 
-    assert calls, "unknown user within known account must trigger a dummy Argon2 verify"
+    assert len(calls) == 1, (
+        "known account + unknown user must run exactly one Argon2 verify "
+        "(the dummy). Additional calls indicate the legacy resolver is "
+        "still scanning the account's user bucket, which re-opens the "
+        "timing oracle (attacker can distinguish unknown-account == 1 "
+        "Argon2 from known-account == 1+N Argon2) and multiplies DoS cost."
+    )
     assert calls[0] == manager_encrypted._dummy_argon2_hash
 
 
@@ -824,9 +834,11 @@ async def test_resolve_unknown_user_skips_dummy_verify_when_encryption_disabled(
         manager.resolve(fake_key)
 
     assert manager._dummy_argon2_hash is None
-    # Legacy resolver may still run its own fast-path compare, but no Argon2
-    # verify should have fired against the precomputed dummy.
-    assert all(h != getattr(manager, "_dummy_argon2_hash", None) for h in calls)
+    assert not calls, (
+        "plaintext storage mode must not run any Argon2 verify on a "
+        "new-format miss: real verifies in this mode use hmac.compare_digest, "
+        "so an Argon2 call here would introduce a reverse timing oracle"
+    )
 
 
 async def test_resolve_valid_key_does_not_trigger_dummy_verify(manager_encrypted, monkeypatch):
