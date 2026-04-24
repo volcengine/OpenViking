@@ -711,3 +711,180 @@ def test_new_api_key_manager_public_api_parity_with_legacy():
         f"NewAPIKeyManager is missing public methods present on "
         f"LegacyAPIKeyManager: {sorted(missing)}"
     )
+
+
+# ---- Timing-oracle guard on the new-format fast path ----
+#
+# NewAPIKeyManager.resolve previously returned in microseconds when
+# (account_id, user_id) did not exist but spent ~50-100 ms running Argon2
+# when it did, letting an unauthenticated attacker enumerate tenants by
+# measuring response time. The fix runs a dummy Argon2 verify on the miss
+# branch so both branches take comparable time. Only active when the
+# manager is initialised with encryption_enabled=True — in plaintext mode
+# real verifies are already fast, so a dummy Argon2 would *introduce* a
+# reverse oracle instead of closing one.
+#
+# Tests below assert the call pattern (not wall-clock times, which are
+# flaky) via spies on LegacyAPIKeyManager._verify_api_key.
+
+
+@pytest_asyncio.fixture(scope="function")
+async def manager_encrypted(manager_service):
+    """APIKeyManager with encryption_enabled=True (production-like)."""
+    mgr = APIKeyManager(
+        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, encryption_enabled=True
+    )
+    await mgr.load()
+    return mgr
+
+
+async def test_resolve_unknown_account_runs_dummy_verify_when_encryption_enabled(
+    manager_encrypted, monkeypatch
+):
+    """Unknown account on new-format key must still trigger an Argon2 verify.
+
+    Closes the timing oracle in NewAPIKeyManager.resolve: without the dummy
+    verify, this branch returns in microseconds while the valid branch
+    spends ~50-100 ms, leaking account existence via response time.
+    """
+    from openviking.server.api_keys import generate_api_key
+    from openviking.server.api_keys.legacy import LegacyAPIKeyManager
+
+    calls = []
+    original_verify = LegacyAPIKeyManager._verify_api_key
+
+    def spy_verify(self, api_key: str, hashed_key: str) -> bool:
+        calls.append(hashed_key)
+        return original_verify(self, api_key, hashed_key)
+
+    monkeypatch.setattr(LegacyAPIKeyManager, "_verify_api_key", spy_verify)
+
+    fake_key = generate_api_key("no_such_account_xyz", "no_such_user_xyz")
+    with pytest.raises(UnauthenticatedError):
+        manager_encrypted.resolve(fake_key)
+
+    assert calls, "unknown account must trigger a dummy Argon2 verify"
+    assert calls[0] == manager_encrypted._dummy_argon2_hash, (
+        "unknown-lookup branch must verify against the precomputed dummy hash"
+    )
+
+
+async def test_resolve_unknown_user_runs_dummy_verify_when_encryption_enabled(
+    manager_encrypted, monkeypatch
+):
+    """Known account + unknown user on new-format key must trigger dummy verify."""
+    from openviking.server.api_keys import generate_api_key
+    from openviking.server.api_keys.legacy import LegacyAPIKeyManager
+
+    acct = _uid()
+    await manager_encrypted.create_account(acct, "admin_user")
+
+    calls = []
+    original_verify = LegacyAPIKeyManager._verify_api_key
+
+    def spy_verify(self, api_key: str, hashed_key: str) -> bool:
+        calls.append(hashed_key)
+        return original_verify(self, api_key, hashed_key)
+
+    monkeypatch.setattr(LegacyAPIKeyManager, "_verify_api_key", spy_verify)
+
+    fake_key = generate_api_key(acct, "no_such_user_in_known_account")
+    with pytest.raises(UnauthenticatedError):
+        manager_encrypted.resolve(fake_key)
+
+    assert calls, "unknown user within known account must trigger a dummy Argon2 verify"
+    assert calls[0] == manager_encrypted._dummy_argon2_hash
+
+
+async def test_resolve_unknown_user_skips_dummy_verify_when_encryption_disabled(
+    manager, monkeypatch
+):
+    """Plaintext storage mode must NOT dummy-verify, or it creates a reverse oracle.
+
+    When encryption_enabled=False, real verifies complete in microseconds via
+    hmac.compare_digest. Adding a dummy Argon2 verify on the miss branch
+    would make unknown-user lookups SLOWER than known-user lookups, turning
+    the fix into a new timing oracle. `manager` fixture uses the default
+    (encryption_enabled=False).
+    """
+    from openviking.server.api_keys import generate_api_key
+    from openviking.server.api_keys.legacy import LegacyAPIKeyManager
+
+    calls = []
+    original_verify = LegacyAPIKeyManager._verify_api_key
+
+    def spy_verify(self, api_key: str, hashed_key: str) -> bool:
+        calls.append(hashed_key)
+        return original_verify(self, api_key, hashed_key)
+
+    monkeypatch.setattr(LegacyAPIKeyManager, "_verify_api_key", spy_verify)
+
+    fake_key = generate_api_key("no_such_account", "no_such_user")
+    with pytest.raises(UnauthenticatedError):
+        manager.resolve(fake_key)
+
+    assert manager._dummy_argon2_hash is None
+    # Legacy resolver may still run its own fast-path compare, but no Argon2
+    # verify should have fired against the precomputed dummy.
+    assert all(h != getattr(manager, "_dummy_argon2_hash", None) for h in calls)
+
+
+async def test_resolve_valid_key_does_not_trigger_dummy_verify(manager_encrypted, monkeypatch):
+    """Successful resolve runs exactly one real verify; dummy must not fire."""
+    from openviking.server.api_keys.legacy import LegacyAPIKeyManager
+
+    acct = _uid()
+    key = await manager_encrypted.create_account(acct, "admin_user")
+
+    calls = []
+    original_verify = LegacyAPIKeyManager._verify_api_key
+
+    def spy_verify(self, api_key: str, hashed_key: str) -> bool:
+        calls.append(hashed_key)
+        return original_verify(self, api_key, hashed_key)
+
+    monkeypatch.setattr(LegacyAPIKeyManager, "_verify_api_key", spy_verify)
+
+    identity = manager_encrypted.resolve(key)
+    assert identity.account_id == acct
+    assert identity.user_id == "admin_user"
+
+    assert len(calls) == 1, "valid key should trigger exactly one Argon2 verify"
+    assert calls[0] != manager_encrypted._dummy_argon2_hash, (
+        "valid key must verify against the stored hash, not the dummy"
+    )
+
+
+async def test_resolve_known_user_wrong_secret_does_not_trigger_dummy_verify(
+    manager_encrypted, monkeypatch
+):
+    """Known user + wrong secret already spends ~50 ms on real Argon2 verify.
+
+    The dummy verify is *only* for the miss branch. Running it additionally
+    for the known-user-wrong-secret case would double the CPU cost of every
+    failed authentication without improving the timing invariant.
+    """
+    from openviking.server.api_keys import generate_api_key
+    from openviking.server.api_keys.legacy import LegacyAPIKeyManager
+
+    acct = _uid()
+    await manager_encrypted.create_account(acct, "admin_user")
+
+    calls = []
+    original_verify = LegacyAPIKeyManager._verify_api_key
+
+    def spy_verify(self, api_key: str, hashed_key: str) -> bool:
+        calls.append(hashed_key)
+        return original_verify(self, api_key, hashed_key)
+
+    monkeypatch.setattr(LegacyAPIKeyManager, "_verify_api_key", spy_verify)
+
+    wrong_key = generate_api_key(acct, "admin_user")  # valid format, wrong secret
+    with pytest.raises(UnauthenticatedError):
+        manager_encrypted.resolve(wrong_key)
+
+    assert len(calls) == 1, (
+        "wrong-secret path should run exactly one real Argon2 verify; "
+        "additional dummy verify would double the failure cost"
+    )
+    assert calls[0] != manager_encrypted._dummy_argon2_hash

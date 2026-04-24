@@ -92,6 +92,18 @@ class NewAPIKeyManager:
         """
         # Delegate to legacy manager for all core functionality
         self._legacy = LegacyAPIKeyManager(root_key, viking_fs, encryption_enabled)
+        # Precomputed Argon2 hash used to match response time on unknown-user
+        # lookups in the new-format fast path. Without this, resolve() returns
+        # in microseconds when (account_id, user_id) does not exist but spends
+        # ~50-100 ms running Argon2 when it does, leaking tenant membership
+        # via response-time side channel. Only populated when encryption is
+        # enabled: in plaintext storage mode real verifies are fast, so a
+        # dummy Argon2 would introduce a reverse oracle rather than close one.
+        self._dummy_argon2_hash: Optional[str] = (
+            self._legacy._hash_api_key("unused-timing-oracle-dummy-secret")
+            if encryption_enabled
+            else None
+        )
 
     async def load(self) -> None:
         """Load accounts and user keys from VikingFS into memory."""
@@ -123,12 +135,14 @@ class NewAPIKeyManager:
 
                 # Verify the user exists in the account using legacy's data
                 account = self._legacy._accounts.get(account_id)
+                lookup_hit = False
                 if account and user_id in account.users:
                     user_info = account.users[user_id]
                     stored_key_or_hash = user_info.get("key", "")
 
                     # Verify the secret part matches using legacy's verify method
                     if stored_key_or_hash:
+                        lookup_hit = True
                         if user_info.get("key_prefix", "").startswith(
                             "$argon2"
                         ) or stored_key_or_hash.startswith("$argon2"):
@@ -149,6 +163,18 @@ class NewAPIKeyManager:
                                     user_id=user_id,
                                     namespace_policy=self.get_account_policy(account_id),
                                 )
+                if not lookup_hit and self._dummy_argon2_hash is not None:
+                    # Constant-time guard: account/user lookup missed or stored
+                    # secret was empty. Run a dummy Argon2 verify so the
+                    # response time of this branch matches the real Argon2
+                    # verify above, closing a timing side channel that would
+                    # otherwise leak (account_id, user_id) existence.
+                    #
+                    # Scoped to is_new_format_key == True so arbitrary garbage
+                    # traffic cannot weaponise this as a DoS amplifier: each
+                    # Argon2 verify costs ~50-100 ms CPU + 64 MiB memory. A
+                    # follow-up infra PR will add auth-endpoint rate limiting.
+                    self._legacy._verify_api_key(api_key, self._dummy_argon2_hash)
             except Exception:
                 # If parsing fails or verification fails, fall through to try legacy path
                 pass
