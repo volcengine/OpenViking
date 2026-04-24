@@ -1,5 +1,8 @@
 import hashlib
+import logging
 import re
+
+logger = logging.getLogger(__name__)
 
 
 class UserIdentifier(object):
@@ -10,6 +13,9 @@ class UserIdentifier(object):
 
         verr = self._validate_error()
         if verr:
+            logger.error(
+                f"Invalid user identifier: {verr}. account_id={self._account_id} user_id={self._user_id} agent_id={self._agent_id}"
+            )
             raise ValueError(verr)
 
     @classmethod
@@ -17,8 +23,8 @@ class UserIdentifier(object):
         return cls("default", default_username, "default")
 
     def _validate_error(self) -> str:
-        """Validate the user identifier. all fields must be non-empty strings, and chars only in [a-zA-Z0-9_-]."""
-        pattern = re.compile(r"^[a-zA-Z0-9_-]+$")
+        """Validate the user identifier. all fields must be non-empty strings, and chars only in [a-zA-Z0-9_.-]."""
+        pattern = re.compile(r"^[a-zA-Z0-9_.-]+$")
         if not self._account_id:
             return "account_id is empty"
         if not pattern.match(self._account_id):
