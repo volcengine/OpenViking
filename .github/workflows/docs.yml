@@ -5,12 +5,14 @@ on:
     paths:
       - 'docs/**'
       - '.github/workflows/_docs.yml'
+      - '.github/workflows/_docs-deploy.yml'
       - '.github/workflows/docs.yml'
   push:
     branches: [ main ]
     paths:
       - 'docs/**'
       - '.github/workflows/_docs.yml'
+      - '.github/workflows/_docs-deploy.yml'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
     inputs:
@@ -30,16 +32,12 @@ jobs:
     uses: ./.github/workflows/_docs.yml
     permissions:
       contents: read
-    with:
-      deploy: false
 
   docs-deploy:
     name: Build and Deploy Docs
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.deploy == true)
-    uses: ./.github/workflows/_docs.yml
+    uses: ./.github/workflows/_docs-deploy.yml
     permissions:
       contents: read
       pages: write
       id-token: write
-    with:
-      deploy: true
