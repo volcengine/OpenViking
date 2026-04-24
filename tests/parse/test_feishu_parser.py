@@ -125,6 +125,13 @@ class TestIsFeishuUrl:
             "https://example.larksuite.com/sheets/abc123"
         )
 
+    def test_larkoffice(self):
+        from openviking.utils.media_processor import UnifiedResourceProcessor
+
+        assert UnifiedResourceProcessor._is_feishu_url(
+            "https://example.larkoffice.com/wiki/wikicn123"
+        )
+
     def test_non_feishu_url(self):
         from openviking.utils.media_processor import UnifiedResourceProcessor
 
@@ -624,6 +631,30 @@ class TestParseAsyncIntegration:
         assert result.source_format == "feishu_docx"
         assert result.meta["feishu_doc_type"] == "docx"
         assert result.meta["feishu_token"] == "real_token"
+
+    def test_parse_content_routes_larkoffice_url(self):
+        """Test that parse_content routes larkoffice.com URLs to FeishuParser.parse() correctly."""
+        parser = FeishuParser()
+
+        # Mock the underlying parse() method to avoid network/SDK calls
+        mock_result = MagicMock()
+        mock_result.source_format = "feishu_docx"
+        mock_result.meta = {"feishu_token": "larkoffice123"}
+        
+        async def _mock_parse(*a, **kw):
+            return mock_result
+            
+        parser.parse = _mock_parse
+
+        result = asyncio.get_event_loop().run_until_complete(
+            parser.parse_content(
+                content="", 
+                source_path="https://bytedance.larkoffice.com/wiki/larkoffice123"
+            )
+        )
+
+        assert result.source_format == "feishu_docx"
+        assert result.meta["feishu_token"] == "larkoffice123"
 
     def test_parse_unsupported_type(self):
         """Test that unsupported document types return error ParseResult."""
