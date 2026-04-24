@@ -54,6 +54,11 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+def _ensure_non_empty_search_query(query: str) -> None:
+    if not query.strip():
+        raise InvalidArgumentError("Search query must not be empty.")
+
+
 def _is_directory_not_empty_error(message: str) -> bool:
     """Check if an error message indicates a directory not empty error.
 
@@ -1013,6 +1018,7 @@ class VikingFS:
         Returns:
             FindResult
         """
+        _ensure_non_empty_search_query(query)
         telemetry = get_current_telemetry()
         from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
         from openviking_cli.retrieve import (
@@ -1105,6 +1111,7 @@ class VikingFS:
         Returns:
             FindResult
         """
+        _ensure_non_empty_search_query(query)
         telemetry = get_current_telemetry()
         from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
         from openviking.retrieve.intent_analyzer import IntentAnalyzer

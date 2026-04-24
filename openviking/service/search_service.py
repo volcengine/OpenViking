@@ -10,13 +10,18 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.exceptions import NotInitializedError
+from openviking_cli.exceptions import InvalidArgumentError, NotInitializedError
 from openviking_cli.utils import get_logger
 
 if TYPE_CHECKING:
     from openviking.session import Session
 
 logger = get_logger(__name__)
+
+
+def _ensure_non_empty_query(query: str) -> None:
+    if not query.strip():
+        raise InvalidArgumentError("Search query must not be empty.")
 
 
 class SearchService:
@@ -58,6 +63,7 @@ class SearchService:
         Returns:
             FindResult
         """
+        _ensure_non_empty_query(query)
         viking_fs = self._ensure_initialized()
 
         session_info = None
@@ -96,6 +102,7 @@ class SearchService:
         Returns:
             FindResult
         """
+        _ensure_non_empty_query(query)
         viking_fs = self._ensure_initialized()
         result = await viking_fs.find(
             query=query,

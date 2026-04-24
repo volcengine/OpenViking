@@ -11,7 +11,9 @@ import pytest
 from openviking.models.embedder.base import EmbedResult
 from openviking.server.auth import get_request_context
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.viking_fs import VikingFS
 from openviking.utils.time_utils import parse_iso_datetime
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -91,6 +93,61 @@ async def test_find_no_results(client: httpx.AsyncClient):
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+
+
+@pytest.mark.parametrize("query", ["", "   \t\n"])
+async def test_find_rejects_empty_query(client: httpx.AsyncClient, service, query: str):
+    class RaisingEmbedder:
+        def embed(self, text: str, is_query: bool = False) -> EmbedResult:
+            raise AssertionError("empty query should not be embedded")
+
+        async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+            raise AssertionError("empty query should not be embedded")
+
+    service.viking_fs.query_embedder = RaisingEmbedder()
+
+    resp = await client.post(
+        "/api/v1/search/find",
+        json={"query": query},
+    )
+
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
+    assert "must not be empty" in body["error"]["message"]
+
+
+@pytest.mark.parametrize("query", ["", "   \t\n"])
+async def test_search_rejects_empty_query(client: httpx.AsyncClient, service, query: str):
+    class RaisingEmbedder:
+        def embed(self, text: str, is_query: bool = False) -> EmbedResult:
+            raise AssertionError("empty query should not be embedded")
+
+        async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+            raise AssertionError("empty query should not be embedded")
+
+    service.viking_fs.query_embedder = RaisingEmbedder()
+
+    resp = await client.post(
+        "/api/v1/search/search",
+        json={"query": query},
+    )
+
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
+    assert "must not be empty" in body["error"]["message"]
+
+
+@pytest.mark.parametrize("method_name", ["find", "search"])
+async def test_vikingfs_rejects_empty_query_before_initialization(method_name: str):
+    viking_fs = VikingFS.__new__(VikingFS)
+    method = getattr(viking_fs, method_name)
+
+    with pytest.raises(InvalidArgumentError, match="must not be empty"):
+        await method(query=" ")
 
 
 async def test_find_with_since_compiles_time_range(client: httpx.AsyncClient, service, monkeypatch):
