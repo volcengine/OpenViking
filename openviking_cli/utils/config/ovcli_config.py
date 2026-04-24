@@ -3,7 +3,7 @@
 """Configuration schema and loader for ovcli.conf."""
 
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 from pydantic import BaseModel, ValidationError
 
@@ -32,6 +32,7 @@ class OVCLIConfig(BaseModel):
     user: Optional[str] = None
     timeout: float = 60.0
     upload: Optional[OVCLIUploadConfig] = None
+    extra_headers: Optional[Dict[str, str]] = None
 
     model_config = {"extra": "forbid"}
 

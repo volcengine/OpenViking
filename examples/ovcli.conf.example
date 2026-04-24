@@ -7,5 +7,6 @@
   "agent_id": null,
   "timeout": 60.0,
   "output": "table",
-  "echo_command": true
+  "echo_command": true,
+  "extra_headers": null
 }

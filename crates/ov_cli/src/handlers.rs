@@ -81,6 +81,7 @@ pub async fn handle_add_resource(
         ctx.config.account.clone(),
         ctx.config.user.clone(),
         effective_timeout,
+        ctx.config.extra_headers.clone(),
     );
     commands::resources::add_resource(
         &client,

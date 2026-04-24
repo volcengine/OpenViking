@@ -85,6 +85,7 @@ impl CliContext {
             self.config.account.clone(),
             self.config.user.clone(),
             timeout_secs.unwrap_or(self.config.timeout),
+            self.config.extra_headers.clone(),
         )
     }
 }
@@ -994,6 +995,7 @@ mod tests {
             output: "table".to_string(),
             echo_command: true,
             upload: Default::default(),
+            extra_headers: None,
         };
 
         let ctx = CliContext::from_config(
@@ -1024,6 +1026,7 @@ mod tests {
             output: "table".to_string(),
             echo_command: true,
             upload: Default::default(),
+            extra_headers: None,
         };
 
         // Without sudo: use api_key
