@@ -16,7 +16,7 @@
 | 视频 | `.mp4`, `.mov`, `.avi` | 帧提取 + VLM |
 | 音频 | `.mp3`, `.wav`, `.m4a` | 语音转录 |
 | 文档 | `.docx` | 文本提取 |
-| 飞书/Lark | URL（`*.feishu.cn`、`*.larksuite.com`） | 云端文档解析（`lark-oapi`） |
+| 飞书/Lark | URL（`*.feishu.cn`、`*.larksuite.com`、`*.larkoffice.com`） | 云端文档解析（`lark-oapi`） |
 
 ## 处理流程
 
