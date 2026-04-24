@@ -22,10 +22,18 @@ from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from openviking.server.auth import resolve_identity
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext, Role
+from openviking_cli.exceptions import (
+    InvalidArgumentError,
+    PermissionDeniedError,
+    UnauthenticatedError,
+)
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 
@@ -51,7 +59,8 @@ def _get_ctx() -> RequestContext:
 
 
 class _IdentityASGIMiddleware:
-    """ASGI middleware: set identity contextvar from HTTP headers."""
+    """ASGI middleware: delegates to auth.resolve_identity (the same function
+    used by all REST API routes) so authentication logic is never duplicated."""
 
     def __init__(self, app: ASGIApp):
         self.app = app
@@ -59,13 +68,36 @@ class _IdentityASGIMiddleware:
     async def __call__(self, scope: Scope, receive: Receive, send: Send):
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
-        headers = dict(scope.get("headers", []))
-        account = (headers.get(b"x-openviking-account", b"default")).decode()
-        user = (headers.get(b"x-openviking-user", b"default")).decode()
-        agent = (headers.get(b"x-openviking-agent", b"default")).decode()
+
+        request = Request(scope)
+        try:
+            identity = await resolve_identity(
+                request,
+                x_api_key=request.headers.get("x-api-key"),
+                authorization=request.headers.get("authorization"),
+                x_openviking_account=request.headers.get("x-openviking-account"),
+                x_openviking_user=request.headers.get("x-openviking-user"),
+                x_openviking_agent=request.headers.get("x-openviking-agent"),
+            )
+        except (UnauthenticatedError, PermissionDeniedError, InvalidArgumentError) as exc:
+            status = 401 if isinstance(exc, UnauthenticatedError) else (
+                403 if isinstance(exc, PermissionDeniedError) else 400
+            )
+            resp = JSONResponse(
+                {"jsonrpc": "2.0", "id": None,
+                 "error": {"code": -32001, "message": str(exc)}},
+                status_code=status,
+            )
+            return await resp(scope, receive, send)
+
         ctx = RequestContext(
-            user=UserIdentifier(account, user, agent),
-            role=Role.USER,
+            user=UserIdentifier(
+                identity.account_id or "default",
+                identity.user_id or "default",
+                identity.agent_id or "default",
+            ),
+            role=identity.role,
+            namespace_policy=identity.namespace_policy,
         )
         token = _mcp_ctx.set(ctx)
         try:
