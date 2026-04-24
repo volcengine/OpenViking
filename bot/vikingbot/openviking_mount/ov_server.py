@@ -62,6 +62,8 @@ class VikingClient:
                     url=self.openviking_config.server_url,
                     api_key=admin_user_api_key,
                     agent_id=self.agent_id,
+                    account=self.account_id,
+                    user=self.admin_user_id,
                 )
                 await self.admin_user_client.initialize()
 

@@ -604,6 +604,7 @@ class AgentLoop:
                 profile_user_list=profile_user_list,
                 memory_user=memory_user,
             )
+            relevant_memories = message_context.latest_relevant_memories
             # logger.info(f"New messages: {json.dumps(messages, indent=4)}")
 
             # Run agent loop
@@ -636,10 +637,13 @@ class AgentLoop:
                 tools_used_names = [tool["tool_name"] for tool in tools_used]
             else:
                 tools_used_names = []
+            response_metadata = dict(msg.metadata or {})
+            if relevant_memories is not None:
+                response_metadata["relevant_memories"] = relevant_memories
             return OutboundMessage(
                 session_key=msg.session_key,
                 content=final_content,
-                metadata=msg.metadata,
+                metadata=response_metadata,
                 token_usage=token_usage,
                 time_cost=time_cost,
                 iteration=iteration,
