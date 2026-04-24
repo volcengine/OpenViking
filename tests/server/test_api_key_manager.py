@@ -652,3 +652,62 @@ async def test_is_new_format_key_validation():
     assert not is_new_format_key("onepart")
     assert not is_new_format_key("two.parts")
     assert not is_new_format_key("too.many.parts.here")
+
+
+# ---- get_user_role / legacy public API parity ----
+
+
+async def test_get_user_role_returns_admin_for_account_admin(manager: APIKeyManager):
+    """get_user_role must return ADMIN for the account's first admin user.
+
+    Trusted mode (openviking/server/auth.py) calls this method to resolve the
+    effective role when X-OpenViking-Account / X-OpenViking-User headers are
+    present. Must not raise AttributeError on the default APIKeyManager.
+    """
+    acct = _uid()
+    await manager.create_account(acct, "admin_user")
+    assert manager.get_user_role(acct, "admin_user") == Role.ADMIN
+
+
+async def test_get_user_role_returns_user_for_registered_user(manager: APIKeyManager):
+    acct = _uid()
+    await manager.create_account(acct, "admin_user")
+    await manager.register_user(acct, "regular_user", "user")
+    assert manager.get_user_role(acct, "regular_user") == Role.USER
+
+
+async def test_get_user_role_defaults_to_user_when_user_missing(manager: APIKeyManager):
+    """Missing user should default to Role.USER, matching legacy behavior."""
+    acct = _uid()
+    await manager.create_account(acct, "admin_user")
+    assert manager.get_user_role(acct, "nobody") == Role.USER
+
+
+async def test_get_user_role_defaults_to_user_when_account_missing(manager: APIKeyManager):
+    """Missing account should default to Role.USER, matching legacy behavior."""
+    assert manager.get_user_role("no_such_account", "no_such_user") == Role.USER
+
+
+def test_new_api_key_manager_public_api_parity_with_legacy():
+    """NewAPIKeyManager must expose every public method LegacyAPIKeyManager does.
+
+    PR #1686 wrapped LegacyAPIKeyManager in a NewAPIKeyManager that forwards
+    methods by hand rather than inheriting. A missing proxy (e.g. get_user_role)
+    becomes a latent AttributeError at runtime. This test enforces parity on the
+    public surface so future wrappers can't silently regress the contract.
+    """
+    from openviking.server.api_keys.legacy import LegacyAPIKeyManager
+    from openviking.server.api_keys.new import NewAPIKeyManager
+
+    def _public_methods(cls) -> set:
+        return {
+            name for name in dir(cls) if not name.startswith("_") and callable(getattr(cls, name))
+        }
+
+    legacy_public = _public_methods(LegacyAPIKeyManager)
+    new_public = _public_methods(NewAPIKeyManager)
+    missing = legacy_public - new_public
+    assert not missing, (
+        f"NewAPIKeyManager is missing public methods present on "
+        f"LegacyAPIKeyManager: {sorted(missing)}"
+    )
