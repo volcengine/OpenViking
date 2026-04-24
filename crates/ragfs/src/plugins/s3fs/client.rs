@@ -10,6 +10,91 @@ use aws_sdk_s3::Client;
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+const ENCODED_SEGMENT_PREFIX: char = '!';
+const HEX_UPPER: &[u8; 16] = b"0123456789ABCDEF";
+
+fn encode_path(path: &str, normalize_encoding: bool) -> String {
+    if !normalize_encoding {
+        return path.to_string();
+    }
+
+    if path.bytes().all(|byte| byte == b'/' || is_safe_segment_byte(byte)) {
+        return path.to_string();
+    }
+
+    let extra = path
+        .bytes()
+        .filter(|&byte| byte != b'/' && !is_safe_segment_byte(byte))
+        .count()
+        * 2;
+    let mut encoded = String::with_capacity(path.len() + extra);
+
+    for &byte in path.as_bytes() {
+        if byte == b'/' || is_safe_segment_byte(byte) {
+            encoded.push(byte as char);
+        } else {
+            push_encoded_byte(&mut encoded, byte);
+        }
+    }
+
+    encoded
+}
+
+fn decode_path(path: &str, normalize_encoding: bool) -> String {
+    if !normalize_encoding {
+        return path.to_string();
+    }
+
+    decode_segment(path)
+}
+
+fn decode_segment(segment: &str) -> String {
+    if segment.is_empty() {
+        return String::new();
+    }
+
+    let bytes = segment.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut idx = 0usize;
+
+    while idx < bytes.len() {
+        if bytes[idx] == ENCODED_SEGMENT_PREFIX as u8 && idx + 2 < bytes.len() {
+            let hi = decode_hex_nibble(bytes[idx + 1]);
+            let lo = decode_hex_nibble(bytes[idx + 2]);
+            if let (Some(hi), Some(lo)) = (hi, lo) {
+                decoded.push((hi << 4) | lo);
+                idx += 3;
+                continue;
+            }
+        }
+
+        decoded.push(bytes[idx]);
+        idx += 1;
+    }
+
+    String::from_utf8(decoded).unwrap_or_else(|_| segment.to_string())
+}
+
+fn is_safe_segment_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(byte, b'!' | b'-' | b'_' | b'.' | b'*' | b'\'' | b'(' | b')')
+}
+
+fn push_encoded_byte(output: &mut String, byte: u8) {
+    output.push(ENCODED_SEGMENT_PREFIX);
+    output.push(HEX_UPPER[(byte >> 4) as usize] as char);
+    output.push(HEX_UPPER[(byte & 0x0f) as usize] as char);
+}
+
+fn decode_hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        _ => None,
+    }
+}
+
 /// Directory marker mode
 #[derive(Debug, Clone, PartialEq)]
 pub enum DirectoryMarkerMode {
@@ -78,11 +163,23 @@ pub struct S3Client {
     client: Client,
     bucket: String,
     prefix: String,
+    normalize_encoding: bool,
     marker_mode: DirectoryMarkerMode,
     disable_batch_delete: bool,
 }
 
 impl S3Client {
+    fn strip_prefix_with_codec(prefix: &str, normalize_encoding: bool, key: &str) -> String {
+        let stripped = if prefix.is_empty() {
+            key
+        } else {
+            let prefix = format!("{}/", prefix.trim_end_matches('/'));
+            key.strip_prefix(&prefix).unwrap_or(key)
+        };
+
+        decode_path(stripped, normalize_encoding)
+    }
+
     /// Create a new S3 client from configuration
     pub async fn new(config: &HashMap<String, ConfigValue>) -> Result<Self> {
         let bucket = config
@@ -120,6 +217,11 @@ impl S3Client {
             .unwrap_or("")
             .to_string();
 
+        let normalize_encoding = config
+            .get("normalize_encoding")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         let marker_mode = config
             .get("directory_marker_mode")
             .and_then(|v| v.as_string())
@@ -155,6 +257,7 @@ impl S3Client {
             client,
             bucket,
             prefix,
+            normalize_encoding,
             marker_mode,
             disable_batch_delete,
         })
@@ -162,9 +265,9 @@ impl S3Client {
 
     /// Build the full S3 key from a filesystem path
     pub fn build_key(&self, path: &str) -> String {
-        let clean = path.trim_start_matches('/');
+        let clean = encode_path(path.trim_start_matches('/'), self.normalize_encoding);
         if self.prefix.is_empty() {
-            clean.to_string()
+            clean
         } else {
             let prefix = self.prefix.trim_end_matches('/');
             if clean.is_empty() {
@@ -176,13 +279,8 @@ impl S3Client {
     }
 
     /// Strip the prefix from an S3 key to get the filesystem path
-    pub fn strip_prefix<'a>(&self, key: &'a str) -> &'a str {
-        if self.prefix.is_empty() {
-            key
-        } else {
-            let prefix = format!("{}/", self.prefix.trim_end_matches('/'));
-            key.strip_prefix(&prefix).unwrap_or(key)
-        }
+    pub fn strip_prefix(&self, key: &str) -> String {
+        Self::strip_prefix_with_codec(&self.prefix, self.normalize_encoding, key)
     }
 
     /// Get an object's contents
@@ -542,5 +640,83 @@ impl S3Client {
     /// Get the bucket name
     pub fn bucket(&self) -> &str {
         &self.bucket
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_client(prefix: &str, normalize_encoding: bool) -> S3Client {
+        S3Client {
+            client: Client::from_conf(
+                aws_sdk_s3::Config::builder()
+                    .behavior_version(BehaviorVersion::latest())
+                    .region(Region::new("us-east-1"))
+                    .build(),
+            ),
+            bucket: "test-bucket".to_string(),
+            prefix: prefix.to_string(),
+            normalize_encoding,
+            marker_mode: DirectoryMarkerMode::Empty,
+            disable_batch_delete: false,
+        }
+    }
+
+    #[test]
+    fn test_key_codec_keeps_safe_segments() {
+        let path = "dir/ok-name_1.2!*'()";
+        assert_eq!(encode_path(path, true), path);
+        assert_eq!(decode_path(path, true), path);
+    }
+
+    #[test]
+    fn test_key_codec_encodes_reserved_and_unsafe_segments() {
+        let encoded = encode_path("a b/c?d/#frag/%raw", true);
+
+        assert_eq!(encoded, "a!20b/c!3Fd/!23frag/!25raw");
+        assert_eq!(decode_path(&encoded, true), "a b/c?d/#frag/%raw");
+    }
+
+    #[test]
+    fn test_key_codec_encodes_segments_with_reserved_prefix() {
+        let encoded = encode_path("!literal/normal", true);
+
+        assert_eq!(encoded, "!literal/normal");
+        assert_eq!(decode_path(&encoded, true), "!literal/normal");
+    }
+
+    #[test]
+    fn test_key_codec_disabled_is_passthrough() {
+        let path = "a b/c?d";
+        assert_eq!(encode_path(path, false), path);
+        assert_eq!(decode_path(path, false), path);
+    }
+
+    #[test]
+    fn test_key_codec_preserves_path_structure_with_mixed_segments() {
+        let path = "dir//safe-_.*/@scope+pkg/file name/";
+        let encoded = encode_path(path, true);
+
+        assert_eq!(encoded, "dir//safe-_.*/!40scope!2Bpkg/file!20name/");
+        assert_eq!(decode_path(&encoded, true), path);
+    }
+
+    #[test]
+    fn test_build_key_applies_normalized_encoding_per_segment() {
+        let key = test_client("ns", true).build_key("/dir/a b/c?d.txt");
+        assert_eq!(key, "ns/dir/a!20b/c!3Fd.txt");
+    }
+
+    #[test]
+    fn test_strip_prefix_decodes_normalized_segments() {
+        let client = test_client("ns", true);
+        let key = client.build_key("/dir/a b/c?d.txt");
+        assert_eq!(client.strip_prefix(&key), "dir/a b/c?d.txt".to_string());
+    }
+
+    #[test]
+    fn test_build_key_preserves_segments_when_normalization_disabled() {
+        assert_eq!(test_client("", false).build_key("/a b"), "a b");
     }
 }
