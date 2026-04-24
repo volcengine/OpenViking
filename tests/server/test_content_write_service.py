@@ -70,7 +70,7 @@ async def test_memory_replace_preserves_metadata(service):
         "updated_at": "2026-04-01T10:05:00",
         "fields": {"topic": "theme"},
     }
-    full_content = serialize_with_metadata("Original preference", metadata)
+    full_content = serialize_with_metadata({**metadata, "content": "Original preference"})
     _, expected_metadata = deserialize_full(full_content)
     await service.viking_fs.write_file(memory_uri, full_content, ctx=ctx)
 
@@ -85,6 +85,34 @@ async def test_memory_replace_preserves_metadata(service):
     stored_content, stored_metadata = deserialize_full(stored)
 
     assert stored_content == "Updated preference"
+    assert stored_metadata == expected_metadata
+
+
+@pytest.mark.asyncio
+async def test_memory_append_preserves_metadata(service):
+    ctx = RequestContext(user=service.user, role=Role.USER)
+    memory_uri = f"viking://user/{ctx.user.user_space_name()}/memories/preferences/theme.md"
+    metadata = {
+        "tags": ["ui", "preference"],
+        "created_at": "2026-04-01T10:00:00",
+        "updated_at": "2026-04-01T10:05:00",
+        "fields": {"topic": "theme"},
+    }
+    full_content = serialize_with_metadata({**metadata, "content": "Original preference"})
+    _, expected_metadata = deserialize_full(full_content)
+    await service.viking_fs.write_file(memory_uri, full_content, ctx=ctx)
+
+    await service.fs.write(
+        memory_uri,
+        content="\nUpdated preference",
+        ctx=ctx,
+        mode="append",
+    )
+
+    stored = await service.viking_fs.read_file(memory_uri, ctx=ctx)
+    stored_content, stored_metadata = deserialize_full(stored)
+
+    assert stored_content == "Original preference\nUpdated preference"
     assert stored_metadata == expected_metadata
 
 

@@ -296,7 +296,9 @@ class ContentWriteCoordinator:
             existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
             _, metadata = deserialize_full(existing_raw)
             if metadata:
-                content = serialize_with_metadata(content, metadata)
+                metadata_with_content = metadata.copy()
+                metadata_with_content["content"] = content
+                content = serialize_with_metadata(metadata_with_content)
             await self._viking_fs.write_file(uri, content, ctx=ctx)
             return
 
@@ -305,7 +307,9 @@ class ContentWriteCoordinator:
             existing_content, metadata = deserialize_full(existing_raw)
             updated_content = existing_content + content
             if metadata:
-                updated_raw = serialize_with_metadata(updated_content, metadata)
+                metadata_with_content = metadata.copy()
+                metadata_with_content["content"] = updated_content
+                updated_raw = serialize_with_metadata(metadata_with_content)
             else:
                 updated_raw = updated_content
             await self._viking_fs.write_file(uri, updated_raw, ctx=ctx)
