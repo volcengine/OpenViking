@@ -777,6 +777,7 @@ RAGFS uses Rust binding mode by default, directly accessing the file system thro
 | `use_ssl` | bool | Enable/disable SSL (HTTPS) for S3 connections | true |
 | `use_path_style` | bool | true for PathStyle used by MinIO and some S3-compatible services; false for VirtualHostStyle used by TOS and some S3-compatible services | true |
 | `directory_marker_mode` | str | How to persist directory markers: `none`, `empty`, or `nonempty` | `"empty"` |
+| `normalize_encoding` | bool | Escape only URL-reserved or URL-unsafe characters in S3 object keys as `!HH` hexadecimal bytes while preserving safe characters | `true` |
 
 `directory_marker_mode` controls how RAGFS materializes directory objects in S3:
 
@@ -790,6 +791,15 @@ Typical choices:
 - For TOS or other VirtualHostStyle backends that reject zero-byte directory markers, use `nonempty`.
 - If you want pure prefix-style behavior and do not need persisted empty directories, use `none`.
 
+`normalize_encoding` controls whether RAGFS rewrites unsafe path segments before issuing S3 requests:
+
+- `true` is the default. RAGFS preserves safe path characters and rewrites only unsafe bytes.
+- Unsafe bytes are encoded as `!HH`, where `HH` is the uppercase hexadecimal value of the byte.
+- The characters `/`, `!`, `-`, `_`, `.`, `*`, `'`, `(`, and `)` remain unescaped.
+- Characters such as `?`, `&`, `#`, spaces, `%`, `@`, and `+` are escaped in place without rewriting the whole segment.
+- Set `false` to keep original path segments in object keys.
+
+</details>
 <details>
 <summary><b>PathStyle S3</b></summary>
 Supports S3 storage in PathStyle mode, such as MinIO, SeaweedFS.
@@ -804,7 +814,8 @@ Supports S3 storage in PathStyle mode, such as MinIO, SeaweedFS.
         "endpoint": "s3.amazonaws.com",
         "region": "us-east-1",
         "access_key": "your-ak",
-        "secret_key": "your-sk"
+        "secret_key": "your-sk",
+        "normalize_encoding": true
       }
     }
   }
@@ -829,7 +840,8 @@ Supports S3 storage in VirtualHostStyle mode, such as TOS.
         "access_key": "your-ak",
         "secret_key": "your-sk",
         "use_path_style": false,
-        "directory_marker_mode": "nonempty"
+        "directory_marker_mode": "nonempty",
+        "normalize_encoding": true
       }
     }
   }

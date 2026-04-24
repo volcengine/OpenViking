@@ -4,10 +4,12 @@
 """Test if config validators work correctly"""
 
 import sys
+from pathlib import Path
 
+from openviking.utils.agfs_utils import _generate_plugin_config
 from openviking_cli.utils.config.agfs_config import AGFSConfig, S3Config
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
-from openviking_cli.utils.config.vectordb_config import VolcengineConfig, VectorDBBackendConfig
+from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig, VolcengineConfig
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
@@ -24,6 +26,40 @@ def test_agfs_validation():
         print(f"   Pass (path={config.path})")
     except ValueError as e:
         print(f"   Fail: {e}")
+
+
+def test_agfs_s3_normalize_encoding_defaults_to_false():
+    config = AGFSConfig(
+        backend="s3",
+        s3=S3Config(
+            bucket="my-bucket",
+            region="us-west-1",
+            access_key="fake-access-key-for-testing",
+            secret_key="fake-secret-key-for-testing-12345",
+            endpoint="https://s3.amazonaws.com",
+        ),
+    )
+
+    assert config.s3.normalize_encoding is False
+
+
+def test_agfs_s3_normalize_encoding_is_forwarded_to_ragfs_plugin_config():
+    config = AGFSConfig(
+        path="/tmp/ov-test",
+        backend="s3",
+        s3=S3Config(
+            bucket="my-bucket",
+            region="us-west-1",
+            access_key="fake-access-key-for-testing",
+            secret_key="fake-secret-key-for-testing-12345",
+            endpoint="https://s3.amazonaws.com",
+            normalize_encoding=True,
+        ),
+    )
+
+    plugins = _generate_plugin_config(config, Path("/tmp/ov-test"))
+
+    assert plugins["s3fs"]["config"]["normalize_encoding"] is True
 
     # Test 2: invalid backend
     print("\n2. Test invalid backend...")
