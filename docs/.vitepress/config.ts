@@ -149,7 +149,7 @@ export default defineConfig({
     root: {
       label: 'English',
       lang: 'en-US',
-      link: '/en/'
+      link: '/en/getting-started/01-introduction'
     },
     zh: {
       label: '简体中文',
