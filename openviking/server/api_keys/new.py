@@ -143,18 +143,21 @@ class NewAPIKeyManager:
 
             # Verify the user exists in the account using legacy's data
             account = self._legacy._accounts.get(account_id)
-            lookup_hit = False
+            spent_argon2 = False
             if account and user_id in account.users:
                 user_info = account.users[user_id]
                 stored_key_or_hash = user_info.get("key", "")
 
                 # Verify the secret part matches using legacy's verify method
                 if stored_key_or_hash:
-                    lookup_hit = True
                     if user_info.get("key_prefix", "").startswith(
                         "$argon2"
                     ) or stored_key_or_hash.startswith("$argon2"):
-                        # Hashed key
+                        # Hashed key: the verify call itself spends ~50-100 ms
+                        # whether the secret matches or not, so the failure
+                        # branch here is already timing-aligned with the
+                        # dummy-verify branch below.
+                        spent_argon2 = True
                         if self._legacy._verify_api_key(api_key, stored_key_or_hash):
                             return ResolvedIdentity(
                                 role=Role(user_info.get("role", "user")),
@@ -163,7 +166,14 @@ class NewAPIKeyManager:
                                 namespace_policy=self.get_account_policy(account_id),
                             )
                     else:
-                        # Plaintext key
+                        # Plaintext key: hmac.compare_digest is ~microseconds
+                        # regardless of match. The success branch must stay
+                        # fast for legitimate traffic, but a *failed* compare
+                        # here would leak "plaintext-stored user exists" vs
+                        # "user does not exist" (the latter pays Argon2 cost
+                        # via the dummy verify below). We deliberately do NOT
+                        # flip spent_argon2 here so a failed plaintext compare
+                        # still falls through to the dummy-verify guard.
                         if hmac.compare_digest(api_key, stored_key_or_hash):
                             return ResolvedIdentity(
                                 role=Role(user_info.get("role", "user")),
@@ -172,12 +182,18 @@ class NewAPIKeyManager:
                                 namespace_policy=self.get_account_policy(account_id),
                             )
 
-            if not lookup_hit and self._dummy_argon2_hash is not None:
-                # Constant-time guard: account/user lookup missed or stored
-                # secret was empty. Run a dummy Argon2 verify so the response
-                # time of this branch matches the real Argon2 verify above,
-                # closing a timing side channel that would otherwise leak
-                # (account_id, user_id) existence.
+            if not spent_argon2 and self._dummy_argon2_hash is not None:
+                # Constant-time guard: we reached this point without spending
+                # ~50-100 ms on a real Argon2 verify. That happens on:
+                #   (a) account or user lookup miss,
+                #   (b) stored secret empty for a registered user, or
+                #   (c) plaintext-stored user with wrong secret in a mixed
+                #       storage deployment (new Argon2 users + legacy
+                #       plaintext users under the same manager).
+                # Run a dummy verify against the precomputed Argon2 hash so
+                # the response time of every failing path matches the real
+                # Argon2 verify success/failure timing, closing the tenant
+                # enumeration side channel.
                 #
                 # Scoped to is_new_format_key == True so arbitrary garbage
                 # traffic cannot weaponise this as a DoS amplifier: each

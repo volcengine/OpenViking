@@ -902,6 +902,62 @@ async def test_resolve_known_user_wrong_secret_does_not_trigger_dummy_verify(
     assert calls[0] != manager_encrypted._dummy_argon2_hash
 
 
+async def test_resolve_known_plaintext_user_wrong_secret_triggers_dummy_verify(
+    manager_encrypted, monkeypatch
+):
+    """Mixed storage (Argon2 new users + plaintext legacy users) timing parity.
+
+    If encryption_enabled=True but a user's stored secret was persisted as
+    plaintext (e.g. created before encryption was enabled on this manager),
+    hmac.compare_digest completes in microseconds regardless of match. A
+    *failed* plaintext compare must therefore be followed by a dummy Argon2
+    verify so the response time cannot distinguish:
+
+      - plaintext user + wrong secret (otherwise ~μs)
+      - unknown user (dummy Argon2 ~50-100 ms)
+      - Argon2 user + wrong secret (real Argon2 ~50-100 ms)
+
+    Without this, an attacker enumerating new-format keys could still
+    identify the subset of tenants backed by plaintext storage.
+    """
+    from openviking.server.api_keys import generate_api_key
+    from openviking.server.api_keys.legacy import LegacyAPIKeyManager
+
+    acct = _uid()
+    await manager_encrypted.create_account(acct, "plain_user")
+    # Inject a plaintext stored secret for this user so the code path falls
+    # into the hmac.compare_digest branch instead of the Argon2 branch.
+    manager_encrypted._legacy._accounts[acct].users["plain_user"]["key"] = (
+        "literal-plaintext-secret"
+    )
+    manager_encrypted._legacy._accounts[acct].users["plain_user"]["key_prefix"] = (
+        "literal-"  # non-$argon2 prefix
+    )
+
+    calls = []
+    original_verify = LegacyAPIKeyManager._verify_api_key
+
+    def spy_verify(self, api_key: str, hashed_key: str) -> bool:
+        calls.append(hashed_key)
+        return original_verify(self, api_key, hashed_key)
+
+    monkeypatch.setattr(LegacyAPIKeyManager, "_verify_api_key", spy_verify)
+
+    wrong_key = generate_api_key(acct, "plain_user")  # random secret, won't match
+    with pytest.raises(UnauthenticatedError):
+        manager_encrypted.resolve(wrong_key)
+
+    assert len(calls) == 1, (
+        "plaintext wrong-secret path must still run one Argon2 verify "
+        "(the dummy) to keep mixed-storage deployments from leaking "
+        "plaintext-user existence via response time"
+    )
+    assert calls[0] == manager_encrypted._dummy_argon2_hash, (
+        "failed plaintext compare must fall through to the dummy hash, "
+        "not to the stored plaintext secret"
+    )
+
+
 async def test_resolve_malformed_three_segment_key_does_not_fall_through_to_legacy(
     manager_encrypted, monkeypatch
 ):
