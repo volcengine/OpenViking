@@ -24,19 +24,27 @@ class UserIdentifier(object):
 
     def _validate_error(self) -> str:
         """Validate the user identifier. all fields must be non-empty strings, and chars only in [a-zA-Z0-9_.-]."""
-        pattern = re.compile(r"^[a-zA-Z0-9_.-]+$")
+        pattern = re.compile(r"^[a-zA-Z0-9_.-@]+$")
         if not self._account_id:
             return "account_id is empty"
         if not pattern.match(self._account_id):
-            return "account_id must be alpha-numeric string."
+            return "account_id must be alpha_numeric string."
+        if self._account_id.count("@") > 1:
+            return "account_id must have at most one @."
+        #
         if not self._user_id:
             return "user_id is empty"
         if not pattern.match(self._user_id):
-            return "user_id must be alpha-numeric string."
+            return "user_id must be alpha_numeric string."
+        if self._user_id.count("@") > 1:
+            return "user_id must have at most one @."
+        #
         if not self._agent_id:
             return "agent_id is empty"
         if not pattern.match(self._agent_id):
-            return "agent_id must be alpha-numeric string."
+            return "agent_id must be alpha_numeric string."
+        if self._agent_id.count("@") > 1:
+            return "agent_id must have at most one @."
         return ""
 
     @property
