@@ -371,6 +371,7 @@ async def index_resource(
             if file_info.get("type") == "directory" or file_info.get("isDir"):
                 sub_uri = file_info.get("uri") or f"{uri}/{file_name}"
                 await index_resource(sub_uri, ctx)
+                continue
 
             file_uri = file_info.get("uri") or f"{uri}/{file_name}"
 
