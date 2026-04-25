@@ -863,9 +863,10 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
     # Convert StrPatch blocks to internal match format
     matches = []
     for block in patch.blocks:
+        start_line = getattr(block, "start_line", None) or 0
         matches.append(
             {
-                "startLine": block.start_line or 0,
+                "startLine": start_line,
                 "searchContent": block.search,
                 "replaceContent": block.replace,
             }

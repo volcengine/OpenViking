@@ -231,7 +231,6 @@ Line 4"""
                 SearchReplaceBlock(
                     search="Line 2\nLine 3",
                     replace="Line 2 modified\nLine 3 modified",
-                    start_line=2,
                 )
             ]
         )
@@ -278,7 +277,7 @@ Goodbye"""
         # StrPatch as dict (this is what JSON parsing gives us)
         patch_dict = {
             "blocks": [
-                {"search": "This is a test", "replace": "This has been modified", "start_line": 2}
+                {"search": "This is a test", "replace": "This has been modified"}
             ]
         }
 

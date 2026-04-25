@@ -58,7 +58,6 @@ class SearchReplaceBlock(BaseModel):
         description="Content to search for. ONLY include the EXACT lines you need to change - NEVER include the entire section. Example (WRONG): '## Melanie\\n- line1\\n- line2\\n[50 more lines]'. Example (CORRECT): '- Art can be in the most unlikely places, and love and acceptance really can be found everywhere'",
     )
     replace: str = Field(..., description="Content to replace with")
-    start_line: Optional[int] = Field(None, description="Starting line number hint")
 
 
 class StrPatch(BaseModel):
