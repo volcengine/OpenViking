@@ -3731,7 +3731,7 @@ requires-dist = [
     { name = "langfuse", marker = "extra == 'bot-langfuse'", specifier = ">=3.0.0" },
     { name = "lark-oapi", specifier = ">=1.5.3" },
     { name = "lark-oapi", marker = "extra == 'bot-feishu'", specifier = ">=1.0.0" },
-    { name = "litellm", specifier = ">=1.0.0,<1.83.1" },
+    { name = "litellm", specifier = ">=1.0.0,<1.83.13" },
     { name = "llama-cpp-python", marker = "extra == 'local-embed'", specifier = ">=0.3.0" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "markdownify", specifier = ">=0.11.0" },
