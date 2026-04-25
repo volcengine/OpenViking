@@ -15,7 +15,12 @@ from enum import Enum
 from typing import Dict, List, Optional
 
 from openviking.core.context import Context
-from openviking.core.namespace import canonical_agent_root, canonical_user_root
+from openviking.core.namespace import (
+    agent_space_fragment,
+    canonical_agent_root,
+    canonical_user_root,
+    user_space_fragment,
+)
 from openviking.models.embedder.base import EmbedResult, embed_compat
 from openviking.prompts import render_prompt
 from openviking.server.identity import RequestContext
@@ -82,6 +87,15 @@ class MemoryDeduplicator:
         elif category in MemoryDeduplicator._AGENT_CATEGORIES:
             return f"{canonical_agent_root(ctx)}/memories/{category}/"
         return ""
+
+    @staticmethod
+    def _owner_space(category: str, ctx: RequestContext) -> str | None:
+        """Return the owner space for the candidate category."""
+        if category in MemoryDeduplicator._USER_CATEGORIES:
+            return user_space_fragment(ctx)
+        if category in MemoryDeduplicator._AGENT_CATEGORIES:
+            return agent_space_fragment(ctx)
+        return None
 
     def __init__(
         self,
@@ -167,18 +181,19 @@ class MemoryDeduplicator:
         embed_result: EmbedResult = await embed_compat(self.embedder, query_text, is_query=True)
         query_vector = embed_result.dense_vector
 
+        owner_space = self._owner_space(candidate.category.value, ctx)
         category_uri_prefix = self._category_uri_prefix(candidate.category.value, ctx)
         logger.debug(
             "Dedup prefilter candidate category=%s owner_space=%s uri_prefix=%s",
             candidate.category.value,
-            None,
+            owner_space,
             category_uri_prefix,
         )
 
         try:
             # Search with memory-scope filter.
             results = await self.vikingdb.search_similar_memories(
-                owner_space=None,
+                owner_space=owner_space,
                 category_uri_prefix=category_uri_prefix,
                 query_vector=query_vector,
                 limit=5,

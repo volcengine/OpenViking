@@ -265,8 +265,8 @@ class LockManager:
     async def _redo_session_memory(self, info: Dict[str, Any]) -> None:
         """Re-extract memories from archive.
 
-        Lets exceptions from _enqueue_semantic propagate so the caller
-        can decide whether to mark the redo task as done.
+        Lets redo recovery exceptions propagate so the caller can decide
+        whether to mark the redo task as done.
         """
         from openviking.message import Message
         from openviking.server.identity import RequestContext, Role
