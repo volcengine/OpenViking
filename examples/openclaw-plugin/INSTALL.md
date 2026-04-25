@@ -142,6 +142,8 @@ Use this mode when you already have a running OpenViking server and want OpenCla
 | `mode` | `remote` | Connect to an existing OpenViking server |
 | `baseUrl` | `http://127.0.0.1:1933` | Remote OpenViking HTTP endpoint |
 | `apiKey` | empty | Optional OpenViking API key |
+| `accountId` | empty | Tenant/account header. Required when `apiKey` is a root API key and the plugin calls tenant-scoped APIs. |
+| `userId` | empty | User header. Required together with `accountId` when using a root API key for tenant-scoped APIs. |
 | `agentId` | `default` | Logical identifier used by this OpenClaw instance on the remote server |
 
 Common remote-mode settings:
@@ -152,6 +154,15 @@ openclaw config set plugins.entries.openviking.config.baseUrl http://your-server
 openclaw config set plugins.entries.openviking.config.apiKey your-api-key
 openclaw config set plugins.entries.openviking.config.agentId your-agent-id
 ```
+
+If the API key is `root_api_key` / a root key, also set the tenant identity headers used by tenant-scoped APIs:
+
+```bash
+openclaw config set plugins.entries.openviking.config.accountId default
+openclaw config set plugins.entries.openviking.config.userId default
+```
+
+For regular user API keys, `accountId` and `userId` can usually be left empty because the server derives the tenant identity from the key.
 
 ## Start
 

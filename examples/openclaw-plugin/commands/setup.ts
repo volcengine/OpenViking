@@ -615,9 +615,21 @@ async function setupRemote(
   const defaultUrl = existing?.baseUrl ? String(existing.baseUrl) : DEFAULT_REMOTE_URL;
   const defaultApiKey = existing?.apiKey ? String(existing.apiKey) : "";
   const defaultAgentId = existing?.agentId ? String(existing.agentId) : "";
+  const defaultAccountId = existing?.accountId ? String(existing.accountId) : "";
+  const defaultUserId = existing?.userId ? String(existing.userId) : "";
 
   const baseUrl = await q(tr(zh, "OpenViking server URL", "OpenViking 服务器地址"), defaultUrl);
   const apiKey = await q(tr(zh, "API Key (optional)", "API Key（可选）"), defaultApiKey);
+  const accountId = await q(tr(
+    zh,
+    "Account ID (optional; required with root API keys for tenant-scoped APIs)",
+    "Account ID（可选；root API Key 访问租户级 API 时必填）",
+  ), defaultAccountId);
+  const userId = await q(tr(
+    zh,
+    "User ID (optional; required with root API keys for tenant-scoped APIs)",
+    "User ID（可选；root API Key 访问租户级 API 时必填）",
+  ), defaultUserId);
   const agentId = await q(tr(zh, "Agent ID (optional)", "Agent ID（可选）"), defaultAgentId);
 
   console.log("");
@@ -646,6 +658,10 @@ async function setupRemote(
   };
   if (apiKey) pluginCfg.apiKey = apiKey;
   else delete pluginCfg.apiKey;
+  if (accountId) pluginCfg.accountId = accountId;
+  else delete pluginCfg.accountId;
+  if (userId) pluginCfg.userId = userId;
+  else delete pluginCfg.userId;
   if (agentId) pluginCfg.agentId = agentId;
   else delete pluginCfg.agentId;
   delete pluginCfg.configPath;
@@ -657,6 +673,8 @@ async function setupRemote(
   console.log(`  ${tr(zh, "mode:", "模式:")}    remote`);
   console.log(`  baseUrl: ${baseUrl}`);
   if (apiKey) console.log(`  apiKey:  ${maskKey(apiKey)}`);
+  if (accountId) console.log(`  accountId: ${accountId}`);
+  if (userId) console.log(`  userId:    ${userId}`);
   if (agentId) console.log(`  agentId: ${agentId}`);
   console.log("");
   console.log(tr(zh,
@@ -671,4 +689,5 @@ export const __test__ = {
   parsePosixEnvPythonPath,
   validateLocalConfigPath,
   setupLocal,
+  setupRemote,
 };

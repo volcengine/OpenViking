@@ -121,6 +121,8 @@ let selectedMode = "remote";
 let selectedServerPort = DEFAULT_SERVER_PORT;
 let remoteBaseUrl = "http://127.0.0.1:1933";
 let remoteApiKey = "";
+let remoteAccountId = "";
+let remoteUserId = "";
 let remoteAgentId = "";
 let openvikingPythonPath = "";
 let upgradeRuntimeConfig = null;
@@ -601,6 +603,20 @@ async function collectRemoteConfig() {
   if (installYes) return;
   remoteBaseUrl = await question(tr("OpenViking server URL", "OpenViking 服务器地址"), remoteBaseUrl);
   remoteApiKey = await question(tr("API Key (optional)", "API Key（可选）"), remoteApiKey);
+  remoteAccountId = await question(
+    tr(
+      "Account ID (optional; required with root API keys for tenant-scoped APIs)",
+      "Account ID（可选；root API Key 访问租户级 API 时必填）",
+    ),
+    remoteAccountId,
+  );
+  remoteUserId = await question(
+    tr(
+      "User ID (optional; required with root API keys for tenant-scoped APIs)",
+      "User ID（可选；root API Key 访问租户级 API 时必填）",
+    ),
+    remoteUserId,
+  );
   remoteAgentId = await question(tr("Agent ID (optional)", "Agent ID（可选）"), remoteAgentId);
 }
 
@@ -1445,6 +1461,12 @@ function extractRuntimeConfigFromPluginEntry(entryConfig) {
     if (typeof entryConfig.apiKey === "string" && entryConfig.apiKey.trim()) {
       runtime.apiKey = entryConfig.apiKey;
     }
+    if (typeof entryConfig.accountId === "string" && entryConfig.accountId.trim()) {
+      runtime.accountId = entryConfig.accountId.trim();
+    }
+    if (typeof entryConfig.userId === "string" && entryConfig.userId.trim()) {
+      runtime.userId = entryConfig.userId.trim();
+    }
     if (typeof entryConfig.agentId === "string" && entryConfig.agentId.trim()) {
       runtime.agentId = entryConfig.agentId.trim();
     }
@@ -1772,6 +1794,8 @@ async function prepareStrongPluginUpgrade() {
   if (upgradeRuntimeConfig.mode === "remote") {
     remoteBaseUrl = upgradeRuntimeConfig.baseUrl || remoteBaseUrl;
     remoteApiKey = upgradeRuntimeConfig.apiKey || "";
+    remoteAccountId = upgradeRuntimeConfig.accountId || "";
+    remoteUserId = upgradeRuntimeConfig.userId || "";
     remoteAgentId = upgradeRuntimeConfig.agentId || "";
   } else {
     selectedServerPort = upgradeRuntimeConfig.port || DEFAULT_SERVER_PORT;
@@ -2090,7 +2114,14 @@ async function configureOpenClawPlugin({
 
   const effectiveRuntimeConfig = runtimeConfig || (
     selectedMode === "remote"
-      ? { mode: "remote", baseUrl: remoteBaseUrl, apiKey: remoteApiKey, agentId: remoteAgentId }
+      ? {
+          mode: "remote",
+          baseUrl: remoteBaseUrl,
+          apiKey: remoteApiKey,
+          accountId: remoteAccountId,
+          userId: remoteUserId,
+          agentId: remoteAgentId,
+        }
       : { mode: "local", configPath: join(OPENVIKING_DIR, "ov.conf"), port: selectedServerPort }
   );
 
@@ -2105,6 +2136,12 @@ async function configureOpenClawPlugin({
     await oc(["config", "set", `plugins.entries.${pluginId}.config.baseUrl`, effectiveRuntimeConfig.baseUrl || remoteBaseUrl]);
     if (effectiveRuntimeConfig.apiKey) {
       await oc(["config", "set", `plugins.entries.${pluginId}.config.apiKey`, effectiveRuntimeConfig.apiKey]);
+    }
+    if (effectiveRuntimeConfig.accountId) {
+      await oc(["config", "set", `plugins.entries.${pluginId}.config.accountId`, effectiveRuntimeConfig.accountId]);
+    }
+    if (effectiveRuntimeConfig.userId) {
+      await oc(["config", "set", `plugins.entries.${pluginId}.config.userId`, effectiveRuntimeConfig.userId]);
     }
     if (effectiveRuntimeConfig.agentId) {
       await oc(["config", "set", `plugins.entries.${pluginId}.config.agentId`, effectiveRuntimeConfig.agentId]);

@@ -135,6 +135,8 @@ openclaw config set plugins.entries.openviking.config.port 1933
 | `mode` | `remote` | 使用已有远端 OpenViking 服务 |
 | `baseUrl` | `http://127.0.0.1:1933` | 远端 OpenViking 服务地址 |
 | `apiKey` | 空 | 远端 OpenViking API Key；服务端未开启认证时可不填 |
+| `accountId` | 空 | 租户/账号请求头。使用 `root_api_key` / root key 访问租户级 API 时必填。 |
+| `userId` | 空 | 用户请求头。使用 root key 访问租户级 API 时需要与 `accountId` 一起配置。 |
 | `agentId` | `default` | 当前 OpenClaw 实例在远端 OpenViking 上的标识 |
 
 常见设置：
@@ -145,6 +147,15 @@ openclaw config set plugins.entries.openviking.config.baseUrl http://your-server
 openclaw config set plugins.entries.openviking.config.apiKey your-api-key
 openclaw config set plugins.entries.openviking.config.agentId your-agent-id
 ```
+
+如果 `apiKey` 使用的是 `root_api_key` / root key，还需要配置租户身份请求头，供租户级 API 使用：
+
+```bash
+openclaw config set plugins.entries.openviking.config.accountId default
+openclaw config set plugins.entries.openviking.config.userId default
+```
+
+如果使用普通用户 API Key，通常可以不填 `accountId` 和 `userId`，由服务端从 key 中解析租户身份。
 
 ## 启动
 
