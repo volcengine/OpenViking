@@ -29,6 +29,12 @@ from openviking.parse.parsers.media.utils import (
 from openviking.prompts import render_prompt
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
+from openviking.storage.queuefs.semantic_cache import (
+    MANAGED_HIDDEN_SEMANTIC_FILES,
+    SUMMARY_CACHE_FILENAME,
+    parse_summary_cache,
+    serialize_summary_cache,
+)
 from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecutor
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.viking_fs import get_viking_fs
@@ -219,6 +225,24 @@ class SemanticProcessor(DequeueHandlerBase):
             return current_content != target_content
         except Exception:
             return True
+
+    async def _read_directory_summary_cache(
+        self, dir_uri: str, ctx: Optional[RequestContext] = None
+    ) -> Dict[str, str]:
+        """Read cached file summaries for a directory."""
+        viking_fs = get_viking_fs()
+        try:
+            cache_content = await viking_fs.read_file(
+                f"{dir_uri}/{SUMMARY_CACHE_FILENAME}", ctx=ctx
+            )
+        except Exception as e:
+            logger.debug(f"No summary cache found for {dir_uri}: {e}")
+            return {}
+
+        cache = parse_summary_cache(cache_content)
+        if cache:
+            logger.info(f"Loaded {len(cache)} cached summaries from {SUMMARY_CACHE_FILENAME}")
+        return cache
 
     async def _reenqueue_semantic_msg(self, msg: SemanticMsg) -> None:
         """Re-enqueue a semantic message for later processing.
@@ -486,15 +510,17 @@ class SemanticProcessor(DequeueHandlerBase):
         existing_summaries: Dict[str, str] = {}
 
         if msg.changes:
-            try:
-                old_overview = await viking_fs.read_file(f"{dir_uri}/.overview.md", ctx=ctx)
-                if old_overview:
-                    existing_summaries = self._parse_overview_md(old_overview)
-                    logger.info(
-                        f"Parsed {len(existing_summaries)} existing summaries from overview.md"
-                    )
-            except Exception as e:
-                logger.debug(f"No existing overview.md found for {dir_uri}: {e}")
+            existing_summaries = await self._read_directory_summary_cache(dir_uri, ctx=ctx)
+            if not existing_summaries:
+                try:
+                    old_overview = await viking_fs.read_file(f"{dir_uri}/.overview.md", ctx=ctx)
+                    if old_overview:
+                        existing_summaries = self._parse_overview_md(old_overview)
+                        logger.info(
+                            f"Parsed {len(existing_summaries)} existing summaries from overview.md"
+                        )
+                except Exception as e:
+                    logger.debug(f"No existing overview.md found for {dir_uri}: {e}")
 
         changed_files: Set[str] = set()
         if msg.changes:
@@ -585,6 +611,15 @@ class SemanticProcessor(DequeueHandlerBase):
             return
 
         try:
+            await viking_fs.write_file(
+                f"{dir_uri}/{SUMMARY_CACHE_FILENAME}",
+                serialize_summary_cache(file_summaries),
+                ctx=ctx,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to write {SUMMARY_CACHE_FILENAME} for {dir_uri}: {e}")
+
+        try:
             if msg.telemetry_id and msg.id:
                 from openviking.storage.queuefs.embedding_tracker import EmbeddingTaskTracker
 
@@ -651,7 +686,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 name = entry.get("name", "")
                 if not name or name in [".", ".."]:
                     continue
-                if name.startswith(".") and name not in [".abstract.md", ".overview.md"]:
+                if name.startswith(".") and name not in MANAGED_HIDDEN_SEMANTIC_FILES:
                     continue
                 item_uri = VikingURI(dir_uri).join(name).uri
                 if entry.get("isDir", False):
