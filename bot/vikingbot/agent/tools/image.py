@@ -47,7 +47,7 @@ class ImageGenerationTool(Tool):
                 },
                 "mask": {
                     "type": "string",
-                    "description": "Mask image for edit mode: base64 data URI or image URL (optional, transparent areas indicate where to edit)",
+                    "description": "Mask image for edit mode: base64 data URI, image URL, or sandbox-local image file path (optional, transparent areas indicate where to edit)",
                 },
                 "size": {
                     "type": "string",

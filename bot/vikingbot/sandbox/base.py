@@ -1,5 +1,6 @@
 """Abstract interface for sandbox backends."""
 
+import asyncio
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
@@ -93,7 +94,7 @@ class SandboxBackend(ABC):
             raise FileNotFoundError(f"File not found: {path}")
         if not sandbox_path.is_file():
             raise IOError(f"Not a file: {path}")
-        return sandbox_path.read_bytes()
+        return await asyncio.to_thread(sandbox_path.read_bytes)
 
     async def read_file(self, path: str) -> str:
         """Read file from sandbox (default implementation: host filesystem).

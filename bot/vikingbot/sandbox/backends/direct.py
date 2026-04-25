@@ -112,7 +112,7 @@ class DirectBackend(SandboxBackend):
             raise FileNotFoundError(f"File not found: {path}")
         if not sandbox_path.is_file():
             raise IOError(f"Not a file: {path}")
-        return sandbox_path.read_bytes()
+        return await asyncio.to_thread(sandbox_path.read_bytes)
 
     async def read_file(self, path: str) -> str:
         return (await self.read_file_bytes(path)).decode("utf-8")
