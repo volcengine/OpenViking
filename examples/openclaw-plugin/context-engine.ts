@@ -1186,7 +1186,7 @@ export function createMemoryOpenVikingContextEngine(params: {
 
         const { messages: compressedMessages, stats: compressionStats } = await compressToolResults(
           sanitized,
-          cfg,
+          { ...cfg, sessionId: OVSessionId },
         );
         const finalMessages = compressionStats.compressedCount > 0 ? compressedMessages : sanitized;
 

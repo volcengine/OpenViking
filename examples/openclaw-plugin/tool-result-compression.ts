@@ -18,11 +18,15 @@
  *      individual persistence, the largest results are progressively
  *      re-truncated until the budget is met.
  *
+ * File persistence is scoped per-session to avoid cross-session collisions.
+ * For array-type tool results (multiple text blocks), the budget is distributed
+ * proportionally across blocks, preserving the original block structure.
+ *
  * All thresholds are configured via `MemoryOpenVikingConfig` in config.ts and
  * passed through as-is by the context engine.
  */
 
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { createHash } from "node:crypto";
@@ -35,7 +39,7 @@ type AgentMessage = {
   isError?: boolean;
 };
 
-const TOOL_RESULTS_SUBDIR = "tool-results";
+const TOOL_RESULTS_BASE_DIR = "tool-results";
 const PREVIEW_TAG_OPEN = "<persisted-output>";
 const PREVIEW_TAG_CLOSE = "</persisted-output>";
 
@@ -67,9 +71,6 @@ function getToolResultTextLength(msg: AgentMessage): number {
   return 0;
 }
 
-/**
- * Extract plain text from a tool result message (string or content-block array).
- */
 function getToolResultText(msg: AgentMessage): string {
   const content = msg.content;
   if (typeof content === "string") return content;
@@ -87,29 +88,39 @@ function getToolResultText(msg: AgentMessage): string {
 }
 
 function formatFileSize(chars: number): string {
-  const bytes = chars;
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (chars < 1024) return `${chars} B`;
+  if (chars < 1024 * 1024) return `${(chars / 1024).toFixed(1)} KB`;
+  return `${(chars / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function contentHash(text: string): string {
+  return createHash("sha256").update(text).digest("hex").slice(0, 16);
 }
 
 /**
- * Stable filename derived from toolCallId (or a hash of content as fallback).
+ * Filename derived from toolCallId + content hash.  The hash suffix ensures
+ * that different content for the same toolCallId (e.g. after a retry) produces
+ * a distinct file instead of silently reusing a stale one.
  */
 function makePersistFilename(msg: AgentMessage): string {
-  if (msg.toolCallId) return `${msg.toolCallId.replace(/[^a-zA-Z0-9_-]/g, "_")}.txt`;
   const text = getToolResultText(msg);
-  const hash = createHash("sha256").update(text).digest("hex").slice(0, 16);
+  const hash = contentHash(text);
+  if (msg.toolCallId) {
+    const safeId = msg.toolCallId.replace(/[^a-zA-Z0-9_-]/g, "_");
+    return `${safeId}-${hash}.txt`;
+  }
   return `result-${hash}.txt`;
 }
 
 /**
- * Resolve the base directory for persisted tool results.
- * Defaults to ~/.openclaw/memory/tool-results.
+ * Resolve session-scoped storage directory:
+ *   override / sessionId /
+ *   ~/.openclaw/memory/tool-results/<sessionId>/
  */
-function resolveStorageDir(override?: string): string {
-  if (override) return override;
-  return join(homedir(), ".openclaw", "memory", TOOL_RESULTS_SUBDIR);
+function resolveStorageDir(sessionId: string, override?: string): string {
+  const base = override ?? join(homedir(), ".openclaw", "memory", TOOL_RESULTS_BASE_DIR);
+  const safeSession = sessionId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
+  return join(base, safeSession);
 }
 
 async function ensureDir(dir: string): Promise<void> {
@@ -121,9 +132,13 @@ async function ensureDir(dir: string): Promise<void> {
 }
 
 /**
- * Persist full tool result text to disk. Returns the file path, or null on
- * failure.  Uses `wx` flag to avoid overwriting if the same file was already
- * persisted in a prior turn.
+ * Persist full tool result text to disk. Returns the file path on success,
+ * null on failure.
+ *
+ * On EEXIST (file already written by a prior assemble of the same session),
+ * we verify the content matches by reading it back.  If the content differs
+ * (stale file from a different run), we append a short collision suffix and
+ * retry once.
  */
 async function persistToDisk(
   text: string,
@@ -134,17 +149,34 @@ async function persistToDisk(
   const filepath = join(storageDir, filename);
   try {
     await writeFile(filepath, text, { encoding: "utf-8", flag: "wx" });
+    return filepath;
   } catch (err: unknown) {
     const code = (err as NodeJS.ErrnoException)?.code;
     if (code !== "EEXIST") return null;
   }
-  return filepath;
+
+  // File exists — verify content matches (same session, same toolCallId + content hash).
+  try {
+    const existing = await readFile(filepath, { encoding: "utf-8" });
+    if (existing === text) return filepath;
+  } catch {
+    // unreadable — fall through to collision retry
+  }
+
+  // Content mismatch: append collision counter and retry.
+  const dotIdx = filename.lastIndexOf(".");
+  const base = dotIdx > 0 ? filename.slice(0, dotIdx) : filename;
+  const ext = dotIdx > 0 ? filename.slice(dotIdx) : ".txt";
+  const collisionName = `${base}_v2${ext}`;
+  const collisionPath = join(storageDir, collisionName);
+  try {
+    await writeFile(collisionPath, text, { encoding: "utf-8", flag: "wx" });
+    return collisionPath;
+  } catch {
+    return null;
+  }
 }
 
-/**
- * Build the preview message that replaces the original content, including
- * the file path so the model knows where to find the full output.
- */
 function buildPersistedPreview(
   originalSize: number,
   previewText: string,
@@ -161,12 +193,6 @@ function buildPersistedPreview(
   return msg;
 }
 
-/**
- * Returns true when the tail of the text contains signals that are valuable
- * for the model — error messages, stack traces, closing braces (JSON), or
- * result/summary keywords.  When this is the case we keep both a head and a
- * tail section in the preview.
- */
 function hasImportantTail(text: string): boolean {
   const tail = text.slice(-2000).toLowerCase();
   return (
@@ -176,10 +202,6 @@ function hasImportantTail(text: string): boolean {
   );
 }
 
-/**
- * Generate a preview string from the full text, respecting line boundaries.
- * When the tail contains important signals, returns both head and tail.
- */
 function generatePreview(
   text: string,
   previewChars: number,
@@ -214,8 +236,8 @@ function generatePreview(
 }
 
 /**
- * Truncate text for aggregate budget enforcement (no disk persistence,
- * just in-memory truncation with a simple marker).
+ * Truncate a single text string to fit within maxChars, respecting line
+ * boundaries.  Used for aggregate budget enforcement.
  */
 function truncateText(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
@@ -243,16 +265,77 @@ function collectToolResults(messages: AgentMessage[]): ToolResultEntry[] {
 }
 
 /**
- * Apply two-level tool-result compression to an assembled message array.
- *
- * 1. Persist any individual result exceeding `toolResultMaxChars` to disk and
- *    replace it with a preview + file path reference.
- * 2. If the aggregate of all results still exceeds
- *    `toolResultAggregateBudgetChars`, progressively truncate the largest
- *    results (greedy, descending by size) until the budget is satisfied.
- *
- * Returns a new array (shallow-copied) plus compression statistics.
+ * Replace the text content of a tool-result message with `newText`.
+ * For array-type content, distributes the text proportionally across text
+ * blocks (each block gets its own truncated slice), preserving non-text blocks.
+ * For string-type content, replaces directly.
  */
+function replaceToolResultText(
+  msg: AgentMessage,
+  newText: string,
+): AgentMessage {
+  const content = msg.content;
+  if (typeof content === "string" || !Array.isArray(content)) {
+    return { ...msg, content: newText };
+  }
+
+  // Array content: distribute proportionally per block (like OpenClaw's
+  // truncateToolResultMessage).
+  const totalTextLen = getToolResultTextLength(msg);
+  if (totalTextLen === 0) return msg;
+
+  let assigned = 0;
+  const textBlocks = content.filter(
+    (b: unknown) => (b as Record<string, unknown>)?.type === "text" && typeof (b as Record<string, unknown>).text === "string",
+  );
+
+  const newContent = content.map((block: unknown) => {
+    const b = block as Record<string, unknown>;
+    if (b?.type !== "text" || typeof b.text !== "string") return block;
+
+    const blockLen = b.text.length;
+    const blockShare = blockLen / totalTextLen;
+    const blockBudget = Math.max(1, Math.floor(newText.length * blockShare));
+
+    const start = Math.min(assigned, newText.length);
+    const end = Math.min(start + blockBudget, newText.length);
+    assigned = end;
+    return { ...b, text: newText.slice(start, end) };
+  });
+
+  return { ...msg, content: newContent };
+}
+
+/**
+ * Truncate a tool-result message's array content blocks proportionally,
+ * each block truncated independently.  Mirrors OpenClaw's
+ * truncateToolResultMessage approach.
+ */
+function truncateToolResultMessage(
+  msg: AgentMessage,
+  maxChars: number,
+): AgentMessage {
+  const content = msg.content;
+  if (typeof content === "string") {
+    return { ...msg, content: truncateText(content, maxChars) };
+  }
+  if (!Array.isArray(content)) return msg;
+
+  const totalTextLen = getToolResultTextLength(msg);
+  if (totalTextLen <= maxChars) return msg;
+
+  const newContent = content.map((block: unknown) => {
+    const b = block as Record<string, unknown>;
+    if (b?.type !== "text" || typeof b.text !== "string") return block;
+
+    const blockShare = b.text.length / totalTextLen;
+    const blockBudget = Math.max(200, Math.floor(maxChars * blockShare));
+    return { ...b, text: truncateText(b.text, blockBudget) };
+  });
+
+  return { ...msg, content: newContent };
+}
+
 export async function compressToolResults(
   messages: AgentMessage[],
   cfg: {
@@ -261,6 +344,7 @@ export async function compressToolResults(
     toolResultAggregateBudgetChars: number;
     toolResultPreviewChars: number;
     toolResultStorageDir?: string;
+    sessionId?: string;
   },
 ): Promise<{ messages: AgentMessage[]; stats: ToolResultCompressionStats }> {
   if (!cfg.toolResultCompression) {
@@ -273,7 +357,8 @@ export async function compressToolResults(
   const maxChars = cfg.toolResultMaxChars;
   const previewChars = cfg.toolResultPreviewChars;
   const aggregateBudget = cfg.toolResultAggregateBudgetChars;
-  const storageDir = resolveStorageDir(cfg.toolResultStorageDir);
+  const sessionId = cfg.sessionId ?? "default";
+  const storageDir = resolveStorageDir(sessionId, cfg.toolResultStorageDir);
 
   const entries = collectToolResults(messages);
   if (entries.length === 0) {
@@ -308,22 +393,14 @@ export async function compressToolResults(
         newContent = buildPersistedPreview(text.length, preview, hasMore, filepath, previewChars);
         persistedFiles.push(filepath);
       } else {
-        // Fallback: in-memory truncation if disk write failed.
         const { preview, hasMore } = generatePreview(text, previewChars);
         newContent = preview + (hasMore ? "\n\n[... disk persistence failed, content truncated ...]" : "");
       }
 
-      const content = entry.message.content;
-      if (typeof content === "string" || !Array.isArray(content)) {
-        return { index: entry.index, message: { ...entry.message, content: newContent } };
-      }
-
-      const newContentBlocks = content.map((block: unknown) => {
-        const b = block as Record<string, unknown>;
-        if (b?.type === "text") return { ...b, text: newContent };
-        return block;
-      });
-      return { index: entry.index, message: { ...entry.message, content: newContentBlocks } };
+      return {
+        index: entry.index,
+        message: replaceToolResultText(entry.message, newContent),
+      };
     });
 
     const persisted = await Promise.all(persistOps);
@@ -333,7 +410,7 @@ export async function compressToolResults(
     }
   }
 
-  // Phase 2: aggregate budget enforcement (in-memory truncation).
+  // Phase 2: aggregate budget enforcement (per-block proportional truncation).
   const afterIndividual = collectToolResults(result);
   let aggregateChars = 0;
   for (const entry of afterIndividual) {
@@ -350,22 +427,7 @@ export async function compressToolResults(
     for (const entry of candidates) {
       if (remaining <= 0) break;
       const targetChars = Math.max(previewChars, entry.textLength - remaining);
-
-      const msg = result[entry.index]!;
-      const text = getToolResultText(msg);
-      const truncated = truncateText(text, targetChars);
-
-      const content = msg.content;
-      if (typeof content === "string" || !Array.isArray(content)) {
-        result[entry.index] = { ...msg, content: truncated };
-      } else {
-        const newBlocks = content.map((block: unknown) => {
-          const b = block as Record<string, unknown>;
-          if (b?.type === "text") return { ...b, text: truncated };
-          return block;
-        });
-        result[entry.index] = { ...msg, content: newBlocks };
-      }
+      result[entry.index] = truncateToolResultMessage(result[entry.index]!, targetChars);
 
       const newTextLen = getToolResultTextLength(result[entry.index]!);
       remaining -= Math.max(0, entry.textLength - newTextLen);

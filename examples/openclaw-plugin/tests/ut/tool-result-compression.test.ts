@@ -25,6 +25,7 @@ function makeCfg(overrides: Record<string, unknown> = {}): {
   toolResultAggregateBudgetChars: number;
   toolResultPreviewChars: number;
   toolResultStorageDir?: string;
+  sessionId?: string;
 } {
   return {
     toolResultCompression: true,
@@ -32,6 +33,7 @@ function makeCfg(overrides: Record<string, unknown> = {}): {
     toolResultAggregateBudgetChars: 100_000,
     toolResultPreviewChars: 2_000,
     toolResultStorageDir: "/tmp/test-tool-results",
+    sessionId: "test-session-001",
     ...overrides,
   };
 }
