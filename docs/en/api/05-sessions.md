@@ -864,6 +864,7 @@ viking://session/{session_id}/
     |   +-- messages.jsonl    # Written in Phase 1
     |   +-- .abstract.md      # Written in Phase 2 (background)
     |   +-- .overview.md      # Written in Phase 2 (background)
+    |   +-- memory_diff.json  # Written in Phase 2 (background, on memory changes)
     |   +-- .done             # Phase 2 completion marker
     +-- archive_002/
 ```
