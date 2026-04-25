@@ -162,6 +162,7 @@ class SyncHTTPClient:
         include: Optional[str] = None,
         exclude: Optional[str] = None,
         directly_upload_media: bool = True,
+        metadata: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
@@ -181,6 +182,7 @@ class SyncHTTPClient:
                 include,
                 exclude,
                 directly_upload_media,
+                metadata=metadata,
                 telemetry=telemetry,
             )
         )

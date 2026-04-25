@@ -41,6 +41,7 @@ class AddResourceRequest(BaseModel):
         reason: Reason for adding the resource. Used for documentation and monitoring.
         instruction: Processing instruction for semantic extraction.
             Provides hints for how the resource should be processed.
+        metadata: Opaque JSON object stored with the resource and returned by stat.
         wait: Whether to wait for semantic extraction and vectorization to complete.
             Default is False (async processing).
         timeout: Timeout in seconds when wait=True. None means no timeout.
@@ -71,6 +72,7 @@ class AddResourceRequest(BaseModel):
     parent: Optional[str] = None
     reason: str = ""
     instruction: str = ""
+    metadata: Optional[dict[str, Any]] = None
     wait: bool = False
     timeout: Optional[float] = None
     strict: bool = False
@@ -215,7 +217,7 @@ async def add_resource(
     if source_name is None and original_filename is not None:
         source_name = original_filename
 
-    kwargs = {
+    kwargs: dict[str, Any] = {
         "strict": request.strict,
         "source_name": source_name,
         "ignore_dirs": request.ignore_dirs,
@@ -226,6 +228,8 @@ async def add_resource(
     }
     if request.preserve_structure is not None:
         kwargs["preserve_structure"] = request.preserve_structure
+    if request.metadata is not None:
+        kwargs["metadata"] = request.metadata
 
     execution = await run_operation(
         operation="resources.add_resource",

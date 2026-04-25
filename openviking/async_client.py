@@ -221,6 +221,7 @@ class AsyncOpenViking:
         timeout: float = None,
         build_index: bool = True,
         summarize: bool = False,
+        metadata: Optional[Dict[str, Any]] = None,
         watch_interval: float = 0,
         telemetry: TelemetryRequest = False,
         **kwargs,
@@ -237,6 +238,7 @@ class AsyncOpenViking:
             parent: Target parent URI (must already exist).
             build_index: Whether to build vector index immediately (default: True).
             summarize: Whether to generate summary (default: False).
+            metadata: Opaque JSON object stored with the resource and returned by stat.
             telemetry: Whether to attach operation telemetry data to the result.
         """
         await self._ensure_initialized()
@@ -254,6 +256,7 @@ class AsyncOpenViking:
             timeout=timeout,
             build_index=build_index,
             summarize=summarize,
+            metadata=metadata,
             telemetry=telemetry,
             watch_interval=watch_interval,
             **kwargs,

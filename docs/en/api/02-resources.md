@@ -46,6 +46,7 @@ Add a resource to the knowledge base.
 | parent | str | No | None | Parent URI under which the resource will be stored. Cannot be combined with `to` |
 | reason | str | No | "" | Why this resource is being added (improves search relevance) |
 | instruction | str | No | "" | Special processing instructions |
+| metadata | object | No | None | Opaque JSON metadata stored with the resource and returned by `stat` |
 | wait | bool | No | False | Wait for semantic processing to complete |
 | timeout | float | No | None | Timeout in seconds (only used when wait=True) |
 | watch_interval | float | No | 0 | Watch interval (minutes). >0 enables/updates watch; <=0 disables watch. Only takes effect when `to` is provided |
@@ -97,8 +98,35 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -H "X-API-Key: your-key" \
   -d '{
     "path": "https://example.com/guide.md",
-    "reason": "User guide documentation"
+    "reason": "User guide documentation",
+    "metadata": {
+      "source": {
+        "provider": "website",
+        "id": "https://example.com/guide.md",
+        "change_detector": "etag-123"
+      }
+    }
   }'
+```
+
+The metadata object is stored opaquely. OpenViking does not interpret its keys, but
+callers can retrieve the same object with `GET /api/v1/fs/stat?uri=...`:
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "name": "guide",
+    "isDir": true,
+    "metadata": {
+      "source": {
+        "provider": "website",
+        "id": "https://example.com/guide.md",
+        "change_detector": "etag-123"
+      }
+    }
+  }
+}
 ```
 
 **CLI**

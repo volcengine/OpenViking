@@ -53,6 +53,8 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+RESOURCE_METADATA_FILENAME = ".resource.metadata.json"
+
 
 def _ensure_non_empty_search_query(query: str) -> None:
     if not query.strip():
@@ -701,7 +703,12 @@ class VikingFS:
             "files_scanned": files_scanned,
         }
 
-    async def stat(self, uri: str, ctx: Optional[RequestContext] = None) -> Dict[str, Any]:
+    async def stat(
+        self,
+        uri: str,
+        ctx: Optional[RequestContext] = None,
+        include_metadata: bool = False,
+    ) -> Dict[str, Any]:
         """
         File/directory information.
 
@@ -709,7 +716,50 @@ class VikingFS:
         """
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
-        return self.agfs.stat(path)
+        info = dict(self.agfs.stat(path))
+        if (
+            include_metadata
+            and info.get("isDir")
+            and not uri.rstrip("/").endswith(f"/{RESOURCE_METADATA_FILENAME}")
+        ):
+            metadata = await self._read_resource_metadata(uri, ctx=ctx)
+            if metadata is not None:
+                info["metadata"] = metadata
+        return info
+
+    def _resource_metadata_uri(self, uri: str) -> str:
+        return f"{uri.rstrip('/')}/{RESOURCE_METADATA_FILENAME}"
+
+    async def _read_resource_metadata(
+        self,
+        uri: str,
+        ctx: Optional[RequestContext] = None,
+    ) -> Optional[Dict[str, Any]]:
+        try:
+            content = await self.read_file(self._resource_metadata_uri(uri), ctx=ctx)
+            metadata = json.loads(content)
+        except Exception as exc:
+            if not is_not_found_error(exc):
+                logger.debug(f"Failed to read resource metadata for {uri}: {exc}")
+            return None
+        if isinstance(metadata, dict):
+            return metadata
+        logger.debug(f"Ignoring non-object resource metadata for {uri}")
+        return None
+
+    async def write_resource_metadata(
+        self,
+        uri: str,
+        metadata: Dict[str, Any],
+        ctx: Optional[RequestContext] = None,
+    ) -> None:
+        """Persist opaque metadata for a resource root."""
+        self._ensure_mutable_access(uri, ctx)
+        try:
+            json_content = json.dumps(metadata, ensure_ascii=False, sort_keys=True, indent=2)
+        except TypeError as exc:
+            raise InvalidArgumentError("metadata must be JSON-serializable") from exc
+        await self.write_file(self._resource_metadata_uri(uri), f"{json_content}\n", ctx=ctx)
 
     async def exists(self, uri: str, ctx: Optional[RequestContext] = None) -> bool:
         """Check if a URI exists.

@@ -46,6 +46,7 @@ Input -> Parser -> TreeBuilder -> AGFS -> SemanticQueue -> Vector Index
 | parent | str | 否 | None | 资源将被放入的父级 URI，不能与 `to` 同时使用 |
 | reason | str | 否 | "" | 添加该资源的原因（可提升搜索相关性） |
 | instruction | str | 否 | "" | 特殊处理指令 |
+| metadata | object | 否 | None | 随资源存储的不透明 JSON 元数据，可通过 `stat` 取回 |
 | wait | bool | 否 | False | 等待语义处理完成 |
 | timeout | float | 否 | None | 超时时间（秒），仅在 wait=True 时生效 |
 | watch_interval | float | 否 | 0 | 定时更新间隔（分钟）。>0 开启/更新定时任务；<=0 关闭（停用）定时任务。仅在指定 `to` 时生效 |
@@ -97,8 +98,35 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -H "X-API-Key: your-key" \
   -d '{
     "path": "https://example.com/guide.md",
-    "reason": "User guide documentation"
+    "reason": "User guide documentation",
+    "metadata": {
+      "source": {
+        "provider": "website",
+        "id": "https://example.com/guide.md",
+        "change_detector": "etag-123"
+      }
+    }
   }'
+```
+
+`metadata` 对 OpenViking 来说是不透明对象；OpenViking 不解释其中的键。
+调用方可以通过 `GET /api/v1/fs/stat?uri=...` 取回同一个对象：
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "name": "guide",
+    "isDir": true,
+    "metadata": {
+      "source": {
+        "provider": "website",
+        "id": "https://example.com/guide.md",
+        "change_detector": "etag-123"
+      }
+    }
+  }
+}
 ```
 
 **CLI**

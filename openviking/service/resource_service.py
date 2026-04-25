@@ -113,6 +113,7 @@ class ResourceService:
         timeout: Optional[float] = None,
         build_index: bool = True,
         summarize: bool = False,
+        metadata: Optional[Dict[str, Any]] = None,
         watch_interval: float = 0,
         skip_watch_management: bool = False,
         allow_local_path_resolution: bool = True,
@@ -131,6 +132,7 @@ class ResourceService:
             timeout: Wait timeout in seconds
             build_index: Whether to build vector index immediately (default: True)
             summarize: Whether to generate summary (default: False)
+            metadata: Opaque JSON object to store with the resulting resource root
             watch_interval: Watch interval in minutes for automatic resource monitoring.
                 - watch_interval > 0: Creates or updates a watch task. The resource will be
                   automatically re-processed at the specified interval by the scheduler.
@@ -207,6 +209,15 @@ class ResourceService:
                 allow_local_path_resolution=allow_local_path_resolution,
                 **kwargs,
             )
+            if metadata is not None and result.get("root_uri"):
+                viking_fs = self._viking_fs
+                if viking_fs is None:
+                    raise NotInitializedError("VikingFS")
+                await viking_fs.write_resource_metadata(
+                    result["root_uri"],
+                    metadata,
+                    ctx=ctx,
+                )
 
             if wait:
                 wait_start = time.perf_counter()

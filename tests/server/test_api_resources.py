@@ -33,6 +33,54 @@ async def test_add_resource_success(
     assert body["result"]["root_uri"].startswith("viking://")
 
 
+async def test_add_resource_persists_metadata(
+    client: httpx.AsyncClient,
+    sample_markdown_file,
+    upload_temp_dir,
+):
+    metadata = {
+        "source": {
+            "provider": "filesystem",
+            "id": "docs/guide.md",
+            "change_detector": "etag-123",
+        },
+        "labels": ["docs", "imported"],
+    }
+
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": sample_markdown_file.name,
+            "to": "viking://resources/metadata-test",
+            "reason": "test metadata",
+            "metadata": metadata,
+            "wait": False,
+        },
+    )
+    assert resp.status_code == 200
+    root_uri = resp.json()["result"]["root_uri"]
+
+    stat_resp = await client.get("/api/v1/fs/stat", params={"uri": root_uri})
+    assert stat_resp.status_code == 200
+    assert stat_resp.json()["result"]["metadata"] == metadata
+
+
+async def test_add_resource_rejects_non_object_metadata(
+    client: httpx.AsyncClient,
+    sample_markdown_file,
+    upload_temp_dir,
+):
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": sample_markdown_file.name,
+            "reason": "test metadata",
+            "metadata": ["not", "an", "object"],
+        },
+    )
+    assert resp.status_code == 422
+
+
 async def test_add_resource_with_wait(
     client: httpx.AsyncClient,
     sample_markdown_file,

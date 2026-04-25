@@ -116,6 +116,7 @@ class SyncOpenViking:
         timeout: float = None,
         build_index: bool = True,
         summarize: bool = False,
+        metadata: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
         **kwargs,
     ) -> Dict[str, Any]:
@@ -124,6 +125,7 @@ class SyncOpenViking:
         Args:
             build_index: Whether to build vector index immediately (default: True).
             summarize: Whether to generate summary (default: False).
+            metadata: Opaque JSON object stored with the resource and returned by stat.
             **kwargs: Extra options forwarded to the parser chain, e.g.
                 ``strict``, ``ignore_dirs``, ``include``, ``exclude``.
         """
@@ -140,6 +142,7 @@ class SyncOpenViking:
                 timeout=timeout,
                 build_index=build_index,
                 summarize=summarize,
+                metadata=metadata,
                 telemetry=telemetry,
                 **kwargs,
             )
