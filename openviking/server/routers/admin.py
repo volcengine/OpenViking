@@ -15,7 +15,7 @@ from openviking.server.dependencies import get_service
 from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
 from openviking.server.models import Response
 from openviking.storage.viking_fs import get_viking_fs
-from openviking_cli.exceptions import PermissionDeniedError
+from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.logger import get_logger
 
