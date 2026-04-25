@@ -629,6 +629,7 @@ class Session:
                             session_id=self.session_id,
                             ctx=self.ctx,
                             latest_archive_overview=latest_archive_overview,
+                            archive_uri=archive_uri,
                         )
                         logger.info(f"Extracted {len(extracted)} memories")
                         for ctx_item in extracted:

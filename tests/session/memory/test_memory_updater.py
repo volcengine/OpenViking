@@ -156,7 +156,7 @@ class TestMemoryUpdater:
 
         updater = MemoryUpdater(registry=registry)
         updater._get_viking_fs = MagicMock(return_value=MagicMock())
-        updater._apply_edit = AsyncMock(return_value=False)
+        updater._apply_edit = AsyncMock(return_value=(False, "", ""))
         updater._vectorize_memories = AsyncMock()
         updater.generate_overview = AsyncMock()
 

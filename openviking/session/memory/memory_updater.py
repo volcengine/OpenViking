@@ -180,6 +180,23 @@ class MessageRange:
         return None
 
 
+class MemoryDiffEntry:
+    """A single memory diff entry tracking before/after content."""
+
+    def __init__(self, uri: str, before: str = "", after: str = ""):
+        self.uri = uri
+        self.before = before
+        self.after = after
+
+
+class MemoryDeleteEntry:
+    """A single memory delete entry tracking deleted content."""
+
+    def __init__(self, uri: str, deleted_content: str = ""):
+        self.uri = uri
+        self.deleted_content = deleted_content
+
+
 class MemoryUpdateResult:
     """Result of memory update operation."""
 
@@ -188,15 +205,21 @@ class MemoryUpdateResult:
         self.edited_uris: List[str] = []
         self.deleted_uris: List[str] = []
         self.errors: List[Tuple[str, Exception]] = []
+        self.adds: List[MemoryDiffEntry] = []
+        self.updates: List[MemoryDiffEntry] = []
+        self.deletes: List[MemoryDeleteEntry] = []
 
-    def add_written(self, uri: str) -> None:
+    def add_written(self, uri: str, before: str = "", after: str = "") -> None:
         self.written_uris.append(uri)
+        self.adds.append(MemoryDiffEntry(uri, before=before, after=after))
 
-    def add_edited(self, uri: str) -> None:
+    def add_edited(self, uri: str, before: str = "", after: str = "") -> None:
         self.edited_uris.append(uri)
+        self.updates.append(MemoryDiffEntry(uri, before=before, after=after))
 
-    def add_deleted(self, uri: str) -> None:
+    def add_deleted(self, uri: str, deleted_content: str = "") -> None:
         self.deleted_uris.append(uri)
+        self.deletes.append(MemoryDeleteEntry(uri, deleted_content=deleted_content))
 
     def add_error(self, uri: str, error: Exception) -> None:
         self.errors.append((uri, error))
@@ -287,10 +310,10 @@ class MemoryUpdater:
                 result.add_error("unknown", ValueError(error))
             return result
 
-        # Apply unified operations - _apply_edit returns True if edited, False if written
+        # Apply unified operations - _apply_edit returns (is_edited, before_content, after_content)
         for resolved_op in resolved_ops.operations:
             try:
-                is_edited = await self._apply_edit(
+                is_edited, before_content, after_content = await self._apply_edit(
                     resolved_op.model,
                     resolved_op.uri,
                     ctx,
@@ -298,9 +321,16 @@ class MemoryUpdater:
                     memory_type=resolved_op.memory_type,
                 )
                 if is_edited:
-                    result.add_edited(resolved_op.uri)
+                    result.add_edited(
+                        resolved_op.uri,
+                        before=before_content,
+                        after=after_content,
+                    )
                 else:
-                    result.add_written(resolved_op.uri)
+                    result.add_written(
+                        resolved_op.uri,
+                        after=after_content,
+                    )
             except Exception as e:
                 tracer.error(
                     f"Failed to apply operation: {e}, op={resolved_op.model}, op type={type(resolved_op.model)}",
@@ -313,8 +343,8 @@ class MemoryUpdater:
         # Apply delete operations
         for _uri_str, uri in resolved_ops.delete_operations:
             try:
-                await self._apply_delete(uri, ctx)
-                result.add_deleted(uri)
+                deleted_content = await self._apply_delete(uri, ctx)
+                result.add_deleted(uri, deleted_content=deleted_content)
             except Exception as e:
                 tracer.error(f"Failed to delete memory {uri}", e)
                 result.add_error(uri, e)
@@ -364,11 +394,13 @@ class MemoryUpdater:
         ctx: RequestContext,
         extract_context: Any = None,
         memory_type: str = None,
-    ) -> bool:
+    ) -> Tuple[bool, str, str]:
         """Apply edit operation from a flat model.
 
         Returns:
-            True if file was edited (existed), False if file was written (new)
+            Tuple of (file_existed, before_content, after_content).
+            before_content is the previous plain content (empty for new files).
+            after_content is the new plain content.
         """
         viking_fs = self._get_viking_fs()
 
@@ -380,9 +412,11 @@ class MemoryUpdater:
 
         # Read current memory (or use empty if not found)
         current_full_content = ""
+        before_plain_content = ""
         file_existed = True
         try:
             current_full_content = await viking_fs.read_file(uri, ctx=ctx) or ""
+            before_plain_content, _ = deserialize_full(current_full_content)
         except NotFoundError:
             file_existed = False
 
@@ -431,11 +465,28 @@ class MemoryUpdater:
             self._print_diff(uri, current_plain_content, new_full_content)
 
         await viking_fs.write_file(uri, new_full_content, ctx=ctx)
-        return file_existed
 
-    async def _apply_delete(self, uri: str, ctx: RequestContext) -> None:
-        """Apply delete operation (uri is already a string)."""
+        # Extract after plain content for memory_diff
+        after_plain_content, _ = deserialize_full(new_full_content)
+        return file_existed, before_plain_content, after_plain_content
+
+    async def _apply_delete(self, uri: str, ctx: RequestContext) -> str:
+        """Apply delete operation (uri is already a string).
+
+        Returns:
+            The plain content that was deleted (empty string if not found).
+        """
         viking_fs = self._get_viking_fs()
+
+        # Read content before deletion for memory_diff
+        deleted_plain_content = ""
+        try:
+            raw_content = await viking_fs.read_file(uri, ctx=ctx) or ""
+            deleted_plain_content, _ = deserialize_full(raw_content)
+        except NotFoundError:
+            pass
+        except Exception:
+            pass
 
         # Delete from VikingFS
         # VikingFS automatically handles vector index cleanup
@@ -444,6 +495,8 @@ class MemoryUpdater:
         except NotFoundError:
             tracer.error(f"Memory not found for delete: {uri}")
             # Idempotent - deleting non-existent file succeeds
+
+        return deleted_plain_content
 
     def _print_diff(self, uri: str, old_content: str, new_content: str) -> None:
         """Print a diff of the memory edit using diff_match_patch."""

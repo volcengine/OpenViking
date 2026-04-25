@@ -8,13 +8,16 @@ Maintains the same interface as compressor.py for backward compatibility.
 """
 
 import asyncio
-from typing import List, Optional
+import json
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 from openviking.core.context import Context
 from openviking.core.namespace import agent_space_fragment, user_space_fragment
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater
+from openviking.session.memory.memory_updater import MemoryUpdateResult
 from openviking.session.memory.utils.json_parser import JsonUtils
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import get_viking_fs
@@ -89,11 +92,15 @@ class SessionCompressorV2:
         ctx: Optional[RequestContext] = None,
         strict_extract_errors: bool = False,
         latest_archive_overview: str = "",
+        archive_uri: str = "",
     ) -> List[Context]:
         """Extract long-term memories from messages using v2 templating system.
 
         Note: Returns empty List[Context] because v2 directly writes to storage.
         The list length is used for stats in session.py.
+
+        Args:
+            archive_uri: The archive URI for this extraction, used to write memory_diff.json.
         """
 
         if not messages:
@@ -246,6 +253,10 @@ class SessionCompressorV2:
             telemetry.set("memory.extract.deleted", len(result.deleted_uris))
             telemetry.set("memory.extract.skipped", len(result.errors))
 
+            # Build and write memory_diff.json to archive
+            if archive_uri and result.has_changes():
+                await self._write_memory_diff(result, viking_fs, ctx, archive_uri)
+
             # Build Context objects for stats in session.py
             contexts: List[Context] = []
 
@@ -293,3 +304,65 @@ class SessionCompressorV2:
                     await lock_manager.release(transaction_handle)
                 except Exception as e:
                     logger.warning(f"Failed to release transaction lock: {e}")
+
+    def _build_memory_diff(self, result: MemoryUpdateResult, archive_uri: str) -> Dict[str, Any]:
+        """Build memory_diff.json structure from MemoryUpdateResult.
+
+        Uses before/after content already captured during _apply_edit/_apply_delete.
+        """
+        adds = []
+        for entry in result.adds:
+            adds.append({
+                "uri": entry.uri,
+                "after": entry.after,
+            })
+
+        updates = []
+        for entry in result.updates:
+            updates.append({
+                "uri": entry.uri,
+                "before": entry.before,
+                "after": entry.after,
+            })
+
+        deletes = []
+        for entry in result.deletes:
+            deletes.append({
+                "uri": entry.uri,
+                "deleted_content": entry.deleted_content,
+            })
+
+        return {
+            "archive_uri": archive_uri,
+            "extracted_at": datetime.utcnow().isoformat() + "Z",
+            "operations": {
+                "adds": adds,
+                "updates": updates,
+                "deletes": deletes,
+            },
+            "summary": {
+                "total_adds": len(adds),
+                "total_updates": len(updates),
+                "total_deletes": len(deletes),
+            },
+        }
+
+    async def _write_memory_diff(
+        self,
+        result: MemoryUpdateResult,
+        viking_fs: Any,
+        ctx: RequestContext,
+        archive_uri: str,
+    ) -> None:
+        """Build and write memory_diff.json to the archive directory."""
+        try:
+            diff = self._build_memory_diff(result, archive_uri)
+            diff_json = json.dumps(diff, ensure_ascii=False, indent=2)
+            diff_uri = f"{archive_uri}/memory_diff.json"
+            await viking_fs.write_file(diff_uri, diff_json, ctx=ctx)
+            logger.info(f"Wrote memory_diff.json to {diff_uri}: "
+                        f"adds={diff['summary']['total_adds']}, "
+                        f"updates={diff['summary']['total_updates']}, "
+                        f"deletes={diff['summary']['total_deletes']}")
+        except Exception as e:
+            logger.warning(f"Failed to write memory_diff.json: {e}")
