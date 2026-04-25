@@ -369,8 +369,8 @@ async def index_resource(
                 continue
 
             if file_info.get("type") == "directory" or file_info.get("isDir"):
-                # TODO: Recursive indexing? For now, skip subdirectories to match previous behavior
-                continue
+                sub_uri = file_info.get("uri") or f"{uri}/{file_name}"
+                await index_resource(sub_uri, ctx)
 
             file_uri = file_info.get("uri") or f"{uri}/{file_name}"
 
