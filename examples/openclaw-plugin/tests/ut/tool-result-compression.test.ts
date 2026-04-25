@@ -90,7 +90,7 @@ describe("compressToolResults", () => {
     expect(text).toContain("<persisted-output>");
   });
 
-  it("triggers aggregate budget when total tool results exceed budget", async () => {
+  it("triggers aggregate budget when tool results in same turn exceed budget", async () => {
     const messages = [
       makeToolResult("a".repeat(30_000)),
       makeToolResult("b".repeat(30_000)),
@@ -102,6 +102,45 @@ describe("compressToolResults", () => {
     }));
     expect(stats.aggregateBudgetTriggered).toBe(true);
     expect(stats.compressedCount).toBeGreaterThan(0);
+  });
+
+  it("applies aggregate budget per assistant turn, not globally", async () => {
+    // Turn 1: 3 results × 20K = 60K (under budget)
+    // Turn 2: 3 results × 20K = 60K (under budget)
+    // Global total = 120K which exceeds budget, but each turn is within budget.
+    const messages = [
+      makeToolResult("a".repeat(20_000)),
+      makeToolResult("b".repeat(20_000)),
+      makeToolResult("c".repeat(20_000)),
+      makeAssistantMsg("let me do more"),
+      makeToolResult("d".repeat(20_000)),
+      makeToolResult("e".repeat(20_000)),
+      makeToolResult("f".repeat(20_000)),
+    ];
+    const { stats } = await compressToolResults(messages, makeCfg({
+      toolResultMaxChars: 100_000,
+      toolResultAggregateBudgetChars: 80_000,
+    }));
+    expect(stats.aggregateBudgetTriggered).toBe(false);
+    expect(stats.compressedCount).toBe(0);
+  });
+
+  it("triggers aggregate budget only for the turn that exceeds it", async () => {
+    // Turn 1: 2 results × 10K = 20K (under budget)
+    // Turn 2: 3 results × 30K = 90K (over budget)
+    const messages = [
+      makeToolResult("a".repeat(10_000)),
+      makeToolResult("b".repeat(10_000)),
+      makeAssistantMsg("next step"),
+      makeToolResult("d".repeat(30_000)),
+      makeToolResult("e".repeat(30_000)),
+      makeToolResult("f".repeat(30_000)),
+    ];
+    const { stats } = await compressToolResults(messages, makeCfg({
+      toolResultMaxChars: 100_000,
+      toolResultAggregateBudgetChars: 50_000,
+    }));
+    expect(stats.aggregateBudgetTriggered).toBe(true);
   });
 
   it("respects toolResultCompression=false to skip compression", async () => {

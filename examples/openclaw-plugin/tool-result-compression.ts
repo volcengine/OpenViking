@@ -265,6 +265,43 @@ function collectToolResults(messages: AgentMessage[]): ToolResultEntry[] {
 }
 
 /**
+ * Group toolResult entries by assistant turn.  A "group" is a maximal run of
+ * non-assistant messages between two assistant messages — i.e. all toolResult
+ * messages that belong to the same parallel tool-call batch.
+ *
+ * This matches Claude Code's `collectCandidatesByMessage` which groups
+ * consecutive user messages not separated by an assistant message.
+ */
+function groupByAssistantTurn(messages: AgentMessage[], entries: ToolResultEntry[]): ToolResultEntry[][] {
+  const groups: ToolResultEntry[][] = [];
+  let current: ToolResultEntry[] = [];
+
+  const flush = () => {
+    if (current.length > 0) {
+      groups.push(current);
+      current = [];
+    }
+  };
+
+  const entryByIndex = new Map(entries.map(e => [e.index, e]));
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if ((msg as AgentMessage).role === "assistant") {
+      flush();
+      continue;
+    }
+    const entry = entryByIndex.get(i);
+    if (entry) {
+      current.push(entry);
+    }
+  }
+  flush();
+
+  return groups;
+}
+
+/**
  * Replace the text content of a tool-result message with `newText`.
  * For array-type content, distributes the text proportionally across text
  * blocks (each block gets its own truncated slice), preserving non-text blocks.
@@ -410,28 +447,33 @@ export async function compressToolResults(
     }
   }
 
-  // Phase 2: aggregate budget enforcement (per-block proportional truncation).
+  // Phase 2: aggregate budget enforcement per assistant turn.
+  // Each group = toolResult messages between two assistant messages.
   const afterIndividual = collectToolResults(result);
-  let aggregateChars = 0;
-  for (const entry of afterIndividual) {
-    aggregateChars += entry.textLength;
-  }
+  const groups = groupByAssistantTurn(result, afterIndividual);
 
-  if (aggregateChars > aggregateBudget) {
-    aggregateBudgetTriggered = true;
-    const candidates = afterIndividual
-      .filter(e => e.textLength > previewChars * 2)
-      .sort((a, b) => b.textLength - a.textLength);
+  for (const group of groups) {
+    let groupChars = 0;
+    for (const entry of group) {
+      groupChars += entry.textLength;
+    }
 
-    let remaining = aggregateChars - aggregateBudget;
-    for (const entry of candidates) {
-      if (remaining <= 0) break;
-      const targetChars = Math.max(previewChars, entry.textLength - remaining);
-      result[entry.index] = truncateToolResultMessage(result[entry.index]!, targetChars);
+    if (groupChars > aggregateBudget) {
+      aggregateBudgetTriggered = true;
+      const candidates = [...group]
+        .filter(e => e.textLength > previewChars * 2)
+        .sort((a, b) => b.textLength - a.textLength);
 
-      const newTextLen = getToolResultTextLength(result[entry.index]!);
-      remaining -= Math.max(0, entry.textLength - newTextLen);
-      if (newTextLen < entry.textLength) compressedCount++;
+      let remaining = groupChars - aggregateBudget;
+      for (const entry of candidates) {
+        if (remaining <= 0) break;
+        const targetChars = Math.max(previewChars, entry.textLength - remaining);
+        result[entry.index] = truncateToolResultMessage(result[entry.index]!, targetChars);
+
+        const newTextLen = getToolResultTextLength(result[entry.index]!);
+        remaining -= Math.max(0, entry.textLength - newTextLen);
+        if (newTextLen < entry.textLength) compressedCount++;
+      }
     }
   }
 
