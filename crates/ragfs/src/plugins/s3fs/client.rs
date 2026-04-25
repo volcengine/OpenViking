@@ -194,7 +194,23 @@ impl S3Client {
             .unwrap_or("us-east-1")
             .to_string();
 
-        let endpoint = config.get("endpoint").and_then(|v| v.as_string());
+        let raw_endpoint = config.get("endpoint").and_then(|v| v.as_string());
+        let use_ssl = if let Some(v) = config.get("use_ssl").and_then(|v| v.as_bool()) {
+            v
+        } else if let Some(v) = config.get("disable_ssl").and_then(|v| v.as_bool()) {
+            !v
+        } else {
+            true
+        };
+        let endpoint = raw_endpoint.map(|ep| {
+            if ep.starts_with("https://") || ep.starts_with("http://") {
+                ep.to_string()
+            } else if use_ssl {
+                format!("https://{}", ep)
+            } else {
+                format!("http://{}", ep)
+            }
+        });
 
         let access_key = config
             .get("access_key_id")
