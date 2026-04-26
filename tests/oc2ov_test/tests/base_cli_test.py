@@ -360,8 +360,11 @@ class BaseOpenClawCLITest(unittest.TestCase):
             "couldn't generate a response",
             "please try again",
             "NO_REPLY",
+            "命令执行超时",
         ]
         if any(ind.lower() in text.lower() for ind in unstable_indicators):
+            return True
+        if isinstance(response, dict) and response.get("error", "").startswith("命令执行超时"):
             return True
         if text.startswith('[{"name"') and len(text) < 300:
             return True

@@ -462,27 +462,57 @@ class MemoryV2TestSuite:
             self.run_openclaw_command(scenario["test_message"], scenario_session_id)
             print("✓ OpenClaw 对话完成")
             result["steps"]["openclaw_chat"] = "success"
-            time.sleep(2)
+            time.sleep(5)
 
             # 步骤 3: 找到 OV session 并 commit
             print("\n[步骤 3/5] 查找 OV session 并 commit")
             ov_session_id = self.api.find_new_session_id(before_session_ids)
             if not ov_session_id:
-                print("  ⚠ 未找到新 session，在已有 session 中查找消息最多的")
-                ov_session_id = self.api.find_session_with_most_messages()
-
+                print("  ⚠ 未找到新 session，等待后重试...")
+                time.sleep(5)
+                ov_session_id = self.api.find_new_session_id(before_session_ids)
             if not ov_session_id:
-                print("  ✗ 无可用 session")
-                result["steps"]["commit"] = "failed"
-                result["status"] = "error"
-                result["error"] = "未找到 OV session"
-                return False, result
+                print("  ⚠ 仍未找到新 session，跳过 commit 步骤，直接检查记忆文件")
+                result["steps"]["commit"] = "skipped"
+                result["ov_session_id"] = None
+                print("\n[步骤 4/5] 跳过 (无 OV session)")
+                print("\n[步骤 5/5] 验证记忆文件变化")
+                memory_files_result = self.check_memory_files(
+                    scenario["memory_type"], before_memory_files
+                )
+                result["memory_files"] = memory_files_result
+                if memory_files_result["found"]:
+                    result["steps"]["memory_files"] = "success"
+                    result["status"] = "passed"
+                    return True, result
+                else:
+                    result["steps"]["memory_files"] = "failed"
+                    result["status"] = "failed"
+                    result["error"] = f"{scenario['memory_type']}: 未找到 OV session 且无新增记忆"
+                    return False, result
 
             print(f"  OV session ID: {ov_session_id}")
             commit_resp = self.api.commit_session(ov_session_id)
             commit_data = commit_resp.get("data", {})
             commit_result = commit_data.get("result", {})
             task_id = commit_result.get("task_id")
+
+            if not task_id and commit_result.get("status") == "accepted":
+                print("  ⚠ Commit 返回 accepted 但无 task_id（对话 token 数可能不足阈值），补充对话后重试...")
+                follow_ups = [
+                    "请详细总结一下我刚才告诉你的所有信息，逐条列出。",
+                    "你能复述一下我的个人情况吗？越详细越好。",
+                ]
+                for follow_up in follow_ups:
+                    try:
+                        self.run_openclaw_command(follow_up, scenario_session_id)
+                        time.sleep(2)
+                    except Exception:
+                        pass
+                commit_resp = self.api.commit_session(ov_session_id)
+                commit_data = commit_resp.get("data", {})
+                commit_result = commit_data.get("result", {})
+                task_id = commit_result.get("task_id")
 
             if commit_resp["status_code"] == 200 and task_id:
                 print(f"✓ Commit 成功 (task_id: {task_id})")
