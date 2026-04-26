@@ -956,9 +956,7 @@ def _wizard_custom() -> dict[str, Any] | None:
             if not config_path.exists():
                 # Copy example as starting point
                 try:
-                    config_path.write_text(
-                        example.read_text(encoding="utf-8"), encoding="utf-8"
-                    )
+                    config_path.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
                 except OSError:
                     pass
             subprocess.run([editor, str(config_path)], check=False)
@@ -979,9 +977,7 @@ def run_init() -> int:
 
     print(f"\n  {_bold('OpenViking Setup')}")
     print(f"  {'=' * 16}\n")
-    print(
-        f"  {_dim(f'Data will be stored under {workspace} unless you edit ov.conf later.')}\n"
-    )
+    print(f"  {_dim(f'Data will be stored under {workspace} unless you edit ov.conf later.')}\n")
 
     # Check for existing config
     if config_path.exists():
