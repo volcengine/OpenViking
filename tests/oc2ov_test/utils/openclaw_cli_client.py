@@ -55,7 +55,11 @@ class OpenClawCLIClient:
         self.timeout = 300
 
     def send_message(
-        self, message: str, session_id: Optional[str] = None, agent_id: Optional[str] = None, timeout: Optional[int] = None
+        self,
+        message: str,
+        session_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        timeout: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         使用 openclaw agent 命令发送消息

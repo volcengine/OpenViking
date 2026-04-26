@@ -29,15 +29,20 @@ from tests.base_cli_test import BaseOpenClawCLITest
 
 SERVER_URL = os.environ.get("SERVER_URL", "http://127.0.0.1:1933")
 OPENVIKING_API_KEY = os.environ.get("OPENVIKING_API_KEY", "test-root-api-key")
+OPENVIKING_ACCOUNT = os.environ.get("OPENVIKING_ACCOUNT", "default")
+OPENVIKING_USER = os.environ.get("OPENVIKING_USER", "default")
 TASK_POLL_INTERVAL = 5
 TASK_POLL_MAX_WAIT = 120
 
 
 def _get_api_headers() -> Dict[str, str]:
-    return {
-        "X-OpenViking-API-Key": OPENVIKING_API_KEY,
+    headers = {
+        "X-API-Key": OPENVIKING_API_KEY,
+        "X-OpenViking-Account": OPENVIKING_ACCOUNT,
+        "X-OpenViking-User": OPENVIKING_USER,
         "Content-Type": "application/json",
     }
+    return headers
 
 
 class OVSessionVerifier:

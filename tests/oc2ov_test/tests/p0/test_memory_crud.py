@@ -132,7 +132,9 @@ class TestMemoryDelete(BaseOpenClawCLITest):
         )
 
         self.logger.info("[2/4] 确认信息已存在")
-        resp1 = self.send_and_retry_on_timeout("我的临时密码是什么？", session_id=session_id, timeout=300)
+        resp1 = self.send_and_retry_on_timeout(
+            "我的临时密码是什么？", session_id=session_id, timeout=300
+        )
         self.assertAnyKeywordInResponse(resp1, [["temp12345"]], case_sensitive=False)
 
         self.logger.info("[3/4] 请求删除临时密码信息并 commit")

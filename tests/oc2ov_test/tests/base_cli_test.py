@@ -217,11 +217,15 @@ class BaseOpenClawCLITest(unittest.TestCase):
 
             @self.retry_manager.retry_on_exception(Exception)
             def send_with_retry():
-                return self.client.send_message(message, target_session_id, agent_id, timeout=timeout)
+                return self.client.send_message(
+                    message, target_session_id, agent_id, timeout=timeout
+                )
 
             response = send_with_retry()
         else:
-            response = self.client.send_message(message, target_session_id, agent_id, timeout=timeout)
+            response = self.client.send_message(
+                message, target_session_id, agent_id, timeout=timeout
+            )
 
         self.logger.info("\n" + "◂" * 40)
         self.logger.info("📩 测试步骤 - 响应接收")
@@ -301,7 +305,9 @@ class BaseOpenClawCLITest(unittest.TestCase):
     ):
         target_session_id = session_id or self.current_session_id
         for attempt in range(max_retries + 1):
-            response = self.send_and_log(message, session_id=target_session_id, agent_id=agent_id, timeout=timeout)
+            response = self.send_and_log(
+                message, session_id=target_session_id, agent_id=agent_id, timeout=timeout
+            )
             is_timeout = self._is_llm_timeout(response)
             is_empty = self._is_empty_response(response)
             is_tool_result = self._is_tool_result_only(response)
