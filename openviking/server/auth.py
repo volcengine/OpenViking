@@ -135,6 +135,7 @@ async def resolve_identity(
 
     if auth_mode == AuthMode.TRUSTED:
         configured_root_api_key = _configured_root_api_key(request)
+        root_api_key_authenticated = False
         if configured_root_api_key:
             if not api_key:
                 raise UnauthenticatedError(
@@ -144,6 +145,7 @@ async def resolve_identity(
                 raise UnauthenticatedError(
                     "Invalid API Key in trusted mode with Root API Key enabled."
                 )
+            root_api_key_authenticated = True
         explicit_account_id, explicit_user_id = _explicit_identity_from_request(request)
         if (
             x_openviking_account
@@ -181,6 +183,14 @@ async def resolve_identity(
                 raise InvalidArgumentError(
                     "Trusted mode requests must include " + " and ".join(missing_fields) + "."
                 )
+
+        if root_api_key_authenticated:
+            return ResolvedIdentity(
+                role=Role.ROOT,
+                account_id=effective_account_id or "trusted",
+                user_id=effective_user_id or "trusted",
+                agent_id=x_openviking_agent or "default",
+            )
 
         trusted_role = Role.USER
         if api_key_manager and effective_account_id and effective_user_id:

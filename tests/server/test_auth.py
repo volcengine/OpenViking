@@ -17,7 +17,7 @@ from starlette.requests import Request
 
 from openviking.server import app as server_app_module
 from openviking.server.app import create_app
-from openviking.server.auth import get_request_context, resolve_identity
+from openviking.server.auth import get_request_context, require_role, resolve_identity
 from openviking.server.config import ServerConfig, _is_localhost, validate_server_config
 from openviking.server.dependencies import set_service
 from openviking.server.identity import ResolvedIdentity, Role
@@ -121,6 +121,13 @@ def _build_auth_http_test_app(
     @app.post("/api/v1/system/wait")
     async def system_wait(ctx=Depends(get_request_context)):
         """Expose a non-tenant system route for auth regression tests."""
+        return {"status": "ok", "result": {"role": ctx.role.value}}
+
+    @app.post("/api/v1/maintenance/reindex-auth-check")
+    async def maintenance_reindex_auth_check(
+        ctx=require_role(Role.ROOT, Role.ADMIN),
+    ):
+        """Expose a maintenance route that requires elevated permissions."""
         return {"status": "ok", "result": {"role": ctx.role.value}}
 
     @app.get("/api/v1/debug/vector/scroll")
@@ -880,7 +887,7 @@ async def test_trusted_mode_with_root_api_key_accepts_matching_api_key():
         x_openviking_agent="assistant-1",
     )
 
-    assert identity.role == Role.USER
+    assert identity.role == Role.ROOT
     assert identity.account_id == "acme"
     assert identity.user_id == "alice"
     assert identity.agent_id == "assistant-1"
@@ -1011,6 +1018,30 @@ async def test_trusted_mode_http_routes_accept_api_key_when_root_key_configured(
 
     assert response.status_code == 200
     assert response.json()["result"] == {"account_id": "acme", "user_id": "alice"}
+
+
+async def test_trusted_mode_root_api_key_grants_root_role_for_maintenance_routes():
+    """Trusted mode root_api_key should satisfy elevated maintenance route role checks."""
+    app = _build_auth_http_test_app(
+        identity=None,
+        auth_enabled=False,
+        auth_mode="trusted",
+        root_api_key=ROOT_KEY,
+    )
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/api/v1/maintenance/reindex-auth-check",
+            headers={
+                "X-API-Key": ROOT_KEY,
+                "X-OpenViking-Account": "acme",
+                "X-OpenViking-User": "alice",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["result"] == {"role": "root"}
 
 
 @pytest.mark.asyncio
