@@ -63,6 +63,8 @@ class _FakeProcessor:
     def __init__(self, viking_fs):
         self._fs = viking_fs
         self.summarized_files = []
+        self.generated_overviews = []
+        self.extracted_abstracts = []
 
     def _parse_overview_md(self, overview_content):
         results = {}
@@ -78,6 +80,7 @@ class _FakeProcessor:
         return {"name": file_path.split("/")[-1], "summary": "summary"}
 
     async def _generate_overview(self, dir_uri, file_summaries, children_abstracts):
+        self.generated_overviews.append(dir_uri)
         lines = ["FILES:"]
         for item in file_summaries:
             name = item.get("name", "")
@@ -86,6 +89,7 @@ class _FakeProcessor:
         return "\n".join(lines)
 
     def _extract_abstract_from_overview(self, overview):
+        self.extracted_abstracts.append(overview)
         return "abstract"
 
     def _enforce_size_limits(self, overview, abstract):
@@ -148,6 +152,12 @@ async def test_incremental_missing_summary_triggers_overview_regen(monkeypatch):
     assert "- a.txt:" in fake_fs._file_contents[f"{root_uri}/.overview.md"]
     assert "- a.txt:" in fake_fs._file_contents[f"{target_uri}/.overview.md"]
     first_run_calls = len(processor.summarized_files)
+    first_run_stats = executor1.get_incremental_reuse_stats()
+    assert first_run_stats.reused_file_summaries == 0
+    assert first_run_stats.regenerated_file_summaries == 1
+    assert first_run_stats.missing_cached_file_summaries == 1
+    assert first_run_stats.reused_directory_summaries == 0
+    assert first_run_stats.regenerated_directory_summaries == 1
 
     executor2 = SemanticDagExecutor(
         processor=processor,
@@ -161,8 +171,58 @@ async def test_incremental_missing_summary_triggers_overview_regen(monkeypatch):
     await executor2.run(root_uri)
 
     assert len(processor.summarized_files) == first_run_calls
+    second_run_stats = executor2.get_incremental_reuse_stats()
+    assert second_run_stats.reused_file_summaries == 1
+    assert second_run_stats.regenerated_file_summaries == 0
+    assert second_run_stats.missing_cached_file_summaries == 0
+    assert second_run_stats.reused_directory_summaries == 1
+    assert second_run_stats.regenerated_directory_summaries == 0
+
+
+@pytest.mark.asyncio
+async def test_incremental_missing_abstract_reuses_existing_overview(monkeypatch):
+    _mock_transaction_layer(monkeypatch)
+
+    root_uri = "viking://resources/root"
+    target_uri = "viking://resources/target"
+    tree = {
+        root_uri: [{"name": "a.txt", "isDir": False}],
+        target_uri: [{"name": "a.txt", "isDir": False}],
+    }
+
+    fake_fs = _FakeVikingFS(
+        tree=tree,
+        file_contents={
+            f"{root_uri}/a.txt": "hello",
+            f"{target_uri}/a.txt": "hello",
+            f"{target_uri}/.overview.md": "FILES:\n- a.txt: cached summary",
+        },
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+
+    processor = _FakeProcessor(fake_fs)
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
+
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=ctx,
+        incremental_update=True,
+        target_uri=target_uri,
+    )
+    monkeypatch.setattr(executor, "_add_vectorize_task", AsyncMock())
+    await executor.run(root_uri)
+
+    stats = executor.get_incremental_reuse_stats()
+    assert processor.generated_overviews == []
+    assert stats.reused_file_summaries == 1
+    assert stats.regenerated_file_summaries == 0
+    assert stats.reused_directory_summaries == 1
+    assert stats.regenerated_directory_summaries == 0
+    assert stats.extracted_directory_abstracts == 1
+    assert fake_fs._file_contents[f"{root_uri}/.abstract.md"] == "abstract"
 
 
 if __name__ == "__main__":
     pytest.main([__file__])
-
