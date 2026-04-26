@@ -141,17 +141,17 @@ class TestTypeHelpers:
 
     def test_get_origin_type_from_optional(self):
         """Test extracts type from Optional[T]."""
-        assert _get_origin_type(Optional[str]) == str
-        assert _get_origin_type(Optional[int]) == int
+        assert _get_origin_type(Optional[str]) is str
+        assert _get_origin_type(Optional[int]) is int
 
     def test_get_origin_type_from_list(self):
         """Test returns list for List[T]."""
-        assert _get_origin_type(List[str]) == list
+        assert _get_origin_type(List[str]) is list
 
     def test_get_arg_type_from_list(self):
         """Test extracts item type from List[T]."""
-        assert _get_arg_type(List[str]) == str
-        assert _get_arg_type(List[int]) == int
+        assert _get_arg_type(List[str]) is str
+        assert _get_arg_type(List[int]) is int
 
 
 class TestParseJsonWithStability:

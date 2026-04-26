@@ -47,23 +47,17 @@ __all__ = [
 ]
 
 
-
-
 class PydanticEncoder(json.JSONEncoder):
     def default(self, obj):
-        if isinstance(obj, BaseModel) :
+        if isinstance(obj, BaseModel):
             # 保存类名和属性值
-            return {
-                **obj.model_dump(mode='python')
-            }
+            return {**obj.model_dump(mode="python")}
         elif is_dataclass(obj):
             return asdict(obj)
         return super().default(obj)
 
 
-
 class JsonUtils:
-
     @staticmethod
     def dumps(obj, indent=4, ensure_ascii=False):
         if obj is None:
@@ -174,7 +168,7 @@ def _get_origin_type(annotation) -> Type:
     if origin is Union or origin is UnionType:
         args = get_args(annotation)
         # Handle Optional[T] which is Union[T, None]
-        if len(args) == 2 and args[1] == type(None):
+        if len(args) == 2 and args[1] is type(None):
             return _get_origin_type(args[0])
     elif origin is list:
         return list
@@ -196,7 +190,7 @@ def _get_arg_type(annotation) -> Optional[Type]:
     origin = get_origin(annotation)
     if origin is Union or origin is UnionType:
         args = get_args(annotation)
-        if len(args) == 2 and args[1] == type(None):
+        if len(args) == 2 and args[1] is type(None):
             return _get_arg_type(args[0])
     elif origin is list:
         args = get_args(annotation)
