@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from unittest.mock import MagicMock, patch
 
 from openviking_cli.setup_wizard import (
@@ -527,6 +528,38 @@ class TestConfigWriting:
         assert str(config_path) not in output
         assert "custom local model (hidden)" in output
         assert "default config location" in output
+
+    def test_run_init_uses_env_config_path_and_workspace(self, tmp_path):
+        config_path = tmp_path / "runtime" / "ov.conf"
+        workspace = tmp_path / "runtime-data"
+        config = {
+            "embedding": {"dense": {"provider": "ollama", "model": "qwen", "dimension": 1024}},
+            "storage": {"workspace": str(workspace)},
+        }
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "OPENVIKING_CONFIG_FILE": str(config_path),
+                    "OPENVIKING_DATA_DIR": str(workspace),
+                },
+                clear=False,
+            ),
+            patch("openviking_cli.setup_wizard._prompt_choice", return_value=2),
+            patch("openviking_cli.setup_wizard._wizard_ollama", return_value=config),
+            patch("openviking_cli.setup_wizard._prompt_confirm", return_value=True),
+            patch("openviking_cli.setup_wizard._write_config", return_value=True) as mock_write,
+            patch("builtins.print") as mock_print,
+        ):
+            assert run_init() == 0
+
+        mock_write.assert_called_once_with(config, config_path)
+        output = "\n".join(
+            " ".join(str(arg) for arg in call.args) for call in mock_print.call_args_list
+        )
+        assert str(workspace) in output
+        assert str(config_path) not in output
 
 
 # ---------------------------------------------------------------------------

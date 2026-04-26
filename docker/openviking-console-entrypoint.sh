@@ -8,6 +8,7 @@ CONSOLE_HOST="${OPENVIKING_CONSOLE_HOST:-0.0.0.0}"
 WITH_BOT="${OPENVIKING_WITH_BOT:-1}"
 CONFIG_FILE="${OPENVIKING_CONFIG_FILE:-/app/conf/ov.conf}"
 DATA_DIR="${OPENVIKING_DATA_DIR:-/app/data}"
+CONFIG_CONTENT="${OPENVIKING_CONF_CONTENT:-}"
 CONFIG_WAIT_SECONDS="${OPENVIKING_CONFIG_WAIT_SECONDS:-5}"
 SERVER_PID=""
 CONSOLE_PID=""
@@ -36,11 +37,46 @@ Mount persistent storage for both paths, then initialize the config inside the c
   mkdir -p "$(dirname "${CONFIG_FILE}")" "${DATA_DIR}"
   openviking-server init
 
+Alternatively, set OPENVIKING_CONF_CONTENT to the full ov.conf JSON content.
 If your platform supports only one persistent volume, mount it at ${DATA_DIR}
 and set OPENVIKING_CONFIG_FILE=${DATA_DIR}/conf/ov.conf.
 If you create ov.conf manually, set storage.workspace to "${DATA_DIR}".
 This container exposes a pending /health endpoint until ${CONFIG_FILE} exists.
 EOF
+}
+
+write_config_from_env() {
+    if [ -f "${CONFIG_FILE}" ] || [ -z "${CONFIG_CONTENT}" ]; then
+        return 0
+    fi
+
+    CONFIG_TARGET="${CONFIG_FILE}" python - <<'PY'
+import json
+import os
+from pathlib import Path
+
+config_path = Path(os.environ["CONFIG_TARGET"])
+content = os.environ["OPENVIKING_CONF_CONTENT"]
+
+try:
+    parsed = json.loads(content)
+except json.JSONDecodeError as exc:
+    raise SystemExit(
+        f"[openviking-console-entrypoint] OPENVIKING_CONF_CONTENT must be valid JSON: {exc}"
+    )
+
+if not isinstance(parsed, dict):
+    raise SystemExit(
+        "[openviking-console-entrypoint] OPENVIKING_CONF_CONTENT must be a JSON object"
+    )
+
+config_path.parent.mkdir(parents=True, exist_ok=True)
+config_path.write_text(json.dumps(parsed, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+print(
+    f"[openviking-console-entrypoint] wrote {config_path} from OPENVIKING_CONF_CONTENT",
+    flush=True,
+)
+PY
 }
 
 start_pending_http_server() {
@@ -111,6 +147,7 @@ PY
 
 wait_for_config() {
     mkdir -p "$(dirname "${CONFIG_FILE}")" "${DATA_DIR}"
+    write_config_from_env
     if [ -f "${CONFIG_FILE}" ]; then
         return
     fi

@@ -557,23 +557,23 @@ def _build_cloud_config(
 # Config I/O
 # ---------------------------------------------------------------------------
 
-def _default_config_path() -> Path:
+_DEFAULT_CONFIG_PATH = DEFAULT_CONFIG_DIR / "ov.conf"
+_DEFAULT_WORKSPACE = str(DEFAULT_CONFIG_DIR / "data")
+_PIP_LOCAL_EMBED = 'pip install "openviking[local-embed]"'
+
+
+def _resolve_init_config_path() -> Path:
     path = os.environ.get(OPENVIKING_CONFIG_ENV)
     if path:
         return Path(path).expanduser()
-    return DEFAULT_CONFIG_DIR / "ov.conf"
+    return _DEFAULT_CONFIG_PATH
 
 
-def _default_workspace() -> str:
+def _resolve_init_workspace() -> str:
     path = os.environ.get(OPENVIKING_DATA_DIR_ENV)
     if path:
         return str(Path(path).expanduser())
-    return str(DEFAULT_CONFIG_DIR / "data")
-
-
-_DEFAULT_CONFIG_PATH = _default_config_path()
-_DEFAULT_WORKSPACE = _default_workspace()
-_PIP_LOCAL_EMBED = 'pip install "openviking[local-embed]"'
+    return _DEFAULT_WORKSPACE
 
 
 def _write_config(config_dict: dict[str, Any], config_path: Path) -> bool:
@@ -600,6 +600,8 @@ def _write_config(config_dict: dict[str, Any], config_path: Path) -> bool:
 
 def _wizard_ollama() -> dict[str, Any] | None:
     """Ollama-based local model setup flow."""
+    workspace = _resolve_init_workspace()
+
     # Ensure Ollama is installed and running
     ollama_running = _ensure_ollama()
 
@@ -674,11 +676,13 @@ def _wizard_ollama() -> dict[str, Any] | None:
             else:
                 print(f"  {_green('OK')} {vlm.ollama_model} pulled successfully")
 
-    return _build_ollama_config(embedding, vlm, _DEFAULT_WORKSPACE)
+    return _build_ollama_config(embedding, vlm, workspace)
 
 
 def _wizard_llamacpp() -> dict[str, Any] | None:
     """llama.cpp local embedding setup flow."""
+    workspace = _resolve_init_workspace()
+
     # --- Step 1: check / install llama-cpp-python ---
     print("\n  Checking llama-cpp-python...", end=" ", flush=True)
 
@@ -851,7 +855,7 @@ def _wizard_llamacpp() -> dict[str, Any] | None:
     return _build_local_config(
         model_name=model_name,
         dimension=dimension,
-        workspace=_DEFAULT_WORKSPACE,
+        workspace=workspace,
         model_path=custom_model_path,
         vlm_config=vlm_config,
     )
@@ -859,6 +863,9 @@ def _wizard_llamacpp() -> dict[str, Any] | None:
 
 def _wizard_cloud() -> dict[str, Any] | None:
     """Cloud API model setup flow."""
+    config_path = _resolve_init_config_path()
+    workspace = _resolve_init_workspace()
+
     # Provider selection
     provider_options = [(p.label, "") for p in CLOUD_PROVIDERS]
     provider_options.append(("Other (manual)", ""))
@@ -867,7 +874,7 @@ def _wizard_cloud() -> dict[str, Any] | None:
     if choice > len(CLOUD_PROVIDERS):
         # Manual / Other
         print(f"\n  See example config: {_cyan('examples/ov.conf.example')}")
-        print(f"  Edit {_cyan(str(_DEFAULT_CONFIG_PATH))} manually.\n")
+        print(f"  Edit {_cyan(str(config_path))} manually.\n")
         return None
 
     provider = CLOUD_PROVIDERS[choice - 1]
@@ -897,7 +904,6 @@ def _wizard_cloud() -> dict[str, Any] | None:
         vlm_model = _prompt_required_input("Model", default=vlm_choice.default_vlm_model)
         vlm_api_base = vlm_choice.default_api_base
         vlm_provider = vlm_choice.provider
-        workspace = _DEFAULT_WORKSPACE
     elif vlm_mode == 2:
         vlm_choice = _get_cloud_provider("volcengine")
         print(f"\n  {_bold('VLM configuration')}")
@@ -908,7 +914,6 @@ def _wizard_cloud() -> dict[str, Any] | None:
         vlm_model = _prompt_required_input("Model", default=vlm_choice.default_vlm_model)
         vlm_api_base = vlm_choice.default_api_base
         vlm_provider = vlm_choice.provider
-        workspace = _DEFAULT_WORKSPACE
     elif vlm_mode == 3:
         _ensure_codex_auth()
         print(f"\n  {_bold('Codex VLM configuration')}")
@@ -916,7 +921,6 @@ def _wizard_cloud() -> dict[str, Any] | None:
         vlm_api_base = _DEFAULT_CODEX_BASE_URL
         vlm_api_key = None
         vlm_provider = "openai-codex"
-        workspace = _DEFAULT_WORKSPACE
     elif vlm_mode == 4:
         print(f"\n  {_bold('Kimi VLM configuration')}")
         vlm_api_key = _prompt_required_input("API Key")
@@ -926,7 +930,6 @@ def _wizard_cloud() -> dict[str, Any] | None:
         vlm_model = _prompt_required_input("Model", default=_DEFAULT_KIMI_MODEL)
         vlm_api_base = _DEFAULT_KIMI_BASE_URL
         vlm_provider = "kimi"
-        workspace = _DEFAULT_WORKSPACE
     else:
         print(f"\n  {_bold('GLM VLM configuration')}")
         vlm_api_key = _prompt_required_input("API Key")
@@ -936,7 +939,6 @@ def _wizard_cloud() -> dict[str, Any] | None:
         vlm_model = _prompt_required_input("Model", default=_DEFAULT_GLM_MODEL)
         vlm_api_base = _DEFAULT_GLM_BASE_URL
         vlm_provider = "glm"
-        workspace = _DEFAULT_WORKSPACE
 
     return _build_cloud_config(
         provider,
@@ -954,24 +956,26 @@ def _wizard_cloud() -> dict[str, Any] | None:
 
 def _wizard_custom() -> dict[str, Any] | None:
     """Custom configuration - point user to example config."""
+    config_path = _resolve_init_config_path()
+
     example = Path(__file__).parent.parent / "examples" / "ov.conf.example"
     if example.exists():
         print(f"\n  Example config: {_cyan(str(example))}")
-    print(f"  Config path:    {_cyan(str(_DEFAULT_CONFIG_PATH))}")
+    print(f"  Config path:    {_cyan(str(config_path))}")
 
     editor = os.environ.get("EDITOR", os.environ.get("VISUAL", ""))
     if editor:
-        if _prompt_confirm(f"Open {_DEFAULT_CONFIG_PATH} in {editor}?"):
-            _DEFAULT_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-            if not _DEFAULT_CONFIG_PATH.exists():
+        if _prompt_confirm(f"Open {config_path} in {editor}?"):
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            if not config_path.exists():
                 # Copy example as starting point
                 try:
-                    _DEFAULT_CONFIG_PATH.write_text(
+                    config_path.write_text(
                         example.read_text(encoding="utf-8"), encoding="utf-8"
                     )
                 except OSError:
                     pass
-            subprocess.run([editor, str(_DEFAULT_CONFIG_PATH)], check=False)
+            subprocess.run([editor, str(config_path)], check=False)
     else:
         print(f"\n  {_dim('Set $EDITOR to open the config file automatically.')}")
     return None
@@ -984,14 +988,17 @@ def _wizard_custom() -> dict[str, Any] | None:
 
 def run_init() -> int:
     """Run the interactive setup wizard."""
+    config_path = _resolve_init_config_path()
+    workspace = _resolve_init_workspace()
+
     print(f"\n  {_bold('OpenViking Setup')}")
     print(f"  {'=' * 16}\n")
-    storage_hint = f"Data will be stored under {_DEFAULT_WORKSPACE} unless you edit ov.conf later."
+    storage_hint = f"Data will be stored under {workspace} unless you edit ov.conf later."
     print(f"  {_dim(storage_hint)}\n")
 
     # Check for existing config
-    if _DEFAULT_CONFIG_PATH.exists():
-        print(f"  {_yellow('Existing config found:')} {_DEFAULT_CONFIG_PATH}")
+    if config_path.exists():
+        print(f"  {_yellow('Existing config found:')} {config_path}")
         if not _prompt_confirm("Overwrite? (current config will be backed up as .bak)"):
             print("  Setup cancelled.\n")
             return 0
@@ -1035,14 +1042,14 @@ def run_init() -> int:
     vlm_summary = _configured_hint(bool(vlm))
     print(f"    VLM:        {vlm_summary}")
     print("    Workspace:  configured (hidden)")
-    print(f"    Config:     {_DEFAULT_CONFIG_PATH}")
+    print("    Config:     default config location")
 
     if not _prompt_confirm("\n  Save configuration?"):
         print("\n  Setup cancelled.\n")
         return 0
 
     # Write
-    if not _write_config(config_dict, _DEFAULT_CONFIG_PATH):
+    if not _write_config(config_dict, config_path):
         return 1
 
     print(f"  {_green('OK')} Configuration written to the default config location\n")
