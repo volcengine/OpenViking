@@ -637,6 +637,7 @@ pub async fn handle_tree(
 }
 
 pub async fn handle_mkdir(uri: String, description: Option<String>, ctx: CliContext) -> Result<()> {
+    ctx.validate_user_account_if_set().await?;
     let client = ctx.get_client();
     commands::filesystem::mkdir(
         &client,
@@ -649,6 +650,7 @@ pub async fn handle_mkdir(uri: String, description: Option<String>, ctx: CliCont
 }
 
 pub async fn handle_rm(uri: String, recursive: bool, ctx: CliContext) -> Result<()> {
+    ctx.validate_user_account_if_set().await?;
     let client = ctx.get_client();
     commands::filesystem::rm(&client, &uri, recursive, ctx.output_format, ctx.compact).await
 }

@@ -6,6 +6,7 @@ mod handlers;
 mod output;
 mod tui;
 mod utils;
+mod validation;
 
 use clap::{ArgAction, Parser, Subcommand};
 use config::Config;
@@ -87,6 +88,19 @@ impl CliContext {
             timeout_secs.unwrap_or(self.config.timeout),
             self.config.extra_headers.clone(),
         )
+    }
+
+    /// When the user passed `--user` and `--account` (or has them set in
+    /// config), confirm they exist on the server before running a mutating
+    /// operation. No-op when both are unset (the global default).
+    pub async fn validate_user_account_if_set(&self) -> Result<()> {
+        let (Some(account), Some(user)) =
+            (self.config.account.as_deref(), self.config.user.as_deref())
+        else {
+            return Ok(());
+        };
+        let client = self.get_client();
+        validation::validate_user_account(&client, account, user).await
     }
 }
 
