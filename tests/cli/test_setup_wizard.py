@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
 from unittest.mock import MagicMock, patch
 
 from openviking_cli.setup_wizard import (
     _DEFAULT_CODEX_MODEL,
     _DEFAULT_GLM_MODEL,
     _DEFAULT_KIMI_MODEL,
-    _DEFAULT_WORKSPACE,
     CLOUD_PROVIDERS,
     EMBEDDING_PRESETS,
     LOCAL_GGUF_PRESETS,
@@ -17,11 +17,13 @@ from openviking_cli.setup_wizard import (
     _build_cloud_config,
     _build_local_config,
     _build_ollama_config,
+    _config_path,
     _get_recommended_indices,
     _is_llamacpp_installed,
     _prompt_required_input,
     _prompt_required_int,
     _wizard_cloud,
+    _workspace_path,
     _write_config,
     run_init,
 )
@@ -192,7 +194,7 @@ class TestConfigBuilding:
                         config = _wizard_cloud()
 
         assert config is not None
-        assert config["storage"]["workspace"] == _DEFAULT_WORKSPACE
+        assert config["storage"]["workspace"] == _workspace_path()
         assert config["vlm"]["provider"] == "openai-codex"
         assert config["vlm"]["api_base"] == "https://chatgpt.com/backend-api/codex"
         assert "api_key" not in config["vlm"]
@@ -218,7 +220,7 @@ class TestConfigBuilding:
                     config = _wizard_cloud()
 
         assert config is not None
-        assert config["storage"]["workspace"] == _DEFAULT_WORKSPACE
+        assert config["storage"]["workspace"] == _workspace_path()
         assert config["vlm"]["provider"] == "openai"
         assert config["vlm"]["api_key"] == "openai-vlm-test"
         assert config["vlm"]["api_base"] == CLOUD_PROVIDERS[0].default_api_base
@@ -244,7 +246,7 @@ class TestConfigBuilding:
                     config = _wizard_cloud()
 
         assert config is not None
-        assert config["storage"]["workspace"] == _DEFAULT_WORKSPACE
+        assert config["storage"]["workspace"] == _workspace_path()
         assert config["vlm"]["provider"] == "volcengine"
         assert config["vlm"]["api_key"] == "ve-vlm-test"
         assert config["vlm"]["api_base"] == CLOUD_PROVIDERS[1].default_api_base
@@ -275,7 +277,7 @@ class TestConfigBuilding:
         assert config["vlm"]["api_key"] == "kimi-test"
         assert config["vlm"]["model"] == "kimi-code"
         assert config["vlm"]["api_base"] == "https://api.kimi.com/coding"
-        assert config["storage"]["workspace"] == _DEFAULT_WORKSPACE
+        assert config["storage"]["workspace"] == _workspace_path()
 
     def test_cloud_wizard_supports_glm_vlm(self):
         with patch(
@@ -302,7 +304,7 @@ class TestConfigBuilding:
         assert config["vlm"]["api_key"] == "glm-test"
         assert config["vlm"]["model"] == "glm-4.6v"
         assert config["vlm"]["api_base"] == "https://api.z.ai/api/coding/paas/v4"
-        assert config["storage"]["workspace"] == _DEFAULT_WORKSPACE
+        assert config["storage"]["workspace"] == _workspace_path()
 
     def test_prompt_required_input_uses_default_on_empty(self):
         with patch("builtins.input", return_value=""):
@@ -510,7 +512,7 @@ class TestConfigWriting:
         }
 
         with (
-            patch("openviking_cli.setup_wizard._DEFAULT_CONFIG_PATH", config_path),
+            patch.dict(os.environ, {"OPENVIKING_CONFIG_FILE": str(config_path)}, clear=False),
             patch("openviking_cli.setup_wizard._prompt_choice", return_value=2),
             patch("openviking_cli.setup_wizard._wizard_ollama", return_value=config),
             patch("openviking_cli.setup_wizard._prompt_confirm", return_value=True),
@@ -527,6 +529,30 @@ class TestConfigWriting:
         assert str(config_path) not in output
         assert "custom local model (hidden)" in output
         assert "default config location" in output
+
+    def test_env_overrides_config_path_and_derives_workspace(self, tmp_path):
+        config_path = tmp_path / "runtime" / "ov.conf"
+        with patch.dict(os.environ, {"OPENVIKING_CONFIG_FILE": str(config_path)}, clear=False):
+            assert _config_path() == config_path
+            assert _workspace_path() == str(config_path.parent / "data")
+
+    def test_run_init_writes_to_env_config_path(self, tmp_path):
+        config_path = tmp_path / "runtime" / "ov.conf"
+        config = {
+            "embedding": {"dense": {"provider": "ollama", "model": "qwen", "dimension": 1024}},
+            "storage": {"workspace": str(config_path.parent / "data")},
+        }
+        with (
+            patch.dict(os.environ, {"OPENVIKING_CONFIG_FILE": str(config_path)}, clear=False),
+            patch("openviking_cli.setup_wizard._prompt_choice", return_value=2),
+            patch("openviking_cli.setup_wizard._wizard_ollama", return_value=config),
+            patch("openviking_cli.setup_wizard._prompt_confirm", return_value=True),
+            patch("openviking_cli.setup_wizard._write_config", return_value=True) as mock_write,
+            patch("builtins.print"),
+        ):
+            assert run_init() == 0
+
+        mock_write.assert_called_once_with(config, config_path)
 
 
 # ---------------------------------------------------------------------------

@@ -6,8 +6,35 @@ SERVER_HEALTH_URL="${SERVER_URL}/health"
 CONSOLE_PORT="${OPENVIKING_CONSOLE_PORT:-8020}"
 CONSOLE_HOST="${OPENVIKING_CONSOLE_HOST:-0.0.0.0}"
 WITH_BOT="${OPENVIKING_WITH_BOT:-1}"
+CONFIG_FILE="${OPENVIKING_CONFIG_FILE:-/app/.openviking/ov.conf}"
 SERVER_PID=""
 CONSOLE_PID=""
+
+ensure_config() {
+    if [ -f "${CONFIG_FILE}" ]; then
+        return
+    fi
+    mkdir -p "$(dirname "${CONFIG_FILE}")"
+    if [ -n "${OPENVIKING_CONF_CONTENT:-}" ]; then
+        printf '%s' "${OPENVIKING_CONF_CONTENT}" > "${CONFIG_FILE}"
+        echo "[openviking-console-entrypoint] wrote ${CONFIG_FILE} from OPENVIKING_CONF_CONTENT"
+        return
+    fi
+    cat >&2 <<EOF
+[openviking-console-entrypoint] ${CONFIG_FILE} not found.
+
+To start OpenViking, do one of:
+  - mount ~/.openviking on the host to /app/.openviking
+  - set OPENVIKING_CONF_CONTENT to the full ov.conf JSON
+  - docker exec into this container and run: openviking-server init
+
+The container will sleep until ${CONFIG_FILE} exists.
+EOF
+    while [ ! -f "${CONFIG_FILE}" ]; do
+        sleep 5
+    done
+    echo "[openviking-console-entrypoint] detected ${CONFIG_FILE}, starting OpenViking"
+}
 
 normalize_with_bot() {
     case "$1" in
@@ -41,6 +68,7 @@ if [ "$#" -gt 0 ]; then
 fi
 
 normalize_with_bot "${WITH_BOT}"
+ensure_config
 
 forward_signal() {
     if [ -n "${SERVER_PID}" ] && kill -0 "${SERVER_PID}" 2>/dev/null; then
