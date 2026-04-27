@@ -356,6 +356,22 @@ class CloudProvider:
 
 CLOUD_PROVIDERS: list[CloudProvider] = [
     CloudProvider(
+        "VolcEngine (火山引擎)",
+        "volcengine",
+        "https://ark.cn-beijing.volces.com/api/v3",
+        "doubao-embedding-vision-251215",
+        1024,
+        "doubao-seed-2-0-code-preview-260215",
+    ),
+    CloudProvider(
+        "BytePlus",
+        "openai",
+        "https://ark.ap-southeast.bytepluses.com/api/v3",
+        "doubao-embedding-vision-251215",
+        1024,
+        "doubao-seed-2-0-code-preview-260215",
+    ),
+    CloudProvider(
         "OpenAI",
         "openai",
         "https://api.openai.com/v1",
@@ -363,27 +379,20 @@ CLOUD_PROVIDERS: list[CloudProvider] = [
         1536,
         "gpt-5.4",
     ),
-    CloudProvider(
-        "Volcengine (Doubao)",
-        "volcengine",
-        "https://ark.cn-beijing.volces.com/api/v3",
-        "doubao-embedding-vision-251215",
-        1024,
-        "doubao-seed-2-0-code-preview-260215",
-    ),
 ]
 
 
-def _get_cloud_provider(provider_name: str) -> CloudProvider:
+def _get_cloud_provider_by_label(label: str) -> CloudProvider:
     for provider in CLOUD_PROVIDERS:
-        if provider.provider == provider_name:
+        if provider.label == label:
             return provider
-    raise ValueError(f"Unknown cloud provider: {provider_name}")
+    raise ValueError(f"Unknown cloud provider: {label}")
 
 
 _WIZARD_VLM_OPTIONS: list[tuple[str, str]] = [
+    ("VolcEngine (火山引擎)", "(API)"),
+    ("BytePlus", "(API)"),
     ("OpenAI", "(API)"),
-    ("Volcengine", "(API)"),
     ("OpenAI Codex", "(Subscription)"),
     ("Kimi", "(Subscription API Key)"),
     ("GLM", "(Subscription API Key)"),
@@ -770,7 +779,7 @@ def _wizard_llamacpp() -> dict[str, Any] | None:
         "VLM (language model) setup:",
         [
             ("Use Ollama for VLM", _dim("(requires Ollama installed)")),
-            ("Use Cloud API for VLM", _dim("(OpenAI, Volcengine, etc.)")),
+            ("Use Cloud API for VLM", _dim("(VolcEngine, BytePlus, OpenAI, etc.)")),
             ("Skip VLM", _dim("(embedding only, add VLM later)")),
         ],
         default=1,
@@ -882,8 +891,8 @@ def _wizard_cloud() -> dict[str, Any] | None:
     vlm_mode = _prompt_choice("VLM provider:", _WIZARD_VLM_OPTIONS, default=1)
 
     if vlm_mode == 1:
-        vlm_choice = _get_cloud_provider("openai")
-        print(f"\n  {_bold('VLM configuration')}")
+        vlm_choice = _get_cloud_provider_by_label("VolcEngine (火山引擎)")
+        print(f"\n  {_bold('VolcEngine VLM configuration')}")
         vlm_api_key = _prompt_required_input("API Key")
         if not vlm_api_key:
             print(f"  {_red('API key is required')}")
@@ -892,8 +901,8 @@ def _wizard_cloud() -> dict[str, Any] | None:
         vlm_api_base = vlm_choice.default_api_base
         vlm_provider = vlm_choice.provider
     elif vlm_mode == 2:
-        vlm_choice = _get_cloud_provider("volcengine")
-        print(f"\n  {_bold('VLM configuration')}")
+        vlm_choice = _get_cloud_provider_by_label("BytePlus")
+        print(f"\n  {_bold('BytePlus VLM configuration')}")
         vlm_api_key = _prompt_required_input("API Key")
         if not vlm_api_key:
             print(f"  {_red('API key is required')}")
@@ -902,13 +911,23 @@ def _wizard_cloud() -> dict[str, Any] | None:
         vlm_api_base = vlm_choice.default_api_base
         vlm_provider = vlm_choice.provider
     elif vlm_mode == 3:
+        vlm_choice = _get_cloud_provider_by_label("OpenAI")
+        print(f"\n  {_bold('OpenAI VLM configuration')}")
+        vlm_api_key = _prompt_required_input("API Key")
+        if not vlm_api_key:
+            print(f"  {_red('API key is required')}")
+            return None
+        vlm_model = _prompt_required_input("Model", default=vlm_choice.default_vlm_model)
+        vlm_api_base = vlm_choice.default_api_base
+        vlm_provider = vlm_choice.provider
+    elif vlm_mode == 4:
         _ensure_codex_auth()
         print(f"\n  {_bold('Codex VLM configuration')}")
         vlm_model = _prompt_required_input("Model", default=_DEFAULT_CODEX_MODEL)
         vlm_api_base = _DEFAULT_CODEX_BASE_URL
         vlm_api_key = None
         vlm_provider = "openai-codex"
-    elif vlm_mode == 4:
+    elif vlm_mode == 5:
         print(f"\n  {_bold('Kimi VLM configuration')}")
         vlm_api_key = _prompt_required_input("API Key")
         if not vlm_api_key:
@@ -939,6 +958,33 @@ def _wizard_cloud() -> dict[str, Any] | None:
         vlm_api_key=vlm_api_key,
         vlm_api_base=vlm_api_base,
     )
+
+
+def _wizard_server() -> dict[str, Any] | None:
+    """Prompt for server host binding and root_api_key (when remote)."""
+    print(f"\n  {_bold('Server binding')}")
+    print(f"  {_dim('Local: only this machine can reach the server.')}")
+    print(f"  {_dim('Remote: bind to 0.0.0.0 — required for Docker / LAN access.')}")
+
+    mode = _prompt_choice(
+        "Bind server host to:",
+        [
+            ("Local (127.0.0.1)", _dim("(default, safer)")),
+            ("Remote (0.0.0.0)", _dim("(required for Docker / remote access)")),
+        ],
+        default=1,
+    )
+
+    if mode == 1:
+        return {"host": "127.0.0.1"}
+
+    print(f"\n  {_bold('Remote binding requires a root API key.')}")
+    print(f"  {_dim('Clients must send this key as a Bearer token to authenticate.')}")
+    root_api_key = _prompt_required_input("Root API Key")
+    if not root_api_key:
+        print(f"  {_red('Root API key is required for remote binding')}")
+        return None
+    return {"host": "0.0.0.0", "root_api_key": root_api_key}
 
 
 def _wizard_custom() -> dict[str, Any] | None:
@@ -992,7 +1038,7 @@ def run_init() -> int:
         [
             ("Local embedding via llama.cpp", "(CPU embedding, no GPU required)"),
             ("Local models via Ollama", "(recommended for macOS / Apple Silicon)"),
-            ("Cloud API", "(OpenAI, Volcengine, etc.)"),
+            ("Cloud API", "(VolcEngine, BytePlus, OpenAI, etc.)"),
             ("Custom", "(manual editing)"),
         ],
         default=1,
@@ -1014,6 +1060,12 @@ def run_init() -> int:
         print("\n  Setup cancelled.\n")
         return 0
 
+    server_dict = _wizard_server()
+    if server_dict is None:
+        print("\n  Setup cancelled.\n")
+        return 0
+    config_dict["server"] = server_dict
+
     # Summary
     emb = config_dict.get("embedding", {}).get("dense", {})
     vlm = config_dict.get("vlm", {})
@@ -1024,6 +1076,9 @@ def run_init() -> int:
         print("    Model path: custom local model (hidden)")
     vlm_summary = _configured_hint(bool(vlm))
     print(f"    VLM:        {vlm_summary}")
+    print(f"    Server:     bound to {server_dict['host']}")
+    if server_dict.get("root_api_key"):
+        print("    Root API key: configured (hidden)")
     print("    Workspace:  configured (hidden)")
     print("    Config:     default config location")
 
