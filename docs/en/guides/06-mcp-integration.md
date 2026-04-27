@@ -93,14 +93,18 @@ Claude.ai and Claude Desktop Connector require MCP servers to use OAuth authenti
 
 ## Available MCP Tools
 
-Once connected, OpenViking exposes 5 tools covering the full memory lifecycle:
+Once connected, OpenViking exposes 9 tools:
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
-| `search` | Semantic search across memories, resources, and skills | `query`, `target_uri` (optional), `limit` |
-| `read` | Read one or more `viking://` URIs | `uris` (single or array) |
-| `store` | Store information into long-term memory (triggers extraction) | `text`, `role` |
-| `forget` | Delete a memory (by URI or search query) | `uri` or `query` |
+| `search` | Semantic search across memories, resources, and skills | `query`, `target_uri` (optional), `limit`, `min_score` |
+| `read` | Read one or more `viking://` URIs | `uris` (single string or array) |
+| `list` | List entries under a `viking://` directory | `uri`, `recursive` (optional) |
+| `store` | Store messages into long-term memory (triggers extraction) | `messages` (list of `{role, content}`) |
+| `add_resource` | Add a local file or URL as a resource | `path`, `description` (optional) |
+| `grep` | Regex content search across `viking://` files | `uri`, `pattern` (string or array), `case_insensitive` |
+| `glob` | Find files matching a glob pattern | `pattern`, `uri` (optional scope) |
+| `forget` | Delete a memory by URI or search query | `uri` or `query` |
 | `health` | Check OpenViking service health | none |
 
 ## Troubleshooting

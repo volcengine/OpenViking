@@ -236,6 +236,78 @@ async def add_resource(path: str, description: str = "") -> str:
         return f"Error adding resource: {e}"
 
 
+# -- grep ------------------------------------------------------------------
+
+@mcp.tool()
+async def grep(
+    uri: str, pattern: str | list[str], case_insensitive: bool = False, node_limit: int = 10
+) -> str:
+    """Search content in viking:// files using regex patterns (like grep). Supports multiple patterns searched concurrently. Use this for exact text matching; use the search tool for semantic retrieval."""
+    import asyncio
+
+    service = get_service()
+    ctx = _get_ctx()
+    patterns = [pattern] if isinstance(pattern, str) else pattern
+    semaphore = asyncio.Semaphore(10)
+
+    async def _grep_one(p: str) -> tuple[str, list[dict]]:
+        async with semaphore:
+            try:
+                result = await service.fs.grep(
+                    uri, p, ctx=ctx, case_insensitive=case_insensitive, node_limit=node_limit,
+                )
+                return (p, result.get("matches", []))
+            except Exception:
+                return (p, [])
+
+    results = await asyncio.gather(*[_grep_one(p) for p in patterns])
+
+    merged: dict[str, list[tuple]] = {}
+    total = 0
+    for p, matches in results:
+        total += len(matches)
+        for m in matches:
+            m_uri = m.get("uri", "?")
+            merged.setdefault(m_uri, []).append(
+                (m.get("line", "?"), m.get("content", ""), p)
+            )
+
+    if not merged:
+        return f"No matches found for pattern(s): {', '.join(patterns)}"
+
+    lines = [f"Found {total} match(es) across {len(patterns)} pattern(s):"]
+    for m_uri, hits in merged.items():
+        hits.sort(key=lambda x: int(x[0]) if str(x[0]).isdigit() else 0)
+        lines.append(f"\n{m_uri}")
+        for line_no, content, p in hits:
+            lines.append(f"  L{line_no} [{p}]: {content}")
+    return "\n".join(lines)
+
+
+# -- glob ------------------------------------------------------------------
+
+@mcp.tool()
+async def glob(pattern: str, uri: str = "viking://", node_limit: int = 100) -> str:
+    """Find viking:// files matching a glob pattern (e.g. **/*.md, *.py). Use this for filename matching; use the search tool for content-based retrieval."""
+    service = get_service()
+    ctx = _get_ctx()
+
+    try:
+        result = await service.fs.glob(pattern, ctx=ctx, uri=uri, node_limit=node_limit)
+    except Exception as e:
+        return f"Error: {e}"
+
+    matches = result.get("matches", [])
+    if not matches:
+        return f"No files found matching: {pattern}"
+
+    lines = [f"Found {len(matches)} file(s):"]
+    for m in matches:
+        m_uri = m.get("uri", str(m)) if isinstance(m, dict) else str(m)
+        lines.append(f"  {m_uri}")
+    return "\n".join(lines)
+
+
 # -- forget ----------------------------------------------------------------
 
 @mcp.tool()
@@ -291,7 +363,7 @@ async def health() -> str:
 async def mcp_lifespan():
     """Run the MCP session manager. Call this inside the FastAPI lifespan."""
     async with mcp.session_manager.run():
-        logger.info("MCP endpoint ready (7 tools: search, read, list, store, add_resource, forget, health)")
+        logger.info("MCP endpoint ready (9 tools: search, read, list, store, add_resource, grep, glob, forget, health)")
         yield
 
 

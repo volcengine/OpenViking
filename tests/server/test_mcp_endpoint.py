@@ -16,6 +16,8 @@ from openviking.server.mcp_endpoint import (
     _mcp_ctx,
     add_resource,
     forget,
+    glob,
+    grep,
     health,
     read,
     search,
@@ -208,6 +210,59 @@ async def test_forget_by_uri_deletes(service):
 async def test_forget_by_query_no_matches(service):
     result = await forget(query="zzz_absolutely_no_match_xyz_99999")
     assert "no matching" in result.lower()
+
+
+# ---------------------------------------------------------------------------
+# grep tool
+# ---------------------------------------------------------------------------
+
+
+async def test_grep_no_matches(service):
+    result = await grep(uri="viking://resources", pattern="zzz_no_match_xyz_99999")
+    assert "No matches found" in result
+
+
+async def test_grep_single_pattern(service, client_with_resource):
+    _, root_uri = client_with_resource
+    result = await grep(uri=root_uri, pattern=".*")
+    assert isinstance(result, str)
+
+
+async def test_grep_multiple_patterns(service):
+    result = await grep(
+        uri="viking://resources", pattern=["pattern_a_xyz", "pattern_b_xyz"]
+    )
+    assert "No matches found" in result
+    assert "pattern_a_xyz" in result
+    assert "pattern_b_xyz" in result
+
+
+async def test_grep_case_insensitive(service):
+    result = await grep(
+        uri="viking://resources", pattern="TEST", case_insensitive=True
+    )
+    assert isinstance(result, str)
+
+
+# ---------------------------------------------------------------------------
+# glob tool
+# ---------------------------------------------------------------------------
+
+
+async def test_glob_no_matches(service):
+    result = await glob(pattern="zzz_nonexistent_*.xyz")
+    assert "No files found" in result
+
+
+async def test_glob_match_all_md(service, client_with_resource):
+    _, root_uri = client_with_resource
+    result = await glob(pattern="**/*.md", uri=root_uri)
+    assert isinstance(result, str)
+
+
+async def test_glob_with_uri_scope(service):
+    result = await glob(pattern="*", uri="viking://resources")
+    assert isinstance(result, str)
 
 
 # ---------------------------------------------------------------------------
