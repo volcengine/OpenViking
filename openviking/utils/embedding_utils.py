@@ -357,6 +357,8 @@ async def vectorize_file(
                     if isinstance(content, bytes):
                         content = content.decode("utf-8", errors="replace")
                     content = _truncate_text(content)
+                    if not context.abstract and content:
+                        context.abstract = content[:200]
                     context.set_vectorize(Vectorize(text=content))
                 except Exception as e:
                     logger.warning(
