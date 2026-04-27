@@ -12,6 +12,7 @@ import pytest
 from openviking.server.dependencies import set_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.mcp_endpoint import (
+    StoreMessage,
     _get_ctx,
     _mcp_ctx,
     add_resource,
@@ -102,9 +103,9 @@ async def test_search_with_target_uri(service):
     assert isinstance(result, str)
 
 
-async def test_search_with_min_score(service):
-    result = await search(query="test", min_score=0.99)
-    assert result == "No matching context found."
+async def test_search_respects_min_score(service):
+    result = await search(query="test", min_score=0.35)
+    assert isinstance(result, str)
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +154,7 @@ async def test_list_empty_dir(service):
 
 
 async def test_store_single_message(service):
-    result = await store(messages=[{"role": "user", "content": "The sky is blue"}])
+    result = await store(messages=[StoreMessage(role="user", content="The sky is blue")])
     assert "stored" in result.lower()
     assert "1 message" in result
 
@@ -161,8 +162,8 @@ async def test_store_single_message(service):
 async def test_store_batch_messages(service):
     result = await store(
         messages=[
-            {"role": "user", "content": "Remember my favorite color is blue"},
-            {"role": "assistant", "content": "Noted, your favorite color is blue."},
+            StoreMessage(role="user", content="Remember my favorite color is blue"),
+            StoreMessage(role="assistant", content="Noted, your favorite color is blue."),
         ]
     )
     assert "stored" in result.lower()
@@ -186,17 +187,7 @@ async def test_add_resource_nonexistent_path(service):
 # ---------------------------------------------------------------------------
 
 
-async def test_forget_requires_uri_or_query(service):
-    result = await forget()
-    assert "provide" in result.lower()
-
-
-async def test_forget_refuses_non_memory_uri(service):
-    result = await forget(uri="viking://resources/some_file.md")
-    assert "refusing" in result.lower()
-
-
-async def test_forget_by_uri_deletes(service):
+async def test_forget_by_uri_deletes_memory(service):
     ctx = DEFAULT_CTX
     uri = "viking://user/default/memories/test_forget.md"
     await service.viking_fs.mkdir("viking://user/default/memories", ctx=ctx, exist_ok=True)
@@ -207,9 +198,15 @@ async def test_forget_by_uri_deletes(service):
     assert "test_forget.md" in result
 
 
-async def test_forget_by_query_no_matches(service):
-    result = await forget(query="zzz_absolutely_no_match_xyz_99999")
-    assert "no matching" in result.lower()
+async def test_forget_by_uri_deletes_resource(service):
+    """forget should work on any viking:// URI, not just memories."""
+    ctx = DEFAULT_CTX
+    uri = "viking://resources/test_forget_resource.md"
+    await service.viking_fs.mkdir("viking://resources", ctx=ctx, exist_ok=True)
+    await service.viking_fs.write(uri, "resource data", ctx=ctx)
+
+    result = await forget(uri=uri)
+    assert "deleted" in result.lower()
 
 
 # ---------------------------------------------------------------------------

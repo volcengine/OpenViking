@@ -17,10 +17,11 @@ from __future__ import annotations
 
 import contextvars
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Literal, Optional
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+from pydantic import BaseModel, Field
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -199,9 +200,14 @@ async def list_dir(uri: str, recursive: bool = False) -> str:
 
 # -- store -----------------------------------------------------------------
 
+class StoreMessage(BaseModel):
+    role: Literal["user", "assistant"] = Field(description="Message role")
+    content: str = Field(description="Message text content")
+
+
 @mcp.tool()
-async def store(messages: list[dict[str, str]]) -> str:
-    """Store information into OpenViking long-term memory. Pass a list of messages, each with 'role' ('user' or 'assistant') and 'content'. Use when the user says 'remember this', shares preferences, important facts, or decisions worth persisting."""
+async def store(messages: list[StoreMessage]) -> str:
+    """Store information into OpenViking long-term memory. Use when the user says 'remember this', shares preferences, important facts, or decisions worth persisting."""
     import uuid
 
     from openviking.message.part import TextPart
@@ -211,10 +217,8 @@ async def store(messages: list[dict[str, str]]) -> str:
     session_id = f"mcp-store-{uuid.uuid4().hex[:12]}"
     session = await service.sessions.get(session_id, ctx, auto_create=True)
     for msg in messages:
-        role = msg.get("role", "user")
-        content = msg.get("content", "")
-        if content:
-            session.add_message(role, [TextPart(text=content)])
+        if msg.content:
+            session.add_message(msg.role, [TextPart(text=msg.content)])
     await service.sessions.commit_async(session_id, ctx)
     return f"Stored {len(messages)} message(s) and committed for memory extraction."
 
@@ -311,36 +315,12 @@ async def glob(pattern: str, uri: str = "viking://", node_limit: int = 100) -> s
 # -- forget ----------------------------------------------------------------
 
 @mcp.tool()
-async def forget(uri: str = "", query: str = "") -> str:
-    """Delete a memory from OpenViking. Provide an exact URI for direct deletion, or a search query to find and delete matching memories."""
-    from openviking_cli.retrieve import ContextType
-
+async def forget(uri: str) -> str:
+    """Delete a viking:// URI from OpenViking. Use the search tool first to find the exact URI, then pass it here."""
     service = get_service()
     ctx = _get_ctx()
-    if uri:
-        if "/memories/" not in uri:
-            return f"Refusing to delete non-memory URI: {uri}"
-        await service.fs.rm(uri, ctx=ctx)
-        return f"Deleted: {uri}"
-    if not query:
-        return "Provide either uri or query."
-
-    result = await service.search.find(query=query, ctx=ctx, target_uri="", limit=20, score_threshold=None)
-    candidates = [
-        m for m in result.memories
-        if m.level == 2 and m.context_type == ContextType.MEMORY
-    ]
-    if not candidates:
-        return "No matching memories found."
-    top = candidates[0]
-    if len(candidates) == 1 and (top.score or 0) >= 0.85:
-        await service.fs.rm(top.uri, ctx=ctx)
-        return f"Deleted: {top.uri}"
-    lines = []
-    for m in candidates[:10]:
-        abstract = (m.abstract or "?").strip()
-        lines.append(f"- {m.uri} — {abstract} ({m.score * 100:.0f}%)")
-    return f"Found {len(candidates)} candidates. Specify the exact URI:\n\n" + "\n".join(lines)
+    await service.fs.rm(uri, ctx=ctx)
+    return f"Deleted: {uri}"
 
 
 # -- health ----------------------------------------------------------------
