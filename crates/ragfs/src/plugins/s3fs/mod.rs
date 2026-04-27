@@ -18,7 +18,7 @@ pub mod client;
 
 use async_trait::async_trait;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 use cache::{S3ListDirCache, S3StatCache};
 use client::S3Client;
@@ -111,13 +111,6 @@ impl S3FileSystem {
             .next()
             .unwrap_or("")
             .to_string()
-    }
-
-    /// Prefer the directory marker's timestamp when available.
-    /// Pure prefix-based directories in S3 have no real mtime, so fall back
-    /// to a stable sentinel instead of returning a fresh timestamp on each call.
-    fn directory_mod_time(marker: Option<SystemTime>) -> SystemTime {
-        marker.unwrap_or(UNIX_EPOCH)
     }
 }
 
@@ -313,17 +306,11 @@ impl FileSystem for S3FileSystem {
                 continue;
             }
 
-            let marker_time = self
-                .client
-                .head_object(&format!("{}/", dir_key))
-                .await?
-                .map(|meta| meta.last_modified);
-
             files.push(FileInfo {
                 name: name.to_string(),
                 size: 0,
                 mode: 0o755,
-                mod_time: Self::directory_mod_time(marker_time),
+                mod_time: SystemTime::now(),
                 is_dir: true,
             });
         }
@@ -379,17 +366,11 @@ impl FileSystem for S3FileSystem {
 
         // Check if it's a directory
         if self.client.directory_exists(&normalized).await? {
-            let dir_key = format!("{}/", self.client.build_key(&normalized));
-            let marker_time = self
-                .client
-                .head_object(&dir_key)
-                .await?
-                .map(|meta| meta.last_modified);
             let info = FileInfo {
                 name: Self::file_name(&normalized),
                 size: 0,
                 mode: 0o755,
-                mod_time: Self::directory_mod_time(marker_time),
+                mod_time: SystemTime::now(),
                 is_dir: true,
             };
             self.stat_cache
@@ -768,17 +749,6 @@ mod tests {
         assert_eq!(S3FileSystem::file_name("/"), "/");
         assert_eq!(S3FileSystem::file_name("/foo.txt"), "foo.txt");
         assert_eq!(S3FileSystem::file_name("/dir/file.txt"), "file.txt");
-    }
-
-    #[test]
-    fn test_directory_mod_time_prefers_marker_time() {
-        let marker_time = UNIX_EPOCH + std::time::Duration::from_secs(123);
-        assert_eq!(S3FileSystem::directory_mod_time(Some(marker_time)), marker_time);
-    }
-
-    #[test]
-    fn test_directory_mod_time_is_stable_without_marker() {
-        assert_eq!(S3FileSystem::directory_mod_time(None), UNIX_EPOCH);
     }
 
     #[tokio::test]
