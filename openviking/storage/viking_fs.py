@@ -53,6 +53,8 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+_DEFAULT_GREP_FILE_CONCURRENCY = 32
+
 
 def _ensure_non_empty_search_query(query: str) -> None:
     if not query.strip():
@@ -632,14 +634,36 @@ class VikingFS:
         if exclude_uri:
             excluded_prefix = self._normalize_uri(exclude_uri).rstrip("/")
             self._ensure_access(excluded_prefix, ctx)
+        file_uris = await self._collect_grep_files(
+            uri,
+            excluded_prefix=excluded_prefix,
+            level_limit=level_limit,
+            ctx=ctx,
+        )
+        results, files_scanned = await self._grep_files_parallel(
+            file_uris,
+            compiled_pattern=compiled_pattern,
+            node_limit=node_limit,
+            ctx=ctx,
+        )
 
-        results = []
-        files_scanned = 0
+        return {
+            "matches": results,
+            "count": len(results),
+            "match_count": len(results),
+            "files_scanned": files_scanned,
+        }
 
-        async def search_recursive(current_uri: str, current_depth: int):
-            if node_limit and len(results) >= node_limit:
-                return
+    async def _collect_grep_files(
+        self,
+        uri: str,
+        excluded_prefix: Optional[str],
+        level_limit: int,
+        ctx: Optional[RequestContext] = None,
+    ) -> List[str]:
+        file_uris: List[str] = []
 
+        async def search_recursive(current_uri: str, current_depth: int) -> None:
             if current_depth > level_limit:
                 return
 
@@ -657,9 +681,6 @@ class VikingFS:
                 return
 
             for entry in entries:
-                if node_limit and len(results) >= node_limit:
-                    break
-
                 entry_uri = f"{normalized_current_uri.rstrip('/')}/{entry['name']}"
                 if excluded_prefix and (
                     entry_uri == excluded_prefix or entry_uri.startswith(excluded_prefix + "/")
@@ -670,36 +691,70 @@ class VikingFS:
                 if entry.get("isDir"):
                     await search_recursive(entry_uri, current_depth + 1)
                 else:
-                    nonlocal files_scanned
-                    files_scanned += 1
-                    try:
-                        content = await self.read(entry_uri, ctx=ctx)
-                        if isinstance(content, bytes):
-                            content = content.decode("utf-8", errors="replace")
-
-                        lines = content.split("\n")
-                        for line_num, line in enumerate(lines, 1):
-                            if compiled_pattern.search(line):
-                                results.append(
-                                    {
-                                        "line": line_num,
-                                        "uri": entry_uri,
-                                        "content": line,
-                                    }
-                                )
-                                if node_limit and len(results) >= node_limit:
-                                    break
-                    except Exception as e:
-                        logger.debug(f"Failed to grep {entry_uri}: {e}")
+                    file_uris.append(entry_uri)
 
         await search_recursive(uri, 0)
+        return file_uris
 
-        return {
-            "matches": results,
-            "count": len(results),
-            "match_count": len(results),
-            "files_scanned": files_scanned,
-        }
+    async def _grep_files_parallel(
+        self,
+        file_uris: List[str],
+        compiled_pattern: re.Pattern,
+        node_limit: Optional[int],
+        ctx: Optional[RequestContext] = None,
+    ) -> tuple[List[Dict[str, Any]], int]:
+        results: List[Dict[str, Any]] = []
+        files_scanned = 0
+        for start in range(0, len(file_uris), _DEFAULT_GREP_FILE_CONCURRENCY):
+            batch_uris = file_uris[start : start + _DEFAULT_GREP_FILE_CONCURRENCY]
+            batch_jobs = [
+                asyncio.to_thread(self._grep_single_file, entry_uri, compiled_pattern, ctx)
+                for entry_uri in batch_uris
+            ]
+            batch_results = await asyncio.gather(*batch_jobs)
+            for matches, scanned_count in batch_results:
+                files_scanned += scanned_count
+                for match in matches:
+                    results.append(match)
+                    if node_limit and len(results) >= node_limit:
+                        return results, files_scanned
+
+        return results, files_scanned
+
+    def _grep_single_file(
+        self,
+        entry_uri: str,
+        compiled_pattern: re.Pattern,
+        ctx: Optional[RequestContext] = None,
+    ) -> tuple[List[Dict[str, Any]], int]:
+        try:
+            self._ensure_access(entry_uri, ctx)
+            path = self._uri_to_path(entry_uri, ctx=ctx)
+            result = self.agfs.read(path, 0, -1)
+            if isinstance(result, bytes):
+                content = result
+            elif result is not None and hasattr(result, "content"):
+                content = result.content
+            else:
+                content = b""
+            if isinstance(content, bytes):
+                content = content.decode("utf-8", errors="replace")
+
+            matches: List[Dict[str, Any]] = []
+            lines = content.split("\n")
+            for line_num, line in enumerate(lines, 1):
+                if compiled_pattern.search(line):
+                    matches.append(
+                        {
+                            "line": line_num,
+                            "uri": entry_uri,
+                            "content": line,
+                        }
+                    )
+            return matches, 1
+        except Exception as e:
+            logger.debug(f"Failed to grep {entry_uri}: {e}")
+            return [], 1
 
     async def stat(self, uri: str, ctx: Optional[RequestContext] = None) -> Dict[str, Any]:
         """
