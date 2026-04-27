@@ -349,6 +349,7 @@ Compact JSON with status wrapper (when `--compact` is true, which is the default
 | POST | `/api/v1/sessions/{id}/extract` | Extract memories from a session |
 | POST | `/api/v1/sessions/{id}/messages` | Add message |
 | POST | `/api/v1/sessions/{id}/used` | Record contexts / skills actually used |
+| GET | `/api/v1/sessions/{id}/archives/{archive_id}` | Get a specific session archive |
 
 ### Tasks
 

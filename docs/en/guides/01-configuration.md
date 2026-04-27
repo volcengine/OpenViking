@@ -68,7 +68,7 @@ For `provider: "openai-codex"`, `vlm.api_key` is optional when Codex OAuth is al
     "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
     "api_key"  : "your-volcengine-api-key",
     "provider" : "volcengine",
-    "model"    : "doubao-seed-2-0-code-preview-260215"
+    "model"    : "doubao-seed-2-0-pro-260215"
   }
 }
 ```
@@ -995,7 +995,7 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 ```json
 {
   "server": {
-    "host": "0.0.0.0",
+    "host": "127.0.0.1",
     "port": 1933,
     "auth_mode": "api_key",
     "root_api_key": "your-secret-root-key",
@@ -1006,7 +1006,7 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 
 | Field | Type | Description | Default |
 |-------|------|-------------|---------|
-| `host` | str | Bind address | `0.0.0.0` |
+| `host` | str | Bind address | `127.0.0.1` |
 | `port` | int | Bind port | `1933` |
 | `auth_mode` | str | Authentication mode: `"api_key"` or `"trusted"`. Default is `"api_key"` | `"api_key"` |
 | `root_api_key` | str | Root API key for multi-tenant auth in `api_key` mode. In `trusted` mode it is optional on localhost, but required for any non-localhost deployment; it does not become the source of user identity | `null` |
@@ -1205,7 +1205,7 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
     "code_summary_mode": "ast"
   },
   "server": {
-    "host": "0.0.0.0",
+    "host": "127.0.0.1",
     "port": 1933,
     "root_api_key": "string",
     "cors_origins": ["*"]

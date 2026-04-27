@@ -29,7 +29,7 @@ curl http://localhost:1933/health
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--config` | Path to ov.conf file | `~/.openviking/ov.conf` |
-| `--host` | Host to bind to | `0.0.0.0` |
+| `--host` | Host to bind to | `127.0.0.1` |
 | `--port` | Port to bind to | `1933` |
 
 **Examples**
