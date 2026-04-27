@@ -785,7 +785,7 @@ class VikingFS:
         abs_limit: int = 256,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
-        level_limit: int = 3,
+        level_limit: Optional[int] = 3,
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """
@@ -797,7 +797,7 @@ class VikingFS:
             abs_limit: int = 256 (for agent output abstract truncation)
             show_all_hidden: bool = False (list all hidden files, like -a)
             node_limit: int = 1000 (maximum number of nodes to list)
-            level_limit: int = 3 (maximum depth level to traverse)
+            level_limit: int | None = 3 (maximum depth level to traverse, None means unlimited)
 
         output="original"
         [{'name': '.abstract.md', 'size': 100, 'mode': 420, 'modTime': '2026-02-11T16:52:16.256334192+08:00', 'isDir': False, 'meta': {...}, 'rel_path': '.abstract.md', 'uri': 'viking://resources...'}]
@@ -820,7 +820,7 @@ class VikingFS:
         uri: str,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
-        level_limit: int = 3,
+        level_limit: Optional[int] = 3,
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """Recursively list all contents (original format)."""
@@ -829,7 +829,9 @@ class VikingFS:
         real_ctx = self._ctx_or_default(ctx)
 
         async def _walk(current_path: str, current_rel: str, current_depth: int):
-            if len(all_entries) >= node_limit or current_depth >= level_limit:
+            if len(all_entries) >= node_limit:
+                return
+            if level_limit is not None and current_depth >= level_limit:
                 return
             for entry in self._ls_entries(current_path):
                 if len(all_entries) >= node_limit:
@@ -860,7 +862,7 @@ class VikingFS:
         abs_limit: int,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
-        level_limit: int = 3,
+        level_limit: Optional[int] = 3,
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """Recursively list all contents (agent format with abstracts)."""
@@ -870,7 +872,9 @@ class VikingFS:
         real_ctx = self._ctx_or_default(ctx)
 
         async def _walk(current_path: str, current_rel: str, current_depth: int):
-            if len(all_entries) >= node_limit or current_depth >= level_limit:
+            if len(all_entries) >= node_limit:
+                return
+            if level_limit is not None and current_depth >= level_limit:
                 return
             for entry in self._ls_entries(current_path):
                 if len(all_entries) >= node_limit:

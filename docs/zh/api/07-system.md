@@ -183,6 +183,144 @@ openviking wait [--timeout 60]
 
 ---
 
+### reindex()
+
+对已经存储在 OpenViking 中的现有内容，重新构建语义产物和/或向量索引。这是一个运维维护接口，适用于 embedding 模型更换、VLM 更换、向量库重刷、版本升级后修复历史索引等场景。
+
+这个接口面向已有的 `viking://...` 内容，不负责导入新文件。常规导入请使用 [Resources](02-resources.md)。
+
+**认证**
+
+- HTTP 端点：在开启认证时要求 root/admin 权限
+- Python embedded 模式：使用当前 service context
+- Python HTTP client / CLI：使用当前认证身份发起请求
+
+**参数**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| uri | str | 是 | - | 要重新索引的 Viking URI |
+| mode | str | 否 | `vectors_only` | 重建模式：`vectors_only` 或 `semantic_and_vectors` |
+| wait | bool | 否 | `true` | 是否等待任务完成 |
+
+**支持的 URI 范围**
+
+- `viking://`
+- `viking://user`
+- `viking://user/<user_id>`
+- `viking://agent`
+- `viking://agent/<agent_id>`
+- `viking://resources/...`
+- `viking://user/<user_id>/memories/...`
+- `viking://agent/<agent_id>/memories/...`
+- `viking://agent/<agent_id>/skills/...`
+
+`reindex()` 不支持 `viking://session/...`。
+
+**模式说明**
+
+- `vectors_only`：基于当前仍可恢复的源数据重建向量库记录，不会重写 `.abstract.md` 和 `.overview.md`
+- `semantic_and_vectors`：先重新生成语义产物，再基于新的语义结果重建向量
+
+对于 `resource` 和 `skill`，`semantic_and_vectors` 会刷新目录/文件语义产物，包括 `.abstract.md` 和 `.overview.md`。对于 `memory`，它会重建当前已持久化 memory 子树的语义和向量，但不会回放历史记忆抽取顺序。
+
+**Python SDK (Embedded / HTTP)**
+
+```python
+result = client.reindex(
+    uri="viking://resources",
+    mode="vectors_only",
+    wait=True,
+)
+print(result)
+```
+
+```python
+result = client.reindex(
+    uri="viking://agent/default/skills",
+    mode="semantic_and_vectors",
+    wait=False,
+)
+print(result["status"])
+```
+
+**HTTP API**
+
+```
+POST /api/v1/content/reindex
+```
+
+```bash
+curl -X POST http://localhost:1933/api/v1/content/reindex \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "uri": "viking://resources",
+    "mode": "vectors_only",
+    "wait": true
+  }'
+```
+
+**CLI**
+
+```bash
+openviking reindex viking://resources --mode vectors_only
+```
+
+```bash
+openviking reindex viking://agent/default/skills --mode semantic_and_vectors --wait false
+```
+
+**同步响应（`wait=true`）**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://resources",
+    "mode": "vectors_only",
+    "status": "completed",
+    "stats": {
+      "visited": 120,
+      "rebuilt": 118,
+      "skipped": 2,
+      "failed": 0
+    }
+  },
+  "time": 0.1
+}
+```
+
+**异步响应（`wait=false`）**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://resources",
+    "mode": "vectors_only",
+    "status": "accepted",
+    "task_id": "task_xxx"
+  },
+  "time": 0.1
+}
+```
+
+**行为说明**
+
+- Reindex 是非破坏式的，采用重建/覆盖写入，不需要先 drop 向量集合。
+- 对 `viking://` 发起 reindex 时，会向下分发到支持的顶层命名空间，并显式排除 `session`。
+- 命名空间级 reindex，例如 `viking://user` 或 `viking://agent/default`，会继续传播到其支持的子内容类型。
+- 如果只是 embedding 模型或向量索引需要刷新，应使用 `vectors_only`。
+- 如果语义产物本身也需要重建，再做重向量化，应使用 `semantic_and_vectors`。
+
+**当前限制**
+
+- Reindex 会使用当前系统中“尽可能可恢复”的输入进行重建，不保证所有场景都能逐字节回放历史当时的 embedding 输入。
+- Memory 的 semantic reindex 基于当前已持久化的 memory 树，不会重建最初按时间顺序执行的记忆抽取流水线。
+
+---
+
 ## Observer API
 
 Observer API 提供详细的组件级监控。

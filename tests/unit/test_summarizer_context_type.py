@@ -6,8 +6,6 @@ Verifies that the summarizer uses get_context_type_for_uri() to correctly
 classify memory, skill, and resource URIs (fixes #1060).
 """
 
-import pytest
-
 from openviking.core.directories import get_context_type_for_uri
 
 
@@ -44,10 +42,15 @@ class TestSummarizerContextType:
         uri = "viking://resources/docs/readme.md"
         assert get_context_type_for_uri(uri) == "resource"
 
-    def test_session_uri(self):
-        """Session URIs should classify as 'memory'."""
+    def test_session_uri_defaults_to_resource(self):
+        """Session URIs should not be treated as memory-specific content."""
         uri = "viking://session/default/sess_001/history/archive_001"
-        assert get_context_type_for_uri(uri) == "memory"
+        assert get_context_type_for_uri(uri) == "resource"
+
+    def test_resource_named_memories_does_not_classify_as_memory(self):
+        """String containment alone should not classify a resource as memory."""
+        uri = "viking://resources/memories-report.md"
+        assert get_context_type_for_uri(uri) == "resource"
 
     def test_unknown_uri_defaults_to_resource(self):
         """Unknown URIs should default to 'resource'."""
@@ -63,5 +66,9 @@ class TestSummarizerContextType:
             "viking://user/john/memories/events/mem_003.md",
         ]
         for uri in real_uris:
-            assert not uri.startswith("viking://memory/"), f"URI unexpectedly matches old prefix: {uri}"
-            assert get_context_type_for_uri(uri) == "memory", f"URI should classify as memory: {uri}"
+            assert not uri.startswith("viking://memory/"), (
+                f"URI unexpectedly matches old prefix: {uri}"
+            )
+            assert get_context_type_for_uri(uri) == "memory", (
+                f"URI should classify as memory: {uri}"
+            )

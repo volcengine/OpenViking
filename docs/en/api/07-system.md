@@ -183,6 +183,144 @@ openviking wait [--timeout 60]
 
 ---
 
+### reindex()
+
+Reindex semantic and/or vector artifacts for existing content already stored in OpenViking. This is an operational maintenance API intended for scenarios such as embedding model changes, VLM changes, vector store rebuild, or post-upgrade repair of existing indexes.
+
+This API operates on existing `viking://...` content. It does not import new files. For normal ingestion, use [Resources](02-resources.md).
+
+**Authentication**
+
+- HTTP endpoint: requires root/admin access when authentication is enabled
+- Python embedded mode: uses the current service context
+- Python HTTP client / CLI: sends the current authenticated identity
+
+**Parameters**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| uri | str | Yes | - | Viking URI to reindex |
+| mode | str | No | `vectors_only` | Reindex mode: `vectors_only` or `semantic_and_vectors` |
+| wait | bool | No | `true` | Whether to wait for completion |
+
+**Supported URI scopes**
+
+- `viking://`
+- `viking://user`
+- `viking://user/<user_id>`
+- `viking://agent`
+- `viking://agent/<agent_id>`
+- `viking://resources/...`
+- `viking://user/<user_id>/memories/...`
+- `viking://agent/<agent_id>/memories/...`
+- `viking://agent/<agent_id>/skills/...`
+
+`viking://session/...` is not supported by `reindex()`.
+
+**Modes**
+
+- `vectors_only`: rebuilds vector-store records from currently recoverable source data without rewriting `.abstract.md` or `.overview.md`
+- `semantic_and_vectors`: regenerates semantic artifacts first, then rebuilds vectors from the refreshed semantic outputs
+
+For `resource` and `skill`, `semantic_and_vectors` refreshes directory/file semantic artifacts, including `.abstract.md` and `.overview.md`. For `memory`, it rebuilds the current persisted memory subtree semantics and vectors, but it does not replay historical extraction order.
+
+**Python SDK (Embedded / HTTP)**
+
+```python
+result = client.reindex(
+    uri="viking://resources",
+    mode="vectors_only",
+    wait=True,
+)
+print(result)
+```
+
+```python
+result = client.reindex(
+    uri="viking://agent/default/skills",
+    mode="semantic_and_vectors",
+    wait=False,
+)
+print(result["status"])
+```
+
+**HTTP API**
+
+```
+POST /api/v1/content/reindex
+```
+
+```bash
+curl -X POST http://localhost:1933/api/v1/content/reindex \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "uri": "viking://resources",
+    "mode": "vectors_only",
+    "wait": true
+  }'
+```
+
+**CLI**
+
+```bash
+openviking reindex viking://resources --mode vectors_only
+```
+
+```bash
+openviking reindex viking://agent/default/skills --mode semantic_and_vectors --wait false
+```
+
+**Synchronous response (`wait=true`)**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://resources",
+    "mode": "vectors_only",
+    "status": "completed",
+    "stats": {
+      "visited": 120,
+      "rebuilt": 118,
+      "skipped": 2,
+      "failed": 0
+    }
+  },
+  "time": 0.1
+}
+```
+
+**Asynchronous response (`wait=false`)**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://resources",
+    "mode": "vectors_only",
+    "status": "accepted",
+    "task_id": "task_xxx"
+  },
+  "time": 0.1
+}
+```
+
+**Behavior notes**
+
+- Reindex is non-destructive. It uses rebuild/upsert behavior and does not require dropping the vector collection first.
+- `viking://` reindex fans out to supported top-level namespaces and excludes `session`.
+- Namespace reindex operations such as `viking://user` or `viking://agent/default` propagate to their supported child content types.
+- `vectors_only` is the right mode when only the embedding model or vector index needs to be refreshed.
+- `semantic_and_vectors` is the right mode when semantic artifacts themselves must be regenerated before re-vectorization.
+
+**Current limitations**
+
+- Reindex uses the best currently recoverable source inputs. It is not guaranteed to replay the exact historical embedding input byte-for-byte in every case.
+- Memory semantic reindex is based on the currently persisted memory tree. It does not reconstruct the original chronological memory-extraction pipeline.
+
+---
+
 ## Observer API
 
 The observer API provides detailed component-level monitoring.
