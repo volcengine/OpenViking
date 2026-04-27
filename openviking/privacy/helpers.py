@@ -10,7 +10,7 @@ _VERSION_RE = re.compile(r"^version_(\d+)\.json$")
 
 
 def config_root_uri(user_space: str, category: str, target_key: str) -> str:
-    return f"viking://user/{user_space}/privacy_configs/{category}/{target_key}"
+    return f"viking://user/{user_space}/privacy/{category}/{target_key}"
 
 
 def current_uri(user_space: str, category: str, target_key: str) -> str:

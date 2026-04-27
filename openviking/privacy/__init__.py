@@ -8,7 +8,12 @@ from openviking.privacy.skill_extractor import (
     SkillPrivacyExtractionResult,
     extract_skill_privacy_values,
 )
-from openviking.privacy.skill_placeholder import build_placeholder, placeholderize_skill_content
+from openviking.privacy.skill_placeholder import (
+    SkillPrivacyPlaceholderizationResult,
+    build_placeholder,
+    placeholderize_skill_content,
+    placeholderize_skill_content_with_blocks,
+)
 from openviking.privacy.skill_restore import get_skill_name_from_uri, restore_skill_content
 
 __all__ = [
@@ -17,7 +22,9 @@ __all__ = [
     "UserPrivacyConfigService",
     "SkillPrivacyExtractionResult",
     "extract_skill_privacy_values",
+    "SkillPrivacyPlaceholderizationResult",
     "build_placeholder",
+    "placeholderize_skill_content_with_blocks",
     "placeholderize_skill_content",
     "get_skill_name_from_uri",
     "restore_skill_content",

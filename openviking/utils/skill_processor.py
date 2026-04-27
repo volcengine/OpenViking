@@ -20,7 +20,6 @@ from openviking.core.skill_loader import SkillLoader
 from openviking.privacy import (
     UserPrivacyConfigService,
     extract_skill_privacy_values,
-    placeholderize_skill_content,
 )
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import deny_direct_local_skill_input
@@ -217,25 +216,21 @@ class SkillProcessor:
             return skill_dict
 
         content = skill_dict.get("content", "")
-        extracted_values = await extract_skill_privacy_values(
+        extraction_result = await extract_skill_privacy_values(
             skill_name=skill_dict.get("name", ""),
             skill_description=skill_dict.get("description", ""),
             content=content,
         )
-        if not extracted_values:
+        if not extraction_result.values:
             return skill_dict
 
         sanitized = deepcopy(skill_dict)
-        sanitized["content"] = placeholderize_skill_content(
-            content,
-            sanitized["name"],
-            extracted_values,
-        )
+        sanitized["content"] = extraction_result.sanitized_content
         await self._privacy_config_service.upsert(
             ctx=ctx,
             category="skill",
             target_key=sanitized["name"],
-            values=extracted_values,
+            values=extraction_result.values,
             updated_by=ctx.user.user_id,
             change_reason="auto-extracted from add_skill",
         )

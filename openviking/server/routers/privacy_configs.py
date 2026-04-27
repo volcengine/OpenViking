@@ -8,11 +8,22 @@ from fastapi import APIRouter, Depends, Path
 from pydantic import BaseModel, ConfigDict
 
 from openviking.server.auth import get_request_context
+from openviking_cli.exceptions import NotFoundError
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 
 router = APIRouter(prefix="/api/v1/privacy-configs", tags=["privacy-configs"])
+
+
+async def _require_privacy_target(
+    privacy,
+    ctx: RequestContext,
+    category: str,
+    target_key: str,
+) -> None:
+    if privacy is None or not await privacy.exists(ctx, category, target_key):
+        raise NotFoundError(f"{category}/{target_key}", "privacy config")
 
 
 class UpsertPrivacyConfigRequest(BaseModel):
@@ -58,8 +69,9 @@ async def get_privacy_current(
 ):
     service = get_service()
     privacy = service.privacy_configs
-    meta = None if privacy is None else await privacy.get_meta(_ctx, category, target_key)
-    current = None if privacy is None else await privacy.get_current(_ctx, category, target_key)
+    await _require_privacy_target(privacy, _ctx, category, target_key)
+    meta = await privacy.get_meta(_ctx, category, target_key)
+    current = await privacy.get_current(_ctx, category, target_key)
     return Response(
         status="ok",
         result={
@@ -77,7 +89,8 @@ async def list_privacy_versions(
 ):
     service = get_service()
     privacy = service.privacy_configs
-    versions = [] if privacy is None else await privacy.list_versions(_ctx, category, target_key)
+    await _require_privacy_target(privacy, _ctx, category, target_key)
+    versions = await privacy.list_versions(_ctx, category, target_key)
     return Response(status="ok", result=versions)
 
 
@@ -90,8 +103,11 @@ async def get_privacy_version(
 ):
     service = get_service()
     privacy = service.privacy_configs
-    snapshot = None if privacy is None else await privacy.get_version(_ctx, category, target_key, version)
-    return Response(status="ok", result=None if snapshot is None else snapshot.to_dict())
+    await _require_privacy_target(privacy, _ctx, category, target_key)
+    snapshot = await privacy.get_version(_ctx, category, target_key, version)
+    if snapshot is None:
+        raise NotFoundError(f"{category}/{target_key}/versions/{version}", "privacy config")
+    return Response(status="ok", result=snapshot.to_dict())
 
 
 @router.post("/{category}/{target_key}")
@@ -113,6 +129,7 @@ async def upsert_privacy_config(
             updated_by=_ctx.user.user_id,
             change_reason=request.change_reason,
             labels=request.labels,
+            enforce_existing_keys=True,
         )
     return Response(status="ok", result=None if result is None else result.to_dict())
 
@@ -126,13 +143,12 @@ async def activate_privacy_version(
 ):
     service = get_service()
     privacy = service.privacy_configs
-    result = None
-    if privacy is not None:
-        result = await privacy.activate_version(
-            ctx=_ctx,
-            category=category,
-            target_key=target_key,
-            version=request.version,
-            updated_by=_ctx.user.user_id,
-        )
-    return Response(status="ok", result=None if result is None else result.to_dict())
+    await _require_privacy_target(privacy, _ctx, category, target_key)
+    result = await privacy.activate_version(
+        ctx=_ctx,
+        category=category,
+        target_key=target_key,
+        version=request.version,
+        updated_by=_ctx.user.user_id,
+    )
+    return Response(status="ok", result=result.to_dict())
