@@ -16,7 +16,9 @@ import httpx
 from openviking.telemetry import TelemetryRequest, normalize_telemetry_request
 from openviking_cli.client.base import BaseClient
 from openviking_cli.exceptions import (
+    AbortedError,
     AlreadyExistsError,
+    ConflictError,
     DeadlineExceededError,
     EmbeddingFailedError,
     FailedPreconditionError,
@@ -28,9 +30,11 @@ from openviking_cli.exceptions import (
     OpenVikingError,
     PermissionDeniedError,
     ProcessingError,
+    ResourceExhaustedError,
     SessionExpiredError,
     UnauthenticatedError,
     UnavailableError,
+    UnimplementedError,
     VLMFailedError,
 )
 from openviking_cli.retrieve.types import FindResult
@@ -45,17 +49,22 @@ ERROR_CODE_TO_EXCEPTION = {
     "INVALID_URI": InvalidURIError,
     "NOT_FOUND": NotFoundError,
     "ALREADY_EXISTS": AlreadyExistsError,
+    "CONFLICT": ConflictError,
     "FAILED_PRECONDITION": FailedPreconditionError,
+    "ABORTED": AbortedError,
     "UNAUTHENTICATED": UnauthenticatedError,
     "PERMISSION_DENIED": PermissionDeniedError,
+    "RESOURCE_EXHAUSTED": ResourceExhaustedError,
     "UNAVAILABLE": UnavailableError,
     "INTERNAL": InternalError,
     "DEADLINE_EXCEEDED": DeadlineExceededError,
+    "UNIMPLEMENTED": UnimplementedError,
     "NOT_INITIALIZED": NotInitializedError,
     "PROCESSING_ERROR": ProcessingError,
     "EMBEDDING_FAILED": EmbeddingFailedError,
     "VLM_FAILED": VLMFailedError,
     "SESSION_EXPIRED": SessionExpiredError,
+    "UNKNOWN": OpenVikingError,
 }
 
 
@@ -275,7 +284,15 @@ class AsyncHTTPClient(BaseClient):
         exc_class = ERROR_CODE_TO_EXCEPTION.get(code, OpenVikingError)
 
         # Handle different exception constructors
-        if exc_class in (InvalidArgumentError,):
+        if exc_class == OpenVikingError:
+            raise exc_class(message, code=code, details=details)
+        elif exc_class in (
+            InvalidArgumentError,
+            FailedPreconditionError,
+            ResourceExhaustedError,
+            AbortedError,
+            UnimplementedError,
+        ):
             raise exc_class(message, details=details)
         elif exc_class == InvalidURIError:
             uri = details.get("uri", "") if details else ""
