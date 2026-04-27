@@ -163,24 +163,41 @@ class SyncHTTPClient:
         exclude: Optional[str] = None,
         directly_upload_media: bool = True,
         telemetry: TelemetryRequest = False,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
         if to and parent:
             raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
         return run_async(
             self._async_client.add_resource(
-                path,
-                to,
-                parent,
-                reason,
-                instruction,
-                wait,
-                timeout,
-                strict,
-                ignore_dirs,
-                include,
-                exclude,
-                directly_upload_media,
+                path=path,
+                to=to,
+                parent=parent,
+                reason=reason,
+                instruction=instruction,
+                wait=wait,
+                timeout=timeout,
+                strict=strict,
+                ignore_dirs=ignore_dirs,
+                include=include,
+                exclude=exclude,
+                directly_upload_media=directly_upload_media,
+                metadata=metadata,
+                telemetry=telemetry,
+            )
+        )
+
+    def patch_resource_metadata(
+        self,
+        uri: str,
+        patch: Dict[str, Any],
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Patch durable metadata for a resource."""
+        return run_async(
+            self._async_client.patch_resource_metadata(
+                uri=uri,
+                patch=patch,
                 telemetry=telemetry,
             )
         )

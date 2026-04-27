@@ -223,6 +223,7 @@ class AsyncOpenViking:
         summarize: bool = False,
         watch_interval: float = 0,
         telemetry: TelemetryRequest = False,
+        metadata: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -256,7 +257,22 @@ class AsyncOpenViking:
             summarize=summarize,
             telemetry=telemetry,
             watch_interval=watch_interval,
+            metadata=metadata,
             **kwargs,
+        )
+
+    async def patch_resource_metadata(
+        self,
+        uri: str,
+        patch: Dict[str, Any],
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Patch durable metadata for a resource without reprocessing content."""
+        await self._ensure_initialized()
+        return await self._client.patch_resource_metadata(
+            uri=uri,
+            patch=patch,
+            telemetry=telemetry,
         )
 
     @property

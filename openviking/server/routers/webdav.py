@@ -30,6 +30,7 @@ _RESERVED_FILENAMES = frozenset(
         ".abstract.md",
         ".overview.md",
         ".relations.json",
+        ".resource.metadata.json",
         ".path.ovlock",
     }
 )

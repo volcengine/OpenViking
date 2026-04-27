@@ -174,7 +174,7 @@ class FSService:
     async def stat(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:
         """Get resource status."""
         viking_fs = self._ensure_initialized()
-        return await viking_fs.stat(uri, ctx=ctx)
+        return await viking_fs.stat(uri, ctx=ctx, include_metadata=True)
 
     async def read(self, uri: str, ctx: RequestContext, offset: int = 0, limit: int = -1) -> str:
         """Read file content."""

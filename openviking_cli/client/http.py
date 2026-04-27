@@ -356,6 +356,7 @@ class AsyncHTTPClient(BaseClient):
         directly_upload_media: bool = True,
         preserve_structure: Optional[bool] = None,
         telemetry: TelemetryRequest = False,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
         telemetry = self._validate_telemetry(telemetry)
@@ -374,6 +375,7 @@ class AsyncHTTPClient(BaseClient):
             "include": include,
             "exclude": exclude,
             "directly_upload_media": directly_upload_media,
+            "metadata": metadata,
             "telemetry": telemetry,
         }
         if preserve_structure is not None:
@@ -402,6 +404,26 @@ class AsyncHTTPClient(BaseClient):
         response = await self._http.post(
             "/api/v1/resources",
             json=request_data,
+        )
+        response_data = self._handle_response_data(response)
+        return self._attach_telemetry(response_data.get("result"), response_data)
+
+    async def patch_resource_metadata(
+        self,
+        uri: str,
+        patch: Dict[str, Any],
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Patch durable metadata for a resource."""
+        telemetry = self._validate_telemetry(telemetry)
+        uri = VikingURI.normalize(uri)
+        response = await self._http.patch(
+            "/api/v1/resources/metadata",
+            json={
+                "uri": uri,
+                "patch": patch,
+                "telemetry": telemetry,
+            },
         )
         response_data = self._handle_response_data(response)
         return self._attach_telemetry(response_data.get("result"), response_data)

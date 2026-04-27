@@ -49,6 +49,7 @@ Input -> Parser -> TreeBuilder -> AGFS -> SemanticQueue -> Vector Index
 | wait | bool | 否 | False | 等待语义处理完成 |
 | timeout | float | 否 | None | 超时时间（秒），仅在 wait=True 时生效 |
 | watch_interval | float | 否 | 0 | 定时更新间隔（分钟）。>0 开启/更新定时任务；<=0 关闭（停用）定时任务。仅在指定 `to` 时生效 |
+| metadata | object | 否 | None | 随资源目录持久保存的 JSON 元数据，可通过 `GET /api/v1/fs/stat` 返回 |
 
 `POST /api/v1/resources` 的 JSON 字段名是 `to`；CLI 对应参数是 `--to`。
 
@@ -60,6 +61,53 @@ Input -> Parser -> TreeBuilder -> AGFS -> SemanticQueue -> Vector Index
   - 本地文件：先调用 `POST /api/v1/resources/temp_upload`，再把返回的 `temp_file_id` 传给目标 API
   - 本地目录：先自行打成 `.zip`，上传该压缩包，再把返回的 `temp_file_id` 传给目标 API
 - `POST /api/v1/resources` 不接受 `./guide.md`、`/tmp/guide.md`、`/tmp/my-dir/` 这类宿主机本地路径。
+
+**资源元数据**
+
+添加资源时可以附带一个 JSON object。该元数据会随资源目录持久保存，
+不会参与语义处理或向量化。
+
+```bash
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "https://example.com/guide.md",
+    "to": "viking://resources/guides/example",
+    "metadata": {
+      "source": {"kind": "web", "id": "guide"},
+      "sync": {"etag": "abc123"}
+    }
+  }'
+```
+
+通过 filesystem stat 读取：
+
+```bash
+curl "http://localhost:1933/api/v1/fs/stat?uri=viking://resources/guides/example" \
+  -H "X-API-Key: your-key"
+```
+
+无需重新导入或重新处理内容即可更新元数据：
+
+```
+PATCH /api/v1/resources/metadata
+```
+
+```bash
+curl -X PATCH http://localhost:1933/api/v1/resources/metadata \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "uri": "viking://resources/guides/example",
+    "patch": {
+      "sync": {"etag": "def456"},
+      "stale": null
+    }
+  }'
+```
+
+patch 是 JSON object merge：嵌套 object 会合并，`null` 表示删除字段。
 
 **增量更新（Incremental Update）**
 

@@ -29,7 +29,9 @@ from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_DERIVED_FILENAMES = frozenset({".abstract.md", ".overview.md", ".relations.json"})
+_DERIVED_FILENAMES = frozenset(
+    {".abstract.md", ".overview.md", ".relations.json", ".resource.metadata.json"}
+)
 _CREATE_ALLOWED_EXTENSIONS = frozenset(
     {".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".py", ".js", ".ts"}
 )
