@@ -706,7 +706,8 @@ class VikingFS:
             excluded_prefix = self._normalize_uri(exclude_uri).rstrip("/")
             self._ensure_access(excluded_prefix, ctx)
 
-        result = self.agfs.grep(
+        result = await asyncio.to_thread(
+            self.agfs.grep,
             path=path,
             pattern=pattern,
             recursive=True,
