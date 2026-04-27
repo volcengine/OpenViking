@@ -235,7 +235,24 @@ docker run -d \
 
 #### When `docker -v` is not available
 
-Some managed platforms (Railway, Fly.io, Heroku-style PaaS) don't let you bind-mount a host path. If `ov.conf` doesn't exist when the container starts, the entrypoint will not crash — it prints a fix-it message and waits for the file to appear. You have two ways to provide it:
+Some managed platforms (Railway, Fly.io, Heroku-style PaaS) don't let you bind-mount a host path. If `ov.conf` doesn't exist when the container starts, the entrypoint will not crash — it prints a fix-it message, then runs a tiny **pending health server** on port `1933` that answers every HTTP request (any path, any method) with a 503 JSON describing the problem and the fix:
+
+```json
+{
+  "status": "pending_initialization",
+  "error": "OpenViking config file not found",
+  "config_file": "/app/.openviking/ov.conf",
+  "fix": [
+    "mount ~/.openviking on the host to /app/.openviking",
+    "set OPENVIKING_CONF_CONTENT to the full ov.conf JSON",
+    "docker exec into this container and run: openviking-server init"
+  ]
+}
+```
+
+This means a probe like `curl http://host:1933/` (or whatever route a monitoring agent hits) will surface the actionable instructions instead of a connection refused, while the Docker `HEALTHCHECK` still reports the container as unhealthy until the file appears.
+
+You have two ways to provide the config:
 
 **Option A: pass the full config through `OPENVIKING_CONF_CONTENT`.** The entrypoint writes the env value to `OPENVIKING_CONFIG_FILE` (defaults to `/app/.openviking/ov.conf`) before starting the server:
 
@@ -249,7 +266,7 @@ docker run -d \
   ghcr.io/volcengine/openviking:latest
 ```
 
-**Option B: configure interactively after the container is up.** While the container is sleeping (waiting for `ov.conf`), `docker exec` in and run the setup wizard — it honors `OPENVIKING_CONFIG_FILE` and writes to the path the server is watching:
+**Option B: configure interactively after the container is up.** While the pending health server is running (waiting for `ov.conf`), `docker exec` in and run the setup wizard — it honors `OPENVIKING_CONFIG_FILE` and writes to the path the server is watching:
 
 ```bash
 docker exec -it openviking openviking-server init

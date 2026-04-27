@@ -233,7 +233,24 @@ docker run -d \
 
 #### 无法使用 `docker -v` 时
 
-部分托管平台（如 Railway、Fly.io、Heroku 这类 PaaS）不支持把宿主机目录绑定挂载进容器。这种环境下，如果容器启动时找不到 `ov.conf`，entrypoint 不会崩溃 —— 它会打印一段修复指引并阻塞等待文件出现。你可以选用以下两种方式之一：
+部分托管平台（如 Railway、Fly.io、Heroku 这类 PaaS）不支持把宿主机目录绑定挂载进容器。这种环境下，如果容器启动时找不到 `ov.conf`，entrypoint 不会崩溃 —— 它会打印一段修复指引，并在端口 `1933` 上启动一个轻量的 **pending health server**：所有 HTTP 请求（任意路径、任意方法）都会返回同一份 503 JSON，说明问题与修复方式：
+
+```json
+{
+  "status": "pending_initialization",
+  "error": "OpenViking config file not found",
+  "config_file": "/app/.openviking/ov.conf",
+  "fix": [
+    "mount ~/.openviking on the host to /app/.openviking",
+    "set OPENVIKING_CONF_CONTENT to the full ov.conf JSON",
+    "docker exec into this container and run: openviking-server init"
+  ]
+}
+```
+
+这样监控/agent 用 `curl http://host:1933/`（或任何路径）探活时，能直接拿到可操作的修复指引，而不是 connection refused；同时 Docker `HEALTHCHECK` 依然会把容器标为 unhealthy，直到 `ov.conf` 出现。
+
+你可以选用以下两种方式之一注入配置：
 
 **方案 A：通过 `OPENVIKING_CONF_CONTENT` 注入完整配置内容。** entrypoint 会在启动 server 前把这个环境变量的值写入到 `OPENVIKING_CONFIG_FILE`（默认 `/app/.openviking/ov.conf`）：
 
@@ -247,7 +264,7 @@ docker run -d \
   ghcr.io/volcengine/openviking:latest
 ```
 
-**方案 B：容器起来之后再 `docker exec` 进去用向导配置。** 容器在等待 `ov.conf` 期间是存活的，`exec` 进去运行 setup wizard，它会按 `OPENVIKING_CONFIG_FILE` 写到 server 正在监听的位置：
+**方案 B：容器起来之后再 `docker exec` 进去用向导配置。** pending health server 运行期间容器是存活的，`exec` 进去运行 setup wizard，它会按 `OPENVIKING_CONFIG_FILE` 写到 server 正在监听的位置：
 
 ```bash
 docker exec -it openviking openviking-server init
