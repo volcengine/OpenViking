@@ -6,6 +6,13 @@ will bind. It answers *every* request — `/`, `/health`, anything — with
 the same 503 JSON payload describing what's wrong and how to fix it, so
 operators and agents probing the container can self-discover the issue
 without having to read ``docker logs``.
+
+This is intentionally undocumented in the user guide: it's a 防呆 (poka-yoke
+/ fool-proofing) fallback that only runs when something has already gone
+wrong (no ov.conf and no OPENVIKING_CONF_CONTENT). The happy path never
+sees it, and pointing users at it would imply it's a deployment mode
+worth depending on rather than a safety net. The response body itself is
+self-explanatory when someone does hit it.
 """
 
 from __future__ import annotations
