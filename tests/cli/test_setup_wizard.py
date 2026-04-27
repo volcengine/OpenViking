@@ -20,6 +20,10 @@ from openviking_cli.setup_wizard import (
     _config_path,
     _get_recommended_indices,
     _is_llamacpp_installed,
+    _mask_secret,
+    _masked_input,
+    _next_backup_path,
+    _prompt_api_key,
     _prompt_required_input,
     _prompt_required_int,
     _wizard_cloud,
@@ -704,6 +708,86 @@ class TestCloudProviderOrdering:
     def test_openai_is_third(self):
         assert CLOUD_PROVIDERS[2].label == "OpenAI"
         assert CLOUD_PROVIDERS[2].provider == "openai"
+
+
+class TestBackupRotation:
+    def test_first_backup_uses_bak_suffix(self, tmp_path):
+        config_path = tmp_path / "ov.conf"
+        assert _next_backup_path(config_path) == tmp_path / "ov.conf.bak"
+
+    def test_rotates_when_bak_exists(self, tmp_path):
+        config_path = tmp_path / "ov.conf"
+        (tmp_path / "ov.conf.bak").write_text("old", encoding="utf-8")
+        assert _next_backup_path(config_path) == tmp_path / "ov.conf.bak.1"
+
+    def test_skips_existing_numbered_backups(self, tmp_path):
+        config_path = tmp_path / "ov.conf"
+        (tmp_path / "ov.conf.bak").write_text("0", encoding="utf-8")
+        (tmp_path / "ov.conf.bak.1").write_text("1", encoding="utf-8")
+        (tmp_path / "ov.conf.bak.2").write_text("2", encoding="utf-8")
+        assert _next_backup_path(config_path) == tmp_path / "ov.conf.bak.3"
+
+    def test_write_config_rotates_existing_backup(self, tmp_path):
+        config_path = tmp_path / "ov.conf"
+        config_path.write_text('{"v":1}', encoding="utf-8")
+        (tmp_path / "ov.conf.bak").write_text('{"old":true}', encoding="utf-8")
+
+        config = _build_ollama_config(EMBEDDING_PRESETS[0], VLM_PRESETS[0], str(tmp_path / "data"))
+        assert _write_config(config, config_path) is True
+
+        # Original backup preserved, new one rotated to .bak.1
+        assert (tmp_path / "ov.conf.bak").read_text() == '{"old":true}'
+        assert (tmp_path / "ov.conf.bak.1").read_text() == '{"v":1}'
+
+
+class TestApiKeyMasking:
+    def test_mask_short_secret_is_fully_starred(self):
+        assert _mask_secret("abc") == "***"
+        assert _mask_secret("a" * 11) == "*" * 11
+
+    def test_mask_long_secret_keeps_prefix_and_suffix(self):
+        value = "sk-proj-1234567890ABCDEF"
+        masked = _mask_secret(value)
+        assert masked.startswith("sk-proj")
+        assert masked.endswith("CDEF")
+        assert "1234567890AB" not in masked
+        assert len(masked) == len(value)
+
+    def test_mask_empty(self):
+        assert _mask_secret("") == ""
+
+    def test_prompt_api_key_uses_masked_input(self):
+        with patch(
+            "openviking_cli.setup_wizard._masked_input",
+            return_value="sk-proj-1234567890ABCDEF",
+        ) as masked:
+            value = _prompt_api_key("API Key")
+        assert value == "sk-proj-1234567890ABCDEF"
+        masked.assert_called_once()
+
+    def test_prompt_api_key_does_not_print_extra_preview_line(self, capsys):
+        with patch(
+            "openviking_cli.setup_wizard._masked_input",
+            return_value="sk-proj-1234567890ABCDEF",
+        ):
+            _prompt_api_key("API Key")
+        # No extra "Using ..." confirmation line — the inline rewrite in
+        # _masked_input is the only place the masked preview should appear.
+        assert "Using API Key" not in capsys.readouterr().out
+
+    def test_masked_input_falls_back_to_input_for_non_tty(self):
+        with patch("builtins.input", return_value="paste-me") as plain:
+            assert _masked_input("API Key: ") == "paste-me"
+        plain.assert_called_once_with("API Key: ")
+
+    def test_prompt_required_input_with_mask_routes_through_masked_input(self):
+        with patch(
+            "openviking_cli.setup_wizard._masked_input",
+            return_value="hunter2",
+        ) as masked:
+            value = _prompt_required_input("API Key", mask=True)
+        assert value == "hunter2"
+        masked.assert_called_once()
 
 
 class TestServerWizard:

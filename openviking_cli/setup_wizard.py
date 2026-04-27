@@ -95,12 +95,80 @@ def _prompt_choice(prompt: str, options: list[tuple[str, str]], default: int = 1
         print(f"  {_red('Please enter a number between 1 and ' + str(len(options)))}")
 
 
-def _prompt_required_input(prompt: str, default: str | None = None) -> str:
-    """Prompt for a required free-text value."""
+def _mask_secret(value: str, prefix: int = 7, suffix: int = 4) -> str:
+    """Mask a secret string, showing only the first ``prefix`` and last ``suffix`` chars."""
+    if not value:
+        return ""
+    if len(value) <= prefix + suffix:
+        return "*" * len(value)
+    return f"{value[:prefix]}{'*' * (len(value) - prefix - suffix)}{value[-suffix:]}"
+
+
+def _masked_input(prompt: str) -> str:
+    """Read a line of input, echoing ``*`` per character; on submit, rewrite
+    the line to show ``prompt + _mask_secret(value)`` (prefix 7 + suffix 4).
+
+    Falls back to plain ``input()`` when stdin/stdout aren't TTYs (tests,
+    pipes) and to ``getpass.getpass`` (no echo at all) on platforms
+    without ``termios`` (Windows).
+    """
+    import sys
+
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return input(prompt)
+
+    try:
+        import termios
+        import tty
+    except ImportError:
+        import getpass
+
+        return getpass.getpass(prompt)
+
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+    fd = sys.stdin.fileno()
+    old_attrs = termios.tcgetattr(fd)
+    chars: list[str] = []
+    try:
+        tty.setraw(fd)
+        while True:
+            ch = sys.stdin.read(1)
+            if ch in ("\r", "\n"):
+                break
+            if ch == "\x03":  # Ctrl-C
+                raise KeyboardInterrupt
+            if ch == "\x04":  # Ctrl-D / EOF
+                if not chars:
+                    raise EOFError
+                break
+            if ch in ("\x7f", "\b"):  # Backspace / DEL
+                if chars:
+                    chars.pop()
+                    sys.stdout.write("\b \b")
+                    sys.stdout.flush()
+                continue
+            if ch < " ":  # Other control chars — ignore
+                continue
+            chars.append(ch)
+            sys.stdout.write("*")
+            sys.stdout.flush()
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
+        value = "".join(chars)
+        # Rewrite the line: \r → clear → prompt + masked preview + \n.
+        sys.stdout.write("\r\033[2K" + prompt + _mask_secret(value) + "\n")
+        sys.stdout.flush()
+    return value
+
+
+def _prompt_required_input(prompt: str, default: str | None = None, *, mask: bool = False) -> str:
+    """Prompt for a required free-text value. When ``mask`` is True, echo ``*`` per char."""
+    reader = _masked_input if mask else input
     while True:
         try:
             prompt_text = f"  {prompt} [{default}]: " if default is not None else f"  {prompt}: "
-            raw = input(prompt_text).strip()
+            raw = reader(prompt_text).strip()
         except EOFError:
             return default or ""
         if not raw and default is not None:
@@ -108,6 +176,11 @@ def _prompt_required_input(prompt: str, default: str | None = None) -> str:
         if raw:
             return raw
         print(f"  {_red(prompt + ' is required')}")
+
+
+def _prompt_api_key(prompt: str = "API Key") -> str:
+    """Prompt for an API key with inline masked echo (no extra confirmation line)."""
+    return _prompt_required_input(prompt, mask=True)
 
 
 def _prompt_required_int(prompt: str, default: int | None = None) -> int | None:
@@ -578,12 +651,25 @@ def _workspace_path() -> str:
     return str(_config_path().parent / "data")
 
 
+def _next_backup_path(config_path: Path) -> Path:
+    """Return a non-conflicting backup path: .bak, then .bak.1, .bak.2, ..."""
+    base = config_path.with_suffix(".conf.bak")
+    if not base.exists():
+        return base
+    i = 1
+    while True:
+        candidate = base.with_suffix(f".bak.{i}")
+        if not candidate.exists():
+            return candidate
+        i += 1
+
+
 def _write_config(config_dict: dict[str, Any], config_path: Path) -> bool:
-    """Write config dict as JSON. Backs up existing file as .bak."""
+    """Write config dict as JSON. Backs up existing file as .bak (rotates on conflict)."""
     try:
         config_path.parent.mkdir(parents=True, exist_ok=True)
         if config_path.exists():
-            backup = config_path.with_suffix(".conf.bak")
+            backup = _next_backup_path(config_path)
             config_path.rename(backup)
             print(f"  {_dim('Existing config backed up to ' + str(backup))}")
         config_path.write_text(
@@ -834,7 +920,7 @@ def _wizard_llamacpp() -> dict[str, Any] | None:
         choice = _prompt_choice("Cloud provider for VLM:", provider_options, default=1)
         provider = CLOUD_PROVIDERS[choice - 1]
 
-        vlm_api_key = _prompt_required_input("VLM API Key")
+        vlm_api_key = _prompt_api_key("VLM API Key")
         if not vlm_api_key:
             print(f"  {_red('API key is required')}")
             return None
@@ -877,7 +963,7 @@ def _wizard_cloud() -> dict[str, Any] | None:
 
     # Embedding config
     print(f"\n  {_bold('Embedding configuration')}")
-    embedding_api_key = _prompt_required_input("API Key")
+    embedding_api_key = _prompt_api_key("API Key")
     if not embedding_api_key:
         print(f"  {_red('API key is required')}")
         return None
@@ -893,7 +979,7 @@ def _wizard_cloud() -> dict[str, Any] | None:
     if vlm_mode == 1:
         vlm_choice = _get_cloud_provider_by_label("VolcEngine (火山引擎)")
         print(f"\n  {_bold('VolcEngine VLM configuration')}")
-        vlm_api_key = _prompt_required_input("API Key")
+        vlm_api_key = _prompt_api_key("API Key")
         if not vlm_api_key:
             print(f"  {_red('API key is required')}")
             return None
@@ -903,7 +989,7 @@ def _wizard_cloud() -> dict[str, Any] | None:
     elif vlm_mode == 2:
         vlm_choice = _get_cloud_provider_by_label("BytePlus")
         print(f"\n  {_bold('BytePlus VLM configuration')}")
-        vlm_api_key = _prompt_required_input("API Key")
+        vlm_api_key = _prompt_api_key("API Key")
         if not vlm_api_key:
             print(f"  {_red('API key is required')}")
             return None
@@ -913,7 +999,7 @@ def _wizard_cloud() -> dict[str, Any] | None:
     elif vlm_mode == 3:
         vlm_choice = _get_cloud_provider_by_label("OpenAI")
         print(f"\n  {_bold('OpenAI VLM configuration')}")
-        vlm_api_key = _prompt_required_input("API Key")
+        vlm_api_key = _prompt_api_key("API Key")
         if not vlm_api_key:
             print(f"  {_red('API key is required')}")
             return None
@@ -929,7 +1015,7 @@ def _wizard_cloud() -> dict[str, Any] | None:
         vlm_provider = "openai-codex"
     elif vlm_mode == 5:
         print(f"\n  {_bold('Kimi VLM configuration')}")
-        vlm_api_key = _prompt_required_input("API Key")
+        vlm_api_key = _prompt_api_key("API Key")
         if not vlm_api_key:
             print(f"  {_red('API key is required')}")
             return None
@@ -938,7 +1024,7 @@ def _wizard_cloud() -> dict[str, Any] | None:
         vlm_provider = "kimi"
     else:
         print(f"\n  {_bold('GLM VLM configuration')}")
-        vlm_api_key = _prompt_required_input("API Key")
+        vlm_api_key = _prompt_api_key("API Key")
         if not vlm_api_key:
             print(f"  {_red('API key is required')}")
             return None
@@ -980,7 +1066,7 @@ def _wizard_server() -> dict[str, Any] | None:
 
     print(f"\n  {_bold('Remote binding requires a root API key.')}")
     print(f"  {_dim('Clients must send this key as a Bearer token to authenticate.')}")
-    root_api_key = _prompt_required_input("Root API Key")
+    root_api_key = _prompt_api_key("Root API Key")
     if not root_api_key:
         print(f"  {_red('Root API key is required for remote binding')}")
         return None
