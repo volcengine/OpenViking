@@ -55,6 +55,27 @@ async def test_add_resource_file_not_found(client: httpx.AsyncClient):
     assert body["error"]["code"] == "PERMISSION_DENIED"
 
 
+async def test_add_resource_token_guardrail_returns_structured_429(
+    client: httpx.AsyncClient,
+    service,
+):
+    service.resources.set_token_guardrails(add_resource=8)
+
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "path": "https://example.com/" + ("long-segment-" * 40),
+            "reason": "guardrail test",
+        },
+    )
+
+    body = resp.json()
+    assert resp.status_code == 429
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "RESOURCE_EXHAUSTED"
+    assert body["error"]["details"]["operation"] == "add_resource"
+
+
 async def test_empty_body_on_post(client: httpx.AsyncClient):
     """POST with empty body should return 422."""
     resp = await client.post(

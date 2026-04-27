@@ -111,6 +111,13 @@ class PermissionDeniedError(OpenVikingError):
         super().__init__(message, code="PERMISSION_DENIED", details=details)
 
 
+class ResourceExhaustedError(OpenVikingError):
+    """A configured quota or resource limit was exceeded."""
+
+    def __init__(self, message: str = "Resource exhausted", details: Optional[dict] = None):
+        super().__init__(message, code="RESOURCE_EXHAUSTED", details=details)
+
+
 # ============= Service Errors =============
 
 

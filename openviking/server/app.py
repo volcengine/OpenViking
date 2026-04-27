@@ -51,6 +51,14 @@ from openviking_cli.utils.logger import init_otel_log_handler_from_server_config
 logger = get_logger(__name__)
 
 
+def _apply_server_service_config(config: ServerConfig, service: OpenVikingService) -> None:
+    """Push server-only runtime config into service components."""
+    service.resources.set_token_guardrails(
+        add_resource=config.token_guardrails.add_resource,
+        add_skill=config.token_guardrails.add_skill,
+    )
+
+
 def create_app(
     config: Optional[ServerConfig] = None,
     service: Optional[OpenVikingService] = None,
@@ -80,6 +88,7 @@ def create_app(
 
         assert service is not None
         set_service(service)
+        _apply_server_service_config(config, service)
 
         # Initialize APIKeyManager after service (needs VikingFS)
         effective_auth_mode = config.get_effective_auth_mode()
@@ -157,6 +166,8 @@ def create_app(
     )
 
     app.state.config = config
+    if service is not None:
+        _apply_server_service_config(config, service)
 
     # Add CORS middleware
     app.add_middleware(
