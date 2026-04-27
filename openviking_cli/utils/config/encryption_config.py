@@ -45,6 +45,23 @@ class VolcengineKMSEncryptionProviderConfig(BaseModel):
     secret_key: Optional[str] = Field(default=None, description="Volcengine secret access key")
 
 
+class APIKeyHashingConfig(BaseModel):
+    """API key hashing configuration.
+
+    Controls whether API keys are hashed using Argon2id before storage.
+    When disabled (default), API keys are stored in plaintext within
+    AES-GCM encrypted files, allowing admin users to retrieve full keys.
+    When enabled, API keys are hashed with Argon2id (one-way),
+    providing maximum security but preventing key recovery.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="Whether API key Argon2id hashing is enabled. "
+        "Default: false - rely on file-level AES encryption for protection.",
+    )
+
+
 class EncryptionConfig(BaseModel):
     """Configuration for encryption module.
 
@@ -96,6 +113,12 @@ class EncryptionConfig(BaseModel):
     volcengine_kms: VolcengineKMSEncryptionProviderConfig = Field(
         default_factory=VolcengineKMSEncryptionProviderConfig,
         description="Volcengine KMS provider configuration",
+    )
+
+    api_key_hashing: APIKeyHashingConfig = Field(
+        default_factory=APIKeyHashingConfig,
+        description="API key hashing configuration. "
+        "Controls whether API keys are hashed using Argon2id before storage.",
     )
 
     params: Dict[str, Any] = Field(

@@ -185,6 +185,7 @@ Update an existing file, or create a new one when `mode="create"`, and automatic
 - `replace` and `append` require the file to exist; `create` targets a new file and returns `409 Conflict` when the path already exists. Directories are always rejected.
 - `create` only accepts text-writable extensions: `.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.toml`, `.py`, `.js`, `.ts`. Parent directories are created automatically.
 - Derived semantic files cannot be written directly: `.abstract.md`, `.overview.md`, `.relations.json`.
+- File content is updated before the API returns. `wait` only controls whether the call waits for semantic/vector refresh to finish.
 - The public API no longer accepts `regenerate_semantics` or `revectorize`; write always refreshes related semantics and vectors.
 
 **Python SDK (Embedded / HTTP)**
@@ -236,8 +237,9 @@ openviking write viking://resources/docs/api.md \
     "context_type": "resource",
     "mode": "replace",
     "written_bytes": 29,
-    "semantic_updated": true,
-    "vector_updated": true,
+    "content_updated": true,
+    "semantic_status": "complete",
+    "vector_status": "complete",
     "queue_status": {
       "Semantic": {
         "processed": 1,

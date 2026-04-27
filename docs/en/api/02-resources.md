@@ -122,6 +122,24 @@ openviking add-resource ./documents/guide.md --reason "User guide documentation"
 }
 ```
 
+**Synchronous Processing Error**
+
+If ingestion fails before producing a resource, raw HTTP returns the standard error envelope
+with a non-2xx HTTP status. For example:
+
+```json
+{
+  "status": "error",
+  "error": {
+    "code": "PROCESSING_ERROR",
+    "message": "Parse error: [Errno 2] No such file or directory: 'git'"
+  }
+}
+```
+
+`SyncHTTPClient`, `AsyncHTTPClient`, and CLI commands surface this as an error instead of
+returning a successful result with `result.status="error"`.
+
 **Example: Add from URL**
 
 **Python SDK (Embedded / HTTP)**

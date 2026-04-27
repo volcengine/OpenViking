@@ -129,6 +129,23 @@ openviking add-skill ./my-skill/ [--wait]
 }
 ```
 
+**Synchronous Processing Error**
+
+If skill parsing or processing fails synchronously, raw HTTP returns the standard error
+envelope with a non-2xx HTTP status:
+
+```json
+{
+  "status": "error",
+  "error": {
+    "code": "PROCESSING_ERROR",
+    "message": "Skill parse error: invalid skill metadata"
+  }
+}
+```
+
+The Python HTTP SDKs raise the mapped exception for this response.
+
 **Example: Add from MCP Tool**
 
 **Python SDK (Embedded / HTTP)**
