@@ -91,6 +91,31 @@ async def test_write_appends_existing_resource_file(client_with_resource):
     assert read_resp.json()["result"] == original + "\n\nAppended section."
 
 
+async def test_write_without_wait_is_immediately_readable(client_with_resource):
+    client, uri = client_with_resource
+    file_uri = await _first_file_uri(client, uri)
+    original = (await client.get("/api/v1/content/read", params={"uri": file_uri})).json()["result"]
+
+    write_resp = await client.post(
+        "/api/v1/content/write",
+        json={
+            "uri": file_uri,
+            "content": "\nImmediate append.",
+            "mode": "append",
+            "wait": False,
+        },
+    )
+    assert write_resp.status_code == 200
+    body = write_resp.json()
+    assert body["result"]["content_updated"] is True
+    assert body["result"]["semantic_status"] == "queued"
+    assert body["result"]["vector_status"] == "queued"
+
+    read_resp = await client.get("/api/v1/content/read", params={"uri": file_uri})
+    assert read_resp.status_code == 200
+    assert read_resp.json()["result"] == original + "\nImmediate append."
+
+
 @pytest.mark.asyncio
 async def test_write_missing_uri_validation(client):
     resp = await client.post("/api/v1/content/write", json={"content": "missing uri"})

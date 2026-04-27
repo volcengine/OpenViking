@@ -45,6 +45,7 @@ class _FakeVikingFS:
     def __init__(self, file_uri: str, root_uri: str):
         self._file_uri = file_uri
         self._root_uri = root_uri
+        self.content = {file_uri: "original"}
 
     async def stat(self, uri: str, ctx=None):
         del ctx
@@ -61,6 +62,18 @@ class _FakeVikingFS:
     async def delete_temp(self, temp_uri: str, ctx=None):
         del temp_uri, ctx
         return None
+
+    async def read_file(self, uri: str, ctx=None):
+        del ctx
+        return self.content[uri]
+
+    async def write_file(self, uri: str, content: str, ctx=None):
+        del ctx
+        self.content[uri] = content
+
+    async def rm(self, uri: str, ctx=None, lock_handle=None):
+        del ctx, lock_handle
+        self.content.pop(uri, None)
 
 
 @pytest.mark.asyncio
@@ -264,10 +277,6 @@ async def test_content_write_wait_uses_request_tracker(monkeypatch):
         raising=False,
     )
 
-    async def _fake_prepare_temp_write(**kwargs):
-        del kwargs
-        return "viking://temp/demo", "viking://temp/demo/doc.md"
-
     async def _fake_enqueue_semantic_refresh(**kwargs):
         del kwargs
         return None
@@ -276,7 +285,6 @@ async def test_content_write_wait_uses_request_tracker(monkeypatch):
         del timeout
         raise AssertionError("global queue wait should not be used")
 
-    monkeypatch.setattr(coordinator, "_prepare_temp_write", _fake_prepare_temp_write)
     monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh", _fake_enqueue_semantic_refresh)
     monkeypatch.setattr(coordinator, "_wait_for_queues", _explode_wait_for_queues)
 
@@ -294,6 +302,8 @@ async def test_content_write_wait_uses_request_tracker(monkeypatch):
     assert tracker.wait_calls == [(telemetry.telemetry_id, 5.0)]
     assert tracker.build_calls == [telemetry.telemetry_id]
     assert tracker.cleaned == [telemetry.telemetry_id]
+    assert result["semantic_status"] == "complete"
+    assert result["vector_status"] == "complete"
 
 
 @pytest.mark.asyncio
@@ -327,10 +337,6 @@ async def test_content_write_wait_uses_request_tracker_when_telemetry_disabled(m
         raising=False,
     )
 
-    async def _fake_prepare_temp_write(**kwargs):
-        del kwargs
-        return "viking://temp/demo", "viking://temp/demo/doc.md"
-
     async def _fake_enqueue_semantic_refresh(**kwargs):
         del kwargs
         return None
@@ -339,7 +345,6 @@ async def test_content_write_wait_uses_request_tracker_when_telemetry_disabled(m
         del timeout
         raise AssertionError("global queue wait should not be used")
 
-    monkeypatch.setattr(coordinator, "_prepare_temp_write", _fake_prepare_temp_write)
     monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh", _fake_enqueue_semantic_refresh)
     monkeypatch.setattr(coordinator, "_wait_for_queues", _explode_wait_for_queues)
 
@@ -357,6 +362,8 @@ async def test_content_write_wait_uses_request_tracker_when_telemetry_disabled(m
     assert tracker.wait_calls == [(telemetry.telemetry_id, 5.0)]
     assert tracker.build_calls == [telemetry.telemetry_id]
     assert tracker.cleaned == [telemetry.telemetry_id]
+    assert result["semantic_status"] == "complete"
+    assert result["vector_status"] == "complete"
 
 
 async def _return_true(handle, path):
