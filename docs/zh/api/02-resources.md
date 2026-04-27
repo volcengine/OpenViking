@@ -122,6 +122,23 @@ openviking add-resource ./documents/guide.md --reason "User guide documentation"
 }
 ```
 
+**同步处理错误**
+
+如果导入在生成资源前失败，裸 HTTP 会返回标准错误 envelope，并使用非 2xx HTTP 状态码。例如：
+
+```json
+{
+  "status": "error",
+  "error": {
+    "code": "PROCESSING_ERROR",
+    "message": "Parse error: [Errno 2] No such file or directory: 'git'"
+  }
+}
+```
+
+`SyncHTTPClient`、`AsyncHTTPClient` 和 CLI 命令会把它作为错误抛出/展示，而不是返回
+`result.status="error"` 的成功结果。
+
 **示例：从 URL 添加**
 
 **Python SDK (Embedded / HTTP)**

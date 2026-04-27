@@ -87,13 +87,13 @@ def create_app(
             api_key_manager = APIKeyManager(
                 root_key=config.root_api_key,
                 viking_fs=service.viking_fs,
-                encryption_enabled=config.encryption_enabled,
+                api_key_hashing_enabled=config.api_key_hashing_enabled,
             )
             await api_key_manager.load()
             app.state.api_key_manager = api_key_manager
             logger.info(
-                "APIKeyManager initialized with encryption_enabled=%s",
-                config.encryption_enabled,
+                "APIKeyManager initialized with api_key_hashing_enabled=%s",
+                config.api_key_hashing_enabled,
             )
         elif effective_auth_mode == AuthMode.TRUSTED:
             app.state.api_key_manager = None

@@ -51,18 +51,19 @@ class LegacyAPIKeyManager:
         self,
         root_key: str,
         viking_fs: VikingFS,
-        encryption_enabled: bool = False,
+        api_key_hashing_enabled: bool = False,
     ):
         """Initialize APIKeyManager.
 
         Args:
             root_key: Global root API key for administrative access.
             viking_fs: VikingFS client for persistent storage of user keys.
-            encryption_enabled: Whether API key hashing is enabled.
+            api_key_hashing_enabled: Whether API key Argon2id hashing is enabled.
+                Default: false - rely on file-level AES encryption for protection.
         """
         self._root_key = root_key
         self._viking_fs = viking_fs
-        self._encryption_enabled = encryption_enabled
+        self._api_key_hashing_enabled = api_key_hashing_enabled
         self._accounts: Dict[str, AccountInfo] = {}
         # Prefix index: key_prefix -> list[UserKeyEntry]
         self._prefix_index: Dict[str, list[UserKeyEntry]] = {}
@@ -115,8 +116,8 @@ class LegacyAPIKeyManager:
                         key_prefix = user_info.get("key_prefix", "")
                     else:
                         # Plaintext key
-                        if self._encryption_enabled:
-                            # If encryption enabled, migrate to hashed
+                        if self._api_key_hashing_enabled:
+                            # If API key hashing enabled, migrate to hashed
                             stored_key = self._hash_api_key(key_or_hash)
                             is_hashed = True
                             key_prefix = self._get_key_prefix(key_or_hash)
@@ -128,7 +129,7 @@ class LegacyAPIKeyManager:
                                 "Migrated API key for user %s in account %s", user_id, account_id
                             )
                         else:
-                            # If encryption not enabled, keep as plaintext
+                            # If API key hashing not enabled, keep as plaintext
                             stored_key = key_or_hash
                             is_hashed = False
                             # For plaintext keys, compute prefix on the fly for indexing
@@ -236,7 +237,7 @@ class LegacyAPIKeyManager:
         key = self._generate_api_key()
         policy = namespace_policy or AccountNamespacePolicy()
 
-        if self._encryption_enabled:
+        if self._api_key_hashing_enabled:
             stored_key = self._hash_api_key(key)
             is_hashed = True
             key_prefix = self._get_key_prefix(key)
@@ -249,7 +250,7 @@ class LegacyAPIKeyManager:
             "role": "admin",
             "key": stored_key,
         }
-        if self._encryption_enabled:
+        if self._api_key_hashing_enabled:
             user_info["key_prefix"] = key_prefix
 
         self._accounts[account_id] = AccountInfo(
@@ -319,7 +320,7 @@ class LegacyAPIKeyManager:
 
         key = self._generate_api_key()
 
-        if self._encryption_enabled:
+        if self._api_key_hashing_enabled:
             stored_key = self._hash_api_key(key)
             is_hashed = True
             key_prefix = self._get_key_prefix(key)
@@ -332,7 +333,7 @@ class LegacyAPIKeyManager:
             "role": role,
             "key": stored_key,
         }
-        if self._encryption_enabled:
+        if self._api_key_hashing_enabled:
             user_info["key_prefix"] = key_prefix
 
         account.users[user_id] = user_info
@@ -413,7 +414,7 @@ class LegacyAPIKeyManager:
         # Generate new key
         new_key = self._generate_api_key()
 
-        if self._encryption_enabled:
+        if self._api_key_hashing_enabled:
             new_stored_key = self._hash_api_key(new_key)
             new_is_hashed = True
             new_key_prefix = self._get_key_prefix(new_key)
@@ -424,10 +425,10 @@ class LegacyAPIKeyManager:
 
         # Update user info
         account.users[user_id]["key"] = new_stored_key
-        if self._encryption_enabled:
+        if self._api_key_hashing_enabled:
             account.users[user_id]["key_prefix"] = new_key_prefix
         else:
-            # Remove key_prefix if encryption is disabled
+            # Remove key_prefix if API key hashing is disabled
             if "key_prefix" in account.users[user_id]:
                 del account.users[user_id]["key_prefix"]
 
@@ -535,6 +536,7 @@ class LegacyAPIKeyManager:
                 if key:
                     if key.startswith("$argon2"):
                         # Hashed key - show key_prefix
+
                         key_prefix = user_info.get("key_prefix")
                         if key_prefix:
                             user_data["key_prefix"] = key_prefix

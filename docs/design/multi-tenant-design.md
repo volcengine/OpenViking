@@ -65,9 +65,20 @@ Request
 用户的角色（ADMIN / USER）不由 key 决定，而是存储在 account 内的用户注册表中。
 
 **Key 加密存储**：
-- 支持 Argon2id 哈希存储 User Key（可选，通过 `encryption_enabled` 启用）
+- 支持 Argon2id 哈希存储 User Key（可选，通过 `encryption.api_key_hashing.enabled` 启用）
 - 加密时存储：`key_prefix`（前 8 字符） + `key_hash`（Argon2id 哈希）
 - 验证时：先用 key_prefix 快速定位候选 entry，再用 Argon2id 验证
+
+**两层加密架构**：
+| 加密层 | 配置项 | 算法 | 可逆性 | 说明 |
+|--------|--------|------|--------|------|
+| **文件层** | `encryption.enabled` | AES-GCM | ✅ 可逆 | 保护整个存储文件 |
+| **API key 字段层** | `encryption.api_key_hashing.enabled` | Argon2id | ❌ 不可逆 | 保护 API key 本身 |
+
+**默认行为**：`encryption.api_key_hashing.enabled = false`
+- API key 以明文存储在 JSON 文件中
+- 但整个文件被 AES-GCM 加密保护
+- `ov admin list-users` 可以显示完整的 API key
 
 ### 2.2 User Key 机制
 
@@ -166,7 +177,7 @@ from .legacy import LegacyAPIKeyManager
 class APIKeyManager:
     """API Key 生命周期管理与解析（新版实现）"""
 
-    def __init__(self, root_key: str, viking_fs: VikingFS, encryption_enabled: bool = False)
+    def __init__(self, root_key: str, viking_fs: VikingFS, api_key_hashing_enabled: bool = False)
     async def load()                                     # 加载所有 account 的 users.json 到内存
     def resolve(api_key: str) -> ResolvedIdentity        # Key → 身份 + 角色（支持新版/旧版两种格式）
     async def create_account(account_id: str, admin_user_id: str, namespace_policy=None) -> str
@@ -203,8 +214,9 @@ def generate_api_key(account_id: str, user_id: str) -> str
 ```python
 class Role(str, Enum):
     ROOT = "root"
-    ADMIN = "admin"          # account 内的管理员（用户属性，非 key 类型）
+    ADMIN = "admin"  # account 内的管理员（用户属性，非 key 类型）
     USER = "user"
+
 
 @dataclass
 class ResolvedIdentity:
@@ -213,9 +225,10 @@ class ResolvedIdentity:
     user_id: Optional[str] = None
     agent_id: Optional[str] = None  # 来自 X-OpenViking-Agent header
 
+
 @dataclass
 class RequestContext:
-    user: UserIdentifier       # account_id + user_id + agent_id
+    user: UserIdentifier  # account_id + user_id + agent_id
     role: Role
 ```
 
@@ -331,6 +344,7 @@ def user_space_name(self) -> str:
     """用户级 space，不含 agent_id"""
     return f"{self._account_id}_{hashlib.md5(self._user_id.encode()).hexdigest()[:8]}"
 
+
 def agent_space_name(self) -> str:
     """Agent 级 space，受 memory.agent_scope_mode 控制"""
     if config.memory.agent_scope_mode == "agent":
@@ -387,17 +401,19 @@ async def ls(self, uri: str, ctx: RequestContext) -> List[str]:
     uris = [self._path_to_uri(e, account_id=ctx.account_id) for e in entries]
     return [u for u in uris if self._is_accessible(u, ctx)]  # 权限过滤，见 5.4
 
+
 # 内部方法：只接收 account_id，不依赖 ctx
 def _uri_to_path(self, uri: str, account_id: str = "") -> str:
-    remainder = uri[len("viking://"):].strip("/")
+    remainder = uri[len("viking://") :].strip("/")
     if account_id:
         return f"/local/{account_id}/{remainder}" if remainder else f"/local/{account_id}"
     return f"/local/{remainder}" if remainder else "/local"
 
+
 def _path_to_uri(self, path: str, account_id: str = "") -> str:
-    inner = path[len("/local/"):]                    # "acme/user/{space}/memories/x"
+    inner = path[len("/local/") :]  # "acme/user/{space}/memories/x"
     if account_id and inner.startswith(account_id + "/"):
-        inner = inner[len(account_id) + 1:]          # "user/{space}/memories/x"
+        inner = inner[len(account_id) + 1 :]  # "user/{space}/memories/x"
     return f"viking://{inner}"
 ```
 
@@ -529,7 +545,7 @@ _is_accessible 检查: owner_space 匹配 OR space in shared_spaces
 class ServerConfig:
     host: str = "0.0.0.0"
     port: int = 1933
-    root_api_key: Optional[str] = None   # 替代原 api_key
+    root_api_key: Optional[str] = None  # 替代原 api_key
     cors_origins: List[str] = field(default_factory=lambda: ["*"])
 ```
 
@@ -557,8 +573,8 @@ class ServerConfig:
 # 多租户后：身份由服务端从 api_key 解析
 client = ov.SyncHTTPClient(
     url="http://localhost:1933",
-    api_key="7f3a9c1e...",             # 服务端查表解析出 account_id + user_id
-    agent_id="coding-agent",           # 可选，默认 "default"
+    api_key="7f3a9c1e...",  # 服务端查表解析出 account_id + user_id
+    agent_id="coding-agent",  # 可选，默认 "default"
 )
 ```
 
@@ -589,6 +605,7 @@ client = ov.Client(path="/data/openviking")
 
 # 多租户（指定身份）
 from openviking_cli.session.user_id import UserIdentifier
+
 user = UserIdentifier("acme", "alice", "coding-agent")
 client = ov.Client(path="/data/openviking", user=user)
 ```
@@ -677,23 +694,28 @@ from dataclasses import dataclass
 from typing import Optional
 from openviking.session.user_id import UserIdentifier
 
+
 class Role(str, Enum):
     ROOT = "root"
-    ADMIN = "admin"          # account 内的管理员（用户属性，非 key 类型）
+    ADMIN = "admin"  # account 内的管理员（用户属性，非 key 类型）
     USER = "user"
+
 
 @dataclass
 class ResolvedIdentity:
     """认证中间件的输出：从 API Key 解析出的原始身份信息"""
+
     role: Role
-    account_id: Optional[str] = None   # ROOT 可能无 account_id
-    user_id: Optional[str] = None      # ROOT 可能无 user_id
-    agent_id: Optional[str] = None     # 来自 X-OpenViking-Agent header
+    account_id: Optional[str] = None  # ROOT 可能无 account_id
+    user_id: Optional[str] = None  # ROOT 可能无 user_id
+    agent_id: Optional[str] = None  # 来自 X-OpenViking-Agent header
+
 
 @dataclass
 class RequestContext:
     """请求级上下文，贯穿 Router → Service → VikingFS 全链路"""
-    user: UserIdentifier    # 完整三元组（account_id, user_id, agent_id）
+
+    user: UserIdentifier  # 完整三元组（account_id, user_id, agent_id）
     role: Role
 
     @property
@@ -717,15 +739,16 @@ class RequestContext:
 class ServerConfig:
     host: str = "0.0.0.0"
     port: int = 1933
-    api_key: Optional[str] = None                          # ← 删除
+    api_key: Optional[str] = None  # ← 删除
     cors_origins: List[str] = field(default_factory=lambda: ["*"])
+
 
 # 改后
 @dataclass
 class ServerConfig:
     host: str = "0.0.0.0"
     port: int = 1933
-    root_api_key: Optional[str] = None                     # ← 替代 api_key
+    root_api_key: Optional[str] = None  # ← 替代 api_key
     cors_origins: List[str] = field(default_factory=lambda: ["*"])
 ```
 
@@ -734,7 +757,7 @@ class ServerConfig:
 config = ServerConfig(
     host=server_data.get("host", "0.0.0.0"),
     port=server_data.get("port", 1933),
-    root_api_key=server_data.get("root_api_key"),          # ← 改
+    root_api_key=server_data.get("root_api_key"),  # ← 改
     cors_origins=server_data.get("cors_origins", ["*"]),
 )
 ```
@@ -754,7 +777,7 @@ Per-account 存储，两级文件：
 {
     "accounts": {
         "default": {"created_at": "2026-02-12T10:00:00Z"},
-        "acme": {"created_at": "2026-02-13T08:00:00Z"}
+        "acme": {"created_at": "2026-02-13T08:00:00Z"},
     }
 }
 
@@ -762,7 +785,7 @@ Per-account 存储，两级文件：
 {
     "users": {
         "alice": {"role": "admin", "key": "YWNtZQ==.YWxpY2U=.OWFmZTEy..."},
-        "bob": {"role": "user", "key": "YWNtZQ==.Ym9i.ZWgyZDRm..."}
+        "bob": {"role": "user", "key": "YWNtZQ==.Ym9i.ZWgyZDRm..."},
     }
 }
 
@@ -770,7 +793,7 @@ Per-account 存储，两级文件：
 {
     "users": {
         "alice": {"role": "admin", "key": "$argon2id$v=19$...", "key_prefix": "YWNtZQ=="},
-        "bob": {"role": "user", "key": "$argon2id$v=19$...", "key_prefix": "YWNtZQ=="}
+        "bob": {"role": "user", "key": "$argon2id$v=19$...", "key_prefix": "YWNtZQ=="},
     }
 }
 ```
@@ -778,12 +801,12 @@ Per-account 存储，两级文件：
 内存索引（启动时从所有 account 加载）：
 ```python
 self._prefix_index: Dict[str, List[UserKeyEntry]] = {}  # {key_prefix -> [entries]}
-self._accounts: Dict[str, AccountInfo] = {}            # {account_id -> AccountInfo(users)}
+self._accounts: Dict[str, AccountInfo] = {}  # {account_id -> AccountInfo(users)}
 ```
 
 ##### 方法逻辑（新版 NewAPIKeyManager）
 
-**`__init__(root_key, viking_fs, encryption_enabled=False)`**：
+**`__init__(root_key, viking_fs, api_key_hashing_enabled=False)`**：
 - 存储 root_key
 - 接收 VikingFS 实例（而非 AGFS URL）
 - 可选启用 Argon2id 加密存储
@@ -792,7 +815,7 @@ self._accounts: Dict[str, AccountInfo] = {}            # {account_id -> AccountI
 - 从 AGFS 读取 `/_system/accounts.json`，若不存在则创建 default account
 - 遍历每个 account，读取 `/{account_id}/_system/users.json`
 - 构建前缀索引：key 前 8 字符 → [UserKeyEntry]
-- 支持自动迁移：plaintext key → hashed key（当 encryption_enabled=True 时）
+- 支持自动迁移：plaintext key → hashed key（当 api_key_hashing_enabled=True 时）
 
 **`resolve(api_key) -> ResolvedIdentity`**：
 ```
@@ -905,6 +928,7 @@ def require_role(*allowed_roles: Role):
         if ctx.role not in allowed_roles:
             raise PermissionDeniedError(f"Requires role: {allowed_roles}")
         return ctx
+
     return _check
 ```
 
@@ -962,6 +986,7 @@ async def ls(uri: str, _: bool = Depends(verify_api_key)):
     service = get_service()
     result = await service.fs.ls(uri)
     ...
+
 
 # Phase 1 改后（ctx 接收但不传递）
 @router.get("/ls")
@@ -1081,6 +1106,7 @@ HTTP 模式新增 `agent_id` 参数，通过 `X-OpenViking-Agent` header 发送�
 ```python
 def __init__(self, url=None, api_key=None, agent_id=None):
     self._agent_id = agent_id
+
 
 # headers 构建
 headers = {}
@@ -1239,10 +1265,11 @@ VikingFS 有以下公开方法需要加 `ctx: RequestContext` 参数：
 
 ```python
 def _uri_to_path(self, uri: str, account_id: str = "") -> str:
-    remainder = uri[len("viking://"):].strip("/")
+    remainder = uri[len("viking://") :].strip("/")
     if account_id:
         return f"/local/{account_id}/{remainder}" if remainder else f"/local/{account_id}"
     return f"/local/{remainder}" if remainder else "/local"
+
 
 def _path_to_uri(self, path: str, account_id: str = "") -> str:
     if path.startswith("viking://"):
@@ -1250,7 +1277,7 @@ def _path_to_uri(self, path: str, account_id: str = "") -> str:
     elif path.startswith("/local/"):
         inner = path[7:]  # 去掉 /local/
         if account_id and inner.startswith(account_id + "/"):
-            inner = inner[len(account_id) + 1:]  # 去掉 account_id 前缀
+            inner = inner[len(account_id) + 1 :]  # 去掉 account_id 前缀
         return f"viking://{inner}"
     ...
 ```
@@ -1290,8 +1317,8 @@ def _path_to_uri(self, path: str, account_id: str = "") -> str:
 `openviking/core/context.py` 中 `Context` 类需增加两个字段：
 
 ```python
-account_id: str = ""      # 所属 account
-owner_space: str = ""     # 所有者的 user_space_name() 或 agent_space_name()
+account_id: str = ""  # 所属 account
+owner_space: str = ""  # 所有者的 user_space_name() 或 agent_space_name()
 ```
 
 `to_dict()` 输出包含这两个字段，`EmbeddingMsgConverter.from_context()` 无需改动即可透传到 VectorDB。
@@ -1406,9 +1433,11 @@ async def initialize_account_directories(self, ctx: RequestContext) -> int:
     """初始化 account 级公共根目录"""
     ...
 
+
 async def initialize_user_directories(self, ctx: RequestContext) -> int:
     """初始化 user space 子目录"""
     ...
+
 
 async def initialize_agent_directories(self, ctx: RequestContext) -> int:
     """初始化 agent space 子目录"""

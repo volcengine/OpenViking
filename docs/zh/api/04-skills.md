@@ -129,6 +129,22 @@ openviking add-skill ./my-skill/ [--wait]
 }
 ```
 
+**同步处理错误**
+
+如果 skill 解析或处理同步失败，裸 HTTP 会返回标准错误 envelope，并使用非 2xx HTTP 状态码：
+
+```json
+{
+  "status": "error",
+  "error": {
+    "code": "PROCESSING_ERROR",
+    "message": "Skill parse error: invalid skill metadata"
+  }
+}
+```
+
+Python HTTP SDK 会把该响应映射为对应异常。
+
 **示例：从 MCP Tool 添加**
 
 **Python SDK (Embedded / HTTP)**
