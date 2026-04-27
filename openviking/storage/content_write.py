@@ -36,7 +36,13 @@ _CREATE_ALLOWED_EXTENSIONS = frozenset(
 
 
 class ContentWriteCoordinator:
-    """Write a file (create or modify) and trigger downstream maintenance."""
+    """Write a file and trigger downstream semantic/vector maintenance.
+
+    Writes to existing files across all supported scopes. For memory URIs,
+    also creates the file (and missing parent dirs) when it does not yet
+    exist; non-memory scopes still require the target file to exist so the
+    semantic refresh's temp-copy path has a root to operate on.
+    """
 
     def __init__(self, viking_fs: VikingFS):
         self._viking_fs = viking_fs
@@ -64,16 +70,30 @@ class ContentWriteCoordinator:
                 timeout=timeout,
             )
 
-        stat = await self._safe_stat(normalized_uri, ctx=ctx)
-        if stat.get("isDir"):
-            raise InvalidArgumentError(f"write only supports existing files, got directory: {uri}")
-
         context_type = self._context_type_for_uri(normalized_uri)
-        root_uri = await self._resolve_root_uri(normalized_uri, ctx=ctx)
+
+        existing_stat = await self._safe_stat(
+            normalized_uri,
+            ctx=ctx,
+            allow_not_found=context_type == "memory",
+        )
+        if existing_stat.get("isDir"):
+            raise InvalidArgumentError(f"write only supports files, got directory: {uri}")
+
+        existed_before = not existing_stat.get("not_found")
+        if not existed_before and context_type != "memory":
+            # Only memory URIs support creation today. Non-memory writes still
+            # require an existing file so the semantic refresh's temp-copy path
+            # has a root to operate on.
+            raise NotFoundError(uri, "file")
+        if not existed_before and mode == "append":
+            mode = "replace"
+
         written_bytes = len(content.encode("utf-8"))
         telemetry_id = get_current_telemetry().telemetry_id
 
         if context_type == "memory":
+            root_uri = await self._resolve_memory_root_uri(normalized_uri)
             return await self._write_memory_with_refresh(
                 uri=normalized_uri,
                 root_uri=root_uri,
@@ -84,7 +104,10 @@ class ContentWriteCoordinator:
                 ctx=ctx,
                 written_bytes=written_bytes,
                 telemetry_id=telemetry_id,
+                existed_before=existed_before,
             )
+
+        root_uri = await self._resolve_root_uri(normalized_uri, ctx=ctx)
 
         lock_manager = get_lock_manager()
         handle = lock_manager.create_handle()
@@ -127,6 +150,7 @@ class ContentWriteCoordinator:
                 "root_uri": root_uri,
                 "context_type": context_type,
                 "mode": mode,
+                "created": False,
                 "written_bytes": written_bytes,
                 "semantic_updated": True,
                 "vector_updated": True,
@@ -161,10 +185,9 @@ class ContentWriteCoordinator:
             raise InvalidArgumentError(f"write is not supported for scope: {parsed.scope}")
 
     def _is_not_found(self, exc: Exception) -> bool:
-        """Check if an exception indicates a not-found error (OpenViking or AGFS)."""
+        """Check if an exception indicates a not-found error."""
         if isinstance(exc, NotFoundError):
             return True
-        # AGFS raises its own AGFSNotFoundError which is unrelated to our NotFoundError
         try:
             from openviking.pyagfs import AGFSNotFoundError
 
@@ -173,7 +196,11 @@ class ContentWriteCoordinator:
             return False
 
     async def _safe_stat(
-        self, uri: str, *, ctx: RequestContext, allow_not_found: bool = False
+        self,
+        uri: str,
+        *,
+        ctx: RequestContext,
+        allow_not_found: bool = False,
     ) -> Dict[str, Any]:
         try:
             return await self._viking_fs.stat(uri, ctx=ctx)
@@ -206,11 +233,12 @@ class ContentWriteCoordinator:
         if not stat.get("not_found"):
             raise AlreadyExistsError(uri, "file")
 
-        # VikingFS.write_file auto-creates parent directories
-        await self._viking_fs.write_file(uri, content, ctx=ctx)
-
         context_type = self._context_type_for_uri(uri)
-        root_uri = await self._resolve_root_uri(uri, ctx=ctx, _allow_not_found=True)
+        root_uri = (
+            await self._resolve_memory_root_uri(uri)
+            if context_type == "memory"
+            else await self._resolve_root_uri(uri, ctx=ctx, _allow_not_found=True)
+        )
         written_bytes = len(content.encode("utf-8"))
         telemetry_id = get_current_telemetry().telemetry_id
 
@@ -225,6 +253,7 @@ class ContentWriteCoordinator:
                 ctx=ctx,
                 written_bytes=written_bytes,
                 telemetry_id=telemetry_id,
+                existed_before=False,
             )
 
         lock_manager = get_lock_manager()
@@ -266,6 +295,7 @@ class ContentWriteCoordinator:
                 "root_uri": root_uri,
                 "context_type": context_type,
                 "mode": "create",
+                "created": True,
                 "written_bytes": written_bytes,
                 "semantic_updated": True,
                 "vector_updated": True,
@@ -503,6 +533,7 @@ class ContentWriteCoordinator:
         ctx: RequestContext,
         written_bytes: int,
         telemetry_id: str,
+        existed_before: bool = True,
     ) -> Dict[str, Any]:
         lock_manager = get_lock_manager()
         handle = lock_manager.create_handle()
@@ -516,7 +547,11 @@ class ContentWriteCoordinator:
         try:
             if wait and telemetry_id:
                 get_request_wait_tracker().register_request(telemetry_id)
-            await self._write_in_place(uri, content, mode=mode, ctx=ctx)
+            if existed_before:
+                await self._write_in_place(uri, content, mode=mode, ctx=ctx)
+            else:
+                # Brand-new memory file: auto-create parent dirs via write_file.
+                await self._viking_fs.write_file(uri, content, ctx=ctx)
             await self._vectorize_single_file(uri, context_type="memory", ctx=ctx)
             await self._enqueue_memory_refresh(
                 root_uri=root_uri,
@@ -535,6 +570,7 @@ class ContentWriteCoordinator:
                 "root_uri": root_uri,
                 "context_type": "memory",
                 "mode": mode,
+                "created": not existed_before,
                 "written_bytes": written_bytes,
                 "semantic_updated": True,
                 "vector_updated": True,
@@ -592,7 +628,11 @@ class ContentWriteCoordinator:
                     )
                 root_uri = VikingURI.build(*parts[: memories_idx + 2])
 
-        stat = await self._safe_stat(root_uri, ctx=ctx, allow_not_found=_allow_not_found)
+        stat = await self._safe_stat(
+            root_uri,
+            ctx=ctx,
+            allow_not_found=_allow_not_found,
+        )
         if stat.get("not_found") or not stat.get("isDir"):
             parent = VikingURI(uri).parent
             if parent is None:
@@ -606,3 +646,22 @@ class ContentWriteCoordinator:
         if "/skills/" in uri or uri.startswith("viking://agent/skills/"):
             return "skill"
         return "resource"
+
+    async def _resolve_memory_root_uri(self, uri: str) -> str:
+        parsed = VikingURI(uri)
+        parts = [part for part in parsed.full_path.split("/") if part]
+        try:
+            memories_idx = parts.index("memories")
+        except ValueError as exc:
+            raise InvalidArgumentError(
+                f"memory uri must contain a 'memories' segment: {uri}"
+            ) from exc
+        tail = parts[memories_idx + 1 :]
+        if not tail:
+            raise InvalidArgumentError(f"memory uri must include a bucket or singleton file: {uri}")
+        # Singleton memory file (e.g. profile.md) lives directly under memories/;
+        # its root is the memories directory itself. Bucket subdirectories
+        # (preferences/, entities/, etc.) use the bucket dir as the root.
+        if len(tail) == 1:
+            return VikingURI.build(*parts[: memories_idx + 1])
+        return VikingURI.build(*parts[: memories_idx + 2])

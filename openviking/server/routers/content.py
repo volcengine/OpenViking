@@ -29,7 +29,7 @@ logger = get_logger(__name__)
 
 
 class WriteContentRequest(BaseModel):
-    """Request to write, append, or create text content to a file."""
+    """Request to write or append text content to an existing file."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -159,7 +159,12 @@ async def write(
     request: WriteContentRequest = Body(...),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Write text content to a file (replace, append, or create) and refresh semantics/vectors."""
+    """Write text content to a file and refresh semantics/vectors.
+
+    For memory URIs, creates the file (and missing parent dirs) when it does
+    not yet exist; non-memory scopes require the target file to exist. The
+    response ``result.created`` is ``true`` only when a new file was written.
+    """
     service = get_service()
     execution = await run_operation(
         operation="content.write",
