@@ -241,7 +241,7 @@ curl -X GET "http://localhost:1933/api/v1/sessions/a1b2c3d4/context?token_budget
 **CLI**
 
 ```bash
-openviking session get-session-context a1b2c3d4 --token-budget 128000
+ov session get-session-context a1b2c3d4 --token-budget 128000
 ```
 
 **Response**
@@ -339,7 +339,7 @@ curl -X GET "http://localhost:1933/api/v1/sessions/a1b2c3d4/archives/archive_002
 **CLI**
 
 ```bash
-openviking session get-session-archive a1b2c3d4 archive_002
+ov session get-session-archive a1b2c3d4 archive_002
 ```
 
 **Response**
