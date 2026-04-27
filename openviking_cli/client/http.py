@@ -17,6 +17,7 @@ from openviking.telemetry import TelemetryRequest, normalize_telemetry_request
 from openviking_cli.client.base import BaseClient
 from openviking_cli.exceptions import (
     AlreadyExistsError,
+    ConflictError,
     DeadlineExceededError,
     EmbeddingFailedError,
     FailedPreconditionError,
@@ -45,6 +46,7 @@ ERROR_CODE_TO_EXCEPTION = {
     "INVALID_URI": InvalidURIError,
     "NOT_FOUND": NotFoundError,
     "ALREADY_EXISTS": AlreadyExistsError,
+    "CONFLICT": ConflictError,
     "FAILED_PRECONDITION": FailedPreconditionError,
     "UNAUTHENTICATED": UnauthenticatedError,
     "PERMISSION_DENIED": PermissionDeniedError,

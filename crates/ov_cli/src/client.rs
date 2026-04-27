@@ -10,6 +10,29 @@ use zip::write::FileOptions;
 
 use crate::error::{Error, Result};
 
+fn api_error_from_envelope(json: &Value, status: StatusCode) -> String {
+    let error_code = json
+        .get("error")
+        .and_then(|e| e.get("code"))
+        .and_then(|c| c.as_str());
+    let error_msg = json
+        .get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(|m| m.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            json.get("detail")
+                .and_then(|d| d.as_str())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| format!("HTTP error {}", status));
+
+    match error_code {
+        Some(code) => format!("[{}] {}", code, error_msg),
+        None => error_msg,
+    }
+}
+
 /// High-level HTTP client for OpenViking API
 #[derive(Clone)]
 pub struct HttpClient {
@@ -292,25 +315,7 @@ impl HttpClient {
 
         // Handle HTTP errors
         if !status.is_success() {
-            let error_code = json
-                .get("error")
-                .and_then(|e| e.get("code"))
-                .and_then(|c| c.as_str());
-            let error_msg = json
-                .get("error")
-                .and_then(|e| e.get("message"))
-                .and_then(|m| m.as_str())
-                .map(|s| s.to_string())
-                .or_else(|| {
-                    json.get("detail")
-                        .and_then(|d| d.as_str())
-                        .map(|s| s.to_string())
-                })
-                .unwrap_or_else(|| format!("HTTP error {}", status));
-            return Err(Error::Api(match error_code {
-                Some(code) => format!("[{}] {}", code, error_msg),
-                None => error_msg,
-            }));
+            return Err(Error::Api(api_error_from_envelope(&json, status)));
         }
 
         // Handle API errors (status == success but body has error)
@@ -1031,7 +1036,8 @@ impl HttpClient {
 
 #[cfg(test)]
 mod tests {
-    use super::HttpClient;
+    use super::{HttpClient, api_error_from_envelope};
+    use reqwest::StatusCode;
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -1125,5 +1131,37 @@ mod tests {
         );
         assert!(body.get("regenerate_semantics").is_none());
         assert!(body.get("revectorize").is_none());
+    }
+
+    #[test]
+    fn standard_error_envelope_formats_api_error() {
+        let body = json!({
+            "status": "error",
+            "error": {
+                "code": "PROCESSING_ERROR",
+                "message": "Parse error: boom"
+            }
+        });
+
+        assert_eq!(
+            api_error_from_envelope(&body, StatusCode::INTERNAL_SERVER_ERROR),
+            "[PROCESSING_ERROR] Parse error: boom"
+        );
+    }
+
+    #[test]
+    fn successful_result_status_failed_stays_domain_status() {
+        let envelope = json!({
+            "status": "ok",
+            "result": {
+                "status": "failed",
+                "task_id": "task-1",
+                "error": "boom"
+            }
+        });
+        let result = envelope.get("result").unwrap();
+
+        assert_eq!(result["status"], "failed");
+        assert_eq!(result["task_id"], "task-1");
     }
 }

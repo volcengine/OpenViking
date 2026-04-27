@@ -134,6 +134,62 @@ async def test_add_resource_with_telemetry_includes_resource_breakdown(
     }
 
 
+async def test_add_resource_business_error_uses_error_envelope(
+    client: httpx.AsyncClient,
+    service,
+    monkeypatch,
+):
+    async def fake_add_resource(**kwargs):
+        return {
+            "status": "error",
+            "errors": ["Parse error: boom"],
+            "source_path": kwargs["path"],
+        }
+
+    monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
+
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "path": "https://example.com/bad.md",
+            "reason": "test resource",
+        },
+    )
+
+    assert resp.status_code == 500
+    body = resp.json()
+    assert body["status"] == "error"
+    assert "result" not in body
+    assert body["error"]["code"] == "PROCESSING_ERROR"
+    assert body["error"]["message"] == "Parse error: boom"
+
+
+async def test_add_skill_business_error_uses_error_envelope(
+    client: httpx.AsyncClient,
+    service,
+    monkeypatch,
+):
+    async def fake_add_skill(**kwargs):
+        return {
+            "status": "error",
+            "errors": [{"message": "Skill parse error: boom"}],
+        }
+
+    monkeypatch.setattr(service.resources, "add_skill", fake_add_skill)
+
+    resp = await client.post(
+        "/api/v1/skills",
+        json={"data": {"name": "bad-skill"}},
+    )
+
+    assert resp.status_code == 500
+    body = resp.json()
+    assert body["status"] == "error"
+    assert "result" not in body
+    assert body["error"]["code"] == "PROCESSING_ERROR"
+    assert body["error"]["message"] == "Skill parse error: boom"
+
+
 async def test_add_resource_with_summary_only_telemetry(
     client: httpx.AsyncClient,
     sample_markdown_file,
