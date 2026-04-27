@@ -386,7 +386,7 @@ class MemoryV2TestSuite:
             "all_files": [],
         }
 
-        print(f"  [远端模式] 通过 OV API 验证记忆...")
+        print("  [远端模式] 通过 OV API 验证记忆...")
 
         before_uris = set(before_files.get("_remote_uris", []))
         before_count = before_files.get("_remote_category_count", 0)
@@ -659,8 +659,8 @@ class MemoryV2TestSuite:
                 result["ov_session_id"] = ov_session_id
                 result["task_id"] = task_id
             elif commit_resp["status_code"] == 200 and not task_id:
-                print(f"  ⚠ Commit 返回 task_id=None (session 可能无待处理消息)")
-                print(f"  等待 10 秒后重试 commit...")
+                print("  ⚠ Commit 返回 task_id=None (session 可能无待处理消息)")
+                print("  等待 10 秒后重试 commit...")
                 time.sleep(10)
                 commit_resp = self.api.commit_session(ov_session_id)
                 commit_data = commit_resp.get("data", {})
@@ -672,7 +672,7 @@ class MemoryV2TestSuite:
                     result["ov_session_id"] = ov_session_id
                     result["task_id"] = task_id
                 else:
-                    print(f"  ⚠ 重试仍无 task_id，跳过记忆提取步骤")
+                    print("  ⚠ 重试仍无 task_id，跳过记忆提取步骤")
                     result["steps"]["commit"] = "accepted_no_task"
                     result["ov_session_id"] = ov_session_id
                     result["steps"]["memory_extraction"] = "skipped"
