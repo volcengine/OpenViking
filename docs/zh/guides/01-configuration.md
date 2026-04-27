@@ -69,7 +69,7 @@ openviking-server doctor
     "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
     "api_key"  : "your-volcengine-api-key",
     "provider" : "volcengine",
-    "model"    : "doubao-seed-2-0-code-preview-260215"
+    "model"    : "doubao-seed-2-0-pro-260215"
   }
 }
 ```
@@ -969,7 +969,7 @@ openviking add-resource ./docs --exclude "*.tmp"
 ```json
 {
   "server": {
-    "host": "0.0.0.0",
+    "host": "127.0.0.1",
     "port": 1933,
     "auth_mode": "api_key",
     "root_api_key": "your-secret-root-key",
@@ -980,7 +980,7 @@ openviking add-resource ./docs --exclude "*.tmp"
 
 | 字段 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `host` | str | 绑定地址 | `0.0.0.0` |
+| `host` | str | 绑定地址 | `127.0.0.1` |
 | `port` | int | 绑定端口 | `1933` |
 | `auth_mode` | str | 认证模式：`"api_key"` 或 `"trusted"`。默认值为 `"api_key"` | `"api_key"` |
 | `root_api_key` | str | Root API Key。在 `api_key` 模式下启用多租户认证；在 `trusted` 模式下它只是可选附加保护，不负责解析普通用户身份 | `null` |

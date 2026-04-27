@@ -62,7 +62,7 @@
 在开始使用 OpenViking 之前，请确保您的环境满足以下要求：
 
 - **Python 版本**：3.10 或更高版本
-- **Go 版本**：1.22 或更高（从源码构建 AGFS 组件需要）
+- **Rust 工具链**：Cargo（从源码构建 RAGFS 和 CLI 组件需要）
 - **C++ 编译器**：GCC 9+ 或 Clang 11+（构建核心扩展需要，必须支持 C++17）
 - **操作系统**：Linux、macOS、Windows
 - **网络连接**：需要稳定的网络连接（用于下载依赖和访问模型服务）
@@ -291,7 +291,7 @@ openviking-server doctor
 }
 ```
 
-> **注意**：对于 embedding 模型，目前支持 `volcengine`（豆包）、`openai`、`azure`、`jina` 等提供商。对于 VLM 模型，常见提供商包括 `volcengine`、`openai`、`azure`、`openai-codex`。
+> **注意**：对于 embedding 模型，支持 `volcengine`（豆包）、`openai`、`azure`、`jina`、`ollama`、`voyage`、`dashscope`、`minimax`、`cohere`、`vikingdb`、`gemini`（需 `pip install "google-genai>=1.0.0"`）、`litellm` 和 `local`。对于 VLM 模型，常见提供商包括 `volcengine`、`openai`、`openai-codex`、`kimi`、`glm`。
 
 #### 服务器配置示例
 

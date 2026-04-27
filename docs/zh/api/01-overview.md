@@ -350,6 +350,7 @@ openviking -o json ls viking://resources/
 | POST | `/api/v1/sessions/{id}/extract` | 从会话提取记忆 |
 | POST | `/api/v1/sessions/{id}/messages` | 添加消息 |
 | POST | `/api/v1/sessions/{id}/used` | 记录实际使用的上下文 / 技能 |
+| GET | `/api/v1/sessions/{id}/archives/{archive_id}` | 获取特定会话归档 |
 
 ### 任务
 

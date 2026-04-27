@@ -126,7 +126,7 @@ while dir_queue:
 |------|-----|------|
 | `SCORE_PROPAGATION_ALPHA` | 0.5 | 50% embedding + 50% parent |
 | `MAX_CONVERGENCE_ROUNDS` | 3 | 收敛检测轮数 |
-| `GLOBAL_SEARCH_TOPK` | 3 | 全局搜索候选数 |
+| `GLOBAL_SEARCH_TOPK` | 10 | 全局搜索候选数 |
 | `MAX_RELATIONS` | 5 | 每资源最大关联数 |
 
 ## Rerank 策略
