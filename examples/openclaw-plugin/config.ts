@@ -39,8 +39,12 @@ export type MemoryOpenVikingConfig = {
   recallResources?: boolean;
   recallLimit?: number;
   recallScoreThreshold?: number;
+  /** Maximum total characters injected by auto-recall. */
+  recallMaxInjectedChars?: number;
+  /** @deprecated Auto-recall no longer truncates individual memories. */
   recallMaxContentChars?: number;
   recallPreferAbstract?: boolean;
+  /** @deprecated Use recallMaxInjectedChars. */
   recallTokenBudget?: number;
   commitTokenThreshold?: number;
   bypassSessionPatterns?: string[];
@@ -63,7 +67,7 @@ const DEFAULT_RECALL_LIMIT = 6;
 const DEFAULT_RECALL_SCORE_THRESHOLD = 0.15;
 const DEFAULT_RECALL_MAX_CONTENT_CHARS = 5000;
 const DEFAULT_RECALL_PREFER_ABSTRACT = true;
-const DEFAULT_RECALL_TOKEN_BUDGET = 8000;
+const DEFAULT_RECALL_MAX_INJECTED_CHARS = 4000;
 const DEFAULT_COMMIT_TOKEN_THRESHOLD = 20000;
 const DEFAULT_BYPASS_SESSION_PATTERNS: string[] = [];
 const DEFAULT_EMIT_STANDARD_DIAGNOSTICS = false;
@@ -174,6 +178,7 @@ export const memoryOpenVikingConfigSchema = {
         "recallResources",
         "recallLimit",
         "recallScoreThreshold",
+        "recallMaxInjectedChars",
         "recallMaxContentChars",
         "recallPreferAbstract",
         "recallTokenBudget",
@@ -259,6 +264,18 @@ export const memoryOpenVikingConfigSchema = {
       explicitIsolateAgentScopeByUser ??
       envIsolateAgentScopeByUser ??
       (hasExplicitAgentScopeMode && agentScopeMode === "user_agent" ? true : false);
+    const recallMaxInjectedChars = Math.max(
+      100,
+      Math.min(
+        50000,
+        Math.floor(
+          toNumber(
+            cfg.recallMaxInjectedChars,
+            toNumber(cfg.recallTokenBudget, DEFAULT_RECALL_MAX_INJECTED_CHARS),
+          ),
+        ),
+      ),
+    );
 
     return {
       mode,
@@ -293,10 +310,8 @@ export const memoryOpenVikingConfigSchema = {
         Math.min(10000, Math.floor(toNumber(cfg.recallMaxContentChars, DEFAULT_RECALL_MAX_CONTENT_CHARS))),
       ),
       recallPreferAbstract: cfg.recallPreferAbstract === true,
-      recallTokenBudget: Math.max(
-        100,
-        Math.min(50000, Math.floor(toNumber(cfg.recallTokenBudget, DEFAULT_RECALL_TOKEN_BUDGET))),
-      ),
+      recallMaxInjectedChars,
+      recallTokenBudget: recallMaxInjectedChars,
       commitTokenThreshold: Math.max(
         0,
         Math.min(100_000, Math.floor(toNumber(cfg.commitTokenThreshold, DEFAULT_COMMIT_TOKEN_THRESHOLD))),
@@ -430,11 +445,17 @@ export const memoryOpenVikingConfigSchema = {
       placeholder: String(DEFAULT_RECALL_SCORE_THRESHOLD),
       advanced: true,
     },
+    recallMaxInjectedChars: {
+      label: "Recall Max Injected Chars",
+      placeholder: String(DEFAULT_RECALL_MAX_INJECTED_CHARS),
+      advanced: true,
+      help: "Maximum total characters for auto-recall memory injection. Complete memories that do not fit are skipped, not truncated.",
+    },
     recallMaxContentChars: {
-      label: "Recall Max Content Chars",
+      label: "Deprecated Recall Max Content Chars",
       placeholder: String(DEFAULT_RECALL_MAX_CONTENT_CHARS),
       advanced: true,
-      help: "Maximum characters per memory content in auto-recall injection. Content exceeding this is truncated.",
+      help: "Deprecated compatibility option and will be removed in a future release. Auto-recall now keeps individual memories intact and uses recallMaxInjectedChars.",
     },
     recallPreferAbstract: {
       label: "Recall Prefer Abstract",
@@ -442,10 +463,10 @@ export const memoryOpenVikingConfigSchema = {
       help: "Use memory abstract instead of fetching full content when abstract is available. Reduces token usage.",
     },
     recallTokenBudget: {
-      label: "Recall Token Budget",
-      placeholder: String(DEFAULT_RECALL_TOKEN_BUDGET),
+      label: "Deprecated Recall Token Budget",
+      placeholder: String(DEFAULT_RECALL_MAX_INJECTED_CHARS),
       advanced: true,
-      help: "Maximum estimated tokens for auto-recall memory injection. Injection stops when budget is exhausted.",
+      help: "Deprecated compatibility alias and will be removed in a future release. Use recallMaxInjectedChars.",
     },
     bypassSessionPatterns: {
       label: "Bypass Session Patterns",

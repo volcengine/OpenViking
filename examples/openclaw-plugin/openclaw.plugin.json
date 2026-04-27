@@ -115,11 +115,17 @@
       "placeholder": "0.15",
       "advanced": true
     },
+    "recallMaxInjectedChars": {
+      "label": "Recall Max Injected Chars",
+      "placeholder": "4000",
+      "advanced": true,
+      "help": "Maximum total characters for auto-recall memory injection. Complete memories that do not fit are skipped, not truncated."
+    },
     "recallMaxContentChars": {
-      "label": "Recall Max Content Chars",
+      "label": "Deprecated Recall Max Content Chars",
       "placeholder": "5000",
       "advanced": true,
-      "help": "Maximum characters per memory content in auto-recall injection"
+      "help": "Deprecated compatibility option and will be removed in a future release. Auto-recall now keeps individual memories intact and uses recallMaxInjectedChars."
     },
     "recallPreferAbstract": {
       "label": "Recall Prefer Abstract",
@@ -127,10 +133,10 @@
       "help": "Use memory abstract instead of fetching full content when available"
     },
     "recallTokenBudget": {
-      "label": "Recall Token Budget",
-      "placeholder": "8000",
+      "label": "Deprecated Recall Token Budget",
+      "placeholder": "4000",
       "advanced": true,
-      "help": "Maximum estimated tokens for auto-recall memory injection"
+      "help": "Deprecated compatibility alias and will be removed in a future release. Use recallMaxInjectedChars."
     },
     "bypassSessionPatterns": {
       "label": "Bypass Session Patterns",
@@ -220,6 +226,9 @@
         "type": "number"
       },
       "recallScoreThreshold": {
+        "type": "number"
+      },
+      "recallMaxInjectedChars": {
         "type": "number"
       },
       "recallMaxContentChars": {

@@ -20,7 +20,8 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.autoCapture).toBe(true);
     expect(cfg.autoRecall).toBe(true);
     expect(cfg.recallPreferAbstract).toBe(false);
-    expect(cfg.recallTokenBudget).toBe(8000);
+    expect(cfg.recallMaxInjectedChars).toBe(4000);
+    expect(cfg.recallTokenBudget).toBe(4000);
     expect(cfg.commitTokenThreshold).toBe(20000);
     expect(cfg.captureMode).toBe("semantic");
     expect(cfg.captureMaxLength).toBe(24000);
@@ -30,6 +31,37 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.isolateUserScopeByAgent).toBe(false);
     expect(cfg.isolateAgentScopeByUser).toBe(false);
     expect(cfg.emitStandardDiagnostics).toBe(false);
+  });
+
+  it("defaults recallMaxInjectedChars to the 4000-character memory budget", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({});
+    expect(cfg.recallMaxInjectedChars).toBe(4000);
+    expect(cfg.recallTokenBudget).toBe(4000);
+  });
+
+  it("uses recallMaxInjectedChars as the canonical auto-recall character budget", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      recallMaxInjectedChars: 1234,
+    });
+    expect(cfg.recallMaxInjectedChars).toBe(1234);
+    expect(cfg.recallTokenBudget).toBe(1234);
+  });
+
+  it("falls back to deprecated recallTokenBudget when recallMaxInjectedChars is unset", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      recallTokenBudget: 2345,
+    });
+    expect(cfg.recallMaxInjectedChars).toBe(2345);
+    expect(cfg.recallTokenBudget).toBe(2345);
+  });
+
+  it("prefers recallMaxInjectedChars over deprecated recallTokenBudget", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      recallMaxInjectedChars: 3456,
+      recallTokenBudget: 2345,
+    });
+    expect(cfg.recallMaxInjectedChars).toBe(3456);
+    expect(cfg.recallTokenBudget).toBe(3456);
   });
 
   it("remote mode preserves custom baseUrl", () => {

@@ -1573,13 +1573,18 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
                     (uri) => client.read(uri, agentId),
                     {
                       recallPreferAbstract: cfg.recallPreferAbstract,
-                      recallMaxContentChars: cfg.recallMaxContentChars,
-                      recallTokenBudget: cfg.recallTokenBudget,
+                      recallMaxInjectedChars: cfg.recallMaxInjectedChars,
                     },
                   );
                   const memoryContext = memoryLines.join("\n");
+                  if (memoryLines.length === 0) {
+                    verboseRoutingInfo(
+                      `openviking: skipping auto-recall injection; no complete memories fit maxInjectedChars=${cfg.recallMaxInjectedChars}`,
+                    );
+                    return;
+                  }
                   verboseRoutingInfo(
-                    `openviking: injecting ${memoryLines.length} memories (~${estimatedTokens} tokens, budget=${cfg.recallTokenBudget})`,
+                    `openviking: injecting ${memoryLines.length} memories (${memoryContext.length} chars, ~${estimatedTokens} tokens, maxInjectedChars=${cfg.recallMaxInjectedChars})`,
                   );
                   verboseRoutingInfo(
                     `openviking: inject-detail ${toJsonLog({ count: memories.length, memories: summarizeInjectionMemories(memories) })}`,
@@ -1905,7 +1910,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
   },
 };
 
-/** Estimate token count using chars/4 heuristic (adequate for budget enforcement). */
+/** Estimate token count using chars/4 heuristic for diagnostics. */
 export function estimateTokenCount(text: string): number {
   if (!text) return 0;
   return Math.ceil(text.length / 4);
@@ -1913,7 +1918,6 @@ export function estimateTokenCount(text: string): number {
 
 export type BuildMemoryLinesOptions = {
   recallPreferAbstract: boolean;
-  recallMaxContentChars: number;
 };
 
 async function resolveMemoryContent(
@@ -1939,10 +1943,6 @@ async function resolveMemoryContent(
     content = item.abstract?.trim() || item.uri;
   }
 
-  if (content.length > options.recallMaxContentChars) {
-    content = content.slice(0, options.recallMaxContentChars) + "...";
-  }
-
   return content;
 }
 
@@ -1960,44 +1960,46 @@ export async function buildMemoryLines(
 }
 
 export type BuildMemoryLinesWithBudgetOptions = BuildMemoryLinesOptions & {
-  recallTokenBudget: number;
+  recallMaxInjectedChars?: number;
+  recallTokenBudget?: number;
 };
 
 /**
- * Build memory lines with a token budget constraint.
+ * Build memory lines with a character budget constraint.
  *
- * The first memory is always included even if its token count exceeds the
- * remaining budget. This is intentional (spec Section 6.2): with
- * `recallMaxContentChars=5000`, a single line is at most ~1250 tokens — well
- * within the 8000-token default budget — so overshoot is bounded and
- * guarantees at least one memory is surfaced.
+ * Individual memories are never truncated. A memory that cannot fit within the
+ * remaining character budget is skipped so only complete memory entries are
+ * injected.
  */
 export async function buildMemoryLinesWithBudget(
   memories: FindResultItem[],
   readFn: (uri: string) => Promise<string>,
   options: BuildMemoryLinesWithBudgetOptions,
 ): Promise<{ lines: string[]; estimatedTokens: number }> {
-  let budgetRemaining = options.recallTokenBudget;
+  const charBudget = options.recallMaxInjectedChars ?? options.recallTokenBudget ?? 0;
   const lines: string[] = [];
   let totalTokens = 0;
+  let totalChars = 0;
 
   for (const item of memories) {
-    if (budgetRemaining <= 0) {
+    if (totalChars >= charBudget) {
       break;
     }
 
     const content = await resolveMemoryContent(item, readFn, options);
     const line = `- [${item.category ?? "memory"}] ${content}`;
-    const lineTokens = estimateTokenCount(line);
+    const separatorChars = lines.length > 0 ? 1 : 0;
+    const projectedChars = totalChars + separatorChars + line.length;
 
-    // First line is always included even if it exceeds the budget (spec §6.2).
-    if (lineTokens > budgetRemaining && lines.length > 0) {
-      break;
+    if (projectedChars > charBudget) {
+      continue;
     }
+
+    const lineTokens = estimateTokenCount(line);
 
     lines.push(line);
     totalTokens += lineTokens;
-    budgetRemaining -= lineTokens;
+    totalChars = projectedChars;
   }
 
   return { lines, estimatedTokens: totalTokens };
