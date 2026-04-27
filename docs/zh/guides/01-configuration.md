@@ -1009,6 +1009,7 @@ openviking add-resource ./docs --exclude "*.tmp"
 |------|------|------|--------|
 | `enabled` | bool | 是否启用加密 | `false` |
 | `provider` | str | 密钥提供程序：`"local"`、`"vault"` 或 `"volcengine_kms"` | - |
+| `api_key_hashing.enabled` | bool | 是否对 API key 字段启用 Argon2id 单向哈希（与文件级 `enabled` 独立控制），详见 [加密指南](./08-encryption.md) | `false` |
 
 ### Local（本地文件）
 
