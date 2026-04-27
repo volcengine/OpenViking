@@ -23,7 +23,6 @@ import os
 import socketserver
 import sys
 
-
 _DEFAULT_HOST = "0.0.0.0"
 _DEFAULT_PORT = 1933
 _DEFAULT_CONFIG_FILE = "/app/.openviking/ov.conf"
@@ -67,9 +66,7 @@ def make_handler(config_file: str) -> type[http.server.BaseHTTPRequestHandler]:
         do_OPTIONS = _respond
 
         def log_message(self, fmt: str, *args) -> None:
-            sys.stdout.write(
-                "[openviking-pending-health] " + (fmt % args) + "\n"
-            )
+            sys.stdout.write("[openviking-pending-health] " + (fmt % args) + "\n")
             sys.stdout.flush()
 
     return Handler
@@ -83,8 +80,7 @@ def serve(host: str, port: int, config_file: str) -> None:
     handler = make_handler(config_file)
     with _ReusableServer((host, port), handler) as httpd:
         sys.stdout.write(
-            f"[openviking-pending-health] serving on {host}:{port}; "
-            f"waiting for {config_file}\n"
+            f"[openviking-pending-health] serving on {host}:{port}; waiting for {config_file}\n"
         )
         sys.stdout.flush()
         httpd.serve_forever()
