@@ -1783,9 +1783,14 @@ class VikingFS:
         # Verify the file exists before reading, because AGFS read returns
         # empty bytes for non-existent files instead of raising an error.
         try:
-            self.agfs.stat(path)
+            stat = self.agfs.stat(path)
         except Exception:
             raise NotFoundError(uri, "file")
+        if isinstance(stat, dict) and stat.get("isDir", False):
+            raise InvalidArgumentError(
+                f"Cannot read directory as file: {uri}",
+                details={"resource": uri, "expected": "file", "actual": "directory"},
+            )
         try:
             content = self.agfs.read(path)
             if isinstance(content, bytes):
@@ -1817,6 +1822,15 @@ class VikingFS:
         """Read single binary file."""
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
+        try:
+            stat = self.agfs.stat(path)
+        except Exception:
+            raise NotFoundError(uri, "file")
+        if isinstance(stat, dict) and stat.get("isDir", False):
+            raise InvalidArgumentError(
+                f"Cannot read directory as file: {uri}",
+                details={"resource": uri, "expected": "file", "actual": "directory"},
+            )
         try:
             raw = self._handle_agfs_read(self.agfs.read(path))
             raw = await self._decrypt_content(raw, ctx=ctx)

@@ -8,6 +8,7 @@ Provides semantic search operations: search, find.
 
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
+from openviking.core.uri_validation import validate_optional_viking_uri
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import InvalidArgumentError, NotInitializedError
@@ -64,6 +65,7 @@ class SearchService:
             FindResult
         """
         _ensure_non_empty_query(query)
+        target_uri = validate_optional_viking_uri(target_uri, field_name="target_uri")
         viking_fs = self._ensure_initialized()
 
         session_info = None
@@ -103,6 +105,7 @@ class SearchService:
             FindResult
         """
         _ensure_non_empty_query(query)
+        target_uri = validate_optional_viking_uri(target_uri, field_name="target_uri")
         viking_fs = self._ensure_initialized()
         result = await viking_fs.find(
             query=query,

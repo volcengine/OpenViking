@@ -9,6 +9,7 @@ from fastapi import APIRouter, Body, Depends, Query
 from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel, ConfigDict
 
+from openviking.core.uri_validation import validate_viking_uri
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
 from openviking.server.auth import get_request_context, require_role
 from openviking.server.dependencies import get_service
@@ -189,7 +190,7 @@ async def reindex(
     from openviking.service.task_tracker import get_task_tracker
     from openviking.storage.viking_fs import get_viking_fs
 
-    uri = body.uri
+    uri = validate_viking_uri(body.uri)
     viking_fs = get_viking_fs()
 
     if not await viking_fs.exists(uri, ctx=ctx):

@@ -130,6 +130,11 @@ Read L2 full content.
 | offset | int | No | 0 | Starting line number (0-indexed) |
 | limit | int | No | -1 | Number of lines to read, `-1` means read to end |
 
+**Notes**
+
+- `read()` accepts file URIs only. Passing an existing directory URI returns `INVALID_ARGUMENT` (`400`), not `NOT_FOUND`.
+- Public URI parameters accept `resources`, `user`, `agent`, and `session` scopes. Internal scopes such as `temp` and `queue` return `INVALID_URI`.
+
 **Python SDK (Embedded / HTTP)**
 
 ```python
@@ -526,6 +531,9 @@ openviking mkdir viking://resources/new-project/ --description "API docs directo
 ### rm()
 
 Remove file or directory.
+
+`rm` is idempotent: removing a valid URI that does not exist still succeeds.
+Invalid URI formats, unsupported schemes, and non-public scopes return `INVALID_URI`.
 
 **Parameters**
 
