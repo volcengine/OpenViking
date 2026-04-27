@@ -28,6 +28,24 @@ OpenViking currently has three common integration paths:
 
 If you are building anything beyond a one-process local demo, prefer HTTP server mode over spawning isolated local processes repeatedly. For MCP specifically, follow the dedicated [MCP Integration Guide](../../docs/en/guides/06-mcp-integration.md).
 
+## How This Relates to Agent Hosts
+
+If your real goal is "connect OpenViking to an agent host", this SDK example is only one path.
+
+| Integration path | Use it when |
+|---|---|
+| Embedded SDK / HTTP SDK | You own the application code and want direct programmatic control |
+| MCP | Your host already supports MCP and you want a reusable, host-agnostic integration |
+| `examples/skills` | Your host has its own skill/tool abstraction and you only need explicit OpenViking operations |
+| Host-specific plugin examples | You need lifecycle-aware behavior such as automatic recall/capture inside a specific host |
+
+Examples of the host-specific path in this repo:
+
+- [OpenClaw Plugin](../openclaw-plugin/README.md)
+- [Claude Code Memory Plugin](../claude-code-memory-plugin/README.md)
+
+For the general cross-host path, go to the [MCP Integration Guide](../../docs/en/guides/06-mcp-integration.md).
+
 ## Prerequisites
 
 1. Python 3.10+

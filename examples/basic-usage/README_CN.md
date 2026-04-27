@@ -29,6 +29,24 @@
 如果不是单进程本地 demo，而是要长期运行或多端接入，优先使用 HTTP 服务端模式。  
 如果你是给 Claude Code、Cursor 这类客户端接入，请直接看 [MCP 集成指南](../../docs/zh/guides/06-mcp-integration.md)。
 
+## 这和 Agent 宿主接入是什么关系
+
+如果你的真实目标是“把 OpenViking 接到某个 Agent 宿主里”，这个 SDK 示例只是其中一条路径。
+
+| 接入路径 | 什么时候用 |
+|---|---|
+| Embedded SDK / HTTP SDK | 你自己控制应用代码，需要直接编程接入 |
+| MCP | 宿主已经支持 MCP，你希望复用一套跨宿主的通用接入方式 |
+| `examples/skills` | 宿主有自己的 skill / tool 抽象，你只需要显式调用 OpenViking 能力 |
+| 宿主专用插件示例 | 你需要和某个宿主的生命周期深度绑定，比如自动 recall / capture |
+
+仓库里宿主专用接入的代表示例包括：
+
+- [OpenClaw 插件](../openclaw-plugin/README_CN.md)
+- [Claude Code 记忆插件](../claude-code-memory-plugin/README_CN.md)
+
+如果你要的是跨宿主通用方案，请直接看 [MCP 集成指南](../../docs/zh/guides/06-mcp-integration.md)。
+
 ## 前置条件
 
 1. Python 3.10+

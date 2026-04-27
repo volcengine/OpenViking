@@ -2,6 +2,38 @@
 
 OpenViking 可以作为 [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) 服务器使用，任何兼容 MCP 的客户端都可以访问其记忆和资源能力。
 
+## 先选对接入模式
+
+`examples/skills` 不是唯一方案，也不是当前通用 Agent 接入的默认路径。
+在当前主干里，OpenViking 常见有三种 Agent 接入模式：
+
+| 模式 | 适合场景 | 你会得到什么 |
+|---|---|---|
+| MCP server | 能调用 MCP 工具的通用 Agent 宿主 | 跨宿主复用、共享服务部署、显式工具调用 |
+| 宿主专用插件 / 示例 | 宿主本身提供了普通工具调用之外的生命周期 hook | 更深的 recall/capture 能力、宿主原生体验、更紧的运行时集成 |
+| Embedded SDK / HTTP SDK | 你自己全权控制的应用或服务 | 从应用代码直接控制导入、检索、session 与存储 |
+
+### `examples/skills` 适合什么
+
+当宿主本身已经有 “skill / tool pack / prompt tool” 这类原生机制，而你只需要轻量、显式地调用 OpenViking 时，`examples/skills` 很合适。例如：
+
+- 把数据写入 OpenViking
+- 按需查询 OpenViking 上下文
+- 让 Agent 操作 OpenViking 服务端
+
+这些示例是刻意做窄的。它们很适合作为显式工具调用模式，但并不替代：
+
+- MCP server：当你需要一条能覆盖 Claude Code、Cursor、Claude Desktop、OpenClaw 等宿主的通用接入路径
+- 宿主专用插件：例如 OpenClaw context-engine 示例、Claude Code memory plugin，这类集成需要绑定宿主生命周期，做自动 recall/capture
+- SDK：当你是把 OpenViking 直接嵌入到自有 Python 服务或应用中
+
+### 快速建议
+
+- 如果你想要一套能跨多个 Agent 宿主复用的接入方式，优先用 MCP。
+- 如果宿主已经有成熟的 skill 抽象，而且你只需要显式工具调用，选 `examples/skills`。
+- 如果你要的是生命周期感知的记忆行为，而不只是可调用工具，选宿主专用插件 / 示例。
+- 如果你在开发自己的应用，并不需要 MCP，直接用 SDK。
+
 ## 传输模式
 
 OpenViking 支持两种 MCP 传输模式：

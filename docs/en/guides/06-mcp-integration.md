@@ -2,6 +2,38 @@
 
 OpenViking can be used as an [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server, allowing any MCP-compatible client to access its memory and resource capabilities.
 
+## Choosing the Integration Pattern
+
+`examples/skills` is not the only or default integration path for agents.
+On current `main`, OpenViking has three common agent integration patterns:
+
+| Pattern | Best for | What you get |
+|---|---|---|
+| MCP server | General-purpose agent hosts that can call MCP tools | Cross-host integration, shared server deployment, explicit tool access |
+| Host-specific plugin/example | Hosts that expose lifecycle hooks beyond plain tool calls | Deeper recall/capture behavior, host-native UX, tighter runtime integration |
+| Embedded SDK / HTTP SDK | Custom applications you own end to end | Full control over ingestion, retrieval, sessions, and storage from application code |
+
+### Where `examples/skills` fits
+
+Use `examples/skills` when your host already has a native "skill", "tool pack", or prompt-driven tool integration mechanism and you want a lightweight, explicit workflow such as:
+
+- add data into OpenViking
+- search OpenViking context on demand
+- operate the OpenViking server from an agent
+
+Those examples are intentionally narrow. They are a good pattern for explicit tool calls, but they are not a replacement for:
+
+- the MCP server, when you want a general integration path across Claude Code, Cursor, Claude Desktop, OpenClaw, and similar hosts
+- host-specific plugins such as the OpenClaw context-engine example or the Claude Code memory plugin, when you need automatic recall/capture tied to the host lifecycle
+- the SDK, when you are embedding OpenViking directly into your own Python service or application
+
+### Quick recommendations
+
+- Start with MCP if you want one integration story that works across multiple agent hosts.
+- Use `examples/skills` if your host already has a strong native skill abstraction and you only need explicit OpenViking tool calls.
+- Use a host-specific plugin/example if you need lifecycle-aware memory behavior, not just callable tools.
+- Use the SDK if you are building the application itself and do not need MCP at all.
+
 ## Transport Modes
 
 OpenViking supports two MCP transport modes:
