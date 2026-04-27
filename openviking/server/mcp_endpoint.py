@@ -114,68 +114,33 @@ mcp = FastMCP(
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
 )
 
-SEARCH_TARGETS: dict[str, list[str]] = {
-    "memories": ["viking://user/memories", "viking://agent/memories"],
-    "resources": ["viking://resources"],
-    "skills": ["viking://agent/skills"],
-}
-
-
-def _is_memory_uri(uri: str) -> bool:
-    return ("viking://user/" in uri or "viking://agent/" in uri) and "/memories/" in uri
-
-
-
 # -- search ----------------------------------------------------------------
 
 @mcp.tool()
-async def search(query: str, scope: str = "all", limit: int = 6) -> str:
-    """Search OpenViking context database. Auto-recall already injects top matches — use this for deeper or narrower searches. Prefer search over manual directory traversal."""
+async def search(query: str, target_uri: str = "", limit: int = 6) -> str:
+    """Search OpenViking context database. Auto-recall already injects top matches — use this for deeper or narrower searches. Prefer search over manual directory traversal. Leave target_uri empty to search everything, or pass a viking:// URI to narrow scope."""
     service = get_service()
     ctx = _get_ctx()
-    scopes = [scope] if scope != "all" else ["memories", "resources", "skills"]
-    score_threshold = 0.35
 
-    results: list[dict] = []
-    for s in scopes:
-        for uri in SEARCH_TARGETS.get(s, []):
-            try:
-                r = await service.search.find(
-                    query=query, ctx=ctx, target_uri=uri,
-                    limit=limit, score_threshold=None,
-                )
-                items = getattr(r, "to_dict", lambda: r)()
-                bucket = items.get(s, []) if isinstance(items, dict) else []
-                for item in bucket:
-                    if (item.get("score", 0) or 0) >= score_threshold:
-                        results.append({**item, "_type": s.rstrip("s")})
-            except Exception:
-                pass
+    result = await service.search.find(
+        query=query, ctx=ctx, target_uri=target_uri,
+        limit=limit, score_threshold=0.35,
+    )
 
-    results.sort(key=lambda x: x.get("score", 0), reverse=True)
+    items = []
+    for ctx_type, contexts in [("memory", result.memories), ("resource", result.resources), ("skill", result.skills)]:
+        for m in contexts:
+            items.append((ctx_type, m))
 
-    seen: set[str] = set()
-    picked: list[dict] = []
-    for item in results:
-        key = item.get("uri", "")
-        if key in seen:
-            continue
-        seen.add(key)
-        picked.append(item)
-        if len(picked) >= limit:
-            break
-
-    if not picked:
+    if not items:
         return "No matching context found."
 
     lines = []
-    for item in picked:
-        score = item.get("score", 0)
-        abstract = (item.get("abstract") or item.get("overview") or "(no abstract)").strip()
-        typ = item.get("_type", "memory")
-        lines.append(f"- [{typ} {score * 100:.0f}%] {item['uri']}\n    {abstract}")
+    for ctx_type, m in items:
+        abstract = (m.abstract or m.overview or "(no abstract)").strip()
+        lines.append(f"- [{ctx_type} {m.score * 100:.0f}%] {m.uri}\n    {abstract}")
 
-    return f"Found {len(picked)} item(s):\n\n" + "\n".join(lines) + "\n\nUse the read tool to expand a URI."
+    return f"Found {len(items)} item(s):\n\n" + "\n".join(lines) + "\n\nUse the read tool to expand a URI."
 
 
 # -- read ------------------------------------------------------------------
@@ -239,37 +204,33 @@ async def store(text: str, role: str = "user") -> str:
 @mcp.tool()
 async def forget(uri: str = "", query: str = "") -> str:
     """Delete a memory from OpenViking. Provide an exact URI for direct deletion, or a search query to find and delete matching memories."""
+    from openviking_cli.retrieve import ContextType
+
     service = get_service()
     ctx = _get_ctx()
     if uri:
-        if not _is_memory_uri(uri):
+        if "/memories/" not in uri:
             return f"Refusing to delete non-memory URI: {uri}"
-        await service.fs.delete(uri, ctx=ctx)
+        await service.fs.rm(uri, ctx=ctx)
         return f"Deleted: {uri}"
     if not query:
         return "Provide either uri or query."
-    candidates = []
-    for target in SEARCH_TARGETS["memories"]:
-        try:
-            r = await service.search.find(query=query, ctx=ctx, target_uri=target, limit=20, score_threshold=None)
-            items = getattr(r, "to_dict", lambda: r)()
-            for item in items.get("memories", []):
-                if item.get("level") == 2 and _is_memory_uri(item.get("uri", "")):
-                    candidates.append(item)
-        except Exception:
-            pass
-    candidates.sort(key=lambda x: x.get("score", 0), reverse=True)
+
+    result = await service.search.find(query=query, ctx=ctx, target_uri="", limit=20, score_threshold=None)
+    candidates = [
+        m for m in result.memories
+        if m.level == 2 and m.context_type == ContextType.MEMORY
+    ]
     if not candidates:
         return "No matching memories found."
     top = candidates[0]
-    if len(candidates) == 1 and (top.get("score", 0) or 0) >= 0.85:
-        await service.fs.delete(top["uri"], ctx=ctx)
-        return f"Deleted: {top['uri']}"
+    if len(candidates) == 1 and (top.score or 0) >= 0.85:
+        await service.fs.rm(top.uri, ctx=ctx)
+        return f"Deleted: {top.uri}"
     lines = []
-    for item in candidates[:10]:
-        score = item.get("score", 0) or 0
-        abstract = (item.get("abstract") or "?").strip()
-        lines.append(f"- {item['uri']} — {abstract} ({score * 100:.0f}%)")
+    for m in candidates[:10]:
+        abstract = (m.abstract or "?").strip()
+        lines.append(f"- {m.uri} — {abstract} ({m.score * 100:.0f}%)")
     return f"Found {len(candidates)} candidates. Specify the exact URI:\n\n" + "\n".join(lines)
 
 
