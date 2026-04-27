@@ -1122,9 +1122,9 @@ def run_init() -> int:
     mode = _prompt_choice(
         "Choose setup mode:",
         [
+            ("Cloud API", "(VolcEngine, BytePlus, OpenAI, etc.)"),
             ("Local embedding via llama.cpp", "(CPU embedding, no GPU required)"),
             ("Local models via Ollama", "(recommended for macOS / Apple Silicon)"),
-            ("Cloud API", "(VolcEngine, BytePlus, OpenAI, etc.)"),
             ("Custom", "(manual editing)"),
         ],
         default=1,
@@ -1133,11 +1133,11 @@ def run_init() -> int:
     config_dict: dict[str, Any] | None = None
 
     if mode == 1:
-        config_dict = _wizard_llamacpp()
-    elif mode == 2:
-        config_dict = _wizard_ollama()
-    elif mode == 3:
         config_dict = _wizard_cloud()
+    elif mode == 2:
+        config_dict = _wizard_llamacpp()
+    elif mode == 3:
+        config_dict = _wizard_ollama()
     else:
         _wizard_custom()
         return 0

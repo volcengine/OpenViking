@@ -545,7 +545,7 @@ class TestConfigWriting:
 
         with (
             patch.dict(os.environ, {"OPENVIKING_CONFIG_FILE": str(config_path)}, clear=False),
-            patch("openviking_cli.setup_wizard._prompt_choice", return_value=2),
+            patch("openviking_cli.setup_wizard._prompt_choice", return_value=3),
             patch("openviking_cli.setup_wizard._wizard_ollama", return_value=config),
             patch(
                 "openviking_cli.setup_wizard._wizard_server",
@@ -580,7 +580,7 @@ class TestConfigWriting:
         }
         with (
             patch.dict(os.environ, {"OPENVIKING_CONFIG_FILE": str(config_path)}, clear=False),
-            patch("openviking_cli.setup_wizard._prompt_choice", return_value=2),
+            patch("openviking_cli.setup_wizard._prompt_choice", return_value=3),
             patch("openviking_cli.setup_wizard._wizard_ollama", return_value=config),
             patch(
                 "openviking_cli.setup_wizard._wizard_server",
