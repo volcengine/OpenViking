@@ -80,6 +80,7 @@ class SemanticDagExecutor:
         recursive: bool = True,
         lifecycle_lock_handle_id: str = "",
         is_code_repo: bool = False,
+        changes: Optional[Dict[str, List[str]]] = None,
     ):
         self._processor = processor
         self._context_type = context_type
@@ -92,6 +93,10 @@ class SemanticDagExecutor:
         self._recursive = recursive
         self._lifecycle_lock_handle_id = lifecycle_lock_handle_id
         self._is_code_repo = is_code_repo
+        self._changes = changes or {}
+        self._changed_paths = {
+            path for key in ("added", "modified", "deleted") for path in self._changes.get(key, [])
+        }
         self._llm_sem = asyncio.Semaphore(max_concurrent_llm)
         self._viking_fs = get_viking_fs()
         self._nodes: Dict[str, DirNode] = {}
@@ -115,6 +120,9 @@ class SemanticDagExecutor:
             return
 
         if not self._target_uri or not self._root_uri:
+            return noop_callback
+
+        if self._target_uri == self._root_uri:
             return noop_callback
 
         # If full update, move temp uri to target uri has been handled in the processor
@@ -316,7 +324,22 @@ class SemanticDagExecutor:
         except Exception:
             return None
 
+    def _is_direct_incremental_update(self) -> bool:
+        return (
+            self._incremental_update
+            and bool(self._changed_paths)
+            and self._target_uri == self._root_uri
+        )
+
+    def _path_has_direct_change(self, uri: str) -> bool:
+        if uri in self._changed_paths:
+            return True
+        prefix = uri.rstrip("/") + "/"
+        return any(path.startswith(prefix) for path in self._changed_paths)
+
     async def _check_file_content_changed(self, file_path: str) -> bool:
+        if self._is_direct_incremental_update():
+            return file_path in self._changed_paths
         target_path = self._get_target_file_path(file_path)
         if not target_path:
             return True
@@ -392,6 +415,17 @@ class SemanticDagExecutor:
     async def _check_dir_children_changed(
         self, dir_uri: str, current_files: List[str], current_dirs: List[str]
     ) -> bool:
+        if self._is_direct_incremental_update():
+            if self._path_has_direct_change(dir_uri):
+                return True
+            for current_file in current_files:
+                if self._file_change_status.get(current_file, True):
+                    return True
+            for current_dir in current_dirs:
+                if self._dir_change_status.get(current_dir, True):
+                    return True
+            return False
+
         target_path = self._get_target_file_path(dir_uri)
         if not target_path:
             return True

@@ -243,11 +243,13 @@ class VolcengineApiKeyCollection(ICollection):
         )
 
     def get_meta_data(self):
+        from openviking.storage.collection_schemas import CollectionSchemas
         return {
             "ProjectName": self.project_name,
             "CollectionName": self.collection_name,
             "IndexName": self.index_name,
             "Description": "data-plane only backend",
+            "Fields": CollectionSchemas.context_collection.get("Fields", []),
         }
 
     def close(self):

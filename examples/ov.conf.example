@@ -244,6 +244,9 @@
     "provider": "local",
     "local": {
       "key_file": "~/.openviking/master.key"
+    },
+    "api_key_hashing": {
+      "enabled": false
     }
   },
   "encryption_vault_example": {

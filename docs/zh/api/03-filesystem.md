@@ -185,6 +185,7 @@ openviking read viking://resources/docs/api.md
 - `replace` 和 `append` 要求文件已存在；`create` 仅用于创建新文件，目标路径已存在时返回 `409 Conflict`。目录始终会被拒绝。
 - `create` 只允许以下文本类扩展名：`.md`、`.txt`、`.json`、`.yaml`、`.yml`、`.toml`、`.py`、`.js`、`.ts`。父目录会自动创建。
 - 不允许直接写入派生语义文件：`.abstract.md`、`.overview.md`、`.relations.json`。
+- 文件内容会在 API 返回前完成更新；`wait` 只控制是否等待语义/向量刷新完成。
 - 公共 API 已不再接受 `regenerate_semantics` 或 `revectorize`；写入后一定会自动刷新相关语义与向量。
 
 **Python SDK (Embedded / HTTP)**
@@ -236,8 +237,9 @@ openviking write viking://resources/docs/api.md \
     "context_type": "resource",
     "mode": "replace",
     "written_bytes": 29,
-    "semantic_updated": true,
-    "vector_updated": true,
+    "content_updated": true,
+    "semantic_status": "complete",
+    "vector_status": "complete",
     "queue_status": {
       "Semantic": {
         "processed": 1,
