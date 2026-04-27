@@ -294,6 +294,17 @@ class Session:
         """Get session metadata."""
         return self._meta
 
+    async def load_latest_archive_messages(self) -> List[Message]:
+        """Load messages from the latest completed archive.
+
+        Returns an empty list if the session has no completed archives or if
+        the archive's messages.jsonl cannot be read.
+        """
+        archives = await self._get_completed_archive_refs()
+        if not archives:
+            return []
+        return await self._read_archive_messages(archives[0]["archive_uri"])
+
     # ============= Core methods =============
 
     def used(

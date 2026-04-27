@@ -509,6 +509,83 @@ async def test_compress_session(client: httpx.AsyncClient):
     assert "telemetry" not in body
 
 
+async def test_extract_uses_archived_messages_after_commit(
+    client: httpx.AsyncClient,
+    service,
+):
+    """After commit, extract reads the session's archive instead of the empty live queue.
+
+    Regression: previously `extract` called the extractor with `session.messages`,
+    which is the live queue. The live queue is empty after commit, so `extract`
+    was a no-op for any already-committed session — blocking recovery when
+    commit's Phase 2 extraction failed silently.
+    """
+    captured_messages: list = []
+
+    async def recording_extract(*, messages, **kwargs):
+        del kwargs
+        captured_messages.append(messages)
+        return []
+
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json=_message_request("user", content="archived question"),
+    )
+    await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json=_message_request("assistant", content="archived answer"),
+    )
+    commit_resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
+    task_id = commit_resp.json()["result"]["task_id"]
+    await _wait_for_task(client, task_id)
+
+    # Swap extractor after commit so the archive is written normally by Phase 2.
+    # This isolates what `extract` passes to the extractor when invoked later.
+    service.sessions._session_compressor.extract_long_term_memories = recording_extract
+
+    resp = await client.post(f"/api/v1/sessions/{session_id}/extract")
+    assert resp.status_code == 200
+
+    assert len(captured_messages) == 1
+    received = captured_messages[0]
+    texts = [m.parts[0].text for m in received]
+    assert texts == ["archived question", "archived answer"]
+
+
+async def test_extract_falls_back_to_live_messages_when_no_archive(
+    client: httpx.AsyncClient,
+    service,
+):
+    """Sessions without a completed archive still extract from the live queue."""
+    captured_messages: list = []
+
+    async def recording_extract(*, messages, **kwargs):
+        del kwargs
+        captured_messages.append(messages)
+        return []
+
+    service.sessions._session_compressor.extract_long_term_memories = recording_extract
+
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json=_message_request("user", content="before commit"),
+    )
+
+    resp = await client.post(f"/api/v1/sessions/{session_id}/extract")
+    assert resp.status_code == 200
+
+    assert len(captured_messages) == 1
+    received = captured_messages[0]
+    assert len(received) == 1
+    assert received[0].parts[0].text == "before commit"
+
+
 async def test_extract_session_jsonable_regression(client: httpx.AsyncClient, service, monkeypatch):
     """Regression: extract endpoint should serialize internal objects."""
 

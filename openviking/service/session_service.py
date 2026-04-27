@@ -244,7 +244,18 @@ class SessionService:
         return task.to_dict() if task else None
 
     async def extract(self, session_id: str, ctx: RequestContext) -> List[Any]:
-        """Extract memories from a session.
+        """Extract memories from a session's archived messages.
+
+        For previously-committed sessions, loads messages from the latest
+        completed archive and runs memory extraction against them. For
+        sessions with no completed archives (or when the archive cannot be
+        read), falls back to the live message queue, which preserves prior
+        behavior for callers that invoke extract before commit.
+
+        This is the recovery path when commit's Phase 2 extraction fails
+        silently (LLM outage, provider regressions, parser edge cases) —
+        the archive is already on disk and can be re-processed without
+        losing the messages or creating a duplicate archive.
 
         Args:
             session_id: Session ID to extract from
@@ -258,8 +269,12 @@ class SessionService:
 
         session = await self.get(session_id, ctx)
 
+        messages = await session.load_latest_archive_messages()
+        if not messages:
+            messages = session.messages
+
         memories = await self._session_compressor.extract_long_term_memories(
-            messages=session.messages,
+            messages=messages,
             user=ctx.user,
             session_id=session_id,
             ctx=ctx,
