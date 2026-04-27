@@ -23,6 +23,7 @@ from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConve
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+from openviking.utils.privacy_config_service import PrivacyConfigService
 from openviking.utils.zip_safe import safe_extract_zip
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
@@ -42,9 +43,14 @@ class SkillProcessor:
     5. Index to vector store
     """
 
-    def __init__(self, vikingdb: VikingDBManager):
+    def __init__(
+        self,
+        vikingdb: VikingDBManager,
+        privacy_config_service: Optional[PrivacyConfigService] = None,
+    ):
         """Initialize skill processor."""
         self.vikingdb = vikingdb
+        self._privacy_config_service = privacy_config_service
 
     async def process_skill(
         self,
@@ -79,6 +85,15 @@ class SkillProcessor:
         telemetry.set(
             "skill.parse.duration_ms", round((time.perf_counter() - parse_start) * 1000, 3)
         )
+        skill_dir_uri = f"viking://agent/skills/{skill_dict['name']}"
+
+        if self._privacy_config_service:
+            skill_dict = dict(skill_dict)
+            skill_dict["content"] = await self._privacy_config_service.sanitize_skill_content(
+                skill_uri=f"{skill_dir_uri}/SKILL.md",
+                content=skill_dict.get("content", ""),
+                ctx=ctx,
+            )
 
         context = Context(
             uri=f"{canonical_agent_root(ctx)}/skills/{skill_dict['name']}",
@@ -105,8 +120,6 @@ class SkillProcessor:
             "skill.overview.duration_ms",
             round((time.perf_counter() - overview_start) * 1000, 3),
         )
-
-        skill_dir_uri = f"viking://agent/skills/{context.meta['name']}"
 
         write_start = time.perf_counter()
         await self._write_skill_content(
