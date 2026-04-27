@@ -305,10 +305,10 @@ def create_app(
 
     # MCP endpoint — serves 5 tools (search, read, store, forget, health)
     # via streamable HTTP for Claude Code and other MCP clients.
-    from openviking.server.mcp_endpoint import create_mcp_app
     from starlette.routing import Route
 
-    mcp_app = create_mcp_app()
-    app.routes.append(Route("/mcp", endpoint=mcp_app, methods=["GET", "POST", "DELETE"]))
+    from openviking.server.mcp_endpoint import create_mcp_app
+
+    app.routes.append(Route("/mcp", endpoint=create_mcp_app(), methods=["GET", "POST", "DELETE"]))
 
     return app

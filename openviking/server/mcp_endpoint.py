@@ -27,7 +27,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from openviking.server.auth import resolve_identity
 from openviking.server.dependencies import get_service
-from openviking.server.identity import RequestContext, Role
+from openviking.server.identity import RequestContext
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     PermissionDeniedError,
@@ -50,10 +50,7 @@ _mcp_ctx: contextvars.ContextVar[Optional[RequestContext]] = contextvars.Context
 def _get_ctx() -> RequestContext:
     ctx = _mcp_ctx.get()
     if ctx is None:
-        return RequestContext(
-            user=UserIdentifier("default", "default", "default"),
-            role=Role.ROOT,
-        )
+        raise UnauthenticatedError("MCP request identity not set")
     return ctx
 
 
@@ -264,8 +261,6 @@ def create_mcp_app() -> ASGIApp:
     IMPORTANT: call `mcp_lifespan()` inside the FastAPI lifespan BEFORE
     serving requests. The session manager task group must be initialized.
     """
-    # streamable_http_app() lazily creates the session_manager.
-    # We call it to trigger creation, then extract the route handler.
     starlette_app = mcp.streamable_http_app()
-    handler = starlette_app.routes[0].app  # StreamableHTTPASGIApp
+    handler = starlette_app.routes[0].app
     return _IdentityASGIMiddleware(handler)
