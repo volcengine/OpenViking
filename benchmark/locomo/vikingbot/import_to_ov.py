@@ -111,7 +111,9 @@ def build_session_messages(
             speaker = msg.get("speaker", "unknown")
             text = msg.get("text", "")
             if single_chat:
-                messages.append({"role": "user", "text": text, "index": idx})
+                # single-chat 模式下所有消息用统一 user_id 上传，
+                # speaker 信息需要嵌入文本以保留说话人身份
+                messages.append({"role": "user", "text": f"{speaker}: {text}", "index": idx})
             else:
                 messages.append({"role": "user", "text": text, "speaker": speaker, "index": idx})
 
