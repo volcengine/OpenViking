@@ -144,6 +144,13 @@ class AGFSConfig(BaseModel):
 
     timeout: int = Field(default=10, description="RAGFS request timeout (seconds)")
 
+    queue_db_path: Optional[str] = Field(
+        default=None,
+        description="Override path of the queuefs sqlite database file. "
+        "Defaults to '{storage.workspace}/_system/queue/queue.db' when not set. "
+        "Useful when the workspace volume does not support sqlite (e.g. some network filesystems).",
+    )
+
     retry_times: Any = Field(
         default=None,
         exclude=True,

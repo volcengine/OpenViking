@@ -15,6 +15,13 @@ logger = get_logger(__name__)
 
 def _generate_plugin_config(agfs_config: Any, data_path: Path) -> Dict[str, Any]:
     """Dynamically generate RAGFS plugin configuration based on backend type."""
+    default_queue_db_path = data_path / "_system" / "queue" / "queue.db"
+    configured_queue_db_path = getattr(agfs_config, "queue_db_path", None)
+    if configured_queue_db_path:
+        queue_db_path = str(Path(configured_queue_db_path).expanduser().resolve())
+    else:
+        queue_db_path = str(default_queue_db_path)
+
     config = {
         "serverinfofs": {
             "enabled": True,
@@ -28,7 +35,7 @@ def _generate_plugin_config(agfs_config: Any, data_path: Path) -> Dict[str, Any]
             "path": "/queue",
             "config": {
                 "backend": "sqlite",
-                "db_path": str(data_path / "_system" / "queue" / "queue.db"),
+                "db_path": queue_db_path,
             },
         },
     }
