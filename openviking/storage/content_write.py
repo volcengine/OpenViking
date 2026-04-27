@@ -123,10 +123,6 @@ class ContentWriteCoordinator:
             "content_updated": True,
             "semantic_status": semantic_status,
             "vector_status": vector_status,
-            # Legacy fields: kept for existing clients. They now mean the refresh
-            # was accepted (queued or completed), not necessarily completed.
-            "semantic_updated": semantic_status != "failed",
-            "vector_updated": vector_status != "failed",
             "queue_status": queue_status,
         }
 
