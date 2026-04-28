@@ -86,7 +86,7 @@ Search the web for current information.
 }
 
 result = client.add_skill(skill)
-print(f"Added: {result['uri']}")
+print(f"Added: {result['root_uri']}")
 ```
 
 **HTTP API**
@@ -121,6 +121,7 @@ openviking add-skill ./my-skill/ [--wait]
   "status": "ok",
   "result": {
     "status": "success",
+    "root_uri": "viking://agent/skills/search-web/",
     "uri": "viking://agent/skills/search-web/",
     "name": "search-web",
     "auxiliary_files": 0

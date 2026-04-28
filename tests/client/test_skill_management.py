@@ -46,7 +46,9 @@ Use this skill when you need to test skill functionality.
 
         result = await client.add_skill(data=skill_file)
 
+        assert "root_uri" in result
         assert "uri" in result
+        assert result["root_uri"] == result["uri"]
         assert "viking://agent/skills/" in result["uri"]
 
     async def test_add_skill_from_string(self, client: AsyncOpenViking):

@@ -138,6 +138,7 @@ class SkillProcessor:
         )
         return {
             "status": "success",
+            "root_uri": skill_dir_uri,
             "uri": skill_dir_uri,
             "name": skill_dict["name"],
             "auxiliary_files": len(auxiliary_files),

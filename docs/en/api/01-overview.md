@@ -204,6 +204,11 @@ resource parsing or synchronous reindex failures, are returned as non-2xx respon
 `status="error"` and an `error` object. Clients should not look for `result.status="error"` to
 detect request failure.
 
+Request validation failures, including malformed JSON, missing required fields, and invalid
+parameter values, return HTTP `400` with `error.code="INVALID_ARGUMENT"`. The response never uses
+FastAPI's raw `{"detail": ...}` error format; when field-level validation information is
+available, it is exposed under `error.details.validation_errors`.
+
 Python HTTP SDKs (`SyncHTTPClient` and `AsyncHTTPClient`) raise the corresponding
 `OpenVikingError` subclass for this envelope. For example, `PROCESSING_ERROR` is raised as
 `ProcessingError`.

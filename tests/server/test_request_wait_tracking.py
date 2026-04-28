@@ -239,6 +239,7 @@ async def test_add_skill_wait_uses_request_tracker_when_telemetry_disabled(servi
             timeout=9.0,
         )
 
+    assert result["root_uri"] == "viking://agent/skills/demo"
     assert result["queue_status"] == tracker.queue_status
     assert tracker.registered_requests == [telemetry.telemetry_id]
     assert tracker.wait_calls == [(telemetry.telemetry_id, 9.0)]

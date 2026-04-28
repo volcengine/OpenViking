@@ -108,7 +108,9 @@ description: SDK localhost upload test
     )
 
     result = await client.add_skill(data=str(f), wait=True)
+    assert "root_uri" in result
     assert "uri" in result
+    assert result["root_uri"] == result["uri"]
     assert result["uri"].startswith("viking://agent/skills/")
 
 

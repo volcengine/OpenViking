@@ -202,6 +202,10 @@ HTTP 错误始终使用顶层错误 envelope。资源解析、同步 reindex 等
 响应，顶层为 `status="error"`，并包含 `error` 对象。客户端不应通过
 `result.status="error"` 判断请求失败。
 
+请求校验失败，包括 JSON 格式错误、缺少必填字段和参数值非法，统一返回 HTTP `400`，
+并使用 `error.code="INVALID_ARGUMENT"`。响应不会使用 FastAPI 原生的 `{"detail": ...}`
+错误格式；当存在字段级校验信息时，会通过 `error.details.validation_errors` 返回。
+
 Python HTTP SDK（`SyncHTTPClient` 和 `AsyncHTTPClient`）会把该 envelope 映射为对应的
 `OpenVikingError` 子类。例如 `PROCESSING_ERROR` 会抛出 `ProcessingError`。
 

@@ -440,6 +440,8 @@ class ResourceService:
                 ctx=ctx,
                 allow_local_path_resolution=allow_local_path_resolution,
             )
+            if isinstance(result, dict) and "root_uri" not in result and result.get("uri"):
+                result["root_uri"] = result["uri"]
 
             if wait:
                 wait_start = time.perf_counter()
