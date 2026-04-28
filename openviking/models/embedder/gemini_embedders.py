@@ -688,7 +688,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
                 raise ValueError(f"'text' content must be a string, got {type(text).__name__}.")
             return types.Part(text=text)
         explicit_mime = content.get("mime_type")
-        for key in ("image", "audio", "video", "pdf", "document"):
+        for key in ("image", "audio", "video", "pdf"):
             if key not in content:
                 continue
             value = content[key]
