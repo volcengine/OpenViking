@@ -318,8 +318,8 @@ Typical `component` values include:
 
 | Metric Family | Type | Common Labels | Meaning |
 |---------------|------|---------------|---------|
-| `openviking_vikingdb_collection_health` | Gauge | `collection, valid` | collection health |
-| `openviking_vikingdb_collection_vectors` | Gauge | `collection, valid` | current vector count per collection |
+| `openviking_vikingdb_collection_health` | Gauge | `account_id, collection, valid` | collection health |
+| `openviking_vikingdb_collection_vectors` | Gauge | `account_id, collection, valid` | current vector count per collection |
 | `openviking_model_usage_available` | Gauge | `model_type, valid` | whether model usage statistics are currently available |
 
 Possible `model_type` values include:
