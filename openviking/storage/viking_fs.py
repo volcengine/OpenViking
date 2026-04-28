@@ -722,7 +722,7 @@ class VikingFS:
             )
         except (AttributeError, AGFSNotSupportedError, NotImplementedError):
             # Capability missing: let the outer caller fall back to the VikingFS implementation.
-            logger.warning(f"agfs grep unavailable, falling back to VikingFS implementation")
+            logger.warning("agfs grep unavailable, falling back to VikingFS implementation")
             raise
 
         matches = result.get("matches", [])
