@@ -10,18 +10,32 @@ Mirrors SDK's client.observer API:
 - /api/v1/observer/system - System overall status
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
-from openviking.server.auth import get_request_context, require_role
+from openviking.server.auth import _auth_mode, get_request_context
 from openviking.server.dependencies import get_service
-from openviking.server.identity import RequestContext, Role
+from openviking.server.identity import AuthMode, RequestContext, Role
 from openviking.server.models import Response
 from openviking.service.debug_service import ComponentStatus, SystemStatus
+from openviking_cli.exceptions import PermissionDeniedError
+
+
+async def require_observer_access(
+    request: Request,
+    ctx: RequestContext = Depends(get_request_context),
+) -> RequestContext:
+    """Allow observer access for trusted deployments and admin/root API keys."""
+    if _auth_mode(request) == AuthMode.TRUSTED:
+        return ctx
+    if ctx.role not in {Role.ROOT, Role.ADMIN}:
+        raise PermissionDeniedError("Requires trusted mode or role: root, admin")
+    return ctx
+
 
 router = APIRouter(
     prefix="/api/v1/observer",
     tags=["observer"],
-    dependencies=[require_role(Role.ROOT, Role.ADMIN)],
+    dependencies=[Depends(require_observer_access)],
 )
 
 

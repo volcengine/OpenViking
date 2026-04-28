@@ -173,7 +173,7 @@ def test_observer_endpoints_reject_user_keys_but_allow_admin_and_root():
     )
 
 
-def test_observer_endpoints_reject_trusted_mode_user_requests():
+def test_observer_endpoints_allow_trusted_mode_requests():
     app = _build_trusted_app()
     client = TestClient(app)
 
@@ -185,5 +185,8 @@ def test_observer_endpoints_reject_trusted_mode_user_requests():
         },
     )
 
-    assert response.status_code == 403
-    assert response.json()["error"]["code"] == "PERMISSION_DENIED"
+    assert response.status_code == 200
+    assert (
+        response.json()["result"]["components"]["vikingdb"]["status"]
+        == "global vikingdb stats for trusted_user"
+    )
