@@ -64,7 +64,7 @@ With OpenViking, developers can build an Agent's brain just like managing local 
 Before starting with OpenViking, please ensure your environment meets the following requirements:
 
 - **Python Version**: 3.10 or higher
-- **Go Version**: 1.22 or higher (Required for building AGFS components)
+- **Rust Toolchain**: Cargo (Required for building RAGFS and CLI components from source)
 - **C++ Compiler**: GCC 9+ or Clang 11+ (Required for building core extensions)
 - **Operating System**: Linux, macOS, Windows
 - **Network Connection**: A stable network connection is required (for downloading dependencies and accessing model services)
@@ -335,7 +335,7 @@ If you prefer manual configuration, create `~/.openviking/ov.conf`, remove the c
 }
 ```
 
-> **Note**: For embedding models, supported providers are `volcengine` (Doubao), `openai`, `jina`, `voyage`, `minimax`, `vikingdb`, and `gemini` (requires `pip install "google-genai>=1.0.0"`). For VLM models, common providers include `volcengine`, `openai`, `openai-codex`, `kimi`, and `glm`.
+> **Note**: For embedding models, supported providers are `volcengine` (Doubao), `openai`, `azure`, `jina`, `ollama`, `voyage`, `dashscope`, `minimax`, `cohere`, `vikingdb`, `gemini` (requires `pip install "google-genai>=1.0.0"`), `litellm`, and `local`. For VLM models, common providers include `volcengine`, `openai`, `openai-codex`, `kimi`, and `glm`.
 
 #### Server Configuration Examples
 

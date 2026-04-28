@@ -43,23 +43,22 @@ async def health_check(request: Request):
             effective_auth_mode = config.get_effective_auth_mode()
         result["auth_mode"] = effective_auth_mode.value
 
-        # Always try to resolve identity - resolve_identity handles all auth modes
-        try:
-            identity = await resolve_identity(
-                request,
-                x_api_key=x_api_key,
-                authorization=authorization,
-                x_openviking_account=x_openviking_account,
-                x_openviking_user=x_openviking_user,
-                x_openviking_agent=x_openviking_agent,
-            )
-            # Always set identity fields if available
-            result["account_id"] = str(identity.account_id)
-            result["user_id"] = str(identity.user_id)
-            result["agent_id"] = str(identity.agent_id)
-            result["role"] = identity.role.value
-        except Exception as e:
-            logger.warning(f"Failed to resolve identity: {e}")
+        if x_api_key or authorization:
+            try:
+                identity = await resolve_identity(
+                    request,
+                    x_api_key=x_api_key,
+                    authorization=authorization,
+                    x_openviking_account=x_openviking_account,
+                    x_openviking_user=x_openviking_user,
+                    x_openviking_agent=x_openviking_agent,
+                )
+                result["account_id"] = str(identity.account_id)
+                result["user_id"] = str(identity.user_id)
+                result["agent_id"] = str(identity.agent_id)
+                result["role"] = identity.role.value
+            except Exception as e:
+                logger.warning(f"Failed to resolve identity: {e}")
     except Exception as e:
         logger.error(f"Failed to get health check: {e}")
 

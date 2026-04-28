@@ -137,7 +137,7 @@ scrape_configs:
 
 ## 关键指标说明
 
-下面的指标说明基于当前实际暴露的代表性指标输出（整理自 `.vscode/.workdir/metric/METRIC_res.md`）。
+下面的指标说明基于当前实际暴露的代表性指标输出（整理自 `openviking/metrics/collectors/`）。
 
 ### 请求与操作
 

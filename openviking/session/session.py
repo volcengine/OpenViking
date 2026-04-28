@@ -67,6 +67,7 @@ class SessionMeta:
     participant_user_ids: List[str] = field(default_factory=list)
     participant_agent_ids: List[str] = field(default_factory=list)
     message_count: int = 0
+    total_message_count: Optional[int] = 0
     commit_count: int = 0
     memories_extracted: Dict[str, int] = field(
         default_factory=lambda: {
@@ -96,7 +97,7 @@ class SessionMeta:
     )
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        data = {
             "session_id": self.session_id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -110,6 +111,9 @@ class SessionMeta:
             "llm_token_usage": dict(self.llm_token_usage),
             "embedding_token_usage": dict(self.embedding_token_usage),
         }
+        if self.total_message_count is not None:
+            data["total_message_count"] = self.total_message_count
+        return data
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SessionMeta":
@@ -125,6 +129,7 @@ class SessionMeta:
             participant_user_ids=list(data.get("participant_user_ids", [])),
             participant_agent_ids=list(data.get("participant_agent_ids", [])),
             message_count=data.get("message_count", 0),
+            total_message_count=data.get("total_message_count"),
             commit_count=data.get("commit_count", 0),
             memories_extracted={
                 "profile": memories.get("profile", 0),
@@ -241,6 +246,7 @@ class Session:
             # Old session without meta — derive from existing data
             self._meta.message_count = len(self._messages)
             self._meta.commit_count = self._compression.compression_index
+            self._meta.total_message_count = None
 
         if not self._meta.created_by_user_id:
             self._meta.created_by_user_id = self.ctx.user.user_id
@@ -283,6 +289,17 @@ class Session:
         if not self._viking_fs:
             return
         run_async(self._save_meta())
+
+    async def _load_latest_meta(self) -> SessionMeta:
+        """Load the latest persisted metadata, falling back to the current instance state."""
+        try:
+            meta_content = await self._viking_fs.read_file(
+                f"{self._session_uri}/.meta.json",
+                ctx=self.ctx,
+            )
+            return SessionMeta.from_dict(json.loads(meta_content))
+        except Exception:
+            return self._meta
 
     @property
     def messages(self) -> List[Message]:
@@ -361,6 +378,8 @@ class Session:
         self._append_to_jsonl(msg)
 
         self._meta.message_count = len(self._messages)
+        if self._meta.total_message_count is not None:
+            self._meta.total_message_count += 1
         self._save_meta_sync()
         return msg
 
@@ -481,8 +500,9 @@ class Session:
                 ctx=self.ctx,
             )
 
-        self._meta.message_count = 0
-        await self._save_meta()
+        await self._mark_archive_committed_meta(
+            archive_index=self._compression.compression_index,
+        )
 
         self._compression.original_count += len(messages_to_archive)
         logger.info(
@@ -803,6 +823,9 @@ class Session:
 
     async def get_session_context(self, token_budget: int = 128_000) -> Dict[str, Any]:
         """Get assembled session context with the latest summary archive and merged messages."""
+        if token_budget < 0:
+            raise ValueError("token_budget must be greater than or equal to 0")
+
         context = await self._collect_session_context_components()
         merged_messages = context["messages"]
 
@@ -1148,15 +1171,8 @@ class Session:
         telemetry_snapshot: Any,
     ) -> None:
         """Reload and merge latest meta state before persisting commit results."""
-        latest_meta = self._meta
-        try:
-            meta_content = await self._viking_fs.read_file(
-                f"{self._session_uri}/.meta.json",
-                ctx=self.ctx,
-            )
-            latest_meta = SessionMeta.from_dict(json.loads(meta_content))
-        except Exception:
-            latest_meta = self._meta
+        latest_meta = await self._load_latest_meta()
+        live_message_count = await self._read_live_message_count()
 
         if telemetry_snapshot:
             llm = telemetry_snapshot.summary.get("tokens", {}).get("llm", {})
@@ -1172,8 +1188,21 @@ class Session:
             latest_meta.memories_extracted["total"] = (
                 latest_meta.memories_extracted.get("total", 0) + count
             )
+        latest_meta.message_count = live_message_count
+        self._meta = latest_meta
+        await self._save_meta()
+
+    async def _mark_archive_committed_meta(
+        self,
+        archive_index: int,
+    ) -> None:
+        """Persist metadata for a completed Phase 1 archive."""
+        latest_meta = await self._load_latest_meta()
+        live_message_count = await self._read_live_message_count()
+
+        latest_meta.commit_count = max(latest_meta.commit_count, archive_index)
         latest_meta.last_commit_at = get_current_timestamp()
-        latest_meta.message_count = await self._read_live_message_count()
+        latest_meta.message_count = live_message_count
         self._meta = latest_meta
         await self._save_meta()
 

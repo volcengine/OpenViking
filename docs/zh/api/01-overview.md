@@ -181,6 +181,10 @@ client.close()
 }
 ```
 
+顶层 `status` 表示本次 HTTP API 请求是否成功。某些成功响应会在 `result` 中返回业务状态，
+例如 `"status": "success"`、`"status": "accepted"` 或任务状态。这些字段不是 API
+传输层错误。
+
 **错误**
 
 ```json
@@ -193,6 +197,17 @@ client.close()
   "time": 0.01
 }
 ```
+
+HTTP 错误始终使用顶层错误 envelope。资源解析、同步 reindex 等同步处理失败会返回非 2xx
+响应，顶层为 `status="error"`，并包含 `error` 对象。客户端不应通过
+`result.status="error"` 判断请求失败。
+
+请求校验失败，包括 JSON 格式错误、缺少必填字段和参数值非法，统一返回 HTTP `400`，
+并使用 `error.code="INVALID_ARGUMENT"`。响应不会使用 FastAPI 原生的 `{"detail": ...}`
+错误格式；当存在字段级校验信息时，会通过 `error.details.validation_errors` 返回。
+
+Python HTTP SDK（`SyncHTTPClient` 和 `AsyncHTTPClient`）会把该 envelope 映射为对应的
+`OpenVikingError` 子类。例如 `PROCESSING_ERROR` 会抛出 `ProcessingError`。
 
 ## CLI 输出格式
 
@@ -268,8 +283,10 @@ openviking -o json ls viking://resources/
 | `PERMISSION_DENIED` | 403 | 权限不足 |
 | `RESOURCE_EXHAUSTED` | 429 | 超出速率限制 |
 | `FAILED_PRECONDITION` | 412 | 前置条件不满足 |
+| `CONFLICT` | 409 | 操作与正在进行的任务或已有状态冲突 |
 | `DEADLINE_EXCEEDED` | 504 | 操作超时 |
 | `UNAVAILABLE` | 503 | 服务不可用 |
+| `PROCESSING_ERROR` | 500 | 资源或语义处理失败 |
 | `INTERNAL` | 500 | 内部服务器错误 |
 | `UNIMPLEMENTED` | 501 | 功能未实现 |
 | `EMBEDDING_FAILED` | 500 | Embedding 生成失败 |
@@ -350,6 +367,7 @@ openviking -o json ls viking://resources/
 | POST | `/api/v1/sessions/{id}/extract` | 从会话提取记忆 |
 | POST | `/api/v1/sessions/{id}/messages` | 添加消息 |
 | POST | `/api/v1/sessions/{id}/used` | 记录实际使用的上下文 / 技能 |
+| GET | `/api/v1/sessions/{id}/archives/{archive_id}` | 获取特定会话归档 |
 
 ### 隐私配置
 

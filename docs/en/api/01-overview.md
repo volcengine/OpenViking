@@ -181,6 +181,11 @@ All HTTP API responses follow a unified format:
 }
 ```
 
+The top-level `status` describes whether the HTTP API request succeeded. Some successful
+operations return domain-level status fields inside `result`, such as
+`"status": "success"`, `"status": "accepted"`, or task states. Those fields are not API
+transport errors.
+
 **Error**
 
 ```json
@@ -193,6 +198,20 @@ All HTTP API responses follow a unified format:
   "time": 0.01
 }
 ```
+
+HTTP errors always use the top-level error envelope. Synchronous processing failures, such as
+resource parsing or synchronous reindex failures, are returned as non-2xx responses with
+`status="error"` and an `error` object. Clients should not look for `result.status="error"` to
+detect request failure.
+
+Request validation failures, including malformed JSON, missing required fields, and invalid
+parameter values, return HTTP `400` with `error.code="INVALID_ARGUMENT"`. The response never uses
+FastAPI's raw `{"detail": ...}` error format; when field-level validation information is
+available, it is exposed under `error.details.validation_errors`.
+
+Python HTTP SDKs (`SyncHTTPClient` and `AsyncHTTPClient`) raise the corresponding
+`OpenVikingError` subclass for this envelope. For example, `PROCESSING_ERROR` is raised as
+`ProcessingError`.
 
 ## CLI Output Format
 
@@ -267,8 +286,10 @@ Compact JSON with status wrapper (when `--compact` is true, which is the default
 | `PERMISSION_DENIED` | 403 | Insufficient permissions |
 | `RESOURCE_EXHAUSTED` | 429 | Rate limit exceeded |
 | `FAILED_PRECONDITION` | 412 | Precondition failed |
+| `CONFLICT` | 409 | Operation conflicts with an in-progress task or existing state |
 | `DEADLINE_EXCEEDED` | 504 | Operation timed out |
 | `UNAVAILABLE` | 503 | Service unavailable |
+| `PROCESSING_ERROR` | 500 | Resource or semantic processing failed |
 | `INTERNAL` | 500 | Internal server error |
 | `UNIMPLEMENTED` | 501 | Feature not implemented |
 | `EMBEDDING_FAILED` | 500 | Embedding generation failed |
@@ -349,6 +370,7 @@ Compact JSON with status wrapper (when `--compact` is true, which is the default
 | POST | `/api/v1/sessions/{id}/extract` | Extract memories from a session |
 | POST | `/api/v1/sessions/{id}/messages` | Add message |
 | POST | `/api/v1/sessions/{id}/used` | Record contexts / skills actually used |
+| GET | `/api/v1/sessions/{id}/archives/{archive_id}` | Get a specific session archive |
 
 ### Privacy Configs
 

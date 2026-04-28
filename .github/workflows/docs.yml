@@ -35,7 +35,7 @@ jobs:
 
   docs-deploy:
     name: Build and Deploy Docs
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.deploy == true)
+    if: github.repository == 'volcengine/OpenViking' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.deploy == true))
     uses: ./.github/workflows/_docs-deploy.yml
     permissions:
       contents: read

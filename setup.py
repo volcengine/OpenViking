@@ -323,7 +323,7 @@ class OpenVikingBuildExt(build_ext):
                 if result.stderr:
                     print(result.stderr.decode("utf-8", errors="replace"))
 
-                # Extract the native .so/.pyd from the built wheel.
+                # Extract the stable-ABI native extension from the built wheel.
                 whl_files = list(Path(tmpdir).glob("ragfs_python-*.whl"))
                 if not whl_files:
                     message = "maturin produced no wheel for ragfs-python."
@@ -333,12 +333,18 @@ class OpenVikingBuildExt(build_ext):
                     return
 
                 ragfs_lib_dir.mkdir(parents=True, exist_ok=True)
+                for stale_artifact in ragfs_lib_dir.glob("ragfs_python*.so"):
+                    stale_artifact.unlink()
+                for stale_artifact in ragfs_lib_dir.glob("ragfs_python*.pyd"):
+                    stale_artifact.unlink()
+                for stale_artifact in ragfs_lib_dir.glob("ragfs_python*.dylib"):
+                    stale_artifact.unlink()
+
                 extracted = False
                 with zipfile.ZipFile(str(whl_files[0])) as zf:
                     for name in zf.namelist():
                         basename = Path(name).name
-                        # Match: ragfs_python.cpython-312-darwin.so, ragfs_python.abi3.so, ragfs_python.cp312-win_amd64.pyd, etc.
-                        if basename.startswith("ragfs_python") and (
+                        if basename.startswith("ragfs_python.abi3.") and (
                             basename.endswith(".so") or basename.endswith(".pyd")
                         ):
                             target_path = ragfs_lib_dir / basename
@@ -351,7 +357,7 @@ class OpenVikingBuildExt(build_ext):
                             break
 
                 if not extracted:
-                    message = "Could not find ragfs_python .so/.pyd in built wheel."
+                    message = "Could not find ragfs_python abi3 .so/.pyd in built wheel."
                     if require_ragfs_artifact:
                         raise RuntimeError(message)
                     print(f"[Warning] {message}")

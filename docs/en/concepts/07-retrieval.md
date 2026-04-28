@@ -126,7 +126,7 @@ while dir_queue:
 |-----------|-------|-------------|
 | `SCORE_PROPAGATION_ALPHA` | 0.5 | 50% embedding + 50% parent |
 | `MAX_CONVERGENCE_ROUNDS` | 3 | Convergence detection rounds |
-| `GLOBAL_SEARCH_TOPK` | 3 | Global search candidates |
+| `GLOBAL_SEARCH_TOPK` | 10 | Global search candidates |
 | `MAX_RELATIONS` | 5 | Max relations per resource |
 
 ## Rerank Strategy

@@ -311,8 +311,11 @@ class ResourceProcessor:
                     except Exception:
                         pass
 
-                    # 数据已移动到 root_uri，后续处理使用 root_uri
-                    temp_uri = root_uri
+                    # Only switch to root_uri after a first-time persist. For repeated
+                    # writes to an existing target we must keep the fresh temp tree so
+                    # semantic processing can diff temp source against target_uri.
+                    if not target_exists:
+                        temp_uri = root_uri
 
             # ============ Phase 4: Optional Steps ============
             build_index = kwargs.get("build_index", True)

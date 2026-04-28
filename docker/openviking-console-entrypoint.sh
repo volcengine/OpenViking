@@ -7,8 +7,18 @@ CONSOLE_PORT="${OPENVIKING_CONSOLE_PORT:-8020}"
 CONSOLE_HOST="${OPENVIKING_CONSOLE_HOST:-0.0.0.0}"
 WITH_BOT="${OPENVIKING_WITH_BOT:-1}"
 CONFIG_FILE="${OPENVIKING_CONFIG_FILE:-/app/.openviking/ov.conf}"
+PENDING_HEALTH_SCRIPT="/usr/local/bin/openviking-pending-health"
 SERVER_PID=""
 CONSOLE_PID=""
+PENDING_PID=""
+
+stop_pending_health() {
+    if [ -n "${PENDING_PID}" ] && kill -0 "${PENDING_PID}" 2>/dev/null; then
+        kill "${PENDING_PID}" 2>/dev/null || true
+        wait "${PENDING_PID}" 2>/dev/null || true
+    fi
+    PENDING_PID=""
+}
 
 ensure_config() {
     if [ -f "${CONFIG_FILE}" ]; then
@@ -28,11 +38,26 @@ To start OpenViking, do one of:
   - set OPENVIKING_CONF_CONTENT to the full ov.conf JSON
   - docker exec into this container and run: openviking-server init
 
-The container will sleep until ${CONFIG_FILE} exists.
+While waiting, every HTTP request to this container returns a 503 JSON
+describing the problem and the fix above.
 EOF
+    OPENVIKING_CONFIG_FILE="${CONFIG_FILE}" \
+    OPENVIKING_PENDING_PORT="1933" \
+        python "${PENDING_HEALTH_SCRIPT}" &
+    PENDING_PID=$!
+    trap 'stop_pending_health; exit 0' INT TERM
+
     while [ ! -f "${CONFIG_FILE}" ]; do
+        if ! kill -0 "${PENDING_PID}" 2>/dev/null; then
+            echo "[openviking-console-entrypoint] pending health server exited unexpectedly" >&2
+            PENDING_PID=""
+            exit 1
+        fi
         sleep 5
     done
+
+    stop_pending_health
+    trap - INT TERM
     echo "[openviking-console-entrypoint] detected ${CONFIG_FILE}, starting OpenViking"
 }
 

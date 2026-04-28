@@ -298,6 +298,7 @@ class SemanticProcessor(DequeueHandlerBase):
                         await self._process_memory_directory(msg)
                     else:
                         is_incremental = False
+                        target_uri = msg.target_uri
                         viking_fs = get_viking_fs()
                         if msg.target_uri:
                             target_exists = await viking_fs.exists(
@@ -309,10 +310,19 @@ class SemanticProcessor(DequeueHandlerBase):
                                 logger.info(
                                     f"Target URI exists, using incremental update: {msg.target_uri}"
                                 )
+                            elif target_exists and msg.changes and msg.uri == msg.target_uri:
+                                is_incremental = True
+                                logger.info(
+                                    f"Using direct incremental semantic update for: {msg.uri}"
+                                )
+                        elif msg.changes:
+                            is_incremental = True
+                            target_uri = msg.uri
+                            logger.info(f"Using direct incremental semantic update for: {msg.uri}")
 
                         # Re-acquire lifecycle lock if handle was lost (e.g. server restart)
                         if msg.lifecycle_lock_handle_id:
-                            lock_uri = msg.target_uri or msg.uri
+                            lock_uri = target_uri or msg.uri
                             msg.lifecycle_lock_handle_id = await self._ensure_lifecycle_lock(
                                 msg.lifecycle_lock_handle_id,
                                 viking_fs._uri_to_path(lock_uri, ctx=self._current_ctx),
@@ -324,12 +334,13 @@ class SemanticProcessor(DequeueHandlerBase):
                             max_concurrent_llm=self.max_concurrent_llm,
                             ctx=self._current_ctx,
                             incremental_update=is_incremental,
-                            target_uri=msg.target_uri,
+                            target_uri=target_uri,
                             semantic_msg_id=msg.id,
                             telemetry_id=msg.telemetry_id,
                             recursive=msg.recursive,
                             lifecycle_lock_handle_id=msg.lifecycle_lock_handle_id,
                             is_code_repo=msg.is_code_repo,
+                            changes=msg.changes,
                         )
                         self._dag_executor = executor
                         if msg.lifecycle_lock_handle_id:

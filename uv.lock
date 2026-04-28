@@ -2398,7 +2398,7 @@ wheels = [
 
 [[package]]
 name = "llama-cpp-python"
-version = "0.3.20"
+version = "0.3.21"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "diskcache" },
@@ -2407,7 +2407,7 @@ dependencies = [
     { name = "numpy", version = "2.4.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/45/95/c69c47c9c8dda97f712f5864688d13a22b0159aa9adae91a69067a728532/llama_cpp_python-0.3.20.tar.gz", hash = "sha256:70f01b7d915d31c617dc66610a332cb2d51cde84c8b152d09a352206323616f5", size = 59323017, upload-time = "2026-04-03T06:56:32.455Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e6/0f/17c0e400ed17094b360e3bcc07e7fbca890e0042a5a1e9dabb056693d57f/llama_cpp_python-0.3.21.tar.gz", hash = "sha256:533636e23953d1efcf16ddf5862d963405e4bc0bccfc04ba90e9ee7afefefa75", size = 67604365, upload-time = "2026-04-27T05:17:44.296Z" }
 
 [[package]]
 name = "loguru"
@@ -3504,6 +3504,7 @@ dependencies = [
     { name = "litellm" },
     { name = "loguru" },
     { name = "markdownify" },
+    { name = "mcp" },
     { name = "olefile" },
     { name = "openai" },
     { name = "openpyxl" },
@@ -3735,6 +3736,7 @@ requires-dist = [
     { name = "llama-cpp-python", marker = "extra == 'local-embed'", specifier = ">=0.3.0" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "markdownify", specifier = ">=0.11.0" },
+    { name = "mcp", specifier = ">=1.27.0" },
     { name = "mcp", marker = "extra == 'bot'", specifier = ">=1.0.0" },
     { name = "msgpack", marker = "extra == 'bot'", specifier = ">=1.0.8" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },

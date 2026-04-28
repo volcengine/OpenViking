@@ -314,7 +314,7 @@ class AsyncOpenViking:
     async def search(
         self,
         query: str,
-        target_uri: str = "",
+        target_uri: Union[str, List[str]] = "",
         session: Optional[Union["Session", Any]] = None,
         session_id: Optional[str] = None,
         limit: int = 10,
@@ -357,7 +357,7 @@ class AsyncOpenViking:
     async def find(
         self,
         query: str,
-        target_uri: str = "",
+        target_uri: Union[str, List[str]] = "",
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,

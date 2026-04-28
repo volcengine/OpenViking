@@ -29,15 +29,20 @@ from tests.base_cli_test import BaseOpenClawCLITest
 
 SERVER_URL = os.environ.get("SERVER_URL", "http://127.0.0.1:1933")
 OPENVIKING_API_KEY = os.environ.get("OPENVIKING_API_KEY", "test-root-api-key")
+OPENVIKING_ACCOUNT = os.environ.get("OPENVIKING_ACCOUNT", "default")
+OPENVIKING_USER = os.environ.get("OPENVIKING_USER", "default")
 TASK_POLL_INTERVAL = 5
 TASK_POLL_MAX_WAIT = 120
 
 
 def _get_api_headers() -> Dict[str, str]:
-    return {
-        "X-OpenViking-API-Key": OPENVIKING_API_KEY,
+    headers = {
+        "X-API-Key": OPENVIKING_API_KEY,
+        "X-OpenViking-Account": OPENVIKING_ACCOUNT,
+        "X-OpenViking-User": OPENVIKING_USER,
         "Content-Type": "application/json",
     }
+    return headers
 
 
 class OVSessionVerifier:
@@ -257,6 +262,7 @@ class TestAssembleArchiveReplay(BaseOpenClawCLITest):
         response = self.send_and_retry_on_timeout(
             f"我之前提到的{unique_marker}是什么？目标是什么？请从你的记忆或上下文中搜索",
             session_id=session_b,
+            timeout=300,
         )
         self.assertAnyKeywordInResponse(
             response,
@@ -331,6 +337,7 @@ class TestMemoryRecallExplicit(BaseOpenClawCLITest):
         response = self.send_and_retry_on_timeout(
             "请搜索你的记忆，我之前有没有提到过一个和加密通信或者协议相关的项目？请仔细搜索记忆文件后回答",
             session_id=session_b,
+            timeout=300,
         )
 
         self.logger.info("[6/7] 验证回复包含记忆中的关键信息（对话级别断言）")
@@ -503,6 +510,7 @@ class TestSessionIsolation(BaseOpenClawCLITest):
         response_a = self.send_and_retry_on_timeout(
             "请根据你记住的关于我的信息回答：我之前告诉过你我在做什么项目？负责什么工作？不要调用任何外部工具，直接从记忆中回答",
             session_id=session_a,
+            timeout=300,
         )
         self.assertAnyKeywordInResponse(
             response_a,
@@ -514,6 +522,7 @@ class TestSessionIsolation(BaseOpenClawCLITest):
         response_b = self.send_and_retry_on_timeout(
             "请根据你记住的关于我的信息回答：我之前告诉过你我在做什么项目？负责什么工作？不要调用任何外部工具，直接从记忆中回答",
             session_id=session_b,
+            timeout=300,
         )
         self.assertAnyKeywordInResponse(
             response_b,
@@ -582,6 +591,7 @@ class TestCompactArchiveGeneration(BaseOpenClawCLITest):
         response = self.send_and_retry_on_timeout(
             "我负责的项目叫什么？核心模块是什么？",
             session_id=session_id,
+            timeout=300,
         )
         self.assertAnyKeywordInResponse(
             response,
@@ -593,6 +603,7 @@ class TestCompactArchiveGeneration(BaseOpenClawCLITest):
         response2 = self.send_and_retry_on_timeout(
             "我们团队有几个人？项目截止日期是什么时候？",
             session_id=session_id,
+            timeout=300,
         )
         self.assertAnyKeywordInResponse(
             response2,
@@ -665,6 +676,7 @@ class TestCrossSessionRecall(BaseOpenClawCLITest):
         response = self.send_and_retry_on_timeout(
             f"我之前提到的{unique_marker}是什么？有什么特点？",
             session_id=session_b,
+            timeout=300,
         )
 
         self.logger.info("[7/7] 验证 session B 通过 auto-recall 获取到 session A 的记忆")

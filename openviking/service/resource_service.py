@@ -10,6 +10,7 @@ import json
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from openviking.core.uri_validation import validate_optional_viking_uri
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import (
     is_remote_resource_source,
@@ -36,7 +37,6 @@ from openviking_cli.exceptions import (
     NotInitializedError,
 )
 from openviking_cli.utils import get_logger
-from openviking_cli.utils.uri import VikingURI
 
 if TYPE_CHECKING:
     from openviking.resource.watch_manager import WatchManager
@@ -173,19 +173,16 @@ class ResourceService:
         telemetry.set("resource.flags.watch_enabled", watch_enabled)
 
         try:
-            # add_resource only supports resources scope
-            if to and to.startswith("viking://"):
-                parsed = VikingURI(to)
-                if parsed.scope != "resources":
-                    raise InvalidArgumentError(
-                        f"add_resource only supports resources scope, use dedicated interface to add {parsed.scope} content"
-                    )
-            if parent and parent.startswith("viking://"):
-                parsed = VikingURI(parent)
-                if parsed.scope != "resources":
-                    raise InvalidArgumentError(
-                        f"add_resource only supports resources scope, use dedicated interface to add {parsed.scope} content"
-                    )
+            to = validate_optional_viking_uri(
+                to,
+                field_name="to",
+                allowed_scopes={"resources"},
+            )
+            parent = validate_optional_viking_uri(
+                parent,
+                field_name="parent",
+                allowed_scopes={"resources"},
+            )
             if watch_manager and not skip_watch_management and watch_interval > 0 and not to:
                 raise InvalidArgumentError(
                     "watch_interval > 0 requires 'to' to be specified (target URI to watch)"
@@ -440,6 +437,8 @@ class ResourceService:
                 ctx=ctx,
                 allow_local_path_resolution=allow_local_path_resolution,
             )
+            if isinstance(result, dict) and "root_uri" not in result and result.get("uri"):
+                result["root_uri"] = result["uri"]
 
             if wait:
                 wait_start = time.perf_counter()
