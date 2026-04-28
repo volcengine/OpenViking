@@ -215,7 +215,7 @@ openviking admin delete-account acme
 |------|------|------|--------|------|
 | account_id | str | 是 | - | 工作区 ID |
 | user_id | str | 是 | - | 用户 ID |
-| role | str | 否 | "user" | 角色："admin" 或 "user" |
+| role | str | 否 | "user" | 要分配的角色。`ROOT` 可直接注册 `"user"` 或 `"admin"`；`ADMIN` 只能注册 `"user"`。`"root"` 必须通过专门的改角色接口分配。 |
 
 **HTTP API**
 

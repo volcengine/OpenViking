@@ -449,10 +449,17 @@ Applicable when:
 
 Available configuration:
 
+- `prompts.enable_custom_templates`
 - `prompts.templates_dir`
 - environment variable `OPENVIKING_PROMPT_TEMPLATES_DIR`
 
-Load priority:
+Secure default:
+
+- custom prompt templates are disabled by default
+- OpenViking only loads bundled templates unless a trusted operator sets `prompts.enable_custom_templates: true`
+- `OPENVIKING_PROMPT_TEMPLATES_DIR` is ignored unless that setting is enabled
+
+Load priority after opt-in:
 
 1. Explicitly provided template directory
 2. Environment variable `OPENVIKING_PROMPT_TEMPLATES_DIR`
@@ -485,6 +492,7 @@ Example configuration:
 ```json
 {
   "prompts": {
+    "enable_custom_templates": true,
     "templates_dir": "/path/to/custom-prompts"
   }
 }
