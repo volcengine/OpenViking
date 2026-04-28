@@ -146,6 +146,18 @@ class SemanticDagExecutor:
                     f"added_dirs={len(diff.added_dirs)}, "
                     f"deleted_dirs={len(diff.deleted_dirs)}"
                 )
+
+                # Clean up the temp tree after a successful sync.
+                try:
+                    temp_parent_uri = "/".join(self._root_uri.rstrip("/").rsplit("/", 1)[:-1])
+                    if temp_parent_uri and temp_parent_uri.startswith("viking://temp/"):
+                        viking_fs = get_viking_fs()
+                        await viking_fs.delete_temp(temp_parent_uri, ctx=self._ctx)
+                        logger.debug(f"[SyncDiff] Cleaned up temp dir: {temp_parent_uri}")
+                except Exception as cleanup_err:
+                    logger.warning(
+                        f"[SyncDiff] Failed to clean up temp dir after sync: {cleanup_err}"
+                    )
             except Exception as e:
                 logger.error(
                     f"[SyncDiff] Error in sync_diff_callback: "
