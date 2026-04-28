@@ -777,7 +777,7 @@ RAGFS uses Rust binding mode by default, directly accessing the file system thro
 | `use_ssl` | bool | Enable/disable SSL (HTTPS) for S3 connections. Also controls the scheme auto-prefixed onto bare-hostname `endpoint` values | true |
 | `use_path_style` | bool | true for PathStyle used by MinIO and some S3-compatible services; false for VirtualHostStyle used by TOS and some S3-compatible services | true |
 | `directory_marker_mode` | str | How to persist directory markers: `none`, `empty`, or `nonempty` | `"empty"` |
-| `normalize_encoding` | bool | Escape only URL-reserved or URL-unsafe characters in S3 object keys as `!HH` hexadecimal bytes while preserving safe characters | `true` |
+| `normalize_encoding_chars` | str | Characters to escape in S3 object keys as `!HH` hexadecimal bytes; empty string disables normalization | `"?#%+@"` |
 
 `directory_marker_mode` controls how RAGFS materializes directory objects in S3:
 
@@ -791,13 +791,12 @@ Typical choices:
 - For TOS or other VirtualHostStyle backends that reject zero-byte directory markers, use `nonempty`.
 - If you want pure prefix-style behavior and do not need persisted empty directories, use `none`.
 
-`normalize_encoding` controls whether RAGFS rewrites unsafe path segments before issuing S3 requests:
+`normalize_encoding_chars` controls which characters RAGFS rewrites before issuing S3 requests:
 
-- `true` is the default. RAGFS preserves safe path characters and rewrites only unsafe bytes.
-- Unsafe bytes are encoded as `!HH`, where `HH` is the uppercase hexadecimal value of the byte.
-- The characters `/`, `!`, `-`, `_`, `.`, `*`, `'`, `(`, and `)` remain unescaped.
-- Characters such as `?`, `&`, `#`, spaces, `%`, `@`, and `+` are escaped in place without rewriting the whole segment.
-- Set `false` to keep original path segments in object keys.
+- The default value is `"?#%+@"`, so only `?`, `#`, `%`, `+`, and `@` are escaped.
+- Escaped bytes are encoded as `!HH`, where `HH` is the uppercase hexadecimal value of the byte.
+- Characters not listed in `normalize_encoding_chars`, including Chinese and other Unicode characters, remain unchanged.
+- Set `normalize_encoding_chars` to `""` to keep original path segments in object keys.
 
 <details>
 <summary><b>PathStyle S3</b></summary>
@@ -814,7 +813,7 @@ Supports S3 storage in PathStyle mode, such as MinIO, SeaweedFS.
         "region": "us-east-1",
         "access_key": "your-ak",
         "secret_key": "your-sk",
-        "normalize_encoding": true
+        "normalize_encoding_chars": "?#%+@"
       }
     }
   }
@@ -840,7 +839,7 @@ Supports S3 storage in VirtualHostStyle mode, such as TOS.
         "secret_key": "your-sk",
         "use_path_style": false,
         "directory_marker_mode": "nonempty",
-        "normalize_encoding": true
+        "normalize_encoding_chars": "?#%+@"
       }
     }
   }

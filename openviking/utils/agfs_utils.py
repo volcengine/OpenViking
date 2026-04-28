@@ -66,7 +66,7 @@ def _generate_plugin_config(agfs_config: Any, data_path: Path) -> Dict[str, Any]
             if hasattr(s3_config.directory_marker_mode, "value")
             else s3_config.directory_marker_mode,
             "disable_batch_delete": s3_config.disable_batch_delete,
-            "normalize_encoding": s3_config.normalize_encoding,
+            "normalize_encoding_chars": s3_config.normalize_encoding_chars,
         }
 
         config["s3fs"] = {

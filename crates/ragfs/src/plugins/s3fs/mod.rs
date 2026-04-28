@@ -527,10 +527,10 @@ impl S3FSPlugin {
                     "Key prefix for namespace isolation (e.g. 'agfs/')",
                 ),
                 ConfigParameter::optional(
-                    "normalize_encoding",
-                    "bool",
-                    "false",
-                    "Normalize unsafe path segments by base32-encoding URL-unsafe characters in S3 object keys",
+                    "normalize_encoding_chars",
+                    "string",
+                    "?#%+@",
+                    "Characters to escape in S3 object keys as !HH hexadecimal bytes; empty string disables normalization",
                 ),
                 ConfigParameter::optional(
                     "directory_marker_mode",
@@ -606,7 +606,7 @@ A file system backed by Amazon S3 or S3-compatible object storage.
 - Dual-layer caching (directory listings + stat metadata)
 - Range-based reads for partial file access
 - Configurable directory marker modes
-- Optional URL-safe key normalization for unsafe path segments
+- Optional configurable key normalization for selected characters
 
 ## Configuration
 
@@ -647,7 +647,7 @@ plugins:
       endpoint: https://tos-cn-beijing.volces.com
       use_path_style: false
       directory_marker_mode: nonempty
-      normalize_encoding: true
+      normalize_encoding_chars: "?#%+@"
 ```
 
 ### Alibaba Cloud OSS
@@ -671,10 +671,9 @@ plugins:
 
 ## Key Normalization
 
-- `normalize_encoding: false`: keep original path segments in object keys
-- `normalize_encoding: true` (default): escape only URL-reserved or URL-unsafe bytes as `!HH`
-- Allowed special characters without encoding: `/`, `!`, `-`, `_`, `.`, `*`, `'`, `(`, `)`
-- Characters such as `?`, `&`, `#`, spaces, `%`, `@`, and `+` are escaped in place without rewriting the whole path segment
+- `normalize_encoding_chars: "?#%+@"` (default): escape only `?`, `#`, `%`, `+`, and `@` as `!HH`
+- `normalize_encoding_chars: ""`: keep original path segments in object keys
+- Characters not listed in `normalize_encoding_chars`, including Chinese and other Unicode characters, remain unchanged
 
 ## Notes
 
@@ -709,10 +708,10 @@ plugins:
             }
         }
 
-        if let Some(value) = config.params.get("normalize_encoding") {
-            if value.as_bool().is_none() {
+        if let Some(value) = config.params.get("normalize_encoding_chars") {
+            if value.as_string().is_none() {
                 return Err(Error::config(
-                    "invalid normalize_encoding: expected bool",
+                    "invalid normalize_encoding_chars: expected string",
                 ));
             }
         }
@@ -817,7 +816,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_plugin_validate_normalize_encoding() {
+    async fn test_plugin_validate_normalize_encoding_chars() {
         let plugin = S3FSPlugin::new();
 
         let mut params = std::collections::HashMap::new();
@@ -826,8 +825,8 @@ mod tests {
             crate::core::ConfigValue::String("test".to_string()),
         );
         params.insert(
-            "normalize_encoding".to_string(),
-            crate::core::ConfigValue::String("true".to_string()),
+            "normalize_encoding_chars".to_string(),
+            crate::core::ConfigValue::Bool(true),
         );
         let config = PluginConfig {
             name: "s3fs".to_string(),
@@ -842,8 +841,8 @@ mod tests {
             crate::core::ConfigValue::String("test".to_string()),
         );
         params.insert(
-            "normalize_encoding".to_string(),
-            crate::core::ConfigValue::Bool(true),
+            "normalize_encoding_chars".to_string(),
+            crate::core::ConfigValue::String("?#%+@".to_string()),
         );
         let config = PluginConfig {
             name: "s3fs".to_string(),

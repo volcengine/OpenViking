@@ -750,7 +750,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 | `use_ssl` | bool | 为 S3 连接启用/禁用 SSL（HTTPS）。也用于决定 `endpoint` 仅填主机名时自动补的协议前缀 | true |
 | `use_path_style` | bool | true 表示对 MinIO 和某些 S3 兼容服务使用 PathStyle；false 表示对 TOS 和某些 S3 兼容服务使用 VirtualHostStyle | true |
 | `directory_marker_mode` | str | 目录 marker 的持久化方式，可选 `none`、`empty`、`nonempty` | `"empty"` |
-| `normalize_encoding` | bool | 仅把 S3 object key 中 URL 保留字符或不安全字符转义为 `!HH` 十六进制字节，同时保留安全字符 | `true` |
+| `normalize_encoding_chars` | str | 需要在 S3 object key 中转义为 `!HH` 十六进制字节的字符集合；空字符串表示关闭编码 | `"?#%+@"` |
 
 `directory_marker_mode` 用来控制 RAGFS 在 S3 中如何落目录对象：
 
@@ -764,13 +764,12 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 - 对 TOS 或其他拒绝 0 字节目录 marker 的 VirtualHostStyle 后端，使用 `nonempty`。
 - 如果你想完全使用 prefix 风格行为，并且不需要持久化空目录，可以使用 `none`。
 
-`normalize_encoding` 用来控制 RAGFS 在发起 S3 请求前是否重写不安全路径段：
+`normalize_encoding_chars` 用来控制 RAGFS 在发起 S3 请求前需要重写哪些字符：
 
-- `true` 是默认值。RAGFS 会保留安全路径字符，只重写不安全字节。
-- 不安全字节会被编码成 `!HH`，其中 `HH` 是该字节的大写十六进制值。
-- `/`、`!`、`-`、`_`、`.`、`*`、`'`、`(`、`)` 这些字符会保留，不触发编码。
-- `?`、`&`、`#`、空格、`%`、`@`、`+` 等字符会在原位被转义，不会导致整个路径段一起重写。
-- 设为 `false` 时，会在 object key 中保留原始路径段。
+- 默认值是 `"?#%+@"`，所以只会转义 `?`、`#`、`%`、`+`、`@`。
+- 被转义的字节会编码成 `!HH`，其中 `HH` 是该字节的大写十六进制值。
+- 没有列在 `normalize_encoding_chars` 里的字符，包括中文和其他 Unicode 字符，都会保持原样。
+- 设为 `""` 时，会在 object key 中保留原始路径段。
 
 <details>
 <summary><b>PathStyle S3</b></summary>
@@ -787,7 +786,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
         "region": "us-east-1",
         "access_key": "your-ak",
         "secret_key": "your-sk",
-        "normalize_encoding": true
+        "normalize_encoding_chars": "?#%+@"
       }
     }
   }
@@ -813,7 +812,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
         "secret_key": "your-sk",
         "use_path_style": false,
         "directory_marker_mode": "nonempty",
-        "normalize_encoding": true
+        "normalize_encoding_chars": "?#%+@"
       }
     }
   }

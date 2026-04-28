@@ -71,11 +71,10 @@ class S3Config(BaseModel):
         "for DeleteObjects but AWS SDK v2 does not send it by default. Defaults to False.",
     )
 
-    normalize_encoding: bool = Field(
-        default=True,
-        description="Normalize URL-unsafe path segments before writing S3 object keys. "
-        "When enabled, reserved or unsafe URL bytes such as ?, &, #, spaces, %, @, or + are "
-        "escaped in place as !HH hexadecimal bytes, while / ! - _ . * ' ( ) remain unescaped.",
+    normalize_encoding_chars: str = Field(
+        default="?#%+@",
+        description="Characters to escape in S3 object keys as !HH hexadecimal bytes. "
+        "Set to an empty string to disable key normalization. Defaults to ?#%+@.",
     )
 
     model_config = {"extra": "forbid"}
