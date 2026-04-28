@@ -7,10 +7,12 @@ import asyncio
 from fastapi import APIRouter, Body
 from pydantic import BaseModel
 
+from openviking.core.uri_validation import validate_viking_uri
 from openviking.server.auth import require_role
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext, Role
-from openviking.server.models import ErrorInfo, Response
+from openviking.server.models import Response
+from openviking.server.responses import error_response, response_from_result
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -46,15 +48,12 @@ async def reindex(
     from openviking.service.task_tracker import get_task_tracker
     from openviking.storage.viking_fs import get_viking_fs
 
-    uri = body.uri
+    uri = validate_viking_uri(body.uri)
     viking_fs = get_viking_fs()
 
     # Validate URI exists
     if not await viking_fs.exists(uri, ctx=ctx):
-        return Response(
-            status="error",
-            error=ErrorInfo(code="NOT_FOUND", message=f"URI not found: {uri}"),
-        )
+        return error_response("NOT_FOUND", f"URI not found: {uri}")
 
     service = get_service()
     tracker = get_task_tracker()
@@ -67,15 +66,9 @@ async def reindex(
             owner_account_id=ctx.account_id,
             owner_user_id=ctx.user.user_id,
         ):
-            return Response(
-                status="error",
-                error=ErrorInfo(
-                    code="CONFLICT",
-                    message=f"URI {uri} already has a reindex in progress",
-                ),
-            )
+            return error_response("CONFLICT", f"URI {uri} already has a reindex in progress")
         result = await _do_reindex(service, uri, body.regenerate, ctx)
-        return Response(status="ok", result=result)
+        return response_from_result(result)
     else:
         # Async path: run in background, return task_id for polling
         task = tracker.create_if_no_running(
@@ -85,13 +78,7 @@ async def reindex(
             owner_user_id=ctx.user.user_id,
         )
         if task is None:
-            return Response(
-                status="error",
-                error=ErrorInfo(
-                    code="CONFLICT",
-                    message=f"URI {uri} already has a reindex in progress",
-                ),
-            )
+            return error_response("CONFLICT", f"URI {uri} already has a reindex in progress")
         asyncio.create_task(
             _background_reindex_tracked(service, uri, body.regenerate, ctx, task.task_id)
         )

@@ -4,7 +4,7 @@ on:
   release:
     types: [prereleased, released]
   schedule:
-    - cron: '0 1,4,7,10,13 * * *'
+    - cron: '0 2,10 * * *'
   workflow_dispatch:
     inputs:
       skip_tests:
@@ -29,8 +29,8 @@ jobs:
   p0-tests:
     name: P0 Memory Tests
     runs-on: [self-hosted, linux, x64]
-    timeout-minutes: 70
-    if: inputs.skip_tests != true && (github.event_name != 'schedule' || github.repository == 'volcengine/OpenViking')
+    timeout-minutes: 100
+    if: inputs.skip_tests != true && (github.event_name == 'workflow_dispatch' || github.repository == 'volcengine/OpenViking')
     
     steps:
       - name: Clean up previous artifacts

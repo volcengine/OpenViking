@@ -17,6 +17,11 @@ def _mock_config():
         code=SimpleNamespace(
             github_domains=["github.com", "www.github.com"],
             gitlab_domains=["gitlab.com", "www.gitlab.com"],
+            azure_devops_domains=[
+                "dev.azure.com",
+                "ssh.dev.azure.com",
+                "vs-ssh.visualstudio.com",
+            ],
             code_hosting_domains=["github.com", "gitlab.com"],
         )
     )
@@ -43,6 +48,8 @@ sys.modules["openviking.utils.code_hosting_utils"] = _module
 _spec.loader.exec_module(_module)
 
 parse_code_hosting_url = _module.parse_code_hosting_url
+is_github_url = _module.is_github_url
+is_gitlab_url = _module.is_gitlab_url
 is_code_hosting_url = _module.is_code_hosting_url
 is_git_repo_url = _module.is_git_repo_url
 validate_git_ssh_uri = _module.validate_git_ssh_uri
@@ -81,12 +88,67 @@ def test_parse_code_hosting_url_https_dotgit():
     assert parse_code_hosting_url("https://github.com/org/repo.git") == "org/repo"
 
 
-def test_parse_code_hosting_url_ssh_with_userinfo():
+def test_parse_code_hosting_url_ssh_url_with_userinfo():
     assert parse_code_hosting_url("ssh://git@github.com/org/repo.git") == "org/repo"
 
 
-def test_parse_code_hosting_url_https_with_explicit_port():
-    assert parse_code_hosting_url("https://github.com:443/org/repo.git") == "org/repo"
+def test_parse_code_hosting_url_gitlab_ssh_url_with_userinfo():
+    assert parse_code_hosting_url("ssh://git@gitlab.com/group/repo.git") == "group/repo"
+
+
+def test_parse_code_hosting_url_https_with_port():
+    assert parse_code_hosting_url("https://github.com:443/org/repo") == "org/repo"
+
+
+def test_parse_code_hosting_url_azure_devops_repo():
+    assert (
+        parse_code_hosting_url("https://dev.azure.com/org/project/_git/repo")
+        == "org/project/repo"
+    )
+
+
+def test_parse_code_hosting_url_azure_devops_repo_dotgit():
+    assert (
+        parse_code_hosting_url("https://dev.azure.com/org/project/_git/repo.git")
+        == "org/project/repo"
+    )
+
+
+def test_parse_code_hosting_url_azure_devops_repo_with_encoded_spaces():
+    assert (
+        parse_code_hosting_url("https://dev.azure.com/org/my%20project/_git/repo")
+        == "org/my_project/repo"
+    )
+
+
+def test_parse_code_hosting_url_azure_devops_ssh_repo():
+    assert parse_code_hosting_url("git@ssh.dev.azure.com:v3/org/project/repo") == "org/project/repo"
+
+
+def test_parse_code_hosting_url_azure_devops_ssh_scheme_repo():
+    assert (
+        parse_code_hosting_url("ssh://git@ssh.dev.azure.com/v3/org/project/repo.git")
+        == "org/project/repo"
+    )
+
+
+def test_parse_code_hosting_url_azure_devops_legacy_ssh_repo():
+    assert (
+        parse_code_hosting_url("git@vs-ssh.visualstudio.com:v3/org/project/repo")
+        == "org/project/repo"
+    )
+
+
+def test_parse_code_hosting_url_azure_rule_not_applied_to_github():
+    assert parse_code_hosting_url("https://github.com/org/repo/tree/main/_git/config") == "org/repo"
+
+
+def test_parse_code_hosting_url_azure_devops_non_repo_page():
+    assert parse_code_hosting_url("https://dev.azure.com/org/project/_build") is None
+
+
+def test_parse_code_hosting_url_azure_devops_pull_request_page():
+    assert parse_code_hosting_url("https://dev.azure.com/org/project/_git/repo/pullrequest/123") is None
 
 
 # --- validate_git_ssh_uri ---
@@ -126,12 +188,27 @@ def test_is_code_hosting_url_https():
     assert is_code_hosting_url("https://github.com/org/repo") is True
 
 
-def test_is_code_hosting_url_ssh_with_userinfo():
+def test_is_code_hosting_url_ssh_url_with_userinfo():
     assert is_code_hosting_url("ssh://git@github.com/org/repo.git") is True
+
+
+def test_is_code_hosting_url_azure_devops_ssh():
+    assert is_code_hosting_url("git@ssh.dev.azure.com:v3/org/project/repo") is True
 
 
 def test_is_code_hosting_url_https_with_explicit_port():
     assert is_code_hosting_url("https://github.com:443/org/repo") is True
+
+
+# --- is_github_url / is_gitlab_url ---
+
+
+def test_is_github_url_ssh_url_with_userinfo():
+    assert is_github_url("ssh://git@github.com/org/repo.git") is True
+
+
+def test_is_gitlab_url_ssh_url_with_userinfo():
+    assert is_gitlab_url("ssh://git@gitlab.com/group/repo.git") is True
 
 
 # --- is_git_repo_url ---
@@ -145,12 +222,51 @@ def test_is_git_repo_url_https_repo():
     assert is_git_repo_url("https://github.com/org/repo") is True
 
 
-def test_is_git_repo_url_ssh_with_userinfo():
+def test_is_git_repo_url_ssh_url_with_userinfo():
     assert is_git_repo_url("ssh://git@github.com/org/repo.git") is True
 
 
-def test_is_git_repo_url_https_with_explicit_port():
+def test_is_git_repo_url_https_with_port():
     assert is_git_repo_url("https://github.com:443/org/repo") is True
+
+
+def test_is_git_repo_url_azure_devops_repo():
+    assert is_git_repo_url("https://dev.azure.com/org/project/_git/repo") is True
+
+
+def test_is_git_repo_url_azure_devops_repo_dotgit():
+    assert is_git_repo_url("https://dev.azure.com/org/project/_git/repo.git") is True
+
+
+def test_is_git_repo_url_azure_devops_ssh_repo():
+    assert is_git_repo_url("git@ssh.dev.azure.com:v3/org/project/repo") is True
+
+
+def test_is_git_repo_url_azure_devops_ssh_scheme_repo():
+    assert is_git_repo_url("ssh://git@ssh.dev.azure.com/v3/org/project/repo.git") is True
+
+
+def test_is_git_repo_url_azure_devops_legacy_ssh_repo():
+    assert is_git_repo_url("git@vs-ssh.visualstudio.com:v3/org/project/repo") is True
+
+
+def test_is_git_repo_url_azure_devops_non_repo_page():
+    assert is_git_repo_url("https://dev.azure.com/org/project/_build") is False
+
+
+def test_is_git_repo_url_azure_devops_browse_url_with_path_query():
+    assert (
+        is_git_repo_url("https://dev.azure.com/org/project/_git/repo?path=/README.md")
+        is False
+    )
+
+
+def test_is_git_repo_url_azure_devops_pull_request_page():
+    assert is_git_repo_url("https://dev.azure.com/org/project/_git/repo/pullrequest/123") is False
+
+
+def test_is_git_repo_url_azure_devops_commit_page():
+    assert is_git_repo_url("https://dev.azure.com/org/project/_git/repo/commit/abc1234") is False
 
 
 def test_is_git_repo_url_https_issues():
@@ -163,6 +279,10 @@ def test_is_git_repo_url_https_pull():
 
 def test_is_git_repo_url_https_blob():
     assert is_git_repo_url("https://github.com/org/repo/blob/main/file.py") is False
+
+
+def test_is_git_repo_url_github_tree_path_with__git_segment():
+    assert is_git_repo_url("https://github.com/org/repo/tree/main/_git/config") is False
 
 
 def test_is_git_repo_url_unknown_domain():

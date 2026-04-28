@@ -137,7 +137,7 @@ Notes:
 
 ## Key Metric Families
 
-The metric summaries below are based on representative metrics currently exposed in `.vscode/.workdir/metric/METRIC_res.md`.
+The metric summaries below are based on representative metrics currently exposed by the collectors in `openviking/metrics/collectors/`.
 
 ### Requests and Operations
 
@@ -364,6 +364,50 @@ Recommended mental model:
 
 - `server.observability.metrics.enabled`: master switch for the metrics subsystem
 - `server.observability.metrics.account_dimension`: controls whether `account_id` labels are enabled and where they are allowed
+
+### Exporters
+
+By default, OpenViking exports metrics via Prometheus exposition format at `/metrics`.
+You can also enable additional exporters under `server.observability.metrics.exporters`.
+
+Key fields:
+
+- `server.observability.metrics.exporters.prometheus.enabled`: enable the Prometheus exporter (serves `/metrics`)
+- `server.observability.metrics.exporters.otel.enabled`: enable OTLP export from the same in-process registry
+- `server.observability.metrics.exporters.otel.protocol`: `"grpc"` or `"http"`
+- `server.observability.metrics.exporters.otel.tls.insecure`: OTLP/gRPC only; `true` means plaintext (no TLS)
+- `server.observability.metrics.exporters.otel.endpoint`: OTLP endpoint (for gRPC, use `host:4317`; for HTTP, use a full URL)
+- `server.observability.metrics.exporters.otel.service_name`: OTLP `service.name` resource attribute (default `"openviking-server"`)
+- `server.observability.metrics.exporters.otel.export_interval_ms`: OTLP push interval in milliseconds (default `10000`)
+
+Example:
+
+```json
+{
+  "server": {
+    "observability": {
+      "metrics": {
+        "enabled": true,
+        "exporters": {
+          "prometheus": {
+            "enabled": true
+          },
+          "otel": {
+            "enabled": true,
+            "protocol": "grpc",
+            "tls": {
+              "insecure": true
+            },
+            "endpoint": "otel-collector:4317",
+            "service_name": "openviking-server",
+            "export_interval_ms": 10000
+          }
+        }
+      }
+    }
+  }
+}
+```
 
 ### Recommended `account_id` Usage
 

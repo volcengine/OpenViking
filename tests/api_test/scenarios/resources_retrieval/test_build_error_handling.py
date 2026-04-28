@@ -140,18 +140,14 @@ class TestBuildErrorHandling:
 
         try:
             response = api_client.add_resource(path=zip_path, wait=True)
-            assert response.status_code == 200
-
-            data = response.json()
-            assert data.get("status") in ("ok", "error"), (
-                f"损坏ZIP应返回 ok 或 error, 实际: {data.get('status')}"
+            assert response.status_code == 500, (
+                f"损坏ZIP应返回 500, 实际: {response.status_code}"
             )
 
-            if data.get("status") == "ok":
-                result = data.get("result", {})
-                root_uri = result.get("root_uri")
-                if root_uri:
-                    assert_root_uri_valid(root_uri)
+            data = response.json()
+            assert data.get("status") == "error", (
+                f"损坏ZIP应返回 error, 实际: {data.get('status')}"
+            )
 
             print("✓ TC-E16 损坏的ZIP文件处理通过")
         finally:

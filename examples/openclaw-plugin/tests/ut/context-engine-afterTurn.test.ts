@@ -18,7 +18,6 @@ function makeEngine(opts?: {
   getSession?: Record<string, unknown>;
   addSessionMessageError?: Error;
   cfgOverrides?: Record<string, unknown>;
-  quickPrecheck?: () => Promise<{ ok: true } | { ok: false; reason: string }>;
 }) {
   const cfg = memoryOpenVikingConfigSchema.parse({
     mode: "remote",
@@ -65,7 +64,6 @@ function makeEngine(opts?: {
     cfg,
     logger,
     getClient,
-    quickPrecheck: opts?.quickPrecheck,
     resolveAgentId,
   });
 
@@ -130,34 +128,6 @@ describe("context-engine afterTurn()", () => {
     expect(client.addSessionMessage).not.toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith(
       expect.stringContaining("no_messages"),
-    );
-  });
-
-  it("skips immediately when local precheck reports OpenViking unavailable", async () => {
-    const quickPrecheck = vi.fn().mockResolvedValue({
-      ok: false as const,
-      reason: "local process is not running",
-    });
-    const { engine, client, getClient, logger } = makeEngine({
-      cfgOverrides: {
-        mode: "local",
-        port: 1933,
-      },
-      quickPrecheck,
-    });
-
-    await engine.afterTurn!({
-      sessionId: "s1",
-      sessionFile: "",
-      messages: [{ role: "user", content: "hello" }],
-      prePromptMessageCount: 0,
-    });
-
-    expect(quickPrecheck).toHaveBeenCalledTimes(1);
-    expect(getClient).not.toHaveBeenCalled();
-    expect(client.addSessionMessage).not.toHaveBeenCalled();
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("afterTurn precheck failed"),
     );
   });
 

@@ -109,7 +109,7 @@ async def test_tree(client: httpx.AsyncClient):
 async def test_stat_not_found(client: httpx.AsyncClient):
     resp = await client.get(
         "/api/v1/fs/stat",
-        params={"uri": "viking://nonexistent/xyz"},
+        params={"uri": "viking://resources/nonexistent/xyz"},
     )
     assert resp.status_code == 404
     body = resp.json()
@@ -132,6 +132,49 @@ async def test_rm_directory_without_recursive_returns_failed_precondition(
     body = resp.json()
     assert body["status"] == "error"
     assert body["error"]["code"] == "FAILED_PRECONDITION"
+
+
+async def test_rm_missing_uri_is_idempotent(client: httpx.AsyncClient):
+    missing_uri = "viking://resources/definitely-missing-rm-target"
+
+    resp = await client.request(
+        "DELETE",
+        "/api/v1/fs",
+        params={"uri": missing_uri, "recursive": True},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["result"] == {"uri": missing_uri}
+
+
+async def test_rm_unsupported_scheme_returns_invalid_uri(client: httpx.AsyncClient):
+    resp = await client.request(
+        "DELETE",
+        "/api/v1/fs",
+        params={"uri": "s3://bucket/missing", "recursive": True},
+    )
+
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "INVALID_URI"
+    assert "unsupported URI scheme 's3'" in body["error"]["message"]
+
+
+async def test_ls_invalid_scope_hides_internal_scopes(client: httpx.AsyncClient):
+    resp = await client.get("/api/v1/fs/ls", params={"uri": "ssd"})
+
+    assert resp.status_code == 400
+    body = resp.json()
+    message = body["error"]["message"]
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "INVALID_URI"
+    assert "resources" in message
+    assert "temp" not in message
+    assert "queue" not in message
+    assert "frozenset" not in message
 
 
 async def test_resource_ops(client_with_resource):

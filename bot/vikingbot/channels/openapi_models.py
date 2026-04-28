@@ -62,6 +62,10 @@ class ChatResponse(BaseModel):
     events: Optional[List[Dict[str, Any]]] = Field(
         default=None, description="Intermediate events (thinking, tool calls)"
     )
+    relevant_memories: Optional[str] = Field(
+        default=None,
+        description="OpenViking memories assembled during _process_message",
+    )
     timestamp: datetime = Field(default_factory=datetime.now, description="Response timestamp")
 
 

@@ -71,6 +71,12 @@ class S3Config(BaseModel):
         "for DeleteObjects but AWS SDK v2 does not send it by default. Defaults to False.",
     )
 
+    normalize_encoding_chars: str = Field(
+        default="?#%+@",
+        description="Characters to escape in S3 object keys as !HH hexadecimal bytes. "
+        "Set to an empty string to disable key normalization. Defaults to ?#%+@.",
+    )
+
     model_config = {"extra": "forbid"}
 
     def validate_config(self):
@@ -136,6 +142,13 @@ class AGFSConfig(BaseModel):
     )
 
     timeout: int = Field(default=10, description="RAGFS request timeout (seconds)")
+
+    queue_db_path: Optional[str] = Field(
+        default=None,
+        description="Override path of the queuefs sqlite database file. "
+        "Defaults to '{storage.workspace}/_system/queue/queue.db' when not set. "
+        "Useful when the workspace volume does not support sqlite (e.g. some network filesystems).",
+    )
 
     retry_times: Any = Field(
         default=None,

@@ -119,3 +119,96 @@ def test_async_http_client_rejects_unknown_ovcli_upload_field(tmp_path, monkeypa
 
     with pytest.raises(ValueError, match=r"ovcli\.upload\.unknown"):
         AsyncHTTPClient()
+
+
+def test_async_http_client_loads_extra_headers_from_ovcli_config(tmp_path, monkeypatch):
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "url": "http://config-host:1933",
+                "api_key": "config-key",
+                "extra_headers": {
+                    "X-Custom-Header": "custom-value",
+                    "Authorization": "Bearer token",
+                },
+            }
+        )
+    )
+    monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
+
+    client = AsyncHTTPClient()
+
+    assert client._url == "http://config-host:1933"
+    assert client._extra_headers == {
+        "X-Custom-Header": "custom-value",
+        "Authorization": "Bearer token",
+    }
+
+
+def test_async_http_client_explicit_extra_headers_override_ovcli_config(tmp_path, monkeypatch):
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "url": "http://localhost:1933",
+                "api_key": "config-key",
+                "extra_headers": {"X-Custom-Header": "from-config"},
+            }
+        )
+    )
+    monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
+
+    client = AsyncHTTPClient(
+        extra_headers={"X-Custom-Header": "from-explicit", "Another-Header": "another-value"}
+    )
+
+    assert client._extra_headers == {
+        "X-Custom-Header": "from-explicit",
+        "Another-Header": "another-value",
+    }
+
+
+def test_async_http_client_loads_extra_header_alias_from_ovcli_config(tmp_path, monkeypatch):
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "url": "http://config-host:1933",
+                "api_key": "config-key",
+                "extra_header": {
+                    "X-Custom-Header": "custom-value",
+                    "Authorization": "Bearer token",
+                },
+            }
+        )
+    )
+    monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
+
+    client = AsyncHTTPClient()
+
+    assert client._url == "http://config-host:1933"
+    assert client._extra_headers == {
+        "X-Custom-Header": "custom-value",
+        "Authorization": "Bearer token",
+    }
+
+
+def test_async_http_client_prefers_extra_headers_over_alias(tmp_path, monkeypatch):
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "url": "http://config-host:1933",
+                "api_key": "config-key",
+                "extra_headers": {"X-Custom-Header": "from-plural"},
+                "extra_header": {"X-Custom-Header": "from-singular"},
+            }
+        )
+    )
+    monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
+
+    client = AsyncHTTPClient()
+
+    # extra_headers 优先
+    assert client._extra_headers == {"X-Custom-Header": "from-plural"}

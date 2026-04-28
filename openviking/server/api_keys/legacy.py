@@ -1,24 +1,27 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""API Key management for OpenViking multi-tenant HTTP Server."""
+"""Legacy API Key management (original implementation)."""
 
+import fnmatch
 import hmac
 import json
 import secrets
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, Optional
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 
+from openviking.server.api_keys.models import AccountInfo, UserKeyEntry
 from openviking.server.identity import AccountNamespacePolicy, ResolvedIdentity, Role
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import (
     AlreadyExistsError,
+    InvalidArgumentError,
     NotFoundError,
     UnauthenticatedError,
 )
+from openviking_cli.session.user_id import validate_account_id, validate_user_id
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -28,60 +31,39 @@ USERS_PATH_TEMPLATE = "/local/{account_id}/_system/users.json"
 SETTINGS_PATH_TEMPLATE = "/local/{account_id}/_system/setting.json"
 
 
-# Argon2id parameters
+# Argon2id parameters - export with LEGACY_ prefix for reuse in new.py
 ARGON2_TIME_COST = 3
 ARGON2_MEMORY_COST = 65536
 ARGON2_PARALLELISM = 2
 ARGON2_HASH_LENGTH = 32
 
-
-@dataclass
-class UserKeyEntry:
-    """In-memory index entry for a user key."""
-
-    account_id: str
-    user_id: str
-    role: Role
-    key_or_hash: str
-    is_hashed: bool
+# Also export with LEGACY_ prefix for clarity when imported by new.py
+LEGACY_ARGON2_TIME_COST = ARGON2_TIME_COST
+LEGACY_ARGON2_MEMORY_COST = ARGON2_MEMORY_COST
+LEGACY_ARGON2_PARALLELISM = ARGON2_PARALLELISM
+LEGACY_ARGON2_HASH_LENGTH = ARGON2_HASH_LENGTH
 
 
-@dataclass
-class AccountInfo:
-    """In-memory account info."""
-
-    created_at: str
-    users: Dict[str, dict] = field(default_factory=dict)
-    namespace_policy: AccountNamespacePolicy = field(default_factory=AccountNamespacePolicy)
-
-
-class APIKeyManager:
-    """Manages API keys for multi-tenant authentication.
-
-    Two-level storage:
-    - /_system/accounts.json: global workspace list
-    - /{account_id}/_system/users.json: per-account user registry
-
-    In-memory index for fast key lookup.
-    Uses Argon2id for secure API key hashing.
-    """
+class LegacyAPIKeyManager:
+    """Manages API keys for multi-tenant authentication (legacy implementation)."""
 
     def __init__(
         self,
         root_key: str,
         viking_fs: VikingFS,
-        encryption_enabled: bool = False,
+        api_key_hashing_enabled: bool = False,
     ):
         """Initialize APIKeyManager.
 
         Args:
             root_key: Global root API key for administrative access.
             viking_fs: VikingFS client for persistent storage of user keys.
-            encryption_enabled: Whether API key hashing is enabled.
+            api_key_hashing_enabled: Whether API key Argon2id hashing is enabled.
+                Default: false - rely on file-level AES encryption for protection.
         """
         self._root_key = root_key
         self._viking_fs = viking_fs
-        self._encryption_enabled = encryption_enabled
+        self._api_key_hashing_enabled = api_key_hashing_enabled
         self._accounts: Dict[str, AccountInfo] = {}
         # Prefix index: key_prefix -> list[UserKeyEntry]
         self._prefix_index: Dict[str, list[UserKeyEntry]] = {}
@@ -134,8 +116,8 @@ class APIKeyManager:
                         key_prefix = user_info.get("key_prefix", "")
                     else:
                         # Plaintext key
-                        if self._encryption_enabled:
-                            # If encryption enabled, migrate to hashed
+                        if self._api_key_hashing_enabled:
+                            # If API key hashing enabled, migrate to hashed
                             stored_key = self._hash_api_key(key_or_hash)
                             is_hashed = True
                             key_prefix = self._get_key_prefix(key_or_hash)
@@ -147,7 +129,7 @@ class APIKeyManager:
                                 "Migrated API key for user %s in account %s", user_id, account_id
                             )
                         else:
-                            # If encryption not enabled, keep as plaintext
+                            # If API key hashing not enabled, keep as plaintext
                             stored_key = key_or_hash
                             is_hashed = False
                             # For plaintext keys, compute prefix on the fly for indexing
@@ -168,7 +150,7 @@ class APIKeyManager:
                         self._prefix_index[key_prefix].append(entry)
 
         logger.info(
-            "APIKeyManager loaded: %d accounts, %d user keys",
+            "LegacyAPIKeyManager loaded: %d accounts, %d user keys",
             len(self._accounts),
             sum(len(info.users) for info in self._accounts.values()),
         )
@@ -238,8 +220,16 @@ class APIKeyManager:
     ) -> str:
         """Create a new account (workspace) with its first admin user.
 
-        Returns the admin user's API key.
+        Returns the admin user's API key (legacy format).
         """
+        # Validate account_id and user_id format
+        verr = validate_account_id(account_id)
+        if verr:
+            raise InvalidArgumentError(verr)
+        verr = validate_user_id(admin_user_id)
+        if verr:
+            raise InvalidArgumentError(verr)
+
         if account_id in self._accounts:
             raise AlreadyExistsError(account_id, "account")
 
@@ -247,7 +237,7 @@ class APIKeyManager:
         key = self._generate_api_key()
         policy = namespace_policy or AccountNamespacePolicy()
 
-        if self._encryption_enabled:
+        if self._api_key_hashing_enabled:
             stored_key = self._hash_api_key(key)
             is_hashed = True
             key_prefix = self._get_key_prefix(key)
@@ -260,7 +250,7 @@ class APIKeyManager:
             "role": "admin",
             "key": stored_key,
         }
-        if self._encryption_enabled:
+        if self._api_key_hashing_enabled:
             user_info["key_prefix"] = key_prefix
 
         self._accounts[account_id] = AccountInfo(
@@ -289,10 +279,7 @@ class APIKeyManager:
         return key
 
     async def delete_account(self, account_id: str) -> None:
-        """Delete an account and remove all its user keys from the index.
-
-        Note: AGFS data and VectorDB cleanup is the caller's responsibility.
-        """
+        """Delete an account and remove all its user keys from the index."""
         if account_id not in self._accounts:
             raise NotFoundError(account_id, "account")
 
@@ -319,7 +306,12 @@ class APIKeyManager:
         await self._save_accounts_json()
 
     async def register_user(self, account_id: str, user_id: str, role: str = "user") -> str:
-        """Register a new user in an account. Returns the user's API key."""
+        """Register a new user in an account. Returns the user's API key (legacy format)."""
+        # Validate user_id format
+        verr = validate_user_id(user_id)
+        if verr:
+            raise InvalidArgumentError(verr)
+
         account = self._accounts.get(account_id)
         if account is None:
             raise NotFoundError(account_id, "account")
@@ -328,7 +320,7 @@ class APIKeyManager:
 
         key = self._generate_api_key()
 
-        if self._encryption_enabled:
+        if self._api_key_hashing_enabled:
             stored_key = self._hash_api_key(key)
             is_hashed = True
             key_prefix = self._get_key_prefix(key)
@@ -341,7 +333,7 @@ class APIKeyManager:
             "role": role,
             "key": stored_key,
         }
-        if self._encryption_enabled:
+        if self._api_key_hashing_enabled:
             user_info["key_prefix"] = key_prefix
 
         account.users[user_id] = user_info
@@ -422,7 +414,7 @@ class APIKeyManager:
         # Generate new key
         new_key = self._generate_api_key()
 
-        if self._encryption_enabled:
+        if self._api_key_hashing_enabled:
             new_stored_key = self._hash_api_key(new_key)
             new_is_hashed = True
             new_key_prefix = self._get_key_prefix(new_key)
@@ -433,10 +425,10 @@ class APIKeyManager:
 
         # Update user info
         account.users[user_id]["key"] = new_stored_key
-        if self._encryption_enabled:
+        if self._api_key_hashing_enabled:
             account.users[user_id]["key_prefix"] = new_key_prefix
         else:
-            # Remove key_prefix if encryption is disabled
+            # Remove key_prefix if API key hashing is disabled
             if "key_prefix" in account.users[user_id]:
                 del account.users[user_id]["key_prefix"]
 
@@ -506,20 +498,53 @@ class APIKeyManager:
             return AccountNamespacePolicy()
         return account.namespace_policy
 
-    def get_users(self, account_id: str) -> list:
+    def get_users(
+        self,
+        account_id: str,
+        limit: int = 100,
+        name_filter: str | None = None,
+        role_filter: str | None = None,
+        expose_key: bool = True,
+    ) -> list:
         """List all users in an account."""
         account = self._accounts.get(account_id)
         if account is None:
             raise NotFoundError(account_id, "account")
 
         result = []
+        count = 0
         for user_id, user_info in account.users.items():
-            result.append(
-                {
-                    "user_id": user_id,
-                    "role": user_info.get("role", "user"),
-                }
-            )
+            user_role = user_info.get("role", "user")
+
+            # Apply name filter if provided
+            if name_filter and not fnmatch.fnmatch(user_id, name_filter):
+                continue
+
+            # Apply role filter if provided
+            if role_filter and user_role != role_filter:
+                continue
+
+            if count >= limit:
+                break
+
+            user_data = {
+                "user_id": user_id,
+                "role": user_role,
+            }
+            if expose_key:
+                key = user_info.get("key")
+                if key:
+                    if key.startswith("$argon2"):
+                        # Hashed key - show key_prefix
+
+                        key_prefix = user_info.get("key_prefix")
+                        if key_prefix:
+                            user_data["key_prefix"] = key_prefix
+                    else:
+                        # Plaintext key - show full api_key
+                        user_data["api_key"] = key
+            result.append(user_data)
+            count += 1
         return result
 
     def has_user(self, account_id: str, user_id: str) -> bool:
@@ -529,10 +554,23 @@ class APIKeyManager:
             return False
         return user_id in account.users
 
+    def get_user_role(self, account_id: str, user_id: str) -> Role:
+        """Return the role of the given user in the given account.
+
+        Returns Role.USER if the account or user doesn't exist.
+        """
+        account = self._accounts.get(account_id)
+        if account is None:
+            return Role.USER
+        user = account.users.get(user_id)
+        if user is None:
+            return Role.USER
+        return Role(user.get("role", "user"))
+
     # ---- internal helpers ----
 
     def _generate_api_key(self) -> str:
-        """Generate new API Key."""
+        """Generate new API Key (legacy format - hex)."""
         return secrets.token_hex(32)
 
     def _get_key_prefix(self, api_key: str) -> str:

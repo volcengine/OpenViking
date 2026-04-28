@@ -130,7 +130,7 @@ Get session details. Returns NOT_FOUND when the session does not exist by defaul
 ```python
 # Get existing session (raises NotFoundError if not found)
 info = client.get_session("a1b2c3d4")
-print(f"Messages: {info['message_count']}, Commits: {info['commit_count']}")
+print(f"Live Messages: {info['message_count']}, Total Messages: {info.get('total_message_count', 'n/a')}, Commits: {info['commit_count']}")
 
 # Get or create session
 info = client.get_session("a1b2c3d4", auto_create=True)
@@ -163,6 +163,7 @@ openviking session get a1b2c3d4
     "created_at": "2026-03-23T10:00:00+08:00",
     "updated_at": "2026-03-23T11:30:00+08:00",
     "message_count": 5,
+    "total_message_count": 20,
     "commit_count": 3,
     "memories_extracted": {
       "profile": 1,
@@ -190,6 +191,11 @@ openviking session get a1b2c3d4
 }
 ```
 
+Notes:
+- `message_count` is the number of current live, unarchived messages.
+- `total_message_count` is the cumulative count of archived and current live messages when present. Sessions created before this field existed may omit it.
+- `commit_count` and `last_commit_at` are updated when commit Phase 1 archives messages successfully; Phase 2 memory extraction progress is tracked through the returned task.
+
 ---
 
 ### get_session_context()
@@ -205,6 +211,7 @@ This endpoint returns:
 Notes:
 - `latest_archive_overview` becomes an empty string when no completed archive exists, or when the latest overview does not fit in the token budget.
 - `token_budget` is applied to the assembled payload after active `messages`: `latest_archive_overview` has higher priority than `pre_archive_abstracts`, and older abstracts are dropped first when budget is tight.
+- `token_budget` must be greater than or equal to `0`. `token_budget=0` is valid and disables archive payload inclusion, while active `messages` are still returned. Negative values are rejected as invalid arguments.
 - Only archive content that is actually returned is counted toward `estimatedTokens` and `stats.archiveTokens`.
 - Session commit generates an archive summary during Phase 2 for every non-empty archive attempt. Only archives with a completed `.done` marker are exposed here.
 
@@ -213,7 +220,7 @@ Notes:
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | session_id | str | Yes | - | Session ID |
-| token_budget | int | No | 128000 | Token budget for assembled archive payload after active `messages` |
+| token_budget | int | No | 128000 | Non-negative token budget for assembled archive payload after active `messages` |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -864,6 +871,7 @@ viking://session/{session_id}/
     |   +-- messages.jsonl    # Written in Phase 1
     |   +-- .abstract.md      # Written in Phase 2 (background)
     |   +-- .overview.md      # Written in Phase 2 (background)
+    |   +-- memory_diff.json  # Written in Phase 2 (background, on memory changes)
     |   +-- .done             # Phase 2 completion marker
     +-- archive_002/
 ```

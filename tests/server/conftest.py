@@ -74,6 +74,8 @@ def _install_fake_vlm(monkeypatch):
     """Use a fake VLM so server tests never hit external LLM APIs."""
 
     async def _fake_get_completion(self, prompt, thinking=False):
+        if "extract user-private configuration items" in prompt:
+            return '{"values": {"api_key": "secret-xyz", "base_url": "https://example.com"}}'
         return "# Test Summary\n\nFake summary for testing.\n\n## Details\nTest content."
 
     async def _fake_get_vision_completion(self, prompt, images, thinking=False):

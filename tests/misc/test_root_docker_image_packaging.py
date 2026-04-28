@@ -36,6 +36,16 @@ def test_dockerfile_and_makefile_share_the_same_minimum_rust_version():
     assert docker_rust_version == make_rust_version
 
 
+def test_root_dockerfile_does_not_bake_zero_openviking_version_by_default():
+    dockerfile = _read_text("Dockerfile")
+
+    assert "ARG OPENVIKING_VERSION=0.0.0" not in dockerfile
+    assert "ENV SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING" not in dockerfile
+    assert "COPY .git/ .git/" not in dockerfile
+    assert 'if [ -n "${OPENVIKING_VERSION:-}" ]; then' in dockerfile
+    assert "OPENVIKING_VERSION build arg is required" in dockerfile
+
+
 def test_openviking_package_includes_console_static_assets():
     pyproject = _read_text("pyproject.toml")
     setup_py = _read_text("setup.py")

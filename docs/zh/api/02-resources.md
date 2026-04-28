@@ -16,7 +16,7 @@
 | 视频 | `.mp4`, `.mov`, `.avi` | 帧提取 + VLM |
 | 音频 | `.mp3`, `.wav`, `.m4a` | 语音转录 |
 | 文档 | `.docx` | 文本提取 |
-| 飞书/Lark | URL（`*.feishu.cn`、`*.larksuite.com`） | 云端文档解析（`lark-oapi`） |
+| 飞书/Lark | URL（`*.feishu.cn`、`*.larksuite.com`、`*.larkoffice.com`） | 云端文档解析（`lark-oapi`） |
 
 ## 处理流程
 
@@ -121,6 +121,23 @@ openviking add-resource ./documents/guide.md --reason "User guide documentation"
   "time": 0.1
 }
 ```
+
+**同步处理错误**
+
+如果导入在生成资源前失败，裸 HTTP 会返回标准错误 envelope，并使用非 2xx HTTP 状态码。例如：
+
+```json
+{
+  "status": "error",
+  "error": {
+    "code": "PROCESSING_ERROR",
+    "message": "Parse error: [Errno 2] No such file or directory: 'git'"
+  }
+}
+```
+
+`SyncHTTPClient`、`AsyncHTTPClient` 和 CLI 命令会把它作为错误抛出/展示，而不是返回
+`result.status="error"` 的成功结果。
 
 **示例：从 URL 添加**
 

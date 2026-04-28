@@ -9,7 +9,7 @@ viking://{scope}/{path}
 ```
 
 - **scheme**: 始终为 `viking`
-- **scope**: 顶级命名空间（resources、user、agent、session、queue）
+- **scope**: 顶级命名空间（`resources`、`user`、`agent`、`session`；`temp` 和 `queue` 为内部作用域）
 - **path**: 作用域内的资源路径
 
 ## 作用域
@@ -22,6 +22,10 @@ viking://{scope}/{path}
 | **session** | 会话级数据 | 会话生命周期 | 当前会话 |
 | **queue** | 处理队列 | 临时 | 内部 |
 | **temp** | 临时文件 | 解析期间 | 内部 |
+
+公开 API 和 CLI 的文件系统/内容操作只接受公开作用域：
+`resources`、`user`、`agent`、`session`，以及根 URI `viking://`。
+`temp` 和 `queue` 是内部实现作用域，不能通过公开 API 的 URI 参数直接访问。
 
 ## 初始目录
 

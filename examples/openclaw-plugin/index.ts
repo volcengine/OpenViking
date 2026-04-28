@@ -1,11 +1,8 @@
-import { launchProcess, sysEnv, getEnv } from "./runtime-utils.js";
-import { tmpdir } from "node:os";
-
 import { Type } from "@sinclair/typebox";
 import { memoryOpenVikingConfigSchema } from "./config.js";
 import { registerSetupCli } from "./commands/setup.js";
 
-import { OpenVikingClient, localClientCache, localClientPendingPromises, isMemoryUri } from "./client.js";
+import { OpenVikingClient, isMemoryUri } from "./client.js";
 import type {
   AddResourceInput,
   AddResourceResult,
@@ -13,7 +10,6 @@ import type {
   AddSkillResult,
   FindResult,
   FindResultItem,
-  PendingClientEntry,
   CommitSessionResult,
   OVMessage,
 } from "./client.js";
@@ -33,16 +29,7 @@ import {
   summarizeInjectionMemories,
   pickMemoriesForInjection,
 } from "./memory-ranking.js";
-import {
-  IS_WIN,
-  waitForHealthOrExit,
-  quickHealthCheck,
-  quickRecallPrecheck,
-  withTimeout,
-  resolvePythonCommand,
-  prepareLocalPort,
-  checkLocalRuntime,
-} from "./process-manager.js";
+import { quickRecallPrecheck, withTimeout } from "./process-manager.js";
 import {
   createMemoryOpenVikingContextEngine,
   openClawSessionToOvStorageId,
@@ -168,8 +155,6 @@ type OpenClawPluginApi = {
   ) => void;
 };
 
-const MAX_OPENVIKING_STDERR_LINES = 200;
-const MAX_OPENVIKING_STDERR_CHARS = 256_000;
 const AUTO_RECALL_TIMEOUT_MS = 5_000;
 const RECALL_QUERY_MAX_CHARS = 4_000;
 
@@ -554,7 +539,7 @@ const contextEnginePlugin = {
         : {};
     const cfg = memoryOpenVikingConfigSchema.parse(api.pluginConfig);
     const bypassSessionPatterns = compileSessionPatterns(cfg.bypassSessionPatterns);
-    const rawAgentId = rawCfg.agentId;
+    const rawAgentId = rawCfg.agent_prefix;
     if (cfg.logFindRequests) {
       api.logger.info(
         "openviking: routing debug logging enabled (config logFindRequests, or env OPENVIKING_LOG_ROUTING=1 / OPENVIKING_DEBUG=1)",
@@ -566,10 +551,10 @@ const contextEnginePlugin = {
       }
     };
     verboseRoutingInfo(
-      `openviking: loaded plugin config agentId="${cfg.agentId}" ` +
-        `(raw plugins.entries.openviking.config.agentId=${JSON.stringify(rawAgentId ?? "(missing)")}; ` +
+      `openviking: loaded plugin config agent_prefix="${cfg.agent_prefix}" ` +
+        `(raw plugins.entries.openviking.config.agent_prefix=${JSON.stringify(rawAgentId ?? "(missing)")}; ` +
         `${
-          cfg.agentId !== "default"
+          cfg.agent_prefix !== "default"
             ? "non-default → X-OpenViking-Agent is <configAgentId>_<ctx.agentId> (sanitized to [a-zA-Z0-9_-]) when hooks expose session agent; config-only if ctx.agentId unknown"
             : 'default → X-OpenViking-Agent follows OpenClaw ctx.agentId per session (e.g. "main")'
         })`,
@@ -590,68 +575,21 @@ const contextEnginePlugin = {
       : undefined;
     const tenantAccount = cfg.accountId;
     const tenantUser = cfg.userId;
-    const localCacheKey = `${cfg.mode}:${cfg.baseUrl}:${cfg.configPath}:${cfg.apiKey}:${cfg.serverAuthMode}:${tenantAccount}:${tenantUser}:${cfg.agentId}:${cfg.isolateUserScopeByAgent ? "1" : "0"}:${cfg.isolateAgentScopeByUser ? "1" : "0"}:${cfg.logFindRequests ? "1" : "0"}`;
 
-    let clientPromise: Promise<OpenVikingClient>;
-    let localProcess: ReturnType<typeof launchProcess> | null = null;
-    let resolveLocalClient: ((c: OpenVikingClient) => void) | null = null;
-    let rejectLocalClient: ((err: unknown) => void) | null = null;
-    let localUnavailableReason: string | null = null;
-    const markLocalUnavailable = (reason: string, err?: unknown) => {
-      if (!localUnavailableReason) {
-        localUnavailableReason = reason;
-        api.logger.warn(
-          `openviking: local mode marked unavailable (${reason})${err ? `: ${String(err)}` : ""}`,
-        );
-      }
-      if (rejectLocalClient) {
-        rejectLocalClient(
-          err instanceof Error ? err : new Error(`openviking unavailable: ${reason}`),
-        );
-        rejectLocalClient = null;
-      }
-      resolveLocalClient = null;
-    };
-
-    if (cfg.mode === "local") {
-      const cached = localClientCache.get(localCacheKey);
-      if (cached) {
-        localProcess = cached.process;
-        clientPromise = Promise.resolve(cached.client);
-      } else {
-        const existingPending = localClientPendingPromises.get(localCacheKey);
-        if (existingPending) {
-          clientPromise = existingPending.promise;
-        } else {
-          const entry = {} as PendingClientEntry;
-          entry.promise = new Promise<OpenVikingClient>((resolve, reject) => {
-            entry.resolve = resolve;
-            entry.reject = reject;
-          });
-          // Service startup can reject this shared promise before any hook/tool
-          // awaits it. Attach a sink now so expected local-startup failures do
-          // not surface as process-level unhandled rejections.
-          void entry.promise.catch(() => {});
-          clientPromise = entry.promise;
-          localClientPendingPromises.set(localCacheKey, entry);
-        }
-      }
-    } else {
-      clientPromise = Promise.resolve(
-        new OpenVikingClient(
-          cfg.baseUrl,
-          cfg.apiKey,
-          cfg.agentId,
-          cfg.timeoutMs,
-          cfg.serverAuthMode,
-          tenantAccount,
-          tenantUser,
-          routingDebugLog,
-          cfg.isolateUserScopeByAgent,
-          cfg.isolateAgentScopeByUser,
-        ),
-      );
-    }
+    const clientPromise = Promise.resolve(
+      new OpenVikingClient(
+        cfg.baseUrl,
+        cfg.apiKey,
+        cfg.agent_prefix,
+        cfg.timeoutMs,
+        cfg.serverAuthMode,
+        tenantAccount,
+        tenantUser,
+        routingDebugLog,
+        cfg.isolateUserScopeByAgent,
+        cfg.isolateAgentScopeByUser,
+      ),
+    );
 
     const getClient = (): Promise<OpenVikingClient> => clientPromise;
 
@@ -1426,7 +1364,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
     }));
 
     let contextEngineRef: ContextEngineWithCommit | null = null;
-    const sessionAgentResolver = createSessionAgentResolver(cfg.agentId);
+    const sessionAgentResolver = createSessionAgentResolver(cfg.agent_prefix);
     const rememberSessionAgentId = (ctx: SessionAgentLookup) => {
       sessionAgentResolver.remember(ctx);
     };
@@ -1445,7 +1383,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
             sessionId: sid || "(empty)",
             sessionKey: sk || "(empty)",
             ovSessionId: ovSid || "(empty)",
-            parsedConfigAgentId: cfg.agentId,
+            parsedConfigAgentPrefix: cfg.agent_prefix,
             mappedResolvedAgentId: result.mappedResolvedAgentId,
             resolvedBeforeSanitize: result.resolvedBeforeSanitize,
             resolved: result.resolved,
@@ -1515,7 +1453,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
       const prependContextParts: string[] = [];
 
       if (cfg.autoRecall && queryText.length >= 5) {
-        const precheck = await quickRecallPrecheck(cfg.mode, cfg.baseUrl, cfg.port, localProcess);
+        const precheck = await quickRecallPrecheck(cfg.baseUrl);
         if (!precheck.ok) {
           verboseRoutingInfo(
             `openviking: skipping auto-recall because precheck failed (${precheck.reason})`,
@@ -1573,13 +1511,18 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
                     (uri) => client.read(uri, agentId),
                     {
                       recallPreferAbstract: cfg.recallPreferAbstract,
-                      recallMaxContentChars: cfg.recallMaxContentChars,
-                      recallTokenBudget: cfg.recallTokenBudget,
+                      recallMaxInjectedChars: cfg.recallMaxInjectedChars,
                     },
                   );
                   const memoryContext = memoryLines.join("\n");
+                  if (memoryLines.length === 0) {
+                    verboseRoutingInfo(
+                      `openviking: skipping auto-recall injection; no complete memories fit maxInjectedChars=${cfg.recallMaxInjectedChars}`,
+                    );
+                    return;
+                  }
                   verboseRoutingInfo(
-                    `openviking: injecting ${memoryLines.length} memories (~${estimatedTokens} tokens, budget=${cfg.recallTokenBudget})`,
+                    `openviking: injecting ${memoryLines.length} memories (${memoryContext.length} chars, ~${estimatedTokens} tokens, maxInjectedChars=${cfg.recallMaxInjectedChars})`,
                   );
                   verboseRoutingInfo(
                     `openviking: inject-detail ${toJsonLog({ count: memories.length, memories: summarizeInjectionMemories(memories) })}`,
@@ -1641,10 +1584,6 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
           cfg,
           logger: api.logger,
           getClient,
-          quickPrecheck:
-            cfg.mode === "local"
-              ? () => quickRecallPrecheck(cfg.mode, cfg.baseUrl, cfg.port, localProcess)
-              : undefined,
           resolveAgentId,
           rememberSessionAgentId,
         });
@@ -1664,248 +1603,19 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
     api.registerService({
       id: "openviking",
       start: async () => {
-        // Claim the pending entry — only the first start() call to claim it spawns the process.
-        // Subsequent start() calls (from other registrations sharing the same promise) fall through.
-        const pendingEntry = localClientPendingPromises.get(localCacheKey);
-        const isSpawner = cfg.mode === "local" && !!pendingEntry;
-        if (isSpawner) {
-          localClientPendingPromises.delete(localCacheKey);
-          resolveLocalClient = pendingEntry!.resolve;
-          rejectLocalClient = pendingEntry!.reject;
-        }
-        if (isSpawner) {
-          const timeoutMs = 60_000;
-          const intervalMs = 500;
-
-          // Prepare port: kill stale OpenViking, or auto-find free port if occupied by others
-          const actualPort = await prepareLocalPort(cfg.port, api.logger);
-          const baseUrl = `http://127.0.0.1:${actualPort}`;
-
-          const rawPythonCmd = resolvePythonCommand(api.logger);
-
-          const runtimeCheck = checkLocalRuntime(rawPythonCmd, cfg.configPath, api.logger);
-          if (!runtimeCheck.installed) {
-            api.logger.warn(
-              "openviking: package not detected — please run `pip install openviking` first. " +
-              "Server spawn will proceed but may fail.",
-            );
-          }
-          if (!runtimeCheck.configExists) {
-            api.logger.warn(
-              `openviking: config file ${cfg.configPath} not found — ` +
-              "please run `ov-install` or create it manually. See https://github.com/volcengine/OpenViking",
-            );
-          }
-          const pythonCmd = runtimeCheck.pythonCmd;
-
-          // Inherit system environment; optionally override Go/Python paths via env vars
-          const pathSep = IS_WIN ? ";" : ":";
-          const { ALL_PROXY, all_proxy, HTTP_PROXY, http_proxy, HTTPS_PROXY, https_proxy, ...filteredEnv } = sysEnv();
-          const env = {
-            ...filteredEnv,
-            PYTHONUNBUFFERED: "1",
-            PYTHONWARNINGS: "ignore::RuntimeWarning",
-            OPENVIKING_CONFIG_FILE: cfg.configPath,
-            OPENVIKING_START_CONFIG: cfg.configPath,
-            OPENVIKING_START_HOST: "127.0.0.1",
-            OPENVIKING_START_PORT: String(actualPort),
-            ...(getEnv("OPENVIKING_GO_PATH") && { PATH: `${getEnv("OPENVIKING_GO_PATH")}${pathSep}${getEnv("PATH") || ""}` }),
-            ...(getEnv("OPENVIKING_GOPATH") && { GOPATH: getEnv("OPENVIKING_GOPATH") }),
-            ...(getEnv("OPENVIKING_GOPROXY") && { GOPROXY: getEnv("OPENVIKING_GOPROXY") }),
-          };
-          // Run OpenViking server: use run_path on the module file to avoid RuntimeWarning from
-          // "parent package import loads submodule before execution" (exit 3). Fallback to run_module with warning suppressed.
-          const runpyCode = `import sys,os,warnings; warnings.filterwarnings('ignore', category=RuntimeWarning, message='.*sys.modules.*'); sys.argv=['openviking.server.bootstrap','--config',os.environ['OPENVIKING_START_CONFIG'],'--host',os.environ.get('OPENVIKING_START_HOST','127.0.0.1'),'--port',os.environ['OPENVIKING_START_PORT']]; import runpy, importlib.util; spec=importlib.util.find_spec('openviking.server.bootstrap'); (runpy.run_path(spec.origin, run_name='__main__') if spec and getattr(spec,'origin',None) else runpy.run_module('openviking.server.bootstrap', run_name='__main__', alter_sys=True))`;
-          const child = launchProcess(
-            pythonCmd,
-            ["-c", runpyCode],
-            { env, cwd: IS_WIN ? tmpdir() : "/tmp", stdio: ["ignore", "pipe", "pipe"] },
-          );
-          localProcess = child;
-          const stderrChunks: string[] = [];
-          let stderrCharCount = 0;
-          let stderrDroppedChunks = 0;
-          const pushStderrChunk = (chunk: string) => {
-            if (!chunk) return;
-            stderrChunks.push(chunk);
-            stderrCharCount += chunk.length;
-            while (
-              stderrChunks.length > MAX_OPENVIKING_STDERR_LINES ||
-              stderrCharCount > MAX_OPENVIKING_STDERR_CHARS
-            ) {
-              const dropped = stderrChunks.shift();
-              if (!dropped) break;
-              stderrCharCount -= dropped.length;
-              stderrDroppedChunks += 1;
-            }
-          };
-          const formatStderrOutput = () => {
-            if (!stderrChunks.length && !stderrDroppedChunks) return "";
-            const truncated =
-              stderrDroppedChunks > 0
-                ? `[truncated ${stderrDroppedChunks} earlier stderr chunk(s)]\n`
-                : "";
-            return `\n[openviking stderr]\n${truncated}${stderrChunks.join("\n")}`;
-          };
-          child.on("error", (err: Error) => api.logger.warn(`openviking: local server error: ${String(err)}`));
-          child.stderr?.on("data", (chunk: Buffer) => {
-            const s = String(chunk).trim();
-            pushStderrChunk(s);
-            if (cfg.logFindRequests) {
-              api.logger.info(`[openviking-local] ${s}`);
-            } else {
-              api.logger.debug?.(`[openviking] ${s}`);
-            }
-          });
-          child.on("exit", (code: number | null, signal: string | null) => {
-            if (localProcess === child) {
-              localProcess = null;
-              localClientCache.delete(localCacheKey);
-            }
-            const out = formatStderrOutput();
-            api.logger.warn(`openviking: subprocess exited (code=${code}, signal=${signal})${out}`);
-          });
-          try {
-            await waitForHealthOrExit(baseUrl, timeoutMs, intervalMs, child);
-            const client = new OpenVikingClient(
-              baseUrl,
-              cfg.apiKey,
-              cfg.agentId,
-              cfg.timeoutMs,
-              cfg.serverAuthMode,
-              tenantAccount,
-              tenantUser,
-              routingDebugLog,
-              cfg.isolateUserScopeByAgent,
-              cfg.isolateAgentScopeByUser,
-            );
-            localClientCache.set(localCacheKey, { client, process: child });
-            resolveLocalClient!(client);
-            rejectLocalClient = null;
-            api.logger.info(
-              `openviking: local server started (${baseUrl}, config: ${cfg.configPath})`,
-            );
-          } catch (err) {
-            localProcess = null;
-            child.kill("SIGTERM");
-            markLocalUnavailable("startup failed", err);
-            if (stderrChunks.length) {
-              api.logger.warn(
-                `openviking: startup failed (health check timeout or error).${formatStderrOutput()}`,
-              );
-            }
-            throw err;
-          }
-        } else if (cfg.mode === "local") {
-          // Defensive re-spawn: if we're not the designated spawner but there's
-          // no valid local process, trigger a fresh spawn to recover from
-          // scenarios like Gateway force-restart where the child process was
-          // orphaned or exited silently.
-          const cached = localClientCache.get(localCacheKey);
-          const processAlive = cached?.process && cached.process.exitCode === null && !cached.process.killed;
-          if (!processAlive) {
-            const healthOk = await quickHealthCheck(`http://127.0.0.1:${cfg.port}`, 2000);
-            if (!healthOk) {
-              api.logger.warn(
-                `openviking: no valid local process detected (isSpawner=false), triggering defensive re-spawn`,
-              );
-              const timeoutMs = 60_000;
-              const intervalMs = 500;
-              const actualPort = await prepareLocalPort(cfg.port, api.logger);
-              const baseUrl = `http://127.0.0.1:${actualPort}`;
-              const pythonCmd = resolvePythonCommand(api.logger);
-              const pathSep = IS_WIN ? ";" : ":";
-              const env = {
-                ...sysEnv(),
-                PYTHONUNBUFFERED: "1",
-                PYTHONWARNINGS: "ignore::RuntimeWarning",
-                OPENVIKING_CONFIG_FILE: cfg.configPath,
-                OPENVIKING_START_CONFIG: cfg.configPath,
-                OPENVIKING_START_HOST: "127.0.0.1",
-                OPENVIKING_START_PORT: String(actualPort),
-                ...(getEnv("OPENVIKING_GO_PATH") && { PATH: `${getEnv("OPENVIKING_GO_PATH")}${pathSep}${getEnv("PATH") || ""}` }),
-                ...(getEnv("OPENVIKING_GOPATH") && { GOPATH: getEnv("OPENVIKING_GOPATH") }),
-                ...(getEnv("OPENVIKING_GOPROXY") && { GOPROXY: getEnv("OPENVIKING_GOPROXY") }),
-              };
-              const runpyCode = `import sys,os,warnings; warnings.filterwarnings('ignore', category=RuntimeWarning, message='.*sys.modules.*'); sys.argv=['openviking.server.bootstrap','--config',os.environ['OPENVIKING_START_CONFIG'],'--host',os.environ.get('OPENVIKING_START_HOST','127.0.0.1'),'--port',os.environ['OPENVIKING_START_PORT']]; import runpy, importlib.util; spec=importlib.util.find_spec('openviking.server.bootstrap'); (runpy.run_path(spec.origin, run_name='__main__') if spec and getattr(spec,'origin',None) else runpy.run_module('openviking.server.bootstrap', run_name='__main__', alter_sys=True))`;
-              const child = launchProcess(
-                pythonCmd,
-                ["-c", runpyCode],
-                { env, cwd: IS_WIN ? tmpdir() : "/tmp", stdio: ["ignore", "pipe", "pipe"] },
-              );
-              localProcess = child;
-              child.on("error", (err: Error) => api.logger.warn(`openviking: local server error (re-spawn): ${String(err)}`));
-              child.stderr?.on("data", (chunk: Buffer) => {
-                api.logger.debug?.(`[openviking-respawn] ${String(chunk).trim()}`);
-              });
-              child.on("exit", (code: number | null, signal: string | null) => {
-                if (localProcess === child) {
-                  localProcess = null;
-                  localClientCache.delete(localCacheKey);
-                }
-                api.logger.warn(`openviking: re-spawned subprocess exited (code=${code}, signal=${signal})`);
-              });
-              try {
-                await waitForHealthOrExit(baseUrl, timeoutMs, intervalMs, child);
-                const client = new OpenVikingClient(
-                  baseUrl,
-                  cfg.apiKey,
-                  cfg.agentId,
-                  cfg.timeoutMs,
-                  cfg.serverAuthMode,
-                  tenantAccount,
-                  tenantUser,
-                  undefined,
-                  cfg.isolateUserScopeByAgent,
-                  cfg.isolateAgentScopeByUser,
-                );
-                localClientCache.set(localCacheKey, { client, process: child });
-                if (resolveLocalClient) {
-                  resolveLocalClient(client);
-                  rejectLocalClient = null;
-                }
-                api.logger.info(
-                  `openviking: local server re-spawned successfully (${baseUrl}, config: ${cfg.configPath})`,
-                );
-              } catch (err) {
-                localProcess = null;
-                child.kill("SIGTERM");
-                markLocalUnavailable("re-spawn failed", err);
-                api.logger.warn(`openviking: defensive re-spawn failed: ${String(err)}`);
-                throw err;
-              }
-            } else {
-              api.logger.info(`openviking: local process healthy on port ${cfg.port} (isSpawner=false)`);
-            }
-          } else {
-            await (await getClient()).healthCheck().catch(() => {});
-            api.logger.info(
-              `openviking: initialized via cache (url: ${cfg.baseUrl}, targetUri: ${cfg.targetUri})`,
-            );
-          }
-        } else {
-          await (await getClient()).healthCheck().catch(() => {});
-          api.logger.info(
-            `openviking: initialized (url: ${cfg.baseUrl}, targetUri: ${cfg.targetUri}, search: hybrid endpoint)`,
-          );
-        }
+        await (await getClient()).healthCheck().catch(() => {});
+        api.logger.info(
+          `openviking: initialized (url: ${cfg.baseUrl}, targetUri: ${cfg.targetUri}, search: hybrid endpoint)`,
+        );
       },
       stop: () => {
-        if (localProcess) {
-          localProcess.kill("SIGTERM");
-          localClientCache.delete(localCacheKey);
-          localClientPendingPromises.delete(localCacheKey);
-          localProcess = null;
-          api.logger.info("openviking: local server stopped");
-        } else {
-          api.logger.info("openviking: stopped");
-        }
+        api.logger.info("openviking: stopped");
       },
     });
   },
 };
 
-/** Estimate token count using chars/4 heuristic (adequate for budget enforcement). */
+/** Estimate token count using chars/4 heuristic for diagnostics. */
 export function estimateTokenCount(text: string): number {
   if (!text) return 0;
   return Math.ceil(text.length / 4);
@@ -1913,7 +1623,6 @@ export function estimateTokenCount(text: string): number {
 
 export type BuildMemoryLinesOptions = {
   recallPreferAbstract: boolean;
-  recallMaxContentChars: number;
 };
 
 async function resolveMemoryContent(
@@ -1939,10 +1648,6 @@ async function resolveMemoryContent(
     content = item.abstract?.trim() || item.uri;
   }
 
-  if (content.length > options.recallMaxContentChars) {
-    content = content.slice(0, options.recallMaxContentChars) + "...";
-  }
-
   return content;
 }
 
@@ -1960,44 +1665,46 @@ export async function buildMemoryLines(
 }
 
 export type BuildMemoryLinesWithBudgetOptions = BuildMemoryLinesOptions & {
-  recallTokenBudget: number;
+  recallMaxInjectedChars?: number;
+  recallTokenBudget?: number;
 };
 
 /**
- * Build memory lines with a token budget constraint.
+ * Build memory lines with a character budget constraint.
  *
- * The first memory is always included even if its token count exceeds the
- * remaining budget. This is intentional (spec Section 6.2): with
- * `recallMaxContentChars=5000`, a single line is at most ~1250 tokens — well
- * within the 8000-token default budget — so overshoot is bounded and
- * guarantees at least one memory is surfaced.
+ * Individual memories are never truncated. A memory that cannot fit within the
+ * remaining character budget is skipped so only complete memory entries are
+ * injected.
  */
 export async function buildMemoryLinesWithBudget(
   memories: FindResultItem[],
   readFn: (uri: string) => Promise<string>,
   options: BuildMemoryLinesWithBudgetOptions,
 ): Promise<{ lines: string[]; estimatedTokens: number }> {
-  let budgetRemaining = options.recallTokenBudget;
+  const charBudget = options.recallMaxInjectedChars ?? options.recallTokenBudget ?? 0;
   const lines: string[] = [];
   let totalTokens = 0;
+  let totalChars = 0;
 
   for (const item of memories) {
-    if (budgetRemaining <= 0) {
+    if (totalChars >= charBudget) {
       break;
     }
 
     const content = await resolveMemoryContent(item, readFn, options);
     const line = `- [${item.category ?? "memory"}] ${content}`;
-    const lineTokens = estimateTokenCount(line);
+    const separatorChars = lines.length > 0 ? 1 : 0;
+    const projectedChars = totalChars + separatorChars + line.length;
 
-    // First line is always included even if it exceeds the budget (spec §6.2).
-    if (lineTokens > budgetRemaining && lines.length > 0) {
-      break;
+    if (projectedChars > charBudget) {
+      continue;
     }
+
+    const lineTokens = estimateTokenCount(line);
 
     lines.push(line);
     totalTokens += lineTokens;
-    budgetRemaining -= lineTokens;
+    totalChars = projectedChars;
   }
 
   return { lines, estimatedTokens: totalTokens };

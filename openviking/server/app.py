@@ -3,13 +3,16 @@
 """FastAPI application for OpenViking HTTP Server."""
 
 import asyncio
+import logging
 import time
 from contextlib import asynccontextmanager
 from typing import Callable, Optional
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from openviking.server.api_keys import APIKeyManager
 from openviking.server.config import (
@@ -32,6 +35,7 @@ from openviking.server.routers import (
     metrics_router,
     observer_router,
     pack_router,
+    privacy_configs_router,
     relations_router,
     resources_router,
     search_router,
@@ -45,8 +49,79 @@ from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
 from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.utils import get_logger
+from openviking_cli.utils.logger import init_otel_log_handler_from_server_config
 
 logger = get_logger(__name__)
+
+
+def _format_error_location(loc: object) -> str:
+    if not isinstance(loc, (list, tuple)):
+        return "request"
+    parts = [str(part) for part in loc if part is not None]
+    return ".".join(parts) if parts else "request"
+
+
+def _normalize_validation_error(error: object) -> dict:
+    if not isinstance(error, dict):
+        return {"loc": ["request"], "message": str(error), "type": "value_error"}
+    loc = error.get("loc", ["request"])
+    if not isinstance(loc, (list, tuple)):
+        loc = [loc]
+    return {
+        "loc": [str(part) for part in loc],
+        "message": str(error.get("msg") or "Invalid value"),
+        "type": str(error.get("type") or "value_error"),
+    }
+
+
+def _validation_error_message(errors: list[dict]) -> str:
+    if not errors:
+        return "Invalid request parameters"
+    first = errors[0]
+    location = _format_error_location(first.get("loc"))
+    message = first.get("message") or "Invalid value"
+    return f"Invalid request parameters: {location}: {message}"
+
+
+_FRAMEWORK_HTTP_STATUS_TO_ERROR_CODE = {
+    400: "INVALID_ARGUMENT",
+    401: "UNAUTHENTICATED",
+    403: "PERMISSION_DENIED",
+    404: "NOT_FOUND",
+    409: "CONFLICT",
+    422: "INVALID_ARGUMENT",
+    429: "RESOURCE_EXHAUSTED",
+    502: "UNAVAILABLE",
+    503: "UNAVAILABLE",
+    504: "DEADLINE_EXCEEDED",
+}
+
+
+def _error_code_from_framework_http_status(status_code: int) -> str:
+    """Best-effort envelope code for framework/proxy HTTPException fallbacks.
+
+    Business routes should raise OpenVikingError subclasses directly instead
+    of relying on this status-code conversion.
+    """
+    if status_code in _FRAMEWORK_HTTP_STATUS_TO_ERROR_CODE:
+        return _FRAMEWORK_HTTP_STATUS_TO_ERROR_CODE[status_code]
+    return "INTERNAL" if status_code >= 500 else "UNKNOWN"
+
+
+def _message_from_http_detail(detail: object) -> str:
+    if isinstance(detail, str) and detail:
+        return detail
+    if isinstance(detail, list):
+        errors = [_normalize_validation_error(item) for item in detail]
+        return _validation_error_message(errors)
+    if isinstance(detail, dict):
+        for key in ("message", "detail", "error"):
+            value = detail.get(key)
+            if isinstance(value, str) and value:
+                return value
+    if detail:
+        return str(detail)
+    return "HTTP request failed"
 
 
 def create_app(
@@ -81,21 +156,17 @@ def create_app(
 
         # Initialize APIKeyManager after service (needs VikingFS)
         effective_auth_mode = config.get_effective_auth_mode()
-        if (
-            effective_auth_mode == AuthMode.API_KEY
-            and config.root_api_key
-            and config.root_api_key != ""
-        ):
+        if config.root_api_key and config.root_api_key != "":
             api_key_manager = APIKeyManager(
                 root_key=config.root_api_key,
                 viking_fs=service.viking_fs,
-                encryption_enabled=config.encryption_enabled,
+                api_key_hashing_enabled=config.api_key_hashing_enabled,
             )
             await api_key_manager.load()
             app.state.api_key_manager = api_key_manager
             logger.info(
-                "APIKeyManager initialized with encryption_enabled=%s",
-                config.encryption_enabled,
+                "APIKeyManager initialized with api_key_hashing_enabled=%s",
+                config.api_key_hashing_enabled,
             )
         elif effective_auth_mode == AuthMode.TRUSTED:
             app.state.api_key_manager = None
@@ -129,17 +200,22 @@ def create_app(
         task_tracker = get_task_tracker()
         task_tracker.start_cleanup_loop()
 
-        # Initialize tracer
+        # Initialize tracing and OTLP log export from server.observability.
         from openviking.telemetry import tracer_module
 
-        tracer_module.init_tracer_from_config()
+        tracer_module.init_tracer_from_server_config(config)
+        init_otel_log_handler_from_server_config(config)
 
-        yield
+        # Start MCP session manager (must be active before /mcp requests)
+        from openviking.server.mcp_endpoint import mcp_lifespan
+
+        async with mcp_lifespan():
+            yield
 
         # Cleanup
-        from openviking.metrics.global_api import shutdown_metrics
+        from openviking.metrics.global_api import shutdown_metrics_async
 
-        shutdown_metrics(app=app)
+        await shutdown_metrics_async(app=app)
         task_tracker.stop_cleanup_loop()
         if owns_service and service:
             try:
@@ -168,22 +244,57 @@ def create_app(
         allow_headers=["*"],
     )
 
+    # Add HTTP observability middleware first (metrics, tracing)
+    # Note: In FastAPI/Starlette, middleware added later executes first (outer layer).
+    # We want timing to be the outermost layer to measure the full request duration.
+    from openviking.observability.http_observability_middleware import (
+        create_http_observability_middleware,
+    )
+
+    http_observability_middleware = create_http_observability_middleware()
+
+    @app.middleware("http")
+    async def add_http_observability(request: Request, call_next: Callable):
+        return await http_observability_middleware(request, call_next)
+
+    # Add request timing middleware last (so it executes first as the outermost layer)
+    # This ensures X-Process-Time includes the full request duration including
+    # observability middleware overhead.
+    # Add request header logging middleware (for debug)
+    @app.middleware("http")
+    async def log_request_headers(request: Request, call_next: Callable):
+        access_logger = logging.getLogger("uvicorn.access")
+        if access_logger.isEnabledFor(logging.DEBUG):
+            headers = dict(request.headers)
+            header_names = ", ".join(sorted(headers.keys()))
+            access_logger.debug(
+                f"Request headers for {request.method} {request.url.path}: {header_names}"
+            )
+        response = await call_next(request)
+        return response
+
     # Add request timing middleware
     @app.middleware("http")
     async def add_timing(request: Request, call_next: Callable):
-        start_time = time.time()
+        """
+        Middleware to measure request processing time.
+
+        This middleware is added last so it executes as the outermost layer,
+        ensuring X-Process-Time includes the full request duration including
+        all other middleware overhead.
+
+        Args:
+            request: The incoming HTTP request.
+            call_next: The next middleware/handler in the chain.
+
+        Returns:
+            The response with X-Process-Time header added.
+        """
+        start_time = time.perf_counter()
         response = await call_next(request)
-        process_time = time.time() - start_time
+        process_time = time.perf_counter() - start_time
         response.headers["X-Process-Time"] = str(process_time)
         return response
-
-    from openviking.metrics.http_middleware import create_http_metrics_middleware
-
-    http_metrics_middleware = create_http_metrics_middleware()
-
-    @app.middleware("http")
-    async def add_http_metrics(request: Request, call_next: Callable):
-        return await http_metrics_middleware(request, call_next)
 
     # Add exception handler for OpenVikingError
     @app.exception_handler(OpenVikingError)
@@ -199,6 +310,44 @@ def create_app(
                     details=exc.details,
                 ),
             ).model_dump(),
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def request_validation_error_handler(request: Request, exc: RequestValidationError):
+        errors = [_normalize_validation_error(error) for error in exc.errors()]
+        code = "INVALID_ARGUMENT"
+        return JSONResponse(
+            status_code=ERROR_CODE_TO_HTTP_STATUS[code],
+            content=Response(
+                status="error",
+                error=ErrorInfo(
+                    code=code,
+                    message=_validation_error_message(errors),
+                    details={"validation_errors": errors},
+                ),
+            ).model_dump(exclude_none=True),
+        )
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+        code = _error_code_from_framework_http_status(exc.status_code)
+        response_status = exc.status_code
+        if code != "UNKNOWN":
+            response_status = ERROR_CODE_TO_HTTP_STATUS.get(code, exc.status_code)
+        details = None
+        if exc.status_code != response_status:
+            details = {"original_http_status_code": exc.status_code}
+        return JSONResponse(
+            status_code=response_status,
+            headers=exc.headers,
+            content=Response(
+                status="error",
+                error=ErrorInfo(
+                    code=code,
+                    message=_message_from_http_detail(exc.detail),
+                    details=details,
+                ),
+            ).model_dump(exclude_none=True),
         )
 
     # Catch-all for unhandled exceptions so clients always get JSON
@@ -254,6 +403,7 @@ def create_app(
     app.include_router(content_router)
     app.include_router(search_router)
     app.include_router(relations_router)
+    app.include_router(privacy_configs_router)
     app.include_router(sessions_router)
     app.include_router(stats_router)
     app.include_router(pack_router)
@@ -264,5 +414,13 @@ def create_app(
     app.include_router(webdav_router)
     app.include_router(maintenance_router)
     app.include_router(bot_router, prefix="/bot/v1")
+
+    # MCP endpoint — serves 5 tools (search, read, store, forget, health)
+    # via streamable HTTP for Claude Code and other MCP clients.
+    from starlette.routing import Route
+
+    from openviking.server.mcp_endpoint import create_mcp_app
+
+    app.routes.append(Route("/mcp", endpoint=create_mcp_app(), methods=["GET", "POST", "DELETE"]))
 
     return app

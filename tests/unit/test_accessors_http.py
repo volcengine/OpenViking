@@ -2,9 +2,27 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Unit tests for HTTPAccessor."""
 
+from types import SimpleNamespace
+from unittest.mock import patch
+
 import pytest
 
 from openviking.parse.accessors import AccessorRegistry, GitAccessor, HTTPAccessor
+
+
+def _mock_config():
+    return SimpleNamespace(
+        code=SimpleNamespace(
+            github_domains=["github.com", "www.github.com"],
+            gitlab_domains=["gitlab.com", "www.gitlab.com"],
+            azure_devops_domains=[
+                "dev.azure.com",
+                "ssh.dev.azure.com",
+                "vs-ssh.visualstudio.com",
+            ],
+            code_hosting_domains=["github.com", "gitlab.com"],
+        )
+    )
 
 
 class TestHTTPAccessor:
@@ -60,6 +78,14 @@ class TestHTTPAccessor:
 class TestHTTPAccessorPriorityRouting:
     """Tests that verify HTTPAccessor works correctly with priority-based routing."""
 
+    @pytest.fixture(autouse=True)
+    def _patch_config(self):
+        with patch(
+            "openviking_cli.utils.config.open_viking_config.OpenVikingConfigSingleton.get_instance",
+            side_effect=_mock_config,
+        ):
+            yield
+
     def test_git_url_routed_to_git_accessor(self) -> None:
         """Git URLs should be routed to GitAccessor, not HTTPAccessor."""
         registry = AccessorRegistry(register_default=False)
@@ -79,6 +105,23 @@ class TestHTTPAccessorPriorityRouting:
         assert accessor is not None
         assert accessor.__class__.__name__ == "GitAccessor"
 
+    def test_azure_devops_git_url_routed_to_git_accessor(self) -> None:
+        """Azure DevOps repo URLs should be routed to GitAccessor."""
+        registry = AccessorRegistry(register_default=False)
+        http = HTTPAccessor()
+        git = GitAccessor()
+        registry.register(http)
+        registry.register(git)
+
+        test_url = "https://dev.azure.com/org/project/_git/repo"
+
+        assert git.can_handle(test_url) is True
+        assert http.can_handle(test_url) is True
+
+        accessor = registry.get_accessor(test_url)
+        assert accessor is not None
+        assert accessor.__class__.__name__ == "GitAccessor"
+
     def test_regular_http_url_routed_to_http_accessor(self) -> None:
         """Regular HTTP URLs should be routed to HTTPAccessor."""
         registry = AccessorRegistry(register_default=False)
@@ -94,6 +137,23 @@ class TestHTTPAccessorPriorityRouting:
         assert http.can_handle(test_url) is True
 
         # Registry picks HTTPAccessor
+        accessor = registry.get_accessor(test_url)
+        assert accessor is not None
+        assert accessor.__class__.__name__ == "HTTPAccessor"
+
+    def test_azure_devops_browse_url_routed_to_http_accessor(self) -> None:
+        """Azure DevOps browse URLs should stay with HTTPAccessor."""
+        registry = AccessorRegistry(register_default=False)
+        http = HTTPAccessor()
+        git = GitAccessor()
+        registry.register(http)
+        registry.register(git)
+
+        test_url = "https://dev.azure.com/org/project/_git/repo?path=/README.md"
+
+        assert git.can_handle(test_url) is False
+        assert http.can_handle(test_url) is True
+
         accessor = registry.get_accessor(test_url)
         assert accessor is not None
         assert accessor.__class__.__name__ == "HTTPAccessor"

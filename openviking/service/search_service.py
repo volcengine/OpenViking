@@ -6,17 +6,23 @@ Search Service for OpenViking.
 Provides semantic search operations: search, find.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+from openviking.core.uri_validation import validate_optional_viking_uri
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.exceptions import NotInitializedError
+from openviking_cli.exceptions import InvalidArgumentError, NotInitializedError
 from openviking_cli.utils import get_logger
 
 if TYPE_CHECKING:
     from openviking.session import Session
 
 logger = get_logger(__name__)
+
+
+def _ensure_non_empty_query(query: str) -> None:
+    if not query.strip():
+        raise InvalidArgumentError("Search query must not be empty.")
 
 
 class SearchService:
@@ -39,7 +45,7 @@ class SearchService:
         self,
         query: str,
         ctx: RequestContext,
-        target_uri: str = "",
+        target_uri: Union[str, List[str]] = "",
         session: Optional["Session"] = None,
         limit: int = 10,
         score_threshold: Optional[float] = None,
@@ -49,7 +55,7 @@ class SearchService:
 
         Args:
             query: Query string
-            target_uri: Target directory URI
+            target_uri: Target directory URI(s), supports str or List[str]
             session: Session object for context
             limit: Max results
             score_threshold: Score threshold
@@ -58,6 +64,8 @@ class SearchService:
         Returns:
             FindResult
         """
+        _ensure_non_empty_query(query)
+        target_uri = validate_optional_viking_uri(target_uri, field_name="target_uri")
         viking_fs = self._ensure_initialized()
 
         session_info = None
@@ -79,7 +87,7 @@ class SearchService:
         self,
         query: str,
         ctx: RequestContext,
-        target_uri: str = "",
+        target_uri: Union[str, List[str]] = "",
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
@@ -88,7 +96,7 @@ class SearchService:
 
         Args:
             query: Query string
-            target_uri: Target directory URI
+            target_uri: Target directory URI(s), supports str or List[str]
             limit: Max results
             score_threshold: Score threshold
             filter: Metadata filters
@@ -96,6 +104,8 @@ class SearchService:
         Returns:
             FindResult
         """
+        _ensure_non_empty_query(query)
+        target_uri = validate_optional_viking_uri(target_uri, field_name="target_uri")
         viking_fs = self._ensure_initialized()
         result = await viking_fs.find(
             query=query,

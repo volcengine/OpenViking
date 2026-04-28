@@ -92,8 +92,10 @@ class RerankBase:
                     e,
                 )
         try:
-            from openviking.metrics.account_context import get_metric_account_context
             from openviking.metrics.datasources import RerankEventDataSource
+            from openviking.observability.context import get_root_observability_context
+
+            root_context = get_root_observability_context()
 
             RerankEventDataSource.record_call(
                 provider=str(provider),
@@ -101,7 +103,7 @@ class RerankBase:
                 duration_seconds=max(float(duration_seconds), 0.0),
                 prompt_tokens=int(prompt_tokens),
                 completion_tokens=int(completion_tokens),
-                account_id=get_metric_account_context().http_account_id,
+                account_id=root_context.account_id if root_context is not None else None,
             )
         except Exception as e:
             # Metrics must never break rerank execution.

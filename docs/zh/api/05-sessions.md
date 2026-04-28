@@ -130,7 +130,7 @@ openviking session list
 ```python
 # 获取已有会话（不存在时抛 NotFoundError）
 info = client.get_session("a1b2c3d4")
-print(f"Messages: {info['message_count']}, Commits: {info['commit_count']}")
+print(f"Live Messages: {info['message_count']}, Total Messages: {info.get('total_message_count', 'n/a')}, Commits: {info['commit_count']}")
 
 # 获取或创建会话
 info = client.get_session("a1b2c3d4", auto_create=True)
@@ -163,6 +163,7 @@ openviking session get a1b2c3d4
     "created_at": "2026-03-23T10:00:00+08:00",
     "updated_at": "2026-03-23T11:30:00+08:00",
     "message_count": 5,
+    "total_message_count": 20,
     "commit_count": 3,
     "memories_extracted": {
       "profile": 1,
@@ -190,6 +191,11 @@ openviking session get a1b2c3d4
 }
 ```
 
+说明：
+- `message_count` 表示当前 live session 中尚未归档的消息数。
+- `total_message_count` 存在时表示已归档消息与当前 live 消息的累计总数；该字段引入前创建的旧 session 可能不返回。
+- `commit_count` 和 `last_commit_at` 会在 commit Phase 1 成功归档消息后更新；Phase 2 记忆提取进度通过返回的 task 跟踪。
+
 ---
 
 ### get_session_context()
@@ -205,6 +211,7 @@ openviking session get a1b2c3d4
 说明：
 - 没有可用 completed archive，或最新 overview 超出 token budget 时，`latest_archive_overview` 返回空字符串。
 - `token_budget` 会在 active `messages` 之后作用于 assembled archive payload：`latest_archive_overview` 优先级高于 `pre_archive_abstracts`，预算紧张时先淘汰最旧的 abstracts。
+- `token_budget` 必须大于等于 `0`。`token_budget=0` 合法，表示不返回 archive payload，但仍会返回 active `messages`；负数会作为非法参数拒绝。
 - 只有最终实际返回的 archive 内容，才会计入 `estimatedTokens` 和 `stats.archiveTokens`。
 - 当前每次有消息的 session commit 都会在 Phase 2 生成 archive 摘要；只有带 `.done` 标记的 completed archive 才会被这里返回。
 
@@ -213,7 +220,7 @@ openviking session get a1b2c3d4
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | session_id | str | 是 | - | 会话 ID |
-| token_budget | int | 否 | 128000 | active `messages` 之后留给 assembled archive payload 的 token 预算 |
+| token_budget | int | 否 | 128000 | active `messages` 之后留给 assembled archive payload 的非负 token 预算 |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -864,6 +871,7 @@ viking://session/{session_id}/
     |   +-- messages.jsonl    # Phase 1 写入
     |   +-- .abstract.md      # Phase 2 写入（后台）
     |   +-- .overview.md      # Phase 2 写入（后台）
+    |   +-- memory_diff.json  # Phase 2 写入（后台，记忆变更时）
     |   +-- .done             # Phase 2 完成标记
     +-- archive_002/
 ```

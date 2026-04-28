@@ -4,6 +4,7 @@ use crate::config::merge_csv_options;
 use crate::error::{Error, Result};
 use crate::tui;
 use crate::CliContext;
+use crate::PrivacyCommands;
 
 pub async fn handle_add_resource(
     mut path: String,
@@ -81,6 +82,7 @@ pub async fn handle_add_resource(
         ctx.config.account.clone(),
         ctx.config.user.clone(),
         effective_timeout,
+        ctx.config.extra_headers.clone(),
     );
     commands::resources::add_resource(
         &client,
@@ -326,8 +328,8 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
             )
             .await
         }
-        AdminCommands::ListUsers { account_id } => {
-            commands::admin::list_users(&client, &account_id, ctx.output_format, ctx.compact).await
+        AdminCommands::ListUsers { account_id, limit, name, role } => {
+            commands::admin::list_users(&client, &account_id, limit, name, role, ctx.output_format, ctx.compact).await
         }
         AdminCommands::RemoveUser {
             account_id,
@@ -376,6 +378,90 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
 pub async fn handle_add_memory(content: String, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     commands::session::add_memory(&client, &content, ctx.output_format, ctx.compact).await
+}
+
+pub async fn handle_privacy(cmd: PrivacyCommands, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    match cmd {
+        PrivacyCommands::Categories => {
+            commands::privacy::categories(&client, ctx.output_format, ctx.compact).await
+        }
+        PrivacyCommands::List { category } => {
+            commands::privacy::list_targets(&client, &category, ctx.output_format, ctx.compact)
+                .await
+        }
+        PrivacyCommands::Get {
+            category,
+            target_key,
+        } => commands::privacy::get_current(
+            &client,
+            &category,
+            &target_key,
+            ctx.output_format,
+            ctx.compact,
+        )
+        .await,
+        PrivacyCommands::Upsert {
+            category,
+            target_key,
+            values_json,
+            values_file,
+            key,
+            change_reason,
+            labels_json,
+        } => {
+            commands::privacy::upsert(
+                &client,
+                &category,
+                &target_key,
+                values_json.as_deref(),
+                values_file.as_deref(),
+                &key,
+                &change_reason,
+                labels_json.as_deref(),
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+        PrivacyCommands::Versions {
+            category,
+            target_key,
+        } => commands::privacy::list_versions(
+            &client,
+            &category,
+            &target_key,
+            ctx.output_format,
+            ctx.compact,
+        )
+        .await,
+        PrivacyCommands::Version {
+            category,
+            target_key,
+            version,
+        } => commands::privacy::get_version(
+            &client,
+            &category,
+            &target_key,
+            version,
+            ctx.output_format,
+            ctx.compact,
+        )
+        .await,
+        PrivacyCommands::Activate {
+            category,
+            target_key,
+            version,
+        } => commands::privacy::activate(
+            &client,
+            &category,
+            &target_key,
+            version,
+            ctx.output_format,
+            ctx.compact,
+        )
+        .await,
+    }
 }
 
 use crate::ConfigCommands;

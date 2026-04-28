@@ -810,6 +810,7 @@ Openviking 指标体系采用如下兼容性策略:
 - 保持现有 retrieval / embedding / vlm / cache 指标名尽量不变；
 - `/metrics` 路由地址保持不变；
 - `server.observability.metrics.enabled` 配置保持不变；
+- `server.observability.metrics.exporters.*` 作为 exporter 扩展点：默认 Prometheus exporter 可继续工作，OTLP exporter 可按需启用；
 - `/api/v1/observer/*` 与 `/api/v1/stats/*` 行为保持不变。
 
 ## 6. 风险与缓解

@@ -375,3 +375,12 @@ jobs:
                 "${dockerhub_image_refs[@]}"
             fi
           done <<< "$SOURCE_TAGS"
+
+  deploy-docs:
+    name: Build and Deploy Docs
+    if: github.event_name == 'release'
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/_docs-deploy.yml

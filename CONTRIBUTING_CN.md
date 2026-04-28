@@ -289,6 +289,79 @@ class TestAsyncOpenViking:
 
 ---
 
+## 维护者路由与贡献入口
+
+### 面向贡献者的模块地图
+
+如果你还不确定问题、issue 或 PR 属于哪个方向，可以先看这张表：
+
+| 领域 | 模块 | 主要联系人 |
+|------|------|------------|
+| Integration | Bot | `@yeshion23333` |
+| Integration | OpenClaw Plugin | `@Mijamind719`、`@wlff123` |
+| Platform | Framework / Multi-tenant / Resources / Session | `@qin-ctx` |
+| Platform | Incremental / Scheduled Update | `@myysy` |
+| Knowledge | Memory | `@chenjw` |
+| Knowledge | Retrieval / Directory Semantics | `@zhoujh01` |
+| Storage & Security | Virtual FS / File Encryption | `@chuanbao666`、`@baojun-zhang` |
+
+如果还是无法判断归属，可以直接 @ 下方的跨模块维护支持成员。
+
+### 面向维护者的路由表
+
+当需要把 issue、PR 或设计问题路由到更具体的 owner 时，可以参考下表：
+
+| 领域 | 子域 | 代表路径或主题 | 主要联系人 | 备援 / 跨模块支持 |
+|------|------|----------------|------------|-------------------|
+| Integration | Bot Runtime | `bot/vikingbot`、`bot/bridge`、部署脚本、bot 文档 | `@yeshion23333` | `@chenjw` |
+| Integration | OpenClaw Plugin | `examples/openclaw-plugin`、安装、remote mode、兼容性 | `@Mijamind719`、`@wlff123` | `@LinQiang391` |
+| Platform | Server & Multi-tenant | `openviking/server`、`openviking/service`、auth、identity、admin、租户边界 | `@qin-ctx` | `@MaojiaSheng` |
+| Platform | Resource & Session Lifecycle | `openviking/resource`、`openviking/session`、资源导入、session 生命周期 | `@qin-ctx` | `@MaojiaSheng` |
+| Platform | Incremental & Scheduled Update | `openviking/resource/watch_manager.py`、`openviking/resource/watch_scheduler.py` | `@myysy` | `@qin-ctx` |
+| Knowledge | Memory Engine | `openviking/session/memory`、`memory_extractor.py`、`memory_deduplicator.py` | `@chenjw` | `@qin-ctx` |
+| Knowledge | Retrieval & Directory Semantics | `openviking/retrieve`、意图分析、分层检索、目录语义 | `@zhoujh01` | `@qin-ctx` |
+| Storage & Security | VFS / AGFS Path Semantics | `openviking/storage`、`openviking/pyagfs`、文件系统行为、路径语义 | `@chuanbao666`、`@baojun-zhang` | `@zhoujh01` |
+| Storage & Security | Encryption & Data Safety | `openviking/crypto`、文件加密、存储安全 | `@chuanbao666`、`@baojun-zhang` | `@zhoujh01` |
+
+对于暂时还没有稳定 owner 的方向，先由跨模块维护支持成员协助路由。
+
+### 跨模块维护支持
+
+- `@MaojiaSheng`
+- `@qin-ctx`
+- `@zhoujh01`
+
+跨模块维护支持成员主要负责 issue 路由、跨模块设计问题，以及 owner 繁忙时的补位 review。
+
+### 如何获得帮助
+
+- 如果你已经知道受影响模块，请在 issue 或 PR 描述中直接写明。
+- 如果暂时无法判断模块归属，优先描述使用场景和受影响行为。
+- 如果你想认领某个 issue，建议先留言说明，尤其是跨模块改动。
+- 如果你的 PR 涉及多个模块，请在描述中标明主要影响域。
+
+### 贡献入口标签
+
+Issue 模板已经会对 `bug`、`enhancement`、`question` 等问题类型做基础分类。为了让贡献入口更清晰，维护者还可能补充以下标签：
+
+| 标签 | 含义 |
+|------|------|
+| `good first issue` | 适合新贡献者上手，范围清晰且验收标准明确 |
+| `help wanted` | 更适合已经熟悉仓库或 review 风格的贡献者参与 |
+| `needs-design` | 实现前需要维护者先澄清设计边界 |
+| `needs-review` | 正在等待首轮 review 的 PR |
+
+### 贡献成长路径
+
+我们希望贡献成长路径足够实际，让贡献者能清楚看到下一步可以怎么参与：
+
+| 阶段 | 常见信号 | 下一步建议 |
+|------|----------|------------|
+| 新贡献者 | 第一次提 issue 或 PR，通常从文档、测试或小范围修复开始 | 从 `good first issue` 入手，熟悉本地开发和提交流程 |
+| 活跃贡献者 | 已经有一个或多个合入贡献 | 在自己熟悉的模块下开始认领 `help wanted` |
+| 模块贡献者 | 在同一子域持续贡献 | 开始参与该模块的 issue 分流、问题复现、文档补充或 review 建议 |
+| 备援 Reviewer 候选 | 在某个子域形成稳定贡献记录 | 协助首轮 review、问题路由和贡献者支持 |
+
 ## 贡献流程
 
 ### 1. 创建分支

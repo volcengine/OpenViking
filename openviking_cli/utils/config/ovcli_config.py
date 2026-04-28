@@ -3,9 +3,9 @@
 """Configuration schema and loader for ovcli.conf."""
 
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ValidationError, model_validator
 
 from .config_loader import resolve_config_path
 from .config_utils import format_validation_error
@@ -32,8 +32,24 @@ class OVCLIConfig(BaseModel):
     user: Optional[str] = None
     timeout: float = 60.0
     upload: Optional[OVCLIUploadConfig] = None
+    extra_headers: Optional[Dict[str, str]] = None
 
     model_config = {"extra": "forbid"}
+
+    @model_validator(mode="before")
+    @classmethod
+    def handle_extra_headers_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            # 支持 extra_header 作为 extra_headers 的别名
+            if "extra_header" in data and "extra_headers" not in data:
+                # 复制字典并移除 extra_header，避免 extra: "forbid" 报错
+                new_data = {k: v for k, v in data.items() if k != "extra_header"}
+                new_data["extra_headers"] = data["extra_header"]
+                data = new_data
+            elif "extra_headers" in data and "extra_header" in data:
+                # 优先使用 extra_headers，移除 extra_header
+                data = {k: v for k, v in data.items() if k != "extra_header"}
+        return data
 
 
 def load_ovcli_config(config_path: Optional[str] = None) -> Optional[OVCLIConfig]:

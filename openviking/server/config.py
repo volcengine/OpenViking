@@ -35,6 +35,43 @@ class MetricsAccountDimensionConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class PrometheusExporterConfig(BaseModel):
+    """Prometheus exporter configuration."""
+
+    enabled: bool = True
+
+    model_config = {"extra": "forbid"}
+
+
+class OTelExporterConfig(BaseModel):
+    """OpenTelemetry exporter configuration."""
+
+    class TLSConfig(BaseModel):
+        """TLS configuration for OTLP exporters."""
+
+        insecure: bool = False
+
+        model_config = {"extra": "forbid"}
+
+    enabled: bool = False
+    protocol: str = "grpc"  # "grpc" or "http"
+    tls: TLSConfig = Field(default_factory=TLSConfig)
+    endpoint: str = "localhost:4317"  # gRPC default: 4317; HTTP default: 4318
+    service_name: str = "openviking-server"
+    export_interval_ms: int = 10000
+
+    model_config = {"extra": "forbid"}
+
+
+class MetricsExportersConfig(BaseModel):
+    """Metrics exporters configuration."""
+
+    prometheus: PrometheusExporterConfig = Field(default_factory=PrometheusExporterConfig)
+    otel: OTelExporterConfig = Field(default_factory=OTelExporterConfig)
+
+    model_config = {"extra": "forbid"}
+
+
 class MetricsConfig(BaseModel):
     """Metrics subsystem configuration."""
 
@@ -42,6 +79,7 @@ class MetricsConfig(BaseModel):
     account_dimension: MetricsAccountDimensionConfig = Field(
         default_factory=MetricsAccountDimensionConfig
     )
+    exporters: MetricsExportersConfig = Field(default_factory=MetricsExportersConfig)
 
     model_config = {"extra": "forbid"}
 
@@ -50,6 +88,8 @@ class ObservabilityConfig(BaseModel):
     """Server-side observability configuration."""
 
     metrics: MetricsConfig = Field(default_factory=MetricsConfig)
+    traces: OTelExporterConfig = Field(default_factory=OTelExporterConfig)
+    logs: OTelExporterConfig = Field(default_factory=OTelExporterConfig)
 
     model_config = {"extra": "forbid"}
 
@@ -63,7 +103,8 @@ class ServerConfig(BaseModel):
     cors_origins: List[str] = Field(default_factory=lambda: ["*"])
     with_bot: bool = False  # Enable Bot API proxy to Vikingbot
     bot_api_url: str = "http://localhost:18790"  # Vikingbot OpenAPIChannel URL (default port)
-    encryption_enabled: bool = False  # Whether API key hashing is enabled
+    encryption_enabled: bool = False  # Whether file-level AES encryption is enabled
+    api_key_hashing_enabled: bool = False  # Whether API key Argon2id hashing is enabled (default: false, rely on file encryption)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
 
     model_config = {"extra": "forbid"}
@@ -132,6 +173,24 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
 
     # Get encryption enabled from config data directly (for test compatibility)
     encryption_enabled = data.get("encryption", {}).get("enabled", False)
+    # Get API key hashing enabled from config data directly (under encryption namespace)
+    # Default: false - rely on file-level encryption for API key protection
+    api_key_hashing_enabled = (
+        data.get("encryption", {}).get("api_key_hashing", {}).get("enabled", False)
+    )
+
+    # BREAKING CHANGE: Previously, encryption.enabled=true implicitly enabled API key Argon2id hashing.
+    # Now, you must explicitly configure encryption.api_key_hashing.enabled=true to enable hashing.
+    # When encryption.enabled=true but api_key_hashing.enabled=false (default),
+    # API keys will be stored in plaintext within AES-GCM encrypted files.
+    if encryption_enabled and not api_key_hashing_enabled:
+        logger.info(
+            "API key hashing is disabled while file encryption is enabled. "
+            "Previously, encryption.enabled=true implicitly enabled API key Argon2id hashing. "
+            "Now, API keys will be stored in plaintext within AES-GCM encrypted files. "
+            "To maintain the previous behavior, set encryption.api_key_hashing.enabled=true. "
+            "See documentation for more details."
+        )
 
     try:
         config = ServerConfig.model_validate(server_data)
@@ -141,7 +200,12 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
             f"{format_validation_error(root_model=ServerConfig, error=e, path_prefix='server')}"
         ) from e
 
-    return config.model_copy(update={"encryption_enabled": encryption_enabled})
+    return config.model_copy(
+        update={
+            "encryption_enabled": encryption_enabled,
+            "api_key_hashing_enabled": api_key_hashing_enabled,
+        }
+    )
 
 
 _LOCALHOST_HOSTS = {"127.0.0.1", "localhost", "::1"}

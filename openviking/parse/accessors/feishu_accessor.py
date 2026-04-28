@@ -256,7 +256,11 @@ class FeishuAccessor(DataAccessor):
         parsed = urlparse(url)
         host = parsed.hostname or ""
         path = parsed.path
-        is_feishu_domain = host.endswith(".feishu.cn") or host.endswith(".larksuite.com")
+        is_feishu_domain = (
+            host.endswith(".feishu.cn")
+            or host.endswith(".larksuite.com")
+            or host.endswith(".larkoffice.com")
+        )
         has_doc_path = any(
             path == f"/{t}" or path.startswith(f"/{t}/") for t in ("docx", "wiki", "sheets", "base")
         )

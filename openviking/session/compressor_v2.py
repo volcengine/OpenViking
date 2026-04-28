@@ -416,6 +416,7 @@ class SessionCompressorV2:
             except Exception:
                 pass
 
+
         return {
             "archive_uri": archive_uri,
             "extracted_at": datetime.utcnow().isoformat() + "Z",

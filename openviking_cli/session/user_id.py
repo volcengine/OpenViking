@@ -1,5 +1,47 @@
 import hashlib
+import logging
 import re
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+# Validation pattern reused across different modules
+# Note: hyphen (-) must be at the end or escaped to avoid being interpreted as a range
+_VALIDATION_PATTERN = re.compile(r"^[a-zA-Z0-9_.@-]+$")
+
+
+def validate_identifier_part(part: str, part_name: str) -> Optional[str]:
+    """Validate a single part of an identifier (account_id, user_id, or agent_id).
+
+    Returns an error message if invalid, None if valid.
+    """
+    if not part:
+        return f"{part_name} is empty"
+    if not _VALIDATION_PATTERN.match(part):
+        return f"{part_name} must be alpha_numeric string."
+    if part.count("@") > 1:
+        return f"{part_name} must have at most one @."
+    return None
+
+
+def validate_account_id(account_id: str) -> Optional[str]:
+    """Validate an account_id. Returns an error message if invalid, None if valid."""
+    verr = validate_identifier_part(account_id, "account_id")
+    if verr:
+        return verr
+    if account_id.startswith("_"):
+        return "account_id cannot start with underscore _."
+    return None
+
+
+def validate_user_id(user_id: str) -> Optional[str]:
+    """Validate a user_id. Returns an error message if invalid, None if valid."""
+    return validate_identifier_part(user_id, "user_id")
+
+
+def validate_agent_id(agent_id: str) -> Optional[str]:
+    """Validate an agent_id. Returns an error message if invalid, None if valid."""
+    return validate_identifier_part(agent_id, "agent_id")
 
 
 class UserIdentifier(object):
@@ -10,6 +52,9 @@ class UserIdentifier(object):
 
         verr = self._validate_error()
         if verr:
+            logger.error(
+                f"Invalid user identifier: {verr}. account_id={self._account_id} user_id={self._user_id} agent_id={self._agent_id}"
+            )
             raise ValueError(verr)
 
     @classmethod
@@ -17,20 +62,16 @@ class UserIdentifier(object):
         return cls("default", default_username, "default")
 
     def _validate_error(self) -> str:
-        """Validate the user identifier. all fields must be non-empty strings, and chars only in [a-zA-Z0-9_-]."""
-        pattern = re.compile(r"^[a-zA-Z0-9_-]+$")
-        if not self._account_id:
-            return "account_id is empty"
-        if not pattern.match(self._account_id):
-            return "account_id must be alpha-numeric string."
-        if not self._user_id:
-            return "user_id is empty"
-        if not pattern.match(self._user_id):
-            return "user_id must be alpha-numeric string."
-        if not self._agent_id:
-            return "agent_id is empty"
-        if not pattern.match(self._agent_id):
-            return "agent_id must be alpha-numeric string."
+        """Validate the user identifier using shared validation functions."""
+        verr = validate_account_id(self._account_id)
+        if verr:
+            return verr
+        verr = validate_user_id(self._user_id)
+        if verr:
+            return verr
+        verr = validate_agent_id(self._agent_id)
+        if verr:
+            return verr
         return ""
 
     @property

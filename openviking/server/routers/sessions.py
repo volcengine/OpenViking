@@ -13,6 +13,7 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import AuthMode, RequestContext
 from openviking.server.models import ErrorInfo, Response
+from openviking.server.responses import error_response
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
 logger = logging.getLogger(__name__)
@@ -173,7 +174,7 @@ async def get_session(
         )
     result = session.meta.to_dict()
     result["user"] = session.user.to_dict()
-    pending_tokens = sum(len(m.content) // 4 for m in session.messages)
+    pending_tokens = sum(m.estimated_tokens for m in session.messages)
     result["pending_tokens"] = pending_tokens
     return Response(status="ok", result=result)
 
@@ -185,6 +186,13 @@ async def get_session_context(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get assembled session context."""
+    if token_budget < 0:
+        return error_response(
+            "INVALID_ARGUMENT",
+            "token_budget must be greater than or equal to 0",
+            details={"field": "token_budget", "value": token_budget},
+        )
+
     service = get_service()
     session = service.sessions.session(_ctx, session_id)
     await session.load()

@@ -33,7 +33,7 @@ from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_ALLOWED_FEISHU_HOSTS = ("feishu.cn", "larksuite.com")
+_ALLOWED_FEISHU_HOSTS = ("feishu.cn", "larksuite.com", "larkoffice.com")
 
 
 def _getattr_safe(obj, key: str, default=None):

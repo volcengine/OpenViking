@@ -9,9 +9,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from openviking.metrics.account_context import get_metric_account_context
 from openviking.models.embedder.base import EmbedResult, embed_compat
 from openviking.models.vlm.base import VLMBase
+from openviking.observability.context import (
+    bind_operation_observability_context,
+    bind_root_observability_context,
+    get_operation_observability_context,
+    get_root_observability_context,
+    reset_operation_observability_context,
+    reset_root_observability_context,
+)
 from openviking.server.identity import RequestContext, Role
 from openviking.service.resource_service import ResourceService
 from openviking.storage.collection_schemas import TextEmbeddingHandler
@@ -27,6 +34,7 @@ from openviking.telemetry import (
 from openviking.telemetry.backends.memory import MemoryOperationTelemetry
 from openviking.telemetry.context import bind_telemetry, bind_telemetry_stage
 from openviking.telemetry.snapshot import TelemetrySnapshot
+from openviking.telemetry.span_models import OperationSpanAttributes, RootSpanAttributes
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -39,6 +47,26 @@ def test_telemetry_module_exports_snapshot_and_runtime():
 
     assert usage == {"duration_ms": 1.2, "token_total": 0}
     assert get_telemetry_runtime().meter() is not None
+
+
+def test_root_observability_context_bind_and_reset():
+    root = RootSpanAttributes(http_method="GET", http_route="/demo", request_id="req-1")
+    token = bind_root_observability_context(root)
+    try:
+        assert get_root_observability_context() is root
+    finally:
+        reset_root_observability_context(token)
+    assert get_root_observability_context() is None
+
+
+def test_operation_observability_context_bind_and_reset():
+    operation = OperationSpanAttributes(operation="search.find", telemetry_id="tm-demo")
+    token = bind_operation_observability_context(operation)
+    try:
+        assert get_operation_observability_context() is operation
+    finally:
+        reset_operation_observability_context(token)
+    assert get_operation_observability_context() is None
 
 
 def test_telemetry_snapshot_to_dict_supports_summary_only():
@@ -286,7 +314,9 @@ async def test_semantic_processor_binds_metric_account_context(monkeypatch):
 
         async def run(self, root_uri):
             ran["value"] = True
-            assert get_metric_account_context().http_account_id == "acct-semantic"
+            root_context = get_root_observability_context()
+            assert root_context is not None
+            assert root_context.account_id == "acct-semantic"
 
         def get_stats(self):
             return DagStats()

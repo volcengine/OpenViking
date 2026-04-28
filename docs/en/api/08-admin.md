@@ -2,7 +2,12 @@
 
 The Admin API manages accounts and users in a multi-tenant environment. It covers workspace (account) creation/deletion, user registration/removal, role changes, and API key regeneration.
 
-This API is for the `api_key` admin workflow. In `trusted` mode, ordinary requests do not use user-key registration, and Admin API calls return a permission error explaining that account/user management requires `api_key` mode with `root_api_key`.
+This API is available in both `api_key` and `trusted` deployments:
+- In `api_key` mode, the effective role is always derived from the presented API key.
+- In `trusted` mode, ordinary requests still do not use user-key registration, but a trusted gateway may call Admin API using a registered user with appropriate role (role is looked up from user registry).
+
+In `trusted` mode, role is determined by looking up `X-OpenViking-Account` + `X-OpenViking-User` from the user registry. If the user doesn't exist, role defaults to `USER`.
+For `/api/v1/admin/*`, trusted mode also permits requests with no explicit identity headers; those requests are treated as ROOT and are intended for trusted upstreams authenticated by the deployment's `root_api_key`.
 
 ## Roles and Permissions
 
@@ -32,12 +37,58 @@ Create a new workspace with its first admin user.
 |-----------|------|----------|---------|-------------|
 | account_id | str | Yes | - | Workspace ID |
 | admin_user_id | str | Yes | - | First admin user ID |
+| isolate_user_scope_by_agent | bool | No | false | Further isolate user scope by agent |
+| isolate_agent_scope_by_user | bool | No | false | Further isolate agent scope by user |
 
 **HTTP API**
 
 ```
 POST /api/v1/admin/accounts
 ```
+
+```bash
+curl -X POST http://localhost:1933/api/v1/admin/accounts \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <root-key>" \
+  -d '{
+    "account_id": "acme",
+    "admin_user_id": "alice"
+  }'
+```
+
+**Trusted mode (registered gateway user)**
+
+```bash
+# First, register the gateway admin user in api_key mode
+curl -X POST http://localhost:1933/api/v1/admin/accounts \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <root-key>" \
+  -d '{
+    "account_id": "platform",
+    "admin_user_id": "gateway-admin"
+  }'
+
+# Then promote it to root for cross-account admin operations
+curl -X PUT http://localhost:1933/api/v1/admin/accounts/platform/users/gateway-admin/role \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <root-key>" \
+  -d '{"role": "root"}'
+
+# Then use in trusted mode
+curl -X POST http://localhost:1933/api/v1/admin/accounts \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <root-key>" \
+  -H "X-OpenViking-Account: platform" \
+  -H "X-OpenViking-User: gateway-admin" \
+  -d '{
+    "account_id": "acme",
+    "admin_user_id": "alice",
+    "isolate_user_scope_by_agent": true,
+    "isolate_agent_scope_by_user": false
+  }'
+```
+
+**Trusted mode (root fallback without identity headers)**
 
 ```bash
 curl -X POST http://localhost:1933/api/v1/admin/accounts \
@@ -68,6 +119,8 @@ openviking admin create-account acme --admin alice
   "time": 0.1
 }
 ```
+
+In `trusted` mode, the same response omits `user_key`.
 
 ---
 

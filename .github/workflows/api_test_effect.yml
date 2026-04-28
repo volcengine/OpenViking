@@ -14,7 +14,7 @@ jobs:
     name: API Effect Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
-    if: github.event_name != 'schedule' || github.repository == 'volcengine/OpenViking'
+    if: github.event_name == 'workflow_dispatch' || github.repository == 'volcengine/OpenViking'
     strategy:
       fail-fast: false
       max-parallel: 1

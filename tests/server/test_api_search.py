@@ -11,7 +11,9 @@ import pytest
 from openviking.models.embedder.base import EmbedResult
 from openviking.server.auth import get_request_context
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.viking_fs import VikingFS
 from openviking.utils.time_utils import parse_iso_datetime
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -93,6 +95,61 @@ async def test_find_no_results(client: httpx.AsyncClient):
     assert resp.json()["status"] == "ok"
 
 
+@pytest.mark.parametrize("query", ["", "   \t\n"])
+async def test_find_rejects_empty_query(client: httpx.AsyncClient, service, query: str):
+    class RaisingEmbedder:
+        def embed(self, text: str, is_query: bool = False) -> EmbedResult:
+            raise AssertionError("empty query should not be embedded")
+
+        async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+            raise AssertionError("empty query should not be embedded")
+
+    service.viking_fs.query_embedder = RaisingEmbedder()
+
+    resp = await client.post(
+        "/api/v1/search/find",
+        json={"query": query},
+    )
+
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
+    assert "must not be empty" in body["error"]["message"]
+
+
+@pytest.mark.parametrize("query", ["", "   \t\n"])
+async def test_search_rejects_empty_query(client: httpx.AsyncClient, service, query: str):
+    class RaisingEmbedder:
+        def embed(self, text: str, is_query: bool = False) -> EmbedResult:
+            raise AssertionError("empty query should not be embedded")
+
+        async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+            raise AssertionError("empty query should not be embedded")
+
+    service.viking_fs.query_embedder = RaisingEmbedder()
+
+    resp = await client.post(
+        "/api/v1/search/search",
+        json={"query": query},
+    )
+
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
+    assert "must not be empty" in body["error"]["message"]
+
+
+@pytest.mark.parametrize("method_name", ["find", "search"])
+async def test_vikingfs_rejects_empty_query_before_initialization(method_name: str):
+    viking_fs = VikingFS.__new__(VikingFS)
+    method = getattr(viking_fs, method_name)
+
+    with pytest.raises(InvalidArgumentError, match="must not be empty"):
+        await method(query=" ")
+
+
 async def test_find_with_since_compiles_time_range(client: httpx.AsyncClient, service, monkeypatch):
     captured = {}
 
@@ -153,34 +210,45 @@ async def test_find_combines_existing_filter_with_time_range(
     }
 
 
-async def test_find_with_invalid_time_returns_422(client: httpx.AsyncClient):
+async def test_find_with_invalid_time_returns_invalid_argument(client: httpx.AsyncClient):
     resp = await client.post(
         "/api/v1/search/find",
         json={"query": "sample", "since": "not-a-time"},
     )
 
-    assert resp.status_code == 422
-    assert resp.json()["detail"]
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
+    assert body["error"]["message"]
 
 
-async def test_find_with_invalid_time_field_returns_422(client: httpx.AsyncClient):
+async def test_find_with_invalid_time_field_returns_invalid_argument(client: httpx.AsyncClient):
     resp = await client.post(
         "/api/v1/search/find",
         json={"query": "sample", "time_field": "published_at", "since": "2h"},
     )
 
-    assert resp.status_code == 422
-    assert resp.json()["detail"]
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
+    assert body["error"]["message"]
 
 
-async def test_find_with_inverted_mixed_time_range_returns_422(client: httpx.AsyncClient):
+async def test_find_with_inverted_mixed_time_range_returns_invalid_argument(
+    client: httpx.AsyncClient,
+):
     resp = await client.post(
         "/api/v1/search/find",
         json={"query": "sample", "since": "2099-01-01", "until": "2h"},
     )
 
-    assert resp.status_code == 422
-    assert "earlier than or equal to" in resp.json()["detail"]
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
+    assert "earlier than or equal to" in body["error"]["message"]
 
 
 async def test_search_basic(client_with_resource):
@@ -339,6 +407,19 @@ async def test_grep_case_insensitive(client_with_resource):
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+
+
+async def test_grep_missing_uri_returns_not_found(client: httpx.AsyncClient):
+    resp = await client.post(
+        "/api/v1/search/grep",
+        json={
+            "uri": "viking://resources/nonexistent_grep_test_xyz",
+            "pattern": "test",
+        },
+    )
+
+    assert resp.status_code == 404
+    assert resp.json()["status"] == "error"
 
 
 async def test_grep_exclude_uri_excludes_specific_uri_range(
