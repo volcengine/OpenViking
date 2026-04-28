@@ -162,7 +162,7 @@ class MemoryStore:
                 score = mem.get('score', 0) if isinstance(mem, dict) else getattr(mem, 'score', 0)
                 memory_list.append(f"{i},{uri},{score}")
             logger.info(f"[RAW_MEMORIES]\n{'\n'.join(memory_list)}")
-            user_memory = await self._parse_viking_memory(result["user_memory"], client, min_score=0.1, max_chars=8000)
+            user_memory = await self._parse_viking_memory(result["user_memory"], client, min_score=0.1, max_chars=4000)
             agent_memory = await self._parse_viking_memory(result["agent_memory"], client, min_score=0.1, max_chars=2000)
             return f"### user memories:\n{user_memory}\n### agent memories:\n{agent_memory}"
         except Exception as e:
