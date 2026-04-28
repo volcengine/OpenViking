@@ -1001,7 +1001,7 @@ class VikingFS:
     async def find(
         self,
         query: str,
-        target_uri: str = "",
+        target_uri: Union[str, List[str]] = "",
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
@@ -1011,7 +1011,7 @@ class VikingFS:
 
         Args:
             query: Search query
-            target_uri: Target directory URI
+            target_uri: Target directory URI(s), supports str or List[str]
             limit: Return count
             score_threshold: Score threshold
             filter: Metadata filter
@@ -1028,12 +1028,23 @@ class VikingFS:
             TypedQuery,
         )
 
-        if target_uri and target_uri not in {"/", "viking://"}:
+        # Normalize target_uri to list
+        target_uri_list = [target_uri] if isinstance(target_uri, str) else (target_uri or [])
+        real_ctx = self._ctx_or_default(ctx)
+        canonical_target_uri_list: List[str] = []
+        for item in target_uri_list:
+            if not item or item in {"/", "viking://"}:
+                continue
             try:
-                target_uri = canonicalize_uri(target_uri, self._ctx_or_default(ctx))
+                canonical_target_uri_list.append(canonicalize_uri(item, real_ctx))
             except NamespaceShapeError as exc:
                 raise InvalidArgumentError(str(exc)) from exc
-            self._ensure_access(target_uri, ctx)
+        target_uri_list = canonical_target_uri_list
+        # Use first URI for context inference and access check
+        primary_target_uri = target_uri_list[0] if target_uri_list else ""
+
+        if primary_target_uri and primary_target_uri not in {"/", "viking://"}:
+            self._ensure_access(primary_target_uri, ctx)
 
         storage = self._get_vector_store()
         if not storage:
@@ -1050,16 +1061,15 @@ class VikingFS:
         )
 
         # Infer context_type (None = search all types)
-        context_type = self._infer_context_type(target_uri) if target_uri else None
+        context_type = self._infer_context_type(primary_target_uri) if primary_target_uri else None
 
         typed_query = TypedQuery(
             query=query,
             context_type=context_type,
             intent="",
-            target_directories=[target_uri] if target_uri else None,
+            target_directories=target_uri_list if target_uri_list else None,
         )
 
-        real_ctx = self._ctx_or_default(ctx)
         logger.debug(
             f"[VikingFS.find] Calling retriever.retrieve with ctx.account_id={real_ctx.account_id}, ctx.user={real_ctx.user}"
         )
