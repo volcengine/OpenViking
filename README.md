@@ -323,7 +323,9 @@ If you prefer manual configuration, create `~/.openviking/ov.conf`, remove the c
       "dimension": 1024,               // Vector dimension
       "model"    : "<model-name>"      // Embedding model name (e.g., doubao-embedding-vision-251215 or text-embedding-3-large)
     },
-    "max_concurrent": 10               // Max concurrent embedding requests (default: 10)
+    "max_concurrent": 10,              // Max concurrent embedding requests (default: 10)
+    "text_source": "content_only",     // Text file vectorization source: content_only|summary_first|summary_only
+    "max_input_tokens": 4096           // Max raw text tokens sent to embedding
   },
   "vlm": {
     "api_base" : "<api-endpoint>",     // API endpoint address

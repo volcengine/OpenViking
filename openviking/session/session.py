@@ -19,6 +19,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.time_utils import get_current_timestamp
+from openviking.utils.token_utils import estimate_token_count
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger, run_async
 from openviking_cli.utils.config import get_openviking_config
@@ -631,8 +632,8 @@ class Session:
                             uri=f"{archive_uri}/.meta.json",
                             content=json.dumps(
                                 {
-                                    "overview_tokens": -(-len(summary) // 4),
-                                    "abstract_tokens": -(-len(abstract) // 4),
+                                    "overview_tokens": estimate_token_count(summary),
+                                    "abstract_tokens": estimate_token_count(abstract),
                                 }
                             ),
                             ctx=self.ctx,
@@ -950,7 +951,7 @@ class Session:
                     {
                         "archive_id": archive["archive_id"],
                         "abstract": abstract,
-                        "tokens": -(-len(abstract) // 4),
+                        "tokens": estimate_token_count(abstract),
                     }
                 )
             else:
@@ -1055,7 +1056,7 @@ class Session:
 
     async def _read_archive_overview_tokens(self, archive_uri: str, overview: str) -> int:
         """Read overview token estimate from archive metadata."""
-        overview_tokens = -(-len(overview) // 4)
+        overview_tokens = estimate_token_count(overview)
         try:
             meta_content = await self._viking_fs.read_file(
                 f"{archive_uri}/.meta.json", ctx=self.ctx

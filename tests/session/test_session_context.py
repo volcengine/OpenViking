@@ -15,6 +15,7 @@ from openviking.message import Message, TextPart
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
+from openviking.utils.token_utils import estimate_token_count
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
@@ -99,7 +100,7 @@ async def client(test_data_dir, monkeypatch, tmp_path):
 
 
 def _estimate_tokens(text: str) -> int:
-    return -(-len(text) // 4)
+    return estimate_token_count(text)
 
 
 async def _wait_for_task(task_id: str, timeout: float = 30.0) -> dict:

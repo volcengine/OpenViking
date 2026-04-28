@@ -194,6 +194,8 @@ openviking-server doctor
   "embedding": {
     "max_concurrent": 10,
     "max_retries": 3,
+    "text_source": "content_only",
+    "max_input_tokens": 4096,
     "dense": {
       "provider": "volcengine",
       "api_key": "your-api-key",
@@ -212,6 +214,8 @@ openviking-server doctor
 |------|------|------|
 | `max_concurrent` | int | 最大并发 Embedding 请求数（`embedding.max_concurrent`，默认：`10`） |
 | `max_retries` | int | Embedding provider 瞬时错误的最大重试次数（`embedding.max_retries`，默认：`3`；`0` 表示禁用重试） |
+| `text_source` | str | 文本文件向量化时使用的文本来源。`content_only` 读取原文内容；`summary_first` 优先使用摘要，没有摘要时回退到原文；`summary_only` 只使用摘要。默认：`content_only` |
+| `max_input_tokens` | int | 使用原文内容向量化时，发送给 embedding 模型的最大 token 数。默认：`4096` |
 | `provider` | str | `"volcengine"`、`"openai"`、`"vikingdb"`、`"jina"`、`"voyage"`、`"minimax"`、`"dashscope"` 或 `"gemini"` |
 | `api_key` | str | API Key |
 | `model` | str | 模型名称 |
@@ -1134,6 +1138,8 @@ openviking add-resource ./docs --exclude "*.tmp"
   "embedding": {
     "max_concurrent": 10,
     "max_retries": 3,
+    "text_source": "content_only",
+    "max_input_tokens": 4096,
     "dense": {
       "provider": "volcengine",
       "api_key": "string",

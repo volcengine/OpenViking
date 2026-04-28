@@ -12,6 +12,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, TypeVar
 
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.model_retry import retry_async, retry_sync
+from openviking.utils.token_utils import estimate_token_count
 
 T = TypeVar("T")
 logger = logging.getLogger(__name__)
@@ -365,7 +366,7 @@ class EmbedderBase(ABC):
         self._token_tracker.reset()
 
     def _estimate_tokens(self, text: str) -> int:
-        """Estimate token count from text (1 token ≈ 4 characters for English)
+        """Estimate token count from text using the shared tokenizer heuristic.
 
         Args:
             text: Input text to estimate tokens for
@@ -373,13 +374,7 @@ class EmbedderBase(ABC):
         Returns:
             Estimated token count
         """
-        if not text:
-            return 0
-        # Approximate: 1 token ≈ 4 characters
-        # For Chinese characters, 1 token ≈ 1-2 characters
-        chinese_chars = sum(1 for c in text if "\u4e00" <= c <= "\u9fff")
-        other_chars = len(text) - chinese_chars
-        return max(1, (chinese_chars // 1) + (other_chars // 4))
+        return estimate_token_count(text)
 
 
 class DenseEmbedderBase(EmbedderBase):

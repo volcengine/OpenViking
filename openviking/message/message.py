@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import List, Literal, Optional
 
 from openviking.message.part import ContextPart, Part, TextPart, ToolPart
+from openviking.utils.token_utils import estimate_token_count
 
 
 @dataclass
@@ -33,7 +34,7 @@ class Message:
 
     @property
     def estimated_tokens(self) -> int:
-        """Estimate token count from all parts (ceil(len/4) heuristic).
+        """Estimate token count from all parts with the shared tokenizer heuristic.
 
         Counts fields that actually appear in the assembled prompt:
         - TextPart.text: always emitted
@@ -48,19 +49,22 @@ class Message:
         (8k/16k) or tool-dense sessions, consider adding a conservative per-tool
         buffer instead of mirroring the full convertToAgentMessages logic.
         """
-        total_chars = 0
+        total_tokens = 0
         for p in self.parts:
             if isinstance(p, TextPart):
-                total_chars += len(p.text)
+                total_tokens += estimate_token_count(p.text)
             elif isinstance(p, ContextPart):
-                total_chars += len(p.abstract)
+                total_tokens += estimate_token_count(p.abstract)
             elif isinstance(p, ToolPart):
-                total_chars += len(p.tool_id) + len(p.tool_name)
+                total_tokens += estimate_token_count(p.tool_id)
+                total_tokens += estimate_token_count(p.tool_name)
                 if p.tool_input:
-                    total_chars += len(json.dumps(p.tool_input, ensure_ascii=False))
+                    total_tokens += estimate_token_count(
+                        json.dumps(p.tool_input, ensure_ascii=False)
+                    )
                 if p.tool_output:
-                    total_chars += len(p.tool_output)
-        return -(-total_chars // 4)  # ceil division
+                    total_tokens += estimate_token_count(p.tool_output)
+        return total_tokens
 
     def to_dict(self) -> dict:
         """Serialize to JSONL."""
