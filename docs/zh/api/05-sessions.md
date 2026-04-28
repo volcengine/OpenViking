@@ -130,7 +130,7 @@ openviking session list
 ```python
 # 获取已有会话（不存在时抛 NotFoundError）
 info = client.get_session("a1b2c3d4")
-print(f"Live Messages: {info['message_count']}, Total Messages: {info['total_message_count']}, Commits: {info['commit_count']}")
+print(f"Live Messages: {info['message_count']}, Total Messages: {info.get('total_message_count', 'n/a')}, Commits: {info['commit_count']}")
 
 # 获取或创建会话
 info = client.get_session("a1b2c3d4", auto_create=True)
@@ -193,7 +193,7 @@ openviking session get a1b2c3d4
 
 说明：
 - `message_count` 表示当前 live session 中尚未归档的消息数。
-- `total_message_count` 表示已归档消息与当前 live 消息的累计总数。
+- `total_message_count` 存在时表示已归档消息与当前 live 消息的累计总数；该字段引入前创建的旧 session 可能不返回。
 - `commit_count` 和 `last_commit_at` 会在 commit Phase 1 成功归档消息后更新；Phase 2 记忆提取进度通过返回的 task 跟踪。
 
 ---

@@ -130,7 +130,7 @@ Get session details. Returns NOT_FOUND when the session does not exist by defaul
 ```python
 # Get existing session (raises NotFoundError if not found)
 info = client.get_session("a1b2c3d4")
-print(f"Live Messages: {info['message_count']}, Total Messages: {info['total_message_count']}, Commits: {info['commit_count']}")
+print(f"Live Messages: {info['message_count']}, Total Messages: {info.get('total_message_count', 'n/a')}, Commits: {info['commit_count']}")
 
 # Get or create session
 info = client.get_session("a1b2c3d4", auto_create=True)
@@ -193,7 +193,7 @@ openviking session get a1b2c3d4
 
 Notes:
 - `message_count` is the number of current live, unarchived messages.
-- `total_message_count` is the cumulative count of archived and current live messages.
+- `total_message_count` is the cumulative count of archived and current live messages when present. Sessions created before this field existed may omit it.
 - `commit_count` and `last_commit_at` are updated when commit Phase 1 archives messages successfully; Phase 2 memory extraction progress is tracked through the returned task.
 
 ---

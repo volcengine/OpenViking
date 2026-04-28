@@ -67,7 +67,7 @@ class SessionMeta:
     participant_user_ids: List[str] = field(default_factory=list)
     participant_agent_ids: List[str] = field(default_factory=list)
     message_count: int = 0
-    total_message_count: int = 0
+    total_message_count: Optional[int] = 0
     commit_count: int = 0
     memories_extracted: Dict[str, int] = field(
         default_factory=lambda: {
@@ -97,7 +97,7 @@ class SessionMeta:
     )
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        data = {
             "session_id": self.session_id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -105,13 +105,15 @@ class SessionMeta:
             "participant_user_ids": list(self.participant_user_ids),
             "participant_agent_ids": list(self.participant_agent_ids),
             "message_count": self.message_count,
-            "total_message_count": self.total_message_count,
             "commit_count": self.commit_count,
             "memories_extracted": dict(self.memories_extracted),
             "last_commit_at": self.last_commit_at,
             "llm_token_usage": dict(self.llm_token_usage),
             "embedding_token_usage": dict(self.embedding_token_usage),
         }
+        if self.total_message_count is not None:
+            data["total_message_count"] = self.total_message_count
+        return data
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SessionMeta":
@@ -127,7 +129,7 @@ class SessionMeta:
             participant_user_ids=list(data.get("participant_user_ids", [])),
             participant_agent_ids=list(data.get("participant_agent_ids", [])),
             message_count=data.get("message_count", 0),
-            total_message_count=data.get("total_message_count", -1),
+            total_message_count=data.get("total_message_count"),
             commit_count=data.get("commit_count", 0),
             memories_extracted={
                 "profile": memories.get("profile", 0),
@@ -244,7 +246,7 @@ class Session:
             # Old session without meta — derive from existing data
             self._meta.message_count = len(self._messages)
             self._meta.commit_count = self._compression.compression_index
-            self._meta.total_message_count = -1
+            self._meta.total_message_count = None
 
         if not self._meta.created_by_user_id:
             self._meta.created_by_user_id = self.ctx.user.user_id
@@ -252,9 +254,6 @@ class Session:
             self._meta.participant_user_ids = [self._meta.created_by_user_id]
         for message in self._messages:
             self._record_participant(message)
-
-        if await self._ensure_total_message_count(live_message_count=len(self._messages)):
-            await self._save_meta()
 
         self._loaded = True
 
@@ -290,45 +289,6 @@ class Session:
         if not self._viking_fs:
             return
         run_async(self._save_meta())
-
-    async def _ensure_total_message_count(
-        self,
-        live_message_count: Optional[int] = None,
-    ) -> bool:
-        """Backfill total_message_count for sessions created before the field existed."""
-        live_count = len(self._messages) if live_message_count is None else live_message_count
-        if self._meta.total_message_count >= 0:
-            if self._meta.total_message_count < live_count:
-                self._meta.total_message_count = live_count
-                return True
-            return False
-
-        self._meta.total_message_count = await self._count_archived_message_count() + live_count
-        return True
-
-    async def _count_archived_message_count(self) -> int:
-        """Count messages already written under history/archive_*/messages.jsonl."""
-        if not self._viking_fs:
-            return 0
-        try:
-            history_items = await self._viking_fs.ls(f"{self._session_uri}/history", ctx=self.ctx)
-        except Exception:
-            return 0
-
-        total = 0
-        for item in history_items:
-            archive_name = item.get("name", "")
-            if not archive_name.startswith("archive_"):
-                continue
-            try:
-                content = await self._viking_fs.read_file(
-                    f"{self._session_uri}/history/{archive_name}/messages.jsonl",
-                    ctx=self.ctx,
-                )
-            except Exception:
-                continue
-            total += sum(1 for line in content.splitlines() if line.strip())
-        return total
 
     async def _load_latest_meta(self) -> SessionMeta:
         """Load the latest persisted metadata, falling back to the current instance state."""
@@ -418,9 +378,8 @@ class Session:
         self._append_to_jsonl(msg)
 
         self._meta.message_count = len(self._messages)
-        if self._meta.total_message_count < 0:
-            self._meta.total_message_count = max(0, self._meta.message_count - 1)
-        self._meta.total_message_count += 1
+        if self._meta.total_message_count is not None:
+            self._meta.total_message_count += 1
         self._save_meta_sync()
         return msg
 
@@ -543,7 +502,6 @@ class Session:
 
         await self._mark_archive_committed_meta(
             archive_index=self._compression.compression_index,
-            archived_message_count=len(messages_to_archive),
         )
 
         self._compression.original_count += len(messages_to_archive)
@@ -1225,10 +1183,6 @@ class Session:
             latest_meta.embedding_token_usage["total_tokens"] += embedding.get("total", 0)
 
         latest_meta.commit_count = max(latest_meta.commit_count, archive_index)
-        if latest_meta.total_message_count < 0:
-            self._meta = latest_meta
-            await self._ensure_total_message_count(live_message_count=live_message_count)
-            latest_meta = self._meta
         for cat, count in memories_extracted.items():
             latest_meta.memories_extracted[cat] = latest_meta.memories_extracted.get(cat, 0) + count
             latest_meta.memories_extracted["total"] = (
@@ -1241,23 +1195,14 @@ class Session:
     async def _mark_archive_committed_meta(
         self,
         archive_index: int,
-        archived_message_count: int,
     ) -> None:
         """Persist metadata for a completed Phase 1 archive."""
         latest_meta = await self._load_latest_meta()
         live_message_count = await self._read_live_message_count()
-        if latest_meta.total_message_count < 0:
-            self._meta = latest_meta
-            await self._ensure_total_message_count(live_message_count=live_message_count)
-            latest_meta = self._meta
 
         latest_meta.commit_count = max(latest_meta.commit_count, archive_index)
         latest_meta.last_commit_at = get_current_timestamp()
         latest_meta.message_count = live_message_count
-        latest_meta.total_message_count = max(
-            latest_meta.total_message_count,
-            live_message_count + archived_message_count,
-        )
         self._meta = latest_meta
         await self._save_meta()
 
