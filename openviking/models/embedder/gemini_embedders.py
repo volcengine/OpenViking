@@ -846,7 +846,10 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
                 "Construct GeminiDenseEmbedder with input_type='multimodal' "
                 "(and a gemini-embedding-2 family model)."
             )
-        parts = self._build_multimodal_contents(contents)
+        # _build_multimodal_contents calls _validate_url, which uses the sync
+        # socket.getaddrinfo for SSRF checks. Dispatch to a thread so DNS
+        # resolution doesn't stall the event loop on the async path.
+        parts = await asyncio.to_thread(self._build_multimodal_contents, contents)
 
         async def _call() -> EmbedResult:
             result = await self.client.aio.models.embed_content(
