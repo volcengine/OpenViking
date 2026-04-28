@@ -325,7 +325,7 @@ If you prefer manual configuration, create `~/.openviking/ov.conf`, remove the c
     },
     "max_concurrent": 10,              // Max concurrent embedding requests (default: 10)
     "text_source": "content_only",     // Text file vectorization source: content_only|summary_first|summary_only
-    "max_input_tokens": 4096           // Max raw text tokens sent to embedding
+    "max_input_tokens": 4096           // Max estimated raw text tokens sent to embedding
   },
   "vlm": {
     "api_base" : "<api-endpoint>",     // API endpoint address

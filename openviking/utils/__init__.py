@@ -12,7 +12,6 @@ from openviking.utils.code_hosting_utils import (
 )
 from openviking.utils.time_utils import get_current_timestamp
 from openviking.utils.token_utils import (
-    count_tokens,
     estimate_token_count,
     truncate_text_by_tokens,
 )
@@ -26,7 +25,6 @@ __all__ = [
     "get_logger",
     "default_logger",
     "get_current_timestamp",
-    "count_tokens",
     "estimate_token_count",
     "truncate_text_by_tokens",
     "StructuredLLM",

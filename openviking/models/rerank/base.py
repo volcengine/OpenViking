@@ -48,8 +48,8 @@ class RerankBase:
         self._token_tracker = _get_token_tracker()
 
     def _estimate_tokens(self, text: str) -> int:
-        """Estimate token count for text using the shared tokenizer heuristic."""
-        return estimate_token_count(text)
+        """Estimate token count for text with the shared heuristic."""
+        return max(1, estimate_token_count(text))
 
     def update_token_usage(
         self,

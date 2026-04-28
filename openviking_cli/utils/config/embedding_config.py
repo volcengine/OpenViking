@@ -364,7 +364,7 @@ class EmbeddingConfig(BaseModel):
     max_input_tokens: int = Field(
         default=4096,
         ge=100,
-        description="Maximum tokens sent to embeddings when raw text fallback is used",
+        description="Maximum estimated tokens sent to embeddings when raw text fallback is used",
     )
 
     model_config = {"extra": "forbid"}

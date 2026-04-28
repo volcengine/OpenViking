@@ -366,7 +366,7 @@ class EmbedderBase(ABC):
         self._token_tracker.reset()
 
     def _estimate_tokens(self, text: str) -> int:
-        """Estimate token count from text using the shared tokenizer heuristic.
+        """Estimate token count from text with the shared heuristic.
 
         Args:
             text: Input text to estimate tokens for

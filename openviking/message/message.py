@@ -34,7 +34,7 @@ class Message:
 
     @property
     def estimated_tokens(self) -> int:
-        """Estimate token count from all parts with the shared tokenizer heuristic.
+        """Estimate token count from all parts with the shared heuristic.
 
         Counts fields that actually appear in the assembled prompt:
         - TextPart.text: always emitted
@@ -49,22 +49,19 @@ class Message:
         (8k/16k) or tool-dense sessions, consider adding a conservative per-tool
         buffer instead of mirroring the full convertToAgentMessages logic.
         """
-        total_tokens = 0
+        estimated_text_parts = []
         for p in self.parts:
             if isinstance(p, TextPart):
-                total_tokens += estimate_token_count(p.text)
+                estimated_text_parts.append(p.text)
             elif isinstance(p, ContextPart):
-                total_tokens += estimate_token_count(p.abstract)
+                estimated_text_parts.append(p.abstract)
             elif isinstance(p, ToolPart):
-                total_tokens += estimate_token_count(p.tool_id)
-                total_tokens += estimate_token_count(p.tool_name)
+                estimated_text_parts.extend([p.tool_id, p.tool_name])
                 if p.tool_input:
-                    total_tokens += estimate_token_count(
-                        json.dumps(p.tool_input, ensure_ascii=False)
-                    )
+                    estimated_text_parts.append(json.dumps(p.tool_input, ensure_ascii=False))
                 if p.tool_output:
-                    total_tokens += estimate_token_count(p.tool_output)
-        return total_tokens
+                    estimated_text_parts.append(p.tool_output)
+        return estimate_token_count("".join(estimated_text_parts))
 
     def to_dict(self) -> dict:
         """Serialize to JSONL."""
