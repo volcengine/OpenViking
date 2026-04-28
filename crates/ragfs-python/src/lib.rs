@@ -525,10 +525,12 @@ impl RAGFSBindingClient {
     ///     case_insensitive: Whether to perform case-insensitive matching (default: false)
     ///     stream: Not supported in binding mode
     ///     node_limit: Maximum number of matches to return (default: None, no limit)
+    ///     exclude_path: Optional path prefix to exclude from search (default: None)
+    ///     level_limit: Optional maximum depth relative to query root (default: None)
     ///
     /// Returns:
     ///     A dict with "matches" (list of match dicts) and "count" (total matches)
-    #[pyo3(signature = (path, pattern, recursive=false, case_insensitive=false, stream=false, node_limit=None))]
+    #[pyo3(signature = (path, pattern, recursive=false, case_insensitive=false, stream=false, node_limit=None, exclude_path=None, level_limit=None))]
     fn grep(
         &self,
         path: String,
@@ -537,6 +539,8 @@ impl RAGFSBindingClient {
         case_insensitive: bool,
         stream: bool,
         node_limit: Option<i32>,
+        exclude_path: Option<String>,
+        level_limit: Option<i32>,
     ) -> PyResult<Py<PyAny>> {
         if stream {
             return Err(PyRuntimeError::new_err(
@@ -546,12 +550,21 @@ impl RAGFSBindingClient {
 
         let fs = self.fs.clone();
         let limit = node_limit.map(|n| if n < 0 { 0 } else { n as usize });
+        let level_limit_usize = level_limit.map(|n| if n < 0 { 0 } else { n as usize });
 
         let result = self
             .rt
             .block_on(async move {
-                fs.grep(&path, &pattern, recursive, case_insensitive, limit)
-                    .await
+                fs.grep(
+                    &path,
+                    &pattern,
+                    recursive,
+                    case_insensitive,
+                    limit,
+                    exclude_path.as_deref(),
+                    level_limit_usize,
+                )
+                .await
             })
             .map_err(to_py_err)?;
 

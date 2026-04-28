@@ -684,8 +684,9 @@ class VikingFS:
         This is the optimized path for non-encrypted files.
         Uses agfs.grep() which performs matching on the server side.
 
-        Note: agfs.grep does not support exclude_uri and level_limit natively.
-        These filters are applied as post-processing.
+        Prefer pushing filters down to agfs backend:
+        - exclude_uri -> exclude_path
+        - level_limit -> level_limit
 
         Args:
             uri: Viking URI
@@ -701,20 +702,28 @@ class VikingFS:
         """
         path = self._uri_to_path(uri, ctx=ctx)
 
-        excluded_prefix = None
+        excluded_path = None
         if exclude_uri:
-            excluded_prefix = self._normalize_uri(exclude_uri).rstrip("/")
-            self._ensure_access(excluded_prefix, ctx)
+            normalized_excluded_uri = self._normalize_uri(exclude_uri).rstrip("/")
+            self._ensure_access(normalized_excluded_uri, ctx)
+            excluded_path = self._uri_to_path(normalized_excluded_uri, ctx=ctx)
 
-        result = await asyncio.to_thread(
-            self.agfs.grep,
-            path=path,
-            pattern=pattern,
-            recursive=True,
-            case_insensitive=case_insensitive,
-            stream=False,
-            node_limit=node_limit,
-        )
+        try:
+            result = await asyncio.to_thread(
+                self.agfs.grep,
+                path=path,
+                pattern=pattern,
+                recursive=True,
+                case_insensitive=case_insensitive,
+                stream=False,
+                node_limit=node_limit,
+                exclude_path=excluded_path,
+                level_limit=level_limit,
+            )
+        except (AttributeError, AGFSNotSupportedError, NotImplementedError):
+            # Capability missing: let the outer caller fall back to the VikingFS implementation.
+            logger.warning(f"agfs grep unavailable, falling back to VikingFS implementation")
+            raise
 
         matches = result.get("matches", [])
         results = []
@@ -729,25 +738,11 @@ class VikingFS:
 
             file_uri = self._path_to_uri(agfs_file_path, ctx=ctx)
 
-            if excluded_prefix and (
-                file_uri == excluded_prefix or file_uri.startswith(excluded_prefix + "/")
-            ):
-                logger.debug(f"Skipping excluded uri during grep: {file_uri}")
-                continue
-
-            if level_limit < 100:
-                rel_depth = self._calculate_grep_match_depth(match_file)
-                if rel_depth > level_limit:
-                    logger.debug(
-                        f"Skipping uri beyond level_limit: {file_uri} (depth {rel_depth} > {level_limit})"
-                    )
-                    continue
-
             files_scanned_set.add(file_uri)
 
             results.append(
                 {
-                    "line": match.get("line", 0),
+                    "line": match.get("line", match.get("line_number", 0)),
                     "uri": file_uri,
                     "content": match.get("content", ""),
                 }

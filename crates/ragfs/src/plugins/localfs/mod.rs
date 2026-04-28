@@ -98,6 +98,42 @@ impl LocalFileSystem {
             .map_err(|e| Error::Internal(format!("spawn_blocking failed: {}", e)))?
     }
 
+    /// Convert an exclude path in "virtual mount" form (often starts with "/") to a query-root-relative path.
+    ///
+    /// This is used to compare with `file_virtual`, which is always query-root-relative.
+    fn exclude_to_query_relative_path(exclude_path: &str) -> Option<String> {
+        let p = exclude_path.trim_end_matches('/');
+        let rel = p.strip_prefix('/').unwrap_or(p);
+        if rel.is_empty() {
+            Some(".".to_string())
+        } else {
+            Some(rel.to_string())
+        }
+    }
+
+    /// Check whether a query-root-relative `file_virtual` is excluded by `exclude_rel`.
+    fn is_excluded_virtual(file_virtual: &str, exclude_rel: &str) -> bool {
+        if exclude_rel == "." {
+            return true;
+        }
+        if file_virtual == exclude_rel || exclude_rel.is_empty() {
+            return file_virtual == exclude_rel;
+        }
+
+        file_virtual
+            .strip_prefix(exclude_rel)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+    }
+
+    /// Compute depth of a query-root-relative path.
+    fn virtual_depth(file_virtual: &str) -> usize {
+        if file_virtual.is_empty() || file_virtual == "." {
+            0
+        } else {
+            file_virtual.split('/').filter(|p| !p.is_empty()).count()
+        }
+    }
+
     /// Execute grep via external `rg` (ripgrep) and return `GrepResult`.
     ///
     /// Returns `Ok(None)` when `rg` is unavailable or cannot be executed (e.g. not in PATH),
@@ -109,6 +145,8 @@ impl LocalFileSystem {
         recursive: bool,
         case_insensitive: bool,
         node_limit: Option<usize>,
+        exclude_path: Option<&str>,
+        level_limit: Option<usize>,
     ) -> Result<Option<GrepResult>> {
         if node_limit == Some(0) {
             return Ok(Some(GrepResult::new()));
@@ -171,6 +209,7 @@ impl LocalFileSystem {
 
         let mut out = GrepResult::new();
         let mut killed_for_limit = false;
+        let exclude_rel = exclude_path.and_then(|p| Self::exclude_to_query_relative_path(p));
 
         #[derive(Debug, Deserialize)]
         struct RgEvent {
@@ -239,6 +278,18 @@ impl LocalFileSystem {
                 None => continue,
             };
 
+            if let Some(excl_rel) = exclude_rel.as_deref() {
+                if Self::is_excluded_virtual(&file_virtual, excl_rel) {
+                    continue;
+                }
+            }
+
+            if let Some(limit) = level_limit {
+                if Self::virtual_depth(&file_virtual) > limit {
+                    continue;
+                }
+            }
+
             let line_no = data.line_number;
 
             // `lines.text` usually contains the full line, possibly including trailing newline.
@@ -289,6 +340,8 @@ impl LocalFileSystem {
         recursive: bool,
         case_insensitive: bool,
         node_limit: Option<usize>,
+        exclude_path: Option<&str>,
+        level_limit: Option<usize>,
     ) -> Result<GrepResult> {
         let local_root = Self::resolve_virtual_path(base_path, virtual_path);
         if !local_root.exists() {
@@ -316,6 +369,7 @@ impl LocalFileSystem {
 
         let mut out = GrepResult::new();
         let limit = node_limit.unwrap_or(usize::MAX);
+        let exclude_rel = exclude_path.and_then(|p| Self::exclude_to_query_relative_path(p));
 
         // Single file: search directly.
         if local_root.is_file() {
@@ -326,6 +380,16 @@ impl LocalFileSystem {
             let sink = UTF8(|lnum, line| {
                 if remaining == 0 {
                     return Ok(false);
+                }
+                if let Some(excl_rel) = exclude_rel.as_deref() {
+                    if Self::is_excluded_virtual(&file_virtual, excl_rel) {
+                        return Ok(true);
+                    }
+                }
+                if let Some(max_depth) = level_limit {
+                    if Self::virtual_depth(&file_virtual) > max_depth {
+                        return Ok(true);
+                    }
                 }
                 out.add_match(
                     file_virtual.clone(),
@@ -384,6 +448,18 @@ impl LocalFileSystem {
                 None => continue,
             };
 
+            if let Some(excl_rel) = exclude_rel.as_deref() {
+                if Self::is_excluded_virtual(&file_virtual, excl_rel) {
+                    continue;
+                }
+            }
+
+            if let Some(max_depth) = level_limit {
+                if Self::virtual_depth(&file_virtual) > max_depth {
+                    continue;
+                }
+            }
+
             let mut remaining = limit.saturating_sub(out.count);
             let sink = UTF8(|lnum, line| {
                 if remaining == 0 {
@@ -404,7 +480,7 @@ impl LocalFileSystem {
 
         Ok(out)
     }
-   fn local_to_query_relative_path(query_root: &Path, local: &Path) -> Option<String> {
+    fn local_to_query_relative_path(query_root: &Path, local: &Path) -> Option<String> {
         let rel = local.strip_prefix(query_root).ok()?;
         let s = rel.to_string_lossy();
         if s.is_empty() {
@@ -515,8 +591,7 @@ impl FileSystem for LocalFileSystem {
         let local_path = self.resolve_path(path);
 
         // Check if exists and is not a directory
-        let metadata = fs::metadata(&local_path)
-            .map_err(|_| Error::NotFound(path.to_string()))?;
+        let metadata = fs::metadata(&local_path).map_err(|_| Error::NotFound(path.to_string()))?;
 
         if metadata.is_dir() {
             return Err(Error::plugin(format!("is a directory: {}", path)));
@@ -628,8 +703,7 @@ impl FileSystem for LocalFileSystem {
         let local_path = self.resolve_path(path);
 
         // Get file metadata
-        let metadata = fs::metadata(&local_path)
-            .map_err(|_| Error::NotFound(path.to_string()))?;
+        let metadata = fs::metadata(&local_path).map_err(|_| Error::NotFound(path.to_string()))?;
 
         let name = Path::new(path)
             .file_name()
@@ -693,6 +767,8 @@ impl FileSystem for LocalFileSystem {
         recursive: bool,
         case_insensitive: bool,
         node_limit: Option<usize>,
+        exclude_path: Option<&str>,
+        level_limit: Option<usize>,
     ) -> Result<GrepResult> {
         // Fast-path: requesting 0 matches should return immediately without touching disk or spawning processes.
         if node_limit == Some(0) {
@@ -706,11 +782,13 @@ impl FileSystem for LocalFileSystem {
         let pattern_owned = pattern.to_string();
         let path_owned = path.to_string();
         let base_path = self.base_path.clone();
+        let exclude_owned = exclude_path.map(|s| s.to_string());
 
         if self.has_rg {
             // External rg path: run in a blocking thread to avoid blocking the async runtime.
             let rg_pattern = pattern_owned.clone();
             let rg_base_path = base_path.clone();
+            let rg_exclude = exclude_owned.clone();
             let rg_res = Self::run_blocking_grep(move || {
                 LocalFileSystem::grep_via_rg(
                     rg_base_path.as_path(),
@@ -719,6 +797,8 @@ impl FileSystem for LocalFileSystem {
                     recursive,
                     case_insensitive,
                     node_limit,
+                    rg_exclude.as_deref(),
+                    level_limit,
                 )
             })
             .await?;
@@ -737,6 +817,8 @@ impl FileSystem for LocalFileSystem {
                 recursive,
                 case_insensitive,
                 node_limit,
+                exclude_owned.as_deref(),
+                level_limit,
             )
         })
         .await
@@ -784,7 +866,10 @@ mod tests {
         let mut fs = LocalFileSystem::new(dir.path().to_str().unwrap()).unwrap();
         fs.has_rg = false;
 
-        let result = fs.grep("/", "hello", true, false, None).await.unwrap();
+        let result = fs
+            .grep("/", "hello", true, false, None, None, None)
+            .await
+            .unwrap();
 
         assert_eq!(result.count, 1);
         assert_eq!(result.matches[0].file, "a.txt");
@@ -800,7 +885,10 @@ mod tests {
         let mut fs = LocalFileSystem::new(dir.path().to_str().unwrap()).unwrap();
         fs.has_rg = false;
 
-        let result = fs.grep("/", "hello", true, true, None).await.unwrap();
+        let result = fs
+            .grep("/", "hello", true, true, None, None, None)
+            .await
+            .unwrap();
 
         assert_eq!(result.count, 1);
     }
@@ -814,7 +902,7 @@ mod tests {
         fs.has_rg = false;
 
         let err = fs
-            .grep("/does-not-exist", "hello", true, false, None)
+            .grep("/does-not-exist", "hello", true, false, None, None, None)
             .await
             .unwrap_err();
         assert!(matches!(err, Error::NotFound(_)));
@@ -835,7 +923,10 @@ mod tests {
         let mut fs = LocalFileSystem::new(mount_dir.to_str().unwrap()).unwrap();
         fs.has_rg = false;
 
-        let result = fs.grep("/", "hello", true, false, None).await.unwrap();
+        let result = fs
+            .grep("/", "hello", true, false, None, None, None)
+            .await
+            .unwrap();
         assert_eq!(result.count, 1);
         assert_eq!(result.matches[0].file, "a.txt");
     }
@@ -851,12 +942,15 @@ mod tests {
         let mut fs = LocalFileSystem::new(dir.path().to_str().unwrap()).unwrap();
         fs.has_rg = false;
 
-        let result = fs.grep("/sub", "hello", true, false, None).await.unwrap();
+        let result = fs
+            .grep("/sub", "hello", true, false, None, None, None)
+            .await
+            .unwrap();
         assert_eq!(result.count, 1);
         assert_eq!(result.matches[0].file, "a.txt");
 
         let single_file = fs
-            .grep("/sub/a.txt", "hello", true, false, None)
+            .grep("/sub/a.txt", "hello", true, false, None, None, None)
             .await
             .unwrap();
         assert_eq!(single_file.count, 1);
@@ -891,9 +985,35 @@ mod tests {
         let _path_guard = EnvVarGuard::set("PATH", &new_path);
 
         let fs = LocalFileSystem::new(dir.path().to_str().unwrap()).unwrap();
-        let result = fs.grep("/", "hello", true, false, Some(0)).await.unwrap();
+        let result = fs
+            .grep("/", "hello", true, false, Some(0), None, None)
+            .await
+            .unwrap();
         assert_eq!(result.count, 0);
         assert!(result.matches.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_localfs_grep_exclude_path_applies_before_node_limit() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("excluded")).unwrap();
+        std::fs::create_dir_all(dir.path().join("ok")).unwrap();
+        std::fs::write(dir.path().join("excluded/x.txt"), "hit\n").unwrap();
+        std::fs::write(dir.path().join("ok/y.txt"), "hit\n").unwrap();
+
+        let mut fs = LocalFileSystem::new(dir.path().to_str().unwrap()).unwrap();
+        fs.has_rg = false;
+
+        let out = fs
+            .grep("/", "hit", true, false, Some(1), Some("/excluded"), None)
+            .await
+            .unwrap();
+
+        assert_eq!(out.count, 1);
+        assert_eq!(out.matches.len(), 1);
+        assert_eq!(out.matches[0].file, "ok/y.txt");
     }
 }
 
@@ -906,15 +1026,13 @@ impl LocalFSPlugin {
     /// Create a new LocalFS plugin
     pub fn new() -> Self {
         Self {
-            config_params: vec![
-                ConfigParameter {
-                    name: "local_dir".to_string(),
-                    param_type: "string".to_string(),
-                    required: true,
-                    default: None,
-                    description: "Local directory path to expose (must exist)".to_string(),
-                },
-            ],
+            config_params: vec![ConfigParameter {
+                name: "local_dir".to_string(),
+                param_type: "string".to_string(),
+                required: true,
+                default: None,
+                description: "Local directory path to expose (must exist)".to_string(),
+            }],
         }
     }
 }

@@ -287,14 +287,41 @@ impl FileSystem for MountableFS {
         recursive: bool,
         case_insensitive: bool,
         node_limit: Option<usize>,
+        exclude_path: Option<&str>,
+        level_limit: Option<usize>,
     ) -> Result<GrepResult> {
         // Route grep to the mounted plugin so plugin-specific fast paths (e.g. localfs + rg)
         // can take effect. If a plugin doesn't override grep, it will fall back to the trait
         // default implementation on that plugin instance (still correct, just slower).
         let (mount_info, rel_path) = self.find_mount(path).await?;
+
+        // Exclude path only applies when it resolves to the same mount point; otherwise it
+        // should not affect searching under `path`.
+        let exclude_rel: Option<String> = match exclude_path {
+            None => None,
+            Some(excl_abs) => match self.find_mount(excl_abs).await {
+                Ok((exclude_mount, excl_rel)) => {
+                    if exclude_mount.path == mount_info.path {
+                        Some(excl_rel)
+                    } else {
+                        None
+                    }
+                }
+                Err(_) => None,
+            },
+        };
+
         mount_info
             .fs
-            .grep(&rel_path, pattern, recursive, case_insensitive, node_limit)
+            .grep(
+                &rel_path,
+                pattern,
+                recursive,
+                case_insensitive,
+                node_limit,
+                exclude_rel.as_deref(),
+                level_limit,
+            )
             .await
     }
 }
@@ -372,6 +399,8 @@ mod tests {
             _recursive: bool,
             _case_insensitive: bool,
             _node_limit: Option<usize>,
+            _exclude_path: Option<&str>,
+            _level_limit: Option<usize>,
         ) -> Result<GrepResult> {
             let mut out = GrepResult::new();
             // Encode the received rel_path into the match so the test can assert routing worked.
@@ -681,7 +710,7 @@ mod tests {
         mfs.mount(config).await.unwrap();
 
         let result = mfs
-            .grep("/mock/a.txt", "foo", false, false, None)
+            .grep("/mock/a.txt", "foo", false, false, None, None, None)
             .await
             .unwrap();
 

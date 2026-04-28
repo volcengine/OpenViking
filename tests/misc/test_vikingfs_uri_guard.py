@@ -142,3 +142,55 @@ class TestVikingFSURITraversalGuard:
 
         fs._grep_with_agfs.assert_awaited_once()
         fs._grep_encrypted.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_grep_with_agfs_maps_query_root_relative_match_to_uri(self) -> None:
+        """Query-root-relative grep matches should be reconstructed into the final Viking URI."""
+        fs = _make_viking_fs()
+        fs._encryptor = None
+        fs._ensure_access = MagicMock()
+        fs.agfs.grep = MagicMock(
+            return_value={
+                "matches": [
+                    {
+                        "file": "sub/a.txt",
+                        "line_number": 3,
+                        "content": "act",
+                    }
+                ],
+                "count": 1,
+            }
+        )
+
+        result = await fs._grep_with_agfs("viking://resources/test-root", "act")
+
+        assert result["count"] == 1
+        assert result["matches"][0]["uri"] == "viking://resources/test-root/sub/a.txt"
+        assert result["matches"][0]["line"] == 3
+        assert result["matches"][0]["content"] == "act"
+
+    @pytest.mark.asyncio
+    async def test_grep_with_agfs_maps_dot_match_to_query_root_uri(self) -> None:
+        """A '.' grep match should resolve back to the queried Viking URI itself."""
+        fs = _make_viking_fs()
+        fs._encryptor = None
+        fs._ensure_access = MagicMock()
+        fs.agfs.grep = MagicMock(
+            return_value={
+                "matches": [
+                    {
+                        "file": ".",
+                        "line_number": 1,
+                        "content": "act",
+                    }
+                ],
+                "count": 1,
+            }
+        )
+
+        result = await fs._grep_with_agfs("viking://resources/test-root", "act")
+
+        assert result["count"] == 1
+        assert result["matches"][0]["uri"] == "viking://resources/test-root"
+        assert result["matches"][0]["line"] == 1
+        assert result["matches"][0]["content"] == "act"
