@@ -10,7 +10,7 @@ description: OpenViking long-term memory plugin guide. Once installed, the plugi
 - **Auto-Capture**: At `afterTurn` (end of one user turn run), automatically extracts memories from user/assistant messages
   - `semantic` mode: captures all qualifying user text, relying on OpenViking's extraction pipeline to filter
   - `keyword` mode: only captures text matching trigger words (e.g. "remember", "preference", etc.)
-- **Auto-Recall**: At `before_prompt_build`, automatically searches for relevant memories and injects them into context
+- **Auto-Recall**: During context-engine `assemble`, automatically searches for relevant memories and injects them into the assembled messages
 
 ## Available Tools
 
@@ -68,6 +68,7 @@ Example: User says "Forget my phone number"
 | `captureMode` | `semantic` | Capture mode: `semantic` / `keyword` |
 | `captureMaxLength` | `24000` | Maximum text length per capture |
 | `autoRecall` | `true` | Automatically recall and inject context |
+| `recallPath` | `assemble` | Recall injection path. Use `hook` only for legacy `before_prompt_build` compatibility |
 | `recallLimit` | `6` | Maximum memories injected during auto-recall |
 | `recallScoreThreshold` | `0.01` | Minimum relevance score for recall |
 

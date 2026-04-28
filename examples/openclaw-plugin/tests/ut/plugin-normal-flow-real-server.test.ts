@@ -218,19 +218,12 @@ describe("plugin normal flow with healthy backend", () => {
     await service!.start();
 
     const beforePromptBuild = handlers.get("before_prompt_build");
-    expect(beforePromptBuild).toBeTruthy();
-    const hookResult = await beforePromptBuild!(
-      { messages: [{ role: "user", content: "what backend language should we use?" }] },
-      { agentId: "main", sessionId: "session-normal", sessionKey: "agent:main:normal" },
-    );
-
-    expect(hookResult).toMatchObject({
-      prependContext: expect.stringContaining("User prefers Rust for backend tasks."),
-    });
+    expect(beforePromptBuild).toBeUndefined();
 
     const contextEngine = contextEngineFactory!() as {
       assemble: (params: {
         sessionId: string;
+        prompt?: string;
         messages: Array<{ role: string; content: string }>;
       }) => Promise<{ messages: Array<{ role: string; content: unknown }> }>;
       afterTurn: (params: {
@@ -243,13 +236,15 @@ describe("plugin normal flow with healthy backend", () => {
 
     const assembled = await contextEngine.assemble({
       sessionId: "session-normal",
-      messages: [{ role: "user", content: "fallback" }],
+      prompt: "what backend language should we use?",
+      messages: [{ role: "user", content: "what backend language should we use?" }],
     });
 
     expect(assembled.messages[0]).toEqual({
       role: "user",
-      content: "[Session History Summary]\nEarlier work focused on backend stack choices.",
+      content: expect.stringContaining("User prefers Rust for backend tasks."),
     });
+    expect(assembled.messages[0].content).toContain("[Session History Summary]");
     expect(assembled.messages[1]).toEqual({
       role: "assistant",
       content: [{ type: "text", text: "Stored answer from OpenViking." }],

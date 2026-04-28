@@ -100,6 +100,12 @@
       "label": "Auto-Recall",
       "help": "Inject relevant OpenViking memories into agent context"
     },
+    "recallPath": {
+      "label": "Recall Path",
+      "placeholder": "assemble",
+      "advanced": true,
+      "help": "Where auto-recall is injected. assemble is the default context engine path; hook preserves legacy before_prompt_build compatibility."
+    },
     "recallResources": {
       "label": "Recall Resources",
       "help": "Include resources (viking://resources) in auto-recall and default memory_recall search. Enables account-level shared knowledge retrieval.",
@@ -212,6 +218,10 @@
       },
       "autoRecall": {
         "type": "boolean"
+      },
+      "recallPath": {
+        "type": "string",
+        "enum": ["assemble", "hook"]
       },
       "recallResources": {
         "type": "boolean"

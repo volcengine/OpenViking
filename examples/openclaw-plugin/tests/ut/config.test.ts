@@ -19,6 +19,7 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.recallScoreThreshold).toBe(0.15);
     expect(cfg.autoCapture).toBe(true);
     expect(cfg.autoRecall).toBe(true);
+    expect(cfg.recallPath).toBe("assemble");
     expect(cfg.recallPreferAbstract).toBe(false);
     expect(cfg.recallTokenBudget).toBe(8000);
     expect(cfg.commitTokenThreshold).toBe(20000);
@@ -257,6 +258,17 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
   it("defaults recallResources to false", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({});
     expect(cfg.recallResources).toBe(false);
+  });
+
+  it("accepts legacy hook recallPath", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ recallPath: "hook" });
+    expect(cfg.recallPath).toBe("hook");
+  });
+
+  it("throws on invalid recallPath", () => {
+    expect(() =>
+      memoryOpenVikingConfigSchema.parse({ recallPath: "prompt" }),
+    ).toThrow('recallPath must be "assemble" or "hook"');
   });
 
   it("enables recallResources when set to true", () => {

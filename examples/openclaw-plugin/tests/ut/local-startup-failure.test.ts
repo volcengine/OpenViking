@@ -98,6 +98,7 @@ describe("local OpenViking startup failure", () => {
           logFindRequests: false,
           mode: "local",
           port: 19433,
+          recallPath: "hook",
         },
         registerContextEngine: vi.fn(),
         registerService: (entry) => {

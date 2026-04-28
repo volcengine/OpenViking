@@ -19,7 +19,7 @@ This document is not an installation guide. It is an implementation-focused desi
 In the current implementation, the plugin plays four roles at once:
 
 - `context-engine`: implements `assemble`, `afterTurn`, and `compact`
-- hook layer: handles `before_prompt_build`, `session_start`, `session_end`, `agent_end`, and `before_reset`
+- hook layer: handles `session_start`, `session_end`, `agent_end`, and `before_reset`; `before_prompt_build` is retained for legacy recall compatibility
 - tool provider: registers memory/archive tools plus OpenViking resource and skill import tools
 - runtime manager: starts and monitors an OpenViking subprocess in `local` mode
 
@@ -77,18 +77,24 @@ For OpenViking servers that include PR #1356, the plugin no longer treats agent 
 
 The plugin cannot auto-discover this policy today because `/api/v1/system/status` does not expose it. Configure the two booleans explicitly so they stay aligned with the server-side account policy.
 
-## Prompt-Front Recall Flow
+## Automatic Recall Flow
 
 ![Automatic recall flow before prompt build](./images/openclaw-plugin-recall-flow.png)
 
-Today the main recall path still lives in `before_prompt_build`:
+By default, automatic recall runs during `assemble()`, so the recalled
+`<relevant-memories>` block travels in the assembled message list. This keeps
+recall visible to OpenClaw context-engine callers that transform messages
+without consuming hook `prependContext` or `systemPromptAddition`.
+
+Set `recallPath` to `hook` only when you need the older `before_prompt_build`
+compatibility path.
 
 1. Extract the latest user text from `messages` or `prompt`.
 2. Resolve the agent routing for the current `sessionId/sessionKey`.
-3. Run a quick availability precheck so prompt building does not stall when OpenViking is unavailable.
+3. Run availability checks so context assembly does not stall when OpenViking is unavailable.
 4. Query both `viking://user/memories` and `viking://agent/memories` in parallel.
 5. Deduplicate, threshold-filter, rerank, and trim the results under a token budget.
-6. Prepend the selected memories as a `<relevant-memories>` block.
+6. Inject the selected memories as a `<relevant-memories>` block.
 
 The reranking logic is not pure vector-score sorting. The current implementation also considers:
 
@@ -220,7 +226,7 @@ The repo also contains a more future-looking design draft at `docs/design/opencl
 
 - this README describes current implemented behavior
 - the older draft discusses a stronger future move into context-engine-owned lifecycle control
-- in the current version, the main automatic recall path still lives in `before_prompt_build`, not fully in `assemble()`
+- in the current version, the main automatic recall path is `assemble()`; `before_prompt_build` is a legacy compatibility option
 - in the current version, `afterTurn()` already appends to the OpenViking session, but commit remains threshold-triggered and asynchronous on that path
 - in the current version, `compact()` already uses `commit(wait=true)`, but it is still focused on synchronous commit plus readback rather than owning every orchestration concern
 

@@ -51,6 +51,7 @@ describe("local OpenViking startup with a bad config", () => {
           logFindRequests: false,
           mode: "local",
           port: 19439,
+          recallPath: "hook",
         },
         registerContextEngine: () => {},
         registerService: (entry) => {

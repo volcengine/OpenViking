@@ -42,12 +42,16 @@ function makeEngine(
   contextResult: unknown,
   opts?: {
     cfgOverrides?: Record<string, unknown>;
+    clientOverrides?: Record<string, unknown>;
     quickPrecheck?: () => Promise<{ ok: true } | { ok: false; reason: string }>;
   },
 ) {
   const logger = makeLogger();
   const client = {
     getSessionContext: vi.fn().mockResolvedValue(contextResult),
+    find: vi.fn().mockResolvedValue({ memories: [] }),
+    read: vi.fn().mockResolvedValue(""),
+    ...opts?.clientOverrides,
   } as unknown as OpenVikingClient;
   const getClient = vi.fn().mockResolvedValue(client);
   const resolveAgentId = vi.fn((sessionId: string) => `agent:${sessionId}`);
@@ -71,7 +75,11 @@ function makeEngine(
 
   return {
     engine,
-    client: client as unknown as { getSessionContext: ReturnType<typeof vi.fn> },
+    client: client as unknown as {
+      find: ReturnType<typeof vi.fn>;
+      getSessionContext: ReturnType<typeof vi.fn>;
+      read: ReturnType<typeof vi.fn>;
+    },
     getClient,
     logger,
     resolveAgentId,
@@ -79,6 +87,106 @@ function makeEngine(
 }
 
 describe("context-engine assemble()", () => {
+  it("injects auto-recall into assembled messages by default", async () => {
+    const { engine, client } = makeEngine(
+      {
+        latest_archive_overview: "Earlier work focused on backend stack choices.",
+        pre_archive_abstracts: [],
+        messages: [
+          {
+            id: "msg_1",
+            role: "assistant",
+            created_at: "2026-04-01T00:00:00Z",
+            parts: [{ type: "text", text: "Stored answer from OpenViking." }],
+          },
+        ],
+        estimatedTokens: 64,
+        stats: {
+          ...makeStats(),
+          activeTokens: 64,
+        },
+      },
+      {
+        cfgOverrides: {
+          autoRecall: true,
+        },
+        clientOverrides: {
+          find: vi.fn().mockResolvedValue({
+            memories: [
+              {
+                uri: "viking://user/default/memories/rust-pref",
+                level: 2,
+                abstract: "User prefers Rust for backend tasks.",
+                category: "preferences",
+                score: 0.91,
+              },
+            ],
+          }),
+          read: vi.fn().mockResolvedValue("User prefers Rust for backend tasks."),
+        },
+      },
+    );
+
+    const result = await engine.assemble({
+      sessionId: "session-normal",
+      prompt: "what backend language should we use?",
+      messages: [{ role: "user", content: "what backend language should we use?" }],
+      tokenBudget: 4096,
+    });
+
+    expect(client.find).toHaveBeenCalledWith(
+      "what backend language should we use?",
+      expect.objectContaining({ targetUri: "viking://user/memories" }),
+      "agent:session-normal",
+    );
+    expect(result.messages[0]).toMatchObject({
+      role: "user",
+      content: expect.stringContaining("<relevant-memories>"),
+    });
+    expect(result.messages[0].content).toContain("User prefers Rust for backend tasks.");
+    expect(result.messages[0].content).toContain("[Session History Summary]");
+    expect(result.systemPromptAddition).toContain("Session Context Guide");
+  });
+
+  it("keeps legacy hook recallPath from doing assemble recall", async () => {
+    const find = vi.fn().mockResolvedValue({ memories: [] });
+    const { engine } = makeEngine(
+      {
+        latest_archive_overview: "Earlier work focused on backend stack choices.",
+        pre_archive_abstracts: [],
+        messages: [
+          {
+            id: "msg_1",
+            role: "assistant",
+            created_at: "2026-04-01T00:00:00Z",
+            parts: [{ type: "text", text: "Stored answer from OpenViking." }],
+          },
+        ],
+        estimatedTokens: 64,
+        stats: {
+          ...makeStats(),
+          activeTokens: 64,
+        },
+      },
+      {
+        cfgOverrides: {
+          autoRecall: true,
+          recallPath: "hook",
+        },
+        clientOverrides: { find },
+      },
+    );
+
+    const result = await engine.assemble({
+      sessionId: "session-hook",
+      messages: [{ role: "user", content: "what backend language should we use?" }],
+      tokenBudget: 4096,
+    });
+
+    expect(find).not.toHaveBeenCalled();
+    expect(result.messages[0].content).not.toContain("<relevant-memories>");
+  });
+
   it("assembles summary archive and completed tool parts into agent messages", async () => {
     const { engine, client, resolveAgentId } = makeEngine({
       latest_archive_overview: "# Session Summary\nPreviously discussed repository setup.",

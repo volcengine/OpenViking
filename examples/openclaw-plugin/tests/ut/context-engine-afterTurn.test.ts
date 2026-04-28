@@ -17,6 +17,7 @@ function makeEngine(opts?: {
   commitTokenThreshold?: number;
   getSession?: Record<string, unknown>;
   addSessionMessageError?: Error;
+  clientOverrides?: Record<string, unknown>;
   cfgOverrides?: Record<string, unknown>;
   quickPrecheck?: () => Promise<{ ok: true } | { ok: false; reason: string }>;
 }) {
@@ -53,6 +54,7 @@ function makeEngine(opts?: {
       estimatedTokens: 0,
       stats: { totalArchives: 0, includedArchives: 0, droppedArchives: 0, failedArchives: 0, activeTokens: 0, archiveTokens: 0 },
     }),
+    ...(opts?.clientOverrides ?? {}),
   } as unknown as OpenVikingClient;
 
   const getClient = vi.fn().mockResolvedValue(client);
@@ -377,6 +379,32 @@ describe("context-engine afterTurn()", () => {
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("afterTurn failed"),
     );
+  });
+
+  it("bounds afterTurn capture and fails open when a write stalls", async () => {
+    vi.useFakeTimers();
+    try {
+      const addSessionMessage = vi.fn(() => new Promise<void>(() => {}));
+      const { engine, logger } = makeEngine({
+        cfgOverrides: { timeoutMs: 1000 },
+        clientOverrides: { addSessionMessage },
+      });
+
+      const promise = engine.afterTurn!({
+        sessionId: "s-timeout",
+        sessionFile: "",
+        messages: [{ role: "user", content: "this write will stall" }],
+        prePromptMessageCount: 0,
+      });
+
+      await vi.advanceTimersByTimeAsync(1000);
+      await expect(promise).resolves.toBeUndefined();
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("afterTurn capture timeout"),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("commit uses OV session ID derived from sessionId", async () => {

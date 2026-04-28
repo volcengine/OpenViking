@@ -3,6 +3,13 @@ import { join } from "node:path";
 import { resolve as resolvePath } from "node:path";
 import { getEnv } from "./runtime-utils.js";
 
+export const RECALL_PATHS = {
+  assemble: "assemble",
+  hook: "hook",
+} as const;
+
+export type RecallPath = typeof RECALL_PATHS[keyof typeof RECALL_PATHS];
+
 export type MemoryOpenVikingConfig = {
   /** "local" = plugin starts OpenViking server as child process (like Claude Code); "remote" = use existing HTTP server */
   mode?: "local" | "remote";
@@ -35,6 +42,12 @@ export type MemoryOpenVikingConfig = {
   captureMode?: "semantic" | "keyword";
   captureMaxLength?: number;
   autoRecall?: boolean;
+  /**
+   * "assemble" injects recall through the context engine so OpenClaw
+   * transformContext callers receive it. "hook" preserves the legacy
+   * before_prompt_build compatibility path.
+   */
+  recallPath?: RecallPath;
   /** Include resources in auto-recall and default memory_recall search. Default false. */
   recallResources?: boolean;
   recallLimit?: number;
@@ -59,6 +72,7 @@ const DEFAULT_TARGET_URI = "viking://user/memories";
 const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_CAPTURE_MODE = "semantic";
 const DEFAULT_CAPTURE_MAX_LENGTH = 24000;
+const DEFAULT_RECALL_PATH: RecallPath = RECALL_PATHS.assemble;
 const DEFAULT_RECALL_LIMIT = 6;
 const DEFAULT_RECALL_SCORE_THRESHOLD = 0.15;
 const DEFAULT_RECALL_MAX_CONTENT_CHARS = 5000;
@@ -171,6 +185,7 @@ export const memoryOpenVikingConfigSchema = {
         "captureMode",
         "captureMaxLength",
         "autoRecall",
+        "recallPath",
         "recallResources",
         "recallLimit",
         "recallScoreThreshold",
@@ -217,6 +232,14 @@ export const memoryOpenVikingConfigSchema = {
       captureMode !== "keyword"
     ) {
       throw new Error(`openviking captureMode must be "semantic" or "keyword"`);
+    }
+    const recallPath = cfg.recallPath;
+    if (
+      typeof recallPath !== "undefined" &&
+      recallPath !== RECALL_PATHS.assemble &&
+      recallPath !== RECALL_PATHS.hook
+    ) {
+      throw new Error(`openviking recallPath must be "assemble" or "hook"`);
     }
 
     const accountId =
@@ -282,6 +305,7 @@ export const memoryOpenVikingConfigSchema = {
         Math.min(200_000, Math.floor(toNumber(cfg.captureMaxLength, DEFAULT_CAPTURE_MAX_LENGTH))),
       ),
       autoRecall: cfg.autoRecall !== false,
+      recallPath: (recallPath as RecallPath | undefined) ?? DEFAULT_RECALL_PATH,
       recallResources: cfg.recallResources === true || envFlag("OPENVIKING_RECALL_RESOURCES"),
       recallLimit: Math.max(1, Math.floor(toNumber(cfg.recallLimit, DEFAULT_RECALL_LIMIT))),
       recallScoreThreshold: Math.min(
@@ -414,6 +438,12 @@ export const memoryOpenVikingConfigSchema = {
     autoRecall: {
       label: "Auto-Recall",
       help: "Inject relevant OpenViking memories into agent context",
+    },
+    recallPath: {
+      label: "Recall Path",
+      placeholder: DEFAULT_RECALL_PATH,
+      advanced: true,
+      help: 'Where auto-recall is injected. "assemble" is the default OpenClaw context engine path; "hook" preserves legacy before_prompt_build compatibility.',
     },
     recallResources: {
       label: "Recall Resources",
