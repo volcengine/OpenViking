@@ -9,8 +9,6 @@ Provides common token usage tracking functionality.
 import logging
 from typing import Any, Dict
 
-from openviking.utils.token_utils import estimate_token_count
-
 _token_tracker_instance = None
 logger = logging.getLogger(__name__)
 
@@ -48,8 +46,8 @@ class RerankBase:
         self._token_tracker = _get_token_tracker()
 
     def _estimate_tokens(self, text: str) -> int:
-        """Estimate token count for text with the shared heuristic."""
-        return max(1, estimate_token_count(text))
+        """Estimate token count for text (rough approximation: 1 token ≈ 4 characters)."""
+        return max(1, len(text) // 4)
 
     def update_token_usage(
         self,

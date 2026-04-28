@@ -31,7 +31,6 @@ from openviking.parse.parsers.constants import (
     DOCUMENTATION_EXTENSIONS,
     IGNORE_EXTENSIONS,
 )
-from openviking.utils.token_utils import estimate_token_count
 from openviking_cli.utils.config.parser_config import ParserConfig
 from openviking_cli.utils.logger import get_logger
 
@@ -368,7 +367,7 @@ class MarkdownParser(BaseParser):
         current_tokens = 0
 
         for para in paragraphs:
-            para_tokens = estimate_token_count(para)
+            para_tokens = self._estimate_token_count(para)
             para_len = len(para)
 
             # Single paragraph too long (by tokens or chars): force split by characters
@@ -441,7 +440,7 @@ class MarkdownParser(BaseParser):
         min_size = self.DEFAULT_MIN_SECTION_TOKENS
 
         # Estimate document size
-        estimated_tokens = estimate_token_count(content)
+        estimated_tokens = self._estimate_token_count(content)
         logger.info(f"[MarkdownParser] Document size: {estimated_tokens} tokens")
 
         # Create root directory
@@ -474,7 +473,7 @@ class MarkdownParser(BaseParser):
         if first_heading_start > 0:
             pre_content = content[:first_heading_start].strip()
             if pre_content:
-                pre_tokens = estimate_token_count(pre_content)
+                pre_tokens = self._estimate_token_count(pre_content)
                 sections.append(
                     {
                         "name": doc_name,
@@ -618,7 +617,7 @@ class MarkdownParser(BaseParser):
                 {
                     "name": name,
                     "content": section["direct_content"],
-                    "tokens": estimate_token_count(section["direct_content"]),
+                    "tokens": self._estimate_token_count(section["direct_content"]),
                     "has_children": False,
                     "heading_idx": None,
                 }
@@ -747,7 +746,7 @@ class MarkdownParser(BaseParser):
         heading_prefix = "#" * level
         section_start = end_pos  # After heading line
         full_content = f"{heading_prefix} {title}\n\n{content[section_start:section_end].strip()}"
-        full_tokens = estimate_token_count(full_content)
+        full_tokens = self._estimate_token_count(full_content)
 
         direct_content = ""
         if has_children:
@@ -764,3 +763,11 @@ class MarkdownParser(BaseParser):
             "direct_content": direct_content,
             "child_indices": child_indices,
         }
+
+    def _estimate_token_count(self, content: str) -> int:
+        # CJK characters (Chinese, Japanese, Korean): ~0.7 token per char
+        # Other characters (including Latin, Arabic, Cyrillic, etc.): ~0.3 token per char
+        # This provides better coverage for multilingual documents
+        cjk_chars = len(re.findall(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]", content))
+        other_chars = len(re.findall(r"[^\s]", content)) - cjk_chars
+        return int(cjk_chars * 0.7 + other_chars * 0.3)

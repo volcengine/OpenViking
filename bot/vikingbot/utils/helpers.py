@@ -1,11 +1,8 @@
 """Utility functions for vikingbot."""
 
-from datetime import datetime
 from pathlib import Path
-
+from datetime import datetime
 from loguru import logger
-
-from openviking.utils.token_utils import estimate_token_count
 
 
 def ensure_dir(path: Path) -> Path:
@@ -109,7 +106,6 @@ def get_workspace_path() -> Path:
 
 def ensure_workspace_templates(workspace: Path) -> None:
     import shutil
-
     from vikingbot.agent.skills import BUILTIN_SKILLS_DIR
 
     # Ensure workspace directory exists first
@@ -285,7 +281,14 @@ def get_skills_path(workspace: Path | None = None) -> Path:
 
 
 def cal_str_tokens(text: str, text_type: str = "mixed") -> int:
-    return estimate_token_count(text)
+    char_length = len(text)
+    if text_type == "en":
+        token_count = char_length / 4.5  # 1 token ≈ 4.5个英文字符
+    elif text_type == "zh":
+        token_count = char_length / 1.1  # 1 token ≈ 1.1个中文字符
+    else:  # mixed
+        token_count = char_length / 2.5  # 混合文本折中值
+    return int(token_count) + 1
 
 
 def timestamp() -> str:

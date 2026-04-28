@@ -11,10 +11,6 @@ from openviking.utils.code_hosting_utils import (
     validate_git_ssh_uri,
 )
 from openviking.utils.time_utils import get_current_timestamp
-from openviking.utils.token_utils import (
-    estimate_token_count,
-    truncate_text_by_tokens,
-)
 from openviking_cli.utils.async_utils import run_async
 from openviking_cli.utils.llm import StructuredLLM, parse_json_from_response, parse_json_to_model
 from openviking_cli.utils.logger import default_logger, get_logger
@@ -25,8 +21,6 @@ __all__ = [
     "get_logger",
     "default_logger",
     "get_current_timestamp",
-    "estimate_token_count",
-    "truncate_text_by_tokens",
     "StructuredLLM",
     "parse_json_from_response",
     "parse_json_to_model",
