@@ -44,7 +44,7 @@ if [[ "$REBUILD" == "false" ]]; then
   # 安装依赖
   echo "安装依赖..."
   cd "$OPENCLAW_PLUGIN_DIR"
-  npm install --include=dev
+  npm install --ignore-scripts --include=dev
 fi
 
 # 编译 TypeScript

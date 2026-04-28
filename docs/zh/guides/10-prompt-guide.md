@@ -449,10 +449,17 @@ OpenViking 支持两种主要的自定义方式：
 
 可用配置：
 
+- `prompts.enable_custom_templates`
 - `prompts.templates_dir`
 - 环境变量 `OPENVIKING_PROMPT_TEMPLATES_DIR`
 
-加载优先级：
+安全默认值：
+
+- 自定义 prompt 模板默认禁用
+- 只有受信任运维显式设置 `prompts.enable_custom_templates: true` 时，OpenViking 才会加载外部模板目录
+- 在未开启该设置时，`OPENVIKING_PROMPT_TEMPLATES_DIR` 会被忽略
+
+开启后的加载优先级：
 
 1. 显式传入的模板目录
 2. 环境变量 `OPENVIKING_PROMPT_TEMPLATES_DIR`
@@ -485,6 +492,7 @@ custom-prompts/
 ```json
 {
   "prompts": {
+    "enable_custom_templates": true,
     "templates_dir": "/path/to/custom-prompts"
   }
 }
