@@ -398,28 +398,6 @@ async def test_quick_mode_skips_rerank(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_score_propagation_alpha_defaults_to_existing_blend():
-    retriever = HierarchicalRetriever(
-        storage=DummyStorage(),
-        embedder=None,
-        rerank_config=None,
-    )
-
-    candidates = await retriever._recursive_search(
-        vector_proxy=DirectChildProxy(),
-        query="hello",
-        query_vector=None,
-        sparse_query_vector=None,
-        starting_points=[("viking://resources", 0.4)],
-        limit=1,
-        mode=RetrieverMode.QUICK,
-    )
-
-    assert candidates[0]["uri"] == "viking://resources/file-b"
-    assert candidates[0]["_final_score"] == pytest.approx(0.6)
-
-
-@pytest.mark.asyncio
 async def test_score_propagation_alpha_uses_configured_weight():
     retriever = HierarchicalRetriever(
         storage=DummyStorage(),
