@@ -267,6 +267,7 @@ class OpenVikingService:
             query_embedder=self._embedder,
             rerank_config=config.rerank,
             vector_store=self._vikingdb_manager,
+            retrieval_config=config.retrieval,
             enable_recorder=enable_recorder,
             encryptor=self._encryptor,
         )

@@ -9,7 +9,7 @@ from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever, Re
 from openviking.server.identity import RequestContext, Role
 from openviking_cli.retrieve.types import ContextType, TypedQuery
 from openviking_cli.session.user_id import UserIdentifier
-from openviking_cli.utils.config import RerankConfig
+from openviking_cli.utils.config import RerankConfig, RetrievalConfig
 
 
 class DummyEmbedResult:
@@ -366,3 +366,60 @@ async def test_quick_mode_skips_rerank(monkeypatch):
         "viking://resources/file-a",
     ]
     assert fake_client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_default_retrieval_config_uses_semantic_score_without_hotness(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.hotness_score",
+        lambda *args, **kwargs: pytest.fail("hotness_score should not be called by default"),
+    )
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=None,
+        rerank_config=None,
+    )
+
+    result = await retriever._convert_to_matched_contexts(
+        [
+            {
+                "uri": "viking://resources/file-a",
+                "abstract": "child A",
+                "_score": 1.0,
+                "level": 2,
+                "context_type": "resource",
+            }
+        ],
+        ctx=_ctx(),
+    )
+
+    assert result[0].score == pytest.approx(1.0)
+
+
+@pytest.mark.asyncio
+async def test_retrieval_hotness_alpha_blends_when_configured(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.hotness_score",
+        lambda *args, **kwargs: 0.5,
+    )
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=None,
+        rerank_config=None,
+        retrieval_config=RetrievalConfig(hotness_alpha=0.2),
+    )
+
+    result = await retriever._convert_to_matched_contexts(
+        [
+            {
+                "uri": "viking://resources/file-a",
+                "abstract": "child A",
+                "_score": 1.0,
+                "level": 2,
+                "context_type": "resource",
+            }
+        ],
+        ctx=_ctx(),
+    )
+
+    assert result[0].score == pytest.approx(0.9)

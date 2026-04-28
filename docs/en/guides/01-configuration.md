@@ -723,6 +723,24 @@ Reranking model for search result refinement. Supports VikingDB (Volcengine), Co
 
 If rerank is not configured, search uses vector similarity only.
 
+### retrieval
+
+Retrieval ranking configuration for final search scores.
+
+```json
+{
+  "retrieval": {
+    "hotness_alpha": 0.0
+  }
+}
+```
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `hotness_alpha` | float | Weight for blending hotness into final retrieval scores. `0.0` disables the hotness boost and keeps scores equal to semantic similarity; `1.0` uses only hotness. Valid range: `0.0` to `1.0`. | `0.0` |
+
+Keep `hotness_alpha` at `0.0` when you need scores to reflect pure vector similarity. Set it above `0.0` only when frequently accessed or recently updated contexts should receive a ranking boost.
+
 ### storage
 
 Storage configuration for context data, including file storage (RAGFS) and vector database storage (VectorDB).
@@ -1166,6 +1184,9 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
     "api_base": "string",
     "threshold": 0.1,
     "extra_headers": {}
+  },
+  "retrieval": {
+    "hotness_alpha": 0.0
   },
   "encryption": {
     "enabled": false,
