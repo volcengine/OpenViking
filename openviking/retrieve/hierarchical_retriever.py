@@ -47,7 +47,6 @@ class HierarchicalRetriever:
 
     MAX_CONVERGENCE_ROUNDS = 3  # Stop after multiple rounds with unchanged topk
     MAX_RELATIONS = 5  # Maximum relations per resource
-    SCORE_PROPAGATION_ALPHA = 0.5  # Score propagation coefficient
     DIRECTORY_DOMINANCE_RATIO = 1.2  # Directory score must exceed max child score
     GLOBAL_SEARCH_TOPK = 10  # Global retrieval count (more candidates = better rerank precision)
     LEVEL_URI_SUFFIX = {0: ".abstract.md", 1: ".overview.md"}
@@ -72,6 +71,7 @@ class HierarchicalRetriever:
         self.rerank_config = rerank_config
         self.retrieval_config = retrieval_config or RetrievalConfig()
         self.hotness_alpha = self.retrieval_config.hotness_alpha
+        self.score_propagation_alpha = self.retrieval_config.score_propagation_alpha
 
         # Use rerank threshold if available, otherwise use a default
         self.threshold = rerank_config.threshold if rerank_config else 0
@@ -408,7 +408,7 @@ class HierarchicalRetriever:
                             f"[RecursiveSearch] Added initial candidate: {uri} (score: {score:.4f})"
                         )
 
-        alpha = self.SCORE_PROPAGATION_ALPHA
+        alpha = self.score_propagation_alpha
 
         # Initialize: process starting points
         for uri, score in starting_points:

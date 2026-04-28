@@ -182,6 +182,35 @@ class LevelTwoGlobalStorage(DummyStorage):
         return []
 
 
+class DirectChildProxy:
+    async def search_children_in_tenant(
+        self,
+        parent_uri: str,
+        query_vector=None,
+        sparse_query_vector=None,
+        context_type=None,
+        target_directories=None,
+        extra_filter=None,
+        limit: int = 10,
+    ):
+        return [
+            {
+                "uri": f"{parent_uri}/file-a",
+                "abstract": "child A",
+                "_score": 0.2,
+                "level": 2,
+                "context_type": "resource",
+            },
+            {
+                "uri": f"{parent_uri}/file-b",
+                "abstract": "child B",
+                "_score": 0.8,
+                "level": 2,
+                "context_type": "resource",
+            },
+        ]
+
+
 class FakeRerankClient:
     def __init__(self, scores):
         self.scores = list(scores)
@@ -366,6 +395,51 @@ async def test_quick_mode_skips_rerank(monkeypatch):
         "viking://resources/file-a",
     ]
     assert fake_client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_score_propagation_alpha_defaults_to_existing_blend():
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=None,
+        rerank_config=None,
+    )
+
+    candidates = await retriever._recursive_search(
+        vector_proxy=DirectChildProxy(),
+        query="hello",
+        query_vector=None,
+        sparse_query_vector=None,
+        starting_points=[("viking://resources", 0.4)],
+        limit=1,
+        mode=RetrieverMode.QUICK,
+    )
+
+    assert candidates[0]["uri"] == "viking://resources/file-b"
+    assert candidates[0]["_final_score"] == pytest.approx(0.6)
+
+
+@pytest.mark.asyncio
+async def test_score_propagation_alpha_uses_configured_weight():
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=None,
+        rerank_config=None,
+        retrieval_config=RetrievalConfig(score_propagation_alpha=1.0),
+    )
+
+    candidates = await retriever._recursive_search(
+        vector_proxy=DirectChildProxy(),
+        query="hello",
+        query_vector=None,
+        sparse_query_vector=None,
+        starting_points=[("viking://resources", 0.4)],
+        limit=1,
+        mode=RetrieverMode.QUICK,
+    )
+
+    assert candidates[0]["uri"] == "viking://resources/file-b"
+    assert candidates[0]["_final_score"] == pytest.approx(0.8)
 
 
 @pytest.mark.asyncio

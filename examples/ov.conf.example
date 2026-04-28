@@ -158,7 +158,8 @@
     "threshold": 0.1
   },
   "retrieval": {
-    "hotness_alpha": 0.0
+    "hotness_alpha": 0.0,
+    "score_propagation_alpha": 0.5
   },
   "auto_generate_l0": true,
   "auto_generate_l1": true,
