@@ -118,7 +118,7 @@ class SkillProcessor:
             round((time.perf_counter() - overview_start) * 1000, 3),
         )
 
-        skill_dir_uri = f"viking://agent/skills/{context.meta['name']}"
+        skill_dir_uri = context.uri
 
         write_start = time.perf_counter()
         await self._write_skill_content(
@@ -301,7 +301,6 @@ class SkillProcessor:
     async def _index_skill(self, context: Context, skill_dir_uri: str):
         """Write skill directory vector via async queue as L0."""
         context.uri = skill_dir_uri
-        context.parent_uri = "viking://agent/skills"
         context.is_leaf = False
         context.level = 0
 
