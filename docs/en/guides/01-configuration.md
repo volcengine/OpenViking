@@ -383,13 +383,52 @@ OpenViking also expects dense float vectors throughout storage and retrieval, so
 ```
 
 Available Gemini embedding models:
-- `gemini-embedding-2-preview`: 8192 token input limit, 1–3072 output dimension (MRL)
-- `gemini-embedding-001`: 2048 token input limit, 1–3072 output dimension (MRL)
-- `text-embedding-004`: 2048 token input limit, 768 output dimension (fixed)
+- `gemini-embedding-2`: 8192 token input limit, 1–3072 output dimension (MRL); supports text + multimodal (image/audio/video/PDF)
+- `gemini-embedding-2-preview`: same family as `gemini-embedding-2`, kept for compatibility
+- `gemini-embedding-001`: 2048 token input limit, 1–3072 output dimension (MRL); text only
+- `text-embedding-004`: 2048 token input limit, 768 output dimension (fixed); text only
 
 Recommended dimensions: `768`, `1536`, or `3072` (default: `3072`).
 
 Get your API key at https://aistudio.google.com/apikey
+
+**Multimodal mode** (gemini-embedding-2 family only):
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "gemini",
+      "api_key": "${GOOGLE_API_KEY}",
+      "model": "gemini-embedding-2",
+      "input": "multimodal",
+      "dimension": 768,
+      "task_instruction": "Retrieve documents that answer:"
+    }
+  }
+}
+```
+
+In multimodal mode, the embedder exposes `embed_content(contents=[...])` for structured input lists. Each content dict is one of:
+
+| Shape | Example | Notes |
+|-------|---------|-------|
+| Text | `{"text": "..."}` | UTF-8 string |
+| Image (URL) | `{"image": "https://..."}` | Server-side fetched by Gemini |
+| Image (bytes) | `{"image": b"...", "mime_type": "image/png"}` | Inline base64 |
+| Audio | `{"audio": ..., "mime_type": "audio/mpeg"}` | URL or bytes |
+| Video | `{"video": ..., "mime_type": "video/mp4"}` | URL or bytes |
+| PDF | `{"pdf": ..., "mime_type": "application/pdf"}` | URL or bytes |
+
+Supported MIME types: PNG, JPEG, WebP, BMP, HEIC/HEIF, AVIF, MP3, WAV, MP4, MOV, MPEG, PDF.
+
+Per-call limits (server-enforced): 8192 input tokens, 6 images, 180s audio, 120 video frames at 1 FPS, 6 PDF pages.
+
+`task_instruction` (optional) is a query-time hint prepended to the first text part. Use it for retrieval task routing per the Gemini Embedding 2 docs.
+
+`/metrics` token usage is reported via Gemini's `count_tokens` API for exact server-side counts (one extra round-trip per `embed_content` call; `count_tokens` is documented as free).
+
+> **Region note:** `gemini-embedding-2` requires reachable Google API endpoints. Users in restricted regions should use `provider: "dashscope"` (multimodal) or `provider: "volcengine"` instead.
 
 **DashScope (Alibaba Tongyi) provider:**
 

@@ -83,6 +83,18 @@ class EmbeddingModelConfig(BaseModel):
         default=None,
         description="Maximum video frames for DashScope multimodal models (multimodal models only).",
     )
+    task_instruction: Optional[str] = Field(
+        default=None,
+        description=(
+            "Task-instruction prefix prepended to the first text part on the "
+            "Gemini multimodal branch (gemini-embedding-2 family). Short "
+            "freeform-English string, e.g. 'Retrieve documents that answer:' "
+            "or 'Classify the sentiment of:'. Ignored on the text branch and "
+            "by other providers. The vectorizer pipeline does not currently "
+            "thread is_query through, so query/document task asymmetry is not "
+            "supported on the multimodal branch — use a single instruction."
+        ),
+    )
 
     model_config = {"extra": "forbid"}
 
@@ -192,6 +204,34 @@ class EmbeddingModelConfig(BaseModel):
                     raise ValueError(
                         f"Invalid {field_name} '{value}' for Gemini. "
                         f"Valid task_types: {', '.join(sorted(_GEMINI_TASK_TYPES))}"
+                    )
+            # Multimodal mode for Gemini requires a gemini-embedding-2 family
+            # model. We can't blanket-reject (input='multimodal' AND non-v2)
+            # because the schema default for `input` is 'multimodal' across all
+            # providers — that would break every existing gemini-embedding-001
+            # user who never explicitly asked for multimodal. The factory entry
+            # below handles this by ONLY threading input_type when both
+            # conditions hold; existing users silently get text mode.
+            #
+            # The check below only fires when the user has signaled explicit
+            # multimodal intent via a Gemini-multimodal-specific signal
+            # (task_instruction). At that point, a non-v2 model is unambiguously
+            # a misconfiguration and we error loudly so the user fixes it
+            # rather than silently getting text-mode behavior.
+            if self.task_instruction:
+                if self.input != "multimodal":
+                    raise ValueError(
+                        "task_instruction is only used by the Gemini multimodal "
+                        "branch (input='multimodal'). For text-mode task control "
+                        "use query_param / document_param."
+                    )
+                if self.model and not self.model.startswith("gemini-embedding-2"):
+                    raise ValueError(
+                        f"task_instruction is a multimodal-only signal but the "
+                        f"configured model '{self.model}' is not in the "
+                        f"gemini-embedding-2 family. Either upgrade to "
+                        f"'gemini-embedding-2' (or 'gemini-embedding-2-preview') "
+                        f"or remove task_instruction."
                     )
 
         elif self.provider == "voyage":
@@ -438,6 +478,13 @@ class EmbeddingConfig(BaseModel):
         if provider == "litellm" and LiteLLMDenseEmbedder is None:
             raise ValueError("LiteLLM is not installed. Install it with: pip install litellm")
 
+        if provider == "gemini" and GeminiDenseEmbedder is None:
+            raise ValueError(
+                "Gemini provider requires the 'google-genai' package. "
+                'Install with: pip install "google-genai>=1.0.0" '
+                "(or: uv sync --extra gemini)."
+            )
+
         # Factory registry: (provider, type) -> (embedder_class, param_builder)
         runtime_config = {
             "max_retries": self.max_retries,
@@ -567,6 +614,14 @@ class EmbeddingConfig(BaseModel):
             ),
             ("gemini", "dense"): (
                 GeminiDenseEmbedder,
+                # Factory contract: input_type is threaded ONLY when the user
+                # explicitly opts in via input='multimodal' AND the configured
+                # model is a v2 family member. The Pydantic validator above
+                # rejects mismatched combinations, so by the time we get here
+                # either both conditions hold (multimodal threading safe) or
+                # neither does (text-mode default preserved — zero behavior
+                # change for existing gemini-embedding-001 users whose schema
+                # `input` defaults to 'multimodal' but who never asked for it).
                 lambda cfg: {
                     "model_name": cfg.model,
                     "api_key": cfg.api_key,
@@ -574,6 +629,16 @@ class EmbeddingConfig(BaseModel):
                     "config": dict(runtime_config),
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
+                    **(
+                        {"input_type": "multimodal"}
+                        if (
+                            cfg.input == "multimodal"
+                            and cfg.model
+                            and cfg.model.startswith("gemini-embedding-2")
+                        )
+                        else {}
+                    ),
+                    **({"task_instruction": cfg.task_instruction} if cfg.task_instruction else {}),
                 },
             ),
             # Ollama: local OpenAI-compatible embedding server, no real API key needed
