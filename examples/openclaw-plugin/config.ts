@@ -51,6 +51,15 @@ export type MemoryOpenVikingConfig = {
   emitStandardDiagnostics?: boolean;
   /** When true, log tenant routing for semantic find and session writes (messages/commit) to the plugin logger. */
   logFindRequests?: boolean;
+  // SCCS integration (tool-output compression)
+  sccsEnabled?: boolean;
+  sccsCompressThreshold?: number;
+  sccsSummaryMaxChars?: number;
+  sccsEnableSmartSummary?: boolean;
+  sccsStorageTtlSeconds?: number;
+  sccsStorageDir?: string;
+  sccsMaxEntries?: number;
+  
 };
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:1933";
@@ -68,6 +77,13 @@ const DEFAULT_COMMIT_TOKEN_THRESHOLD = 20000;
 const DEFAULT_BYPASS_SESSION_PATTERNS: string[] = [];
 const DEFAULT_EMIT_STANDARD_DIAGNOSTICS = false;
 const DEFAULT_LOCAL_CONFIG_PATH = join(homedir(), ".openviking", "ov.conf");
+const DEFAULT_SCCS_ENABLED = false;
+const DEFAULT_SCCS_COMPRESS_THRESHOLD = 3000;
+const DEFAULT_SCCS_SUMMARY_MAX_CHARS = 300;
+const DEFAULT_SCCS_ENABLE_SMART_SUMMARY = true;
+const DEFAULT_SCCS_STORAGE_TTL_SECONDS = 86400;
+const DEFAULT_SCCS_STORAGE_DIR = join(homedir(), ".openclaw", "sccs");
+const DEFAULT_SCCS_MAX_ENTRIES = 10000;
 
 const DEFAULT_AGENT_ID = "default";
 const DEFAULT_SERVER_AUTH_MODE = "api_key";
@@ -185,6 +201,13 @@ export const memoryOpenVikingConfigSchema = {
         "ingestReplyAssistIgnoreSessionPatterns",
         "emitStandardDiagnostics",
         "logFindRequests",
+        "sccsEnabled",
+        "sccsCompressThreshold",
+        "sccsSummaryMaxChars",
+        "sccsEnableSmartSummary",
+        "sccsStorageTtlSeconds",
+        "sccsStorageDir",
+        "sccsMaxEntries",
       ],
       "openviking config",
     );
@@ -316,6 +339,34 @@ export const memoryOpenVikingConfigSchema = {
         cfg.logFindRequests === true ||
         envFlag("OPENVIKING_LOG_ROUTING") ||
         envFlag("OPENVIKING_DEBUG"),
+      sccsEnabled: cfg.sccsEnabled === true ? true : DEFAULT_SCCS_ENABLED,
+      sccsCompressThreshold: Math.max(
+        2000,
+        Math.floor(toNumber(cfg.sccsCompressThreshold, DEFAULT_SCCS_COMPRESS_THRESHOLD)),
+      ),
+      sccsSummaryMaxChars: Math.max(
+        50,
+        Math.floor(toNumber(cfg.sccsSummaryMaxChars, DEFAULT_SCCS_SUMMARY_MAX_CHARS)),
+      ),
+      sccsEnableSmartSummary:
+        typeof cfg.sccsEnableSmartSummary === "boolean"
+          ? cfg.sccsEnableSmartSummary
+          : DEFAULT_SCCS_ENABLE_SMART_SUMMARY,
+      sccsStorageTtlSeconds: Math.max(
+        600,
+        Math.floor(toNumber(cfg.sccsStorageTtlSeconds, DEFAULT_SCCS_STORAGE_TTL_SECONDS)),
+      ),
+      sccsStorageDir: resolvePath(
+        resolveEnvVars(
+          typeof cfg.sccsStorageDir === "string" && cfg.sccsStorageDir.trim()
+            ? cfg.sccsStorageDir
+            : DEFAULT_SCCS_STORAGE_DIR,
+        ).replace(/^~/, homedir()),
+      ),
+      sccsMaxEntries: Math.max(
+        1000,
+        Math.floor(toNumber(cfg.sccsMaxEntries, DEFAULT_SCCS_MAX_ENTRIES)),
+      ),
     };
   },
   uiHints: {

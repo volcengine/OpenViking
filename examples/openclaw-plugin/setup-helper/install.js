@@ -126,6 +126,7 @@ let openvikingPythonPath = "";
 let upgradeRuntimeConfig = null;
 let installedUpgradeState = null;
 let upgradeAudit = null;
+let enableSccs = false;
 
 const argv = process.argv.slice(2);
 for (let i = 0; i < argv.length; i++) {
@@ -595,6 +596,15 @@ async function selectMode() {
   }
   const mode = (await question(tr("Plugin mode - local or remote", "插件模式 - local 或 remote"), "remote")).toLowerCase();
   selectedMode = mode === "remote" ? "remote" : "local";
+}
+
+async function selectSccs() {
+  if (installYes) {
+    enableSccs = false;
+    return;
+  }
+  const answer = (await question(tr("Enable SCCS tool-output compression? (y/N)", "启用 SCCS 工具输出压缩？(y/N)"), "N")).toLowerCase();
+  enableSccs = answer === "y" || answer === "yes";
 }
 
 async function collectRemoteConfig() {
@@ -2117,6 +2127,11 @@ async function configureOpenClawPlugin({
     await oc(["config", "set", `plugins.entries.${pluginId}.config.autoRecall`, "true", "--json"]);
     await oc(["config", "set", `plugins.entries.${pluginId}.config.autoCapture`, "true", "--json"]);
   }
+  
+  if (enableSccs) {
+    await oc(["config", "set", "plugins.entries.openviking.config.sccsEnabled", "true", "--json"]);
+    info(tr("SCCS compression enabled", "SCCS 压缩已启用"));
+  }
 
   info(tr("OpenClaw plugin configured", "OpenClaw 插件配置完成"));
 }
@@ -2299,6 +2314,7 @@ async function main() {
     await selectMode();
   }
   info(tr(`Mode: ${selectedMode}`, `模式: ${selectedMode}`));
+  await selectSccs();
 
   if (upgradePluginOnly) {
     await checkOpenClaw();

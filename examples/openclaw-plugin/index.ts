@@ -48,6 +48,7 @@ import {
   openClawSessionToOvStorageId,
 } from "./context-engine.js";
 import type { ContextEngineWithCommit } from "./context-engine.js";
+import { createSccsIntegration } from "./sccs/integration.js";
 
 type PluginLogger = {
   debug?: (message: string) => void;
@@ -553,6 +554,18 @@ const contextEnginePlugin = {
         ? (api.pluginConfig as Record<string, unknown>)
         : {};
     const cfg = memoryOpenVikingConfigSchema.parse(api.pluginConfig);
+    const sccs = createSccsIntegration({
+      cfg: {
+        enabled: cfg.sccsEnabled,
+        compressThreshold: cfg.sccsCompressThreshold,
+        summaryMaxChars: cfg.sccsSummaryMaxChars,
+        enableSmartSummary: cfg.sccsEnableSmartSummary,
+        storageTtlSeconds: cfg.sccsStorageTtlSeconds,
+        storageDir: cfg.sccsStorageDir,
+        maxEntries: cfg.sccsMaxEntries,
+      },
+      logger: api.logger,
+    });
     const bypassSessionPatterns = compileSessionPatterns(cfg.bypassSessionPatterns);
     const rawAgentId = rawCfg.agentId;
     if (cfg.logFindRequests) {
@@ -1115,6 +1128,10 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
       { name: "memory_recall" },
     );
 
+    if (sccs.enabled && sccs.tool) {
+      api.registerTool(sccs.tool, { name: "fetch_original_data" });
+    }
+
     api.registerTool(
       (ctx: ToolContext) => ({
         name: "memory_store",
@@ -1634,7 +1651,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
 
     if (typeof api.registerContextEngine === "function") {
       api.registerContextEngine(contextEnginePlugin.id, () => {
-        contextEngineRef = createMemoryOpenVikingContextEngine({
+        const baseEngine = createMemoryOpenVikingContextEngine({
           id: contextEnginePlugin.id,
           name: contextEnginePlugin.name,
           version: "0.1.0",
@@ -1648,10 +1665,14 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
           resolveAgentId,
           rememberSessionAgentId,
         });
+        // Wrap base engine with SCCS compression layer (no-op when sccsEnabled=false).
+        // Cast: spread preserves all base engine props (including commitOVSession),
+        // but TS cannot infer the subtype relationship across the internal ContextEngine types.
+        contextEngineRef = sccs.wrapContextEngine(baseEngine) as typeof contextEngineRef;
         return contextEngineRef;
       });
       api.logger.info(
-        "openviking: registered context-engine (before_prompt_build=auto-recall, afterTurn=auto-capture, assemble=archive+active, session→OV id=uuid-or-sha256 + diag/Phase2 options)",
+        `openviking: registered context-engine (before_prompt_build=auto-recall, afterTurn=auto-capture, assemble=archive+active, session→OV id=uuid-or-sha256 + diag/Phase2 options)${sccs.enabled ? " + SCCS compression" : ""}`,
       );
     } else {
       api.logger.warn(
