@@ -1,0 +1,44 @@
+name: Update CHANGELOG
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  update-changelog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Generate CHANGELOG.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "# Changelog"
+            echo ""
+            echo "All notable changes to this project are documented in this file."
+            echo "This changelog is automatically generated from [GitHub Releases](https://github.com/${{ github.repository }}/releases)."
+            echo ""
+
+            gh release list -L 100 --json tagName -q '.[].tagName' | while read -r tag; do
+              gh release view "$tag" --json tagName,publishedAt,body \
+                -q '"## " + .tagName + " (" + (.publishedAt[:10]) + ")\n\n" + .body'
+              echo ""
+              echo ""
+            done
+          } > CHANGELOG.md
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git diff --cached --quiet && exit 0
+          git commit -m "docs: update CHANGELOG.md from release ${{ github.event.release.tag_name }}"
+          git push
