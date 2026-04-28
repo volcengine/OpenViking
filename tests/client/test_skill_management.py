@@ -57,6 +57,13 @@ Use this skill when you need to test skill functionality.
         assert result["root_uri"] == result["uri"]
         assert result["uri"].startswith(f"{_agent_skills_root(client)}/")
 
+        abstract = await client.abstract(result["uri"])
+        assert "name: test-skill" in abstract
+        assert "description: A test skill for unit testing" in abstract
+        assert "tags:" in abstract
+        assert "test" in abstract
+        assert "unit-test" in abstract
+
     async def test_add_skill_from_string(self, client: AsyncOpenViking):
         """Test adding skill from string"""
         skill_content = """---
@@ -64,6 +71,8 @@ name: string-skill
 description: A skill created from string
 tags:
   - test
+allowed-tools:
+  - shell
 ---
 
 # String Skill
@@ -75,6 +84,14 @@ This skill was created from a string.
 
         assert "uri" in result
         assert result["uri"].startswith(f"{_agent_skills_root(client)}/")
+
+        abstract = await client.abstract(result["uri"])
+        assert "name: string-skill" in abstract
+        assert "description: A skill created from string" in abstract
+        assert "tags:" in abstract
+        assert "test" in abstract
+        assert "allowed_tools:" in abstract
+        assert "shell" in abstract
 
     async def test_add_skill_with_wait_returns_queue_status(self, client: AsyncOpenViking):
         """Test local SDK add_skill(wait=True) preserves queue_status and binds telemetry."""
@@ -232,3 +249,16 @@ Use this skill to test canonical URI vector indexing.
 
         assert canonical_count == 1
         assert short_count == 0
+
+        records = await vikingdb.filter(
+            filter=PathScope("uri", canonical_uri, depth=0),
+            limit=10,
+            output_fields=["uri", "abstract"],
+            ctx=client._client._ctx,
+        )
+        assert len(records) == 1
+        assert records[0]["uri"] == canonical_uri
+        assert "name: canonical-scope-skill" in records[0]["abstract"]
+        assert "description: A skill for testing canonical vector scope" in records[0]["abstract"]
+        assert "tags:" in records[0]["abstract"]
+        assert "search" in records[0]["abstract"]
