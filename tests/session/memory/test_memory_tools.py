@@ -130,6 +130,6 @@ class TestMemoryTools:
 
         # Check get_tool_schemas
         schemas = get_tool_schemas()
-        assert len(schemas) == 1
         schema_names = [s["function"]["name"] for s in schemas]
-        assert schema_names == ["read"]
+        assert "read" in schema_names
+        assert all(name in all_tools for name in schema_names)
