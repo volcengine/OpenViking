@@ -63,3 +63,14 @@ async def test_append_file_other_runtime_error_bubbles():
 
     with pytest.raises(RuntimeError):
         await fs.append_file("viking://session/default/bad/messages.jsonl", "x\n")
+
+
+@pytest.mark.asyncio
+async def test_append_file_other_client_error_bubbles():
+    """AGFSClientError without 'not found' should still propagate."""
+    fs = _make_viking_fs()
+    fs._ensure_parent_dirs = AsyncMock()
+    fs.agfs.read.side_effect = AGFSClientError("permission denied")
+
+    with pytest.raises(AGFSClientError):
+        await fs.append_file("viking://session/default/bad/messages.jsonl", "x\n")
