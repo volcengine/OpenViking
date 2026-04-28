@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 from typing import Any, Dict, Optional
 
@@ -17,7 +16,7 @@ from openviking.storage.transaction import get_lock_manager
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
-from openviking.telemetry.resource_summary import build_queue_status_payload, unregister_wait_telemetry
+from openviking.telemetry.resource_summary import build_queue_status_payload
 from openviking.utils.embedding_utils import vectorize_file
 from openviking_cli.exceptions import (
     AlreadyExistsError,
@@ -99,9 +98,8 @@ class ContentWriteCoordinator:
 
         temp_root_uri = ""
         lock_transferred = False
-        task_id = None
         try:
-            if telemetry_id:
+            if wait and telemetry_id:
                 get_request_wait_tracker().register_request(telemetry_id)
             temp_root_uri, temp_target_uri = await self._prepare_temp_write(
                 uri=normalized_uri,
@@ -119,14 +117,12 @@ class ContentWriteCoordinator:
                 lifecycle_lock_handle_id=handle.id,
             )
             lock_transferred = True
-            if wait:
-                queue_status = await self._wait_for_request(
-                    telemetry_id=telemetry_id, timeout=timeout
-                )
-            else:
-                queue_status = None
-                task_id = self._create_write_task(root_uri, ctx, telemetry_id)
-            result = {
+            queue_status = (
+                await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
+                if wait
+                else None
+            )
+            return {
                 "uri": normalized_uri,
                 "root_uri": root_uri,
                 "context_type": context_type,
@@ -136,9 +132,6 @@ class ContentWriteCoordinator:
                 "vector_updated": True,
                 "queue_status": queue_status,
             }
-            if task_id:
-                result["task_id"] = task_id
-            return result
         except Exception:
             if not lock_transferred and temp_root_uri:
                 try:
@@ -149,7 +142,7 @@ class ContentWriteCoordinator:
                 await lock_manager.release(handle)
             raise
         finally:
-            if wait or not telemetry_id:
+            if wait and telemetry_id:
                 get_request_wait_tracker().cleanup(telemetry_id)
 
     def _validate_mode(self, mode: str) -> None:
@@ -244,9 +237,8 @@ class ContentWriteCoordinator:
 
         temp_root_uri = ""
         lock_transferred = False
-        task_id = None
         try:
-            if telemetry_id:
+            if wait and telemetry_id:
                 get_request_wait_tracker().register_request(telemetry_id)
             temp_root_uri, temp_target_uri = await self._prepare_temp_write(
                 uri=uri,
@@ -264,14 +256,12 @@ class ContentWriteCoordinator:
                 lifecycle_lock_handle_id=handle.id,
             )
             lock_transferred = True
-            if wait:
-                queue_status = await self._wait_for_request(
-                    telemetry_id=telemetry_id, timeout=timeout
-                )
-            else:
-                queue_status = None
-                task_id = self._create_write_task(root_uri, ctx, telemetry_id)
-            result = {
+            queue_status = (
+                await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
+                if wait
+                else None
+            )
+            return {
                 "uri": uri,
                 "root_uri": root_uri,
                 "context_type": context_type,
@@ -281,9 +271,6 @@ class ContentWriteCoordinator:
                 "vector_updated": True,
                 "queue_status": queue_status,
             }
-            if task_id:
-                result["task_id"] = task_id
-            return result
         except Exception:
             if not lock_transferred and temp_root_uri:
                 try:
@@ -294,7 +281,7 @@ class ContentWriteCoordinator:
                 await lock_manager.release(handle)
             raise
         finally:
-            if wait or not telemetry_id:
+            if wait and telemetry_id:
                 get_request_wait_tracker().cleanup(telemetry_id)
 
     async def _write_in_place(
@@ -460,43 +447,6 @@ class ContentWriteCoordinator:
             raise DeadlineExceededError("queue processing", timeout) from exc
         return tracker.build_queue_status(telemetry_id)
 
-    def _create_write_task(
-        self, root_uri: str, ctx: RequestContext, telemetry_id: str
-    ) -> Optional[str]:
-        from openviking.service.task_tracker import get_task_tracker
-
-        task_tracker = get_task_tracker()
-        task = task_tracker.create(
-            "write",
-            resource_id=root_uri,
-            owner_account_id=ctx.account_id,
-            owner_user_id=ctx.user.user_id,
-        )
-        if telemetry_id:
-            asyncio.create_task(
-                self._monitor_write_queue(task.task_id, telemetry_id)
-            )
-        else:
-            task_tracker.start(task.task_id)
-            task_tracker.complete(task.task_id, {"root_uri": root_uri})
-        return task.task_id
-
-    async def _monitor_write_queue(self, task_id: str, telemetry_id: str) -> None:
-        from openviking.service.task_tracker import get_task_tracker
-
-        task_tracker = get_task_tracker()
-        request_wait_tracker = get_request_wait_tracker()
-        task_tracker.start(task_id)
-        try:
-            await request_wait_tracker.wait_for_request(telemetry_id)
-            status = request_wait_tracker.build_queue_status(telemetry_id)
-            task_tracker.complete(task_id, {"queue_status": status})
-        except Exception as exc:
-            task_tracker.fail(task_id, str(exc))
-        finally:
-            request_wait_tracker.cleanup(telemetry_id)
-            unregister_wait_telemetry(telemetry_id)
-
     async def _vectorize_single_file(
         self,
         uri: str,
@@ -563,9 +513,8 @@ class ContentWriteCoordinator:
             raise InvalidArgumentError(f"resource is busy and cannot be written now: {uri}")
 
         lock_transferred = False
-        task_id = None
         try:
-            if telemetry_id:
+            if wait and telemetry_id:
                 get_request_wait_tracker().register_request(telemetry_id)
             await self._write_in_place(uri, content, mode=mode, ctx=ctx)
             await self._vectorize_single_file(uri, context_type="memory", ctx=ctx)
@@ -576,14 +525,12 @@ class ContentWriteCoordinator:
                 lifecycle_lock_handle_id=handle.id,
             )
             lock_transferred = True
-            if wait:
-                queue_status = await self._wait_for_request(
-                    telemetry_id=telemetry_id, timeout=timeout
-                )
-            else:
-                queue_status = None
-                task_id = self._create_write_task(root_uri, ctx, telemetry_id)
-            result = {
+            queue_status = (
+                await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
+                if wait
+                else None
+            )
+            return {
                 "uri": uri,
                 "root_uri": root_uri,
                 "context_type": "memory",
@@ -593,15 +540,12 @@ class ContentWriteCoordinator:
                 "vector_updated": True,
                 "queue_status": queue_status,
             }
-            if task_id:
-                result["task_id"] = task_id
-            return result
         except Exception:
             if not lock_transferred:
                 await lock_manager.release(handle)
             raise
         finally:
-            if wait or not telemetry_id:
+            if wait and telemetry_id:
                 get_request_wait_tracker().cleanup(telemetry_id)
 
     async def _resolve_root_uri(
