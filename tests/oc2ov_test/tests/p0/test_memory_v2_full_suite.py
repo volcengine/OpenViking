@@ -126,6 +126,20 @@ class OpenVikingAPIClient:
             return new_ids.pop()
         return None
 
+    def find_session_by_id(self, session_id: str) -> Optional[str]:
+        """直接通过 session ID 查找是否存在于 OV 中"""
+        try:
+            resp = requests.get(
+                f"{self.server_url}/api/v1/sessions/{session_id}",
+                headers=self.headers,
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                return session_id
+        except Exception:
+            pass
+        return None
+
     def find_session_with_most_messages(
         self, candidate_ids: Optional[Set[str]] = None
     ) -> Optional[str]:
@@ -605,9 +619,11 @@ class MemoryV2TestSuite:
             print("\n[步骤 3/5] 查找 OV session 并 commit")
             ov_session_id = self.api.find_new_session_id(before_session_ids)
             if not ov_session_id:
-                print("  ⚠ 未找到新 session，等待后重试...")
-                time.sleep(5)
-                ov_session_id = self.api.find_new_session_id(before_session_ids)
+                print("  ⚠ 未找到新 session，尝试用场景 session ID 直接查找")
+                ov_session_id = self.api.find_session_by_id(scenario_session_id)
+            if not ov_session_id:
+                print("  ⚠ 场景 session ID 未命中，在已有 session 中查找消息最多的")
+                ov_session_id = self.api.find_session_with_most_messages()
             if not ov_session_id:
                 print("  ⚠ 仍未找到新 session，跳过 commit 步骤，直接检查记忆文件")
                 result["steps"]["commit"] = "skipped"
