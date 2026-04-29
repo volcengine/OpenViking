@@ -4,31 +4,46 @@
  * Auto-Capture Hook Script for Claude Code
  *
  * Triggered by Stop hook.
- * Reads transcript_path from stdin → extracts INCREMENTAL conversation
- * (only new turns since last capture) → keeps user turns by default →
- * sends to OpenViking session/extract pipeline → memories stored automatically.
+ * Reads transcript_path from stdin → extracts INCREMENTAL new turns since last
+ * capture → pushes them to a PERSISTENT per-CC-session OpenViking session.
  *
- * Incremental tracking: uses a state file per session_id to record how many
- * turns have been captured. Only new turns are processed on each invocation.
+ * Unlike the previous one-shot model (create→add→extract→delete every Stop),
+ * this keeps a stable ovSessionId derived from the CC session_id. OV's own
+ * auto_commit_threshold (openviking/session/session.py) drives archive + extract.
+ * This preserves cross-turn context for the memory extractor, produces archives
+ * naturally, and lets resume / PreCompact / SessionEnd reuse the same session.
  *
- * Ported from openclaw-plugin/ auto-capture logic in context-engine.ts + text-utils.ts.
+ * Incremental tracking: state file per CC session_id records capturedTurnCount.
+ *
+ * Ported from openclaw-plugin/ context-engine.ts + text-utils.ts
+ * (sanitize / MEMORY_TRIGGERS / extractNewTurnMessages).
  */
 
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { loadConfig } from "./config.mjs";
+import { isPluginEnabled, loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
+import {
+  addMessage,
+  commitSession,
+  deriveOvSessionId,
+  getSession,
+  isBypassed,
+  makeFetchJSON,
+} from "./lib/ov-session.mjs";
+import { maybeDetach, readHookStdin } from "./lib/async-writer.mjs";
+
+if (!isPluginEnabled()) {
+  process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
+  process.exit(0);
+}
 
 const cfg = loadConfig();
 const { log, logError } = createLogger("auto-capture");
+const fetchJSON = makeFetchJSON(cfg, "captureTimeoutMs");
 
-// State directory for incremental tracking
 const STATE_DIR = join(tmpdir(), "openviking-cc-capture-state");
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 function output(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
@@ -39,28 +54,6 @@ function approve(msg) {
   if (msg) out.systemMessage = msg;
   output(out);
 }
-
-async function fetchJSON(path, init = {}) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), cfg.captureTimeoutMs);
-  try {
-    const headers = { "Content-Type": "application/json" };
-    if (cfg.apiKey) headers["X-API-Key"] = cfg.apiKey;
-    if (cfg.agentId) headers["X-OpenViking-Agent"] = cfg.agentId;
-    const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
-    const body = await res.json();
-    if (!res.ok || body.status === "error") return null;
-    return body.result ?? body;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Incremental state tracking
-// ---------------------------------------------------------------------------
 
 function stateFilePath(sessionId) {
   const safe = sessionId.replace(/[^a-zA-Z0-9_-]/g, "_");
@@ -84,7 +77,7 @@ async function saveState(sessionId, state) {
 }
 
 // ---------------------------------------------------------------------------
-// Text processing (ported from text-utils.ts)
+// Text processing (ported from openclaw-plugin/text-utils.ts)
 // ---------------------------------------------------------------------------
 
 const MEMORY_TRIGGERS = [
@@ -98,14 +91,23 @@ const MEMORY_TRIGGERS = [
 ];
 
 const RELEVANT_MEMORIES_BLOCK_RE = /<relevant-memories>[\s\S]*?<\/relevant-memories>/gi;
+const OPENVIKING_CTX_BLOCK_RE = /<openviking-context>[\s\S]*?<\/openviking-context>/gi;
+const SYSTEM_REMINDER_BLOCK_RE = /<system-reminder>[\s\S]*?<\/system-reminder>/gi;
+const SUBAGENT_CONTEXT_LINE_RE = /^\[Subagent Context\][^\n]*$/gmi;
 const COMMAND_TEXT_RE = /^\/[a-z0-9_-]{1,64}\b/i;
 const NON_CONTENT_TEXT_RE = /^[\p{P}\p{S}\s]+$/u;
-const CJK_CHAR_RE = /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uac00-\ud7af]/;
+const CJK_CHAR_RE = /[぀-ヿ㐀-鿿豈-﫿가-힯]/;
+// Question-only heuristic (ported from openclaw-plugin/text-utils.ts
+// looksLikeQuestionOnlyText). Pure interrogatives rarely yield memories.
+const QUESTION_ONLY_RE = /^(who|what|when|where|why|how|is|are|does|did|can|could|would|should|may|might|will|谁|什么|何|哪|为什么|怎么|如何|是|会|能|能否)\b.{0,200}[?？]$/i;
 
 function sanitize(text) {
   return text
     .replace(RELEVANT_MEMORIES_BLOCK_RE, " ")
-    .replace(/\u0000/g, "")
+    .replace(OPENVIKING_CTX_BLOCK_RE, " ")
+    .replace(SYSTEM_REMINDER_BLOCK_RE, " ")
+    .replace(SUBAGENT_CONTEXT_LINE_RE, " ")
+    .replace(/\x00/g, "")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -126,6 +128,10 @@ function shouldCapture(text) {
 
   if (NON_CONTENT_TEXT_RE.test(normalized)) {
     return { capture: false, reason: "non_content", text: normalized };
+  }
+
+  if (QUESTION_ONLY_RE.test(normalized)) {
+    return { capture: false, reason: "question_only", text: normalized };
   }
 
   if (cfg.captureMode === "keyword") {
@@ -159,6 +165,11 @@ function parseTranscript(content) {
   return messages;
 }
 
+/**
+ * Extract user/assistant turns. Tier-1 parts: plain text + tool-use name list.
+ * Tool-use blocks are aggregated into a tool-name summary per assistant message
+ * so the OV memory extractor sees "what happened" without raw tool_result JSON.
+ */
 function extractAllTurns(messages) {
   const turns = [];
   for (const msg of messages) {
@@ -166,64 +177,75 @@ function extractAllTurns(messages) {
 
     let role = msg.role;
     let text = "";
+    let toolNames = [];
 
-    if (typeof msg.content === "string") {
-      text = msg.content;
-    } else if (Array.isArray(msg.content)) {
-      const textParts = msg.content
-        .filter(b => b && b.type === "text" && typeof b.text === "string")
-        .map(b => b.text);
-      text = textParts.join("\n");
-    } else if (typeof msg.message === "object" && msg.message) {
-      const inner = msg.message;
-      role = inner.role || role;
-      if (typeof inner.content === "string") {
-        text = inner.content;
-      } else if (Array.isArray(inner.content)) {
-        const textParts = inner.content
-          .filter(b => b && b.type === "text" && typeof b.text === "string")
-          .map(b => b.text);
-        text = textParts.join("\n");
+    const harvestContent = (content) => {
+      if (typeof content === "string") {
+        text = content;
+      } else if (Array.isArray(content)) {
+        const texts = [];
+        for (const block of content) {
+          if (!block || typeof block !== "object") continue;
+          if (block.type === "text" && typeof block.text === "string") {
+            texts.push(block.text);
+          } else if (block.type === "tool_use" && typeof block.name === "string") {
+            toolNames.push(block.name);
+          }
+        }
+        text = texts.join("\n");
       }
+    };
+
+    if (msg.content !== undefined) {
+      harvestContent(msg.content);
+    } else if (typeof msg.message === "object" && msg.message) {
+      role = msg.message.role || role;
+      harvestContent(msg.message.content);
     }
 
     if (role !== "user" && role !== "assistant") continue;
-    if (text.trim()) {
-      turns.push({ role, text: text.trim() });
-    }
+    if (!text.trim() && toolNames.length === 0) continue;
+    turns.push({ role, text: text.trim(), toolNames });
   }
   return turns;
 }
 
-// ---------------------------------------------------------------------------
-// OpenViking session capture
-// ---------------------------------------------------------------------------
-
-async function captureToOpenViking(text) {
-  const sessionResult = await fetchJSON("/api/v1/sessions", {
-    method: "POST",
-    body: JSON.stringify({}),
-  });
-  if (!sessionResult?.session_id) return { ok: false, reason: "session_create_failed" };
-
-  const sessionId = sessionResult.session_id;
-  try {
-    await fetchJSON(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`, {
-      method: "POST",
-      body: JSON.stringify({ role: "user", content: text }),
-    });
-
-    const extracted = await fetchJSON(
-      `/api/v1/sessions/${encodeURIComponent(sessionId)}/extract`,
-      { method: "POST", body: JSON.stringify({}) }
-    );
-
-    return { ok: true, count: Array.isArray(extracted) ? extracted.length : 0 };
-  } finally {
-    await fetchJSON(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, {
-      method: "DELETE",
-    }).catch(() => {});
+function formatTurnsAsText(turns) {
+  const lines = [];
+  for (const t of turns) {
+    if (t.role === "assistant" && t.toolNames.length > 0) {
+      const uniq = Array.from(new Set(t.toolNames)).join(", ");
+      if (t.text) lines.push(`[assistant]: ${t.text}`);
+      lines.push(`[assistant used tools: ${uniq}]`);
+    } else if (t.text) {
+      lines.push(`[${t.role}]: ${t.text}`);
+    }
   }
+  return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Persistent-session capture
+// ---------------------------------------------------------------------------
+
+async function pushTurnsToOv(ovSessionId, turns) {
+  let ok = 0;
+  let failed = 0;
+  for (const turn of turns) {
+    let content = turn.text;
+    if (turn.role === "assistant" && turn.toolNames.length > 0) {
+      const uniq = Array.from(new Set(turn.toolNames)).join(", ");
+      content = content
+        ? `${content}\n\n[tools used: ${uniq}]`
+        : `[tools used: ${uniq}]`;
+    }
+    if (!content) continue;
+
+    const res = await addMessage(fetchJSON, ovSessionId, { role: turn.role, content });
+    if (res.ok) ok++;
+    else failed++;
+  }
+  return { ok, failed };
 }
 
 // ---------------------------------------------------------------------------
@@ -237,11 +259,12 @@ async function main() {
     return;
   }
 
+  // Async write path: parent detaches and returns, worker continues below.
+  if (await maybeDetach(cfg, { approve })) return;
+
   let input;
   try {
-    const chunks = [];
-    for await (const chunk of process.stdin) chunks.push(chunk);
-    input = JSON.parse(Buffer.concat(chunks).toString());
+    input = JSON.parse(await readHookStdin());
   } catch {
     log("skip", { stage: "stdin_parse", reason: "invalid input" });
     approve();
@@ -250,18 +273,25 @@ async function main() {
 
   const transcriptPath = input.transcript_path;
   const sessionId = input.session_id || "unknown";
-  log("start", { sessionId, transcriptPath });
+  const cwd = input.cwd;
+  const ovSessionId = sessionId !== "unknown" ? deriveOvSessionId(sessionId) : null;
+  log("start", { sessionId, ovSessionId, transcriptPath });
 
-  // Quick health check
+  if (isBypassed(cfg, { sessionId, cwd })) {
+    log("skip", { reason: "bypass_session_pattern" });
+    approve();
+    return;
+  }
+
   const health = await fetchJSON("/health");
-  if (!health) {
+  if (!health.ok) {
     logError("health_check", "server unreachable or unhealthy");
     approve();
     return;
   }
 
-  if (!transcriptPath) {
-    log("skip", { stage: "input_check", reason: "no transcript_path" });
+  if (!transcriptPath || !ovSessionId) {
+    log("skip", { stage: "input_check", reason: "no transcript_path or session_id" });
     approve();
     return;
   }
@@ -281,7 +311,6 @@ async function main() {
     return;
   }
 
-  // Parse transcript and extract all turns
   const messages = parseTranscript(transcriptContent);
   const allTurns = extractAllTurns(messages);
   if (allTurns.length === 0) {
@@ -290,7 +319,6 @@ async function main() {
     return;
   }
 
-  // Load incremental state — skip already-captured turns
   const state = await loadState(sessionId);
   const newTurns = allTurns.slice(state.capturedTurnCount);
   const captureTurns = cfg.captureAssistantTurns
@@ -317,11 +345,8 @@ async function main() {
     return;
   }
 
-  // Format only the capturable turns
-  const turnText = captureTurns.map(t => `[${t.role}]: ${t.text}`).join("\n");
-
-  // Check capture decision
-  const decision = shouldCapture(turnText);
+  const combined = formatTurnsAsText(captureTurns);
+  const decision = shouldCapture(combined);
   log("should_capture", {
     capture: decision.capture,
     reason: decision.reason,
@@ -334,17 +359,34 @@ async function main() {
     return;
   }
 
-  // Send to OpenViking
-  const result = await captureToOpenViking(decision.text);
-  log("openviking_capture", { sessionCreated: result.ok, extractedCount: result.count || 0 });
+  const result = await pushTurnsToOv(ovSessionId, captureTurns);
+  log("push_turns", { ovSessionId, ok: result.ok, failed: result.failed });
 
-  // Update state
+  // Advance state regardless of per-turn failures: retrying the same turns on
+  // a persistent session would duplicate them. Accepting the loss is cheaper.
   await saveState(sessionId, { capturedTurnCount: allTurns.length });
   log("state_update", { newCapturedTurnCount: allTurns.length });
 
-  if (result.ok && result.count > 0) {
-    log("done", { captureTurns: captureTurns.length, extractedCount: result.count });
-    approve(`captured ${captureTurns.length} turns, extracted ${result.count} memories`);
+  // Client-driven commit (ported from openclaw-plugin/context-engine.ts:afterTurn).
+  // OV's Session._auto_commit_threshold is not consumed by addMessage, so we
+  // poll pending_tokens ourselves and commit when the threshold is crossed.
+  let committed = false;
+  if (result.ok > 0) {
+    const meta = await getSession(fetchJSON, ovSessionId);
+    const pending = Number(meta?.pending_tokens || 0);
+    log("pending_tokens", { ovSessionId, pending, threshold: cfg.commitTokenThreshold });
+    if (pending >= cfg.commitTokenThreshold) {
+      const commitRes = await commitSession(fetchJSON, ovSessionId);
+      committed = commitRes.ok;
+      log("commit", { ovSessionId, ok: commitRes.ok, pending });
+    }
+  }
+
+  if (result.ok > 0) {
+    approve(
+      `captured ${result.ok} turns to ov session ${ovSessionId}` +
+      (committed ? " (committed)" : ""),
+    );
   } else {
     approve();
   }

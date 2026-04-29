@@ -58,7 +58,7 @@ into the plugin source tree.
 ### Runtime Bootstrap (transparent, on session start)
 
 1. Claude starts a session → `SessionStart` hook fires
-2. `bootstrap-runtime.mjs` hashes `package.json`, `package-lock.json`, and `servers/memory-server.js`
+2. `session-start.mjs` hashes `package.json`, `package-lock.json`, and `servers/memory-server.js`
 3. If the runtime directory is missing or stale, it copies runtime files there
 4. Runs `npm ci --omit=dev` in that runtime directory
 5. Writes `install-state.json` so later sessions can skip reinstall
@@ -156,8 +156,25 @@ vim ~/.openviking/ov.conf
 }
 ```
 
-> `root_api_key`: Once set, all HTTP requests must carry the `X-API-Key` header. Defaults to `null` in local mode (authentication disabled).  
+> `root_api_key`: Once set, all HTTP requests must carry an `Authorization: Bearer <token>` header. Defaults to `null` in local mode (authentication disabled).  
 > For Windows system paths in the workspace, use / instead of \, for example: `D:/.openviking/data`
+
+#### `~/.openviking/ov.conf` (Remote Mode)
+
+```json
+{
+  "server": {
+    "url": "https://your-openviking-server.example.com",
+    "root_api_key": "<your-api-key>"
+  },
+  "claude_code": {
+    "accountId": "my-team",
+    "userId": "alice"
+  }
+}
+```
+
+> When `server.url` is set, the `host` and `port` fields are ignored. The URL can use `https://` for remote deployments. The `accountId` and `userId` fields map to `X-OpenViking-Account` and `X-OpenViking-User` headers for multi-tenant isolation.
 
 Optionally add a `claude_code` section for plugin-specific overrides:
 
@@ -165,6 +182,9 @@ Optionally add a `claude_code` section for plugin-specific overrides:
 {
   "claude_code": {
     "agentId": "claude-code",
+    "accountId": "",
+    "userId": "",
+    "apiKey": "",
     "recallLimit": 6,
     "captureMode": "semantic",
     "captureTimeoutMs": 30000,
@@ -182,10 +202,37 @@ openviking-server
 
 ### 4. Install Plugin
 
+**From marketplace:**
+
 ```bash
 /plugin marketplace add Castor6/openviking-plugins
 /plugin install claude-code-memory-plugin@openviking-plugin
 ```
+
+**From local source (for development):**
+
+The repo includes a local marketplace manifest at `examples/.claude-plugin/marketplace.json`.
+Install with two commands:
+
+```bash
+# Run from the OpenViking repo root:
+
+# Add the examples directory as a local marketplace (one-time)
+claude plugin marketplace add "$(pwd)/examples" --scope local
+
+# Install the plugin
+claude plugin install claude-code-memory-plugin@openviking-plugins-local --scope local
+```
+
+When you modify `src/memory-server.ts`, rebuild the compiled JS:
+
+```bash
+cd examples/claude-code-memory-plugin
+npm install   # first time only
+npm run build # recompile TypeScript → servers/memory-server.js
+```
+
+> **Note:** Local install points Claude Code directly at the source directory — any changes you make to scripts, hooks, or configs take effect the next time the plugin is invoked (no reinstall needed). This is convenient for iteration but also means moving, renaming, or deleting the source directory will break the plugin; `git checkout` to a branch without these files has the same effect. Rebuild the MCP server (`npm run build`) after editing `src/memory-server.ts` since hooks run the compiled JS, not the TypeScript source.
 
 ### 5. Start a New Claude Session
 
@@ -201,23 +248,91 @@ if Claude does not inject `CLAUDE_PLUGIN_DATA`. No manual `npm install` is requi
 
 Uses the same `~/.openviking/ov.conf` as the OpenViking server and OpenClaw plugin.
 
-Override the path via environment variable:
+Override the config path via environment variable:
 ```bash
 export OPENVIKING_CONFIG_FILE="~/custom/path/ov.conf"
 ```
 
-**Connection info** is read from ov.conf's `server` section:
+### Resolution Priority
+
+All connection fields follow the same priority chain (highest → lowest):
+
+1. **Environment variables** (`OPENVIKING_URL`, `OPENVIKING_API_KEY`, etc.)
+2. **`ovcli.conf`** — CLI client config (`~/.openviking/ovcli.conf` or `OPENVIKING_CLI_CONFIG_FILE`)
+3. **`ov.conf`** — server config (`~/.openviking/ov.conf` or `OPENVIKING_CONFIG_FILE`)
+4. **Built-in defaults**
+
+### Environment Variables
+
+| Env Var | Maps To | Description |
+|---------|---------|-------------|
+| `OPENVIKING_URL` / `OPENVIKING_BASE_URL` | `baseUrl` | Full server URL (e.g. `https://remote.example.com`) |
+| `OPENVIKING_BEARER_TOKEN` / `OPENVIKING_API_KEY` | `apiKey` | API key (either env var works); sent as `Authorization: Bearer <key>` |
+| `OPENVIKING_ACCOUNT` | `accountId` | Multi-tenant account (`X-OpenViking-Account` header) |
+| `OPENVIKING_USER` | `userId` | Multi-tenant user (`X-OpenViking-User` header) |
+| `OPENVIKING_AGENT_ID` | `agentId` | Agent identity (`X-OpenViking-Agent` header) |
+| `OPENVIKING_MEMORY_ENABLED` | enabled | `0`/`false`/`no` = force disable; `1`/`true`/`yes` = force enable |
+| `OPENVIKING_CONFIG_FILE` | ov.conf path | Path to `ov.conf` (default: `~/.openviking/ov.conf`) |
+| `OPENVIKING_CLI_CONFIG_FILE` | ovcli.conf path | Path to `ovcli.conf` (default: `~/.openviking/ovcli.conf`) |
+| `OPENVIKING_DEBUG` | debug | `1` = enable debug logging |
+
+Example — connect to a remote server with env vars only (no config files):
+```bash
+OPENVIKING_MEMORY_ENABLED=1 \
+OPENVIKING_URL=https://openviking.example.com \
+OPENVIKING_API_KEY=sk-xxx \
+OPENVIKING_ACCOUNT=my-team \
+OPENVIKING_USER=alice \
+claude
+```
+
+### ovcli.conf (CLI Client Config)
+
+If you already have `~/.openviking/ovcli.conf` configured for the `ov` CLI, the plugin will automatically pick up the connection info from it — no extra `ov.conf` needed.
+
+```json
+{
+  "url": "https://openviking.example.com",
+  "api_key": "sk-xxx",
+  "account": "my-team",
+  "user": "alice",
+  "agent_id": "claude-code"
+}
+```
+
+### Enable / Disable
+
+The plugin determines whether to activate using this priority chain:
+
+1. **`OPENVIKING_MEMORY_ENABLED` env var** — `0`/`false`/`no` forces disable; `1`/`true`/`yes` forces enable (even without config files, but connection info must come from env vars)
+2. **`claude_code.enabled` in `ov.conf`** — set to `false` to disable the plugin while keeping the config
+3. **Config file existence** — if `ov.conf` or `ovcli.conf` exists and is parseable, the plugin is enabled; if neither exists, the plugin is **silently disabled** (no error, hooks pass through)
+
+This means: without any config, the plugin does nothing. Create `~/.openviking/ovcli.conf` or `~/.openviking/ov.conf` to activate it.
+
+### Connection Info (ov.conf)
+
+Resolution order for `baseUrl` (first match wins):
+1. `OPENVIKING_URL` / `OPENVIKING_BASE_URL` env var
+2. `url` in ovcli.conf
+3. `server.url` in ov.conf (full URL, supports `https://`)
+4. `http://{server.host}:{server.port}` (derived, backward-compatible)
 
 | ov.conf field | Used as | Description |
 |---------------|---------|-------------|
-| `server.host` + `server.port` | `baseUrl` | Derives `http://{host}:{port}` |
+| `server.url` | `baseUrl` | Full server URL (takes priority over host+port) |
+| `server.host` + `server.port` | `baseUrl` | Derives `http://{host}:{port}` (fallback) |
 | `server.root_api_key` | `apiKey` | API key for authentication |
 
-**Plugin overrides** go in an optional `claude_code` section:
+### Plugin Overrides (ov.conf `claude_code` section)
 
 | Field | Default | Description |
 |-------|---------|-------------|
+| `enabled` | `true` | Set to `false` to disable the plugin |
+| `apiKey` | — | Plugin-specific API key (overrides `server.root_api_key`) |
 | `agentId` | `claude-code` | Agent identity for memory isolation |
+| `accountId` | `""` | Multi-tenant account ID (`X-OpenViking-Account` header) |
+| `userId` | `""` | Multi-tenant user ID (`X-OpenViking-User` header) |
 | `timeoutMs` | `15000` | HTTP request timeout for recall/general requests (ms) |
 | `autoRecall` | `true` | Enable auto-recall on every user prompt |
 | `recallLimit` | `6` | Max memories to inject per turn |
@@ -271,7 +386,7 @@ claude-code-memory-plugin/
 ├── scripts/
 │   ├── config.mjs               # Shared config loader
 │   ├── runtime-common.mjs       # Shared runtime paths + install state helpers
-│   ├── bootstrap-runtime.mjs    # SessionStart installer for runtime deps
+│   ├── session-start.mjs        # SessionStart: runtime install + resume/compact archive inject
 │   ├── start-memory-server.mjs  # Launches MCP server from plugin data runtime
 │   ├── auto-recall.mjs          # Auto-recall hook script
 │   └── auto-capture.mjs         # Auto-capture hook script
@@ -301,9 +416,12 @@ Claude Code has a built-in auto-memory system using `MEMORY.md` files. This plug
 
 | Symptom | Cause | Solution |
 |---------|-------|----------|
+| Plugin not activating | No `ov.conf` found | Create `~/.openviking/ov.conf` or set `OPENVIKING_MEMORY_ENABLED=1` with env-var config |
+| Plugin silently disabled | `claude_code.enabled: false` or `OPENVIKING_MEMORY_ENABLED=0` | Check both the env var and the `ov.conf` field |
 | No memories recalled | Server not running | Start OpenViking server |
 | Auto-capture extracts 0 | Wrong API key / model | Check `ov.conf` embedding config |
 | MCP tools not available | First-run runtime install failed | Start a new Claude session to retry bootstrap and inspect SessionStart stderr for the npm failure |
+| Remote server auth failure | Wrong API key or missing account/user headers | Set `OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER` or configure them in `ov.conf` |
 | Repeated auto-capture of old context | `Stop` hook timed out before incremental state was saved | Keep `captureAssistantTurns=false`, raise the `Stop` hook timeout, and keep `captureTimeoutMs` below that hook timeout |
 | Hook timeout | Server slow / unreachable | Increase the `Stop` hook timeout in `hooks/hooks.json` and tune `claude_code.captureTimeoutMs` in `ov.conf` |
 | Logs too verbose | Detailed recall ranking logs are enabled | Leave `logRankingDetails=false` for normal use and use the debug scripts for one-off inspection |
