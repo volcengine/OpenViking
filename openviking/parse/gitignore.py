@@ -54,7 +54,10 @@ def _transform_gitignore_line(line: str, base_rel: str) -> str:
 
 @dataclass
 class GitignoreMatcher:
-    """Maintain gitignore specs per directory for fast matching."""
+    """
+    Helper class for matching files and directories against gitignore specs.
+    It maintains an in-memory cache of gitignore specs per directory for faster matching.
+    """
 
     root: Path
     _spec_cache: Dict[Path, Optional[GitIgnoreSpec]]
@@ -62,6 +65,43 @@ class GitignoreMatcher:
     def __init__(self, root: Path) -> None:
         self.root = root.resolve()
         self._spec_cache = {}
+
+    def spec_for_dir(self, dir_path: Path) -> Optional[GitIgnoreSpec]:
+        """
+        Resolve the gitignore spec for the given directory (including parent specs recursively).
+        """
+        dir_path = dir_path.resolve()
+        if dir_path in self._spec_cache:
+            return self._spec_cache[dir_path]
+
+        parent_spec = None
+        # try to resolve all parent specs recursively
+        if dir_path != self.root:
+            parent_spec = self.spec_for_dir(dir_path.parent)
+
+        local_spec = self._load_local_spec(dir_path)
+
+        if parent_spec and local_spec:
+            spec = parent_spec + local_spec
+        else:
+            spec = local_spec or parent_spec
+
+        self._spec_cache[dir_path] = spec
+        return spec
+
+    def is_ignored_file(self, file_path: Path, spec: Optional[GitIgnoreSpec]) -> bool:
+        if not spec:
+            return False
+
+        rel_path = self._rel_path(file_path)
+        return spec.match_file(rel_path)
+
+    def is_ignored_dir(self, dir_path: Path, spec: Optional[GitIgnoreSpec]) -> bool:
+        if not spec:
+            return False
+
+        rel_path = self._rel_path(dir_path)
+        return spec.match_file(f"{rel_path}/")
 
     def _rel_path(self, path: Path) -> str:
         try:
@@ -100,40 +140,3 @@ class GitignoreMatcher:
             return list(lines)
 
         return [_transform_gitignore_line(line, base_rel) for line in lines]
-
-    def spec_for_dir(self, dir_path: Path) -> Optional[GitIgnoreSpec]:
-        """
-        Resolve the gitignore spec for the given directory (including parent specs recursively).
-        """
-        dir_path = dir_path.resolve()
-        if dir_path in self._spec_cache:
-            return self._spec_cache[dir_path]
-
-        parent_spec = None
-        # try to resolve all parent specs recursively
-        if dir_path != self.root:
-            parent_spec = self.spec_for_dir(dir_path.parent)
-
-        local_spec = self._load_local_spec(dir_path)
-
-        if parent_spec and local_spec:
-            spec = parent_spec + local_spec
-        else:
-            spec = local_spec or parent_spec
-
-        self._spec_cache[dir_path] = spec
-        return spec
-
-    def is_ignored_file(self, file_path: Path, spec: Optional[GitIgnoreSpec]) -> bool:
-        if not spec:
-            return False
-
-        rel_path = self._rel_path(file_path)
-        return spec.match_file(rel_path)
-
-    def is_ignored_dir(self, dir_path: Path, spec: Optional[GitIgnoreSpec]) -> bool:
-        if not spec:
-            return False
-
-        rel_path = self._rel_path(dir_path)
-        return spec.match_file(f"{rel_path}/")
