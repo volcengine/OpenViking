@@ -115,6 +115,7 @@ class LiteLLMVLMProvider(VLMBase):
         self._provider_name = config.get("provider")
         self._extra_headers = config.get("extra_headers") or {}
         self._thinking = config.get("thinking", False)
+        self._enable_thinking = config.get("enable_thinking")
         self._detected_provider: str | None = None
 
         if self.api_key:
@@ -205,6 +206,40 @@ class LiteLLMVLMProvider(VLMBase):
             }
         return {"type": "image_url", "image_url": {"url": image}}
 
+    def _build_thinking_extra_body(
+        self, thinking: bool, provider: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Build thinking parameters for LiteLLM extra_body.
+
+        Mirrors the OpenAI VLM backend logic but uses LiteLLM's model-based
+        provider detection (``deepseek`` keyword) instead of host detection.
+
+        Three modes based on ``enable_thinking`` config:
+
+        - ``True`` / ``False`` (explicit): always emit thinking params.
+        - ``None`` / unset (auto): only emit for detected thinking-capable
+          providers (dashscope, deepseek).
+        """
+        is_thinking_provider = provider in ("dashscope", "deepseek")
+
+        if self._enable_thinking is not None:
+            # Explicit config: force behavior for any provider
+            actual_thinking = self._enable_thinking
+            if provider == "deepseek":
+                if actual_thinking:
+                    return None
+                return {"thinking": {"type": "disabled"}}
+            return {"enable_thinking": actual_thinking}
+        else:
+            # Auto-detect: only for known thinking-capable providers
+            if not is_thinking_provider:
+                return None
+            if provider == "deepseek":
+                if thinking:
+                    return None
+                return {"thinking": {"type": "disabled"}}
+            return {"enable_thinking": thinking}
+
     def _build_kwargs(
         self,
         model: str,
@@ -235,11 +270,12 @@ class LiteLLMVLMProvider(VLMBase):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
 
-        # Only send enable_thinking to DashScope-compatible providers
+        # Thinking control for reasoning models
         provider = self._detected_provider or detect_provider_by_model(model)
-        if provider == "dashscope":
+        thinking_params = self._build_thinking_extra_body(thinking, provider)
+        if thinking_params:
             extra = kwargs.get("extra_body", {})
-            extra["enable_thinking"] = thinking
+            extra.update(thinking_params)
             kwargs["extra_body"] = extra
 
         # Workaround for LiteLLM bug where Gemini context-caching path emits

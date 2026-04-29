@@ -154,7 +154,8 @@ class OpenAIVLM(VLMBase):
 
         - ``True`` / ``False`` (explicit): always emit thinking params,
           using the detected provider format (or ``enable_thinking`` bool
-          as default for unknown providers).
+          as default for unknown providers).  The explicit config value
+          overrides the ``thinking`` call argument.
         - ``None`` / unset (auto): only emit for auto-detected providers
           (DashScope, DeepSeek).
 
@@ -163,20 +164,22 @@ class OpenAIVLM(VLMBase):
         if self.enable_thinking is not None:
             # Explicit config: force thinking behavior for any endpoint
             provider = self._detect_thinking_provider() or "default"
+            actual_thinking = self.enable_thinking
         else:
             # Auto-detect: only for known thinking-capable providers
             provider = self._detect_thinking_provider()
             if provider is None:
                 return None
+            actual_thinking = thinking
 
         if provider == "deepseek":
             # DeepSeek enables thinking by default; only need to disable
-            if thinking:
+            if actual_thinking:
                 return None
             return {"thinking": {"type": "disabled"}}
         else:
             # DashScope and default: use enable_thinking boolean
-            return {"enable_thinking": thinking}
+            return {"enable_thinking": actual_thinking}
 
     def _apply_provider_specific_extra_body(self, kwargs: Dict[str, Any], thinking: bool) -> None:
         """Attach provider-specific raw body parameters understood by compatible APIs.
