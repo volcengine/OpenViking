@@ -79,6 +79,8 @@ export function loadConfig() {
     baseUrl,
     apiKey,
     agentId: str(cc.agentId, "claude-code"),
+    account: str(cc.account, str(file.default_account, "")),
+    user: str(cc.user, str(file.default_user, "")),
     timeoutMs,
 
     // Recall

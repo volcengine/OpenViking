@@ -13,7 +13,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { createHash } from "node:crypto";
 
 // ---------------------------------------------------------------------------
 // Types (ported from openclaw-plugin/client.ts)
@@ -35,8 +34,6 @@ type FindResult = {
   skills?: FindResultItem[];
   total?: number;
 };
-
-type ScopeName = "user" | "agent";
 
 // ---------------------------------------------------------------------------
 // Configuration — loaded from ov.conf (shared with OpenClaw plugin).
@@ -90,6 +87,8 @@ const config = {
   baseUrl: `http://${host}:${port}`,
   apiKey: str(serverCfg.root_api_key, ""),
   agentId: str(cc.agentId, "claude-code"),
+  account: str(cc.account, str(file.default_account, "")),
+  user: str(cc.user, str(file.default_user, "")),
   timeoutMs: Math.max(1000, Math.floor(num(cc.timeoutMs, 15000))),
   recallLimit: Math.max(1, Math.floor(num(cc.recallLimit, 6))),
   scoreThreshold: Math.min(1, Math.max(0, num(cc.scoreThreshold, 0.01))),
@@ -100,28 +99,21 @@ const config = {
 // ---------------------------------------------------------------------------
 
 const MEMORY_URI_PATTERNS = [
-  /^viking:\/\/user\/(?:[^/]+\/)?memories(?:\/|$)/,
-  /^viking:\/\/agent\/(?:[^/]+\/)?memories(?:\/|$)/,
+  /^viking:\/\/user\/(?:.*\/)?memories(?:\/|$)/,
+  /^viking:\/\/agent\/(?:.*\/)?memories(?:\/|$)/,
 ];
-const USER_STRUCTURE_DIRS = new Set(["memories"]);
-const AGENT_STRUCTURE_DIRS = new Set(["memories", "skills", "instructions", "workspaces"]);
-
-function md5Short(input: string): string {
-  return createHash("md5").update(input).digest("hex").slice(0, 12);
-}
 
 function isMemoryUri(uri: string): boolean {
   return MEMORY_URI_PATTERNS.some((p) => p.test(uri));
 }
 
 class OpenVikingClient {
-  private resolvedSpaceByScope: Partial<Record<ScopeName, string>> = {};
-  private runtimeIdentity: { userId: string; agentId: string } | null = null;
-
   constructor(
     private readonly baseUrl: string,
     private readonly apiKey: string,
     private readonly agentId: string,
+    private readonly account: string,
+    private readonly user: string,
     private readonly timeoutMs: number,
   ) {}
 
@@ -132,6 +124,8 @@ class OpenVikingClient {
       const headers = new Headers(init.headers ?? {});
       if (this.apiKey) headers.set("X-API-Key", this.apiKey);
       if (this.agentId) headers.set("X-OpenViking-Agent", this.agentId);
+      if (this.account) headers.set("X-OpenViking-Account", this.account);
+      if (this.user) headers.set("X-OpenViking-User", this.user);
       if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
 
       const response = await fetch(`${this.baseUrl}${path}`, {
@@ -166,92 +160,15 @@ class OpenVikingClient {
     }
   }
 
-  private async ls(uri: string): Promise<Array<Record<string, unknown>>> {
-    return this.request<Array<Record<string, unknown>>>(
-      `/api/v1/fs/ls?uri=${encodeURIComponent(uri)}&output=original`,
-    );
-  }
-
-  private async getRuntimeIdentity(): Promise<{ userId: string; agentId: string }> {
-    if (this.runtimeIdentity) return this.runtimeIdentity;
-    const fallback = { userId: "default", agentId: this.agentId || "default" };
-    try {
-      const status = await this.request<{ user?: unknown }>("/api/v1/system/status");
-      const userId =
-        typeof status.user === "string" && status.user.trim() ? status.user.trim() : "default";
-      this.runtimeIdentity = { userId, agentId: this.agentId || "default" };
-      return this.runtimeIdentity;
-    } catch {
-      this.runtimeIdentity = fallback;
-      return fallback;
-    }
-  }
-
-  private async resolveScopeSpace(scope: ScopeName): Promise<string> {
-    const cached = this.resolvedSpaceByScope[scope];
-    if (cached) return cached;
-
-    const identity = await this.getRuntimeIdentity();
-    const fallbackSpace =
-      scope === "user" ? identity.userId : md5Short(`${identity.userId}:${identity.agentId}`);
-    const reservedDirs = scope === "user" ? USER_STRUCTURE_DIRS : AGENT_STRUCTURE_DIRS;
-
-    try {
-      const entries = await this.ls(`viking://${scope}`);
-      const spaces = entries
-        .filter((e) => e?.isDir === true)
-        .map((e) => (typeof e.name === "string" ? e.name.trim() : ""))
-        .filter((n) => n && !n.startsWith(".") && !reservedDirs.has(n));
-
-      if (spaces.length > 0) {
-        if (spaces.includes(fallbackSpace)) {
-          this.resolvedSpaceByScope[scope] = fallbackSpace;
-          return fallbackSpace;
-        }
-        if (scope === "user" && spaces.includes("default")) {
-          this.resolvedSpaceByScope[scope] = "default";
-          return "default";
-        }
-        if (spaces.length === 1) {
-          this.resolvedSpaceByScope[scope] = spaces[0]!;
-          return spaces[0]!;
-        }
-      }
-    } catch { /* fall through */ }
-
-    this.resolvedSpaceByScope[scope] = fallbackSpace;
-    return fallbackSpace;
-  }
-
-  private async normalizeTargetUri(targetUri: string): Promise<string> {
-    const trimmed = targetUri.trim().replace(/\/+$/, "");
-    const match = trimmed.match(/^viking:\/\/(user|agent)(?:\/(.*))?$/);
-    if (!match) return trimmed;
-
-    const scope = match[1] as ScopeName;
-    const rawRest = (match[2] ?? "").trim();
-    if (!rawRest) return trimmed;
-
-    const parts = rawRest.split("/").filter(Boolean);
-    if (parts.length === 0) return trimmed;
-
-    const reservedDirs = scope === "user" ? USER_STRUCTURE_DIRS : AGENT_STRUCTURE_DIRS;
-    if (!reservedDirs.has(parts[0]!)) return trimmed;
-
-    const space = await this.resolveScopeSpace(scope);
-    return `viking://${scope}/${space}/${parts.join("/")}`;
-  }
-
   async find(
     query: string,
     options: { targetUri: string; limit: number; scoreThreshold?: number },
   ): Promise<FindResult> {
-    const normalizedTargetUri = await this.normalizeTargetUri(options.targetUri);
     return this.request<FindResult>("/api/v1/search/find", {
       method: "POST",
       body: JSON.stringify({
         query,
-        target_uri: normalizedTargetUri,
+        target_uri: options.targetUri,
         limit: options.limit,
         score_threshold: options.scoreThreshold,
       }),
@@ -441,7 +358,14 @@ async function searchBothScopes(
 // MCP Server
 // ---------------------------------------------------------------------------
 
-const client = new OpenVikingClient(config.baseUrl, config.apiKey, config.agentId, config.timeoutMs);
+const client = new OpenVikingClient(
+  config.baseUrl,
+  config.apiKey,
+  config.agentId,
+  config.account,
+  config.user,
+  config.timeoutMs,
+);
 
 const server = new McpServer({
   name: "openviking-memory",
