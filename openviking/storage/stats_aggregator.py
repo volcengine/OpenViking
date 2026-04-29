@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 from openviking.retrieve.memory_lifecycle import hotness_score
 from openviking.server.identity import RequestContext
 from openviking.storage.expr import Eq
+from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -71,15 +72,15 @@ class StatsAggregator:
             "oldest_memory_age_days": 0,
         }
 
-        # Fetch all memories once and group by category in Python
-        all_records = await self._query_all_memories(ctx)
+        # Fetch vector-indexed memories first, then supplement from the
+        # filesystem so stats still work when extracted memory leaf files have
+        # not been individually indexed into VikingDB.
+        all_records = await self._get_memory_records(ctx)
         grouped: Dict[str, List[Dict[str, Any]]] = {cat: [] for cat in categories}
         for record in all_records:
-            uri = record.get("uri", "")
-            for cat in categories:
-                if f"/{cat}/" in uri:
-                    grouped[cat].append(record)
-                    break
+            cat = _category_from_uri(record.get("uri", ""))
+            if cat in grouped:
+                grouped[cat].append(record)
 
         for cat in categories:
             records = grouped[cat]
@@ -177,6 +178,132 @@ class StatsAggregator:
         except Exception as e:
             logger.error("Error querying memories: %s", e)
             return []
+
+    async def _get_memory_records(
+        self,
+        ctx: RequestContext,
+    ) -> List[Dict[str, Any]]:
+        """Return memory records from VikingDB, supplemented by filesystem scan."""
+        records_by_uri: Dict[str, Dict[str, Any]] = {}
+        for record in await self._query_all_memories(ctx):
+            uri = record.get("uri", "")
+            if isinstance(uri, str) and uri:
+                records_by_uri[uri] = record
+
+        for record in await self._scan_memory_filesystem(ctx):
+            uri = record.get("uri", "")
+            if isinstance(uri, str) and uri and uri not in records_by_uri:
+                records_by_uri[uri] = record
+
+        return list(records_by_uri.values())
+
+    async def _scan_memory_filesystem(
+        self,
+        ctx: RequestContext,
+    ) -> List[Dict[str, Any]]:
+        """Scan memory roots directly from VikingFS as a stats fallback."""
+        viking_fs = get_viking_fs()
+        if viking_fs is None:
+            return []
+
+        memory_roots = [
+            f"viking://user/{ctx.user.user_space_name()}/memories",
+            f"viking://agent/{ctx.user.agent_space_name()}/memories",
+        ]
+        seen_dirs = set()
+        scanned: Dict[str, Dict[str, Any]] = {}
+
+        async def walk(dir_uri: str) -> None:
+            if dir_uri in seen_dirs:
+                return
+            seen_dirs.add(dir_uri)
+            try:
+                entries = await viking_fs.ls(dir_uri, show_all_hidden=True, ctx=ctx)
+            except Exception as e:
+                logger.debug("Failed to list memory directory %s: %s", dir_uri, e)
+                return
+
+            for entry in entries:
+                name = entry.get("name", "")
+                if not name or name in {".", ".."}:
+                    continue
+                if name.startswith(".") or name in {"_archive", ".relations.json"}:
+                    continue
+
+                uri = entry.get("uri") or f"{dir_uri.rstrip('/')}/{name}"
+                if entry.get("isDir", False):
+                    await walk(uri)
+                    continue
+
+                if not uri.endswith(".md"):
+                    continue
+                if name in {".overview.md", ".abstract.md"}:
+                    continue
+                if _category_from_uri(uri) is None:
+                    continue
+
+                scanned[uri] = await self._build_filesystem_record(viking_fs, uri, ctx)
+
+        for root in memory_roots:
+            await walk(root)
+
+        return list(scanned.values())
+
+    async def _build_filesystem_record(
+        self,
+        viking_fs,
+        uri: str,
+        ctx: RequestContext,
+    ) -> Dict[str, Any]:
+        """Build a lightweight stats record from a memory file on VikingFS."""
+        created_at = None
+        updated_at = None
+        active_count = 0
+
+        try:
+            from openviking.session.memory.utils.content import deserialize_metadata
+
+            raw = await viking_fs.read_file(uri, ctx=ctx)
+            metadata = deserialize_metadata(raw) or {}
+            created_at = metadata.get("created_at")
+            updated_at = metadata.get("updated_at")
+            active_count = int(metadata.get("active_count", 0) or 0)
+        except Exception as e:
+            logger.debug("Failed to read memory metadata for %s: %s", uri, e)
+
+        if created_at is None or updated_at is None:
+            try:
+                stat = await viking_fs.stat(uri, ctx=ctx)
+                mod_time = stat.get("modTime")
+                if created_at is None:
+                    created_at = mod_time
+                if updated_at is None:
+                    updated_at = mod_time
+            except Exception as e:
+                logger.debug("Failed to stat memory file %s: %s", uri, e)
+                pass
+
+        return {
+            "uri": uri,
+            "active_count": active_count,
+            "updated_at": updated_at,
+            "created_at": created_at,
+            "context_type": "memory",
+        }
+
+
+def _category_from_uri(uri: str) -> Optional[str]:
+    """Infer memory category from a memory URI."""
+    if not isinstance(uri, str) or not uri:
+        return None
+    if uri.endswith("/memories/profile.md"):
+        return "profile"
+    for cat in MEMORY_CATEGORIES:
+        if cat == "profile":
+            continue
+        if f"/{cat}/" in uri:
+            return cat
+    return None
 
 
 def _parse_datetime(value) -> Optional[datetime]:
