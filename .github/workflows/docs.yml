@@ -1,6 +1,12 @@
 name: 17. Docs
 
 on:
+  pull_request:
+    paths:
+      - 'docs/**'
+      - '.github/workflows/_docs.yml'
+      - '.github/workflows/_docs-deploy.yml'
+      - '.github/workflows/docs.yml'
   push:
     branches: [ main ]
     paths:
@@ -14,9 +20,16 @@ permissions:
   contents: read
 
 jobs:
+  docs-check:
+    name: Build Docs
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/_docs.yml
+    permissions:
+      contents: read
+
   docs-deploy:
     name: Build and Deploy Docs
-    if: github.repository == 'volcengine/OpenViking'
+    if: github.repository == 'volcengine/OpenViking' && github.event_name != 'pull_request'
     uses: ./.github/workflows/_docs-deploy.yml
     permissions:
       contents: read
