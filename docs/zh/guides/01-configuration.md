@@ -907,6 +907,17 @@ OpenViking 使用两个配置文件：
 
 配置文件放在默认路径时，OpenViking 自动加载，无需额外设置。
 
+#### `ovcli.conf` 解析顺序
+
+CLI 按以下顺序查找 `ovcli.conf`，使用第一个找到的文件：
+
+1. **环境变量** — `OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf`
+2. **当前目录** — CLI 启动时所在工作目录下的 `./ovcli.conf`
+3. **默认路径** — `~/.openviking/ovcli.conf`
+4. **内置默认值** — 以上均不存在时使用
+
+#### 指定配置文件路径
+
 如果配置文件在其他位置，有两种指定方式：
 
 ```bash

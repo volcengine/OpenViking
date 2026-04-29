@@ -75,7 +75,7 @@ client = ov.SyncHTTPClient(
 client.initialize()
 ```
 
-未显式传入 `url` 时，HTTP 客户端会自动从 `ovcli.conf` 读取连接信息。`ovcli.conf` 是 HTTP 客户端和 CLI 共享的配置文件，默认路径 `~/.openviking/ovcli.conf`，也可通过环境变量指定：
+未显式传入 `url` 时，HTTP 客户端会自动从 `ovcli.conf` 读取连接信息。`ovcli.conf` 是 HTTP 客户端和 CLI 共享的配置文件。CLI 会优先查找当前工作目录下的 `ovcli.conf`，然后回退到 `~/.openviking/ovcli.conf`（详见[解析顺序](../guides/01-configuration.md#ovcliconf-解析顺序)）。也可通过环境变量指定：
 
 ```bash
 export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf

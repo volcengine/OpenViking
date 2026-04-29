@@ -75,7 +75,7 @@ client = ov.SyncHTTPClient(
 client.initialize()
 ```
 
-When `url` is not explicitly provided, the HTTP client automatically reads connection information from `ovcli.conf`. `ovcli.conf` is a configuration file shared between the HTTP client and CLI. Default path: `~/.openviking/ovcli.conf`. You can also specify the path via environment variable:
+When `url` is not explicitly provided, the HTTP client automatically reads connection information from `ovcli.conf`. `ovcli.conf` is a configuration file shared between the HTTP client and CLI. The CLI looks for `ovcli.conf` in the current working directory first, then falls back to `~/.openviking/ovcli.conf` (see [resolution order](../guides/01-configuration.md#ovcliconf-resolution-order)). You can also specify the path via environment variable:
 
 ```bash
 export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
