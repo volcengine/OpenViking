@@ -1103,6 +1103,59 @@ viking://session/{user_id}/{session_id}/
     └── archive_002/
 ```
 
+### memory_diff.json 数据结构
+
+每次提交会在归档目录写入 `memory_diff.json`，记录所有记忆变更，便于审计和回溯：
+
+```json
+{
+  "archive_uri": "viking://session/{session_id}/history/archive_001",
+  "extracted_at": "2026-04-21T10:00:00Z",
+  "operations": {
+    "adds": [
+      {
+        "uri": "memory/user/xxx/identity.md",
+        "memory_type": "identity",
+        "after": "新创建的文件内容"
+      }
+    ],
+    "updates": [
+      {
+        "uri": "memory/user/xxx/context/project.md",
+        "memory_type": "context",
+        "before": "修改前的文件内容",
+        "after": "修改后的文件内容"
+      }
+    ],
+    "deletes": [
+      {
+        "uri": "memory/user/xxx/context/old.md",
+        "memory_type": "context",
+        "deleted_content": "被删除的文件内容"
+      }
+    ]
+  },
+  "summary": {
+    "total_adds": 1,
+    "total_updates": 1,
+    "total_deletes": 1
+  }
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `archive_uri` | str | 本次提交的归档目录 URI |
+| `extracted_at` | str | 提取时间的 ISO 8601 格式 |
+| `operations.adds` | array | 新增记忆（`uri`、`memory_type`、`after`） |
+| `operations.updates` | array | 修改记忆（`uri`、`memory_type`、`before`、`after`） |
+| `operations.deletes` | array | 删除记忆（`uri`、`memory_type`、`deleted_content`） |
+| `summary.total_adds` | int | 新增记忆数 |
+| `summary.total_updates` | int | 修改记忆数 |
+| `summary.total_deletes` | int | 删除记忆数 |
+
+即使没有记忆操作，也会写入空结构的 `memory_diff.json`（所有计数为零）。
+
 ---
 
 ## 记忆分类

@@ -36,17 +36,9 @@ from openviking.session.memory.utils.model import (
     model_to_dict,
 )
 from openviking.session.memory.utils.uri import (
-    ResolvedOperation,
     ResolvedOperations,
-    collect_allowed_directories,
-    collect_allowed_path_patterns,
-    extract_uri_fields_from_flat_model,
     generate_uri,
     is_uri_allowed,
-    is_uri_allowed_for_schema,
-    resolve_all_operations,
-    resolve_flat_model_uri,
-    validate_operations_uris,
     validate_uri_template,
 )
 
@@ -68,16 +60,8 @@ __all__ = [
     # URI
     "generate_uri",
     "validate_uri_template",
-    "collect_allowed_directories",
-    "collect_allowed_path_patterns",
     "is_uri_allowed",
-    "is_uri_allowed_for_schema",
-    "extract_uri_fields_from_flat_model",
-    "resolve_flat_model_uri",
-    "ResolvedOperation",
     "ResolvedOperations",
-    "resolve_all_operations",
-    "validate_operations_uris",
     # JSON Parser
     "extract_json_content",
     "remove_json_trailing_content",

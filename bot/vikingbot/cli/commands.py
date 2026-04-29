@@ -568,6 +568,7 @@ def prepare_agent_channel(
     logs: bool,
     eval: bool = False,
     sender: str | None = None,
+    memory_user: list[str] | None = None,
 ):
     """Prepare channel for agent command."""
     from vikingbot.channels.chat import ChatChannel, ChatChannelConfig
@@ -576,7 +577,7 @@ def prepare_agent_channel(
     channels = ChannelManager(bus)
     if message is not None:
         # Single message mode - use SingleTurnChannel for clean output
-        channel_config = SingleTurnChannelConfig()
+        channel_config = SingleTurnChannelConfig(memory_user=memory_user)
         channel = SingleTurnChannel(
             channel_config,
             bus,
@@ -590,7 +591,7 @@ def prepare_agent_channel(
         channels.add_channel(channel)
     else:
         # Interactive mode - use ChatChannel with thinking display
-        channel_config = ChatChannelConfig()
+        channel_config = ChatChannelConfig(memory_user=memory_user)
         channel = ChatChannel(
             channel_config,
             bus,
@@ -624,6 +625,9 @@ def chat(
     sender: str = typer.Option(
         None, "--sender", help="Sender ID, same usage as feishu channel sender"
     ),
+    memory_user: list[str] = typer.Option(
+        None, "--memory-user", help="User ID for memory retrieval (can be repeated)"
+    ),
 ):
     """Interact with the agent directly."""
     path = Path(config_path).expanduser() if config_path is not None else None
@@ -656,7 +660,7 @@ def chat(
     if session_id is None:
         session_id = get_or_create_machine_id()
     cron = prepare_cron(bus, quiet=is_single_turn)
-    channels = prepare_agent_channel(config, bus, message, session_id, markdown, logs, eval, sender)
+    channels = prepare_agent_channel(config, bus, message, session_id, markdown, logs, eval, sender, memory_user)
     agent_loop = prepare_agent_loop(
         config, bus, session_manager, cron, quiet=is_single_turn, eval=eval
     )

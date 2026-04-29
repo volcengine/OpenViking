@@ -116,8 +116,6 @@ def parse_memory_file_with_fields(content: str) -> Dict[str, Any]:
 
     # Remove the comment from content
     content_without_comment = re.sub(pattern, "", content).strip()
-
-    content_without_comment = truncate_content(content_without_comment)
     result["content"] = content_without_comment
 
     return result

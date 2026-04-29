@@ -341,9 +341,9 @@ class ContentWriteCoordinator:
     ) -> None:
         if mode == "replace" and self._context_type_for_uri(uri) == "memory":
             existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
-            _, metadata = deserialize_full(existing_raw)
-            if metadata:
-                metadata_with_content = metadata.copy()
+            existing = deserialize_full(existing_raw)
+            if existing.memory_fields:
+                metadata_with_content = existing.memory_fields.copy()
                 metadata_with_content["content"] = content
                 content = serialize_with_metadata(metadata_with_content)
             await self._viking_fs.write_file(uri, content, ctx=ctx)
@@ -351,7 +351,9 @@ class ContentWriteCoordinator:
 
         if mode == "append":
             existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
-            existing_content, metadata = deserialize_full(existing_raw)
+            existing = deserialize_full(existing_raw)
+            existing_content = existing.plain_content
+            metadata = existing.memory_fields
             updated_content = existing_content + content
             if metadata:
                 metadata_with_content = metadata.copy()

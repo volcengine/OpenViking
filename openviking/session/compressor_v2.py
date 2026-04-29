@@ -13,14 +13,23 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from openviking.core.context import Context
-from openviking.core.namespace import agent_space_fragment, user_space_fragment
+from openviking.core.namespace import (
+    agent_space_fragment,
+    user_space_fragment,
+    to_user_space,
+    to_agent_space,
+)
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater
-from openviking.session.memory.memory_updater import MemoryUpdateResult
+from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.utils.json_parser import JsonUtils
+from openviking.session.memory.utils.messages import parse_memory_file_with_fields
+from openviking.session.memory.utils.uri import render_template
 from openviking.storage import VikingDBManager
-from openviking.storage.viking_fs import get_viking_fs
+from openviking.storage.viking_fs import VikingFS, get_viking_fs
+from openviking.session.memory.dataclass import ResolvedOperations
+from openviking.session.memory.memory_updater import MemoryUpdateResult
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
@@ -38,8 +47,6 @@ class SessionCompressorV2:
     ):
         """Initialize session compressor."""
         self.vikingdb = vikingdb
-        # registry 现在由 provider 负责加载，这里不再初始化
-        # MemoryUpdater 会在 apply_operations 时从 provider 获取 registry
         pass
 
     def _get_or_create_react(
@@ -47,6 +54,8 @@ class SessionCompressorV2:
         ctx: Optional[RequestContext] = None,
         messages: Optional[List] = None,
         latest_archive_overview: str = "",
+        isolation_handler: Optional[MemoryIsolationHandler] = None,
+        transaction_handle=None,
     ) -> ExtractLoop:
         """Create new ExtractLoop instance with current ctx.
 
@@ -65,6 +74,10 @@ class SessionCompressorV2:
         context_provider = SessionExtractContextProvider(
             messages=messages,
             latest_archive_overview=latest_archive_overview,
+            isolation_handler=isolation_handler,
+            ctx=ctx,
+            viking_fs=viking_fs,
+            transaction_handle=transaction_handle,
         )
 
         return ExtractLoop(
@@ -72,6 +85,7 @@ class SessionCompressorV2:
             viking_fs=viking_fs,
             ctx=ctx,
             context_provider=context_provider,
+            isolation_handler=isolation_handler,
         )
 
     def _get_or_create_updater(self, registry, transaction_handle=None) -> MemoryUpdater:
@@ -92,7 +106,7 @@ class SessionCompressorV2:
         ctx: Optional[RequestContext] = None,
         strict_extract_errors: bool = False,
         latest_archive_overview: str = "",
-        archive_uri: str = "",
+        archive_uri: Optional[str] = None,
     ) -> List[Context]:
         """Extract long-term memories from messages using v2 templating system.
 
@@ -100,7 +114,13 @@ class SessionCompressorV2:
         The list length is used for stats in session.py.
 
         Args:
-            archive_uri: The archive URI for this extraction, used to write memory_diff.json.
+            messages: Messages to extract memories from.
+            user: User identifier.
+            session_id: Session ID.
+            ctx: Request context.
+            strict_extract_errors: If True, raise exceptions on extraction errors.
+            latest_archive_overview: Overview of latest archive for context.
+            archive_uri: Archive URI for writing memory_diff.json.
         """
 
         if not messages:
@@ -113,6 +133,7 @@ class SessionCompressorV2:
         tracer.info("Starting v2 memory extraction from conversation")
         tracer.info(f"messages={JsonUtils.dumps(messages)}")
         config = get_openviking_config()
+
         # Initialize default memory files (soul.md, identity.md) if not exist
         from openviking.session.memory.memory_type_registry import create_default_registry
 
@@ -144,12 +165,23 @@ class SessionCompressorV2:
             logger.warning("VikingFS or AGFS not available, running without lock mechanism")
 
         try:
+            # Create extract context from messages
+            from openviking.session.memory.memory_updater import ExtractContext
+
+            extract_context = ExtractContext(messages)
+
+            # Create MemoryIsolationHandler
+            isolation_handler = MemoryIsolationHandler(ctx, extract_context)
+            isolation_handler.prepare_messages()
             # 获取所有记忆 schema 目录并加锁（仅在有锁管理器时）
             orchestrator = self._get_or_create_react(
                 ctx=ctx,
                 messages=messages,
                 latest_archive_overview=latest_archive_overview,
+                isolation_handler=isolation_handler,
+                transaction_handle=transaction_handle,
             )
+            read_scope = isolation_handler.get_read_scope()
             if lock_manager:
                 # 基于 provider 的 schemas 生成目录列表
                 schemas = orchestrator.context_provider.get_memory_schemas(ctx)
@@ -157,17 +189,22 @@ class SessionCompressorV2:
                 for schema in schemas:
                     if not schema.directory:
                         continue
-                    user_space = user_space_fragment(ctx) if ctx and ctx.user else "default"
-                    agent_space = agent_space_fragment(ctx) if ctx and ctx.user else "default"
-                    # 使用 Jinja2 渲染 directory
-                    import jinja2
-
-                    env = jinja2.Environment(autoescape=False)
-                    template = env.from_string(schema.directory)
-                    dir_path = template.render(user_space=user_space, agent_space=agent_space)
-                    dir_path = viking_fs._uri_to_path(dir_path, ctx)
-                    if dir_path not in memory_schema_dirs:
-                        memory_schema_dirs.append(dir_path)
+                    for user_id in read_scope.user_ids:
+                        for agent_id in read_scope.agent_ids:
+                            dir_path = render_template(
+                                schema.directory,
+                                {
+                                    "user_space": to_user_space(
+                                        ctx.namespace_policy, user_id, agent_id
+                                    ),
+                                    "agent_space": to_agent_space(
+                                        ctx.namespace_policy, user_id, agent_id
+                                    ),
+                                },
+                            )
+                            dir_path = viking_fs._uri_to_path(dir_path, ctx)
+                            if dir_path not in memory_schema_dirs:
+                                memory_schema_dirs.append(dir_path)
                 logger.debug(f"Memory schema directories to lock: {memory_schema_dirs}")
 
                 retry_interval = config.memory.v2_lock_retry_interval_seconds
@@ -206,34 +243,14 @@ class SessionCompressorV2:
                 tracer.info("No memory operations generated")
                 return []
 
-            # Convert to legacy format for logging and apply_operations
-            if hasattr(operations, "to_legacy_operations"):
-                legacy = operations.to_legacy_operations()
-                write_uris = legacy.get("write_uris", [])
-                edit_uris = legacy.get("edit_uris", [])
-            else:
-                # Fallback for old format
-                write_uris = operations.write_uris
-                edit_uris = operations.edit_uris
-
-            # 从 orchestrator 获取 registry（从 provider 获取）
-            registry = orchestrator.context_provider._get_registry()
             updater = self._get_or_create_updater(registry, transaction_handle)
 
-            tracer.info(
-                f"Generated memory operations: write={len(write_uris)}, "
-                f"edit={len(edit_uris)} "
-                f"delete={len(operations.delete_uris)}"
-            )
-
-            # Create extract context from messages
-            from openviking.session.memory.memory_updater import ExtractContext
-
-            extract_context = ExtractContext(messages)
-
-            # Apply operations
+            # Apply operations with isolation_handler
             result = await updater.apply_operations(
-                operations, ctx, extract_context=extract_context
+                operations,
+                ctx,
+                extract_context=extract_context,
+                isolation_handler=isolation_handler,
             )
 
             tracer.info(
@@ -241,6 +258,22 @@ class SessionCompressorV2:
                 f"edited={len(result.edited_uris)}, deleted={len(result.deleted_uris)}, "
                 f"errors={len(result.errors)}"
             )
+
+            # Write memory_diff.json to archive directory
+            if archive_uri and viking_fs:
+                memory_diff = await self._build_memory_diff(
+                    result=result,
+                    operations=operations,
+                    viking_fs=viking_fs,
+                    ctx=ctx,
+                    archive_uri=archive_uri,
+                )
+                await viking_fs.write_file(
+                    uri=f"{archive_uri}/memory_diff.json",
+                    content=json.dumps(memory_diff, ensure_ascii=False, indent=4),
+                    ctx=ctx,
+                )
+                logger.info(f"Wrote memory_diff.json to {archive_uri}")
 
             # Report telemetry stats (matching v1 pattern)
             telemetry = get_current_telemetry()
@@ -252,10 +285,6 @@ class SessionCompressorV2:
             telemetry.set("memory.extract.merged", len(result.edited_uris))
             telemetry.set("memory.extract.deleted", len(result.deleted_uris))
             telemetry.set("memory.extract.skipped", len(result.errors))
-
-            # Build and write memory_diff.json to archive
-            if archive_uri and result.has_changes():
-                await self._write_memory_diff(result, viking_fs, ctx, archive_uri)
 
             # Build Context objects for stats in session.py
             contexts: List[Context] = []
@@ -305,32 +334,108 @@ class SessionCompressorV2:
                 except Exception as e:
                     logger.warning(f"Failed to release transaction lock: {e}")
 
-    def _build_memory_diff(self, result: MemoryUpdateResult, archive_uri: str) -> Dict[str, Any]:
-        """Build memory_diff.json structure from MemoryUpdateResult.
+    async def _build_memory_diff(
+        self,
+        result: MemoryUpdateResult,
+        operations: ResolvedOperations,
+        viking_fs: VikingFS,
+        ctx: RequestContext,
+        archive_uri: str = "",
+    ) -> Dict[str, Any]:
+        """Build memory_diff.json structure from operations and result.
 
-        Uses before/after content already captured during _apply_edit/_apply_delete.
+        Args:
+            result: Memory update result containing written/edited/deleted URIs.
+            operations: Resolved operations containing original content.
+            viking_fs: VikingFS instance for reading file contents.
+            ctx: Request context.
+            archive_uri: The archive URI for this extraction.
+
+        Returns:
+            Dictionary containing memory_diff structure.
         """
         adds = []
-        for entry in result.adds:
-            adds.append({
-                "uri": entry.uri,
-                "after": entry.after,
-            })
-
         updates = []
-        for entry in result.updates:
-            updates.append({
-                "uri": entry.uri,
-                "before": entry.before,
-                "after": entry.after,
-            })
-
         deletes = []
-        for entry in result.deletes:
-            deletes.append({
-                "uri": entry.uri,
-                "deleted_content": entry.deleted_content,
-            })
+
+        # Build lookup maps for efficient access
+        upsert_by_uri = {op.uris[0]: op for op in operations.upsert_operations if op.uris}
+        delete_by_uri = {dc.uri: dc for dc in operations.delete_file_contents}
+
+        # Process written_uris - distinguish between add and update
+        # Use old_memory_file_content from the operation to determine if this is
+        # an update (old content existed) or a new add.
+        for uri in result.written_uris:
+            op = upsert_by_uri.get(uri)
+            memory_type = op.memory_type if op else self._get_memory_type_from_uri(uri)
+            old_file = op.old_memory_file_content if op else None
+
+            if old_file:
+                # Old content existed, this is an update
+                raw_before = old_file.plain_content
+                parsed = parse_memory_file_with_fields(raw_before)
+                updates.append(
+                    {
+                        "uri": uri,
+                        "memory_type": memory_type,
+                        "before": parsed.get("content", raw_before),
+                        "after": "",  # Will be filled after
+                    }
+                )
+            else:
+                # No old content, this is a new add
+                adds.append(
+                    {
+                        "uri": uri,
+                        "memory_type": memory_type,
+                        "after": "",  # Will be filled after
+                    }
+                )
+
+        # Process edited_uris - these are updates
+        for uri in result.edited_uris:
+            op = upsert_by_uri.get(uri)
+            memory_type = op.memory_type if op else self._get_memory_type_from_uri(uri)
+            old_content = None
+            if op and op.old_memory_file_content:
+                old_content = op.old_memory_file_content.plain_content
+            raw_before = old_content or ""
+            parsed = parse_memory_file_with_fields(raw_before)
+            updates.append(
+                {
+                    "uri": uri,
+                    "memory_type": memory_type,
+                    "before": parsed.get("content", raw_before) if raw_before else "",
+                    "after": "",  # Will be filled after
+                }
+            )
+
+        # Process deleted_uris - from delete_file_contents
+        for uri in result.deleted_uris:
+            deleted_content = None
+            dc = delete_by_uri.get(uri)
+            memory_type = dc.memory_fields.get("memory_type", "unknown") if dc else "unknown"
+            if dc:
+                deleted_content = dc.plain_content
+            raw_deleted = deleted_content or ""
+            parsed = parse_memory_file_with_fields(raw_deleted)
+            deletes.append(
+                {
+                    "uri": uri,
+                    "memory_type": memory_type,
+                    "deleted_content": parsed.get("content", raw_deleted),
+                }
+            )
+
+        # Read new content for adds and updates
+        for item in adds + updates:
+            try:
+                content = await viking_fs.read_file(uri=item["uri"], ctx=ctx)
+                # Strip MEMORY_FIELDS comment from content
+                parsed = parse_memory_file_with_fields(content)
+                item["after"] = parsed.get("content", content)
+            except Exception:
+                pass
 
         return {
             "archive_uri": archive_uri,
@@ -347,22 +452,21 @@ class SessionCompressorV2:
             },
         }
 
-    async def _write_memory_diff(
-        self,
-        result: MemoryUpdateResult,
-        viking_fs: Any,
-        ctx: RequestContext,
-        archive_uri: str,
-    ) -> None:
-        """Build and write memory_diff.json to the archive directory."""
-        try:
-            diff = self._build_memory_diff(result, archive_uri)
-            diff_json = json.dumps(diff, ensure_ascii=False, indent=2)
-            diff_uri = f"{archive_uri}/memory_diff.json"
-            await viking_fs.write_file(diff_uri, diff_json, ctx=ctx)
-            logger.info(f"Wrote memory_diff.json to {diff_uri}: "
-                        f"adds={diff['summary']['total_adds']}, "
-                        f"updates={diff['summary']['total_updates']}, "
-                        f"deletes={diff['summary']['total_deletes']}")
-        except Exception as e:
-            logger.warning(f"Failed to write memory_diff.json: {e}")
+    def _get_memory_type_from_uri(self, uri: str) -> str:
+        """Extract memory type from URI.
+
+        Examples:
+            memory/user/xxx/identity.md -> identity
+            memory/user/xxx/context/project.md -> context
+
+        Args:
+            uri: Memory file URI.
+
+        Returns:
+            Memory type (filename without extension) or 'unknown'.
+        """
+        parts = uri.split("/")
+        for part in parts:
+            if part.endswith(".md"):
+                return part.replace(".md", "")
+        return "unknown"

@@ -173,7 +173,9 @@ class VikingClient:
         result = await self.read_content(uri=uri, level="read")
         return result
 
-    async def search(self, query: str, target_uri: Optional[str] = "", limit: int = 10) -> Dict[str, Any]:
+    async def search(
+        self, query: str, target_uri: str | list[str] | None = None, limit: int = 10
+    ) -> Dict[str, Any]:
         # session = self.client.session()
 
         result = await self.client.search(query, target_uri=target_uri, limit=limit)
@@ -300,40 +302,40 @@ class VikingClient:
             return None
 
     async def search_memory(
-        self, query: str, user_id: str, agent_user_id: str, limit: int = 10
+        self, query: str, user_ids: str | list[str], agent_user_id: str, limit: int = 10
     ) -> dict[str, list[Any]]:
         """通过上下文消息，检索viking 的user、Agent memory。
 
-        首先检查用户是否存在，如不存在则初始化用户并返回空结果。
-        用户存在时，再进行记忆检索。
+        Args:
+            query: Search query
+            user_ids: Single user_id (str) or list of user_ids for memory retrieval
+            agent_user_id: Agent user ID for agent memory space
+            limit: Max results per user
         """
-        # Step 1: 检查用户是否存在
-        user_exists = await self._check_user_exists(user_id)
+        # Normalize user_ids to list
+        if isinstance(user_ids, str):
+            user_ids = [user_ids]
 
-        # Step 2: 如果用户不存在，初始化用户并直接返回
-        if not user_exists:
-            await self._initialize_user(user_id)
-            return {
-                "user_memory": [],
-                "agent_memory": [],
-            }
-        # Step 3: 用户存在，查询记忆
-        uri_user_memory = f"viking://user/{user_id}/memories/"
-        user_memory = await self.client.find(
-            query=query,
-            target_uri=uri_user_memory,
-            limit=limit,
-        )
+        # Build target URIs for all users and agent
+        user_uris = [f"viking://user/{user_id}/memories/" for user_id in user_ids]
         agent_space_name = self.get_agent_space_name(agent_user_id)
-        uri_agent_memory = f"viking://agent/{agent_space_name}/memories/"
-        agent_memory = await self.client.find(
-            query=query,
-            target_uri=uri_agent_memory,
-            limit=limit,
-        )
+        agent_uri = f"viking://agent/{agent_space_name}/memories/"
+
+        # Query each URI and collect results
+        all_user_memories = []
+        all_agent_memories = []
+
+        for uri in user_uris + [agent_uri]:
+            result = await self.search(query=query, target_uri=uri, limit=limit)
+            memories = result.get("memories", [])
+            if uri.startswith("viking://agent/"):
+                all_agent_memories.extend(memories)
+            else:
+                all_user_memories.extend(memories)
+
         return {
-            "user_memory": user_memory.memories if hasattr(user_memory, "memories") else [],
-            "agent_memory": agent_memory.memories if hasattr(agent_memory, "memories") else [],
+            "user_memory": all_user_memories,
+            "agent_memory": all_agent_memories,
         }
 
     async def grep(

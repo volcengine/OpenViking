@@ -160,7 +160,7 @@ Skills with available="false" need dependencies installed first - you can try in
         session_key: SessionKey,
         current_message: str,
         sender_id: str,
-        memory_user: str,
+        memory_users: list[str] | None = None,
         ov_tools_enable: bool = True,
     ) -> str:
         """
@@ -194,9 +194,10 @@ Skills with available="false" need dependencies installed first - you can try in
         # Viking agent memory (only if ov tools are enabled)
         if ov_tools_enable:
             start = _time.time()
-            user = memory_user or sender_id
+            # Use provided memory_users or fall back to [sender_id]
+            search_user_ids = memory_users if memory_users else [sender_id]
             viking_memory = await self.memory.get_viking_memory_context(
-                current_message=current_message, workspace_id=workspace_id, sender_id=user
+                current_message=current_message, workspace_id=workspace_id, sender_id=sender_id, user_ids=search_user_ids
             )
             logger.info(f"viking_memory={viking_memory}")
             cost = round(_time.time() - start, 2)
@@ -278,7 +279,7 @@ IMPORTANT:
         session_key: SessionKey | None = None,
         ov_tools_enable: bool = True,
         profile_user_list: list[str] | None = None,
-        memory_user: str | None = None,
+        memory_users: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """
         Build the complete message list for an LLM call.
@@ -290,7 +291,7 @@ IMPORTANT:
             session_key: Optional session key.
             ov_tools_enable: Whether to enable OpenViking tools and memory.
             profile_user_list: List of additional user IDs to fetch profiles for.
-            memory_user: Optional user ID to fetch memory for.
+            memory_users: Optional list of user IDs to fetch memory for.
 
         Returns:
             List of messages including system prompt.
@@ -313,7 +314,7 @@ IMPORTANT:
             session_key,
             current_message,
             self._sender_id,
-            memory_user,
+            memory_users,
             ov_tools_enable=ov_tools_enable,
         )
         messages.append({"role": "user", "content": user_info})

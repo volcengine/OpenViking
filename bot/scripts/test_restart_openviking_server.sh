@@ -7,7 +7,7 @@ set -e
 
 # Default values
 PORT="1934"
-BOT_PORT="18790"
+BOT_PORT="18890"
 TEST_CONFIG="$HOME/.openviking_test/ov.conf"
 TEST_DATA_DIR="$HOME/.openviking_test/data"
 

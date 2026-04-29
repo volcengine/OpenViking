@@ -1105,6 +1105,59 @@ viking://session/{user_id}/{session_id}/
     +-- archive_002/
 ```
 
+### memory_diff.json Structure
+
+Each commit writes a `memory_diff.json` to the archive directory, recording all memory changes for auditing and rollback:
+
+```json
+{
+  "archive_uri": "viking://session/{session_id}/history/archive_001",
+  "extracted_at": "2026-04-21T10:00:00Z",
+  "operations": {
+    "adds": [
+      {
+        "uri": "memory/user/xxx/identity.md",
+        "memory_type": "identity",
+        "after": "Newly created file content"
+      }
+    ],
+    "updates": [
+      {
+        "uri": "memory/user/xxx/context/project.md",
+        "memory_type": "context",
+        "before": "Content before modification",
+        "after": "Content after modification"
+      }
+    ],
+    "deletes": [
+      {
+        "uri": "memory/user/xxx/context/old.md",
+        "memory_type": "context",
+        "deleted_content": "Deleted file content"
+      }
+    ]
+  },
+  "summary": {
+    "total_adds": 1,
+    "total_updates": 1,
+    "total_deletes": 1
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `archive_uri` | str | Archive directory URI for this commit |
+| `extracted_at` | str | ISO 8601 timestamp of extraction |
+| `operations.adds` | array | New memories created (`uri`, `memory_type`, `after`) |
+| `operations.updates` | array | Modified memories (`uri`, `memory_type`, `before`, `after`) |
+| `operations.deletes` | array | Deleted memories (`uri`, `memory_type`, `deleted_content`) |
+| `summary.total_adds` | int | Number of new memories |
+| `summary.total_updates` | int | Number of modified memories |
+| `summary.total_deletes` | int | Number of deleted memories |
+
+An empty `memory_diff.json` (all counts zero) is written even when no memory operations occurred.
+
 ---
 
 ## Memory Categories
