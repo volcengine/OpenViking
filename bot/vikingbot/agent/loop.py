@@ -263,7 +263,7 @@ class AgentLoop:
         publish_events: bool = True,
         sender_id: str | None = None,
         ov_tools_enable: bool = True,
-    ) -> tuple[str | None, list[dict], dict[str, int], int]:
+    ) -> tuple[str | None, str | None, list[dict], dict[str, int], int]:
         """
         Run the core agent loop: call LLM, execute tools, repeat until done.
 
@@ -274,10 +274,11 @@ class AgentLoop:
             ov_tools_enable: Whether to enable OpenViking tools for this session
 
         Returns:
-            tuple of (final_content, tools_used)
+            tuple of (final_content, final_reasoning_content, tools_used, token_usage, iteration)
         """
         iteration = 0
         final_content = None
+        final_reasoning_content = None
         tools_used: list[dict] = []
         token_usage = {
             "prompt_tokens": 0,
@@ -319,6 +320,7 @@ class AgentLoop:
                 )
 
             if response.has_tool_calls:
+                final_reasoning_content = response.reasoning_content
                 args_list = [tc.arguments for tc in response.tool_calls]
                 tool_call_dicts = [
                     {
@@ -402,6 +404,7 @@ class AgentLoop:
                 )
             else:
                 final_content = response.content
+                final_reasoning_content = response.reasoning_content
                 break
 
         if final_content is None or (isinstance(final_content, str) and not final_content.strip()):
@@ -410,7 +413,7 @@ class AgentLoop:
             else:
                 final_content = "I've completed processing but have no response to give."
 
-        return final_content, tools_used, token_usage, iteration
+        return final_content, final_reasoning_content, tools_used, token_usage, iteration
 
     @trace(
         name="process_message",
@@ -595,8 +598,9 @@ class AgentLoop:
             )
 
             # Build initial messages (use get_history for LLM-formatted messages)
+            provider_name = self.config.get_provider_name(self.model) if self.config else None
             messages = await message_context.build_messages(
-                history=session.get_history(),
+                history=session.get_history(provider_name=provider_name),
                 current_message=msg.content,
                 media=msg.media if msg.media else None,
                 session_key=msg.session_key,
@@ -608,7 +612,7 @@ class AgentLoop:
             # logger.info(f"New messages: {json.dumps(messages, indent=4)}")
 
             # Run agent loop
-            final_content, tools_used, token_usage, iteration = await self._run_agent_loop(
+            final_content, final_reasoning_content, tools_used, token_usage, iteration = await self._run_agent_loop(
                 messages=messages,
                 session_key=session_key,
                 publish_events=True,
@@ -629,6 +633,7 @@ class AgentLoop:
                     tools_used=tools_used if tools_used else None,
                     token_usage=token_usage,
                     sender_id=msg.sender_id,
+                    reasoning_content=final_reasoning_content,
                 )
                 await self.sessions.save(session)
 
@@ -699,8 +704,9 @@ class AgentLoop:
             profile_user_list = getattr(channel_config, "profile_user_list", [])
 
         # Build messages with the announce content
+        provider_name = self.config.get_provider_name(self.model) if self.config else None
         messages = await self.context.build_messages(
-            history=session.get_history(),
+            history=session.get_history(provider_name=provider_name),
             current_message=msg.content,
             session_key=msg.session_key,
             ov_tools_enable=ov_tools_enable,
@@ -708,7 +714,7 @@ class AgentLoop:
         )
 
         # Run agent loop (no events published)
-        final_content, tools_used, token_usage, iteration = await self._run_agent_loop(
+        final_content, final_reasoning_content, tools_used, token_usage, iteration = await self._run_agent_loop(
             messages=messages,
             session_key=msg.session_key,
             publish_events=False,
@@ -721,7 +727,10 @@ class AgentLoop:
         # Save to session (mark as system message in history)
         session.add_message("user", f"[System: {msg.sender_id}] {msg.content}")
         session.add_message(
-            "assistant", final_content, tools_used=tools_used if tools_used else None
+            "assistant",
+            final_content,
+            tools_used=tools_used if tools_used else None,
+            reasoning_content=final_reasoning_content,
         )
         await self.sessions.save(session)
 

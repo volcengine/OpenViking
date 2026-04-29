@@ -10,6 +10,7 @@ from typing import Any
 from loguru import logger
 
 from vikingbot.config.schema import SessionKey
+from vikingbot.providers.registry import find_by_name
 from vikingbot.sandbox.manager import SandboxManager
 from vikingbot.utils.helpers import ensure_dir, ensure_non_empty_assistant_content
 
@@ -40,12 +41,15 @@ class Session:
         self.messages.append(msg)
         self.updated_at = datetime.now()
 
-    def get_history(self, max_messages: int = 50) -> list[dict[str, Any]]:
+    def get_history(
+        self, max_messages: int = 50, provider_name: str | None = None
+    ) -> list[dict[str, Any]]:
         """
         Get message history for LLM context.
 
         Args:
             max_messages: Maximum messages to return.
+            provider_name: Optional provider name for provider-specific history fields.
 
         Returns:
             List of messages in LLM format.
@@ -55,14 +59,22 @@ class Session:
             self.messages[-max_messages:] if len(self.messages) > max_messages else self.messages
         )
 
-        # Convert to LLM format (just role and content)
+        provider_spec = find_by_name(provider_name) if provider_name else None
+        include_reasoning_content = bool(provider_spec and provider_spec.name == "deepseek")
+
         out: list[dict[str, Any]] = []
         for m in recent:
             role = m["role"]
             content: Any = m.get("content", "")
             if role == "assistant" and isinstance(content, str):
                 content = ensure_non_empty_assistant_content(content)
-            out.append({"role": role, "content": content})
+
+            msg = {"role": role, "content": content}
+
+            if role == "assistant" and include_reasoning_content and m.get("reasoning_content"):
+                msg["reasoning_content"] = m["reasoning_content"]
+
+            out.append(msg)
         return out
 
     def clear(self) -> None:
