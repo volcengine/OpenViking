@@ -198,6 +198,9 @@ class QueueManager:
         finally:
             loop.close()
 
+    # Maximum time a single queue task may run before being cancelled.
+    _TASK_TTL_SECONDS: float = 600.0  # 10 minutes
+
     async def _worker_async_concurrent(
         self, queue: NamedQueue, stop_event: threading.Event, max_concurrent: int
     ) -> None:
@@ -212,9 +215,20 @@ class QueueManager:
             async with sem:
                 msg_id = data.get("id", "") if isinstance(data, dict) else ""
                 try:
-                    await queue.process_dequeued(data)
+                    await asyncio.wait_for(
+                        queue.process_dequeued(data),
+                        timeout=self._TASK_TTL_SECONDS,
+                    )
                     # Ack after successful processing (delete from persistent storage).
                     await queue.ack(msg_id)
+                except asyncio.TimeoutError:
+                    queue._on_process_error(
+                        f"Task timed out after {self._TASK_TTL_SECONDS}s", data
+                    )
+                    logger.error(
+                        f"[QueueManager] Task timeout for {queue.name} "
+                        f"(msg_id={msg_id}, TTL={self._TASK_TTL_SECONDS}s)"
+                    )
                 except Exception as e:
                     # Handler did not call report_error; decrement in_progress manually.
                     # Do NOT ack — let RecoverStale re-queue on next startup.
