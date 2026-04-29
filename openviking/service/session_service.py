@@ -202,20 +202,31 @@ class SessionService:
             self._record_lifecycle_metric("delete", "error")
             raise NotFoundError(session_id, "session")
 
-    async def commit(self, session_id: str, ctx: RequestContext) -> Dict[str, Any]:
+    async def commit(
+        self,
+        session_id: str,
+        ctx: RequestContext,
+        keep_recent_count: int = 0,
+    ) -> Dict[str, Any]:
         """Commit a session (archive messages and extract memories).
 
         Delegates to commit_async() for true non-blocking behavior.
 
         Args:
             session_id: Session ID to commit
+            keep_recent_count: See :meth:`commit_async`.
 
         Returns:
             Commit result
         """
-        return await self.commit_async(session_id, ctx)
+        return await self.commit_async(session_id, ctx, keep_recent_count=keep_recent_count)
 
-    async def commit_async(self, session_id: str, ctx: RequestContext) -> Dict[str, Any]:
+    async def commit_async(
+        self,
+        session_id: str,
+        ctx: RequestContext,
+        keep_recent_count: int = 0,
+    ) -> Dict[str, Any]:
         """Async commit a session.
 
         Phase 1 (archive) always runs inline.  Phase 2 (memory extraction)
@@ -223,6 +234,8 @@ class SessionService:
 
         Args:
             session_id: Session ID to commit
+            keep_recent_count: Number of most-recent messages to keep in the
+                live session after commit. ``0`` archives everything.
 
         Returns:
             Commit result with keys: session_id, status, task_id,
@@ -230,7 +243,7 @@ class SessionService:
         """
         self._ensure_initialized()
         session = await self.get(session_id, ctx)
-        result = await session.commit_async()
+        result = await session.commit_async(keep_recent_count=keep_recent_count)
         self._record_lifecycle_metric("commit", "ok" if result.get("status") else "error")
         self._record_archive_metric("ok" if result.get("archived") else "skip")
         return result
