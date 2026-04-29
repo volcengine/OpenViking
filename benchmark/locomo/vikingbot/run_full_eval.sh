@@ -32,6 +32,7 @@ done
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKIP_IMPORT=false
+GROUP_CHAT=false
 AUTO_COMMIT=false
 
 if command -v python3 >/dev/null 2>&1; then
@@ -104,7 +105,7 @@ for arg in "$@"; do
     if [ "$arg" = "--skip-import" ]; then
         SKIP_IMPORT=true
     elif [ "$arg" = "--group-chat" ]; then
-        :  # 默认 group-chat，忽略此开关
+        GROUP_CHAT=true
     elif [ "$arg" = "--auto-commit" ]; then
         AUTO_COMMIT=true
     fi
@@ -119,7 +120,10 @@ for arg in "$@"; do
 done
 
 # 构建通用选项
-COMMON_OPTS=("--group-chat")
+COMMON_OPTS=()
+if [ "$GROUP_CHAT" = "true" ]; then
+    COMMON_OPTS+=("--group-chat")
+fi
 
 SAMPLE=${ARGS[0]}
 QUESTION_INDEX=${ARGS[1]}
