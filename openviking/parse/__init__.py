@@ -18,6 +18,8 @@ from openviking.parse.parsers.html import HTMLParser
 from openviking.parse.parsers.markdown import MarkdownParser
 from openviking.parse.parsers.pdf import PDFParser
 from openviking.parse.parsers.text import TextParser
+from openviking.parse.plugin_base import ParserProvider
+from openviking.parse.plugin_manager import ParserPluginManager
 from openviking.parse.registry import ParserRegistry, get_registry, parse
 from openviking.parse.tree_builder import TreeBuilder
 from openviking.parse.vlm import VLMProcessor
@@ -35,6 +37,8 @@ __all__ = [
     "PDFParser",
     "HTMLParser",
     "DocumentConverter",
+    "ParserProvider",
+    "ParserPluginManager",
     # Custom parser support
     "CustomParserProtocol",
     "CustomParserWrapper",
