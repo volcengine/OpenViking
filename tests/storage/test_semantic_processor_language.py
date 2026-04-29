@@ -140,6 +140,67 @@ class TestOverviewGenerationFlow:
         )
 
 
+class TestSemanticPromptLanguageContract:
+    """语义摘要模板的语言约束测试。"""
+
+    @pytest.mark.parametrize(
+        "prompt_id,variables",
+        [
+            (
+                "semantic.file_summary",
+                {
+                    "file_name": "notes.txt",
+                    "content": "这是中文说明，API 名称保持英文。",
+                    "output_language": "zh-CN",
+                },
+            ),
+            (
+                "semantic.document_summary",
+                {
+                    "file_name": "guide.md",
+                    "content": "# 中文指南\n\n包含 English API 名称。",
+                    "output_language": "zh-CN",
+                },
+            ),
+        ],
+    )
+    def test_summary_prompts_require_dominant_source_language(self, prompt_id, variables):
+        prompt = render_prompt(prompt_id, variables)
+
+        assert "matching the dominant natural language used in the source content" in prompt
+        assert (
+            "Do not default to English unless the source content is predominantly English" in prompt
+        )
+        assert (
+            "Keep unavoidable file names, code identifiers, API names, and quoted literals in their original form"
+            in prompt
+        )
+
+    def test_overview_prompt_requires_localized_headings_and_navigation(self):
+        prompt = render_prompt(
+            "semantic.overview_generation",
+            {
+                "dir_name": "test_dir",
+                "file_summaries": "[1] docs.md: 这是中文文档，包含 API 说明",
+                "children_abstracts": "- api/: 中文接口说明",
+                "output_language": "zh-CN",
+            },
+        )
+
+        assert (
+            "Write the entire overview in zh-CN, matching the dominant natural language used across the provided summaries and abstracts"
+            in prompt
+        )
+        assert (
+            "Do not default the title, section headings, navigation text, or descriptions to English unless the dominant source language is English"
+            in prompt
+        )
+        assert (
+            "Use headings and navigation labels translated into zh-CN while preserving the markdown hierarchy above."
+            in prompt
+        )
+
+
 class LanguageAwareMockVLM:
     """语言感知的 MockVLM，根据 prompt 中的 Output Language 返回对应语言的响应。"""
 
