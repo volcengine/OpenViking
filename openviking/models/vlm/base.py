@@ -65,6 +65,7 @@ class VLMBase(ABC):
         self.max_tokens = config.get("max_tokens")
         self.extra_headers = config.get("extra_headers")
         self.stream = config.get("stream", False)
+        self.enable_thinking = config.get("enable_thinking")
 
         # Token usage tracking
         self._token_tracker = TokenUsageTracker()
@@ -273,6 +274,18 @@ class VLMBase(ABC):
         if isinstance(response, str):
             return response
         return response.choices[0].message.content or ""
+
+    def _resolve_enable_thinking_value(
+        self, thinking: bool, auto_supported: bool
+    ) -> Optional[bool]:
+        """Return the enable_thinking payload value, or None to omit the field."""
+        if self.enable_thinking is True:
+            return bool(thinking)
+        if self.enable_thinking is False:
+            return None
+        if auto_supported:
+            return bool(thinking)
+        return None
 
 
 class VLMFactory:

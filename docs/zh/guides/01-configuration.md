@@ -510,6 +510,7 @@ openviking-server doctor
 | `model` | str | 模型名称 |
 | `api_base` | str | API 端点（可选） |
 | `thinking` | bool | 启用思考模式（仅对部分火山模型生效，默认：`false`） |
+| `enable_thinking` | bool\|null | 控制 OpenAI 兼容和 LiteLLM backend 是否发送 `extra_body.enable_thinking`；`null` 表示保持 backend 默认的 provider 判定行为 |
 | `max_concurrent` | int | 语义处理阶段 LLM 最大并发调用数（默认：`100`） |
 | `max_retries` | int | VLM provider 瞬时错误的最大重试次数（默认：`3`；`0` 表示禁用重试） |
 | `timeout` | float | 单次 VLM API 请求的 HTTP 超时时间（秒），传递给底层 OpenAI/LiteLLM 客户端。慢端点（如 DashScope、本地推理）可调大。必须 `> 0`（默认：`60.0`） |
@@ -517,6 +518,8 @@ openviking-server doctor
 | `stream` | bool | 启用流式模式（OpenAI 兼容 provider 可用，默认：`false`） |
 
 `vlm.max_retries` 仅对瞬时错误生效，例如 `429`、`5xx`、超时和连接错误；认证、鉴权、欠费等永久错误不会自动重试。退避策略为指数退避，初始延迟 `0.5s`，上限 `8s`，并带随机抖动。
+
+将 `vlm.enable_thinking` 设为 `true` 可强制在 OpenAI 兼容或 LiteLLM backend 上发送 `extra_body.enable_thinking`，设为 `false` 则完全禁止发送该字段。不设置时会保持现有的 provider 自动判定逻辑。
 
 **可用模型**
 
@@ -1154,6 +1157,7 @@ openviking add-resource ./docs --exclude "*.tmp"
     "model": "string",
     "api_base": "string",
     "thinking": false,
+    "enable_thinking": null,
     "max_concurrent": 100,
     "max_retries": 3,
     "extra_headers": {},

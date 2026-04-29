@@ -139,8 +139,16 @@ class OpenAIVLM(VLMBase):
 
     def _apply_provider_specific_extra_body(self, kwargs: Dict[str, Any], thinking: bool) -> None:
         """Attach provider-specific raw body parameters understood by compatible APIs."""
-        if self._supports_enable_thinking():
-            kwargs["extra_body"] = {"enable_thinking": bool(thinking)}
+        enable_thinking = self._resolve_enable_thinking_value(
+            thinking=thinking,
+            auto_supported=self._supports_enable_thinking(),
+        )
+        if enable_thinking is None:
+            return
+
+        extra_body = dict(kwargs.get("extra_body", {}))
+        extra_body["enable_thinking"] = enable_thinking
+        kwargs["extra_body"] = extra_body
 
     def _update_token_usage_from_response(
         self,
