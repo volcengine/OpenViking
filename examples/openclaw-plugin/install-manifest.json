@@ -10,7 +10,8 @@
     "required": [
       "index.ts",
       "config.ts",
-      "package.json"
+      "package.json",
+      "openclaw.plugin.json"
     ],
     "optional": [
       "context-engine.ts",
@@ -22,7 +23,6 @@
       "session-transcript-repair.ts",
       "runtime-utils.ts",
       "commands/setup.ts",
-      "openclaw.plugin.json",
       "tsconfig.json",
       "package-lock.json",
       ".gitignore"

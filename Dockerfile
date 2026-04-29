@@ -118,8 +118,9 @@ WORKDIR /app
 
 COPY --from=py-builder /app/.venv /app/.venv
 COPY docker/openviking-console-entrypoint.sh /usr/local/bin/openviking-console-entrypoint
+COPY docker/pending_health_server.py /usr/local/bin/openviking-pending-health
 RUN mkdir -p /app/.openviking \
- && chmod +x /usr/local/bin/openviking-console-entrypoint
+ && chmod +x /usr/local/bin/openviking-console-entrypoint /usr/local/bin/openviking-pending-health
 ENV HOME="/app" \
     PATH="/app/.venv/bin:$PATH" \
     OPENVIKING_CONFIG_FILE="/app/.openviking/ov.conf" \

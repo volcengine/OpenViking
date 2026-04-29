@@ -184,7 +184,7 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 
 The current OpenClaw plugin follows a "plugin holds one user identity" model:
 
-- Remote mode config is `baseUrl + apiKey + agentId`
+- Remote mode config is `baseUrl + apiKey + agent_prefix`
 - `apiKey` should normally be a user key
 - The server resolves `account_id` and `user_id` from that user key
 - The plugin explicitly passes `X-OpenViking-Agent`
@@ -195,7 +195,7 @@ Typical config:
 openclaw config set plugins.entries.openviking.config.mode remote
 openclaw config set plugins.entries.openviking.config.baseUrl "http://your-server:1933"
 openclaw config set plugins.entries.openviking.config.apiKey "<user-api-key>"
-openclaw config set plugins.entries.openviking.config.agentId "<agent-id>"
+openclaw config set plugins.entries.openviking.config.agent_prefix "<agent-prefix>"
 ```
 
 Characteristics of this model:

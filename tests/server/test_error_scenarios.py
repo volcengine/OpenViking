@@ -6,23 +6,34 @@
 import httpx
 
 
+def _assert_invalid_request_response(resp: httpx.Response):
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
+    assert body["error"]["message"]
+    assert body["error"]["details"]["validation_errors"]
+    return body
+
+
 async def test_invalid_json_body(client: httpx.AsyncClient):
-    """Sending invalid JSON should return 422."""
+    """Sending invalid JSON should return a structured invalid argument error."""
     resp = await client.post(
         "/api/v1/resources",
         content=b"not-valid-json",
         headers={"Content-Type": "application/json"},
     )
-    assert resp.status_code == 422
+    _assert_invalid_request_response(resp)
 
 
 async def test_missing_required_field(client: httpx.AsyncClient):
-    """Missing required 'path' field in add_resource should return 422."""
+    """Missing required 'path' field should return a structured invalid argument error."""
     resp = await client.post(
         "/api/v1/resources",
         json={"reason": "test"},  # missing 'path'
     )
-    assert resp.status_code == 422
+    body = _assert_invalid_request_response(resp)
+    assert "path" in body["error"]["message"]
 
 
 async def test_not_found_resource_returns_structured_error(
@@ -38,6 +49,17 @@ async def test_not_found_resource_returns_structured_error(
     assert body["status"] == "error"
     assert "code" in body["error"]
     assert "message" in body["error"]
+
+
+async def test_missing_task_returns_structured_error(client: httpx.AsyncClient):
+    """Missing task should use the standard error envelope."""
+    resp = await client.get("/api/v1/tasks/missing-task-id")
+
+    assert resp.status_code == 404
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "NOT_FOUND"
+    assert body["error"]["message"] == "Task not found or expired"
 
 
 async def test_add_resource_file_not_found(client: httpx.AsyncClient):
@@ -56,23 +78,23 @@ async def test_add_resource_file_not_found(client: httpx.AsyncClient):
 
 
 async def test_empty_body_on_post(client: httpx.AsyncClient):
-    """POST with empty body should return 422."""
+    """POST with empty body should return a structured invalid argument error."""
     resp = await client.post(
         "/api/v1/resources",
         content=b"",
         headers={"Content-Type": "application/json"},
     )
-    assert resp.status_code == 422
+    _assert_invalid_request_response(resp)
 
 
 async def test_wrong_content_type(client: httpx.AsyncClient):
-    """POST with wrong content type should return 422."""
+    """POST with wrong content type should return a structured invalid argument error."""
     resp = await client.post(
         "/api/v1/resources",
         content=b"path=/tmp/test",
         headers={"Content-Type": "text/plain"},
     )
-    assert resp.status_code == 422
+    _assert_invalid_request_response(resp)
 
 
 async def test_invalid_uri_format(client: httpx.AsyncClient):

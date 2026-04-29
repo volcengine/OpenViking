@@ -13,7 +13,10 @@ from typing import TYPE_CHECKING, Any, Dict, List
 from openviking.core.namespace import agent_space_fragment, user_space_fragment
 from openviking.server.identity import RequestContext
 from openviking.session.memory.core import ExtractContextProvider
-from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+from openviking.session.memory.memory_type_registry import (
+    MemoryTypeRegistry,
+    resolve_memory_templates_dir,
+)
 from openviking.session.memory.tools import (
     add_tool_call_pair_to_messages,
     get_tool,
@@ -382,12 +385,10 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
     def get_schema_directories(self) -> List[str]:
         """返回需要加载的 schema 目录"""
         if self._schema_directories is None:
-            builtin_dir = os.path.join(
-                os.path.dirname(__file__), "..", "..", "prompts", "templates", "memory"
-            )
+            memory_templates_dir = str(resolve_memory_templates_dir())
             config = get_openviking_config()
             custom_dir = config.memory.custom_templates_dir
-            self._schema_directories = [builtin_dir]
+            self._schema_directories = [memory_templates_dir]
             if custom_dir:
                 custom_dir_expanded = os.path.expanduser(custom_dir)
                 if os.path.exists(custom_dir_expanded):

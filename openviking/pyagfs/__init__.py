@@ -7,7 +7,6 @@ import importlib.util
 import logging
 import os
 import sys
-import sysconfig
 from pathlib import Path
 
 from .client import AGFSClient, FileHandle
@@ -49,20 +48,16 @@ def _find_ragfs_so():
     Returns the path to the ``.so`` / ``.dylib`` / ``.pyd`` file, or *None*.
     """
     try:
-        ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
-        # Exact match first: ragfs_python.cpython-312-darwin.so or ragfs_python.abi3.so
-        exact = _LIB_DIR / f"ragfs_python{ext_suffix}"
-        if exact.exists():
-            return str(exact)
-        # Try abi3 suffix explicitly first (stable ABI)
+        # The ragfs-python crate is built with PyO3's stable ABI. Do not load
+        # cpython-specific artifacts from older source-checkout builds.
         abi3_suffix = ".abi3.so"
         if sys.platform == "win32":
             abi3_suffix = ".abi3.pyd"
         abi3_exact = _LIB_DIR / f"ragfs_python{abi3_suffix}"
         if abi3_exact.exists():
             return str(abi3_exact)
-        # Glob fallback: ragfs_python.cpython-*, ragfs_python.abi3.*, ragfs_python.*.pyd
-        for pattern in ("ragfs_python.cpython-*", "ragfs_python.abi3.*", "ragfs_python.*"):
+        # Glob fallback handles platform-tagged abi3 artifacts if any.
+        for pattern in ("ragfs_python.abi3.*",):
             matches = glob.glob(str(_LIB_DIR / pattern))
             if matches:
                 return matches[0]

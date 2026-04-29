@@ -77,12 +77,13 @@ class _IdentityASGIMiddleware:
                 x_openviking_agent=request.headers.get("x-openviking-agent"),
             )
         except (UnauthenticatedError, PermissionDeniedError, InvalidArgumentError) as exc:
-            status = 401 if isinstance(exc, UnauthenticatedError) else (
-                403 if isinstance(exc, PermissionDeniedError) else 400
+            status = (
+                401
+                if isinstance(exc, UnauthenticatedError)
+                else (403 if isinstance(exc, PermissionDeniedError) else 400)
             )
             resp = JSONResponse(
-                {"jsonrpc": "2.0", "id": None,
-                 "error": {"code": -32001, "message": str(exc)}},
+                {"jsonrpc": "2.0", "id": None, "error": {"code": -32001, "message": str(exc)}},
                 status_code=status,
             )
             return await resp(scope, receive, send)
@@ -115,6 +116,7 @@ mcp = FastMCP(
 
 # -- search ----------------------------------------------------------------
 
+
 @mcp.tool()
 async def search(query: str, target_uri: str = "", limit: int = 10, min_score: float = 0.35) -> str:
     """Search OpenViking context database (memories, resources, skills). Returns ranked results with URI, abstract, and score. Leave target_uri empty to search everything, or pass a viking:// URI to narrow scope."""
@@ -122,12 +124,19 @@ async def search(query: str, target_uri: str = "", limit: int = 10, min_score: f
     ctx = _get_ctx()
 
     result = await service.search.find(
-        query=query, ctx=ctx, target_uri=target_uri,
-        limit=limit, score_threshold=min_score,
+        query=query,
+        ctx=ctx,
+        target_uri=target_uri,
+        limit=limit,
+        score_threshold=min_score,
     )
 
     items = []
-    for ctx_type, contexts in [("memory", result.memories), ("resource", result.resources), ("skill", result.skills)]:
+    for ctx_type, contexts in [
+        ("memory", result.memories),
+        ("resource", result.resources),
+        ("skill", result.skills),
+    ]:
         for m in contexts:
             items.append((ctx_type, m))
 
@@ -139,10 +148,15 @@ async def search(query: str, target_uri: str = "", limit: int = 10, min_score: f
         abstract = (m.abstract or m.overview or "(no abstract)").strip()
         lines.append(f"- [{ctx_type} {m.score * 100:.0f}%] {m.uri}\n    {abstract}")
 
-    return f"Found {len(items)} item(s):\n\n" + "\n".join(lines) + "\n\nUse the read tool to expand a URI."
+    return (
+        f"Found {len(items)} item(s):\n\n"
+        + "\n".join(lines)
+        + "\n\nUse the read tool to expand a URI."
+    )
 
 
 # -- read ------------------------------------------------------------------
+
 
 @mcp.tool()
 async def read(uris: str | list[str]) -> str:
@@ -176,9 +190,10 @@ async def read(uris: str | list[str]) -> str:
 
 # -- list ------------------------------------------------------------------
 
+
 @mcp.tool(name="list")
-async def list_dir(uri: str, recursive: bool = False) -> str:
-    """List entries under a viking:// directory URI. Use recursive=true for deep listing."""
+async def ls(uri: str, recursive: bool = False) -> str:
+    """List files and subdirectories under a viking:// directory URI. Use recursive=true for deep listing."""
     service = get_service()
     ctx = _get_ctx()
 
@@ -199,6 +214,7 @@ async def list_dir(uri: str, recursive: bool = False) -> str:
 
 
 # -- store -----------------------------------------------------------------
+
 
 class StoreMessage(BaseModel):
     role: Literal["user", "assistant"] = Field(description="Message role")
@@ -225,6 +241,7 @@ async def store(messages: list[StoreMessage]) -> str:
 
 # -- add_resource ----------------------------------------------------------
 
+
 @mcp.tool()
 async def add_resource(path: str, description: str = "") -> str:
     """Add a resource (local file path or URL) to OpenViking. This is an asynchronous operation — the resource will be processed in the background."""
@@ -232,15 +249,23 @@ async def add_resource(path: str, description: str = "") -> str:
     ctx = _get_ctx()
     try:
         result = await service.resources.add_resource(
-            path=path, ctx=ctx, reason=description, wait=False,
+            path=path,
+            ctx=ctx,
+            reason=description,
+            wait=False,
         )
         root_uri = result.get("root_uri", "")
-        return f"Resource added: {root_uri}" if root_uri else "Resource added (processing in background)."
+        return (
+            f"Resource added: {root_uri}"
+            if root_uri
+            else "Resource added (processing in background)."
+        )
     except Exception as e:
         return f"Error adding resource: {e}"
 
 
 # -- grep ------------------------------------------------------------------
+
 
 @mcp.tool()
 async def grep(
@@ -258,7 +283,11 @@ async def grep(
         async with semaphore:
             try:
                 result = await service.fs.grep(
-                    uri, p, ctx=ctx, case_insensitive=case_insensitive, node_limit=node_limit,
+                    uri,
+                    p,
+                    ctx=ctx,
+                    case_insensitive=case_insensitive,
+                    node_limit=node_limit,
                 )
                 return (p, result.get("matches", []))
             except Exception:
@@ -272,9 +301,7 @@ async def grep(
         total += len(matches)
         for m in matches:
             m_uri = m.get("uri", "?")
-            merged.setdefault(m_uri, []).append(
-                (m.get("line", "?"), m.get("content", ""), p)
-            )
+            merged.setdefault(m_uri, []).append((m.get("line", "?"), m.get("content", ""), p))
 
     if not merged:
         return f"No matches found for pattern(s): {', '.join(patterns)}"
@@ -289,6 +316,7 @@ async def grep(
 
 
 # -- glob ------------------------------------------------------------------
+
 
 @mcp.tool()
 async def glob(pattern: str, uri: str = "viking://", node_limit: int = 100) -> str:
@@ -314,9 +342,10 @@ async def glob(pattern: str, uri: str = "viking://", node_limit: int = 100) -> s
 
 # -- forget ----------------------------------------------------------------
 
+
 @mcp.tool()
 async def forget(uri: str) -> str:
-    """Delete a viking:// URI from OpenViking. Use the search tool first to find the exact URI, then pass it here."""
+    """Permanently delete a viking:// URI from OpenViking. This is irreversible. Only use when the user explicitly asks to forget or delete something. Always confirm with the user before calling this tool. Use the search tool first to find the exact URI, then pass it here."""
     service = get_service()
     ctx = _get_ctx()
     await service.fs.rm(uri, ctx=ctx)
@@ -324,6 +353,7 @@ async def forget(uri: str) -> str:
 
 
 # -- health ----------------------------------------------------------------
+
 
 @mcp.tool()
 async def health() -> str:
@@ -339,11 +369,14 @@ async def health() -> str:
 # App factory + lifespan
 # ---------------------------------------------------------------------------
 
+
 @asynccontextmanager
 async def mcp_lifespan():
     """Run the MCP session manager. Call this inside the FastAPI lifespan."""
     async with mcp.session_manager.run():
-        logger.info("MCP endpoint ready (9 tools: search, read, list, store, add_resource, grep, glob, forget, health)")
+        logger.info(
+            "MCP endpoint ready (9 tools: search, read, list, store, add_resource, grep, glob, forget, health)"
+        )
         yield
 
 

@@ -8,6 +8,7 @@ mod tui;
 mod utils;
 
 use clap::{ArgAction, Parser, Subcommand};
+use std::ffi::OsString;
 use config::Config;
 use error::Result;
 use output::OutputFormat;
@@ -421,6 +422,11 @@ enum Commands {
         /// or JSON array of such objects for multiple messages.
         content: String,
     },
+    /// [Data] Privacy config management commands
+    Privacy {
+        #[command(subcommand)]
+        action: PrivacyCommands,
+    },
     /// [Experimental][Data] List relations of a resource
     Relations {
         /// Viking URI
@@ -637,6 +643,71 @@ enum SessionCommands {
 }
 
 #[derive(Subcommand)]
+enum PrivacyCommands {
+    /// List privacy config categories
+    Categories,
+    /// List targets by category
+    List {
+        /// Privacy config category
+        category: String,
+    },
+    /// Get current active config for target
+    Get {
+        /// Privacy config category
+        category: String,
+        /// Privacy config target key
+        target_key: String,
+    },
+    /// Upsert privacy config values
+    Upsert {
+        /// Privacy config category
+        category: String,
+        /// Privacy config target key
+        target_key: String,
+        /// JSON object string for values
+        #[arg(long, conflicts_with = "values_file")]
+        values_json: Option<String>,
+        /// JSON file path for values
+        #[arg(long = "values-file", conflicts_with = "values_json")]
+        values_file: Option<String>,
+        /// Existing key updates in key=value format (repeatable)
+        #[arg(long = "key")]
+        key: Vec<String>,
+        /// Change reason
+        #[arg(long, default_value = "")]
+        change_reason: String,
+        /// Optional labels JSON object string
+        #[arg(long = "labels-json")]
+        labels_json: Option<String>,
+    },
+    /// List versions for target
+    Versions {
+        /// Privacy config category
+        category: String,
+        /// Privacy config target key
+        target_key: String,
+    },
+    /// Get one version by number
+    Version {
+        /// Privacy config category
+        category: String,
+        /// Privacy config target key
+        target_key: String,
+        /// Version number
+        version: i32,
+    },
+    /// Activate a version
+    Activate {
+        /// Privacy config category
+        category: String,
+        /// Privacy config target key
+        target_key: String,
+        /// Version number
+        version: i32,
+    },
+}
+
+#[derive(Subcommand)]
 enum AdminCommands {
     /// Create a new account with its first admin user
     CreateAccount {
@@ -710,9 +781,120 @@ enum ConfigCommands {
     Validate,
 }
 
+fn find_command_index(args: &[OsString]) -> Option<usize> {
+    let mut i = 1;
+    while i < args.len() {
+        let token = args[i].to_string_lossy();
+        match token.as_ref() {
+            "--output" | "-o" | "--compact" | "--account" | "--user" | "--agent-id" => {
+                i += 2;
+            }
+            "--sudo" => {
+                i += 1;
+            }
+            _ if token.starts_with('-') => {
+                i += 1;
+            }
+            _ => return Some(i),
+        }
+    }
+    None
+}
+
+fn is_privacy_subcommand(token: &str) -> bool {
+    matches!(
+        token,
+        "categories" | "list" | "get" | "upsert" | "versions" | "version" | "activate"
+    )
+}
+
+fn preprocess_privacy_get_shortcut(args: Vec<OsString>) -> Vec<OsString> {
+    let Some(cmd_idx) = find_command_index(&args) else {
+        return args;
+    };
+    if args[cmd_idx].to_string_lossy() != "privacy" {
+        return args;
+    }
+    let Some(next) = args.get(cmd_idx + 1) else {
+        return args;
+    };
+    let next_token = next.to_string_lossy();
+    if next_token.starts_with('-') || is_privacy_subcommand(&next_token) {
+        return args;
+    }
+
+    let mut out = Vec::with_capacity(args.len() + 1);
+    out.extend(args[..=cmd_idx].iter().cloned());
+    out.push(OsString::from("get"));
+    out.extend(args[cmd_idx + 1..].iter().cloned());
+    out
+}
+
+fn preprocess_privacy_upsert_key_flags(args: Vec<OsString>) -> Vec<OsString> {
+    let Some(cmd_idx) = find_command_index(&args) else {
+        return args;
+    };
+    if args[cmd_idx].to_string_lossy() != "privacy" {
+        return args;
+    }
+    if args.get(cmd_idx + 1).map(|s| s.to_string_lossy().to_string()) != Some("upsert".to_string()) {
+        return args;
+    }
+
+    let mut converted: Vec<OsString> = Vec::with_capacity(args.len());
+    let mut i = 0;
+
+    while i < args.len() {
+        let arg_lossy = args[i].to_string_lossy();
+
+        if i > cmd_idx + 1 && arg_lossy == "--" {
+            i += 1;
+            continue;
+        }
+
+        if i > cmd_idx + 1 && arg_lossy.starts_with("--key-") {
+            let suffix = &arg_lossy[6..];
+            if suffix.is_empty() {
+                converted.push(args[i].clone());
+                i += 1;
+                continue;
+            }
+
+            if let Some((key, value)) = suffix.split_once('=') {
+                converted.push(OsString::from("--key"));
+                converted.push(OsString::from(format!("{}={}", key, value)));
+                i += 1;
+                continue;
+            }
+
+            if i + 1 < args.len() {
+                let next_val = args[i + 1].to_string_lossy();
+                converted.push(OsString::from("--key"));
+                converted.push(OsString::from(format!("{}={}", suffix, next_val)));
+                i += 2;
+                continue;
+            }
+
+            converted.push(args[i].clone());
+            i += 1;
+            continue;
+        }
+
+        converted.push(args[i].clone());
+        i += 1;
+    }
+
+    converted
+}
+
+fn preprocess_privacy_args(args: Vec<OsString>) -> Vec<OsString> {
+    let args = preprocess_privacy_get_shortcut(args);
+    preprocess_privacy_upsert_key_flags(args)
+}
+
 #[tokio::main]
 async fn main() {
-    let cli = Cli::parse();
+    let cli = Cli::parse_from(preprocess_privacy_args(std::env::args_os().collect()));
 
     let output_format = cli.output;
     let compact = cli.compact;
@@ -810,6 +992,7 @@ async fn main() {
         Commands::Observer { action } => handlers::handle_observer(action, ctx).await,
         Commands::Session { action } => handlers::handle_session(action, ctx).await,
         Commands::Admin { action } => handlers::handle_admin(action, ctx).await,
+        Commands::Privacy { action } => handlers::handle_privacy(action, ctx).await,
         Commands::Ls {
             uri,
             simple,
@@ -966,11 +1149,12 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, CliContext};
+    use super::{Cli, CliContext, Commands, PrivacyCommands, preprocess_privacy_args};
     use crate::config::Config;
     use crate::handlers;
     use crate::output::OutputFormat;
     use clap::Parser;
+    use std::ffi::OsString;
 
     #[test]
     fn cli_parses_global_identity_override_flags() {
@@ -1089,5 +1273,91 @@ mod tests {
         handlers::append_time_filter_params(&mut params, after.as_deref(), before.as_deref());
 
         assert_eq!(params, vec!["--after 7d", "--before 2026-03-12"]);
+    }
+
+    #[test]
+    fn preprocess_key_dynamic_flag_to_static_form() {
+        let args = vec![
+            OsString::from("ov"),
+            OsString::from("privacy"),
+            OsString::from("upsert"),
+            OsString::from("skill"),
+            OsString::from("demo"),
+            OsString::from("--key-api_key"),
+            OsString::from("secret-v1"),
+        ];
+
+        let converted = preprocess_privacy_args(args);
+        let converted_strs: Vec<String> = converted
+            .into_iter()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect();
+
+        assert_eq!(
+            converted_strs,
+            vec![
+                "ov",
+                "privacy",
+                "upsert",
+                "skill",
+                "demo",
+                "--key",
+                "api_key=secret-v1",
+            ]
+        );
+    }
+
+    #[test]
+    fn cli_parses_privacy_upsert_with_key_dynamic_flag() {
+        let cli = Cli::parse_from(preprocess_privacy_args(vec![
+            OsString::from("ov"),
+            OsString::from("privacy"),
+            OsString::from("upsert"),
+            OsString::from("skill"),
+            OsString::from("demo"),
+            OsString::from("--key-api_key"),
+            OsString::from("secret-v2"),
+        ]));
+
+        match cli.command {
+            Commands::Privacy { action } => match action {
+                PrivacyCommands::Upsert {
+                    category,
+                    target_key,
+                    key,
+                    ..
+                } => {
+                    assert_eq!(category, "skill");
+                    assert_eq!(target_key, "demo");
+                    assert_eq!(key, vec!["api_key=secret-v2"]);
+                }
+                _ => panic!("expected privacy upsert"),
+            },
+            _ => panic!("expected privacy command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_privacy_shortcut_as_get() {
+        let cli = Cli::parse_from(preprocess_privacy_args(vec![
+            OsString::from("ov"),
+            OsString::from("privacy"),
+            OsString::from("skill"),
+            OsString::from("demo"),
+        ]));
+
+        match cli.command {
+            Commands::Privacy { action } => match action {
+                PrivacyCommands::Get {
+                    category,
+                    target_key,
+                } => {
+                    assert_eq!(category, "skill");
+                    assert_eq!(target_key, "demo");
+                }
+                _ => panic!("expected privacy get"),
+            },
+            _ => panic!("expected privacy command"),
+        }
     }
 }

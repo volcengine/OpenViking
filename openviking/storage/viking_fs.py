@@ -49,9 +49,11 @@ from openviking_cli.utils.uri import VikingURI
 if TYPE_CHECKING:
     from openviking.storage.transaction.lock_handle import LockHandle
     from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
-    from openviking_cli.utils.config import RerankConfig
+    from openviking_cli.utils.config import RerankConfig, RetrievalConfig
 
 logger = get_logger(__name__)
+
+_DEFAULT_GREP_FILE_CONCURRENCY = 32
 
 
 def _ensure_non_empty_search_query(query: str) -> None:
@@ -110,6 +112,7 @@ def init_viking_fs(
     query_embedder: Optional[Any] = None,
     rerank_config: Optional["RerankConfig"] = None,
     vector_store: Optional["VikingVectorIndexBackend"] = None,
+    retrieval_config: Optional["RetrievalConfig"] = None,
     timeout: int = 10,
     enable_recorder: bool = False,
     encryptor: Optional[Any] = None,
@@ -121,6 +124,7 @@ def init_viking_fs(
         agfs_config: AGFS configuration object for backend settings
         query_embedder: Embedder instance
         rerank_config: Rerank configuration
+        retrieval_config: Retrieval ranking configuration
         vector_store: Vector store instance
         enable_recorder: Whether to enable IO recording
         encryptor: FileEncryptor instance for encryption/decryption
@@ -132,6 +136,7 @@ def init_viking_fs(
         query_embedder=query_embedder,
         rerank_config=rerank_config,
         vector_store=vector_store,
+        retrieval_config=retrieval_config,
         encryptor=encryptor,
     )
 
@@ -203,6 +208,7 @@ class VikingFS:
         query_embedder: Optional[Any] = None,
         rerank_config: Optional["RerankConfig"] = None,
         vector_store: Optional["VikingVectorIndexBackend"] = None,
+        retrieval_config: Optional["RetrievalConfig"] = None,
         timeout: int = 10,
         encryptor: Optional[Any] = None,
     ):
@@ -210,6 +216,7 @@ class VikingFS:
         self.query_embedder = query_embedder
         self.rerank_config = rerank_config
         self.vector_store = vector_store
+        self.retrieval_config = retrieval_config
         self._encryptor = encryptor
         self._bound_ctx: contextvars.ContextVar[Optional[RequestContext]] = contextvars.ContextVar(
             "vikingfs_bound_ctx", default=None
@@ -632,14 +639,36 @@ class VikingFS:
         if exclude_uri:
             excluded_prefix = self._normalize_uri(exclude_uri).rstrip("/")
             self._ensure_access(excluded_prefix, ctx)
+        file_uris = await self._collect_grep_files(
+            uri,
+            excluded_prefix=excluded_prefix,
+            level_limit=level_limit,
+            ctx=ctx,
+        )
+        results, files_scanned = await self._grep_files_parallel(
+            file_uris,
+            compiled_pattern=compiled_pattern,
+            node_limit=node_limit,
+            ctx=ctx,
+        )
 
-        results = []
-        files_scanned = 0
+        return {
+            "matches": results,
+            "count": len(results),
+            "match_count": len(results),
+            "files_scanned": files_scanned,
+        }
 
-        async def search_recursive(current_uri: str, current_depth: int):
-            if node_limit and len(results) >= node_limit:
-                return
+    async def _collect_grep_files(
+        self,
+        uri: str,
+        excluded_prefix: Optional[str],
+        level_limit: int,
+        ctx: Optional[RequestContext] = None,
+    ) -> List[str]:
+        file_uris: List[str] = []
 
+        async def search_recursive(current_uri: str, current_depth: int) -> None:
             if current_depth > level_limit:
                 return
 
@@ -657,9 +686,6 @@ class VikingFS:
                 return
 
             for entry in entries:
-                if node_limit and len(results) >= node_limit:
-                    break
-
                 entry_uri = f"{normalized_current_uri.rstrip('/')}/{entry['name']}"
                 if excluded_prefix and (
                     entry_uri == excluded_prefix or entry_uri.startswith(excluded_prefix + "/")
@@ -670,36 +696,70 @@ class VikingFS:
                 if entry.get("isDir"):
                     await search_recursive(entry_uri, current_depth + 1)
                 else:
-                    nonlocal files_scanned
-                    files_scanned += 1
-                    try:
-                        content = await self.read(entry_uri, ctx=ctx)
-                        if isinstance(content, bytes):
-                            content = content.decode("utf-8", errors="replace")
-
-                        lines = content.split("\n")
-                        for line_num, line in enumerate(lines, 1):
-                            if compiled_pattern.search(line):
-                                results.append(
-                                    {
-                                        "line": line_num,
-                                        "uri": entry_uri,
-                                        "content": line,
-                                    }
-                                )
-                                if node_limit and len(results) >= node_limit:
-                                    break
-                    except Exception as e:
-                        logger.debug(f"Failed to grep {entry_uri}: {e}")
+                    file_uris.append(entry_uri)
 
         await search_recursive(uri, 0)
+        return file_uris
 
-        return {
-            "matches": results,
-            "count": len(results),
-            "match_count": len(results),
-            "files_scanned": files_scanned,
-        }
+    async def _grep_files_parallel(
+        self,
+        file_uris: List[str],
+        compiled_pattern: re.Pattern,
+        node_limit: Optional[int],
+        ctx: Optional[RequestContext] = None,
+    ) -> tuple[List[Dict[str, Any]], int]:
+        results: List[Dict[str, Any]] = []
+        files_scanned = 0
+        for start in range(0, len(file_uris), _DEFAULT_GREP_FILE_CONCURRENCY):
+            batch_uris = file_uris[start : start + _DEFAULT_GREP_FILE_CONCURRENCY]
+            batch_jobs = [
+                asyncio.to_thread(self._grep_single_file, entry_uri, compiled_pattern, ctx)
+                for entry_uri in batch_uris
+            ]
+            batch_results = await asyncio.gather(*batch_jobs)
+            for matches, scanned_count in batch_results:
+                files_scanned += scanned_count
+                for match in matches:
+                    results.append(match)
+                    if node_limit and len(results) >= node_limit:
+                        return results, files_scanned
+
+        return results, files_scanned
+
+    def _grep_single_file(
+        self,
+        entry_uri: str,
+        compiled_pattern: re.Pattern,
+        ctx: Optional[RequestContext] = None,
+    ) -> tuple[List[Dict[str, Any]], int]:
+        try:
+            self._ensure_access(entry_uri, ctx)
+            path = self._uri_to_path(entry_uri, ctx=ctx)
+            result = self.agfs.read(path, 0, -1)
+            if isinstance(result, bytes):
+                content = result
+            elif result is not None and hasattr(result, "content"):
+                content = result.content
+            else:
+                content = b""
+            if isinstance(content, bytes):
+                content = content.decode("utf-8", errors="replace")
+
+            matches: List[Dict[str, Any]] = []
+            lines = content.split("\n")
+            for line_num, line in enumerate(lines, 1):
+                if compiled_pattern.search(line):
+                    matches.append(
+                        {
+                            "line": line_num,
+                            "uri": entry_uri,
+                            "content": line,
+                        }
+                    )
+            return matches, 1
+        except Exception as e:
+            logger.debug(f"Failed to grep {entry_uri}: {e}")
+            return [], 1
 
     async def stat(self, uri: str, ctx: Optional[RequestContext] = None) -> Dict[str, Any]:
         """
@@ -1001,7 +1061,7 @@ class VikingFS:
     async def find(
         self,
         query: str,
-        target_uri: str = "",
+        target_uri: Union[str, List[str]] = "",
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
@@ -1011,7 +1071,7 @@ class VikingFS:
 
         Args:
             query: Search query
-            target_uri: Target directory URI
+            target_uri: Target directory URI(s), supports str or List[str]
             limit: Return count
             score_threshold: Score threshold
             filter: Metadata filter
@@ -1028,12 +1088,23 @@ class VikingFS:
             TypedQuery,
         )
 
-        if target_uri and target_uri not in {"/", "viking://"}:
+        # Normalize target_uri to list
+        target_uri_list = [target_uri] if isinstance(target_uri, str) else (target_uri or [])
+        real_ctx = self._ctx_or_default(ctx)
+        canonical_target_uri_list: List[str] = []
+        for item in target_uri_list:
+            if not item or item in {"/", "viking://"}:
+                continue
             try:
-                target_uri = canonicalize_uri(target_uri, self._ctx_or_default(ctx))
+                canonical_target_uri_list.append(canonicalize_uri(item, real_ctx))
             except NamespaceShapeError as exc:
                 raise InvalidArgumentError(str(exc)) from exc
-            self._ensure_access(target_uri, ctx)
+        target_uri_list = canonical_target_uri_list
+        # Use first URI for context inference and access check
+        primary_target_uri = target_uri_list[0] if target_uri_list else ""
+
+        if primary_target_uri and primary_target_uri not in {"/", "viking://"}:
+            self._ensure_access(primary_target_uri, ctx)
 
         storage = self._get_vector_store()
         if not storage:
@@ -1047,19 +1118,19 @@ class VikingFS:
             storage=storage,
             embedder=embedder,
             rerank_config=self.rerank_config,
+            retrieval_config=self.retrieval_config,
         )
 
         # Infer context_type (None = search all types)
-        context_type = self._infer_context_type(target_uri) if target_uri else None
+        context_type = self._infer_context_type(primary_target_uri) if primary_target_uri else None
 
         typed_query = TypedQuery(
             query=query,
             context_type=context_type,
             intent="",
-            target_directories=[target_uri] if target_uri else None,
+            target_directories=target_uri_list if target_uri_list else None,
         )
 
-        real_ctx = self._ctx_or_default(ctx)
         logger.debug(
             f"[VikingFS.find] Calling retriever.retrieve with ctx.account_id={real_ctx.account_id}, ctx.user={real_ctx.user}"
         )
@@ -1206,6 +1277,7 @@ class VikingFS:
             storage=storage,
             embedder=embedder,
             rerank_config=self.rerank_config,
+            retrieval_config=self.retrieval_config,
         )
 
         async def _execute(tq: TypedQuery):
@@ -1783,9 +1855,14 @@ class VikingFS:
         # Verify the file exists before reading, because AGFS read returns
         # empty bytes for non-existent files instead of raising an error.
         try:
-            self.agfs.stat(path)
+            stat = self.agfs.stat(path)
         except Exception:
             raise NotFoundError(uri, "file")
+        if isinstance(stat, dict) and stat.get("isDir", False):
+            raise InvalidArgumentError(
+                f"Cannot read directory as file: {uri}",
+                details={"resource": uri, "expected": "file", "actual": "directory"},
+            )
         try:
             content = self.agfs.read(path)
             if isinstance(content, bytes):
@@ -1817,6 +1894,15 @@ class VikingFS:
         """Read single binary file."""
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
+        try:
+            stat = self.agfs.stat(path)
+        except Exception:
+            raise NotFoundError(uri, "file")
+        if isinstance(stat, dict) and stat.get("isDir", False):
+            raise InvalidArgumentError(
+                f"Cannot read directory as file: {uri}",
+                details={"resource": uri, "expected": "file", "actual": "directory"},
+            )
         try:
             raw = self._handle_agfs_read(self.agfs.read(path))
             raw = await self._decrypt_content(raw, ctx=ctx)

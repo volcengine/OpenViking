@@ -5,7 +5,7 @@ import uuid
 class TestFsRm:
     def test_fs_rm(self, api_client):
         random_id = str(uuid.uuid4())[:8]
-        test_dir = f"/tmp/test-rm-{random_id}"
+        test_dir = f"viking://resources/test-rm-{random_id}"
 
         try:
             response = api_client.fs_mkdir(test_dir)

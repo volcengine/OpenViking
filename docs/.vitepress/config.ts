@@ -238,6 +238,7 @@ export default defineConfig({
   },
   themeConfig: {
     logo: '/ov-logo.png',
+    logoLink: 'https://openviking.ai/',
     search: {
       provider: 'local'
     },

@@ -181,6 +181,16 @@ async def test_get_session_context(client: httpx.AsyncClient):
     assert [m["parts"][0]["text"] for m in body["result"]["messages"]] == ["Current live message"]
 
 
+async def test_get_session_context_rejects_negative_token_budget(client: httpx.AsyncClient):
+    resp = await client.get("/api/v1/sessions/any-session/context?token_budget=-1")
+
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
+    assert body["error"]["details"] == {"field": "token_budget", "value": -1}
+
+
 async def test_get_session_context_includes_incomplete_archive_messages(
     client: httpx.AsyncClient, service
 ):
@@ -507,6 +517,54 @@ async def test_compress_session(client: httpx.AsyncClient):
     assert body["result"]["status"] == "accepted"
     assert "usage" not in body
     assert "telemetry" not in body
+
+
+async def test_commit_updates_archive_metadata_before_background_task(client: httpx.AsyncClient):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    for content in ["first", "second", "third"]:
+        resp = await client.post(
+            f"/api/v1/sessions/{session_id}/messages",
+            json=_message_request("user", content=content),
+        )
+        assert resp.status_code == 200
+
+    before_commit = await client.get(f"/api/v1/sessions/{session_id}")
+    assert before_commit.status_code == 200
+    before_result = before_commit.json()["result"]
+    assert before_result["message_count"] == 3
+    assert before_result["total_message_count"] == 3
+    assert before_result["commit_count"] == 0
+    assert before_result["last_commit_at"] == ""
+
+    commit_resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
+    assert commit_resp.status_code == 200
+    commit_result = commit_resp.json()["result"]
+    assert commit_result["archived"] is True
+
+    immediate_get = await client.get(f"/api/v1/sessions/{session_id}")
+    assert immediate_get.status_code == 200
+    immediate_result = immediate_get.json()["result"]
+    assert immediate_result["message_count"] == 0
+    assert immediate_result["total_message_count"] == 3
+    assert immediate_result["commit_count"] == 1
+    assert immediate_result["last_commit_at"] != ""
+
+    await _wait_for_task(client, commit_result["task_id"])
+
+    resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json=_message_request("user", content="fourth"),
+    )
+    assert resp.status_code == 200
+
+    after_new_message = await client.get(f"/api/v1/sessions/{session_id}")
+    assert after_new_message.status_code == 200
+    after_result = after_new_message.json()["result"]
+    assert after_result["message_count"] == 1
+    assert after_result["total_message_count"] == 4
+    assert after_result["commit_count"] == 1
 
 
 async def test_extract_session_jsonable_regression(client: httpx.AsyncClient, service, monkeypatch):

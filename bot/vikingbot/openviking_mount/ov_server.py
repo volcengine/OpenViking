@@ -173,10 +173,10 @@ class VikingClient:
         result = await self.read_content(uri=uri, level="read")
         return result
 
-    async def search(self, query: str, target_uri: Optional[str] = "") -> Dict[str, Any]:
+    async def search(self, query: str, target_uri: Optional[str] = "", limit: int = 10) -> Dict[str, Any]:
         # session = self.client.session()
 
-        result = await self.client.search(query, target_uri=target_uri)
+        result = await self.client.search(query, target_uri=target_uri, limit=limit)
 
         # 将 FindResult 对象转换为 JSON map
         return {

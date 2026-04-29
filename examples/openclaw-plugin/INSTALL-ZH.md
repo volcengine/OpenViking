@@ -8,14 +8,14 @@
 
 | 组件 | 版本要求 |
 | --- | --- |
-| Python | >= 3.10 |
 | Node.js | >= 22 |
 | OpenClaw | >= 2026.3.7 |
+
+插件以远程模式连接到已有的 OpenViking 服务。安装前请确保已有可访问的 OpenViking HTTP 服务。
 
 快速检查：
 
 ```bash
-python3 --version
 node -v
 openclaw --version
 ```
@@ -44,11 +44,11 @@ openclaw plugins install clawhub:@openclaw/openviking
 openclaw openviking setup
 ```
 
-向导会检测 Python 环境、验证 OpenViking 包是否可用，并将配置写入 `$OPENCLAW_STATE_DIR/openclaw.json`（默认：`~/.openclaw/openclaw.json`）。
+向导会提示你填写远程 OpenViking 服务地址和可选的 API Key，并将配置写入 `$OPENCLAW_STATE_DIR/openclaw.json`（默认：`~/.openclaw/openclaw.json`）。
 
 ## 通过 ov-install 安装（替代方案）
 
-`ov-install` 一键完成 Python/OpenViking 安装和插件部署。macOS、Linux、Windows 的流程相同。
+`ov-install` 一键完成插件部署。macOS、Linux、Windows 的流程相同。
 
 ```bash
 npm install -g openclaw-openviking-setup-helper
@@ -62,7 +62,7 @@ ov-install --workdir ~/.openclaw-second
 
 ## 升级
 
-要把 OpenViking 和插件一起升级到最新版本，执行：
+要把插件升级到最新版本，执行：
 
 ```bash
 npm install -g openclaw-openviking-setup-helper@latest && ov-install -y
@@ -81,12 +81,11 @@ ov-install -y --version 0.2.9
 | 参数 | 含义 |
 | --- | --- |
 | `--workdir PATH` | 指定 OpenClaw 数据目录 |
-| `--version VER` | 同时指定插件版本和 OpenViking 版本，例如 `0.2.9` 会对应插件 `v0.2.9` |
-| `--current-version` | 查看当前已安装的插件版本和 OpenViking 版本 |
+| `--version VER` | 指定插件版本，例如 `0.2.9` 会对应插件 `v0.2.9` |
+| `--current-version` | 查看当前已安装的插件版本 |
 | `--plugin-version REF` | 指定插件版本，支持 tag、分支或 commit |
-| `--openviking-version VER` | 指定 PyPI 上的 OpenViking 版本 |
 | `--github-repo owner/repo` | 指定插件来源仓库，默认 `volcengine/OpenViking` |
-| `--update` | 只升级插件，不升级 OpenViking 服务版本 |
+| `--update` | 只升级插件 |
 | `-y` | 非交互模式，使用默认配置 |
 
 ## OpenClaw 插件参数说明
@@ -99,51 +98,22 @@ ov-install -y --version 0.2.9
 openclaw config get plugins.entries.openviking.config
 ```
 
-### Local 模式
+### 配置参数
 
-适用于由 OpenClaw 插件在本机拉起 OpenViking 服务的场景。
-
-| 参数 | 默认值 | 含义 |
-| --- | --- | --- |
-| `mode` | `local` | `local` 表示由插件拉起本机 OpenViking；`remote` 表示连接已有远端 OpenViking 服务 |
-| `agentId` | `default` | 当前 OpenClaw 实例在 OpenViking 侧使用的标识 |
-| `configPath` | `~/.openviking/ov.conf` | 本机 OpenViking 配置文件路径 |
-| `port` | `1933` | 本机 OpenViking HTTP 端口 |
-
-`local` 模式下，VLM、Embedding、API Key 等服务端配置写在 `~/.openviking/ov.conf`，不写在 OpenClaw 插件参数里。常见项包括：
-
-| 配置项 | 含义 |
-| --- | --- |
-| `vlm.api_key` / `vlm.model` / `vlm.api_base` | 记忆抽取使用的 VLM 模型配置 |
-| `embedding.dense.api_key` / `embedding.dense.model` / `embedding.dense.api_base` | 向量化使用的 Embedding 模型配置 |
-| `server.port` | OpenViking 服务监听端口 |
-
-常见设置：
-
-```bash
-openclaw config set plugins.entries.openviking.config.mode local
-openclaw config set plugins.entries.openviking.config.configPath ~/.openviking/ov.conf
-openclaw config set plugins.entries.openviking.config.port 1933
-```
-
-### Remote 模式
-
-适用于连接已有远端 OpenViking 服务的场景。
+插件连接到已有的远端 OpenViking 服务。
 
 | 参数 | 默认值 | 含义 |
 | --- | --- | --- |
-| `mode` | `remote` | 使用已有远端 OpenViking 服务 |
 | `baseUrl` | `http://127.0.0.1:1933` | 远端 OpenViking 服务地址 |
 | `apiKey` | 空 | 远端 OpenViking API Key；服务端未开启认证时可不填 |
-| `agentId` | `default` | 当前 OpenClaw 实例在远端 OpenViking 上的标识 |
+| `agent_prefix` | `default` | 当前 OpenClaw 实例在远端 OpenViking 上的 agent 前缀 |
 
 常见设置：
 
 ```bash
-openclaw config set plugins.entries.openviking.config.mode remote
 openclaw config set plugins.entries.openviking.config.baseUrl http://your-server:1933
 openclaw config set plugins.entries.openviking.config.apiKey your-api-key
-openclaw config set plugins.entries.openviking.config.agentId your-agent-id
+openclaw config set plugins.entries.openviking.config.agent_prefix your-prefix
 ```
 
 ## 启动
@@ -151,13 +121,12 @@ openclaw config set plugins.entries.openviking.config.agentId your-agent-id
 安装完成后，运行：
 
 ```bash
-source ~/.openclaw/openviking.env && openclaw gateway restart
+openclaw gateway restart
 ```
 
 Windows PowerShell：
 
 ```powershell
-. "$HOME/.openclaw/openviking.env.ps1"
 openclaw gateway restart
 ```
 
@@ -205,7 +174,7 @@ python examples/openclaw-plugin/health_check_tools/ov-healthcheck.py
 
 ## 卸载
 
-只卸载 OpenClaw 插件、保留 OpenViking 运行时：
+卸载 OpenClaw 插件：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/upgrade_scripts/uninstall-openclaw-plugin.sh -o uninstall-openviking.sh
@@ -217,10 +186,4 @@ bash uninstall-openviking.sh
 ```bash
 curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/upgrade_scripts/uninstall-openclaw-plugin.sh -o uninstall-openviking.sh
 bash uninstall-openviking.sh --workdir ~/.openclaw-second
-```
-
-如果还要一并删除本机 OpenViking 运行时和数据，再执行：
-
-```bash
-python3 -m pip uninstall openviking -y && rm -rf ~/.openviking
 ```

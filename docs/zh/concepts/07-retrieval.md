@@ -107,7 +107,7 @@ while dir_queue:
 
     for r in results:
         # 分数传播
-        final_score = 0.5 * embedding_score + 0.5 * parent_score
+        final_score = score_propagation_alpha * embedding_score + (1 - score_propagation_alpha) * parent_score
 
         if final_score > threshold:
             collected.append(r)
@@ -124,9 +124,9 @@ while dir_queue:
 
 | 参数 | 值 | 说明 |
 |------|-----|------|
-| `SCORE_PROPAGATION_ALPHA` | 0.5 | 50% embedding + 50% parent |
+| `retrieval.score_propagation_alpha` | 0.5 | 分数传播混合中子节点自身分数的权重；`0.5` 表示 50% 子节点分数 + 50% 父节点分数 |
 | `MAX_CONVERGENCE_ROUNDS` | 3 | 收敛检测轮数 |
-| `GLOBAL_SEARCH_TOPK` | 3 | 全局搜索候选数 |
+| `GLOBAL_SEARCH_TOPK` | 10 | 全局搜索候选数 |
 | `MAX_RELATIONS` | 5 | 每资源最大关联数 |
 
 ## Rerank 策略

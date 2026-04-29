@@ -210,34 +210,45 @@ async def test_find_combines_existing_filter_with_time_range(
     }
 
 
-async def test_find_with_invalid_time_returns_422(client: httpx.AsyncClient):
+async def test_find_with_invalid_time_returns_invalid_argument(client: httpx.AsyncClient):
     resp = await client.post(
         "/api/v1/search/find",
         json={"query": "sample", "since": "not-a-time"},
     )
 
-    assert resp.status_code == 422
-    assert resp.json()["detail"]
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
+    assert body["error"]["message"]
 
 
-async def test_find_with_invalid_time_field_returns_422(client: httpx.AsyncClient):
+async def test_find_with_invalid_time_field_returns_invalid_argument(client: httpx.AsyncClient):
     resp = await client.post(
         "/api/v1/search/find",
         json={"query": "sample", "time_field": "published_at", "since": "2h"},
     )
 
-    assert resp.status_code == 422
-    assert resp.json()["detail"]
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
+    assert body["error"]["message"]
 
 
-async def test_find_with_inverted_mixed_time_range_returns_422(client: httpx.AsyncClient):
+async def test_find_with_inverted_mixed_time_range_returns_invalid_argument(
+    client: httpx.AsyncClient,
+):
     resp = await client.post(
         "/api/v1/search/find",
         json={"query": "sample", "since": "2099-01-01", "until": "2h"},
     )
 
-    assert resp.status_code == 422
-    assert "earlier than or equal to" in resp.json()["detail"]
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
+    assert "earlier than or equal to" in body["error"]["message"]
 
 
 async def test_search_basic(client_with_resource):

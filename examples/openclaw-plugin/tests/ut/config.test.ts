@@ -1,6 +1,4 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { homedir } from "node:os";
-import { join, resolve as resolvePath } from "node:path";
 
 import { memoryOpenVikingConfigSchema } from "../../config.js";
 
@@ -13,23 +11,53 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
 
   it("empty object uses all defaults", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({});
-    expect(cfg.mode).toBe("local");
-    expect(cfg.port).toBe(1933);
+    expect(cfg.mode).toBe("remote");
     expect(cfg.recallLimit).toBe(6);
     expect(cfg.recallScoreThreshold).toBe(0.15);
     expect(cfg.autoCapture).toBe(true);
     expect(cfg.autoRecall).toBe(true);
     expect(cfg.recallPreferAbstract).toBe(false);
-    expect(cfg.recallTokenBudget).toBe(8000);
+    expect(cfg.recallMaxInjectedChars).toBe(4000);
+    expect(cfg.recallTokenBudget).toBe(4000);
     expect(cfg.commitTokenThreshold).toBe(20000);
     expect(cfg.captureMode).toBe("semantic");
     expect(cfg.captureMaxLength).toBe(24000);
     expect(cfg.recallMaxContentChars).toBe(5000);
-    expect(cfg.agentId).toBe("default");
-    expect(cfg.serverAuthMode).toBe("api_key");
+    expect(cfg.agent_prefix).toBe("default");
     expect(cfg.isolateUserScopeByAgent).toBe(false);
     expect(cfg.isolateAgentScopeByUser).toBe(false);
     expect(cfg.emitStandardDiagnostics).toBe(false);
+  });
+
+  it("defaults recallMaxInjectedChars to the 4000-character memory budget", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({});
+    expect(cfg.recallMaxInjectedChars).toBe(4000);
+    expect(cfg.recallTokenBudget).toBe(4000);
+  });
+
+  it("uses recallMaxInjectedChars as the canonical auto-recall character budget", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      recallMaxInjectedChars: 1234,
+    });
+    expect(cfg.recallMaxInjectedChars).toBe(1234);
+    expect(cfg.recallTokenBudget).toBe(1234);
+  });
+
+  it("falls back to deprecated recallTokenBudget when recallMaxInjectedChars is unset", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      recallTokenBudget: 2345,
+    });
+    expect(cfg.recallMaxInjectedChars).toBe(2345);
+    expect(cfg.recallTokenBudget).toBe(2345);
+  });
+
+  it("prefers recallMaxInjectedChars over deprecated recallTokenBudget", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      recallMaxInjectedChars: 3456,
+      recallTokenBudget: 2345,
+    });
+    expect(cfg.recallMaxInjectedChars).toBe(3456);
+    expect(cfg.recallTokenBudget).toBe(3456);
   });
 
   it("remote mode preserves custom baseUrl", () => {
@@ -45,16 +73,6 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(() =>
       memoryOpenVikingConfigSchema.parse({ foo: 1 }),
     ).toThrow("unknown keys");
-  });
-
-  it("clamps port below 1 to 1", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({ port: 0 });
-    expect(cfg.port).toBe(1);
-  });
-
-  it("clamps port above 65535 to 65535", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({ port: 99999 });
-    expect(cfg.port).toBe(65535);
   });
 
   it("resolves environment variables in apiKey", () => {
@@ -89,26 +107,10 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.recallScoreThreshold).toBe(1);
   });
 
-  it("expands tilde in configPath", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({
-      configPath: "~/custom/ov.conf",
-    });
-    const expected = resolvePath(join(homedir(), "custom", "ov.conf"));
-    expect(cfg.configPath).toBe(expected);
-  });
-
   it("throws on invalid captureMode", () => {
     expect(() =>
       memoryOpenVikingConfigSchema.parse({ captureMode: "fast" }),
     ).toThrow('captureMode must be "semantic" or "keyword"');
-  });
-
-  it("local mode auto-generates baseUrl from port", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({
-      mode: "local",
-      port: 9999,
-    });
-    expect(cfg.baseUrl).toBe("http://127.0.0.1:9999");
   });
 
   it("trims trailing slashes from baseUrl", () => {
@@ -132,8 +134,8 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
   it("treats undefined/null as empty config", () => {
     const cfg1 = memoryOpenVikingConfigSchema.parse(undefined);
     const cfg2 = memoryOpenVikingConfigSchema.parse(null);
-    expect(cfg1.mode).toBe("local");
-    expect(cfg2.mode).toBe("local");
+    expect(cfg1.mode).toBe("remote");
+    expect(cfg2.mode).toBe("remote");
   });
 
   it("accepts valid captureMode values", () => {
@@ -157,14 +159,24 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfgHigh.recallMaxContentChars).toBe(10000);
   });
 
-  it("resolves agentId from configured value", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({ agentId: "  my-agent  " });
-    expect(cfg.agentId).toBe("my-agent");
+  it("resolves agent_prefix from configured value", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ agent_prefix: "  my-agent  " });
+    expect(cfg.agent_prefix).toBe("my-agent");
   });
 
-  it("falls back to 'default' for empty agentId", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({ agentId: "  " });
-    expect(cfg.agentId).toBe("default");
+  it("falls back to 'default' for empty agent_prefix", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ agent_prefix: "  " });
+    expect(cfg.agent_prefix).toBe("default");
+  });
+
+  it("migrates legacy agentId to agent_prefix", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ agentId: "legacy-agent" });
+    expect(cfg.agent_prefix).toBe("legacy-agent");
+  });
+
+  it("agent_prefix takes precedence over legacy agentId", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ agentId: "old", agent_prefix: "new" });
+    expect(cfg.agent_prefix).toBe("new");
   });
 
   it("parses accountId and trims whitespace", () => {
@@ -196,7 +208,7 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({
       baseUrl: "http://127.0.0.1:1933",
       apiKey: "sk-user",
-      agentId: "coding-agent",
+      agent_prefix: "coding-agent",
     });
     expect(cfg.accountId).toBe("");
     expect(cfg.userId).toBe("");
@@ -244,14 +256,9 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.isolateAgentScopeByUser).toBe(true);
   });
 
-  it("parses trusted serverAuthMode", () => {
+  it("accepts deprecated serverAuthMode without exposing it in parsed config", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({ serverAuthMode: "trusted" });
-    expect(cfg.serverAuthMode).toBe("trusted");
-  });
-
-  it("falls back to api_key for invalid serverAuthMode", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({ serverAuthMode: "invalid" });
-    expect(cfg.serverAuthMode).toBe("api_key");
+    expect("serverAuthMode" in cfg).toBe(false);
   });
 
   it("defaults recallResources to false", () => {

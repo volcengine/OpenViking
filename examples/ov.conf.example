@@ -89,6 +89,8 @@
         "provider": "volcengine",
         "input": "multimodal"
     },
+    "text_source": "content_only",
+    "max_input_tokens": 4096,
     "circuit_breaker": {
         "failure_threshold": 5,
         "reset_timeout": 60,
@@ -156,6 +158,10 @@
     "api_base": "https://dashscope.aliyuncs.com/compatible-api/v1/reranks",
     "model": "qwen3-rerank",
     "threshold": 0.1
+  },
+  "retrieval": {
+    "hotness_alpha": 0.0,
+    "score_propagation_alpha": 0.5
   },
   "auto_generate_l0": true,
   "auto_generate_l1": true,
@@ -244,6 +250,9 @@
     "provider": "local",
     "local": {
       "key_file": "~/.openviking/master.key"
+    },
+    "api_key_hashing": {
+      "enabled": false
     }
   },
   "encryption_vault_example": {

@@ -226,18 +226,14 @@ async def test_grep_single_pattern(service, client_with_resource):
 
 
 async def test_grep_multiple_patterns(service):
-    result = await grep(
-        uri="viking://resources", pattern=["pattern_a_xyz", "pattern_b_xyz"]
-    )
+    result = await grep(uri="viking://resources", pattern=["pattern_a_xyz", "pattern_b_xyz"])
     assert "No matches found" in result
     assert "pattern_a_xyz" in result
     assert "pattern_b_xyz" in result
 
 
 async def test_grep_case_insensitive(service):
-    result = await grep(
-        uri="viking://resources", pattern="TEST", case_insensitive=True
-    )
+    result = await grep(uri="viking://resources", pattern="TEST", case_insensitive=True)
     assert isinstance(result, str)
 
 

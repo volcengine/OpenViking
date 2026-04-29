@@ -137,7 +137,7 @@ Notes:
 
 ## Key Metric Families
 
-The metric summaries below are based on representative metrics currently exposed in `.vscode/.workdir/metric/METRIC_res.md`.
+The metric summaries below are based on representative metrics currently exposed by the collectors in `openviking/metrics/collectors/`.
 
 ### Requests and Operations
 

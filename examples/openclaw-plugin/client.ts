@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { spawn } from "node:child_process";
 import { once } from "node:events";
 import { createWriteStream } from "node:fs";
 import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
@@ -28,22 +27,10 @@ export type FindResult = {
 export type CaptureMode = "semantic" | "keyword";
 export type ScopeName = "user" | "agent";
 export type AgentScopeMode = "user_agent" | "agent";
-export type ServerAuthMode = "api_key" | "trusted";
 export type RuntimeIdentity = {
   userId: string;
   agentId: string;
 };
-export type LocalClientCacheEntry = {
-  client: OpenVikingClient;
-  process: ReturnType<typeof spawn> | null;
-};
-
-export type PendingClientEntry = {
-  promise: Promise<OpenVikingClient>;
-  resolve: (c: OpenVikingClient) => void;
-  reject: (err: unknown) => void;
-};
-
 export type CommitSessionResult = {
   session_id: string;
   /** "accepted" (async), "completed", "failed", or "timeout" (wait mode). */
@@ -165,13 +152,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export const localClientCache = new Map<string, LocalClientCacheEntry>();
-
-// Module-level pending promise map: shared across all plugin registrations so
-// that both [gateway] and [plugins] contexts await the same promise and
-// don't create duplicate pending promises that never resolve.
-export const localClientPendingPromises = new Map<string, PendingClientEntry>();
-
 const MEMORY_URI_PATTERNS = [
   /^viking:\/\/user\/(?:[^/]+(?:\/agent\/[^/]+)?\/)?memories(?:\/|$)/,
   /^viking:\/\/agent\/(?:[^/]+(?:\/user\/[^/]+)?\/)?memories(?:\/|$)/,
@@ -223,8 +203,7 @@ export class OpenVikingClient {
     private readonly apiKey: string,
     private readonly defaultAgentId: string,
     private readonly timeoutMs: number,
-    private readonly serverAuthMode: ServerAuthMode = "api_key",
-    /** When set (or defaulted), sent so ROOT key can access tenant-scoped APIs. */
+    /** When set, sent so ROOT keys or trusted deployments can select tenant identity. */
     private readonly accountId: string = "",
     private readonly userId: string = "",
     /** When set, logs routing for find + session writes (tenant headers + paths; never apiKey). */
@@ -247,23 +226,10 @@ export class OpenVikingClient {
     const apiKey = this.apiKey.trim();
     const accountId = this.accountId.trim();
     const userId = this.userId.trim();
-    if (this.serverAuthMode === "trusted") {
-      return {
-        ...(apiKey ? { apiKey } : {}),
-        accountId: accountId || "default",
-        userId: userId || "default",
-      };
-    }
-    if (apiKey) {
-      return {
-        apiKey,
-        ...(accountId ? { accountId } : {}),
-        ...(userId ? { userId } : {}),
-      };
-    }
     return {
-      accountId: accountId || "default",
-      userId: userId || "default",
+      ...(apiKey ? { apiKey } : {}),
+      ...(accountId ? { accountId } : {}),
+      ...(userId ? { userId } : {}),
     };
   }
 

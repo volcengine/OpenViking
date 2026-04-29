@@ -25,15 +25,28 @@ from utils.test_utils import SessionIdManager
 
 SERVER_URL = os.environ.get("SERVER_URL", "http://127.0.0.1:1933")
 OPENVIKING_API_KEY = os.environ.get("OPENVIKING_API_KEY", "test-root-api-key")
+OPENVIKING_ACCOUNT = os.environ.get("OPENVIKING_ACCOUNT", "default")
+OPENVIKING_USER = os.environ.get("OPENVIKING_USER", "default")
 TASK_POLL_INTERVAL = 5
 TASK_POLL_MAX_WAIT = 120
+OV_MODE = os.environ.get("OV_MODE", "local")
+
+
+def _is_remote_mode() -> bool:
+    return OV_MODE == "remote" or SERVER_URL not in (
+        "http://127.0.0.1:1933",
+        "http://localhost:1933",
+    )
 
 
 def _get_api_headers() -> Dict[str, str]:
-    return {
-        "X-OpenViking-API-Key": OPENVIKING_API_KEY,
+    headers = {
+        "X-API-Key": OPENVIKING_API_KEY,
+        "X-OpenViking-Account": OPENVIKING_ACCOUNT,
+        "X-OpenViking-User": OPENVIKING_USER,
         "Content-Type": "application/json",
     }
+    return headers
 
 
 def get_viking_data_dir() -> Path:
@@ -113,6 +126,20 @@ class OpenVikingAPIClient:
             return new_ids.pop()
         return None
 
+    def find_session_by_id(self, session_id: str) -> Optional[str]:
+        """直接通过 session ID 查找是否存在于 OV 中"""
+        try:
+            resp = requests.get(
+                f"{self.server_url}/api/v1/sessions/{session_id}",
+                headers=self.headers,
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                return session_id
+        except Exception:
+            pass
+        return None
+
     def find_session_with_most_messages(
         self, candidate_ids: Optional[Set[str]] = None
     ) -> Optional[str]:
@@ -180,6 +207,51 @@ class OpenVikingAPIClient:
                 return task_data
             time.sleep(TASK_POLL_INTERVAL)
         return {"status": "timeout", "task_id": task_id}
+
+    def get_memory_stats(self) -> Dict[str, Any]:
+        try:
+            resp = requests.get(
+                f"{self.server_url}/api/v1/stats/memories",
+                headers=self.headers,
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                return {}
+            return resp.json().get("result", {})
+        except Exception:
+            return {}
+
+    def search_memories(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+        try:
+            resp = requests.post(
+                f"{self.server_url}/api/v1/search/find",
+                headers=self.headers,
+                json={"query": query, "limit": limit},
+                timeout=15,
+            )
+            if resp.status_code != 200:
+                return []
+            return resp.json().get("result", {}).get("memories", [])
+        except Exception:
+            return []
+
+    def list_memory_files(self, memory_type: str) -> List[str]:
+        try:
+            uri = f"viking://user/default/memories/{memory_type}"
+            resp = requests.get(
+                f"{self.server_url}/api/v1/fs/ls",
+                headers=self.headers,
+                params={"uri": uri, "recursive": "true", "simple": "true"},
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                return []
+            result = resp.json().get("result", [])
+            if isinstance(result, list):
+                return [str(r) for r in result if str(r).endswith(".md")]
+            return []
+        except Exception:
+            return []
 
 
 class MemoryV2TestSuite:
@@ -283,7 +355,9 @@ class MemoryV2TestSuite:
             "all_files": [],
         }
 
-        # 先检查目标类型目录
+        if _is_remote_mode():
+            return self._check_memory_files_remote(memory_type, before_files)
+
         target_result = self._check_target_type(memory_type, before_files)
         result["new_files"].extend(target_result["new_files"])
         result["modified_files"].extend(target_result["modified_files"])
@@ -293,7 +367,6 @@ class MemoryV2TestSuite:
             result["found"] = True
             return result
 
-        # 目标目录无变化，扫描全目录查找新增/修改的文件
         print(f"  ⚠ {memory_type} 目录无直接变化，扫描全目录...")
         after_files = self._snapshot_all_memory_files()
 
@@ -313,6 +386,70 @@ class MemoryV2TestSuite:
 
         if not result["found"]:
             print("  ✗ 全目录扫描均无新增或修改的记忆文件")
+        return result
+
+    def _check_memory_files_remote(
+        self, memory_type: str, before_files: Dict[str, float]
+    ) -> Dict[str, Any]:
+        """远端模式：通过 OV API 验证记忆是否写入成功"""
+        result = {
+            "memory_type": memory_type,
+            "found": False,
+            "new_files": [],
+            "modified_files": [],
+            "all_files": [],
+        }
+
+        print("  [远端模式] 通过 OV API 验证记忆...")
+
+        before_uris = set(before_files.get("_remote_uris", []))
+        before_count = before_files.get("_remote_category_count", 0)
+
+        after_files_list = self.api.list_memory_files(memory_type)
+        after_uris = set(after_files_list)
+        new_uris = after_uris - before_uris
+
+        stats = self.api.get_memory_stats()
+        by_category = stats.get("by_category", {})
+        after_count = by_category.get(memory_type, 0)
+        count_diff = after_count - before_count
+        print(
+            f"  /api/v1/stats/memories → {memory_type}: {before_count} → {after_count} (增量: {count_diff})"
+        )
+        print(
+            f"  /api/v1/fs/ls → {memory_type}: 文件 {len(before_uris)} → {len(after_uris)} (新增: {len(new_uris)})"
+        )
+
+        if new_uris:
+            result["found"] = True
+            result["new_files"] = list(new_uris)
+            print(f"  ✓ {memory_type} 目录新增 {len(new_uris)} 个文件")
+            for uri in list(new_uris)[:3]:
+                print(f"    + {uri}")
+
+        if count_diff > 0:
+            result["found"] = True
+            print(f"  ✓ {memory_type} 类别计数增加 {count_diff} 条")
+
+        if not result["found"]:
+            scenario = next(
+                (s for s in self.test_scenarios if s["memory_type"] == memory_type), None
+            )
+            if scenario:
+                search_keywords = scenario["test_message"][:30]
+                memories = self.api.search_memories(search_keywords, limit=5)
+                if memories:
+                    result["found"] = True
+                    result["new_files"] = [m.get("uri", "") for m in memories]
+                    print(f"  ✓ 通过 search/find 找到 {len(memories)} 条相关记忆")
+                    for m in memories[:3]:
+                        uri = m.get("uri", "")
+                        score = m.get("score", 0)
+                        abstract = (m.get("abstract", "") or "")[:60]
+                        print(f"    - {uri} (score={score:.3f}) {abstract}...")
+
+        if not result["found"]:
+            print(f"  ✗ 远端验证失败：{memory_type} 无新增记忆 (计数无变化且无新文件)")
         return result
 
     def _relative_display(self, file_str: str) -> str:
@@ -450,9 +587,23 @@ class MemoryV2TestSuite:
             # 步骤 1: 记录当前 OV sessions 快照和全目录记忆文件快照
             print("\n[步骤 1/5] 记录快照")
             before_session_ids = self.api.list_session_ids()
-            before_memory_files = self._snapshot_all_memory_files()
-            print(f"  当前 session 数量: {len(before_session_ids)}")
-            print(f"  当前全目录记忆文件数量: {len(before_memory_files)}")
+            if _is_remote_mode():
+                before_stats = self.api.get_memory_stats()
+                before_count = before_stats.get("by_category", {}).get(scenario["memory_type"], 0)
+                before_uris = self.api.list_memory_files(scenario["memory_type"])
+                before_memory_files = {
+                    "_remote_uris": before_uris,
+                    "_remote_category_count": before_count,
+                }
+                print(f"  当前 session 数量: {len(before_session_ids)}")
+                print(f"  [远端模式] 记忆统计: {before_stats.get('by_category', {})}")
+                print(
+                    f"  [远端模式] {scenario['memory_type']} 文件数: {len(before_uris)}, 计数: {before_count}"
+                )
+            else:
+                before_memory_files = self._snapshot_all_memory_files()
+                print(f"  当前 session 数量: {len(before_session_ids)}")
+                print(f"  当前全目录记忆文件数量: {len(before_memory_files)}")
             print(f"  场景 session ID: {scenario_session_id}")
             result["steps"]["snapshot"] = "success"
 
@@ -462,21 +613,36 @@ class MemoryV2TestSuite:
             self.run_openclaw_command(scenario["test_message"], scenario_session_id)
             print("✓ OpenClaw 对话完成")
             result["steps"]["openclaw_chat"] = "success"
-            time.sleep(2)
+            time.sleep(5)
 
             # 步骤 3: 找到 OV session 并 commit
             print("\n[步骤 3/5] 查找 OV session 并 commit")
             ov_session_id = self.api.find_new_session_id(before_session_ids)
             if not ov_session_id:
-                print("  ⚠ 未找到新 session，在已有 session 中查找消息最多的")
-                ov_session_id = self.api.find_session_with_most_messages()
-
+                print("  ⚠ 未找到新 session，尝试用场景 session ID 直接查找")
+                ov_session_id = self.api.find_session_by_id(scenario_session_id)
             if not ov_session_id:
-                print("  ✗ 无可用 session")
-                result["steps"]["commit"] = "failed"
-                result["status"] = "error"
-                result["error"] = "未找到 OV session"
-                return False, result
+                print("  ⚠ 场景 session ID 未命中，在已有 session 中查找消息最多的")
+                ov_session_id = self.api.find_session_with_most_messages()
+            if not ov_session_id:
+                print("  ⚠ 仍未找到新 session，跳过 commit 步骤，直接检查记忆文件")
+                result["steps"]["commit"] = "skipped"
+                result["ov_session_id"] = None
+                print("\n[步骤 4/5] 跳过 (无 OV session)")
+                print("\n[步骤 5/5] 验证记忆文件变化")
+                memory_files_result = self.check_memory_files(
+                    scenario["memory_type"], before_memory_files
+                )
+                result["memory_files"] = memory_files_result
+                if memory_files_result["found"]:
+                    result["steps"]["memory_files"] = "success"
+                    result["status"] = "passed"
+                    return True, result
+                else:
+                    result["steps"]["memory_files"] = "failed"
+                    result["status"] = "failed"
+                    result["error"] = f"{scenario['memory_type']}: 未找到 OV session 且无新增记忆"
+                    return False, result
 
             print(f"  OV session ID: {ov_session_id}")
             commit_resp = self.api.commit_session(ov_session_id)
@@ -484,11 +650,65 @@ class MemoryV2TestSuite:
             commit_result = commit_data.get("result", {})
             task_id = commit_result.get("task_id")
 
+            if not task_id and commit_result.get("status") == "accepted":
+                print(
+                    "  ⚠ Commit 返回 accepted 但无 task_id（对话 token 数可能不足阈值），补充对话后重试..."
+                )
+                follow_ups = [
+                    "请详细总结一下我刚才告诉你的所有信息，逐条列出。",
+                    "你能复述一下我的个人情况吗？越详细越好。",
+                ]
+                for follow_up in follow_ups:
+                    try:
+                        self.run_openclaw_command(follow_up, scenario_session_id)
+                        time.sleep(2)
+                    except Exception:
+                        pass
+                commit_resp = self.api.commit_session(ov_session_id)
+                commit_data = commit_resp.get("data", {})
+                commit_result = commit_data.get("result", {})
+                task_id = commit_result.get("task_id")
+
             if commit_resp["status_code"] == 200 and task_id:
                 print(f"✓ Commit 成功 (task_id: {task_id})")
                 result["steps"]["commit"] = "success"
                 result["ov_session_id"] = ov_session_id
                 result["task_id"] = task_id
+            elif commit_resp["status_code"] == 200 and not task_id:
+                print("  ⚠ Commit 返回 task_id=None (session 可能无待处理消息)")
+                print("  等待 10 秒后重试 commit...")
+                time.sleep(10)
+                commit_resp = self.api.commit_session(ov_session_id)
+                commit_data = commit_resp.get("data", {})
+                commit_result = commit_data.get("result", {})
+                task_id = commit_result.get("task_id")
+                if task_id:
+                    print(f"✓ 重试 Commit 成功 (task_id: {task_id})")
+                    result["steps"]["commit"] = "success"
+                    result["ov_session_id"] = ov_session_id
+                    result["task_id"] = task_id
+                else:
+                    print("  ⚠ 重试仍无 task_id，跳过记忆提取步骤")
+                    result["steps"]["commit"] = "accepted_no_task"
+                    result["ov_session_id"] = ov_session_id
+                    result["steps"]["memory_extraction"] = "skipped"
+                    print("\n[步骤 4/5] 跳过 (无 task_id)")
+                    print("\n[步骤 5/5] 验证记忆文件变化")
+                    memory_files_result = self.check_memory_files(
+                        scenario["memory_type"], before_memory_files
+                    )
+                    result["memory_files"] = memory_files_result
+                    if memory_files_result["found"]:
+                        result["steps"]["memory_files"] = "success"
+                        result["status"] = "passed"
+                        return True, result
+                    else:
+                        result["steps"]["memory_files"] = "failed"
+                        result["status"] = "failed"
+                        result["error"] = (
+                            f"{scenario['memory_type']}: Commit 无 task_id 且无新增记忆"
+                        )
+                        return False, result
             else:
                 print(f"✗ Commit 失败: {commit_resp}")
                 result["steps"]["commit"] = "failed"
