@@ -37,6 +37,8 @@ async function fetchJSON(path, init = {}) {
     const headers = { "Content-Type": "application/json" };
     if (cfg.apiKey) headers["X-API-Key"] = cfg.apiKey;
     if (cfg.agentId) headers["X-OpenViking-Agent"] = cfg.agentId;
+    if (cfg.account) headers["X-OpenViking-Account"] = cfg.account;
+    if (cfg.user) headers["X-OpenViking-User"] = cfg.user;
     const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
     const body = await res.json();
     if (!res.ok || body.status === "error") return null;
@@ -155,68 +157,13 @@ function postProcess(items, limit, threshold) {
 }
 
 // ---------------------------------------------------------------------------
-// URI space resolution (mirrors MCP server's normalizeTargetUri logic)
-// ---------------------------------------------------------------------------
-
-const USER_RESERVED_DIRS = new Set(["memories"]);
-const AGENT_RESERVED_DIRS = new Set(["memories", "skills", "instructions", "workspaces"]);
-const _spaceCache = {};
-
-async function resolveScopeSpace(scope) {
-  if (_spaceCache[scope]) return _spaceCache[scope];
-
-  let fallbackSpace = "default";
-  try {
-    const status = await fetchJSON("/api/v1/system/status");
-    if (status && typeof status.user === "string" && status.user.trim()) {
-      fallbackSpace = status.user.trim();
-    }
-  } catch { /* use fallback */ }
-
-  const reservedDirs = scope === "user" ? USER_RESERVED_DIRS : AGENT_RESERVED_DIRS;
-  try {
-    const entries = await fetchJSON(`/api/v1/fs/ls?uri=${encodeURIComponent(`viking://${scope}`)}&output=original`);
-    if (Array.isArray(entries)) {
-      const spaces = entries
-        .filter(e => e?.isDir)
-        .map(e => (typeof e.name === "string" ? e.name.trim() : ""))
-        .filter(n => n && !n.startsWith(".") && !reservedDirs.has(n));
-      if (spaces.length > 0) {
-        if (spaces.includes(fallbackSpace)) { _spaceCache[scope] = fallbackSpace; return fallbackSpace; }
-        if (scope === "user" && spaces.includes("default")) { _spaceCache[scope] = "default"; return "default"; }
-        if (spaces.length === 1) { _spaceCache[scope] = spaces[0]; return spaces[0]; }
-      }
-    }
-  } catch { /* use fallback */ }
-
-  _spaceCache[scope] = fallbackSpace;
-  return fallbackSpace;
-}
-
-async function resolveTargetUri(targetUri) {
-  const trimmed = targetUri.trim().replace(/\/+$/, "");
-  const m = trimmed.match(/^viking:\/\/(user|agent)(?:\/(.*))?$/);
-  if (!m) return trimmed;
-  const scope = m[1];
-  const rawRest = (m[2] ?? "").trim();
-  if (!rawRest) return trimmed;
-  const parts = rawRest.split("/").filter(Boolean);
-  if (parts.length === 0) return trimmed;
-  const reservedDirs = scope === "user" ? USER_RESERVED_DIRS : AGENT_RESERVED_DIRS;
-  if (!reservedDirs.has(parts[0])) return trimmed;
-  const space = await resolveScopeSpace(scope);
-  return `viking://${scope}/${space}/${parts.join("/")}`;
-}
-
-// ---------------------------------------------------------------------------
 // Search OpenViking
 // ---------------------------------------------------------------------------
 
 async function searchScope(query, targetUri, limit) {
-  const resolvedUri = await resolveTargetUri(targetUri);
   const result = await fetchJSON("/api/v1/search/find", {
     method: "POST",
-    body: JSON.stringify({ query, target_uri: resolvedUri, limit, score_threshold: 0 }),
+    body: JSON.stringify({ query, target_uri: targetUri, limit, score_threshold: 0 }),
   });
   return result?.memories || [];
 }
