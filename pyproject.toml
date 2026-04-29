@@ -82,6 +82,7 @@ dependencies = [
     "argon2-cffi>=23.0.0",
     "lark-oapi>=1.5.3",
     "mcp>=1.27.0",
+    "pathspec>=1.1.1",
 ]
 
 

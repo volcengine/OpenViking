@@ -28,7 +28,7 @@ OpenViking 支持多种资源类型，按照功能分类如下：
 | 类型 | 资源名 | 说明 |
 |------|--------|------|
 | 代码文件 | `*.py`, `*.js`, ... | 支持常见编程语言（Python, JavaScript, Go, Rust, Java 等） |
-| Git 协议代码仓库 | `git://...` | Git URL, 本地目录, `.zip` 包，会自动过滤 `.git`, `node_modules` 等目录 |
+| Git 协议代码仓库 | `git://...` | Git URL, 本地目录, `.zip` 包，遵循 `.gitignore` 并自动过滤 `.git`, `node_modules` 等目录 |
 | Git 代码托管平台 | `https://github.com/{org}/{repo}` | GitHub, GitLab, Bitbucket 等代码托管平台的 URL |
 | Git 代码托管平台上的 raw 文件 | `https://github.com/{org}/{repo}/raw/{branch}/{path}` | GitHub, GitLab, Bitbucket 等代码托管平台的 raw 文件下载 URL |
 
@@ -150,6 +150,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 - `to` 和 `parent` 都可用于指定目标路径，但不能同时使用；指定 `to` 且目标已存在时，触发增量更新。
 - `path` 和 `temp_file_id` 不能同时指定，上传本地文件需要先通过 [temp_upload](#temp_upload) 上传获取 `temp_file_id`，在 SDK 和 CLI 中已经封装好。
 - `watch_interval` 仅在指定 `to` 时生效
+- 本地目录输入会遵循 `.gitignore`（根目录和子目录，标准 Git 语义）；`ignore_dirs`、`include`、`exclude` 会在此基础上进一步过滤。
 
 #### 3. 使用示例
 

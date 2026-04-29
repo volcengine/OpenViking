@@ -31,7 +31,7 @@ OpenViking supports various resource types, categorized by functionality:
 | Type | Resource Name | Description |
 |------|---------------|-------------|
 | Code Files | `*.py`, `*.js`, ... | Supports common programming languages (Python, JavaScript, Go, Rust, Java, etc.) |
-| Git Protocol Repository | `git://...` | Git URL, local directory, `.zip` package, automatically filters `.git`, `node_modules` and other directories |
+| Git Protocol Repository | `git://...` | Git URL, local directory, `.zip` package, respects `.gitignore` and automatically filters `.git`, `node_modules` and other directories |
 | Git Code Hosting Platform | `https://github.com/{org}/{repo}` | URLs from GitHub, GitLab, Bitbucket and other code hosting platforms |
 | Raw Files from Git Hosting | `https://github.com/{org}/{repo}/raw/{branch}/{path}` | Raw file download URLs from GitHub, GitLab, Bitbucket and other platforms |
 
@@ -157,6 +157,7 @@ This endpoint is the core entry point for resource management, supporting adding
 - Raw HTTP calls for local files require first uploading via [temp_upload](#temp_upload) to obtain `temp_file_id`
 - When `to` is specified and the target already exists, triggers incremental update
 - `watch_interval` only takes effect when `to` is provided
+- For local directory inputs, scanning respects `.gitignore` files (root and nested) with standard Git semantics; `ignore_dirs`, `include`, and `exclude` further refine what is ingested.
 
 #### 3. Usage Examples
 
