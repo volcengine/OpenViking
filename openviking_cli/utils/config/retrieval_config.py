@@ -17,13 +17,14 @@ class RetrievalConfig(BaseModel):
         ),
     )
     score_propagation_alpha: float = Field(
-        default=0.0,
+        default=0.5,
         ge=0.0,
         le=1.0,
         description=(
             "Weight for each child result's own score when blending with its parent score "
-            "during hierarchical retrieval. 0 uses only the parent score; "
-            "1 uses only the child score."
+            "during hierarchical retrieval. 0.5 keeps the historic equal blend "
+            "(matches the pre-refactor SCORE_PROPAGATION_ALPHA constant); "
+            "0 uses only the parent score; 1 uses only the child score."
         ),
     )
 
