@@ -162,6 +162,8 @@ vim ~/.openviking/ov.conf
 {
   "claude_code": {
     "agentId": "claude-code",
+    "account": "default",
+    "user": "default",
     "recallLimit": 6,
     "captureMode": "semantic",
     "captureTimeoutMs": 30000,
@@ -213,6 +215,8 @@ export OPENVIKING_CONFIG_FILE="~/custom/path/ov.conf"
 | 字段 | 默认值 | 描述 |
 |------|-------|------|
 | `agentId` | `claude-code` | 用于记忆隔离的代理标识 |
+| `account` | `default_account` | 作为 `X-OpenViking-Account` 发送的租户账号。使用 root key 或 trusted 认证模式时需要；使用 user key 时 OpenViking 会从 key 推导。 |
+| `user` | `default_user` | 作为 `X-OpenViking-User` 发送的租户用户。使用 root key 或 trusted 认证模式时需要；使用 user key 时 OpenViking 会从 key 推导。 |
 | `timeoutMs` | `15000` | 召回/通用请求的 HTTP 请求超时（毫秒）|
 | `autoRecall` | `true` | 每次用户提示时启用自动召回 |
 | `recallLimit` | `6` | 每轮注入的最大记忆数 |
@@ -224,6 +228,11 @@ export OPENVIKING_CONFIG_FILE="~/custom/path/ov.conf"
 | `captureMaxLength` | `24000` | 捕获的最大文本长度 |
 | `captureTimeoutMs` | `30000` | 自动捕获请求的 HTTP 请求超时（毫秒）|
 | `captureAssistantTurns` | `false` | 在自动捕获输入中包含助手轮次；默认只捕获用户 |
+
+**作用域解析**由 OpenViking 服务端处理。插件会原样发送
+`viking://user/memories`、`viking://agent/memories` 和
+`viking://agent/skills` 等简写 target URI。OpenViking 会根据 API key 和
+`X-OpenViking-*` headers 得到的有效 account/user/agent 身份来解析这些作用域。
 
 ## Hook 超时
 
