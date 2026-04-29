@@ -1,0 +1,20 @@
+name: 17. Docs
+
+on:
+  pull_request:
+    paths:
+      - 'docs/**'
+      - '.github/workflows/_docs.yml'
+      - '.github/workflows/_docs-deploy.yml'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  docs-check:
+    name: Build Docs
+    uses: ./.github/workflows/_docs.yml
+    permissions:
+      contents: read

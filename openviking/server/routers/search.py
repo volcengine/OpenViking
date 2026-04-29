@@ -3,20 +3,21 @@
 """Search endpoints for OpenViking HTTP Server."""
 
 import math
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
+from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
 from openviking.utils.search_filters import merge_time_filter
-from openviking_cli.exceptions import NotFoundError
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
 
 def _sanitize_floats(obj: Any) -> Any:
@@ -54,14 +55,14 @@ def _resolve_search_filter(
             time_field=time_field,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise InvalidArgumentError(str(exc)) from exc
 
 
 class FindRequest(BaseModel):
     """Request model for find."""
 
     query: str
-    target_uri: str = ""
+    target_uri: Union[str, List[str]] = ""
     limit: int = 10
     node_limit: Optional[int] = None
     score_threshold: Optional[float] = None
@@ -78,7 +79,7 @@ class SearchRequest(BaseModel):
     """Request model for search with session."""
 
     query: str
-    target_uri: str = ""
+    target_uri: Union[str, List[str]] = ""
     session_id: Optional[str] = None
     limit: int = 10
     node_limit: Optional[int] = None
@@ -218,6 +219,11 @@ async def grep(
         err_msg = str(e).lower()
         if "not found" in err_msg or "no such file or directory" in err_msg:
             raise NotFoundError(request.uri, "file")
+        raise
+    except Exception as exc:
+        mapped = map_exception(exc, resource=request.uri, resource_type="file")
+        if mapped is not None:
+            raise mapped from exc
         raise
     return Response(status="ok", result=result)
 

@@ -45,7 +45,6 @@ describe("buildMemoryLines", () => {
 
     const lines = await buildMemoryLines(memories, readFn, {
       recallPreferAbstract: true,
-      recallMaxContentChars: 500,
     });
 
     expect(lines).toHaveLength(2);
@@ -59,7 +58,6 @@ describe("buildMemoryLines", () => {
 
     await buildMemoryLines(memories, readFn, {
       recallPreferAbstract: true,
-      recallMaxContentChars: 500,
     });
 
     expect(readFn).not.toHaveBeenCalled();
@@ -71,7 +69,6 @@ describe("buildMemoryLines", () => {
 
     const lines = await buildMemoryLines(memories, readFn, {
       recallPreferAbstract: false,
-      recallMaxContentChars: 500,
     });
 
     expect(readFn).toHaveBeenCalledWith("viking://user/memories/test-1");
@@ -84,7 +81,6 @@ describe("buildMemoryLines", () => {
 
     const lines = await buildMemoryLines(memories, readFn, {
       recallPreferAbstract: false,
-      recallMaxContentChars: 500,
     });
 
     expect(lines[0]).toContain("Fallback abstract");
@@ -96,24 +92,21 @@ describe("buildMemoryLines", () => {
 
     const lines = await buildMemoryLines(memories, readFn, {
       recallPreferAbstract: false,
-      recallMaxContentChars: 500,
     });
 
     expect(lines[0]).toContain("Fallback abstract");
   });
 
-  it("truncates content exceeding recallMaxContentChars", async () => {
+  it("keeps individual memory content intact", async () => {
     const longAbstract = "x".repeat(600);
     const memories = [makeMemory({ abstract: longAbstract })];
     const readFn = vi.fn();
 
     const lines = await buildMemoryLines(memories, readFn, {
       recallPreferAbstract: true,
-      recallMaxContentChars: 100,
     });
 
-    expect(lines[0]).toContain("...");
-    expect(lines[0].length).toBeLessThan(600);
+    expect(lines[0]).toBe(`- [core] ${longAbstract}`);
   });
 
   it("uses uri as fallback when no abstract", async () => {
@@ -122,7 +115,6 @@ describe("buildMemoryLines", () => {
 
     const lines = await buildMemoryLines(memories, readFn, {
       recallPreferAbstract: true,
-      recallMaxContentChars: 500,
     });
 
     expect(lines[0]).toContain("viking://user/memories/test-1");
@@ -134,7 +126,6 @@ describe("buildMemoryLines", () => {
 
     const lines = await buildMemoryLines(memories, readFn, {
       recallPreferAbstract: true,
-      recallMaxContentChars: 500,
     });
 
     expect(lines[0]).toContain("[memory]");
@@ -142,31 +133,30 @@ describe("buildMemoryLines", () => {
 });
 
 describe("buildMemoryLinesWithBudget", () => {
-  it("stops adding when budget is exhausted", async () => {
+  it("stops adding before total injected characters exceed the budget", async () => {
     const memories = [
-      makeMemory({ abstract: "a".repeat(100), category: "a" }),
-      makeMemory({ abstract: "b".repeat(100), category: "b" }),
-      makeMemory({ abstract: "c".repeat(100), category: "c" }),
+      makeMemory({ abstract: "a".repeat(3000), category: "a" }),
+      makeMemory({ abstract: "b".repeat(1500), category: "b" }),
     ];
     const readFn = vi.fn();
-    // Each line ~100 chars → ~25 tokens. Budget=40 fits 1-2 lines.
     const { lines, estimatedTokens } = await buildMemoryLinesWithBudget(
       memories,
       readFn,
       {
         recallPreferAbstract: true,
-        recallMaxContentChars: 500,
-        recallTokenBudget: 40,
+        recallMaxInjectedChars: 4000,
       },
     );
 
-    expect(lines.length).toBeLessThan(3);
-    expect(estimatedTokens).toBeLessThanOrEqual(40 + 30); // first always included even if over
+    expect(lines).toHaveLength(1);
+    expect(lines[0]!.length).toBeLessThanOrEqual(4000);
+    expect(estimatedTokens).toBe(estimateTokenCount(lines[0]!));
   });
 
-  it("always includes the first memory even if over budget", async () => {
+  it("skips memories that do not fit the remaining character budget", async () => {
     const memories = [
-      makeMemory({ abstract: "a".repeat(400) }), // ~100 tokens
+      makeMemory({ abstract: "a".repeat(400), category: "large" }),
+      makeMemory({ abstract: "short", category: "small" }),
     ];
     const readFn = vi.fn();
 
@@ -175,12 +165,31 @@ describe("buildMemoryLinesWithBudget", () => {
       readFn,
       {
         recallPreferAbstract: true,
-        recallMaxContentChars: 500,
-        recallTokenBudget: 10,
+        recallMaxInjectedChars: 20,
       },
     );
 
     expect(lines).toHaveLength(1);
+    expect(lines[0]).toBe("- [small] short");
+  });
+
+  it("returns no lines when no complete memory fits the character budget", async () => {
+    const memories = [
+      makeMemory({ abstract: "a".repeat(400), category: "large" }),
+    ];
+    const readFn = vi.fn();
+
+    const { lines, estimatedTokens } = await buildMemoryLinesWithBudget(
+      memories,
+      readFn,
+      {
+        recallPreferAbstract: true,
+        recallMaxInjectedChars: 20,
+      },
+    );
+
+    expect(lines).toHaveLength(0);
+    expect(estimatedTokens).toBe(0);
   });
 
   it("returns correct estimatedTokens sum", async () => {
@@ -194,7 +203,6 @@ describe("buildMemoryLinesWithBudget", () => {
       readFn,
       {
         recallPreferAbstract: true,
-        recallMaxContentChars: 500,
         recallTokenBudget: 2000,
       },
     );
@@ -210,7 +218,6 @@ describe("buildMemoryLinesWithBudget", () => {
       readFn,
       {
         recallPreferAbstract: true,
-        recallMaxContentChars: 500,
         recallTokenBudget: 2000,
       },
     );

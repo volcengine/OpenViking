@@ -66,6 +66,84 @@ asyncio.run(test())
 
 Done! Now all written data is automatically encrypted.
 
+## API Key Hashing Configuration
+
+OpenViking provides two layers of encryption protection:
+
+| Encryption Layer | Config | Algorithm | Reversible | Description |
+|------------------|--------|-----------|------------|-------------|
+| **File Layer** | `encryption.enabled` | AES-GCM | ✅ Yes | Protects entire storage files |
+| **API Key Field Layer** | `encryption.api_key_hashing.enabled` | Argon2id | ❌ No | Protects API keys themselves |
+
+### ⚠️ Breaking Change Notice
+
+**Version Change**: OpenViking v0.3.12 → later versions
+
+**Behavior Change**:
+- **Before**: `encryption.enabled = true` implicitly enabled API key Argon2id hashing
+- **Now**: You must explicitly configure `encryption.api_key_hashing.enabled`
+
+**Impact**:
+- After upgrade, if `encryption.enabled = true` but `encryption.api_key_hashing.enabled` is not explicitly set to `true`, you will see the following warning log on startup:
+  ```
+  API key hashing is disabled while file encryption is enabled.
+  Previously, encryption.enabled=true implicitly enabled API key Argon2id hashing.
+  Now, API keys will be stored in plaintext within AES-GCM encrypted files.
+  To maintain the previous behavior, set encryption.api_key_hashing.enabled=true.
+  ```
+
+**Migration Options**:
+
+| Option | Config | Behavior |
+|--------|--------|----------|
+| **Maintain Previous Behavior** | `api_key_hashing.enabled = true` | API keys stored using Argon2id hashing |
+| **Recommended New Behavior** | `api_key_hashing.enabled = false` (default) | API keys stored in plaintext (file layer still encrypted) |
+
+### Default Behavior
+
+**By default, `encryption.api_key_hashing.enabled = false`**:
+- API keys are stored in plaintext within JSON files
+- If `encryption.enabled = true`, the entire file is protected by AES-GCM encryption
+- `ov admin list-users` can display the full API key
+
+### Enabling Argon2id Hashing
+
+For maximum API key protection, you can enable Argon2id one-way hashing:
+
+```json
+{
+  "encryption": {
+    "enabled": true,
+    "api_key_hashing": {
+      "enabled": true
+    }
+  }
+}
+```
+
+**Note**: When enabled:
+- API keys are stored using Argon2id one-way hashing
+- Plaintext keys cannot be recovered from hash values
+- `ov admin list-users` only shows `key_prefix` instead of the full API key
+- Plaintext keys are only visible when creating users or regenerating keys
+
+### Configuration Example
+
+```json
+{
+  "encryption": {
+    "enabled": true,
+    "provider": "local",
+    "local": {
+      "key_file": "~/.openviking/master.key"
+    },
+    "api_key_hashing": {
+      "enabled": false
+    }
+  }
+}
+```
+
 ## Choosing a Key Provider
 
 | Provider | Use Case | Pros | Cons |

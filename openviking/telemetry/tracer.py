@@ -14,19 +14,33 @@ from loguru import logger
 try:
     from opentelemetry import trace as otel_trace
     from opentelemetry.context import Context
-    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
     from opentelemetry.propagate import extract, inject
     from opentelemetry.sdk.resources import Resource
     from opentelemetry.sdk.trace import Status, StatusCode, TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
     from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+
+    try:
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+            OTLPSpanExporter as OTLPGrpcSpanExporter,
+        )
+    except ImportError:
+        OTLPGrpcSpanExporter = None
+
+    try:
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+            OTLPSpanExporter as OTLPHttpSpanExporter,
+        )
+    except ImportError:
+        OTLPHttpSpanExporter = None
 except ImportError:
     otel_trace = None
     TracerProvider = None
     Status = None
     StatusCode = None
     BatchSpanProcessor = None
-    OTLPSpanExporter = None
+    OTLPGrpcSpanExporter = None
+    OTLPHttpSpanExporter = None
     TraceContextTextMapPropagator = None
     Context = None
     extract = None
@@ -80,32 +94,34 @@ def _setup_logging():
         _log_trace_internal_failure("[TRACER] failed to attach standard logging trace_id filter")
 
 
-def init_tracer_from_config() -> Any:
-    """Initialize tracer from OpenViking config."""
+def init_tracer_from_server_config(server_config: Any) -> Any:
+    """Initialize tracer from server.observability.traces config.
+
+    Args:
+        server_config: The server configuration containing observability settings.
+
+    Returns:
+        The initialized tracer, or None if initialization failed or disabled.
+    """
     try:
-        from openviking_cli.utils.config import get_openviking_config
-
-        config = get_openviking_config()
-        tracer_cfg = config.telemetry.tracer
-
-        if not tracer_cfg.enabled:
-            logger.info("[TRACER] disabled in config")
+        trace_cfg = server_config.observability.traces
+        if not trace_cfg.enabled:
+            logger.info("[TRACER] disabled in server.observability.traces")
             return None
 
-        if not tracer_cfg.endpoint:
-            logger.warning("[TRACER] endpoint not configured")
+        if not trace_cfg.endpoint:
+            logger.warning("[TRACER] server.observability.traces.endpoint not configured")
             return None
 
         return init_tracer(
-            endpoint=tracer_cfg.endpoint,
-            service_name=tracer_cfg.service_name,
-            topic=tracer_cfg.topic,
-            ak=tracer_cfg.ak,
-            sk=tracer_cfg.sk,
-            enabled=tracer_cfg.enabled,
+            endpoint=trace_cfg.endpoint,
+            service_name=trace_cfg.service_name,
+            protocol=trace_cfg.protocol,
+            insecure=trace_cfg.tls.insecure,
+            enabled=trace_cfg.enabled,
         )
     except Exception as e:
-        logger.warning(f"[TRACER] init from config failed: {e}")
+        logger.warning(f"[TRACER] init from server config failed: {e}")
         return None
 
 
@@ -125,19 +141,17 @@ def _init_asyncio_instrumentation() -> None:
 def init_tracer(
     endpoint: str,
     service_name: str,
-    topic: str,
-    ak: str,
-    sk: str,
+    protocol: str = "grpc",
+    insecure: bool = False,
     enabled: bool = True,
 ) -> Any:
     """Initialize the OpenTelemetry tracer.
 
     Args:
-        endpoint: OTLP endpoint URL
+        endpoint: OTLP endpoint
         service_name: Service name for tracing
-        topic: Trace topic
-        ak: Access key
-        sk: Secret key
+        protocol: OTLP protocol ("grpc" or "http")
+        insecure: For OTLP/gRPC only. When True, use plaintext instead of TLS.
         enabled: Whether to enable tracing
 
     Returns:
@@ -157,22 +171,36 @@ def init_tracer(
         return None
 
     try:
-        headers = {
-            "x-tls-otel-tracetopic": topic,
-            "x-tls-otel-ak": ak,
-            "x-tls-otel-sk": sk,
-            "x-tls-otel-region": "cn-beijing",
-        }
-
         resource_attributes = {
             "service.name": service_name,
         }
         resource = Resource.create(resource_attributes)
 
-        trace_exporter = OTLPSpanExporter(
-            endpoint=endpoint,
-            headers=headers,
-        )
+        protocol = protocol.lower()
+        if protocol == "grpc":
+            if OTLPGrpcSpanExporter is None:
+                raise ImportError("gRPC OTLP trace exporter not available")
+            try:
+                trace_exporter = OTLPGrpcSpanExporter(
+                    endpoint=endpoint,
+                    insecure=insecure,
+                )
+            except TypeError:
+                trace_exporter = OTLPGrpcSpanExporter(
+                    endpoint=endpoint,
+                )
+        elif protocol == "http":
+            if OTLPHttpSpanExporter is None:
+                raise ImportError("HTTP OTLP trace exporter not available")
+            if not endpoint.startswith("http://") and not endpoint.startswith("https://"):
+                raise ValueError(
+                    "OTLP/HTTP trace endpoint must include scheme, e.g. 'http://localhost:4318/v1/traces'"
+                )
+            trace_exporter = OTLPHttpSpanExporter(
+                endpoint=endpoint,
+            )
+        else:
+            raise ValueError(f"Unsupported trace protocol: {protocol}")
 
         trace_provider = TracerProvider(resource=resource)
         trace_provider.add_span_processor(
@@ -194,7 +222,12 @@ def init_tracer(
         # Initialize asyncio instrumentation to create child spans for create_task
         _init_asyncio_instrumentation()
 
-        logger.info(f"[TRACER] initialized with service_name={service_name}, endpoint={endpoint}")
+        logger.info(
+            "[TRACER] initialized with service_name=%s, protocol=%s, endpoint=%s",
+            service_name,
+            protocol,
+            endpoint,
+        )
         return _otel_tracer
 
     except Exception as e:

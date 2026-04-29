@@ -18,7 +18,7 @@ All API keys are plain random tokens with no embedded identity. The server resol
 | Mode | `server.auth_mode` | Identity Source | Typical Use |
 |------|--------------------|-----------------|-------------|
 | API key mode | `"api_key"` | API key, with optional tenant headers for root requests | Standard multi-tenant deployment |
-| Trusted mode | `"trusted"` | `X-OpenViking-Account` / `X-OpenViking-User` / optional `X-OpenViking-Agent` headers, plus `root_api_key` on non-localhost deployments | Behind a trusted gateway or internal network boundary |
+| Trusted mode | `"trusted"` | `X-OpenViking-Account` / `X-OpenViking-User` / optional `X-OpenViking-Agent`, plus `root_api_key` on non-localhost deployments. Role is looked up from APIKeyManager if the user exists. | Behind a trusted gateway or internal network boundary |
 | Dev mode | `"dev"` | No authentication, always ROOT | Local development only |
 
 If `auth_mode` is not explicitly configured:
@@ -48,7 +48,7 @@ openviking-server
 
 ## Managing Accounts and Users
 
-This section applies to `api_key` mode. In `trusted` mode, normal requests do not use user-key registration or lookup.
+Normal requests in both `api_key` and `trusted` modes do not need Admin API as a prerequisite for ordinary reads, writes, search, or session access. Admin API is still the place to create accounts, register users, change roles, and issue user keys.
 
 Use the root key to create accounts (workspaces) and users via the Admin API:
 
@@ -66,6 +66,40 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users \
   -H "Content-Type: application/json" \
   -d '{"user_id": "bob", "role": "user"}'
 # Returns: {"result": {"account_id": "acme", "user_id": "bob", "user_key": "..."}}
+```
+
+Trusted deployments can also call Admin API through a trusted gateway. There are two supported patterns:
+
+- Present only the trusted deployment's `root_api_key`. For `/api/v1/admin/*`, the server treats the request as ROOT even without `X-OpenViking-Account` / `X-OpenViking-User`.
+- Present `X-OpenViking-Account` + `X-OpenViking-User` for a registered gateway user. In that case the server looks up the effective role from the user registry.
+
+Example using a registered gateway user:
+
+```bash
+# First, register the gateway admin (do this once in api_key mode)
+curl -X POST http://localhost:1933/api/v1/admin/accounts \
+  -H "X-API-Key: your-secret-root-key" \
+  -H "Content-Type: application/json" \
+  -d '{"account_id": "platform", "admin_user_id": "gateway-admin"}'
+
+# Then promote it to root if it needs cross-account admin access
+curl -X PUT http://localhost:1933/api/v1/admin/accounts/platform/users/gateway-admin/role \
+  -H "X-API-Key: your-secret-root-key" \
+  -H "Content-Type: application/json" \
+  -d '{"role": "root"}'
+
+# Then, in trusted mode, use that identity to call Admin API
+curl -X POST http://localhost:1933/api/v1/admin/accounts \
+  -H "X-API-Key: your-secret-root-key" \
+  -H "X-OpenViking-Account: platform" \
+  -H "X-OpenViking-User: gateway-admin" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "account_id": "acme",
+    "admin_user_id": "alice",
+    "isolate_user_scope_by_agent": true,
+    "isolate_agent_scope_by_user": false
+  }'
 ```
 
 ## Using API Keys (Client Side)
@@ -208,7 +242,9 @@ Rules in trusted mode:
 - Normal data access does not require user registration or user-key provisioning first.
 - `X-OpenViking-Account` and `X-OpenViking-User` are required on tenant-scoped requests.
 - `X-OpenViking-Agent` is optional and defaults to `default`.
-- Every trusted-mode request is resolved as `USER`. Identity comes from the headers, not from a root key or user key.
+- `/api/v1/admin/*` is special: when no explicit identity is provided, trusted mode treats the request as ROOT. This is intended for trusted upstreams that authenticate only with the deployment's root API key.
+- Role is determined by looking up the account/user in APIKeyManager. If the user exists, their configured role is used; otherwise it defaults to `USER`.
+- Trusted identity comes from the headers, not from a user key. If `root_api_key` is configured, it still acts as proof that the caller is an approved trusted upstream.
 - If `root_api_key` is also configured, every request must still provide a matching API key.
 - Only expose this mode behind a trusted network boundary or an identity-injecting gateway.
 
@@ -216,7 +252,10 @@ Implications:
 
 - Trusted mode is not development mode.
 - Trusted mode does not use the Admin API as a prerequisite for ordinary reads, writes, search, or session access.
-- Account creation, user registration, role changes, and key regeneration remain part of the `api_key` admin workflow. If you call Admin API endpoints while the server runs in `trusted` mode, the server returns a permission error explaining that admin registration is unavailable in `trusted` mode and that you should switch to `api_key` mode with `root_api_key` for account/user management.
+- Admin API remains available in trusted mode for users that have been registered with appropriate roles (root/admin).
+- Trusted Admin API responses omit `user_key` from account creation and user registration results.
+- `root` can create/delete accounts and change roles; `admin` can manage users inside its own account; `user` cannot call Admin API.
+- To use Admin API in trusted mode, first register the gateway's service account with the appropriate role using the Admin API in api_key mode.
 
 **curl**
 
@@ -275,7 +314,7 @@ Or explicitly:
 | ADMIN | Own account | Regular operations + manage users in own account |
 | USER | Own account | Regular operations (ls, read, find, sessions, etc.) |
 
-In `trusted` mode, requests are resolved as `USER`, so the usual ROOT/ADMIN registration flow does not apply to ordinary traffic.
+In `trusted` mode, ordinary tenant requests default to `USER` unless the account/user is registered with a higher role. Admin routes also allow a trusted ROOT fallback when no explicit identity is provided.
 
 ## Unauthenticated Endpoints
 

@@ -16,7 +16,7 @@ Resources are external knowledge that agents can reference. This guide covers ho
 | Video | `.mp4`, `.mov`, `.avi` | Frame extraction + VLM |
 | Audio | `.mp3`, `.wav`, `.m4a` | Transcription |
 | Documents | `.docx` | Text extraction |
-| Feishu/Lark | URL (`*.feishu.cn`, `*.larksuite.com`) | Cloud document parsing via `lark-oapi` |
+| Feishu/Lark | URL (`*.feishu.cn`, `*.larksuite.com`, `*.larkoffice.com`) | Cloud document parsing via `lark-oapi` |
 
 ## Processing Pipeline
 
@@ -121,6 +121,24 @@ openviking add-resource ./documents/guide.md --reason "User guide documentation"
   "time": 0.1
 }
 ```
+
+**Synchronous Processing Error**
+
+If ingestion fails before producing a resource, raw HTTP returns the standard error envelope
+with a non-2xx HTTP status. For example:
+
+```json
+{
+  "status": "error",
+  "error": {
+    "code": "PROCESSING_ERROR",
+    "message": "Parse error: [Errno 2] No such file or directory: 'git'"
+  }
+}
+```
+
+`SyncHTTPClient`, `AsyncHTTPClient`, and CLI commands surface this as an error instead of
+returning a successful result with `result.status="error"`.
 
 **Example: Add from URL**
 

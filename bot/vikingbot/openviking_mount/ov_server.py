@@ -62,6 +62,8 @@ class VikingClient:
                     url=self.openviking_config.server_url,
                     api_key=admin_user_api_key,
                     agent_id=self.agent_id,
+                    account=self.account_id,
+                    user=self.admin_user_id,
                 )
                 await self.admin_user_client.initialize()
 
@@ -171,10 +173,10 @@ class VikingClient:
         result = await self.read_content(uri=uri, level="read")
         return result
 
-    async def search(self, query: str, target_uri: Optional[str] = "") -> Dict[str, Any]:
+    async def search(self, query: str, target_uri: Optional[str] = "", limit: int = 10) -> Dict[str, Any]:
         # session = self.client.session()
 
-        result = await self.client.search(query, target_uri=target_uri)
+        result = await self.client.search(query, target_uri=target_uri, limit=limit)
 
         # 将 FindResult 对象转换为 JSON map
         return {

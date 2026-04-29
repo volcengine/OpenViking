@@ -306,6 +306,7 @@ class SessionCompressor:
         ctx: Optional[RequestContext] = None,
         strict_extract_errors: bool = False,
         latest_archive_overview: str = "",
+        archive_uri: str = "",
     ) -> List[Context]:
         """Extract long-term memories from messages."""
         if not messages:

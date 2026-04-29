@@ -5,16 +5,49 @@
     "root_api_key": null,
     "cors_origins": ["*"],
     "observability": {
-      "metrics": {
-        "enabled": true,
-        "account_dimension": {
-          "enabled": true,
-          "max_active_accounts": 100,
-          "metric_allowlist": [
-            "openviking_*"
-          ]
+        "metrics": {
+            "enabled": true,
+            "account_dimension": {
+                "enabled": true,
+                "max_active_accounts": 100,
+                "metric_allowlist": [
+                    "openviking_*"
+                ]
+            },
+            "exporters": {
+                "prometheus": {
+                    "enabled": true
+                },
+                "otel": {
+                    "enabled": false,
+                    "protocol": "grpc",
+                    "tls": {
+                        "insecure": false
+                    },
+                    "endpoint": "localhost:4317",
+                    "service_name": "openviking-server",
+                    "export_interval_ms": 10000
+                }
+            }
+        },
+        "traces": {
+            "enabled": false,
+            "protocol": "grpc",
+            "tls": {
+                "insecure": false
+            },
+            "endpoint": "localhost:4317",
+            "service_name": "openviking-server"
+        },
+        "logs": {
+            "enabled": false,
+            "protocol": "grpc",
+            "tls": {
+                "insecure": false
+            },
+            "endpoint": "localhost:4317",
+            "service_name": "openviking-server"
         }
-      }
     }
   },
   "storage": {
@@ -56,6 +89,8 @@
         "provider": "volcengine",
         "input": "multimodal"
     },
+    "text_source": "content_only",
+    "max_input_tokens": 4096,
     "circuit_breaker": {
         "failure_threshold": 5,
         "reset_timeout": 60,
@@ -123,6 +158,10 @@
     "api_base": "https://dashscope.aliyuncs.com/compatible-api/v1/reranks",
     "model": "qwen3-rerank",
     "threshold": 0.1
+  },
+  "retrieval": {
+    "hotness_alpha": 0.0,
+    "score_propagation_alpha": 0.5
   },
   "auto_generate_l0": true,
   "auto_generate_l1": true,
@@ -211,6 +250,9 @@
     "provider": "local",
     "local": {
       "key_file": "~/.openviking/master.key"
+    },
+    "api_key_hashing": {
+      "enabled": false
     }
   },
   "encryption_vault_example": {

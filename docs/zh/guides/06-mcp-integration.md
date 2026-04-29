@@ -1,211 +1,115 @@
 # MCP 集成指南
 
-OpenViking 可以作为 [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) 服务器使用，任何兼容 MCP 的客户端都可以访问其记忆和资源能力。
+OpenViking 服务器内置 [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) 端点，任何兼容 MCP 的客户端都可以通过 HTTP 直接访问其记忆和资源能力，无需部署额外进程。
 
-## 传输模式
-
-OpenViking 支持两种 MCP 传输模式：
-
-| | HTTP (SSE) | stdio |
-|---|---|---|
-| **工作方式** | 单个长期运行的服务器进程；客户端通过 HTTP 连接 | 宿主为每个会话生成一个新的 OpenViking 进程 |
-| **多会话安全** | ✅ 是 — 单进程，无锁竞争 | ⚠️ **否** — 多进程争用同一数据目录 |
-| **推荐用于** | 生产环境、多 Agent、多会话 | 仅限单会话本地开发 |
-| **配置复杂度** | 需要单独运行 `openviking-server` | 零配置 — 宿主管理进程 |
-
-### 选择合适的传输模式
-
-- **使用 HTTP**：如果你的宿主会打开多个会话、运行多个 Agent，或需要并发访问。
-- **使用 stdio**：仅在单会话、单 Agent 的本地环境中，且追求简单时使用。
-
-> ⚠️ **重要提示：** 当 MCP 宿主为每个会话生成独立的 stdio OpenViking 进程时（例如每个聊天会话一个进程），所有实例会争用同一底层数据目录。这会导致存储层（AGFS 和 VectorDB）的 **锁/资源竞争**。
->
-> 表现为以下误导性错误：
-> - `Collection 'context' does not exist`
-> - `Transport closed`
-> - 间歇性搜索失败
->
-> **根因不是索引损坏** — 而是多个进程争用同一存储文件。切换到 HTTP 模式即可解决。详见[故障排除](#故障排除)。
-
-## 配置
-
-### 前提条件
+## 前提条件
 
 1. 已安装 OpenViking（`pip install openviking` 或从源码安装）
 2. 有效的配置文件（参见[配置指南](01-configuration.md)）
-3. HTTP 模式需要：`openviking-server` 正在运行（参见[部署指南](03-deployment.md)）
+3. `openviking-server` 正在运行（参见[部署指南](03-deployment.md)）
 
-### HTTP 模式（推荐）
+MCP 端点位于 `http://<server>:1933/mcp`，与 REST API 同进程、同端口。
 
-首先启动 OpenViking 服务器：
+## 已验证的接入平台
 
-```bash
-openviking-server --config /path/to/config.yaml
-# 默认地址：http://localhost:1933
-```
+以下平台已成功接入并使用 OpenViking MCP：
 
-然后配置你的 MCP 客户端通过 HTTP 连接。
+| 平台 | 接入方式 |
+|------|----------|
+| **Claude Code** | `type: http` 接入 |
+| **ChatGPT & Codex** | 标准 MCP 配置 |
+| **Claude.ai / Claude Desktop** | 通过 MCP-Key2OAuth 代理接入 |
+| **Manus** | 标准 MCP 配置 |
+| **Trae** | 标准 MCP 配置 |
 
-### stdio 模式
+## 鉴权方式
 
-无需单独启动服务器 — MCP 宿主直接启动 OpenViking。
+MCP 端点的鉴权与 OpenViking REST API 完全一致，复用同一套 API-Key 认证系统。传入以下任一 header 即可：
+
+- `X-Api-Key: <your-key>`
+- `Authorization: Bearer <your-key>`
+
+本地开发模式（服务器绑定 localhost）下无需认证。
 
 ## 客户端配置
 
-### Claude Code (CLI)
+### 通用 MCP 客户端
 
-**HTTP 模式：**
-
-```bash
-claude mcp add openviking \
-  --transport sse \
-  "http://localhost:1933/mcp"
-```
-
-**stdio 模式：**
-
-```bash
-claude mcp add openviking \
-  --transport stdio \
-  -- python -m openviking.server --transport stdio \
-     --config /path/to/config.yaml
-```
-
-### Claude Desktop
-
-编辑 `claude_desktop_config.json`：
-
-**HTTP 模式：**
+大多数支持 MCP 的平台（如 Trae、Manus、Cursor 等）使用标准的 `mcpServers` 配置格式：
 
 ```json
 {
   "mcpServers": {
     "openviking": {
-      "url": "http://localhost:1933/mcp"
-    }
-  }
-}
-```
-
-**stdio 模式：**
-
-```json
-{
-  "mcpServers": {
-    "openviking": {
-      "command": "python",
-      "args": [
-        "-m", "openviking.server",
-        "--transport", "stdio",
-        "--config", "/path/to/config.yaml"
-      ]
-    }
-  }
-}
-```
-
-### Cursor
-
-在 Cursor 设置 → MCP 中配置：
-
-**HTTP 模式：**
-
-```json
-{
-  "mcpServers": {
-    "openviking": {
-      "url": "http://localhost:1933/mcp"
-    }
-  }
-}
-```
-
-**stdio 模式：**
-
-```json
-{
-  "mcpServers": {
-    "openviking": {
-      "command": "python",
-      "args": [
-        "-m", "openviking.server",
-        "--transport", "stdio",
-        "--config", "/path/to/config.yaml"
-      ]
-    }
-  }
-}
-```
-
-### OpenClaw
-
-在 OpenClaw 配置文件（`openclaw.json` 或 `openclaw.yaml`）中：
-
-**HTTP 模式（推荐）：**
-
-```json
-{
-  "mcp": {
-    "servers": {
-      "openviking": {
-        "url": "http://localhost:1933/mcp"
+      "url": "https://your-server.com/mcp",
+      "headers": {
+        "Authorization": "Bearer your-api-key-here"
       }
     }
   }
 }
 ```
 
-**stdio 模式：**
+### Claude Code
+
+Claude Code 需要额外指定 `"type": "http"`。可通过命令行添加：
+
+```bash
+claude mcp add --transport http openviking \
+  https://your-server.com/mcp \
+  --header "Authorization: Bearer your-api-key-here"
+```
+
+或在 `.mcp.json` 中手动配置：
 
 ```json
 {
-  "mcp": {
-    "servers": {
-      "openviking": {
-        "command": "python",
-        "args": [
-          "-m", "openviking.server",
-          "--transport", "stdio",
-          "--config", "/path/to/config.yaml"
-        ]
+  "mcpServers": {
+    "openviking": {
+      "type": "http",
+      "url": "https://your-server.com/mcp",
+      "headers": {
+        "Authorization": "Bearer your-api-key-here"
       }
     }
   }
 }
 ```
+
+加 `--scope user` 可将配置设为全局（所有项目共享）。
+
+### Claude.ai / Claude Desktop（OAuth 代理鉴权）
+
+Claude.ai 和 Claude Desktop Connector 强制要求 MCP 服务器使用 OAuth 鉴权，无法直接传入 API Key。可借助 [MCP-Key2OAuth](https://mcp.767911.xyz/) 将 API Key 认证代理为 OAuth 流程：
+
+1. 访问 https://mcp.767911.xyz/
+2. 填入你的 OpenViking MCP 服务器 URL（如 `https://your-server.com/mcp`）
+3. 生成代理后的新 URL
+4. 在 Claude.ai / Claude Desktop 中填入生成的新 URL，连接时会跳转至代理站进行鉴权
+5. 授权完成后即可正常使用
+
+> ⚠️ MCP-Key2OAuth 为社区项目，OpenViking 不保证其安全性。
+
 
 ## 可用的 MCP 工具
 
-连接后，OpenViking 提供以下 MCP 工具：
+连接后，OpenViking MCP 端点暴露 9 个工具：
 
-| 工具 | 说明 |
-|------|------|
-| `search` | 跨记忆和资源的语义搜索 |
-| `add_memory` | 存储新记忆 |
-| `add_resource` | 添加资源（文件、文本、URL） |
-| `get_status` | 检查系统健康状态和组件状态 |
-| `list_memories` | 浏览已存储的记忆 |
-| `list_resources` | 浏览已存储的资源 |
-
-完整参数详情请参考 OpenViking 的工具文档。
+| 工具 | 说明 | 主要参数 |
+|------|------|----------|
+| `search` | 语义搜索记忆、资源和技能 | `query`, `target_uri`(可选), `limit`, `min_score` |
+| `read` | 读取一个或多个 `viking://` URI 的内容 | `uris`（单个字符串或数组） |
+| `list` | 列出 `viking://` 目录下的条目 | `uri`, `recursive`(可选) |
+| `store` | 存储消息到长期记忆（触发记忆提取） | `messages`（`{role, content}` 列表） |
+| `add_resource` | 添加本地文件或 URL 作为资源 | `path`, `description`(可选) |
+| `grep` | 在 `viking://` 文件中进行正则内容搜索 | `uri`, `pattern`（字符串或数组）, `case_insensitive` |
+| `glob` | 按 glob 模式匹配文件 | `pattern`, `uri`(可选范围) |
+| `forget` | 删除任意 `viking://` URI（先用 `search` 查找） | `uri` |
+| `health` | 检查 OpenViking 服务健康状态 | 无 |
 
 ## 故障排除
 
-### `Collection 'context' does not exist`
-
-**可能原因：** 多个 stdio MCP 实例争用同一数据目录。
-
-**解决方案：** 切换到 HTTP 模式。如果必须使用 stdio，请确保同一时间只有一个 OpenViking 进程访问给定的数据目录。
-
-### `Transport closed`
-
-**可能原因：** MCP stdio 进程因资源竞争而崩溃或被终止。也可能发生在后端重启后客户端持有过期连接时。
-
-**解决方案：**
-1. 切换到 HTTP 模式以避免竞争。
-2. 如果使用 HTTP：在客户端中重新加载 MCP 连接（重启会话或重新连接）。
-
-### HTTP 端点连接被拒绝
+### 连接被拒绝
 
 **可能原因：** `openviking-server` 未运行，或运行在不同端口上。
 
@@ -227,4 +131,3 @@ curl http://localhost:1933/health
 - [MCP 规范](https://modelcontextprotocol.io/)
 - [OpenViking 配置](01-configuration.md)
 - [OpenViking 部署](03-deployment.md)
-- [相关 Issue：stdio 竞争问题 (#473)](https://github.com/volcengine/OpenViking/issues/473)

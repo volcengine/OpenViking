@@ -3,6 +3,7 @@
 
 """Exporter entry points that render the shared metrics registry into external formats."""
 
+from .otel import OTelMetricExporter
 from .prometheus import PrometheusExporter
 
-__all__ = ["PrometheusExporter"]
+__all__ = ["PrometheusExporter", "OTelMetricExporter"]

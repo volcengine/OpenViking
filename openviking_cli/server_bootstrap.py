@@ -21,19 +21,11 @@ from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 
 
 def main():
-    # Intercept subcommands that don't need the server.
-    if len(sys.argv) > 1 and sys.argv[1] == "init":
-        from openviking_cli.setup_wizard import main as init_main
-
-        sys.exit(init_main())
-
-    if len(sys.argv) > 1 and sys.argv[1] == "doctor":
-        from openviking_cli.doctor import main as doctor_main
-
-        sys.exit(doctor_main())
-
+    """Bootstrap the server while binding a stable execution-level log trace ID."""
     # Pre-parse --config from sys.argv before any openviking imports,
     # so the env var is visible when the config singleton first initialises.
+    # This is done for all subcommands (init, doctor, server) to ensure
+    # consistent behavior.
     for i, arg in enumerate(sys.argv):
         if arg == "--config" and i + 1 < len(sys.argv):
             os.environ[OPENVIKING_CONFIG_ENV] = sys.argv[i + 1]
@@ -42,9 +34,27 @@ def main():
             os.environ[OPENVIKING_CONFIG_ENV] = arg.split("=", 1)[1]
             break
 
+    # Import after config pre-parse to avoid early config singleton initialization via
+    # module-level loggers.
+    from openviking_cli.utils.logger import bind_log_execution_trace  # noqa: PLC0415
+
+    # Intercept subcommands that don't need the server.
+    if len(sys.argv) > 1 and sys.argv[1] == "init":
+        from openviking_cli.setup_wizard import main as init_main
+
+        with bind_log_execution_trace():
+            sys.exit(init_main())
+
+    if len(sys.argv) > 1 and sys.argv[1] == "doctor":
+        from openviking_cli.doctor import main as doctor_main
+
+        with bind_log_execution_trace():
+            sys.exit(doctor_main())
+
     from openviking.server.bootstrap import main as _real_main
 
-    _real_main()
+    with bind_log_execution_trace():
+        _real_main()
 
 
 if __name__ == "__main__":

@@ -10,12 +10,18 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 from openviking.core.namespace import agent_space_fragment, user_space_fragment
+from openviking.prompts.manager import PromptManager
 from openviking.session.memory.dataclass import MemoryField, MemoryTypeSchema
 from openviking.session.memory.merge_op import MergeOp
 from openviking.session.memory.merge_op.base import FieldType
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+
+def resolve_memory_templates_dir() -> Path:
+    """Resolve the memory templates directory from PromptManager semantics."""
+    return PromptManager._resolve_templates_dir(None) / "memory"
 
 
 class MemoryTypeRegistry:
@@ -33,24 +39,23 @@ class MemoryTypeRegistry:
             self._load_schemas()
 
     def _load_schemas(self) -> None:
-        """Load schemas from built-in and custom directories. Fails on error."""
+        """Load schemas from the resolved memory templates directory and custom directory."""
         import os
 
         from openviking_cli.utils.config import get_openviking_config
 
-        builtin_dir = os.path.join(
-            os.path.dirname(__file__), "..", "..", "prompts", "templates", "memory"
-        )
+        memory_templates_dir = str(resolve_memory_templates_dir())
         config = get_openviking_config()
         custom_dir = config.memory.custom_templates_dir
 
-        # Load from builtin directory (must succeed)
-        if not os.path.exists(builtin_dir):
-            raise RuntimeError(f"Builtin memory templates directory not found: {builtin_dir}")
-        loaded = self.load_from_directory(builtin_dir)
+        if not os.path.exists(memory_templates_dir):
+            raise RuntimeError(f"Memory templates directory not found: {memory_templates_dir}")
+        loaded = self.load_from_directory(memory_templates_dir)
         if loaded == 0:
-            raise RuntimeError(f"No memory schemas loaded from builtin directory: {builtin_dir}")
-        logger.info(f"Loaded {loaded} memory schemas from builtin: {builtin_dir}")
+            raise RuntimeError(
+                f"No memory schemas loaded from memory templates directory: {memory_templates_dir}"
+            )
+        logger.info(f"Loaded {loaded} memory schemas from templates: {memory_templates_dir}")
 
         # Load from custom directory (if configured)
         if custom_dir:

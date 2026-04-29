@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { spawn } from "node:child_process";
 import { once } from "node:events";
 import { createWriteStream } from "node:fs";
 import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
@@ -33,17 +32,6 @@ export type RuntimeIdentity = {
   userId: string;
   agentId: string;
 };
-export type LocalClientCacheEntry = {
-  client: OpenVikingClient;
-  process: ReturnType<typeof spawn> | null;
-};
-
-export type PendingClientEntry = {
-  promise: Promise<OpenVikingClient>;
-  resolve: (c: OpenVikingClient) => void;
-  reject: (err: unknown) => void;
-};
-
 export type CommitSessionResult = {
   session_id: string;
   /** "accepted" (async), "completed", "failed", or "timeout" (wait mode). */
@@ -164,13 +152,6 @@ const WAIT_REQUEST_TIMEOUT_BUFFER_MS = 5_000;
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
-
-export const localClientCache = new Map<string, LocalClientCacheEntry>();
-
-// Module-level pending promise map: shared across all plugin registrations so
-// that both [gateway] and [plugins] contexts await the same promise and
-// don't create duplicate pending promises that never resolve.
-export const localClientPendingPromises = new Map<string, PendingClientEntry>();
 
 const MEMORY_URI_PATTERNS = [
   /^viking:\/\/user\/(?:[^/]+(?:\/agent\/[^/]+)?\/)?memories(?:\/|$)/,

@@ -201,12 +201,14 @@ class CodeHostingConfig(ParserConfig):
         code_hosting_domains: List of code hosting platform domains (github.com, gitlab.com, etc.)
         github_domains: List of GitHub domains (github.com, www.github.com)
         gitlab_domains: List of GitLab domains (gitlab.com, www.gitlab.com)
+        azure_devops_domains: List of Azure DevOps domains (dev.azure.com, ssh.dev.azure.com)
     """
 
     # Code hosting platform configuration
     code_hosting_domains: list = None
     github_domains: list = None
     gitlab_domains: list = None
+    azure_devops_domains: list = None
 
     def __post_init__(self):
         """Initialize default values for mutable fields."""
@@ -216,6 +218,12 @@ class CodeHostingConfig(ParserConfig):
             self.github_domains = ["github.com", "www.github.com"]
         if self.gitlab_domains is None:
             self.gitlab_domains = ["gitlab.com", "www.gitlab.com"]
+        if self.azure_devops_domains is None:
+            self.azure_devops_domains = [
+                "dev.azure.com",
+                "ssh.dev.azure.com",
+                "vs-ssh.visualstudio.com",
+            ]
 
 
 @dataclass

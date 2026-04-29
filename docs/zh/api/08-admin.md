@@ -2,7 +2,12 @@
 
 Admin API 用于多租户环境下的账户和用户管理。包括工作区（account）的创建与删除、用户注册与移除、角色变更、API Key 重新生成。
 
-该 API 只适用于 `api_key` 模式下的管理链路。在 `trusted` 模式里，普通请求不使用 user key 注册流程；如果去调用 Admin API，服务端会返回明确权限错误，说明账户/用户管理需要切换到配置了 `root_api_key` 的 `api_key` 模式。
+该 API 适用于 `api_key` 和 `trusted` 两种模式下的管理链路：
+- 在 `api_key` 模式下，角色始终从 API Key 推导。
+- 在 `trusted` 模式下，普通请求仍然不依赖 user key 注册流程；但受信任网关可以使用已注册且具有适当角色的用户调用 Admin API（角色从用户注册表查询）。
+
+在 `trusted` 模式下，角色通过查询 `X-OpenViking-Account` + `X-OpenViking-User` 从用户注册表确定。如果用户不存在，角色默认为 `USER`。
+对于 `/api/v1/admin/*`，`trusted` 模式还允许不携带显式身份头；这类请求会被视为 ROOT，适用于仅通过部署级 `root_api_key` 认证的受信上游。
 
 ## 角色与权限
 
@@ -32,6 +37,8 @@ Admin API 用于多租户环境下的账户和用户管理。包括工作区（a
 |------|------|------|--------|------|
 | account_id | str | 是 | - | 工作区 ID |
 | admin_user_id | str | 是 | - | 首个管理员用户 ID |
+| isolate_user_scope_by_agent | bool | 否 | false | 是否按 agent 进一步隔离 user scope |
+| isolate_agent_scope_by_user | bool | 否 | false | 是否按 user 进一步隔离 agent scope |
 
 **HTTP API**
 
@@ -45,7 +52,9 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
   -H "X-API-Key: <root-key>" \
   -d '{
     "account_id": "acme",
-    "admin_user_id": "alice"
+    "admin_user_id": "alice",
+    "isolate_user_scope_by_agent": true,
+    "isolate_agent_scope_by_user": false
   }'
 ```
 
@@ -63,10 +72,56 @@ openviking admin create-account acme --admin alice
   "result": {
     "account_id": "acme",
     "admin_user_id": "alice",
-    "user_key": "7f3a9c1e..."
+    "user_key": "7f3a9c1e...",
+    "isolate_user_scope_by_agent": true,
+    "isolate_agent_scope_by_user": false
   },
   "time": 0.1
 }
+```
+
+`trusted` 模式示例：
+
+```bash
+# 首先，在 api_key 模式下注册网关管理员用户
+curl -X POST http://localhost:1933/api/v1/admin/accounts \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <root-key>" \
+  -d '{
+    "account_id": "platform",
+    "admin_user_id": "gateway-admin"
+  }'
+
+# 然后提升为 root，以便执行跨 account 的管理操作
+curl -X PUT http://localhost:1933/api/v1/admin/accounts/platform/users/gateway-admin/role \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <root-key>" \
+  -d '{"role": "root"}'
+
+# 然后在 trusted 模式下使用
+curl -X POST http://localhost:1933/api/v1/admin/accounts \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <root-key>" \
+  -H "X-OpenViking-Account: platform" \
+  -H "X-OpenViking-User: gateway-admin" \
+  -d '{
+    "account_id": "acme",
+    "admin_user_id": "alice",
+    "isolate_user_scope_by_agent": true,
+    "isolate_agent_scope_by_user": false
+  }'
+```
+
+`trusted` 模式也支持“不带身份头”的 ROOT 回退写法：
+
+```bash
+curl -X POST http://localhost:1933/api/v1/admin/accounts \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <root-key>" \
+  -d '{
+    "account_id": "acme",
+    "admin_user_id": "alice"
+  }'
 ```
 
 ---
@@ -104,6 +159,8 @@ openviking admin list-accounts
   "time": 0.1
 }
 ```
+
+在 `trusted` 模式下，同类响应不会返回 `user_key`。
 
 ---
 

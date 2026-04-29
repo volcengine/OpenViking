@@ -1,17 +1,14 @@
 """Direct backend implementation - executes commands directly on host without sandboxing."""
 
 import asyncio
-import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from loguru import logger
 
-from vikingbot.sandbox.base import SandboxBackend
-from vikingbot.sandbox.backends import register_backend
-
-
 from vikingbot.config.schema import SandboxConfig, SessionKey
+from vikingbot.sandbox.backends import register_backend
+from vikingbot.sandbox.base import SandboxBackend
 
 
 @register_backend("direct")
@@ -105,7 +102,7 @@ class DirectBackend(SandboxBackend):
         """Get the current working directory (uses actual host cwd)."""
         return str(self._workspace)
 
-    async def read_file(self, path: str) -> str:
+    async def read_file_bytes(self, path: str) -> bytes:
         sandbox_path = Path(path)
         if not sandbox_path.is_absolute():
             sandbox_path = self._workspace / path
@@ -115,7 +112,10 @@ class DirectBackend(SandboxBackend):
             raise FileNotFoundError(f"File not found: {path}")
         if not sandbox_path.is_file():
             raise IOError(f"Not a file: {path}")
-        return sandbox_path.read_text(encoding="utf-8")
+        return await asyncio.to_thread(sandbox_path.read_bytes)
+
+    async def read_file(self, path: str) -> str:
+        return (await self.read_file_bytes(path)).decode("utf-8")
 
     async def write_file(self, path: str, content: str) -> None:
         sandbox_path = Path(path)

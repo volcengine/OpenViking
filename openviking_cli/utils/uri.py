@@ -39,8 +39,11 @@ class VikingURI:
         "agent",
         "session",
     }
-    # All valid scopes that can be visited/accessed
-    VISITABLE_SCOPES = LISTABLE_SCOPES | {"temp", "queue"}
+    PUBLIC_SCOPES = frozenset(LISTABLE_SCOPES)
+    INTERNAL_SCOPES = frozenset({"temp", "queue"})
+    # All valid scopes that can be addressed by the URI parser/storage internals.
+    # Public API handlers must not use this as their external whitelist.
+    VISITABLE_SCOPES = PUBLIC_SCOPES | INTERNAL_SCOPES
 
     def __init__(self, uri: str):
         """
@@ -79,7 +82,7 @@ class VikingURI:
         # Parse scope
         scope = path.split("/")[0]
         if scope not in self.VISITABLE_SCOPES:
-            raise ValueError(f"Invalid scope '{scope}'. Must be one of {self.VISITABLE_SCOPES}")
+            raise ValueError(f"Invalid scope '{scope}'")
 
         return {
             "scheme": self.SCHEME,
@@ -193,9 +196,7 @@ class VikingURI:
             Viking URI string
         """
         if scope not in VikingURI.VISITABLE_SCOPES:
-            raise ValueError(
-                f"Invalid scope '{scope}'. Must be one of {VikingURI.VISITABLE_SCOPES}"
-            )
+            raise ValueError(f"Invalid scope '{scope}'")
 
         parts = [scope] + list(path_parts)
         # Filter out empty parts

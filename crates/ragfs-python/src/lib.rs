@@ -18,6 +18,14 @@ use ragfs::plugins::{
     KVFSPlugin, LocalFSPlugin, MemFSPlugin, QueueFSPlugin, SQLFSPlugin, ServerInfoFSPlugin,
 };
 
+fn py_detach_blocking<T, F>(py: Python<'_>, f: F) -> T
+where
+    T: Send,
+    F: Send + FnOnce() -> T,
+{
+    py.detach(f)
+}
+
 /// Get a Python exception class from the pyagfs module
 fn get_exception<'py>(py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyType>> {
     let pyagfs = PyModule::import(py, "openviking.pyagfs")?;
@@ -220,10 +228,10 @@ impl RAGFSBindingClient {
     /// name, size, mode, modTime, isDir
     fn ls(&self, path: String) -> PyResult<Py<PyAny>> {
         let fs = self.fs.clone();
-        let entries = self
-            .rt
-            .block_on(async move { fs.read_dir(&path).await })
-            .map_err(to_py_err)?;
+        let entries = Python::attach(|py| {
+            py_detach_blocking(py, move || self.rt.block_on(async move { fs.read_dir(&path).await }))
+        })
+        .map_err(to_py_err)?;
 
         Python::attach(|py| {
             let list = PyList::empty(py);
@@ -254,10 +262,10 @@ impl RAGFSBindingClient {
         let off = if offset < 0 { 0u64 } else { offset as u64 };
         let sz = if size < 0 { 0u64 } else { size as u64 };
 
-        let data = self
-            .rt
-            .block_on(async move { fs.read(&path, off, sz).await })
-            .map_err(to_py_err)?;
+        let data = Python::attach(|py| {
+            py_detach_blocking(py, move || self.rt.block_on(async move { fs.read(&path, off, sz).await }))
+        })
+        .map_err(to_py_err)?;
 
         Python::attach(|py| Ok(PyBytes::new(py, &data).into()))
     }
@@ -278,9 +286,13 @@ impl RAGFSBindingClient {
         let _ = max_retries; // not applicable for local binding
         let fs = self.fs.clone();
         let len = data.len();
-        self.rt
-            .block_on(async move { fs.write(&path, &data, 0, WriteFlag::Create).await })
-            .map_err(to_py_err)?;
+        Python::attach(|py| {
+            py_detach_blocking(py, move || {
+                self.rt
+                    .block_on(async move { fs.write(&path, &data, 0, WriteFlag::Create).await })
+            })
+        })
+        .map_err(to_py_err)?;
 
         Ok(format!("Written {} bytes", len))
     }
@@ -288,9 +300,10 @@ impl RAGFSBindingClient {
     /// Create a new empty file.
     fn create(&self, path: String) -> PyResult<HashMap<String, String>> {
         let fs = self.fs.clone();
-        self.rt
-            .block_on(async move { fs.create(&path).await })
-            .map_err(to_py_err)?;
+        Python::attach(|py| {
+            py_detach_blocking(py, move || self.rt.block_on(async move { fs.create(&path).await }))
+        })
+        .map_err(to_py_err)?;
 
         let mut m = HashMap::new();
         m.insert("message".to_string(), "created".to_string());
@@ -304,9 +317,10 @@ impl RAGFSBindingClient {
             .map_err(|e| PyRuntimeError::new_err(format!("Invalid mode '{}': {}", mode, e)))?;
 
         let fs = self.fs.clone();
-        self.rt
-            .block_on(async move { fs.mkdir(&path, mode_int).await })
-            .map_err(to_py_err)?;
+        Python::attach(|py| {
+            py_detach_blocking(py, move || self.rt.block_on(async move { fs.mkdir(&path, mode_int).await }))
+        })
+        .map_err(to_py_err)?;
 
         let mut m = HashMap::new();
         m.insert("message".to_string(), "created".to_string());
@@ -317,15 +331,18 @@ impl RAGFSBindingClient {
     #[pyo3(signature = (path, recursive=false))]
     fn rm(&self, path: String, recursive: bool) -> PyResult<HashMap<String, String>> {
         let fs = self.fs.clone();
-        self.rt
-            .block_on(async move {
-                if recursive {
-                    fs.remove_all(&path).await
-                } else {
-                    fs.remove(&path).await
-                }
+        Python::attach(|py| {
+            py_detach_blocking(py, move || {
+                self.rt.block_on(async move {
+                    if recursive {
+                        fs.remove_all(&path).await
+                    } else {
+                        fs.remove(&path).await
+                    }
+                })
             })
-            .map_err(to_py_err)?;
+        })
+        .map_err(to_py_err)?;
 
         let mut m = HashMap::new();
         m.insert("message".to_string(), "deleted".to_string());
@@ -335,10 +352,10 @@ impl RAGFSBindingClient {
     /// Get file/directory information.
     fn stat(&self, path: String) -> PyResult<Py<PyAny>> {
         let fs = self.fs.clone();
-        let info = self
-            .rt
-            .block_on(async move { fs.stat(&path).await })
-            .map_err(to_py_err)?;
+        let info = Python::attach(|py| {
+            py_detach_blocking(py, move || self.rt.block_on(async move { fs.stat(&path).await }))
+        })
+        .map_err(to_py_err)?;
 
         Python::attach(|py| {
             let dict = file_info_to_py_dict(py, &info)?;
@@ -349,9 +366,13 @@ impl RAGFSBindingClient {
     /// Rename/move a file or directory.
     fn mv(&self, old_path: String, new_path: String) -> PyResult<HashMap<String, String>> {
         let fs = self.fs.clone();
-        self.rt
-            .block_on(async move { fs.rename(&old_path, &new_path).await })
-            .map_err(to_py_err)?;
+        Python::attach(|py| {
+            py_detach_blocking(py, move || {
+                self.rt
+                    .block_on(async move { fs.rename(&old_path, &new_path).await })
+            })
+        })
+        .map_err(to_py_err)?;
 
         let mut m = HashMap::new();
         m.insert("message".to_string(), "renamed".to_string());
@@ -361,9 +382,10 @@ impl RAGFSBindingClient {
     /// Change file permissions.
     fn chmod(&self, path: String, mode: u32) -> PyResult<HashMap<String, String>> {
         let fs = self.fs.clone();
-        self.rt
-            .block_on(async move { fs.chmod(&path, mode).await })
-            .map_err(to_py_err)?;
+        Python::attach(|py| {
+            py_detach_blocking(py, move || self.rt.block_on(async move { fs.chmod(&path, mode).await }))
+        })
+        .map_err(to_py_err)?;
 
         let mut m = HashMap::new();
         m.insert("message".to_string(), "chmod ok".to_string());
@@ -373,18 +395,21 @@ impl RAGFSBindingClient {
     /// Touch a file (create if not exists, or update timestamp).
     fn touch(&self, path: String) -> PyResult<HashMap<String, String>> {
         let fs = self.fs.clone();
-        self.rt
-            .block_on(async move {
-                // Try create; if already exists, write empty to update mtime
-                match fs.create(&path).await {
-                    Ok(_) => Ok(()),
-                    Err(_) => {
-                        // File exists, write empty bytes to update timestamp
-                        fs.write(&path, &[], 0, WriteFlag::None).await.map(|_| ())
+        Python::attach(|py| {
+            py_detach_blocking(py, move || {
+                self.rt.block_on(async move {
+                    // Try create; if already exists, write empty to update mtime
+                    match fs.create(&path).await {
+                        Ok(_) => Ok(()),
+                        Err(_) => {
+                            // File exists, write empty bytes to update timestamp
+                            fs.write(&path, &[], 0, WriteFlag::None).await.map(|_| ())
+                        }
                     }
-                }
+                })
             })
-            .map_err(to_py_err)?;
+        })
+        .map_err(to_py_err)?;
 
         let mut m = HashMap::new();
         m.insert("message".to_string(), "touched".to_string());
@@ -394,7 +419,9 @@ impl RAGFSBindingClient {
     /// List all mounted plugins.
     fn mounts(&self) -> PyResult<Vec<HashMap<String, String>>> {
         let fs = self.fs.clone();
-        let mount_list = self.rt.block_on(async move { fs.list_mounts().await });
+        let mount_list = Python::attach(|py| {
+            py_detach_blocking(py, move || self.rt.block_on(async move { fs.list_mounts().await }))
+        });
 
         let result: Vec<HashMap<String, String>> = mount_list
             .into_iter()
@@ -434,9 +461,10 @@ impl RAGFSBindingClient {
         };
 
         let fs = self.fs.clone();
-        self.rt
-            .block_on(async move { fs.mount(plugin_config).await })
-            .map_err(to_py_err)?;
+        Python::attach(|py| {
+            py_detach_blocking(py, move || self.rt.block_on(async move { fs.mount(plugin_config).await }))
+        })
+        .map_err(to_py_err)?;
 
         let mut m = HashMap::new();
         m.insert(
@@ -450,9 +478,10 @@ impl RAGFSBindingClient {
     fn unmount(&self, path: String) -> PyResult<HashMap<String, String>> {
         let fs = self.fs.clone();
         let path_clone = path.clone();
-        self.rt
-            .block_on(async move { fs.unmount(&path_clone).await })
-            .map_err(to_py_err)?;
+        Python::attach(|py| {
+            py_detach_blocking(py, move || self.rt.block_on(async move { fs.unmount(&path_clone).await }))
+        })
+        .map_err(to_py_err)?;
 
         let mut m = HashMap::new();
         m.insert("message".to_string(), format!("unmounted {}", path));
@@ -533,4 +562,17 @@ impl RAGFSBindingClient {
 fn ragfs_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RAGFSBindingClient>()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detach_blocking_helper_runs_without_python_objects() {
+        Python::attach(|py| {
+            let value: i32 = py_detach_blocking(py, || 40 + 2);
+            assert_eq!(value, 42);
+        });
+    }
 }

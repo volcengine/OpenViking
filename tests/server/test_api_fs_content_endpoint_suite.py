@@ -205,7 +205,7 @@ async def test_reindex_missing_uri_returns_not_found_error_payload(client, monke
         "/api/v1/content/reindex",
         json={"uri": "viking://resources/missing", "wait": True},
     )
-    _assert_error(response, status_code=200, error_code="NOT_FOUND")
+    _assert_error(response, status_code=404, error_code="NOT_FOUND")
 
 
 async def test_reindex_sync_conflict_returns_error_payload(client, monkeypatch):
@@ -225,7 +225,65 @@ async def test_reindex_sync_conflict_returns_error_payload(client, monkeypatch):
         "/api/v1/content/reindex",
         json={"uri": "viking://resources/conflict", "wait": True},
     )
-    _assert_error(response, status_code=200, error_code="CONFLICT")
+    _assert_error(response, status_code=409, error_code="CONFLICT")
+
+
+async def test_reindex_sync_business_error_returns_error_envelope(client, monkeypatch):
+    async def fake_do_reindex(service, uri, regenerate, ctx):
+        return {"status": "error", "message": "bad summarize"}
+
+    monkeypatch.setattr(
+        "openviking.storage.viking_fs.get_viking_fs",
+        lambda: _FakeVikingFS(True),
+    )
+    monkeypatch.setattr(
+        "openviking.service.task_tracker.get_task_tracker",
+        lambda: _FakeTracker(has_running=False),
+    )
+    monkeypatch.setattr(
+        "openviking.server.routers.content.get_service",
+        lambda: SimpleNamespace(),
+    )
+    monkeypatch.setattr("openviking.server.routers.content._do_reindex", fake_do_reindex)
+    response = await client.post(
+        "/api/v1/content/reindex",
+        json={"uri": "viking://resources/demo", "wait": True, "regenerate": True},
+    )
+    _assert_error(
+        response,
+        status_code=500,
+        error_code="PROCESSING_ERROR",
+        message_fragment="bad summarize",
+    )
+
+
+async def test_maintenance_reindex_sync_business_error_returns_error_envelope(client, monkeypatch):
+    async def fake_do_reindex(service, uri, regenerate, ctx):
+        return {"status": "error", "message": "bad maintenance summarize"}
+
+    monkeypatch.setattr(
+        "openviking.storage.viking_fs.get_viking_fs",
+        lambda: _FakeVikingFS(True),
+    )
+    monkeypatch.setattr(
+        "openviking.service.task_tracker.get_task_tracker",
+        lambda: _FakeTracker(has_running=False),
+    )
+    monkeypatch.setattr(
+        "openviking.server.routers.maintenance.get_service",
+        lambda: SimpleNamespace(),
+    )
+    monkeypatch.setattr("openviking.server.routers.maintenance._do_reindex", fake_do_reindex)
+    response = await client.post(
+        "/api/v1/maintenance/reindex",
+        json={"uri": "viking://resources/demo", "wait": True, "regenerate": True},
+    )
+    _assert_error(
+        response,
+        status_code=500,
+        error_code="PROCESSING_ERROR",
+        message_fragment="bad maintenance summarize",
+    )
 
 
 async def test_reindex_sync_success_returns_ok_payload(client, monkeypatch):

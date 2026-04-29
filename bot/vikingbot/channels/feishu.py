@@ -6,6 +6,7 @@ import json
 import re
 import tempfile
 import threading
+import time
 from collections import OrderedDict
 from typing import Any
 
@@ -46,6 +47,7 @@ try:
         CreateMessageRequest,
         CreateMessageRequestBody,
         Emoji,
+        GetChatMembersRequest,
         GetChatRequest,
         GetImageRequest,
         GetMessageResourceRequest,
@@ -61,6 +63,7 @@ except ImportError:
     Emoji = None
     GetImageRequest = None
     GetUserRequest = None
+    GetChatMembersRequest = None
     BatchGetIdUserRequest = None
     BatchGetIdUserRequestBody = None
 
@@ -73,7 +76,6 @@ MSG_TYPE_MAP = {
 }
 
 # Pre-compiled regex patterns
-MENTION_PATTERN = re.compile(r"@_user_\d+")
 OPEN_ID_MENTION_PATTERN = re.compile(r"@ou_[a-f0-9]+")
 
 
@@ -114,12 +116,16 @@ class FeishuChannel(BaseChannel):
         self._chat_mode_cache: dict[str, str] = {}  # 缓存群类型：group(普通群)/thread(话题群)
         self._user_name_cache: OrderedDict[str, str] = OrderedDict()  # LRU缓存用户ID到姓名的映射
         self._bot_name_cache: dict[str, str] = {}  # 缓存机器人open_id到名称的映射
+        self._chat_member_cache: OrderedDict[str, dict[str, Any]] = OrderedDict()  # chat_id -> {members, expires_at, last_error_at}
         self._MAX_USER_CACHE_SIZE = 1000  # 最大缓存1000个用户
+        self._CHAT_MEMBER_CACHE_TTL_SEC = 300
+        self._CHAT_MEMBER_CACHE_MAX_CHATS = 30
+        self._CHAT_MEMBER_FETCH_COOLDOWN_SEC = 60
+        self._CHAT_MEMBER_FETCH_PAGE_SIZE = 100
+        self._CHAT_MEMBER_FETCH_MAX_PAGES = 500
 
     async def _get_tenant_access_token(self) -> str:
         """Get tenant access token for Feishu API."""
-        import time
-
         now = time.time()
         if (
             self._tenant_access_token and now < self._token_expire_time - 60
@@ -781,36 +787,125 @@ class FeishuChannel(BaseChannel):
 
         return True
 
-    async def _get_user_name(self, open_id: str) -> str | None:
+    def _save_user_name_cache(self, open_id: str, name: str) -> None:
+        if open_id in self._user_name_cache:
+            self._user_name_cache.pop(open_id)
+        elif len(self._user_name_cache) >= self._MAX_USER_CACHE_SIZE:
+            self._user_name_cache.popitem(last=False)
+        self._user_name_cache[open_id] = name
+
+    def _get_cached_user_name(self, open_id: str) -> str | None:
+        if open_id not in self._user_name_cache:
+            return None
+        name = self._user_name_cache.pop(open_id)
+        self._user_name_cache[open_id] = name
+        return name
+
+    def _save_chat_member_cache(self, chat_id: str, members: dict[str, str], last_error_at: float = 0) -> None:
+        if chat_id in self._chat_member_cache:
+            self._chat_member_cache.pop(chat_id)
+        elif len(self._chat_member_cache) >= self._CHAT_MEMBER_CACHE_MAX_CHATS:
+            self._chat_member_cache.popitem(last=False)
+
+        ttl = self._CHAT_MEMBER_FETCH_COOLDOWN_SEC if last_error_at else self._CHAT_MEMBER_CACHE_TTL_SEC
+        self._chat_member_cache[chat_id] = {
+            "members": members,
+            "expires_at": time.time() + ttl,
+            "last_error_at": last_error_at,
+        }
+
+    async def _fetch_chat_members(self, chat_id: str) -> dict[str, str]:
+        if not self._client or not GetChatMembersRequest:
+            return {}
+
+        members: dict[str, str] = {}
+        page_token = ""
+
+        for _ in range(self._CHAT_MEMBER_FETCH_MAX_PAGES):
+            request_builder = (
+                GetChatMembersRequest.builder()
+                .chat_id(chat_id)
+                .member_id_type("open_id")
+                .page_size(self._CHAT_MEMBER_FETCH_PAGE_SIZE)
+            )
+            if page_token:
+                request_builder = request_builder.page_token(page_token)
+            request = request_builder.build()
+            response = await self._client.im.v1.chat_members.aget(request)
+            if not response.success():
+                raise RuntimeError(
+                    f"client.im.v1.chat_members.get failed, code: {response.code}, msg: {response.msg}, log_id: {response.get_log_id()}"
+                )
+
+            data = response.data
+            items = getattr(data, "items", []) if data else []
+            for item in items:
+                member_id = getattr(item, "member_id", "")
+                name = getattr(item, "name", "")
+                if member_id and name:
+                    members[member_id] = name
+
+            has_more = bool(getattr(data, "has_more", False)) if data else False
+            next_page_token = getattr(data, "page_token", "") if data else ""
+            if not has_more or not next_page_token:
+                break
+            page_token = next_page_token
+
+        return members
+
+    async def _get_group_member_name(self, chat_id: str, open_id: str) -> str | None:
+        now = time.time()
+        entry = self._chat_member_cache.get(chat_id)
+
+        if entry:
+            self._chat_member_cache.move_to_end(chat_id)
+            members = entry.get("members", {})
+            if entry.get("expires_at", 0) > now:
+                return members.get(open_id)
+            if now - float(entry.get("last_error_at", 0) or 0) < self._CHAT_MEMBER_FETCH_COOLDOWN_SEC:
+                return members.get(open_id)
+
+        try:
+            members = await self._fetch_chat_members(chat_id)
+            self._save_chat_member_cache(chat_id, members)
+            return members.get(open_id)
+        except Exception as e:
+            logger.warning(f"Failed to get chat members for {chat_id}: {e}")
+            stale_members: dict[str, str] = {}
+            if entry:
+                stale_members = entry.get("members", {})
+            self._save_chat_member_cache(chat_id, stale_members, last_error_at=now)
+            return stale_members.get(open_id)
+
+    async def _get_user_name(self, open_id: str, chat_id: str | None = None) -> str | None:
         """
         Get user name from Feishu API by open_id.
         Returns user name if found, None otherwise.
         Uses LRU cache to avoid memory issues.
         """
-        # Check cache first
-        if open_id in self._user_name_cache:
-            # Move to end (most recently used)
-            name = self._user_name_cache.pop(open_id)
-            self._user_name_cache[open_id] = name
-            return name
+        cached_name = self._get_cached_user_name(open_id)
+        if cached_name:
+            return cached_name
 
         try:
-            # Directly get user by open_id
             if GetUserRequest:
-                # Use open_id directly with user_id_type="open_id"
                 user_request = (
                     GetUserRequest.builder().user_id(open_id).user_id_type("open_id").build()
                 )
                 user_response = self._client.contact.v3.user.get(user_request)
-
                 if user_response.success() and user_response.data and user_response.data.user:
                     name = user_response.data.user.name
-                    if len(self._user_name_cache) >= self._MAX_USER_CACHE_SIZE:
-                        self._user_name_cache.popitem(last=False)
-                    self._user_name_cache[open_id] = name
-                    return name
+                    if name:
+                        self._save_user_name_cache(open_id, name)
+                        return name
         except Exception as e:
             logger.warning(f"Failed to get user name for {open_id}: {e}")
+
+        if chat_id:
+            member_name = await self._get_group_member_name(chat_id, open_id)
+            if member_name:
+                self._save_user_name_cache(open_id, member_name)
+                return member_name
 
         return None
 
@@ -829,7 +924,7 @@ class FeishuChannel(BaseChannel):
         self._bot_name_cache[open_id] = bot_name
         return bot_name
 
-    async def _batch_get_user_names(self, open_ids: list[str]) -> dict[str, str]:
+    async def _batch_get_user_names(self, open_ids: list[str], chat_id: str | None = None) -> dict[str, str]:
         """
         Get user names from Feishu API by open_ids (fetches individually with LRU cache).
         Returns a dict mapping open_id to user name.
@@ -838,14 +933,11 @@ class FeishuChannel(BaseChannel):
             return {}
 
         result = {}
-        # Check cache first
         missing_ids = []
         for open_id in open_ids:
-            if open_id in self._user_name_cache:
-                # Move to end (most recently used)
-                name = self._user_name_cache.pop(open_id)
-                self._user_name_cache[open_id] = name
-                result[open_id] = name
+            cached_name = self._get_cached_user_name(open_id)
+            if cached_name:
+                result[open_id] = cached_name
             else:
                 missing_ids.append(open_id)
 
@@ -853,10 +945,9 @@ class FeishuChannel(BaseChannel):
             return result
 
         try:
-            # Fetch missing users one by one
             for open_id in missing_ids:
                 try:
-                    name = await self._get_user_name(open_id)
+                    name = await self._get_user_name(open_id, chat_id=chat_id)
                     if name:
                         result[open_id] = name
                 except Exception as e:
@@ -866,7 +957,9 @@ class FeishuChannel(BaseChannel):
 
         return result
 
-    async def _process_group_message_content(self, content: str, sender_id: str) -> tuple[str, str]:
+    async def _process_group_message_content(
+        self, content: str, sender_id: str, chat_id: str | None = None
+    ) -> tuple[str, str]:
         """
         Process group message content:
         1. Get sender name and prepend to content
@@ -879,7 +972,7 @@ class FeishuChannel(BaseChannel):
         mentioned_open_ids = [mid[1:] for mid in mentioned_open_ids] if mentioned_open_ids else []
 
         all_ids_to_fetch = list({sender_id} | set(mentioned_open_ids))
-        user_name_map = await self._batch_get_user_names(all_ids_to_fetch)
+        user_name_map = await self._batch_get_user_names(all_ids_to_fetch, chat_id=chat_id)
 
         processed_content = content
         if mentioned_open_ids:
@@ -965,28 +1058,31 @@ class FeishuChannel(BaseChannel):
             if hasattr(message, "mentions") and message.mentions:
                 for idx, mention in enumerate(message.mentions):
                     placeholder = f"@_user_{idx + 1}"
-                    if hasattr(mention, "id") and mention.id and placeholder in content:
-                        # mention.id 是 UserId 对象，直接取 open_id
+                    if placeholder not in content:
+                        continue
+                    mention_name = getattr(mention, "name", "")
+                    if bot_name and mention_name == bot_name:
+                        content = content.replace(placeholder, "")
+                        continue
+                    if hasattr(mention, "id") and mention.id:
                         user_id = mention.id.open_id
-                        # 保存 name 供后续使用
-                        if hasattr(mention, "name") and mention.name:
-                            mention_name_map[user_id] = mention.name
-                        # 先替换成 @open_id 格式
+                        if mention_name:
+                            mention_name_map[user_id] = mention_name
                         content = content.replace(placeholder, f"@{user_id}")
-            if "@_user_" in content:
-                content = MENTION_PATTERN.sub(f"@{sender_id}", content)
 
             # 8.5 群聊场景：处理用户姓名
             user_name = ""
             if chat_type == "group":
                 user_name = mention_name_map.get(sender_id, "")
                 if not user_name:
-                    user_name = await self._get_user_name(sender_id) or ""
+                    user_name = await self._get_user_name(sender_id, chat_id=chat_id) or ""
                 if user_name:
                     content = f"[{user_name}]: {content}"
+
                 for user_id, name in mention_name_map.items():
                     if name and f"@{user_id}" in content:
                         content = content.replace(f"@{user_id}", f"@{name}")
+                content = re.sub(r"\s{2,}", " ", content).strip()
 
             # 9. 构建会话ID（处理话题群）
             reply_to = chat_id if chat_type == "group" else sender_id
