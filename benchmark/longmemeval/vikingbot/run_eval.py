@@ -22,7 +22,7 @@ except ModuleNotFoundError:
 
 
 LONGMEMEVAL_TIME_FORMAT = "%Y/%m/%d (%a) %H:%M"
-DEFAULT_SINGLE_SEARCH_CONTEXT_LIMIT = 30
+DEFAULT_SINGLE_SEARCH_CONTEXT_LIMIT = 10
 
 
 def get_token_encoding_name(model_name: str | None = None) -> str:
@@ -270,33 +270,28 @@ def run_single_search_context_answer(
         user=sender_id,
         timeout=timeout,
     )
-    attempted_read_uris: list[str] = []
-    read_success_uris: list[str] = []
-
     try:
         client.initialize()
         target_uri = f"viking://user/{sender_id or 'default'}/memories"
         search_result = client.find(
             question,
             target_uri=target_uri,
-            limit=100,
+            limit=single_search_context_limit,
         )
         contexts = select_single_search_contexts(
             search_result,
             limit=single_search_context_limit,
         )
-        search_result_uris = [context["uri"] for context in contexts]
+        context_uris = [context["uri"] for context in contexts]
 
         for context in contexts:
             uri = context["uri"]
-            attempted_read_uris.append(uri)
             try:
                 context["content"] = client.read(
                     uri,
                     offset=0,
                     limit=-1,
                 )
-                read_success_uris.append(uri)
             except Exception as exc:
                 context["content"] = f"[READ ERROR] {exc}"
 
@@ -318,13 +313,12 @@ def run_single_search_context_answer(
             print(prompt, flush=True)
             print("===== SINGLE SEARCH MODEL INPUT END =====", flush=True)
             print("===== SINGLE SEARCH DEBUG =====", flush=True)
-            print(f"search_result_count: {len(search_result_uris)}", flush=True)
-            print(f"read_success_count: {len(read_success_uris)}", flush=True)
+            print(f"context_count: {len(context_uris)}", flush=True)
             print(f"memory_content_tokens: {memory_prompt_tokens}", flush=True)
             print(f"memory_content_chars: {memory_chars}", flush=True)
             print(f"memory_tokenizer: {memory_tokenizer}", flush=True)
-            print("retrieved_uris:", flush=True)
-            for uri in search_result_uris:
+            print("context_uris:", flush=True)
+            for uri in context_uris:
                 print(f"  {uri}", flush=True)
             print("===== SINGLE SEARCH DEBUG END =====", flush=True)
         raw_response = vlm.get_completion(prompt)
@@ -347,9 +341,7 @@ def run_single_search_context_answer(
             [
                 {
                     "iteration": 1,
-                    "search_result_uris": search_result_uris,
-                    "attempted_read_uris": attempted_read_uris,
-                    "read_success_uris": read_success_uris,
+                    "context_uris": context_uris,
                 }
             ],
         )
@@ -364,9 +356,7 @@ def run_single_search_context_answer(
             [
                 {
                     "iteration": 1,
-                    "search_result_uris": [],
-                    "attempted_read_uris": attempted_read_uris,
-                    "read_success_uris": read_success_uris,
+                    "context_uris": [],
                 }
             ],
         )
