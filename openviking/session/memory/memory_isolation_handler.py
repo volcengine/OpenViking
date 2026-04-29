@@ -44,6 +44,7 @@ class MemoryIsolationHandler:
 
     def prepare_messages(self) -> None:
         """开关关闭时，清空 messages 中的 role_id，使下游统一使用登录用户。"""
+        print(f'self.enable_role_id_memory_isolate={self.enable_role_id_memory_isolate}')
         if self.enable_role_id_memory_isolate:
             return
         messages = self._extract_context.messages if self._extract_context else []

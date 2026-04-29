@@ -133,6 +133,7 @@ class SessionCompressorV2:
         tracer.info("Starting v2 memory extraction from conversation")
         tracer.info(f"messages={JsonUtils.dumps(messages)}")
         config = get_openviking_config()
+
         # Initialize default memory files (soul.md, identity.md) if not exist
         from openviking.session.memory.memory_type_registry import create_default_registry
 
