@@ -384,6 +384,93 @@ If the archive does not exist, is incomplete, or does not belong to the session,
 
 ---
 
+### preview_memory_extraction()
+
+Preview which memories would be extracted from the current live session without writing any memory files.
+
+This endpoint is intended for debugging and observability:
+- inspect the candidate memories produced by the extraction LLM
+- verify category distribution before calling `commit_session()`
+- inspect the archive summary preview that would be generated for the current messages
+
+This endpoint returns:
+- `session_id`: the target session ID
+- `message_count`: how many live messages are currently in the session
+- `estimated_message_tokens`: estimated token count of current live messages
+- `latest_archive_overview`: overview of the latest completed archive, if any
+- `archive_summary_preview`: summary preview for the current live messages
+- `counts_by_category`: candidate counts grouped by memory category
+- `candidates`: extracted candidate memories, not yet deduplicated or persisted
+
+**Parameters**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| session_id | str | Yes | - | Session ID |
+
+**Python SDK (Embedded / HTTP)**
+
+```python
+preview = await client.preview_memory_extraction("a1b2c3d4")
+print(preview["counts_by_category"])
+print(preview["archive_summary_preview"])
+print(preview["candidates"][0]["abstract"])
+```
+
+**HTTP API**
+
+```
+POST /api/v1/sessions/{session_id}/extract-preview
+```
+
+```bash
+curl -X POST "http://localhost:1933/api/v1/sessions/a1b2c3d4/extract-preview" \
+  -H "X-API-Key: your-key"
+```
+
+**Response**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "session_id": "a1b2c3d4",
+    "message_count": 2,
+    "estimated_message_tokens": 21,
+    "latest_archive_overview": "",
+    "archive_summary_preview": "# Session Summary\n\n**Overview**: The user talked about Wangcai and coffee preferences.",
+    "counts_by_category": {
+      "entities": 1,
+      "preferences": 1,
+      "total": 2
+    },
+    "candidates": [
+      {
+        "category": "entities",
+        "abstract": "The user's dog is named Wangcai.",
+        "overview": "The user mentioned a dog named Wangcai.",
+        "content": "The user said their dog is named Wangcai.",
+        "language": "zh-CN"
+      },
+      {
+        "category": "preferences",
+        "abstract": "The user prefers pour-over coffee.",
+        "overview": "The user mentioned a preference for pour-over coffee.",
+        "content": "The user said they like pour-over coffee.",
+        "language": "zh-CN"
+      }
+    ]
+  }
+}
+```
+
+Notes:
+- This endpoint does **not** write any memory files.
+- Returned candidates are raw extraction outputs before deduplication and merge.
+- When the session has no live messages, `candidates` is empty and `archive_summary_preview` is an empty string.
+
+---
+
 ### delete_session()
 
 Delete a session.

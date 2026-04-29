@@ -160,6 +160,11 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         return await self._client.get_session_archive(session_id, archive_id)
 
+    async def preview_memory_extraction(self, session_id: str) -> Dict[str, Any]:
+        """Preview extracted memories for a session without persisting them."""
+        await self._ensure_initialized()
+        return await self._client.preview_memory_extraction(session_id)
+
     async def delete_session(self, session_id: str) -> None:
         """Delete a session."""
         await self._ensure_initialized()

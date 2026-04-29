@@ -260,6 +260,17 @@ async def extract_session(
     return Response(status="ok", result=_to_jsonable(result))
 
 
+@router.post("/{session_id}/extract-preview")
+async def preview_extract_session(
+    session_id: str = Path(..., description="Session ID"),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Preview extracted memories for a session without persisting them."""
+    service = get_service()
+    result = await service.sessions.preview_extract(session_id, _ctx)
+    return Response(status="ok", result=_to_jsonable(result))
+
+
 @router.post("/{session_id}/messages")
 async def add_message(
     request: AddMessageRequest,

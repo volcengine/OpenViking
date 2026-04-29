@@ -11,6 +11,7 @@ import httpx
 import pytest
 import pytest_asyncio
 
+from openviking.session import CandidateMemory, MemoryCategory
 from openviking_cli.client.http import AsyncHTTPClient
 from openviking_cli.exceptions import ConflictError, FailedPreconditionError, ProcessingError
 from tests.server.conftest import SAMPLE_MD_CONTENT, TEST_TMP_DIR
@@ -230,6 +231,39 @@ async def test_sdk_get_session_archive(http_client):
     assert archive["overview"]
     assert archive["abstract"]
     assert [m["parts"][0]["text"] for m in archive["messages"]] == ["Archive me"]
+
+
+async def test_sdk_preview_memory_extraction(http_client):
+    client, svc = http_client
+
+    session_info = await client.create_session()
+    session_id = session_info["session_id"]
+
+    await client.add_message(session_id, "user", "我的狗叫旺财。")
+
+    async def fake_preview(*args, **kwargs):
+        del args, kwargs
+        return [
+            CandidateMemory(
+                category=MemoryCategory.ENTITIES,
+                abstract="用户有一只叫旺财的狗",
+                overview="用户提到了宠物狗旺财。",
+                content="用户在会话里说明自己的狗叫旺财。",
+                source_session=session_id,
+                user="sdk_test_user",
+                language="zh-CN",
+            )
+        ]
+
+    svc.session_compressor.preview_long_term_memories = fake_preview
+
+    result = await client.preview_memory_extraction(session_id)
+    assert result["session_id"] == session_id
+    assert result["message_count"] == 1
+    assert result["counts_by_category"]["entities"] == 1
+    assert result["counts_by_category"]["total"] == 1
+    assert result["candidates"][0]["category"] == "entities"
+    assert result["archive_summary_preview"]
 
 
 async def test_sdk_commit_raises_failed_precondition_after_failed_archive(http_client):

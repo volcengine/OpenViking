@@ -6,12 +6,13 @@ Session Service for OpenViking.
 Provides session management operations: session, sessions, add_message, commit, delete.
 """
 
+from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
 from openviking.core.namespace import canonical_session_uri
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker import get_task_tracker
-from openviking.session import Session
+from openviking.session import Session, ToolSkillCandidateMemory
 from openviking.session.compressor import SessionCompressor
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import VikingFS
@@ -266,3 +267,80 @@ class SessionService:
         )
         self._record_lifecycle_metric("extract", "ok")
         return memories
+
+    @staticmethod
+    def _serialize_preview_candidate(candidate: Any) -> Dict[str, Any]:
+        """Convert a candidate-memory dataclass into a stable preview payload."""
+        category = getattr(candidate, "category", "")
+        category_value = getattr(category, "value", category) or ""
+
+        payload = {
+            "category": str(category_value),
+            "abstract": getattr(candidate, "abstract", "") or "",
+            "overview": getattr(candidate, "overview", "") or "",
+            "content": getattr(candidate, "content", "") or "",
+            "language": getattr(candidate, "language", "") or "",
+        }
+
+        if isinstance(candidate, ToolSkillCandidateMemory):
+            payload.update(
+                {
+                    "tool_name": candidate.tool_name,
+                    "skill_name": candidate.skill_name,
+                    "call_time": candidate.call_time,
+                    "success_time": candidate.success_time,
+                    "duration_ms": candidate.duration_ms,
+                    "prompt_tokens": candidate.prompt_tokens,
+                    "completion_tokens": candidate.completion_tokens,
+                    "best_for": candidate.best_for,
+                    "optimal_params": candidate.optimal_params,
+                    "recommended_flow": candidate.recommended_flow,
+                    "key_dependencies": candidate.key_dependencies,
+                    "common_failures": candidate.common_failures,
+                    "recommendation": candidate.recommendation,
+                }
+            )
+
+        return payload
+
+    async def preview_extract(self, session_id: str, ctx: RequestContext) -> Dict[str, Any]:
+        """Preview memory extraction results without persisting any memories."""
+        self._ensure_initialized()
+        if not self._session_compressor:
+            raise NotInitializedError("SessionCompressor")
+
+        session = await self.get(session_id, ctx)
+        messages = list(session.messages)
+        latest_archive_overview = await session._get_latest_completed_archive_overview()
+        archive_summary_preview = ""
+        if messages:
+            archive_summary_preview = await session._generate_archive_summary_async(
+                messages,
+                latest_archive_overview=latest_archive_overview,
+            )
+
+        candidates = await self._session_compressor.preview_long_term_memories(
+            messages=messages,
+            user=ctx.user,
+            session_id=session_id,
+            latest_archive_overview=latest_archive_overview,
+        )
+        serialized_candidates = [
+            self._serialize_preview_candidate(candidate) for candidate in candidates
+        ]
+
+        counts = defaultdict(int)
+        for candidate in serialized_candidates:
+            category = candidate.get("category", "") or "unknown"
+            counts[category] += 1
+        counts["total"] = len(serialized_candidates)
+
+        return {
+            "session_id": session_id,
+            "message_count": len(messages),
+            "estimated_message_tokens": sum(msg.estimated_tokens for msg in messages),
+            "latest_archive_overview": latest_archive_overview,
+            "archive_summary_preview": archive_summary_preview,
+            "counts_by_category": dict(counts),
+            "candidates": serialized_candidates,
+        }
