@@ -21,7 +21,9 @@ Codex gets four tools:
 - `.codex-plugin/plugin.json`: plugin metadata
 - `.mcp.json`: MCP server wiring for Codex
 - `src/memory-server.ts`: MCP server source
-- `package.json`: build and start scripts
+- `src/config.ts`: config loader and precedence resolver
+- `tests/config.test.mjs`: config-loading tests (`node --test`)
+- `package.json`: build, start, and test scripts
 - `tsconfig.json`: TypeScript build config
 
 ## Prerequisites
@@ -59,13 +61,44 @@ Or copy `.mcp.json` into a Codex workspace and adjust the `cwd` path if needed.
 
 The server reads OpenViking connection settings from `~/.openviking/ov.conf`.
 
+Per-plugin overrides may live in `~/.openviking/codex-memory-plugin/config.json`.
+This is optional; when the file is absent the server falls back to `ov.conf`
+defaults and the literal defaults below.
+
+Resolution precedence (highest wins):
+
+1. environment variable
+2. client config (`~/.openviking/codex-memory-plugin/config.json`)
+3. `ov.conf` default
+4. built-in literal default
+
+Supported client config keys (all optional):
+
+- `apiKey`
+- `accountId`
+- `userId`
+- `agentId` (default: `codex`)
+- `timeoutMs` (default: `15000`)
+- `recallLimit` (default: `6`)
+- `scoreThreshold` (default: `0.01`)
+
+Example `~/.openviking/codex-memory-plugin/config.json`:
+
+```json
+{
+  "agentId": "codex-prod",
+  "recallLimit": 8
+}
+```
+
 Supported environment overrides:
 
 - `OPENVIKING_CONFIG_FILE`: alternate `ov.conf` path
+- `OPENVIKING_CODEX_CONFIG_FILE`: alternate client config path
 - `OPENVIKING_API_KEY`: API key override
-- `OPENVIKING_ACCOUNT`: account identity, default from `ov.conf`
-- `OPENVIKING_USER`: user identity, default from `ov.conf`
-- `OPENVIKING_AGENT_ID`: agent identity, default `codex`
+- `OPENVIKING_ACCOUNT`: account identity, default from client config or `ov.conf`
+- `OPENVIKING_USER`: user identity, default from client config or `ov.conf`
+- `OPENVIKING_AGENT_ID`: agent identity, default from client config or `ov.conf`
 - `OPENVIKING_TIMEOUT_MS`: HTTP timeout, default `15000`
 - `OPENVIKING_RECALL_LIMIT`: recall result limit, default `6`
 - `OPENVIKING_SCORE_THRESHOLD`: recall threshold, default `0.01`
