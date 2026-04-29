@@ -188,10 +188,9 @@ class VLMConfig(BaseModel):
             return self._get_provider_config_by_name(self.provider) or {}, self.provider
 
         if self.default_provider:
-            return (
-                self._get_provider_config_by_name(self.default_provider) or {},
-                self.default_provider,
-            )
+            config = self._get_provider_config_by_name(self.default_provider)
+            if self._provider_has_usable_credentials(self.default_provider, config):
+                return config, self.default_provider
 
         if len(self.providers) == 1:
             provider_name = next(iter(self.providers))
