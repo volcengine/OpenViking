@@ -30,6 +30,9 @@ _DASHSCOPE_HOSTS = {
     "dashscope-intl.aliyuncs.com",
 }
 
+_DEEPSEEK_HOSTS = {
+    "api.deepseek.com",
+}
 
 _REASONING_MODEL_PREFIXES = ("gpt-5", "o1", "o3", "o4")
 
@@ -80,6 +83,7 @@ class OpenAIVLM(VLMBase):
         self._async_client = None
         self.api_version = config.get("api_version")
         self.reasoning_effort = config.get("reasoning_effort", "low")
+        self.enable_thinking = config.get("enable_thinking")
 
     def get_client(self):
         """Get sync client"""
@@ -119,28 +123,71 @@ class OpenAIVLM(VLMBase):
                 self._async_client = openai.AsyncOpenAI(**kwargs)
         return self._async_client
 
-    def _supports_enable_thinking(self) -> bool:
-        """Return True for OpenAI-compatible DashScope endpoints that accept enable_thinking."""
-        if self.provider != "openai":
-            return False
+    def _detect_thinking_provider(self) -> Optional[str]:
+        """Detect thinking-capable provider from model name or api_base.
 
+        Returns "dashscope", "deepseek", or None.
+        """
         if isinstance(self.model, str) and self.model.lower().startswith("dashscope/"):
-            return True
+            return "dashscope"
 
         if not self.api_base:
-            return False
+            return None
 
         try:
             host = urlparse(self.api_base).hostname or ""
         except ValueError:
-            return False
+            return None
 
-        return host.lower() in _DASHSCOPE_HOSTS
+        host = host.lower()
+        if host in _DASHSCOPE_HOSTS:
+            return "dashscope"
+        if host in _DEEPSEEK_HOSTS:
+            return "deepseek"
+
+        return None
+
+    def _build_thinking_extra_body(self, thinking: bool) -> Optional[Dict[str, Any]]:
+        """Build provider-specific thinking parameters for extra_body.
+
+        Three modes based on ``enable_thinking`` config:
+
+        - ``True`` / ``False`` (explicit): always emit thinking params,
+          using the detected provider format (or ``enable_thinking`` bool
+          as default for unknown providers).
+        - ``None`` / unset (auto): only emit for auto-detected providers
+          (DashScope, DeepSeek).
+
+        Returns None when thinking control is not applicable.
+        """
+        if self.enable_thinking is not None:
+            # Explicit config: force thinking behavior for any endpoint
+            provider = self._detect_thinking_provider() or "default"
+        else:
+            # Auto-detect: only for known thinking-capable providers
+            provider = self._detect_thinking_provider()
+            if provider is None:
+                return None
+
+        if provider == "deepseek":
+            # DeepSeek enables thinking by default; only need to disable
+            if thinking:
+                return None
+            return {"thinking": {"type": "disabled"}}
+        else:
+            # DashScope and default: use enable_thinking boolean
+            return {"enable_thinking": thinking}
 
     def _apply_provider_specific_extra_body(self, kwargs: Dict[str, Any], thinking: bool) -> None:
-        """Attach provider-specific raw body parameters understood by compatible APIs."""
-        if self._supports_enable_thinking():
-            kwargs["extra_body"] = {"enable_thinking": bool(thinking)}
+        """Attach provider-specific raw body parameters understood by compatible APIs.
+
+        Merges into existing ``extra_body`` instead of overwriting, so
+        other call-sites can add their own parameters safely.
+        """
+        params = self._build_thinking_extra_body(thinking)
+        if params:
+            existing = kwargs.get("extra_body") or {}
+            kwargs["extra_body"] = {**existing, **params}
 
     def _update_token_usage_from_response(
         self,
