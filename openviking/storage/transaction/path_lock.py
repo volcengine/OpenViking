@@ -233,9 +233,10 @@ class PathLock:
             # 有限超时
             deadline = asyncio.get_running_loop().time() + timeout
 
-        # 确保目录存在
-        if not self._ensure_directory_exists(path):
-            logger.warning(f"[POINT] Failed to ensure directory exists: {path}")
+        # 确保目录存在（传父目录而非文件本身）
+        parent = self._get_parent_path(path)
+        if parent and not self._ensure_directory_exists(parent):
+            logger.warning(f"[POINT] Failed to ensure directory exists: {parent}")
             return False
 
         while True:
@@ -324,9 +325,10 @@ class PathLock:
             # 有限超时
             deadline = asyncio.get_running_loop().time() + timeout
 
-        # 确保目录存在
-        if not self._ensure_directory_exists(path):
-            logger.warning(f"[SUBTREE] Failed to ensure directory exists: {path}")
+        # 确保目录存在（传父目录而非文件本身）
+        parent = self._get_parent_path(path)
+        if parent and not self._ensure_directory_exists(parent):
+            logger.warning(f"[SUBTREE] Failed to ensure directory exists: {parent}")
             return False
 
         while True:
