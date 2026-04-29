@@ -247,7 +247,7 @@ ov system wait --timeout 60
 
 Observer API 提供详细的组件级监控。
 
-启用服务端认证后，Observer 端点属于特权监控面。在 `api_key` 模式下，它们需要 `ADMIN`/`ROOT` 上下文；在 `trusted` 模式下，请求会解析为 `USER`，因此这些端点会被拒绝。若 CLI 已配置 `root_api_key`，请使用 `openviking --sudo observer ...`。
+启用服务端认证后，Observer 端点属于特权监控面。在 `api_key` 模式下，它们需要 `ADMIN`/`ROOT` 上下文；在 `trusted` 模式下，部署边界已经受信任，因此 Observer 端点仍可使用。若 CLI 已配置 `root_api_key` 且需要发送 root key，请使用 `ov --sudo observer ...`。
 
 ### observer.queue
 
