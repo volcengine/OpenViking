@@ -274,7 +274,7 @@ class SyncOpenViking:
     def import_ovpack(
         self, file_path: str, target: str, force: bool = False, vectorize: bool = True
     ) -> str:
-        """Import .ovpack file (triggers vectorization by default)"""
+        """Import .ovpack file and enqueue semantic refresh."""
         return run_async(self._async_client.import_ovpack(file_path, target, force, vectorize))
 
     def close(self) -> None:
