@@ -113,7 +113,7 @@ done
 # 过滤掉开关参数，获取位置参数
 ARGS=()
 for arg in "$@"; do
-    if [ "$arg" != "--skip-import" ] && [ "$arg" != "--auto-commit" ]; then
+    if [ "$arg" != "--skip-import" ] && [ "$arg" != "--group-chat" ] && [ "$arg" != "--auto-commit" ]; then
         ARGS+=("$arg")
     fi
 done
