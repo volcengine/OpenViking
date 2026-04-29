@@ -28,9 +28,9 @@ Brief introduction explaining the main features and purpose of this module.
 Explain the purpose of this API, point to the corresponding code entry, and briefly describe the principles and workflow.
 
 **Code Entry**:
-- `openviking/<module>/<file>.py:<ClassName>.<MethodName>` - Core implementation
-- `openviking/server/routers/<router-file>.py` - HTTP router
-- `openviking_cli/commands/<command-file>.py` - CLI command
+- `openviking/&lt;module&gt;/&lt;file&gt;.py:&lt;ClassName&gt;.&lt;MethodName&gt;` - Core implementation
+- `openviking/server/routers/&lt;router-file&gt;.py` - HTTP router
+- `openviking_cli/commands/&lt;command-file&gt;.py` - CLI command
 
 #### 2. Interface and Parameter Description
 
@@ -38,7 +38,7 @@ Explain the purpose of this API, point to the corresponding code entry, and brie
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| <param-name> | <type> | <yes/no> | <default> | <detailed description> |
+| &lt;param-name&gt; | &lt;type&gt; | &lt;yes/no&gt; | &lt;default&gt; | &lt;detailed description&gt; |
 | ... | ... | ... | ... | ... |
 
 **Optional Supplementary Section**
@@ -50,29 +50,29 @@ Explain the purpose of this API, point to the corresponding code entry, and brie
 **HTTP API**
 
 ```
-<HTTP Method> <Path>
+&lt;HTTP Method&gt; &lt;Path&gt;
 ```
 
 ```bash
-<curl example>
+&lt;curl example&gt;
 ```
 
 **Python SDK**
 
 ```python
-<SDK call example>
+&lt;SDK call example&gt;
 ```
 
 **CLI**
 
 ```bash
-<CLI command example>
+&lt;CLI command example&gt;
 ```
 
 **Response Example**
 
 ```json
-<JSON response example>
+&lt;JSON response example&gt;
 ```
 
 
@@ -90,7 +90,7 @@ Explain the purpose of this API, point to the corresponding code entry, and brie
 
 ## Related Documentation
 
-- [Document Title](<relative-path>) - <brief description>
+- [Document Title](&lt;relative-path&gt;) - &lt;brief description&gt;
 ```
 
 ## Structure Details
