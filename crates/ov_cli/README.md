@@ -93,7 +93,7 @@ ov read viking://resources/...
 - `observer vikingdb` - VikingDB status (admin/root; use `--sudo` with a configured `root_api_key`)
 - `observer vlm` - VLM status (admin/root; use `--sudo` with a configured `root_api_key`)
 
-When server auth is enabled, observer commands are a privileged monitoring surface. In `api_key` mode they require an `ADMIN`/`ROOT` context; in `trusted` mode requests resolve to `USER` and observer endpoints are denied.
+When server auth is enabled, observer commands are a privileged monitoring surface. In `api_key` mode they require an `ADMIN`/`ROOT` context; in `trusted` mode the deployment boundary is already trusted, so observer endpoints remain available.
 
 ### Session
 - `session new` - Create session
