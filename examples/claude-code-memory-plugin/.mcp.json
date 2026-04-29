@@ -3,7 +3,7 @@
     "type": "http",
     "url": "${OPENVIKING_URL:-http://127.0.0.1:1933}/mcp",
     "headers": {
-      "X-API-Key": "${OPENVIKING_API_KEY:-}",
+      "Authorization": "Bearer ${OPENVIKING_API_KEY:-}",
       "X-OpenViking-Account": "${OPENVIKING_ACCOUNT:-}",
       "X-OpenViking-User": "${OPENVIKING_USER:-}",
       "X-OpenViking-Agent": "${OPENVIKING_AGENT_ID:-}"

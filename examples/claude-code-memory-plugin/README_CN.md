@@ -153,7 +153,7 @@ vim ~/.openviking/ov.conf
 }
 ```
 
-> `root_api_key`：设置后，所有 HTTP 请求必须携带 `X-API-Key` 头。本地模式默认为 `null`（禁用认证）。  
+> `root_api_key`：设置后，所有 HTTP 请求必须携带 `Authorization: Bearer <token>` 头。本地模式默认为 `null`（禁用认证）。  
 > windows 系统的 workspace 路径分隔请用 / ，不要用 \ ，如 `D:/.openviking/data`
 
 #### `~/.openviking/ov.conf`（远程模式）
@@ -262,7 +262,7 @@ export OPENVIKING_CONFIG_FILE="~/custom/path/ov.conf"
 | 环境变量 | 映射到 | 描述 |
 |---------|-------|------|
 | `OPENVIKING_URL` / `OPENVIKING_BASE_URL` | `baseUrl` | 完整服务器 URL（如 `https://remote.example.com`）|
-| `OPENVIKING_API_KEY` | `apiKey` | API key，通过 `X-API-Key` 请求头发送 |
+| `OPENVIKING_BEARER_TOKEN` / `OPENVIKING_API_KEY` | `apiKey` | API key（任一环境变量均可），通过 `Authorization: Bearer <key>` 请求头发送 |
 | `OPENVIKING_ACCOUNT` | `accountId` | 多租户账户（`X-OpenViking-Account` 请求头）|
 | `OPENVIKING_USER` | `userId` | 多租户用户（`X-OpenViking-User` 请求头）|
 | `OPENVIKING_AGENT_ID` | `agentId` | 代理标识（`X-OpenViking-Agent` 请求头）|

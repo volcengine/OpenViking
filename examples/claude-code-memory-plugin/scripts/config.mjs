@@ -130,7 +130,9 @@ export function loadConfig() {
   }
 
   // apiKey: env → ovcli.api_key → cc.apiKey → server.root_api_key
-  const apiKey = str(process.env.OPENVIKING_API_KEY, null)
+  // Accepts OPENVIKING_BEARER_TOKEN or OPENVIKING_API_KEY (sent as Bearer either way).
+  const apiKey = str(process.env.OPENVIKING_BEARER_TOKEN, null)
+    || str(process.env.OPENVIKING_API_KEY, null)
     || str(cliFile.api_key, null)
     || str(cc.apiKey, null)
     || str(server.root_api_key, "");

@@ -156,7 +156,7 @@ vim ~/.openviking/ov.conf
 }
 ```
 
-> `root_api_key`: Once set, all HTTP requests must carry the `X-API-Key` header. Defaults to `null` in local mode (authentication disabled).  
+> `root_api_key`: Once set, all HTTP requests must carry an `Authorization: Bearer <token>` header. Defaults to `null` in local mode (authentication disabled).  
 > For Windows system paths in the workspace, use / instead of \, for example: `D:/.openviking/data`
 
 #### `~/.openviking/ov.conf` (Remote Mode)
@@ -267,7 +267,7 @@ All connection fields follow the same priority chain (highest → lowest):
 | Env Var | Maps To | Description |
 |---------|---------|-------------|
 | `OPENVIKING_URL` / `OPENVIKING_BASE_URL` | `baseUrl` | Full server URL (e.g. `https://remote.example.com`) |
-| `OPENVIKING_API_KEY` | `apiKey` | API key sent as `X-API-Key` header |
+| `OPENVIKING_BEARER_TOKEN` / `OPENVIKING_API_KEY` | `apiKey` | API key (either env var works); sent as `Authorization: Bearer <key>` |
 | `OPENVIKING_ACCOUNT` | `accountId` | Multi-tenant account (`X-OpenViking-Account` header) |
 | `OPENVIKING_USER` | `userId` | Multi-tenant user (`X-OpenViking-User` header) |
 | `OPENVIKING_AGENT_ID` | `agentId` | Agent identity (`X-OpenViking-Agent` header) |
