@@ -64,9 +64,17 @@ class ContentWriteCoordinator:
                 timeout=timeout,
             )
 
-        stat = await self._safe_stat(normalized_uri, ctx=ctx)
+        stat = await self._safe_stat(normalized_uri, ctx=ctx, allow_not_found=mode == "replace")
         if stat.get("isDir"):
             raise InvalidArgumentError(f"write only supports existing files, got directory: {uri}")
+        if mode == "replace" and stat.get("not_found"):
+            return await self._create_and_write(
+                uri=normalized_uri,
+                content=content,
+                ctx=ctx,
+                wait=wait,
+                timeout=timeout,
+            )
 
         context_type = self._context_type_for_uri(normalized_uri)
         root_uri = await self._resolve_root_uri(normalized_uri, ctx=ctx)
