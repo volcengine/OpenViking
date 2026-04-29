@@ -48,7 +48,7 @@ async def extract_skill_privacy_values(
 
     placeholder_result = placeholderize_skill_content_with_blocks(content, skill_name, values)
     return SkillPrivacyExtractionResult(
-        values=values,
+        values=placeholder_result.replaced_values,
         original_content=content,
         sanitized_content=placeholder_result.sanitized_content,
         original_content_blocks=placeholder_result.original_content_blocks,
