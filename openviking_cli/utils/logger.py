@@ -234,6 +234,7 @@ def init_otel_log_handler(
     endpoint: str = "localhost:4317",  # gRPC default: 4317; HTTP default: 4318
     service_name: str = "openviking-server",
     insecure: bool = False,
+    headers: Optional[dict[str, str]] = None,
     enabled: bool = True,
 ) -> Any:
     """Initialize OTel LoggingHandler.
@@ -243,6 +244,7 @@ def init_otel_log_handler(
         endpoint: OTLP logs endpoint.
         service_name: Service name.
         insecure: For OTLP/gRPC only. When True, use plaintext instead of TLS.
+        headers: Additional OTLP exporter headers for vendor-specific auth.
         enabled: Whether to enable the handler.
 
     Returns:
@@ -271,6 +273,7 @@ def init_otel_log_handler(
         return None
 
     try:
+        normalized_headers = {str(key): str(value) for key, value in (headers or {}).items()}
         # Create resource
         resource = Resource.create(
             {
@@ -287,9 +290,16 @@ def init_otel_log_handler(
             if OTLPGrpcLogExporter is None:
                 raise ImportError("gRPC OTLP log exporter not available")
             try:
-                otlp_exporter = OTLPGrpcLogExporter(endpoint=endpoint, insecure=insecure)
+                otlp_exporter = OTLPGrpcLogExporter(
+                    endpoint=endpoint,
+                    insecure=insecure,
+                    headers=normalized_headers,
+                )
             except TypeError:
-                otlp_exporter = OTLPGrpcLogExporter(endpoint=endpoint)
+                otlp_exporter = OTLPGrpcLogExporter(
+                    endpoint=endpoint,
+                    headers=normalized_headers,
+                )
         elif protocol == "http":
             if OTLPHttpLogExporter is None:
                 raise ImportError("HTTP OTLP log exporter not available")
@@ -298,7 +308,10 @@ def init_otel_log_handler(
                 raise ValueError(
                     "OTLP/HTTP endpoint must include scheme, e.g. 'http://localhost:4318/v1/logs'"
                 )
-            otlp_exporter = OTLPHttpLogExporter(endpoint=endpoint)
+            otlp_exporter = OTLPHttpLogExporter(
+                endpoint=endpoint,
+                headers=normalized_headers,
+            )
 
         if otlp_exporter is None:
             raise ValueError(f"Failed to create log exporter for protocol={protocol}")
@@ -356,6 +369,7 @@ def init_otel_log_handler_from_server_config(server_config: Any) -> Any:
         endpoint=logs_cfg.endpoint,
         service_name=logs_cfg.service_name,
         insecure=logs_cfg.tls.insecure,
+        headers=logs_cfg.headers,
         enabled=logs_cfg.enabled,
     )
     attach_otel_log_handler_to_existing_loggers()

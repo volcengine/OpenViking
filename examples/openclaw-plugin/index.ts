@@ -562,7 +562,6 @@ const contextEnginePlugin = {
     verboseRoutingInfo(
       `openviking: auth/namespace config ` +
         JSON.stringify({
-          serverAuthMode: cfg.serverAuthMode,
           isolateUserScopeByAgent: cfg.isolateUserScopeByAgent,
           isolateAgentScopeByUser: cfg.isolateAgentScopeByUser,
           deprecatedAgentScopeMode: cfg.agentScopeMode,
@@ -582,7 +581,6 @@ const contextEnginePlugin = {
         cfg.apiKey,
         cfg.agent_prefix,
         cfg.timeoutMs,
-        cfg.serverAuthMode,
         tenantAccount,
         tenantUser,
         routingDebugLog,

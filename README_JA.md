@@ -543,6 +543,11 @@ AIエージェントのコンテキスト管理の未来を共に定義し、構
 
 [![Star History Chart](https://api.star-history.com/svg?repos=volcengine/OpenViking&type=timeline&legend=top-left)](https://www.star-history.com/#volcengine/OpenViking&type=timeline&legend=top-left)
 
+## セキュリティとプライバシー
+
+このプロジェクトはセキュリティを重視しています。
+脆弱性の報告方法とサポート対象バージョンについては、[SECURITY.md](SECURITY.md) を参照してください。
+
 ## ライセンス
 
 OpenVikingプロジェクトは、コンポーネントごとに異なるライセンスを使用しています：

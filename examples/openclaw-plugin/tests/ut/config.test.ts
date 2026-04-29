@@ -24,7 +24,6 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.captureMaxLength).toBe(24000);
     expect(cfg.recallMaxContentChars).toBe(5000);
     expect(cfg.agent_prefix).toBe("default");
-    expect(cfg.serverAuthMode).toBe("api_key");
     expect(cfg.isolateUserScopeByAgent).toBe(false);
     expect(cfg.isolateAgentScopeByUser).toBe(false);
     expect(cfg.emitStandardDiagnostics).toBe(false);
@@ -257,14 +256,9 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.isolateAgentScopeByUser).toBe(true);
   });
 
-  it("parses trusted serverAuthMode", () => {
+  it("accepts deprecated serverAuthMode without exposing it in parsed config", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({ serverAuthMode: "trusted" });
-    expect(cfg.serverAuthMode).toBe("trusted");
-  });
-
-  it("falls back to api_key for invalid serverAuthMode", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({ serverAuthMode: "invalid" });
-    expect(cfg.serverAuthMode).toBe("api_key");
+    expect("serverAuthMode" in cfg).toBe(false);
   });
 
   it("defaults recallResources to false", () => {

@@ -150,7 +150,7 @@ class MemoryStore:
 
             # Log raw search results for debugging
             memory_list = []
-            memory_list.append(f'user_memory[{len(result['user_memory'])}]:')
+            memory_list.append(f"user_memory[{len(result['user_memory'])}]:")
 
             for i, mem in enumerate(result['user_memory']):
                 uri = mem.get('uri', '') if isinstance(mem, dict) else getattr(mem, 'uri', '')

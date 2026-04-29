@@ -47,7 +47,7 @@
 - 非安全路径字符会被规整或退化成稳定的 SHA-256。
 - `X-OpenViking-Agent` 按 session 解析，不按进程写死。
 - 若 `plugins.entries.openviking.config.agent_prefix` 不是 `default`，会形成 `<agent_prefix>_<sessionAgent>` 的前缀形式。
-- client 层统一补全 `X-OpenViking-Account`、`X-OpenViking-User`、`X-OpenViking-Agent` 这些 header。
+- client 层会发送 `X-OpenViking-Agent`；只有显式配置了 `accountId` / `userId` 时才发送 `X-OpenViking-Account` / `X-OpenViking-User`。
 
 这样做是为了支持多 agent、多 session 并发时的记忆隔离，避免不同 OpenClaw 会话串用同一套长期上下文。
 
@@ -60,7 +60,7 @@
 其中：
 
 - `apiKey` 推荐使用某个 user 的 user key
-- `accountId` / `userId` 仅在 root key 或 `trusted` 模式下作为高级选项使用
+- `accountId` / `userId` 仅在部署需要显式身份 header 时作为高级选项使用，例如 root key 或 trusted server 流程
 - 使用 PR #1356 canonical namespace 模型时，`isolateUserScopeByAgent` / `isolateAgentScopeByUser` 必须与服务端 account namespace policy 保持一致
 - `agentScopeMode` 已退化为兼容旧 hash 路由的 deprecated alias，仅应在旧服务端上使用
 

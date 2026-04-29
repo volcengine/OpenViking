@@ -1,913 +1,552 @@
-# Resources
+# Resource Management
 
-Resources are external knowledge that agents can reference. This guide covers how to add, manage, and retrieve resources.
+Resources are external knowledge that agents can reference. This module provides functionality for adding, importing/exporting, and uploading temporary files for resources.
 
-## Supported Formats
+## Core Concepts
 
-| Format | Extensions | Processing |
-|--------|------------|------------|
-| PDF | `.pdf` | Text and image extraction |
-| Markdown | `.md` | Native support |
-| HTML | `.html`, `.htm` | Cleaned text extraction |
-| Plain Text | `.txt` | Direct import |
-| JSON/YAML | `.json`, `.yaml`, `.yml` | Structured parsing |
-| Code | `.py`, `.js`, `.ts`, `.go`, `.java`, etc. | Syntax-aware parsing |
-| Images | `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp` | VLM description |
-| Video | `.mp4`, `.mov`, `.avi` | Frame extraction + VLM |
-| Audio | `.mp3`, `.wav`, `.m4a` | Transcription |
-| Documents | `.docx` | Text extraction |
-| Feishu/Lark | URL (`*.feishu.cn`, `*.larksuite.com`, `*.larkoffice.com`) | Cloud document parsing via `lark-oapi` |
+### Resource Types
 
-## Processing Pipeline
+OpenViking supports various resource types, categorized by functionality:
+
+**Documents**
+
+| Type | Extensions | Description |
+|------|------------|-------------|
+| PDF | `.pdf` | Supports local parsing and MinerU API conversion |
+| Markdown | `.md`, `.markdown`, `.mdown`, `.mkd` | Native support, extracts structure and stores in segments |
+| HTML | `.html`, `.htm` | Cleans navigation/ads and extracts content, converts to Markdown |
+| Word | `.docx` | Extracts text, headings, tables and converts to Markdown |
+| Plain Text | `.txt`, `.text` | Direct import and processing |
+| EPUB | `.epub` | E-book format, supports ebooklib or manual extraction |
+
+**Spreadsheets & Presentations**
+
+| Type | Extensions | Description |
+|------|------------|-------------|
+| Excel | `.xlsx`, `.xls`, `.xlsm` | Supports new and legacy Excel formats, converts to Markdown tables by worksheet |
+| PowerPoint | `.pptx` | Extracts content by slide, supports extracting notes |
+
+**Code**
+
+| Type | Resource Name | Description |
+|------|---------------|-------------|
+| Code Files | `*.py`, `*.js`, ... | Supports common programming languages (Python, JavaScript, Go, Rust, Java, etc.) |
+| Git Protocol Repository | `git://...` | Git URL, local directory, `.zip` package, automatically filters `.git`, `node_modules` and other directories |
+| Git Code Hosting Platform | `https://github.com/{org}/{repo}` | URLs from GitHub, GitLab, Bitbucket and other code hosting platforms |
+| Raw Files from Git Hosting | `https://github.com/{org}/{repo}/raw/{branch}/{path}` | Raw file download URLs from GitHub, GitLab, Bitbucket and other platforms |
+
+**Media**
+
+| Type | Resource Name | Description |
+|------|---------------|-------------|
+| Images | `*.jpg`, `*.jpeg`, `*.png`, `*.gif` ... | Various image formats, descriptions generated via VLM (Experimental) |
+| Video | `*.mp4`, `*.avi`, `*.mov` ... | Extracts keyframes and analyzes with VLM (Planning) |
+| Audio | `*.mp3`, `*.wav`, `*.m4a` ... | Performs speech transcription (Planning) |
+
+**Cloud Documents**
+
+| Type | Description |
+|------|-------------|
+| Feishu/Lark | URL-based, supports docx, wiki, sheets, bitable, requires FEISHU_APP_ID and FEISHU_APP_SECRET configuration |
+
+### Resource Processing Pipeline
+
+Resources go through the following processing stages when added:
 
 ```
-Input -> Parser -> TreeBuilder -> AGFS -> SemanticQueue -> Vector Index
+Source Input -> Parse -> Resource Tree Build -> Persistence -> Semantic Processing
+    ↓           ↓            ↓                 ↓               ↓
+  URL/File    Parser    TreeBuilder        AGFS       Summarizer/Vector
 ```
 
-1. **Parser**: Extracts content based on file type
-2. **TreeBuilder**: Creates directory structure
-3. **AGFS**: Stores files in virtual file system
-4. **SemanticQueue**: Generates L0/L1 asynchronously
-5. **Vector Index**: Indexes for semantic search
+#### Stage 1: Parse
+- Uses `UnifiedResourceProcessor` to parse content based on resource type
+- Supports multiple formats: documents (PDF/Markdown/Word), spreadsheets (Excel/PPT), code, media files, etc.
+- Parsed results are written to a temporary VikingFS directory
+- Media files have descriptions generated via VLM (Vision Language Model)
+
+#### Stage 2: Resource Tree Build (TreeBuilder)
+- `TreeBuilder.finalize_from_temp()` scans the temporary directory structure
+- Builds resource tree nodes, handles URI conflicts (auto-renames)
+- Establishes relationships between directories and resources
+
+#### Stage 3: Persistence
+- Checks if target URI already exists
+- New resources: moves temporary files to permanent AGFS location
+- Existing resources: retains temporary tree for subsequent diff comparison
+- Acquires lifecycle lock to prevent concurrent modifications
+- Cleans up temporary directory
+
+#### Stage 4: Semantic Processing
+- **Summary Generation**: `Summarizer` generates L0 (abstract) and L1 (overview)
+- **Vector Index**: Vectorizes content for semantic search
+- Processed asynchronously via `SemanticQueue`, can wait for completion with `wait=True`
+
+### Incremental Updates for Resources
+
+Resource incremental updates are implemented via the **Watch Task** mechanism:
+
+#### Watch Task Creation
+- Set `watch_interval > 0` (in minutes) when calling `add_resource` to create a watch task
+- Must specify the `to` parameter to define the target URI
+- `WatchManager` handles task persistence
+- Supports multi-tenant permission control (ROOT/ADMIN/USER permission levels)
+
+#### Task Scheduling & Execution
+- `WatchScheduler` checks for expired tasks every 60 seconds
+- Default concurrency control prevents duplicate execution
+- Expired tasks automatically re-invoke `add_resource`
+- Updates task's last execution time and next execution time
+
+#### Task Management Operations
+- **Create**: Creates new task or reactivates disabled task when `watch_interval > 0`
+- **Update**: Re-sets parameters for the same target URI
+- **Cancel**: Disables task when `watch_interval <= 0` for the same target URI
+- **Query**: Queries task status by task ID or target URI
 
 ## API Reference
 
-### add_resource()
+### add_resource
 
-Add a resource to the knowledge base.
+Add a resource to the knowledge base. Supports local files/directories, URLs, and other sources.
+
+#### 1. API Implementation Overview
+
+This endpoint is the core entry point for resource management, supporting adding resources from various sources with optional waiting for semantic processing completion.
+
+**Processing Flow**:
+1. Identify resource source (URL or uploaded temporary file)
+2. Call corresponding Parser to parse content
+3. Build directory tree and write to AGFS
+4. Set up scheduled update task if `watch_interval` is specified
+5. Wait for semantic processing completion if `wait=true`
+
+**Code Entry Points**:
+- `openviking/client/local.py:LocalClient.add_resource` - SDK entry (embedded)
+- `openviking_cli/client/http.py:AsyncHTTPClient.add_resource` - SDK entry (HTTP)
+- `openviking/server/routers/resources.py:add_resource` - HTTP router
+- `openviking/service/resource_service.py` - Core service implementation
+- `crates/ov_cli/src/handlers.rs:handle_add_resource` - CLI handler
+
+#### 2. Interface and Parameter Description
 
 **Parameters**
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| path | str | Yes | - | SDK/CLI: local path, directory path, or URL. Raw HTTP: remote URL only |
-| temp_file_id | str | No | None | Upload ID returned by `POST /api/v1/resources/temp_upload` for raw HTTP local file ingestion |
-| to | str | No | None | Exact target Viking URI (must be in `resources` scope) |
-| parent | str | No | None | Parent URI under which the resource will be stored. Cannot be combined with `to` |
-| reason | str | No | "" | Why this resource is being added (improves search relevance) |
-| instruction | str | No | "" | Special processing instructions |
-| wait | bool | No | False | Wait for semantic processing to complete |
-| timeout | float | No | None | Timeout in seconds (only used when wait=True) |
-| watch_interval | float | No | 0 | Watch interval (minutes). >0 enables/updates watch; <=0 disables watch. Only takes effect when `to` is provided |
+| path | string | No | - | Remote resource URL (HTTP/HTTPS/Git). Mutually exclusive with `temp_file_id` |
+| temp_file_id | string | No | - | Temporary upload file ID. Mutually exclusive with `path` |
+| to | string | No | - | Target Viking URI (exact location). Mutually exclusive with `parent` |
+| parent | string | No | - | Parent Viking URI (resource placed under this directory). Mutually exclusive with `to` |
+| reason | string | No | "" | Reason for adding the resource (for documentation and relevance improvement, experimental feature) |
+| instruction | string | No | "" | Processing instructions for semantic extraction (experimental feature) |
+| wait | bool | No | False | Whether to wait for semantic processing and vectorization to complete before returning |
+| timeout | float | No | None | Timeout in seconds, only effective when `wait=True` |
+| strict | bool | No | False | Whether to use strict mode |
+| ignore_dirs | string | No | None | Directory names to ignore (comma-separated) |
+| include | string | No | None | File patterns to include (glob) |
+| exclude | string | No | None | File patterns to exclude (glob) |
+| directly_upload_media | bool | No | True | Whether to directly upload media files |
+| preserve_structure | bool | No | None | Whether to preserve directory structure |
+| watch_interval | float | No | 0 | Scheduled update interval (minutes). >0 creates task; <=0 cancels task |
+| telemetry | TelemetryRequest | No | False | Whether to return telemetry data |
 
-`POST /api/v1/resources` uses `to` in JSON. CLI uses `--to`.
+**Additional Notes**:
+- `to` and `parent` cannot be specified together
+- `path` and `temp_file_id` cannot be specified together
+- Raw HTTP calls for local files require first uploading via [temp_upload](#temp_upload) to obtain `temp_file_id`
+- When `to` is specified and the target already exists, triggers incremental update
+- `watch_interval` only takes effect when `to` is provided
 
-**How local files and directories work**
+#### 3. Usage Examples
 
-- Python SDK and CLI accept local file and directory paths directly. In HTTP mode they automatically upload local files before calling the server API.
-- Raw HTTP callers should think in two categories:
-  - Remote source: pass `path` directly, for example `https://example.com/doc.pdf`
-  - Local file: call `POST /api/v1/resources/temp_upload` first, then pass the returned `temp_file_id`
-  - Local directory: zip it first, upload the `.zip` file, then pass the returned `temp_file_id`
-- `POST /api/v1/resources` does not accept direct host filesystem paths such as `./guide.md`, `/tmp/guide.md`, or `/tmp/my-dir/`.
+**HTTP API**
 
-**Incremental Updates**
+```
+POST /api/v1/resources
+Content-Type: application/json
+```
 
-When you call `add_resource()` repeatedly for the same resource URI, the system performs an incremental update instead of rebuilding everything from scratch:
+```bash
+# Add resource from URL
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "https://example.com/guide.md",
+    "reason": "User guide documentation",
+    "wait": true
+  }'
 
-- **Trigger**: `to` is provided and already exists in the knowledge base.
-- **High-level idea**: each ingestion first builds a temporary resource tree from the new input. During asynchronous semantic processing, the temporary tree is compared against the existing tree at `to`, and only the changed parts are re-processed and synchronized.
-- **Incremental behavior in the semantic stage**:
-  - **Unchanged files**: reuse existing L0 summaries and vector index records; skip vectorization.
-  - **Changed files**: regenerate summaries and vector index entries.
-  - **Directory-level L0/L1 (abstract/overview)**: if the child set and their change status are unchanged, reuse existing results and skip vectorization; otherwise recompute and update.
-- **Filesystem + index sync**: after the semantic DAG finishes, a top-down diff is applied from the temporary tree to `to` to synchronize additions, deletions, and updates. Vector store records are kept consistent: deletions remove corresponding vectors, while moves/overwrites update vector records’ URI mapping, completing an incremental update of both the resource tree and the semantic index.
+# Add from local file (requires temp_upload first)
+TEMP_FILE_ID=$(
+  curl -s -X POST http://localhost:1933/api/v1/resources/temp_upload \
+    -H "X-API-Key: your-key" \
+    -F "file=@./documents/guide.md" \
+  | jq -r '.result.temp_file_id'
+)
 
-**Python SDK (Embedded / HTTP)**
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d "{
+    \"temp_file_id\": \"$TEMP_FILE_ID\",
+    \"to\": \"viking://resources/guide.md\",
+    \"reason\": \"User guide\"
+  }"
+```
+
+**Python SDK**
 
 ```python
+import openviking as ov
+
+# Using embedded mode
+client = ov.OpenViking(path="./data")
+client.initialize()
+
+# Or using HTTP client
+client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client.initialize()
+
+# Add local file
 result = client.add_resource(
     "./documents/guide.md",
     reason="User guide documentation"
 )
 print(f"Added: {result['root_uri']}")
 
+# Add from URL to specific location
+result = client.add_resource(
+    "https://example.com/api-docs.md",
+    to="viking://resources/external/api-docs.md",
+    reason="External API documentation"
+)
+
+# Wait for processing to complete
 client.wait_processed()
-```
 
-**HTTP API**
-
-```
-POST /api/v1/resources
-```
-
-```bash
-curl -X POST http://localhost:1933/api/v1/resources \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{
-    "path": "https://example.com/guide.md",
-    "reason": "User guide documentation"
-  }'
+# Enable scheduled updates
+client.add_resource(
+    "./documents/guide.md",
+    to="viking://resources/guide.md",
+    watch_interval=60  # Update every 60 minutes
+)
 ```
 
 **CLI**
 
 ```bash
-openviking add-resource ./documents/guide.md --reason "User guide documentation"
+# Add local file
+ov add-resource ./documents/guide.md --reason "User guide"
+
+# Add from URL
+ov add-resource https://example.com/guide.md --to viking://resources/guide.md
+
+# Wait for processing to complete
+ov add-resource ./documents/guide.md --wait
+
+# Enable scheduled updates (check every 60 minutes)
+ov add-resource https://github.com/example/repo.git --to viking://resources/guide.md --watch-interval 60
+
+# Cancel scheduled updates
+ov add-resource https://github.com/example/repo.git --to viking://resources/guide.md --watch-interval 0
 ```
 
-**Response**
+**Response Example**
+
+**HTTP API Response (JSON)**
 
 ```json
 {
   "status": "ok",
   "result": {
     "status": "success",
-    "root_uri": "viking://resources/documents/guide.md",
+    "root_uri": "viking://resources/guide.md",
+    "temp_uri": "viking://temp/username/04291108_b62dc7/guide.md",
     "source_path": "./documents/guide.md",
-    "errors": []
+    "meta": {},
+    "errors": [],
+    "queue_status": {
+      "pending": 5,
+      "processing": 2,
+      "completed": 10
+    }
   },
-  "time": 0.1
-}
-```
-
-**Synchronous Processing Error**
-
-If ingestion fails before producing a resource, raw HTTP returns the standard error envelope
-with a non-2xx HTTP status. For example:
-
-```json
-{
-  "status": "error",
-  "error": {
-    "code": "PROCESSING_ERROR",
-    "message": "Parse error: [Errno 2] No such file or directory: 'git'"
+  "telemetry": {
+    "operation_id": "550e8400-e29b-41d4-a716-446655440000"
   }
 }
 ```
 
-`SyncHTTPClient`, `AsyncHTTPClient`, and CLI commands surface this as an error instead of
-returning a successful result with `result.status="error"`.
-
-**Example: Add from URL**
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-result = client.add_resource(
-    "https://example.com/api-docs.md",
-    to="viking://resources/external/",
-    reason="External API documentation"
-)
-client.wait_processed()
-```
-
-**HTTP API**
-
-```bash
-curl -X POST http://localhost:1933/api/v1/resources \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{
-    "path": "https://example.com/api-docs.md",
-    "to": "viking://resources/external/",
-    "reason": "External API documentation",
-    "wait": true
-  }'
-```
-
-**CLI**
-
-```bash
-openviking add-resource https://example.com/api-docs.md --to viking://resources/external/ --reason "External API documentation"
-```
-
-**Example: Add a Local File with Raw HTTP**
-
-When you call the HTTP API directly, upload local files first and then use `temp_file_id`.
-
-```bash
-# Step 1: upload the local file
-TEMP_FILE_ID=$(
-  curl -sS -X POST http://localhost:1933/api/v1/resources/temp_upload \
-    -H "X-API-Key: your-key" \
-    -F 'file=@./documents/guide.md' \
-  | jq -r '.result.temp_file_id'
-)
-
-# Step 2: add the uploaded file
-curl -X POST http://localhost:1933/api/v1/resources \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d "{
-    \"temp_file_id\": \"$TEMP_FILE_ID\",
-    \"reason\": \"User guide documentation\",
-    \"wait\": true
-  }"
-```
-
-**Example: Add a Local Directory with Raw HTTP**
-
-When you call the HTTP API directly, zip the directory yourself first. CLI and SDK do this automatically for you.
-
-```bash
-# Step 1: zip the local directory
-cd ./documents
-zip -r /tmp/guide.zip ./guide
-
-# Step 2: upload the zip file
-TEMP_FILE_ID=$(
-  curl -sS -X POST http://localhost:1933/api/v1/resources/temp_upload \
-    -H "X-API-Key: your-key" \
-    -F 'file=@/tmp/guide.zip' \
-  | jq -r '.result.temp_file_id'
-)
-
-# Step 3: add the uploaded directory archive
-curl -X POST http://localhost:1933/api/v1/resources \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d "{
-    \"temp_file_id\": \"$TEMP_FILE_ID\",
-    \"reason\": \"Import local directory\",
-    \"wait\": true
-  }"
-```
-
-**Example: Add Feishu/Lark Cloud Documents**
-
-[Feishu](https://www.feishu.cn) (飞书) and its international version [Lark](https://www.larksuite.com) are widely used for documentation in Chinese tech companies. OpenViking can directly import cloud documents by URL.
-
-Supported document types:
-
-| Type | URL Pattern |
-|------|-------------|
-| Documents | `https://*.feishu.cn/docx/{id}` |
-| Wiki pages | `https://*.feishu.cn/wiki/{token}` |
-| Spreadsheets | `https://*.feishu.cn/sheets/{token}` |
-| Bitable | `https://*.feishu.cn/base/{token}` |
-
-> **Setup**: Install the optional dependency: `pip install 'openviking[bot-feishu]'`
->
-> Configure credentials via `ov.conf` (see [Configuration](../../guides/01-configuration.md#feishu)) or environment variables:
-> ```bash
-> export FEISHU_APP_ID="cli_xxx"
-> export FEISHU_APP_SECRET="xxx"
-> ```
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-# Import a Feishu document
-result = client.add_resource(
-    "https://example.feishu.cn/docx/doxcnABC123",
-    reason="Project design document"
-)
-client.wait_processed()
-
-# Import a wiki page (auto-resolves to underlying type)
-client.add_resource("https://example.feishu.cn/wiki/wikiXYZ")
-
-# Import a spreadsheet
-client.add_resource("https://example.feishu.cn/sheets/shtcn456")
-```
-
-**CLI**
-
-```bash
-# Import a Feishu document
-openviking add-resource "https://example.feishu.cn/docx/doxcnABC123" --reason "Project design document"
-
-# Import a wiki page
-openviking add-resource "https://example.feishu.cn/wiki/wikiXYZ"
-
-# Incremental update to an existing target
-openviking add-resource "https://example.feishu.cn/docx/doxcnABC123" --to viking://resources/design-doc
-```
-
-**Example: Wait for Processing**
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-# Option 1: Wait inline
-result = client.add_resource("./documents/guide.md", wait=True)
-print(f"Queue status: {result['queue_status']}")
-
-# Option 2: Wait separately (for batch processing)
-client.add_resource("./file1.md")
-client.add_resource("./file2.md")
-client.add_resource("./file3.md")
-
-status = client.wait_processed()
-print(f"All processed: {status}")
-```
-
-**HTTP API**
-
-```bash
-# Wait inline
-curl -X POST http://localhost:1933/api/v1/resources \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{"path": "https://example.com/guide.md", "wait": true}'
-
-# Wait separately after batch
-curl -X POST http://localhost:1933/api/v1/system/wait \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{}'
-```
-
-**CLI**
-
-```bash
-openviking add-resource ./documents/guide.md --wait
-```
-
-**Example: Watch for Updates (watch_interval)**
-
-`watch_interval` is in minutes and periodically triggers re-processing for the specified target URI:
-
-- `watch_interval > 0`: create (or reactivate and update) a watch task for the `to`
-- `watch_interval <= 0`: disable (deactivate) the watch task for the `to`
-- watch tasks are only managed when `to` / CLI `--to` is provided
-
-If there is already an active watch task for the same `to`, submitting another request with `watch_interval > 0` returns a conflict error. Disable it first (`watch_interval = 0`) and then set a new interval.
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-client.add_resource(
-    "./documents/guide.md",
-    to="viking://resources/documents/guide.md",
-    watch_interval=60,
-)
-```
-
-**HTTP API**
-
-```bash
-curl -X POST http://localhost:1933/api/v1/resources \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{
-    "path": "https://example.com/guide.md",
-    "to": "viking://resources/documents/guide.md",
-    "watch_interval": 60
-  }'
-```
-
-**CLI**
-
-```bash
-openviking add-resource ./documents/guide.md --to viking://resources/documents/guide.md --watch-interval 60
-
-# Disable watch
-openviking add-resource ./documents/guide.md --to viking://resources/documents/guide.md --watch-interval 0
-```
-
----
-
-### export_ovpack()
-
-Export a resource tree as a `.ovpack` file.
-
-**SDK / CLI parameters**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| uri | str | Yes | - | Viking URI to export |
-| to | str | Yes | - | Target file path |
-
-**Raw HTTP request body**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| uri | str | Yes | - | Viking URI to export |
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-path = client.export_ovpack(
-    "viking://resources/my-project/",
-    "./exports/my-project.ovpack"
-)
-print(f"Exported to: {path}")
-```
-
-**HTTP API**
+**CLI Response (Default Table Format)**
 
 ```
-POST /api/v1/pack/export
+Note: Resource is being processed in the background.
+Use 'ov wait' to wait for completion, or 'ov observer queue' to check status.
+status       success
+errors       []
+source_path  /Users/bytedance/workspace/github.com/OpenViking/docs/en/api/01-overview.md
+meta         {}
+root_uri     viking://resources/01-overview
+temp_uri     viking://temp/shengmaojia/04291108_b62dc7/01-overview
 ```
 
-```bash
-curl -X POST http://localhost:1933/api/v1/pack/export \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{
-    "uri": "viking://resources/my-project/"
-  }'
-```
-
-**CLI**
-
-```bash
-openviking export viking://resources/my-project/ ./exports/my-project.ovpack
-```
-
-**Response**
-
-The HTTP API streams the `.ovpack` file directly as a download (`Content-Type: application/zip`). It does not return a JSON envelope for this endpoint.
-
----
-
-### import_ovpack()
-
-Import a `.ovpack` file.
-
-**SDK / CLI parameters**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| file_path | str | Yes | - | Local `.ovpack` file path |
-| parent | str | Yes | - | Target parent URI |
-| force | bool | No | False | Overwrite existing resources |
-| vectorize | bool | No | True | Trigger vectorization after import |
-
-**Raw HTTP request body**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| temp_file_id | str | Yes | - | Upload ID returned by `POST /api/v1/resources/temp_upload` |
-| parent | str | Yes | - | Target parent URI |
-| force | bool | No | False | Overwrite existing resources |
-| vectorize | bool | No | True | Trigger vectorization after import |
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-uri = client.import_ovpack(
-    "./exports/my-project.ovpack",
-    "viking://resources/imported/",
-    force=True,
-    vectorize=True
-)
-print(f"Imported to: {uri}")
-
-client.wait_processed()
-```
-
-**HTTP API**
-
-```
-POST /api/v1/pack/import
-```
-
-```bash
-# Step 1: upload the local ovpack file
-TEMP_FILE_ID=$(
-  curl -sS -X POST http://localhost:1933/api/v1/resources/temp_upload \
-    -H "X-API-Key: your-key" \
-    -F 'file=@./exports/my-project.ovpack' \
-  | jq -r '.result.temp_file_id'
-)
-
-# Step 2: import using temp_file_id
-curl -X POST http://localhost:1933/api/v1/pack/import \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d "{
-    \"temp_file_id\": \"$TEMP_FILE_ID\",
-    \"parent\": \"viking://resources/imported/\",
-    \"force\": true,
-    \"vectorize\": true
-  }"
-```
-
-**CLI**
-
-```bash
-openviking import ./exports/my-project.ovpack viking://resources/imported/ --force
-```
-
-**Response**
+**CLI Response (JSON Format, using -o json)**
 
 ```json
 {
-  "status": "ok",
-  "result": {
-    "uri": "viking://resources/imported/my-project/"
-  },
-  "time": 0.1
+  "status": "success",
+  "root_uri": "viking://resources/01-overview",
+  "temp_uri": "viking://temp/shengmaojia/04291108_b62dc7/01-overview",
+  "source_path": "/Users/bytedance/workspace/github.com/OpenViking/docs/en/api/01-overview.md",
+  "meta": {},
+  "errors": []
 }
 ```
 
+**Field Description**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `status` | string | Processing status: "success" or "error" |
+| `root_uri` | string | Final URI of the resource in OpenViking |
+| `temp_uri` | string | Temporary URI during processing (only valid during background processing) |
+| `source_path` | string | Original source file path or URL |
+| `meta` | object | Metadata from resource parsing (file type, size, etc.) |
+| `errors` | array | List of errors encountered during processing |
+| `warnings` | array | (Optional) List of warnings (only when `strict=False`) |
+| `queue_status` | object | (Optional, only when `wait=true`) Queue processing status with `pending`, `processing`, `completed` counts |
+
 ---
 
-## Managing Resources
+### add_skill
 
-### List Resources
+Add a skill to the knowledge base.
 
-**Python SDK (Embedded / HTTP)**
+#### 1. API Implementation Overview
 
-```python
-# List all resources
-entries = client.ls("viking://resources/")
+Skills are special resources used to define operations or tools that agents can execute.
 
-# List with details
-for entry in entries:
-    type_str = "dir" if entry['isDir'] else "file"
-    print(f"{entry['name']} - {type_str}")
+**Processing Flow**:
+1. Receive skill data or uploaded temporary file
+2. Parse skill definition
+3. Store to skill directory
+4. Wait for skill processing completion if `wait=true`
 
-# Simple path list
-paths = client.ls("viking://resources/", simple=True)
-# Returns: ["project-a/", "project-b/", "shared/"]
+**Code Entry Points**:
+- `openviking/client/local.py:LocalClient.add_skill` - SDK entry (embedded)
+- `openviking_cli/client/http.py:AsyncHTTPClient.add_skill` - SDK entry (HTTP)
+- `openviking/server/routers/resources.py:add_skill` - HTTP router
+- `openviking/service/resource_service.py` - Core service implementation
+- `crates/ov_cli/src/handlers.rs:handle_add_skill` - CLI handler
 
-# Recursive listing
-all_entries = client.ls("viking://resources/", recursive=True)
-```
+#### 2. Interface and Parameter Description
+
+**Parameters**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| data | Any | No | - | Inline skill content or structured data. Mutually exclusive with `temp_file_id` |
+| temp_file_id | string | No | - | Temporary upload file ID (obtained via [temp_upload](#temp_upload)). Mutually exclusive with `data` |
+| wait | bool | No | False | Whether to wait for skill processing to complete |
+| timeout | float | No | None | Timeout in seconds, only effective when `wait=True` |
+| telemetry | TelemetryRequest | No | False | Whether to return telemetry data |
+
+#### 3. Usage Examples
 
 **HTTP API**
 
 ```
-GET /api/v1/fs/ls?uri={uri}&simple={bool}&recursive={bool}
+POST /api/v1/skills
+Content-Type: application/json
 ```
 
 ```bash
-# List all resources
-curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/" \
-  -H "X-API-Key: your-key"
-
-# Simple path list
-curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&simple=true" \
-  -H "X-API-Key: your-key"
-
-# Recursive listing
-curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&recursive=true" \
-  -H "X-API-Key: your-key"
-```
-
-**CLI**
-
-```bash
-# List all resources
-openviking ls viking://resources/
-
-# Simple path list
-openviking ls viking://resources/ --simple
-
-# Recursive listing
-openviking ls viking://resources/ --recursive
-```
-
-**Response**
-
-```json
-{
-  "status": "ok",
-  "result": [
-    {
-      "name": "project-a",
-      "size": 4096,
-      "isDir": true,
-      "uri": "viking://resources/project-a/"
+# Using inline data
+curl -X POST http://localhost:1933/api/v1/skills \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "data": {
+      "name": "my-skill",
+      "description": "My custom skill",
+      "steps": []
     }
-  ],
-  "time": 0.1
-}
-```
+  }'
 
----
-
-### Read Resource Content
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-# L0: Abstract
-abstract = client.abstract("viking://resources/docs/")
-
-# L1: Overview
-overview = client.overview("viking://resources/docs/")
-
-# L2: Full content
-content = client.read("viking://resources/docs/api.md")
-```
-
-**HTTP API**
-
-```bash
-# L0: Abstract
-curl -X GET "http://localhost:1933/api/v1/content/abstract?uri=viking://resources/docs/" \
-  -H "X-API-Key: your-key"
-
-# L1: Overview
-curl -X GET "http://localhost:1933/api/v1/content/overview?uri=viking://resources/docs/" \
-  -H "X-API-Key: your-key"
-
-# L2: Full content
-curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://resources/docs/api.md" \
-  -H "X-API-Key: your-key"
-```
-
-**CLI**
-
-```bash
-# L0: Abstract
-openviking abstract viking://resources/docs/
-
-# L1: Overview
-openviking overview viking://resources/docs/
-
-# L2: Full content
-openviking read viking://resources/docs/api.md
-```
-
-**Response**
-
-```json
-{
-  "status": "ok",
-  "result": "Documentation for the project API, covering authentication, endpoints...",
-  "time": 0.1
-}
-```
-
----
-
-### Move Resources
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-client.mv(
-    "viking://resources/old-project/",
-    "viking://resources/new-project/"
+# Using local file (requires temp_upload first)
+TEMP_FILE_ID=$(
+  curl -s -X POST http://localhost:1933/api/v1/resources/temp_upload \
+    -H "X-API-Key: your-key" \
+    -F "file=@./skills/my-skill.json" \
+  | jq -r '.result.temp_file_id'
 )
-```
 
-**HTTP API**
-
-```
-POST /api/v1/fs/mv
-```
-
-```bash
-curl -X POST http://localhost:1933/api/v1/fs/mv \
+curl -X POST http://localhost:1933/api/v1/skills \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
-  -d '{
-    "from_uri": "viking://resources/old-project/",
-    "to_uri": "viking://resources/new-project/"
-  }'
+  -d "{
+    \"temp_file_id\": \"$TEMP_FILE_ID\"
+  }"
+```
+
+**Python SDK**
+
+```python
+import openviking as ov
+
+client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client.initialize()
+
+# Add skill from local file
+result = client.add_skill("./skills/my-skill.json")
+
+# Wait for processing to complete
+client.wait_processed()
 ```
 
 **CLI**
 
 ```bash
-openviking mv viking://resources/old-project/ viking://resources/new-project/
+# Add skill
+ov add-skill ./skills/my-skill.json
+
+# Wait for processing to complete
+ov add-skill ./skills/my-skill.json --wait
 ```
 
-**Response**
+#### 4. Response Example
+
+**HTTP API Response (JSON)**
 
 ```json
 {
   "status": "ok",
   "result": {
-    "from": "viking://resources/old-project/",
-    "to": "viking://resources/new-project/"
+    "status": "success",
+    "root_uri": "viking://agent/skills/my-skill",
+    "uri": "viking://agent/skills/my-skill",
+    "name": "my-skill",
+    "auxiliary_files": 2,
+    "queue_status": {
+      "pending": 0,
+      "processing": 0,
+      "completed": 1
+    }
   },
-  "time": 0.1
+  "telemetry": {
+    "operation_id": "550e8400-e29b-41d4-a716-446655440000"
+  }
 }
 ```
 
+**CLI Response (Default Table Format)**
+
+```
+Note: Skill is being processed in the background.
+Use 'ov wait' to wait for completion, or 'ov observer queue' to check status.
+status          success
+root_uri        viking://agent/skills/my-skill
+uri             viking://agent/skills/my-skill
+name            my-skill
+auxiliary_files 2
+```
+
+**CLI Response (JSON Format, using -o json)**
+
+```json
+{
+  "status": "success",
+  "root_uri": "viking://agent/skills/my-skill",
+  "uri": "viking://agent/skills/my-skill",
+  "name": "my-skill",
+  "auxiliary_files": 2
+}
+```
+
+**Field Description**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `status` | string | Processing status: "success" or "error" |
+| `root_uri` | string | Final URI of the skill in OpenViking (same as `uri`) |
+| `uri` | string | Final URI of the skill in OpenViking (same as `root_uri`) |
+| `name` | string | Skill name |
+| `auxiliary_files` | number | Number of auxiliary files attached to the skill |
+| `queue_status` | object | (Optional, only when `wait=true`) Queue processing status with `pending`, `processing`, `completed` counts |
+
 ---
 
-### Delete Resources
+### temp_upload
 
-**Python SDK (Embedded / HTTP)**
+Upload a temporary file for subsequent importing of local files via [add_resource](#add_resource) or [add_skill](#add_skill).
 
-```python
-# Delete single file
-client.rm("viking://resources/docs/old.md")
+#### 1. API Implementation Overview
 
-# Delete directory recursively
-client.rm("viking://resources/old-project/", recursive=True)
-```
+This endpoint is used to upload local files to server temporary storage, returning a `temp_file_id` for use with subsequent API calls. This is a helper endpoint typically not called directly but used automatically via the SDK or CLI.
+
+**Processing Flow**:
+1. Receive uploaded file
+2. Clean up expired temporary files
+3. Save to temporary directory and record original filename
+4. Return temporary file ID
+
+**Code Entry Points**:
+- `openviking/server/routers/resources.py:temp_upload` - HTTP router
+- `openviking/service/resource_service.py` - Service implementation
+
+#### 2. Interface and Parameter Description
+
+**Parameters**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| file | UploadFile | Yes | - | Uploaded file (multipart/form-data) |
+| telemetry | bool | No | False | Whether to return telemetry data |
+
+#### 3. Usage Examples
 
 **HTTP API**
 
 ```
-DELETE /api/v1/fs?uri={uri}&recursive={bool}
+POST /api/v1/resources/temp_upload
+Content-Type: multipart/form-data
 ```
 
 ```bash
-# Delete single file
-curl -X DELETE "http://localhost:1933/api/v1/fs?uri=viking://resources/docs/old.md" \
-  -H "X-API-Key: your-key"
-
-# Delete directory recursively
-curl -X DELETE "http://localhost:1933/api/v1/fs?uri=viking://resources/old-project/&recursive=true" \
-  -H "X-API-Key: your-key"
+curl -X POST http://localhost:1933/api/v1/resources/temp_upload \
+  -H "X-API-Key: your-key" \
+  -F "file=@./documents/guide.md"
 ```
+
+**Python SDK**
+
+The `add_resource`, `add_skill` and other endpoints in the Python SDK automatically handle local file uploads, no need to call this endpoint manually.
 
 **CLI**
 
-```bash
-# Delete single file
-openviking rm viking://resources/docs/old.md
+CLI commands also automatically handle local file uploads, no need to call this endpoint manually.
 
-# Delete directory recursively
-openviking rm viking://resources/old-project/ --recursive
-```
-
-**Response**
+**Response Example**
 
 ```json
 {
   "status": "ok",
   "result": {
-    "uri": "viking://resources/docs/old.md"
+    "temp_file_id": "upload_abc123def456.md"
   },
-  "time": 0.1
+  "telemetry": {
+    "operation_id": "550e8400-e29b-41d4-a716-446655440000"
+  }
 }
 ```
 
 ---
-
-### Create Links
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-# Link related resources
-client.link(
-    "viking://resources/docs/auth/",
-    "viking://resources/docs/security/",
-    reason="Security best practices for authentication"
-)
-
-# Multiple links
-client.link(
-    "viking://resources/docs/api/",
-    [
-        "viking://resources/docs/auth/",
-        "viking://resources/docs/errors/"
-    ],
-    reason="Related documentation"
-)
-```
-
-**HTTP API**
-
-```
-POST /api/v1/relations/link
-```
-
-```bash
-# Single link
-curl -X POST http://localhost:1933/api/v1/relations/link \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{
-    "from_uri": "viking://resources/docs/auth/",
-    "to_uris": "viking://resources/docs/security/",
-    "reason": "Security best practices for authentication"
-  }'
-
-# Multiple links
-curl -X POST http://localhost:1933/api/v1/relations/link \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{
-    "from_uri": "viking://resources/docs/api/",
-    "to_uris": ["viking://resources/docs/auth/", "viking://resources/docs/errors/"],
-    "reason": "Related documentation"
-  }'
-```
-
-**CLI**
-
-```bash
-openviking link viking://resources/docs/auth/ viking://resources/docs/security/ --reason "Security best practices"
-```
-
-**Response**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "from": "viking://resources/docs/auth/",
-    "to": "viking://resources/docs/security/"
-  },
-  "time": 0.1
-}
-```
-
----
-
-### Get Relations
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-relations = client.relations("viking://resources/docs/auth/")
-for rel in relations:
-    print(f"{rel['uri']}: {rel['reason']}")
-```
-
-**HTTP API**
-
-```
-GET /api/v1/relations?uri={uri}
-```
-
-```bash
-curl -X GET "http://localhost:1933/api/v1/relations?uri=viking://resources/docs/auth/" \
-  -H "X-API-Key: your-key"
-```
-
-**CLI**
-
-```bash
-openviking relations viking://resources/docs/auth/
-```
-
-**Response**
-
-```json
-{
-  "status": "ok",
-  "result": [
-    {"uri": "viking://resources/docs/security/", "reason": "Security best practices"},
-    {"uri": "viking://resources/docs/errors/", "reason": "Error handling"}
-  ],
-  "time": 0.1
-}
-```
-
----
-
-### Remove Links
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-client.unlink(
-    "viking://resources/docs/auth/",
-    "viking://resources/docs/security/"
-)
-```
-
-**HTTP API**
-
-```
-DELETE /api/v1/relations/link
-```
-
-```bash
-curl -X DELETE http://localhost:1933/api/v1/relations/link \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{
-    "from_uri": "viking://resources/docs/auth/",
-    "to_uri": "viking://resources/docs/security/"
-  }'
-```
-
-**CLI**
-
-```bash
-openviking unlink viking://resources/docs/auth/ viking://resources/docs/security/
-```
-
-**Response**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "from": "viking://resources/docs/auth/",
-    "to": "viking://resources/docs/security/"
-  },
-  "time": 0.1
-}
-```
-
----
-
-## Best Practices
-
-### Organize by Project
-
-```
-viking://resources/
-+-- project-a/
-|   +-- docs/
-|   +-- specs/
-|   +-- references/
-+-- project-b/
-|   +-- ...
-+-- shared/
-    +-- common-docs/
-```
 
 ## Related Documentation
 
-- [Retrieval](06-retrieval.md) - Search resources
-- [File System](03-filesystem.md) - File operations
-- [Context Types](../concepts/02-context-types.md) - Resource concept
+- [File System](03-filesystem.md) - File and directory operations
+- [Skills](04-skills.md) - Skill management APIs
+- [Retrieval](06-retrieval.md) - Search and context acquisition
+- [ovpack Guide](../guides/09-ovpack.md) - Detailed ovpack import/export documentation

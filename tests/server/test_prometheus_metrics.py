@@ -236,6 +236,48 @@ def test_reinitializing_metrics_shuts_down_existing_exporters(monkeypatch):
     shutdown_metrics(app=None)
 
 
+def test_metrics_otel_exporter_receives_headers_from_server_config(monkeypatch):
+    class FakeOTelExporter:
+        instances = []
+
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.__class__.instances.append(self)
+
+        def start(self):
+            return None
+
+        async def shutdown(self):
+            return None
+
+    from openviking.metrics import global_api as global_api_module
+
+    config = ServerConfig(
+        observability=ObservabilityConfig(
+            metrics=MetricsConfig(
+                enabled=True,
+                exporters=MetricsExportersConfig(
+                    prometheus=PrometheusExporterConfig(enabled=False),
+                    otel=OTelExporterConfig(
+                        enabled=True,
+                        headers={"X-ByteAPM-AppKey": "metric-appkey"},
+                    ),
+                ),
+            )
+        )
+    )
+
+    shutdown_metrics(app=None)
+    monkeypatch.setattr(global_api_module, "OTelMetricExporter", FakeOTelExporter)
+
+    init_metrics_from_server_config(config, app=None)
+
+    assert len(FakeOTelExporter.instances) == 1
+    assert FakeOTelExporter.instances[0].kwargs["headers"] == {"X-ByteAPM-AppKey": "metric-appkey"}
+
+    shutdown_metrics(app=None)
+
+
 @pytest.mark.asyncio
 async def test_async_shutdown_properly_awaits_exporter_cleanup(monkeypatch):
     """Async shutdown should properly await async exporter cleanup methods.

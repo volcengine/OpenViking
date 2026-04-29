@@ -27,7 +27,6 @@ export type FindResult = {
 export type CaptureMode = "semantic" | "keyword";
 export type ScopeName = "user" | "agent";
 export type AgentScopeMode = "user_agent" | "agent";
-export type ServerAuthMode = "api_key" | "trusted";
 export type RuntimeIdentity = {
   userId: string;
   agentId: string;
@@ -204,8 +203,7 @@ export class OpenVikingClient {
     private readonly apiKey: string,
     private readonly defaultAgentId: string,
     private readonly timeoutMs: number,
-    private readonly serverAuthMode: ServerAuthMode = "api_key",
-    /** When set (or defaulted), sent so ROOT key can access tenant-scoped APIs. */
+    /** When set, sent so ROOT keys or trusted deployments can select tenant identity. */
     private readonly accountId: string = "",
     private readonly userId: string = "",
     /** When set, logs routing for find + session writes (tenant headers + paths; never apiKey). */
@@ -228,23 +226,10 @@ export class OpenVikingClient {
     const apiKey = this.apiKey.trim();
     const accountId = this.accountId.trim();
     const userId = this.userId.trim();
-    if (this.serverAuthMode === "trusted") {
-      return {
-        ...(apiKey ? { apiKey } : {}),
-        accountId: accountId || "default",
-        userId: userId || "default",
-      };
-    }
-    if (apiKey) {
-      return {
-        apiKey,
-        ...(accountId ? { accountId } : {}),
-        ...(userId ? { userId } : {}),
-      };
-    }
     return {
-      accountId: accountId || "default",
-      userId: userId || "default",
+      ...(apiKey ? { apiKey } : {}),
+      ...(accountId ? { accountId } : {}),
+      ...(userId ? { userId } : {}),
     };
   }
 

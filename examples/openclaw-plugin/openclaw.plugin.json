@@ -14,11 +14,6 @@
       "placeholder": "auto-generated",
       "help": "OpenViking agent prefix. default: follow OpenClaw ctx.agentId. Non-default: use `<prefix>_<OpenClaw ctx.agentId>` (sanitized to letters/digits/_/-), so the configured value acts as a prefix."
     },
-    "serverAuthMode": {
-      "label": "Server Auth Mode",
-      "placeholder": "api_key",
-      "help": "api_key (default): send X-API-Key when configured, otherwise dev fallback to default/default tenant headers. trusted: always send accountId/userId and optionally send apiKey when configured."
-    },
     "apiKey": {
       "label": "OpenViking API Key",
       "sensitive": true,
@@ -28,13 +23,13 @@
     "accountId": {
       "label": "Account ID",
       "placeholder": "(derived from API key)",
-      "help": "Advanced option. Tenant account ID. Only needed when using root key or trusted auth mode. With a user key the server derives identity from the key.",
+      "help": "Advanced option. Tenant account ID. Only needed when explicitly sending identity headers, such as root-key or trusted deployments. With a user key the server derives identity from the key.",
       "advanced": true
     },
     "userId": {
       "label": "User ID",
       "placeholder": "(derived from API key)",
-      "help": "Advanced option. Tenant user ID. Only needed when using root key or trusted auth mode.",
+      "help": "Advanced option. Tenant user ID. Only needed when explicitly sending identity headers.",
       "advanced": true
     },
     "isolateUserScopeByAgent": {
@@ -161,7 +156,8 @@
         "description": "Deprecated: use agent_prefix instead"
       },
       "serverAuthMode": {
-        "type": "string"
+        "type": "string",
+        "description": "Deprecated and ignored. Tenant identity headers are controlled by explicit accountId/userId."
       },
       "apiKey": {
         "type": "string"

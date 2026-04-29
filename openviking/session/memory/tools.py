@@ -231,12 +231,13 @@ class MemorySearchTool(MemoryTool):
             if ctx.default_search_uris:
                 target_uri = ctx.default_search_uris
             limit = kwargs.get("limit", 10)
+            request_ctx = ctx.request_ctx if ctx else None
             # 多搜索 10 个，过滤抽象文件后再截断
             search_result = await ctx.viking_fs.search(
                 query,
                 target_uri=target_uri,
                 limit=limit + 10,
-                ctx=ctx.request_ctx,
+                ctx=request_ctx,
             )
             return optimize_search_result(search_result.to_dict(), limit=limit)
         except Exception as e:

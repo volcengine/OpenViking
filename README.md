@@ -750,6 +750,11 @@ Let's work together to define and build the future of AI Agent context managemen
 
 [![Star History Chart](https://api.star-history.com/svg?repos=volcengine/OpenViking\&type=timeline\&legend=top-left)](https://www.star-history.com/#volcengine/OpenViking\&type=timeline\&legend=top-left)
 
+## Security and privacy
+
+This project takes security seriously.
+For vulnerability reporting and supported versions, see [SECURITY.md](SECURITY.md)
+
 ## License
 
 The OpenViking project uses different licenses for different components:
