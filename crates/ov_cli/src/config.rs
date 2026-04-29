@@ -110,11 +110,18 @@ impl Config {
     }
 
     pub fn load_default() -> Result<Self> {
-        // Resolution order: env var > default path
+        // Resolution order: env var > local dir > default path
         if let Ok(env_path) = std::env::var(OPENVIKING_CLI_CONFIG_ENV) {
             let p = PathBuf::from(env_path);
             if p.exists() {
                 return Self::from_file(&p.to_string_lossy());
+            }
+        }
+
+        if let Ok(cwd) = std::env::current_dir() {
+            let local_config = cwd.join("ovcli.conf");
+            if local_config.exists() {
+                return Self::from_file(&local_config.to_string_lossy());
             }
         }
 
@@ -301,9 +308,17 @@ mod tests {
         )
         .expect("config should deserialize with extra_headers");
 
-        let headers = config.extra_headers.expect("extra_headers should be present");
-        assert_eq!(headers.get("X-Custom-Header"), Some(&"custom-value".to_string()));
-        assert_eq!(headers.get("Authorization"), Some(&"Bearer token".to_string()));
+        let headers = config
+            .extra_headers
+            .expect("extra_headers should be present");
+        assert_eq!(
+            headers.get("X-Custom-Header"),
+            Some(&"custom-value".to_string())
+        );
+        assert_eq!(
+            headers.get("Authorization"),
+            Some(&"Bearer token".to_string())
+        );
     }
 
     #[test]
@@ -331,8 +346,40 @@ mod tests {
         )
         .expect("config should deserialize with alias");
 
-        let headers = config.extra_headers.expect("extra_headers should be present");
-        assert_eq!(headers.get("X-Custom-Header"), Some(&"custom-value".to_string()));
-        assert_eq!(headers.get("Authorization"), Some(&"Bearer token".to_string()));
+        let headers = config
+            .extra_headers
+            .expect("extra_headers should be present");
+        assert_eq!(
+            headers.get("X-Custom-Header"),
+            Some(&"custom-value".to_string())
+        );
+        assert_eq!(
+            headers.get("Authorization"),
+            Some(&"Bearer token".to_string())
+        );
+    }
+
+    #[test]
+    fn load_default_picks_up_local_ovcli_conf() {
+        use std::env;
+
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let local_conf = tmp.path().join("ovcli.conf");
+        std::fs::write(
+            &local_conf,
+            r#"{ "url": "http://local-override:9999", "api_key": "local-key" }"#,
+        )
+        .expect("write local config");
+
+        let prev_dir = env::current_dir().expect("get cwd");
+        env::set_current_dir(tmp.path()).expect("cd into temp dir");
+
+        let config = Config::load_default().expect("should load local config");
+
+        // Restore working directory
+        env::set_current_dir(&prev_dir).expect("restore cwd");
+
+        assert_eq!(config.url, "http://local-override:9999");
+        assert_eq!(config.api_key.as_deref(), Some("local-key"));
     }
 }

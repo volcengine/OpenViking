@@ -933,6 +933,17 @@ OpenViking uses two config files:
 
 When config files are at the default path, OpenViking loads them automatically — no additional setup needed.
 
+#### `ovcli.conf` resolution order
+
+The CLI resolves `ovcli.conf` in the following order, using the first one found:
+
+1. **Environment variable** — `OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf`
+2. **Current directory** — `./ovcli.conf` in the working directory where the CLI is invoked
+3. **Default path** — `~/.openviking/ovcli.conf`
+4. **Built-in defaults** — if none of the above exist
+
+#### Overriding config file paths
+
 If config files are at a different location, there are two ways to specify:
 
 ```bash
