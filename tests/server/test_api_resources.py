@@ -513,3 +513,73 @@ async def test_add_resource_rejects_temp_file_id_symlink(
     body = resp.json()
     assert body["status"] == "error"
     assert body["error"]["code"] == "PERMISSION_DENIED"
+
+
+async def test_add_resource_async_returns_task_id(
+    client: httpx.AsyncClient,
+    sample_markdown_file,
+    upload_temp_dir,
+):
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": sample_markdown_file.name,
+            "reason": "test async task tracking",
+            "wait": False,
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert "task_id" in body["result"]
+    assert body["result"]["task_id"]
+
+
+async def test_add_resource_sync_no_task_id(
+    client: httpx.AsyncClient,
+    sample_markdown_file,
+    upload_temp_dir,
+):
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": sample_markdown_file.name,
+            "reason": "test sync no task_id",
+            "wait": True,
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert "task_id" not in body["result"]
+
+
+async def test_add_resource_async_task_queryable(
+    client: httpx.AsyncClient,
+    sample_markdown_file,
+    upload_temp_dir,
+):
+    import asyncio
+
+    from openviking.service.task_tracker import reset_task_tracker
+
+    reset_task_tracker()
+
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": sample_markdown_file.name,
+            "reason": "test task queryable",
+            "wait": False,
+        },
+    )
+    task_id = resp.json()["result"]["task_id"]
+
+    await asyncio.sleep(2.0)
+
+    task_resp = await client.get(f"/api/v1/tasks/{task_id}")
+    assert task_resp.status_code == 200
+    result = task_resp.json()["result"]
+    assert result["task_id"] == task_id
+    assert result["task_type"] == "add_resource"
+    assert result["status"] in {"running", "completed"}

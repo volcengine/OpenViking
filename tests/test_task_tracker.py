@@ -241,7 +241,9 @@ def test_to_dict(tracker: TaskTracker):
     assert d["status"] == "pending"
     assert d["task_type"] == "session_commit"
     assert d["resource_id"] == "s1"
-    assert isinstance(d["created_at"], float)
+    assert isinstance(d["created_at"], str)
+    assert "T" in d["created_at"]
+    assert isinstance(d["updated_at"], str)
     assert "owner_account_id" not in d
     assert "owner_user_id" not in d
 

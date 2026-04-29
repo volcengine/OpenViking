@@ -766,6 +766,28 @@ impl HttpClient {
         }
     }
 
+    // ============ Task Methods ============
+
+    pub async fn get_task(&self, task_id: &str) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/tasks/{}", task_id);
+        self.get(&path, &[]).await
+    }
+
+    pub async fn list_tasks(
+        &self,
+        task_type: Option<&str>,
+        status: Option<&str>,
+    ) -> Result<serde_json::Value> {
+        let mut params: Vec<(String, String)> = Vec::new();
+        if let Some(t) = task_type {
+            params.push(("task_type".to_string(), t.to_string()));
+        }
+        if let Some(s) = status {
+            params.push(("status".to_string(), s.to_string()));
+        }
+        self.get("/api/v1/tasks", &params).await
+    }
+
     // ============ Relation Methods ============
 
     pub async fn relations(&self, uri: &str) -> Result<serde_json::Value> {
