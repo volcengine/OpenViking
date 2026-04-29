@@ -5,6 +5,7 @@ from .lock_observer import LockObserver
 from .models_observer import ModelsObserver
 from .queue_observer import QueueObserver
 from .retrieval_observer import RetrievalObserver
+from .usage_observer import UsageObserver
 from .vikingdb_observer import VikingDBObserver
 
 __all__ = [
@@ -13,5 +14,6 @@ __all__ = [
     "ModelsObserver",
     "QueueObserver",
     "RetrievalObserver",
+    "UsageObserver",
     "VikingDBObserver",
 ]
