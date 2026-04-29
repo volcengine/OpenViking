@@ -12,11 +12,10 @@ export type MemoryOpenVikingConfig = {
   port?: number;
   baseUrl?: string;
   agentId?: string;
-  serverAuthMode?: "api_key" | "trusted";
   apiKey?: string;
-  /** Advanced option. Only needed when using root key or trusted auth mode. With a user key the server derives identity from the key. */
+  /** Advanced option. Only needed when explicitly sending tenant identity headers. With a user key the server derives identity from the key. */
   accountId?: string;
-  /** Advanced option. Only needed when using root key or trusted auth mode. */
+  /** Advanced option. Only needed when explicitly sending tenant identity headers. */
   userId?: string;
   /**
    * Canonical namespace policy. Must match the server-side account namespace
@@ -74,7 +73,6 @@ const DEFAULT_EMIT_STANDARD_DIAGNOSTICS = false;
 const DEFAULT_LOCAL_CONFIG_PATH = join(homedir(), ".openviking", "ov.conf");
 
 const DEFAULT_AGENT_ID = "default";
-const DEFAULT_SERVER_AUTH_MODE = "api_key";
 
 function resolveAgentId(configured: unknown): string {
   if (typeof configured === "string" && configured.trim()) {
@@ -211,10 +209,6 @@ export const memoryOpenVikingConfigSchema = {
       mode === "local" ? localBaseUrl : (typeof cfg.baseUrl === "string" ? cfg.baseUrl : resolveDefaultBaseUrl());
     const resolvedBaseUrl = resolveEnvVars(rawBaseUrl).replace(/\/+$/, "");
     const rawApiKey = typeof cfg.apiKey === "string" ? cfg.apiKey : process.env.OPENVIKING_API_KEY;
-    const rawServerAuthMode =
-      cfg.serverAuthMode ?? process.env.OPENVIKING_SERVER_AUTH_MODE;
-    const serverAuthMode =
-      rawServerAuthMode === "trusted" ? "trusted" as const : "api_key" as const;
     const captureMode = cfg.captureMode;
     if (
       typeof captureMode !== "undefined" &&
@@ -283,7 +277,6 @@ export const memoryOpenVikingConfigSchema = {
       port,
       baseUrl: resolvedBaseUrl,
       agentId: resolveAgentId(cfg.agentId),
-      serverAuthMode,
       apiKey: rawApiKey ? resolveEnvVars(rawApiKey) : "",
       accountId,
       userId,
@@ -359,11 +352,6 @@ export const memoryOpenVikingConfigSchema = {
       placeholder: "auto-generated",
       help: 'OpenViking X-OpenViking-Agent. "default" follows OpenClaw ctx.agentId. Non-default values are prepended as "<config>_<ctx.agentId>" (sanitized to [a-zA-Z0-9_-]).',
     },
-    serverAuthMode: {
-      label: "Server Auth Mode",
-      placeholder: DEFAULT_SERVER_AUTH_MODE,
-      help: 'OpenViking auth behavior. "api_key" (default): send X-API-Key when configured, otherwise dev fallback to X-OpenViking-Account/User default/default. "trusted": always send accountId/userId and optionally send apiKey when configured.',
-    },
     apiKey: {
       label: "OpenViking API Key",
       sensitive: true,
@@ -373,13 +361,13 @@ export const memoryOpenVikingConfigSchema = {
     accountId: {
       label: "Account ID",
       placeholder: "(derived from API key)",
-      help: "Advanced option. Tenant account ID. Only needed when using root key or trusted auth mode. With a user key the server derives identity from the key.",
+      help: "Advanced option. Tenant account ID. Only needed when explicitly sending identity headers, such as root-key or trusted deployments. With a user key the server derives identity from the key.",
       advanced: true,
     },
     userId: {
       label: "User ID",
       placeholder: "(derived from API key)",
-      help: "Advanced option. Tenant user ID. Only needed when using root key or trusted auth mode.",
+      help: "Advanced option. Tenant user ID. Only needed when explicitly sending identity headers.",
       advanced: true,
     },
     isolateUserScopeByAgent: {

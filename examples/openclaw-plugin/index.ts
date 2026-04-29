@@ -577,7 +577,6 @@ const contextEnginePlugin = {
     verboseRoutingInfo(
       `openviking: auth/namespace config ` +
         JSON.stringify({
-          serverAuthMode: cfg.serverAuthMode,
           isolateUserScopeByAgent: cfg.isolateUserScopeByAgent,
           isolateAgentScopeByUser: cfg.isolateAgentScopeByUser,
           deprecatedAgentScopeMode: cfg.agentScopeMode,
@@ -590,7 +589,7 @@ const contextEnginePlugin = {
       : undefined;
     const tenantAccount = cfg.accountId;
     const tenantUser = cfg.userId;
-    const localCacheKey = `${cfg.mode}:${cfg.baseUrl}:${cfg.configPath}:${cfg.apiKey}:${cfg.serverAuthMode}:${tenantAccount}:${tenantUser}:${cfg.agentId}:${cfg.isolateUserScopeByAgent ? "1" : "0"}:${cfg.isolateAgentScopeByUser ? "1" : "0"}:${cfg.logFindRequests ? "1" : "0"}`;
+    const localCacheKey = `${cfg.mode}:${cfg.baseUrl}:${cfg.configPath}:${cfg.apiKey}:${tenantAccount}:${tenantUser}:${cfg.agentId}:${cfg.isolateUserScopeByAgent ? "1" : "0"}:${cfg.isolateAgentScopeByUser ? "1" : "0"}:${cfg.logFindRequests ? "1" : "0"}`;
 
     let clientPromise: Promise<OpenVikingClient>;
     let localProcess: ReturnType<typeof launchProcess> | null = null;
@@ -643,7 +642,6 @@ const contextEnginePlugin = {
           cfg.apiKey,
           cfg.agentId,
           cfg.timeoutMs,
-          cfg.serverAuthMode,
           tenantAccount,
           tenantUser,
           routingDebugLog,
@@ -1777,7 +1775,6 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
               cfg.apiKey,
               cfg.agentId,
               cfg.timeoutMs,
-              cfg.serverAuthMode,
               tenantAccount,
               tenantUser,
               routingDebugLog,
@@ -1857,7 +1854,6 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
                   cfg.apiKey,
                   cfg.agentId,
                   cfg.timeoutMs,
-                  cfg.serverAuthMode,
                   tenantAccount,
                   tenantUser,
                   undefined,

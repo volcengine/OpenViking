@@ -334,13 +334,12 @@ describe("OpenVikingClient resource and skill import", () => {
 });
 
 describe("OpenVikingClient tenant headers (advanced accountId / userId overrides)", () => {
-  it("sends configured accountId and userId in request headers for trusted flows", async () => {
+  it("sends explicitly configured accountId and userId in request headers", async () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse({ status: "ok" }));
     vi.stubGlobal("fetch", fetchMock);
 
     const client = new OpenVikingClient(
       "http://127.0.0.1:1933", "sk-test", "agent", 5000,
-      "trusted",
       "acct-123", "user-456",
     );
     await client.healthCheck();
@@ -357,7 +356,6 @@ describe("OpenVikingClient tenant headers (advanced accountId / userId overrides
 
     const client = new OpenVikingClient(
       "http://127.0.0.1:1933", "sk-user", "agent", 5000,
-      "api_key",
       "", "",
     );
     await client.healthCheck();
@@ -375,7 +373,6 @@ describe("OpenVikingClient tenant headers (advanced accountId / userId overrides
 
     const client = new OpenVikingClient(
       "http://127.0.0.1:1933", "sk-root", "agent", 5000,
-      "api_key",
       "acct-123", "user-456",
     );
     await client.healthCheck();
@@ -387,30 +384,28 @@ describe("OpenVikingClient tenant headers (advanced accountId / userId overrides
     expect(headers.get("X-OpenViking-User")).toBe("user-456");
   });
 
-  it("falls back to default/default in api_key dev mode when apiKey is missing", async () => {
+  it("does not synthesize tenant headers when apiKey is missing", async () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse({ status: "ok" }));
     vi.stubGlobal("fetch", fetchMock);
 
     const client = new OpenVikingClient(
       "http://127.0.0.1:1933", "", "agent", 5000,
-      "api_key",
       "", "",
     );
     await client.healthCheck();
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const headers = new Headers(init.headers);
-    expect(headers.get("X-OpenViking-Account")).toBe("default");
-    expect(headers.get("X-OpenViking-User")).toBe("default");
+    expect(headers.get("X-OpenViking-Account")).toBeNull();
+    expect(headers.get("X-OpenViking-User")).toBeNull();
   });
 
-  it("trims whitespace from trusted accountId and userId overrides", async () => {
+  it("trims whitespace from accountId and userId overrides", async () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse({ status: "ok" }));
     vi.stubGlobal("fetch", fetchMock);
 
     const client = new OpenVikingClient(
       "http://127.0.0.1:1933", "", "agent", 5000,
-      "trusted",
       "  acct  ", "  user  ",
     );
     await client.healthCheck();
@@ -437,7 +432,6 @@ describe("OpenVikingClient canonical namespace policy", () => {
 
     const client = new OpenVikingClient(
       "http://127.0.0.1:1933", "", "my-agent", 5000,
-      "api_key",
       "", "", undefined,
       false,
       true,
@@ -465,7 +459,6 @@ describe("OpenVikingClient canonical namespace policy", () => {
 
     const client = new OpenVikingClient(
       "http://127.0.0.1:1933", "", "my-agent", 5000,
-      "api_key",
       "", "", undefined,
       true,
       true,
@@ -493,7 +486,6 @@ describe("OpenVikingClient canonical namespace policy", () => {
 
     const client = new OpenVikingClient(
       "http://127.0.0.1:1933", "", "shared-agent", 5000,
-      "api_key",
       "", "", undefined,
       false,
       true,
@@ -521,7 +513,6 @@ describe("OpenVikingClient canonical namespace policy", () => {
 
     const client = new OpenVikingClient(
       "http://127.0.0.1:1933", "", "shared-agent", 5000,
-      "api_key",
       "", "", undefined,
       false,
       false,
