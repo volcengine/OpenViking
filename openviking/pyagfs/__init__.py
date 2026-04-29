@@ -50,12 +50,15 @@ def _find_ragfs_so():
     try:
         # The ragfs-python crate is built with PyO3's stable ABI. Do not load
         # cpython-specific artifacts from older source-checkout builds.
-        abi3_suffix = ".abi3.so"
         if sys.platform == "win32":
-            abi3_suffix = ".abi3.pyd"
-        abi3_exact = _LIB_DIR / f"ragfs_python{abi3_suffix}"
-        if abi3_exact.exists():
-            return str(abi3_exact)
+            for filename in ("ragfs_python.pyd", "ragfs_python.abi3.pyd"):
+                exact_path = _LIB_DIR / filename
+                if exact_path.exists():
+                    return str(exact_path)
+        else:
+            abi3_exact = _LIB_DIR / "ragfs_python.abi3.so"
+            if abi3_exact.exists():
+                return str(abi3_exact)
         # Glob fallback handles platform-tagged abi3 artifacts if any.
         for pattern in ("ragfs_python.abi3.*",):
             matches = glob.glob(str(_LIB_DIR / pattern))

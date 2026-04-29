@@ -83,6 +83,14 @@ def test_build_workflow_smoke_tests_linux_and_macos_ragfs_binding_import():
     assert "Loaded RAGFS binding client" in build_workflow
 
 
+def test_setup_extracts_windows_ragfs_python_pyd_from_maturin_wheel():
+    setup_py = _read_text("setup.py")
+
+    assert 'basename == "ragfs_python.pyd"' in setup_py
+    assert 'basename.startswith("ragfs_python.abi3.")' in setup_py
+    assert "stable-ABI native extension" in setup_py
+
+
 def test_windows_abi3_backend_uses_stable_python_linkage():
     setup_py = _read_text("setup.py")
     src_cmake = _read_text("src/CMakeLists.txt")
