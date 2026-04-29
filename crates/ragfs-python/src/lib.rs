@@ -11,7 +11,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
-use ragfs::core::{ConfigValue, FileInfo, FileSystem, MountableFS, PluginConfig, WriteFlag};
+use ragfs::core::{
+    ConfigValue, FileInfo, FileSystem, GrepResult, MountableFS, PluginConfig, WriteFlag,
+};
 #[cfg(feature = "s3")]
 use ragfs::plugins::S3FSPlugin;
 use ragfs::plugins::{
@@ -94,6 +96,26 @@ fn file_info_to_py_dict(py: Python<'_>, info: &FileInfo) -> PyResult<Py<PyDict>>
     dict.set_item("modTime", mod_time)?;
 
     dict.set_item("isDir", info.is_dir)?;
+    Ok(dict.into())
+}
+
+/// Convert GrepResult to a Python dict matching the Go binding JSON format:
+/// {"matches": [{"file": str, "line": int, "content": str}, ...], "count": int}
+fn grep_result_to_py_dict(py: Python<'_>, result: &GrepResult) -> PyResult<Py<PyDict>> {
+    let dict = PyDict::new(py);
+
+    let matches_list = PyList::empty(py);
+    for m in &result.matches {
+        let match_dict = PyDict::new(py);
+        match_dict.set_item("file", &m.file)?;
+        match_dict.set_item("line", m.line)?;
+        match_dict.set_item("content", &m.content)?;
+        matches_list.append(match_dict)?;
+    }
+
+    dict.set_item("matches", matches_list)?;
+    dict.set_item("count", result.count)?;
+
     Ok(dict.into())
 }
 
@@ -523,8 +545,21 @@ impl RAGFSBindingClient {
         ))
     }
 
-    /// Search for pattern in files (not yet implemented in ragfs).
-    #[pyo3(signature = (path, pattern, recursive=false, case_insensitive=false, stream=false, node_limit=None))]
+    /// Search for pattern in files using regular expressions.
+    ///
+    /// Args:
+    ///     path: File or directory path to search
+    ///     pattern: Regular expression pattern to search for
+    ///     recursive: Whether to search recursively in subdirectories (default: false)
+    ///     case_insensitive: Whether to perform case-insensitive matching (default: false)
+    ///     stream: Not supported in binding mode
+    ///     node_limit: Maximum number of matches to return (default: None, no limit)
+    ///     exclude_path: Optional path prefix to exclude from search (default: None)
+    ///     level_limit: Optional maximum depth relative to query root (default: None)
+    ///
+    /// Returns:
+    ///     A dict with "matches" (list of match dicts) and "count" (total matches)
+    #[pyo3(signature = (path, pattern, recursive=false, case_insensitive=false, stream=false, node_limit=None, exclude_path=None, level_limit=None))]
     fn grep(
         &self,
         path: String,
@@ -533,18 +568,39 @@ impl RAGFSBindingClient {
         case_insensitive: bool,
         stream: bool,
         node_limit: Option<i32>,
+        exclude_path: Option<String>,
+        level_limit: Option<i32>,
     ) -> PyResult<Py<PyAny>> {
-        let _ = (
-            path,
-            pattern,
-            recursive,
-            case_insensitive,
-            stream,
-            node_limit,
-        );
-        Err(PyRuntimeError::new_err(
-            "grep not yet implemented in ragfs-python",
-        ))
+        if stream {
+            return Err(PyRuntimeError::new_err(
+                "Streaming not supported in binding mode",
+            ));
+        }
+
+        let fs = self.fs.clone();
+        let limit = node_limit.map(|n| if n < 0 { 0 } else { n as usize });
+        let level_limit_usize = level_limit.map(|n| if n < 0 { 0 } else { n as usize });
+
+        let result = self
+            .rt
+            .block_on(async move {
+                fs.grep(
+                    &path,
+                    &pattern,
+                    recursive,
+                    case_insensitive,
+                    limit,
+                    exclude_path.as_deref(),
+                    level_limit_usize,
+                )
+                .await
+            })
+            .map_err(to_py_err)?;
+
+        Python::attach(|py| {
+            let dict = grep_result_to_py_dict(py, &result)?;
+            Ok(dict.into())
+        })
     }
 
     /// Calculate file digest (not yet implemented in ragfs).
