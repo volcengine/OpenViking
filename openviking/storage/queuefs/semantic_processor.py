@@ -1043,7 +1043,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
                 file_name = header_match.group(1).strip()
                 parts = file_name.split()
-                if len(parts) >= 2 and parts[0] == parts[1]:
+                if len(parts) >= 2 and parts[1].startswith(parts[0]):
                     file_name = parts[0]
 
                 current_file = file_name
