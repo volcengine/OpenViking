@@ -216,6 +216,15 @@ export class OpenVikingClient {
     return this.defaultAgentId;
   }
 
+  private resolveEffectiveAgentId(agentId?: string): string {
+    const explicit = agentId?.trim();
+    if (explicit) {
+      return explicit;
+    }
+    const prefix = this.defaultAgentId.trim();
+    return prefix ? `${prefix}_main` : "main";
+  }
+
   async getResolvedIdentity(agentId?: string): Promise<RuntimeIdentity> {
     return this.getRuntimeIdentity(agentId);
   }
@@ -241,7 +250,7 @@ export class OpenVikingClient {
     if (!this.routingDebugLog) {
       return;
     }
-    const effectiveAgentId = agentId ?? this.defaultAgentId;
+    const effectiveAgentId = this.resolveEffectiveAgentId(agentId);
     const identity = await this.getRuntimeIdentity(agentId);
     const tenantHeaders = this.resolveTenantHeaders();
     this.routingDebugLog(
@@ -265,7 +274,7 @@ export class OpenVikingClient {
     agentId?: string,
     requestTimeoutMs?: number,
   ): Promise<T> {
-    const effectiveAgentId = agentId ?? this.defaultAgentId;
+    const effectiveAgentId = this.resolveEffectiveAgentId(agentId);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), requestTimeoutMs ?? this.timeoutMs);
     try {
@@ -316,17 +325,17 @@ export class OpenVikingClient {
   }
 
   private async getRuntimeIdentity(agentId?: string): Promise<RuntimeIdentity> {
-    const effectiveAgentId = agentId ?? this.defaultAgentId;
+    const effectiveAgentId = this.resolveEffectiveAgentId(agentId);
     const cached = this.identityCache.get(effectiveAgentId);
     if (cached) {
       return cached;
     }
-    const fallback: RuntimeIdentity = { userId: "default", agentId: effectiveAgentId || "default" };
+    const fallback: RuntimeIdentity = { userId: "default", agentId: effectiveAgentId };
     try {
       const status = await this.request<{ user?: unknown }>("/api/v1/system/status", {}, agentId);
       const userId =
         typeof status.user === "string" && status.user.trim() ? status.user.trim() : "default";
-      const identity: RuntimeIdentity = { userId, agentId: effectiveAgentId || "default" };
+      const identity: RuntimeIdentity = { userId, agentId: effectiveAgentId };
       this.identityCache.set(effectiveAgentId, identity);
       return identity;
     } catch {
@@ -390,7 +399,7 @@ export class OpenVikingClient {
       limit: options.limit,
       score_threshold: options.scoreThreshold,
     };
-    const effectiveAgentId = agentId ?? this.defaultAgentId;
+    const effectiveAgentId = this.resolveEffectiveAgentId(agentId);
     const identity = await this.getRuntimeIdentity(agentId);
     const tenantHeaders = this.resolveTenantHeaders();
     this.routingDebugLog?.(

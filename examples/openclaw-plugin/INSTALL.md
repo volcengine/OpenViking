@@ -11,13 +11,47 @@ Use [OpenViking](https://github.com/volcengine/OpenViking) as the long-term memo
 | Node.js | >= 22 |
 | OpenClaw | >= 2026.3.7 |
 
-The plugin connects to an existing OpenViking server. Make sure you have a running OpenViking service accessible via HTTP before proceeding.
+The plugin connects to an existing OpenViking server. It does not start the OpenViking server for you. Start OpenViking first, keep it running, then point the plugin `baseUrl` at that HTTP service. The default local URL is `http://127.0.0.1:1933`.
 
 Quick check:
 
 ```bash
 node -v
 openclaw --version
+```
+
+## Start OpenViking Server
+
+For a local OpenViking server on the same machine as OpenClaw:
+
+```bash
+pip install openviking --upgrade --force-reinstall
+openviking-server init
+openviking-server doctor
+openviking-server
+```
+
+`openviking-server init` writes the server configuration, `openviking-server doctor` validates local model/provider auth, and `openviking-server` starts the HTTP API. Keep this process running while OpenClaw uses the plugin.
+
+To run the server in the background:
+
+```bash
+mkdir -p ~/.openviking/data/log
+nohup openviking-server > ~/.openviking/data/log/openviking.log 2>&1 &
+```
+
+If OpenViking runs on another machine, start it on a reachable host/port, for example:
+
+```bash
+openviking-server --host 0.0.0.0 --port 1933
+```
+
+Then configure the OpenClaw plugin `baseUrl` to that address, such as `http://your-server:1933`.
+
+Verify the server before installing or restarting the plugin:
+
+```bash
+curl http://127.0.0.1:1933/health
 ```
 
 ## Legacy Upgrade Note
@@ -113,7 +147,7 @@ The plugin connects to an existing remote OpenViking server.
 | --- | --- | --- |
 | `baseUrl` | `http://127.0.0.1:1933` | Remote OpenViking HTTP endpoint |
 | `apiKey` | empty | Optional OpenViking API key |
-| `agent_prefix` | `default` | Agent prefix used by this OpenClaw instance on the remote server |
+| `agent_prefix` | empty | Optional prefix for OpenClaw agent IDs. If no agent ID is available, the plugin uses `main`. Interactive setup accepts only letters, digits, `_`, and `-` |
 
 Common settings:
 

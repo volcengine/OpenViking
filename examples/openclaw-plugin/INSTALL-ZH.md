@@ -11,13 +11,47 @@
 | Node.js | >= 22 |
 | OpenClaw | >= 2026.3.7 |
 
-插件以远程模式连接到已有的 OpenViking 服务。安装前请确保已有可访问的 OpenViking HTTP 服务。
+插件以远程模式连接到已有的 OpenViking 服务。它不会帮你启动 OpenViking server。需要先启动 OpenViking，并保持服务运行，再把插件的 `baseUrl` 指向这个 HTTP 服务。默认本地地址是 `http://127.0.0.1:1933`。
 
 快速检查：
 
 ```bash
 node -v
 openclaw --version
+```
+
+## 启动 OpenViking Server
+
+如果 OpenViking 和 OpenClaw 在同一台机器上，最短流程是：
+
+```bash
+pip install openviking --upgrade --force-reinstall
+openviking-server init
+openviking-server doctor
+openviking-server
+```
+
+`openviking-server init` 用来生成服务端配置，`openviking-server doctor` 用来检查本地模型和 provider 鉴权是否可用，`openviking-server` 才是真正启动 HTTP API 的命令。OpenClaw 使用插件期间，这个服务进程需要一直运行。
+
+后台启动可以用：
+
+```bash
+mkdir -p ~/.openviking/data/log
+nohup openviking-server > ~/.openviking/data/log/openviking.log 2>&1 &
+```
+
+如果 OpenViking 跑在另一台机器上，需要监听可访问的地址和端口，例如：
+
+```bash
+openviking-server --host 0.0.0.0 --port 1933
+```
+
+然后把 OpenClaw 插件的 `baseUrl` 配成对应地址，例如 `http://your-server:1933`。
+
+安装或重启插件前，先确认服务能访问：
+
+```bash
+curl http://127.0.0.1:1933/health
 ```
 
 ## 旧版升级说明
@@ -106,7 +140,7 @@ openclaw config get plugins.entries.openviking.config
 | --- | --- | --- |
 | `baseUrl` | `http://127.0.0.1:1933` | 远端 OpenViking 服务地址 |
 | `apiKey` | 空 | 远端 OpenViking API Key；服务端未开启认证时可不填 |
-| `agent_prefix` | `default` | 当前 OpenClaw 实例在远端 OpenViking 上的 agent 前缀 |
+| `agent_prefix` | 空 | OpenClaw agent ID 的可选前缀；如果拿不到 agent ID，插件使用 `main`。交互式配置只接受字母、数字、`_` 和 `-` |
 
 常见设置：
 

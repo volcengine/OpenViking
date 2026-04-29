@@ -23,7 +23,7 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.captureMode).toBe("semantic");
     expect(cfg.captureMaxLength).toBe(24000);
     expect(cfg.recallMaxContentChars).toBe(5000);
-    expect(cfg.agent_prefix).toBe("default");
+    expect(cfg.agent_prefix).toBe("");
     expect(cfg.isolateUserScopeByAgent).toBe(false);
     expect(cfg.isolateAgentScopeByUser).toBe(false);
     expect(cfg.emitStandardDiagnostics).toBe(false);
@@ -164,9 +164,14 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.agent_prefix).toBe("my-agent");
   });
 
-  it("falls back to 'default' for empty agent_prefix", () => {
+  it("falls back to an empty prefix for empty agent_prefix", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({ agent_prefix: "  " });
-    expect(cfg.agent_prefix).toBe("default");
+    expect(cfg.agent_prefix).toBe("");
+  });
+
+  it("normalizes legacy 'default' agent_prefix to an empty prefix", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ agent_prefix: "default" });
+    expect(cfg.agent_prefix).toBe("");
   });
 
   it("migrates legacy agentId to agent_prefix", () => {

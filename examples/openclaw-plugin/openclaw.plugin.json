@@ -11,8 +11,8 @@
     },
     "agent_prefix": {
       "label": "Agent Prefix",
-      "placeholder": "auto-generated",
-      "help": "OpenViking agent prefix. default: follow OpenClaw ctx.agentId. Non-default: use `<prefix>_<OpenClaw ctx.agentId>` (sanitized to letters/digits/_/-), so the configured value acts as a prefix."
+      "placeholder": "optional-prefix",
+      "help": "Optional OpenViking agent prefix. Empty: follow OpenClaw ctx.agentId directly. Non-empty: use `<prefix>_<OpenClaw ctx.agentId>` (sanitized to letters/digits/_/-). If OpenClaw ctx.agentId is unavailable, use OpenClaw default agent `main`."
     },
     "apiKey": {
       "label": "OpenViking API Key",

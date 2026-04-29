@@ -61,11 +61,12 @@ const DEFAULT_RECALL_MAX_INJECTED_CHARS = 4000;
 const DEFAULT_COMMIT_TOKEN_THRESHOLD = 20000;
 const DEFAULT_BYPASS_SESSION_PATTERNS: string[] = [];
 const DEFAULT_EMIT_STANDARD_DIAGNOSTICS = false;
-const DEFAULT_AGENT_PREFIX = "default";
+const DEFAULT_AGENT_PREFIX = "";
 
 function resolveAgentPrefix(configured: unknown): string {
   if (typeof configured === "string" && configured.trim()) {
-    return configured.trim();
+    const trimmed = configured.trim();
+    return trimmed === "default" ? DEFAULT_AGENT_PREFIX : trimmed;
   }
   return DEFAULT_AGENT_PREFIX;
 }
@@ -313,8 +314,8 @@ export const memoryOpenVikingConfigSchema = {
     },
     agent_prefix: {
       label: "Agent Prefix",
-      placeholder: "auto-generated",
-      help: 'OpenViking X-OpenViking-Agent prefix. "default" follows OpenClaw ctx.agentId. Non-default values are prepended as "<prefix>_<ctx.agentId>" (sanitized to [a-zA-Z0-9_-]).',
+      placeholder: "optional-prefix",
+      help: 'Optional prefix for OpenViking X-OpenViking-Agent. Empty means use OpenClaw ctx.agentId directly. Non-empty values are prepended as "<prefix>_<ctx.agentId>" (sanitized to [a-zA-Z0-9_-]). If ctx.agentId is unavailable, OpenClaw default agent "main" is used.',
     },
     apiKey: {
       label: "OpenViking API Key",

@@ -46,8 +46,10 @@
 - `sessionKey` 存在时优先用它生成稳定的 `ovSessionId`。
 - 非安全路径字符会被规整或退化成稳定的 SHA-256。
 - `X-OpenViking-Agent` 按 session 解析，不按进程写死。
-- 若 `plugins.entries.openviking.config.agent_prefix` 不是 `default`，会形成 `<agent_prefix>_<sessionAgent>` 的前缀形式。
-- client 层会发送 `X-OpenViking-Agent`；只有显式配置了 `accountId` / `userId` 时才发送 `X-OpenViking-Account` / `X-OpenViking-User`。
+- 若 `plugins.entries.openviking.config.agent_prefix` 非空，会形成 `<agent_prefix>_<sessionAgent>` 的前缀形式。
+- OpenClaw 没有提供 session agent 时，使用其默认 agent `main`。
+- OpenViking 请求都会发送 `X-OpenViking-Agent`，包括启动阶段的 health check。
+- 只有显式配置了 `accountId` / `userId` 时才发送 `X-OpenViking-Account` / `X-OpenViking-User`。
 
 这样做是为了支持多 agent、多 session 并发时的记忆隔离，避免不同 OpenClaw 会话串用同一套长期上下文。
 

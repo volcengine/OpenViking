@@ -157,6 +157,7 @@ type OpenClawPluginApi = {
 
 const AUTO_RECALL_TIMEOUT_MS = 5_000;
 const RECALL_QUERY_MAX_CHARS = 4_000;
+const DEFAULT_OPENCLAW_AGENT_ID = "main";
 
 /**
  * OpenViking `UserIdentifier` allows only [a-zA-Z0-9_-] for agent_id
@@ -439,6 +440,7 @@ function collectSessionAgentAliases(
 }
 
 export function createSessionAgentResolver(configAgentId: string) {
+  const configAgentPrefix = configAgentId.trim() === "default" ? "" : configAgentId.trim();
   const sessionAgentIds = new Map<string, string>();
 
   const remember = (ctx: SessionAgentLookup): void => {
@@ -453,10 +455,8 @@ export function createSessionAgentResolver(configAgentId: string) {
       return;
     }
 
-    const resolvedBeforeSanitize =
-      !configAgentId || configAgentId === "default"
-        ? rawAgentId
-        : `${configAgentId}_${rawAgentId}`;
+    const prefix = configAgentPrefix;
+    const resolvedBeforeSanitize = prefix ? `${prefix}_${rawAgentId}` : rawAgentId;
     const resolved = sanitizeOpenVikingAgentIdHeader(resolvedBeforeSanitize);
     for (const alias of collectSessionAgentAliases(ctx.sessionId, ctx.sessionKey, ctx.ovSessionId)) {
       sessionAgentIds.set(alias, resolved);
@@ -478,31 +478,26 @@ export function createSessionAgentResolver(configAgentId: string) {
     let resolvedBeforeSanitize: string;
     let resolved: string;
     let branch: SessionAgentResolveBranch;
+    const prefix = configAgentPrefix;
 
     if (mappedResolvedAgentId) {
       resolvedBeforeSanitize = mappedResolvedAgentId;
       resolved = mappedResolvedAgentId;
       branch = "session_resolved";
     } else if (sessionScopedAgentId) {
-      resolvedBeforeSanitize =
-        !configAgentId || configAgentId === "default"
-          ? sessionScopedAgentId
-          : `${configAgentId}_${sessionScopedAgentId}`;
+      resolvedBeforeSanitize = prefix ? `${prefix}_${sessionScopedAgentId}` : sessionScopedAgentId;
       resolved = sanitizeOpenVikingAgentIdHeader(resolvedBeforeSanitize);
       branch = "session_resolved";
-    } else if (!configAgentId || configAgentId === "default") {
-      resolvedBeforeSanitize = "default";
-      resolved = "default";
+    } else if (!prefix) {
+      resolvedBeforeSanitize = DEFAULT_OPENCLAW_AGENT_ID;
+      resolved = DEFAULT_OPENCLAW_AGENT_ID;
       branch = "default_no_session";
     } else {
-      resolvedBeforeSanitize = configAgentId;
-      resolved = sanitizeOpenVikingAgentIdHeader(configAgentId);
+      resolvedBeforeSanitize = `${prefix}_${DEFAULT_OPENCLAW_AGENT_ID}`;
+      resolved = sanitizeOpenVikingAgentIdHeader(resolvedBeforeSanitize);
       branch = "config_only_fallback";
     }
 
-    // Only explicit agent observations are persisted via remember().
-    // Fallback values must stay ephemeral so a later real ctx.agentId
-    // can safely take over without inheriting a stale default binding.
     return {
       resolved,
       resolvedBeforeSanitize,
@@ -554,9 +549,9 @@ const contextEnginePlugin = {
       `openviking: loaded plugin config agent_prefix="${cfg.agent_prefix}" ` +
         `(raw plugins.entries.openviking.config.agent_prefix=${JSON.stringify(rawAgentId ?? "(missing)")}; ` +
         `${
-          cfg.agent_prefix !== "default"
-            ? "non-default → X-OpenViking-Agent is <configAgentId>_<ctx.agentId> (sanitized to [a-zA-Z0-9_-]) when hooks expose session agent; config-only if ctx.agentId unknown"
-            : 'default → X-OpenViking-Agent follows OpenClaw ctx.agentId per session (e.g. "main")'
+          cfg.agent_prefix
+            ? 'non-empty → X-OpenViking-Agent is <agent_prefix>_<ctx.agentId> when hooks expose session agent, or <agent_prefix>_main when ctx.agentId is unknown'
+            : 'empty → X-OpenViking-Agent follows OpenClaw ctx.agentId per session, or "main" when ctx.agentId is unknown'
         })`,
     );
     verboseRoutingInfo(

@@ -46,8 +46,10 @@ The main rules are:
 - prefer `sessionKey` when deriving a stable `ovSessionId`
 - normalize unsafe path characters, or fall back to a stable SHA-256 when needed
 - resolve `X-OpenViking-Agent` per session, not per process
-- when `plugins.entries.openviking.config.agent_prefix` is not `default`, prefix the session agent as `<agent_prefix>_<sessionAgent>`
-- add `X-OpenViking-Agent` in the client layer, and only add `X-OpenViking-Account` / `X-OpenViking-User` when `accountId` / `userId` are explicitly configured
+- when `plugins.entries.openviking.config.agent_prefix` is non-empty, prefix the session agent as `<agent_prefix>_<sessionAgent>`
+- when OpenClaw does not provide a session agent, use its default agent `main`
+- send `X-OpenViking-Agent` on OpenViking requests, including startup health checks
+- only add `X-OpenViking-Account` / `X-OpenViking-User` when `accountId` / `userId` are explicitly configured
 
 This matters because the plugin is built to support multi-agent and multi-session OpenClaw usage without mixing memories across sessions.
 
