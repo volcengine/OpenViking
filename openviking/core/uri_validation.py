@@ -107,3 +107,39 @@ def validate_optional_viking_uri(
         allow_internal=allow_internal,
         allowed_scopes=allowed_scopes,
     )
+
+
+def validate_optional_viking_uris(
+    uri: str | list[str] | None,
+    *,
+    field_name: str = "uri",
+    allow_internal: bool = False,
+    allowed_scopes: Collection[str] | str | None = None,
+) -> str | list[str]:
+    """Validate an optional Viking URI field that may be a single URI or a list.
+
+    Like :func:`validate_optional_viking_uri` but also accepts ``list[str]``.
+    Returns a validated ``str`` when the input is a single URI, or a
+    ``list[str]`` with each element validated when the input is a list.
+    Empty / ``None`` inputs produce ``""``; empty lists produce ``[]``.
+    """
+    if uri is None:
+        return ""
+    if isinstance(uri, list):
+        validated: list[str] = []
+        for item in uri:
+            result = validate_optional_viking_uri(
+                item,
+                field_name=field_name,
+                allow_internal=allow_internal,
+                allowed_scopes=allowed_scopes,
+            )
+            if result:
+                validated.append(result)
+        return validated
+    return validate_optional_viking_uri(
+        uri,
+        field_name=field_name,
+        allow_internal=allow_internal,
+        allowed_scopes=allowed_scopes,
+    )
