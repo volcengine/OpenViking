@@ -163,6 +163,14 @@ class TelemetrySummaryBuilder:
         llm_output_tokens = cls._i(counters.get("tokens.llm.output"), 0)
         llm_total_tokens = cls._i(counters.get("tokens.llm.total"), 0)
         embedding_total_tokens = cls._i(counters.get("tokens.embedding.total"), 0)
+        embedding_duration_ms = round(float(counters.get("embedding.duration_ms", 0.0) or 0.0), 3)
+        embedding_requests = cls._i(counters.get("embedding.requests"), 0)
+        embedding_error_count = cls._i(counters.get("embedding.error_count"), 0)
+        embedding_wall_duration_ms = gauges.get("embedding.wall_duration_ms")
+        if embedding_wall_duration_ms is None:
+            embedding_wall_duration_ms = embedding_duration_ms
+        else:
+            embedding_wall_duration_ms = round(float(embedding_wall_duration_ms or 0.0), 3)
         rerank_total_tokens = cls._i(counters.get("tokens.rerank.total"), 0)
         stage_token_summary = cls._build_stage_token_summary(counters)
         vector_candidates_scored = cls._i(counters.get("vector.scored"), 0)
@@ -191,17 +199,45 @@ class TelemetrySummaryBuilder:
         if stage_token_summary:
             summary["tokens"]["stages"] = stage_token_summary
 
+        if embedding_total_tokens or embedding_duration_ms or embedding_requests or embedding_error_count:
+            effective_embedding_ms = embedding_wall_duration_ms or embedding_duration_ms
+            summary["embedding"] = {
+                "duration_ms": embedding_duration_ms,
+                "wall_duration_ms": effective_embedding_ms,
+                "requests": embedding_requests,
+                "error_count": embedding_error_count,
+                "avg_duration_ms": round(embedding_duration_ms / embedding_requests, 3)
+                if embedding_requests
+                else 0.0,
+                "share_of_total_pct": round((effective_embedding_ms / duration_ms) * 100.0, 3)
+                if duration_ms > 0
+                else 0.0,
+            }
+
         if cls._has_metric_prefix("queue", counters, gauges):
             summary["queue"] = {
+                "wait_duration_ms": round(float(gauges.get("queue.wait.duration_ms") or 0.0), 3),
                 "semantic": {
                     "processed": cls._i(gauges.get("queue.semantic.processed"), 0),
                     "requeue_count": cls._i(gauges.get("queue.semantic.requeue_count"), 0),
                     "error_count": cls._i(gauges.get("queue.semantic.error_count"), 0),
+                    "duration_ms": round(
+                        float(gauges.get("queue.semantic.duration_ms") or 0.0), 3
+                    ),
+                    "wall_duration_ms": round(
+                        float(gauges.get("queue.semantic.wall_duration_ms") or 0.0), 3
+                    ),
                 },
                 "embedding": {
                     "processed": cls._i(gauges.get("queue.embedding.processed"), 0),
                     "requeue_count": cls._i(gauges.get("queue.embedding.requeue_count"), 0),
                     "error_count": cls._i(gauges.get("queue.embedding.error_count"), 0),
+                    "duration_ms": round(
+                        float(gauges.get("queue.embedding.duration_ms") or 0.0), 3
+                    ),
+                    "wall_duration_ms": round(
+                        float(gauges.get("queue.embedding.wall_duration_ms") or 0.0), 3
+                    ),
                 },
             }
 

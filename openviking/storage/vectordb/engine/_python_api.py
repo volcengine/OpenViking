@@ -439,6 +439,12 @@ def build_abi3_exports(backend: Any) -> dict[str, Any]:
         def search(self, req: SearchRequest) -> SearchResult:
             return SearchResult.from_backend(self._backend._index_engine_search(self._handle, req))
 
+        def search_batch(self, reqs: list[SearchRequest]) -> list[SearchResult]:
+            results = self._backend._index_engine_search_batch(
+                self._handle, list(reqs)
+            )
+            return [SearchResult.from_backend(r) for r in results]
+
         def dump(self, path: str) -> int:
             return int(self._backend._index_engine_dump(self._handle, path))
 

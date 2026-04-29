@@ -187,6 +187,13 @@ def create_app(
         else:
             # AuthMode.DEV - logging already handled in validate_server_config
             app.state.api_key_manager = None
+            logger.warning(
+                "Dev mode: no root_api_key configured, authentication disabled. "
+                "Server is bound to %s. Do NOT expose this server to the network "
+                "unless unauthenticated ROOT access is intentional or until "
+                "server.root_api_key is configured in ov.conf.",
+                config.host,
+            )
 
         from openviking.metrics.global_api import (
             init_metrics_from_server_config,
