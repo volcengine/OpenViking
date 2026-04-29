@@ -1099,7 +1099,11 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
               undefined,
               roleId,
             );
-            const commitResult = await c.commitSession(sessionId, { wait: true, agentId: storeAgentId });
+            const commitResult = await c.commitSession(sessionId, {
+              wait: true,
+              agentId: storeAgentId,
+              keepRecentCount: 0,
+            });
             const memoriesCount = totalCommitMemories(commitResult);
             if (commitResult.status === "failed") {
               api.logger.warn(
@@ -1276,6 +1280,108 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
       }),
       { name: "memory_forget" },
     );
+
+    api.registerTool(
+      (ctx: ToolContext) => ({
+        name: "ov_archive_search",
+        label: "Archive Search (OpenViking)",
+        description:
+          "Keyword-grep across all archived original conversation messages of the current session. " +
+          "Use this whenever the [Session History Summary] does not contain the specific detail " +
+          "the user is asking about. Extract 2-3 concrete entity words from the question " +
+          "(names, places, objects, dates) and search each separately. " +
+          "Only conclude information is unavailable after trying at least 2 different keyword variations.",
+        parameters: Type.Object({
+          query: Type.String({
+            description:
+              "A single keyword or short phrase to grep. Use concrete nouns, names, dates, " +
+              "or distinctive phrases. Case-insensitive. Prefer entity words over full sentences.",
+          }),
+          archiveId: Type.Optional(
+            Type.String({
+              description: 'Optional: limit search to one archive (e.g. "archive_005")',
+            }),
+          ),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          if (isBypassedSession(ctx)) {
+            return makeBypassedToolResult("ov_archive_search");
+          }
+          rememberSessionAgentId(ctx);
+          const sessionId = ctx.sessionId ?? "";
+          const sessionKey = ctx.sessionKey ?? "";
+          if (!sessionId && !sessionKey) {
+            return {
+              content: [{ type: "text", text: "Error: no active session." }],
+              details: { error: "no_session" },
+            };
+          }
+          const ovSessionId = openClawSessionToOvStorageId(ctx.sessionId, ctx.sessionKey);
+          const query = String((params as { query?: string }).query ?? "").trim();
+          const archiveId = (params as { archiveId?: string }).archiveId;
+
+          if (!query) {
+            return {
+              content: [{ type: "text", text: "Error: query is required." }],
+              details: { error: "missing_param", param: "query" },
+            };
+          }
+
+          const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          api.logger.info?.(`openviking: ov_archive_search query="${query}" escaped="${escapedQuery}" archive=${archiveId ?? "all"} session=${ovSessionId}`);
+
+          try {
+            const client = await getClient();
+            const agentId = resolveAgentId(ctx.sessionId, ctx.sessionKey);
+            const result = await client.grepSessionArchives(ovSessionId, escapedQuery, {
+              archiveId,
+              caseInsensitive: true,
+              agentId,
+            });
+
+            if (!result.matches || result.matches.length === 0) {
+              return {
+                content: [{
+                  type: "text",
+                  text: `No matches found for "${query}". Try a different keyword — ` +
+                    "the original conversation may use different wording than the question. " +
+                    "Try synonyms, related terms, or shorter fragments.",
+                }],
+                details: { query, matchCount: 0 },
+              };
+            }
+
+            const MAX_MATCHES = 12;
+            const MAX_LINE_LEN = 1500;
+            const shown = result.matches.slice(0, MAX_MATCHES);
+            const blocks = shown.map((m, i) => {
+              const archiveTag = m.uri.match(/archive_\d+/)?.[0] ?? "unknown";
+              const truncated = m.content.length > MAX_LINE_LEN
+                ? m.content.slice(0, MAX_LINE_LEN) + "…(truncated)"
+                : m.content;
+              return `## Match ${i + 1}: ${archiveTag} (line ${m.line})\n${truncated}`;
+            });
+
+            const header = `Found ${result.matches.length} match(es) for "${query}"` +
+              (result.matches.length > MAX_MATCHES ? ` (showing first ${MAX_MATCHES})` : "") + ":";
+
+            return {
+              content: [{ type: "text", text: header + "\n\n" + blocks.join("\n\n") }],
+              details: { query, matchCount: result.matches.length },
+            };
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            api.logger.error?.(`openviking: ov_archive_search error: ${msg}`);
+            return {
+              content: [{ type: "text", text: `Archive search failed: ${msg}` }],
+              details: { error: msg },
+            };
+          }
+        },
+      }),
+      { name: "ov_archive_search" },
+    );
+
     api.registerTool((ctx: ToolContext) => ({
       name: "ov_archive_expand",
       label: "Archive Expand (OpenViking)",

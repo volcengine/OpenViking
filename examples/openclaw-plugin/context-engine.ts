@@ -523,40 +523,29 @@ function buildSystemPromptAddition(): string {
   return [
     "## Session Context Guide",
     "",
-    "Your conversation history may include:",
+    "Your conversation history includes two layers:",
     "",
-    "1. **[Session History Summary]** — A compressed summary of all prior",
-    "   conversation sessions. Use it to understand background and continuity.",
-    "   It is lossy: specific details (commands, file paths, code, config",
-    "   values) may have been compressed away. It may be omitted when the",
-    "   token budget is tight.",
+    "1. **[Session History Summary]** — A compressed summary of all prior turns",
+    "   in this session. It is organized into structured sections (Key Facts,",
+    "   Timeline, People, etc.). Use it for background and continuity.",
+    "   The summary is lossy: specific details (exact dates, numbers, names,",
+    "   small events) may have been compressed away.",
     "",
-    "2. **[Archive Index]** — A list of archive entries in chronological order",
-    "   (archive_001 is the oldest, higher numbers are more recent). Most",
-    "   lines summarize one archive; the latest archive may appear as an ID",
-    "   pointer only.",
-    "",
-    "3. **Active messages** — The current, uncompressed conversation.",
-    "",
-    "**When you need precise details from a prior session:**",
-    "",
-    "1. Review [Archive Index] to identify which archive likely contains",
-    "   the information you need.",
-    "2. Call `ov_archive_expand` with that archive ID to retrieve the",
-    "   archived conversation content.",
-    "3. If multiple archives look relevant, try the most recent one first.",
-    "4. Answer using the retrieved content together with active messages.",
+    "2. **Active messages** — The most recent uncompressed turns.",
     "",
     "**Rules:**",
-    "- If active messages conflict with archive content, trust active",
-    "  messages as the newer source of truth.",
-    "- Only expand an archive when the existing context lacks the specific detail needed.",
-    "- If [Session History Summary] is absent, use [Archive Index] and active",
-    "  messages to decide whether to expand an archive.",
-    "- Do not fabricate details from summaries. When uncertain, expand first",
-    "  or state that the information comes from a compressed summary.",
-    "- After expanding, cite the archive ID in your answer",
-    '  (e.g. "Based on archive_003, ...").',
+    "- When active messages conflict with the Summary, trust active messages",
+    "  as the newer source of truth.",
+    "- Do not fabricate details the Summary does not state explicitly.",
+    "- **CRITICAL: Before answering 'no information' or 'not mentioned',",
+    "  you MUST carefully re-read EVERY section of the [Session History Summary].",
+    "  The answer may be expressed with different wording than the question.",
+    "  Look for synonyms, related facts, and indirect references.**",
+    "- If the Summary mentions a topic but lacks the specific detail asked,",
+    "  use the `ov_archive_search` tool to grep the original archived messages",
+    "  for the exact detail. Try 2-3 different keywords extracted from the question.",
+    "- Only conclude information is unavailable AFTER both checking the Summary",
+    "  thoroughly AND searching the archives with at least 2 keyword variations.",
   ].join("\n");
 }
 
@@ -567,8 +556,8 @@ function buildInstructionPrompt(): { text: string; tokens: number } {
 
 function buildArchiveMemory(
   archiveOverview: string | undefined,
-  preAbstracts: Array<{ archive_id: string; abstract: string }>,
-  budget: number,
+  _preAbstracts: Array<{ archive_id: string; abstract: string }>,
+  _budget: number,
 ): { messages: AgentMessage[]; tokens: number } {
   const messages: AgentMessage[] = [];
 
@@ -579,33 +568,7 @@ function buildArchiveMemory(
     });
   }
 
-  if (preAbstracts.length > 0) {
-    const lines = preAbstracts.map((a) => `${a.archive_id}: ${a.abstract}`);
-    messages.push({
-      role: "user",
-      content: `[Archive Index]\n${lines.join("\n")}`,
-    });
-  }
-
-  let tokens = roughEstimate(messages);
-  if (budget === BUDGET_UNLIMITED || tokens <= budget || preAbstracts.length <= ARCHIVE_INDEX_TRIM_LIMIT) {
-    return { messages, tokens };
-  }
-
-  const trimmed = preAbstracts.slice(-ARCHIVE_INDEX_TRIM_LIMIT);
-  const trimmedMessages: AgentMessage[] = [];
-  if (archiveOverview) {
-    trimmedMessages.push({
-      role: "user",
-      content: `[Session History Summary]\n${archiveOverview}`,
-    });
-  }
-  trimmedMessages.push({
-    role: "user",
-    content: `[Archive Index]\n${trimmed.map((a) => `${a.archive_id}: ${a.abstract}`).join("\n")}`,
-  });
-  tokens = roughEstimate(trimmedMessages);
-  return { messages: trimmedMessages, tokens };
+  return { messages, tokens: roughEstimate(messages) };
 }
 
 /** Merge consecutive assistant messages by concatenating their content arrays. */
@@ -746,7 +709,11 @@ export function createMemoryOpenVikingContextEngine(params: {
         ovSessionId: ovId,
       });
       const agentId = resolveAgentId(sessionId, sessionKey, ovId);
-      const commitResult = await client.commitSession(ovId, { wait: true, agentId });
+      const commitResult = await client.commitSession(ovId, {
+        wait: true,
+        agentId,
+        keepRecentCount: 0,
+      });
       const memCount = totalExtractedMemories(commitResult.memories_extracted);
       if (commitResult.status === "failed") {
         logger.warn?.(`openviking: commit Phase 2 failed for session=${sessionId}: ${commitResult.error ?? "unknown"}`);
@@ -1128,7 +1095,11 @@ export function createMemoryOpenVikingContextEngine(params: {
           return;
         }
 
-        const commitResult = await client.commitSession(OVSessionId, { wait: false, agentId });
+        const commitResult = await client.commitSession(OVSessionId, {
+          wait: false,
+          agentId,
+          keepRecentCount: cfg.commitKeepRecentCount,
+        });
         logger.info(
           `openviking: committed session=${OVSessionId}, ` +
             `status=${commitResult.status}, archived=${commitResult.archived ?? false}, ` +
@@ -1224,7 +1195,11 @@ export function createMemoryOpenVikingContextEngine(params: {
         logger.info(
           `openviking: compact committing session=${OVSessionId} (wait=true, tokenBudget=${tokenBudget})`,
         );
-        const commitResult = await client.commitSession(OVSessionId, { wait: true, agentId });
+        const commitResult = await client.commitSession(OVSessionId, {
+          wait: true,
+          agentId,
+          keepRecentCount: 0,
+        });
         const memCount = totalExtractedMemories(commitResult.memories_extracted);
 
         if (commitResult.status === "failed") {
