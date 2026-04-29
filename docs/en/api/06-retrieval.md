@@ -23,7 +23,7 @@ Basic vector similarity search.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | query | str | Yes | - | Search query string |
-| target_uri | str | No | "" | Limit search to specific URI prefix |
+| target_uri | str or list[str] | No | "" | Limit search to one or more URI prefixes |
 | limit | int | No | 10 | Maximum number of results |
 | node_limit | int | No | None | Optional HTTP alias that overrides `limit` when provided |
 | score_threshold | float | No | None | Minimum relevance score threshold |
@@ -194,7 +194,7 @@ Search with session context and intent analysis.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | query | str | Yes | - | Search query string |
-| target_uri | str | No | "" | Limit search to specific URI prefix |
+| target_uri | str or list[str] | No | "" | Limit search to one or more URI prefixes |
 | session | Session | No | None | Session for context-aware search (SDK) |
 | session_id | str | No | None | Session ID for context-aware search (HTTP) |
 | limit | int | No | 10 | Maximum number of results |

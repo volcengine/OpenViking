@@ -23,7 +23,7 @@ OpenViking 提供两种搜索方法：`find` 用于简单的语义搜索，`sear
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | query | str | 是 | - | 搜索查询字符串 |
-| target_uri | str | 否 | "" | 限制搜索范围到指定的 URI 前缀 |
+| target_uri | str 或 list[str] | 否 | "" | 限制搜索范围到一个或多个 URI 前缀 |
 | limit | int | 否 | 10 | 最大返回结果数 |
 | node_limit | int | 否 | None | 可选 HTTP 别名；如果提供，会覆盖 `limit` |
 | score_threshold | float | 否 | None | 最低相关性分数阈值 |
@@ -194,7 +194,7 @@ curl -X POST http://localhost:1933/api/v1/search/find \
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | query | str | 是 | - | 搜索查询字符串 |
-| target_uri | str | 否 | "" | 限制搜索范围到指定的 URI 前缀 |
+| target_uri | str 或 list[str] | 否 | "" | 限制搜索范围到一个或多个 URI 前缀 |
 | session | Session | 否 | None | 用于上下文感知搜索的会话（SDK） |
 | session_id | str | 否 | None | 用于上下文感知搜索的会话 ID（HTTP） |
 | limit | int | 否 | 10 | 最大返回结果数 |
