@@ -4,17 +4,22 @@ OpenViking provides system health, observability, and debug APIs for monitoring 
 
 ## API Reference
 
-### health()
+### health
 
-Basic health check endpoint. No authentication required.
+#### 1. API Implementation Overview
 
-**Python SDK (Embedded / HTTP)**
+Basic health check endpoint. No authentication required. Returns service version and health status. If authentication is provided, also returns auth mode and identity information.
 
-```python
-# Check if system is healthy
-if client.observer.is_healthy():
-    print("System OK")
-```
+**Code Entry Points**:
+- `openviking/server/routers/system.py:health_check` - HTTP route
+- `openviking_cli/client/sync_http.py:SyncHTTPClient.health` - SDK entry
+- `crates/ov_cli/src/commands/system.rs` - CLI command
+
+#### 2. Interface and Parameters
+
+No parameters.
+
+#### 3. Usage Examples
 
 **HTTP API**
 
@@ -26,27 +31,57 @@ GET /health
 curl -X GET http://localhost:1933/health
 ```
 
+**Python SDK**
+
+```python
+import openviking as ov
+
+client = ov.SyncHTTPClient(url="http://localhost:1933")
+client.initialize()
+
+healthy = client.health()
+print(f"Healthy: {healthy}")
+```
+
 **CLI**
 
 ```bash
-openviking health
+ov system health
 ```
 
-**Response**
+**Response Example**
 
 ```json
 {
   "status": "ok",
   "healthy": true,
-  "version": "0.1.x"
+  "version": "0.1.x",
+  "auth_mode": "api_key"
 }
 ```
 
 ---
 
-### ready()
+### ready
 
-Readiness probe for deployment environments. Returns `200` when core subsystems are ready and `503` otherwise.
+#### 1. API Implementation Overview
+
+Readiness probe for deployment environments. Checks AGFS, VectorDB, APIKeyManager, and Ollama (if configured) status. Returns 200 when all configured subsystems are ready and 503 otherwise. No authentication required (designed for Kubernetes probes).
+
+**Code Entry Points**:
+- `openviking/server/routers/system.py:readiness_check` - HTTP route
+
+#### 2. Interface and Parameters
+
+No parameters.
+
+**Check Item Descriptions**:
+- `agfs`: Whether Viking filesystem is accessible
+- `vectordb`: Whether vector database is healthy
+- `api_key_manager`: Whether API key manager is loaded
+- `ollama`: Whether Ollama service is reachable (only if configured)
+
+#### 3. Usage Examples
 
 **HTTP API**
 
@@ -58,7 +93,7 @@ GET /ready
 curl -X GET http://localhost:1933/ready
 ```
 
-**Response**
+**Response Example**
 
 ```json
 {
@@ -74,15 +109,22 @@ curl -X GET http://localhost:1933/ready
 
 ---
 
-### status()
+### status
 
-Get system status including initialization state and user info.
+#### 1. API Implementation Overview
 
-**Python SDK (Embedded / HTTP)**
+Get system status including initialization state and authenticated user info. `result.user` is the authenticated request's `user_id` (from API key or headers), not the process-level service default - clients can use this to resolve multi-tenant paths.
 
-```python
-print(client.observer.system())
-```
+**Code Entry Points**:
+- `openviking/server/routers/system.py:system_status` - HTTP route
+- `openviking_cli/client/sync_http.py:SyncHTTPClient.get_status` - SDK entry
+- `crates/ov_cli/src/commands/system.rs` - CLI command
+
+#### 2. Interface and Parameters
+
+No parameters.
+
+#### 3. Usage Examples
 
 **HTTP API**
 
@@ -95,13 +137,20 @@ curl -X GET http://localhost:1933/api/v1/system/status \
   -H "X-API-Key: your-key"
 ```
 
+**Python SDK**
+
+```python
+status = client.get_status()
+print(status)
+```
+
 **CLI**
 
 ```bash
-openviking status
+ov system status
 ```
 
-**Response**
+**Response Example**
 
 ```json
 {
@@ -116,26 +165,26 @@ openviking status
 
 ---
 
-### wait_processed()
+### wait_processed
 
-Wait for all asynchronous processing (embedding, semantic generation) to complete.
+#### 1. API Implementation Overview
+
+Wait for all asynchronous processing (embedding, semantic generation) to complete. This method blocks until all queued tasks are processed or timeout occurs.
+
+**Code Entry Points**:
+- `openviking/server/routers/system.py:wait_processed` - HTTP route
+- `openviking_cli/client/sync_http.py:SyncHTTPClient.wait_processed` - SDK entry
+- `crates/ov_cli/src/commands/system.rs` - CLI command
+
+#### 2. Interface and Parameters
 
 **Parameters**
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| timeout | float | No | None | Timeout in seconds |
+| timeout | float | No | None | Timeout in seconds. None means wait indefinitely |
 
-**Python SDK (Embedded / HTTP)**
-
-```python
-# Add resources
-client.add_resource("./docs/")
-
-# Wait for all processing to complete
-status = client.wait_processed()
-print(f"Processing complete: {status}")
-```
+#### 3. Usage Examples
 
 **HTTP API**
 
@@ -152,13 +201,24 @@ curl -X POST http://localhost:1933/api/v1/system/wait \
   }'
 ```
 
+**Python SDK**
+
+```python
+# Add resources
+client.add_resource("./docs/")
+
+# Wait for all processing to complete
+status = client.wait_processed(timeout=60.0)
+print(f"Processing complete: {status}")
+```
+
 **CLI**
 
 ```bash
-openviking wait [--timeout 60]
+ov system wait --timeout 60
 ```
 
-**Response**
+**Response Example**
 
 ```json
 {
@@ -189,19 +249,21 @@ The observer API provides detailed component-level monitoring.
 
 ### observer.queue
 
-Get queue system status (embedding and semantic processing queues).
+#### 1. API Implementation Overview
 
-**Python SDK (Embedded / HTTP)**
+Get queue system status (embedding and semantic processing queues). Shows pending, in-progress, completed, and error counts for each queue.
 
-```python
-print(client.observer.queue)
-# Output:
-# [queue] (healthy)
-# Queue                 Pending  In Progress  Processed  Errors  Total
-# Embedding             0        0            10         0       10
-# Semantic              0        0            10         0       10
-# TOTAL                 0        0            20         0       20
-```
+**Code Entry Points**:
+- `openviking/server/routers/observer.py:observer_queue` - HTTP route
+- `openviking/service/debug_service.py:ObserverService.queue` - Core implementation
+- `openviking/storage/observers/queue_observer.py` - Queue observer
+- `crates/ov_cli/src/commands/observer.rs` - CLI command
+
+#### 2. Interface and Parameters
+
+No parameters.
+
+#### 3. Usage Examples
 
 **HTTP API**
 
@@ -214,13 +276,25 @@ curl -X GET http://localhost:1933/api/v1/observer/queue \
   -H "X-API-Key: your-key"
 ```
 
+**Python SDK**
+
+```python
+print(client.observer.queue)
+# Output:
+# [queue] (healthy)
+# Queue                 Pending  In Progress  Processed  Errors  Total
+# Embedding             0        0            10         0       10
+# Semantic              0        0            10         0       10
+# TOTAL                 0        0            20         0       20
+```
+
 **CLI**
 
 ```bash
-openviking observer queue
+ov observer queue
 ```
 
-**Response**
+**Response Example**
 
 ```json
 {
@@ -229,7 +303,7 @@ openviking observer queue
     "name": "queue",
     "is_healthy": true,
     "has_errors": false,
-    "status": "Queue  Pending  In Progress  Processed  Errors  Total\nEmbedding  0  0  10  0  10\nSemantic  0  0  10  0  10\nTOTAL  0  0  20  0  20"
+    "status": "Queue                 Pending  In Progress  Processed  Errors  Total\nEmbedding             0        0            10         0       10\nSemantic              0        0            10         0       10\nTOTAL                 0        0            20         0       20"
   },
   "time": 0.1
 }
@@ -239,9 +313,34 @@ openviking observer queue
 
 ### observer.vikingdb
 
+#### 1. API Implementation Overview
+
 Get VikingDB status (collections, indexes, vector counts).
 
-**Python SDK (Embedded / HTTP)**
+**Code Entry Points**:
+- `openviking/server/routers/observer.py:observer_vikingdb` - HTTP route
+- `openviking/service/debug_service.py:ObserverService.vikingdb` - Core implementation
+- `openviking/storage/observers/vikingdb_observer.py` - VikingDB observer
+- `crates/ov_cli/src/commands/observer.rs` - CLI command
+
+#### 2. Interface and Parameters
+
+No parameters.
+
+#### 3. Usage Examples
+
+**HTTP API**
+
+```
+GET /api/v1/observer/vikingdb
+```
+
+```bash
+curl -X GET http://localhost:1933/api/v1/observer/vikingdb \
+  -H "X-API-Key: your-key"
+```
+
+**Python SDK**
 
 ```python
 print(client.observer.vikingdb())
@@ -256,24 +355,13 @@ print(client.observer.vikingdb().is_healthy)  # True
 print(client.observer.vikingdb().status)      # Status table string
 ```
 
-**HTTP API**
-
-```
-GET /api/v1/observer/vikingdb
-```
-
-```bash
-curl -X GET http://localhost:1933/api/v1/observer/vikingdb \
-  -H "X-API-Key: your-key"
-```
-
 **CLI**
 
 ```bash
-openviking observer vikingdb
+ov observer vikingdb
 ```
 
-**Response**
+**Response Example**
 
 ```json
 {
@@ -282,7 +370,7 @@ openviking observer vikingdb
     "name": "vikingdb",
     "is_healthy": true,
     "has_errors": false,
-    "status": "Collection  Index Count  Vector Count  Status\ncontext  1  55  OK\nTOTAL  1  55"
+    "status": "Collection  Index Count  Vector Count  Status\ncontext     1            55            OK\nTOTAL       1            55"
   },
   "time": 0.1
 }
@@ -292,19 +380,21 @@ openviking observer vikingdb
 
 ### observer.models
 
-Get aggregated model subsystem status (VLM, embedding, rerank).
+#### 1. API Implementation Overview
 
-**Python SDK (Embedded / HTTP)**
+Get aggregated model subsystem status (VLM, embedding, rerank). Checks if each model provider is healthy and available.
 
-```python
-print(client.observer.models)
-# Output:
-# [models] (healthy)
-# provider_model         healthy  detail
-# dense_embedding        yes      ...
-# rerank                 yes      ...
-# vlm                    yes      ...
-```
+**Code Entry Points**:
+- `openviking/server/routers/observer.py:observer_models` - HTTP route
+- `openviking/service/debug_service.py:ObserverService.models` - Core implementation
+- `openviking/storage/observers/models_observer.py` - Models observer
+- `crates/ov_cli/src/commands/observer.rs` - CLI command
+
+#### 2. Interface and Parameters
+
+No parameters.
+
+#### 3. Usage Examples
 
 **HTTP API**
 
@@ -317,13 +407,25 @@ curl -X GET http://localhost:1933/api/v1/observer/models \
   -H "X-API-Key: your-key"
 ```
 
+**Python SDK**
+
+```python
+print(client.observer.models)
+# Output:
+# [models] (healthy)
+# provider_model         healthy  detail
+# dense_embedding        yes      ...
+# rerank                 yes      ...
+# vlm                    yes      ...
+```
+
 **CLI**
 
 ```bash
-openviking observer models
+ov observer models
 ```
 
-**Response**
+**Response Example**
 
 ```json
 {
@@ -332,7 +434,7 @@ openviking observer models
     "name": "models",
     "is_healthy": true,
     "has_errors": false,
-    "status": "provider_model  healthy  detail\ndense_embedding  yes  ...\nrerank  yes  ...\nvlm  yes  ..."
+    "status": "provider_model         healthy  detail\ndense_embedding        yes      ...\nrerank                 yes      ...\nvlm                    yes      ..."
   },
   "time": 0.1
 }
@@ -340,16 +442,151 @@ openviking observer models
 
 ---
 
-Additional HTTP observer endpoints are also available:
+### observer.lock
 
-- `GET /api/v1/observer/lock`
-- `GET /api/v1/observer/retrieval`
+#### 1. API Implementation Overview
+
+Get distributed lock system status.
+
+**Code Entry Points**:
+- `openviking/server/routers/observer.py:observer_lock` - HTTP route
+- `openviking/service/debug_service.py:ObserverService.lock` - Core implementation
+- `openviking/storage/observers/lock_observer.py` - Lock observer
+- `crates/ov_cli/src/commands/observer.rs` - CLI command
+
+#### 2. Interface and Parameters
+
+No parameters.
+
+#### 3. Usage Examples
+
+**HTTP API**
+
+```
+GET /api/v1/observer/lock
+```
+
+```bash
+curl -X GET http://localhost:1933/api/v1/observer/lock \
+  -H "X-API-Key: your-key"
+```
+
+**Python SDK**
+
+```python
+print(client.observer.lock)
+```
+
+**CLI**
+
+```bash
+ov observer transaction
+```
+
+**Response Example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "name": "lock",
+    "is_healthy": true,
+    "has_errors": false,
+    "status": "..."
+  },
+  "time": 0.1
+}
+```
+
+---
+
+### observer.retrieval
+
+#### 1. API Implementation Overview
+
+Get retrieval quality metrics.
+
+**Code Entry Points**:
+- `openviking/server/routers/observer.py:observer_retrieval` - HTTP route
+- `openviking/service/debug_service.py:ObserverService.retrieval` - Core implementation
+- `openviking/storage/observers/retrieval_observer.py` - Retrieval observer
+- `crates/ov_cli/src/commands/observer.rs` - CLI command
+
+#### 2. Interface and Parameters
+
+No parameters.
+
+#### 3. Usage Examples
+
+**HTTP API**
+
+```
+GET /api/v1/observer/retrieval
+```
+
+```bash
+curl -X GET http://localhost:1933/api/v1/observer/retrieval \
+  -H "X-API-Key: your-key"
+```
+
+**Python SDK**
+
+```python
+print(client.observer.retrieval)
+```
+
+**CLI**
+
+```bash
+ov observer retrieval
+```
+
+**Response Example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "name": "retrieval",
+    "is_healthy": true,
+    "has_errors": false,
+    "status": "..."
+  },
+  "time": 0.1
+}
+```
+
+---
 
 ### observer.system
 
-Get overall system status including all components.
+#### 1. API Implementation Overview
 
-**Python SDK (Embedded / HTTP)**
+Get overall system status, including all components (queue, vikingdb, models, lock, retrieval).
+
+**Code Entry Points**:
+- `openviking/server/routers/observer.py:observer_system` - HTTP route
+- `openviking/service/debug_service.py:ObserverService.system` - Core implementation
+- `crates/ov_cli/src/commands/observer.rs` - CLI command
+
+#### 2. Interface and Parameters
+
+No parameters.
+
+#### 3. Usage Examples
+
+**HTTP API**
+
+```
+GET /api/v1/observer/system
+```
+
+```bash
+curl -X GET http://localhost:1933/api/v1/observer/system \
+  -H "X-API-Key: your-key"
+```
+
+**Python SDK**
 
 ```python
 print(client.observer.system())
@@ -366,24 +603,13 @@ print(client.observer.system())
 # [system] (healthy)
 ```
 
-**HTTP API**
-
-```
-GET /api/v1/observer/system
-```
-
-```bash
-curl -X GET http://localhost:1933/api/v1/observer/system \
-  -H "X-API-Key: your-key"
-```
-
 **CLI**
 
 ```bash
-openviking observer system
+ov observer system
 ```
 
-**Response**
+**Response Example**
 
 ```json
 {
@@ -404,8 +630,20 @@ openviking observer system
         "has_errors": false,
         "status": "..."
       },
-      "vlm": {
-        "name": "vlm",
+      "models": {
+        "name": "models",
+        "is_healthy": true,
+        "has_errors": false,
+        "status": "..."
+      },
+      "lock": {
+        "name": "lock",
+        "is_healthy": true,
+        "has_errors": false,
+        "status": "..."
+      },
+      "retrieval": {
+        "name": "retrieval",
         "is_healthy": true,
         "has_errors": false,
         "status": "..."
@@ -415,69 +653,6 @@ openviking observer system
   "time": 0.1
 }
 ```
-
----
-
-### is_healthy()
-
-Quick health check for the entire system.
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-if client.observer.is_healthy():
-    print("System OK")
-else:
-    print(client.observer.system())
-```
-
-**HTTP API**
-
-```
-GET /api/v1/debug/health
-```
-
-```bash
-curl -X GET http://localhost:1933/api/v1/debug/health \
-  -H "X-API-Key: your-key"
-```
-
-**Response**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "healthy": true
-  },
-  "time": 0.1
-}
-```
-
----
-
-## Data Structures
-
-### ComponentStatus
-
-Status information for a single component.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| name | str | Component name |
-| is_healthy | bool | Whether the component is healthy |
-| has_errors | bool | Whether the component has errors |
-| status | str | Status table string |
-
-### SystemStatus
-
-Overall system status including all components.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| is_healthy | bool | Whether the entire system is healthy |
-| components | Dict[str, ComponentStatus] | Status of each component |
-| errors | List[str] | List of error messages |
 
 ---
 
