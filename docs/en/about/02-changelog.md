@@ -517,7 +517,7 @@ This changelog is automatically generated from [GitHub Releases](https://github.
 - 新增 **memory extract telemetry breakdown**，帮助更细粒度地分析记忆提取过程。
 - OpenAI VLM 支持 **streaming response handling**。
 - 补充 `max_tokens` 参数以避免 vLLM 拒绝请求，并支持 OpenAI-compatible VLM 的自定义 HTTP headers。
-- 自动清理模型输出中的 `<think>` 标签，减少推理内容污染存储结果。
+- 自动清理模型输出中的 `&lt;think&gt;` 标签，减少推理内容污染存储结果。
 
 ### 6. 工程兼容性与交付体验继续改进
 - 修复 Windows zip 路径、代码仓库索引、Rust CLI 版本等跨平台问题。
@@ -579,7 +579,7 @@ This changelog is automatically generated from [GitHub Releases](https://github.
 ## What's Changed
 * docs: use openviking-server to launch server
 * fix: Session.add_message() support parts parameter
-* feat: support GitHub tree/&lt;ref&gt; URL for code repository import
+* feat: support GitHub `tree/&lt;ref&gt;` URL for code repository import
 * fix: improve ISO datetime parsing
 * feat(pdf): extract bookmarks as markdown headings for hierarchical parsing
 * feat: add index control to add_resource and refactor embedding logic

@@ -10,15 +10,33 @@ Mirrors SDK's client.observer API:
 - /api/v1/observer/system - System overall status
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
-from openviking.server.auth import get_request_context
+from openviking.server.auth import _auth_mode, get_request_context
 from openviking.server.dependencies import get_service
-from openviking.server.identity import RequestContext
+from openviking.server.identity import AuthMode, RequestContext, Role
 from openviking.server.models import Response
 from openviking.service.debug_service import ComponentStatus, SystemStatus
+from openviking_cli.exceptions import PermissionDeniedError
 
-router = APIRouter(prefix="/api/v1/observer", tags=["observer"])
+
+async def require_observer_access(
+    request: Request,
+    ctx: RequestContext = Depends(get_request_context),
+) -> RequestContext:
+    """Allow observer access for trusted deployments and admin/root API keys."""
+    if _auth_mode(request) == AuthMode.TRUSTED:
+        return ctx
+    if ctx.role not in {Role.ROOT, Role.ADMIN}:
+        raise PermissionDeniedError("Requires trusted mode or role: root, admin")
+    return ctx
+
+
+router = APIRouter(
+    prefix="/api/v1/observer",
+    tags=["observer"],
+    dependencies=[Depends(require_observer_access)],
+)
 
 
 def _component_to_dict(component: ComponentStatus) -> dict:
@@ -43,9 +61,7 @@ def _system_to_dict(status: SystemStatus) -> dict:
 
 
 @router.get("/queue")
-async def observer_queue(
-    _ctx: RequestContext = Depends(get_request_context),
-):
+async def observer_queue():
     """Get queue system status."""
     service = get_service()
     component = service.debug.observer.queue
@@ -63,9 +79,7 @@ async def observer_vikingdb(
 
 
 @router.get("/models")
-async def observer_models(
-    _ctx: RequestContext = Depends(get_request_context),
-):
+async def observer_models():
     """Get models status (VLM, Embedding, Rerank)."""
     service = get_service()
     component = service.debug.observer.models
@@ -73,9 +87,7 @@ async def observer_models(
 
 
 @router.get("/lock")
-async def observer_lock(
-    _ctx: RequestContext = Depends(get_request_context),
-):
+async def observer_lock():
     """Get lock system status."""
     service = get_service()
     component = service.debug.observer.lock
@@ -83,9 +95,7 @@ async def observer_lock(
 
 
 @router.get("/retrieval")
-async def observer_retrieval(
-    _ctx: RequestContext = Depends(get_request_context),
-):
+async def observer_retrieval():
     """Get retrieval quality metrics."""
     service = get_service()
     component = service.debug.observer.retrieval
