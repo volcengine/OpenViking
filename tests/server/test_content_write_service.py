@@ -782,6 +782,45 @@ async def test_create_mode_regression_replace_unchanged(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_replace_mode_missing_file_falls_back_to_create(monkeypatch):
+    file_uri = "viking://user/default/memories/new-upsert.md"
+    root_uri = "viking://user/default/memories"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    viking_fs = _FakeVikingFSForCreate(file_uri=file_uri, root_uri=root_uri, file_exists=False)
+    coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
+
+    captured = {}
+
+    async def _fake_create_and_write(*, uri, content, ctx, wait, timeout):
+        captured["uri"] = uri
+        captured["content"] = content
+        captured["ctx"] = ctx
+        captured["wait"] = wait
+        captured["timeout"] = timeout
+        return {"uri": uri, "mode": "create", "queue_status": None}
+
+    monkeypatch.setattr(coordinator, "_create_and_write", _fake_create_and_write)
+
+    result = await coordinator.write(
+        uri=file_uri,
+        content="created via replace",
+        ctx=ctx,
+        mode="replace",
+        wait=True,
+        timeout=12.5,
+    )
+
+    assert result["mode"] == "create"
+    assert captured == {
+        "uri": file_uri,
+        "content": "created via replace",
+        "ctx": ctx,
+        "wait": True,
+        "timeout": 12.5,
+    }
+
+
+@pytest.mark.asyncio
 async def test_create_mode_regression_append_unchanged(monkeypatch):
     file_uri = "viking://user/default/memories/theme.md"
     root_uri = "viking://user/default/memories"
