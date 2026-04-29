@@ -1239,6 +1239,22 @@ class VikingFS:
                 target_abstract=target_abstract,
             )
             typed_queries = query_plan.queries
+
+            # Guardrail: keep retrieval queries semantically anchored to the current
+            # user query. Intent analysis may expand into task-planning language
+            # using recent conversation context, which hurts retrieval precision and
+            # can pollute rerank inputs with session-level narration.
+            original_query = (query or "").strip()
+            if original_query:
+                for tq in typed_queries:
+                    rewritten = (tq.query or "").strip()
+                    if not rewritten:
+                        tq.query = original_query
+                        continue
+                    token_overlap = set(original_query.lower().split()) & set(rewritten.lower().split())
+                    if len(token_overlap) < 2 and len(original_query) <= 200:
+                        tq.query = original_query
+
             # Set target_directories
             if target_uri_list:
                 for tq in typed_queries:
