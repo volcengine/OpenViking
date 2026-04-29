@@ -34,21 +34,6 @@ class InboundMessage:
 
 
 @dataclass
-class ResponseCompletedEvent:
-    """Summary payload emitted with a terminal assistant response."""
-
-    response_id: str
-    session_id: str
-    channel: str
-    user_id: str | None = None
-    token_usage: dict[str, int] = field(default_factory=dict)
-    time_cost: float = field(default_factory=float)
-    iteration: int = field(default_factory=int)
-    tools_used_names: list[str] = field(default_factory=list)
-    timestamp: datetime = field(default_factory=datetime.now)
-
-
-@dataclass
 class OutboundMessage:
     """Message to send to a chat channel."""
 
@@ -62,8 +47,6 @@ class OutboundMessage:
     time_cost: float = field(default_factory=float)
     iteration: int = field(default_factory=int)
     tools_used_names: list[str] = field(default_factory=list)
-    response_id: str | None = None
-    response_completed: ResponseCompletedEvent | None = None
 
     @property
     def channel(self) -> str:

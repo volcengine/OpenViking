@@ -1,7 +1,6 @@
 """OpenAPI channel for HTTP-based chat API."""
 
 import asyncio
-import json
 import secrets
 import uuid
 from datetime import datetime
@@ -20,8 +19,6 @@ from vikingbot.channels.openapi_models import (
     ChatResponse,
     ChatStreamEvent,
     EventType,
-    FeedbackRequest,
-    FeedbackResponse,
     HealthResponse,
     SessionCreateRequest,
     SessionCreateResponse,
@@ -36,8 +33,6 @@ from vikingbot.config.schema import (
     SessionKey,
     requires_gateway_token,
 )
-from vikingbot.integrations.langfuse import LangfuseClient
-from vikingbot.utils.helpers import ensure_dir
 
 
 class PendingResponse:
@@ -110,289 +105,10 @@ class OpenAPIChannel(BaseChannel):
         self._router: Optional[APIRouter] = None
         self._app = app  # External FastAPI app to register routes on
         self._server: Optional[asyncio.Task] = None  # Server task
-        self._langfuse = LangfuseClient.get_instance()
-        self._response_index: Dict[str, Dict[str, Any]] = {}
-        self._feedback_lock = asyncio.Lock()
-        self._response_lock = asyncio.Lock()
-        self._outcome_lock = asyncio.Lock()
-
-        storage_root = (
-            self._global_config.bot_data_path if self._global_config is not None else workspace_path
-        ) or Path.cwd()
-        feedback_dir = ensure_dir(storage_root / "feedback")
-        self._feedback_file = feedback_dir / "feedback.jsonl"
-        self._responses_file = feedback_dir / "responses.jsonl"
-        self._outcomes_file = feedback_dir / "outcomes.jsonl"
 
         # Load BotChannel configurations immediately in constructor
         # so that subscriptions are setup before ChannelManager starts
         self._load_bot_channels()
-        self._load_response_index()
-
-    def _index_response(self, msg: OutboundMessage) -> None:
-        """Remember terminal responses so feedback can be linked later."""
-        if not msg.response_id or not msg.response_completed:
-            return
-
-        self._response_index[msg.response_id] = {
-            "response_id": msg.response_id,
-            "session_id": msg.session_key.chat_id,
-            "session_key": msg.response_completed.session_id,
-            "channel": msg.session_key.channel_key(),
-            "user_id": msg.response_completed.user_id if msg.response_completed else None,
-            "event_type": msg.event_type.value,
-            "timestamp": (
-                msg.response_completed.timestamp.isoformat()
-                if msg.response_completed
-                else datetime.now().isoformat()
-            ),
-        }
-
-    def _load_response_index(self) -> None:
-        """Load persisted response metadata for future feedback lookups."""
-        if not self._responses_file.exists():
-            return
-
-        try:
-            with open(self._responses_file) as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    data = json.loads(line)
-                    response_id = data.get("response_id")
-                    if not response_id:
-                        continue
-                    self._response_index[response_id] = data
-        except Exception as e:
-            logger.warning(f"Failed to load persisted response index: {e}")
-
-    @staticmethod
-    def _parse_timestamp(value: str | None) -> datetime | None:
-        if not value:
-            return None
-        try:
-            return datetime.fromisoformat(value)
-        except ValueError:
-            return None
-
-    @staticmethod
-    def _classify_outcome(reask_within_window: bool) -> str:
-        return "follow_up_needed" if reask_within_window else "unresolved"
-
-    def _build_outcome_record(
-        self,
-        response_info: Dict[str, Any],
-        *,
-        user_id: str | None,
-        current_message: str,
-        current_timestamp: datetime,
-        window_seconds: int = 900,
-    ) -> Dict[str, Any] | None:
-        response_id = response_info.get("response_id")
-        if not response_id:
-            return None
-
-        response_timestamp = self._parse_timestamp(response_info.get("timestamp"))
-        if response_timestamp is None:
-            return None
-
-        delta_seconds = max((current_timestamp - response_timestamp).total_seconds(), 0.0)
-        reask_within_window = delta_seconds <= window_seconds
-
-        return {
-            "event_type": "response_outcome_evaluated",
-            "response_id": response_id,
-            "session_id": response_info.get("session_id"),
-            "session_key": response_info.get("session_key"),
-            "channel": response_info.get("channel"),
-            "user_id": user_id or response_info.get("user_id"),
-            "evaluated_at": current_timestamp.isoformat(),
-            "evaluation_type": "follow_up_message",
-            "follow_up_message": current_message,
-            "follow_up_delay_seconds": round(delta_seconds, 3),
-            "reask_within_window": reask_within_window,
-            "one_turn_resolution": False,
-            "outcome_label": self._classify_outcome(reask_within_window),
-        }
-
-    def _find_latest_response_for_session(
-        self, session_id: str, channel: str | None = None
-    ) -> Dict[str, Any] | None:
-        latest: Dict[str, Any] | None = None
-        latest_ts: datetime | None = None
-        for response_info in self._response_index.values():
-            if response_info.get("session_id") != session_id:
-                continue
-            if channel and response_info.get("channel") != channel:
-                continue
-            ts = self._parse_timestamp(response_info.get("timestamp"))
-            if ts is None:
-                continue
-            if latest is None or latest_ts is None or ts > latest_ts:
-                latest = response_info
-                latest_ts = ts
-        return latest
-
-    async def _store_outcome(self, record: Dict[str, Any]) -> None:
-        """Append an implicit outcome evaluation to the local JSONL store."""
-        async with self._outcome_lock:
-            with open(self._outcomes_file, "a") as f:
-                f.write(json.dumps(record, ensure_ascii=False) + "\n")
-        self._sync_langfuse_outcome(record)
-
-    async def _evaluate_follow_up_outcome(
-        self,
-        *,
-        session_id: str,
-        channel: str | None,
-        user_id: str | None,
-        current_message: str,
-        current_timestamp: datetime,
-    ) -> None:
-        response_info = self._find_latest_response_for_session(session_id, channel)
-        if not response_info:
-            return
-        outcome_record = self._build_outcome_record(
-            response_info,
-            user_id=user_id,
-            current_message=current_message,
-            current_timestamp=current_timestamp,
-        )
-        if not outcome_record:
-            return
-        await self._store_outcome(outcome_record)
-
-    async def _store_response(self, msg: OutboundMessage) -> None:
-        """Persist response metadata so feedback survives process restarts."""
-        if not msg.response_id or not msg.response_completed:
-            return
-
-        record = {
-            "event_type": "response_completed",
-            "response_id": msg.response_completed.response_id,
-            "session_id": msg.session_key.chat_id,
-            "session_key": msg.response_completed.session_id,
-            "channel": msg.response_completed.channel,
-            "user_id": msg.response_completed.user_id,
-            "token_usage": msg.response_completed.token_usage,
-            "time_cost": msg.response_completed.time_cost,
-            "iteration": msg.response_completed.iteration,
-            "tools_used_names": msg.response_completed.tools_used_names,
-            "timestamp": msg.response_completed.timestamp.isoformat(),
-        }
-        async with self._response_lock:
-            with open(self._responses_file, "a") as f:
-                f.write(json.dumps(record, ensure_ascii=False) + "\n")
-        self._sync_langfuse_response(record)
-
-    async def _store_feedback(self, record: Dict[str, Any]) -> None:
-        """Append a feedback record to the local JSONL store."""
-        async with self._feedback_lock:
-            with open(self._feedback_file, "a") as f:
-                f.write(json.dumps(record, ensure_ascii=False) + "\n")
-        self._sync_langfuse_feedback(record)
-
-    @staticmethod
-    def _langfuse_session_id(record: Dict[str, Any]) -> str | None:
-        return record.get("session_key") or record.get("session_id")
-
-    def _sync_langfuse_response(self, record: Dict[str, Any]) -> None:
-        if not self._langfuse.enabled:
-            return
-
-        metadata = {
-            "event_type": record.get("event_type"),
-            "response_id": record.get("response_id"),
-            "session_id": record.get("session_id"),
-            "channel": record.get("channel"),
-            "token_usage": record.get("token_usage"),
-            "time_cost": record.get("time_cost"),
-            "iteration": record.get("iteration"),
-            "tools_used_names": record.get("tools_used_names"),
-            "timestamp": record.get("timestamp"),
-        }
-        self._langfuse.log_event(
-            "response_completed",
-            session_id=self._langfuse_session_id(record),
-            user_id=record.get("user_id"),
-            metadata=metadata,
-        )
-
-    def _sync_langfuse_feedback(self, record: Dict[str, Any]) -> None:
-        if not self._langfuse.enabled:
-            return
-
-        metadata = {
-            "event_type": record.get("event_type"),
-            "feedback_id": record.get("feedback_id"),
-            "response_id": record.get("response_id"),
-            "session_id": record.get("session_id"),
-            "channel": record.get("channel"),
-            "rating": record.get("rating"),
-            "comment": record.get("comment"),
-            "timestamp": record.get("timestamp"),
-        }
-        self._langfuse.log_event(
-            "feedback_submitted",
-            session_id=self._langfuse_session_id(record),
-            user_id=record.get("user_id"),
-            metadata=metadata,
-        )
-
-        rating = record.get("rating")
-        if rating in {"positive", "negative"}:
-            self._langfuse.log_score(
-                "user_feedback",
-                1.0 if rating == "positive" else 0.0,
-                session_id=self._langfuse_session_id(record),
-                user_id=record.get("user_id"),
-                comment=record.get("comment"),
-                metadata={
-                    "response_id": record.get("response_id"),
-                    "feedback_id": record.get("feedback_id"),
-                    "session_id": record.get("session_id"),
-                    "channel": record.get("channel"),
-                    "timestamp": record.get("timestamp"),
-                },
-            )
-
-    def _sync_langfuse_outcome(self, record: Dict[str, Any]) -> None:
-        if not self._langfuse.enabled:
-            return
-
-        metadata = {
-            "event_type": record.get("event_type"),
-            "response_id": record.get("response_id"),
-            "session_id": record.get("session_id"),
-            "channel": record.get("channel"),
-            "evaluated_at": record.get("evaluated_at"),
-            "evaluation_type": record.get("evaluation_type"),
-            "follow_up_message": record.get("follow_up_message"),
-            "follow_up_delay_seconds": record.get("follow_up_delay_seconds"),
-            "reask_within_window": record.get("reask_within_window"),
-            "one_turn_resolution": record.get("one_turn_resolution"),
-            "outcome_label": record.get("outcome_label"),
-        }
-        self._langfuse.log_event(
-            "response_outcome_evaluated",
-            session_id=self._langfuse_session_id(record),
-            user_id=record.get("user_id"),
-            metadata=metadata,
-        )
-        self._langfuse.log_score(
-            "reask_within_window",
-            1.0 if record.get("reask_within_window") else 0.0,
-            session_id=self._langfuse_session_id(record),
-            user_id=record.get("user_id"),
-            metadata={
-                "response_id": record.get("response_id"),
-                "session_id": record.get("session_id"),
-                "channel": record.get("channel"),
-                "evaluated_at": record.get("evaluated_at"),
-                "outcome_label": record.get("outcome_label"),
-            },
-        )
 
     async def start(self) -> None:
         """Start the channel - register routes to external FastAPI app if provided."""
@@ -569,14 +285,6 @@ class OpenAPIChannel(BaseChannel):
                 request.stream = True
             return await channel._handle_chat_stream(request)
 
-        @router.post("/feedback", response_model=FeedbackResponse)
-        async def submit_feedback(
-            request: FeedbackRequest,
-            authorized: bool = Depends(verify_api_key),
-        ):
-            """Submit explicit feedback for a prior response."""
-            return await channel._handle_feedback(request)
-
         @router.get("/sessions", response_model=SessionListResponse)
         async def list_sessions(
             authorized: bool = Depends(verify_api_key),
@@ -694,28 +402,19 @@ class OpenAPIChannel(BaseChannel):
         # Generate or use provided session ID
         session_id = request.session_id or str(uuid.uuid4())
         user_id = request.user_id or "anonymous"
-        now = datetime.now()
 
         # Create session if new
         if session_id not in self._sessions:
             self._sessions[session_id] = {
                 "user_id": user_id,
-                "created_at": now,
-                "last_active": now,
+                "created_at": datetime.now(),
+                "last_active": datetime.now(),
                 "message_count": 0,
                 "messages": [],
             }
-        else:
-            await self._evaluate_follow_up_outcome(
-                session_id=session_id,
-                channel=f"cli__{self.config.channel_id()}",
-                user_id=user_id,
-                current_message=request.message,
-                current_timestamp=now,
-            )
 
         # Update session activity
-        self._sessions[session_id]["last_active"] = now
+        self._sessions[session_id]["last_active"] = datetime.now()
         self._sessions[session_id]["message_count"] += 1
 
         # Create pending response tracker
@@ -756,7 +455,6 @@ class OpenAPIChannel(BaseChannel):
 
             return ChatResponse(
                 session_id=session_id,
-                response_id=pending.response_id,
                 message=response_content,
                 events=pending.events if pending.events else None,
                 relevant_memories=pending.relevant_memories,
@@ -771,56 +469,22 @@ class OpenAPIChannel(BaseChannel):
             # Clean up pending
             self._pending.pop(session_id, None)
 
-    async def _handle_feedback(self, request: FeedbackRequest) -> FeedbackResponse:
-        """Handle explicit user feedback for a response."""
-        feedback_id = str(uuid.uuid4())
-        now = datetime.now()
-        response_info = self._response_index.get(request.response_id, {})
-        record = {
-            "event_type": "feedback_submitted",
-            "feedback_id": feedback_id,
-            "response_id": request.response_id,
-            "rating": request.rating.value,
-            "comment": request.comment,
-            "session_id": request.session_id or response_info.get("session_id"),
-            "session_key": response_info.get("session_key"),
-            "channel": response_info.get("channel"),
-            "user_id": request.user_id or response_info.get("user_id"),
-            "timestamp": now.isoformat(),
-        }
-        await self._store_feedback(record)
-        return FeedbackResponse(
-            feedback_id=feedback_id,
-            response_id=request.response_id,
-            accepted=True,
-            timestamp=now,
-        )
-
     async def _handle_chat_stream(self, request: ChatRequest) -> StreamingResponse:
         """Handle a streaming chat request."""
         session_id = request.session_id or str(uuid.uuid4())
         user_id = request.user_id or "anonymous"
-        now = datetime.now()
 
         # Create session if new
         if session_id not in self._sessions:
             self._sessions[session_id] = {
                 "user_id": user_id,
-                "created_at": now,
-                "last_active": now,
+                "created_at": datetime.now(),
+                "last_active": datetime.now(),
                 "message_count": 0,
                 "messages": [],
             }
-        else:
-            await self._evaluate_follow_up_outcome(
-                session_id=session_id,
-                channel=f"cli__{self.config.channel_id()}",
-                user_id=user_id,
-                current_message=request.message,
-                current_timestamp=now,
-            )
 
-        self._sessions[session_id]["last_active"] = now
+        self._sessions[session_id]["last_active"] = datetime.now()
         self._sessions[session_id]["message_count"] += 1
 
         pending = PendingResponse()
@@ -875,7 +539,6 @@ class OpenAPIChannel(BaseChannel):
         # Generate or use provided session ID
         session_id = request.session_id or str(uuid.uuid4())
         user_id = request.user_id or "anonymous"
-        now = datetime.now()
 
         # Ensure channel has session storage
         if channel_id not in self._bot_sessions:
@@ -885,22 +548,14 @@ class OpenAPIChannel(BaseChannel):
         if session_id not in self._bot_sessions[channel_id]:
             self._bot_sessions[channel_id][session_id] = {
                 "user_id": user_id,
-                "created_at": now,
-                "last_active": now,
+                "created_at": datetime.now(),
+                "last_active": datetime.now(),
                 "message_count": 0,
                 "messages": [],
             }
-        else:
-            await self._evaluate_follow_up_outcome(
-                session_id=session_id,
-                channel=f"bot_api__{channel_id}",
-                user_id=user_id,
-                current_message=request.message,
-                current_timestamp=now,
-            )
 
         # Update session activity
-        self._bot_sessions[channel_id][session_id]["last_active"] = now
+        self._bot_sessions[channel_id][session_id]["last_active"] = datetime.now()
         self._bot_sessions[channel_id][session_id]["message_count"] += 1
 
         # Create pending response tracker
@@ -942,7 +597,6 @@ class OpenAPIChannel(BaseChannel):
 
             return ChatResponse(
                 session_id=session_id,
-                response_id=pending.response_id,
                 message=response_content,
                 events=pending.events if pending.events else None,
                 relevant_memories=pending.relevant_memories,
@@ -964,7 +618,6 @@ class OpenAPIChannel(BaseChannel):
         """Handle a BotChannel streaming chat request."""
         session_id = request.session_id or str(uuid.uuid4())
         user_id = request.user_id or "anonymous"
-        now = datetime.now()
 
         # Ensure channel has session storage
         if channel_id not in self._bot_sessions:
@@ -974,21 +627,13 @@ class OpenAPIChannel(BaseChannel):
         if session_id not in self._bot_sessions[channel_id]:
             self._bot_sessions[channel_id][session_id] = {
                 "user_id": user_id,
-                "created_at": now,
-                "last_active": now,
+                "created_at": datetime.now(),
+                "last_active": datetime.now(),
                 "message_count": 0,
                 "messages": [],
             }
-        else:
-            await self._evaluate_follow_up_outcome(
-                session_id=session_id,
-                channel=f"bot_api__{channel_id}",
-                user_id=user_id,
-                current_message=request.message,
-                current_timestamp=now,
-            )
 
-        self._bot_sessions[channel_id][session_id]["last_active"] = now
+        self._bot_sessions[channel_id][session_id]["last_active"] = datetime.now()
         self._bot_sessions[channel_id][session_id]["message_count"] += 1
 
         pending = PendingResponse()

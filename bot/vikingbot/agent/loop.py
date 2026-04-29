@@ -6,7 +6,6 @@ import asyncio
 import json
 import re
 import time
-import uuid
 from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -18,12 +17,7 @@ from vikingbot.agent.memory import MemoryStore
 from vikingbot.agent.subagent import SubagentManager
 from vikingbot.agent.tools import register_default_tools
 from vikingbot.agent.tools.registry import ToolRegistry
-from vikingbot.bus.events import (
-    InboundMessage,
-    OutboundEventType,
-    OutboundMessage,
-    ResponseCompletedEvent,
-)
+from vikingbot.bus.events import InboundMessage, OutboundEventType, OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.config import load_config
 from vikingbot.config.schema import BotMode, Config, SessionKey
@@ -212,46 +206,6 @@ class AgentLoop:
                 content=content,
                 event_type=event_type,
             )
-        )
-
-    def _build_terminal_response(
-        self,
-        msg: InboundMessage,
-        content: str,
-        *,
-        metadata: dict | None = None,
-        event_type: OutboundEventType = OutboundEventType.RESPONSE,
-        token_usage: dict[str, int] | None = None,
-        time_cost: float = 0.0,
-        iteration: int = 0,
-        tools_used_names: list[str] | None = None,
-        response_id: str | None = None,
-    ) -> OutboundMessage:
-        response_completed = None
-        if event_type == OutboundEventType.RESPONSE:
-            response_id = response_id or str(uuid.uuid4())
-            response_completed = ResponseCompletedEvent(
-                response_id=response_id,
-                session_id=msg.session_key.safe_name(),
-                channel=msg.session_key.channel_key(),
-                user_id=msg.sender_id,
-                token_usage=token_usage or {},
-                time_cost=time_cost,
-                iteration=iteration,
-                tools_used_names=tools_used_names or [],
-            )
-
-        return OutboundMessage(
-            session_key=msg.session_key,
-            content=content,
-            event_type=event_type,
-            metadata=dict(metadata or msg.metadata or {}),
-            token_usage=token_usage or {},
-            time_cost=time_cost,
-            iteration=iteration,
-            tools_used_names=tools_used_names or [],
-            response_id=response_id,
-            response_completed=response_completed,
         )
 
     def _register_builtin_hooks(self):
@@ -545,49 +499,56 @@ class AgentLoop:
             if cmd == "/new":
                 # Clone session for async consolidation, then immediately clear original
                 if not self._check_cmd_auth(msg):
-                    return self._build_terminal_response(
-                        msg,
-                        "🐈 Sorry, you are not authorized to use this command.",
+                    return OutboundMessage(
+                        session_key=msg.session_key,
+                        content="🐈 Sorry, you are not authorized to use this command.",
+                        metadata=msg.metadata,
                     )
                 session.clear()
                 await self.sessions.save(session)
-                return self._build_terminal_response(
-                    msg,
-                    "🐈 New session started. Session history droped.",
+                return OutboundMessage(
+                    session_key=msg.session_key,
+                    content="🐈 New session started. Session history droped.",
+                    metadata=msg.metadata,
                 )
             elif cmd == "/compact":
                 # Clone session for async consolidation, then immediately clear original
                 if not self._check_cmd_auth(msg):
-                    return self._build_terminal_response(
-                        msg,
-                        "🐈 Sorry, you are not authorized to use this command.",
+                    return OutboundMessage(
+                        session_key=msg.session_key,
+                        content="🐈 Sorry, you are not authorized to use this command.",
+                        metadata=msg.metadata,
                     )
                 session_clone = session.clone()
                 session.clear()
                 await self.sessions.save(session)
                 # Run consolidation in background
                 await self._safe_consolidate_memory(session_clone, archive_all=True)
-                return self._build_terminal_response(
-                    msg,
-                    "🐈 New session started. Memory consolidated.",
+                return OutboundMessage(
+                    session_key=msg.session_key,
+                    content="🐈 New session started. Memory consolidated.",
+                    metadata=msg.metadata,
                 )
             if cmd == "/remember":
                 if not self._check_cmd_auth(msg):
-                    return self._build_terminal_response(
-                        msg,
-                        "🐈 Sorry, you are not authorized to use this command.",
+                    return OutboundMessage(
+                        session_key=msg.session_key,
+                        content="🐈 Sorry, you are not authorized to use this command.",
+                        metadata=msg.metadata,
                     )
                 if ov_tools_enable:
                     session_clone = session.clone()
                     await self._consolidate_viking_memory(session_clone)
-                return self._build_terminal_response(
-                    msg,
-                    "This conversation has been submitted to memory storage.",
+                return OutboundMessage(
+                    session_key=msg.session_key,
+                    content="This conversation has been submitted to memory storage.",
+                    metadata=msg.metadata,
                 )
             if cmd == "/help":
-                return self._build_terminal_response(
-                    msg,
-                    "🐈 vikingbot commands:\n/new — Start a new conversation\n/remember — Submit current session to memories and start new session\n/help — Show available commands",
+                return OutboundMessage(
+                    session_key=msg.session_key,
+                    content="🐈 vikingbot commands:\n/new — Start a new conversation\n/remember — Submit current session to memories and start new session\n/help — Show available commands",
+                    metadata=msg.metadata,
                 )
 
             # Debug mode handling
@@ -600,9 +561,10 @@ class AgentLoop:
             if not msg.need_reply:
                 session.add_message("user", msg.content, sender_id=msg.sender_id)
                 await self.sessions.save(session)
-                return self._build_terminal_response(
-                    msg,
-                    "",
+                return OutboundMessage(
+                    session_key=msg.session_key,
+                    content="",
+                    metadata=msg.metadata,
                     event_type=OutboundEventType.NO_REPLY,
                 )
 
@@ -659,7 +621,6 @@ class AgentLoop:
             logger.info(f"Response to {msg.session_key}: {preview}")
 
             is_heartbeat = bool(msg.metadata.get(HEARTBEAT_METADATA_KEY))
-            response_id = str(uuid.uuid4())
             if not (is_heartbeat and is_heartbeat_noop_response(final_content)):
                 session.add_message("user", msg.content, sender_id=msg.sender_id)
                 session.add_message(
@@ -667,7 +628,6 @@ class AgentLoop:
                     final_content,
                     tools_used=tools_used if tools_used else None,
                     token_usage=token_usage,
-                    response_id=response_id,
                     sender_id=msg.sender_id,
                 )
                 await self.sessions.save(session)
@@ -688,7 +648,6 @@ class AgentLoop:
                 time_cost=time_cost,
                 iteration=iteration,
                 tools_used_names=tools_used_names,
-                response_id=response_id,
             )
         finally:
             long_running_notified = True
@@ -729,7 +688,6 @@ class AgentLoop:
         the response back to the correct destination.
         """
         logger.info(f"Processing system message from {msg.sender_id}")
-        start_time = time.time()
 
         session = self.sessions.get_or_create(msg.session_key)
 
@@ -761,27 +719,13 @@ class AgentLoop:
             final_content = "Background task completed."
 
         # Save to session (mark as system message in history)
-        response_id = str(uuid.uuid4())
         session.add_message("user", f"[System: {msg.sender_id}] {msg.content}")
         session.add_message(
-            "assistant",
-            final_content,
-            tools_used=tools_used if tools_used else None,
-            token_usage=token_usage,
-            response_id=response_id,
+            "assistant", final_content, tools_used=tools_used if tools_used else None
         )
         await self.sessions.save(session)
 
-        tools_used_names = [tool["tool_name"] for tool in tools_used] if tools_used else []
-        return self._build_terminal_response(
-            msg,
-            final_content,
-            token_usage=token_usage,
-            time_cost=round(time.time() - start_time, 2),
-            iteration=iteration,
-            tools_used_names=tools_used_names,
-            response_id=response_id,
-        )
+        return OutboundMessage(session_key=msg.session_key, content=final_content)
 
     async def _consolidate_memory(self, session, archive_all: bool = False) -> None:
         """Consolidate old messages into MEMORY.md + HISTORY.md. Works on a cloned session."""
