@@ -35,9 +35,9 @@ OpenViking 支持多种资源类型，按照功能分类如下：
 媒体类
 | 类型 | 资源名 | 说明 |
 |------|--------|------|
-| 图片 | `*.jpg`, `*.jpeg`, `*.png`, `*.gif` ... | 多种图片格式，通过 VLM 生成描述 |
-| 视频 | `*.mp4`, `*.avi`, `*.mov` ... | 提取关键帧后使用 VLM 分析 |
-| 音频 | `*.mp3`, `*.wav`, `*.m4a` ... | 进行语音转录处理 |
+| 图片 | `*.jpg`, `*.jpeg`, `*.png`, `*.gif` ... | 多种图片格式，通过 VLM 生成描述（实验特性） |
+| 视频 | `*.mp4`, `*.avi`, `*.mov` ... | 提取关键帧后使用 VLM 分析（规划） |
+| 音频 | `*.mp3`, `*.wav`, `*.m4a` ... | 进行语音转录处理（规划） |
 
 云文档类
 | 类型 | 说明 |
@@ -113,8 +113,8 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 1. 识别资源来源（URL 或上传的临时文件）
 2. 调用对应 Parser 解析内容
 3. 构建目录树并写入 AGFS
-4. 如指定 `watch_interval`，设置定时更新任务
-5. 如指定 `wait=true`，等待语义处理完成
+4. 如指定 `--watch-interval`，设置定时更新任务
+5. 如指定 `--wait=true`，等待语义处理完成
 
 **代码入口**：
 - `openviking/client/local.py:LocalClient.add_resource` - SDK 入口（嵌入式）
@@ -143,14 +143,12 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 | exclude | string | 否 | None | 排除的文件模式（glob） |
 | directly_upload_media | bool | 否 | True | 是否直接上传媒体文件 |
 | preserve_structure | bool | 否 | None | 是否保留目录结构 |
-| watch_interval | float | 否 | 0 | 定时更新间隔（分钟）。>0 创建任务；≤0 取消任务 |
+| watch_interval | float | 否 | 0 | 定时更新间隔（分钟）。>0 创建任务；≤0 取消任务，依赖 `to` 目标指定 |
 | telemetry | TelemetryRequest | 否 | False | 是否返回遥测数据 |
 
 **补充说明**：
-- `to` 和 `parent` 不能同时指定
-- `path` 和 `temp_file_id` 不能同时指定
-- 裸 HTTP 调用本地文件需要先用 [temp_upload](#temp_upload) 上传获取 `temp_file_id`
-- 指定 `to` 且目标已存在时，触发增量更新
+- `to` 和 `parent` 都可用于指定目标路径，但不能同时使用；指定 `to` 且目标已存在时，触发增量更新。
+- `path` 和 `temp_file_id` 不能同时指定，上传本地文件需要先通过 [temp_upload](#temp_upload) 上传获取 `temp_file_id`，在 SDK 和 CLI 中已经封装好。
 - `watch_interval` 仅在指定 `to` 时生效
 
 #### 3. 使用示例
@@ -196,32 +194,32 @@ curl -X POST http://localhost:1933/api/v1/resources \
 ```python
 import openviking as ov
 
-# 使用嵌入式模式
+# 使用嵌入式模式（以后不再推荐和详细介绍）
 client = ov.OpenViking(path="./data")
 client.initialize()
 
-# 或使用 HTTP 客户端
+# 使用 HTTP 客户端模式
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
-# 添加本地文件
+## 添加本地文件
 result = client.add_resource(
     "./documents/guide.md",
     reason="User guide documentation"
 )
 print(f"Added: {result['root_uri']}")
 
-# 从 URL 添加到指定位置
+## 从 URL 添加到指定位置
 result = client.add_resource(
     "https://example.com/api-docs.md",
     to="viking://resources/external/api-docs.md",
     reason="External API docs"
 )
 
-# 等待处理完成
+## 等待处理完成
 client.wait_processed()
 
-# 开启定时更新
+## 开启定时更新
 client.add_resource(
     "./documents/guide.md",
     to="viking://resources/guide.md",
@@ -242,13 +240,15 @@ ov add-resource https://example.com/guide.md --to viking://resources/guide.md
 ov add-resource ./documents/guide.md --wait
 
 # 开启定时更新（每60分钟检测一次）
-ov add-resource https://github.com/example/repo.git --to viking://resources/guide.md --watch-interval 60
+ov add-resource https://github.com/example/repo.git --to viking://resources/my_repo --watch-interval 60
 
 # 取消定时更新
-ov add-resource https://github.com/example/repo.git --to viking://resources/guide.md --watch-interval 0
+ov add-resource https://github.com/example/repo.git --to viking://resources/my_repo --watch-interval 0
 ```
 
-**响应示例**
+#### 4. 响应示例
+
+**HTTP API 响应 (JSON)**
 
 ```json
 {
@@ -256,7 +256,9 @@ ov add-resource https://github.com/example/repo.git --to viking://resources/guid
   "result": {
     "status": "success",
     "root_uri": "viking://resources/guide.md",
+    "temp_uri": "viking://temp/username/04291108_b62dc7/guide.md",
     "source_path": "./documents/guide.md",
+    "meta": {},
     "errors": [],
     "queue_status": {
       "pending": 5,
@@ -264,9 +266,50 @@ ov add-resource https://github.com/example/repo.git --to viking://resources/guid
       "completed": 10
     }
   },
-  "time": 0.456
+  "telemetry": {
+    "operation_id": "550e8400-e29b-41d4-a716-446655440000"
+  }
 }
 ```
+
+**CLI 响应 (默认表格格式)**
+
+```
+Note: Resource is being processed in the background.
+Use 'ov wait' to wait for completion, or 'ov observer queue' to check status.
+status       success
+errors       []
+source_path  /Users/bytedance/workspace/github.com/OpenViking/docs/en/api/01-overview.md
+meta         {}
+root_uri     viking://resources/01-overview
+temp_uri     viking://temp/shengmaojia/04291108_b62dc7/01-overview
+```
+
+**CLI 响应 (JSON 格式，使用 -o json)**
+
+```json
+{
+  "status": "success",
+  "root_uri": "viking://resources/01-overview",
+  "temp_uri": "viking://temp/shengmaojia/04291108_b62dc7/01-overview",
+  "source_path": "/Users/bytedance/workspace/github.com/OpenViking/docs/en/api/01-overview.md",
+  "meta": {},
+  "errors": []
+}
+```
+
+**字段说明**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `status` | string | 处理状态："success" 成功，"error" 失败 |
+| `root_uri` | string | 资源在 OpenViking 中的最终 URI |
+| `temp_uri` | string | 处理过程中的临时 URI（仅在后台处理阶段有效） |
+| `source_path` | string | 原始源文件路径或 URL |
+| `meta` | object | 资源解析过程中的元数据（如文件类型、大小等） |
+| `errors` | array | 处理过程中的错误列表 |
+| `warnings` | array | （可选）处理过程中的警告列表（仅在 `strict=False` 时可能出现） |
+| `queue_status` | object | （可选，仅当 `wait=true` 时）队列处理状态，包含 `pending`、`processing`、`completed` 计数 |
 
 ---
 
@@ -366,198 +409,71 @@ ov add-skill ./skills/my-skill.json
 ov add-skill ./skills/my-skill.json --wait
 ```
 
-**响应示例**
+#### 4. 响应示例
+
+**HTTP API 响应 (JSON)**
 
 ```json
 {
   "status": "ok",
   "result": {
     "status": "success",
-    "skill_uri": "viking://skills/my-skill"
+    "root_uri": "viking://agent/skills/my-skill",
+    "uri": "viking://agent/skills/my-skill",
+    "name": "my-skill",
+    "auxiliary_files": 2,
+    "queue_status": {
+      "pending": 0,
+      "processing": 0,
+      "completed": 1
+    }
   },
-  "time": 0.123
+  "telemetry": {
+    "operation_id": "550e8400-e29b-41d4-a716-446655440000"
+  }
 }
 ```
 
----
-
-### export_ovpack
-
-将资源树导出为 `.ovpack` 文件。
-
-#### 1. API 实现介绍
-
-将指定 URI 下的所有资源打包成 `.ovpack` 格式文件，用于备份或迁移。需要 ROOT 或 ADMIN 权限。
-
-**处理流程**：
-1. 验证用户权限
-2. 遍历指定 URI 下的资源
-3. 打包成 zip 格式（.ovpack）
-4. 以文件流形式返回
-
-**代码入口**：
-- `openviking/server/routers/pack.py:export_ovpack` - HTTP 路由
-- `openviking/service/pack_service.py` - 核心服务实现
-- `crates/ov_cli/src/handlers.rs:handle_export` - CLI 处理
-
-#### 2. 接口和参数说明
-
-**参数**
-
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| uri | string | 是 | - | 要导出的 Viking URI |
-
-**权限要求**：ROOT 或 ADMIN
-
-#### 3. 使用示例
-
-**HTTP API**
+**CLI 响应 (默认表格格式)**
 
 ```
-POST /api/v1/pack/export
-Content-Type: application/json
+Note: Skill is being processed in the background.
+Use 'ov wait' to wait for completion, or 'ov observer queue' to check status.
+status          success
+root_uri        viking://agent/skills/my-skill
+uri             viking://agent/skills/my-skill
+name            my-skill
+auxiliary_files 2
 ```
 
-```bash
-curl -X POST http://localhost:1933/api/v1/pack/export \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-admin-key" \
-  -d '{
-    "uri": "viking://resources/my-project/"
-  }' \
-  --output my-project.ovpack
-```
-
-**Python SDK**
-
-```python
-import openviking as ov
-
-client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-admin-key")
-client.initialize()
-
-# 导出到本地文件（HTTP SDK 会自动处理下载）
-# 注意：导出功能主要通过 CLI 使用
-```
-
-**CLI**
-
-```bash
-# 导出资源
-ov export viking://resources/my-project/ ./exports/my-project.ovpack
-```
-
-**响应示例**
-
-此接口直接返回文件流（`Content-Type: application/zip`），不返回 JSON 包装体。
-
----
-
-### import_ovpack
-
-导入 `.ovpack` 文件。
-
-#### 1. API 实现介绍
-
-将 `.ovpack` 文件导入到指定位置，用于恢复或迁移数据。需要 ROOT 或 ADMIN 权限。
-
-**处理流程**：
-1. 验证用户权限
-2. 解析上传的 `.ovpack` 文件
-3. 导入资源到目标位置
-4. 可选地触发向量化
-
-**代码入口**：
-- `openviking/server/routers/pack.py:import_ovpack` - HTTP 路由
-- `openviking/service/pack_service.py` - 核心服务实现
-- `crates/ov_cli/src/handlers.rs:handle_import` - CLI 处理
-
-#### 2. 接口和参数说明
-
-**参数**
-
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| temp_file_id | string | 是 | - | 临时上传文件 ID（通过 [temp_upload](#temp_upload) 获取） |
-| parent | string | 是 | - | 目标父级 URI（导入到此处） |
-| force | bool | 否 | False | 是否覆盖已有资源 |
-| vectorize | bool | 否 | True | 是否触发向量化 |
-
-**权限要求**：ROOT 或 ADMIN
-
-#### 3. 使用示例
-
-**HTTP API**
-
-```
-POST /api/v1/pack/import
-Content-Type: application/json
-```
-
-```bash
-# 第一步：上传 .ovpack 文件
-TEMP_FILE_ID=$(
-  curl -s -X POST http://localhost:1933/api/v1/resources/temp_upload \
-    -H "X-API-Key: your-admin-key" \
-    -F "file=@./exports/my-project.ovpack" \
-  | jq -r '.result.temp_file_id'
-)
-
-# 第二步：导入
-curl -X POST http://localhost:1933/api/v1/pack/import \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-admin-key" \
-  -d "{
-    \"temp_file_id\": \"$TEMP_FILE_ID\",
-    \"parent\": \"viking://resources/imported/\",
-    \"force\": true,
-    \"vectorize\": true
-  }"
-```
-
-**Python SDK**
-
-```python
-import openviking as ov
-
-client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-admin-key")
-client.initialize()
-
-# 导入 .ovpack 文件（HTTP SDK 会自动处理上传）
-# 注意：导入功能主要通过 CLI 使用
-```
-
-**CLI**
-
-```bash
-# 导入 .ovpack 文件
-ov import ./exports/my-project.ovpack viking://resources/imported/
-
-# 强制覆盖已有内容
-ov import ./exports/my-project.ovpack viking://resources/imported/ --force
-
-# 不进行向量化
-ov import ./exports/my-project.ovpack viking://resources/imported/ --no-vectorize
-```
-
-**响应示例**
+**CLI 响应 (JSON 格式，使用 -o json)**
 
 ```json
 {
-  "status": "ok",
-  "result": {
-    "uri": "viking://resources/imported/my-project/"
-  },
-  "time": 0.789
+  "status": "success",
+  "root_uri": "viking://agent/skills/my-skill",
+  "uri": "viking://agent/skills/my-skill",
+  "name": "my-skill",
+  "auxiliary_files": 2
 }
 ```
+
+**字段说明**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `status` | string | 处理状态："success" 成功，"error" 失败 |
+| `root_uri` | string | 技能在 OpenViking 中的最终 URI（同 `uri`） |
+| `uri` | string | 技能在 OpenViking 中的最终 URI（同 `root_uri`） |
+| `name` | string | 技能名称 |
+| `auxiliary_files` | number | 技能附带的辅助文件数量 |
+| `queue_status` | object | （可选，仅当 `wait=true` 时）队列处理状态，包含 `pending`、`processing`、`completed` 计数 |
 
 ---
 
 ### temp_upload
 
-上传临时文件，用于后续通过 [add_resource](#add_resource)、[add_skill](#add_skill) 或 [import_ovpack](#import_ovpack) 导入本地文件。
+上传临时文件，用于后续通过 [add_resource](#add_resource) 或 [add_skill](#add_skill) 导入本地文件。
 
 #### 1. API 实现介绍
 
@@ -613,7 +529,9 @@ CLI 命令也会自动处理本地文件上传，无需手动调用此接口。
   "result": {
     "temp_file_id": "upload_abc123def456.md"
   },
-  "time": 0.123
+  "telemetry": {
+    "operation_id": "550e8400-e29b-41d4-a716-446655440000"
+  }
 }
 ```
 

@@ -75,6 +75,9 @@ Explain the purpose of this API, point to the corresponding code entry, and brie
 <JSON response example>
 ```
 
+
+#### 4. Response Example, Error Handling, and Exception Handling (Optional)
+
 ---
 
 ### API Method Name 2
