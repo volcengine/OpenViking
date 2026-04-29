@@ -274,7 +274,11 @@ def test_vikingdb_collector_exports_health_and_count(monkeypatch):
     registry = MetricRegistry()
     VikingDBCollector(data_source=VikingDBStateDataSource(service=Service())).collect(registry)
     text = PrometheusExporter(registry=registry).render()
-    assert 'openviking_vikingdb_collection_health{collection="my_collection",valid="1"} 1.0' in text
     assert (
-        'openviking_vikingdb_collection_vectors{collection="my_collection",valid="1"} 123.0' in text
+        'openviking_vikingdb_collection_health{account_id="__unknown__",collection="my_collection",valid="1"} 1.0'
+        in text
+    )
+    assert (
+        'openviking_vikingdb_collection_vectors{account_id="__unknown__",collection="my_collection",valid="1"} 123.0'
+        in text
     )

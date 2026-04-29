@@ -14,6 +14,7 @@ from openviking.metrics.collectors.base import (
 )
 from openviking.metrics.core.base import ReadEnvelope
 from openviking.metrics.core.registry import MetricRegistry
+from openviking.metrics.datasources.observer_state import VikingDBStateDataSource
 
 
 class _EnvelopeStateCollector(StateMetricCollector):
@@ -233,3 +234,31 @@ def test_async_system_probe_datasource_returns_default_on_exception(monkeypatch)
     assert env.ok is False
     assert env.value == {"queue": False}
     assert env.error_type == "RuntimeError"
+
+
+def test_vikingdb_state_datasource_uses_default_account_ctx_for_count(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class DummyVikingDB:
+        collection_name = "my_collection"
+
+        async def health_check(self):
+            return True
+
+        async def count(self, filter=None, ctx=None):
+            captured["ctx"] = ctx
+            return 123
+
+    class Service:
+        _vikingdb_manager = DummyVikingDB()
+
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: SimpleNamespace(default_account="acct_demo", default_user="user_demo"),
+    )
+
+    env = VikingDBStateDataSource(service=Service()).read_vikingdb_state()
+    assert env.ok is True
+    assert env.value == ("acct_demo", "my_collection", True, 123)
+    ctx = captured["ctx"]
+    assert getattr(ctx, "account_id", None) == "acct_demo"

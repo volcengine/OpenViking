@@ -321,8 +321,8 @@ scrape_configs:
 
 | 指标族 | 类型 | 常见标签 | 含义 |
 |--------|------|----------|------|
-| `openviking_vikingdb_collection_health` | Gauge | `collection, valid` | collection 健康状态 |
-| `openviking_vikingdb_collection_vectors` | Gauge | `collection, valid` | collection 当前向量数 |
+| `openviking_vikingdb_collection_health` | Gauge | `account_id, collection, valid` | collection 健康状态 |
+| `openviking_vikingdb_collection_vectors` | Gauge | `account_id, collection, valid` | collection 当前向量数 |
 | `openviking_model_usage_available` | Gauge | `model_type, valid` | 模型使用统计是否可用 |
 
 其中 `model_type` 可能包括：

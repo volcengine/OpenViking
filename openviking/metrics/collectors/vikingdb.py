@@ -35,6 +35,8 @@ class VikingDBCollector(StateMetricCollector):
     data_source: VikingDBStateDataSource
     config: CollectorConfig = CollectorConfig(ttl_seconds=10.0, timeout_seconds=0.8)
     _last_collection: str = field(default="unknown", init=False, repr=False)
+    _last_account: str = field(default="default", init=False, repr=False)
+    _last_vectors: float = field(default=0.0, init=False, repr=False)
 
     def read_metric_input(self):
         """Read the latest VikingDB collection state from the datasource."""
@@ -48,8 +50,10 @@ class VikingDBCollector(StateMetricCollector):
         to the last observed collection name and preserves last vectors count when present,
         emitting `valid="0"` to mark the data as stale.
         """
-        collection, ok, vectors = metric_input
+        account_id, collection, ok, vectors = metric_input
         self._last_collection = str(collection)
+        self._last_account = str(account_id)
+        self._last_vectors = float(vectors)
         base = {"collection": str(collection)}
         labels = {"collection": str(collection), "valid": "1"}
         self.replace_gauge_series(
@@ -59,6 +63,7 @@ class VikingDBCollector(StateMetricCollector):
             match_labels=base,
             labels=labels,
             label_names=("collection", "valid"),
+            account_id=self._last_account,
         )
         self.replace_gauge_series(
             registry,
@@ -67,6 +72,7 @@ class VikingDBCollector(StateMetricCollector):
             match_labels=base,
             labels=labels,
             label_names=("collection", "valid"),
+            account_id=self._last_account,
         )
 
     def collect_error_hook(self, registry, error: Exception) -> None:
@@ -75,14 +81,9 @@ class VikingDBCollector(StateMetricCollector):
 
     def collect_stale_hook(self, registry, error: Exception) -> None:
         """Export stale VikingDB gauges under `valid=0` when datasource refresh fails."""
+        account_id = self._last_account
         collection = self._last_collection
         base = {"collection": collection}
-        last_vectors = registry.gauge_get(
-            self.COLLECTION_VECTORS,
-            labels={"collection": collection, "valid": "1"},
-        )
-        if last_vectors is None:
-            last_vectors = 0.0
         labels = {"collection": collection, "valid": "0"}
         self.replace_gauge_series(
             registry,
@@ -91,12 +92,14 @@ class VikingDBCollector(StateMetricCollector):
             match_labels=base,
             labels=labels,
             label_names=("collection", "valid"),
+            account_id=account_id,
         )
         self.replace_gauge_series(
             registry,
             self.COLLECTION_VECTORS,
-            float(last_vectors),
+            float(self._last_vectors),
             match_labels=base,
             labels=labels,
             label_names=("collection", "valid"),
+            account_id=account_id,
         )

@@ -7,7 +7,9 @@ import time
 from typing import Any
 
 from openviking.metrics.core.base import ReadEnvelope
+from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
 from openviking.storage.transaction import get_lock_manager
+from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import run_async
 
 from .base import DomainStatsMetricDataSource, StateMetricDataSource
@@ -108,13 +110,28 @@ class VikingDBStateDataSource(StateMetricDataSource):
         """Store the optional service object used to resolve the active VikingDB manager."""
         self._service = service
 
-    def read_vikingdb_state(self) -> ReadEnvelope[tuple[str, bool, int]]:
+    def _make_default_ctx(self) -> tuple[str, RequestContext]:
+        """Build a RequestContext scoped to the configured default account, returning (account_id, ctx)."""
+        try:
+            from openviking_cli.utils.config import get_openviking_config
+
+            config = get_openviking_config()
+            account_id = config.default_account or "default"
+            user_id = config.default_user or "default"
+        except Exception:
+            account_id = "default"
+            user_id = "default"
+        user = UserIdentifier(account_id=account_id, user_id=user_id, agent_id="metrics")
+        ctx = RequestContext(user=user, role=Role.USER, namespace_policy=AccountNamespacePolicy())
+        return account_id, ctx
+
+    def read_vikingdb_state(self) -> ReadEnvelope[tuple[str, str, bool, int]]:
         """
         Read the collection name, health status, and approximate row count for VikingDB.
 
         Returns:
-            A tuple of `(collection_name, healthy, count)`. Missing services or failures fall
-            back to safe default values so metrics collection remains best-effort.
+            A tuple of `(account_id, collection_name, healthy, count)`. Missing services or
+            failures fall back to safe default values so metrics collection remains best-effort.
         """
         vikingdb = None
         if self._service is not None:
@@ -124,11 +141,12 @@ class VikingDBStateDataSource(StateMetricDataSource):
         if vikingdb is None:
             return ReadEnvelope(
                 ok=False,
-                value=("default", False, 0),
+                value=("default", "default", False, 0),
                 error_type="NotAvailable",
                 error_message="vikingdb manager missing",
             )
 
+        account_id, ctx = self._make_default_ctx()
         collection = self.normalize_str(
             getattr(vikingdb, "collection_name", "default"), default="default"
         )
@@ -138,7 +156,7 @@ class VikingDBStateDataSource(StateMetricDataSource):
             runner=run_async,
         )
         count_env = self.safe_read_async(
-            lambda: vikingdb.count(filter=None, ctx=None),
+            lambda: vikingdb.count(filter=None, ctx=ctx),
             default=0,
             runner=run_async,
         )
@@ -147,7 +165,7 @@ class VikingDBStateDataSource(StateMetricDataSource):
         envelope_ok = bool(ok_env.ok and count_env.ok)
         return ReadEnvelope(
             ok=envelope_ok,
-            value=(collection, ok, count),
+            value=(account_id, collection, ok, count),
             error_type=ok_env.error_type or count_env.error_type,
             error_message=ok_env.error_message or count_env.error_message,
         )
