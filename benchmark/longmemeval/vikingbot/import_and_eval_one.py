@@ -9,7 +9,7 @@ import sys
 import time
 from pathlib import Path
 
-DEFAULT_INPUT_FILE = "/Users/bytedance/mempalace/data/longmemeval-data/longmemeval_s_cleaned.json"
+DEFAULT_INPUT_FILE = "data/longmemeval_s_cleaned.json"
 
 
 def parse_args() -> argparse.Namespace:
@@ -32,6 +32,11 @@ def parse_args() -> argparse.Namespace:
         type=float,
         help="Seconds to wait after import before evaluation, default 3.",
     )
+    parser.add_argument(
+        "--force-ingest",
+        action="store_true",
+        help="Force re-import even if the sample was already ingested.",
+    )
     return parser.parse_args()
 
 
@@ -46,18 +51,19 @@ def main() -> int:
         print(f"Error: input file not found: {input_file}", file=sys.stderr)
         return 1
 
+    import_cmd = [
+        sys.executable,
+        "benchmark/longmemeval/vikingbot/import_to_ov.py",
+        "--input",
+        str(input_file),
+        "--sample",
+        str(args.sample),
+    ]
+    if args.force_ingest:
+        import_cmd.append("--force-ingest")
+
     print(f"[1/2] Importing sample {args.sample}...")
-    run_command(
-        [
-            sys.executable,
-            "benchmark/longmemeval/vikingbot/import_to_ov.py",
-            "--input",
-            str(input_file),
-            "--sample",
-            str(args.sample),
-            "--force-ingest",
-        ]
-    )
+    run_command(import_cmd)
 
     print("Waiting for data processing...")
     time.sleep(args.wait_seconds)

@@ -22,18 +22,14 @@ import openviking as ov
 LONGMEMEVAL_TIME_FORMAT = "%Y/%m/%d (%a) %H:%M"
 
 
-def build_sample_agent_id(sample_id: str | int, mode: str) -> str:
+def build_sample_agent_id(sample_id: str | int) -> str:
     """Return the agent_id used for one sample import."""
-    if mode == "shared":
-        return "default"
     digest = hashlib.md5(str(sample_id).encode("utf-8")).hexdigest()[:12]
     return f"lm_{digest}"
 
 
-def build_sample_user_id(sample_id: str | int, mode: str) -> str:
+def build_sample_user_id(sample_id: str | int) -> str:
     """Return the user_id used for one sample import."""
-    if mode == "shared":
-        return "default"
     digest = hashlib.md5(f"user:{sample_id}".encode("utf-8")).hexdigest()[:12]
     return f"lm_user_{digest}"
 
@@ -372,8 +368,8 @@ async def process_single_session(
     wait_semaphore: asyncio.Semaphore,
 ) -> Dict[str, Any]:
     try:
-        agent_id = build_sample_agent_id(sample_id, args.agent_id_mode)
-        user_id = build_sample_user_id(sample_id, args.user_id_mode)
+        agent_id = build_sample_agent_id(sample_id)
+        user_id = build_sample_user_id(sample_id)
         result = await viking_ingest(
             messages,
             args.openviking_url,
@@ -496,9 +492,11 @@ async def finalize_deferred_session(
 
 async def run_import(args: argparse.Namespace) -> None:
     submit_parallel = _resolve_parallel(getattr(args, "submit_parallel", None), args.parallel)
-    wait_parallel = _resolve_parallel(getattr(args, "wait_parallel", None), args.parallel)
+    wait_parallel = _resolve_parallel(None, args.parallel)
+    sample_parallel = submit_parallel
     submit_semaphore = asyncio.Semaphore(submit_parallel)
     wait_semaphore = asyncio.Semaphore(wait_parallel)
+    sample_semaphore = asyncio.Semaphore(sample_parallel)
     session_range = parse_session_range(args.sessions) if args.sessions else None
     deferred_tasks: List[Dict[str, Any]] = []
 
@@ -522,8 +520,8 @@ async def run_import(args: argparse.Namespace) -> None:
 
     async def process_sample(item):
         sample_id = item["question_id"]
-        agent_id = build_sample_agent_id(sample_id, args.agent_id_mode)
-        user_id = build_sample_user_id(sample_id, args.user_id_mode)
+        agent_id = build_sample_agent_id(sample_id)
+        user_id = build_sample_user_id(sample_id)
         sessions = build_session_messages(item, session_range)
 
         print(f"\n=== Sample {sample_id} ===", file=sys.stderr)
@@ -600,10 +598,15 @@ async def run_import(args: argparse.Namespace) -> None:
                 }
                 write_error_record(record, args.error_log)
 
-    tasks = [asyncio.create_task(process_sample(item)) for item in samples]
+    async def process_sample_with_limit(item):
+        async with sample_semaphore:
+            await process_sample(item)
+
+    tasks = [asyncio.create_task(process_sample_with_limit(item)) for item in samples]
     print(
-        f"\n[INFO] Starting import with submit_parallel={submit_parallel}, "
-        f"wait_parallel={wait_parallel}, {len(tasks)} sample task(s) to process",
+        f"\n[INFO] Starting import with sample_parallel={sample_parallel}, "
+        f"submit_parallel={submit_parallel}, wait_parallel={wait_parallel}, "
+        f"{len(tasks)} sample task(s) to process",
         file=sys.stderr,
     )
     await asyncio.gather(*tasks, return_exceptions=True)
@@ -633,7 +636,7 @@ def main():
     parser = argparse.ArgumentParser(description="Import LongMemEval conversations into OpenViking")
     parser.add_argument(
         "--input",
-        default="/Users/bytedance/mempalace/data/longmemeval-data/longmemeval_s_cleaned.json",
+        default="data/longmemeval_s_cleaned.json",
         help="Path to LongMemEval JSON file",
     )
     parser.add_argument(
@@ -655,19 +658,13 @@ def main():
         "--parallel",
         type=int,
         default=5,
-        help="Shared default for submit/wait concurrency when dedicated flags are not set.",
+        help="Default concurrency for sample processing, task waiting, and submissions when --submit-parallel is not set.",
     )
     parser.add_argument(
         "--submit-parallel",
         type=int,
         default=None,
         help="Max concurrent session submissions across samples. Defaults to --parallel.",
-    )
-    parser.add_argument(
-        "--wait-parallel",
-        type=int,
-        default=None,
-        help="Max concurrent background task waiters. Defaults to --parallel.",
     )
     parser.add_argument(
         "--sample",
@@ -697,18 +694,6 @@ def main():
         choices=("immediate", "deferred"),
         default="deferred",
         help="When to wait for background commit tasks: immediate or deferred.",
-    )
-    parser.add_argument(
-        "--agent-id-mode",
-        choices=("shared", "per-sample"),
-        default="per-sample",
-        help="Whether all samples share one agent_id or each sample gets its own.",
-    )
-    parser.add_argument(
-        "--user-id-mode",
-        choices=("shared", "per-sample"),
-        default="per-sample",
-        help="Whether all samples share one user_id or each sample gets its own.",
     )
     args = parser.parse_args()
 

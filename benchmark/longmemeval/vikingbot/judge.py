@@ -3,10 +3,17 @@ import asyncio
 import csv
 import json
 import os
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
 from openai import AsyncAzureOpenAI, AsyncOpenAI
+
+try:
+    from benchmark.longmemeval.vikingbot.longmemeval_prompts import get_judge_prompt
+except ModuleNotFoundError:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from longmemeval_prompts import get_judge_prompt
 
 env_file = Path.home() / ".openviking_benchmark_env"
 load_dotenv(env_file)
@@ -15,47 +22,63 @@ load_dotenv(env_file)
 DEFAULT_AZURE_API_VERSION = "2025-01-01-preview"
 
 
+def parse_judge_verdict(content: str) -> bool | None:
+    stripped = content.strip()
+    if not stripped:
+        return None
+
+    start_idx = stripped.find("{")
+    end_idx = stripped.rfind("}")
+    if start_idx != -1 and end_idx != -1:
+        try:
+            result = json.loads(stripped[start_idx : end_idx + 1].strip())
+            label = str(result.get("is_correct", "")).strip().upper()
+            if label == "CORRECT":
+                return True
+            if label == "WRONG":
+                return False
+        except json.JSONDecodeError:
+            pass
+
+    for line in reversed([line.strip() for line in stripped.splitlines() if line.strip()]):
+        normalized = line.strip().strip(".。").lower()
+        if normalized == "yes":
+            return True
+        if normalized == "no":
+            return False
+    return None
+
+
 async def grade_answer(
-    llm_client, model: str, question: str, gold_answer: str, response: str
+    llm_client,
+    model: str,
+    question: str,
+    gold_answer: str,
+    response: str,
+    question_type: str = "",
+    question_id: str = "",
+    question_date: str = "",
 ) -> tuple[bool, str]:
-    system_prompt = """
-        You are an expert grader that determines if answers to questions match a gold standard answer
-        """
-
-    accuracy_prompt = f"""
-    Your task is to label an answer to a question as 'CORRECT' or 'WRONG'. You will be given:
-        (1) a question
-        (2) a gold answer
-        (3) a generated answer
-
-    Grade generously on semantic equivalence, especially for concise factual answers and dates.
-
-    Question: {question}
-    Gold answer: {gold_answer}
-    Generated answer: {response}
-
-    First, provide a short explanation, then finish with CORRECT or WRONG.
-    Respond with JSON only: {{"is_correct": "CORRECT" or "WRONG", "reasoning": "your explanation"}}
-    """
+    accuracy_prompt = get_judge_prompt(
+        question_type=question_type,
+        question_id=question_id,
+        question=question,
+        answer=gold_answer,
+        response=response,
+        question_date=question_date,
+    )
 
     try:
         resp = await llm_client.chat.completions.create(
             model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": accuracy_prompt},
-            ],
+            messages=[{"role": "user", "content": accuracy_prompt}],
             temperature=0,
             timeout=60,
         )
         content = resp.choices[0].message.content.strip()
-        start_idx = content.find("{")
-        end_idx = content.rfind("}")
-        if start_idx != -1 and end_idx != -1:
-            result = json.loads(content[start_idx : end_idx + 1].strip())
-            is_correct = result.get("is_correct", "WRONG").strip().upper() == "CORRECT"
-            reasoning = result.get("reasoning", "")
-            return is_correct, reasoning
+        verdict = parse_judge_verdict(content)
+        if verdict is not None:
+            return verdict, content
         return False, f"[PARSE ERROR] Invalid response: {content}"
     except Exception as e:
         return False, f"[API ERROR] {str(e)}"
@@ -133,7 +156,7 @@ async def main():
         help="Judge model name",
     )
     parser.add_argument(
-        "--parallel", type=int, default=5, help="Parallel request count, default: 5"
+        "--parallel", type=int, default=8, help="Parallel request count, default: 8"
     )
     parser.add_argument(
         "--force",
@@ -177,7 +200,14 @@ async def main():
         async with semaphore:
             row = rows[idx]
             is_correct, reasoning = await grade_answer(
-                client, args.model, row["question"], row["answer"], row["response"]
+                client,
+                args.model,
+                row["question"],
+                row["answer"],
+                row["response"],
+                question_type=row.get("question_type", ""),
+                question_id=row.get("sample_id", ""),
+                question_date=row.get("question_time", ""),
             )
             row["result"] = "CORRECT" if is_correct else "WRONG"
             row["reasoning"] = reasoning

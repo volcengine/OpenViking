@@ -2,15 +2,65 @@ import argparse
 import csv
 import hashlib
 import json
-import os
-import subprocess
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+from openviking_cli.client.sync_http import SyncHTTPClient
+
+try:
+    from benchmark.longmemeval.vikingbot.longmemeval_prompts import (
+        get_answer_generation_prompt,
+    )
+except ModuleNotFoundError:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from longmemeval_prompts import get_answer_generation_prompt
 
 
 LONGMEMEVAL_TIME_FORMAT = "%Y/%m/%d (%a) %H:%M"
+DEFAULT_SINGLE_SEARCH_CONTEXT_LIMIT = 30
+
+
+def get_token_encoding_name(model_name: str | None = None) -> str:
+    try:
+        import tiktoken
+
+        if model_name:
+            candidates = [model_name]
+            if "/" in model_name:
+                candidates.append(model_name.rsplit("/", 1)[-1])
+            for candidate in candidates:
+                try:
+                    return tiktoken.encoding_for_model(candidate).name
+                except KeyError:
+                    continue
+    except Exception:
+        pass
+
+    normalized = (model_name or "").lower()
+    if normalized.startswith(("gpt-4o", "gpt-5", "o1", "o3", "o4")):
+        return "o200k_base"
+    if normalized.startswith(("gpt-4", "gpt-3.5")):
+        return "cl100k_base"
+    return "approx_chars_div_4"
+
+
+def count_text_tokens(text: str, model_name: str | None = None) -> int:
+    encoding_name = get_token_encoding_name(model_name)
+    if encoding_name == "approx_chars_div_4":
+        return max(0, len(text or "") // 4)
+
+    try:
+        import tiktoken
+
+        encoding = tiktoken.get_encoding(encoding_name)
+        return len(encoding.encode(text or ""))
+    except Exception:
+        return max(0, len(text or "") // 4)
 
 
 def parse_longmemeval_datetime(date_str: str) -> datetime | None:
@@ -20,25 +70,19 @@ def parse_longmemeval_datetime(date_str: str) -> datetime | None:
         return None
 
 
-def build_sample_agent_id(sample_id: str | int, mode: str) -> str:
+def build_sample_agent_id(sample_id: str | int) -> str:
     """Return the agent_id used for one sample eval."""
-    if mode == "shared":
-        return "default"
     digest = hashlib.md5(str(sample_id).encode("utf-8")).hexdigest()[:12]
     return f"lm_{digest}"
 
 
-def build_sample_user_id(sample_id: str | int, mode: str) -> str:
+def build_sample_user_id(sample_id: str | int) -> str:
     """Return the user_id used for one sample eval."""
-    if mode == "shared":
-        return "default"
     digest = hashlib.md5(f"user:{sample_id}".encode("utf-8")).hexdigest()[:12]
     return f"lm_user_{digest}"
 
 
-def load_csv_qa(
-    input_path: str, count: int | None = None, default_time: str | None = None
-) -> list[dict]:
+def load_csv_qa(input_path: str, count: int | None = None) -> list[dict]:
     qa_list = []
     with open(input_path, "r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
@@ -49,8 +93,7 @@ def load_csv_qa(
                     "question": row.get("question", ""),
                     "answer": row.get("answer", ""),
                     "question_type": row.get("question_type", ""),
-                    "evidence": [],
-                    "question_time": default_time,
+                    "question_time": row.get("question_time", ""),
                 }
             )
     if count is not None:
@@ -62,10 +105,9 @@ def load_longmemeval_qa(
     input_path: str,
     sample_index: int | None = None,
     count: int | None = None,
-    default_time: str | None = None,
 ) -> list[dict]:
     if input_path.lower().endswith(".csv"):
-        return load_csv_qa(input_path, count, default_time)
+        return load_csv_qa(input_path, count)
 
     with open(input_path, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -80,14 +122,13 @@ def load_longmemeval_qa(
     qa_list = []
     for sample in samples:
         question_dt = parse_longmemeval_datetime(sample.get("question_date", ""))
-        question_time = question_dt.strftime("%Y-%m-%d") if question_dt else default_time
+        question_time = question_dt.strftime("%Y-%m-%d") if question_dt else ""
         qa_list.append(
             {
                 "sample_id": sample.get("question_id", ""),
                 "question": sample.get("question", ""),
                 "answer": sample.get("answer", ""),
                 "question_type": sample.get("question_type", ""),
-                "evidence": [],
                 "question_time": question_time,
             }
         )
@@ -97,79 +138,243 @@ def load_longmemeval_qa(
     return qa_list
 
 
-def build_vikingbot_chat_cmd(
-    question: str,
-    question_time: str | None = None,
-    sender_id: str | None = None,
-    session_id: str | None = None,
-) -> list[str]:
-    if question_time:
-        input_text = f"Current date: {question_time}. Answer the question directly: {question}"
-    else:
-        input_text = f"Answer the question directly: {question}"
-    cmd = ["vikingbot", "chat", "-m", input_text]
-    if sender_id:
-        cmd.extend(["--sender", sender_id])
-    if session_id:
-        cmd.extend(["--session", session_id])
-    cmd.append("-e")
-    return cmd
+def _iter_search_contexts(search_result: Any) -> list[Any]:
+    if search_result is None:
+        return []
+    if isinstance(search_result, list):
+        return search_result
+
+    contexts = []
+    for attr in ("memories", "resources", "skills"):
+        contexts.extend(getattr(search_result, attr, []) or [])
+    if contexts:
+        return contexts
+
+    try:
+        return list(search_result)
+    except TypeError:
+        return []
 
 
-def run_vikingbot_chat(
+def select_single_search_contexts(
+    search_result: Any,
+    limit: int = DEFAULT_SINGLE_SEARCH_CONTEXT_LIMIT,
+) -> list[dict[str, Any]]:
+    selected = []
+    for raw_rank, context in enumerate(_iter_search_contexts(search_result), start=1):
+        uri = getattr(context, "uri", "")
+        if not uri:
+            continue
+        selected.append(
+            {
+                "raw_rank": raw_rank,
+                "uri": uri,
+                "score": getattr(context, "score", 0.0),
+                "abstract": getattr(context, "abstract", ""),
+            }
+        )
+        if len(selected) >= limit:
+            break
+    return selected
+
+
+def build_single_search_context_prompt(
     question: str,
+    question_type: str | None,
+    question_time: str | None,
+    contexts: list[dict[str, Any]],
+) -> str:
+    search_results = build_single_search_prompt_search_results(contexts)
+
+    prompt = get_answer_generation_prompt(
+        question=question,
+        search_results=search_results,
+        question_date=question_time or "unknown",
+    )
+    if question_type:
+        return f"Question Type: {question_type}\n\n{prompt}"
+    return prompt
+
+
+def build_single_search_prompt_search_results(contexts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "memory": str(context.get("content", "")),
+            "score": context.get("score", 0.0),
+            "raw_rank": context.get("raw_rank"),
+        }
+        for context in contexts
+    ]
+
+
+def count_retrieved_memory_content_tokens(
+    contexts: list[dict[str, Any]],
+    model_name: str | None = None,
+) -> tuple[int, int, str]:
+    memory_texts = [str(context.get("content", "")) for context in contexts]
+    tokenizer = get_token_encoding_name(model_name)
+    return (
+        sum(count_text_tokens(memory_text, model_name) for memory_text in memory_texts),
+        sum(len(memory_text) for memory_text in memory_texts),
+        tokenizer,
+    )
+
+
+def build_single_search_vlm() -> Any:
+    from openviking.models.vlm import VLMFactory
+    from openviking_cli.utils.config import get_openviking_config
+
+    vlm_config = get_openviking_config().vlm
+    return VLMFactory.create(vlm_config._build_vlm_config_dict())
+
+
+def _response_text(response: Any) -> str:
+    if hasattr(response, "content"):
+        return str(response.content or "").strip()
+    return str(response).strip()
+
+
+def _token_usage_from_vlm(vlm: Any, response: Any = None) -> dict[str, int]:
+    usage = getattr(response, "usage", None)
+    if isinstance(usage, dict) and usage:
+        return {
+            "prompt_tokens": int(usage.get("prompt_tokens", 0) or 0),
+            "completion_tokens": int(usage.get("completion_tokens", 0) or 0),
+            "total_tokens": int(usage.get("total_tokens", 0) or 0),
+        }
+
+    if hasattr(vlm, "get_token_usage_summary"):
+        summary = vlm.get_token_usage_summary()
+        return {
+            "prompt_tokens": int(summary.get("total_prompt_tokens", 0) or 0),
+            "completion_tokens": int(summary.get("total_completion_tokens", 0) or 0),
+            "total_tokens": int(summary.get("total_tokens", 0) or 0),
+        }
+
+    return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+
+def run_single_search_context_answer(
+    question: str,
+    question_type: str | None = None,
     question_time: str | None = None,
     sender_id: str | None = None,
     session_id: str | None = None,
     timeout: int = 300,
-) -> tuple[str, dict, float, int, list]:
-    cmd = build_vikingbot_chat_cmd(
-        question=question,
-        question_time=question_time,
-        sender_id=sender_id,
-        session_id=session_id,
-    )
+    single_search_context_limit: int = DEFAULT_SINGLE_SEARCH_CONTEXT_LIMIT,
+    debug_print_model_input: bool = False,
+) -> tuple[str, dict, float, int, list, list]:
     start_time = time.time()
+    client = SyncHTTPClient(
+        agent_id=session_id,
+        user=sender_id,
+        timeout=timeout,
+    )
+    attempted_read_uris: list[str] = []
+    read_success_uris: list[str] = []
+
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=timeout)
-        elapsed = time.time() - start_time
-        output = result.stdout.strip()
-        try:
-            resp_json = json.loads(output, strict=False)
-            response = resp_json.get("text", "")
-            token_usage = resp_json.get(
-                "token_usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        client.initialize()
+        target_uri = f"viking://user/{sender_id or 'default'}/memories"
+        search_result = client.find(
+            question,
+            target_uri=target_uri,
+            limit=100,
+        )
+        contexts = select_single_search_contexts(
+            search_result,
+            limit=single_search_context_limit,
+        )
+        search_result_uris = [context["uri"] for context in contexts]
+
+        for context in contexts:
+            uri = context["uri"]
+            attempted_read_uris.append(uri)
+            try:
+                context["content"] = client.read(
+                    uri,
+                    offset=0,
+                    limit=-1,
+                )
+                read_success_uris.append(uri)
+            except Exception as exc:
+                context["content"] = f"[READ ERROR] {exc}"
+
+        prompt = build_single_search_context_prompt(
+            question=question,
+            question_type=question_type,
+            question_time=question_time,
+            contexts=contexts,
+        )
+        vlm = build_single_search_vlm()
+        memory_prompt_tokens, memory_chars, memory_tokenizer = (
+            count_retrieved_memory_content_tokens(
+                contexts,
+                model_name=getattr(vlm, "model", None),
             )
-            time_cost = resp_json.get("time_cost", elapsed)
-            iteration = resp_json.get("iteration", 0)
-            tools_used_names = resp_json.get("tools_used_names", [])
-        except (json.JSONDecodeError, ValueError):
-            response = f"[PARSE ERROR] {output}"
-            token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-            time_cost = elapsed
-            iteration = 0
-            tools_used_names = []
-        return response, token_usage, time_cost, iteration, tools_used_names
-    except subprocess.CalledProcessError as e:
-        return (
-            f"[CMD ERROR] {e.stderr}",
-            {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-            0,
-            0,
-            [],
         )
-    except subprocess.TimeoutExpired:
+        if debug_print_model_input:
+            print("\n===== SINGLE SEARCH MODEL INPUT BEGIN =====", flush=True)
+            print(prompt, flush=True)
+            print("===== SINGLE SEARCH MODEL INPUT END =====", flush=True)
+            print("===== SINGLE SEARCH DEBUG =====", flush=True)
+            print(f"search_result_count: {len(search_result_uris)}", flush=True)
+            print(f"read_success_count: {len(read_success_uris)}", flush=True)
+            print(f"memory_content_tokens: {memory_prompt_tokens}", flush=True)
+            print(f"memory_content_chars: {memory_chars}", flush=True)
+            print(f"memory_tokenizer: {memory_tokenizer}", flush=True)
+            print("retrieved_uris:", flush=True)
+            for uri in search_result_uris:
+                print(f"  {uri}", flush=True)
+            print("===== SINGLE SEARCH DEBUG END =====", flush=True)
+        raw_response = vlm.get_completion(prompt)
+        response = _response_text(raw_response)
+        token_usage = _token_usage_from_vlm(vlm, raw_response)
+        token_usage["memory_prompt_tokens"] = memory_prompt_tokens
+        token_usage["memory_chars"] = memory_chars
+        token_usage["memory_tokenizer"] = memory_tokenizer
+        if debug_print_model_input:
+            print("===== SINGLE SEARCH TOKEN USAGE =====", flush=True)
+            print(json.dumps(token_usage, ensure_ascii=False, indent=2), flush=True)
+            print("===== SINGLE SEARCH TOKEN USAGE END =====", flush=True)
+        elapsed = time.time() - start_time
         return (
-            "[TIMEOUT]",
-            {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-            0,
-            0,
-            [],
+            response,
+            token_usage,
+            elapsed,
+            1,
+            ["single_search", "read", "context_answer"],
+            [
+                {
+                    "iteration": 1,
+                    "search_result_uris": search_result_uris,
+                    "attempted_read_uris": attempted_read_uris,
+                    "read_success_uris": read_success_uris,
+                }
+            ],
         )
-
-
-def load_processed_questions(output_path: str) -> set:
-    return set()
+    except Exception as exc:
+        elapsed = time.time() - start_time
+        return (
+            f"[SINGLE SEARCH ERROR] {exc}",
+            {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            elapsed,
+            1,
+            ["single_search", "read", "context_answer"],
+            [
+                {
+                    "iteration": 1,
+                    "search_result_uris": [],
+                    "attempted_read_uris": attempted_read_uris,
+                    "read_success_uris": read_success_uris,
+                }
+            ],
+        )
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
 
 
 def main():
@@ -177,7 +382,7 @@ def main():
     parser.add_argument(
         "input",
         nargs="?",
-        default="/Users/bytedance/mempalace/data/longmemeval-data/longmemeval_s_cleaned.json",
+        default="data/longmemeval_s_cleaned.json",
         help="Path to LongMemEval JSON file",
     )
     parser.add_argument(
@@ -201,18 +406,35 @@ def main():
         "--timeout",
         type=int,
         default=300,
-        help="Per-question timeout in seconds for the vikingbot subprocess, default: 300",
+        help="Per-question OpenViking client timeout in seconds, default: 300",
+    )
+    parser.add_argument(
+        "--answer-mode",
+        choices=["single-search-context"],
+        default="single-search-context",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--debug-print-model-input",
+        action="store_true",
+        help="Print the full model input prompt and retrieved memory token stats.",
+    )
+    parser.add_argument(
+        "--single-search-context-limit",
+        type=int,
+        default=DEFAULT_SINGLE_SEARCH_CONTEXT_LIMIT,
+        help=(
+            "Number of memory files to read into the single-search-context prompt, "
+            f"default: {DEFAULT_SINGLE_SEARCH_CONTEXT_LIMIT}"
+        ),
     )
     args = parser.parse_args()
 
-    os.makedirs(os.path.dirname(args.output), exist_ok=True)
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     qa_list = load_longmemeval_qa(args.input, args.sample, args.count)
     total = len(qa_list)
-    processed_questions = load_processed_questions(args.output)
-    remaining = total - len(processed_questions)
-    print(
-        f"Loaded {total} QA questions, {len(processed_questions)} already processed, {remaining} remaining"
-    )
+    print(f"Loaded {total} QA questions")
 
     fieldnames = [
         "sample_id",
@@ -225,29 +447,18 @@ def main():
         "time_cost",
         "iteration",
         "tools_used_names",
+        "retrieved_uris_by_iteration",
         "result",
     ]
-    file_exists = os.path.exists(args.output)
-    if file_exists:
-        with open(args.output, "r", encoding="utf-8", newline="") as f:
-            reader = csv.reader(f)
-            first_row = next(reader)
-            if "question_time" not in first_row or "question_type" not in first_row:
-                os.remove(args.output)
-                file_exists = False
-
     write_lock = threading.Lock()
-    with open(args.output, "a+", encoding="utf-8", newline="") as f:
+    with open(output_path, "w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
-        if not file_exists:
-            writer.writeheader()
-            f.flush()
+        writer.writeheader()
+        f.flush()
 
-        processed_count = len(processed_questions)
-        remaining_qa = [qa for qa in qa_list if qa["question"] not in processed_questions]
-        remaining_count = len(remaining_qa)
+        processed_count = 0
         print(
-            f"Starting evaluation with {args.threads} concurrent threads, {remaining_count} questions to process"
+            f"Starting evaluation with {args.threads} concurrent threads, {total} questions to process"
         )
 
         def process_qa(qa_item, idx, total_count):
@@ -260,14 +471,24 @@ def main():
             if question_time:
                 print(f"  [time context: {question_time}]")
 
-            sender_id = build_sample_user_id(sample_id, "per-sample")
-            session_id = build_sample_agent_id(sample_id, "per-sample")
-            response, token_usage, time_cost, iteration, tools_used_names = run_vikingbot_chat(
+            sender_id = build_sample_user_id(sample_id)
+            session_id = build_sample_agent_id(sample_id)
+            (
+                response,
+                token_usage,
+                time_cost,
+                iteration,
+                tools_used_names,
+                retrieved_uris_by_iteration,
+            ) = run_single_search_context_answer(
                 question,
+                qa_item.get("question_type"),
                 question_time,
                 sender_id=sender_id,
                 session_id=session_id,
                 timeout=args.timeout,
+                single_search_context_limit=args.single_search_context_limit,
+                debug_print_model_input=args.debug_print_model_input,
             )
             row = {
                 "sample_id": sample_id,
@@ -280,21 +501,23 @@ def main():
                 "time_cost": round(time_cost, 2),
                 "iteration": iteration,
                 "tools_used_names": json.dumps(tools_used_names, ensure_ascii=False),
+                "retrieved_uris_by_iteration": json.dumps(
+                    retrieved_uris_by_iteration, ensure_ascii=False
+                ),
                 "result": "",
             }
 
             with write_lock:
                 writer.writerow(row)
                 f.flush()
-                processed_questions.add(question)
                 processed_count += 1
                 print(f"Completed {processed_count}/{total}, time cost: {round(time_cost, 2)}s")
             return True
 
         with ThreadPoolExecutor(max_workers=args.threads) as executor:
             futures = []
-            for idx, qa_item in enumerate(remaining_qa, 1):
-                futures.append(executor.submit(process_qa, qa_item, idx, remaining_count))
+            for idx, qa_item in enumerate(qa_list, 1):
+                futures.append(executor.submit(process_qa, qa_item, idx, total))
 
             for future in as_completed(futures):
                 try:
@@ -302,7 +525,7 @@ def main():
                 except Exception as e:
                     print(f"Error processing QA item: {str(e)}")
 
-    print(f"Evaluation completed, results saved to {args.output}")
+    print(f"Evaluation completed, results saved to {output_path}")
 
 
 if __name__ == "__main__":

@@ -250,19 +250,23 @@ class SchemaModelGenerator:
         for mt in enabled_memory_types:
             flat_model = self.create_flat_data_model(mt)
             is_single = self._is_single_value_schema(mt)
+            field_description = f"{mt.memory_type} memory (add or edit)"
+            if mt.description:
+                field_description = f"{field_description}\n\n{mt.description}"
 
             if is_single:
                 # Single value: Optional[FlatModel] = None
                 field_definitions[mt.memory_type] = (
                     Optional[flat_model],  # type: ignore
-                    Field(None, description=f"{mt.memory_type} memory (add or edit)"),
+                    Field(None, description=field_description),
                 )
             else:
                 # List: List[FlatModel] = []
                 field_definitions[mt.memory_type] = (
                     List[flat_model],  # type: ignore
                     Field(
-                        default_factory=list, description=f"{mt.memory_type} memories (add or edit)"
+                        default_factory=list,
+                        description=field_description,
                     ),
                 )
 
