@@ -51,7 +51,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Create application state
-    let state = AppState { fs: fs.clone() };
+    let state = AppState {
+        fs: fs.clone(),
+        mount_api_key: config.api_key.clone(),
+    };
 
     // Create router
     let app = create_router(state, config.enable_cors);
@@ -73,10 +76,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("  POST   /api/v1/mount");
     tracing::info!("  POST   /api/v1/unmount");
     tracing::info!("");
-    tracing::info!("Example: Mount MemFS");
-    tracing::info!("  curl -X POST http://{}/api/v1/mount \\", addr);
-    tracing::info!("    -H 'Content-Type: application/json' \\");
-    tracing::info!("    -d '{{\"plugin\": \"memfs\", \"path\": \"/memfs\"}}'");
+    if config.api_key.is_empty() {
+        tracing::warn!("Mount-management endpoints are disabled until RAGFS_API_KEY (or api_key in config) is set");
+    } else {
+        tracing::info!("Mount-management endpoints require X-API-Key authentication");
+        tracing::info!("Example: Mount MemFS");
+        tracing::info!("  curl -X POST http://{}/api/v1/mount \\", addr);
+        tracing::info!("    -H 'X-API-Key: <RAGFS_API_KEY>' \\");
+        tracing::info!("    -H 'Content-Type: application/json' \\");
+        tracing::info!("    -d '{{\"plugin\": \"memfs\", \"path\": \"/memfs\"}}'");
+    }
 
     // Create TCP listener
     let listener = tokio::net::TcpListener::bind(addr).await?;

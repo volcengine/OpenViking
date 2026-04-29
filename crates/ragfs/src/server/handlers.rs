@@ -4,7 +4,7 @@
 
 use axum::{
     extract::{Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -18,6 +18,8 @@ use crate::core::{FileSystem, MountableFS, PluginConfig, WriteFlag};
 pub struct AppState {
     /// The mounted filesystem
     pub fs: Arc<MountableFS>,
+    /// API key required for mount-management endpoints
+    pub mount_api_key: String,
 }
 
 /// Standard API response
@@ -108,6 +110,59 @@ pub struct MountInfo {
     pub path: String,
     /// Plugin name
     pub plugin: String,
+}
+
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    let a_bytes = a.as_bytes();
+    let b_bytes = b.as_bytes();
+    if a_bytes.len() != b_bytes.len() {
+        return false;
+    }
+
+    let mut diff = 0u8;
+    for (x, y) in a_bytes.iter().zip(b_bytes.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+fn authorize_mount_management(headers: &HeaderMap, state: &AppState) -> Option<Response> {
+    if state.mount_api_key.is_empty() {
+        return Some(
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ApiResponse::<()>::error(
+                    "RAGFS mount-management API key is not configured",
+                )),
+            )
+                .into_response(),
+        );
+    }
+
+    let supplied = match headers.get("X-API-Key").and_then(|v| v.to_str().ok()) {
+        Some(value) if !value.is_empty() => value,
+        _ => {
+            return Some(
+                (
+                    StatusCode::UNAUTHORIZED,
+                    Json(ApiResponse::<()>::error("X-API-Key header required")),
+                )
+                    .into_response(),
+            )
+        }
+    };
+
+    if !constant_time_eq(supplied, &state.mount_api_key) {
+        return Some(
+            (
+                StatusCode::FORBIDDEN,
+                Json(ApiResponse::<()>::error("Invalid API key")),
+            )
+                .into_response(),
+        );
+    }
+
+    None
 }
 
 // ============================================================================
@@ -257,7 +312,11 @@ pub async fn create_directory(
 // ============================================================================
 
 /// GET /api/v1/mounts - List all mounts
-pub async fn list_mounts(State(state): State<AppState>) -> Response {
+pub async fn list_mounts(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Some(response) = authorize_mount_management(&headers, &state) {
+        return response;
+    }
+
     let mounts = state.fs.list_mounts().await;
     let mount_infos: Vec<MountInfo> = mounts
         .into_iter()
@@ -270,8 +329,13 @@ pub async fn list_mounts(State(state): State<AppState>) -> Response {
 /// POST /api/v1/mount - Mount a filesystem
 pub async fn mount_filesystem(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<MountRequest>,
 ) -> Response {
+    if let Some(response) = authorize_mount_management(&headers, &state) {
+        return response;
+    }
+
     // Convert JSON params to ConfigValue
     let params = req
         .params
@@ -326,8 +390,13 @@ pub async fn mount_filesystem(
 /// POST /api/v1/unmount - Unmount a filesystem
 pub async fn unmount_filesystem(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<UnmountRequest>,
 ) -> Response {
+    if let Some(response) = authorize_mount_management(&headers, &state) {
+        return response;
+    }
+
     match state.fs.unmount(&req.path).await {
         Ok(_) => (
             StatusCode::OK,

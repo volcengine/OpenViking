@@ -18,6 +18,9 @@ pub struct ServerConfig {
 
     /// Enable CORS
     pub enable_cors: bool,
+
+    /// API key required for mount-management endpoints
+    pub api_key: String,
 }
 
 impl Default for ServerConfig {
@@ -26,6 +29,7 @@ impl Default for ServerConfig {
             address: "0.0.0.0:8080".to_string(),
             log_level: "info".to_string(),
             enable_cors: true,
+            api_key: String::new(),
         }
     }
 }
@@ -62,6 +66,10 @@ pub struct Args {
     /// Enable CORS
     #[arg(long, default_value = "true", env = "RAGFS_ENABLE_CORS")]
     pub enable_cors: bool,
+
+    /// API key required for mount-management endpoints
+    #[arg(long, default_value = "", env = "RAGFS_API_KEY")]
+    pub api_key: String,
 }
 
 impl Args {
@@ -71,6 +79,7 @@ impl Args {
             address: self.address.clone(),
             log_level: self.log_level.clone(),
             enable_cors: self.enable_cors,
+            api_key: self.api_key.clone(),
         }
     }
 
@@ -106,6 +115,7 @@ mod tests {
             address: "127.0.0.1:3000".to_string(),
             log_level: "debug".to_string(),
             enable_cors: false,
+            api_key: String::new(),
         };
 
         let addr = config.socket_addr().unwrap();
@@ -118,6 +128,7 @@ mod tests {
             address: "invalid".to_string(),
             log_level: "info".to_string(),
             enable_cors: true,
+            api_key: String::new(),
         };
 
         assert!(config.socket_addr().is_err());
