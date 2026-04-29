@@ -70,7 +70,7 @@ add_skill
 
 1. **抽取结果来源**：模型返回 JSON，读取 `values` 字段作为隐私键值。  
 2. **内容替换**：原文中命中的敏感片段会替换为占位符：
-   - <code v-pre>{{ov_privacy:skill:{skill_name}:{field_name}}}</code>
+   - ``{{ov_privacy:skill:{skill_name}:{field_name}}}``
 3. **保留块映射**：会同时记录：
    - `original_content_blocks`
    - `replacement_content_blocks`
