@@ -37,9 +37,9 @@ def _wm_debug(msg: str) -> None:
     background-task stdout capture. Best-effort, never raises."""
     try:
         from pathlib import Path as _P
-        log_path = _P(r"E:\work_memory\log")
-        log_path.mkdir(parents=True, exist_ok=True)
-        with (log_path / "wm_debug.log").open("a", encoding="utf-8") as f:
+        log_dir = _P(get_openviking_config().storage.workspace) / "log"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with (log_dir / "wm_debug.log").open("a", encoding="utf-8") as f:
             import time as _t
             f.write(f"{_t.strftime('%Y-%m-%d %H:%M:%S')} {msg}\n")
     except Exception:
@@ -557,6 +557,7 @@ class Session:
 
         self._save_tool_result(tool_id, msg, output, status)
         self._update_message_in_jsonl()
+        self._rebuild_pending_tokens()
 
     def commit(self, keep_recent_count: int = 0) -> Dict[str, Any]:
         """Sync wrapper for commit_async()."""
@@ -1464,13 +1465,21 @@ class Session:
                 f"**Overview**: {turn_count} turns, {len(messages)} messages"
             )
 
-        # -------- Branch 1: no prior WM -> full creation --------
-        if not latest_archive_overview:
-            _wm_debug(f"branch=CREATE")
+        # -------- Detect WM v2 format --------
+        _is_wm_v2 = latest_archive_overview and any(
+            f"## {s}" in latest_archive_overview for s in WM_SEVEN_SECTIONS
+        )
+
+        # -------- Branch 1: no prior WM (or legacy format) -> full creation --------
+        if not latest_archive_overview or not _is_wm_v2:
+            _wm_debug(
+                f"branch=CREATE (prior={'legacy' if latest_archive_overview else 'none'} "
+                f"{len(latest_archive_overview or '')}B)"
+            )
             try:
                 prompt = render_prompt(
                     "compression.ov_wm_v2",
-                    {"messages": formatted, "latest_archive_overview": ""},
+                    {"messages": formatted, "latest_archive_overview": latest_archive_overview or ""},
                 )
                 return await vlm.get_completion_async(prompt)
             except Exception as e:
