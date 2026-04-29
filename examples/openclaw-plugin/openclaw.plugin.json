@@ -4,30 +4,15 @@
   "kind": "context-engine",
   "description": "OpenClaw context-engine plugin for memory management — powered by OpenViking",
   "uiHints": {
-    "mode": {
-      "label": "Mode",
-      "help": "local = plugin starts OpenViking (like Claude Code); remote = use existing HTTP server"
-    },
-    "configPath": {
-      "label": "Config path (local)",
-      "placeholder": "~/.openviking/ov.conf",
-      "help": "Path to ov.conf when mode is local"
-    },
-    "port": {
-      "label": "Port (local)",
-      "placeholder": "1933",
-      "help": "Port for local OpenViking server",
-      "advanced": true
-    },
     "baseUrl": {
-      "label": "OpenViking Base URL (remote)",
+      "label": "OpenViking Base URL",
       "placeholder": "http://127.0.0.1:1933",
       "help": "HTTP URL when mode is remote (or ${OPENVIKING_BASE_URL})"
     },
-    "agentId": {
-      "label": "Agent ID",
-      "placeholder": "random unique ID",
-      "help": "OpenViking agent identity. default: follow OpenClaw ctx.agentId. Non-default: use `<this>_<OpenClaw ctx.agentId>` (sanitized to letters/digits/_/-), so the configured value acts as a prefix."
+    "agent_prefix": {
+      "label": "Agent Prefix",
+      "placeholder": "auto-generated",
+      "help": "OpenViking agent prefix. default: follow OpenClaw ctx.agentId. Non-default: use `<prefix>_<OpenClaw ctx.agentId>` (sanitized to letters/digits/_/-), so the configured value acts as a prefix."
     },
     "apiKey": {
       "label": "OpenViking API Key",
@@ -152,7 +137,7 @@
     },
     "logFindRequests": {
       "label": "Log find requests",
-      "help": "Log tenant routing: /search/find + session messages/commit (X-OpenViking-*; not apiKey). Or set env OPENVIKING_LOG_ROUTING=1 or OPENVIKING_DEBUG=1. Local mode: subprocess stderr at info when enabled.",
+      "help": "Log tenant routing: /search/find + session messages/commit (X-OpenViking-*; not apiKey). Or set env OPENVIKING_LOG_ROUTING=1 or OPENVIKING_DEBUG=1.",
       "advanced": true
     }
   },
@@ -160,20 +145,15 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "mode": {
-        "type": "string"
-      },
-      "configPath": {
-        "type": "string"
-      },
-      "port": {
-        "type": "number"
-      },
       "baseUrl": {
         "type": "string"
       },
-      "agentId": {
+      "agent_prefix": {
         "type": "string"
+      },
+      "agentId": {
+        "type": "string",
+        "description": "Deprecated: use agent_prefix instead"
       },
       "serverAuthMode": {
         "type": "string",

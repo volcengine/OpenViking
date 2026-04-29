@@ -38,7 +38,7 @@ description: temp uploaded skill
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
-    assert body["result"]["uri"].startswith("viking://agent/skills/")
+    assert body["result"]["uri"].startswith("viking://agent/default/skills/")
 
 
 async def test_add_skill_rejects_direct_local_path(client: httpx.AsyncClient):
@@ -76,7 +76,7 @@ description: inline
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
-    assert body["result"]["uri"].startswith("viking://agent/skills/")
+    assert body["result"]["uri"].startswith("viking://agent/default/skills/")
 
 
 def _build_ovpack_bytes() -> bytes:

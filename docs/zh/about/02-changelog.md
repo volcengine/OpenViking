@@ -568,7 +568,7 @@ v0.3.10 重点增强了 VLM provider、OpenClaw 插件生态、VikingDB 数据�
 ## What's Changed
 * docs: use openviking-server to launch server
 * fix: Session.add_message() support parts parameter
-* feat: support GitHub tree/<ref> URL for code repository import
+* feat: support GitHub tree/&lt;ref&gt; URL for code repository import
 * fix: improve ISO datetime parsing
 * feat(pdf): extract bookmarks as markdown headings for hierarchical parsing
 * feat: add index control to add_resource and refactor embedding logic

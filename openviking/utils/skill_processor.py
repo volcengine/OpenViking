@@ -13,6 +13,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import yaml
+
 from openviking.core.context import Context, ContextType, Vectorize
 from openviking.core.mcp_converter import is_mcp_format, mcp_to_skill
 from openviking.core.namespace import agent_space_fragment, canonical_agent_root
@@ -91,12 +93,13 @@ class SkillProcessor:
         )
 
         skill_dict = await self._sanitize_skill_privacy(skill_dict, ctx)
+        skill_abstract = self._build_skill_abstract(skill_dict)
 
         context = Context(
             uri=f"{canonical_agent_root(ctx)}/skills/{skill_dict['name']}",
             parent_uri=f"{canonical_agent_root(ctx)}/skills",
             is_leaf=False,
-            abstract=skill_dict.get("description", ""),
+            abstract=skill_abstract,
             context_type=ContextType.SKILL.value,
             user=ctx.user,
             account_id=ctx.account_id,
@@ -118,13 +121,14 @@ class SkillProcessor:
             round((time.perf_counter() - overview_start) * 1000, 3),
         )
 
-        skill_dir_uri = f"viking://agent/skills/{context.meta['name']}"
+        skill_dir_uri = context.uri
 
         write_start = time.perf_counter()
         await self._write_skill_content(
             viking_fs=viking_fs,
             skill_dict=skill_dict,
             skill_dir_uri=skill_dir_uri,
+            abstract=skill_abstract,
             overview=overview,
             ctx=ctx,
         )
@@ -210,6 +214,24 @@ class SkillProcessor:
 
         return skill_dict, auxiliary_files, base_path
 
+    @staticmethod
+    def _build_skill_abstract(skill_dict: Dict[str, Any]) -> str:
+        """Build the L0 skill abstract from normalized SKILL.md header metadata."""
+        abstract_meta: Dict[str, Any] = {
+            "name": skill_dict["name"],
+            "description": skill_dict.get("description", ""),
+        }
+
+        tags = skill_dict.get("tags")
+        if tags:
+            abstract_meta["tags"] = tags
+
+        allowed_tools = skill_dict.get("allowed_tools") or skill_dict.get("allowed-tools")
+        if allowed_tools:
+            abstract_meta["allowed_tools"] = allowed_tools
+
+        return yaml.safe_dump(abstract_meta, allow_unicode=True, sort_keys=False).strip()
+
     async def _sanitize_skill_privacy(
         self, skill_dict: Dict[str, Any], ctx: RequestContext
     ) -> Dict[str, Any]:
@@ -256,6 +278,7 @@ class SkillProcessor:
         viking_fs: VikingFS,
         skill_dict: Dict[str, Any],
         skill_dir_uri: str,
+        abstract: str,
         overview: str,
         ctx: RequestContext,
     ):
@@ -263,7 +286,7 @@ class SkillProcessor:
         await viking_fs.write_context(
             uri=skill_dir_uri,
             content=skill_dict.get("content", ""),
-            abstract=skill_dict.get("description", ""),
+            abstract=abstract,
             overview=overview,
             content_filename="SKILL.md",
             is_leaf=False,
@@ -301,7 +324,6 @@ class SkillProcessor:
     async def _index_skill(self, context: Context, skill_dir_uri: str):
         """Write skill directory vector via async queue as L0."""
         context.uri = skill_dir_uri
-        context.parent_uri = "viking://agent/skills"
         context.is_leaf = False
         context.level = 0
 

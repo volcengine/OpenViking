@@ -11,7 +11,7 @@ Choose the smallest action that matches the user's intent:
 | User intent | Command |
 | --- | --- |
 | Fresh install, latest | `npm install -g openclaw-openviking-setup-helper@latest && ov-install` |
-| Upgrade plugin + OpenViking to latest | `npm install -g openclaw-openviking-setup-helper@latest && ov-install -y` |
+| Upgrade plugin to latest | `npm install -g openclaw-openviking-setup-helper@latest && ov-install -y` |
 | Install or upgrade a specific release | `npm install -g openclaw-openviking-setup-helper@latest && ov-install -y --version 0.2.9` |
 | Upgrade only the plugin | `ov-install --update` |
 | Show installed versions | `ov-install --current-version` |
@@ -37,14 +37,12 @@ ls -d ~/.openclaw* 2>/dev/null
 Verify:
 
 ```bash
-python3 --version
 node -v
 openclaw --version
 ```
 
 Requirements:
 
-- Python >= 3.10
 - Node.js >= 22
 - OpenClaw >= 2026.3.7
 
@@ -66,7 +64,6 @@ This reports:
 
 - installed plugin release
 - requested plugin ref
-- installed OpenViking version
 - installation time
 
 ## Standard Workflows
@@ -83,12 +80,11 @@ ov-install
 Notes:
 
 - `ov-install` is interactive on first install.
-- In local mode, it generates `~/.openviking/ov.conf` and `~/.openclaw/openviking.env`.
-- In remote mode, it stores remote connection settings in `plugins.entries.openviking.config`.
+- It stores remote connection settings in `plugins.entries.openviking.config`.
 
 ### Latest Upgrade
 
-Use when the user wants both the plugin and OpenViking runtime upgraded:
+Use when the user wants the plugin upgraded:
 
 ```bash
 npm install -g openclaw-openviking-setup-helper@latest
@@ -98,7 +94,6 @@ ov-install -y
 Current behavior:
 
 - plugin version defaults to the latest repo tag
-- OpenViking runtime is upgraded through pip during install
 - `-y` runs the non-interactive path; verify the resulting plugin config after upgrade if the target instance has custom settings
 
 ### Release-Pinned Install or Upgrade
@@ -110,20 +105,15 @@ npm install -g openclaw-openviking-setup-helper@latest
 ov-install -y --version 0.2.9
 ```
 
-This is shorthand for:
-
-- plugin version `v0.2.9`
-- OpenViking version `0.2.9`
+This sets the plugin version to `v0.2.9`.
 
 ### Plugin-Only Upgrade
 
-Use only when the user explicitly wants to keep the current OpenViking runtime version unchanged:
+Use only when the user explicitly wants to upgrade just the plugin:
 
 ```bash
 ov-install --update
 ```
-
-Do not combine `--update` with `--version` or `--openviking-version`.
 
 ### Legacy Plugin Cleanup
 
@@ -169,7 +159,7 @@ Look for:
 openviking: registered context-engine
 ```
 
-OpenViking service log, default local path:
+OpenViking service log, default path:
 
 ```bash
 cat ~/.openviking/data/log/openviking.log
@@ -185,15 +175,7 @@ python examples/openclaw-plugin/health_check_tools/ov-healthcheck.py
 
 This injects a real conversation through Gateway and verifies from the OpenViking side that the session was captured, committed, archived, and had memories extracted. See [health_check_tools/HEALTHCHECK.md](./health_check_tools/HEALTHCHECK.md) for full details.
 
-### Start commands
-
-Local mode:
-
-```bash
-source ~/.openclaw/openviking.env && openclaw gateway restart
-```
-
-Remote mode:
+### Start command
 
 ```bash
 openclaw gateway restart
@@ -201,8 +183,6 @@ openclaw gateway restart
 
 ## Plugin Config Reference
 
-### Local Mode
-
 Check the whole config first:
 
 ```bash
@@ -211,33 +191,9 @@ openclaw config get plugins.entries.openviking.config
 
 Core OpenClaw plugin fields:
 
-- `mode=local`
-- `configPath`
-- `port`
-- `agentId`
-
-Service-side model configuration is not stored in the OpenClaw plugin config. It lives in `~/.openviking/ov.conf`, especially:
-
-- `vlm.api_key`
-- `vlm.model`
-- `embedding.dense.api_key`
-- `embedding.dense.model`
-- `server.port`
-
-### Remote Mode
-
-Check the whole config first:
-
-```bash
-openclaw config get plugins.entries.openviking.config
-```
-
-Core OpenClaw plugin fields:
-
-- `mode=remote`
 - `baseUrl`
 - `apiKey`
-- `agentId`
+- `agent_prefix`
 
 ## Uninstall
 
@@ -245,10 +201,4 @@ Plugin only:
 
 ```bash
 bash examples/openclaw-plugin/upgrade_scripts/uninstall-openclaw-plugin.sh
-```
-
-Plugin + local OpenViking runtime:
-
-```bash
-python3 -m pip uninstall openviking -y && rm -rf ~/.openviking
 ```

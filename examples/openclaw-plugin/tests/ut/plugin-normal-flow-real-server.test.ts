@@ -3,7 +3,6 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { localClientCache, localClientPendingPromises } from "../../client.js";
 import plugin from "../../index.js";
 
 type RequestRecord = {
@@ -44,8 +43,6 @@ describe("plugin normal flow with healthy backend", () => {
 
   beforeEach(async () => {
     requests = [];
-    localClientCache.clear();
-    localClientPendingPromises.clear();
 
     server = createServer(async (req, res) => {
       const method = req.method ?? "GET";
@@ -170,8 +167,6 @@ describe("plugin normal flow with healthy backend", () => {
   });
 
   afterEach(async () => {
-    localClientCache.clear();
-    localClientPendingPromises.clear();
     server.close();
     await once(server, "close");
   });

@@ -42,7 +42,6 @@ function makeEngine(
   contextResult: unknown,
   opts?: {
     cfgOverrides?: Record<string, unknown>;
-    quickPrecheck?: () => Promise<{ ok: true } | { ok: false; reason: string }>;
   },
 ) {
   const logger = makeLogger();
@@ -65,7 +64,6 @@ function makeEngine(
     cfg: localCfg,
     logger,
     getClient,
-    quickPrecheck: opts?.quickPrecheck,
     resolveAgentId,
   });
 
@@ -190,47 +188,6 @@ describe("context-engine assemble()", () => {
       messages: liveMessages,
       estimatedTokens: roughEstimate(liveMessages),
     });
-  });
-
-  it("falls back immediately when local precheck reports OpenViking unavailable", async () => {
-    const quickPrecheck = vi.fn().mockResolvedValue({
-      ok: false as const,
-      reason: "local process is not running",
-    });
-    const { engine, client, getClient, logger } = makeEngine(
-      {
-        latest_archive_overview: "unused",
-        pre_archive_abstracts: [],
-        messages: [],
-        estimatedTokens: 123,
-        stats: makeStats(),
-      },
-      {
-        cfgOverrides: {
-          mode: "local",
-          port: 1933,
-        },
-        quickPrecheck,
-      },
-    );
-
-    const liveMessages = [{ role: "user", content: "fallback live message" }];
-    const result = await engine.assemble({
-      sessionId: "session-local",
-      messages: liveMessages,
-      tokenBudget: 4096,
-    });
-
-    expect(quickPrecheck).toHaveBeenCalledTimes(1);
-    expect(getClient).not.toHaveBeenCalled();
-    expect(client.getSessionContext).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      messages: liveMessages,
-      estimatedTokens: roughEstimate(liveMessages),
-    });
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("assemble precheck failed"),
-    );
   });
 
   it("emits a non-error toolResult for a running tool (not a synthetic error)", async () => {

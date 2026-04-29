@@ -70,7 +70,7 @@ add_skill
 
 1. **Extraction source**: model returns JSON; `values` is used as privacy key-value pairs.  
 2. **Content replacement**: matched plaintext is replaced by placeholders:
-   - `{{ov_privacy:skill:{skill_name}:{field_name}}}`
+   - <code v-pre>{{ov_privacy:skill:{skill_name}:{field_name}}}</code>
 3. **Block mapping captured**:
    - `original_content_blocks`
    - `replacement_content_blocks`
