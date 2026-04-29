@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from openviking.retrieve.memory_lifecycle import hotness_score
 from openviking.server.identity import RequestContext
-from openviking.storage.expr import Eq
+from openviking.storage.expr import And, Eq
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -31,6 +31,21 @@ MEMORY_CATEGORIES = [
 # Hotness buckets
 COLD_THRESHOLD = 0.2
 HOT_THRESHOLD = 0.6
+
+
+def _category_from_uri(uri: str) -> Optional[str]:
+    """Determine memory category from its Viking URI.
+
+    Handles both directory-based memories (``/preferences/mem_*.md``)
+    and the single-file ``profile.md`` at the memories root.
+    """
+    for cat in MEMORY_CATEGORIES:
+        if cat == "profile":
+            if uri.endswith("/profile.md"):
+                return cat
+        elif f"/{cat}/" in uri:
+            return cat
+    return None
 
 
 class StatsAggregator:
@@ -63,7 +78,7 @@ class StatsAggregator:
         # Build category list to query
         categories = [category] if category else MEMORY_CATEGORIES
 
-        by_category: Dict[str, int] = {}
+        by_category: Dict[str, int] = {cat: 0 for cat in categories}
         hotness_dist = {"cold": 0, "warm": 0, "hot": 0}
         staleness = {
             "not_accessed_7d": 0,
@@ -71,49 +86,45 @@ class StatsAggregator:
             "oldest_memory_age_days": 0,
         }
 
-        # Fetch all memories once and group by category in Python
         all_records = await self._query_all_memories(ctx)
-        grouped: Dict[str, List[Dict[str, Any]]] = {cat: [] for cat in categories}
         for record in all_records:
             uri = record.get("uri", "")
-            for cat in categories:
-                if f"/{cat}/" in uri:
-                    grouped[cat].append(record)
-                    break
+            record_cat = _category_from_uri(uri)
 
-        for cat in categories:
-            records = grouped[cat]
-            by_category[cat] = len(records)
+            # Skip records not in the requested categories
+            if not (record_cat and record_cat in by_category):
+                continue
 
-            for record in records:
-                active_count = record.get("active_count", 0)
-                updated_at_raw = record.get("updated_at")
-                updated_at = _parse_datetime(updated_at_raw)
-                created_at_raw = record.get("created_at")
-                created_at = _parse_datetime(created_at_raw)
+            by_category[record_cat] += 1
 
-                # Hotness distribution
-                score = hotness_score(active_count, updated_at, now=now)
-                if score < COLD_THRESHOLD:
-                    hotness_dist["cold"] += 1
-                elif score > HOT_THRESHOLD:
-                    hotness_dist["hot"] += 1
-                else:
-                    hotness_dist["warm"] += 1
+            active_count = record.get("active_count", 0)
+            updated_at_raw = record.get("updated_at")
+            updated_at = _parse_datetime(updated_at_raw)
+            created_at_raw = record.get("created_at")
+            created_at = _parse_datetime(created_at_raw)
 
-                # Staleness: use updated_at for access tracking
-                if updated_at:
-                    age_days = (now - updated_at).total_seconds() / 86400.0
-                    if age_days > 7:
-                        staleness["not_accessed_7d"] += 1
-                    if age_days > 30:
-                        staleness["not_accessed_30d"] += 1
+            # Hotness distribution
+            score = hotness_score(active_count, updated_at, now=now)
+            if score < COLD_THRESHOLD:
+                hotness_dist["cold"] += 1
+            elif score > HOT_THRESHOLD:
+                hotness_dist["hot"] += 1
+            else:
+                hotness_dist["warm"] += 1
 
-                # Track oldest memory by created_at
-                if created_at:
-                    age = (now - created_at).total_seconds() / 86400.0
-                    if age > staleness["oldest_memory_age_days"]:
-                        staleness["oldest_memory_age_days"] = round(age, 1)
+            # Staleness: use updated_at for access tracking
+            if updated_at:
+                age_days = (now - updated_at).total_seconds() / 86400.0
+                if age_days > 7:
+                    staleness["not_accessed_7d"] += 1
+                if age_days > 30:
+                    staleness["not_accessed_30d"] += 1
+
+            # Track oldest memory by created_at
+            if created_at:
+                age = (now - created_at).total_seconds() / 86400.0
+                if age > staleness["oldest_memory_age_days"]:
+                    staleness["oldest_memory_age_days"] = round(age, 1)
 
         total_memories = sum(by_category.values())
 
@@ -156,14 +167,14 @@ class StatsAggregator:
         self,
         ctx: RequestContext,
     ) -> List[Dict[str, Any]]:
-        """Query all memory records in a single DB round-trip.
+        """Query all memory records from the vector index.
 
-        Uses the context_type="memory" filter. Callers group by category
-        in Python to avoid N+1 queries.
+        Filters to ``level=2`` so only actual memory records are returned,
+        excluding directory-level abstract/overview metadata.
         """
         try:
             return await self._vikingdb.query(
-                filter=Eq("context_type", "memory"),
+                filter=And([Eq("context_type", "memory"), Eq("level", 2)]),
                 limit=10000,
                 output_fields=[
                     "uri",
