@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from openviking.core.context import Context
-from openviking.message import Message
+from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.session.compressor import SessionCompressor
 from openviking.session.memory_deduplicator import (
@@ -27,6 +27,12 @@ from openviking_cli.session.user_id import UserIdentifier
 from tests.utils.mock_context import make_test_ctx
 
 ctx = make_test_ctx()
+
+
+@pytest.fixture
+def client():
+    """This unit test module does not need the session package's real client fixture."""
+    return None
 
 
 class _DummyVikingDB:
@@ -139,6 +145,15 @@ class TestMemoryDeduplicatorPayload:
 
         assert decision == DedupDecision.SKIP
         assert actions == []
+
+    @pytest.mark.asyncio
+    async def test_strict_dedup_raises_when_vector_search_fails(self):
+        vikingdb = MagicMock()
+        vikingdb.search_similar_memories = AsyncMock(side_effect=RuntimeError("vector down"))
+        dedup = _make_dedup(vikingdb=vikingdb, embedder=_DummyEmbedder())
+
+        with pytest.raises(RuntimeError, match="Memory dedup vector search failed"):
+            await dedup.deduplicate(_make_candidate(), _make_ctx(), strict_errors=True)
 
     def test_cross_facet_delete_actions_are_kept(self):
         dedup = MemoryDeduplicator(vikingdb=_DummyVikingDB())
@@ -569,6 +584,40 @@ class TestSessionCompressorDedupActions:
         fs.rm.assert_not_called()
         compressor.extractor.create_memory.assert_awaited_once()
 
+    async def test_created_memory_is_rolled_back_when_indexing_fails(self):
+        candidate = _make_candidate()
+        new_memory = _make_existing("created.md")
+
+        compressor = _make_compressor(vikingdb=MagicMock(), embedder=_DummyEmbedder())
+        compressor.extractor.extract = AsyncMock(return_value=[candidate])
+        compressor.extractor.create_memory = AsyncMock(return_value=new_memory)
+        compressor.deduplicator.deduplicate = AsyncMock(
+            return_value=DedupResult(
+                decision=DedupDecision.CREATE,
+                candidate=candidate,
+                similar_memories=[],
+                actions=[],
+            )
+        )
+        compressor._index_memory = AsyncMock(side_effect=RuntimeError("enqueue failed"))
+        compressor._rollback_created_memory = AsyncMock()
+        request_ctx = _make_ctx()
+
+        with (
+            patch("openviking.session.compressor.get_viking_fs", return_value=MagicMock()),
+            pytest.raises(RuntimeError, match="enqueue failed"),
+        ):
+            await compressor.extract_long_term_memories(
+                [Message(id="msg1", role="user", parts=[TextPart("test message")])],
+                user=_make_user(),
+                session_id="session_test",
+                ctx=request_ctx,
+            )
+
+        compressor._rollback_created_memory.assert_awaited_once_with(
+            new_memory, request_ctx, chunk_uris=[]
+        )
+
     async def test_create_with_merge_is_executed_as_none(self):
         candidate = _make_candidate()
         target = _make_existing("merge_target.md")
@@ -744,9 +793,10 @@ class TestSessionCompressorDedupActions:
 
         call_count = 0
 
-        async def _deduplicate(candidate, ctx, *, batch_memories=None):
+        async def _deduplicate(candidate, ctx, *, batch_memories=None, strict_errors=False):
             nonlocal call_count
             call_count += 1
+            assert strict_errors is False
             if call_count == 1:
                 assert batch_memories is None or len(batch_memories) == 0
                 return DedupResult(

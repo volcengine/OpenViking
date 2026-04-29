@@ -734,8 +734,6 @@ class Session:
             )
             logger.info(f"Session {self.session_id} memory extraction completed")
         except Exception as e:
-            if redo_task_id:
-                get_lock_manager().redo_log.mark_done(redo_task_id)
             await self._write_failed_marker(
                 archive_uri,
                 stage="memory_extraction",
