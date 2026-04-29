@@ -10,8 +10,13 @@
  * Ported from openclaw-plugin/ auto-recall logic in index.ts + memory-ranking.ts.
  */
 
-import { loadConfig } from "./config.mjs";
+import { isPluginEnabled, loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
+
+if (!isPluginEnabled()) {
+  process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
+  process.exit(0);
+}
 
 const cfg = loadConfig();
 const { log, logError } = createLogger("auto-recall");
@@ -36,6 +41,8 @@ async function fetchJSON(path, init = {}) {
   try {
     const headers = { "Content-Type": "application/json" };
     if (cfg.apiKey) headers["X-API-Key"] = cfg.apiKey;
+    if (cfg.accountId) headers["X-OpenViking-Account"] = cfg.accountId;
+    if (cfg.userId) headers["X-OpenViking-User"] = cfg.userId;
     if (cfg.agentId) headers["X-OpenViking-Agent"] = cfg.agentId;
     const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
     const body = await res.json();
