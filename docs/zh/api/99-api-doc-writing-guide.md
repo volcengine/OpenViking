@@ -223,7 +223,6 @@ openviking add-resource ./documents/guide.md --reason "User guide documentation"
 ```
 
 ---
-```
 
 ## 文档维护清单
 
