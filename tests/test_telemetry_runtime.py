@@ -32,12 +32,12 @@ from openviking.telemetry import (
     tracer_module,
     unregister_telemetry,
 )
-from openviking_cli.utils import logger as logger_module
 from openviking.telemetry.backends.memory import MemoryOperationTelemetry
 from openviking.telemetry.context import bind_telemetry, bind_telemetry_stage
 from openviking.telemetry.snapshot import TelemetrySnapshot
 from openviking.telemetry.span_models import OperationSpanAttributes, RootSpanAttributes
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils import logger as logger_module
 
 
 def test_telemetry_module_exports_snapshot_and_runtime():
