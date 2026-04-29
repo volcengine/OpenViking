@@ -247,7 +247,7 @@ ov system wait --timeout 60
 
 The observer API provides detailed component-level monitoring.
 
-When server auth is enabled, observer endpoints are a privileged monitoring surface. In `api_key` mode they require an `ADMIN`/`ROOT` context. In `trusted` mode each request resolves to `USER`, so observer endpoints are denied. Use `openviking --sudo observer ...` when the CLI is configured with `root_api_key`.
+When server auth is enabled, observer endpoints are a privileged monitoring surface. In `api_key` mode they require an `ADMIN`/`ROOT` context. In `trusted` mode the deployment boundary is already trusted, so observer endpoints remain available. Use `ov --sudo observer ...` when the CLI is configured with `root_api_key` and needs to send the root key.
 
 ### observer.queue
 
