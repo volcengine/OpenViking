@@ -259,28 +259,40 @@ class HierarchicalRetriever:
     ) -> List[float]:
         """Return rerank scores or fall back to vector scores."""
         if not self._rerank_client or not documents:
-            return fallback_scores
+            return list(fallback_scores)
+
+        # Skip empty/whitespace-only docs. Empty content has no rerank signal,
+        # and some providers (e.g. Voyage) reject the whole batch with HTTP 400
+        # on any empty entry. Skipped slots keep their vector score.
+        kept_indices: List[int] = []
+        filtered_docs: List[str] = []
+        for i, d in enumerate(documents):
+            if isinstance(d, str) and d.strip():
+                kept_indices.append(i)
+                filtered_docs.append(d)
+
+        if not filtered_docs:
+            return list(fallback_scores)
 
         try:
-            scores = self._rerank_client.rerank_batch(query, documents)
+            scores = self._rerank_client.rerank_batch(query, filtered_docs)
         except Exception as e:
             logger.warning(
                 "[HierarchicalRetriever] Rerank failed, fallback to vector scores: %s", e
             )
-            return fallback_scores
+            return list(fallback_scores)
 
-        if not scores or len(scores) != len(documents):
+        if not scores or len(scores) != len(filtered_docs):
             logger.warning(
                 "[HierarchicalRetriever] Invalid rerank result, fallback to vector scores"
             )
-            return fallback_scores
+            return list(fallback_scores)
 
-        normalized_scores: List[float] = []
-        for score, fallback in zip(scores, fallback_scores, strict=True):
+        normalized_scores: List[float] = [float(fb) for fb in fallback_scores]
+        for j, idx in enumerate(kept_indices):
+            score = scores[j]
             if isinstance(score, (int, float)):
-                normalized_scores.append(float(score))
-            else:
-                normalized_scores.append(fallback)
+                normalized_scores[idx] = float(score)
         return normalized_scores
 
     def _merge_starting_points(
