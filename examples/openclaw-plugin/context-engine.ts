@@ -1172,8 +1172,8 @@ export function createMemoryOpenVikingContextEngine(params: {
     },
 
     async compact(compactParams): Promise<CompactResult> {
-      const OVSessionId = compactParams.sessionId;
       const sessionKey = extractSessionKey(compactParams.runtimeContext);
+      const OVSessionId = openClawSessionToOvStorageId(compactParams.sessionId, sessionKey);
       const tokenBudget = validTokenBudget(compactParams.tokenBudget) ?? 128_000;
       diag("compact_entry", OVSessionId, {
         tokenBudget,
@@ -1198,7 +1198,7 @@ export function createMemoryOpenVikingContextEngine(params: {
       }
 
       const client = await getClient();
-      const agentId = resolveAgentId(OVSessionId);
+      const agentId = resolveAgentId(compactParams.sessionId, sessionKey, OVSessionId);
       const tokensBeforeOriginal = validTokenBudget(compactParams.currentTokenCount);
       let preCommitEstimatedTokens: number | undefined;
       if (typeof tokensBeforeOriginal !== "number") {
@@ -1418,9 +1418,27 @@ export function createMemoryOpenVikingContextEngine(params: {
           },
         };
       } catch (err) {
-        logger.warn?.(`openviking: compact commit failed for session=${OVSessionId}: ${String(err)}`);
+        const errorMessage = String(err);
+        if (errorMessage.includes("[NOT_FOUND]") && errorMessage.includes("Session not found")) {
+          logger.info(
+            `openviking: compact skipped because OV session does not exist ` +
+              `(session=${OVSessionId}, agentId=${agentId})`,
+          );
+          diag("compact_result", OVSessionId, {
+            ok: true,
+            compacted: false,
+            reason: "session_not_found",
+            error: errorMessage,
+          });
+          return {
+            ok: true,
+            compacted: false,
+            reason: "session_not_found",
+          };
+        }
+        logger.warn?.(`openviking: compact commit failed for session=${OVSessionId}: ${errorMessage}`);
         diag("compact_error", OVSessionId, {
-          error: String(err),
+          error: errorMessage,
         });
         return {
           ok: false,
@@ -1432,7 +1450,7 @@ export function createMemoryOpenVikingContextEngine(params: {
             tokensBefore: tokensBefore,
             tokensAfter: undefined,
             details: {
-              error: String(err),
+              error: errorMessage,
             },
           },
         };
