@@ -82,6 +82,18 @@ class ExtractContext:
         first_time = msg_range._first_message_time()
         return first_time.split("-")[2] if first_time else None
 
+    def get_event_content(self, ranges_str: str, summary: str, ratio_threshold: float = 0.7) -> str:
+        """根据原始消息与 summary 的字符数比例，决定返回原始消息还是摘要。"""
+        if not ranges_str or not summary:
+            return summary or ""
+        msg_range = self.read_message_ranges(ranges_str)
+        original = msg_range.pretty_print()
+        if not original:
+            return summary
+        if len(summary) / len(original) >= ratio_threshold:
+            return original
+        return summary
+
     def read_message_ranges(self, ranges_str: str) -> "MessageRange":
         """Parse ranges string like "0-10,50-60" or "7,9,11,13" and return combined MessageRange.
 

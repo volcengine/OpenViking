@@ -1177,19 +1177,31 @@ OpenKB 的编译管线是精心设计的多步 LLM 调用链：摘要 → 概念
 
 ```mermaid
 flowchart TB
-    ov_session[对话] --> ov_extract[ExtractLoop\n记忆提取]
-    ov_resource[资源\n邮件/会议纪要等] --> ov_extract
-    ov_extract --> ov_memory[entity/event/preference..记忆\n links + backlinks]
-    ov_memory --> ov_dream[外部 Bot T+1\n主题整合]
-    ov_dream --> ov_report[整理产物\n问题驱动的研究报告]
-    ov_memory --> ov_embed[写入时\n向量化入队]
-    ov_memory --> ov_semantic[写入时\n摘要生成]
-    ov_memory --> ov_ppr[搜索时\nPPR 图增强\n在线计算不持久化]
+    ov_s1["(1) 对话消息 session.commit"]
+    ov_s2["(2) 邮件会议纪要等默认进wiki的 resource"]
+    ov_s3["(3) 默认不进wiki的 resource"]
+    ov_s1 --> ov_extract["ExtractLoop\n(SessionContextProvider)"]
+    ov_s2 --> ov_extract
+    ov_s3 --> ov_extract
+    ov_extract <--> ov_memory[entity/event/preference等记忆\n links + backlinks]
+	ov_extract --> |session中提到的研究主题|ov_rc
+    ov_rc[report_candidate\n候选主题] --> ov_dream["ExtractLoop\n(DreamContextProvider) (per report)"]
+    ov_memory --> ov_dream
+    ov_bot[暴露CLI供Bot通过Cron触发] --> ov_dream
+	ov_bot --> |CLI提交研究主题| ov_rc
+	ov_search[search请求] -->|基于search结果分布| ov_rc
+    ov_dream --> ov_report[问题驱动的研究报告]
+
+
+    style ov_s1 fill:#ffe6cc,stroke:#333
+    style ov_s2 fill:#ffe6cc,stroke:#333
+    style ov_s3 fill:#ffe6cc,stroke:#333
     style ov_extract fill:#9f9,stroke:#333
     style ov_dream fill:#9f9,stroke:#333
     style ov_memory fill:#9cf,stroke:#333
-	style ov_report fill:#9cf,stroke:#333
-    style ov_ppr fill:#ccf,stroke:#333
+    style ov_rc fill:#9cf,stroke:#333
+    style ov_report fill:#9cf,stroke:#333
+    style ov_bot fill:#ffc,stroke:#333
 ```
 
 **关键路径**：对话/资源 → ExtractLoop（LLM 统一输出记忆 + links）→ merge_op 合并写入 → 向量化/摘要异步入队 → 外部 Bot T+1 触发整理发现主题 → PPR 在线图增强
