@@ -6,6 +6,7 @@ import asyncio
 import json
 import re
 import time
+import uuid
 from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -28,7 +29,7 @@ from vikingbot.providers.base import LLMProvider
 from vikingbot.sandbox import SandboxManager
 from vikingbot.session.manager import SessionManager
 from vikingbot.utils.helpers import cal_str_tokens
-from vikingbot.utils.tracing import trace
+from vikingbot.utils.tracing import set_response_id, trace
 
 if TYPE_CHECKING:
     from vikingbot.config.schema import ExecToolConfig
@@ -607,14 +608,16 @@ class AgentLoop:
             relevant_memories = message_context.latest_relevant_memories
             # logger.info(f"New messages: {json.dumps(messages, indent=4)}")
 
-            # Run agent loop
-            final_content, tools_used, token_usage, iteration = await self._run_agent_loop(
-                messages=messages,
-                session_key=session_key,
-                publish_events=True,
-                sender_id=msg.sender_id,
-                ov_tools_enable=ov_tools_enable,
-            )
+            # Run agent loop within a stable response identity for tracing/tool spans.
+            response_id = uuid.uuid4().hex
+            with set_response_id(response_id):
+                final_content, tools_used, token_usage, iteration = await self._run_agent_loop(
+                    messages=messages,
+                    session_key=session_key,
+                    publish_events=True,
+                    sender_id=msg.sender_id,
+                    ov_tools_enable=ov_tools_enable,
+                )
 
             # Log response preview
             preview = final_content[:300] + "..." if len(final_content) > 300 else final_content
@@ -626,6 +629,7 @@ class AgentLoop:
                 session.add_message(
                     "assistant",
                     final_content,
+                    response_id=response_id,
                     tools_used=tools_used if tools_used else None,
                     token_usage=token_usage,
                     sender_id=msg.sender_id,
@@ -640,10 +644,31 @@ class AgentLoop:
             response_metadata = dict(msg.metadata or {})
             if relevant_memories is not None:
                 response_metadata["relevant_memories"] = relevant_memories
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    session_key=msg.session_key,
+                    content="",
+                    event_type=OutboundEventType.RESPONSE_COMPLETED,
+                    response_id=response_id,
+                    metadata={
+                        "response_completed": {
+                            "response_id": response_id,
+                            "session_id": session_key.safe_name(),
+                            "sender_id": msg.sender_id,
+                            "content": final_content,
+                            "token_usage": token_usage,
+                            "time_cost": time_cost,
+                            "iteration": iteration,
+                            "tools_used_names": tools_used_names,
+                        }
+                    },
+                )
+            )
             return OutboundMessage(
                 session_key=msg.session_key,
                 content=final_content,
                 metadata=response_metadata,
+                response_id=response_id,
                 token_usage=token_usage,
                 time_cost=time_cost,
                 iteration=iteration,

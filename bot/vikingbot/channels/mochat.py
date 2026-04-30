@@ -12,7 +12,7 @@ from typing import Any
 import httpx
 from loguru import logger
 
-from vikingbot.bus.events import OutboundMessage
+from vikingbot.bus.events import OutboundEventType, OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
 from vikingbot.config.schema import MochatChannelConfig
@@ -314,6 +314,9 @@ class MochatChannel(BaseChannel):
 
     async def send(self, msg: OutboundMessage) -> None:
         """Send outbound message to session or panel."""
+        if msg.event_type == OutboundEventType.RESPONSE_COMPLETED:
+            return
+
         if not self.config.claw_token:
             logger.warning("Mochat claw_token missing, skip send")
             return

@@ -12,6 +12,7 @@ from vikingbot.hooks import HookContext
 from vikingbot.hooks.manager import hook_manager
 from vikingbot.integrations.langfuse import LangfuseClient
 from vikingbot.sandbox.manager import SandboxManager
+from vikingbot.utils.tracing import get_current_response_id
 
 
 class ToolRegistry:
@@ -163,12 +164,14 @@ class ToolRegistry:
         tool_span = None
         start_time = time.time()
         result = None
+        response_id = get_current_response_id()
         try:
             if self.langfuse.enabled:
                 tool_ctx = self.langfuse.tool_call(
                     name=name,
                     input=params,
                     session_id=session_key.safe_name(),
+                    metadata={"response_id": response_id} if response_id else None,
                 )
                 tool_span = tool_ctx.__enter__()
 
@@ -193,7 +196,10 @@ class ToolRegistry:
                         span=tool_span,
                         output=output_str,
                         success=execute_success,
-                        metadata={"duration_ms": duration_ms},
+                        metadata={
+                            "duration_ms": duration_ms,
+                            **({"response_id": response_id} if response_id else {}),
+                        },
                     )
                     if hasattr(tool_span, "__exit__"):
                         tool_span.__exit__(None, None, None)

@@ -109,6 +109,8 @@ class ChatChannel(BaseChannel):
                 if len(content) > 150:
                     content = content[:150] + "..."
                 console.print(f"  [dim]└─ Result: {content}[/dim]")
+            elif msg.event_type == OutboundEventType.RESPONSE_COMPLETED:
+                return
 
     async def _run_interactive(self) -> None:
         """Run in interactive mode."""

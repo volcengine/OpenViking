@@ -16,7 +16,7 @@ from typing import Any
 
 from loguru import logger
 
-from vikingbot.bus.events import OutboundMessage
+from vikingbot.bus.events import OutboundEventType, OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
 from vikingbot.config.schema import EmailChannelConfig
@@ -104,6 +104,9 @@ class EmailChannel(BaseChannel):
 
     async def send(self, msg: OutboundMessage) -> None:
         """Send email via SMTP."""
+        if msg.event_type == OutboundEventType.RESPONSE_COMPLETED:
+            return
+
         if not self.config.consent_granted:
             logger.warning("Skip email send: consent_granted is false")
             return

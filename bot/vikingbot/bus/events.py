@@ -17,6 +17,7 @@ class OutboundEventType(str, Enum):
     REASONING = "reasoning"  # Reasoning content
     ITERATION = "iteration"  # Iteration marker
     NO_REPLY = "no_reply"  # No reply required
+    RESPONSE_COMPLETED = "response_completed"  # Analytics-only response fact
 
 
 @dataclass
@@ -43,6 +44,7 @@ class OutboundMessage:
     reply_to: str | None = None
     media: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    response_id: str | None = None
     token_usage: dict[str, int] = field(default_factory=dict)
     time_cost: float = field(default_factory=float)
     iteration: int = field(default_factory=int)

@@ -41,6 +41,7 @@ class PendingResponse:
     def __init__(self):
         self.events: List[Dict[str, Any]] = []
         self.final_content: Optional[str] = None
+        self.response_id: Optional[str] = None
         self.relevant_memories: Optional[str] = None
         self.event = asyncio.Event()
         self.stream_queue: asyncio.Queue[Optional[ChatStreamEvent]] = asyncio.Queue()
@@ -55,6 +56,10 @@ class PendingResponse:
         """Set the final response content."""
         self.final_content = content
         self.event.set()
+
+    def set_response_id(self, response_id: str | None):
+        """Track the response ID for the final assistant response."""
+        self.response_id = response_id
 
     async def close_stream(self):
         """Close the stream queue."""
@@ -189,8 +194,12 @@ class OpenAPIChannel(BaseChannel):
                 msg.event_type == OutboundEventType.RESPONSE
                 or msg.event_type == OutboundEventType.NO_REPLY
             ):
+                pending.set_response_id(msg.response_id)
                 pending.relevant_memories = (msg.metadata or {}).get("relevant_memories")
-                await pending.add_event("response", msg.content or "")
+                await pending.add_event(
+                    "response",
+                    {"content": msg.content or "", "response_id": msg.response_id},
+                )
                 pending.set_final(msg.content or "")
                 await pending.close_stream()
             elif msg.event_type == OutboundEventType.REASONING:
@@ -211,8 +220,12 @@ class OpenAPIChannel(BaseChannel):
 
         if msg.event_type == OutboundEventType.RESPONSE:
             # Final response - add to stream first
+            pending.set_response_id(msg.response_id)
             pending.relevant_memories = (msg.metadata or {}).get("relevant_memories")
-            await pending.add_event("response", msg.content or "")
+            await pending.add_event(
+                "response",
+                {"content": msg.content or "", "response_id": msg.response_id},
+            )
             pending.set_final(msg.content or "")
             await pending.close_stream()
         elif msg.event_type == OutboundEventType.REASONING:
@@ -234,7 +247,7 @@ class OpenAPIChannel(BaseChannel):
         channel = self  # Capture for closures
 
         async def verify_api_key(
-            x_gateway_token: Optional[str] = Header(None, alias="X-Gateway-Token")
+            x_gateway_token: Optional[str] = Header(None, alias="X-Gateway-Token"),
         ) -> bool:
             """Verify API key for privileged HTTP chat/session routes."""
             gateway_token = ""
@@ -455,6 +468,7 @@ class OpenAPIChannel(BaseChannel):
 
             return ChatResponse(
                 session_id=session_id,
+                response_id=pending.response_id,
                 message=response_content,
                 events=pending.events if pending.events else None,
                 relevant_memories=pending.relevant_memories,
@@ -597,6 +611,7 @@ class OpenAPIChannel(BaseChannel):
 
             return ChatResponse(
                 session_id=session_id,
+                response_id=pending.response_id,
                 message=response_content,
                 events=pending.events if pending.events else None,
                 relevant_memories=pending.relevant_memories,

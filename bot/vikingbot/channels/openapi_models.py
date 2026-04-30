@@ -58,6 +58,7 @@ class ChatResponse(BaseModel):
     """Response from chat endpoint (non-streaming)."""
 
     session_id: str = Field(..., description="Session ID")
+    response_id: Optional[str] = Field(default=None, description="Assistant response ID")
     message: str = Field(..., description="Assistant's response message")
     events: Optional[List[Dict[str, Any]]] = Field(
         default=None, description="Intermediate events (thinking, tool calls)"

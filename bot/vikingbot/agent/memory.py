@@ -127,9 +127,9 @@ class MemoryStore:
             config = load_config().ov_server
             admin_user_id = config.admin_user_id
             user_id = sender_id
-            logger.info(f'workspace_id={workspace_id}')
-            logger.info(f'user_id={user_id}')
-            logger.info(f'admin_user_id={admin_user_id}')
+            logger.info(f"workspace_id={workspace_id}")
+            logger.info(f"user_id={user_id}")
+            logger.info(f"admin_user_id={admin_user_id}")
             client = await VikingClient.create(agent_id=workspace_id)
             result = await client.search_memory(
                 query=current_message, user_id=user_id, agent_user_id=admin_user_id, limit=30
@@ -139,16 +139,21 @@ class MemoryStore:
 
             # Log raw search results for debugging
             memory_list = []
-            memory_list.append(f'user_memory[{len(result['user_memory'])}]:')
+            memory_list.append(f"user_memory[{len(result['user_memory'])}]:")
 
-            for i, mem in enumerate(result['user_memory']):
+            for i, mem in enumerate(result["user_memory"]):
                 memory_list.append(f"{i},{getattr(mem, 'uri', '')},{getattr(mem, 'score', 0)}")
-            memory_list.append(f'agent_memory[{len(result['agent_memory'])}]:')
-            for i, mem in enumerate(result['agent_memory']):
+            memory_list.append(f"agent_memory[{len(result['agent_memory'])}]:")
+            for i, mem in enumerate(result["agent_memory"]):
                 memory_list.append(f"{i},{getattr(mem, 'uri', '')},{getattr(mem, 'score', 0)}")
-            logger.info(f"[RAW_MEMORIES]\n{'\n'.join(memory_list)}")
-            user_memory = await self._parse_viking_memory(result["user_memory"], client, min_score=0.35)
-            agent_memory = await self._parse_viking_memory(result["agent_memory"], client, min_score=0.35, max_chars=2000)
+            raw_memories_log = "\n".join(memory_list)
+            logger.info(f"[RAW_MEMORIES]\n{raw_memories_log}")
+            user_memory = await self._parse_viking_memory(
+                result["user_memory"], client, min_score=0.35
+            )
+            agent_memory = await self._parse_viking_memory(
+                result["agent_memory"], client, min_score=0.35, max_chars=2000
+            )
             return f"### user memories:\n{user_memory}\n### agent memories:\n{agent_memory}"
         except Exception as e:
             logger.error(f"[READ_USER_MEMORY]: search error. {e}")

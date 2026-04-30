@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Regression tests for OpenAPI HTTP auth requirements."""
 
+import asyncio
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,10 +10,12 @@ from types import SimpleNamespace
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from vikingbot.bus.events import OutboundEventType, OutboundMessage
 from vikingbot.bus.queue import MessageBus
-from vikingbot.channels.openapi import OpenAPIChannel, OpenAPIChannelConfig
+from vikingbot.channels.openapi import OpenAPIChannel, OpenAPIChannelConfig, PendingResponse
 from vikingbot.channels.openapi_models import ChatResponse
 from vikingbot.config.schema import BotChannelConfig
+from vikingbot.config.schema import SessionKey
 
 
 @pytest.fixture
@@ -45,12 +48,15 @@ class TestOpenAPIAuth:
 
         assert response.status_code == 200
 
-    def test_chat_accepts_requests_when_api_key_not_configured(self, message_bus, temp_workspace, monkeypatch):
+    def test_chat_accepts_requests_when_api_key_not_configured(
+        self, message_bus, temp_workspace, monkeypatch
+    ):
         channel = OpenAPIChannel(
             OpenAPIChannelConfig(),
             message_bus,
             workspace_path=temp_workspace,
         )
+
         async def fake_handle_chat(request):
             return ChatResponse(
                 session_id=request.session_id or "default", message="ok", events=None
@@ -105,7 +111,10 @@ class TestOpenAPIAuth:
         response = client.post("/bot/v1/chat", json={"message": "hello"})
 
         assert response.status_code == 503
-        assert response.json()["detail"] == "OpenAPI gateway token is required when host is non-localhost"
+        assert (
+            response.json()["detail"]
+            == "OpenAPI gateway token is required when host is non-localhost"
+        )
 
     def test_bot_channel_accepts_requests_without_channel_api_key(
         self, message_bus, temp_workspace, monkeypatch
@@ -166,3 +175,32 @@ class TestOpenAPIAuth:
         )
         assert authorized.status_code == 200
         assert authorized.json()["message"] == "ok:alpha"
+
+    @pytest.mark.asyncio
+    async def test_send_tracks_response_id_in_final_openapi_response(
+        self, message_bus, temp_workspace
+    ):
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+        )
+        pending = PendingResponse()
+        channel._pending["session-1"] = pending
+
+        await channel.send(
+            OutboundMessage(
+                session_key=SessionKey(type="cli", channel_id="default", chat_id="session-1"),
+                content="hello",
+                event_type=OutboundEventType.RESPONSE,
+                response_id="resp-123",
+                metadata={"relevant_memories": "memory"},
+            )
+        )
+
+        assert pending.final_content == "hello"
+        assert pending.response_id == "resp-123"
+        assert pending.relevant_memories == "memory"
+        assert len(pending.events) == 1
+        assert pending.events[0]["type"] == "response"
+        assert pending.events[0]["data"] == {"content": "hello", "response_id": "resp-123"}
