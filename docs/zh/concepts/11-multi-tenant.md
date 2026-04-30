@@ -202,7 +202,7 @@ openclaw config set plugins.entries.openviking.config.agent_prefix "<agent-prefi
 
 - 接入简单，插件不需要管理 account/user 生命周期
 - 最适合“一个 OpenClaw 实例对应一个 OpenViking 用户”的场景
-- `agentId` 参与决定 agent 级空间，便于区分不同 OpenClaw 实例或不同 agent 角色
+- `agent_prefix` 参与决定 agent 级空间，便于区分不同 OpenClaw 实例或不同 agent 角色
 - 同一 account 内的 `resources` 可共享，`user` / `agent` memory 会按身份隔离
 
 ### OpenClaw 插件为何通常不配 `account` / `user`
@@ -210,7 +210,7 @@ openclaw config set plugins.entries.openviking.config.agent_prefix "<agent-prefi
 因为在 `api_key` 模式下，user key 已经足够表达身份：
 
 - `account`、`user` 由服务端从 key 反解
-- 插件只需要额外告诉服务端当前的 `agentId`
+- 插件只需要额外告诉服务端当前的 `agent_prefix`
 - 插件内部会根据运行时身份去解析默认的 `user` / `agent` 记忆空间
 
 如果给插件直接配置 root key，则普通租户数据 API 会缺少 `X-OpenViking-Account` / `X-OpenViking-User`，这不适合作为日常读写方式。
