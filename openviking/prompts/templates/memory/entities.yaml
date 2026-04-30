@@ -37,23 +37,32 @@ fields:
         - "Made a black and white bowl, a plate, and a cup with dog face" NOT just "Made pottery"
         - "Plays clarinet and violin" NOT just "Plays an instrument"
         - "Important symbols: Rainbow flag, transgender symbol" NOT just "Important symbols"
-      - **IMPORTANT**: Include event cross-references using relative paths so that
-        readers can navigate from an entity to its related events for more detail.
+      - **IMPORTANT**: When an entity page lists multiple items of the same type (books read,
+        art created, activities done, items bought), add a complete list summary line at the top:
+        # Books Melanie Has Read
+        Complete list: Charlotte's Web, Nothing is Impossible
+        - Charlotte's Web: childhood favorite, about friendship and compassion
+        - Nothing is Impossible: read in 2022
+        # Art Melanie Has Created
+        Complete list: horse painting, sunset painting, sunrise painting
+        - Horse painting: captures grace and strength
+        - Sunset painting: inspired by sunsets, calming colors
+      - **IMPORTANT**: Preserve specific descriptions verbatim — exact poster text, sign contents,
+        specific feelings, specific item descriptions. Do NOT replace with vague summaries.
+        - "posters saying 'Trans Lives Matter'" NOT "amazing posters"
+        - "a sign stating someone is not being able to leave" NOT "a thoughtful sign"
+        - "a cup with a dog face on it" NOT "their own pots"
+        - "felt grateful and thankful for her family" NOT "reminded life is precious"
       - **For person entities**: This is a DETAILED entity page, NOT a duplicate of the profile.
-        Focus on this person's relationships, interactions with other people, and cross-references
-        to their activities/entities. The profile stores flat attributes; the person entity stores
-        relational and contextual information with cross-references.
-      Relative path format: events://{event_name} or ../events/{year}/{month}/{day}/{event_name}.md
+        Focus on this person's relationships, interactions with other people.
+        The profile stores flat attributes; the person entity stores relational
+        and contextual information.
       - Example:
       # Pottery
-      - Melanie takes pottery classes (as of 2023-07-03) [→ class](../events/2023/07/03/melanie_pottery_class.md)
+      Complete list of items made: black and white bowl, plate, cup with dog face
+      - Melanie takes pottery classes (as of 2023-07-03)
         - Made a black and white bowl, a plate, and a cup with dog face
-      - Got injured Sep 2023, taking break [→ injury](../events/2023/10/13/melanie_pottery_injury.md)
+      - Got injured Sep 2023, taking break
       - Caroline interested in trying pottery (as of 2023-09-13)
-      - Example:
-      # Book club events Caroline participated in:
-      - [Monthly book discussion](../events/2023/03/05/Monthly book discussion.md)
-      - [Author meetup](events://Author meetup)
-      - [Summer reading challenge](../events/2024/03/10/Summer reading challenge.md)
 
     merge_op: patch

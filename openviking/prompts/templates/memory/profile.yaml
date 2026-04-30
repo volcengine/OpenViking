@@ -26,9 +26,18 @@ description: |
   - Merge similar items; keep latest if conflicting
   - Organize related items under ## sub-headings by topic (e.g., ## Identity, ## Career,
     ## Art, ## Music, ## Pets, ## Family, ## Books) so related facts are grouped together
-  - **CRITICAL**: When converting relative time expressions to absolute dates, calculate carefully.
-    Verify by counting backwards from the reference date. Record both forms:
-    "on the Tuesday before 2023-07-20 (2023-07-18)"
+  - **IMPORTANT**: When the user states a summary, conclusion, or description about their
+    life direction, relationships, or future intentions, record it verbatim.
+    Examples: "described their journey together as an ongoing adventure of learning and growing",
+    "would likely not go on another road trip soon since the last one went badly"
+  - **IMPORTANT**: When a count or duration is inferable from the conversation, state it
+    explicitly. Examples: "3 children" (not just "2 younger kids and a youngest daughter"),
+    "practicing art since 2016" (not just "into art for seven years")
+  - **CRITICAL**: Do NOT convert relative time expressions to calculated absolute dates.
+    LLMs frequently miscalculate dates (e.g., "Friday before July 15" is July 14, not July 7).
+    Instead, record the relative expression AS-IS so the reader can interpret it correctly:
+    "on the Friday before 2023-07-15" (NOT "on 2023-07-07")
+    Only include absolute dates when they are stated directly in the original conversation.
 
 
 directory: "viking://user/{{ user_space }}/memories"
@@ -47,8 +56,25 @@ fields:
       what symbols (list ALL symbols), what books (list ALL books mentioned),
       how many children (explicit count), relationship status (explicitly stated).
       [IMPORTANT] Organize using ## sub-headings by topic so related facts are co-located.
+      [IMPORTANT] Add a ## Summary section at the top (right after the user's name heading)
+      with a concise bullet list of the most important facts: name, identity, family count,
+      relationship status, key durations, core activities. This summary ensures critical
+      facts are always visible even when the full profile is too long to fit in context.
+      [IMPORTANT] When a count or duration can be inferred, state it explicitly:
+      "3 children" not "2 younger kids and a youngest daughter",
+      "practicing art since 2016" not "into art for seven years",
+      "married 5 years" not just "married".
+      [IMPORTANT] Do NOT convert relative time expressions to calculated absolute dates.
+      Record the relative expression as-is: "on the Friday before 2023-07-15" (NOT "on 2023-07-07").
       Example:
       # Caroline
+      ## Summary
+      - Transgender woman, moved from Sweden 4 years ago
+      - Single, planning to adopt
+      - Career: counseling/mental health for Transgender people
+      - Art: painting, drawing flowers; symbols: Rainbow flag, transgender symbol
+      - Music: acoustic guitar, piano
+      - Pets: guinea pig Oscar
       ## Identity
       - Transgender woman
       - Moved from Sweden 4 years ago (as of 2023-06-27)

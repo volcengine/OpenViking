@@ -10,26 +10,24 @@ description: |
   - Describe the complete content of an event within a single event as much as possible; do not split one event into multiple parts.
   - Record content that mentions time.
   - **IMPORTANT**: Preserve ALL specific details in the summary — do NOT replace specific descriptions with vague summaries.
-    Examples of what to PRESERVE:
-    - "posters saying 'Trans Lives Matter'" NOT just "pride posters"
-    - "a cup with a dog face on it" NOT just "pots"
-    - "painted a sunset with a palm tree" NOT just "painted a nature piece"
-    - "a sign stating that someone is not being able to leave" NOT just "a sign"
-    - "felt in awe of the universe" NOT just "enjoyed the meteor shower"
-    - "plays clarinet and violin" NOT just "plays clarinet"
-  - **IMPORTANT**: When a user describes WHY they do something or HOW they feel, record the
-    reason/feeling verbatim. Do NOT generalize or paraphrase.
-    Example: "chose colors to catch the eye and make people smile" NOT just "used colors"
-  - **CRITICAL**: When converting relative time expressions (like "last Tuesday",
-    "the weekend before X", "two weeks ago"), calculate the EXACT date carefully.
-    Common errors to avoid:
-    - "the Tuesday before July 20" = July 18 (NOT July 11)
-    - "two weekends before July 17" = July 1-2 (NOT July 8-9)
-    - "the Sunday before May 25" = May 21 (NOT May 20 — May 20 is Saturday)
-    - "the weekend before July 17" = July 15-16 (NOT July 17 itself)
-    Always verify: count backwards from the reference date to the target weekday.
-    Record BOTH the relative expression AND the calculated absolute date:
-    "on the Tuesday before 2023-07-20 (2023-07-18)"
+    When the original text contains specific words, descriptions, or feelings, you MUST keep them verbatim.
+    Examples:
+    - WRONG: "amazing posters with pride and strength" → RIGHT: "posters saying 'Trans Lives Matter'"
+    - WRONG: "they made their own pots" → RIGHT: "they made a cup with a dog face on it, and bowls"
+    - WRONG: "a thoughtful sign" → RIGHT: "a sign stating that someone is not being able to leave"
+    - WRONG: "felt at one with the universe" → RIGHT: "felt in awe of the universe"
+    - WRONG: "painted a nature-inspired painting" → RIGHT: "painted a sunset with a palm tree"
+    - WRONG: "used colors" → RIGHT: "chose colors to catch the eye and make people smile"
+    - WRONG: "he was okay" → RIGHT: "he was scared but reassured by his family"
+    - WRONG: "reminded her life is precious" → RIGHT: "felt grateful and thankful for her family"
+    - WRONG: "shared abstract art" → RIGHT: "shared an abstract painting with blue streaks on a wall"
+  - **CRITICAL**: Do NOT convert relative time expressions to calculated absolute dates in the summary.
+    LLMs frequently miscalculate dates (e.g., "Friday before July 15" is July 14, not July 7).
+    Instead, record the relative expression AS-IS so the reader can interpret it correctly:
+    - "on the Friday before 2023-07-15" (NOT "on 2023-07-07")
+    - "last Saturday before 2023-05-25" (NOT "on 2023-05-20")
+    - "two weekends before 2023-07-17" (NOT "on 2023-07-03")
+    Only include absolute dates when they are stated directly in the original conversation.
 directory: "viking://user/{{ user_space }}/memories/events"
 filename_template: "{{ extract_context.get_year(ranges) }}/{{ extract_context.get_month(ranges) }}/{{ extract_context.get_day(ranges) }}/{{ event_name }}.md"
 enabled: true
@@ -65,6 +63,10 @@ fields:
     description: |
       Based on the content of the above fields, compile a description to outline the complete Fact content.
       Use specific year-month-day dates instead of vague terms such as yesterday, last week, and tomorrow.
+      [CRITICAL] Preserve exact wording for: quotes, sign/poster text, specific item descriptions,
+      specific feelings, specific reasons. Do NOT paraphrase or generalize these into vague summaries.
+      [CRITICAL] Do NOT convert relative time to calculated absolute dates — keep the relative
+      expression as-is (e.g., "on the Friday before 2023-07-15", NOT "on 2023-07-07").
 
   - name: ranges
     type: string
