@@ -6,6 +6,7 @@ from vikingbot.agent.loop import AgentLoop
 from vikingbot.bus.events import InboundMessage, OutboundEventType
 from vikingbot.bus.queue import MessageBus
 from vikingbot.config.schema import Config, SessionKey
+from vikingbot.heartbeat.service import HEARTBEAT_METADATA_KEY
 from vikingbot.providers.base import LLMProvider
 
 
@@ -72,3 +73,50 @@ async def test_agent_loop_evaluates_previous_response_outcome_before_new_user_tu
 
     persisted_session = loop.sessions.get_or_create(session_key, skip_heartbeat=True)
     assert persisted_session.metadata["response_outcomes"]["resp-123"]["outcome_label"] == "reasked"
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_ignores_heartbeat_when_evaluating_previous_response_outcome(
+    temp_dir: Path, monkeypatch
+):
+    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
+    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
+    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+
+    bus = MessageBus()
+    config = Config(storage_workspace=str(temp_dir))
+    loop = AgentLoop(
+        bus=bus,
+        provider=_FakeProvider(),
+        workspace=temp_dir / "workspace",
+        config=config,
+    )
+
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="session-1")
+    session = loop.sessions.get_or_create(session_key, skip_heartbeat=False)
+    session.add_message(
+        "assistant",
+        "hello",
+        sender_id="user-1",
+        response_id="resp-123",
+        timestamp="2026-04-30T00:00:00",
+    )
+    await loop.sessions.save(session)
+
+    response = await loop._process_message(
+        InboundMessage(
+            session_key=session_key,
+            sender_id="user-1",
+            content="Read HEARTBEAT.md if needed",
+            need_reply=False,
+            timestamp=datetime.fromisoformat("2026-04-30T00:05:00"),
+            metadata={HEARTBEAT_METADATA_KEY: True},
+        )
+    )
+
+    assert response is not None
+    assert response.event_type == OutboundEventType.NO_REPLY
+    assert bus.outbound_size == 0
+
+    persisted_session = loop.sessions.get_or_create(session_key, skip_heartbeat=False)
+    assert "response_outcomes" not in persisted_session.metadata

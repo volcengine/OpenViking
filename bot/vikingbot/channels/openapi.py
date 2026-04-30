@@ -729,40 +729,57 @@ class OpenAPIChannel(BaseChannel):
     async def _handle_feedback(self, request: FeedbackRequest) -> FeedbackResponse:
         """Persist explicit user feedback and emit an analytics event."""
         session_key = self._get_feedback_session_key(request)
-        session = self._session_manager.get_or_create(session_key)
-        response_message = self._find_response_message(session.messages, request.response_id)
-        if response_message is None:
-            # The agent loop and OpenAPI channel keep separate session-manager caches.
-            # Reload from disk once so an earlier stale cache entry does not hide a
-            # response that was persisted moments before feedback submission.
-            self._session_manager._cache.pop(session_key, None)
-            session = self._session_manager.get_or_create(session_key)
+        feedback_timestamp = datetime.now()
+
+        def apply_feedback(
+            session: Any,
+        ) -> tuple[dict[str, Any], float | None, Optional[dict[str, Any]]]:
             response_message = self._find_response_message(session.messages, request.response_id)
             if response_message is None:
                 raise HTTPException(status_code=404, detail="Response not found")
 
-        response_timestamp = self._parse_message_timestamp(response_message)
-        feedback_timestamp = datetime.now()
-        feedback_delay_sec = None
-        if response_timestamp is not None:
-            feedback_delay_sec = round((feedback_timestamp - response_timestamp).total_seconds(), 3)
+            response_timestamp = self._parse_message_timestamp(response_message)
+            feedback_delay_sec = None
+            if response_timestamp is not None:
+                feedback_delay_sec = round(
+                    (feedback_timestamp - response_timestamp).total_seconds(), 3
+                )
 
-        feedback_event = {
-            "response_id": request.response_id,
-            "session_id": request.session_id,
-            "user_id": request.user_id or response_message.get("sender_id"),
-            "feedback_type": request.feedback_type.value,
-            "feedback_score": request.feedback_score,
-            "feedback_reason": request.feedback_reason,
-            "feedback_text": request.feedback_text,
-            "feedback_delay_sec": feedback_delay_sec,
-            "channel": session_key.channel_key(),
-            "created_at": feedback_timestamp.isoformat(),
-        }
-        session.metadata.setdefault("feedback_events", []).append(feedback_event)
-        await self._evaluate_and_publish_outcome(session_key, session, request.response_id)
-        session.updated_at = feedback_timestamp
-        await self._session_manager.save(session)
+            feedback_event = {
+                "response_id": request.response_id,
+                "session_id": request.session_id,
+                "user_id": request.user_id or response_message.get("sender_id"),
+                "feedback_type": request.feedback_type.value,
+                "feedback_score": request.feedback_score,
+                "feedback_reason": request.feedback_reason,
+                "feedback_text": request.feedback_text,
+                "feedback_delay_sec": feedback_delay_sec,
+                "channel": session_key.channel_key(),
+                "created_at": feedback_timestamp.isoformat(),
+            }
+            session.metadata.setdefault("feedback_events", []).append(feedback_event)
+            outcome_payload = self._build_outcome_payload(session, request.response_id)
+            return feedback_event, feedback_delay_sec, outcome_payload
+
+        session, feedback_update = await self._session_manager.update_session(
+            session_key, apply_feedback
+        )
+        feedback_event, feedback_delay_sec, outcome_payload = feedback_update
+        if outcome_payload is not None:
+            LangfuseClient.get_instance().update_response_outcome(
+                request.response_id,
+                outcome_payload["outcome_label"],
+                outcome_payload,
+            )
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    session_key=session_key,
+                    content="",
+                    event_type=OutboundEventType.RESPONSE_OUTCOME_EVALUATED,
+                    response_id=request.response_id,
+                    metadata={"response_outcome_evaluated": outcome_payload},
+                )
+            )
 
         await self.bus.publish_outbound(
             OutboundMessage(
@@ -812,40 +829,24 @@ class OpenAPIChannel(BaseChannel):
         except ValueError:
             return None
 
-    async def _evaluate_and_publish_outcome(
-        self, session_key: SessionKey, session: Any, response_id: str
-    ) -> None:
-        """Evaluate and publish the latest known outcome for a response."""
+    def _build_outcome_payload(self, session: Any, response_id: str) -> Optional[dict[str, Any]]:
+        """Evaluate and persist the latest known outcome for a response."""
         evaluation = evaluate_response_outcome(
             session.messages,
             response_id,
             feedback_events=session.metadata.get("feedback_events", []),
         )
         if evaluation is None:
-            return
+            return None
 
         outcomes = session.metadata.setdefault("response_outcomes", {})
         previous = outcomes.get(response_id)
         if not should_update_outcome(previous, evaluation):
-            return
+            return None
 
         outcome_payload = evaluation.to_dict()
         outcomes[response_id] = outcome_payload
-        LangfuseClient.get_instance().update_response_outcome(
-            response_id,
-            outcome_payload["outcome_label"],
-            outcome_payload,
-        )
-
-        await self.bus.publish_outbound(
-            OutboundMessage(
-                session_key=session_key,
-                content="",
-                event_type=OutboundEventType.RESPONSE_OUTCOME_EVALUATED,
-                response_id=response_id,
-                metadata={"response_outcome_evaluated": outcome_payload},
-            )
-        )
+        return outcome_payload
 
 
 def get_openapi_router(bus: MessageBus, config: Config) -> APIRouter:

@@ -703,6 +703,9 @@ class AgentLoop:
         self, session: Session, msg: InboundMessage
     ) -> None:
         """Evaluate the latest assistant response before appending a new user turn."""
+        if msg.metadata.get(HEARTBEAT_METADATA_KEY):
+            return
+
         last_response = None
         for message in reversed(session.messages):
             if message.get("role") == "assistant" and message.get("response_id"):

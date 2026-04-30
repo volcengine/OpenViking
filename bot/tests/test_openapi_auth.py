@@ -320,3 +320,69 @@ class TestOpenAPIAuth:
 
         assert response.status_code == 200
         assert response.json()["accepted"] is True
+
+    def test_feedback_preserves_messages_written_after_stale_cache_read(
+        self, message_bus, temp_workspace
+    ):
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+        )
+        session_key = SessionKey(type="cli", channel_id="default", chat_id="session-1")
+
+        stale_session = channel._session_manager.get_or_create(session_key)
+        stale_session.add_message(
+            "assistant",
+            "hello",
+            sender_id="user-1",
+            response_id="resp-123",
+            timestamp="2026-04-30T00:00:00",
+        )
+        asyncio.run(channel._session_manager.save(stale_session))
+
+        writer_manager = channel._session_manager.__class__(channel._session_manager.bot_data_path)
+        writer_session = writer_manager.get_or_create(session_key)
+        writer_session.add_message(
+            "user",
+            "follow up",
+            sender_id="user-1",
+            timestamp="2026-04-30T00:01:00",
+        )
+        writer_session.add_message(
+            "assistant",
+            "new reply",
+            sender_id="user-1",
+            response_id="resp-456",
+            timestamp="2026-04-30T00:02:00",
+        )
+        asyncio.run(writer_manager.save(writer_session))
+
+        stale_session.metadata["local_only"] = True
+
+        client = _make_client(channel)
+        response = client.post(
+            "/bot/v1/feedback",
+            json={
+                "session_id": "session-1",
+                "response_id": "resp-123",
+                "feedback_type": "thumb_up",
+            },
+        )
+
+        assert response.status_code == 200
+
+        session_path = temp_workspace / "sessions" / "cli__default__session-1.jsonl"
+        lines = session_path.read_text(encoding="utf-8").splitlines()
+        metadata = json.loads(lines[0])
+        messages = [json.loads(line) for line in lines[1:]]
+
+        assert metadata["metadata"]["feedback_events"][0]["response_id"] == "resp-123"
+        assert "local_only" not in metadata["metadata"]
+        assert [
+            message.get("response_id") for message in messages if message["role"] == "assistant"
+        ] == [
+            "resp-123",
+            "resp-456",
+        ]
+        assert messages[-1]["content"] == "new reply"

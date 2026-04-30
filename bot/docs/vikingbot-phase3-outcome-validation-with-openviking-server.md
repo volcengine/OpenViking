@@ -100,7 +100,7 @@ OPENVIKING_CLI_CONFIG_FILE=ov_conf/ovcli.conf openviking-server --with-bot --con
 2. `thumb_up` -> `positive_feedback`
 3. 无显式反馈，但 10 分钟内出现新的 user turn -> `reasked`
 4. 无后续 user turn -> `resolved`
-5. 有 follow-up 且无反馈 -> `abandoned`
+5. 有 follow-up 且无反馈 -> `follow_up_without_feedback`
 6. 其他情况 -> `follow_up`
 
 当前写入的 outcome payload 至少包含：
@@ -109,7 +109,7 @@ OPENVIKING_CLI_CONFIG_FILE=ov_conf/ovcli.conf openviking-server --with-bot --con
 - `resolved_in_one_turn`
 - `reask_within_10m`
 - `clarification_turns`
-- `abandoned`
+- `follow_up_without_feedback`
 - `outcome_label`
 - `evaluated_at`
 - `evidence`
@@ -272,7 +272,7 @@ curl -sS -X POST "http://127.0.0.1:30300/bot/v1/chat" \
         "reask_within_10m": true,
         "resolved_in_one_turn": false,
         "clarification_turns": 1,
-        "abandoned": false
+        "follow_up_without_feedback": false
       }
     }
   }

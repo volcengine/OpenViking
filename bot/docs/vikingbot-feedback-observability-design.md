@@ -476,7 +476,7 @@ good_answer_rate =
 | `resolved_in_one_turn` | 是否单轮解决 |
 | `reask_within_10m` | 10 分钟内是否重问 |
 | `clarification_turns` | 后续澄清轮次 |
-| `abandoned` | 是否被放弃 |
+| `follow_up_without_feedback` | 是否出现 follow-up 且无显式反馈 |
 | `outcome_label` | 最终结果标签 |
 
 ---

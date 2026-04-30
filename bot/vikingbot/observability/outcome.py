@@ -17,7 +17,7 @@ class OutcomeEvaluation:
     resolved_in_one_turn: bool
     reask_within_10m: bool
     clarification_turns: int
-    abandoned: bool
+    follow_up_without_feedback: bool
     outcome_label: str
     evaluated_at: str
     evidence: dict[str, Any]
@@ -28,7 +28,7 @@ class OutcomeEvaluation:
             "resolved_in_one_turn": self.resolved_in_one_turn,
             "reask_within_10m": self.reask_within_10m,
             "clarification_turns": self.clarification_turns,
-            "abandoned": self.abandoned,
+            "follow_up_without_feedback": self.follow_up_without_feedback,
             "outcome_label": self.outcome_label,
             "evaluated_at": self.evaluated_at,
             "evidence": self.evidence,
@@ -71,7 +71,7 @@ def evaluate_response_outcome(
         reask_within_10m = user_timestamp - assistant_timestamp <= REASK_WINDOW
 
     resolved_in_one_turn = not user_messages
-    abandoned = bool(user_messages) and not relevant_feedback
+    follow_up_without_feedback = bool(user_messages) and not relevant_feedback
 
     if feedback_type == "thumb_down":
         outcome_label = "negative_feedback"
@@ -81,16 +81,16 @@ def evaluate_response_outcome(
         resolved_in_one_turn = True
         reask_within_10m = False
         clarification_turns = 0
-        abandoned = False
+        follow_up_without_feedback = False
     elif reask_within_10m:
         outcome_label = "reasked"
         resolved_in_one_turn = False
-        abandoned = False
+        follow_up_without_feedback = False
     elif resolved_in_one_turn:
         outcome_label = "resolved"
-        abandoned = False
-    elif abandoned:
-        outcome_label = "abandoned"
+        follow_up_without_feedback = False
+    elif follow_up_without_feedback:
+        outcome_label = "follow_up_without_feedback"
     else:
         outcome_label = "follow_up"
 
@@ -100,7 +100,7 @@ def evaluate_response_outcome(
         resolved_in_one_turn=resolved_in_one_turn,
         reask_within_10m=reask_within_10m,
         clarification_turns=clarification_turns,
-        abandoned=abandoned,
+        follow_up_without_feedback=follow_up_without_feedback,
         outcome_label=outcome_label,
         evaluated_at=evaluated_at,
         evidence={
@@ -121,7 +121,7 @@ def should_update_outcome(previous: Optional[dict[str, Any]], current: OutcomeEv
             "resolved_in_one_turn",
             "reask_within_10m",
             "clarification_turns",
-            "abandoned",
+            "follow_up_without_feedback",
             "outcome_label",
         )
     )
