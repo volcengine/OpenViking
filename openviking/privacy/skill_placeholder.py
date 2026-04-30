@@ -23,14 +23,24 @@ def _replace_structured_value(content: str, raw_value: str, placeholder: str) ->
         (f"'{raw_value}'", f"'{placeholder}'"),
         (f": {raw_value}\n", f": {placeholder}\n"),
         (f": {raw_value}\r\n", f": {placeholder}\r\n"),
+        (f":{raw_value}\n", f":{placeholder}\n"),
+        (f":{raw_value}\r\n", f":{placeholder}\r\n"),
+        (f": {raw_value}", f": {placeholder}"),
+        (f":{raw_value}", f":{placeholder}"),
         (f"= {raw_value}\n", f"= {placeholder}\n"),
         (f"= {raw_value}\r\n", f"= {placeholder}\r\n"),
+        (f"={raw_value}\n", f"={placeholder}\n"),
+        (f"={raw_value}\r\n", f"={placeholder}\r\n"),
+        (f"= {raw_value}", f"= {placeholder}"),
+        (f"={raw_value}", f"={placeholder}"),
     )
 
+    replaced = False
     for old, new in replacements:
         if old in content:
-            return content.replace(old, new), True
-    return content, False
+            content = content.replace(old, new)
+            replaced = True
+    return content, replaced
 
 
 def placeholderize_skill_content_with_blocks(

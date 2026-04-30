@@ -211,7 +211,8 @@ async def test_privacy_config_service_uses_policy_aware_user_root(service):
     assert current is not None
 
 
-def test_placeholderization_only_replaces_structured_values():
+@pytest.mark.asyncio
+async def test_placeholderization_only_replaces_structured_values(monkeypatch):
     content = """region: cn\nnotes: region is cn in docs\ndefault_env=prod\ntext: prod should stay here\n"""
     result = placeholderize_skill_content_with_blocks(
         content,
@@ -223,7 +224,7 @@ def test_placeholderization_only_replaces_structured_values():
     assert result.sanitized_content == (
         "region: {{ov_privacy:skill:structured-skill:region}}\n"
         "notes: region is cn in docs\n"
-        "default_env=prod\n"
+        "default_env={{ov_privacy:skill:structured-skill:env}}\n"
         "text: prod should stay here\n"
     )
 
@@ -246,3 +247,28 @@ def test_placeholderization_only_replaces_structured_values():
     assert result.sanitized_content == content
     assert result.original_content_blocks == []
     assert result.replacement_content_blocks == []
+
+
+def test_placeholderization_replaces_end_of_file_values_without_newline():
+    result = placeholderize_skill_content_with_blocks(
+        "api_key=secret-xyz",
+        "eof-skill",
+        {"api_key": "secret-xyz"},
+    )
+
+    assert result.replaced_values == {"api_key": "secret-xyz"}
+    assert result.sanitized_content == "api_key={{ov_privacy:skill:eof-skill:api_key}}"
+
+
+def test_placeholderization_replaces_all_structured_occurrences_for_same_value():
+    result = placeholderize_skill_content_with_blocks(
+        'api_key: "secret"\nbackup=secret\n',
+        "multi-hit-skill",
+        {"api_key": "secret"},
+    )
+
+    assert result.replaced_values == {"api_key": "secret"}
+    assert result.sanitized_content == (
+        'api_key: "{{ov_privacy:skill:multi-hit-skill:api_key}}"\n'
+        'backup={{ov_privacy:skill:multi-hit-skill:api_key}}\n'
+    )
