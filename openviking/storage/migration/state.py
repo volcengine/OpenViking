@@ -41,6 +41,13 @@ class MigrationPhase(str, Enum):
     completed = "completed"
 
 
+class ActiveSide(str, Enum):
+    """Which side of the dual-write adapter is the active read side."""
+
+    SOURCE = "source"
+    TARGET = "target"
+
+
 # =============================================================================
 # ReindexProgress
 # =============================================================================

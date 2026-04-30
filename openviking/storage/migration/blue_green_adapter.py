@@ -23,6 +23,8 @@ from openviking.storage.expr import FilterExpr
 from openviking.storage.vectordb_adapters.base import CollectionAdapter
 from openviking_cli.utils import get_logger
 
+from .state import ActiveSide
+
 logger = get_logger(__name__)
 
 
@@ -59,7 +61,7 @@ class DualWriteAdapter(CollectionAdapter):
         self.mode = "dual_write"
         self._source = source
         self._target = target
-        self._active_side: str = active_side
+        self._active_side: ActiveSide = ActiveSide(active_side)
         self._dual_write_enabled: bool = dual_write_enabled
         self._degraded_write_failures: int = 0
         self._lock = threading.RLock()
@@ -82,11 +84,16 @@ class DualWriteAdapter(CollectionAdapter):
         raise NotImplementedError("DualWriteAdapter must be constructed manually")
 
     def _load_existing_collection_if_needed(self) -> None:
-        pass  # No-op: collection loading is delegated to wrapped adapters
+        # DualWriteAdapter has no collection of its own — collection
+        # existence and loading are delegated to the wrapped source/target
+        # adapters via the overridden collection_exists() and get_collection().
+        raise NotImplementedError(
+            "DualWriteAdapter delegates collection loading to wrapped adapters"
+        )
 
     def _create_backend_collection(self, meta: Dict[str, Any]) -> Any:
         raise NotImplementedError(
-            "Collection lifecycle is handled by CollectionLifecycle"
+            "DualWriteAdapter does not support direct collection creation"
         )
 
     # ------------------------------------------------------------------
@@ -96,12 +103,12 @@ class DualWriteAdapter(CollectionAdapter):
     @property
     def _active(self) -> Any:
         """The currently active adapter (source or target)."""
-        return self._source if self._active_side == "source" else self._target
+        return self._source if self._active_side == ActiveSide.SOURCE else self._target
 
     @property
     def _standby(self) -> Any:
         """The currently inactive / standby adapter."""
-        return self._target if self._active_side == "source" else self._source
+        return self._target if self._active_side == ActiveSide.SOURCE else self._source
 
     def _write_to_standby(self, method_name: str, *args: Any, **kwargs: Any) -> Any:
         """Best-effort write to standby adapter with retry.
@@ -235,7 +242,7 @@ class DualWriteAdapter(CollectionAdapter):
             raise ValueError(
                 f"Unknown side: {side!r}, must be 'source' or 'target'"
             )
-        if side == self._active_side:
+        if side == self._active_side.value:
             raise RuntimeError(
                 f"Cannot drop the active collection ({side})"
             )
@@ -246,7 +253,7 @@ class DualWriteAdapter(CollectionAdapter):
         """Not supported — collection lifecycle is handled externally."""
         raise NotImplementedError(
             "DualWriteAdapter.create_collection is not supported; "
-            "use CollectionLifecycle"
+            "collections must be created before constructing this adapter"
         )
 
     def close(self) -> None:
@@ -280,12 +287,9 @@ class DualWriteAdapter(CollectionAdapter):
 
         Raises ValueError for invalid values.
         """
-        if side not in ("source", "target"):
-            raise ValueError(
-                f"side must be 'source' or 'target', got {side!r}"
-            )
+        validated = ActiveSide(side)
         with self._lock:
-            self._active_side = side
+            self._active_side = validated
 
     def set_dual_write(self, enabled: bool) -> None:
         """Enable or disable dual-write to standby."""

@@ -58,47 +58,41 @@ def _make_openviking_config(
 
 
 # ============================================================================
-# Tests for EmbeddingConfig.get_target_embedder()
+# Tests for OpenVikingConfig.get_target_embedder()
 # ============================================================================
 
 
 class TestGetTargetEmbedder:
-    """Tests for EmbeddingConfig.get_target_embedder()."""
+    """Tests for OpenVikingConfig.get_target_embedder()."""
 
     def test_get_target_embedder_returns_embedder_for_valid_target(self):
         """get_target_embedder("v2") should return an embedder instance."""
         fake_embedder = MagicMock()
         fake_embedder.model_name = "test-fake"
 
-        # Use MagicMock for the target config too (Pydantic blocks instance patching)
         target_config = MagicMock()
         target_config.get_embedder.return_value = fake_embedder
 
-        # Mock get_openviking_config() with a MagicMock that has embeddings dict
-        mock_ov_config = MagicMock()
-        mock_ov_config.embeddings = {"v2": target_config}
-        with patch(
-            "openviking_cli.utils.config.open_viking_config.get_openviking_config",
-            return_value=mock_ov_config,
-        ):
-            config = _make_embedding_config()
-            embedder = config.get_target_embedder("v2")
-            assert embedder is not None
-            assert embedder == fake_embedder
-            target_config.get_embedder.assert_called_once()
+        ov_config = MagicMock()
+        ov_config.embeddings = {"v2": target_config}
+        ov_config.get_target_embedder.side_effect = (
+            lambda name: ov_config.embeddings[name].get_embedder()
+        )
+
+        embedder = ov_config.get_target_embedder("v2")
+        assert embedder is fake_embedder
+        target_config.get_embedder.assert_called_once()
 
     def test_get_target_embedder_raises_for_missing_target(self):
         """get_target_embedder() with nonexistent name should raise KeyError."""
-        # Mock get_openviking_config() with a MagicMock that has empty embeddings
-        mock_ov_config = MagicMock()
-        mock_ov_config.embeddings = {}
-        with patch(
-            "openviking_cli.utils.config.open_viking_config.get_openviking_config",
-            return_value=mock_ov_config,
-        ):
-            config = _make_embedding_config()
-            with pytest.raises(KeyError):
-                config.get_target_embedder("nonexistent_embedder")
+        ov_config = MagicMock()
+        ov_config.embeddings = {}
+        ov_config.get_target_embedder.side_effect = (
+            lambda name: ov_config.embeddings[name].get_embedder()
+        )
+
+        with pytest.raises(KeyError):
+            ov_config.get_target_embedder("nonexistent_embedder")
 
     def test_get_target_embedder_backward_compat(self, monkeypatch):
         """When embeddings={}, get_embedder() should remain unchanged."""

@@ -27,16 +27,24 @@ def temp_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def sample_config() -> dict:
-    """Provide a minimal migration configuration skeleton."""
+    """Provide a minimal migration configuration skeleton.
+
+    Each value is a full EmbeddingConfig dict, which requires at least
+    a ``dense`` sub-field with provider/model/dimension.
+    """
     return {
         "source": {
-            "provider": "openai",
-            "model": "text-embedding-3-large",
-            "dimension": 3072,
+            "dense": {
+                "provider": "openai",
+                "model": "text-embedding-3-large",
+                "dimension": 3072,
+            },
         },
         "target": {
-            "provider": "volcengine",
-            "model": "doubao-embedding-vision-251215",
-            "dimension": 1024,
+            "dense": {
+                "provider": "volcengine",
+                "model": "doubao-embedding-vision-251215",
+                "dimension": 1024,
+            },
         },
     }

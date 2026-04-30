@@ -159,7 +159,7 @@ class TestDualWriteAdapterCoverageGaps:
         target = FakeCollectionAdapter(collection_name="target")
         adapter = DualWriteAdapter(source=source, target=target)
 
-        with pytest.raises(NotImplementedError, match="CollectionLifecycle"):
+        with pytest.raises(NotImplementedError, match="not supported"):
             adapter.create_collection()
 
     def test_drop_collection_requires_explicit_side(self):

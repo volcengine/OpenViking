@@ -103,9 +103,10 @@ def recover_from_crash(
     # ---- C3: building — also reconstruct ReindexEngine ----
     engine = None
     if phase == MigrationPhase.building:
-        # P0 fix: use the TARGET embedder name from state, NOT the current
-        # active embedder from config.embedding.get_embedder().
-        # The target embedder is the NEW embedding model being migrated TO.
+        # Use the persisted target embedder name from state, NOT the current
+        # active embedder.  The current active embedder may still be the source
+        # model; using it to reindex would embed records with the wrong model
+        # and produce dimension mismatches.
         target_embedder = config.get_target_embedder(state.target_embedder_name)
         engine = ReindexEngine(
             source_adapter=source_adapter,

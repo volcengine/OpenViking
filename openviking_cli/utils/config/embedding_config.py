@@ -714,25 +714,6 @@ class EmbeddingConfig(BaseModel):
 
         raise ValueError("No embedding configuration found (dense, sparse, or hybrid)")
 
-    def get_target_embedder(self, target_name: str):
-        """Create target embedder from named embedding configuration.
-
-        Looks up the named target in the global OpenVikingConfig.embeddings dict,
-        then calls .get_embedder() on the resolved EmbeddingConfig.
-
-        Args:
-            target_name: Key into get_openviking_config().embeddings (e.g. "v2")
-
-        Returns:
-            Embedder instance (Dense, Sparse, Hybrid, or Composite)
-
-        Raises:
-            KeyError: If target_name is not found in the embeddings dict
-        """
-        from openviking_cli.utils.config.open_viking_config import get_openviking_config
-        target_cfg = get_openviking_config().embeddings[target_name]
-        return target_cfg.get_embedder()
-
     @property
     def dimension(self) -> int:
         """Get dimension from active config."""

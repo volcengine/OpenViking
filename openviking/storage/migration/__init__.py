@@ -10,6 +10,7 @@ from .blue_green_adapter import DualWriteAdapter
 from .controller import InvalidTransitionError, MigrationController
 from .reindex_engine import ReindexEngine
 from .state import (
+    ActiveSide,
     MigrationPhase,
     MigrationState,
     MigrationStateFile,
@@ -22,6 +23,7 @@ from .state import (
 # See: from .rollback import ...
 
 __all__ = [
+    "ActiveSide",
     "DualWriteAdapter",
     "InvalidTransitionError",
     "MigrationController",

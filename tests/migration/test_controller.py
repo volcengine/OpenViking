@@ -6,7 +6,7 @@ All tests MUST fail because MigrationController doesn't exist yet.
 They define the expected API contract for the TDD GREEN phase.
 
 Tests use mocks for DualWriteAdapter, ReindexEngine, MigrationStateManager,
-and CollectionLifecycle to verify orchestration logic in isolation.
+to verify orchestration logic in isolation.
 
 MigrationController is imported INSIDE test functions (not at module level)
 so the test file doesn't crash on import error — every test fails individually
@@ -188,7 +188,7 @@ def _import_controller():
 
 def test_start_migration_idle_to_dual_write(temp_dir):
     """start_migration must transition from idle to dual_write:
-    - Create target collection via CollectionLifecycle
+    - Create target collection if it does not exist
     - Construct DualWriteAdapter
     - Persist state with embedder names
     - Return MigrationState with phase=dual_write

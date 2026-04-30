@@ -216,7 +216,9 @@ class MigrationController:
 
         self._queue = queue
 
-        # C-2: use state.target_embedder_name (NOT config.embedding)
+        # Use the persisted target embedder name from state (NOT the current
+        # active embedder from config.embedding), so reindex always uses the
+        # migration target model rather than the source model.
         target_embedder = self._config.get_target_embedder(state.target_embedder_name)
 
         engine = ReindexEngine(

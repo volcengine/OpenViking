@@ -162,6 +162,26 @@ class OpenVikingConfig(BaseModel):
             )
         return self
 
+    def get_target_embedder(self, target_name: str):
+        """Create a target embedder from a named embedding configuration.
+
+        Looks up *target_name* in ``self.embeddings`` and returns a fully
+        constructed embedder instance for that named config.  Used by the
+        migration controller and crash-recovery path to create the embedder
+        for the *target* side of a migration.
+
+        Args:
+            target_name: Key into ``self.embeddings`` (e.g. ``"v2"``).
+
+        Returns:
+            Embedder instance (Dense, Sparse, Hybrid, or Composite).
+
+        Raises:
+            KeyError: If *target_name* is not found in ``self.embeddings``.
+        """
+        target_cfg = self.embeddings[target_name]
+        return target_cfg.get_embedder()
+
     @model_validator(mode="after")
     def _resolve_embedding_from_embeddings(self) -> "OpenVikingConfig":
         """Resolve active embedding from the embeddings map.
