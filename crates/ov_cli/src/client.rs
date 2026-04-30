@@ -308,10 +308,24 @@ impl HttpClient {
                 .map_err(|e| Error::Parse(format!("Failed to parse empty response: {}", e)));
         }
 
-        let json: Value = response
-            .json()
+        // First get the raw bytes/text to enable debugging when JSON parsing fails
+        let bytes = response
+            .bytes()
             .await
-            .map_err(|e| Error::Network(format!("Failed to parse JSON response: {}", e)))?;
+            .map_err(|e| Error::Network(format!("Failed to read response body: {}", e)))?;
+
+        // Try to parse as JSON
+        let json: Value = match serde_json::from_slice(&bytes) {
+            Ok(json) => json,
+            Err(e) => {
+                // If parsing fails, try to convert bytes to string for debugging
+                let body_str = String::from_utf8_lossy(&bytes);
+                return Err(Error::Network(format!(
+                    "Failed to parse JSON response: {}\n\nRaw response body:\n{}",
+                    e, body_str
+                )));
+            }
+        };
 
         // Handle HTTP errors
         if !status.is_success() {
@@ -337,11 +351,17 @@ impl HttpClient {
         let result = if let Some(result) = json.get("result") {
             result.clone()
         } else {
-            json
+            json.clone()
         };
 
         serde_json::from_value(result)
-            .map_err(|e| Error::Parse(format!("Failed to deserialize response: {}", e)))
+            .map_err(|e| {
+                // If final deserialization fails, include the JSON we were trying to parse
+                Error::Parse(format!(
+                    "Failed to deserialize response: {}\n\nJSON that failed to parse:\n{}",
+                    e, json
+                ))
+            })
     }
 
     // ============ Content Methods ============
@@ -419,13 +439,13 @@ impl HttpClient {
 
         let status = response.status();
         if !status.is_success() {
-            // Try to parse error message as JSON
-            let json_result: Result<serde_json::Value> = response
-                .json()
+            // Try to parse error message as JSON, but if that fails show raw response
+            let bytes = response
+                .bytes()
                 .await
-                .map_err(|e| Error::Network(format!("Failed to parse error response: {}", e)));
+                .map_err(|e| Error::Network(format!("Failed to read error response: {}", e)))?;
 
-            let error_msg = match json_result {
+            let error_msg = match serde_json::from_slice::<serde_json::Value>(&bytes) {
                 Ok(json) => json
                     .get("error")
                     .and_then(|e| e.get("message"))
@@ -437,7 +457,10 @@ impl HttpClient {
                             .map(|s| s.to_string())
                     })
                     .unwrap_or_else(|| format!("HTTP error {}", status)),
-                Err(_) => format!("HTTP error {}", status),
+                Err(_) => {
+                    let body_str = String::from_utf8_lossy(&bytes);
+                    format!("HTTP error {}\n\nRaw response body:\n{}", status, body_str)
+                }
             };
 
             return Err(Error::Api(error_msg));
@@ -814,13 +837,13 @@ impl HttpClient {
 
         let status = response.status();
         if !status.is_success() {
-            // Try to parse error message as JSON
-            let json_result: Result<serde_json::Value> = response
-                .json()
+            // Try to parse error message as JSON, but if that fails show raw response
+            let bytes = response
+                .bytes()
                 .await
-                .map_err(|e| Error::Network(format!("Failed to parse error response: {}", e)));
+                .map_err(|e| Error::Network(format!("Failed to read error response: {}", e)))?;
 
-            let error_msg = match json_result {
+            let error_msg = match serde_json::from_slice::<serde_json::Value>(&bytes) {
                 Ok(json) => json
                     .get("error")
                     .and_then(|e| e.get("message"))
@@ -832,7 +855,10 @@ impl HttpClient {
                             .map(|s| s.to_string())
                     })
                     .unwrap_or_else(|| format!("HTTP error {}", status)),
-                Err(_) => format!("HTTP error {}", status),
+                Err(_) => {
+                    let body_str = String::from_utf8_lossy(&bytes);
+                    format!("HTTP error {}\n\nRaw response body:\n{}", status, body_str)
+                }
             };
 
             return Err(Error::Api(error_msg));
