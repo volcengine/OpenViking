@@ -61,6 +61,11 @@ class OpenVikingConfig(BaseModel):
         default_factory=EmbeddingConfig, description="Embedding configuration"
     )
 
+    embeddings: Dict[str, EmbeddingConfig] = Field(
+        default_factory=dict,
+        description="Named embedding configurations for migration (e.g. {'default': ..., 'v2': ...})",
+    )
+
     vlm: VLMConfig = Field(default_factory=VLMConfig, description="VLM configuration")
 
     rerank: RerankConfig = Field(default_factory=RerankConfig, description="Rerank configuration")
@@ -155,6 +160,89 @@ class OpenVikingConfig(BaseModel):
                 "remove it, or set 'output_language_override' to pin an explicit language.",
                 self.language_fallback,
             )
+        return self
+
+    @model_validator(mode="after")
+    def _resolve_embedding_from_embeddings(self) -> "OpenVikingConfig":
+        """Resolve active embedding from the embeddings map.
+
+        When embeddings is non-empty:
+        1. Read migration state file for current_active
+        2. Auto-create state file with "default" if missing
+        3. Set self.embedding = self.embeddings[current_active]
+        4. Reject on dimension mismatch with storage.vectordb
+
+        When embeddings is empty: no-op (backward compat).
+        """
+        if not self.embeddings:
+            return self  # backward compat — no migration configs present
+
+        # Determine config directory for the migration state file.
+        # Respect OPENVIKING_CONFIG_DIR for testability; fall back to the
+        # standard ~/.openviking directory.
+        config_dir_str = os.environ.get("OPENVIKING_CONFIG_DIR")
+        if config_dir_str:
+            config_dir = Path(config_dir_str)
+        else:
+            config_dir = DEFAULT_CONFIG_DIR
+
+        state_file_path = config_dir / "embedding_migration_state.json"
+
+        if state_file_path.exists():
+            try:
+                state = json.loads(state_file_path.read_text(encoding="utf-8"))
+                current_active = state["current_active"]
+            except (json.JSONDecodeError, KeyError) as e:
+                raise ValueError(
+                    f"Embedding migration state file at {state_file_path} is corrupt: {e}"
+                ) from e
+        else:
+            # No state file — must have "default" key in embeddings.
+            # User's original embedding config becomes embeddings["default"].
+            # If no "default" key, error out — the user must create it.
+            if "default" not in self.embeddings:
+                raise ValueError(
+                    "embeddings configured but no 'default' key found and no "
+                    "embedding_migration_state.json exists. "
+                    "Add 'default' to embeddings pointing to the current embedding config."
+                )
+            current_active = "default"
+            # Auto-create state file
+            config_dir.mkdir(parents=True, exist_ok=True)
+            initial_state = {
+                "version": 1,
+                "current_active": current_active,
+                "history": [],
+            }
+            state_file_path.write_text(
+                json.dumps(initial_state, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+        # Validate current_active exists in embeddings
+        if current_active not in self.embeddings:
+            raise ValueError(
+                f"current_active '{current_active}' not found in embeddings. "
+                f"Available keys: {list(self.embeddings.keys())}"
+            )
+
+        # Resolve the active embedding config
+        self.embedding = self.embeddings[current_active]
+
+        # Dimension consistency check with storage
+        if (
+            self.storage is not None
+            and self.storage.vectordb is not None
+            and self.embedding is not None
+        ):
+            emb_dim = self.embedding.dimension
+            store_dim = self.storage.vectordb.dimension
+            if emb_dim > 0 and store_dim > 0 and emb_dim != store_dim:
+                raise ValueError(
+                    f"Dimension mismatch: embedding.dimension={emb_dim}, "
+                    f"storage.vectordb.dimension={store_dim}"
+                )
+
         return self
 
     allow_private_networks: bool = Field(
