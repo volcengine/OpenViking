@@ -126,7 +126,7 @@
     },
     "commitTokenThreshold": {
       "label": "Commit Token Threshold",
-      "placeholder": "2000",
+      "placeholder": "20000",
       "advanced": true,
       "help": "Minimum estimated pending tokens before auto-commit triggers. Set to 0 to commit every turn."
     },

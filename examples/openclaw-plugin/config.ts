@@ -56,7 +56,7 @@ const DEFAULT_CAPTURE_MAX_LENGTH = 24000;
 const DEFAULT_RECALL_LIMIT = 6;
 const DEFAULT_RECALL_SCORE_THRESHOLD = 0.15;
 const DEFAULT_RECALL_MAX_CONTENT_CHARS = 5000;
-const DEFAULT_RECALL_PREFER_ABSTRACT = true;
+const DEFAULT_RECALL_PREFER_ABSTRACT = false;
 const DEFAULT_RECALL_MAX_INJECTED_CHARS = 4000;
 const DEFAULT_COMMIT_TOKEN_THRESHOLD = 20000;
 const DEFAULT_BYPASS_SESSION_PATTERNS: string[] = [];
@@ -282,7 +282,10 @@ export const memoryOpenVikingConfigSchema = {
         50,
         Math.min(10000, Math.floor(toNumber(cfg.recallMaxContentChars, DEFAULT_RECALL_MAX_CONTENT_CHARS))),
       ),
-      recallPreferAbstract: cfg.recallPreferAbstract === true,
+      recallPreferAbstract:
+        typeof cfg.recallPreferAbstract === "boolean"
+          ? cfg.recallPreferAbstract
+          : DEFAULT_RECALL_PREFER_ABSTRACT,
       recallMaxInjectedChars,
       recallTokenBudget: recallMaxInjectedChars,
       commitTokenThreshold: Math.max(

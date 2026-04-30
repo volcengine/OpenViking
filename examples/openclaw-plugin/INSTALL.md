@@ -9,7 +9,7 @@ Use [OpenViking](https://github.com/volcengine/OpenViking) as the long-term memo
 | Component | Required Version |
 | --- | --- |
 | Node.js | >= 22 |
-| OpenClaw | >= 2026.3.7 |
+| OpenClaw | >= 2026.4.24 |
 
 The plugin connects to an existing OpenViking server. It does not start the OpenViking server for you. Start OpenViking first, keep it running, then point the plugin `baseUrl` at that HTTP service. The default local URL is `http://127.0.0.1:1933`.
 

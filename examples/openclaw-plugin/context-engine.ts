@@ -3,10 +3,14 @@ import { DEFAULT_PHASE2_POLL_TIMEOUT_MS } from "./client.js";
 import type { OpenVikingClient, OVMessage } from "./client.js";
 import type { MemoryOpenVikingConfig } from "./config.js";
 import {
+  AUTO_RECALL_SOURCE_MARKER,
+  buildAutoRecallContext,
+  prepareRecallQuery,
+} from "./auto-recall.js";
+import {
   compileSessionPatterns,
   getCaptureDecision,
   extractNewTurnMessages,
-  extractSingleMessageText,
   shouldBypassSession,
 } from "./text-utils.js";
 import {
@@ -90,6 +94,7 @@ type ContextEngine = {
     sessionId: string;
     sessionKey?: string;
     messages: AgentMessage[];
+    prompt?: string;
     tokenBudget?: number;
     runtimeContext?: Record<string, unknown>;
   }) => Promise<AssembleResult>;
@@ -209,6 +214,78 @@ function messageDigest(messages: AgentMessage[], maxCharsPerMsg = 2000): Array<{
       truncated,
     };
   });
+}
+
+function extractAgentMessageText(message: AgentMessage | undefined): string {
+  if (!message) {
+    return "";
+  }
+  const raw = message.content;
+  if (typeof raw === "string") {
+    return raw;
+  }
+  if (Array.isArray(raw)) {
+    return raw
+      .map((block) => {
+        if (!block || typeof block !== "object") {
+          return "";
+        }
+        const b = block as Record<string, unknown>;
+        if (b.type === "text" && typeof b.text === "string") {
+          return b.text;
+        }
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+  return "";
+}
+
+function hasAutoRecallBlock(message: AgentMessage | undefined): boolean {
+  return extractAgentMessageText(message).includes(AUTO_RECALL_SOURCE_MARKER);
+}
+
+function prependTextToMessageContent(content: unknown, text: string): unknown {
+  if (typeof content === "string") {
+    return `${text}\n\n${content}`;
+  }
+  if (Array.isArray(content)) {
+    if (content.length === 0) {
+      return [{ type: "text", text }];
+    }
+    const first = content[0];
+    if (
+      first &&
+      typeof first === "object" &&
+      (first as Record<string, unknown>).type === "text" &&
+      typeof (first as Record<string, unknown>).text === "string"
+    ) {
+      return [
+        {
+          ...(first as Record<string, unknown>),
+          text: `${text}\n\n${(first as Record<string, unknown>).text as string}`,
+        },
+        ...content.slice(1),
+      ];
+    }
+    return [{ type: "text", text }, ...content];
+  }
+  return text;
+}
+
+function prependRecallToLatestUserMessage(messages: AgentMessage[], recallBlock: string): AgentMessage[] {
+  const latest = messages.at(-1);
+  if (!latest || latest.role !== "user" || hasAutoRecallBlock(latest)) {
+    return messages;
+  }
+  return [
+    ...messages.slice(0, -1),
+    {
+      ...latest,
+      content: prependTextToMessageContent(latest.content, recallBlock),
+    },
+  ];
 }
 
 function emitDiag(log: Logger, stage: string, sessionId: string, data: Record<string, unknown>, enabled = true): void {
@@ -885,6 +962,12 @@ export function createMemoryOpenVikingContextEngine(params: {
       const tokenBudget = validTokenBudget(assembleParams.tokenBudget) ?? 128_000;
       const sessionKey = extractAssembleSessionKey(assembleParams);
       const sender = extractRuntimeSenderId(assembleParams.runtimeContext);
+      const latestMessage = messages.at(-1);
+      const isMainAssemble =
+        Object.prototype.hasOwnProperty.call(assembleParams, "availableTools") ||
+        Object.prototype.hasOwnProperty.call(assembleParams, "citationsMode") ||
+        Object.prototype.hasOwnProperty.call(assembleParams, "prompt");
+      const isTransformContextAssemble = !isMainAssemble;
 
       const originalTokens = roughEstimate(messages);
 
@@ -907,6 +990,70 @@ export function createMemoryOpenVikingContextEngine(params: {
 
       if (isBypassedSession({ sessionId: assembleParams.sessionId, sessionKey })) {
         return assemblePassthrough(OVSessionId, "session_bypassed", messages, originalTokens);
+      }
+
+      if (isTransformContextAssemble) {
+        if (latestMessage?.role !== "user") {
+          return assemblePassthrough(OVSessionId, "transform_context_non_user_tail", messages, originalTokens, {
+            latestRole: latestMessage?.role ?? null,
+          });
+        }
+        if (!cfg.autoRecall) {
+          return assemblePassthrough(OVSessionId, "transform_context_auto_recall_disabled", messages, originalTokens);
+        }
+        if (hasAutoRecallBlock(latestMessage)) {
+          return assemblePassthrough(OVSessionId, "transform_context_recall_already_injected", messages, originalTokens);
+        }
+
+        const recallQuery = prepareRecallQuery(extractAgentMessageText(latestMessage));
+        if (!recallQuery.query || recallQuery.query.length < 5) {
+          return assemblePassthrough(OVSessionId, "transform_context_empty_recall_query", messages, originalTokens);
+        }
+        if (recallQuery.truncated) {
+          logger.info(
+            `openviking: recall query truncated (` +
+              `chars=${recallQuery.originalChars}->${recallQuery.finalChars})`,
+          );
+        }
+
+        try {
+          const client = await getClient();
+          const routingRef = assembleParams.sessionId ?? sessionKey ?? OVSessionId;
+          const agentId = resolveAgentId(routingRef, sessionKey, OVSessionId);
+          const recall = await buildAutoRecallContext({
+            cfg,
+            client,
+            agentId,
+            queryText: recallQuery.query,
+            logger,
+            verbose: (message) => logger.info(message),
+          });
+
+          if (!recall.block) {
+            return assemblePassthrough(OVSessionId, "transform_context_no_recall_hits", messages, originalTokens, {
+              memoryCount: recall.memoryCount,
+            });
+          }
+
+          const withRecall = prependRecallToLatestUserMessage(messages, recall.block);
+          const estimatedTokens = roughEstimate(withRecall);
+          diag("assemble_result", OVSessionId, {
+            passthrough: false,
+            phase: "transform_context",
+            outputMessagesCount: withRecall.length,
+            inputTokenEstimate: originalTokens,
+            estimatedTokens,
+            autoRecallMemoryCount: recall.memoryCount,
+            autoRecallTokens: recall.estimatedTokens,
+            messages: messageDigest(withRecall),
+          });
+          return { messages: withRecall, estimatedTokens };
+        } catch (err) {
+          logger.warn?.(`openviking: auto-recall failed: ${String(err)}`);
+          return assemblePassthrough(OVSessionId, "transform_context_recall_failed", messages, originalTokens, {
+            error: String(err),
+          });
+        }
       }
 
       try {

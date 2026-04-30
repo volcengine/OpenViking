@@ -47,6 +47,7 @@ const FALLBACK_LEGACY = {
   id: "memory-openviking",
   kind: "memory",
   slot: "memory",
+  minOpenclawVersion: "2026.3.7",
   required: ["index.ts", "config.ts", "openclaw.plugin.json", "package.json"],
   optional: ["package-lock.json", ".gitignore"],
 };
@@ -57,15 +58,19 @@ const FALLBACK_CURRENT = {
   id: "openviking",
   kind: "context-engine",
   slot: "contextEngine",
+  minOpenclawVersion: "2026.4.24",
   required: ["index.ts", "config.ts", "package.json", "openclaw.plugin.json"],
   optional: [
     "context-engine.ts",
+    "auto-recall.ts",
     "client.ts",
     "process-manager.ts",
     "memory-ranking.ts",
     "text-utils.ts",
     "tool-call-id.ts",
     "session-transcript-repair.ts",
+    "runtime-utils.ts",
+    "commands/setup.ts",
     "tsconfig.json",
     "package-lock.json",
     ".gitignore",
@@ -702,7 +707,7 @@ async function resolvePluginConfig() {
       }
     }
 
-    resolvedMinOpenclawVersion = compatVer || "2026.3.7";
+    resolvedMinOpenclawVersion = compatVer || fallback.minOpenclawVersion || "2026.3.7";
     resolvedMinOpenvikingVersion = "";
   }
 

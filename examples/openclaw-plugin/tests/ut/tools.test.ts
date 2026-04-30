@@ -703,16 +703,16 @@ describe("Plugin registration", () => {
     );
   });
 
-  it("registers hooks: session_start, session_end, before_prompt_build, agent_end, before_reset, after_compaction", () => {
+  it("registers hooks: session_start, session_end, agent_end, before_reset, after_compaction", () => {
     const { api } = setupPlugin();
     contextEnginePlugin.register(api as any);
     const hookNames = api.on.mock.calls.map((c: unknown[]) => c[0]);
     expect(hookNames).toContain("session_start");
     expect(hookNames).toContain("session_end");
-    expect(hookNames).toContain("before_prompt_build");
     expect(hookNames).toContain("agent_end");
     expect(hookNames).toContain("before_reset");
     expect(hookNames).toContain("after_compaction");
+    expect(hookNames).not.toContain("before_prompt_build");
   });
 
   it("plugin has correct metadata", () => {

@@ -9,7 +9,7 @@
 | 组件 | 版本要求 |
 | --- | --- |
 | Node.js | >= 22 |
-| OpenClaw | >= 2026.3.7 |
+| OpenClaw | >= 2026.4.24 |
 
 插件以远程模式连接到已有的 OpenViking 服务。它不会帮你启动 OpenViking server。需要先启动 OpenViking，并保持服务运行，再把插件的 `baseUrl` 指向这个 HTTP 服务。默认本地地址是 `http://127.0.0.1:1933`。
 
