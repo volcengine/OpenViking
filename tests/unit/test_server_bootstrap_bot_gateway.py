@@ -1,7 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-from pathlib import Path
 
 import openviking.server.bootstrap as bootstrap
 from openviking_cli.utils.config.consts import OPENVIKING_CLI_CONFIG_ENV

@@ -3,10 +3,11 @@
 
 """Regression tests for bot proxy endpoint auth enforcement."""
 
+from types import SimpleNamespace
+
 import httpx
 import pytest
 from fastapi import FastAPI
-from types import SimpleNamespace
 
 import openviking.server.routers.bot as bot_router_module
 from openviking.server.identity import AuthMode

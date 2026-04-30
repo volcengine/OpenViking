@@ -186,7 +186,7 @@ def trace(
                             return await wrapped_func(*args, **kwargs)
                     else:
                         if not has_propagate:
-                            logger.warning(f"[LANGFUSE] propagate_attributes not available")
+                            logger.warning("[LANGFUSE] propagate_attributes not available")
                     return await wrapped_func(*args, **kwargs)
             else:
                 return await wrapped_func(*args, **kwargs)

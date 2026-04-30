@@ -15,8 +15,7 @@ from vikingbot.bus.events import OutboundEventType, OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.openapi import OpenAPIChannel, OpenAPIChannelConfig, PendingResponse
 from vikingbot.channels.openapi_models import ChatResponse
-from vikingbot.config.schema import BotChannelConfig
-from vikingbot.config.schema import SessionKey
+from vikingbot.config.schema import BotChannelConfig, SessionKey
 
 
 @pytest.fixture

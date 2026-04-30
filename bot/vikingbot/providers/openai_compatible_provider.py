@@ -9,8 +9,9 @@ Supports all LLM providers with OpenAI-compatible API endpoints, including:
 
 import json
 from typing import Any
-from openai import AsyncOpenAI
+
 from loguru import logger
+from openai import AsyncOpenAI
 
 from vikingbot.integrations.langfuse import LangfuseClient
 from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest

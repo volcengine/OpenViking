@@ -22,8 +22,8 @@ from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.config_loader import resolve_config_path
 from openviking_cli.utils.config.consts import (
     DEFAULT_CONFIG_DIR,
-    DEFAULT_OVCLI_CONF,
     DEFAULT_OV_CONF,
+    DEFAULT_OVCLI_CONF,
     OPENVIKING_CLI_CONFIG_ENV,
 )
 from openviking_cli.utils.logger import configure_uvicorn_logging
