@@ -32,6 +32,8 @@ class _FakeVikingFS:
         self._tree = {self._norm(k): v for k, v in tree.items()}
         self._file_contents = {self._norm(k): v for k, v in file_contents.items()}
         self.writes = []
+        self.ls_calls: list[str] = []
+        self.read_calls: list[str] = []
 
     def _norm(self, path):
         if "://" not in path:
@@ -41,6 +43,7 @@ class _FakeVikingFS:
         return f"{scheme}://{rest}"
 
     async def ls(self, uri, ctx=None):
+        self.ls_calls.append(self._norm(uri))
         return self._tree.get(self._norm(uri), [])
 
     async def stat(self, uri, ctx=None):
@@ -48,7 +51,9 @@ class _FakeVikingFS:
         return {"size": len(content)}
 
     async def read_file(self, path, ctx=None):
-        return self._file_contents.get(self._norm(path), "")
+        normed = self._norm(path)
+        self.read_calls.append(normed)
+        return self._file_contents.get(normed, "")
 
     async def write_file(self, path, content, ctx=None):
         norm_path = self._norm(path)
@@ -93,7 +98,12 @@ class _FakeProcessor:
         return overview, abstract
 
     async def _sync_topdown_recursive(
-        self, root_uri, target_uri, ctx=None, file_change_status=None, lifecycle_lock_handle_id=""
+        self,
+        root_uri,
+        target_uri,
+        ctx=None,
+        file_change_status=None,
+        lifecycle_lock_handle_id="",
     ):
         self.sync_calls.append((root_uri, target_uri))
         root_uri = self._fs._norm(root_uri)
@@ -208,6 +218,111 @@ async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypa
     overview = fake_fs._file_contents[f"{root_uri}/.overview.md"]
     assert "- a.txt: summary" in overview
     assert "- b.txt: old-b" in overview
+
+
+@pytest.mark.asyncio
+async def test_direct_incremental_update_skips_unchanged_sibling_subtrees(monkeypatch):
+    """With complete directory metadata, writing to dir_a/ should not
+    dispatch the unchanged sibling dir_b/ subtree — reducing FS IO and
+    preventing unnecessary embedding calls.
+
+    Scenario: viking://resources/project_x/ has two child directories:
+      - dir_a/ (with a changed file deep inside)
+      - dir_b/ (fully unchanged, with its own nested files)
+
+    All directories have complete .overview.md and .abstract.md — the
+    typical production state after initial processing. The fix should
+    prevent the sibling subtree from being traversed at all.
+    """
+    _mock_transaction_layer(monkeypatch)
+
+    root_uri = "viking://resources/project_x"
+    changed_file = f"{root_uri}/dir_a/sub_dir/changed.md"
+    tree = {
+        root_uri: [
+            {"name": "dir_a", "isDir": True},
+            {"name": "dir_b", "isDir": True},
+        ],
+        f"{root_uri}/dir_a": [
+            {"name": "sub_dir", "isDir": True},
+        ],
+        f"{root_uri}/dir_a/sub_dir": [
+            {"name": "changed.md", "isDir": False},
+            {"name": "other.md", "isDir": False},
+        ],
+        f"{root_uri}/dir_b": [
+            {"name": "nested", "isDir": True},
+        ],
+        f"{root_uri}/dir_b/nested": [
+            {"name": "f1.md", "isDir": False},
+            {"name": "f2.md", "isDir": False},
+        ],
+    }
+    fake_fs = _FakeVikingFS(
+        tree=tree,
+        file_contents={
+            changed_file: "new content",
+            f"{root_uri}/dir_a/sub_dir/other.md": "unchanged",
+            f"{root_uri}/dir_a/.overview.md": "FILES:\n",
+            f"{root_uri}/dir_a/.abstract.md": "dir-a-abstract",
+            f"{root_uri}/dir_a/sub_dir/.overview.md": (
+                "FILES:\n- changed.md: old-c\n- other.md: old-o"
+            ),
+            f"{root_uri}/dir_a/sub_dir/.abstract.md": "sub-dir-abstract",
+            f"{root_uri}/dir_b/.overview.md": "FILES:\n",
+            f"{root_uri}/dir_b/.abstract.md": "dir-b-abstract",
+            f"{root_uri}/dir_b/nested/.overview.md": ("FILES:\n- f1.md: old-f1\n- f2.md: old-f2"),
+            f"{root_uri}/dir_b/nested/.abstract.md": "nested-abstract",
+            f"{root_uri}/.overview.md": "FILES:\n",
+            f"{root_uri}/.abstract.md": "root-abstract",
+        },
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+
+    processor = _FakeProcessor(fake_fs)
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=ctx,
+        incremental_update=True,
+        target_uri=root_uri,
+        changes={"modified": [changed_file]},
+    )
+    monkeypatch.setattr(executor, "_add_vectorize_task", AsyncMock())
+
+    await executor.run(root_uri)
+
+    # Changed file MUST be summarized (ancestor chain is processed)
+    summarized = set(processor.summarized_files)
+    assert changed_file in summarized, f"Changed file {changed_file} must be summarized"
+    assert len(summarized) == 1, f"Must only summarize {changed_file=} got {summarized=}"
+
+    # Sibling subtree MUST NOT be ls'd at all
+    sibling_deep_ls = [c for c in fake_fs.ls_calls if "dir_b/nested" in c]
+    assert not sibling_deep_ls, f"Sibling children should not be ls'd, got: {sibling_deep_ls}"
+
+    # Sibling subtree MUST NOT trigger any vectorize/embedding tasks
+    vectorize_tasks = [call.args[0] for call in executor._add_vectorize_task.call_args_list]
+    sibling_vectorize = [
+        t
+        for t in vectorize_tasks
+        if "dir_b" in (getattr(t, "uri", None) or "")
+        or "dir_b" in (getattr(t, "file_path", None) or "")
+    ]
+    assert not sibling_vectorize, (
+        f"Sibling subtree should not be vectorized, got: "
+        f"{[(t.task_type, getattr(t, 'uri', ''), getattr(t, 'file_path', '')) for t in sibling_vectorize]}"
+    )
+
+    # Sibling subtree files MUST NOT be read
+    sibling_file_reads = [
+        c
+        for c in fake_fs.read_calls
+        if "dir_b/" in c and not c.endswith(".abstract.md") and not c.endswith(".overview.md")
+    ]
+    assert not sibling_file_reads, f"Sibling files should not be read, got: {sibling_file_reads}"
 
 
 if __name__ == "__main__":
