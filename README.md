@@ -557,6 +557,8 @@ or you can run in background
 nohup openviking-server > /data/log/openviking.log 2>&1 &
 ```
 
+For long-running environments, prefer a `systemd --user` service instead of `nohup` so restarts and process state are managed consistently. See: [Server Mode (systemd user service)](./docs/en/getting-started/03-quickstart-server.md#run-with-systemd-user-service-recommended-for-linux).
+
 #### Run the CLI
 
 ```bash

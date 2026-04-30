@@ -38,6 +38,37 @@ You should see:
 INFO:     Uvicorn running on http://0.0.0.0:1933
 ```
 
+## Run with systemd user service (recommended for Linux)
+
+`openviking-server` runs in the foreground. For persistent Linux sessions, use a user-level systemd unit instead of shell background wrappers.
+
+1. Copy the example unit file:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp docs/en/getting-started/examples/openviking-server.service ~/.config/systemd/user/openviking.service
+```
+
+2. Edit the unit values:
+
+- Set `WorkingDirectory` to your OpenViking workspace
+- Set `Environment=OPENVIKING_CONFIG_FILE=...` to your `ov.conf` path
+- Optionally add `Environment=OPENVIKING_CLI_CONFIG_FILE=...` if needed
+
+3. Enable and start:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now openviking.service
+systemctl --user status openviking.service
+```
+
+4. View logs:
+
+```bash
+journalctl --user -u openviking.service -f
+```
+
 ## Verify
 
 ```bash
