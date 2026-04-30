@@ -262,6 +262,29 @@ All connection fields follow the same priority chain (highest → lowest):
 3. **`ov.conf`** — server config (`~/.openviking/ov.conf` or `OPENVIKING_CONFIG_FILE`)
 4. **Built-in defaults**
 
+> ⚠️ **Important — applies to hooks only**: the resolution chain above is implemented in `scripts/config.mjs`, which is loaded by hooks (auto-recall, auto-capture, session-start). It does **not** apply to the bundled MCP server registration. See [MCP Server Connection](#mcp-server-connection-architectural-limit) below.
+
+### MCP Server Connection (Architectural Limit)
+
+Claude Code parses `.mcp.json` itself and supports **only `${ENV_VAR}` substitution** — there is no plugin hook that runs before MCP servers are registered. As a result, the plugin cannot transparently feed `ovcli.conf` / `ov.conf` values into the MCP server URL or auth headers.
+
+**Symptom**: hooks (auto-recall, auto-capture) work correctly because they read `ovcli.conf` directly via Node, but the on-demand MCP tools (`search`, `read`, `store`, `list`, etc.) silently connect to the fallback `http://127.0.0.1:1933` with an empty `Authorization: Bearer ` header.
+
+**Fix — choose one**:
+
+1. **Export env vars before launching `claude`** (recommended for remote servers). Add to your shell rc, or wrap with a one-liner:
+   ```bash
+   # ~/.zshrc / ~/.bashrc
+   if [ -f ~/.openviking/ovcli.conf ]; then
+     export OPENVIKING_URL=$(jq -r '.url' ~/.openviking/ovcli.conf)
+     export OPENVIKING_API_KEY=$(jq -r '.api_key' ~/.openviking/ovcli.conf)
+     export OPENVIKING_ACCOUNT=$(jq -r '.account // ""' ~/.openviking/ovcli.conf)
+     export OPENVIKING_USER=$(jq -r '.user // ""' ~/.openviking/ovcli.conf)
+   fi
+   ```
+2. **Manually configure the MCP server** in your project `.mcp.json` or `~/.claude.json`, bypassing the plugin's bundled `.mcp.json`. Use the standard config (see the [MCP integration guide](../../docs/en/guides/06-mcp-integration.md)) with the URL and `Authorization: Bearer` header from `ovcli.conf`.
+3. **Local mode** (server on `127.0.0.1:1933` with no auth): the bundled `.mcp.json` already works — no extra setup needed.
+
 ### Environment Variables
 
 | Env Var | Maps To | Description |

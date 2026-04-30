@@ -257,6 +257,29 @@ export OPENVIKING_CONFIG_FILE="~/custom/path/ov.conf"
 3. **`ov.conf`** — 服务器配置（`~/.openviking/ov.conf` 或 `OPENVIKING_CONFIG_FILE`）
 4. **内置默认值**
 
+> ⚠️ **重要 — 仅适用于 hooks**：上述优先级链由 `scripts/config.mjs` 实现，被 hooks（自动召回、自动捕获、会话启动）加载。它**不适用**于内置 MCP 服务器的注册。详见下方 [MCP 服务器连接](#mcp-服务器连接架构限制)。
+
+### MCP 服务器连接（架构限制）
+
+Claude Code 自己解析 `.mcp.json`，且**仅支持 `${ENV_VAR}` 占位符替换** —— 没有任何插件 hook 能在 MCP 服务器注册之前运行。因此，插件无法将 `ovcli.conf` / `ov.conf` 中的值透明地注入 MCP 服务器的 URL 或认证头。
+
+**症状**：hooks（自动召回、自动捕获）工作正常，因为它们直接通过 Node 读取 `ovcli.conf`；但按需的 MCP 工具（`search`、`read`、`store`、`list` 等）会静默连接到 fallback 的 `http://127.0.0.1:1933`，且 `Authorization: Bearer ` 头为空。
+
+**修复方式 —— 三选一**：
+
+1. **启动 `claude` 之前先 export 环境变量**（远程服务器推荐）。加入 shell rc：
+   ```bash
+   # ~/.zshrc / ~/.bashrc
+   if [ -f ~/.openviking/ovcli.conf ]; then
+     export OPENVIKING_URL=$(jq -r '.url' ~/.openviking/ovcli.conf)
+     export OPENVIKING_API_KEY=$(jq -r '.api_key' ~/.openviking/ovcli.conf)
+     export OPENVIKING_ACCOUNT=$(jq -r '.account // ""' ~/.openviking/ovcli.conf)
+     export OPENVIKING_USER=$(jq -r '.user // ""' ~/.openviking/ovcli.conf)
+   fi
+   ```
+2. **在项目 `.mcp.json` 或 `~/.claude.json` 中手动配置 MCP 服务器**，绕过插件自带的 `.mcp.json`。使用标准 MCP 配置格式（参考 [MCP 集成文档](../../docs/zh/guides/06-mcp-integration.md)），URL 和 `Authorization: Bearer` 头从 `ovcli.conf` 中复制。
+3. **本地模式**（服务器在 `127.0.0.1:1933` 且无需鉴权）：内置 `.mcp.json` 已经能跑，无需额外配置。
+
 ### 环境变量
 
 | 环境变量 | 映射到 | 描述 |
