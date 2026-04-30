@@ -54,7 +54,6 @@ class MemoryStore:
 
         for idx, memory in enumerate(filtered_memories, start=1):
             uri = getattr(memory, "uri", "")
-            abstract = getattr(memory, "abstract", "")
             score = getattr(memory, "score", 0.0)
 
             # First, try to build full memory with content

@@ -186,7 +186,7 @@ def resolve_was_mentioned(payload: dict[str, Any], agent_user_id: str) -> bool:
     return f"<@{agent_user_id}>" in content or f"@{agent_user_id}" in content
 
 
-def resolve_require_mention(config: MochatConfig, session_id: str, group_id: str) -> bool:
+def resolve_require_mention(config: MochatChannelConfig, session_id: str, group_id: str) -> bool:
     """Resolve mention requirement for group/panel conversations."""
     groups = config.groups or {}
     for key in (group_id, session_id, "*"):
