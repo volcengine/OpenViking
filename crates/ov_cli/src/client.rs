@@ -954,6 +954,11 @@ impl HttpClient {
         self.get(&path, &params).await
     }
 
+    pub async fn admin_list_agents(&self, account_id: &str) -> Result<Value> {
+        let path = format!("/api/v1/admin/accounts/{}/agents", account_id);
+        self.get(&path, &[]).await
+    }
+
     pub async fn admin_remove_user(&self, account_id: &str, user_id: &str) -> Result<Value> {
         let path = format!("/api/v1/admin/accounts/{}/users/{}", account_id, user_id);
         self.delete(&path, &[]).await

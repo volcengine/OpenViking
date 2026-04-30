@@ -22,6 +22,7 @@ Admin API 用于多租户环境下的账户和用户管理。包括工作区（a
 | 创建/删除工作区 | Y | N | N |
 | 列出工作区 | Y | N | N |
 | 注册/移除用户 | Y | Y（本 account） | N |
+| 列出 agent namespace | Y | Y（本 account） | N |
 | 重新生成 User Key | Y | Y（本 account） | N |
 | 修改用户角色 | Y | N | N |
 
@@ -504,6 +505,75 @@ ov --sudo admin list-users acme
   "result": [
     {"user_id": "alice", "role": "admin"},
     {"user_id": "bob", "role": "user"}
+  ],
+  "time": 0.1
+}
+```
+
+---
+
+### list_agents
+
+#### 1. API 实现介绍
+
+列出工作区中已经存在的 agent namespace。这是管理侧发现接口，不改变普通 `viking://agent/...` 文件系统语义。
+
+**处理流程：**
+1. 验证请求者具有 ROOT 权限，或为本账户的 ADMIN
+2. 验证 account 存在
+3. 扫描该 account 的 `viking://agent` namespace 根目录
+4. 返回按 agent_id 排序的 agent namespace 列表
+
+**代码入口：**
+- `openviking/server/routers/admin.py:list_agents` - HTTP 路由
+- `crates/ov_cli/src/client.rs:HttpClient.admin_list_agents` - CLI HTTP 客户端
+- `crates/ov_cli/src/commands/admin.rs:list_agents` - CLI 命令
+
+#### 2. 接口和参数说明
+
+**参数**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| account_id | str | 是 | - | 工作区 ID |
+
+**说明：**
+- ROOT 可以列出任意 account 的 agents
+- ADMIN 只能列出自己所属 account 的 agents
+- USER 不能调用该接口
+- 返回的是存储中已经存在的 agent namespace；新建 account 会包含初始化出的 `default` agent namespace
+
+#### 3. 使用示例
+
+**HTTP API**
+
+```
+GET /api/v1/admin/accounts/{account_id}/agents
+```
+
+```bash
+curl -X GET http://localhost:1933/api/v1/admin/accounts/acme/agents \
+  -H "X-API-Key: <root-or-admin-key>"
+```
+
+**CLI**
+
+```bash
+# ROOT 或本账户的 ADMIN 都可以执行
+# 如果使用普通用户的 api_key 但该用户是 acme 的 ADMIN：
+ov admin list-agents acme
+# 如果使用 root_api_key（--sudo）：
+ov --sudo admin list-agents acme
+```
+
+**响应示例**
+
+```json
+{
+  "status": "ok",
+  "result": [
+    {"agent_id": "default", "uri": "viking://agent/default"},
+    {"agent_id": "openclaw", "uri": "viking://agent/openclaw"}
   ],
   "time": 0.1
 }

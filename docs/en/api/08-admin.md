@@ -22,6 +22,7 @@ For `/api/v1/admin/*`, trusted mode also permits requests with no explicit ident
 | Create/delete workspace | Y | N | N |
 | List workspaces | Y | N | N |
 | Register/remove users | Y | Y (own account) | N |
+| List agent namespaces | Y | Y (own account) | N |
 | Regenerate user key | Y | Y (own account) | N |
 | Change user role | Y | N | N |
 
@@ -506,6 +507,75 @@ ov --sudo admin list-users acme
   "result": [
     {"user_id": "alice", "role": "admin"},
     {"user_id": "bob", "role": "user"}
+  ],
+  "time": 0.1
+}
+```
+
+---
+
+### list_agents
+
+#### 1. API Implementation Overview
+
+List agent namespaces that exist under a workspace. This is an admin discovery API; it does not change normal `viking://agent/...` filesystem semantics.
+
+**Processing Flow:**
+1. Verify requester has ROOT privileges or is an ADMIN of the account
+2. Verify the account exists
+3. Scan the account's `viking://agent` namespace root
+4. Return sorted agent namespace entries
+
+**Code Entry Points:**
+- `openviking/server/routers/admin.py:list_agents` - HTTP route
+- `crates/ov_cli/src/client.rs:HttpClient.admin_list_agents` - CLI HTTP client
+- `crates/ov_cli/src/commands/admin.rs:list_agents` - CLI command
+
+#### 2. Interface and Parameters
+
+**Parameters**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| account_id | str | Yes | - | Workspace ID |
+
+**Notes:**
+- ROOT can list agents in any account
+- ADMIN can only list agents in their own account
+- USER cannot call this API
+- The result lists agent namespaces that exist in storage. A new account includes the initialized `default` agent namespace.
+
+#### 3. Usage Examples
+
+**HTTP API**
+
+```
+GET /api/v1/admin/accounts/{account_id}/agents
+```
+
+```bash
+curl -X GET http://localhost:1933/api/v1/admin/accounts/acme/agents \
+  -H "X-API-Key: <root-or-admin-key>"
+```
+
+**CLI**
+
+```bash
+# Either ROOT or account ADMIN can execute
+# If using regular user's api_key who is an ADMIN of acme:
+ov admin list-agents acme
+# If using root_api_key (--sudo):
+ov --sudo admin list-agents acme
+```
+
+**Response Example**
+
+```json
+{
+  "status": "ok",
+  "result": [
+    {"agent_id": "default", "uri": "viking://agent/default"},
+    {"agent_id": "openclaw", "uri": "viking://agent/openclaw"}
   ],
   "time": 0.1
 }

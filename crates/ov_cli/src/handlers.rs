@@ -331,6 +331,9 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
         AdminCommands::ListUsers { account_id, limit, name, role } => {
             commands::admin::list_users(&client, &account_id, limit, name, role, ctx.output_format, ctx.compact).await
         }
+        AdminCommands::ListAgents { account_id } => {
+            commands::admin::list_agents(&client, &account_id, ctx.output_format, ctx.compact).await
+        }
         AdminCommands::RemoveUser {
             account_id,
             user_id,
