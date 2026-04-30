@@ -231,7 +231,7 @@ def run_vikingbot_chat(
         ]
         try:
             # print(f'new_cmd={new_cmd}')
-            subprocess.run(new_cmd, capture_output=True, text=True, timeout=60)
+            subprocess.run(new_cmd, capture_output=True, text=True, timeout=300)
         except Exception:
             # 忽略 /new 命令的错误
             pass
@@ -289,10 +289,19 @@ def run_vikingbot_chat(
         )
 
 
-def load_processed_questions(output_path: str) -> set:
-    """加载已处理的问题集合（已禁用，每次重新运行）"""
-    # 注意：去重逻辑已禁用，每次运行都会重新执行所有问题
-    return set()
+def load_processed_questions(output_path: str, skip_done: bool = False) -> set[str]:
+    """加载已处理的问题集合。"""
+    if not skip_done or not os.path.exists(output_path):
+        return set()
+
+    processed_questions = set()
+    with open(output_path, "r", encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            question = row.get("question")
+            if question:
+                processed_questions.add(question)
+    return processed_questions
 
 
 def main():
@@ -341,6 +350,11 @@ def main():
         action="store_true",
         help="Update mode: if output file exists, update matching question_index rows instead of overwriting",
     )
+    parser.add_argument(
+        "--skip-done",
+        action="store_true",
+        help="Skip questions already present in the output file",
+    )
     args = parser.parse_args()
 
     # 如果指定了 question-index，自动设置 count=1
@@ -380,7 +394,7 @@ def main():
     print(f"Filtered to {len(qa_list)} questions after removing category=5")
 
     # 加载已处理的问题
-    processed_questions = load_processed_questions(args.output)
+    processed_questions = load_processed_questions(args.output, skip_done=args.skip_done)
     remaining = total - len(processed_questions)
     print(
         f"Loaded {total} QA questions, {len(processed_questions)} already processed, {remaining} remaining"
