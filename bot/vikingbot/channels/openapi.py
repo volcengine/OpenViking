@@ -19,6 +19,8 @@ from vikingbot.channels.openapi_models import (
     ChatResponse,
     ChatStreamEvent,
     EventType,
+    FeedbackRequest,
+    FeedbackResponse,
     HealthResponse,
     SessionCreateRequest,
     SessionCreateResponse,
@@ -33,6 +35,7 @@ from vikingbot.config.schema import (
     SessionKey,
     requires_gateway_token,
 )
+from vikingbot.session.manager import SessionManager
 
 
 class PendingResponse:
@@ -110,6 +113,7 @@ class OpenAPIChannel(BaseChannel):
         self._router: Optional[APIRouter] = None
         self._app = app  # External FastAPI app to register routes on
         self._server: Optional[asyncio.Task] = None  # Server task
+        self._session_manager = SessionManager(self._resolve_bot_data_path())
 
         # Load BotChannel configurations immediately in constructor
         # so that subscriptions are setup before ChannelManager starts
@@ -241,6 +245,18 @@ class OpenAPIChannel(BaseChannel):
             self._router = self._create_router()
         return self._router
 
+    def _resolve_bot_data_path(self) -> Path:
+        """Resolve the bot data path used for session persistence."""
+        if self._global_config is not None and hasattr(self._global_config, "bot_data_path"):
+            return Path(self._global_config.bot_data_path)
+        if self.workspace_path is not None:
+            return (
+                self.workspace_path.parent
+                if self.workspace_path.name == "workspace"
+                else self.workspace_path
+            )
+        return Path("~/.openviking/data/bot").expanduser()
+
     def _create_router(self) -> APIRouter:
         """Create the FastAPI router with all routes."""
         router = APIRouter()
@@ -297,6 +313,14 @@ class OpenAPIChannel(BaseChannel):
             if not request.stream:
                 request.stream = True
             return await channel._handle_chat_stream(request)
+
+        @router.post("/feedback", response_model=FeedbackResponse)
+        async def submit_feedback(
+            request: FeedbackRequest,
+            authorized: bool = Depends(verify_api_key),
+        ):
+            """Submit explicit user feedback for a prior assistant response."""
+            return await channel._handle_feedback(request)
 
         @router.get("/sessions", response_model=SessionListResponse)
         async def list_sessions(
@@ -699,6 +723,91 @@ class OpenAPIChannel(BaseChannel):
                 "Connection": "keep-alive",
             },
         )
+
+    async def _handle_feedback(self, request: FeedbackRequest) -> FeedbackResponse:
+        """Persist explicit user feedback and emit an analytics event."""
+        session_key = self._get_feedback_session_key(request)
+        session = self._session_manager.get_or_create(session_key)
+        response_message = self._find_response_message(session.messages, request.response_id)
+        if response_message is None:
+            # The agent loop and OpenAPI channel keep separate session-manager caches.
+            # Reload from disk once so an earlier stale cache entry does not hide a
+            # response that was persisted moments before feedback submission.
+            self._session_manager._cache.pop(session_key, None)
+            session = self._session_manager.get_or_create(session_key)
+            response_message = self._find_response_message(session.messages, request.response_id)
+            if response_message is None:
+                raise HTTPException(status_code=404, detail="Response not found")
+
+        response_timestamp = self._parse_message_timestamp(response_message)
+        feedback_timestamp = datetime.now()
+        feedback_delay_sec = None
+        if response_timestamp is not None:
+            feedback_delay_sec = round((feedback_timestamp - response_timestamp).total_seconds(), 3)
+
+        feedback_event = {
+            "response_id": request.response_id,
+            "session_id": request.session_id,
+            "user_id": request.user_id or response_message.get("sender_id"),
+            "feedback_type": request.feedback_type.value,
+            "feedback_score": request.feedback_score,
+            "feedback_reason": request.feedback_reason,
+            "feedback_text": request.feedback_text,
+            "feedback_delay_sec": feedback_delay_sec,
+            "channel": session_key.channel_key(),
+            "created_at": feedback_timestamp.isoformat(),
+        }
+        session.metadata.setdefault("feedback_events", []).append(feedback_event)
+        session.updated_at = feedback_timestamp
+        await self._session_manager.save(session)
+
+        await self.bus.publish_outbound(
+            OutboundMessage(
+                session_key=session_key,
+                content="",
+                event_type=OutboundEventType.FEEDBACK_SUBMITTED,
+                response_id=request.response_id,
+                metadata={"feedback_submitted": feedback_event},
+            )
+        )
+
+        return FeedbackResponse(
+            accepted=True,
+            response_id=request.response_id,
+            session_id=request.session_id,
+            feedback_type=request.feedback_type,
+            feedback_delay_sec=feedback_delay_sec,
+            timestamp=feedback_timestamp,
+        )
+
+    def _get_feedback_session_key(self, request: FeedbackRequest) -> SessionKey:
+        """Resolve the persisted session key for a feedback request."""
+        if request.channel_id:
+            return SessionKey(
+                type="bot_api", channel_id=request.channel_id, chat_id=request.session_id
+            )
+        return SessionKey(
+            type="cli", channel_id=self.config.channel_id(), chat_id=request.session_id
+        )
+
+    @staticmethod
+    def _find_response_message(
+        messages: List[Dict[str, Any]], response_id: str
+    ) -> Optional[Dict[str, Any]]:
+        for message in reversed(messages):
+            if message.get("role") == "assistant" and message.get("response_id") == response_id:
+                return message
+        return None
+
+    @staticmethod
+    def _parse_message_timestamp(message: Dict[str, Any]) -> Optional[datetime]:
+        timestamp = message.get("timestamp")
+        if not isinstance(timestamp, str) or not timestamp:
+            return None
+        try:
+            return datetime.fromisoformat(timestamp)
+        except ValueError:
+            return None
 
 
 def get_openapi_router(bus: MessageBus, config: Config) -> APIRouter:

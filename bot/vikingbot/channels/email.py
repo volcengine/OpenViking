@@ -104,7 +104,10 @@ class EmailChannel(BaseChannel):
 
     async def send(self, msg: OutboundMessage) -> None:
         """Send email via SMTP."""
-        if msg.event_type == OutboundEventType.RESPONSE_COMPLETED:
+        if msg.event_type in (
+            OutboundEventType.RESPONSE_COMPLETED,
+            OutboundEventType.FEEDBACK_SUBMITTED,
+        ):
             return
 
         if not self.config.consent_granted:

@@ -314,7 +314,10 @@ class MochatChannel(BaseChannel):
 
     async def send(self, msg: OutboundMessage) -> None:
         """Send outbound message to session or panel."""
-        if msg.event_type == OutboundEventType.RESPONSE_COMPLETED:
+        if msg.event_type in (
+            OutboundEventType.RESPONSE_COMPLETED,
+            OutboundEventType.FEEDBACK_SUBMITTED,
+        ):
             return
 
         if not self.config.claw_token:

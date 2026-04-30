@@ -3,6 +3,7 @@
 """Regression tests for OpenAPI HTTP auth requirements."""
 
 import asyncio
+import json
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -204,3 +205,108 @@ class TestOpenAPIAuth:
         assert len(pending.events) == 1
         assert pending.events[0]["type"] == "response"
         assert pending.events[0]["data"] == {"content": "hello", "response_id": "resp-123"}
+
+    def test_feedback_persists_event_and_emits_feedback_submitted(
+        self, message_bus, temp_workspace
+    ):
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+        )
+        session_key = SessionKey(type="cli", channel_id="default", chat_id="session-1")
+        session = channel._session_manager.get_or_create(session_key)
+        session.add_message(
+            "assistant",
+            "hello",
+            sender_id="user-1",
+            response_id="resp-123",
+            timestamp="2026-04-30T00:00:00",
+        )
+        asyncio.run(channel._session_manager.save(session))
+
+        client = _make_client(channel)
+        response = client.post(
+            "/bot/v1/feedback",
+            json={
+                "session_id": "session-1",
+                "response_id": "resp-123",
+                "feedback_type": "thumb_up",
+                "feedback_text": "helpful",
+            },
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["accepted"] is True
+        assert body["response_id"] == "resp-123"
+        assert body["session_id"] == "session-1"
+        assert body["feedback_type"] == "thumb_up"
+        assert message_bus.outbound_size == 1
+
+        outbound = asyncio.run(message_bus.consume_outbound())
+        assert outbound.event_type == OutboundEventType.FEEDBACK_SUBMITTED
+        assert outbound.response_id == "resp-123"
+        assert outbound.metadata["feedback_submitted"]["feedback_type"] == "thumb_up"
+        assert outbound.metadata["feedback_submitted"]["feedback_text"] == "helpful"
+
+        session_path = temp_workspace / "sessions" / "cli__default__session-1.jsonl"
+        lines = session_path.read_text(encoding="utf-8").splitlines()
+        metadata = json.loads(lines[0])
+        assert metadata["metadata"]["feedback_events"][0]["response_id"] == "resp-123"
+        assert metadata["metadata"]["feedback_events"][0]["feedback_type"] == "thumb_up"
+
+    def test_feedback_requires_existing_response(self, message_bus, temp_workspace):
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+        )
+        client = _make_client(channel)
+
+        response = client.post(
+            "/bot/v1/feedback",
+            json={
+                "session_id": "missing-session",
+                "response_id": "missing-response",
+                "feedback_type": "thumb_down",
+            },
+        )
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Response not found"
+
+    def test_feedback_reloads_session_after_stale_cached_miss(self, message_bus, temp_workspace):
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+        )
+        session_key = SessionKey(type="cli", channel_id="default", chat_id="session-1")
+
+        stale_session = channel._session_manager.get_or_create(session_key)
+        assert stale_session.messages == []
+
+        writer_manager = channel._session_manager.__class__(channel._session_manager.bot_data_path)
+        writer_session = writer_manager.get_or_create(session_key)
+        writer_session.add_message(
+            "assistant",
+            "hello",
+            sender_id="user-1",
+            response_id="resp-123",
+            timestamp="2026-04-30T00:00:00",
+        )
+        asyncio.run(writer_manager.save(writer_session))
+
+        client = _make_client(channel)
+        response = client.post(
+            "/bot/v1/feedback",
+            json={
+                "session_id": "session-1",
+                "response_id": "resp-123",
+                "feedback_type": "thumb_up",
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["accepted"] is True
