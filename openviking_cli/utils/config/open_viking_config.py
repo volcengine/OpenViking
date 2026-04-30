@@ -229,6 +229,7 @@ class OpenVikingConfig(BaseModel):
             current_active = "default"
             # Atomic write via MigrationStateFile to prevent corruption
             from openviking.storage.migration.state import MigrationStateFile
+
             migration_file = MigrationStateFile(str(config_dir))
             migration_file.create_initial(current_active)
 

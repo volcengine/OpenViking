@@ -75,9 +75,9 @@ class TestGetTargetEmbedder:
 
         ov_config = MagicMock()
         ov_config.embeddings = {"v2": target_config}
-        ov_config.get_target_embedder.side_effect = (
-            lambda name: ov_config.embeddings[name].get_embedder()
-        )
+        ov_config.get_target_embedder.side_effect = lambda name: ov_config.embeddings[
+            name
+        ].get_embedder()
 
         embedder = ov_config.get_target_embedder("v2")
         assert embedder is fake_embedder
@@ -87,9 +87,9 @@ class TestGetTargetEmbedder:
         """get_target_embedder() with nonexistent name should raise KeyError."""
         ov_config = MagicMock()
         ov_config.embeddings = {}
-        ov_config.get_target_embedder.side_effect = (
-            lambda name: ov_config.embeddings[name].get_embedder()
-        )
+        ov_config.get_target_embedder.side_effect = lambda name: ov_config.embeddings[
+            name
+        ].get_embedder()
 
         with pytest.raises(KeyError):
             ov_config.get_target_embedder("nonexistent_embedder")
@@ -129,6 +129,7 @@ class TestEmbeddingsField:
     def test_embeddings_field_exists(self, tmp_path):
         """OpenVikingConfig should have an embeddings: Dict[str, EmbeddingConfig] field."""
         import os
+
         os.environ["OPENVIKING_CONFIG_DIR"] = str(tmp_path)
         # Create state file with current_active pointing to v1
         state_file = tmp_path / "embedding_migration_state.json"
@@ -136,7 +137,9 @@ class TestEmbeddingsField:
         config = _make_openviking_config(
             embeddings={
                 "v1": _make_embedding_config(),
-                "v2": _make_embedding_config(dense={"provider": "local", "model": "bge-small-zh-v1.5-f16", "dimension": 512}),
+                "v2": _make_embedding_config(
+                    dense={"provider": "local", "model": "bge-small-zh-v1.5-f16", "dimension": 512}
+                ),
             }
         )
         assert hasattr(config, "embeddings")
@@ -177,7 +180,9 @@ class TestEmbeddingsField:
 
     def test_dimension_mismatch_rejects(self):
         """embedding.dimension != storage.vectordb.dimension should reject."""
-        emb = _make_embedding_config(dense={"provider": "local", "model": "bge-small-zh-v1.5-f16", "dimension": 512})
+        emb = _make_embedding_config(
+            dense={"provider": "local", "model": "bge-small-zh-v1.5-f16", "dimension": 512}
+        )
         storage = StorageConfig(
             vectordb=VectorDBBackendConfig(dimension=1024),
         )
@@ -190,12 +195,17 @@ class TestEmbeddingsField:
     def test_embeddings_resolves_active_config(self, tmp_path):
         """embeddings non-empty -> config.embedding should equal embeddings[current_active]."""
         import os
+
         os.environ["OPENVIKING_CONFIG_DIR"] = str(tmp_path)
         # Create state file pointing to v1
         state_file = tmp_path / "embedding_migration_state.json"
         state_file.write_text(json.dumps({"version": 1, "current_active": "v1", "history": []}))
-        emb_v1 = _make_embedding_config(dense={"provider": "local", "model": "bge-small-zh-v1.5-f16", "dimension": 512})
-        emb_v2 = _make_embedding_config(dense={"provider": "local", "model": "bge-small-zh-v1.5-f16", "dimension": 512})
+        emb_v1 = _make_embedding_config(
+            dense={"provider": "local", "model": "bge-small-zh-v1.5-f16", "dimension": 512}
+        )
+        emb_v2 = _make_embedding_config(
+            dense={"provider": "local", "model": "bge-small-zh-v1.5-f16", "dimension": 512}
+        )
         config = _make_openviking_config(
             embeddings={
                 "v1": emb_v1,

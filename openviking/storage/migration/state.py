@@ -112,9 +112,7 @@ class MigrationState:
         data = dict(data)
         data["phase"] = MigrationPhase(data["phase"])
         if data.get("reindex_progress") is not None:
-            data["reindex_progress"] = ReindexProgress.from_dict(
-                data["reindex_progress"]
-            )
+            data["reindex_progress"] = ReindexProgress.from_dict(data["reindex_progress"])
         return cls(**data)
 
 
@@ -231,12 +229,16 @@ class MigrationStateFile:
 
     def update_current_active(self, name: str) -> None:
         """Atomically update current_active, preserving other fields."""
+
         def _update(data: Dict[str, Any]) -> None:
             data["current_active"] = name
+
         self._read_write_atomic(_update)
 
     def append_history(self, entry: Dict[str, Any]) -> None:
         """Atomically append a migration history record."""
+
         def _update(data: Dict[str, Any]) -> None:
             data["history"].append(entry)
+
         self._read_write_atomic(_update)
