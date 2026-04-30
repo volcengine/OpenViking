@@ -117,3 +117,52 @@ def test_load_server_config_preserves_metrics_account_dimension_fields(tmp_path)
         "openviking_http_requests_total",
         "openviking_task_pending",
     ]
+
+
+def test_load_server_config_preserves_otlp_headers_fields(tmp_path):
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "server": {
+                    "observability": {
+                        "traces": {
+                            "enabled": True,
+                            "headers": {
+                                "X-ByteAPM-AppKey": "trace-appkey",
+                            },
+                        },
+                        "logs": {
+                            "enabled": True,
+                            "headers": {
+                                "X-ByteAPM-AppKey": "log-appkey",
+                            },
+                        },
+                        "metrics": {
+                            "enabled": True,
+                            "exporters": {
+                                "otel": {
+                                    "enabled": True,
+                                    "headers": {
+                                        "X-ByteAPM-AppKey": "metric-appkey",
+                                    },
+                                }
+                            },
+                        },
+                    }
+                }
+            }
+        )
+    )
+
+    config = load_server_config(str(config_path))
+
+    assert config.observability.traces.headers == {
+        "X-ByteAPM-AppKey": "trace-appkey",
+    }
+    assert config.observability.logs.headers == {
+        "X-ByteAPM-AppKey": "log-appkey",
+    }
+    assert config.observability.metrics.exporters.otel.headers == {
+        "X-ByteAPM-AppKey": "metric-appkey",
+    }

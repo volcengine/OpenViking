@@ -748,6 +748,11 @@ enum AdminCommands {
         #[arg(long)]
         role: Option<String>,
     },
+    /// List all agent namespaces in an account
+    ListAgents {
+        /// Account ID
+        account_id: String,
+    },
     /// Remove a user from an account
     RemoveUser {
         /// Account ID

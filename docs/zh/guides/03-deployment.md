@@ -195,9 +195,21 @@ docker run -d \
 ```
 
 Docker 镜像默认会同时启动：
-- OpenViking HTTP 服务，端口 `1933`
+- OpenViking HTTP 服务，端口 `1933`（绑定 `0.0.0.0`）
 - OpenViking Console，端口 `8020`
 - `vikingbot` gateway
+
+由于容器内服务绑定 `0.0.0.0`（Docker 端口映射所必需），你**必须**在 `ov.conf` 中设置 `root_api_key`：
+
+```json
+{
+  "server": {
+    "root_api_key": "your-secret-root-key"
+  }
+}
+```
+
+未设置时服务将拒绝启动。如需自定义绑定地址，可通过环境变量 `OPENVIKING_SERVER_HOST` 覆盖。
 
 升级容器的方式
 ```bash

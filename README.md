@@ -511,8 +511,7 @@ Example: ovcli.conf for visiting localhost server
 ```json
 {
   "url": "http://localhost:1933",
-  "timeout": 60.0,
-  "output": "table"
+  "timeout": 60.0
 }
 ```
 
@@ -749,6 +748,11 @@ Let's work together to define and build the future of AI Agent context managemen
 ### Star Trend
 
 [![Star History Chart](https://api.star-history.com/svg?repos=volcengine/OpenViking\&type=timeline\&legend=top-left)](https://www.star-history.com/#volcengine/OpenViking\&type=timeline\&legend=top-left)
+
+## Security and privacy
+
+This project takes security seriously.
+For vulnerability reporting and supported versions, see [SECURITY.md](SECURITY.md)
 
 ## License
 

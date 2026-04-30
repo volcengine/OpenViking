@@ -26,7 +26,8 @@
                     },
                     "endpoint": "localhost:4317",
                     "service_name": "openviking-server",
-                    "export_interval_ms": 10000
+                    "export_interval_ms": 10000,
+                    "headers": {}
                 }
             }
         },
@@ -37,7 +38,8 @@
                 "insecure": false
             },
             "endpoint": "localhost:4317",
-            "service_name": "openviking-server"
+            "service_name": "openviking-server",
+            "headers": {}
         },
         "logs": {
             "enabled": false,
@@ -46,7 +48,8 @@
                 "insecure": false
             },
             "endpoint": "localhost:4317",
-            "service_name": "openviking-server"
+            "service_name": "openviking-server",
+            "headers": {}
         }
     }
   },

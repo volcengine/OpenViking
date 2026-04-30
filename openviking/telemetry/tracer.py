@@ -118,6 +118,7 @@ def init_tracer_from_server_config(server_config: Any) -> Any:
             service_name=trace_cfg.service_name,
             protocol=trace_cfg.protocol,
             insecure=trace_cfg.tls.insecure,
+            headers=trace_cfg.headers,
             enabled=trace_cfg.enabled,
         )
     except Exception as e:
@@ -143,6 +144,7 @@ def init_tracer(
     service_name: str,
     protocol: str = "grpc",
     insecure: bool = False,
+    headers: Optional[dict[str, str]] = None,
     enabled: bool = True,
 ) -> Any:
     """Initialize the OpenTelemetry tracer.
@@ -152,6 +154,7 @@ def init_tracer(
         service_name: Service name for tracing
         protocol: OTLP protocol ("grpc" or "http")
         insecure: For OTLP/gRPC only. When True, use plaintext instead of TLS.
+        headers: Additional OTLP exporter headers for vendor-specific auth.
         enabled: Whether to enable tracing
 
     Returns:
@@ -171,6 +174,7 @@ def init_tracer(
         return None
 
     try:
+        normalized_headers = {str(key): str(value) for key, value in (headers or {}).items()}
         resource_attributes = {
             "service.name": service_name,
         }
@@ -184,10 +188,12 @@ def init_tracer(
                 trace_exporter = OTLPGrpcSpanExporter(
                     endpoint=endpoint,
                     insecure=insecure,
+                    headers=normalized_headers,
                 )
             except TypeError:
                 trace_exporter = OTLPGrpcSpanExporter(
                     endpoint=endpoint,
+                    headers=normalized_headers,
                 )
         elif protocol == "http":
             if OTLPHttpSpanExporter is None:
@@ -198,6 +204,7 @@ def init_tracer(
                 )
             trace_exporter = OTLPHttpSpanExporter(
                 endpoint=endpoint,
+                headers=normalized_headers,
             )
         else:
             raise ValueError(f"Unsupported trace protocol: {protocol}")

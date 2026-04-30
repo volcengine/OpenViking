@@ -106,10 +106,12 @@ forward_signal() {
 
 trap 'forward_signal' INT TERM
 
+SERVER_HOST="${OPENVIKING_SERVER_HOST:-0.0.0.0}"
+
 if [ "${WITH_BOT}" = "1" ]; then
-    openviking-server --with-bot &
+    openviking-server --host "${SERVER_HOST}" --with-bot &
 else
-    openviking-server &
+    openviking-server --host "${SERVER_HOST}" &
 fi
 SERVER_PID=$!
 

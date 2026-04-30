@@ -23,8 +23,7 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.captureMode).toBe("semantic");
     expect(cfg.captureMaxLength).toBe(24000);
     expect(cfg.recallMaxContentChars).toBe(5000);
-    expect(cfg.agent_prefix).toBe("default");
-    expect(cfg.serverAuthMode).toBe("api_key");
+    expect(cfg.agent_prefix).toBe("");
     expect(cfg.isolateUserScopeByAgent).toBe(false);
     expect(cfg.isolateAgentScopeByUser).toBe(false);
     expect(cfg.emitStandardDiagnostics).toBe(false);
@@ -165,9 +164,14 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.agent_prefix).toBe("my-agent");
   });
 
-  it("falls back to 'default' for empty agent_prefix", () => {
+  it("falls back to an empty prefix for empty agent_prefix", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({ agent_prefix: "  " });
-    expect(cfg.agent_prefix).toBe("default");
+    expect(cfg.agent_prefix).toBe("");
+  });
+
+  it("normalizes legacy 'default' agent_prefix to an empty prefix", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ agent_prefix: "default" });
+    expect(cfg.agent_prefix).toBe("");
   });
 
   it("migrates legacy agentId to agent_prefix", () => {
@@ -257,14 +261,9 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.isolateAgentScopeByUser).toBe(true);
   });
 
-  it("parses trusted serverAuthMode", () => {
+  it("accepts deprecated serverAuthMode without exposing it in parsed config", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({ serverAuthMode: "trusted" });
-    expect(cfg.serverAuthMode).toBe("trusted");
-  });
-
-  it("falls back to api_key for invalid serverAuthMode", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({ serverAuthMode: "invalid" });
-    expect(cfg.serverAuthMode).toBe("api_key");
+    expect("serverAuthMode" in cfg).toBe(false);
   });
 
   it("defaults recallResources to false", () => {

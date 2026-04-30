@@ -16,7 +16,7 @@ from openviking.server.dependencies import get_service
 from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
 from openviking.server.models import Response
 from openviking.storage.viking_fs import get_viking_fs
-from openviking_cli.exceptions import PermissionDeniedError
+from openviking_cli.exceptions import NotFoundError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.logger import get_logger
 
@@ -203,6 +203,48 @@ async def list_users(
         account_id, limit=limit, name_filter=name, role_filter=role, expose_key=expose_key
     )
     return Response(status="ok", result=users)
+
+
+@router.get("/accounts/{account_id}/agents")
+@require_auth_root_or_admin
+async def list_agents(
+    request: Request,
+    account_id: str = Path(..., description="Account ID"),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """List agent namespaces that have data under an account."""
+    _check_account_access(ctx, account_id)
+    manager = _get_api_key_manager(request)
+    manager.get_users(account_id, limit=1, expose_key=False)
+    policy = manager.get_account_policy(account_id)
+    viking_fs = get_viking_fs()
+    list_ctx = RequestContext(
+        user=UserIdentifier(account_id, "system", "system"),
+        role=Role.ROOT,
+        namespace_policy=policy,
+    )
+
+    try:
+        entries = await viking_fs.ls("viking://agent", ctx=list_ctx, output="original")
+    except NotFoundError:
+        entries = []
+
+    agents = []
+    for entry in entries:
+        if not entry.get("isDir", False):
+            continue
+        agent_id = str(entry.get("name", "")).strip()
+        if not agent_id:
+            continue
+        agents.append(
+            {
+                "agent_id": agent_id,
+                "uri": f"viking://agent/{agent_id}",
+            }
+        )
+
+    agents.sort(key=lambda item: item["agent_id"])
+    return Response(status="ok", result=agents)
 
 
 @router.delete("/accounts/{account_id}/users/{user_id}")

@@ -646,8 +646,8 @@ class MemoryV2TestSuite:
 
             print(f"  OV session ID: {ov_session_id}")
             commit_resp = self.api.commit_session(ov_session_id)
-            commit_data = commit_resp.get("data", {})
-            commit_result = commit_data.get("result", {})
+            commit_data = commit_resp.get("data") or {}
+            commit_result = commit_data.get("result") or {}
             task_id = commit_result.get("task_id")
 
             if not task_id and commit_result.get("status") == "accepted":
@@ -665,8 +665,8 @@ class MemoryV2TestSuite:
                     except Exception:
                         pass
                 commit_resp = self.api.commit_session(ov_session_id)
-                commit_data = commit_resp.get("data", {})
-                commit_result = commit_data.get("result", {})
+                commit_data = commit_resp.get("data") or {}
+                commit_result = commit_data.get("result") or {}
                 task_id = commit_result.get("task_id")
 
             if commit_resp["status_code"] == 200 and task_id:
@@ -679,8 +679,8 @@ class MemoryV2TestSuite:
                 print("  等待 10 秒后重试 commit...")
                 time.sleep(10)
                 commit_resp = self.api.commit_session(ov_session_id)
-                commit_data = commit_resp.get("data", {})
-                commit_result = commit_data.get("result", {})
+                commit_data = commit_resp.get("data") or {}
+                commit_result = commit_data.get("result") or {}
                 task_id = commit_result.get("task_id")
                 if task_id:
                     print(f"✓ 重试 Commit 成功 (task_id: {task_id})")

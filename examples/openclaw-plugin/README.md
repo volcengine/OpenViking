@@ -46,8 +46,10 @@ The main rules are:
 - prefer `sessionKey` when deriving a stable `ovSessionId`
 - normalize unsafe path characters, or fall back to a stable SHA-256 when needed
 - resolve `X-OpenViking-Agent` per session, not per process
-- when `plugins.entries.openviking.config.agent_prefix` is not `default`, prefix the session agent as `<agent_prefix>_<sessionAgent>`
-- add `X-OpenViking-Account`, `X-OpenViking-User`, and `X-OpenViking-Agent` in the client layer
+- when `plugins.entries.openviking.config.agent_prefix` is non-empty, prefix the session agent as `<agent_prefix>_<sessionAgent>`
+- when OpenClaw does not provide a session agent, use its default agent `main`
+- send `X-OpenViking-Agent` on OpenViking requests, including startup health checks
+- only add `X-OpenViking-Account` / `X-OpenViking-User` when `accountId` / `userId` are explicitly configured
 
 This matters because the plugin is built to support multi-agent and multi-session OpenClaw usage without mixing memories across sessions.
 
@@ -60,7 +62,7 @@ The recommended remote-mode configuration only needs:
 In this setup:
 
 - `apiKey` should usually be a user key
-- `accountId` / `userId` are advanced options only for root-key or `trusted` deployments
+- `accountId` / `userId` are advanced options only when the deployment needs explicit identity headers, such as root-key or trusted-server flows
 - `isolateUserScopeByAgent` / `isolateAgentScopeByUser` must match the server-side account namespace policy when using the PR #1356 canonical namespace model
 - `agentScopeMode` is a deprecated compatibility alias for older hash-based routing and should only be used against older servers
 

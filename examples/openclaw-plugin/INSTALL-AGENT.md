@@ -16,6 +16,7 @@ Choose the smallest action that matches the user's intent:
 | Upgrade only the plugin | `ov-install --update` |
 | Show installed versions | `ov-install --current-version` |
 | Operate on a specific OpenClaw instance | add `--workdir <path>` |
+| Start missing OpenViking server | `openviking-server init && openviking-server doctor && openviking-server` |
 
 Default rule: when upgrading, refresh the setup helper first unless the user explicitly asks to pin the helper itself.
 
@@ -46,13 +47,36 @@ Requirements:
 - Node.js >= 22
 - OpenClaw >= 2026.3.7
 
+### 3. Detect or start OpenViking server
+
+The OpenClaw plugin only connects to an OpenViking HTTP server. It does not start the server.
+
+Check the default local server first:
+
+```bash
+curl -fsS http://127.0.0.1:1933/health
+```
+
+If no OpenViking server is running and the user wants a local server:
+
+```bash
+pip install openviking --upgrade --force-reinstall
+openviking-server init
+openviking-server doctor
+openviking-server
+```
+
+Keep `openviking-server` running while OpenClaw uses the plugin. Use `http://127.0.0.1:1933` as the plugin `baseUrl` for the default local setup.
+
+For a remote server, confirm the reachable URL with the user and use that URL as `baseUrl`.
+
 If OpenClaw is missing, tell the user to run:
 
 ```bash
 npm install -g openclaw && openclaw onboard
 ```
 
-### 3. Detect existing install state
+### 4. Detect existing install state
 
 Use:
 
@@ -193,7 +217,7 @@ Core OpenClaw plugin fields:
 
 - `baseUrl`
 - `apiKey`
-- `agent_prefix`
+- `agent_prefix`: optional; interactive setup accepts only letters, digits, `_`, and `-`
 
 ## Uninstall
 

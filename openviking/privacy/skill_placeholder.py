@@ -10,10 +10,37 @@ class SkillPrivacyPlaceholderizationResult:
     sanitized_content: str
     original_content_blocks: list[str] = field(default_factory=list)
     replacement_content_blocks: list[str] = field(default_factory=list)
+    replaced_values: dict[str, str] = field(default_factory=dict)
 
 
 def build_placeholder(skill_name: str, field_name: str) -> str:
     return f"{{{{ov_privacy:skill:{skill_name}:{field_name}}}}}"
+
+
+def _replace_structured_value(content: str, raw_value: str, placeholder: str) -> tuple[str, bool]:
+    replacements = (
+        (f'"{raw_value}"', f'"{placeholder}"'),
+        (f"'{raw_value}'", f"'{placeholder}'"),
+        (f": {raw_value}\n", f": {placeholder}\n"),
+        (f": {raw_value}\r\n", f": {placeholder}\r\n"),
+        (f":{raw_value}\n", f":{placeholder}\n"),
+        (f":{raw_value}\r\n", f":{placeholder}\r\n"),
+        (f": {raw_value}", f": {placeholder}"),
+        (f":{raw_value}", f":{placeholder}"),
+        (f"= {raw_value}\n", f"= {placeholder}\n"),
+        (f"= {raw_value}\r\n", f"= {placeholder}\r\n"),
+        (f"={raw_value}\n", f"={placeholder}\n"),
+        (f"={raw_value}\r\n", f"={placeholder}\r\n"),
+        (f"= {raw_value}", f"= {placeholder}"),
+        (f"={raw_value}", f"={placeholder}"),
+    )
+
+    replaced = False
+    for old, new in replacements:
+        if old in content:
+            content = content.replace(old, new)
+            replaced = True
+    return content, replaced
 
 
 def placeholderize_skill_content_with_blocks(
@@ -22,6 +49,7 @@ def placeholderize_skill_content_with_blocks(
     sanitized = content
     original_content_blocks: list[str] = []
     replacement_content_blocks: list[str] = []
+    replaced_values: dict[str, str] = {}
     replacements = sorted(values.items(), key=lambda item: len(str(item[1])), reverse=True)
 
     for field_name, raw_value in replacements:
@@ -29,15 +57,17 @@ def placeholderize_skill_content_with_blocks(
             continue
         raw_value_str = str(raw_value)
         placeholder = build_placeholder(skill_name, field_name)
-        if raw_value_str in sanitized:
+        sanitized, replaced = _replace_structured_value(sanitized, raw_value_str, placeholder)
+        if replaced:
             original_content_blocks.append(raw_value_str)
             replacement_content_blocks.append(placeholder)
-        sanitized = sanitized.replace(raw_value_str, placeholder)
+            replaced_values[field_name] = raw_value_str
 
     return SkillPrivacyPlaceholderizationResult(
         sanitized_content=sanitized,
         original_content_blocks=original_content_blocks,
         replacement_content_blocks=replacement_content_blocks,
+        replaced_values=replaced_values,
     )
 
 

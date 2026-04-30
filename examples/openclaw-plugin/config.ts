@@ -4,11 +4,10 @@ export type MemoryOpenVikingConfig = {
   mode?: "remote";
   baseUrl?: string;
   agent_prefix?: string;
-  serverAuthMode?: "api_key" | "trusted";
   apiKey?: string;
-  /** Advanced option. Only needed when using root key or trusted auth mode. With a user key the server derives identity from the key. */
+  /** Advanced option. Only needed when explicitly sending tenant identity headers. With a user key the server derives identity from the key. */
   accountId?: string;
-  /** Advanced option. Only needed when using root key or trusted auth mode. */
+  /** Advanced option. Only needed when explicitly sending tenant identity headers. */
   userId?: string;
   /**
    * Canonical namespace policy. Must match the server-side account namespace
@@ -62,12 +61,12 @@ const DEFAULT_RECALL_MAX_INJECTED_CHARS = 4000;
 const DEFAULT_COMMIT_TOKEN_THRESHOLD = 20000;
 const DEFAULT_BYPASS_SESSION_PATTERNS: string[] = [];
 const DEFAULT_EMIT_STANDARD_DIAGNOSTICS = false;
-const DEFAULT_AGENT_PREFIX = "default";
-const DEFAULT_SERVER_AUTH_MODE = "api_key";
+const DEFAULT_AGENT_PREFIX = "";
 
 function resolveAgentPrefix(configured: unknown): string {
   if (typeof configured === "string" && configured.trim()) {
-    return configured.trim();
+    const trimmed = configured.trim();
+    return trimmed === "default" ? DEFAULT_AGENT_PREFIX : trimmed;
   }
   return DEFAULT_AGENT_PREFIX;
 }
@@ -192,10 +191,6 @@ export const memoryOpenVikingConfigSchema = {
     const rawBaseUrl = typeof cfg.baseUrl === "string" ? cfg.baseUrl : resolveDefaultBaseUrl();
     const resolvedBaseUrl = resolveEnvVars(rawBaseUrl).replace(/\/+$/, "");
     const rawApiKey = typeof cfg.apiKey === "string" ? cfg.apiKey : process.env.OPENVIKING_API_KEY;
-    const rawServerAuthMode =
-      cfg.serverAuthMode ?? process.env.OPENVIKING_SERVER_AUTH_MODE;
-    const serverAuthMode =
-      rawServerAuthMode === "trusted" ? "trusted" as const : "api_key" as const;
     const captureMode = cfg.captureMode;
     if (
       typeof captureMode !== "undefined" &&
@@ -262,7 +257,6 @@ export const memoryOpenVikingConfigSchema = {
       mode,
       baseUrl: resolvedBaseUrl,
       agent_prefix: resolveAgentPrefix(cfg.agent_prefix),
-      serverAuthMode,
       apiKey: rawApiKey ? resolveEnvVars(rawApiKey) : "",
       accountId,
       userId,
@@ -320,13 +314,8 @@ export const memoryOpenVikingConfigSchema = {
     },
     agent_prefix: {
       label: "Agent Prefix",
-      placeholder: "auto-generated",
-      help: 'OpenViking X-OpenViking-Agent prefix. "default" follows OpenClaw ctx.agentId. Non-default values are prepended as "<prefix>_<ctx.agentId>" (sanitized to [a-zA-Z0-9_-]).',
-    },
-    serverAuthMode: {
-      label: "Server Auth Mode",
-      placeholder: DEFAULT_SERVER_AUTH_MODE,
-      help: 'OpenViking auth behavior. "api_key" (default): send X-API-Key when configured, otherwise dev fallback to X-OpenViking-Account/User default/default. "trusted": always send accountId/userId and optionally send apiKey when configured.',
+      placeholder: "optional-prefix",
+      help: 'Optional prefix for OpenViking X-OpenViking-Agent. Empty means use OpenClaw ctx.agentId directly. Non-empty values are prepended as "<prefix>_<ctx.agentId>" (sanitized to [a-zA-Z0-9_-]). If ctx.agentId is unavailable, OpenClaw default agent "main" is used.',
     },
     apiKey: {
       label: "OpenViking API Key",
@@ -337,13 +326,13 @@ export const memoryOpenVikingConfigSchema = {
     accountId: {
       label: "Account ID",
       placeholder: "(derived from API key)",
-      help: "Advanced option. Tenant account ID. Only needed when using root key or trusted auth mode. With a user key the server derives identity from the key.",
+      help: "Advanced option. Tenant account ID. Only needed when explicitly sending identity headers, such as root-key or trusted deployments. With a user key the server derives identity from the key.",
       advanced: true,
     },
     userId: {
       label: "User ID",
       placeholder: "(derived from API key)",
-      help: "Advanced option. Tenant user ID. Only needed when using root key or trusted auth mode.",
+      help: "Advanced option. Tenant user ID. Only needed when explicitly sending identity headers.",
       advanced: true,
     },
     isolateUserScopeByAgent: {
