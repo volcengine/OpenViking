@@ -615,15 +615,19 @@ class MemoryV2TestSuite:
             self.run_openclaw_command(scenario["test_message"], scenario_session_id)
             print("✓ OpenClaw 对话完成")
             result["steps"]["openclaw_chat"] = "success"
-            time.sleep(5)
+            time.sleep(8)
 
             # 步骤 3: 找到 OV session 并 commit
             print("\n[步骤 3/5] 查找 OV session 并 commit")
             ov_session_id = self.api.find_new_session_id(before_session_ids)
             if not ov_session_id:
-                print(
-                    "  ⚠ 未找到新 session，OV 可能复用了已有 session，尝试 commit 所有已有 session"
-                )
+                print("  ⚠ 未找到新 session，等待 OV auto-capture 创建 session...")
+                for retry in range(3):
+                    time.sleep(5)
+                    ov_session_id = self.api.find_new_session_id(before_session_ids)
+                    if ov_session_id:
+                        print(f"  ✓ 第 {retry + 1} 次重试找到新 session")
+                        break
                 all_session_ids = self.api.list_session_ids()
                 committed_any = False
                 for sid in all_session_ids:
