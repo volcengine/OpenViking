@@ -21,10 +21,13 @@ fields:
   - name: content
     type: string
     description: |
-      Structured experience in EXACTLY this 3-section format:
+      Structured experience in EXACTLY this 4-section format:
 
       ## Situation
       <markdown bullets: trigger conditions and context where this pattern applies>
+
+      ## Key Facts
+      <markdown bullets: specific, concrete facts discovered during execution that are directly reusable — exact values, parameters, paths, error patterns, missing components. Only include facts that would NOT be obvious from the task description alone.>
 
       ## Approach
       <markdown bullets: the effective strategy or key steps to take>
@@ -33,8 +36,19 @@ fields:
       <markdown bullets: distilled principles — why the approach works, what risks or failure modes exist, and actionable rules to follow in future>
 
       Rules:
-      - Use exactly these 3 headings in this order.
+      - Use exactly these 4 headings in this order.
       - Each section uses concise markdown bullets (no numbered lists, no nested headings).
-      - Reflect must contain only transferable principles and lessons. Write as forward-looking rules that guide future behavior, not as a retrospective summary of what happened in past cases.
+      - **Key Facts** is the most important section. It must capture task-type-specific discoveries:
+          - Data structure details found at runtime (e.g., "header row is at index 4", "column count is 27 not 28")
+          - Specific required components that are easy to miss (e.g., "dropdown must be populated with real branch names, not left as template")
+          - Specific error patterns and their fixes (e.g., "ValueError on df.columns if unnamed index column not dropped first")
+          - Missing libraries or dependencies found in the execution environment
+          - Evaluation feedback: what specifically caused score deductions (e.g., "score deducted for missing R&D cost split sheet")
+          - Exact artifact paths or output file naming conventions that the submission system requires
+        If nothing task-specific was discovered, write: "- No task-specific facts to record."
+      - **Approach** should describe the generalizable procedure. Prefer concrete steps over abstract principles.
+        Do NOT repeat facts already listed in Key Facts.
+      - **Reflect** must contain only transferable principles and lessons. Write as forward-looking rules that guide future behavior.
+        At minimum: one bullet about what caused the worst score deduction and how to prevent it next time.
     merge_op: patch
 

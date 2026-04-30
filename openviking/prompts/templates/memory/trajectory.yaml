@@ -30,20 +30,25 @@ fields:
     type: string
     description: |
       Execution trace in EXACTLY this format:
-      - Goal: <what the user wanted to achieve — one sentence>
+      - Goal: <what the agent wanted to achieve — one sentence>
       - Process:
         1. <first key step or decision>
         2. <second key step or decision>
         3. <... continue for each major step>
-      - Result: <final outcome and any important side effects — one sentence>
+      - Result: <final outcome, evaluation score if known, and specific feedback received — one to two sentences>
 
       Rules:
       - Use exactly these 3 labels in this order.
-      - Goal and Result are ONE sentence each.
+      - Goal is ONE sentence.
+      - Result is one to two sentences: state the outcome, then include the evaluation score (e.g., "score=0.7") and any specific feedback about what was missing or deducted, if available.
       - Process lists the major steps in order as a numbered list. Each step is one concise sentence.
-      - If a step involves a tool call, record: tool name, key input parameters, and execution status (success / failed / <error reason>).
-        Example: "Called book_flight(flight=MU5101, passenger=user_123) → failed: duplicate booking on same date."
-      - Keep the full critical path intact — do not collapse steps that meaningfully changed the execution.
-      - Omit only noise: routine confirmations, minor retries, and setup that did not affect the outcome.
+      - If a step involves a tool call, record: tool name, key input parameters, and execution status.
+        For failures, include the SPECIFIC error: error type + exact message excerpt (not just "failed").
+        Example: "Called execute_code(read Excel) → failed: ValueError 'Length mismatch: Expected 28 elements, new values have 27'."
+        Example: "Called submit_work(artifact=None) → rejected: feedback 'missing required PDF artifact path'."
+      - For a step that fixes a previous failure, explicitly record what changed: "Fixed by setting header=4 and dropping the unnamed index column."
+      - Record task-specific facts discovered during execution that are not obvious from the task description:
+        e.g., actual column count, header row index, file encoding issues, missing library names, exact artifact paths printed by the sandbox.
+      - Keep the full critical path intact. Omit only noise: routine confirmations and setup steps with no bearing on the outcome.
       - No extra headings or free paragraphs.
     merge_op: patch
