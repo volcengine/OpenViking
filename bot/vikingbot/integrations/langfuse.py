@@ -32,6 +32,9 @@ class LangfuseClient:
     ):
         self._client = None
         self.enabled = enabled
+        self._observations_by_response_id: dict[str, Any] = {}
+        self._metadata_by_response_id: dict[str, dict[str, Any]] = {}
+        self._trace_context_by_response_id: dict[str, dict[str, str]] = {}
 
         if not self.enabled:
             return
@@ -79,6 +82,72 @@ class LangfuseClient:
         """Flush pending events to Langfuse."""
         if self.enabled and self._client:
             self._client.flush()
+
+    def register_generation(
+        self, response_id: str, generation: Any, metadata: dict[str, Any] | None = None
+    ) -> None:
+        """Keep a recent generation handle and metadata for later response outcome updates."""
+        if not response_id or generation is None:
+            return
+        self._observations_by_response_id[response_id] = generation
+        self._metadata_by_response_id[response_id] = dict(metadata or {})
+        trace_id = getattr(generation, "trace_id", None)
+        observation_id = getattr(generation, "id", None)
+        if trace_id and observation_id:
+            self._trace_context_by_response_id[response_id] = {
+                "trace_id": trace_id,
+                "observation_id": observation_id,
+            }
+        if len(self._observations_by_response_id) > 1000:
+            oldest_response_id = next(iter(self._observations_by_response_id))
+            self._observations_by_response_id.pop(oldest_response_id, None)
+            self._metadata_by_response_id.pop(oldest_response_id, None)
+            self._trace_context_by_response_id.pop(oldest_response_id, None)
+
+    def update_generation_metadata(self, response_id: str, metadata: dict[str, Any]) -> None:
+        """Merge provider-side generation metadata for later outcome updates."""
+        if not response_id or not metadata:
+            return
+        current = self._metadata_by_response_id.setdefault(response_id, {})
+        current.update(metadata)
+
+    def update_response_outcome(
+        self,
+        response_id: str,
+        outcome_label: str,
+        outcome_payload: dict[str, Any] | None = None,
+    ) -> None:
+        """Attach evaluated response outcome metadata to a tracked generation."""
+        if not self.enabled or not response_id:
+            return
+
+        trace_context = self._trace_context_by_response_id.get(response_id)
+        if trace_context is None or not self._client:
+            return
+
+        metadata = {"outcome_label": outcome_label}
+        if outcome_payload:
+            metadata["response_outcome_evaluated"] = outcome_payload
+
+        try:
+            combined_metadata = {**self._metadata_by_response_id.get(response_id, {}), **metadata}
+            self._metadata_by_response_id[response_id] = combined_metadata
+            self._client.create_event(
+                trace_context={"trace_id": trace_context["trace_id"]},
+                name="response_outcome_evaluated",
+                metadata=combined_metadata,
+            )
+            self._client.create_score(
+                name="response_outcome_label",
+                value=outcome_label,
+                trace_id=trace_context["trace_id"],
+                observation_id=trace_context["observation_id"],
+                data_type="CATEGORICAL",
+                metadata=outcome_payload,
+            )
+            self.flush()
+        except Exception as e:
+            logger.debug(f"Langfuse update response outcome error: {e}")
 
     @contextmanager
     def propagate_attributes(

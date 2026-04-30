@@ -107,6 +107,7 @@ class EmailChannel(BaseChannel):
         if msg.event_type in (
             OutboundEventType.RESPONSE_COMPLETED,
             OutboundEventType.FEEDBACK_SUBMITTED,
+            OutboundEventType.RESPONSE_OUTCOME_EVALUATED,
         ):
             return
 

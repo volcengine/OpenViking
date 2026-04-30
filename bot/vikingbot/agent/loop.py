@@ -25,9 +25,11 @@ from vikingbot.config.schema import BotMode, Config, SessionKey
 from vikingbot.heartbeat.service import HEARTBEAT_METADATA_KEY, is_heartbeat_noop_response
 from vikingbot.hooks import HookContext
 from vikingbot.hooks.manager import hook_manager
+from vikingbot.integrations.langfuse import LangfuseClient
 from vikingbot.providers.base import LLMProvider
 from vikingbot.sandbox import SandboxManager
-from vikingbot.session.manager import SessionManager
+from vikingbot.observability.outcome import evaluate_response_outcome, should_update_outcome
+from vikingbot.session.manager import Session, SessionManager
 from vikingbot.utils.helpers import cal_str_tokens
 from vikingbot.utils.tracing import set_response_id, trace
 
@@ -555,11 +557,13 @@ class AgentLoop:
             # Debug mode handling
             if self.config.mode == BotMode.DEBUG:
                 # In debug mode, only record message to session, no processing or reply
+                await self._evaluate_previous_response_outcome(session, msg)
                 session.add_message("user", msg.content, sender_id=msg.sender_id)
                 await self.sessions.save(session)
                 return None
 
             if not msg.need_reply:
+                await self._evaluate_previous_response_outcome(session, msg)
                 session.add_message("user", msg.content, sender_id=msg.sender_id)
                 await self.sessions.save(session)
                 return OutboundMessage(
@@ -578,6 +582,8 @@ class AgentLoop:
                 await self.sessions.save(session)
                 # Run consolidation in background
                 await self._safe_consolidate_memory(session_clone, archive_all=False)
+
+            await self._evaluate_previous_response_outcome(session, msg)
 
             if self.sandbox_manager:
                 message_workspace = self.sandbox_manager.get_workspace_path(session_key)
@@ -681,6 +687,54 @@ class AgentLoop:
                 await monitor_task
             except asyncio.CancelledError:
                 pass
+
+    async def _evaluate_previous_response_outcome(
+        self, session: Session, msg: InboundMessage
+    ) -> None:
+        """Evaluate the latest assistant response before appending a new user turn."""
+        last_response = None
+        for message in reversed(session.messages):
+            if message.get("role") == "assistant" and message.get("response_id"):
+                last_response = message
+                break
+            if message.get("role") == "user":
+                break
+
+        if last_response is None:
+            return
+
+        response_id = last_response["response_id"]
+        evaluation = evaluate_response_outcome(
+            session.messages
+            + [{"role": "user", "content": msg.content, "timestamp": msg.timestamp.isoformat()}],
+            response_id,
+            feedback_events=session.metadata.get("feedback_events", []),
+            now=msg.timestamp,
+        )
+        if evaluation is None:
+            return
+
+        outcomes = session.metadata.setdefault("response_outcomes", {})
+        previous = outcomes.get(response_id)
+        if not should_update_outcome(previous, evaluation):
+            return
+
+        outcome_payload = evaluation.to_dict()
+        outcomes[response_id] = outcome_payload
+        LangfuseClient.get_instance().update_response_outcome(
+            response_id,
+            outcome_payload["outcome_label"],
+            outcome_payload,
+        )
+        await self.bus.publish_outbound(
+            OutboundMessage(
+                session_key=msg.session_key,
+                content="",
+                event_type=OutboundEventType.RESPONSE_OUTCOME_EVALUATED,
+                response_id=response_id,
+                metadata={"response_outcome_evaluated": outcome_payload},
+            )
+        )
 
     def _get_channel_config(self, session_key: SessionKey):
         """Get channel config for a session key.

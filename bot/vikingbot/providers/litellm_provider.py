@@ -236,6 +236,10 @@ class LiteLLMProvider(LLMProvider):
                         input=messages,
                         metadata=metadata,
                     )
+                    if response_id:
+                        self.langfuse.register_generation(
+                            response_id, langfuse_observation, metadata=metadata
+                        )
 
             response = await acompletion(**kwargs)
             llm_response = self._parse_response(response)
@@ -277,6 +281,13 @@ class LiteLLMProvider(LLMProvider):
                         usage_details["cache_read_input_tokens"] = cache_read_tokens
 
                     update_kwargs["usage_details"] = usage_details
+
+                response_id = get_current_response_id()
+                if response_id:
+                    self.langfuse.update_generation_metadata(
+                        response_id,
+                        update_kwargs.get("metadata", {}),
+                    )
 
                 # Update the observation
                 if hasattr(langfuse_observation, "update"):

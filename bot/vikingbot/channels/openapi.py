@@ -35,6 +35,8 @@ from vikingbot.config.schema import (
     SessionKey,
     requires_gateway_token,
 )
+from vikingbot.integrations.langfuse import LangfuseClient
+from vikingbot.observability.outcome import evaluate_response_outcome, should_update_outcome
 from vikingbot.session.manager import SessionManager
 
 
@@ -758,6 +760,7 @@ class OpenAPIChannel(BaseChannel):
             "created_at": feedback_timestamp.isoformat(),
         }
         session.metadata.setdefault("feedback_events", []).append(feedback_event)
+        await self._evaluate_and_publish_outcome(session_key, session, request.response_id)
         session.updated_at = feedback_timestamp
         await self._session_manager.save(session)
 
@@ -808,6 +811,41 @@ class OpenAPIChannel(BaseChannel):
             return datetime.fromisoformat(timestamp)
         except ValueError:
             return None
+
+    async def _evaluate_and_publish_outcome(
+        self, session_key: SessionKey, session: Any, response_id: str
+    ) -> None:
+        """Evaluate and publish the latest known outcome for a response."""
+        evaluation = evaluate_response_outcome(
+            session.messages,
+            response_id,
+            feedback_events=session.metadata.get("feedback_events", []),
+        )
+        if evaluation is None:
+            return
+
+        outcomes = session.metadata.setdefault("response_outcomes", {})
+        previous = outcomes.get(response_id)
+        if not should_update_outcome(previous, evaluation):
+            return
+
+        outcome_payload = evaluation.to_dict()
+        outcomes[response_id] = outcome_payload
+        LangfuseClient.get_instance().update_response_outcome(
+            response_id,
+            outcome_payload["outcome_label"],
+            outcome_payload,
+        )
+
+        await self.bus.publish_outbound(
+            OutboundMessage(
+                session_key=session_key,
+                content="",
+                event_type=OutboundEventType.RESPONSE_OUTCOME_EVALUATED,
+                response_id=response_id,
+                metadata={"response_outcome_evaluated": outcome_payload},
+            )
+        )
 
 
 def get_openapi_router(bus: MessageBus, config: Config) -> APIRouter:

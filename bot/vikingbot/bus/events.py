@@ -19,6 +19,9 @@ class OutboundEventType(str, Enum):
     NO_REPLY = "no_reply"  # No reply required
     RESPONSE_COMPLETED = "response_completed"  # Analytics-only response fact
     FEEDBACK_SUBMITTED = "feedback_submitted"  # Analytics-only explicit feedback fact
+    RESPONSE_OUTCOME_EVALUATED = (
+        "response_outcome_evaluated"  # Analytics-only implicit outcome fact
+    )
 
 
 @dataclass

@@ -242,19 +242,30 @@ class TestOpenAPIAuth:
         assert body["response_id"] == "resp-123"
         assert body["session_id"] == "session-1"
         assert body["feedback_type"] == "thumb_up"
-        assert message_bus.outbound_size == 1
+        assert message_bus.outbound_size == 2
 
-        outbound = asyncio.run(message_bus.consume_outbound())
-        assert outbound.event_type == OutboundEventType.FEEDBACK_SUBMITTED
-        assert outbound.response_id == "resp-123"
-        assert outbound.metadata["feedback_submitted"]["feedback_type"] == "thumb_up"
-        assert outbound.metadata["feedback_submitted"]["feedback_text"] == "helpful"
+        first_outbound = asyncio.run(message_bus.consume_outbound())
+        second_outbound = asyncio.run(message_bus.consume_outbound())
+        assert first_outbound.event_type == OutboundEventType.RESPONSE_OUTCOME_EVALUATED
+        assert first_outbound.response_id == "resp-123"
+        assert (
+            first_outbound.metadata["response_outcome_evaluated"]["outcome_label"]
+            == "positive_feedback"
+        )
+        assert second_outbound.event_type == OutboundEventType.FEEDBACK_SUBMITTED
+        assert second_outbound.response_id == "resp-123"
+        assert second_outbound.metadata["feedback_submitted"]["feedback_type"] == "thumb_up"
+        assert second_outbound.metadata["feedback_submitted"]["feedback_text"] == "helpful"
 
         session_path = temp_workspace / "sessions" / "cli__default__session-1.jsonl"
         lines = session_path.read_text(encoding="utf-8").splitlines()
         metadata = json.loads(lines[0])
         assert metadata["metadata"]["feedback_events"][0]["response_id"] == "resp-123"
         assert metadata["metadata"]["feedback_events"][0]["feedback_type"] == "thumb_up"
+        assert (
+            metadata["metadata"]["response_outcomes"]["resp-123"]["outcome_label"]
+            == "positive_feedback"
+        )
 
     def test_feedback_requires_existing_response(self, message_bus, temp_workspace):
         channel = OpenAPIChannel(
