@@ -98,9 +98,10 @@ class SchemaModelGenerator:
         # Add business fields from schema
         for field in memory_type.fields:
             base_type = self._map_field_type(field.field_type)
+            prefixed_name = f"extract_{field.name}"
             if field.merge_op == MergeOp.IMMUTABLE:
                 # Immutable fields: only base type, required
-                field_definitions[field.name] = (
+                field_definitions[prefixed_name] = (
                     base_type,
                     Field(..., description=field.description),
                 )
@@ -110,7 +111,7 @@ class SchemaModelGenerator:
                 patch_type = merge_op.get_output_schema_type(field.field_type)
                 union_type = Union[base_type, patch_type]
                 desc = merge_op.get_output_schema_description(field.description)
-                field_definitions[field.name] = (
+                field_definitions[prefixed_name] = (
                     Optional[union_type],
                     Field(None, description=desc),
                 )
