@@ -15,7 +15,7 @@ class LogConfig(BaseModel):
     )
 
     format: str = Field(
-        default="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        default="%(asctime)s - %(name)s - %(levelname)s - [%(trace_id)s] %(message)s",
         description="Log format string",
     )
 

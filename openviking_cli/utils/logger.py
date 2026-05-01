@@ -619,7 +619,7 @@ def _load_log_config() -> Tuple[str, str, str, Optional[Any]]:
             log_output = str(log_dir / "openviking.log")
     except Exception:
         log_level_str = "INFO"
-        log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        log_format = "%(asctime)s - %(name)s - %(levelname)s - [%(trace_id)s] %(message)s"
         log_output = "stdout"
 
     return log_level_str, log_format, log_output, config
