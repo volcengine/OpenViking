@@ -62,7 +62,10 @@ class TraceIdLoggingFilter(logging.Filter):
     """日志过滤器：注入 TraceID"""
 
     def filter(self, record):
-        record.trace_id = get_trace_id()
+        trace_id = get_trace_id()
+        record.trace_id = trace_id
+        if trace_id:
+            record.msg = f"[{trace_id}] {record.msg}"
         return True
 
 
