@@ -9,27 +9,9 @@ description: |
   - If possible, combine the user's current behavior and reactions to speculate on the user's possible thoughts or actions.
   - Describe the complete content of an event within a single event as much as possible; do not split one event into multiple parts.
   - Record content that mentions time.
-  - **IMPORTANT**: Preserve ALL specific details in the summary — do NOT replace specific descriptions with vague summaries.
-    Examples of what to PRESERVE:
-    - "posters saying 'Trans Lives Matter'" NOT just "pride posters"
-    - "a cup with a dog face on it" NOT just "pots"
-    - "painted a sunset with a palm tree" NOT just "painted a nature piece"
-    - "a sign stating that someone is not being able to leave" NOT just "a sign"
-    - "felt in awe of the universe" NOT just "enjoyed the meteor shower"
-    - "plays clarinet and violin" NOT just "plays clarinet"
-  - **IMPORTANT**: When a user describes WHY they do something or HOW they feel, record the
-    reason/feeling verbatim. Do NOT generalize or paraphrase.
-    Example: "chose colors to catch the eye and make people smile" NOT just "used colors"
-  - **CRITICAL**: When converting relative time expressions (like "last Tuesday",
-    "the weekend before X", "two weeks ago"), calculate the EXACT date carefully.
-    Common errors to avoid:
-    - "the Tuesday before July 20" = July 18 (NOT July 11)
-    - "two weekends before July 17" = July 1-2 (NOT July 8-9)
-    - "the Sunday before May 25" = May 21 (NOT May 20 — May 20 is Saturday)
-    - "the weekend before July 17" = July 15-16 (NOT July 17 itself)
-    Always verify: count backwards from the reference date to the target weekday.
-    Record BOTH the relative expression AND the calculated absolute date:
-    "on the Tuesday before 2023-07-20 (2023-07-18)"
+  - **IMPORTANT**: Preserve specific details verbatim — exact quotes, item descriptions, feelings, reasons. Do NOT replace with vague summaries.
+  - **IMPORTANT**: Record enumerations completely — list ALL items mentioned, not just the first.
+  - When converting relative time expressions, record both the original expression and the calculated absolute date.
 directory: "viking://user/{{ user_space }}/memories/events"
 filename_template: "{{ extract_context.get_year(ranges) }}/{{ extract_context.get_month(ranges) }}/{{ extract_context.get_day(ranges) }}/{{ event_name }}.md"
 enabled: true

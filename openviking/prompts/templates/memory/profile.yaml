@@ -10,25 +10,13 @@ description: |
   - Each item: self-contained, declarative sentence, < 30 words
   - Extract only facts stated/confirmed by user; no guesses
   - Focus on persistent information, not temporary situations
-  - **IMPORTANT**: When extracting attributes, preserve ALL qualifying details and specific descriptors.
-    Do NOT strip away specifics that distinguish one fact from a more general category.
-    Examples of what to PRESERVE:
-    - "counseling for Transgender people" NOT just "counseling"
-    - "plays clarinet and violin" NOT just "plays clarinet"
-    - "moved from Sweden 4 years ago" NOT just "moved"
-    - "symbols: Rainbow flag, transgender symbol" NOT just "Rainbow flag"
-    - "painted sunsets with palm trees" NOT just "painted nature"
-  - **IMPORTANT**: Record enumerations completely — if the user lists multiple items
-    (instruments, books, symbols, pets, children count), list ALL of them, not just the first.
-  - **IMPORTANT**: Record specific content that defines the user's experience:
-    exact poster/sign text, artwork subjects, reasons/motivations expressed by the user.
+  - **IMPORTANT**: Preserve specific details and qualifying descriptors verbatim. Do NOT replace with vague summaries.
+  - **IMPORTANT**: Record enumerations completely — list ALL items mentioned, not just the first.
   - Forbidden: events, only-assistant content, sensitive/private info, trivial updates
   - Merge similar items; keep latest if conflicting
   - Organize related items under ## sub-headings by topic (e.g., ## Identity, ## Career,
     ## Art, ## Music, ## Pets, ## Family, ## Books) so related facts are grouped together
-  - **CRITICAL**: When converting relative time expressions to absolute dates, calculate carefully.
-    Verify by counting backwards from the reference date. Record both forms:
-    "on the Tuesday before 2023-07-20 (2023-07-18)"
+  - When converting relative time expressions, record both the original expression and the calculated absolute date.
 
 
 directory: "viking://user/{{ user_space }}/memories"
@@ -42,10 +30,7 @@ fields:
       Includes relatively stable personal attributes: profession, experience, tech stack, communication style, etc.
       Only record objective statuses, do not record events or similar information.
       [IMPORTANT] For changeable statuses, must include the last updated time in the format: (as of 2023-06-09)
-      [IMPORTANT] When recording preferences or activities, include specific details:
-      what was painted/drawn (not just "painting"), what instruments (list ALL instruments),
-      what symbols (list ALL symbols), what books (list ALL books mentioned),
-      how many children (explicit count), relationship status (explicitly stated).
+      [IMPORTANT] Include specific details for preferences/activities (what instruments, what books, what symbols).
       [IMPORTANT] Organize using ## sub-headings by topic so related facts are co-located.
       Example:
       # Caroline
