@@ -828,10 +828,9 @@ class MemoryPatchHandler:
         if result.success:
             return result.content if result.content is not None else original_content
         else:
-            # If failed but patch was valid (e.g., search content not found), fall back to appending
             error_msg = result.error or "Unknown error"
-            logger.warning(f"Patch application failed, falling back to append: {error_msg}, original_content={original_content}, patch={patch}")
-            return original_content + "\n" + self._extract_replace_content(patch)
+            logger.warning(f"Patch application failed, skipping update: {error_msg}, original_content={original_content}, patch={patch}")
+            raise PatchParseError(f"Patch application failed: {error_msg}")
 
     def _extract_replace_content(self, patch: str) -> str:
         """Extract replace content from patch for fallback append."""
@@ -858,7 +857,7 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
         return original_content
 
     # Directly convert StrPatch to internal format, skip string conversion
-    strategy = MultiSearchReplaceDiffStrategy()
+    strategy = MultiSearchReplaceDiffStrategy(fuzzy_threshold=0.8)
 
     # Convert StrPatch blocks to internal match format
     matches = []
@@ -1130,10 +1129,8 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
     has_failures = any(not result.get("success", False) for result in diff_results)
 
     if applied_count == 0 and has_failures:
-        # If failed, fall back to appending last replace content
-        logger.warning("Patch application failed, falling back to append")
-        last_replace = matches[-1].get("replaceContent", "") if matches else ""
-        return original_content + "\n" + last_replace
+        logger.warning("Patch application failed, skipping update")
+        raise PatchParseError("Patch application failed: search content not found in original")
 
     return final_content
 
