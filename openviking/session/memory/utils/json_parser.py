@@ -69,7 +69,7 @@ class JsonUtils:
         if not json_str:
             return None
         if clazz:
-            return TypeAdapter.validate_python(clazz, json_repair.loads(json_str))
+            return TypeAdapter(clazz).validate_python(json_repair.loads(json_str), strict=False)
         return json_repair.loads(json_str)
 
 
