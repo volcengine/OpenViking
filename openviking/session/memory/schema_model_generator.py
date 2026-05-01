@@ -117,7 +117,7 @@ class SchemaModelGenerator:
         # Create the model
         model = create_model(
             model_name,
-            __config__=ConfigDict(extra="forbid"),
+            __config__=ConfigDict(extra="ignore"),
             **field_definitions,
         )
 
