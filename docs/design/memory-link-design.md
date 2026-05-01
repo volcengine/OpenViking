@@ -1157,21 +1157,21 @@ OpenKB 的编译管线是精心设计的多步 LLM 调用链：摘要 → 概念
 
 **定位：** AI agent 的持久化记忆系统，在对话中实时写入记忆，外部 Bot T+1 触发整理发现主题生成研究报告。
 
-**输入源：** 对话 + 资源。
+**输入源：** 对话消息 + 资源（默认进 wiki / 默认不进 wiki）。
 
-**数据写入（可能存在 3 种场景）：**
+**数据写入（3 种输入场景）：**
 
-| 场景 | 触发 | 输入 | 记忆更新与建链 |
-|------|------|------|------|
-| (1) 对话提取 | session.commit（compact 触发） | 对话消息 | 对话进记忆，互链 |
-| (2) 对话关联资源 | session.commit 中对话提到已有资源uri | 对话消息 + 已有资源 | 对话进记忆，资源不进，但记忆会链接到资源 |
-| (3) 资源进记忆 | add-resource（邮件/会议纪要等） | 资源文件 | 资源进记忆，互链 |
+| 场景 | 触发 | 说明 |
+|------|------|------|
+| (1) 对话消息 | session.commit | 对话进记忆，互链 |
+| (2) 邮件会议纪要等默认进 wiki 的 resource | add-resource | 资源进记忆，互链 |
+| (3) 默认不进 wiki 的 resource | add-resource | 资源不进记忆，但记忆可链接到资源 |
 
 三种场景统一走 ExtractLoop，LLM 按 schema 输出记忆操作 + links
 
 **链接机制：** 链接存在文件元数据 JSON（VikingFS）中，content 保持纯净。6 种 LinkType 枚举约束，weight 表达关联强度，t_line_ranges 行号级精度。一条链接写入 from 端 links + to 端 backlinks，两侧记录完全相同。PageIdMap 从结构上杜绝死链。
 
-**T+1整理：** 主题整合。从已有记忆中发现问题（新记忆无关联 report / CONTRADICTS 链接 / report_candidate），逐主题调用 ExtractLoop 生成 report。
+**T+1整理：** 主题整合。从已有记忆中发现问题（新记忆无关联 report / CONTRADICTS 链接 / report_candidate），逐主题调用 ExtractLoop（DreamContextProvider）生成 report。暴露 CLI 供 Bot 通过 Cron 触发。report_candidate 来源：session 中提到的研究主题 / CLI 提交研究主题 / 基于搜索结果分布。
 
 **整理产物：** 问题驱动的研究报告（report memory_type）。
 
@@ -1204,15 +1204,15 @@ flowchart TB
     style ov_bot fill:#ffc,stroke:#333
 ```
 
-**关键路径**：对话/资源 → ExtractLoop（LLM 统一输出记忆 + links）→ merge_op 合并写入 → 向量化/摘要异步入队 → 外部 Bot T+1 触发整理发现主题 → PPR 在线图增强
+**关键路径**：对话消息/资源 → ExtractLoop（LLM 统一输出记忆 + links）→ merge_op 合并写入 → 向量化/摘要异步入队 → report_candidate → Bot Cron 触发 T+1 整理 → PPR 在线图增强
 
-**1. 在线写入（3 种场景统一走 ExtractLoop）**
+**1. 在线写入（3 种输入场景统一走 ExtractLoop）**
 
-| 场景 | 触发 | 输入 | 建链 |
-|------|------|------|------|
-| (1) 对话提取 | session.commit（compact 触发） | 对话消息 | 记忆间互链 |
-| (2) 对话关联资源 | session.commit 中对话提到已有资源 | 对话消息 + 已有资源 | 新记忆 → 已有资源 |
-| (3) 资源进记忆 | add-resource（邮件/会议纪要等） | 资源文件 | 资源提取的记忆间互链 + 关联已有记忆 |
+| 场景 | 触发 | 说明 |
+|------|------|------|
+| (1) 对话消息 | session.commit | 记忆间互链 |
+| (2) 邮件会议纪要等默认进 wiki 的 resource | add-resource | 资源进记忆，互链 |
+| (3) 默认不进 wiki 的 resource | add-resource | 资源不进记忆，但记忆可链接到资源 |
 
 - **处理**：
   1. SessionExtractContextProvider.prefetch() — 搜索/读取已有记忆文件和资源

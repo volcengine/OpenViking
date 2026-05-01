@@ -82,7 +82,7 @@ class ExtractContext:
         first_time = msg_range._first_message_time()
         return first_time.split("-")[2] if first_time else None
 
-    def get_event_content(self, ranges_str: str, summary: str, ratio_threshold: float = 0.7) -> str:
+    def get_event_content(self, ranges_str: str, summary: str, ratio_threshold: float = 0.2) -> str:
         """根据原始消息与 summary 的字符数比例，决定返回原始消息还是摘要。"""
         if not ranges_str or not summary:
             return summary or ""
