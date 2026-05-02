@@ -16,6 +16,7 @@ from openviking_cli.cli.commands import (
     serve,
     session,
     system,
+    watch,
 )
 
 
@@ -32,3 +33,4 @@ def register_commands(app: typer.Typer) -> None:
     debug.register(app)
     observer.register(app)
     session.register(app)
+    watch.register(app)
