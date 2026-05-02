@@ -189,10 +189,17 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
             # If last iteration, add a message telling the model to return result directly
             if is_last_iteration:
+                schema_str = json.dumps(self._json_schema, ensure_ascii=False)
                 messages.append(
                     {
                         "role": "user",
-                        "content": "You have reached the maximum number of tool call iterations. Do not call any more tools - return your final result directly now.",
+                        "content": (
+                            "You have reached the maximum number of tool call iterations. "
+                            "Do not call any more tools. Output ONLY a JSON object matching "
+                            "the schema below — no prose, no markdown fences, no explanation. "
+                            "If you have nothing to commit, return the schema with empty arrays.\n"
+                            f"```json\n{schema_str}\n```"
+                        ),
                     }
                 )
 
@@ -431,10 +438,18 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 if error is not None:
                     print(f"content={content}")
                     logger.warning(f"Failed to parse memory operations: {error}")
+                    # Persist the failed assistant content + a corrective user message
+                    # so the next iteration sees the failure and can self-correct
+                    # instead of repeating the same plain-text drift (fixes #1541).
+                    self._append_invalid_response_correction(messages, content, error)
                     return (None, None)
 
                 # Validate that all URIs are allowed
-                self._validate_operations(operations)
+                try:
+                    self._validate_operations(operations)
+                except ValueError as ve:
+                    self._append_invalid_response_correction(messages, content, str(ve))
+                    return (None, None)
                 return (None, operations)
             except Exception as e:
                 logger.exception(f"Error parsing operations: {e}")
@@ -562,3 +577,36 @@ The final output of the model must strictly follow the JSON Schema format shown 
         # 支持 dict 消息和 object 消息
         last_msg = messages[-1]
         last_msg["cache_control"] = {"type": "ephemeral"}
+
+    _MAX_FAILED_CONTENT_CHARS = 1500
+
+    def _append_invalid_response_correction(
+        self,
+        messages: List[Dict[str, Any]],
+        content: str,
+        error: str,
+    ) -> None:
+        """Persist the unparseable assistant response + a corrective user message.
+
+        Without this, when the model returns plain prose (or any non-schema output)
+        the next iteration sees the exact same prompt and repeats the same drift,
+        exhausting `max_iterations` with zero memories extracted.
+        """
+        truncated = content or ""
+        if len(truncated) > self._MAX_FAILED_CONTENT_CHARS:
+            truncated = truncated[: self._MAX_FAILED_CONTENT_CHARS] + "...[truncated]"
+
+        schema_str = json.dumps(self._json_schema, ensure_ascii=False)
+        messages.append({"role": "assistant", "content": truncated})
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "Your previous response could not be parsed as valid memory "
+                    f"operations: {error}. Output ONLY a JSON object matching the "
+                    "schema below — no prose, no markdown fences, no explanation. "
+                    "If you have nothing to commit, return the schema with empty arrays.\n"
+                    f"```json\n{schema_str}\n```"
+                ),
+            }
+        )
