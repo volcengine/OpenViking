@@ -17,6 +17,12 @@ variables:
     description: "File content"
     required: true
 
+  - name: "instruction"
+    type: "string"
+    description: "Custom instruction to guide summary generation"
+    required: false
+    default: ""
+
 template: |
   Please generate a summary for the following file:
 
@@ -26,6 +32,11 @@ template: |
   【File Content】
   {{ content }}
 
+  {% if instruction %}
+  【Custom Instruction】
+  {{ instruction }}
+
+  {% endif %}
   Output requirements:
   - Length: 50-150 words
   - Explain what this file is, what it covers, and what it's used for

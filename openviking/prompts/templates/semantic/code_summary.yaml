@@ -17,6 +17,12 @@ variables:
     description: "File content (code)"
     required: true
 
+  - name: "instruction"
+    type: "string"
+    description: "Custom instruction to guide summary generation"
+    required: false
+    default: ""
+
 template: |
   You are a code analysis expert. Generate a concise yet informative summary for the following code file.
 
@@ -26,6 +32,11 @@ template: |
   【File Content】
   {{ content }}
 
+  {% if instruction %}
+  【Custom Instruction】
+  {{ instruction }}
+
+  {% endif %}
   Output requirements:
   - Length: 80-200 words
   - Focus on the main purpose and functionality of this code file

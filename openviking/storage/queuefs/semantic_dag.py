@@ -41,10 +41,11 @@ class DagStats:
 class SemanticDagExecutor:
     """Execute semantic generation with DAG-style, event-driven lazy dispatch."""
 
-    def __init__(self, processor: "SemanticProcessor", context_type: str, max_concurrent_llm: int):
+    def __init__(self, processor: "SemanticProcessor", context_type: str, max_concurrent_llm: int, instruction: str = ""):
         self._processor = processor
         self._context_type = context_type
         self._max_concurrent_llm = max_concurrent_llm
+        self._instruction = instruction
         self._llm_sem = asyncio.Semaphore(max_concurrent_llm)
         self._viking_fs = get_viking_fs()
         self._nodes: Dict[str, DirNode] = {}
@@ -138,7 +139,7 @@ class SemanticDagExecutor:
         file_name = file_path.split("/")[-1]
         try:
             summary_dict = await self._processor._generate_single_file_summary(
-                file_path, llm_sem=self._llm_sem
+                file_path, llm_sem=self._llm_sem, instruction=self._instruction
             )
         except Exception as e:
             logger.warning(f"Failed to generate summary for {file_path}: {e}")
@@ -240,7 +241,7 @@ class SemanticDagExecutor:
         try:
             async with self._llm_sem:
                 overview = await self._processor._generate_overview(
-                    dir_uri, file_summaries, children_abstracts
+                    dir_uri, file_summaries, children_abstracts, instruction=self._instruction
                 )
             abstract = self._processor._extract_abstract_from_overview(overview)
 

@@ -141,6 +141,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     processor=self,
                     context_type=msg.context_type,
                     max_concurrent_llm=self.max_concurrent_llm,
+                    instruction=msg.instruction,
                 )
                 self._dag_executor = executor
                 await executor.run(msg.uri)
@@ -176,6 +177,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     context_type=msg.context_type,
                     children_uris=children_uris,
                     file_paths=file_paths,
+                    instruction=msg.instruction,
                 )
 
                 logger.info(f"Completed semantic generation for: {msg.uri}")
@@ -198,6 +200,7 @@ class SemanticProcessor(DequeueHandlerBase):
         context_type: str,
         children_uris: List[str],
         file_paths: List[str],
+        instruction: str = "",
     ) -> None:
         """Process single directory, generate .abstract.md and .overview.md."""
         viking_fs = get_viking_fs()
@@ -207,11 +210,12 @@ class SemanticProcessor(DequeueHandlerBase):
 
         # 2. Concurrently generate summaries for files in directory
         file_summaries = await self._generate_file_summaries(
-            file_paths, context_type=context_type, parent_uri=uri, enqueue_files=True
+            file_paths, context_type=context_type, parent_uri=uri, enqueue_files=True,
+            instruction=instruction,
         )
 
         # 3. Generate .overview.md (contains brief description)
-        overview = await self._generate_overview(uri, file_summaries, children_abstracts)
+        overview = await self._generate_overview(uri, file_summaries, children_abstracts, instruction=instruction)
 
         # 4. Extract abstract from overview
         abstract = self._extract_abstract_from_overview(overview)
@@ -245,6 +249,7 @@ class SemanticProcessor(DequeueHandlerBase):
         context_type: Optional[str] = None,
         parent_uri: Optional[str] = None,
         enqueue_files: bool = False,
+        instruction: str = "",
     ) -> List[Dict[str, str]]:
         """Concurrently generate file summaries."""
         if not file_paths:
@@ -254,7 +259,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
         async def generate_one_summary(file_path: str) -> Dict[str, str]:
             async with sem:
-                summary = await self._generate_single_file_summary(file_path)
+                summary = await self._generate_single_file_summary(file_path, instruction=instruction)
             if enqueue_files and context_type and parent_uri:
                 try:
                     await self._vectorize_single_file(
@@ -274,7 +279,7 @@ class SemanticProcessor(DequeueHandlerBase):
         return await asyncio.gather(*tasks)
 
     async def _generate_single_file_summary(
-        self, file_path: str, llm_sem: Optional[asyncio.Semaphore] = None
+        self, file_path: str, llm_sem: Optional[asyncio.Semaphore] = None, instruction: str = ""
     ) -> Dict[str, str]:
         """Generate summary for a single file.
 
@@ -316,7 +321,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
             prompt = render_prompt(
                 prompt_id,
-                {"file_name": file_name, "content": content},
+                {"file_name": file_name, "content": content, "instruction": instruction},
             )
 
             if llm_sem:
@@ -358,6 +363,7 @@ class SemanticProcessor(DequeueHandlerBase):
         dir_uri: str,
         file_summaries: List[Dict[str, str]],
         children_abstracts: List[Dict[str, str]],
+        instruction: str = "",
     ) -> str:
         """Generate directory's .overview.md (L1).
 
@@ -400,6 +406,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     "dir_name": dir_uri.split("/")[-1],
                     "file_summaries": file_summaries_str,
                     "children_abstracts": children_abstracts_str,
+                    "instruction": instruction,
                 },
             )
 

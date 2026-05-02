@@ -17,6 +17,12 @@ variables:
     description: "File content (documentation text)"
     required: true
 
+  - name: "instruction"
+    type: "string"
+    description: "Custom instruction to guide summary generation"
+    required: false
+    default: ""
+
 template: |
   You are a documentation analysis expert. Generate a concise yet informative summary for the following documentation file.
 
@@ -26,6 +32,11 @@ template: |
   【File Content】
   {{ content }}
 
+  {% if instruction %}
+  【Custom Instruction】
+  {{ instruction }}
+
+  {% endif %}
   Output requirements:
   - Length: 60-180 words
   - Focus on the main topics and purpose of this document

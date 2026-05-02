@@ -22,6 +22,12 @@ variables:
     description: "List of subdirectories and their abstracts, format: '- dirname/: abstract'"
     default: ""
 
+  - name: "instruction"
+    type: "string"
+    description: "Custom instruction to guide summary generation"
+    required: false
+    default: ""
+
 template: |
   Generate an overview document based on the following directory content:
 
@@ -36,6 +42,11 @@ template: |
   [Subdirectories and Their Summaries]
   {{ children_abstracts }}
 
+  {% if instruction %}
+  【Custom Instruction】
+  {{ instruction }}
+
+  {% endif %}
   Output in Markdown format, strictly following this structure:
 
   1. **Title** (H1): Directory name
