@@ -93,11 +93,20 @@ class RerankClient:
         if not documents:
             return []
 
+        # Filter out empty-string documents — the API returns null for empty inputs.
+        # Track the original indices so scores can be merged back in order.
+        non_empty_indices = [i for i, doc in enumerate(documents) if doc and doc.strip()]
+        if not non_empty_indices:
+            logger.warning("[RerankClient] All documents are empty, returning zero scores")
+            return [0.0] * len(documents)
+
+        non_empty_docs = [documents[i] for i in non_empty_indices]
+
         # Build request body
         req_body = {
             "model_name": self.model_name,
             "model_version": self.model_version,
-            "data": [[{"text": doc}] for doc in documents],
+            "data": [[{"text": doc}] for doc in non_empty_docs],
             "query": [{"text": query}],
             "instruction": "Whether the Document answers the Query or matches the content retrieval intent",
         }
@@ -119,15 +128,31 @@ class RerankClient:
 
             result = response.json()
             # print(f"[RerankClient] Raw response: {result}")
+
+            # Guard against VikingDB returning HTTP 200 with a null body.
+            # Without this check, `"result" not in None` raises TypeError which is
+            # silently swallowed by the broad except below, disabling reranking entirely.
+            if not isinstance(result, dict):
+                logger.warning(
+                    f"[RerankClient] Unexpected response format (got {type(result).__name__}): {result!r}"
+                )
+                return [0.0] * len(documents)
+
             if "result" not in result or "data" not in result["result"]:
                 logger.warning(f"[RerankClient] Unexpected response format: {result}")
                 return [0.0] * len(documents)
 
             # Each document is a separate group, data array returns scores for each group sequentially
             data = result["result"]["data"]
-            scores = [item.get("score", 0.0) for item in data]
+            non_empty_scores = [item.get("score", 0.0) for item in data]
 
-            logger.debug(f"[RerankClient] Reranked {len(documents)} documents")
+            # Merge scores back into a full-length list, with 0.0 for empty documents
+            scores = [0.0] * len(documents)
+            for rank_idx, orig_idx in enumerate(non_empty_indices):
+                if rank_idx < len(non_empty_scores):
+                    scores[orig_idx] = non_empty_scores[rank_idx]
+
+            logger.debug(f"[RerankClient] Reranked {len(non_empty_docs)} documents (skipped {len(documents) - len(non_empty_docs)} empty)")
             return scores
 
         except Exception as e:
