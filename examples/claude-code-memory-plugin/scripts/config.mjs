@@ -2,9 +2,10 @@
  * Shared configuration loader for the Claude Code OpenViking memory plugin.
  *
  * Resolution priority (highest → lowest):
- *   1. Environment variables (OPENVIKING_URL, OPENVIKING_API_KEY, etc.)
- *   2. ovcli.conf (CLI client config: url, api_key, account, user, agent_id)
- *   3. ov.conf fields (server section + claude_code section)
+ *   1. Environment variables (OPENVIKING_*)
+ *   2. ovcli.conf (CLI client config: url, api_key, account, user, agent_id) — connection only
+ *   3. ov.conf fields (server section + claude_code section) — legacy; new deployments should
+ *      prefer env vars. Tuning fields under claude_code.* are still honored for backward compat.
  *   4. Built-in defaults
  *
  * Enable/disable:
@@ -12,9 +13,24 @@
  *   - claude_code.enabled field in ov.conf (false = off)
  *   - Fallback: enabled when ov.conf or ovcli.conf exists, disabled otherwise
  *
- * Config file env vars:
- *   - OPENVIKING_CONFIG_FILE      → ov.conf path     (default: ~/.openviking/ov.conf)
- *   - OPENVIKING_CLI_CONFIG_FILE  → ovcli.conf path  (default: ~/.openviking/ovcli.conf)
+ * Env vars covered (full list):
+ *   Connection / identity:
+ *     OPENVIKING_URL / OPENVIKING_BASE_URL, OPENVIKING_API_KEY / OPENVIKING_BEARER_TOKEN,
+ *     OPENVIKING_ACCOUNT, OPENVIKING_USER, OPENVIKING_AGENT_ID
+ *   Recall tuning:
+ *     OPENVIKING_AUTO_RECALL, OPENVIKING_RECALL_LIMIT, OPENVIKING_RECALL_TOKEN_BUDGET,
+ *     OPENVIKING_RECALL_MAX_CONTENT_CHARS, OPENVIKING_RECALL_PREFER_ABSTRACT,
+ *     OPENVIKING_SCORE_THRESHOLD, OPENVIKING_MIN_QUERY_LENGTH, OPENVIKING_LOG_RANKING_DETAILS
+ *   Capture tuning:
+ *     OPENVIKING_AUTO_CAPTURE, OPENVIKING_CAPTURE_MODE, OPENVIKING_CAPTURE_MAX_LENGTH,
+ *     OPENVIKING_CAPTURE_ASSISTANT_TURNS, OPENVIKING_COMMIT_TOKEN_THRESHOLD,
+ *     OPENVIKING_RESUME_CONTEXT_BUDGET
+ *   Lifecycle / behavior:
+ *     OPENVIKING_TIMEOUT_MS, OPENVIKING_CAPTURE_TIMEOUT_MS, OPENVIKING_WRITE_PATH_ASYNC,
+ *     OPENVIKING_BYPASS_SESSION, OPENVIKING_BYPASS_SESSION_PATTERNS (CSV)
+ *   Misc:
+ *     OPENVIKING_MEMORY_ENABLED, OPENVIKING_DEBUG, OPENVIKING_DEBUG_LOG,
+ *     OPENVIKING_CONFIG_FILE, OPENVIKING_CLI_CONFIG_FILE
  */
 
 import { readFileSync } from "node:fs";
@@ -152,15 +168,35 @@ export function loadConfig() {
     || str(cliFile.user, null)
     || str(cc.userId, "");
 
-  const debug = cc.debug === true || process.env.OPENVIKING_DEBUG === "1";
+  // Each tuning field follows env > ovcli.conf is N/A (CLI doesn't carry tuning) >
+  // ov.conf cc.* > built-in default. Env var names are flat OPENVIKING_* (no CC
+  // namespace) to match the existing connection-field convention; they are only
+  // read by this plugin's hooks.
+
+  const debug = envBool("OPENVIKING_DEBUG") ?? (cc.debug === true);
   const defaultLogPath = join(homedir(), ".openviking", "logs", "cc-hooks.log");
   const debugLogPath = str(process.env.OPENVIKING_DEBUG_LOG, defaultLogPath);
 
-  const timeoutMs = Math.max(1000, Math.floor(num(cc.timeoutMs, 15000)));
-  const captureTimeoutMs = Math.max(
-    1000,
-    Math.floor(num(cc.captureTimeoutMs, Math.max(timeoutMs * 2, 30000))),
-  );
+  const timeoutMs = Math.max(1000, Math.floor(num(
+    process.env.OPENVIKING_TIMEOUT_MS,
+    num(cc.timeoutMs, 15000),
+  )));
+  const captureTimeoutMs = Math.max(1000, Math.floor(num(
+    process.env.OPENVIKING_CAPTURE_TIMEOUT_MS,
+    num(cc.captureTimeoutMs, Math.max(timeoutMs * 2, 30000)),
+  )));
+
+  // captureMode whitelist: env or cc, only "keyword" flips it; anything else → "semantic"
+  const captureModeRaw = str(process.env.OPENVIKING_CAPTURE_MODE, str(cc.captureMode, "semantic"));
+  const captureMode = captureModeRaw === "keyword" ? "keyword" : "semantic";
+
+  // bypassSessionPatterns: env CSV overrides ov.conf array entirely
+  const envPatterns = str(process.env.OPENVIKING_BYPASS_SESSION_PATTERNS, null);
+  const bypassSessionPatterns = envPatterns
+    ? envPatterns.split(",").map((s) => s.trim()).filter(Boolean)
+    : (Array.isArray(cc.bypassSessionPatterns)
+        ? cc.bypassSessionPatterns.filter((p) => typeof p === "string" && p.trim())
+        : []);
 
   return {
     configPath,
@@ -172,45 +208,66 @@ export function loadConfig() {
     timeoutMs,
 
     // Recall
-    autoRecall: cc.autoRecall !== false,
-    recallLimit: Math.max(1, Math.floor(num(cc.recallLimit, 6))),
-    scoreThreshold: Math.min(1, Math.max(0, num(cc.scoreThreshold, 0.35))),
-    minQueryLength: Math.max(1, Math.floor(num(cc.minQueryLength, 3))),
-    logRankingDetails: cc.logRankingDetails === true,
+    autoRecall: envBool("OPENVIKING_AUTO_RECALL") ?? (cc.autoRecall !== false),
+    recallLimit: Math.max(1, Math.floor(num(
+      process.env.OPENVIKING_RECALL_LIMIT,
+      num(cc.recallLimit, 6),
+    ))),
+    scoreThreshold: Math.min(1, Math.max(0, num(
+      process.env.OPENVIKING_SCORE_THRESHOLD,
+      num(cc.scoreThreshold, 0.35),
+    ))),
+    minQueryLength: Math.max(1, Math.floor(num(
+      process.env.OPENVIKING_MIN_QUERY_LENGTH,
+      num(cc.minQueryLength, 3),
+    ))),
+    logRankingDetails: envBool("OPENVIKING_LOG_RANKING_DETAILS") ?? (cc.logRankingDetails === true),
     // Ported from openclaw DEFAULT_RECALL_MAX_CONTENT_CHARS / DEFAULT_RECALL_TOKEN_BUDGET /
     // DEFAULT_RECALL_PREFER_ABSTRACT (openclaw-plugin/config.ts:44-47).
-    recallMaxContentChars: Math.max(50, Math.floor(num(cc.recallMaxContentChars, 500))),
-    recallTokenBudget: Math.max(200, Math.floor(num(cc.recallTokenBudget, 2000))),
-    recallPreferAbstract: cc.recallPreferAbstract !== false,
+    recallMaxContentChars: Math.max(50, Math.floor(num(
+      process.env.OPENVIKING_RECALL_MAX_CONTENT_CHARS,
+      num(cc.recallMaxContentChars, 500),
+    ))),
+    recallTokenBudget: Math.max(200, Math.floor(num(
+      process.env.OPENVIKING_RECALL_TOKEN_BUDGET,
+      num(cc.recallTokenBudget, 2000),
+    ))),
+    recallPreferAbstract: envBool("OPENVIKING_RECALL_PREFER_ABSTRACT") ?? (cc.recallPreferAbstract !== false),
 
     // Capture
-    autoCapture: cc.autoCapture !== false,
-    captureMode: cc.captureMode === "keyword" ? "keyword" : "semantic",
-    captureMaxLength: Math.max(200, Math.floor(num(cc.captureMaxLength, 24000))),
+    autoCapture: envBool("OPENVIKING_AUTO_CAPTURE") ?? (cc.autoCapture !== false),
+    captureMode,
+    captureMaxLength: Math.max(200, Math.floor(num(
+      process.env.OPENVIKING_CAPTURE_MAX_LENGTH,
+      num(cc.captureMaxLength, 24000),
+    ))),
     captureTimeoutMs,
-    captureAssistantTurns: cc.captureAssistantTurns === true,
+    captureAssistantTurns: envBool("OPENVIKING_CAPTURE_ASSISTANT_TURNS") ?? (cc.captureAssistantTurns === true),
     // P0-2: client-driven commit threshold (ported from openclaw afterTurn).
     // Default 20000 aligns with openclaw; lower values produce archives faster.
-    commitTokenThreshold: Math.max(1000, Math.floor(num(cc.commitTokenThreshold, 20000))),
+    commitTokenThreshold: Math.max(1000, Math.floor(num(
+      process.env.OPENVIKING_COMMIT_TOKEN_THRESHOLD,
+      num(cc.commitTokenThreshold, 20000),
+    ))),
 
     // P0-3b: token budget for session-start archive-overview fetch
-    resumeContextBudget: Math.max(1024, Math.floor(num(cc.resumeContextBudget, 32000))),
+    resumeContextBudget: Math.max(1024, Math.floor(num(
+      process.env.OPENVIKING_RESUME_CONTEXT_BUDGET,
+      num(cc.resumeContextBudget, 32000),
+    ))),
 
     // P1-15: bypass patterns (glob) — when the CC session_id or cwd matches,
     // skip capture/recall entirely. Useful for one-off scratch sessions that
     // should not contaminate OV.
-    bypassSessionPatterns: Array.isArray(cc.bypassSessionPatterns)
-      ? cc.bypassSessionPatterns.filter((p) => typeof p === "string" && p.trim())
-      : [],
-    bypassSession: process.env.OPENVIKING_BYPASS_SESSION === "1"
-      || process.env.OPENVIKING_BYPASS_SESSION === "true",
+    bypassSessionPatterns,
+    bypassSession: envBool("OPENVIKING_BYPASS_SESSION") ?? false,
 
     // Write-path async: auto-capture / session-end / subagent-stop fire-and-
     // forget via a detached child process, so the hook returns to CC instantly.
     // pre-compact stays sync regardless (CC rewrites transcript right after).
     // Default on — OV commit is already half-async server-side, so eventual
     // consistency matches the sync path.
-    writePathAsync: cc.writePathAsync !== false,
+    writePathAsync: envBool("OPENVIKING_WRITE_PATH_ASYNC") ?? (cc.writePathAsync !== false),
 
     // Debug
     debug,
