@@ -1106,7 +1106,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
             );
             const commitResult = await c.commitSession(sessionId, {
               wait: true,
-              agentId: storeAgentId,
+              agentId: session.agentId,
               keepRecentCount: 0,
             });
             const memoriesCount = totalCommitMemories(commitResult);
