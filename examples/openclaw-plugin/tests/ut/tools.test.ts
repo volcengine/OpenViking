@@ -611,10 +611,10 @@ describe("OpenViking search command parsing", () => {
 });
 
 describe("Plugin registration", () => {
-  it("registers all 6 tools", () => {
+  it("registers all 7 tools", () => {
     const { api } = setupPlugin();
     contextEnginePlugin.register(api as any);
-    expect(api.registerTool).toHaveBeenCalledTimes(6);
+    expect(api.registerTool).toHaveBeenCalledTimes(7);
   });
 
   it("registers import and search commands", () => {

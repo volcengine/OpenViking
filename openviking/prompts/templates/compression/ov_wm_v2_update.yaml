@@ -152,6 +152,12 @@ template: |
       - [resolved] Question about Caroline's adoption agency
       - [new] Need to verify the camping trip date
     Do not drop an unresolved item just because it was not discussed this round.
+    However, items tagged `[silently dropped, restored]` were already given a
+    second chance by the server — you may safely mark them `[resolved]` if the
+    conversation has moved on and they are no longer actionable.
+    Also, if an issue has remained unactioned for several rounds (no user
+    follow-up, no assistant action), consolidate such stale items into a single
+    summary line rather than carrying each one forward indefinitely.
 
   # RULE 3 — Self-check BEFORE emitting the tool call.
 

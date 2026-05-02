@@ -126,10 +126,6 @@ describe("context-engine assemble()", () => {
         content: "[Session History Summary]\n# Session Summary\nPreviously discussed repository setup.",
       },
       {
-        role: "user",
-        content: "[Archive Index]\narchive_001: Previously discussed repository setup.",
-      },
-      {
         role: "assistant",
         content: [
           { type: "text", text: "I checked the latest context." },

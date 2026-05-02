@@ -232,6 +232,39 @@ class TestEnforceOpenIssuesResolved:
         result = Session._wm_enforce_open_issues_resolved({"op": "KEEP"}, "old")
         assert result == {"op": "KEEP"}
 
+    def test_already_restored_item_not_restored_again(self):
+        """Items already tagged [silently dropped, restored] should NOT be
+        restored a second time -- they had their chance."""
+        old = (
+            "- [silently dropped, restored] stale follow-up issue\n"
+            "- fresh unresolved bug"
+        )
+        op = {"op": "UPDATE", "content": "- fresh unresolved bug"}
+        result = Session._wm_enforce_open_issues_resolved(op, old)
+        assert "stale follow-up" not in result["content"]
+        assert "fresh unresolved bug" in result["content"]
+
+    def test_multi_layer_restored_tags_not_restored(self):
+        """Items with nested [silently dropped, restored] tags must not
+        be restored again (regression guard for the old accumulation bug)."""
+        old = (
+            "- [silently dropped, restored] [silently dropped, restored] old issue\n"
+            "- active issue"
+        )
+        op = {"op": "UPDATE", "content": "- active issue"}
+        result = Session._wm_enforce_open_issues_resolved(op, old)
+        assert "old issue" not in result["content"]
+        assert "active issue" in result["content"]
+
+    def test_fresh_item_still_restored_once(self):
+        """A fresh item (no tag) that gets dropped should be restored with
+        the marker exactly once."""
+        old = "- never-restored issue\n- kept issue"
+        op = {"op": "UPDATE", "content": "- kept issue"}
+        result = Session._wm_enforce_open_issues_resolved(op, old)
+        assert "[silently dropped, restored]" in result["content"]
+        assert "never-restored issue" in result["content"]
+
 
 # =======================================================================
 # _merge_wm_sections
@@ -445,3 +478,188 @@ class TestWmPathLikeRe:
 
     def test_no_match_plain_word(self):
         assert not Session._WM_PATH_LIKE_RE.search("hello")
+
+
+# =======================================================================
+# pending_tokens defensive clamp
+# =======================================================================
+
+class TestPendingTokensClamp:
+    """Verify that pending_tokens is always clamped to >= 0."""
+
+    def test_negative_pending_tokens_clamped_on_rebuild(self):
+        result = _calc_pending_tokens([], keep_recent_count=0)
+        assert result >= 0
+
+    def test_negative_keep_recent_count_treated_as_zero(self):
+        result = _calc_pending_tokens([100, 200], keep_recent_count=-5)
+        assert result == 300
+
+    def test_from_dict_clamps_negative_pending(self):
+        from openviking.session.session import SessionMeta
+        data = {"pending_tokens": -100, "keep_recent_count": -5}
+        meta = SessionMeta.from_dict(data)
+        assert meta.pending_tokens >= 0
+        assert meta.keep_recent_count >= 0
+
+
+# =======================================================================
+# APPEND non-string items handling
+# =======================================================================
+
+class TestAppendNonStringItems:
+    """APPEND items that are not strings should be dropped (not crash)."""
+
+    def test_append_with_mixed_types_keeps_strings(self):
+        old_wm = _make_wm(open_issues="- Existing issue")
+        ops = {
+            "Session Title": {"op": "KEEP"},
+            "Current State": {"op": "KEEP"},
+            "Task & Goals": {"op": "KEEP"},
+            "Key Facts & Decisions": {"op": "KEEP"},
+            "Files & Context": {"op": "KEEP"},
+            "Errors & Corrections": {"op": "KEEP"},
+            "Open Issues": {"op": "APPEND", "items": ["valid item", 42, None, {"bad": True}]},
+        }
+        merged = Session._merge_wm_sections(old_wm, ops)
+        assert "valid item" in merged
+        assert "Existing issue" in merged
+        assert "42" not in merged
+
+    def test_append_with_empty_items(self):
+        old_wm = _make_wm(open_issues="- Existing issue")
+        ops = {
+            "Session Title": {"op": "KEEP"},
+            "Current State": {"op": "KEEP"},
+            "Task & Goals": {"op": "KEEP"},
+            "Key Facts & Decisions": {"op": "KEEP"},
+            "Files & Context": {"op": "KEEP"},
+            "Errors & Corrections": {"op": "KEEP"},
+            "Open Issues": {"op": "APPEND", "items": []},
+        }
+        merged = Session._merge_wm_sections(old_wm, ops)
+        assert "Existing issue" in merged
+
+
+# =======================================================================
+# _merge_wm_sections edge cases
+# =======================================================================
+
+class TestMergeWmSectionsEdgeCases:
+
+    def test_missing_ops_default_to_keep(self):
+        old_wm = _make_wm(
+            session_title="Original Title",
+            current_state="Running",
+        )
+        merged = Session._merge_wm_sections(old_wm, {})
+        assert "Original Title" in merged
+        assert "Running" in merged
+
+    def test_unknown_op_defaults_to_keep(self):
+        old_wm = _make_wm(current_state="Running")
+        ops = {
+            "Session Title": {"op": "KEEP"},
+            "Current State": {"op": "UNKNOWN_OP"},
+            "Task & Goals": {"op": "KEEP"},
+            "Key Facts & Decisions": {"op": "KEEP"},
+            "Files & Context": {"op": "KEEP"},
+            "Errors & Corrections": {"op": "KEEP"},
+            "Open Issues": {"op": "KEEP"},
+        }
+        merged = Session._merge_wm_sections(old_wm, ops)
+        assert "Running" in merged
+
+    def test_all_sections_update(self):
+        old_wm = _make_wm(
+            session_title="Old Title",
+            current_state="Old State",
+        )
+        ops = {
+            "Session Title": {"op": "UPDATE", "content": "Old Title (updated)"},
+            "Current State": {"op": "UPDATE", "content": "New State"},
+            "Task & Goals": {"op": "UPDATE", "content": "New Goals"},
+            "Key Facts & Decisions": {"op": "UPDATE", "content": "- New fact"},
+            "Files & Context": {"op": "UPDATE", "content": "- new/file.py"},
+            "Errors & Corrections": {"op": "KEEP"},
+            "Open Issues": {"op": "UPDATE", "content": "- New issue"},
+        }
+        merged = Session._merge_wm_sections(old_wm, ops)
+        assert "New State" in merged
+        assert "New Goals" in merged
+
+
+# -----------------------------------------------------------------------
+# _format_message_for_wm
+# -----------------------------------------------------------------------
+
+from openviking.message.message import Message
+from openviking.message.part import TextPart, ToolPart, ContextPart
+
+
+def _msg(role, parts):
+    """Convenience builder for a Message with an auto-id."""
+    return Message(id="test-msg", role=role, parts=parts)
+
+
+class TestFormatMessageForWm:
+    """Tests for Session._format_message_for_wm."""
+
+    def test_text_only(self):
+        m = _msg("user", [TextPart(text="Hello world")])
+        result = Session._format_message_for_wm(m)
+        assert result == "[user]: Hello world"
+
+    def test_tool_part_included(self):
+        m = _msg("assistant", [
+            ToolPart(tool_name="search", tool_status="completed",
+                     tool_output="found 3 results"),
+        ])
+        result = Session._format_message_for_wm(m)
+        assert "[tool:search (completed)]" in result
+        assert "found 3 results" in result
+        assert result.startswith("[assistant]:")
+
+    def test_context_part_included(self):
+        m = _msg("assistant", [
+            ContextPart(abstract="Summary of prior session"),
+        ])
+        result = Session._format_message_for_wm(m)
+        assert "[context] Summary of prior session" in result
+
+    def test_mixed_parts(self):
+        m = _msg("assistant", [
+            TextPart(text="Let me check."),
+            ToolPart(tool_name="read_file", tool_status="completed",
+                     tool_output="/path/to/file content here"),
+            TextPart(text="Done reading."),
+        ])
+        result = Session._format_message_for_wm(m)
+        lines = result.split("\n")
+        assert lines[0] == "[assistant]: Let me check."
+        assert "[tool:read_file (completed)]" in lines[1]
+        assert "Done reading." in lines[2]
+
+    def test_empty_parts(self):
+        m = _msg("user", [])
+        result = Session._format_message_for_wm(m)
+        assert "(no content)" in result
+
+    def test_whitespace_only_text_skipped(self):
+        m = _msg("user", [TextPart(text="   ")])
+        result = Session._format_message_for_wm(m)
+        assert "(no content)" in result
+
+    def test_tool_with_empty_output(self):
+        m = _msg("assistant", [
+            ToolPart(tool_name="delete", tool_status="completed", tool_output=""),
+        ])
+        result = Session._format_message_for_wm(m)
+        assert "[tool:delete (completed)]" in result
+
+    def test_tool_default_status(self):
+        m = _msg("assistant", [
+            ToolPart(tool_name="run", tool_output="ok"),
+        ])
+        result = Session._format_message_for_wm(m)
+        assert "(pending)" in result

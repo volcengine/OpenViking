@@ -244,6 +244,7 @@ class CommitRequest(BaseModel):
     keep_recent_count: int = Field(
         default=0,
         ge=0,
+        le=10_000,
         description=(
             "Number of most-recent messages to keep live after commit. "
             "Plugin's afterTurn path typically passes its configured value "

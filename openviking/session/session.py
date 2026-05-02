@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from openviking.core.namespace import canonical_session_uri
 from openviking.message import Message, Part
+from openviking.message.part import ContextPart, TextPart, ToolPart
 from openviking.server.identity import RequestContext, Role
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking.utils.time_utils import get_current_timestamp
@@ -33,17 +34,8 @@ _ARCHIVE_WAIT_POLL_SECONDS = 0.1
 
 
 def _wm_debug(msg: str) -> None:
-    """Write a WM debug line to a dedicated file so it survives uvicorn's
-    background-task stdout capture. Best-effort, never raises."""
-    try:
-        from pathlib import Path as _P
-        log_dir = _P(get_openviking_config().storage.workspace) / "log"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        with (log_dir / "wm_debug.log").open("a", encoding="utf-8") as f:
-            import time as _t
-            f.write(f"{_t.strftime('%Y-%m-%d %H:%M:%S')} {msg}\n")
-    except Exception:
-        pass
+    """Log a WM v2 debug message via the standard logger."""
+    logger.debug("wm_v2: %s", msg)
 
 
 # =====================================================================
@@ -267,8 +259,8 @@ class SessionMeta:
             embedding_token_usage={
                 "total_tokens": embedding_token_usage.get("total_tokens", 0),
             },
-            pending_tokens=int(data.get("pending_tokens", 0) or 0),
-            keep_recent_count=int(data.get("keep_recent_count", 0) or 0),
+            pending_tokens=max(0, int(data.get("pending_tokens", 0) or 0)),
+            keep_recent_count=max(0, int(data.get("keep_recent_count", 0) or 0)),
         )
 
 
@@ -387,7 +379,7 @@ class Session:
         Used on load and as a safety net after rollbacks. Respects the
         currently remembered ``keep_recent_count`` from meta.
         """
-        keep = int(self._meta.keep_recent_count or 0)
+        keep = max(0, int(self._meta.keep_recent_count or 0))
         total = len(self._messages)
         if keep <= 0:
             self._meta.pending_tokens = sum(
@@ -399,6 +391,7 @@ class Session:
             )
         else:
             self._meta.pending_tokens = 0
+        self._meta.pending_tokens = max(0, self._meta.pending_tokens)
 
     async def exists(self) -> bool:
         """Check whether this session already exists in storage."""
@@ -1393,6 +1386,26 @@ class Session:
         first_line = summary.split("\n")[0].strip()
         return first_line if first_line else ""
 
+    @staticmethod
+    def _format_message_for_wm(m: Message) -> str:
+        """Format a single message for WM generation, including all parts.
+
+        Includes TextPart, ToolPart (name + status + full output), and
+        ContextPart so the WM LLM sees the complete conversation.
+        """
+        lines: List[str] = []
+        for p in m.parts:
+            if isinstance(p, TextPart) and p.text.strip():
+                lines.append(p.text)
+            elif isinstance(p, ToolPart) and p.tool_name:
+                status = p.tool_status or "completed"
+                output = p.tool_output or ""
+                lines.append(f"[tool:{p.tool_name} ({status})] {output}")
+            elif isinstance(p, ContextPart) and p.abstract:
+                lines.append(f"[context] {p.abstract}")
+        body = "\n".join(lines) if lines else "(no content)"
+        return f"[{m.role}]: {body}"
+
     def _generate_archive_summary(
         self,
         messages: List[Message],
@@ -1402,7 +1415,7 @@ class Session:
         if not messages:
             return ""
 
-        formatted = "\n".join([f"[{m.role}]: {m.content}" for m in messages])
+        formatted = "\n".join(self._format_message_for_wm(m) for m in messages)
 
         vlm = get_openviking_config().vlm
         if vlm and vlm.is_available():
@@ -1445,7 +1458,7 @@ class Session:
         if not messages:
             return ""
 
-        formatted = "\n".join([f"[{m.role}]: {m.content}" for m in messages])
+        formatted = "\n".join(self._format_message_for_wm(m) for m in messages)
 
         vlm = get_openviking_config().vlm
         if not (vlm and vlm.is_available()):
@@ -2216,6 +2229,8 @@ class Session:
         old_items = Session._wm_extract_bullet_items(old_content or "")
         dropped: List[str] = []
         for it in old_items:
+            if "[silently dropped, restored]" in it:
+                continue
             snippet = it[:40].lower().strip("_* `").strip()
             if snippet and snippet not in new_lower:
                 dropped.append(it)
@@ -2224,7 +2239,7 @@ class Session:
 
         _wm_debug(
             f"guard: Open Issues UPDATE silently dropped {len(dropped)} "
-            f"items; restoring with [silently dropped, restored] marker"
+            f"items; restoring once (will not restore again if re-dropped)"
         )
         restored = "\n".join(
             f"- [silently dropped, restored] {it}" for it in dropped
@@ -2249,7 +2264,8 @@ class Session:
         - ``Key Facts & Decisions`` uses a fact-preserving dual-threshold
           guard: UPDATE is accepted only if the consolidated content has
           >= 15% of old bullet count AND >= 70% lexical anchor coverage.
-          Rejected UPDATEs fall back to KEEP (not APPEND).
+          Rejected UPDATEs fall back to APPEND (salvaging new facts)
+          or KEEP if no new facts can be extracted.
         - ``Files & Context`` UPDATE that loses old file paths is rejected
           (KEEP + APPEND newly-added paths instead).
         - ``Session Title`` UPDATE with zero meaningful-word overlap against
@@ -2297,6 +2313,12 @@ class Session:
                     new_content = (op.get("content") or "").strip()
                 elif op_name == "APPEND":
                     items = op.get("items") or []
+                    bad_items = [s for s in items if not isinstance(s, str)]
+                    if bad_items:
+                        logger.warning(
+                            "wm_v2: dropped %d non-string APPEND item(s) in section %r: %s",
+                            len(bad_items), header, [type(s).__name__ for s in bad_items],
+                        )
                     appended = "\n".join(
                         f"- {s.strip()}" for s in items if isinstance(s, str) and s.strip()
                     )
