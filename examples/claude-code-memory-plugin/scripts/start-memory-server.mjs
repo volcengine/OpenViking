@@ -1,10 +1,15 @@
 import { spawn } from "node:child_process";
+import { isPluginEnabled } from "./config.mjs";
 import {
   computeSourceState,
   ensureRuntimeInstalled,
   getRuntimePaths,
   loadInstallState,
 } from "./runtime-common.mjs";
+
+if (!isPluginEnabled()) {
+  process.exit(0);
+}
 
 async function main() {
   const paths = getRuntimePaths();

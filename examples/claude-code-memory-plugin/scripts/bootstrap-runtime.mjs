@@ -1,8 +1,13 @@
+import { isPluginEnabled } from "./config.mjs";
 import {
   computeSourceState,
   ensureRuntimeInstalled,
   getRuntimePaths,
 } from "./runtime-common.mjs";
+
+if (!isPluginEnabled()) {
+  process.exit(0);
+}
 
 async function main() {
   const paths = getRuntimePaths();

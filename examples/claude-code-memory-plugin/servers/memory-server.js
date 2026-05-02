@@ -14,27 +14,41 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { createHash } from "node:crypto";
 // ---------------------------------------------------------------------------
-// Configuration — loaded from ov.conf (shared with OpenClaw plugin).
-// Env var: OPENVIKING_CONFIG_FILE (default: ~/.openviking/ov.conf)
-// Plugin-specific overrides go in the optional "claude_code" section.
+// Configuration
+//
+// Resolution priority (highest → lowest):
+//   1. Environment variables (OPENVIKING_URL, OPENVIKING_API_KEY, etc.)
+//   2. ovcli.conf (CLI client config: url, api_key, account, user, agent_id)
+//   3. ov.conf fields (server section + claude_code section)
+//   4. Built-in defaults
+//
+// When no config file exists and no env-var override enables the plugin,
+// the server exits silently (code 0) so Claude Code is not disrupted.
 // ---------------------------------------------------------------------------
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
-function loadOvConf() {
-    const defaultPath = join(homedir(), ".openviking", "ov.conf");
-    const configPath = resolvePath((process.env.OPENVIKING_CONFIG_FILE || defaultPath).replace(/^~/, homedir()));
+const DEFAULT_OV_CONF_PATH = join(homedir(), ".openviking", "ov.conf");
+const DEFAULT_OVCLI_CONF_PATH = join(homedir(), ".openviking", "ovcli.conf");
+function tryLoadJsonFile(envVar, defaultPath) {
+    const configPath = resolvePath((process.env[envVar] || defaultPath).replace(/^~/, homedir()));
     try {
         return JSON.parse(readFileSync(configPath, "utf-8"));
     }
-    catch (err) {
-        const code = err?.code;
-        const msg = code === "ENOENT"
-            ? `Config file not found: ${configPath}`
-            : `Failed to read config: ${configPath}`;
-        process.stderr.write(`[openviking-memory] ${msg}\n`);
-        process.exit(1);
+    catch {
+        return null;
     }
+}
+function envBool(name) {
+    const v = process.env[name];
+    if (v == null || v === "")
+        return undefined;
+    const lower = v.trim().toLowerCase();
+    if (lower === "0" || lower === "false" || lower === "no")
+        return false;
+    if (lower === "1" || lower === "true" || lower === "yes")
+        return true;
+    return undefined;
 }
 function num(val, fallback) {
     if (typeof val === "number" && Number.isFinite(val))
@@ -51,15 +65,48 @@ function str(val, fallback) {
         return val.trim();
     return fallback;
 }
-const file = loadOvConf();
-const serverCfg = (file.server ?? {});
-const cc = (file.claude_code ?? {});
-const host = str(serverCfg.host, "127.0.0.1").replace("0.0.0.0", "127.0.0.1");
-const port = Math.floor(num(serverCfg.port, 1933));
+// --- Enable/disable check ---
+const envEnabled = envBool("OPENVIKING_MEMORY_ENABLED");
+const ovFile = tryLoadJsonFile("OPENVIKING_CONFIG_FILE", DEFAULT_OV_CONF_PATH) ?? {};
+const cliFile = tryLoadJsonFile("OPENVIKING_CLI_CONFIG_FILE", DEFAULT_OVCLI_CONF_PATH) ?? {};
+const ovFileMissing = Object.keys(ovFile).length === 0;
+const cliFileMissing = Object.keys(cliFile).length === 0;
+const cc = (ovFile.claude_code ?? {});
+if (envEnabled === false) {
+    process.exit(0);
+}
+if (envEnabled === undefined) {
+    if (ovFileMissing && cliFileMissing)
+        process.exit(0);
+    if (cc.enabled === false)
+        process.exit(0);
+}
+// --- Build config: env → ovcli.conf → ov.conf → defaults ---
+const serverCfg = (ovFile.server ?? {});
+const cli = cliFile;
+// baseUrl: env → ovcli.url → ov.server.url → http://{host}:{port}
+const envUrl = str(process.env.OPENVIKING_URL, "") || str(process.env.OPENVIKING_BASE_URL, "");
+let baseUrl;
+if (envUrl) {
+    baseUrl = envUrl.replace(/\/+$/, "");
+}
+else if (cli.url) {
+    baseUrl = str(cli.url, "").replace(/\/+$/, "");
+}
+else if (serverCfg.url) {
+    baseUrl = str(serverCfg.url, "").replace(/\/+$/, "");
+}
+else {
+    const host = str(serverCfg.host, "127.0.0.1").replace("0.0.0.0", "127.0.0.1");
+    const port = Math.floor(num(serverCfg.port, 1933));
+    baseUrl = `http://${host}:${port}`;
+}
 const config = {
-    baseUrl: `http://${host}:${port}`,
-    apiKey: str(serverCfg.root_api_key, ""),
-    agentId: str(cc.agentId, "claude-code"),
+    baseUrl,
+    apiKey: str(process.env.OPENVIKING_API_KEY, "") || str(cli.api_key, "") || str(cc.apiKey, "") || str(serverCfg.root_api_key, ""),
+    agentId: str(process.env.OPENVIKING_AGENT_ID, "") || str(cli.agent_id, "") || str(cc.agentId, "claude-code"),
+    accountId: str(process.env.OPENVIKING_ACCOUNT, "") || str(cli.account, "") || str(cc.accountId, ""),
+    userId: str(process.env.OPENVIKING_USER, "") || str(cli.user, "") || str(cc.userId, ""),
     timeoutMs: Math.max(1000, Math.floor(num(cc.timeoutMs, 15000))),
     recallLimit: Math.max(1, Math.floor(num(cc.recallLimit, 6))),
     scoreThreshold: Math.min(1, Math.max(0, num(cc.scoreThreshold, 0.01))),
@@ -84,13 +131,17 @@ class OpenVikingClient {
     apiKey;
     agentId;
     timeoutMs;
+    accountId;
+    userId;
     resolvedSpaceByScope = {};
     runtimeIdentity = null;
-    constructor(baseUrl, apiKey, agentId, timeoutMs) {
+    constructor(baseUrl, apiKey, agentId, timeoutMs, accountId = "", userId = "") {
         this.baseUrl = baseUrl;
         this.apiKey = apiKey;
         this.agentId = agentId;
         this.timeoutMs = timeoutMs;
+        this.accountId = accountId;
+        this.userId = userId;
     }
     async request(path, init = {}) {
         const controller = new AbortController();
@@ -99,6 +150,10 @@ class OpenVikingClient {
             const headers = new Headers(init.headers ?? {});
             if (this.apiKey)
                 headers.set("X-API-Key", this.apiKey);
+            if (this.accountId)
+                headers.set("X-OpenViking-Account", this.accountId);
+            if (this.userId)
+                headers.set("X-OpenViking-User", this.userId);
             if (this.agentId)
                 headers.set("X-OpenViking-Agent", this.agentId);
             if (init.body && !headers.has("Content-Type"))
@@ -369,7 +424,7 @@ async function searchBothScopes(client, query, limit) {
 // ---------------------------------------------------------------------------
 // MCP Server
 // ---------------------------------------------------------------------------
-const client = new OpenVikingClient(config.baseUrl, config.apiKey, config.agentId, config.timeoutMs);
+const client = new OpenVikingClient(config.baseUrl, config.apiKey, config.agentId, config.timeoutMs, config.accountId, config.userId);
 const server = new McpServer({
     name: "openviking-memory",
     version: "0.1.0",
