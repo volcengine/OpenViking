@@ -21,6 +21,7 @@ class AddResourceRequest(BaseModel):
     target: Optional[str] = None
     reason: str = ""
     instruction: str = ""
+    summary_instruction: str = ""
     wait: bool = False
     timeout: Optional[float] = None
 
@@ -45,6 +46,7 @@ async def add_resource(
         target=request.target,
         reason=request.reason,
         instruction=request.instruction,
+        summary_instruction=request.summary_instruction,
         wait=request.wait,
         timeout=request.timeout,
     )

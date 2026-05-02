@@ -226,6 +226,7 @@ class AsyncHTTPClient(BaseClient):
         target: Optional[str] = None,
         reason: str = "",
         instruction: str = "",
+        summary_instruction: str = "",
         wait: bool = False,
         timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
@@ -237,6 +238,7 @@ class AsyncHTTPClient(BaseClient):
                 "target": target,
                 "reason": reason,
                 "instruction": instruction,
+                "summary_instruction": summary_instruction,
                 "wait": wait,
                 "timeout": timeout,
             },

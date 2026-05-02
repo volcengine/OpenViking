@@ -23,6 +23,7 @@ class SemanticMsg:
                    When True, the processor will collect all subdirectory info and
                    enqueue them for processing (bottom-up order).
                    When False, only the specified directory will be processed.
+        instruction: Custom instruction for abstract/overview generation via VLM.
     """
 
     id: str  # UUID
@@ -31,17 +32,20 @@ class SemanticMsg:
     status: str = "pending"  # pending/processing/completed
     timestamp: int = int(datetime.now().timestamp())
     recursive: bool = True  # Whether to recursively process subdirectories
+    instruction: str = ""  # Custom instruction for abstract/overview generation
 
     def __init__(
         self,
         uri: str,
         context_type: str,
         recursive: bool = True,
+        instruction: str = "",
     ):
         self.id = str(uuid4())
         self.uri = uri
         self.context_type = context_type
         self.recursive = recursive
+        self.instruction = instruction
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert object to dictionary."""
@@ -72,6 +76,7 @@ class SemanticMsg:
             uri=uri,
             context_type=context_type,
             recursive=data.get("recursive", True),
+            instruction=data.get("instruction", ""),
         )
         if "id" in data and data["id"]:
             obj.id = data["id"]

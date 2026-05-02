@@ -19,6 +19,7 @@ def register(app: typer.Typer) -> None:
         to: Optional[str] = typer.Option(None, "--to", help="Target URI"),
         reason: str = typer.Option("", help="Reason for import"),
         instruction: str = typer.Option("", help="Additional instruction"),
+        summary_instruction: str = typer.Option("", "--summary-instruction", help="Custom instruction for abstract/overview generation"),
         wait: bool = typer.Option(False, "--wait", help="Wait until processing is complete"),
         timeout: Optional[float] = typer.Option(600.0, help="Wait timeout in seconds"),
     ) -> None:
@@ -30,6 +31,7 @@ def register(app: typer.Typer) -> None:
                 target=to,
                 reason=reason,
                 instruction=instruction,
+                summary_instruction=summary_instruction,
                 wait=wait,
                 timeout=timeout,
             ),

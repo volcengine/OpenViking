@@ -73,6 +73,7 @@ class ResourceProcessor:
         path: str,
         reason: str = "",
         instruction: str = "",
+        summary_instruction: str = "",
         scope: str = "resources",
         user: Optional[str] = None,
         target: Optional[str] = None,
@@ -84,8 +85,7 @@ class ResourceProcessor:
         1. Parse source (writes to temp directory)
         2. TreeBuilder moves to AGFS
         3. SemanticQueue generates L0/L1 and vectorizes asynchronously
-        """
-        result = {
+        """        result = {
             "status": "success",
             "errors": [],
             "source_path": None,
@@ -129,6 +129,7 @@ class ResourceProcessor:
                 base_uri=located_uri,
                 source_path=parse_result.source_path,
                 source_format=parse_result.source_format,
+                summary_instruction=summary_instruction,
             )
         except Exception as e:
             result["status"] = "error"

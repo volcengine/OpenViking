@@ -36,6 +36,7 @@ class BaseClient(ABC):
         target: Optional[str] = None,
         reason: str = "",
         instruction: str = "",
+        summary_instruction: str = "",
         wait: bool = False,
         timeout: Optional[float] = None,
     ) -> Dict[str, Any]:

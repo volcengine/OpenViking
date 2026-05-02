@@ -72,6 +72,7 @@ class ResourceService:
         target: Optional[str] = None,
         reason: str = "",
         instruction: str = "",
+        summary_instruction: str = "",
         wait: bool = False,
         timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
@@ -82,6 +83,7 @@ class ResourceService:
             target: Target URI
             reason: Reason for adding
             instruction: Processing instruction
+            summary_instruction: Custom instruction for abstract/overview generation
             wait: Whether to wait for semantic extraction and vectorization to complete
             timeout: Wait timeout in seconds
 
@@ -102,6 +104,7 @@ class ResourceService:
             path=path,
             reason=reason,
             instruction=instruction,
+            summary_instruction=summary_instruction,
             scope="resources",
             target=target,
         )

@@ -80,6 +80,7 @@ class TreeBuilder:
         base_uri: Optional[str] = None,
         source_path: Optional[str] = None,
         source_format: Optional[str] = None,
+        summary_instruction: str = "",
     ) -> "BuildingTree":
         """
         Finalize tree from temporary directory (v5.0 architecture).
@@ -95,6 +96,7 @@ class TreeBuilder:
             base_uri: Base URI (None = use scope default)
             source_path: Source file path
             source_format: Source file format
+            summary_instruction: Custom instruction for abstract/overview generation
 
         Returns:
             Complete BuildingTree with all resources moved to AGFS
@@ -136,7 +138,7 @@ class TreeBuilder:
         # 6. Enqueue to SemanticQueue for async semantic generation
         try:
             context_type = "resource"  # Default to resource
-            await self._enqueue_semantic_generation(final_uri, context_type)
+            await self._enqueue_semantic_generation(final_uri, context_type, summary_instruction)
             logger.info(f"Enqueued semantic generation for: {final_uri}")
         except Exception as e:
             logger.error(f"Failed to enqueue semantic generation: {e}", exc_info=True)
@@ -205,13 +207,14 @@ class TreeBuilder:
             if "exist" not in str(e).lower():
                 logger.debug(f"Parent dir {parent_uri} may already exist: {e}")
 
-    async def _enqueue_semantic_generation(self, uri: str, context_type: str) -> None:
+    async def _enqueue_semantic_generation(self, uri: str, context_type: str, instruction: str = "") -> None:
         """
         Enqueue a directory for semantic generation.
 
         Args:
             uri: Directory URI to enqueue
             context_type: resource/memory/skill
+            instruction: Custom instruction for abstract/overview generation
         """
         from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 
@@ -224,6 +227,7 @@ class TreeBuilder:
         msg = SemanticMsg(
             uri=uri,
             context_type=context_type,
+            instruction=instruction,
         )
         await semantic_queue.enqueue(msg)
 
