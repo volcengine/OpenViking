@@ -10,14 +10,9 @@ description: |
   - Each item: self-contained, declarative sentence, < 30 words
   - Extract only facts stated/confirmed by user; no guesses
   - Focus on persistent information, not temporary situations
-  - **IMPORTANT**: Preserve specific details and qualifying descriptors verbatim. Do NOT replace with vague summaries.
-  - **IMPORTANT**: Record enumerations completely — list ALL items mentioned, not just the first.
   - Forbidden: events, only-assistant content, sensitive/private info, trivial updates
-  - Merge similar items; keep latest if conflicting
-  - Organize related items under ## sub-headings by topic (e.g., ## Identity, ## Career,
-    ## Art, ## Music, ## Pets, ## Family, ## Books) so related facts are grouped together
-  - When converting relative time expressions, record both the original expression and the calculated absolute date.
-
+  - Merge similar items; keep latest if conflicting 
+  
 
 directory: "viking://user/{{ user_space }}/memories"
 filename_template: "profile.md"
@@ -29,26 +24,18 @@ fields:
       User profile content in Markdown format describing "who the user is".
       Includes relatively stable personal attributes: profession, experience, tech stack, communication style, etc.
       Only record objective statuses, do not record events or similar information.
-      [IMPORTANT] For changeable statuses, must include the last updated time in the format: (as of 2023-06-09)
-      [IMPORTANT] Include specific details for preferences/activities (what instruments, what books, what symbols).
-      [IMPORTANT] Organize using ## sub-headings by topic so related facts are co-located.
+      [IMPORTANT] For changeable statuses, must include the last updated time in the format: (as of 2023-06-09) 
       Example:
       # Caroline
-      ## Identity
-      - Transgender woman
-      - Moved from Sweden 4 years ago (as of 2023-06-27)
-      - Relationship status: Single (as of 2023-05-25)
-      ## Career
-      - Exploring counseling or mental health work for Transgender people (as of 2023-07-12)
-      ## Art
-      - Painting: sunsets, abstract, trans experience pieces
-      - Drawing: flowers
-      - Symbols important: Rainbow flag, transgender symbol
-      - Art symbolizes: freedom and being true to herself
-      ## Music
-      - Plays: acoustic guitar (5 years), piano (learning)
-      ## Pets
-      - Guinea pig named Oscar
-      ## Family Plans
-      - Researching adoption agencies (as of 2023-08-23)
+      - Date of birth
+      - Gender: Female
+      - Age: 25 (as of 2023-06-09)
+      - Nickname
+      - Place of origin
+      - Place of residence
+      - Regular city of residence
+      - Current occupation
+      - Relationship status: Single (as of 2023-06-09)
+      - Career plan
+      etc.
     merge_op: patch

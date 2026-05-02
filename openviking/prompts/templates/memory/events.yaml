@@ -9,9 +9,7 @@ description: |
   - If possible, combine the user's current behavior and reactions to speculate on the user's possible thoughts or actions.
   - Describe the complete content of an event within a single event as much as possible; do not split one event into multiple parts.
   - Record content that mentions time.
-  - **IMPORTANT**: Preserve specific details verbatim — exact quotes, item descriptions, feelings, reasons. Do NOT replace with vague summaries.
-  - **IMPORTANT**: Record enumerations completely — list ALL items mentioned, not just the first.
-  - When converting relative time expressions, record both the original expression and the calculated absolute date.
+  - Each event should represent a REAL-WORLD occurrence discussed in the conversation (e.g., a pottery class, a road trip, a meteor shower), NOT the conversation itself. Do NOT name events after who was chatting — name them after WHAT happened.
 directory: "viking://user/{{ user_space }}/memories/events"
 filename_template: "{{ extract_context.get_year(ranges) }}/{{ extract_context.get_month(ranges) }}/{{ extract_context.get_day(ranges) }}/{{ event_name }}.md"
 enabled: true
@@ -35,6 +33,7 @@ fields:
     type: string
     description: |
       Event name in Chinese or English. If English, use lowercase with underscores, max 3 words. Do not include any dates.
+      This must name the REAL-WORLD event discussed (e.g., "pottery_class", "road_trip", "pride_parade"), NOT the conversation itself (e.g., NOT "caroline_and_melanie_chat", NOT "chat_about_weekend").
     merge_op: immutable
 
   - name: goal

@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 from openviking.core.namespace import agent_space_fragment, user_space_fragment
 from openviking.message import Message
 from openviking.server.identity import RequestContext
-from openviking.session.memory.dataclass import MemoryField, ResolvedOperations, ResolvedOperation
+from openviking.session.memory.dataclass import MemoryField, MemoryFileContent, ResolvedOperations, ResolvedOperation
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.merge_op import MergeOpFactory
 from openviking.session.memory.utils import (
@@ -347,20 +347,38 @@ class MemoryUpdater:
         memory_type = resolved_op.memory_type
         schema = self._registry.get(memory_type)
         metadata: Dict[str, Any] = dict(resolved_op.memory_fields)
+
+        # Read the latest file content from storage instead of using the stale
+        # snapshot from old_memory_file_content. This ensures patches are applied
+        # against the current state, which matters when multiple operations target
+        # the same URI or when the file was modified concurrently.
+        current_file: Optional[MemoryFileContent] = None
+        for uri in resolved_op.uris:
+            try:
+                raw_content = await viking_fs.read_file(uri, ctx=ctx)
+                if raw_content:
+                    parsed = parse_memory_file_with_fields(raw_content)
+                    current_file = MemoryFileContent(
+                        uri=uri,
+                        plain_content=parsed.get("content", ""),
+                        memory_fields=parsed,
+                    )
+                    break
+            except NotFoundError:
+                pass
+
         # Process fields defined in schema (apply merge_op)
         for field in schema.fields:
             if field.name in resolved_op.memory_fields:
                 patch_value = resolved_op.memory_fields[field.name]
-                # Get current value
-                if resolved_op.old_memory_file_content is None:
+                # Get current value from the latest file content
+                if current_file is None:
                     current_value = None
                 else:
                     if field.name == "content":
-                        current_value = resolved_op.old_memory_file_content.plain_content
+                        current_value = current_file.plain_content
                     else:
-                        current_value = resolved_op.old_memory_file_content.memory_fields.get(
-                            field.name
-                        )
+                        current_value = current_file.memory_fields.get(field.name)
                 # Use merge_op to process field value
                 merge_op = MergeOpFactory.from_field(field)
                 new_value = merge_op.apply(current_value, patch_value)
