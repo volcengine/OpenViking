@@ -204,43 +204,66 @@ with open(input_file, "r", encoding="utf-8") as f:
     data = json.load(f)
 sample_id_to_index = {f"sample_{i}": i for i in range(len(data))}
 
-# Read wrong questions, collect (sample_index, question_index) with dedup
-wrong_keys = set()
+# Read wrong questions, collect required sessions per sample (dedup)
+sample_sessions = {}  # sample_index -> set of session numbers
+wrong_count = 0
 with open(retry_wrong, "r", encoding="utf-8") as f:
     reader = csv.DictReader(f)
     for row in reader:
         if row.get("is_invalid", "").lower() == "true":
             continue
-        if row.get("result") == "WRONG":
-            sample_id = row["sample_id"]
-            qi = row.get("question_index", "")
-            sample_index = sample_id_to_index.get(sample_id)
-            if sample_index is not None:
-                wrong_keys.add((sample_index, qi))
+        if row.get("result") != "WRONG":
+            continue
+        wrong_count += 1
+        sample_id = row["sample_id"]
+        sample_index = sample_id_to_index.get(sample_id)
+        if sample_index is None:
+            continue
 
-print(f"Found {len(wrong_keys)} unique wrong questions to import")
+        # Parse evidence to get session numbers (e.g. ["D1:3","D2:5"] -> {1, 2})
+        if sample_index not in sample_sessions:
+            sample_sessions[sample_index] = set()
+        try:
+            evidence = json.loads(row.get("evidence", "[]"))
+        except json.JSONDecodeError:
+            evidence = []
+        for ev in evidence:
+            try:
+                session_num = int(ev.split(":")[0][1:])
+                sample_sessions[sample_index].add(session_num)
+            except (ValueError, IndexError):
+                pass
 
-# Import one question at a time using --question-index (auto-detects sessions from evidence)
+print(f"Found {wrong_count} wrong questions across {len(sample_sessions)} samples")
+
+# Import per sample with deduped session range
 imported = 0
-for sample_index, qi in sorted(wrong_keys):
+for sample_index in sorted(sample_sessions.keys()):
+    sessions = sorted(sample_sessions[sample_index])
+    # Build session range string
+    if len(sessions) == 1:
+        sessions_arg = str(sessions[0])
+    else:
+        sessions_arg = f"{sessions[0]}-{sessions[-1]}"
+
     cmd = [
         sys.executable, f"{script_dir}/import_to_ov.py",
         "--input", input_file,
         "--sample", str(sample_index),
-        "--question-index", str(qi),
+        "--sessions", sessions_arg,
         "--force-ingest",
         "--account", account,
         "--openviking-url", ov_url,
     ]
     if group_chat:
         cmd.append("--group-chat")
-    print(f"  Importing sample_{sample_index} q{qi}...")
+    print(f"  Importing sample_{sample_index} sessions {sessions_arg}...")
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"  Warning: import failed: {result.stderr[:200]}")
     imported += 1
 
-print(f"Imported {imported} question-related sessions")
+print(f"Imported {imported} samples")
 PY
 
     echo "等待数据处理完成..."
