@@ -455,8 +455,53 @@ async def process_single_session(
         return result
 
 
+def parse_retry_wrong_csv(csv_path: str) -> Dict[str, set]:
+    """Parse a judged result CSV, extract valid wrong questions, and return
+    per-sample session numbers derived from evidence.
+
+    Returns: {sample_id: {session_num, ...}}
+    """
+    with open(csv_path, "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        wrong_items = [row for row in reader
+                       if row.get("is_invalid", "").lower() != "true"
+                       and row.get("result") == "WRONG"]
+
+    if not wrong_items:
+        print(f"[retry-wrong] No valid wrong questions found in {csv_path}", file=sys.stderr)
+        return {}
+
+    sample_sessions: Dict[str, set] = {}
+    for row in wrong_items:
+        sample_id = row["sample_id"]
+        if sample_id not in sample_sessions:
+            sample_sessions[sample_id] = set()
+        try:
+            evidence = json.loads(row.get("evidence", "[]"))
+        except json.JSONDecodeError:
+            evidence = []
+        for ev in evidence:
+            try:
+                session_num = int(ev.split(":")[0][1:])
+                sample_sessions[sample_id].add(session_num)
+            except (ValueError, IndexError):
+                pass
+
+    total_wrong = len(wrong_items)
+    print(
+        f"[retry-wrong] {total_wrong} valid wrong questions across {len(sample_sessions)} samples",
+        file=sys.stderr,
+    )
+    return sample_sessions
+
+
 async def run_import(args: argparse.Namespace) -> None:
     session_range = parse_session_range(args.sessions) if args.sessions else None
+
+    # --retry-wrong: build per-sample session ranges from wrong questions
+    retry_wrong_sessions = None  # sample_id -> (min, max) or set of session nums
+    if args.retry_wrong:
+        retry_wrong_sessions = parse_retry_wrong_csv(args.retry_wrong)
 
     # 如果指定了 question-index，自动从 evidence 推断需要的 session
     if args.question_index is not None and not args.sessions:
@@ -527,12 +572,44 @@ async def run_import(args: argparse.Namespace) -> None:
         # LoCoMo JSON format
         samples = load_locomo_data(args.input, args.sample)
 
+        # --retry-wrong: resolve sample_id -> sample_index and filter
+        if retry_wrong_sessions:
+            # Build mapping from data
+            with open(args.input, "r", encoding="utf-8") as f:
+                all_data = json.load(f)
+            sample_id_to_index = {f"sample_{i}": i for i in range(len(all_data))}
+            # Filter samples to only those with wrong questions
+            retry_sample_indices = set()
+            for sid in retry_wrong_sessions:
+                idx = sample_id_to_index.get(sid)
+                if idx is not None:
+                    retry_sample_indices.add(idx)
+            # If --sample was specified, also filter by that
+            if args.sample is not None:
+                retry_sample_indices &= {args.sample}
+            samples = [all_data[i] for i in sorted(retry_sample_indices)]
+            # Reload with load_locomo_data's return format
+            # Actually we need to re-index, so let's just filter the loaded samples
+            print(
+                f"[retry-wrong] {len(retry_wrong_sessions)} samples with wrong questions, "
+                f"filtered to {len(samples)} samples to import",
+                file=sys.stderr,
+            )
+
         # 为每个 sample 创建独立的处理协程
         async def process_sample(item, sample_index):
             nonlocal success_count, error_count, total_embedding_tokens, total_vlm_tokens
             sample_id = item["sample_id"]
             display_id = f"sample_{sample_index}"
-            sessions = build_session_messages(item, session_range, group_chat=args.group_chat)
+
+            # --retry-wrong: use per-sample session range from evidence
+            sample_session_range = session_range
+            if retry_wrong_sessions and display_id in retry_wrong_sessions:
+                sess_nums = retry_wrong_sessions[display_id]
+                if sess_nums:
+                    sample_session_range = (min(sess_nums), max(sess_nums))
+
+            sessions = build_session_messages(item, sample_session_range, group_chat=args.group_chat)
 
             print(f"\n=== Sample {display_id} ({sample_id}) ===", file=sys.stderr)
             print(f"    {len(sessions)} session(s) to import", file=sys.stderr)
@@ -738,6 +815,11 @@ def main():
         action="store_true",
         default=False,
         help="Clear all existing ingest records before running",
+    )
+    parser.add_argument(
+        "--retry-wrong",
+        default=None,
+        help="Path to a judged result CSV. Only import sessions needed by valid wrong questions.",
     )
     args = parser.parse_args()
 

@@ -183,88 +183,15 @@ if [ -n "$RETRY_WRONG" ]; then
         RESULT_FILE="./result/locomo_retry_${TIMESTAMP}.csv"
     fi
 
-    # 从错题 CSV 中提取需要导入的 (sample_index, question_index) 并导入相关对话
+    # 从错题 CSV 中提取需要导入的对话（复用 import_to_ov.py 的并行逻辑）
     echo "[1/3] 导入错题相关对话..."
-    "$PYTHON_BIN" - <<PY
-import csv
-import json
-import subprocess
-import sys
-import os
-
-script_dir = os.environ["SCRIPT_DIR"]
-input_file = os.environ["INPUT_FILE"]
-retry_wrong = os.environ["RETRY_WRONG"]
-account = os.environ.get("ACCOUNT", "default")
-ov_url = os.environ.get("OPENVIKING_URL", "http://localhost:1933")
-group_chat = os.environ.get("GROUP_CHAT", "false") == "true"
-
-# Load locomo data
-with open(input_file, "r", encoding="utf-8") as f:
-    data = json.load(f)
-sample_id_to_index = {f"sample_{i}": i for i in range(len(data))}
-
-# Read wrong questions, collect required sessions per sample (dedup)
-sample_sessions = {}  # sample_index -> set of session numbers
-wrong_count = 0
-with open(retry_wrong, "r", encoding="utf-8") as f:
-    reader = csv.DictReader(f)
-    for row in reader:
-        if row.get("is_invalid", "").lower() == "true":
-            continue
-        if row.get("result") != "WRONG":
-            continue
-        wrong_count += 1
-        sample_id = row["sample_id"]
-        sample_index = sample_id_to_index.get(sample_id)
-        if sample_index is None:
-            continue
-
-        # Parse evidence to get session numbers (e.g. ["D1:3","D2:5"] -> {1, 2})
-        if sample_index not in sample_sessions:
-            sample_sessions[sample_index] = set()
-        try:
-            evidence = json.loads(row.get("evidence", "[]"))
-        except json.JSONDecodeError:
-            evidence = []
-        for ev in evidence:
-            try:
-                session_num = int(ev.split(":")[0][1:])
-                sample_sessions[sample_index].add(session_num)
-            except (ValueError, IndexError):
-                pass
-
-print(f"Found {wrong_count} wrong questions across {len(sample_sessions)} samples")
-
-# Import per sample with deduped session range
-imported = 0
-for sample_index in sorted(sample_sessions.keys()):
-    sessions = sorted(sample_sessions[sample_index])
-    # Build session range string
-    if len(sessions) == 1:
-        sessions_arg = str(sessions[0])
-    else:
-        sessions_arg = f"{sessions[0]}-{sessions[-1]}"
-
-    cmd = [
-        sys.executable, f"{script_dir}/import_to_ov.py",
-        "--input", input_file,
-        "--sample", str(sample_index),
-        "--sessions", sessions_arg,
-        "--force-ingest",
-        "--account", account,
-        "--openviking-url", ov_url,
-    ]
-    if group_chat:
-        cmd.append("--group-chat")
-    print(f"  Importing sample_{sample_index} sessions {sessions_arg}...")
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        print(f"  Warning: import failed: {result.stderr[:200]}")
-    imported += 1
-
-print(f"Imported {imported} samples")
-PY
+    "$PYTHON_BIN" "$SCRIPT_DIR/import_to_ov.py" \
+        --input "$INPUT_FILE" \
+        --retry-wrong "$RETRY_WRONG" \
+        --force-ingest \
+        --account "$ACCOUNT" \
+        --openviking-url "$OPENVIKING_URL" \
+        "${COMMON_OPTS[@]}"
 
     echo "等待数据处理完成..."
     sleep 30
