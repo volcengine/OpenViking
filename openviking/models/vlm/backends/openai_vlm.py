@@ -59,6 +59,7 @@ class OpenAIVLM(VLMBase):
             "model": self.model or "gpt-4o-mini",
             "messages": [{"role": "user", "content": prompt}],
             "temperature": self.temperature,
+            "stream": False,  # Explicitly disable streaming to prevent AsyncStream responses
         }
 
         if self.provider == "volcengine":
@@ -77,6 +78,7 @@ class OpenAIVLM(VLMBase):
             "model": self.model or "gpt-4o-mini",
             "messages": [{"role": "user", "content": prompt}],
             "temperature": self.temperature,
+            "stream": False,  # Explicitly disable streaming to prevent AsyncStream responses
         }
 
         if self.provider == "volcengine":
@@ -144,6 +146,7 @@ class OpenAIVLM(VLMBase):
             model=self.model or "gpt-4o-mini",
             messages=[{"role": "user", "content": content}],
             temperature=self.temperature,
+            stream=False,  # Explicitly disable streaming to prevent AsyncStream responses
         )
         self._update_token_usage_from_response(response)
         return response.choices[0].message.content or ""
@@ -165,6 +168,7 @@ class OpenAIVLM(VLMBase):
             model=self.model or "gpt-4o-mini",
             messages=[{"role": "user", "content": content}],
             temperature=self.temperature,
+            stream=False,  # Explicitly disable streaming to prevent AsyncStream responses
         )
         self._update_token_usage_from_response(response)
         return response.choices[0].message.content or ""
