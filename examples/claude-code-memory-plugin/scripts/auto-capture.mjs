@@ -47,6 +47,8 @@ async function fetchJSON(path, init = {}) {
     const headers = { "Content-Type": "application/json" };
     if (cfg.apiKey) headers["X-API-Key"] = cfg.apiKey;
     if (cfg.agentId) headers["X-OpenViking-Agent"] = cfg.agentId;
+    if (cfg.account) headers["X-OpenViking-Account"] = cfg.account;
+    if (cfg.user) headers["X-OpenViking-User"] = cfg.user;
     const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
     const body = await res.json();
     if (!res.ok || body.status === "error") return null;

@@ -39,29 +39,101 @@ type FindResult = {
 type ScopeName = "user" | "agent";
 
 // ---------------------------------------------------------------------------
-// Configuration — loaded from ov.conf (shared with OpenClaw plugin).
-// Env var: OPENVIKING_CONFIG_FILE (default: ~/.openviking/ov.conf)
-// Plugin-specific overrides go in the optional "claude_code" section.
+// Configuration — loaded from the Claude Code client config.
+// Env var: OPENVIKING_CC_CONFIG_FILE
+// Default: ~/.openviking/claude-code-memory-plugin/config.json
+//
+// In local mode, apiKey defaults to the local OpenViking server config:
+// OPENVIKING_CONFIG_FILE or ~/.openviking/ov.conf
 // ---------------------------------------------------------------------------
 
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 
-function loadOvConf(): Record<string, unknown> {
-  const defaultPath = join(homedir(), ".openviking", "ov.conf");
-  const configPath = resolvePath(
-    (process.env.OPENVIKING_CONFIG_FILE || defaultPath).replace(/^~/, homedir()),
-  );
+const DEFAULT_CLIENT_CONFIG_PATH = join(
+  homedir(),
+  ".openviking",
+  "claude-code-memory-plugin",
+  "config.json",
+);
+const DEFAULT_SERVER_CONFIG_PATH = join(homedir(), ".openviking", "ov.conf");
+
+function fatal(message: string): never {
+  process.stderr.write(`[openviking-memory] ${message}\n`);
+  process.exit(1);
+}
+
+function resolveEnvVars(value: string): string {
+  return value.replace(/\$\{([^}]+)\}/g, (_, envVar) => {
+    const envValue = process.env[envVar];
+    if (typeof envValue !== "string" || envValue === "") {
+      fatal(`Environment variable ${envVar} is not set`);
+    }
+    return envValue;
+  });
+}
+
+function resolveString(value: unknown, fallback: string): string {
+  if (typeof value === "string" && value.trim()) return resolveEnvVars(value.trim());
+  return fallback;
+}
+
+function resolveConfigPath(rawValue: unknown, fallback: string): string {
+  return resolvePath(resolveString(rawValue, fallback).replace(/^~/, homedir()));
+}
+
+function normalizeBaseUrl(value: unknown): string {
+  return resolveString(value, "").replace(/\/+$/, "");
+}
+
+function requireBaseUrl(value: unknown): string {
+  const resolved = normalizeBaseUrl(value);
+  if (!resolved) {
+    fatal("Claude Code client config: baseUrl is required when mode is \"remote\"");
+  }
+  return resolved;
+}
+
+function clampPort(value: unknown): number {
+  return Math.max(1, Math.min(65535, Math.floor(num(value, 1933))));
+}
+
+function loadRequiredJson(configPath: string, label: string): Record<string, unknown> {
+  let raw: string;
   try {
-    return JSON.parse(readFileSync(configPath, "utf-8"));
+    raw = readFileSync(configPath, "utf-8");
   } catch (err: unknown) {
     const code = (err as { code?: string })?.code;
     const msg = code === "ENOENT"
-      ? `Config file not found: ${configPath}`
-      : `Failed to read config: ${configPath}`;
-    process.stderr.write(`[openviking-memory] ${msg}\n`);
-    process.exit(1);
+      ? `${label} not found: ${configPath}\n  Create it and set at least: { "mode": "local" }`
+      : `Failed to read ${label}: ${configPath} — ${(err as Error)?.message || String(err)}`;
+    fatal(msg);
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      fatal(`${label} must contain a JSON object: ${configPath}`);
+    }
+    return parsed as Record<string, unknown>;
+  } catch (err: unknown) {
+    fatal(`Invalid JSON in ${configPath}: ${(err as Error)?.message || String(err)}`);
+  }
+}
+
+function loadOptionalJson(configPath: string): { file: Record<string, unknown> | null; error: string | null } {
+  try {
+    const parsed = JSON.parse(readFileSync(configPath, "utf-8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { file: null, error: `JSON root must be an object: ${configPath}` };
+    }
+    return { file: parsed as Record<string, unknown>, error: null };
+  } catch (err: unknown) {
+    if ((err as { code?: string })?.code === "ENOENT") {
+      return { file: null, error: null };
+    }
+    return { file: null, error: (err as Error)?.message || String(err) };
   }
 }
 
@@ -74,25 +146,34 @@ function num(val: unknown, fallback: number): number {
   return fallback;
 }
 
-function str(val: unknown, fallback: string): string {
-  if (typeof val === "string" && val.trim()) return val.trim();
-  return fallback;
-}
-
-const file = loadOvConf();
-const serverCfg = (file.server ?? {}) as Record<string, unknown>;
-const cc = (file.claude_code ?? {}) as Record<string, unknown>;
-
-const host = str(serverCfg.host, "127.0.0.1").replace("0.0.0.0", "127.0.0.1");
-const port = Math.floor(num(serverCfg.port, 1933));
+const clientConfigPath = resolveConfigPath(
+  process.env.OPENVIKING_CC_CONFIG_FILE,
+  DEFAULT_CLIENT_CONFIG_PATH,
+);
+const clientFile = loadRequiredJson(clientConfigPath, "Claude Code client config");
+const mode = clientFile.mode === "remote" ? "remote" : "local";
+const serverConfigPath = resolveConfigPath(
+  process.env.OPENVIKING_CONFIG_FILE,
+  DEFAULT_SERVER_CONFIG_PATH,
+);
+const serverConfigResult = mode === "local"
+  ? loadOptionalJson(serverConfigPath)
+  : { file: null, error: null };
+const serverCfg = (serverConfigResult.file?.server ?? {}) as Record<string, unknown>;
 
 const config = {
-  baseUrl: `http://${host}:${port}`,
-  apiKey: str(serverCfg.root_api_key, ""),
-  agentId: str(cc.agentId, "claude-code"),
-  timeoutMs: Math.max(1000, Math.floor(num(cc.timeoutMs, 15000))),
-  recallLimit: Math.max(1, Math.floor(num(cc.recallLimit, 6))),
-  scoreThreshold: Math.min(1, Math.max(0, num(cc.scoreThreshold, 0.01))),
+  mode,
+  configPath: clientConfigPath,
+  serverConfigPath,
+  serverConfigError: serverConfigResult.error,
+  baseUrl: mode === "remote"
+    ? requireBaseUrl(clientFile.baseUrl)
+    : `http://127.0.0.1:${clampPort(serverCfg.port)}`,
+  apiKey: resolveString(clientFile.apiKey, "") || (mode === "local" ? resolveString(serverCfg.root_api_key, "") : ""),
+  agentId: resolveString(clientFile.agentId, "claude-code"),
+  timeoutMs: Math.max(1000, Math.floor(num(clientFile.timeoutMs, 15000))),
+  recallLimit: Math.max(1, Math.floor(num(clientFile.recallLimit, 6))),
+  scoreThreshold: Math.min(1, Math.max(0, num(clientFile.scoreThreshold, 0.01))),
 };
 
 // ---------------------------------------------------------------------------

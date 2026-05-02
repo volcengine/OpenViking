@@ -117,9 +117,9 @@ pipx ensurepath
 pipx install openviking
 ```
 
-### 2. Create Config
+### 2. Create OpenViking Server Config (Local Mode)
 
-If you don't already have `~/.openviking/ov.conf`(Can override the default path via the environment variable `OPENVIKING_CONFIG_FILE`), create it:
+If you use the plugin in `local` mode, prepare your local OpenViking server config first (you can override the default config path via `OPENVIKING_CONFIG_FILE`):
 
 ```bash
 mkdir -p ~/.openviking
@@ -159,35 +159,65 @@ vim ~/.openviking/ov.conf
 > `root_api_key`: Once set, all HTTP requests must carry the `X-API-Key` header. Defaults to `null` in local mode (authentication disabled).  
 > For Windows system paths in the workspace, use / instead of \, for example: `D:/.openviking/data`
 
-Optionally add a `claude_code` section for plugin-specific overrides:
+### 3. Create Claude Code Client Config
+
+Create a dedicated client config file for the Claude Code plugin:
+
+```bash
+mkdir -p ~/.openviking/claude-code-memory-plugin
+vim ~/.openviking/claude-code-memory-plugin/config.json
+```
+
+#### `~/.openviking/claude-code-memory-plugin/config.json` (Local Mode)
 
 ```json
 {
-  "claude_code": {
-    "agentId": "claude-code",
-    "recallLimit": 6,
-    "captureMode": "semantic",
-    "captureTimeoutMs": 30000,
-    "captureAssistantTurns": false,
-    "logRankingDetails": false
-  }
+  "mode": "local",
+  "agentId": "claude-code",
+  "recallLimit": 6,
+  "captureMode": "semantic",
+  "captureTimeoutMs": 30000,
+  "captureAssistantTurns": false,
+  "logRankingDetails": false
 }
 ```
 
-### 3. Start OpenViking
+In `local` mode, the plugin connects to `http://127.0.0.1:${server.port}` from `ov.conf`
+(defaults to `1933`). You may also set `apiKey` explicitly in client config; if omitted,
+the plugin falls back to `server.root_api_key` from local `ov.conf` when present.
+
+#### `~/.openviking/claude-code-memory-plugin/config.json` (Remote Mode)
+
+```json
+{
+  "mode": "remote",
+  "baseUrl": "https://your-openviking.example.com",
+  "apiKey": "<your-api-key>",
+  "agentId": "claude-code",
+  "account": "default",
+  "user": "default",
+  "recallLimit": 6,
+  "captureMode": "semantic",
+  "captureTimeoutMs": 30000,
+  "captureAssistantTurns": false,
+  "logRankingDetails": false
+}
+```
+
+### 4. Start OpenViking
 
 ```bash
 openviking-server
 ```
 
-### 4. Install Plugin
+### 5. Install Plugin
 
 ```bash
 /plugin marketplace add Castor6/openviking-plugins
 /plugin install claude-code-memory-plugin@openviking-plugin
 ```
 
-### 5. Start a New Claude Session
+### 6. Start a New Claude Session
 
 ```bash
 claude
@@ -199,21 +229,47 @@ if Claude does not inject `CLAUDE_PLUGIN_DATA`. No manual `npm install` is requi
 
 ## Configuration
 
-Uses the same `~/.openviking/ov.conf` as the OpenViking server and OpenClaw plugin.
+The plugin uses a dedicated client config file:
+
+```bash
+~/.openviking/claude-code-memory-plugin/config.json
+```
 
 Override the path via environment variable:
+```bash
+export OPENVIKING_CC_CONFIG_FILE="~/custom/path/config.json"
+```
+
+In `local` mode, the plugin also looks at the local OpenViking server config only for
+fallback values such as `server.port` and `server.root_api_key`:
+
 ```bash
 export OPENVIKING_CONFIG_FILE="~/custom/path/ov.conf"
 ```
 
-**Connection info** is read from ov.conf's `server` section:
+### Local Mode
 
-| ov.conf field | Used as | Description |
-|---------------|---------|-------------|
-| `server.host` + `server.port` | `baseUrl` | Derives `http://{host}:{port}` |
-| `server.root_api_key` | `apiKey` | API key for authentication |
+| Field | Description |
+|-------|-------------|
+| `mode` | Fixed to `local`, meaning the plugin connects to the local OpenViking server |
+| `apiKey` | Optional override. If omitted, the plugin falls back to `server.root_api_key` in local `ov.conf` |
 
-**Plugin overrides** go in an optional `claude_code` section:
+Local-mode connection behavior:
+
+- `baseUrl` is derived as `http://127.0.0.1:${server.port}` from local `ov.conf`
+- If local `ov.conf` is missing, the plugin falls back to `http://127.0.0.1:1933`
+
+### Remote Mode
+
+| Field | Description |
+|-------|-------------|
+| `mode` | Fixed to `remote`, meaning the plugin connects to an existing remote OpenViking server |
+| `baseUrl` | Required. Remote OpenViking HTTP endpoint |
+| `apiKey` | Optional OpenViking API key; required when the remote server enables authentication |
+| `account` | OpenViking tenant account; required for tenant-scoped APIs |
+| `user` | OpenViking tenant user; required for tenant-scoped APIs |
+
+### Shared Behavior Fields
 
 | Field | Default | Description |
 |-------|---------|-------------|
@@ -229,6 +285,8 @@ export OPENVIKING_CONFIG_FILE="~/custom/path/ov.conf"
 | `captureMaxLength` | `24000` | Max text length for capture |
 | `captureTimeoutMs` | `30000` | HTTP request timeout for auto-capture requests (ms) |
 | `captureAssistantTurns` | `false` | Include assistant turns in auto-capture input; default is user-only capture |
+| `debug` | `false` | Enable hook debug logging |
+| `debugLogPath` | `~/.openviking/logs/cc-hooks.log` | Override debug log file path |
 
 ## Hook Timeouts
 
@@ -240,14 +298,14 @@ The bundled hooks are intentionally asymmetric:
 | `UserPromptSubmit` | `8s` | Auto-recall should stay fast so prompt submission is not blocked |
 | `Stop` | `45s` | Gives auto-capture enough room to finish and persist incremental state |
 
-Keep `claude_code.captureTimeoutMs` lower than the `Stop` hook timeout so the script can fail gracefully and still update its incremental state.
+Keep `captureTimeoutMs` lower than the `Stop` hook timeout so the script can fail gracefully and still update its incremental state.
 
 ## Debug Logging
 
-When `claude_code.debug` or `OPENVIKING_DEBUG=1` is enabled, hook logs are written to `~/.openviking/logs/cc-hooks.log`.
+When `debug=true` in client config or `OPENVIKING_DEBUG=1` is enabled, hook logs are written to `~/.openviking/logs/cc-hooks.log`.
 
 - `auto-recall` now logs key stages plus a compact `ranking_summary` by default.
-- Set `claude_code.logRankingDetails=true` only when you need per-candidate scoring logs.
+- Set `logRankingDetails=true` only when you need per-candidate scoring logs.
 - For deep diagnosis, prefer the standalone scripts `scripts/debug-recall.mjs` and `scripts/debug-capture.mjs` instead of leaving verbose hook logging on all the time.
 
 ## Runtime Dependency Bootstrap
@@ -305,7 +363,7 @@ Claude Code has a built-in auto-memory system using `MEMORY.md` files. This plug
 | Auto-capture extracts 0 | Wrong API key / model | Check `ov.conf` embedding config |
 | MCP tools not available | First-run runtime install failed | Start a new Claude session to retry bootstrap and inspect SessionStart stderr for the npm failure |
 | Repeated auto-capture of old context | `Stop` hook timed out before incremental state was saved | Keep `captureAssistantTurns=false`, raise the `Stop` hook timeout, and keep `captureTimeoutMs` below that hook timeout |
-| Hook timeout | Server slow / unreachable | Increase the `Stop` hook timeout in `hooks/hooks.json` and tune `claude_code.captureTimeoutMs` in `ov.conf` |
+| Hook timeout | Server slow / unreachable | Increase the `Stop` hook timeout in `hooks/hooks.json` and tune `captureTimeoutMs` in client config |
 | Logs too verbose | Detailed recall ranking logs are enabled | Leave `logRankingDetails=false` for normal use and use the debug scripts for one-off inspection |
 
 ## License

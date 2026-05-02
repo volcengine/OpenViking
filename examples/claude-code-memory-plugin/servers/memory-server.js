@@ -14,26 +14,88 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { createHash } from "node:crypto";
 // ---------------------------------------------------------------------------
-// Configuration — loaded from ov.conf (shared with OpenClaw plugin).
-// Env var: OPENVIKING_CONFIG_FILE (default: ~/.openviking/ov.conf)
-// Plugin-specific overrides go in the optional "claude_code" section.
+// Configuration — loaded from the Claude Code client config.
+// Env var: OPENVIKING_CC_CONFIG_FILE
+// Default: ~/.openviking/claude-code-memory-plugin/config.json
+//
+// In local mode, apiKey defaults to the local OpenViking server config:
+// OPENVIKING_CONFIG_FILE or ~/.openviking/ov.conf
 // ---------------------------------------------------------------------------
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
-function loadOvConf() {
-    const defaultPath = join(homedir(), ".openviking", "ov.conf");
-    const configPath = resolvePath((process.env.OPENVIKING_CONFIG_FILE || defaultPath).replace(/^~/, homedir()));
+const DEFAULT_CLIENT_CONFIG_PATH = join(homedir(), ".openviking", "claude-code-memory-plugin", "config.json");
+const DEFAULT_SERVER_CONFIG_PATH = join(homedir(), ".openviking", "ov.conf");
+function fatal(message) {
+    process.stderr.write(`[openviking-memory] ${message}\n`);
+    process.exit(1);
+}
+function resolveEnvVars(value) {
+    return value.replace(/\$\{([^}]+)\}/g, (_, envVar) => {
+        const envValue = process.env[envVar];
+        if (typeof envValue !== "string" || envValue === "") {
+            fatal(`Environment variable ${envVar} is not set`);
+        }
+        return envValue;
+    });
+}
+function resolveString(value, fallback) {
+    if (typeof value === "string" && value.trim())
+        return resolveEnvVars(value.trim());
+    return fallback;
+}
+function resolveConfigPath(rawValue, fallback) {
+    return resolvePath(resolveString(rawValue, fallback).replace(/^~/, homedir()));
+}
+function normalizeBaseUrl(value) {
+    return resolveString(value, "").replace(/\/+$/, "");
+}
+function requireBaseUrl(value) {
+    const resolved = normalizeBaseUrl(value);
+    if (!resolved) {
+        fatal("Claude Code client config: baseUrl is required when mode is \"remote\"");
+    }
+    return resolved;
+}
+function clampPort(value) {
+    return Math.max(1, Math.min(65535, Math.floor(num(value, 1933))));
+}
+function loadRequiredJson(configPath, label) {
+    let raw;
     try {
-        return JSON.parse(readFileSync(configPath, "utf-8"));
+        raw = readFileSync(configPath, "utf-8");
     }
     catch (err) {
         const code = err?.code;
         const msg = code === "ENOENT"
-            ? `Config file not found: ${configPath}`
-            : `Failed to read config: ${configPath}`;
-        process.stderr.write(`[openviking-memory] ${msg}\n`);
-        process.exit(1);
+            ? `${label} not found: ${configPath}\n  Create it and set at least: { "mode": "local" }`
+            : `Failed to read ${label}: ${configPath} — ${err?.message || String(err)}`;
+        fatal(msg);
+    }
+    try {
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            fatal(`${label} must contain a JSON object: ${configPath}`);
+        }
+        return parsed;
+    }
+    catch (err) {
+        fatal(`Invalid JSON in ${configPath}: ${err?.message || String(err)}`);
+    }
+}
+function loadOptionalJson(configPath) {
+    try {
+        const parsed = JSON.parse(readFileSync(configPath, "utf-8"));
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            return { file: null, error: `JSON root must be an object: ${configPath}` };
+        }
+        return { file: parsed, error: null };
+    }
+    catch (err) {
+        if (err?.code === "ENOENT") {
+            return { file: null, error: null };
+        }
+        return { file: null, error: err?.message || String(err) };
     }
 }
 function num(val, fallback) {
@@ -46,23 +108,29 @@ function num(val, fallback) {
     }
     return fallback;
 }
-function str(val, fallback) {
-    if (typeof val === "string" && val.trim())
-        return val.trim();
-    return fallback;
-}
-const file = loadOvConf();
-const serverCfg = (file.server ?? {});
-const cc = (file.claude_code ?? {});
-const host = str(serverCfg.host, "127.0.0.1").replace("0.0.0.0", "127.0.0.1");
-const port = Math.floor(num(serverCfg.port, 1933));
+const clientConfigPath = resolveConfigPath(process.env.OPENVIKING_CC_CONFIG_FILE, DEFAULT_CLIENT_CONFIG_PATH);
+const clientFile = loadRequiredJson(clientConfigPath, "Claude Code client config");
+const mode = clientFile.mode === "remote" ? "remote" : "local";
+const serverConfigPath = resolveConfigPath(process.env.OPENVIKING_CONFIG_FILE, DEFAULT_SERVER_CONFIG_PATH);
+const serverConfigResult = mode === "local"
+    ? loadOptionalJson(serverConfigPath)
+    : { file: null, error: null };
+const serverCfg = (serverConfigResult.file?.server ?? {});
 const config = {
-    baseUrl: `http://${host}:${port}`,
-    apiKey: str(serverCfg.root_api_key, ""),
-    agentId: str(cc.agentId, "claude-code"),
-    timeoutMs: Math.max(1000, Math.floor(num(cc.timeoutMs, 15000))),
-    recallLimit: Math.max(1, Math.floor(num(cc.recallLimit, 6))),
-    scoreThreshold: Math.min(1, Math.max(0, num(cc.scoreThreshold, 0.01))),
+    mode,
+    configPath: clientConfigPath,
+    serverConfigPath,
+    serverConfigError: serverConfigResult.error,
+    baseUrl: mode === "remote"
+        ? requireBaseUrl(clientFile.baseUrl)
+        : `http://127.0.0.1:${clampPort(serverCfg.port)}`,
+    apiKey: resolveString(clientFile.apiKey, "") || (mode === "local" ? resolveString(serverCfg.root_api_key, "") : ""),
+    agentId: resolveString(clientFile.agentId, "claude-code"),
+    account: resolveString(clientFile.account, ""),
+    user: resolveString(clientFile.user, ""),
+    timeoutMs: Math.max(1000, Math.floor(num(clientFile.timeoutMs, 15000))),
+    recallLimit: Math.max(1, Math.floor(num(clientFile.recallLimit, 6))),
+    scoreThreshold: Math.min(1, Math.max(0, num(clientFile.scoreThreshold, 0.01))),
 };
 // ---------------------------------------------------------------------------
 // OpenViking HTTP Client (ported from openclaw-plugin/client.ts)
@@ -83,13 +151,17 @@ class OpenVikingClient {
     baseUrl;
     apiKey;
     agentId;
+    account;
+    user;
     timeoutMs;
     resolvedSpaceByScope = {};
     runtimeIdentity = null;
-    constructor(baseUrl, apiKey, agentId, timeoutMs) {
+    constructor(baseUrl, apiKey, agentId, account, user, timeoutMs) {
         this.baseUrl = baseUrl;
         this.apiKey = apiKey;
         this.agentId = agentId;
+        this.account = account;
+        this.user = user;
         this.timeoutMs = timeoutMs;
     }
     async request(path, init = {}) {
@@ -101,6 +173,10 @@ class OpenVikingClient {
                 headers.set("X-API-Key", this.apiKey);
             if (this.agentId)
                 headers.set("X-OpenViking-Agent", this.agentId);
+            if (this.account)
+                headers.set("X-OpenViking-Account", this.account);
+            if (this.user)
+                headers.set("X-OpenViking-User", this.user);
             if (init.body && !headers.has("Content-Type"))
                 headers.set("Content-Type", "application/json");
             const response = await fetch(`${this.baseUrl}${path}`, {
@@ -369,7 +445,7 @@ async function searchBothScopes(client, query, limit) {
 // ---------------------------------------------------------------------------
 // MCP Server
 // ---------------------------------------------------------------------------
-const client = new OpenVikingClient(config.baseUrl, config.apiKey, config.agentId, config.timeoutMs);
+const client = new OpenVikingClient(config.baseUrl, config.apiKey, config.agentId, config.account, config.user, config.timeoutMs);
 const server = new McpServer({
     name: "openviking-memory",
     version: "0.1.0",

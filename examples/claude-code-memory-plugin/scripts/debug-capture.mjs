@@ -196,6 +196,8 @@ async function fetchJSON(path, init = {}) {
     const headers = { "Content-Type": "application/json" };
     if (cfg.apiKey) headers["X-API-Key"] = cfg.apiKey;
     if (cfg.agentId) headers["X-OpenViking-Agent"] = cfg.agentId;
+    if (cfg.account) headers["X-OpenViking-Account"] = cfg.account;
+    if (cfg.user) headers["X-OpenViking-User"] = cfg.user;
     const res = await fetch(url, { ...init, headers, signal: controller.signal });
     const body = await res.json();
     dim(`  ${init.method || "GET"} ${path} -> ${res.status}`);
@@ -326,6 +328,7 @@ async function main() {
 
   // ── Stage 1: Config summary ──
   header("Config Summary");
+  console.log(`  mode:             ${cfg.mode}`);
   console.log(`  baseUrl:          ${cfg.baseUrl}`);
   console.log(`  captureMode:      ${cfg.captureMode}`);
   console.log(`  captureMaxLength: ${cfg.captureMaxLength}`);
@@ -334,6 +337,13 @@ async function main() {
   console.log(`  debug:            ${cfg.debug}`);
   console.log(`  agentId:          ${cfg.agentId}`);
   console.log(`  timeoutMs:        ${cfg.timeoutMs}`);
+  console.log(`  clientConfig:     ${cfg.configPath}`);
+  if (cfg.mode === "local") {
+    console.log(`  serverConfig:     ${cfg.serverConfigPath}`);
+    if (cfg.serverConfigError) {
+      warn(`  local ov.conf fallback unavailable: ${cfg.serverConfigError}`);
+    }
+  }
 
   let allTurns;
   let sessionId;
