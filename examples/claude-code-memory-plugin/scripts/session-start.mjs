@@ -15,6 +15,7 @@ import { createLogger } from "./debug-log.mjs";
 import {
   deriveOvSessionId,
   getSessionContext,
+  isBypassed,
   makeFetchJSON,
 } from "./lib/ov-session.mjs";
 
@@ -76,6 +77,7 @@ async function main() {
 
   const source = input.source || "startup";
   const sessionId = input.session_id;
+  const cwd = input.cwd;
   log("start", { source, sessionId });
 
   // Only inject archive context on resume/compact. startup/clear get nothing.
@@ -85,6 +87,12 @@ async function main() {
   }
   if (!sessionId) {
     log("skip", { reason: "no session_id" });
+    approve();
+    return;
+  }
+
+  if (isBypassed(cfg, { sessionId, cwd })) {
+    log("skip", { reason: "bypass_session_pattern" });
     approve();
     return;
   }

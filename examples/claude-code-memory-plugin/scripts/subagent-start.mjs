@@ -22,7 +22,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { isPluginEnabled, loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
-import { deriveOvSessionId } from "./lib/ov-session.mjs";
+import { deriveOvSessionId, isBypassed } from "./lib/ov-session.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -62,9 +62,16 @@ async function main() {
   const sessionId = input.session_id;
   const agentId = input.agent_id;
   const agentType = input.agent_type || "subagent";
+  const cwd = input.cwd;
 
   if (!sessionId || !agentId) {
     log("skip", { reason: "missing session_id or agent_id" });
+    approve();
+    return;
+  }
+
+  if (isBypassed(cfg, { sessionId, cwd })) {
+    log("skip", { reason: "bypass_session_pattern" });
     approve();
     return;
   }

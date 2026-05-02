@@ -101,13 +101,23 @@ const CJK_CHAR_RE = /[぀-ヿ㐀-鿿豈-﫿가-힯]/;
 // looksLikeQuestionOnlyText). Pure interrogatives rarely yield memories.
 const QUESTION_ONLY_RE = /^(who|what|when|where|why|how|is|are|does|did|can|could|would|should|may|might|will|谁|什么|何|哪|为什么|怎么|如何|是|会|能|能否)\b.{0,200}[?？]$/i;
 
-function sanitize(text) {
+// Strip plugin-injected blocks (auto-recall context, system reminders,
+// subagent context, relevant-memories) without collapsing whitespace —
+// preserves the user's original formatting (newlines, code blocks) for
+// storage in OV. Without this, the auto-recall block we inject this turn
+// would be captured back into OV next turn, causing a self-referential
+// pollution loop.
+function stripInjectedBlocks(text) {
   return text
-    .replace(RELEVANT_MEMORIES_BLOCK_RE, " ")
-    .replace(OPENVIKING_CTX_BLOCK_RE, " ")
-    .replace(SYSTEM_REMINDER_BLOCK_RE, " ")
-    .replace(SUBAGENT_CONTEXT_LINE_RE, " ")
-    .replace(/\x00/g, "")
+    .replace(RELEVANT_MEMORIES_BLOCK_RE, "")
+    .replace(OPENVIKING_CTX_BLOCK_RE, "")
+    .replace(SYSTEM_REMINDER_BLOCK_RE, "")
+    .replace(SUBAGENT_CONTEXT_LINE_RE, "")
+    .replace(/\x00/g, "");
+}
+
+function sanitize(text) {
+  return stripInjectedBlocks(text)
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -232,7 +242,7 @@ async function pushTurnsToOv(ovSessionId, turns) {
   let ok = 0;
   let failed = 0;
   for (const turn of turns) {
-    let content = turn.text;
+    let content = stripInjectedBlocks(turn.text).trim();
     if (turn.role === "assistant" && turn.toolNames.length > 0) {
       const uniq = Array.from(new Set(turn.toolNames)).join(", ");
       content = content
