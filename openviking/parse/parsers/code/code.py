@@ -237,7 +237,7 @@ class CodeRepositoryParser(BaseParser):
             git_index = next((i for i, p in enumerate(path_parts) if p.endswith(".git")), None)
             if git_index is not None:
                 base_parts = path_parts[: git_index + 1]
-            elif parsed.netloc in ["github.com", "gitlab.com"] and len(path_parts) >= 2:
+            elif len(path_parts) >= 2:
                 base_parts = path_parts[:2]
             base_path = "/" + "/".join(base_parts)
             return parsed._replace(path=base_path, query="", fragment="").geturl()
