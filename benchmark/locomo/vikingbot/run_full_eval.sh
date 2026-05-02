@@ -167,45 +167,7 @@ fi
 GIT_COMMIT_ID=$(git rev-parse --short HEAD)
 TIMESTAMP=$(date +%Y%m%d%H%M%S)
 
-# ========== 全量评测模式 ==========
-if [ -z "$SAMPLE" ]; then
-    echo "=== 全量评测模式 ==="
-
-    if [ "$AUTO_COMMIT" = "true" ]; then
-        RESULT_FILE="./result/locomo_result_${TIMESTAMP}_${GIT_COMMIT_ID}.csv"
-    else
-        RESULT_FILE="./result/locomo_result_${TIMESTAMP}.csv"
-    fi
-
-    # 导入数据
-    if [ "$SKIP_IMPORT" = "true" ]; then
-        echo "[1/4] 跳过导入数据..."
-    else
-        echo "[1/4] 导入数据..."
-        "$PYTHON_BIN" "$SCRIPT_DIR/import_to_ov.py" --input "$INPUT_FILE" --force-ingest --account "$ACCOUNT" --openviking-url "$OPENVIKING_URL" "${COMMON_OPTS[@]}"
-        echo "等待 1 分钟..."
-        sleep 60
-    fi
-
-    # 评估
-    echo "[2/4] 评估..."
-    "$PYTHON_BIN" "$SCRIPT_DIR/run_eval.py" "$INPUT_FILE" --output "$RESULT_FILE" "${COMMON_OPTS[@]}"
-
-    # 裁判打分
-    echo "[3/4] 裁判打分..."
-    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$RESULT_FILE" --parallel 40
-
-    # 计算结果
-    echo "[4/4] 计算结果..."
-    "$PYTHON_BIN" "$SCRIPT_DIR/stat_judge_result.py" --input "$RESULT_FILE"
-
-    echo ""
-    echo "=== 全量评测完成 ==="
-    echo "结果文件: $RESULT_FILE"
-    exit 0
-fi
-
-# ========== 重跑错题模式 ==========
+# ========== 重跑错题模式（优先） ==========
 if [ -n "$RETRY_WRONG" ]; then
     if [ ! -f "$RETRY_WRONG" ]; then
         echo "Error: --retry-wrong file not found: $RETRY_WRONG" >&2
@@ -302,6 +264,44 @@ PY
 
     echo ""
     echo "=== 错题重跑完成 ==="
+    echo "结果文件: $RESULT_FILE"
+    exit 0
+fi
+
+# ========== 全量评测模式 ==========
+if [ -z "$SAMPLE" ]; then
+    echo "=== 全量评测模式 ==="
+
+    if [ "$AUTO_COMMIT" = "true" ]; then
+        RESULT_FILE="./result/locomo_result_${TIMESTAMP}_${GIT_COMMIT_ID}.csv"
+    else
+        RESULT_FILE="./result/locomo_result_${TIMESTAMP}.csv"
+    fi
+
+    # 导入数据
+    if [ "$SKIP_IMPORT" = "true" ]; then
+        echo "[1/4] 跳过导入数据..."
+    else
+        echo "[1/4] 导入数据..."
+        "$PYTHON_BIN" "$SCRIPT_DIR/import_to_ov.py" --input "$INPUT_FILE" --force-ingest --account "$ACCOUNT" --openviking-url "$OPENVIKING_URL" "${COMMON_OPTS[@]}"
+        echo "等待 1 分钟..."
+        sleep 60
+    fi
+
+    # 评估
+    echo "[2/4] 评估..."
+    "$PYTHON_BIN" "$SCRIPT_DIR/run_eval.py" "$INPUT_FILE" --output "$RESULT_FILE" "${COMMON_OPTS[@]}"
+
+    # 裁判打分
+    echo "[3/4] 裁判打分..."
+    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$RESULT_FILE" --parallel 40
+
+    # 计算结果
+    echo "[4/4] 计算结果..."
+    "$PYTHON_BIN" "$SCRIPT_DIR/stat_judge_result.py" --input "$RESULT_FILE"
+
+    echo ""
+    echo "=== 全量评测完成 ==="
     echo "结果文件: $RESULT_FILE"
     exit 0
 fi
