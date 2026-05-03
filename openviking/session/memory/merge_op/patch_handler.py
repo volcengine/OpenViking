@@ -895,9 +895,7 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
     for replacement in replacements:
         search_content = replacement["searchContent"]
         replace_content = replacement["replaceContent"]
-        start_line = replacement["startLine"] + (
-            replacement["startLine"] if replacement["startLine"] != 0 else 0
-        )
+        start_line = replacement["startLine"]
 
         # Unescape markers
         search_content = unescape_markers(search_content)
