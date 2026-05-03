@@ -32,8 +32,14 @@ fields:
   - name: event_name
     type: string
     description: |
-      Event name in Chinese or English. If English, use lowercase with underscores, max 3 words. Do not include any dates.
-      This must name the REAL-WORLD event discussed (e.g., "pottery_class", "road_trip", "pride_parade"), NOT the conversation itself (e.g., NOT "caroline_and_melanie_chat", NOT "chat_about_weekend").
+      Output a real-world event name only.
+      Rules:
+      1. Can be Chinese or English;
+      2. If English: all lowercase, use underscore instead of space, maximum 3 words;
+      3. Never include any date, time, year or number;
+      4. Must be the actual real-life event being discussed, NOT the chat/conversation itself;
+      5. Forbidden format: person name + chat, chat about xxx, daily talk;
+      6. Output only the event name, no extra explanation.
     merge_op: immutable
 
   - name: goal
