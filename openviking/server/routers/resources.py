@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Resource endpoints for OpenViking HTTP Server."""
 
-import re
 import time
 import uuid
 from pathlib import Path
@@ -16,6 +15,8 @@ from openviking.server.config import ServerConfig
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import (
+    TEMP_FILE_ID_RE,
+    _is_safe_namespace_component,
     require_remote_resource_source,
     resolve_uploaded_temp_file_id,
 )
@@ -219,7 +220,6 @@ async def temp_upload(
     return response_from_result(execution.result, telemetry=execution.telemetry)
 
 
-_TEMP_FILE_ID_RE = re.compile(r"^upload_[a-zA-Z0-9]+(\.[a-zA-Z0-9]+)?$")
 _DEFAULT_UPLOAD_MAX_BYTES = 100 * 1024 * 1024
 
 
@@ -245,7 +245,7 @@ async def temp_upload_signed(
     """
     import json
 
-    if not _TEMP_FILE_ID_RE.match(temp_file_id):
+    if not TEMP_FILE_ID_RE.match(temp_file_id):
         raise HTTPException(status_code=400, detail="invalid temp_file_id")
 
     max_bytes = _resolve_upload_max_bytes(request)
@@ -262,12 +262,19 @@ async def temp_upload_signed(
     except UploadTokenError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
+    # Defense-in-depth: tokens currently only carry server-controlled identity, but
+    # validate anyway so a future code path that mints tokens from less-trusted input
+    # cannot escape the per-tenant directory.
+    if not (_is_safe_namespace_component(account_id) and _is_safe_namespace_component(user_id)):
+        raise HTTPException(status_code=400, detail="invalid namespace component")
+
     upload_temp_dir = get_openviking_config().storage.get_upload_temp_dir()
     target_dir = upload_temp_dir / account_id / user_id
     target_dir.mkdir(parents=True, exist_ok=True)
     target_path = target_dir / temp_file_id
 
     bytes_written = 0
+    success = False
     try:
         with open(target_path, "wb") as out:
             while True:
@@ -278,9 +285,10 @@ async def temp_upload_signed(
                 if bytes_written > max_bytes:
                     raise HTTPException(status_code=413, detail="upload exceeds max_bytes")
                 out.write(chunk)
-    except HTTPException:
-        target_path.unlink(missing_ok=True)
-        raise
+        success = True
+    finally:
+        if not success:
+            target_path.unlink(missing_ok=True)
 
     if file.filename:
         meta_path = target_dir / f"{temp_file_id}.ov_upload.meta"
@@ -288,7 +296,9 @@ async def temp_upload_signed(
         with open(meta_path, "w") as meta_f:
             json.dump(meta, meta_f)
 
-    _cleanup_temp_files(upload_temp_dir)
+    # Scope cleanup to this tenant's subdir to bound the scan; the legacy flat
+    # /temp_upload route still cleans the root level on its own calls.
+    _cleanup_temp_files(target_dir)
     return {"temp_file_id": temp_file_id}
 
 

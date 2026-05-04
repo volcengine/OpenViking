@@ -97,6 +97,21 @@ async def test_signed_upload_token_for_different_temp_file_id(
     assert resp.status_code == 401
 
 
+async def test_signed_upload_accepts_unusual_extensions(
+    client: httpx.AsyncClient, upload_temp_dir: Path
+):
+    """Original filenames with non-alnum extensions (.my-file, .中文) must round-trip."""
+    for suffix in (".my-file", ".bak~", ".中文"):
+        tfid = f"upload_{int(time.time() * 1000_000)}{suffix}"
+        token, _ = upload_token_store.issue("acct", "user", tfid, ttl_seconds=60)
+        resp = await client.post(
+            "/api/v1/resources/temp_upload_signed",
+            params={"token": token, "temp_file_id": tfid},
+            files={"file": (tfid, b"x", "application/octet-stream")},
+        )
+        assert resp.status_code == 200, f"suffix {suffix!r}: {resp.text}"
+
+
 async def test_signed_upload_oversize_rejected(
     client: httpx.AsyncClient, upload_temp_dir: Path, app
 ):

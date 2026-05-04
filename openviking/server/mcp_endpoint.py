@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import contextvars
 import os
-import re
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -35,7 +34,8 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from openviking.server.auth import resolve_identity
 from openviking.server.dependencies import get_server_config, get_service
 from openviking.server.identity import RequestContext
-from openviking.server.local_input_guard import is_remote_resource_source
+from openviking.server.local_input_guard import TEMP_FILE_ID_RE, is_remote_resource_source
+from openviking.server.routers.resources import _resolve_temp_or_path
 from openviking.server.upload_token_store import upload_token_store
 from openviking_cli.exceptions import (
     InvalidArgumentError,
@@ -266,7 +266,6 @@ async def store(messages: list[StoreMessage]) -> str:
 # -- add_resource ----------------------------------------------------------
 
 
-_TEMP_FILE_ID_RE = re.compile(r"^upload_[a-zA-Z0-9]+(\.[a-zA-Z0-9]+)?$")
 _DEFAULT_UPLOAD_TTL_SECONDS = 600
 
 
@@ -334,8 +333,6 @@ async def add_resource(
        given in the response, then call this tool again with ``temp_file_id`` set to
        the value the response gave you (and omit ``path``).
     """
-    from openviking.server.routers.resources import _resolve_temp_or_path
-
     service = get_service()
     ctx = _get_ctx()
 
@@ -375,7 +372,7 @@ async def add_resource(
         return "Error: provide either 'path' (remote URL or local file) or 'temp_file_id'."
 
     # Branch 2: agent passed a temp_file_id-shaped string as `path` — guide them
-    if _TEMP_FILE_ID_RE.match(path):
+    if TEMP_FILE_ID_RE.match(path):
         return (
             f"Error: '{path}' looks like a temp_file_id, not a path. "
             f'Pass it as the temp_file_id kwarg: add_resource(temp_file_id="{path}")'

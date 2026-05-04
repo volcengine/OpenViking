@@ -15,6 +15,12 @@ from openviking_cli.exceptions import PermissionDeniedError
 _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
 _REMOTE_SOURCE_PREFIXES = ("http://", "https://", "git@", "ssh://", "git://")
 
+# Shape check for tfids minted by the server / accepted on signed upload paths.
+# Prefix is alnum (server-generated UUIDs). Extension allows any character that
+# isn't a path separator — original filenames like ``report.my-file`` or
+# ``notes.中文`` produce non-alnum extensions and must round-trip.
+TEMP_FILE_ID_RE = re.compile(r"^upload_[a-zA-Z0-9]+(\.[^/\\]+)?$")
+
 
 def is_remote_resource_source(source: str) -> bool:
     """Return True if *source* is a remotely fetchable resource location."""
