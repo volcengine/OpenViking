@@ -540,12 +540,13 @@ pub async fn handle_write(
     .await
 }
 
-pub async fn handle_reindex(uri: String, regenerate: bool, wait: bool, ctx: CliContext) -> Result<()> {
+pub async fn handle_reindex(uri: String, regenerate: bool, recursive: bool, wait: bool, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     commands::content::reindex(
         &client,
         &uri,
         regenerate,
+        recursive,
         wait,
         ctx.output_format,
         ctx.compact,

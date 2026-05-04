@@ -413,11 +413,13 @@ impl HttpClient {
         &self,
         uri: &str,
         regenerate: bool,
+        recursive: bool,
         wait: bool,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "uri": uri,
             "regenerate": regenerate,
+            "recursive": recursive,
             "wait": wait,
         });
         self.post("/api/v1/content/reindex", &body).await
