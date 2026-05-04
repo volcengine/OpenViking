@@ -391,19 +391,45 @@ async function main() {
     return;
   }
 
+  // Batch-level capture decision. shouldCapture() is designed to evaluate a *single
+  // user message* (length bounds, command/punctuation/question-only filters, keyword
+  // trigger). Applied to a multi-turn batch concatenated by formatTurnsAsText(), it
+  // misfires:
+  //   - tool I/O inlining easily pushes combined text over captureMaxLength → entire
+  //     batch silently dropped + state advanced → permanent data loss
+  //   - JSON-shaped tool I/O can match the punctuation-only regex → non_content drop
+  //   - a leading `/cmd` user turn flips the whole batch to `command` → drop
+  //   - a question-shaped user turn ("why?") tags the whole batch as question_only
+  // For batches we only need: skip empty batches, and (keyword mode) require *some*
+  // user turn to carry a trigger phrase. Per-turn substance is already bounded by
+  // TOOL_BLOCK_MAX_CHARS during harvest.
   const combined = formatTurnsAsText(captureTurns);
-  const decision = shouldCapture(combined);
-  log("should_capture", {
-    capture: decision.capture,
-    reason: decision.reason,
-    textPreview: decision.text.slice(0, 100),
-  });
-
-  if (!decision.capture) {
+  if (!sanitize(combined)) {
+    log("skip", { stage: "batch_empty" });
     await saveState(sessionId, { capturedTurnCount: allTurns.length });
     approve();
     return;
   }
+
+  if (cfg.captureMode === "keyword") {
+    const hasTrigger = captureTurns.some(
+      (t) =>
+        t.role === "user" &&
+        MEMORY_TRIGGERS.some((re) => re.test(sanitize(t.text))),
+    );
+    if (!hasTrigger) {
+      log("skip", { stage: "keyword_mode_no_trigger", turns: captureTurns.length });
+      await saveState(sessionId, { capturedTurnCount: allTurns.length });
+      approve();
+      return;
+    }
+  }
+
+  log("should_capture", {
+    capture: true,
+    reason: cfg.captureMode === "keyword" ? "keyword_trigger_matched" : "semantic",
+    combinedLength: combined.length,
+  });
 
   const result = await pushTurnsToOv(ovSessionId, captureTurns);
   log("push_turns", { ovSessionId, ok: result.ok, failed: result.failed });
