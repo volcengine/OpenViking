@@ -34,13 +34,13 @@ const navLabels = {
     guide: 'Guide',
     api: 'API Reference',
     faq: 'FAQ',
-    changelog: 'Changelog'
+    about: 'About'
   },
   zh: {
     guide: '指南',
     api: 'API 参考',
     faq: '常见问题',
-    changelog: '更新日志'
+    about: '关于'
   }
 }
 
@@ -100,14 +100,14 @@ const enNav: DefaultTheme.NavItem[] = [
   { text: navLabels.en.guide, link: '/en/getting-started/01-introduction', activeMatch: '/en/(getting-started|concepts|guides|agent-integrations)/' },
   { text: navLabels.en.api, link: '/en/api/01-overview', activeMatch: '/en/api/' },
   { text: navLabels.en.faq, link: '/en/faq/faq', activeMatch: '/en/faq/' },
-  { text: navLabels.en.changelog, link: '/en/about/02-changelog', activeMatch: '/en/about/' }
+  { text: navLabels.en.about, link: '/en/about/01-about-us', activeMatch: '/en/about/' }
 ]
 
 const zhNav: DefaultTheme.NavItem[] = [
   { text: navLabels.zh.guide, link: '/zh/getting-started/01-introduction', activeMatch: '/zh/(getting-started|concepts|guides|agent-integrations)/' },
   { text: navLabels.zh.api, link: '/zh/api/01-overview', activeMatch: '/zh/api/' },
   { text: navLabels.zh.faq, link: '/zh/faq/faq', activeMatch: '/zh/faq/' },
-  { text: navLabels.zh.changelog, link: '/zh/about/02-changelog', activeMatch: '/zh/about/' }
+  { text: navLabels.zh.about, link: '/zh/about/01-about-us', activeMatch: '/zh/about/' }
 ]
 
 function collectAllMdFiles(srcDir: string): { relativePath: string; absPath: string }[] {
