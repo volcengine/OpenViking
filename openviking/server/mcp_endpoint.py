@@ -56,6 +56,14 @@ _mcp_ctx: contextvars.ContextVar[Optional[RequestContext]] = contextvars.Context
     "_mcp_ctx", default=None
 )
 
+# URL hints from the incoming request, captured by middleware so MCP tools can
+# reconstruct the agent-facing public URL without knowing about ASGI/Starlette.
+# Only used as a fallback when neither OPENVIKING_PUBLIC_BASE_URL nor
+# ServerConfig.public_base_url is set.
+_request_url_ctx: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
+    "_request_url_ctx", default=None
+)
+
 
 def _get_ctx() -> RequestContext:
     ctx = _mcp_ctx.get()
@@ -106,11 +114,18 @@ class _IdentityASGIMiddleware:
             role=identity.role,
             namespace_policy=identity.namespace_policy,
         )
-        token = _mcp_ctx.set(ctx)
+        url_info = {
+            "x_forwarded_proto": request.headers.get("x-forwarded-proto"),
+            "x_forwarded_host": request.headers.get("x-forwarded-host"),
+            "host": request.headers.get("host"),
+        }
+        ctx_token = _mcp_ctx.set(ctx)
+        url_token = _request_url_ctx.set(url_info)
         try:
             return await self.app(scope, receive, send)
         finally:
-            _mcp_ctx.reset(token)
+            _mcp_ctx.reset(ctx_token)
+            _request_url_ctx.reset(url_token)
 
 
 # ---------------------------------------------------------------------------
@@ -255,24 +270,49 @@ _TEMP_FILE_ID_RE = re.compile(r"^upload_[a-zA-Z0-9]+(\.[a-zA-Z0-9]+)?$")
 _DEFAULT_UPLOAD_TTL_SECONDS = 600
 
 
-def _resolve_public_base_url() -> str:
-    """Pick the URL the agent should PUT uploads to.
+def _resolve_public_base_url() -> tuple[str, str]:
+    """Pick the URL the agent should PUT uploads to. Returns ``(base_url, source)``.
 
-    Env var > ServerConfig.public_base_url > ``http://{host}:{port}``. The first two are
-    explicit operator-set; the listen-host fallback only produces something usable when
-    the server is reachable directly (typically local-dev), since prod deployments
-    commonly sit behind an MCP proxy + nginx whose external URL is not derivable from
-    the server's request scope.
+    Resolution order (first match wins):
+
+    1. ``env`` — ``OPENVIKING_PUBLIC_BASE_URL`` environment variable. Operator-set,
+       always wins.
+    2. ``config`` — ``ServerConfig.public_base_url``. Operator-set baseline in ov.conf.
+    3. ``forwarded`` — ``X-Forwarded-Host`` (+ ``X-Forwarded-Proto``) from the request.
+       Set by reverse proxies (nginx, ALB, ingress controllers, MCP proxies). Reliable
+       when the proxy chain forwards these headers, which is the standard default.
+    4. ``host`` — the raw ``Host`` header from a direct connection. Reliable for
+       same-host MCP clients (e.g. local Claude Code talking to localhost server).
+    5. ``listen`` — ``http://{listen_host}:{listen_port}`` last-resort fallback.
+       Only produces an agent-reachable URL when the server is bound to a routable
+       address; commonly wrong behind reverse proxies.
+
+    Sources 1 and 2 are "explicit" — operator vouched for the URL. Sources 3-5 are
+    inferred and may be wrong when the proxy chain doesn't forward request headers.
+    Callers should append a "set OPENVIKING_PUBLIC_BASE_URL if upload fails" hint
+    in that case.
     """
     env_url = os.environ.get("OPENVIKING_PUBLIC_BASE_URL")
     if env_url:
-        return env_url.rstrip("/")
+        return env_url.rstrip("/"), "env"
     config = get_server_config()
+    if config is not None and config.public_base_url:
+        return config.public_base_url.rstrip("/"), "config"
+
+    url_info = _request_url_ctx.get()
+    if url_info:
+        xfh = url_info.get("x_forwarded_host")
+        xfp = url_info.get("x_forwarded_proto")
+        host_hdr = url_info.get("host")
+        if xfh:
+            proto = xfp or "https"
+            return f"{proto}://{xfh}", "forwarded"
+        if host_hdr:
+            return f"http://{host_hdr}", "host"
+
     if config is not None:
-        if config.public_base_url:
-            return config.public_base_url.rstrip("/")
-        return f"http://{config.host}:{config.port}"
-    return "http://127.0.0.1:1933"
+        return f"http://{config.host}:{config.port}", "listen"
+    return "http://127.0.0.1:1933", "listen"
 
 
 @mcp.tool()
@@ -376,7 +416,7 @@ async def add_resource(
         minted_tfid,
         ttl_seconds=ttl_seconds,
     )
-    base_url = _resolve_public_base_url()
+    base_url, url_source = _resolve_public_base_url()
     upload_url = (
         f"{base_url}/api/v1/resources/temp_upload_signed"
         f"?token={quote(token, safe='')}&temp_file_id={quote(minted_tfid, safe='')}"
@@ -384,7 +424,7 @@ async def add_resource(
     expires_iso = datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat(timespec="seconds")
     minutes = max(1, ttl_seconds // 60)
 
-    return (
+    prose = (
         "Local file detected — upload required before this resource can be ingested.\n"
         "\n"
         'Step 1. HTTP POST the file bytes (multipart/form-data, field name "file") to:\n'
@@ -397,6 +437,19 @@ async def add_resource(
         "\n"
         f"This upload URL expires in ~{minutes} minutes ({expires_iso})."
     )
+
+    if url_source not in ("env", "config"):
+        prose += (
+            "\n\n"
+            "Note for the user: this upload URL was auto-detected from the incoming "
+            "request because OPENVIKING_PUBLIC_BASE_URL is not set on the server. "
+            "If Step 1 fails (connection refused, wrong host, TLS error), ask the "
+            "server operator to set OPENVIKING_PUBLIC_BASE_URL to the agent-facing "
+            "URL of the OpenViking server (e.g. via docker-compose `environment:` "
+            "or systemd unit) and retry."
+        )
+
+    return prose
 
 
 # -- grep ------------------------------------------------------------------

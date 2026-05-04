@@ -187,6 +187,63 @@ async def test_add_resource_local_path_returns_upload_instruction(service):
     assert "token=" in result
     assert "temp_file_id=" in result
     assert 'add_resource(temp_file_id="upload_' in result
+    # Default fixture sets neither env nor config.public_base_url → URL is auto-inferred
+    # and the troubleshooting hint must appear.
+    assert "OPENVIKING_PUBLIC_BASE_URL" in result
+    upload_token_store.clear()
+
+
+async def test_add_resource_local_path_uses_env_var_when_set(service, monkeypatch):
+    from openviking.server.upload_token_store import upload_token_store
+
+    upload_token_store.clear()
+    monkeypatch.setenv("OPENVIKING_PUBLIC_BASE_URL", "https://my-ov.example.com")
+    result = await add_resource(path="/tmp/x.pdf")
+    assert "https://my-ov.example.com/api/v1/resources/temp_upload_signed" in result
+    # Explicit source → no troubleshooting hint
+    assert "OPENVIKING_PUBLIC_BASE_URL is not set" not in result
+    upload_token_store.clear()
+
+
+async def test_add_resource_local_path_uses_config_when_env_unset(service, monkeypatch):
+    from openviking.server.config import ServerConfig
+    from openviking.server.upload_token_store import upload_token_store
+
+    upload_token_store.clear()
+    monkeypatch.delenv("OPENVIKING_PUBLIC_BASE_URL", raising=False)
+    monkeypatch.setattr(
+        "openviking.server.dependencies._server_config",
+        ServerConfig(public_base_url="https://configured.example.com"),
+    )
+
+    result = await add_resource(path="/tmp/x.pdf")
+    assert "https://configured.example.com/api/v1/resources/temp_upload_signed" in result
+    assert "OPENVIKING_PUBLIC_BASE_URL is not set" not in result
+    upload_token_store.clear()
+
+
+async def test_add_resource_local_path_infers_from_x_forwarded_headers(service, monkeypatch):
+    from openviking.server.mcp_endpoint import _request_url_ctx
+    from openviking.server.upload_token_store import upload_token_store
+
+    upload_token_store.clear()
+    monkeypatch.delenv("OPENVIKING_PUBLIC_BASE_URL", raising=False)
+
+    token = _request_url_ctx.set(
+        {
+            "x_forwarded_proto": "https",
+            "x_forwarded_host": "ov.public.example.com",
+            "host": "internal:1933",
+        }
+    )
+    try:
+        result = await add_resource(path="/tmp/x.pdf")
+    finally:
+        _request_url_ctx.reset(token)
+
+    assert "https://ov.public.example.com/api/v1/resources/temp_upload_signed" in result
+    # Inferred → hint must appear
+    assert "OPENVIKING_PUBLIC_BASE_URL" in result
     upload_token_store.clear()
 
 

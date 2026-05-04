@@ -10,6 +10,18 @@ services:
     volumes:
       # All persistent state (ov.conf, ovcli.conf, workspace) lives here.
       - ~/.openviking:/app/.openviking
+    # environment:
+    #   # Set this to the agent-facing URL of the OpenViking server when MCP clients
+    #   # reach it from outside the container — i.e. via a reverse proxy, public
+    #   # domain, or any host other than localhost on the same machine. The MCP
+    #   # `add_resource` tool emits this URL to agents that need to upload local
+    #   # files. Without it the server falls back to request-header inference,
+    #   # which fails when the proxy chain doesn't forward `X-Forwarded-Host`.
+    #   #
+    #   # Examples:
+    #   #   OPENVIKING_PUBLIC_BASE_URL: "https://ov.your-domain.com"
+    #   #   OPENVIKING_PUBLIC_BASE_URL: "http://192.168.1.100:1933"
+    #   OPENVIKING_PUBLIC_BASE_URL: ""
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:1933/health || exit 1"]
       interval: 30s
