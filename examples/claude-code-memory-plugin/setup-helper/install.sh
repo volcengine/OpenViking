@@ -96,24 +96,24 @@ fi
 
 if [ -z "$CURRENT_URL" ] || [ -z "$CURRENT_KEY" ]; then
   printf '%sChoose where you'\''ll connect to OpenViking:%s\n' "$BOLD" "$RESET"
-  printf '  1) Self-hosted / local                          [http://127.0.0.1:1933]\n'
+  printf '  1) Self-hosted / local                          [default: http://127.0.0.1:1933]\n'
   printf '  2) Volcengine OpenViking Cloud                  [https://api.vikingdb.cn-beijing.volces.com/openviking]\n'
   ask '[1/2, default 1]: '
   read -r MODE_INPUT || MODE_INPUT=""
   case "$MODE_INPUT" in
     2)
-      DEFAULT_URL="https://api.vikingdb.cn-beijing.volces.com/openviking"
+      CURRENT_URL="https://api.vikingdb.cn-beijing.volces.com/openviking"
+      info "Using Volcengine OpenViking Cloud: $CURRENT_URL"
       KEY_PROMPT="API key (required for Volcengine OpenViking Cloud): "
       ;;
     *)
       DEFAULT_URL="http://127.0.0.1:1933"
+      ask "OpenViking server URL [$DEFAULT_URL]: "
+      read -r URL_INPUT || URL_INPUT=""
+      CURRENT_URL="${URL_INPUT:-$DEFAULT_URL}"
       KEY_PROMPT="API key (leave empty for unauthenticated local mode): "
       ;;
   esac
-
-  ask "OpenViking server URL [$DEFAULT_URL]: "
-  read -r URL_INPUT || URL_INPUT=""
-  CURRENT_URL="${URL_INPUT:-$DEFAULT_URL}"
 
   ask "$KEY_PROMPT"
   # -s: don't echo (hide secret); fall back if -s unsupported
