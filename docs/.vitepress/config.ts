@@ -244,16 +244,6 @@ export default defineConfig({
     search: {
       provider: 'local'
     },
-    nav: enNav,
-    sidebar: {
-      '/en/getting-started/': localizedGuideSidebarItems('en'),
-      '/en/concepts/': localizedGuideSidebarItems('en'),
-      '/en/guides/': localizedGuideSidebarItems('en'),
-      '/en/agent-integrations/': localizedGuideSidebarItems('en'),
-      '/en/api/': localizedReferenceSidebarItems('en'),
-      '/en/about/': localizedAboutSidebarItems('en'),
-      '/design/': designSidebar
-    },
     socialLinks: [
       { icon: 'github', link: `https://github.com/${repo}` }
     ],
@@ -263,10 +253,22 @@ export default defineConfig({
     }
   },
   locales: {
-    root: {
+    en: {
       label: 'English',
       lang: 'en-US',
-      link: '/en/getting-started/01-introduction'
+      link: '/en/getting-started/01-introduction',
+      themeConfig: {
+        nav: enNav,
+        sidebar: {
+          '/en/getting-started/': localizedGuideSidebarItems('en'),
+          '/en/concepts/': localizedGuideSidebarItems('en'),
+          '/en/guides/': localizedGuideSidebarItems('en'),
+          '/en/agent-integrations/': localizedGuideSidebarItems('en'),
+          '/en/api/': localizedReferenceSidebarItems('en'),
+          '/en/about/': localizedAboutSidebarItems('en'),
+          '/design/': designSidebar
+        }
+      }
     },
     zh: {
       label: '简体中文',
