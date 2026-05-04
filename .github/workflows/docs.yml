@@ -8,7 +8,7 @@ on:
       - '.github/workflows/_docs-deploy.yml'
       - '.github/workflows/docs.yml'
   push:
-    branches: [ main ]
+    branches: [ main, docs-fix ]
     paths:
       - 'docs/**'
       - '.github/workflows/_docs.yml'
@@ -29,7 +29,7 @@ jobs:
 
   docs-deploy:
     name: Build and Deploy Docs
-    if: github.repository == 'volcengine/OpenViking' && github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request'
     uses: ./.github/workflows/_docs-deploy.yml
     permissions:
       contents: read
