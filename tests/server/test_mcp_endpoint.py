@@ -24,7 +24,7 @@ from openviking.server.mcp_endpoint import (
     search,
     store,
 )
-from openviking.server.mcp_endpoint import list_dir as list_tool
+from openviking.server.mcp_endpoint import ls as list_tool
 from openviking_cli.exceptions import UnauthenticatedError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -175,11 +175,88 @@ async def test_store_batch_messages(service):
 # ---------------------------------------------------------------------------
 
 
-async def test_add_resource_nonexistent_path(service):
-    result = await add_resource(path="/tmp/definitely_does_not_exist_xyz.md")
-    assert (
-        "error" in result.lower() or "not found" in result.lower() or "resource" in result.lower()
+async def test_add_resource_local_path_returns_upload_instruction(service):
+    from openviking.server.upload_token_store import upload_token_store
+
+    upload_token_store.clear()
+    result = await add_resource(path="/tmp/sample_local_file_xyz.pdf")
+    assert "upload required" in result.lower()
+    assert "Step 1." in result
+    assert "Step 2." in result
+    assert "/api/v1/resources/temp_upload_signed" in result
+    assert "token=" in result
+    assert "temp_file_id=" in result
+    assert 'add_resource(temp_file_id="upload_' in result
+    upload_token_store.clear()
+
+
+async def test_add_resource_temp_file_id_lookalike_in_path_is_rejected(service):
+    result = await add_resource(path="upload_abc123.pdf")
+    assert "looks like a temp_file_id" in result.lower()
+    assert 'temp_file_id="upload_abc123.pdf"' in result
+
+
+async def test_add_resource_neither_path_nor_temp_file_id(service):
+    result = await add_resource()
+    assert "error" in result.lower()
+    assert "path" in result.lower() or "temp_file_id" in result.lower()
+
+
+async def test_add_resource_remote_url_is_ingested(service, monkeypatch):
+    captured = {}
+
+    async def fake_add_resource(*, path, ctx, **kwargs):
+        captured["path"] = path
+        captured["enforce_public_remote_targets"] = kwargs.get("enforce_public_remote_targets")
+        return {"root_uri": "viking://resources/test_remote"}
+
+    monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
+    result = await add_resource(path="https://example.com/x.md")
+    assert "Resource added" in result
+    assert captured["path"] == "https://example.com/x.md"
+    assert captured["enforce_public_remote_targets"] is True
+
+
+async def test_add_resource_temp_file_id_branch_resolves_and_ingests(
+    service, upload_temp_dir, monkeypatch
+):
+    """When temp_file_id is supplied, MCP resolves via the per-tenant lookup and ingests."""
+    from types import SimpleNamespace
+
+    from openviking.server.upload_token_store import upload_token_store
+
+    upload_token_store.clear()
+
+    # Mirror the conftest upload_temp_dir patch into the MCP endpoint module so that
+    # MCP's get_openviking_config() points at the per-test temp dir.
+    monkeypatch.setattr(
+        "openviking.server.mcp_endpoint.get_openviking_config",
+        lambda: SimpleNamespace(
+            storage=SimpleNamespace(get_upload_temp_dir=lambda: upload_temp_dir)
+        ),
     )
+
+    # Drop a file at the per-tenant subdir matching DEFAULT_CTX (account="default", user="test_user")
+    sub = upload_temp_dir / "default" / "test_user"
+    sub.mkdir(parents=True, exist_ok=True)
+    tfid = "upload_abcdef123.md"
+    target = sub / tfid
+    target.write_text("hello mcp")
+
+    captured = {}
+
+    async def fake_add_resource(*, path, ctx, **kwargs):
+        captured["path"] = path
+        captured["allow_local_path_resolution"] = kwargs.get("allow_local_path_resolution")
+        return {"root_uri": "viking://resources/from_tfid"}
+
+    monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
+
+    result = await add_resource(temp_file_id=tfid)
+    assert "Resource added" in result
+    assert captured["path"] == str(target.resolve())
+    assert captured["allow_local_path_resolution"] is True
+    upload_token_store.clear()
 
 
 # ---------------------------------------------------------------------------

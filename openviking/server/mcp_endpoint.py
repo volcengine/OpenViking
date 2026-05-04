@@ -16,8 +16,14 @@ are extracted from HTTP request scope and propagated via contextvars.
 from __future__ import annotations
 
 import contextvars
+import os
+import re
+import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Literal, Optional
+from urllib.parse import quote
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -27,8 +33,10 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from openviking.server.auth import resolve_identity
-from openviking.server.dependencies import get_service
+from openviking.server.dependencies import get_server_config, get_service
 from openviking.server.identity import RequestContext
+from openviking.server.local_input_guard import is_remote_resource_source
+from openviking.server.upload_token_store import upload_token_store
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     PermissionDeniedError,
@@ -36,6 +44,7 @@ from openviking_cli.exceptions import (
 )
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
+from openviking_cli.utils.config.open_viking_config import get_openviking_config
 
 logger = get_logger(__name__)
 
@@ -242,26 +251,152 @@ async def store(messages: list[StoreMessage]) -> str:
 # -- add_resource ----------------------------------------------------------
 
 
+_TEMP_FILE_ID_RE = re.compile(r"^upload_[a-zA-Z0-9]+(\.[a-zA-Z0-9]+)?$")
+_DEFAULT_UPLOAD_TTL_SECONDS = 600
+
+
+def _resolve_public_base_url() -> str:
+    """Pick the URL the agent should PUT uploads to.
+
+    Env var > ServerConfig.public_base_url > ``http://{host}:{port}``. The first two are
+    explicit operator-set; the listen-host fallback only produces something usable when
+    the server is reachable directly (typically local-dev), since prod deployments
+    commonly sit behind an MCP proxy + nginx whose external URL is not derivable from
+    the server's request scope.
+    """
+    env_url = os.environ.get("OPENVIKING_PUBLIC_BASE_URL")
+    if env_url:
+        return env_url.rstrip("/")
+    config = get_server_config()
+    if config is not None:
+        if config.public_base_url:
+            return config.public_base_url.rstrip("/")
+        return f"http://{config.host}:{config.port}"
+    return "http://127.0.0.1:1933"
+
+
 @mcp.tool()
-async def add_resource(path: str, description: str = "") -> str:
-    """Add a resource (local file path or URL) to OpenViking. This is an asynchronous operation — the resource will be processed in the background."""
+async def add_resource(
+    path: str = "",
+    temp_file_id: str = "",
+    description: str = "",
+) -> str:
+    """Add a resource to OpenViking. Asynchronous — processing happens in the background.
+
+    Two ways to invoke:
+
+    1. Remote URL: pass ``path`` set to an http(s)://, git@, ssh://, or git:// URL.
+       Returns a success message immediately.
+
+    2. Local file: pass ``path`` set to a local filesystem path (e.g. ``/tmp/foo.pdf``).
+       The response will NOT be a success message — it will be a multi-step upload
+       instruction. Follow the instructions: HTTP-upload the file bytes to the URL
+       given in the response, then call this tool again with ``temp_file_id`` set to
+       the value the response gave you (and omit ``path``).
+    """
+    from openviking.server.routers.resources import _resolve_temp_or_path
+
     service = get_service()
     ctx = _get_ctx()
-    try:
-        result = await service.resources.add_resource(
-            path=path,
-            ctx=ctx,
-            reason=description,
-            wait=False,
-        )
+
+    # Branch 1: ingest by temp_file_id (second leg of progressive upload, or REST-style)
+    if temp_file_id:
+        upload_temp_dir = get_openviking_config().storage.get_upload_temp_dir()
+        try:
+            resolved_path, allow_local, original_filename = _resolve_temp_or_path(
+                path=None,
+                temp_file_id=temp_file_id,
+                upload_temp_dir=upload_temp_dir,
+                account_id=ctx.user.account_id,
+                user_id=ctx.user.user_id,
+            )
+        except (PermissionDeniedError, InvalidArgumentError) as exc:
+            return f"Error: {exc}"
+        try:
+            result = await service.resources.add_resource(
+                path=resolved_path,
+                ctx=ctx,
+                reason=description,
+                source_name=original_filename,
+                wait=False,
+                allow_local_path_resolution=allow_local,
+                enforce_public_remote_targets=True,
+            )
+        except Exception as exc:
+            return f"Error adding resource: {exc}"
         root_uri = result.get("root_uri", "")
         return (
             f"Resource added: {root_uri}"
             if root_uri
             else "Resource added (processing in background)."
         )
-    except Exception as e:
-        return f"Error adding resource: {e}"
+
+    if not path:
+        return "Error: provide either 'path' (remote URL or local file) or 'temp_file_id'."
+
+    # Branch 2: agent passed a temp_file_id-shaped string as `path` — guide them
+    if _TEMP_FILE_ID_RE.match(path):
+        return (
+            f"Error: '{path}' looks like a temp_file_id, not a path. "
+            f'Pass it as the temp_file_id kwarg: add_resource(temp_file_id="{path}")'
+        )
+
+    # Branch 3: remote URL — same flow as before
+    if is_remote_resource_source(path):
+        try:
+            result = await service.resources.add_resource(
+                path=path,
+                ctx=ctx,
+                reason=description,
+                wait=False,
+                enforce_public_remote_targets=True,
+            )
+        except Exception as exc:
+            return f"Error adding resource: {exc}"
+        root_uri = result.get("root_uri", "")
+        return (
+            f"Resource added: {root_uri}"
+            if root_uri
+            else "Resource added (processing in background)."
+        )
+
+    # Branch 4: local path — mint token, return upload instruction
+    server_config = get_server_config()
+    ttl_seconds = (
+        server_config.upload_signed_ttl_seconds
+        if server_config is not None
+        else _DEFAULT_UPLOAD_TTL_SECONDS
+    )
+    suffix = Path(path).suffix
+    minted_tfid = f"upload_{uuid.uuid4().hex}{suffix}"
+
+    token, expires_at = upload_token_store.issue(
+        ctx.user.account_id,
+        ctx.user.user_id,
+        minted_tfid,
+        ttl_seconds=ttl_seconds,
+    )
+    base_url = _resolve_public_base_url()
+    upload_url = (
+        f"{base_url}/api/v1/resources/temp_upload_signed"
+        f"?token={quote(token, safe='')}&temp_file_id={quote(minted_tfid, safe='')}"
+    )
+    expires_iso = datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat(timespec="seconds")
+    minutes = max(1, ttl_seconds // 60)
+
+    return (
+        "Local file detected — upload required before this resource can be ingested.\n"
+        "\n"
+        'Step 1. HTTP POST the file bytes (multipart/form-data, field name "file") to:\n'
+        "\n"
+        f"  {upload_url}\n"
+        "\n"
+        "Step 2. After the upload returns 200, call this tool again:\n"
+        "\n"
+        f'  add_resource(temp_file_id="{minted_tfid}")\n'
+        "\n"
+        f"This upload URL expires in ~{minutes} minutes ({expires_iso})."
+    )
 
 
 # -- grep ------------------------------------------------------------------

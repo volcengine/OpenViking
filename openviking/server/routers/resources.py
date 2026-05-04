@@ -2,15 +2,17 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Resource endpoints for OpenViking HTTP Server."""
 
+import re
 import time
 import uuid
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from openviking.server.auth import get_request_context
+from openviking.server.config import ServerConfig
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import (
@@ -19,6 +21,7 @@ from openviking.server.local_input_guard import (
 )
 from openviking.server.responses import response_from_result
 from openviking.server.telemetry import run_operation
+from openviking.server.upload_token_store import UploadTokenError, upload_token_store
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils.config.open_viking_config import get_openviking_config
@@ -116,25 +119,59 @@ class AddSkillRequest(BaseModel):
         return self
 
 
+def _resolve_temp_or_path(
+    *,
+    path: Optional[str],
+    temp_file_id: Optional[str],
+    upload_temp_dir: Path,
+    account_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+) -> tuple[str, bool, Optional[str]]:
+    """Resolve add_resource's source argument to a concrete path string.
+
+    Returns (resolved_path, allow_local_path_resolution, original_filename). Raises
+    InvalidArgumentError when neither argument is supplied.
+    """
+    if temp_file_id:
+        resolved, original = resolve_uploaded_temp_file_id(
+            temp_file_id,
+            upload_temp_dir,
+            account_id=account_id,
+            user_id=user_id,
+        )
+        return resolved, True, original
+    if path is None:
+        raise InvalidArgumentError("Either 'path' or 'temp_file_id' must be provided.")
+    return require_remote_resource_source(path), False, None
+
+
 def _cleanup_temp_files(temp_dir: Path, max_age_hours: int = 1):
-    """Clean up temporary files older than max_age_hours."""
+    """Clean up temporary files older than max_age_hours.
+
+    Recurses into per-tenant subdirectories produced by the signed-upload route
+    (``{temp_dir}/{account_id}/{user_id}/{temp_file_id}``) as well as the legacy
+    flat layout used by ``POST /api/v1/resources/temp_upload``.
+    """
     if not temp_dir.exists():
         return
 
     now = time.time()
     max_age_seconds = max_age_hours * 3600
 
-    for file_path in temp_dir.iterdir():
-        if file_path.is_file():
+    for file_path in temp_dir.rglob("*"):
+        if not file_path.is_file():
+            continue
+        try:
             file_age = now - file_path.stat().st_mtime
-            if file_age > max_age_seconds:
-                file_path.unlink(missing_ok=True)
-
-                # Also clean up corresponding .ov_upload.meta file
-                if not file_path.name.endswith(".ov_upload.meta"):
-                    meta_path = temp_dir / f"{file_path.name}.ov_upload.meta"
-                    if meta_path.exists():
-                        meta_path.unlink(missing_ok=True)
+        except OSError:
+            continue
+        if file_age <= max_age_seconds:
+            continue
+        file_path.unlink(missing_ok=True)
+        if not file_path.name.endswith(".ov_upload.meta"):
+            meta_path = file_path.parent / f"{file_path.name}.ov_upload.meta"
+            if meta_path.exists():
+                meta_path.unlink(missing_ok=True)
 
 
 @router.post("/resources/temp_upload")
@@ -182,6 +219,79 @@ async def temp_upload(
     return response_from_result(execution.result, telemetry=execution.telemetry)
 
 
+_TEMP_FILE_ID_RE = re.compile(r"^upload_[a-zA-Z0-9]+(\.[a-zA-Z0-9]+)?$")
+_DEFAULT_UPLOAD_MAX_BYTES = 100 * 1024 * 1024
+
+
+def _resolve_upload_max_bytes(request: Request) -> int:
+    config = getattr(request.app.state, "config", None)
+    if isinstance(config, ServerConfig):
+        return config.upload_signed_max_bytes
+    return _DEFAULT_UPLOAD_MAX_BYTES
+
+
+@router.post("/resources/temp_upload_signed")
+async def temp_upload_signed(
+    request: Request,
+    file: UploadFile = File(...),
+    token: str = Query(..., min_length=1),
+    temp_file_id: str = Query(..., min_length=1),
+):
+    """Upload via short-lived signed token. Used by the MCP progressive-upload flow.
+
+    No identity headers required — the token (issued by ``add_resource`` MCP for local-file
+    paths) carries the bound (account_id, user_id, temp_file_id). The token is consumed on
+    first use; subsequent attempts return 401.
+    """
+    import json
+
+    if not _TEMP_FILE_ID_RE.match(temp_file_id):
+        raise HTTPException(status_code=400, detail="invalid temp_file_id")
+
+    max_bytes = _resolve_upload_max_bytes(request)
+    content_length_hdr = request.headers.get("content-length")
+    if content_length_hdr is not None:
+        try:
+            if int(content_length_hdr) > max_bytes:
+                raise HTTPException(status_code=413, detail="upload exceeds max_bytes")
+        except ValueError:
+            pass  # malformed header — let the streaming check catch oversize
+
+    try:
+        account_id, user_id = upload_token_store.consume(token, temp_file_id)
+    except UploadTokenError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+    upload_temp_dir = get_openviking_config().storage.get_upload_temp_dir()
+    target_dir = upload_temp_dir / account_id / user_id
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_path = target_dir / temp_file_id
+
+    bytes_written = 0
+    try:
+        with open(target_path, "wb") as out:
+            while True:
+                chunk = await file.read(64 * 1024)
+                if not chunk:
+                    break
+                bytes_written += len(chunk)
+                if bytes_written > max_bytes:
+                    raise HTTPException(status_code=413, detail="upload exceeds max_bytes")
+                out.write(chunk)
+    except HTTPException:
+        target_path.unlink(missing_ok=True)
+        raise
+
+    if file.filename:
+        meta_path = target_dir / f"{temp_file_id}.ov_upload.meta"
+        meta = {"original_filename": file.filename, "upload_time": time.time()}
+        with open(meta_path, "w") as meta_f:
+            json.dump(meta, meta_f)
+
+    _cleanup_temp_files(upload_temp_dir)
+    return {"temp_file_id": temp_file_id}
+
+
 @router.post("/resources")
 async def add_resource(
     request: AddResourceRequest,
@@ -193,18 +303,13 @@ async def add_resource(
         raise InvalidArgumentError("Cannot specify both 'to' and 'parent' at the same time.")
 
     upload_temp_dir = get_openviking_config().storage.get_upload_temp_dir()
-    path = request.path
-    allow_local_path_resolution = False
-    original_filename = None
-    if request.temp_file_id:
-        path, original_filename = resolve_uploaded_temp_file_id(
-            request.temp_file_id, upload_temp_dir
-        )
-        allow_local_path_resolution = True
-    elif path is not None:
-        path = require_remote_resource_source(path)
-    if path is None:
-        raise InvalidArgumentError("Either 'path' or 'temp_file_id' must be provided.")
+    path, allow_local_path_resolution, original_filename = _resolve_temp_or_path(
+        path=request.path,
+        temp_file_id=request.temp_file_id,
+        upload_temp_dir=upload_temp_dir,
+        account_id=_ctx.user.account_id,
+        user_id=_ctx.user.user_id,
+    )
 
     # Use original_filename from upload if source_name not explicitly provided
     source_name = request.source_name

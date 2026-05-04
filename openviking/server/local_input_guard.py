@@ -64,10 +64,23 @@ def _read_upload_meta(meta_path: Path) -> Optional[dict]:
     return None
 
 
+def _is_safe_namespace_component(value: str) -> bool:
+    """Reject path-traversal-shaped account/user identifiers."""
+    return bool(value) and value not in {".", ".."} and "/" not in value and "\\" not in value
+
+
 def resolve_uploaded_temp_file_id(
-    temp_file_id: str, upload_temp_dir: Path
+    temp_file_id: str,
+    upload_temp_dir: Path,
+    *,
+    account_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> Tuple[str, Optional[str]]:
     """Resolve a temp upload id to a regular file under the server upload temp dir.
+
+    Looks up under ``{upload_temp_dir}/{account_id}/{user_id}/{temp_file_id}`` when both
+    namespace components are provided, then falls back to the flat layout
+    ``{upload_temp_dir}/{temp_file_id}`` (the legacy CLI ``temp_upload`` writes here).
 
     Returns:
         Tuple of (resolved_file_path, original_filename)
@@ -84,35 +97,44 @@ def resolve_uploaded_temp_file_id(
             "HTTP server only accepts temp_file_id values issued from the upload temp directory."
         )
 
-    raw_path = upload_temp_dir / temp_file_id
-    if raw_path.is_symlink():
-        raise PermissionDeniedError(
-            "HTTP server only accepts regular files from the upload temp directory."
-        )
-
-    try:
-        resolved_path = raw_path.resolve(strict=True)
-    except (FileNotFoundError, OSError) as exc:
-        raise PermissionDeniedError(
-            "HTTP server only accepts regular files from the upload temp directory."
-        ) from exc
-
     upload_root = upload_temp_dir.resolve()
-    try:
-        resolved_path.relative_to(upload_root)
-    except ValueError as exc:
-        raise PermissionDeniedError(
-            "HTTP server only accepts temp_file_id values issued from the upload temp directory."
-        ) from exc
 
-    if not resolved_path.is_file():
-        raise PermissionDeniedError(
-            "HTTP server only accepts regular files from the upload temp directory."
-        )
+    candidates: list[Path] = []
+    if account_id and user_id:
+        if not (_is_safe_namespace_component(account_id) and _is_safe_namespace_component(user_id)):
+            raise PermissionDeniedError(
+                "HTTP server only accepts temp_file_id values issued from the upload temp directory."
+            )
+        candidates.append(upload_temp_dir / account_id / user_id / temp_file_id)
+    candidates.append(upload_temp_dir / temp_file_id)
 
-    # Try to read original filename from meta file
-    meta_path = upload_temp_dir / f"{temp_file_id}.ov_upload.meta"
-    meta = _read_upload_meta(meta_path)
-    original_filename = meta.get("original_filename") if meta else None
+    last_exc: Optional[Exception] = None
+    for raw_path in candidates:
+        if raw_path.is_symlink():
+            raise PermissionDeniedError(
+                "HTTP server only accepts regular files from the upload temp directory."
+            )
+        try:
+            resolved_path = raw_path.resolve(strict=True)
+        except (FileNotFoundError, OSError) as exc:
+            last_exc = exc
+            continue
+        try:
+            resolved_path.relative_to(upload_root)
+        except ValueError as exc:
+            raise PermissionDeniedError(
+                "HTTP server only accepts temp_file_id values issued from the upload temp directory."
+            ) from exc
+        if not resolved_path.is_file():
+            raise PermissionDeniedError(
+                "HTTP server only accepts regular files from the upload temp directory."
+            )
 
-    return (str(resolved_path), original_filename)
+        meta_path = raw_path.parent / f"{temp_file_id}.ov_upload.meta"
+        meta = _read_upload_meta(meta_path)
+        original_filename = meta.get("original_filename") if meta else None
+        return (str(resolved_path), original_filename)
+
+    raise PermissionDeniedError(
+        "HTTP server only accepts regular files from the upload temp directory."
+    ) from last_exc
