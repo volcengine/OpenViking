@@ -251,7 +251,7 @@ _LOCAL_FILE_HINT = (
     "     curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/crates/ov_cli/install.sh | bash\n"
     "  3. Only if connecting to a remote / multi-tenant OpenViking server, "
     "configure ~/.openviking/ovcli.conf:\n"
-    '       {\"url\": \"https://your-host\", \"api_key\": \"your-key\"}'
+    '       {"url": "https://your-host", "api_key": "your-key"}'
 )
 
 
