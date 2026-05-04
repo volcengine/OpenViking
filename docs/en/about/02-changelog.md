@@ -42,7 +42,13 @@ This changelog is automatically generated from [GitHub Releases](https://github.
 
 ## v0.3.12 (2026-04-24)
 
-Focused on parser hardening, VitePress docs site launch, API key security improvements, and Azure DevOps git support.
+### Highlights
+
+- **New Integrations**: Added Azure DevOps support for Git hosting and larkoffice.com URL parsing for Feishu documents.
+- **Security**: Overhauled API key management with security hardening, fixed account name exposure, and resolved a trusted-mode 500 regression in proxy role lookups.
+- **Documentation**: Launched a VitePress-powered docs site with GitHub Pages deployment, added llms.txt support and a Copy Markdown button.
+- **Bug Fixes**: Corrected Feishu config limit validation, SSH repository host recognition with userinfo, AGFS URI error mapping, and token counting for pending tool parts.
+- **Developer Experience**: Added maintainer routing map to contributing docs and S3 key normalization encoding for RAGFS.
 
 [Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.3.10...v0.3.12)
 
@@ -77,7 +83,14 @@ Focused on parser hardening, VitePress docs site launch, API key security improv
 
 ## v0.3.9 (2026-04-18)
 
-Highlights include Memory V2 as default, MCP client support for bot, Codex memory plugin example, OpenClaw unified `ov_import`/`ov_search`, interactive setup wizard for local Ollama deployment, and metric system addition.
+### Highlights
+
+- **Memory**: Shipped Memory V2 as the new default, including a full test suite, session row migration, and a fix for file lock conflicts in concurrent scenarios.
+- **OpenClaw**: Refactored context partitioning into Instruction/Archive/Session layers, unified `ov_import` and `ov_search` in the plugin, and extended Phase 2 commit wait timeout.
+- **Bot & MCP**: Ported MCP client support from HKUDS/nanobot v0.1.5, added per-channel OpenViking config disable, and fixed heartbeat reliability.
+- **Search & Retrieval**: Optimized large-directory search by skipping redundant scope checks, fixed sparse embedder async initialization, and added rerank extra-headers support.
+- **Setup & Onboarding**: Introduced an interactive `openviking-server init` wizard for local Ollama deployment and added a default file/dir ignore config for `ovcli.conf`.
+- **Infrastructure**: Added a metric system, updated the default Doubao embedding model, raised the Rust toolchain for RAGFS Docker builds, and split the parser layer into accessor and parser sublayers.
 
 [Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.3.8...v0.3.9)
 
@@ -107,7 +120,13 @@ Memory V2 is now the default memory pipeline, featuring a redesigned format, ref
 
 ## v0.3.5 (2026-04-10)
 
-Bug fixes for memory v2 lock retry, bot proxy error sanitization, session auto-creation, and embedding dimension adaptation. Added scenario-based API tests and OSS batch-delete compatibility.
+### Highlights
+
+- **Storage**: Added a `disable_batch_delete` option to S3FS for OSS compatibility and improved RAGFS path scope fallback to prefix filters.
+- **Session & Memory**: Fixed auto-creation of missing sessions on first message add and resolved a Memory V2 config initialization ordering issue.
+- **Bot**: Fixed multi-user memory commits, response language handling, and ensured `afterTurn` stores messages with correct roles while skipping heartbeat entries.
+- **Security & CI**: Removed a leaked token from settings.py, sanitized internal error details in bot proxy responses, and streamlined CI with a conditional OS matrix.
+- **Developer Experience**: Added scenario-based API tests and exposed re-enqueue counts in queue status for easier debugging.
 
 [Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.3.4...v0.3.5)
 
@@ -152,13 +171,26 @@ Bug fixes for memory v2 lock retry, bot proxy error sanitization, session auto-c
 
 ## v0.3.2 (2026-04-01)
 
-Config-driven retry unification for VLM and embedding, OVPack guide, observability docs reorganization, Docker vikingbot/console addition, and OpenClaw session-pattern guard.
+### Highlights
+
+- **Docker**: Added VikingBot and Console services to Docker setup; updated examples to use latest image tags.
+- **OpenClaw Plugin**: Added session-pattern guard for ingest reply assist; unified test directory structure.
+- **VLM**: Rolled back ResponseAPI to Chat Completions while preserving tool call support.
+- **Reliability**: Fixed HTTPX SOCKS5 proxy crash; improved PyPI mirror fallback in installer; skipped FUSE-incompatible filesystem tests on Windows.
+- **Docs**: Added OVPack guide in Chinese and English; reorganized observability documentation; retired legacy integration examples.
 
 [Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.3.1...v0.3.2)
 
 ## v0.3.1 (2026-03-31)
 
-PHP tree-sitter support, multi-platform API tests, auto language detection for semantic summaries, configurable prompt template directories, and OpenClaw install hardening.
+### Highlights
+
+- **Language Support**: Added PHP tree-sitter AST parsing.
+- **Storage**: Introduced auto language detection for semantic summary generation; fixed parent URI compatibility with legacy records.
+- **CI**: Expanded API test coverage to 5 platforms; switched to native per-arch Docker image builds; refreshed uv.lock for release.
+- **Configuration**: Added configurable prompt template directories; unified archive context handling in session management.
+- **OpenClaw Plugin**: Simplified install flow, hardened helpers, and preserved existing `ov.conf` on auto install.
+- **Memory**: Applied memory optimization improvements.
 
 [Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.2.14...v0.3.1)
 
@@ -183,13 +215,19 @@ PHP tree-sitter support, multi-platform API tests, auto language detection for s
 
 ## v0.2.13 (2026-03-26)
 
-Unit tests for core utilities, LiteLLM thinking param scoped to DashScope, dual-mode CI for API tests, Windows engine wheel fix, OpenClaw duplicate registration guard.
+### Highlights
+
+- **Testing**: Added comprehensive unit tests for core utilities; improved API test infrastructure with dual-mode CI support.
+- **Platform**: Fixed Windows engine wheel runtime packaging.
+- **VLM**: Scoped LiteLLM thinking parameter to DashScope providers only.
+- **OpenClaw Plugin**: Hardened duplicate registration guard.
+- **Docs**: Added basic usage examples and Chinese documentation.
 
 [Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.2.12...v0.2.13)
 
 ## v0.2.12 (2026-03-25)
 
-Docker `uv sync --locked`, CancelledError handling during shutdown, bot config rollback.
+This patch release stabilizes the server shutdown sequence by properly handling `CancelledError`, rolls back a bot configuration regression, and tightens the Docker build by switching to `uv sync --locked` for reproducible dependency resolution.
 
 [Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.2.11...v0.2.12)
 
@@ -230,7 +268,7 @@ LiteLLM features will remain unavailable until a trusted upstream fix is release
 
 ## v0.2.9 (2026-03-19)
 
-Agent-level watch task isolation, summary-based file embedding, bot mode config and debug mode, RocksDB lock contention fix for shared adapter.
+This release focuses on stability and developer experience improvements. Key fixes address RocksDB lock contention by sharing a single adapter across account backends, restore previously lost plugin bug fixes, and improve vector store incremental updates. New features include a bot debug mode with `/remember` command support, summary-based file embedding in the semantic pipeline, and comprehensive PR-Agent review rules for CI. Documentation also received Docker Compose and Mac port forwarding guidance.
 
 [Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.2.8...v0.2.9)
 
@@ -262,7 +300,14 @@ Agent-level watch task isolation, summary-based file embedding, bot mode config 
 
 ## v0.2.5 (2026-03-06)
 
-PDF bookmark headings, GitHub tree/ref URL import, index control for `add_resource`, curl-based OpenClaw install, bot refactoring with new eval module, ripgrep-based grep acceleration.
+### Highlights
+
+- **PDF & Parsing**: Font-based heading detection and bookmark extraction as structured markdown headings; `add_resource` now supports index control with refactored embedding logic and correctly handles ZIP-based container formats.
+- **Session & Memory**: `add_message()` adds `parts` parameter support; semantic indexing triggered for parent directories after memory extraction.
+- **URI Handling**: Short-format `VikingURI` support, `git@` SSH URL format in the CLI, and GitHub `tree/<ref>` URL for code repository import.
+- **Bot & Integrations**: VikingBot refactored with new evaluation module, Feishu multi-user and channel enhancements, OpenAPI standardization; Telegram crash fix for Claude.
+- **Infrastructure**: `agfs` gains ripgrep-based grep acceleration and async grep support with optional binding client mode; automated PR review workflows using Doubao model with severity classification.
+- **Installation**: curl-based installation works correctly on Ubuntu/Debian without triggering system protection errors; Rust compile fixed for `uv pip install -e .`.
 
 [Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.2.3...v0.2.5)
 
@@ -270,9 +315,9 @@ PDF bookmark headings, GitHub tree/ref URL import, index control for `add_resour
 
 ### Breaking Change
 
-After upgrading, datasets/indexes generated by historical versions are not compatible with the new version and cannot be reused directly. Please rebuild the datasets after upgrading (a full rebuild is recommended).
+Datasets and indexes generated by previous versions are incompatible with this release and cannot be reused. A full rebuild is required after upgrading to avoid retrieval anomalies, inconsistent filtering, or runtime errors. Stop the service, remove your workspace directory (`rm -rf ./your-openviking-workspace`), then restart with `openviking-server`.
 
-Stop the service → `rm -rf ./your-openviking-workspace` → restart the service with `openviking-server`.
+This release delivers CLI optimizations including `glob -n` flag support and `cmd echo`, alongside README updates for both English and Chinese documentation.
 
 [Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.2.2...v0.2.3)
 
@@ -280,7 +325,9 @@ Stop the service → `rm -rf ./your-openviking-workspace` → restart the servic
 
 ### Breaking Change
 
-This release includes a breaking change. Before upgrading, stop VikingDB Server and clear the workspace directory first.
+Before upgrading, stop the VikingDB Server and clear your workspace directory. Indexes from prior versions are not forward-compatible with this release.
+
+This release adds C# AST extractor support for code parsing, fixes multi-tenant filtering, normalizes OpenViking memory target paths, and improves git repository detection with `git@` SSH URL support. The `agfs` dependency libraries and binaries are now pre-compiled, eliminating the need for a build step at install time. Documentation adds Qwen model usage instructions.
 
 [Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.2.1...v0.2.2)
 
@@ -298,66 +345,110 @@ This release includes a breaking change. Before upgrading, stop VikingDB Server 
 
 ## cli@0.2.0 (2026-02-27)
 
-OpenViking CLI v0.2.0 release with cross-platform binaries.
+Updated CLI binary release with cross-platform support for macOS and Linux, aligned with the v0.1.18 feature set including the Rust-based implementation and expanded file parser capabilities.
 
 [Full Changelog](https://github.com/volcengine/OpenViking/releases/tag/cli%400.2.0)
 
 ## v0.1.18 (2026-02-23)
 
-Rust CLI implementation, markitdown-inspired parsers (Word, PowerPoint, Excel, EPub, ZIP), multi-provider support, TUI filesystem navigator, memory redesign with conflict-aware dedup.
+This release brings major new capabilities to OpenViking. A high-performance Rust CLI is introduced alongside a terminal UI for filesystem navigation. File parsing is significantly expanded with support for Word, PowerPoint, Excel, EPub, and ZIP formats. Multi-provider support is added for embedding and VLM backends. Memory handling is redesigned with conflict-aware deduplication and a new extraction flow.
+
+### Highlights
+
+- **Rust CLI**: New blazing-fast CLI implementation.
+- **File Parsers**: Word, PowerPoint, Excel, EPub, ZIP support via markitdown-inspired parsers.
+- **TUI**: Basic terminal UI for filesystem navigation (`ov tui`).
+- **Multi-provider**: Support for multiple embedding and VLM providers.
+- **Memory**: Redesigned extraction and deduplication flow with conflict awareness.
+- **Skills**: New memory, resource, and search skills; improved skill search ranking.
+- **Directory Parsing**: Added directory-level parsing support.
 
 [Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.1.17...v0.1.18)
 
 ## cli@0.1.0 (2026-02-14)
 
-OpenViking CLI v0.1.0 initial release with cross-platform binaries.
+Initial CLI binary release with cross-platform support for macOS and Linux, providing a standalone distributable for OpenViking server management and resource operations.
 
 [Full Changelog](https://github.com/volcengine/OpenViking/releases/tag/cli%400.1.0)
 
 ## v0.1.17 (2026-02-14)
 
-Reverted dynamic `project_name` config, CI workspace cleanup fix, tree URI output validation.
+A stability-focused patch release. Reverts dynamic project name configuration in VectorDB due to instability, fixes CI workspace cleanup, and resolves a tree URI output error with added validation of `ov.conf` on startup.
 
 [Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.1.16...v0.1.17)
 
 ## v0.1.16 (2026-02-13)
 
-VectorDB fixes, readable temp URIs, dynamic `project_name` config for VectorDB/volcengine, uvloop conflict fix.
+A focused bug-fix and improvement release. Fixes VectorDB connectivity issues and a server conflict between uvloop and nest_asyncio. Temporary URIs are now human-readable, resource add timeouts are enlarged, and dynamic project name configuration is introduced for VectorDB and Volcengine backends.
 
 [Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.1.15...v0.1.16)
 
 ## v0.1.15 (2026-02-13)
 
-Server/CLI mode now available. HTTP client refactor, QueueManager decoupling, CLI launch speed optimization, memory output language pipeline, parser branch/commit ref support.
+This release focuses on architectural refactoring and reliability improvements. The HTTP client is split into distinct embedded and HTTP modes for cleaner separation of concerns. The CLI launch speed is improved through directory restructuring. VectorDB timestamp and collection creation bugs are resolved.
+
+### Highlights
+
+- **Refactor**: HTTP client split into embedded and HTTP modes; QueueManager decoupled from VikingDBManager.
+- **CLI**: Faster launch speed; improved `ls` and `tree` output.
+- **VectorDB**: Fixed timestamp format and collection creation issues.
+- **Parser**: Support for repository branch and commit refs.
+- **OpenClaw**: Initial memory output language pipeline adaptation.
 
 [Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.1.14...v0.1.15)
 
 ## v0.1.14 (2026-02-12)
 
-HTTP Server and Python HTTP Client, OpenClaw MCP skill, directory pre-scan validation, DAG-triggered embedding, Bash CLI framework, parallel add support.
+A major infrastructure release. An HTTP server and Python HTTP client are introduced, enabling remote access to OpenViking services. The OpenClaw skill adds MCP integration support. Directory pre-scan validation, DAG-triggered embedding, and parallel resource addition improve performance and reliability.
+
+### Highlights
+
+- **HTTP Server**: New server mode with Python HTTP client for remote access.
+- **OpenClaw Skill**: MCP integration for OpenViking.
+- **CLI**: Full Bash CLI framework with comprehensive command implementation.
+- **Embedding**: DAG-triggered embedding and parallel add support.
+- **Directory Scan**: Pre-scan validation module added.
+- **Config**: Default configuration directory set to `~/.openviking`.
 
 [Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.1.12...v0.1.14)
 
 ## v0.1.12 (2026-02-09)
 
-Sparse logit alpha search, S3 config refactor, async execution unification, native VikingDB deployment, Zip Slip prevention, MCP query support.
+This release improves search quality, storage reliability, and code maintainability. Sparse logit alpha search is added for enhanced retrieval. Query embeddings are reused in the hierarchical retriever for better performance. Native VikingDB deployment is now supported. A critical Zip Slip path traversal vulnerability (CWE-22) is patched.
+
+### Highlights
+
+- **Search**: Sparse logit alpha support and optimized query embedding reuse.
+- **VikingDB**: Native deployment support.
+- **Security**: Zip Slip path traversal fix (CWE-22).
+- **Refactor**: Unified async execution utilities; restructured S3 configuration.
+- **MCP**: Query support added and validated with Kimi.
 
 [Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.1.11...v0.1.12)
 
 ## v0.1.11 (2026-02-05)
 
-Support for small GitHub code repos.
+Adds support for ingesting small GitHub code repositories, enabling OpenViking to index and search public codebases directly.
 
 [Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.1.10...v0.1.11)
 
 ## v0.1.10 (2026-02-05)
 
-Compilation fixes and Windows release fix.
+Patch release fixing a compilation error and resolving a Windows binary release packaging issue.
 
 [Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.1.9...v0.1.10)
 
 ## v0.1.9 (2026-02-05)
 
-Initial public release. GitHub templates, multi-provider embedding/VLM support, Intel Mac support, Linux compilation, Python 3.13 support, chat examples, logging standardization.
+The initial public release of OpenViking. This release establishes the core project structure with cross-platform support including Linux and Intel Mac. It introduces the service layer architecture, separating embedding and VLM backends into configurable providers. Memory deduplication is improved and retrieval recursion bugs are fixed. Python 3.13 compatibility, S3FS support, and usage examples for chat and memory workflows are included.
+
+### Highlights
+
+- **Initial Release**: Core OpenViking server, client, and CLI foundation.
+- **Providers**: Configurable embedding and VLM backends with provider abstraction.
+- **Architecture**: Service layer extracted from async client; ObserverService separated from DebugService.
+- **Platform**: Linux compile support, Intel Mac compatibility, Python 3.13 support.
+- **Memory**: Simplified deduplication logic and fixed retrieval recursion bug.
+- **Examples**: Chat and chat-with-memory usage examples added.
 
 [Full Changelog](https://github.com/volcengine/OpenViking/releases/tag/v0.1.9)
