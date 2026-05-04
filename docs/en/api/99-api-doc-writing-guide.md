@@ -10,7 +10,7 @@ API documentation is organized by module, with one file per module, using a two-
 
 Each API module documentation should follow the structure below:
 
-```markdown
+````markdown
 # Module Name
 
 Brief introduction explaining the main features and purpose of this module.
@@ -91,7 +91,7 @@ Explain the purpose of this API, point to the corresponding code entry, and brie
 ## Related Documentation
 
 - [Document Title](<relative-path>) - <brief description>
-```
+````
 
 ## Structure Details
 
@@ -130,7 +130,7 @@ Provide in order:
 
 ## Example: Complete API Documentation
 
-```markdown
+````markdown
 ### add_resource()
 
 #### 1. API Implementation Introduction
@@ -224,7 +224,7 @@ openviking add-resource ./documents/guide.md --reason "User guide documentation"
 ```
 
 ---
-```
+````
 
 ## Documentation Maintenance Checklist
 
