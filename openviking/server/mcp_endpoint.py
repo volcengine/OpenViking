@@ -245,10 +245,13 @@ async def store(messages: list[StoreMessage]) -> str:
 _LOCAL_FILE_HINT = (
     "MCP add_resource only accepts remote URLs (http(s)://, git@, ssh://, git://). "
     "For local files or directories, use the `ov` CLI:\n"
-    "  1. Install: curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/crates/ov_cli/install.sh | bash\n"
-    "  2. (remote / multi-tenant only) configure ~/.openviking/ovcli.conf:\n"
-    '       {\"url\": \"http://localhost:1933\", \"api_key\": \"your-key\"}\n'
-    "  3. Run: ov add-resource <path>"
+    "  1. Try first: ov add-resource <path>\n"
+    "     (if `ov` is already on PATH, this is all you need)\n"
+    "  2. If `ov` is not installed, run:\n"
+    "     curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/crates/ov_cli/install.sh | bash\n"
+    "  3. Only if connecting to a remote / multi-tenant OpenViking server, "
+    "configure ~/.openviking/ovcli.conf:\n"
+    '       {\"url\": \"https://your-host\", \"api_key\": \"your-key\"}'
 )
 
 
