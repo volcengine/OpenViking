@@ -149,7 +149,10 @@ export async function quickHealthCheck(baseUrl: string, timeoutMs: number): Prom
 export async function quickRecallPrecheck(
   baseUrl: string,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
-  const healthOk = await quickHealthCheck(baseUrl, 500);
+  // Remote container deployments can see intermittent sub-second network jitter.
+  // Keep the precheck lightweight, but avoid treating a brief 500ms blip as a
+  // hard "skip recall" signal.
+  const healthOk = await quickHealthCheck(baseUrl, 2_000);
   if (healthOk) {
     return { ok: true };
   }

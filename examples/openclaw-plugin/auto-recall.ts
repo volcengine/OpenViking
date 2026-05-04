@@ -172,13 +172,24 @@ export async function buildAutoRecallContext(params: {
 
   const precheck = await quickRecallPrecheck(cfg.baseUrl);
   if (!precheck.ok) {
-    verbose?.(`openviking: skipping auto-recall because precheck failed (${precheck.reason})`);
-    return { memoryCount: 0, estimatedTokens: 0 };
+    verbose?.(
+      `openviking: auto-recall precheck failed (${precheck.reason}); continuing with direct recall attempt`,
+    );
   }
 
   return withTimeout(
     (async () => {
       const candidateLimit = Math.max(cfg.recallLimit * 4, 20);
+      verbose?.(
+        `openviking: auto-recall start ` +
+          toJsonLog({
+            agentId,
+            queryChars: queryText.length,
+            candidateLimit,
+            recallLimit: cfg.recallLimit,
+            recallResources: cfg.recallResources,
+          }),
+      );
       const autoRecallPromises: Promise<FindResult>[] = [
         client.find(queryText, {
           targetUri: "viking://user/memories",
@@ -210,6 +221,14 @@ export async function buildAutoRecallContext(params: {
           logger.warn?.(`openviking: auto-recall search failed: ${String(s.reason)}`);
         }
       }
+      verbose?.(
+        `openviking: auto-recall settled ` +
+          toJsonLog({
+            fulfilled: autoRecallSettled.filter((s) => s.status === "fulfilled").length,
+            rejected: autoRecallSettled.filter((s) => s.status === "rejected").length,
+            rawResults: allMemories.length,
+          }),
+      );
 
       const uniqueMemories = allMemories.filter((memory, index, self) =>
         index === self.findIndex((m) => m.uri === memory.uri)
@@ -222,6 +241,7 @@ export async function buildAutoRecallContext(params: {
       const memories = pickMemoriesForInjection(processed, cfg.recallLimit, queryText);
 
       if (memories.length === 0) {
+        verbose?.("openviking: auto-recall produced zero candidate memories after ranking");
         return { memoryCount: 0, estimatedTokens: 0 };
       }
 

@@ -251,6 +251,16 @@ function hasAutoRecallBlock(message: AgentMessage | undefined): boolean {
   return extractAgentMessageText(message).includes(AUTO_RECALL_SOURCE_MARKER);
 }
 
+function findLatestUserMessage(messages: AgentMessage[]): { index: number; message: AgentMessage } | null {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const candidate = messages[i];
+    if (candidate?.role === "user") {
+      return { index: i, message: candidate };
+    }
+  }
+  return null;
+}
+
 function prependTextToMessageContent(content: unknown, text: string): unknown {
   if (typeof content === "string") {
     return `${text}\n\n${content}`;
@@ -280,17 +290,16 @@ function prependTextToMessageContent(content: unknown, text: string): unknown {
 }
 
 function prependRecallToLatestUserMessage(messages: AgentMessage[], recallBlock: string): AgentMessage[] {
-  const latest = messages.at(-1);
-  if (!latest || latest.role !== "user" || hasAutoRecallBlock(latest)) {
+  const latestUser = findLatestUserMessage(messages);
+  if (!latestUser || hasAutoRecallBlock(latestUser.message)) {
     return messages;
   }
-  return [
-    ...messages.slice(0, -1),
-    {
-      ...latest,
-      content: prependTextToMessageContent(latest.content, recallBlock),
-    },
-  ];
+  const next = [...messages];
+  next[latestUser.index] = {
+    ...latestUser.message,
+    content: prependTextToMessageContent(latestUser.message.content, recallBlock),
+  };
+  return next;
 }
 
 function emitDiag(log: Logger, stage: string, sessionId: string, data: Record<string, unknown>, enabled = true): void {
@@ -1053,11 +1062,193 @@ export function createMemoryOpenVikingContextEngine(params: {
         const preAbstracts = ctx?.pre_archive_abstracts ?? [];
         const hasArchives = !!ctx?.latest_archive_overview || preAbstracts.length > 0;
         const activeCount = ctx?.messages?.length ?? 0;
+        logger.info(
+          `openviking: main assemble context ` +
+            JSON.stringify({
+              ovSessionId: OVSessionId,
+              agentId,
+              hasArchives,
+              preArchiveCount: preAbstracts.length,
+              activeCount,
+              inputMessages: messages.length,
+            }),
+        );
 
-        if (!ctx || (!hasArchives && activeCount === 0)) {
+        const tryMainPathRecallFallback = async (reason: string) => {
+          let latestUser = findLatestUserMessage(messages);
+          let queryText = "";
+
+          // When main assemble has no user messages (e.g. fresh /v1/responses
+          // with inputMessages=0), try to extract the user question from the
+          // prompt field so we can still perform auto-recall.
+          if (!latestUser && messages.length === 0) {
+            const prompt = (assembleParams as Record<string, unknown>).prompt;
+            if (typeof prompt === "string" && prompt.trim().length > 0) {
+              // The prompt typically ends with the user input in /v1/responses.
+              // Take the last substantial paragraph as a fallback query.
+              const trimmed = prompt.trim();
+              const lastNewline = trimmed.lastIndexOf("\n");
+              const tail = lastNewline > 0 ? trimmed.slice(lastNewline + 1).trim() : trimmed;
+              if (tail.length >= 5) {
+                queryText = tail;
+                logger.info(
+                  `openviking: main recall fallback extracting query from prompt ` +
+                    JSON.stringify({
+                      ovSessionId: OVSessionId,
+                      reason,
+                      promptChars: trimmed.length,
+                      queryChars: tail.length,
+                    }),
+                );
+              }
+            }
+          }
+
+          if (!latestUser && !queryText) {
+            logger.info(
+              `openviking: main recall fallback skipped ` +
+                JSON.stringify({
+                  ovSessionId: OVSessionId,
+                  reason,
+                  latestRole: latestMessage?.role ?? null,
+                  latestUserRole: latestUser?.message.role ?? null,
+                  autoRecall: cfg.autoRecall,
+                  hasRecallBlock: latestUser ? hasAutoRecallBlock(latestUser.message) : false,
+                  promptAvailable: typeof (assembleParams as Record<string, unknown>).prompt === "string",
+                }),
+            );
+            return null;
+          }
+
+          if (latestUser && (!cfg.autoRecall || hasAutoRecallBlock(latestUser.message))) {
+            logger.info(
+              `openviking: main recall fallback skipped ` +
+                JSON.stringify({
+                  ovSessionId: OVSessionId,
+                  reason,
+                  latestRole: latestMessage?.role ?? null,
+                  latestUserRole: latestUser?.message.role ?? null,
+                  autoRecall: cfg.autoRecall,
+                  hasRecallBlock: hasAutoRecallBlock(latestUser.message),
+                }),
+            );
+            return null;
+          }
+
+          if (!cfg.autoRecall) {
+            return null;
+          }
+
+          const effectiveQuery = latestUser
+            ? prepareRecallQuery(extractAgentMessageText(latestUser.message))
+            : prepareRecallQuery(queryText);
+
+          if (!effectiveQuery.query || effectiveQuery.query.length < 5) {
+            logger.info(
+              `openviking: main recall fallback empty query ` +
+                JSON.stringify({
+                  ovSessionId: OVSessionId,
+                  reason,
+                  finalChars: effectiveQuery.finalChars,
+                  latestUserIndex: latestUser?.index ?? -1,
+                  fromPrompt: !latestUser,
+                }),
+            );
+            return null;
+          }
+          logger.info(
+            `openviking: main recall fallback trying ` +
+              JSON.stringify({
+                ovSessionId: OVSessionId,
+                reason,
+                agentId,
+                queryChars: effectiveQuery.finalChars,
+                latestUserIndex: latestUser?.index ?? -1,
+                fromPrompt: !latestUser,
+              }),
+          );
+          const recall = await buildAutoRecallContext({
+            cfg,
+            client,
+            agentId,
+            queryText: effectiveQuery.query,
+            logger,
+            verbose: (message) => logger.info(message),
+          });
+          if (!recall.block) {
+            logger.info(
+              `openviking: main recall fallback no block ` +
+                JSON.stringify({
+                  ovSessionId: OVSessionId,
+                  reason,
+                  memoryCount: recall.memoryCount,
+                  estimatedTokens: recall.estimatedTokens,
+                }),
+            );
+            return null;
+          }
+          // When no user message exists (prompt-based recall), inject the
+          // recall block as a synthetic user message so the model sees it.
+          let withRecall: AgentMessage[];
+          if (!latestUser) {
+            withRecall = [
+              ...messages,
+              {
+                role: "user",
+                content: recall.block,
+              } as AgentMessage,
+            ];
+          } else {
+            withRecall = prependRecallToLatestUserMessage(messages, recall.block);
+          }
+          const estimatedTokens = roughEstimate(withRecall);
+          logger.info(
+            `openviking: main recall fallback injected ` +
+              JSON.stringify({
+                ovSessionId: OVSessionId,
+                reason,
+                estimatedTokens,
+                memoryCount: recall.memoryCount,
+              }),
+          );
+          diag("assemble_result", OVSessionId, {
+            passthrough: false,
+            phase: "main_context_recall_fallback",
+            reason,
+            outputMessagesCount: withRecall.length,
+            inputTokenEstimate: originalTokens,
+            estimatedTokens,
+            autoRecallMemoryCount: recall.memoryCount,
+            autoRecallTokens: recall.estimatedTokens,
+            messages: messageDigest(withRecall),
+          });
+          return { messages: withRecall, estimatedTokens };
+        };
+
+        // Force a recall-first path for main assemble. This is a targeted
+        // diagnostic/workaround for `/v1/responses` flows where assemble is
+        // entered but the transform-context recall path is never reached.
+        const forcedRecallFallback = await tryMainPathRecallFallback("main_force");
+        if (forcedRecallFallback) {
+          return forcedRecallFallback;
+        }
+
+        if (!ctx) {
+          const recallFallback = await tryMainPathRecallFallback("no_ov_data");
+          if (recallFallback) {
+            return recallFallback;
+          }
           return assemblePassthrough(OVSessionId, "no_ov_data", messages, originalTokens, {
             archiveCount: 0, activeCount: 0,
           });
+        }
+        if (!hasArchives) {
+          const recallFallback = await tryMainPathRecallFallback(
+            activeCount === 0 ? "no_ov_archives" : "no_ov_archives_active_only",
+          );
+          if (recallFallback) {
+            return recallFallback;
+          }
         }
         if (!hasArchives && ctx.messages.length < messages.length) {
           return assemblePassthrough(OVSessionId, "ov_msgs_fewer_than_input", messages, originalTokens, {

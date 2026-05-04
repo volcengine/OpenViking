@@ -1536,13 +1536,91 @@ class Session:
         # -------- Branch 2: has prior WM v2 -> tool_call incremental update --------
         _wm_debug(f"branch=UPDATE (prior WM={len(latest_archive_overview)}B)")
         try:
+            config = get_openviking_config()
+            memory_config = getattr(config, "memory", None)
+            update_messages = formatted
+            get_current_telemetry().set(
+                "wm.preprocess.enabled",
+                bool(getattr(memory_config, "wm_v2_preprocess_enabled", False)),
+            )
+            if bool(getattr(memory_config, "wm_v2_preprocess_enabled", False)):
+                try:
+                    from openviking.session.extraction_preprocessor import (
+                        PreprocessorOptions,
+                        build_wm_compact_packet,
+                    )
+
+                    packet = build_wm_compact_packet(
+                        messages,
+                        latest_overview=latest_archive_overview,
+                        options=PreprocessorOptions(
+                            max_span_tokens=int(
+                                getattr(memory_config, "wm_v2_preprocess_max_span_tokens", 1200)
+                            ),
+                            fallback_if_compact_ratio_above=float(
+                                getattr(memory_config, "wm_v2_preprocess_fallback_ratio", 0.9)
+                            ),
+                            min_full_tokens_for_compact=int(
+                                getattr(memory_config, "wm_v2_preprocess_min_full_tokens", 600)
+                            ),
+                        ),
+                    )
+                    get_current_telemetry().set(
+                        "wm.preprocess.full_messages_tokens_est",
+                        packet.token_estimates.full_messages_tokens_est,
+                    )
+                    get_current_telemetry().set(
+                        "wm.preprocess.compact_packet_tokens_est",
+                        packet.token_estimates.compact_packet_tokens_est,
+                    )
+                    get_current_telemetry().set(
+                        "wm.preprocess.saved_tokens_est",
+                        packet.token_estimates.saved_tokens_est,
+                    )
+                    get_current_telemetry().set(
+                        "wm.preprocess.selected_spans_count",
+                        len(packet.selected_spans),
+                    )
+                    get_current_telemetry().set(
+                        "wm.preprocess.structured_facts_count",
+                        len(packet.structured_facts),
+                    )
+                    get_current_telemetry().set(
+                        "wm.preprocess.risk_flags",
+                        list(packet.risk_flags),
+                    )
+                    get_current_telemetry().set(
+                        "wm.preprocess.fallback_reason",
+                        packet.fallback_reason or "",
+                    )
+                    if packet.should_fallback:
+                        _wm_debug(
+                            "preprocess fallback: "
+                            f"{packet.fallback_reason} "
+                            f"full={packet.token_estimates.full_messages_tokens_est} "
+                            f"compact={packet.token_estimates.compact_packet_tokens_est}"
+                        )
+                    else:
+                        update_messages = packet.wm_update_view
+                        _wm_debug(
+                            "preprocess compact enabled: "
+                            f"full={packet.token_estimates.full_messages_tokens_est} "
+                            f"compact={packet.token_estimates.compact_packet_tokens_est} "
+                            f"spans={len(packet.selected_spans)} "
+                            f"facts={len(packet.structured_facts)}"
+                        )
+                except Exception as e:
+                    get_current_telemetry().set("wm.preprocess.fallback_reason", "exception")
+                    logger.warning(
+                        "WM v2 preprocessing failed (%s); using full messages", e
+                    )
             reminders = Session._build_wm_section_reminders(latest_archive_overview)
             if reminders:
                 _wm_debug(f"section_reminders injected ({len(reminders)}B)")
             update_prompt = render_prompt(
                 "compression.ov_wm_v2_update",
                 {
-                    "messages": formatted,
+                    "messages": update_messages,
                     "latest_archive_overview": latest_archive_overview,
                     "wm_section_reminders": reminders,
                 },

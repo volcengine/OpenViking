@@ -48,6 +48,35 @@ class MemoryConfig(BaseModel):
             "When disabled (default), LLM has read tool and reads files on-demand."
         ),
     )
+    wm_v2_preprocess_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable compact pre-processing for Working Memory v2 incremental update prompts. "
+            "When disabled, WM v2 update uses the original full archived messages."
+        ),
+    )
+    wm_v2_preprocess_max_span_tokens: int = Field(
+        default=1200,
+        ge=100,
+        description="Maximum estimated tokens to spend on selected evidence spans.",
+    )
+    wm_v2_preprocess_fallback_ratio: float = Field(
+        default=0.9,
+        ge=0.1,
+        le=10.0,
+        description=(
+            "Fallback to full messages when compact packet tokens are greater than this "
+            "ratio of full message tokens."
+        ),
+    )
+    wm_v2_preprocess_min_full_tokens: int = Field(
+        default=600,
+        ge=0,
+        description=(
+            "Skip compact preprocessing when the estimated full message tokens are "
+            "below this threshold. Set to 0 to force compact even for short sessions."
+        ),
+    )
 
     model_config = {"extra": "forbid"}
 
