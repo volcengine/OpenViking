@@ -242,7 +242,12 @@ export function loadConfig() {
       num(cc.captureMaxLength, 24000),
     ))),
     captureTimeoutMs,
-    captureAssistantTurns: envBool("OPENVIKING_CAPTURE_ASSISTANT_TURNS") ?? (cc.captureAssistantTurns === true),
+    // Default true: a "memory plugin" without assistant-side capture only sees half the
+    // conversation, which makes extraction noticeably worse. Subagent capture has always
+    // pushed both sides (subagent-stop.mjs); this aligns the main-session path with that
+    // behavior. Operators who want the old user-only behavior can still set
+    // OPENVIKING_CAPTURE_ASSISTANT_TURNS=0 or claude_code.captureAssistantTurns=false.
+    captureAssistantTurns: envBool("OPENVIKING_CAPTURE_ASSISTANT_TURNS") ?? (cc.captureAssistantTurns !== false),
     // P0-2: client-driven commit threshold (ported from openclaw afterTurn).
     // Default 20000 aligns with openclaw; lower values produce archives faster.
     commitTokenThreshold: Math.max(1000, Math.floor(num(

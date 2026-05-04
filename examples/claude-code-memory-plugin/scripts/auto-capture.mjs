@@ -175,10 +175,44 @@ function parseTranscript(content) {
   return messages;
 }
 
+// Per-block cap for tool input / tool result snippets. Sized to keep most invocations
+// (URLs, file paths, search queries, short results) verbatim while bounding worst-case
+// blowup when an agent reads a large file or fetches a long page.
+const TOOL_BLOCK_MAX_CHARS = 4096;
+
+function truncateForLog(value) {
+  let s;
+  if (typeof value === "string") {
+    s = value;
+  } else {
+    try {
+      s = JSON.stringify(value, null, 2);
+    } catch {
+      s = String(value);
+    }
+  }
+  if (typeof s !== "string") s = "";
+  if (s.length <= TOOL_BLOCK_MAX_CHARS) return s;
+  return (
+    s.slice(0, TOOL_BLOCK_MAX_CHARS) +
+    `\n... [truncated, ${s.length - TOOL_BLOCK_MAX_CHARS} more chars]`
+  );
+}
+
+function extractToolResultText(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((b) => b && b.type === "text" && typeof b.text === "string")
+    .map((b) => b.text)
+    .join("\n");
+}
+
 /**
- * Extract user/assistant turns. Tier-1 parts: plain text + tool-use name list.
- * Tool-use blocks are aggregated into a tool-name summary per assistant message
- * so the OV memory extractor sees "what happened" without raw tool_result JSON.
+ * Extract user/assistant turns. Captures plain text, tool_use input (server-side args),
+ * and tool_result content (tool output). Tool blocks are inlined into the per-turn text
+ * so the OV memory extractor sees "what happened" with substance, not just tool names.
+ * Each tool block is truncated to TOOL_BLOCK_MAX_CHARS to bound size.
  */
 function extractAllTurns(messages) {
   const turns = [];
@@ -193,16 +227,22 @@ function extractAllTurns(messages) {
       if (typeof content === "string") {
         text = content;
       } else if (Array.isArray(content)) {
-        const texts = [];
+        const parts = [];
         for (const block of content) {
           if (!block || typeof block !== "object") continue;
           if (block.type === "text" && typeof block.text === "string") {
-            texts.push(block.text);
+            parts.push(block.text);
           } else if (block.type === "tool_use" && typeof block.name === "string") {
             toolNames.push(block.name);
+            parts.push(`[tool: ${block.name}]\n${truncateForLog(block.input)}`);
+          } else if (block.type === "tool_result") {
+            const resultText = extractToolResultText(block.content);
+            if (resultText) {
+              parts.push(`[tool result]\n${truncateForLog(resultText)}`);
+            }
           }
         }
-        text = texts.join("\n");
+        text = parts.join("\n\n");
       }
     };
 
@@ -242,13 +282,9 @@ async function pushTurnsToOv(ovSessionId, turns) {
   let ok = 0;
   let failed = 0;
   for (const turn of turns) {
-    let content = stripInjectedBlocks(turn.text).trim();
-    if (turn.role === "assistant" && turn.toolNames.length > 0) {
-      const uniq = Array.from(new Set(turn.toolNames)).join(", ");
-      content = content
-        ? `${content}\n\n[tools used: ${uniq}]`
-        : `[tools used: ${uniq}]`;
-    }
+    // Tool input + tool_result are already inlined as `[tool: NAME]` / `[tool result]`
+    // blocks during harvesting, so no separate suffix is needed here.
+    const content = stripInjectedBlocks(turn.text).trim();
     if (!content) continue;
 
     const res = await addMessage(fetchJSON, ovSessionId, { role: turn.role, content });

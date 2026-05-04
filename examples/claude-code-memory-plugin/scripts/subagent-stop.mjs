@@ -68,9 +68,43 @@ function parseTranscript(content) {
   return out;
 }
 
+// Per-block cap for tool input / tool result snippets. Sized to keep most invocations
+// verbatim while bounding worst-case blowup. Mirrors auto-capture.mjs.
+const TOOL_BLOCK_MAX_CHARS = 4096;
+
+function truncateForLog(value) {
+  let s;
+  if (typeof value === "string") {
+    s = value;
+  } else {
+    try {
+      s = JSON.stringify(value, null, 2);
+    } catch {
+      s = String(value);
+    }
+  }
+  if (typeof s !== "string") s = "";
+  if (s.length <= TOOL_BLOCK_MAX_CHARS) return s;
+  return (
+    s.slice(0, TOOL_BLOCK_MAX_CHARS) +
+    `\n... [truncated, ${s.length - TOOL_BLOCK_MAX_CHARS} more chars]`
+  );
+}
+
+function extractToolResultText(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((b) => b && b.type === "text" && typeof b.text === "string")
+    .map((b) => b.text)
+    .join("\n");
+}
+
 /**
  * Tier-1 parts extraction — shared shape with auto-capture.mjs.
  * Kept inline here so SubagentStop does not import auto-capture's globals.
+ * Inlines tool_use input + tool_result content (truncated) so the memory extractor
+ * sees what the subagent actually fetched/read/searched, not just tool names.
  */
 function extractTurns(messages) {
   const turns = [];
@@ -84,16 +118,22 @@ function extractTurns(messages) {
       if (typeof content === "string") {
         text = content;
       } else if (Array.isArray(content)) {
-        const texts = [];
+        const parts = [];
         for (const block of content) {
           if (!block || typeof block !== "object") continue;
           if (block.type === "text" && typeof block.text === "string") {
-            texts.push(block.text);
+            parts.push(block.text);
           } else if (block.type === "tool_use" && typeof block.name === "string") {
             toolNames.push(block.name);
+            parts.push(`[tool: ${block.name}]\n${truncateForLog(block.input)}`);
+          } else if (block.type === "tool_result") {
+            const resultText = extractToolResultText(block.content);
+            if (resultText) {
+              parts.push(`[tool result]\n${truncateForLog(resultText)}`);
+            }
           }
         }
-        text = texts.join("\n");
+        text = parts.join("\n\n");
       }
     };
 
@@ -119,11 +159,8 @@ async function pushTurns(ovSessionId, ovAgentId, turns) {
   let ok = 0;
   let failed = 0;
   for (const turn of turns) {
-    let content = turn.text;
-    if (turn.role === "assistant" && turn.toolNames.length > 0) {
-      const uniq = Array.from(new Set(turn.toolNames)).join(", ");
-      content = content ? `${content}\n\n[tools used: ${uniq}]` : `[tools used: ${uniq}]`;
-    }
+    // Tool input / result already inlined as `[tool: NAME]` / `[tool result]` during harvest.
+    const content = turn.text;
     if (!content) continue;
     const res = await addMessage(fetchJSON, ovSessionId, { role: turn.role, content });
     if (res.ok) ok++;
