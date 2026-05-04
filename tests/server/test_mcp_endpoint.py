@@ -175,11 +175,17 @@ async def test_store_batch_messages(service):
 # ---------------------------------------------------------------------------
 
 
-async def test_add_resource_nonexistent_path(service):
+async def test_add_resource_rejects_local_path_with_cli_hint(service):
     result = await add_resource(path="/tmp/definitely_does_not_exist_xyz.md")
-    assert (
-        "error" in result.lower() or "not found" in result.lower() or "resource" in result.lower()
-    )
+    assert "error" in result.lower()
+    assert "ov add-resource" in result
+    assert "ovcli.conf" in result
+
+
+async def test_add_resource_rejects_bare_filename_with_cli_hint(service):
+    result = await add_resource(path="some_local_file.md")
+    assert "error" in result.lower()
+    assert "ov add-resource" in result
 
 
 # ---------------------------------------------------------------------------

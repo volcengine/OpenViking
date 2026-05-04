@@ -242,17 +242,34 @@ async def store(messages: list[StoreMessage]) -> str:
 # -- add_resource ----------------------------------------------------------
 
 
+_LOCAL_FILE_HINT = (
+    "MCP add_resource only accepts remote URLs (http(s)://, git@, ssh://, git://). "
+    "For local files or directories, use the `ov` CLI:\n"
+    "  1. Install: curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/crates/ov_cli/install.sh | bash\n"
+    "  2. (remote / multi-tenant only) configure ~/.openviking/ovcli.conf:\n"
+    '       {\"url\": \"http://localhost:1933\", \"api_key\": \"your-key\"}\n'
+    "  3. Run: ov add-resource <path>"
+)
+
+
 @mcp.tool()
 async def add_resource(path: str, description: str = "") -> str:
-    """Add a resource (local file path or URL) to OpenViking. This is an asynchronous operation — the resource will be processed in the background."""
+    """Add a remote resource (HTTP/HTTPS URL or git URL) to OpenViking. Asynchronous — processed in the background. Local file paths are not supported here; use the `ov add-resource` CLI for local files."""
+    from openviking.server.local_input_guard import require_remote_resource_source
+
     service = get_service()
     ctx = _get_ctx()
+    try:
+        path = require_remote_resource_source(path)
+    except PermissionDeniedError:
+        return f"Error: {_LOCAL_FILE_HINT}"
     try:
         result = await service.resources.add_resource(
             path=path,
             ctx=ctx,
             reason=description,
             wait=False,
+            enforce_public_remote_targets=True,
         )
         root_uri = result.get("root_uri", "")
         return (
