@@ -148,8 +148,8 @@ def test_key_facts_consolidation_rejected_when_trivially_small():
 _RICH_KEY_FACTS = "\n".join([
     "- Caroline adopted a rescue dog named Biscuit on 15 March 2024.",
     "- Melanie's family took 3 camping trips to Yellowstone because the kids love hiking.",
-    "- Caroline attended pride parade on 10 June 2023, felt empowered.",
-    "- Caroline attended pride parade on 9 June 2024, brought friends.",
+    "- Caroline competed in swimming contest on 10 June 2023, won gold medal.",
+    "- Caroline competed in swimming contest on 9 June 2024, brought friends to cheer.",
     "- Sweden trip planned for August 2025 with budget of 5000 dollars.",
     "- Decided to use Python because the team has 4 years experience.",
     "- Marcus is Caroline's brother, lives in Portland.",
@@ -191,7 +191,7 @@ _RICH_KEY_FACTS = "\n".join([
 
 _GOOD_CONSOLIDATION = "\n".join([
     "- Caroline adopted rescue dog Biscuit (golden retriever mix, 3 years old) on 15 March 2024; vet at Pawsome Clinic every 6 months. Neighbor Jake (retired teacher, next door since 2020) offered to pet-sit during Sweden trip.",
-    "- Caroline regularly attends pride parades; most recently on 9 June 2024, brought friends.",
+    "- Caroline regularly competes in swimming contests; most recently on 9 June 2024, won 2 gold medals total.",
     "- Caroline's art: switched from acrylic to watercolor (March 2024) because of studio ventilation; exhibition on 22 November 2024 at Gallery One (12 paintings, 500 dollars space); studio in garage, converted 2023. Budget 200 dollars/month.",
     "- Caroline took ceramics class starting January 2025; resolved to run half-marathon Spring 2025 (target under 2 hours, runs 5 miles mornings along river trail, group meets Wednesdays 6 AM).",
     "- Caroline volunteers at shelter every Saturday morning.",
@@ -264,7 +264,7 @@ def test_key_facts_consolidation_accepted_at_low_volume_with_anchors():
 
     consolidated = "\n".join([
         "- Caroline adopted Biscuit (golden retriever, 3 years old) on 15 March 2024; vet every 6 months at Pawsome Clinic.",
-        "- Caroline attends pride parades regularly; latest 9 June 2024.",
+        "- Caroline competes in swimming contests regularly; latest 9 June 2024, 2 gold medals total.",
         "- Caroline's art: watercolor (switched March 2024 because ventilation); exhibition 22 November 2024 at Gallery One, 12 paintings, 500 dollars. Studio in garage since 2023. Budget 200 dollars/month. Also took ceramics January 2025.",
         "- Caroline runs half-marathon Spring 2025, target under 2 hours; runs 5 miles mornings, group Wednesdays 6 AM. Volunteers shelter Saturdays.",
         "- Marcus: Caroline's brother, Portland. Joint savings, Sunday calls. Committed to Sweden trip help.",
