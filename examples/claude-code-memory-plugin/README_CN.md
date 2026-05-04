@@ -84,10 +84,14 @@ claude
 ```bash
 # ~/.zshrc 或 ~/.bashrc
 claude() {
-  if [ -f ~/.openviking/ovcli.conf ]; then
-    OPENVIKING_URL=$(jq -r '.url' ~/.openviking/ovcli.conf) \
-    OPENVIKING_API_KEY=$(jq -r '.api_key' ~/.openviking/ovcli.conf) \
-    command claude "$@"
+  local _ov_conf="${OPENVIKING_CLI_CONFIG_FILE:-$HOME/.openviking/ovcli.conf}"
+  if [ -f "$_ov_conf" ] && command -v jq >/dev/null 2>&1; then
+    local _ov_url _ov_key
+    _ov_url=$(jq -r '.url // empty'     "$_ov_conf" 2>/dev/null)
+    _ov_key=$(jq -r '.api_key // empty' "$_ov_conf" 2>/dev/null)
+    OPENVIKING_URL="${OPENVIKING_URL:-$_ov_url}" \
+    OPENVIKING_API_KEY="${OPENVIKING_API_KEY:-$_ov_key}" \
+      command claude "$@"
   else
     command claude "$@"
   fi

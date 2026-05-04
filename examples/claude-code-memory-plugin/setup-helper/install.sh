@@ -26,7 +26,9 @@ OV_HOME="${OPENVIKING_HOME:-$HOME/.openviking}"
 REPO_DIR="${OPENVIKING_REPO_DIR:-$OV_HOME/openviking-repo}"
 REPO_URL="${OPENVIKING_REPO_URL:-https://github.com/volcengine/OpenViking.git}"
 REPO_BRANCH="${OPENVIKING_REPO_BRANCH:-main}"
-OVCLI_CONF="$OV_HOME/ovcli.conf"
+# Honor OPENVIKING_CLI_CONFIG_FILE (the env var the `ov` CLI itself reads —
+# crates/ov_cli/src/config.rs:6) so this installer matches CLI behavior.
+OVCLI_CONF="${OPENVIKING_CLI_CONFIG_FILE:-$OV_HOME/ovcli.conf}"
 
 MARKER_BEGIN='# >>> openviking claude-code memory plugin >>>'
 MARKER_END='# <<< openviking claude-code memory plugin <<<'
@@ -186,10 +188,14 @@ else
 
 $MARKER_BEGIN
 claude() {
-  if [ -f ~/.openviking/ovcli.conf ]; then
-    OPENVIKING_URL=\$(jq -r '.url' ~/.openviking/ovcli.conf) \\
-    OPENVIKING_API_KEY=\$(jq -r '.api_key' ~/.openviking/ovcli.conf) \\
-    command claude "\$@"
+  local _ov_conf="\${OPENVIKING_CLI_CONFIG_FILE:-\$HOME/.openviking/ovcli.conf}"
+  if [ -f "\$_ov_conf" ] && command -v jq >/dev/null 2>&1; then
+    local _ov_url _ov_key
+    _ov_url=\$(jq -r '.url // empty'     "\$_ov_conf" 2>/dev/null)
+    _ov_key=\$(jq -r '.api_key // empty' "\$_ov_conf" 2>/dev/null)
+    OPENVIKING_URL="\${OPENVIKING_URL:-\$_ov_url}" \\
+    OPENVIKING_API_KEY="\${OPENVIKING_API_KEY:-\$_ov_key}" \\
+      command claude "\$@"
   else
     command claude "\$@"
   fi
