@@ -51,11 +51,13 @@ If `ov.conf` is what you already maintain, the plugin reads it too — see [Conf
 The repo's `examples/.claude-plugin/marketplace.json` exposes the plugin as a local marketplace entry. From the OpenViking repo root:
 
 ```bash
-claude plugin marketplace add "$(pwd)/examples" --scope local
-claude plugin install claude-code-memory-plugin@openviking-plugins-local --scope local
+claude plugin marketplace add "$(pwd)/examples" --scope user
+claude plugin install claude-code-memory-plugin@openviking-plugins-local --scope user
 ```
 
-> Local install points Claude Code at the source directory. Edits to `scripts/`, `hooks/`, and config files take effect on the next hook invocation — no reinstall. But moving / renaming / deleting the source dir, or `git checkout`-ing to a branch without these files, breaks the plugin. A public marketplace listing for one-click install will follow.
+> `--scope user` makes the plugin active from any directory. Using `--scope local` ties enablement to the current dir and the plugin shows up disabled the moment you `cd` elsewhere.
+>
+> The marketplace entry points Claude Code at the source directory. Edits to `scripts/`, `hooks/`, and config files take effect on the next hook invocation — no reinstall. But moving / renaming / deleting the source dir, or `git checkout`-ing to a branch without these files, breaks the plugin. A public marketplace listing for one-click install will follow.
 
 #### 4. Start Claude Code
 
@@ -84,10 +86,14 @@ Where is your OpenViking server?
 ```bash
 # ~/.zshrc or ~/.bashrc
 claude() {
-  if [ -f ~/.openviking/ovcli.conf ]; then
-    OPENVIKING_URL=$(jq -r '.url' ~/.openviking/ovcli.conf) \
-    OPENVIKING_API_KEY=$(jq -r '.api_key' ~/.openviking/ovcli.conf) \
-    command claude "$@"
+  local _ov_conf="${OPENVIKING_CLI_CONFIG_FILE:-$HOME/.openviking/ovcli.conf}"
+  if [ -f "$_ov_conf" ] && command -v jq >/dev/null 2>&1; then
+    local _ov_url _ov_key
+    _ov_url=$(jq -r '.url // empty'     "$_ov_conf" 2>/dev/null)
+    _ov_key=$(jq -r '.api_key // empty' "$_ov_conf" 2>/dev/null)
+    OPENVIKING_URL="${OPENVIKING_URL:-$_ov_url}" \
+    OPENVIKING_API_KEY="${OPENVIKING_API_KEY:-$_ov_key}" \
+      command claude "$@"
   else
     command claude "$@"
   fi

@@ -26,7 +26,9 @@ OV_HOME="${OPENVIKING_HOME:-$HOME/.openviking}"
 REPO_DIR="${OPENVIKING_REPO_DIR:-$OV_HOME/openviking-repo}"
 REPO_URL="${OPENVIKING_REPO_URL:-https://github.com/volcengine/OpenViking.git}"
 REPO_BRANCH="${OPENVIKING_REPO_BRANCH:-main}"
-OVCLI_CONF="$OV_HOME/ovcli.conf"
+# Honor OPENVIKING_CLI_CONFIG_FILE (the env var the `ov` CLI itself reads —
+# crates/ov_cli/src/config.rs:6) so this installer matches CLI behavior.
+OVCLI_CONF="${OPENVIKING_CLI_CONFIG_FILE:-$OV_HOME/ovcli.conf}"
 
 MARKER_BEGIN='# >>> openviking claude-code memory plugin >>>'
 MARKER_END='# <<< openviking claude-code memory plugin <<<'
@@ -186,10 +188,14 @@ else
 
 $MARKER_BEGIN
 claude() {
-  if [ -f ~/.openviking/ovcli.conf ]; then
-    OPENVIKING_URL=\$(jq -r '.url' ~/.openviking/ovcli.conf) \\
-    OPENVIKING_API_KEY=\$(jq -r '.api_key' ~/.openviking/ovcli.conf) \\
-    command claude "\$@"
+  local _ov_conf="\${OPENVIKING_CLI_CONFIG_FILE:-\$HOME/.openviking/ovcli.conf}"
+  if [ -f "\$_ov_conf" ] && command -v jq >/dev/null 2>&1; then
+    local _ov_url _ov_key
+    _ov_url=\$(jq -r '.url // empty'     "\$_ov_conf" 2>/dev/null)
+    _ov_key=\$(jq -r '.api_key // empty' "\$_ov_conf" 2>/dev/null)
+    OPENVIKING_URL="\${OPENVIKING_URL:-\$_ov_url}" \\
+    OPENVIKING_API_KEY="\${OPENVIKING_API_KEY:-\$_ov_key}" \\
+      command claude "\$@"
   else
     command claude "\$@"
   fi
@@ -203,16 +209,23 @@ fi
 heading '5. Plugin install'
 
 if [ "$CLAUDE_AVAILABLE" -eq 1 ]; then
+  # Use --scope user so the plugin is active from any directory, not just $REPO_DIR.
+  # `local` scope binds enablement to $REPO_DIR's .claude/settings.local.json, which
+  # surfaces as "disabled" the moment the user `cd`s elsewhere and forces a manual
+  # `claude plugin enable` post-install.
   info 'claude plugin marketplace add'
-  ( cd "$REPO_DIR" && claude plugin marketplace add "$REPO_DIR/examples" --scope local ) || \
+  ( cd "$REPO_DIR" && claude plugin marketplace add "$REPO_DIR/examples" --scope user ) || \
     warn 'marketplace add returned non-zero (likely already added) — continuing'
   info 'claude plugin install'
-  ( cd "$REPO_DIR" && claude plugin install claude-code-memory-plugin@openviking-plugins-local --scope local )
+  ( cd "$REPO_DIR" && claude plugin install claude-code-memory-plugin@openviking-plugins-local --scope user )
+  # Belt-and-suspenders: make sure it ends up enabled even if `install` left it
+  # in a disabled state (observed on some Claude Code versions).
+  claude plugin enable claude-code-memory-plugin@openviking-plugins-local --scope user >/dev/null 2>&1 || true
 else
   warn "Run these manually after installing Claude Code:"
   warn "  cd \"$REPO_DIR\""
-  warn '  claude plugin marketplace add "$(pwd)/examples" --scope local'
-  warn '  claude plugin install claude-code-memory-plugin@openviking-plugins-local --scope local'
+  warn '  claude plugin marketplace add "$(pwd)/examples" --scope user'
+  warn '  claude plugin install claude-code-memory-plugin@openviking-plugins-local --scope user'
 fi
 
 # ----- Done -----
