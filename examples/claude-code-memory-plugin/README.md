@@ -63,27 +63,32 @@ The plugin's hooks read `ovcli.conf` / `ov.conf` automatically. The bundled **MC
 Where is your OpenViking server?
 ├─ Local (127.0.0.1, no auth)
 │    └─ ✅ Nothing to do — the bundled .mcp.json already works.
-├─ Remote, and ovcli.conf is set
-│    └─ ✅ Add the snippet below to your shell rc — both hooks AND MCP get it.
-└─ Remote, no ovcli.conf
-     └─ ✅ Export OPENVIKING_URL / OPENVIKING_API_KEY / … directly in your rc.
+└─ Remote
+     └─ ✅ Add the function-wrapper below to your shell rc.
 ```
 
-**Recommended path — shell rc derives env vars from `ovcli.conf`:**
+**Recommended path — wrap `claude` to inject env from `ovcli.conf` on each invocation:**
 
 ```bash
 # ~/.zshrc or ~/.bashrc
-if [ -f ~/.openviking/ovcli.conf ]; then
-  export OPENVIKING_URL=$(jq -r '.url' ~/.openviking/ovcli.conf)
-  export OPENVIKING_API_KEY=$(jq -r '.api_key' ~/.openviking/ovcli.conf)
-  export OPENVIKING_ACCOUNT=$(jq -r '.account // ""' ~/.openviking/ovcli.conf)
-  export OPENVIKING_USER=$(jq -r '.user // ""' ~/.openviking/ovcli.conf)
-fi
+claude() {
+  if [ -f ~/.openviking/ovcli.conf ]; then
+    OPENVIKING_URL=$(jq -r '.url' ~/.openviking/ovcli.conf) \
+    OPENVIKING_API_KEY=$(jq -r '.api_key' ~/.openviking/ovcli.conf) \
+    command claude "$@"
+  else
+    command claude "$@"
+  fi
+}
 ```
 
-Re-source (`source ~/.zshrc`) and restart `claude` — `/mcp` should then show your remote URL with valid auth.
+Re-source your rc (`source ~/.zshrc`, or `source ~/.bashrc` on bash) and restart `claude` — `/mcp` should then show your remote URL with valid auth.
 
-**Other options if shell rc isn't viable:**
+> **Why a function instead of `export`?** A globally exported API key leaks into every child process spawned from your shell — npm scripts, build tools, crash dumps, `/proc/<pid>/environ`. The function wrapper limits the secret to the `claude` process tree only.
+>
+> Don't have `ovcli.conf` yet? See the [Deployment Guide → CLI](../../docs/en/guides/03-deployment.md#cli) to set one up.
+
+**Other options if the function wrapper isn't viable:**
 
 - **Edit the plugin's `.mcp.json` directly** with hardcoded values. Future plugin updates may overwrite it.
 - **Add a separate MCP entry** to your project `.mcp.json` or `~/.claude.json`. See the [MCP integration guide](../../docs/en/guides/06-mcp-integration.md).

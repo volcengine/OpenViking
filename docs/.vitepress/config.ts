@@ -11,6 +11,7 @@ const sectionNames: Record<string, string> = {
   'getting-started': 'Getting Started',
   concepts: 'Concepts',
   guides: 'Guides',
+  'agent-integrations': 'Agent Integrations',
   api: 'API Reference',
   faq: 'FAQ',
   about: 'About',
@@ -21,6 +22,7 @@ const zhSectionNames: Record<string, string> = {
   'getting-started': '快速开始',
   concepts: '核心概念',
   guides: '指南',
+  'agent-integrations': 'Agent 集成',
   api: 'API 参考',
   faq: '常见问题',
   about: '关于',
@@ -73,7 +75,7 @@ function sidebarSection(dir: string, title: string, collapsed = true): DefaultTh
 
 function localizedGuideSidebarItems(locale: 'en' | 'zh'): DefaultTheme.SidebarItem[] {
   const labels = locale === 'zh' ? zhSectionNames : sectionNames
-  const sections = ['getting-started', 'concepts', 'guides']
+  const sections = ['getting-started', 'concepts', 'guides', 'agent-integrations']
 
   return sections.map((section, index) =>
     sidebarSection(`${locale}/${section}`, labels[section], index !== 0)
@@ -95,14 +97,14 @@ const designSidebar: DefaultTheme.SidebarItem[] = [
 ]
 
 const enNav: DefaultTheme.NavItem[] = [
-  { text: navLabels.en.guide, link: '/en/getting-started/01-introduction', activeMatch: '/en/(getting-started|concepts|guides)/' },
+  { text: navLabels.en.guide, link: '/en/getting-started/01-introduction', activeMatch: '/en/(getting-started|concepts|guides|agent-integrations)/' },
   { text: navLabels.en.api, link: '/en/api/01-overview', activeMatch: '/en/api/' },
   { text: navLabels.en.faq, link: '/en/faq/faq', activeMatch: '/en/faq/' },
   { text: navLabels.en.changelog, link: '/en/about/02-changelog', activeMatch: '/en/about/' }
 ]
 
 const zhNav: DefaultTheme.NavItem[] = [
-  { text: navLabels.zh.guide, link: '/zh/getting-started/01-introduction', activeMatch: '/zh/(getting-started|concepts|guides)/' },
+  { text: navLabels.zh.guide, link: '/zh/getting-started/01-introduction', activeMatch: '/zh/(getting-started|concepts|guides|agent-integrations)/' },
   { text: navLabels.zh.api, link: '/zh/api/01-overview', activeMatch: '/zh/api/' },
   { text: navLabels.zh.faq, link: '/zh/faq/faq', activeMatch: '/zh/faq/' },
   { text: navLabels.zh.changelog, link: '/zh/about/02-changelog', activeMatch: '/zh/about/' }
@@ -247,6 +249,7 @@ export default defineConfig({
       '/en/getting-started/': localizedGuideSidebarItems('en'),
       '/en/concepts/': localizedGuideSidebarItems('en'),
       '/en/guides/': localizedGuideSidebarItems('en'),
+      '/en/agent-integrations/': localizedGuideSidebarItems('en'),
       '/en/api/': localizedReferenceSidebarItems('en'),
       '/en/about/': localizedAboutSidebarItems('en'),
       '/design/': designSidebar
@@ -277,6 +280,7 @@ export default defineConfig({
           '/zh/getting-started/': localizedGuideSidebarItems('zh'),
           '/zh/concepts/': localizedGuideSidebarItems('zh'),
           '/zh/guides/': localizedGuideSidebarItems('zh'),
+          '/zh/agent-integrations/': localizedGuideSidebarItems('zh'),
           '/zh/api/': localizedReferenceSidebarItems('zh'),
           '/zh/about/': localizedAboutSidebarItems('zh')
         },

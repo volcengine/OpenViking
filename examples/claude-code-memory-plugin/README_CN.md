@@ -63,27 +63,32 @@ claude
 你的 OpenViking 服务器在哪？
 ├─ 本地 (127.0.0.1, 无鉴权)
 │    └─ ✅ 什么都不用做——自带 .mcp.json 已经能跑。
-├─ 远程 + 已配 ovcli.conf
-│    └─ ✅ 在 shell rc 里加下面这段——hook 和 MCP 都能拿到。
-└─ 远程，没配 ovcli.conf
-     └─ ✅ 直接在 rc 里 export OPENVIKING_URL / OPENVIKING_API_KEY / …
+└─ 远程
+     └─ ✅ 在 shell rc 里加下面这段 function 包装。
 ```
 
-**推荐路径——shell rc 从 `ovcli.conf` 派生 env vars：**
+**推荐路径——用 function 包装 `claude`，调用时从 `ovcli.conf` 注入 env：**
 
 ```bash
 # ~/.zshrc 或 ~/.bashrc
-if [ -f ~/.openviking/ovcli.conf ]; then
-  export OPENVIKING_URL=$(jq -r '.url' ~/.openviking/ovcli.conf)
-  export OPENVIKING_API_KEY=$(jq -r '.api_key' ~/.openviking/ovcli.conf)
-  export OPENVIKING_ACCOUNT=$(jq -r '.account // ""' ~/.openviking/ovcli.conf)
-  export OPENVIKING_USER=$(jq -r '.user // ""' ~/.openviking/ovcli.conf)
-fi
+claude() {
+  if [ -f ~/.openviking/ovcli.conf ]; then
+    OPENVIKING_URL=$(jq -r '.url' ~/.openviking/ovcli.conf) \
+    OPENVIKING_API_KEY=$(jq -r '.api_key' ~/.openviking/ovcli.conf) \
+    command claude "$@"
+  else
+    command claude "$@"
+  fi
+}
 ```
 
-`source ~/.zshrc` 后重启 `claude`——`/mcp` 应该显示远程 URL 且认证有效。
+重新 source rc（`source ~/.zshrc`，bash 用户改成 `source ~/.bashrc`）后重启 `claude`——`/mcp` 应该显示远程 URL 且认证有效。
 
-**如果 shell rc 不方便：**
+> **为什么用 function 而不是 `export`？** 全局 export 的 API Key 会被该 shell 派生的所有子进程继承——npm 脚本、构建工具、崩溃 dump、`/proc/<pid>/environ` 都会带上。函数包装把秘钥限定在 `claude` 进程树内。
+>
+> 还没有 `ovcli.conf`？先按 [部署指南 → CLI 章节](../../docs/zh/guides/03-deployment.md#cli) 创建一份。
+
+**如果 function 包装不方便：**
 
 - **直接编辑插件的 `.mcp.json`**，把值硬编码进去。插件未来更新可能覆盖。
 - **在项目 `.mcp.json` 或 `~/.claude.json` 里另起一个 MCP 条目**。参考 [MCP 集成指南](../../docs/zh/guides/06-mcp-integration.md)。
