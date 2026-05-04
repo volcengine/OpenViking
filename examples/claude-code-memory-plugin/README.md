@@ -165,6 +165,8 @@ Optionally add a `claude_code` section for plugin-specific overrides:
 {
   "claude_code": {
     "agentId": "claude-code",
+    "account": "default",
+    "user": "default",
     "recallLimit": 6,
     "captureMode": "semantic",
     "captureTimeoutMs": 30000,
@@ -218,6 +220,8 @@ export OPENVIKING_CONFIG_FILE="~/custom/path/ov.conf"
 | Field | Default | Description |
 |-------|---------|-------------|
 | `agentId` | `claude-code` | Agent identity for memory isolation |
+| `account` | `default_account` | Tenant account sent as `X-OpenViking-Account`. Needed when using a root key or trusted auth mode; with a user key, OpenViking derives this from the key. |
+| `user` | `default_user` | Tenant user sent as `X-OpenViking-User`. Needed when using a root key or trusted auth mode; with a user key, OpenViking derives this from the key. |
 | `timeoutMs` | `15000` | HTTP request timeout for recall/general requests (ms) |
 | `autoRecall` | `true` | Enable auto-recall on every user prompt |
 | `recallLimit` | `6` | Max memories to inject per turn |
@@ -229,6 +233,11 @@ export OPENVIKING_CONFIG_FILE="~/custom/path/ov.conf"
 | `captureMaxLength` | `24000` | Max text length for capture |
 | `captureTimeoutMs` | `30000` | HTTP request timeout for auto-capture requests (ms) |
 | `captureAssistantTurns` | `false` | Include assistant turns in auto-capture input; default is user-only capture |
+
+**Scope resolution** is handled by the OpenViking server. The plugin sends shorthand
+target URIs such as `viking://user/memories`, `viking://agent/memories`, and
+`viking://agent/skills` unchanged. OpenViking resolves those scopes using the
+effective account/user/agent identity from the API key and `X-OpenViking-*` headers.
 
 ## Hook Timeouts
 

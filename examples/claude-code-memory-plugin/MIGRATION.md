@@ -101,6 +101,8 @@ Add the `claude_code` section to `~/.openviking/ov.conf` for plugin-specific set
 {
   "claude_code": {
     "agentId": "claude-code",
+    "account": "default",
+    "user": "default",
     "recallLimit": 6,
     "captureMode": "semantic",
     "captureTimeoutMs": 30000,
@@ -108,6 +110,12 @@ Add the `claude_code` section to `~/.openviking/ov.conf` for plugin-specific set
   }
 }
 ```
+
+Set `account` and `user` when the plugin authenticates with a root key or when the
+server runs in trusted auth mode. With a user key, OpenViking derives account/user
+identity from the key. The new plugin sends shorthand scopes such as
+`viking://user/memories` unchanged and lets the server resolve them from the
+effective request identity.
 
 ## Behavior Changes
 
