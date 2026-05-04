@@ -12,7 +12,7 @@
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/claude-code-memory-plugin/setup-helper/install.sh)
 ```
 
-仅支持 macOS 和 Linux。脚本会校验依赖、按需配置 `~/.openviking/ovcli.conf`（已存在则复用）、把仓库 clone 到 `~/.openviking/openviking-repo`、把 `claude` shell function 包装写进 rc，最后跑 `claude plugin install`。重复执行安全。
+仅支持 macOS 和 Linux。脚本会校验依赖、询问你接入**自托管**服务器还是**火山引擎 OpenViking Cloud**（`https://api.vikingdb.cn-beijing.volces.com/openviking`）、按需配置 `~/.openviking/ovcli.conf`（已存在则复用）、把仓库 clone 到 `~/.openviking/openviking-repo`、把 `claude` shell function 包装写进 rc，最后跑 `claude plugin install`。重复执行安全。
 
 如果你更喜欢手动操作，按下面四步走。
 

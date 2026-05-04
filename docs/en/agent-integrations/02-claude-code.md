@@ -12,7 +12,7 @@ Source: [examples/claude-code-memory-plugin](https://github.com/volcengine/OpenV
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/claude-code-memory-plugin/setup-helper/install.sh)
 ```
 
-The script runs on macOS and Linux. It checks dependencies, sets up `~/.openviking/ovcli.conf` (prompting only if missing), clones the OpenViking repo to `~/.openviking/openviking-repo`, adds the `claude` function wrapper to your shell rc, and installs the plugin via `claude plugin install`. Every step is idempotent — re-running is safe.
+The script runs on macOS and Linux. It checks dependencies, asks whether you'll connect to a **self-hosted** server or to **Volcengine OpenViking Cloud** (`https://api.vikingdb.cn-beijing.volces.com/openviking`), sets up `~/.openviking/ovcli.conf` (prompting only if missing), clones the OpenViking repo to `~/.openviking/openviking-repo`, adds the `claude` function wrapper to your shell rc, and installs the plugin via `claude plugin install`. Every step is idempotent — re-running is safe.
 
 If you'd rather do it by hand, follow the three steps below.
 

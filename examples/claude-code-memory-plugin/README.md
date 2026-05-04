@@ -12,7 +12,7 @@ Long-term semantic memory for Claude Code, powered by [OpenViking](https://githu
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/claude-code-memory-plugin/setup-helper/install.sh)
 ```
 
-macOS / Linux only. The script verifies dependencies, sets up `~/.openviking/ovcli.conf` (prompts only if absent), clones the repo to `~/.openviking/openviking-repo`, adds the `claude` shell-function wrapper to your rc, and runs `claude plugin install`. Re-running is safe.
+macOS / Linux only. The script verifies dependencies, asks whether you'll connect to a **self-hosted** server or to **Volcengine OpenViking Cloud** (`https://api.vikingdb.cn-beijing.volces.com/openviking`), sets up `~/.openviking/ovcli.conf` (prompts only if absent), clones the repo to `~/.openviking/openviking-repo`, adds the `claude` shell-function wrapper to your rc, and runs `claude plugin install`. Re-running is safe.
 
 If you'd rather do it by hand, follow the four steps below.
 
