@@ -6,7 +6,19 @@ Source: [examples/claude-code-memory-plugin](https://github.com/volcengine/OpenV
 
 ## Quick Start
 
-### 1. Wrap `claude` to inject env from `ovcli.conf`
+### One-line installer (recommended)
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/claude-code-memory-plugin/setup-helper/install.sh)
+```
+
+The script runs on macOS and Linux. It checks dependencies, sets up `~/.openviking/ovcli.conf` (prompting only if missing), clones the OpenViking repo to `~/.openviking/openviking-repo`, adds the `claude` function wrapper to your shell rc, and installs the plugin via `claude plugin install`. Every step is idempotent — re-running is safe.
+
+If you'd rather do it by hand, follow the three steps below.
+
+### Manual setup
+
+#### 1. Wrap `claude` to inject env from `ovcli.conf`
 
 This is the recommended path. The plugin's hooks **and** the bundled MCP server both read env vars, so we set them once — but scoped to the `claude` invocation only, not exported globally. Append to `~/.zshrc` or `~/.bashrc`:
 
@@ -37,7 +49,7 @@ Inside Claude Code, run `/mcp` after the next start — the OpenViking entry sho
 >
 > **Why a function instead of `export`?** Globally exported env vars leak into every child process spawned from your shell — npm scripts, build tools, crash dumps, `/proc/<pid>/environ`. The function-wrapper limits the secret to the `claude` process tree only.
 
-### 2. Install the plugin
+#### 2. Install the plugin
 
 From the OpenViking repo root:
 
@@ -48,7 +60,7 @@ claude plugin install claude-code-memory-plugin@openviking-plugins-local --scope
 
 > Local install points Claude Code at the source directory. Edits to `scripts/`, `hooks/`, and config files take effect on the next hook invocation — no reinstall. But moving / renaming / deleting the source dir, or `git checkout`-ing to a branch without these files, breaks the plugin.
 
-### 3. Start Claude Code
+#### 3. Start Claude Code
 
 ```bash
 claude
@@ -60,7 +72,7 @@ Inside Claude Code, run `/mcp` to confirm the OpenViking MCP entry shows your re
 
 The plugin's hooks read `ovcli.conf` directly — but the bundled `.mcp.json` entry **cannot**. Claude Code parses `.mcp.json` itself and only supports `${VAR}` substitution, so config-file values can't transparently reach the MCP server URL or auth headers.
 
-Injecting env vars at `claude` invocation is the single path that covers both hooks and MCP. Wrapping in a shell function (rather than a global `export`) keeps the API key out of every other shell child process — see the security note in [step 1](#1-wrap-claude-to-inject-env-from-ovcli-conf).
+Injecting env vars at `claude` invocation is the single path that covers both hooks and MCP. Wrapping in a shell function (rather than a global `export`) keeps the API key out of every other shell child process — see the security note in [the manual setup step 1](#1-wrap-claude-to-inject-env-from-ovcli-conf).
 
 **Symptom of misconfiguration**: hooks (auto-recall, auto-capture) work fine because they read `ovcli.conf` via Node, but the on-demand MCP tools (`search`, `read`, `store`, …) silently connect to `http://127.0.0.1:1933` with empty auth headers, and `/mcp` shows the wrong URL.
 
@@ -141,7 +153,7 @@ This plugin **complements** Claude Code's native memory system, it doesn't repla
 
 | Symptom                                    | Cause                                                          | Fix                                                                                          |
 |--------------------------------------------|----------------------------------------------------------------|----------------------------------------------------------------------------------------------|
-| Plugin not activating                      | No `ov.conf` / `ovcli.conf` found                              | Create one (see [Quick Start](#quick-start)), or set `OPENVIKING_MEMORY_ENABLED=1` plus URL/API_KEY env vars |
+| Plugin not activating                      | No `ov.conf` / `ovcli.conf` found                              | Run the [one-line installer](#one-line-installer-recommended), or set `OPENVIKING_MEMORY_ENABLED=1` plus URL/API_KEY env vars |
 | Hooks fire but recall is empty             | OpenViking server not running, or wrong URL                    | `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"`                                     |
 | MCP tools hit `127.0.0.1` instead of remote | `.mcp.json` only resolves `${VAR}`, no `ovcli.conf` integration | See [Why a function wrapper?](#why-a-function-wrapper)                                       |
 | Remote auth 401 / 403                      | Wrong API key or missing tenant headers                        | Verify `OPENVIKING_API_KEY`; for multi-tenant, also check `OPENVIKING_ACCOUNT` / `OPENVIKING_USER` |

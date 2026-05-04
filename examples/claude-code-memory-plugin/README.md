@@ -6,7 +6,19 @@ Long-term semantic memory for Claude Code, powered by [OpenViking](https://githu
 
 ## Quick Start
 
-### 1. Have an OpenViking server reachable
+### One-line installer (recommended)
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/claude-code-memory-plugin/setup-helper/install.sh)
+```
+
+macOS / Linux only. The script verifies dependencies, sets up `~/.openviking/ovcli.conf` (prompts only if absent), clones the repo to `~/.openviking/openviking-repo`, adds the `claude` shell-function wrapper to your rc, and runs `claude plugin install`. Re-running is safe.
+
+If you'd rather do it by hand, follow the four steps below.
+
+### Manual setup
+
+#### 1. Have an OpenViking server reachable
 
 Either run one locally or point at a remote one. The [quickstart guide](../../docs/en/getting-started/02-quickstart.md) walks through both options, including how to issue API keys for remote use. Default port is `1933`; local mode runs without authentication.
 
@@ -16,7 +28,7 @@ Verify it's up:
 curl http://localhost:1933/health   # or your remote URL
 ```
 
-### 2. Tell the plugin where the server is
+#### 2. Tell the plugin where the server is
 
 Easiest path — write `~/.openviking/ovcli.conf` (the same file `ov` CLI uses):
 
@@ -34,7 +46,7 @@ For purely local mode (`http://127.0.0.1:1933` with no auth) you can skip this s
 
 If `ov.conf` is what you already maintain, the plugin reads it too — see [Configuration](#configuration) for the full priority chain and per-field overrides.
 
-### 3. Install the plugin
+#### 3. Install the plugin
 
 The repo's `examples/.claude-plugin/marketplace.json` exposes the plugin as a local marketplace entry. From the OpenViking repo root:
 
@@ -45,7 +57,7 @@ claude plugin install claude-code-memory-plugin@openviking-plugins-local --scope
 
 > Local install points Claude Code at the source directory. Edits to `scripts/`, `hooks/`, and config files take effect on the next hook invocation — no reinstall. But moving / renaming / deleting the source dir, or `git checkout`-ing to a branch without these files, breaks the plugin. A public marketplace listing for one-click install will follow.
 
-### 4. Start Claude Code
+#### 4. Start Claude Code
 
 ```bash
 claude

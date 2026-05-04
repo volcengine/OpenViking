@@ -6,7 +6,19 @@
 
 ## 快速开始
 
-### 1. 准备一个可用的 OpenViking 服务器
+### 一行安装（推荐）
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/claude-code-memory-plugin/setup-helper/install.sh)
+```
+
+仅支持 macOS 和 Linux。脚本会校验依赖、按需配置 `~/.openviking/ovcli.conf`（已存在则复用）、把仓库 clone 到 `~/.openviking/openviking-repo`、把 `claude` shell function 包装写进 rc，最后跑 `claude plugin install`。重复执行安全。
+
+如果你更喜欢手动操作，按下面四步走。
+
+### 手动安装
+
+#### 1. 准备一个可用的 OpenViking 服务器
 
 本地起一个或者指向远程：[快速开始指南](../../docs/zh/getting-started/02-quickstart.md) 涵盖两种模式，也讲了远程使用时怎么签发 API key。默认端口 `1933`；本地模式无需鉴权。
 
@@ -16,7 +28,7 @@
 curl http://localhost:1933/health   # 或者你的远程 URL
 ```
 
-### 2. 告诉插件服务器在哪
+#### 2. 告诉插件服务器在哪
 
 最简单的方式——写 `~/.openviking/ovcli.conf`（也是 `ov` CLI 用的同一个文件）：
 
@@ -34,7 +46,7 @@ curl http://localhost:1933/health   # 或者你的远程 URL
 
 如果你已经在维护 `ov.conf`，插件也读它——完整优先级链和按字段覆盖见下方 [配置](#配置)。
 
-### 3. 安装插件
+#### 3. 安装插件
 
 仓库的 `examples/.claude-plugin/marketplace.json` 把本插件暴露为一个本地 marketplace 条目。在 OpenViking 仓库根目录：
 
@@ -45,7 +57,7 @@ claude plugin install claude-code-memory-plugin@openviking-plugins-local --scope
 
 > 本地安装让 Claude Code 直接引用源码目录，对 `scripts/`、`hooks/`、配置文件的修改下次 hook 触发即生效，无需重装。但移动 / 重命名 / 删除源码目录，或 `git checkout` 到不含这些文件的分支，会立刻让插件失效。后续会发布公开 marketplace 以支持一键安装。
 
-### 4. 启动 Claude Code
+#### 4. 启动 Claude Code
 
 ```bash
 claude
