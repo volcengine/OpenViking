@@ -7,11 +7,14 @@
 #   ./import_and_eval_one.sh conv-26                     # sample_id conv-26, 所有问题 (批量)
 #   ./import_and_eval_one.sh conv-26 2 --skip-import     # 跳过导入，直接评测
 #   ./import_and_eval_one.sh conv-26 --skip-import       # 跳过导入，批量评测
+#   ./import_and_eval_one.sh conv-26 --skip-done         # 跳过结果文件中已存在的问题
+#   ./import_and_eval_one.sh conv-26 --skip-import --skip-done  # 跳过导入并跳过已完成题目
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKIP_IMPORT=false
+SKIP_DONE=false
 
 if command -v python3 >/dev/null 2>&1; then
     PYTHON_BIN="python3"
@@ -82,13 +85,15 @@ source "$RUNTIME_ENV_FILE"
 for arg in "$@"; do
     if [ "$arg" = "--skip-import" ]; then
         SKIP_IMPORT=true
+    elif [ "$arg" = "--skip-done" ]; then
+        SKIP_DONE=true
     fi
 done
 
-# 过滤掉 --skip-import 获取实际参数
+# 过滤掉 --skip-import/--skip-done 获取实际参数
 ARGS=()
 for arg in "$@"; do
-    if [ "$arg" != "--skip-import" ]; then
+    if [ "$arg" != "--skip-import" ] && [ "$arg" != "--skip-done" ]; then
         ARGS+=("$arg")
     fi
 done
@@ -96,12 +101,17 @@ done
 SAMPLE=${ARGS[0]}
 QUESTION_INDEX=${ARGS[1]}
 INPUT_FILE="$SCRIPT_DIR/../data/locomo10.json"
+RUN_EVAL_EXTRA_ARGS=()
+if [ "$SKIP_DONE" = "true" ]; then
+    RUN_EVAL_EXTRA_ARGS+=("--skip-done")
+fi
 
 if [ -z "$SAMPLE" ]; then
-    echo "Usage: $0 <sample_index|sample_id> [question_index] [--skip-import]"
+    echo "Usage: $0 <sample_index|sample_id> [question_index] [--skip-import] [--skip-done]"
     echo "  sample_index: 数字索引 (0,1,2...) 或 sample_id (conv-26)"
     echo "  question_index: 问题索引 (可选)，不传则测试该 sample 的所有问题"
     echo "  --skip-import: 跳过导入步骤，直接使用已导入的数据进行评测"
+    echo "  --skip-done: 跳过输出结果文件中已存在的问题"
     exit 1
 fi
 
@@ -173,7 +183,8 @@ if [ -n "$QUESTION_INDEX" ]; then
             "$INPUT_FILE" \
             --sample "$SAMPLE_ID_FOR_CMD" \
             --question-index "$QUESTION_INDEX" \
-            --count 1
+            --count 1 \
+            "${RUN_EVAL_EXTRA_ARGS[@]}"
     else
         # sample_id 模式直接更新批量结果文件
         OUTPUT_FILE=./result/locomo_${SAMPLE}_result.csv
@@ -183,7 +194,8 @@ if [ -n "$QUESTION_INDEX" ]; then
             --question-index "$QUESTION_INDEX" \
             --count 1 \
             --output "$OUTPUT_FILE" \
-            --update-mode
+            --update-mode \
+            "${RUN_EVAL_EXTRA_ARGS[@]}"
     fi
 
     # 运行 Judge 评分
@@ -277,7 +289,9 @@ PY
         "$INPUT_FILE" \
         --sample "$SAMPLE_ID_FOR_CMD" \
         --output "$OUTPUT_FILE" \
-        --threads 5
+        --threads 5 \
+        --update-mode \
+        "${RUN_EVAL_EXTRA_ARGS[@]}"
 
     # 运行 Judge 评分
     if [ "$SKIP_IMPORT" = "true" ]; then
@@ -294,6 +308,58 @@ PY
         echo "[4/4] Calculating statistics..."
     fi
     "$PYTHON_BIN" "$SCRIPT_DIR/stat_judge_result.py" --input "$OUTPUT_FILE"
+
+    echo ""
+    SAMPLE="$SAMPLE" IMPORT_SUCCESS_FILE="$SCRIPT_DIR/result/import_success.csv" "$PYTHON_BIN" - <<'PY'
+import csv
+import os
+from pathlib import Path
+
+
+def make_table(title, rows):
+    metric_width = max(len("Metric"), *(len(metric) for metric, _ in rows))
+    value_width = max(len("Value"), *(len(value) for _, value in rows))
+    border = f"+-{'-' * (metric_width + 2)}-+-{'-' * (value_width + 2)}-+"
+
+    lines = [title, border]
+    lines.append(f"| {'Metric'.center(metric_width)} | {'Value'.center(value_width)} |")
+    lines.append(border)
+    for metric, value in rows:
+        lines.append(f"| {metric.ljust(metric_width)} | {value.rjust(value_width)} |")
+    lines.append(border)
+    return lines
+
+
+sample = os.environ["SAMPLE"]
+import_success_file = Path(os.environ["IMPORT_SUCCESS_FILE"])
+
+embedding_total = 0
+vlm_total = 0
+all_total = 0
+matched_rows = 0
+
+if import_success_file.exists():
+    with import_success_file.open("r", encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if row.get("sample_id") != sample:
+                continue
+            matched_rows += 1
+            embedding_total += int(row.get("embedding_tokens") or 0)
+            vlm_total += int(row.get("vlm_tokens") or 0)
+            all_total += int(row.get("total_tokens") or 0)
+
+rows = [
+    ("Sample", sample),
+    ("Imported sessions", f"{matched_rows:,}"),
+    ("Total embedding tokens", f"{embedding_total:,}"),
+    ("Total vlm tokens", f"{vlm_total:,}"),
+    ("Total tokens", f"{all_total:,}"),
+]
+
+for line in make_table("=== Import Token Usage ===", rows):
+    print(line)
+PY
 
     echo ""
     echo "=== 批量评测完成 ==="

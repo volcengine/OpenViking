@@ -21,6 +21,10 @@ type CommandBuilder = {
   action: (fn: (...args: unknown[]) => void | Promise<void>) => CommandBuilder;
 };
 
+type RegisterCliArgs = {
+  program: CommandProgram;
+};
+
 function tr(langZh: boolean, en: string, zh: string): string {
   return langZh ? zh : en;
 }
@@ -28,6 +32,34 @@ function tr(langZh: boolean, en: string, zh: string): string {
 function maskKey(key: string): string {
   if (key.length <= 8) return "****";
   return `${key.slice(0, 4)}...${key.slice(-4)}`;
+}
+
+function isValidAgentPrefixInput(value: string): boolean {
+  const trimmed = value.trim();
+  return !trimmed || /^[a-zA-Z0-9_-]+$/.test(trimmed);
+}
+
+async function askAgentPrefix(
+  zh: boolean,
+  q: (prompt: string, def?: string) => Promise<string>,
+  defaultValue: string,
+): Promise<string> {
+  while (true) {
+    const value = (await q(
+      tr(zh, "Agent Prefix (optional)", "Agent Prefix（可选）"),
+      defaultValue,
+    )).trim();
+    if (isValidAgentPrefixInput(value)) {
+      return value;
+    }
+    console.log(
+      `  ✗ ${tr(
+        zh,
+        "Agent Prefix may only contain letters, digits, underscores, and hyphens, or be empty.",
+        "Agent Prefix 只能包含字母、数字、下划线和连字符，或留空。",
+      )}`,
+    );
+  }
 }
 
 function ask(rl: readline.Interface, prompt: string, defaultValue = ""): Promise<string> {
@@ -154,8 +186,7 @@ export function registerSetupCli(api: any): void {
   }
 
   api.registerCli(
-    ({ program: rawProgram }) => {
-      const program = rawProgram as CommandProgram;
+    ({ program }: RegisterCliArgs) => {
       const ovCmd = program.command("openviking").description("OpenViking plugin commands");
 
       ovCmd
@@ -163,7 +194,8 @@ export function registerSetupCli(api: any): void {
         .description("Interactive setup wizard for OpenViking plugin configuration")
         .option("--reconfigure", "Force re-entry of all configuration values")
         .option("--zh", "Chinese prompts")
-        .action(async (options: { reconfigure?: boolean; zh?: boolean }) => {
+        .action(async (rawOptions: unknown) => {
+          const options = (rawOptions ?? {}) as { reconfigure?: boolean; zh?: boolean };
           const zh = detectLangZh(options as Record<string, unknown>);
           const configDir = OPENCLAW_DIR;
           const configPath = path.join(configDir, "openclaw.json");
@@ -288,7 +320,7 @@ async function setupRemote(
 
   const baseUrl = await q(tr(zh, "OpenViking server URL", "OpenViking 服务器地址"), defaultUrl);
   const apiKey = await q(tr(zh, "API Key (optional)", "API Key（可选）"), defaultApiKey);
-  const agentPrefix = await q(tr(zh, "Agent Prefix (optional)", "Agent Prefix（可选）"), defaultAgentPrefix);
+  const agentPrefix = await askAgentPrefix(zh, q, defaultAgentPrefix);
 
   console.log("");
 
@@ -339,4 +371,5 @@ async function setupRemote(
 export const __test__ = {
   resolveAbsoluteCommand,
   isLegacyLocalMode,
+  isValidAgentPrefixInput,
 };

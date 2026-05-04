@@ -12,6 +12,7 @@ from openviking.server.api_keys import APIKeyManager
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
 from openviking.server.dependencies import set_service
+from openviking.server.identity import RequestContext, Role
 from openviking.service.core import OpenVikingService
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -70,6 +71,14 @@ def trusted_headers(
     if include_api_key:
         headers["X-API-Key"] = ROOT_KEY
     return headers
+
+
+async def create_agent_namespace(service: OpenVikingService, account_id: str, agent_id: str):
+    ctx = RequestContext(
+        user=UserIdentifier(account_id, "system", agent_id),
+        role=Role.ROOT,
+    )
+    await service.viking_fs.mkdir(f"viking://agent/{agent_id}", ctx=ctx, exist_ok=True)
 
 
 # ---- Account CRUD ----
@@ -235,6 +244,110 @@ async def test_list_users(admin_client: httpx.AsyncClient):
     users = resp.json()["result"]
     user_ids = {u["user_id"] for u in users}
     assert user_ids == {"alice", "bob"}
+
+
+async def test_list_agents(admin_client: httpx.AsyncClient, admin_service: OpenVikingService):
+    """ROOT can list agent namespaces in an account."""
+    acct = _uid()
+    await admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    await create_agent_namespace(admin_service, acct, "research")
+    await create_agent_namespace(admin_service, acct, "writer")
+
+    resp = await admin_client.get(f"/api/v1/admin/accounts/{acct}/agents", headers=root_headers())
+
+    assert resp.status_code == 200
+    assert resp.json()["result"] == [
+        {"agent_id": "default", "uri": "viking://agent/default"},
+        {"agent_id": "research", "uri": "viking://agent/research"},
+        {"agent_id": "writer", "uri": "viking://agent/writer"},
+    ]
+
+
+async def test_list_agents_returns_default_for_new_account(
+    admin_client: httpx.AsyncClient,
+):
+    """New accounts should expose the initialized default agent namespace."""
+    acct = _uid()
+    await admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+
+    resp = await admin_client.get(f"/api/v1/admin/accounts/{acct}/agents", headers=root_headers())
+
+    assert resp.status_code == 200
+    assert resp.json()["result"] == [
+        {"agent_id": "default", "uri": "viking://agent/default"},
+    ]
+
+
+async def test_admin_can_list_agents_in_own_account(
+    admin_client: httpx.AsyncClient,
+    admin_service: OpenVikingService,
+):
+    """ADMIN can list agent namespaces in their own account."""
+    acct = _uid()
+    resp = await admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    alice_key = resp.json()["result"]["user_key"]
+    await create_agent_namespace(admin_service, acct, "assistant")
+
+    resp = await admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/agents",
+        headers={"X-API-Key": alice_key},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["result"] == [
+        {"agent_id": "assistant", "uri": "viking://agent/assistant"},
+        {"agent_id": "default", "uri": "viking://agent/default"},
+    ]
+
+
+async def test_admin_cannot_list_agents_in_other_account(
+    admin_client: httpx.AsyncClient,
+    admin_service: OpenVikingService,
+):
+    """ADMIN cannot list agent namespaces in another account."""
+    acct = _uid()
+    other = _uid()
+    resp = await admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    alice_key = resp.json()["result"]["user_key"]
+    await admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": other, "admin_user_id": "eve"},
+        headers=root_headers(),
+    )
+    await create_agent_namespace(admin_service, other, "foreign")
+
+    resp = await admin_client.get(
+        f"/api/v1/admin/accounts/{other}/agents",
+        headers={"X-API-Key": alice_key},
+    )
+
+    assert resp.status_code == 403
+
+
+async def test_list_agents_unknown_account_returns_404(admin_client: httpx.AsyncClient):
+    """Unknown accounts should use the same 404 behavior as other admin account APIs."""
+    resp = await admin_client.get(
+        f"/api/v1/admin/accounts/{_uid()}/agents",
+        headers=root_headers(),
+    )
+
+    assert resp.status_code == 404
 
 
 async def test_remove_user(admin_client: httpx.AsyncClient):

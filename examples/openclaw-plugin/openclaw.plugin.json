@@ -11,8 +11,8 @@
     },
     "agent_prefix": {
       "label": "Agent Prefix",
-      "placeholder": "auto-generated",
-      "help": "OpenViking agent prefix. default: follow OpenClaw ctx.agentId. Non-default: use `<prefix>_<OpenClaw ctx.agentId>` (sanitized to letters/digits/_/-), so the configured value acts as a prefix."
+      "placeholder": "optional-prefix",
+      "help": "Optional OpenViking agent prefix. Empty: follow OpenClaw ctx.agentId directly. Non-empty: use `<prefix>_<OpenClaw ctx.agentId>` (sanitized to letters/digits/_/-). If OpenClaw ctx.agentId is unavailable, use OpenClaw default agent `main`."
     },
     "apiKey": {
       "label": "OpenViking API Key",
@@ -126,9 +126,15 @@
     },
     "commitTokenThreshold": {
       "label": "Commit Token Threshold",
-      "placeholder": "2000",
+      "placeholder": "20000",
       "advanced": true,
       "help": "Minimum estimated pending tokens before auto-commit triggers. Set to 0 to commit every turn."
+    },
+    "commitKeepRecentCount": {
+      "label": "Commit Keep Recent Count",
+      "placeholder": "10",
+      "advanced": true,
+      "help": "WM v2: number of most-recent messages kept live after an afterTurn commit. Compact path always uses 0."
     },
     "emitStandardDiagnostics": {
       "label": "Standard diagnostics (diag JSON lines)",
@@ -218,6 +224,11 @@
       },
       "commitTokenThreshold": {
         "type": "number"
+      },
+      "commitKeepRecentCount": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1000
       },
       "bypassSessionPatterns": {
         "type": "array",

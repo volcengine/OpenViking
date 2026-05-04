@@ -95,3 +95,73 @@ def test_otel_http_send_uses_export_timeout_not_refresh_deadline(registry):
     exporter._send_http_request(ExportMetricsServiceRequest())
 
     assert fake_session.timeout == 5.0
+
+
+def test_otel_http_send_forwards_custom_headers(registry):
+    """HTTP transport should merge vendor auth headers with protobuf content type."""
+    exporter = OTelMetricExporter(
+        registry=registry,
+        enabled=False,
+        protocol="http",
+        endpoint="https://apmplus-cn-beijing.ivolces.com/api/otlp/v1/metrics",
+        headers={"X-ByteAPM-AppKey": "metric-appkey"},
+    )
+
+    class _FakeSession:
+        def __init__(self):
+            self.headers = None
+
+        def post(self, _url, **kwargs):
+            self.headers = kwargs.get("headers")
+
+            class _Resp:
+                @staticmethod
+                def raise_for_status():
+                    return None
+
+            return _Resp()
+
+    exporter._http_session = _FakeSession()
+
+    from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import (
+        ExportMetricsServiceRequest,
+    )
+
+    exporter._send_http_request(ExportMetricsServiceRequest())
+
+    assert exporter._http_session.headers == {
+        "Content-Type": "application/x-protobuf",
+        "X-ByteAPM-AppKey": "metric-appkey",
+    }
+
+
+def test_otel_grpc_send_forwards_custom_metadata(registry):
+    """gRPC transport should forward vendor auth headers as metadata pairs."""
+    exporter = OTelMetricExporter(
+        registry=registry,
+        enabled=False,
+        protocol="grpc",
+        endpoint="apmplus-cn-beijing.ivolces.com:4317",
+        headers={"x-byteapm-appkey": "metric-appkey"},
+    )
+
+    class _FakeStub:
+        def __init__(self):
+            self.metadata = None
+            self.timeout = None
+
+        def Export(self, _request, **kwargs):
+            self.metadata = kwargs.get("metadata")
+            self.timeout = kwargs.get("timeout")
+            return None
+
+    exporter._grpc_stub = _FakeStub()
+
+    from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import (
+        ExportMetricsServiceRequest,
+    )
+
+    exporter._send_grpc_request(ExportMetricsServiceRequest())
+
+    assert exporter._grpc_stub.metadata == [("x-byteapm-appkey", "metric-appkey")]
+    assert exporter._grpc_stub.timeout == 5.0

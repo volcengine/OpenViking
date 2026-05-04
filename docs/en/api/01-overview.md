@@ -476,6 +476,7 @@ Below are all HTTP API endpoints provided by OpenViking, grouped by functional m
 | DELETE | `/api/v1/admin/accounts/{account_id}` | Delete workspace (cascade data cleanup) | ROOT |
 | POST | `/api/v1/admin/accounts/{account_id}/users` | Register user | ROOT/ADMIN |
 | GET | `/api/v1/admin/accounts/{account_id}/users` | List users | ROOT/ADMIN |
+| GET | `/api/v1/admin/accounts/{account_id}/agents` | List agent namespaces | ROOT/ADMIN |
 | DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | Remove user | ROOT/ADMIN |
 | PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | Change user role | ROOT |
 | POST | `/api/v1/admin/accounts/{account_id}/users/{user_id}/key` | Regenerate user key | ROOT/ADMIN |

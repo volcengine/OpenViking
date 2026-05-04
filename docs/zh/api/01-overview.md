@@ -476,6 +476,7 @@ JSON 输出 - 错误：
 | DELETE | `/api/v1/admin/accounts/{account_id}` | 删除工作区（级联清理数据） | ROOT |
 | POST | `/api/v1/admin/accounts/{account_id}/users` | 注册用户 | ROOT/ADMIN |
 | GET | `/api/v1/admin/accounts/{account_id}/users` | 列出用户 | ROOT/ADMIN |
+| GET | `/api/v1/admin/accounts/{account_id}/agents` | 列出 agent namespace | ROOT/ADMIN |
 | DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | 移除用户 | ROOT/ADMIN |
 | PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | 修改用户角色 | ROOT |
 | POST | `/api/v1/admin/accounts/{account_id}/users/{user_id}/key` | 重新生成 User Key | ROOT/ADMIN |

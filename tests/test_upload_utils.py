@@ -375,6 +375,18 @@ class TestUploadDirectory:
         # Most files are > 5 bytes, so fewer uploads
         assert count < 4
 
+    @pytest.mark.asyncio
+    async def test_respects_gitignore(self, tmp_path: Path, viking_fs: FakeVikingFS) -> None:
+        (tmp_path / ".gitignore").write_text("*.tmp\n", encoding="utf-8")
+        (tmp_path / "keep.txt").write_text("ok", encoding="utf-8")
+        (tmp_path / "skip.tmp").write_text("no", encoding="utf-8")
+
+        count, _ = await upload_directory(tmp_path, "viking://temp/gi", viking_fs)
+
+        assert count == 1
+        assert "viking://temp/gi/keep.txt" in viking_fs.files
+        assert "viking://temp/gi/skip.tmp" not in viking_fs.files
+
 
 # ---------------------------------------------------------------------------
 # detect_and_convert_encoding (additional edge cases)

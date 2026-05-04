@@ -310,8 +310,7 @@ set "OPENVIKING_CONFIG_FILE=%USERPROFILE%\.openviking\ov.conf"
 ```json
 {
   "url": "http://localhost:1933",
-  "timeout": 60.0,
-  "output": "table"
+  "timeout": 60.0
 }
 ```
 

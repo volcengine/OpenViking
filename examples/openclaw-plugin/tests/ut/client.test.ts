@@ -334,6 +334,21 @@ describe("OpenVikingClient resource and skill import", () => {
 });
 
 describe("OpenVikingClient tenant headers (advanced accountId / userId overrides)", () => {
+  it.each([
+    ["prefix", "prefix_main"],
+    ["", "main"],
+  ])("sends OpenClaw default agent for health checks with prefix %j", async (prefix, expected) => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse({ status: "ok" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenVikingClient("http://127.0.0.1:1933", "sk-test", prefix, 5000);
+    await client.healthCheck();
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.get("X-OpenViking-Agent")).toBe(expected);
+  });
+
   it("sends explicitly configured accountId and userId in request headers", async () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse({ status: "ok" }));
     vi.stubGlobal("fetch", fetchMock);
@@ -436,7 +451,7 @@ describe("OpenVikingClient canonical namespace policy", () => {
       false,
       true,
     );
-    await client.find("test query", { targetUri: "viking://user/memories" });
+    await client.find("test query", { targetUri: "viking://user/memories" }, "my-agent");
 
     const findCall = fetchMock.mock.calls.find((c) =>
       String(c[0]).endsWith("/api/v1/search/find"),
@@ -463,7 +478,7 @@ describe("OpenVikingClient canonical namespace policy", () => {
       true,
       true,
     );
-    await client.find("test query", { targetUri: "viking://user/memories" });
+    await client.find("test query", { targetUri: "viking://user/memories" }, "my-agent");
 
     const findCall = fetchMock.mock.calls.find((c) =>
       String(c[0]).endsWith("/api/v1/search/find"),
@@ -490,7 +505,7 @@ describe("OpenVikingClient canonical namespace policy", () => {
       false,
       true,
     );
-    await client.find("test", { targetUri: "viking://agent/memories" });
+    await client.find("test", { targetUri: "viking://agent/memories" }, "shared-agent");
 
     const findCall = fetchMock.mock.calls.find((c) =>
       String(c[0]).endsWith("/api/v1/search/find"),
@@ -517,7 +532,7 @@ describe("OpenVikingClient canonical namespace policy", () => {
       false,
       false,
     );
-    await client.find("test", { targetUri: "viking://agent/skills" });
+    await client.find("test", { targetUri: "viking://agent/skills" }, "shared-agent");
 
     const findCall = fetchMock.mock.calls.find((c) =>
       String(c[0]).endsWith("/api/v1/search/find"),

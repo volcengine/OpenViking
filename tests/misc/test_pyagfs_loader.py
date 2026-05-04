@@ -22,3 +22,17 @@ def test_pyagfs_loader_ignores_cpython_specific_artifact(monkeypatch, tmp_path: 
     monkeypatch.setattr(pyagfs, "_LIB_DIR", tmp_path)
 
     assert pyagfs._find_ragfs_so() is None
+
+
+def test_pyagfs_loader_finds_windows_maturin_abi3_pyd(monkeypatch, tmp_path: Path):
+    import openviking.pyagfs as pyagfs
+
+    cpython_artifact = tmp_path / "ragfs_python.cp310-win_amd64.pyd"
+    abi3_artifact = tmp_path / "ragfs_python.pyd"
+    cpython_artifact.write_bytes(b"old")
+    abi3_artifact.write_bytes(b"new")
+
+    monkeypatch.setattr(pyagfs, "_LIB_DIR", tmp_path)
+    monkeypatch.setattr(pyagfs.sys, "platform", "win32")
+
+    assert pyagfs._find_ragfs_so() == str(abi3_artifact)

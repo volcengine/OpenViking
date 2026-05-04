@@ -174,6 +174,7 @@ def init_metrics_from_server_config(
                 endpoint=exporters_config.otel.endpoint,
                 service_name=exporters_config.otel.service_name,
                 export_interval_ms=exporters_config.otel.export_interval_ms,
+                headers=exporters_config.otel.headers,
                 enabled=True,
             )
             otel_exporter.start()

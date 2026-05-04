@@ -202,7 +202,7 @@ Characteristics of this model:
 
 - Simple integration, because the plugin does not manage account/user lifecycle
 - Best for "one OpenClaw instance maps to one OpenViking user identity"
-- `agentId` distinguishes different OpenClaw instances or agent roles
+- `agent_prefix` distinguishes different OpenClaw instances or agent roles
 - `resources` can be shared inside the same account, while `user` and `agent` memory stay identity-scoped
 
 ### Why the OpenClaw plugin usually does not set `account` / `user`
@@ -210,7 +210,7 @@ Characteristics of this model:
 In `api_key` mode, a user key is already enough to express identity:
 
 - `account` and `user` are resolved server-side from the key
-- The plugin only needs to provide `agentId`
+- The plugin only needs to provide `agent_prefix`
 - Internally, the plugin derives default `user` and `agent` memory scopes from the runtime identity
 
 If you give the plugin a root key directly, normal tenant-scoped data APIs will lack `X-OpenViking-Account` and `X-OpenViking-User`, so that is not a good default for day-to-day access.

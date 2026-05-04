@@ -16,8 +16,6 @@ import type {
 import { formatMessageFaithful, toRoleId } from "./context-engine.js";
 import {
   compileSessionPatterns,
-  extractLatestUserText,
-  sanitizeUserTextForCapture,
   shouldBypassSession,
   extractNewTurnMessages,
 } from "./text-utils.js";
@@ -25,16 +23,31 @@ import {
   clampScore,
   postProcessMemories,
   formatMemoryLines,
-  toJsonLog,
-  summarizeInjectionMemories,
-  pickMemoriesForInjection,
 } from "./memory-ranking.js";
-import { quickRecallPrecheck, withTimeout } from "./process-manager.js";
+import { withTimeout } from "./process-manager.js";
 import {
   createMemoryOpenVikingContextEngine,
   openClawSessionToOvStorageId,
+  openClawSessionRefToOvStorageId,
 } from "./context-engine.js";
 import type { ContextEngineWithCommit } from "./context-engine.js";
+import {
+  buildMemoryLines,
+  buildMemoryLinesWithBudget,
+  estimateTokenCount,
+  prepareRecallQuery,
+} from "./auto-recall.js";
+export {
+  buildMemoryLines,
+  buildMemoryLinesWithBudget,
+  estimateTokenCount,
+  prepareRecallQuery,
+};
+export type {
+  BuildMemoryLinesOptions,
+  BuildMemoryLinesWithBudgetOptions,
+  PreparedRecallQuery,
+} from "./auto-recall.js";
 
 type PluginLogger = {
   debug?: (message: string) => void;
@@ -54,6 +67,13 @@ type SessionAgentLookup = {
   sessionId?: string;
   sessionKey?: string;
   ovSessionId?: string;
+};
+
+type PluginSessionRouting = {
+  sessionId?: string;
+  sessionKey?: string;
+  ovSessionId?: string;
+  agentId: string;
 };
 
 type SessionAgentResolveBranch =
@@ -155,8 +175,7 @@ type OpenClawPluginApi = {
   ) => void;
 };
 
-const AUTO_RECALL_TIMEOUT_MS = 5_000;
-const RECALL_QUERY_MAX_CHARS = 4_000;
+const DEFAULT_OPENCLAW_AGENT_ID = "main";
 
 /**
  * OpenViking `UserIdentifier` allows only [a-zA-Z0-9_-] for agent_id
@@ -173,39 +192,6 @@ export function sanitizeOpenVikingAgentIdHeader(raw: string): string {
     .replace(/_+/g, "_")
     .replace(/^_|_$/g, "");
   return normalized.length > 0 ? normalized : "ov_agent";
-}
-
-export type PreparedRecallQuery = {
-  query: string;
-  truncated: boolean;
-  originalChars: number;
-  finalChars: number;
-};
-
-export function prepareRecallQuery(rawText: string): PreparedRecallQuery {
-  const sanitized = sanitizeUserTextForCapture(rawText).trim();
-  const originalChars = sanitized.length;
-
-  if (!sanitized) {
-    return {
-      query: "",
-      truncated: false,
-      originalChars: 0,
-      finalChars: 0,
-    };
-  }
-
-  const query =
-    sanitized.length > RECALL_QUERY_MAX_CHARS
-      ? sanitized.slice(0, RECALL_QUERY_MAX_CHARS).trim()
-      : sanitized;
-
-  return {
-    query,
-    truncated: sanitized.length > RECALL_QUERY_MAX_CHARS,
-    originalChars,
-    finalChars: query.length,
-  };
 }
 
 export function tokenizeCommandArgs(args: string): string[] {
@@ -439,6 +425,7 @@ function collectSessionAgentAliases(
 }
 
 export function createSessionAgentResolver(configAgentId: string) {
+  const configAgentPrefix = configAgentId.trim() === "default" ? "" : configAgentId.trim();
   const sessionAgentIds = new Map<string, string>();
 
   const remember = (ctx: SessionAgentLookup): void => {
@@ -453,10 +440,8 @@ export function createSessionAgentResolver(configAgentId: string) {
       return;
     }
 
-    const resolvedBeforeSanitize =
-      !configAgentId || configAgentId === "default"
-        ? rawAgentId
-        : `${configAgentId}_${rawAgentId}`;
+    const prefix = configAgentPrefix;
+    const resolvedBeforeSanitize = prefix ? `${prefix}_${rawAgentId}` : rawAgentId;
     const resolved = sanitizeOpenVikingAgentIdHeader(resolvedBeforeSanitize);
     for (const alias of collectSessionAgentAliases(ctx.sessionId, ctx.sessionKey, ctx.ovSessionId)) {
       sessionAgentIds.set(alias, resolved);
@@ -478,31 +463,26 @@ export function createSessionAgentResolver(configAgentId: string) {
     let resolvedBeforeSanitize: string;
     let resolved: string;
     let branch: SessionAgentResolveBranch;
+    const prefix = configAgentPrefix;
 
     if (mappedResolvedAgentId) {
       resolvedBeforeSanitize = mappedResolvedAgentId;
       resolved = mappedResolvedAgentId;
       branch = "session_resolved";
     } else if (sessionScopedAgentId) {
-      resolvedBeforeSanitize =
-        !configAgentId || configAgentId === "default"
-          ? sessionScopedAgentId
-          : `${configAgentId}_${sessionScopedAgentId}`;
+      resolvedBeforeSanitize = prefix ? `${prefix}_${sessionScopedAgentId}` : sessionScopedAgentId;
       resolved = sanitizeOpenVikingAgentIdHeader(resolvedBeforeSanitize);
       branch = "session_resolved";
-    } else if (!configAgentId || configAgentId === "default") {
-      resolvedBeforeSanitize = "default";
-      resolved = "default";
+    } else if (!prefix) {
+      resolvedBeforeSanitize = DEFAULT_OPENCLAW_AGENT_ID;
+      resolved = DEFAULT_OPENCLAW_AGENT_ID;
       branch = "default_no_session";
     } else {
-      resolvedBeforeSanitize = configAgentId;
-      resolved = sanitizeOpenVikingAgentIdHeader(configAgentId);
+      resolvedBeforeSanitize = `${prefix}_${DEFAULT_OPENCLAW_AGENT_ID}`;
+      resolved = sanitizeOpenVikingAgentIdHeader(resolvedBeforeSanitize);
       branch = "config_only_fallback";
     }
 
-    // Only explicit agent observations are persisted via remember().
-    // Fallback values must stay ephemeral so a later real ctx.agentId
-    // can safely take over without inheriting a stale default binding.
     return {
       resolved,
       resolvedBeforeSanitize,
@@ -554,9 +534,9 @@ const contextEnginePlugin = {
       `openviking: loaded plugin config agent_prefix="${cfg.agent_prefix}" ` +
         `(raw plugins.entries.openviking.config.agent_prefix=${JSON.stringify(rawAgentId ?? "(missing)")}; ` +
         `${
-          cfg.agent_prefix !== "default"
-            ? "non-default → X-OpenViking-Agent is <configAgentId>_<ctx.agentId> (sanitized to [a-zA-Z0-9_-]) when hooks expose session agent; config-only if ctx.agentId unknown"
-            : 'default → X-OpenViking-Agent follows OpenClaw ctx.agentId per session (e.g. "main")'
+          cfg.agent_prefix
+            ? 'non-empty → X-OpenViking-Agent is <agent_prefix>_<ctx.agentId> when hooks expose session agent, or <agent_prefix>_main when ctx.agentId is unknown'
+            : 'empty → X-OpenViking-Agent follows OpenClaw ctx.agentId per session, or "main" when ctx.agentId is unknown'
         })`,
     );
     verboseRoutingInfo(
@@ -609,6 +589,34 @@ const contextEnginePlugin = {
         toolName,
       },
     });
+
+    const resolvePluginSessionRouting = (ctx?: SessionAgentLookup): PluginSessionRouting => {
+      const sessionId = typeof ctx?.sessionId === "string" ? ctx.sessionId.trim() : "";
+      const sessionKey = typeof ctx?.sessionKey === "string" ? ctx.sessionKey.trim() : "";
+      let ovSessionId = typeof ctx?.ovSessionId === "string" ? ctx.ovSessionId.trim() : "";
+
+      if (!ovSessionId && (sessionId || sessionKey)) {
+        ovSessionId = openClawSessionToOvStorageId(
+          sessionId || undefined,
+          sessionKey || undefined,
+        );
+      }
+
+      const session = {
+        agentId: ctx?.agentId,
+        sessionId: sessionId || undefined,
+        sessionKey: sessionKey || undefined,
+        ovSessionId: ovSessionId || undefined,
+      };
+      rememberSessionAgentId(session);
+
+      return {
+        sessionId: session.sessionId,
+        sessionKey: session.sessionKey,
+        ovSessionId: session.ovSessionId,
+        agentId: resolveAgentId(session.sessionId, session.sessionKey, session.ovSessionId),
+      };
+    };
 
     const formatResourceImportText = (result: AddResourceResult): string => {
       const root = result.root_uri ? ` ${result.root_uri}` : "";
@@ -824,8 +832,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
           if (isBypassedSession(ctx)) {
             return makeBypassedToolResult("ov_import");
           }
-          rememberSessionAgentId(ctx);
-          const agentId = resolveAgentId(ctx.sessionId, ctx.sessionKey);
+          const session = resolvePluginSessionRouting(ctx);
           return executeImport({
             kind: params.kind === "skill" ? "skill" : "resource",
             source: typeof params.source === "string" ? params.source : undefined,
@@ -836,7 +843,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
             instruction: typeof params.instruction === "string" ? params.instruction : undefined,
             wait: typeof params.wait === "boolean" ? params.wait : undefined,
             timeout: typeof params.timeout === "number" ? params.timeout : undefined,
-          }, agentId);
+          }, session.agentId);
         },
       }),
       { name: "ov_import" },
@@ -857,13 +864,12 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
           if (isBypassedSession(ctx)) {
             return makeBypassedToolResult("ov_search");
           }
-          rememberSessionAgentId(ctx);
-          const agentId = resolveAgentId(ctx.sessionId, ctx.sessionKey);
+          const session = resolvePluginSessionRouting(ctx);
           return searchOpenViking({
             query: String((params as { query?: unknown }).query ?? ""),
             uri: typeof params.uri === "string" ? params.uri : undefined,
             limit: typeof params.limit === "number" ? params.limit : undefined,
-          }, agentId);
+          }, session.agentId);
         },
       }),
       { name: "ov_search" },
@@ -879,10 +885,9 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
             const bypassed = makeBypassedToolResult("ov_import");
             return { text: bypassed.content[0]!.text, details: bypassed.details };
           }
-          rememberSessionAgentId(ctx);
-          const agentId = resolveAgentId(ctx.sessionId, ctx.sessionKey, ctx.ovSessionId);
+          const session = resolvePluginSessionRouting(ctx);
           const input = parseOvImportCommandArgs(ctx.args ?? "");
-          const result = await executeImport(input, agentId);
+          const result = await executeImport(input, session.agentId);
           return { text: result.content[0]!.text, details: result.details };
         } catch (err) {
           return { text: `OpenViking import failed: ${err instanceof Error ? err.message : String(err)}` };
@@ -900,10 +905,9 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
             const bypassed = makeBypassedToolResult("ov_search");
             return { text: bypassed.content[0]!.text, details: bypassed.details };
           }
-          rememberSessionAgentId(ctx);
-          const agentId = resolveAgentId(ctx.sessionId, ctx.sessionKey, ctx.ovSessionId);
+          const session = resolvePluginSessionRouting(ctx);
           const input = parseOvSearchCommandArgs(ctx.args ?? "");
-          const result = await searchOpenViking(input, agentId);
+          const result = await searchOpenViking(input, session.agentId);
           return { text: result.content[0]!.text, details: result.details };
         } catch (err) {
           return { text: `OpenViking search failed: ${err instanceof Error ? err.message : String(err)}` };
@@ -933,8 +937,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
           if (isBypassedSession(ctx)) {
             return makeBypassedToolResult("memory_recall");
           }
-          rememberSessionAgentId(ctx);
-          const agentId = resolveAgentId(ctx.sessionId, ctx.sessionKey);
+          const session = resolvePluginSessionRouting(ctx);
           const { query } = params as { query: string };
           const limit =
             typeof (params as { limit?: number }).limit === "number"
@@ -953,7 +956,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
           const recallClient = await getClient();
           if (cfg.logFindRequests) {
             api.logger.info(
-              `openviking: memory_recall X-OpenViking-Agent="${agentId}" ` +
+              `openviking: memory_recall X-OpenViking-Agent="${session.agentId}" ` +
                 `(plugin defaultAgentId="${recallClient.getDefaultAgentId()}" is unused when session context is present)`,
             );
           }
@@ -968,7 +971,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
                 limit: requestLimit,
                 scoreThreshold: 0,
               },
-              agentId,
+              session.agentId,
             );
           } else {
             const searchPromises: Promise<FindResult>[] = [
@@ -979,7 +982,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
                   limit: requestLimit,
                   scoreThreshold: 0,
                 },
-                agentId,
+                session.agentId,
               ),
               recallClient.find(
                 query,
@@ -988,7 +991,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
                   limit: requestLimit,
                   scoreThreshold: 0,
                 },
-                agentId,
+                session.agentId,
               ),
             ];
             if (cfg.recallResources) {
@@ -1000,7 +1003,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
                     limit: requestLimit,
                     scoreThreshold: 0,
                   },
-                  agentId,
+                  session.agentId,
                 ),
               );
             }
@@ -1066,22 +1069,25 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
           if (isBypassedSession(ctx)) {
             return makeBypassedToolResult("memory_store");
           }
-          rememberSessionAgentId(ctx);
-          const storeAgentId = resolveAgentId(ctx.sessionId, ctx.sessionKey);
+          const session = resolvePluginSessionRouting(ctx);
           const { text } = params as { text: string };
           const role =
             typeof (params as { role?: string }).role === "string"
               ? (params as { role: string }).role
               : "user";
-          const sessionIdIn = (params as { sessionId?: string }).sessionId;
+          const explicitSessionId =
+            typeof (params as { sessionId?: unknown }).sessionId === "string" &&
+              (params as { sessionId: string }).sessionId.trim()
+              ? openClawSessionRefToOvStorageId((params as { sessionId: string }).sessionId)
+              : undefined;
 
           if (cfg.logFindRequests) {
             api.logger.info?.(
-              `openviking: memory_store invoked (textLength=${text?.length ?? 0}, sessionId=${sessionIdIn ?? "auto"})`,
+              `openviking: memory_store invoked (textLength=${text?.length ?? 0}, sessionId=${explicitSessionId ?? "auto"})`,
             );
           }
 
-          let sessionId = sessionIdIn;
+          let sessionId = explicitSessionId;
           let usedTempSession = false;
           try {
             const c = await getClient();
@@ -1089,17 +1095,20 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
               sessionId = `memory-store-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
               usedTempSession = true;
             }
-            sessionId = openClawSessionToOvStorageId(sessionId, ctx.sessionKey);
             const roleId = role === "user" ? toRoleId(extractToolSenderId(ctx)) : undefined;
             await c.addSessionMessage(
               sessionId,
               role,
               [{ type: "text" as const, text }],
-              storeAgentId,
+              session.agentId,
               undefined,
               roleId,
             );
-            const commitResult = await c.commitSession(sessionId, { wait: true, agentId: storeAgentId });
+            const commitResult = await c.commitSession(sessionId, {
+              wait: true,
+              agentId: session.agentId,
+              keepRecentCount: 0,
+            });
             const memoriesCount = totalCommitMemories(commitResult);
             if (commitResult.status === "failed") {
               api.logger.warn(
@@ -1185,8 +1194,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
           if (isBypassedSession(ctx)) {
             return makeBypassedToolResult("memory_forget");
           }
-          rememberSessionAgentId(ctx);
-          const agentId = resolveAgentId(ctx.sessionId, ctx.sessionKey);
+          const session = resolvePluginSessionRouting(ctx);
           const client = await getClient();
           const uri = (params as { uri?: string }).uri;
           if (uri) {
@@ -1196,7 +1204,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
                 details: { action: "rejected", uri },
               };
             }
-            await client.deleteUri(uri, agentId);
+            await client.deleteUri(uri, session.agentId);
             return {
               content: [{ type: "text", text: `Forgotten: ${uri}` }],
               details: { action: "deleted", uri },
@@ -1232,7 +1240,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
               limit: requestLimit,
               scoreThreshold: 0,
             },
-            agentId,
+            session.agentId,
           );
           const candidates = postProcessMemories(result.memories ?? [], {
             limit: requestLimit,
@@ -1252,7 +1260,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
           }
           const top = candidates[0];
           if (candidates.length === 1 && clampScore(top.score) >= 0.85) {
-            await client.deleteUri(top.uri, agentId);
+            await client.deleteUri(top.uri, session.agentId);
             return {
               content: [{ type: "text", text: `Forgotten: ${top.uri}` }],
               details: { action: "deleted", uri: top.uri, score: top.score ?? 0 },
@@ -1276,6 +1284,108 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
       }),
       { name: "memory_forget" },
     );
+
+    api.registerTool(
+      (ctx: ToolContext) => ({
+        name: "ov_archive_search",
+        label: "Archive Search (OpenViking)",
+        description:
+          "Keyword-grep across all archived original conversation messages of the current session. " +
+          "Use this whenever the [Session History Summary] does not contain the specific detail " +
+          "the user is asking about. Extract 2-3 concrete entity words from the question " +
+          "(names, places, objects, dates) and search each separately. " +
+          "Only conclude information is unavailable after trying at least 2 different keyword variations.",
+        parameters: Type.Object({
+          query: Type.String({
+            description:
+              "A single keyword or short phrase to grep. Use concrete nouns, names, dates, " +
+              "or distinctive phrases. Case-insensitive. Prefer entity words over full sentences.",
+          }),
+          archiveId: Type.Optional(
+            Type.String({
+              description: 'Optional: limit search to one archive (e.g. "archive_005")',
+            }),
+          ),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          if (isBypassedSession(ctx)) {
+            return makeBypassedToolResult("ov_archive_search");
+          }
+          rememberSessionAgentId(ctx);
+          const sessionId = ctx.sessionId ?? "";
+          const sessionKey = ctx.sessionKey ?? "";
+          if (!sessionId && !sessionKey) {
+            return {
+              content: [{ type: "text", text: "Error: no active session." }],
+              details: { error: "no_session" },
+            };
+          }
+          const ovSessionId = openClawSessionToOvStorageId(ctx.sessionId, ctx.sessionKey);
+          const query = String((params as { query?: string }).query ?? "").trim();
+          const archiveId = (params as { archiveId?: string }).archiveId;
+
+          if (!query) {
+            return {
+              content: [{ type: "text", text: "Error: query is required." }],
+              details: { error: "missing_param", param: "query" },
+            };
+          }
+
+          const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          api.logger.info?.(`openviking: ov_archive_search query="${query}" escaped="${escapedQuery}" archive=${archiveId ?? "all"} session=${ovSessionId}`);
+
+          try {
+            const client = await getClient();
+            const agentId = resolveAgentId(ctx.sessionId, ctx.sessionKey);
+            const result = await client.grepSessionArchives(ovSessionId, escapedQuery, {
+              archiveId,
+              caseInsensitive: true,
+              agentId,
+            });
+
+            if (!result.matches || result.matches.length === 0) {
+              return {
+                content: [{
+                  type: "text",
+                  text: `No matches found for "${query}". Try a different keyword — ` +
+                    "the original conversation may use different wording than the question. " +
+                    "Try synonyms, related terms, or shorter fragments.",
+                }],
+                details: { query, matchCount: 0 },
+              };
+            }
+
+            const MAX_MATCHES = 12;
+            const MAX_LINE_LEN = 1500;
+            const shown = result.matches.slice(0, MAX_MATCHES);
+            const blocks = shown.map((m, i) => {
+              const archiveTag = m.uri.match(/archive_\d+/)?.[0] ?? "unknown";
+              const truncated = m.content.length > MAX_LINE_LEN
+                ? m.content.slice(0, MAX_LINE_LEN) + "…(truncated)"
+                : m.content;
+              return `## Match ${i + 1}: ${archiveTag} (line ${m.line})\n${truncated}`;
+            });
+
+            const header = `Found ${result.matches.length} match(es) for "${query}"` +
+              (result.matches.length > MAX_MATCHES ? ` (showing first ${MAX_MATCHES})` : "") + ":";
+
+            return {
+              content: [{ type: "text", text: header + "\n\n" + blocks.join("\n\n") }],
+              details: { query, matchCount: result.matches.length },
+            };
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            api.logger.error?.(`openviking: ov_archive_search error: ${msg}`);
+            return {
+              content: [{ type: "text", text: `Archive search failed: ${msg}` }],
+              details: { error: msg },
+            };
+          }
+        },
+      }),
+      { name: "ov_archive_search" },
+    );
+
     api.registerTool((ctx: ToolContext) => ({
       name: "ov_archive_expand",
       label: "Archive Expand (OpenViking)",
@@ -1294,9 +1404,9 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
         if (isBypassedSession(ctx)) {
           return makeBypassedToolResult("ov_archive_expand");
         }
-        rememberSessionAgentId(ctx);
+        const session = resolvePluginSessionRouting(ctx);
         const archiveId = String((params as { archiveId?: string }).archiveId ?? "").trim();
-        const sessionId = ctx.sessionId ?? "";
+        const sessionId = session.sessionId ?? "";
         api.logger.info?.(`openviking: ov_archive_expand invoked (archiveId=${archiveId || "(empty)"}, sessionId=${sessionId || "(empty)"})`);
 
         if (!archiveId) {
@@ -1307,25 +1417,19 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
           };
         }
 
-        const sessionKey = ctx.sessionKey ?? "";
-        if (!sessionId && !sessionKey) {
+        if (!session.ovSessionId) {
           return {
             content: [{ type: "text", text: "Error: no active session." }],
             details: { error: "no_session" },
           };
         }
-        const ovSessionId = openClawSessionToOvStorageId(
-          ctx.sessionId,
-          ctx.sessionKey,
-        );
 
         try {
           const client = await getClient();
-          const agentId = resolveAgentId(ctx.sessionId, ctx.sessionKey);
           const detail = await client.getSessionArchive(
-            ovSessionId,
+            session.ovSessionId,
             archiveId,
-            agentId,
+            session.agentId,
           );
 
           const header = [
@@ -1347,7 +1451,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
               archiveId: detail.archive_id,
               messageCount: detail.messages.length,
               sessionId,
-              ovSessionId,
+              ovSessionId: session.ovSessionId,
             },
           };
         } catch (err) {
@@ -1355,7 +1459,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
           api.logger.warn?.(`openviking: ov_archive_expand failed (archiveId=${archiveId}, sessionId=${sessionId}): ${msg}`);
           return {
             content: [{ type: "text", text: `Failed to expand ${archiveId}: ${msg}` }],
-            details: { error: msg, archiveId, sessionId, ovSessionId },
+            details: { error: msg, archiveId, sessionId, ovSessionId: session.ovSessionId },
           };
         }
       },
@@ -1400,153 +1504,6 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
     api.on("session_end", async (_event: unknown, ctx?: HookAgentContext) => {
       rememberSessionAgentId(ctx ?? {});
     });
-    api.on("before_prompt_build", async (event: unknown, ctx?: HookAgentContext) => {
-      rememberSessionAgentId(ctx ?? {});
-
-      if (cfg.logFindRequests) {
-        api.logger.info(
-          `openviking: hook before_prompt_build ctx=${JSON.stringify({
-            sessionId: ctx?.sessionId,
-            sessionKey: ctx?.sessionKey,
-            agentId: ctx?.agentId,
-          })}`,
-        );
-      }
-      if (isBypassedSession(ctx)) {
-        verboseRoutingInfo(
-          `openviking: bypassing before_prompt_build due to session pattern match (sessionKey=${ctx?.sessionKey ?? "none"}, sessionId=${ctx?.sessionId ?? "none"})`,
-        );
-        return;
-      }
-      const agentId = resolveAgentId(ctx?.sessionId, ctx?.sessionKey);
-      let client: OpenVikingClient;
-      try {
-        client = await withTimeout(
-          getClient(),
-          5000,
-          "openviking: client initialization timeout (OpenViking service not ready yet)"
-        );
-      } catch (err) {
-        api.logger.warn?.(`openviking: failed to get client: ${String(err)}`);
-        return;
-      }
-
-      const eventObj = (event ?? {}) as { messages?: unknown[]; prompt?: string };
-      const latestUserText = extractLatestUserText(eventObj.messages);
-      const rawRecallQuery =
-        latestUserText ||
-        (typeof eventObj.prompt === "string" ? sanitizeUserTextForCapture(eventObj.prompt) : "");
-      const recallQuery = prepareRecallQuery(rawRecallQuery);
-      const queryText = recallQuery.query;
-      if (!queryText) {
-        return;
-      }
-      if (recallQuery.truncated) {
-        verboseRoutingInfo(
-          `openviking: recall query truncated (` +
-            `chars=${recallQuery.originalChars}->${recallQuery.finalChars})`,
-        );
-      }
-
-      const prependContextParts: string[] = [];
-
-      if (cfg.autoRecall && queryText.length >= 5) {
-        const precheck = await quickRecallPrecheck(cfg.baseUrl);
-        if (!precheck.ok) {
-          verboseRoutingInfo(
-            `openviking: skipping auto-recall because precheck failed (${precheck.reason})`,
-          );
-        } else {
-          try {
-            await withTimeout(
-              (async () => {
-                const candidateLimit = Math.max(cfg.recallLimit * 4, 20);
-                const autoRecallPromises: Promise<FindResult>[] = [
-                  client.find(queryText, {
-                    targetUri: "viking://user/memories",
-                    limit: candidateLimit,
-                    scoreThreshold: 0,
-                  }, agentId),
-                  client.find(queryText, {
-                    targetUri: "viking://agent/memories",
-                    limit: candidateLimit,
-                    scoreThreshold: 0,
-                  }, agentId),
-                ];
-                if (cfg.recallResources) {
-                  autoRecallPromises.push(
-                    client.find(queryText, {
-                      targetUri: "viking://resources",
-                      limit: candidateLimit,
-                      scoreThreshold: 0,
-                    }, agentId),
-                  );
-                }
-                const autoRecallSettled = await Promise.allSettled(autoRecallPromises);
-
-                const allMemories: FindResultItem[] = [];
-                for (const s of autoRecallSettled) {
-                  if (s.status === "fulfilled") {
-                    allMemories.push(...(s.value.memories ?? []), ...(s.value.resources ?? []));
-                  } else {
-                    api.logger.warn(`openviking: auto-recall search failed: ${String(s.reason)}`);
-                  }
-                }
-
-                const uniqueMemories = allMemories.filter((memory, index, self) =>
-                  index === self.findIndex((m) => m.uri === memory.uri)
-                );
-                const leafOnly = uniqueMemories.filter((m) => !m.level || m.level === 2);
-                const processed = postProcessMemories(leafOnly, {
-                  limit: candidateLimit,
-                  scoreThreshold: cfg.recallScoreThreshold,
-                });
-                const memories = pickMemoriesForInjection(processed, cfg.recallLimit, queryText);
-
-                if (memories.length > 0) {
-                  const { lines: memoryLines, estimatedTokens } = await buildMemoryLinesWithBudget(
-                    memories,
-                    (uri) => client.read(uri, agentId),
-                    {
-                      recallPreferAbstract: cfg.recallPreferAbstract,
-                      recallMaxInjectedChars: cfg.recallMaxInjectedChars,
-                    },
-                  );
-                  const memoryContext = memoryLines.join("\n");
-                  if (memoryLines.length === 0) {
-                    verboseRoutingInfo(
-                      `openviking: skipping auto-recall injection; no complete memories fit maxInjectedChars=${cfg.recallMaxInjectedChars}`,
-                    );
-                    return;
-                  }
-                  verboseRoutingInfo(
-                    `openviking: injecting ${memoryLines.length} memories (${memoryContext.length} chars, ~${estimatedTokens} tokens, maxInjectedChars=${cfg.recallMaxInjectedChars})`,
-                  );
-                  verboseRoutingInfo(
-                    `openviking: inject-detail ${toJsonLog({ count: memories.length, memories: summarizeInjectionMemories(memories) })}`,
-                  );
-                  prependContextParts.push(
-                    "<relevant-memories>\nThe following OpenViking memories may be relevant:\n" +
-                      `${memoryContext}\n` +
-                    "</relevant-memories>",
-                  );
-                }
-              })(),
-              AUTO_RECALL_TIMEOUT_MS,
-              "openviking: auto-recall search timeout",
-            );
-          } catch (err) {
-            api.logger.warn(`openviking: auto-recall failed: ${String(err)}`);
-          }
-        }
-      }
-
-      if (prependContextParts.length > 0) {
-        return {
-          prependContext: prependContextParts.join("\n\n"),
-        };
-      }
-    });
     api.on("agent_end", async (_event: unknown, ctx?: HookAgentContext) => {
       rememberSessionAgentId(ctx ?? {});
     });
@@ -1560,7 +1517,10 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
       const sessionId = ctx?.sessionId;
       if (sessionId && contextEngineRef) {
         try {
-          const ok = await contextEngineRef.commitOVSession(sessionId, ctx?.sessionKey);
+          const ok = await contextEngineRef.commitOVSession({
+            sessionId,
+            sessionKey: ctx?.sessionKey,
+          });
           if (ok) {
             api.logger.info(`openviking: committed OV session on reset for session=${sessionId}`);
           }
@@ -1588,7 +1548,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
         return contextEngineRef;
       });
       api.logger.info(
-        "openviking: registered context-engine (before_prompt_build=auto-recall, afterTurn=auto-capture, assemble=archive+active, session→OV id=uuid-or-sha256 + diag/Phase2 options)",
+        "openviking: registered context-engine (assemble=archive+active+auto-recall, afterTurn=auto-capture, session→OV id=uuid-or-sha256 + diag/Phase2 options)",
       );
     } else {
       api.logger.warn(
@@ -1612,100 +1572,5 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
     });
   },
 };
-
-/** Estimate token count using chars/4 heuristic for diagnostics. */
-export function estimateTokenCount(text: string): number {
-  if (!text) return 0;
-  return Math.ceil(text.length / 4);
-}
-
-export type BuildMemoryLinesOptions = {
-  recallPreferAbstract: boolean;
-};
-
-async function resolveMemoryContent(
-  item: FindResultItem,
-  readFn: (uri: string) => Promise<string>,
-  options: BuildMemoryLinesOptions,
-): Promise<string> {
-  let content: string;
-
-  if (options.recallPreferAbstract && item.abstract?.trim()) {
-    content = item.abstract.trim();
-  } else if (item.level === 2) {
-    try {
-      const fullContent = await readFn(item.uri);
-      content =
-        fullContent && typeof fullContent === "string" && fullContent.trim()
-          ? fullContent.trim()
-          : (item.abstract?.trim() || item.uri);
-    } catch {
-      content = item.abstract?.trim() || item.uri;
-    }
-  } else {
-    content = item.abstract?.trim() || item.uri;
-  }
-
-  return content;
-}
-
-export async function buildMemoryLines(
-  memories: FindResultItem[],
-  readFn: (uri: string) => Promise<string>,
-  options: BuildMemoryLinesOptions,
-): Promise<string[]> {
-  const lines: string[] = [];
-  for (const item of memories) {
-    const content = await resolveMemoryContent(item, readFn, options);
-    lines.push(`- [${item.category ?? "memory"}] ${content}`);
-  }
-  return lines;
-}
-
-export type BuildMemoryLinesWithBudgetOptions = BuildMemoryLinesOptions & {
-  recallMaxInjectedChars?: number;
-  recallTokenBudget?: number;
-};
-
-/**
- * Build memory lines with a character budget constraint.
- *
- * Individual memories are never truncated. A memory that cannot fit within the
- * remaining character budget is skipped so only complete memory entries are
- * injected.
- */
-export async function buildMemoryLinesWithBudget(
-  memories: FindResultItem[],
-  readFn: (uri: string) => Promise<string>,
-  options: BuildMemoryLinesWithBudgetOptions,
-): Promise<{ lines: string[]; estimatedTokens: number }> {
-  const charBudget = options.recallMaxInjectedChars ?? options.recallTokenBudget ?? 0;
-  const lines: string[] = [];
-  let totalTokens = 0;
-  let totalChars = 0;
-
-  for (const item of memories) {
-    if (totalChars >= charBudget) {
-      break;
-    }
-
-    const content = await resolveMemoryContent(item, readFn, options);
-    const line = `- [${item.category ?? "memory"}] ${content}`;
-    const separatorChars = lines.length > 0 ? 1 : 0;
-    const projectedChars = totalChars + separatorChars + line.length;
-
-    if (projectedChars > charBudget) {
-      continue;
-    }
-
-    const lineTokens = estimateTokenCount(line);
-
-    lines.push(line);
-    totalTokens += lineTokens;
-    totalChars = projectedChars;
-  }
-
-  return { lines, estimatedTokens: totalTokens };
-}
 
 export default contextEnginePlugin;

@@ -511,8 +511,7 @@ Example: ovcli.conf for visiting localhost server
 ```json
 {
   "url": "http://localhost:1933",
-  "timeout": 60.0,
-  "output": "table"
+  "timeout": 60.0
 }
 ```
 

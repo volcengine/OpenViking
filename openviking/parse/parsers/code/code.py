@@ -51,7 +51,7 @@ class CodeRepositoryParser(BaseParser):
 
     Features:
     - Shallow clone for Git repositories
-    - Automatic filtering of non-code directories (.git, node_modules, etc.)
+    - Automatic filtering based on .gitignore and of non-code directories (.git, node_modules, etc.)
     - Direct mapping to VikingFS temp directory
     - Preserves directory structure without chunking
 

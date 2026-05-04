@@ -22,14 +22,59 @@ For `/api/v1/admin/*`, trusted mode also permits requests with no explicit ident
 | Create/delete workspace | Y | N | N |
 | List workspaces | Y | N | N |
 | Register/remove users | Y | Y (own account) | N |
+| List agent namespaces | Y | Y (own account) | N |
 | Regenerate user key | Y | Y (own account) | N |
 | Change user role | Y | N | N |
 
+## CLI `--sudo` Option
+
+When using the `ov` CLI to perform admin operations requiring ROOT privileges, you can use the `--sudo` option. This option uses the `root_api_key` from your `~/.openviking/ovcli.conf` instead of the regular `api_key`.
+
+### Configuration Requirements
+
+Configure `root_api_key` in `~/.openviking/ovcli.conf`:
+
+```json
+{
+  "url": "http://localhost:1933",
+  "api_key": "alice-user-key",
+  "root_api_key": "your-root-api-key",
+  ...
+}
+```
+
+### Commands Supporting `--sudo`
+
+- `ov --sudo admin` - Account and user management
+- `ov --sudo system` - System utility commands
+- `ov --sudo reindex` - Rebuild indexes
+
+### Usage Limitations
+
+- `--sudo` only works with admin commands - using it with regular data commands will error
+- Must have `root_api_key` configured to use `--sudo`
+
 ## API Reference
 
-### create_account()
+### create_account
+
+#### 1. API Implementation Overview
 
 Create a new workspace with its first admin user.
+
+**Processing Flow:**
+1. Verify requester has ROOT privileges
+2. Use API Key Manager to create account and initial admin user
+3. Initialize account-level directory structure
+4. Initialize admin user's personal directory
+5. Return account info and user key (not in trusted mode)
+
+**Code Entry Points:**
+- `openviking/server/routers/admin.py:create_account` - HTTP route
+- `openviking/server/api_keys/new.py:APIKeyManager.create_account` - Core implementation
+- `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_create_account` - Python SDK
+
+#### 2. Interface and Parameters
 
 **Parameters**
 
@@ -39,6 +84,12 @@ Create a new workspace with its first admin user.
 | admin_user_id | str | Yes | - | First admin user ID |
 | isolate_user_scope_by_agent | bool | No | false | Further isolate user scope by agent |
 | isolate_agent_scope_by_user | bool | No | false | Further isolate agent scope by user |
+
+**Notes:**
+- In `trusted` mode, `user_key` is omitted from the response
+- `isolate_user_scope_by_agent` and `isolate_agent_scope_by_user` are only available via HTTP API, not in Python SDK or CLI
+
+#### 3. Usage Examples
 
 **HTTP API**
 
@@ -52,7 +103,9 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
   -H "X-API-Key: <root-key>" \
   -d '{
     "account_id": "acme",
-    "admin_user_id": "alice"
+    "admin_user_id": "alice",
+    "isolate_user_scope_by_agent": true,
+    "isolate_agent_scope_by_user": false
   }'
 ```
 
@@ -100,13 +153,28 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
   }'
 ```
 
+**Python SDK**
+
+```python
+import openviking as ov
+
+client = ov.SyncHTTPClient(api_key="<root-key>")
+client.initialize()
+
+result = client.admin_create_account("acme", "alice")
+print(f"Account created: {result['account_id']}")
+print(f"Admin user: {result['admin_user_id']}")
+print(f"User key: {result.get('user_key', '(not exposed in trusted mode)')}")
+```
+
 **CLI**
 
 ```bash
-openviking admin create-account acme --admin alice
+# Requires ROOT privileges, use --sudo
+ov --sudo admin create-account acme --admin alice
 ```
 
-**Response**
+**Response Example**
 
 ```json
 {
@@ -114,7 +182,9 @@ openviking admin create-account acme --admin alice
   "result": {
     "account_id": "acme",
     "admin_user_id": "alice",
-    "user_key": "7f3a9c1e..."
+    "user_key": "7f3a9c1e...",
+    "isolate_user_scope_by_agent": true,
+    "isolate_agent_scope_by_user": false
   },
   "time": 0.1
 }
@@ -124,9 +194,27 @@ In `trusted` mode, the same response omits `user_key`.
 
 ---
 
-### list_accounts()
+### list_accounts
+
+#### 1. API Implementation Overview
 
 List all workspaces (ROOT only).
+
+**Processing Flow:**
+1. Verify requester has ROOT privileges
+2. Call API Key Manager to get all accounts
+3. Return list with account ID, creation time, and user count
+
+**Code Entry Points:**
+- `openviking/server/routers/admin.py:list_accounts` - HTTP route
+- `openviking/server/api_keys/new.py:APIKeyManager.get_accounts` - Core implementation
+- `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_list_accounts` - Python SDK
+
+#### 2. Interface and Parameters
+
+No parameters.
+
+#### 3. Usage Examples
 
 **HTTP API**
 
@@ -139,13 +227,27 @@ curl -X GET http://localhost:1933/api/v1/admin/accounts \
   -H "X-API-Key: <root-key>"
 ```
 
+**Python SDK**
+
+```python
+import openviking as ov
+
+client = ov.SyncHTTPClient(api_key="<root-key>")
+client.initialize()
+
+accounts = client.admin_list_accounts()
+for account in accounts:
+    print(f"Account: {account['account_id']}, created: {account['created_at']}, users: {account['user_count']}")
+```
+
 **CLI**
 
 ```bash
-openviking admin list-accounts
+# Requires ROOT privileges, use --sudo
+ov --sudo admin list-accounts
 ```
 
-**Response**
+**Response Example**
 
 ```json
 {
@@ -160,15 +262,36 @@ openviking admin list-accounts
 
 ---
 
-### delete_account()
+### delete_account
+
+#### 1. API Implementation Overview
 
 Delete a workspace and all associated users and data (ROOT only).
+
+**Processing Flow:**
+1. Verify requester has ROOT privileges
+2. Cascade delete all AGFS data for the account (user/, agent/, session/, resources/)
+3. Cascade delete all vector DB records for the account
+4. Finally delete account metadata and all user keys
+
+**Code Entry Points:**
+- `openviking/server/routers/admin.py:delete_account` - HTTP route
+- `openviking/server/api_keys/new.py:APIKeyManager.delete_account` - Core implementation
+- `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_delete_account` - Python SDK
+
+#### 2. Interface and Parameters
 
 **Parameters**
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | account_id | str | Yes | - | Workspace ID to delete |
+
+**Notes:**
+- Delete operation is irreversible and cascades to all account data
+- If some data fails to delete, warnings are logged and deletion continues
+
+#### 3. Usage Examples
 
 **HTTP API**
 
@@ -181,19 +304,32 @@ curl -X DELETE http://localhost:1933/api/v1/admin/accounts/acme \
   -H "X-API-Key: <root-key>"
 ```
 
+**Python SDK**
+
+```python
+import openviking as ov
+
+client = ov.SyncHTTPClient(api_key="<root-key>")
+client.initialize()
+
+result = client.admin_delete_account("acme")
+print(f"Account deleted: {result['deleted']}")
+```
+
 **CLI**
 
 ```bash
-openviking admin delete-account acme
+# Requires ROOT privileges, use --sudo
+ov --sudo admin delete-account acme
 ```
 
-**Response**
+**Response Example**
 
 ```json
 {
   "status": "ok",
   "result": {
-    "account_id": "acme"
+    "deleted": true
   },
   "time": 0.1
 }
@@ -201,9 +337,24 @@ openviking admin delete-account acme
 
 ---
 
-### register_user()
+### register_user
+
+#### 1. API Implementation Overview
 
 Register a new user in a workspace.
+
+**Processing Flow:**
+1. Verify requester has ROOT privileges or is an ADMIN of the account
+2. Call API Key Manager to register new user
+3. Initialize new user's personal directory
+4. Return user info and user key (not in trusted mode)
+
+**Code Entry Points:**
+- `openviking/server/routers/admin.py:register_user` - HTTP route
+- `openviking/server/api_keys/new.py:APIKeyManager.register_user` - Core implementation
+- `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_register_user` - Python SDK
+
+#### 2. Interface and Parameters
 
 **Parameters**
 
@@ -212,6 +363,13 @@ Register a new user in a workspace.
 | account_id | str | Yes | - | Workspace ID |
 | user_id | str | Yes | - | User ID |
 | role | str | No | "user" | Role: "admin" or "user" |
+
+**Notes:**
+- In `trusted` mode, `user_key` is omitted from the response
+- ADMIN can only register users in their own account
+- Only ROOT can set role to "admin" for new users
+
+#### 3. Usage Examples
 
 **HTTP API**
 
@@ -229,13 +387,30 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users \
   }'
 ```
 
+**Python SDK**
+
+```python
+import openviking as ov
+
+client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
+client.initialize()
+
+result = client.admin_register_user("acme", "bob", role="user")
+print(f"User registered: {result['user_id']}")
+print(f"User key: {result.get('user_key', '(not exposed in trusted mode)')}")
+```
+
 **CLI**
 
 ```bash
-openviking admin register-user acme bob --role user
+# Either ROOT or account ADMIN can execute
+# If using regular user's api_key who is an ADMIN of acme:
+ov admin register-user acme bob --role user
+# If using root_api_key (--sudo):
+ov --sudo admin register-user acme bob --role user
 ```
 
-**Response**
+**Response Example**
 
 ```json
 {
@@ -251,15 +426,39 @@ openviking admin register-user acme bob --role user
 
 ---
 
-### list_users()
+### list_users
+
+#### 1. API Implementation Overview
 
 List all users in a workspace.
+
+**Processing Flow:**
+1. Verify requester has ROOT privileges or is an ADMIN of the account
+2. Call API Key Manager to get users list
+3. Apply optional filters (name, role) and pagination limit
+4. Return users list (trusted mode omits user_key)
+
+**Code Entry Points:**
+- `openviking/server/routers/admin.py:list_users` - HTTP route
+- `openviking/server/api_keys/new.py:APIKeyManager.get_users` - Core implementation
+- `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_list_users` - Python SDK
+
+#### 2. Interface and Parameters
 
 **Parameters**
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | account_id | str | Yes | - | Workspace ID |
+| limit | int | No | 100 | Maximum number of users to return |
+| name | str | No | null | Filter by user ID (prefix match) |
+| role | str | No | null | Filter by role |
+
+**Notes:**
+- ADMIN can only list users in their own account
+- In `trusted` mode, `user_key` is omitted from the response
+
+#### 3. Usage Examples
 
 **HTTP API**
 
@@ -268,17 +467,39 @@ GET /api/v1/admin/accounts/{account_id}/users
 ```
 
 ```bash
+# List all users
 curl -X GET http://localhost:1933/api/v1/admin/accounts/acme/users \
   -H "X-API-Key: <root-or-admin-key>"
+
+# With filters
+curl -X GET "http://localhost:1933/api/v1/admin/accounts/acme/users?role=admin&limit=50" \
+  -H "X-API-Key: <root-or-admin-key>"
+```
+
+**Python SDK**
+
+```python
+import openviking as ov
+
+client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
+client.initialize()
+
+users = client.admin_list_users("acme")
+for user in users:
+    print(f"User: {user['user_id']}, role: {user['role']}")
 ```
 
 **CLI**
 
 ```bash
-openviking admin list-users acme
+# Either ROOT or account ADMIN can execute
+# If using regular user's api_key who is an ADMIN of acme:
+ov admin list-users acme
+# If using root_api_key (--sudo):
+ov --sudo admin list-users acme
 ```
 
-**Response**
+**Response Example**
 
 ```json
 {
@@ -293,9 +514,92 @@ openviking admin list-users acme
 
 ---
 
-### remove_user()
+### list_agents
+
+#### 1. API Implementation Overview
+
+List agent namespaces that exist under a workspace. This is an admin discovery API; it does not change normal `viking://agent/...` filesystem semantics.
+
+**Processing Flow:**
+1. Verify requester has ROOT privileges or is an ADMIN of the account
+2. Verify the account exists
+3. Scan the account's `viking://agent` namespace root
+4. Return sorted agent namespace entries
+
+**Code Entry Points:**
+- `openviking/server/routers/admin.py:list_agents` - HTTP route
+- `crates/ov_cli/src/client.rs:HttpClient.admin_list_agents` - CLI HTTP client
+- `crates/ov_cli/src/commands/admin.rs:list_agents` - CLI command
+
+#### 2. Interface and Parameters
+
+**Parameters**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| account_id | str | Yes | - | Workspace ID |
+
+**Notes:**
+- ROOT can list agents in any account
+- ADMIN can only list agents in their own account
+- USER cannot call this API
+- The result lists agent namespaces that exist in storage. A new account includes the initialized `default` agent namespace.
+
+#### 3. Usage Examples
+
+**HTTP API**
+
+```
+GET /api/v1/admin/accounts/{account_id}/agents
+```
+
+```bash
+curl -X GET http://localhost:1933/api/v1/admin/accounts/acme/agents \
+  -H "X-API-Key: <root-or-admin-key>"
+```
+
+**CLI**
+
+```bash
+# Either ROOT or account ADMIN can execute
+# If using regular user's api_key who is an ADMIN of acme:
+ov admin list-agents acme
+# If using root_api_key (--sudo):
+ov --sudo admin list-agents acme
+```
+
+**Response Example**
+
+```json
+{
+  "status": "ok",
+  "result": [
+    {"agent_id": "default", "uri": "viking://agent/default"},
+    {"agent_id": "openclaw", "uri": "viking://agent/openclaw"}
+  ],
+  "time": 0.1
+}
+```
+
+---
+
+### remove_user
+
+#### 1. API Implementation Overview
 
 Remove a user from a workspace. The user's API key is deleted immediately.
+
+**Processing Flow:**
+1. Verify requester has ROOT privileges or is an ADMIN of the account
+2. Call API Key Manager to delete user and their API key
+3. Return deletion confirmation
+
+**Code Entry Points:**
+- `openviking/server/routers/admin.py:remove_user` - HTTP route
+- `openviking/server/api_keys/new.py:APIKeyManager.remove_user` - Core implementation
+- `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_remove_user` - Python SDK
+
+#### 2. Interface and Parameters
 
 **Parameters**
 
@@ -303,6 +607,12 @@ Remove a user from a workspace. The user's API key is deleted immediately.
 |-----------|------|----------|---------|-------------|
 | account_id | str | Yes | - | Workspace ID |
 | user_id | str | Yes | - | User ID to remove |
+
+**Notes:**
+- ADMIN can only remove users in their own account
+- Cannot delete the last admin user of an account
+
+#### 3. Usage Examples
 
 **HTTP API**
 
@@ -315,20 +625,35 @@ curl -X DELETE http://localhost:1933/api/v1/admin/accounts/acme/users/bob \
   -H "X-API-Key: <root-or-admin-key>"
 ```
 
+**Python SDK**
+
+```python
+import openviking as ov
+
+client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
+client.initialize()
+
+result = client.admin_remove_user("acme", "bob")
+print(f"User deleted: {result['deleted']}")
+```
+
 **CLI**
 
 ```bash
-openviking admin remove-user acme bob
+# Either ROOT or account ADMIN can execute
+# If using regular user's api_key who is an ADMIN of acme:
+ov admin remove-user acme bob
+# If using root_api_key (--sudo):
+ov --sudo admin remove-user acme bob
 ```
 
-**Response**
+**Response Example**
 
 ```json
 {
   "status": "ok",
   "result": {
-    "account_id": "acme",
-    "user_id": "bob"
+    "deleted": true
   },
   "time": 0.1
 }
@@ -336,9 +661,23 @@ openviking admin remove-user acme bob
 
 ---
 
-### set_role()
+### set_role
+
+#### 1. API Implementation Overview
 
 Change a user's role (ROOT only).
+
+**Processing Flow:**
+1. Verify requester has ROOT privileges
+2. Call API Key Manager to update user role
+3. Return updated user info
+
+**Code Entry Points:**
+- `openviking/server/routers/admin.py:set_user_role` - HTTP route
+- `openviking/server/api_keys/new.py:APIKeyManager.set_role` - Core implementation
+- `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_set_role` - Python SDK
+
+#### 2. Interface and Parameters
 
 **Parameters**
 
@@ -346,7 +685,13 @@ Change a user's role (ROOT only).
 |-----------|------|----------|---------|-------------|
 | account_id | str | Yes | - | Workspace ID |
 | user_id | str | Yes | - | User ID |
-| role | str | Yes | - | New role: "admin" or "user" |
+| role | str | Yes | - | New role: "admin", "user", or "root" |
+
+**Notes:**
+- Only ROOT can change user roles
+- Role can be set to "admin", "user", or "root"
+
+#### 3. Usage Examples
 
 **HTTP API**
 
@@ -361,13 +706,26 @@ curl -X PUT http://localhost:1933/api/v1/admin/accounts/acme/users/bob/role \
   -d '{"role": "admin"}'
 ```
 
+**Python SDK**
+
+```python
+import openviking as ov
+
+client = ov.SyncHTTPClient(api_key="<root-key>")
+client.initialize()
+
+result = client.admin_set_role("acme", "bob", "admin")
+print(f"User: {result['user_id']}, new role: {result['role']}")
+```
+
 **CLI**
 
 ```bash
-openviking admin set-role acme bob admin
+# Requires ROOT privileges, use --sudo
+ov --sudo admin set-role acme bob admin
 ```
 
-**Response**
+**Response Example**
 
 ```json
 {
@@ -383,9 +741,24 @@ openviking admin set-role acme bob admin
 
 ---
 
-### regenerate_key()
+### regenerate_key
+
+#### 1. API Implementation Overview
 
 Regenerate a user's API key. The old key is immediately invalidated.
+
+**Processing Flow:**
+1. Verify requester has ROOT privileges or is an ADMIN of the account
+2. Call API Key Manager to regenerate user key
+3. Old key is immediately invalidated
+4. Return new user key
+
+**Code Entry Points:**
+- `openviking/server/routers/admin.py:regenerate_key` - HTTP route
+- `openviking/server/api_keys/new.py:APIKeyManager.regenerate_key` - Core implementation
+- `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_regenerate_key` - Python SDK
+
+#### 2. Interface and Parameters
 
 **Parameters**
 
@@ -393,6 +766,12 @@ Regenerate a user's API key. The old key is immediately invalidated.
 |-----------|------|----------|---------|-------------|
 | account_id | str | Yes | - | Workspace ID |
 | user_id | str | Yes | - | User ID |
+
+**Notes:**
+- ADMIN can only regenerate keys for users in their own account
+- Old key is immediately invalidated, clients using it need to be updated
+
+#### 3. Usage Examples
 
 **HTTP API**
 
@@ -406,13 +785,29 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users/bob/key \
   -H "X-API-Key: <root-or-admin-key>"
 ```
 
+**Python SDK**
+
+```python
+import openviking as ov
+
+client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
+client.initialize()
+
+result = client.admin_regenerate_key("acme", "bob")
+print(f"New user key: {result['user_key']}")
+```
+
 **CLI**
 
 ```bash
-openviking admin regenerate-key acme bob
+# Either ROOT or account ADMIN can execute
+# If using regular user's api_key who is an ADMIN of acme:
+ov admin regenerate-key acme bob
+# If using root_api_key (--sudo):
+ov --sudo admin regenerate-key acme bob
 ```
 
-**Response**
+**Response Example**
 
 ```json
 {
@@ -431,28 +826,30 @@ openviking admin regenerate-key acme bob
 ### Typical Admin Workflow
 
 ```bash
-# Step 1: ROOT creates workspace with alice as first admin
-openviking admin create-account acme --admin alice
+# Step 1: ROOT creates workspace with alice as first admin (requires --sudo)
+ov --sudo admin create-account acme --admin alice
 # Returns alice's user_key
 
 # Step 2: alice (admin) registers regular user bob
-openviking admin register-user acme bob --role user
+# Configure api_key in config file to alice's user_key, no --sudo needed
+ov admin register-user acme bob --role user
 # Returns bob's user_key
 
 # Step 3: List all users in the account
-openviking admin list-users acme
+ov admin list-users acme
 
-# Step 4: ROOT promotes bob to admin
-openviking admin set-role acme bob admin
+# Step 4: ROOT promotes bob to admin (requires --sudo)
+ov --sudo admin set-role acme bob admin
 
 # Step 5: bob lost their key, regenerate (old key immediately invalidated)
-openviking admin regenerate-key acme bob
+# alice as admin can do this, no --sudo needed
+ov admin regenerate-key acme bob
 
 # Step 6: Remove user
-openviking admin remove-user acme bob
+ov admin remove-user acme bob
 
-# Step 7: Delete entire workspace
-openviking admin delete-account acme
+# Step 7: Delete entire workspace (requires --sudo)
+ov --sudo admin delete-account acme
 ```
 
 ### HTTP API Equivalent
