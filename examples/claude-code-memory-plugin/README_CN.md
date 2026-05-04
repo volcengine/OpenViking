@@ -51,11 +51,13 @@ curl http://localhost:1933/health   # 或者你的远程 URL
 仓库的 `examples/.claude-plugin/marketplace.json` 把本插件暴露为一个本地 marketplace 条目。在 OpenViking 仓库根目录：
 
 ```bash
-claude plugin marketplace add "$(pwd)/examples" --scope local
-claude plugin install claude-code-memory-plugin@openviking-plugins-local --scope local
+claude plugin marketplace add "$(pwd)/examples" --scope user
+claude plugin install claude-code-memory-plugin@openviking-plugins-local --scope user
 ```
 
-> 本地安装让 Claude Code 直接引用源码目录，对 `scripts/`、`hooks/`、配置文件的修改下次 hook 触发即生效，无需重装。但移动 / 重命名 / 删除源码目录，或 `git checkout` 到不含这些文件的分支，会立刻让插件失效。后续会发布公开 marketplace 以支持一键安装。
+> `--scope user` 让插件在任意目录下都启用。用 `--scope local` 会把启用状态绑死在当前目录,一旦 `cd` 到别处插件就显示 disabled,需要手动 enable。
+>
+> marketplace 条目让 Claude Code 直接引用源码目录,对 `scripts/`、`hooks/`、配置文件的修改下次 hook 触发即生效,无需重装。但移动 / 重命名 / 删除源码目录,或 `git checkout` 到不含这些文件的分支,会立刻让插件失效。后续会发布公开 marketplace 以支持一键安装。
 
 #### 4. 启动 Claude Code
 

@@ -51,11 +51,13 @@ If `ov.conf` is what you already maintain, the plugin reads it too — see [Conf
 The repo's `examples/.claude-plugin/marketplace.json` exposes the plugin as a local marketplace entry. From the OpenViking repo root:
 
 ```bash
-claude plugin marketplace add "$(pwd)/examples" --scope local
-claude plugin install claude-code-memory-plugin@openviking-plugins-local --scope local
+claude plugin marketplace add "$(pwd)/examples" --scope user
+claude plugin install claude-code-memory-plugin@openviking-plugins-local --scope user
 ```
 
-> Local install points Claude Code at the source directory. Edits to `scripts/`, `hooks/`, and config files take effect on the next hook invocation — no reinstall. But moving / renaming / deleting the source dir, or `git checkout`-ing to a branch without these files, breaks the plugin. A public marketplace listing for one-click install will follow.
+> `--scope user` makes the plugin active from any directory. Using `--scope local` ties enablement to the current dir and the plugin shows up disabled the moment you `cd` elsewhere.
+>
+> The marketplace entry points Claude Code at the source directory. Edits to `scripts/`, `hooks/`, and config files take effect on the next hook invocation — no reinstall. But moving / renaming / deleting the source dir, or `git checkout`-ing to a branch without these files, breaks the plugin. A public marketplace listing for one-click install will follow.
 
 #### 4. Start Claude Code
 

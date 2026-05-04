@@ -209,16 +209,23 @@ fi
 heading '5. Plugin install'
 
 if [ "$CLAUDE_AVAILABLE" -eq 1 ]; then
+  # Use --scope user so the plugin is active from any directory, not just $REPO_DIR.
+  # `local` scope binds enablement to $REPO_DIR's .claude/settings.local.json, which
+  # surfaces as "disabled" the moment the user `cd`s elsewhere and forces a manual
+  # `claude plugin enable` post-install.
   info 'claude plugin marketplace add'
-  ( cd "$REPO_DIR" && claude plugin marketplace add "$REPO_DIR/examples" --scope local ) || \
+  ( cd "$REPO_DIR" && claude plugin marketplace add "$REPO_DIR/examples" --scope user ) || \
     warn 'marketplace add returned non-zero (likely already added) — continuing'
   info 'claude plugin install'
-  ( cd "$REPO_DIR" && claude plugin install claude-code-memory-plugin@openviking-plugins-local --scope local )
+  ( cd "$REPO_DIR" && claude plugin install claude-code-memory-plugin@openviking-plugins-local --scope user )
+  # Belt-and-suspenders: make sure it ends up enabled even if `install` left it
+  # in a disabled state (observed on some Claude Code versions).
+  claude plugin enable claude-code-memory-plugin@openviking-plugins-local --scope user >/dev/null 2>&1 || true
 else
   warn "Run these manually after installing Claude Code:"
   warn "  cd \"$REPO_DIR\""
-  warn '  claude plugin marketplace add "$(pwd)/examples" --scope local'
-  warn '  claude plugin install claude-code-memory-plugin@openviking-plugins-local --scope local'
+  warn '  claude plugin marketplace add "$(pwd)/examples" --scope user'
+  warn '  claude plugin install claude-code-memory-plugin@openviking-plugins-local --scope user'
 fi
 
 # ----- Done -----
