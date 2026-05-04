@@ -454,13 +454,11 @@ async def index_resource(
 
     if await viking_fs.exists(abstract_uri, ctx=ctx):
         content = await viking_fs.read_file(abstract_uri, ctx=ctx)
-        if isinstance(content, bytes):
-            abstract = content.decode("utf-8")
+        abstract = content.decode("utf-8") if isinstance(content, bytes) else content
 
     if await viking_fs.exists(overview_uri, ctx=ctx):
         content = await viking_fs.read_file(overview_uri, ctx=ctx)
-        if isinstance(content, bytes):
-            overview = content.decode("utf-8")
+        overview = content.decode("utf-8") if isinstance(content, bytes) else content
 
     if abstract or overview:
         await vectorize_directory_meta(uri, abstract, overview, context_type=context_type, ctx=ctx)
