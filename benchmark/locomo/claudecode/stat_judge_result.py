@@ -140,10 +140,10 @@ def process_qa_results(input_path: str) -> list[str]:
     avg_cost = total_cost / valid_rows if valid_rows > 0 else 0.0
 
     category_names = {
-        "1": "single-hop",
-        "2": "multi-hop",
-        "3": "temporal",
-        "4": "world-knowledge",
+        "1": "multi-hop",
+        "2": "temporal",
+        "3": "open-domain",
+        "4": "single-hop",
     }
 
     output = [

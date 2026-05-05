@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "viking": {
+      "command": "node",
+      "args": ["/Users/zhengxiao.wu/Dev/OpenViking-base/examples/claude-code-memory-plugin/servers/memory-server.js"],
+      "env": {
+        "OPENVIKING_CONFIG_FILE": "/Users/zhengxiao.wu/Dev/OpenViking-benchmark/benchmark/locomo/claudecode/config/ov-qa-old.conf"
+      }
+    }
+  }
+}

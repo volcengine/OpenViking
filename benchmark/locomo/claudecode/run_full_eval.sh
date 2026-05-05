@@ -33,6 +33,10 @@ HOOKS_SETTINGS=""
 MCP_CONFIG=""
 OV_INGEST_CONFIG=""
 OV_QA_CONFIG=""
+OV_CLI_CONFIG=""
+OV_SHARED_ID_SET=false
+OV_SHARED_ID=""
+OV_PREAMBLE=""
 
 # QA 并行度（注意 API rate limit）
 QA_PARALLEL=5
@@ -120,6 +124,19 @@ while [[ $# -gt 0 ]]; do
             OV_QA_CONFIG="$2"
             shift 2
             ;;
+        --ov-cli-config)
+            OV_CLI_CONFIG="$2"
+            shift 2
+            ;;
+        --ov-shared-id)
+            OV_SHARED_ID="$2"
+            OV_SHARED_ID_SET=true
+            shift 2
+            ;;
+        --ov-preamble)
+            OV_PREAMBLE="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown argument: $1"
             shift
@@ -178,8 +195,18 @@ fi
 if [ -n "$OV_QA_CONFIG" ]; then
     OV_QA_ARGS="$OV_QA_ARGS --ov-config $OV_QA_CONFIG"
 fi
-
+if [ -n "$OV_CLI_CONFIG" ]; then
+    OV_QA_ARGS="$OV_QA_ARGS --ov-cli-config $OV_CLI_CONFIG"
+fi
 echo "[2/4] Running QA evaluation..."
+OV_PREAMBLE_ARG=()
+if [ -n "$OV_PREAMBLE" ]; then
+    OV_PREAMBLE_ARG=(--ov-preamble "$OV_PREAMBLE")
+fi
+OV_SHARED_ARG=()
+if [ "$OV_SHARED_ID_SET" = true ]; then
+    OV_SHARED_ARG=(--ov-shared-id "$OV_SHARED_ID")
+fi
 uv run python "$SCRIPT_DIR/eval.py" \
     --input "$INPUT_FILE" \
     --output "$OUTPUT_CSV" \
@@ -191,7 +218,9 @@ uv run python "$SCRIPT_DIR/eval.py" \
     $API_KEY_ARG \
     $AUTH_TOKEN_ARG \
     $MODEL_ARG \
-    $OV_QA_ARGS
+    $OV_QA_ARGS \
+    "${OV_SHARED_ARG[@]}" \
+    "${OV_PREAMBLE_ARG[@]}"
 
 # =============================================================================
 # Step 3: Judge 打分

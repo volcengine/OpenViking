@@ -267,6 +267,7 @@ def run_claude_code(
     hooks_settings: Optional[str] = None,
     mcp_config: Optional[str] = None,
     ov_config: Optional[str] = None,
+    ov_cli_config: Optional[str] = None,
     ov_agent_id: Optional[str] = None,
 ) -> dict:
     """Run claude -p with retries on TIMEOUT/ERROR."""
@@ -282,11 +283,13 @@ def run_claude_code(
         env["OPENVIKING_CONFIG_FILE"] = ov_config
         env["OPENVIKING_MEMORY_ENABLED"] = "1"
         env["OPENVIKING_DEBUG"] = "1"
+    if ov_cli_config:
+        env["OPENVIKING_CLI_CONFIG_FILE"] = ov_cli_config
     if ov_agent_id:
         env["OPENVIKING_AGENT_ID"] = ov_agent_id
         env["OPENVIKING_USER"] = ov_agent_id
 
-    extra_flags = ["--no-session-persistence"]
+    extra_flags = []
     if hooks_settings:
         extra_flags.extend(["--settings", hooks_settings])
     if mcp_config:
@@ -319,6 +322,9 @@ def process_question(
     hooks_settings: Optional[str] = None,
     mcp_config: Optional[str] = None,
     ov_config: Optional[str] = None,
+    ov_cli_config: Optional[str] = None,
+    ov_shared_id: Optional[str] = None,
+    ov_preamble_override: Optional[str] = None,
 ) -> dict:
     sample_id = qa["sample_id"]
     qi = qa["question_index"]
@@ -327,7 +333,9 @@ def process_question(
 
     project_dir = os.path.join(project_root, sample_id)
 
-    if ov_config:
+    if ov_preamble_override is not None:
+        ov_preamble = ov_preamble_override + "\n\n" if ov_preamble_override else ""
+    elif ov_config:
         ov_preamble = (
             "If context is insufficient, use OpenViking MCP tools or auto-memory files to find more information.\n\n"
         )
@@ -354,7 +362,8 @@ def process_question(
         api_url=api_url, api_key=api_key, auth_token=auth_token,
         model=model, timeout_sec=timeout_sec,
         hooks_settings=hooks_settings, mcp_config=mcp_config,
-        ov_config=ov_config, ov_agent_id=sample_id,
+        ov_config=ov_config, ov_cli_config=ov_cli_config,
+        ov_agent_id=(ov_shared_id if ov_shared_id is not None else sample_id),
     )
     elapsed = time.perf_counter() - t0
 
@@ -469,6 +478,18 @@ def main():
         "--ov-config", default=None,
         help="Path to ov.conf for OpenViking (sets OPENVIKING_CONFIG_FILE env var)",
     )
+    parser.add_argument(
+        "--ov-cli-config", default=None,
+        help="Path to ovcli.conf (sets OPENVIKING_CLI_CONFIG_FILE; pin local OV)",
+    )
+    parser.add_argument(
+        "--ov-shared-id", default=None,
+        help="If set, use this single agent_id/user for all samples (no per-sample isolation). Empty string '' means do NOT set OPENVIKING_AGENT_ID at all (server falls back to 'default').",
+    )
+    parser.add_argument(
+        "--ov-preamble", default=None,
+        help="Custom preamble for OV-enabled QA (overrides default)",
+    )
     args = parser.parse_args()
 
     api_key = args.api_key or os.environ.get("ANTHROPIC_API_KEY", "")
@@ -476,8 +497,7 @@ def main():
     api_url = args.api_url or os.environ.get("ANTHROPIC_BASE_URL")
 
     if not api_key and not auth_token:
-        print("Error: API key required (--api-key/ANTHROPIC_API_KEY or --auth-token/ANTHROPIC_AUTH_TOKEN)", file=sys.stderr)
-        sys.exit(1)
+        print("[INFO] No API key/token provided - assuming subscription auth in HOME", file=sys.stderr)
 
     # Verify project root has been ingested
     mapping_path = os.path.join(args.project_root, "sample_mapping.json")
@@ -538,6 +558,9 @@ def main():
                 hooks_settings=args.hooks_settings,
                 mcp_config=args.mcp_config,
                 ov_config=args.ov_config,
+                ov_cli_config=args.ov_cli_config,
+                ov_shared_id=args.ov_shared_id,
+                ov_preamble_override=args.ov_preamble,
             )
             futures[fut] = qa
 

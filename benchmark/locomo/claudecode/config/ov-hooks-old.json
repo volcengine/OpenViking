@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /Users/zhengxiao.wu/Dev/OpenViking-base/examples/claude-code-memory-plugin/scripts/auto-recall.mjs",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}
