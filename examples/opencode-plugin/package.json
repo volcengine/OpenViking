@@ -1,0 +1,39 @@
+{
+  "name": "openviking-opencode-plugin",
+  "version": "0.1.0",
+  "author": "tanyouqing",
+  "description": "Unified OpenCode plugin for OpenViking repository retrieval and long-term memory",
+  "type": "module",
+  "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs"
+  },
+  "files": [
+    "index.mjs",
+    "lib/",
+    "wrappers/",
+    "README.md",
+    "README_ZH.md",
+    "INSTALL.md",
+    "INSTALL-ZH.md"
+  ],
+  "scripts": {
+    "check": "node --check index.mjs && node --check wrappers/openviking.js"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "latest"
+  },
+  "repository": {
+  "type": "git",
+  "url": "https://github.com/volcengine/OpenViking"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "openviking",
+    "memory",
+    "rag",
+    "code-search"
+  ],
+  "license": "Apache-2.0"
+}
