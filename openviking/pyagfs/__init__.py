@@ -50,8 +50,10 @@ def _is_compatible_ragfs_extension(path: str, ext_suffix: str) -> bool:
         return False
 
     # CPython-specific extensions are only safe for the exact running
-    # interpreter ABI tag. A cp310 binary must not be loaded on cp312/cp313.
-    if ".cpython-" in name:
+    # interpreter ABI tag. Reject both Unix-style `.cpython-312-...` and
+    # Windows-style `.cp312-...` artifacts unless they exactly match
+    # the active EXT_SUFFIX.
+    if name.startswith("ragfs_python.cp") and not name.startswith("ragfs_python.abi3."):
         return name == f"ragfs_python{ext_suffix}"
 
     # Stable ABI artifacts are intentionally interpreter-independent.
