@@ -669,6 +669,99 @@ export function mergeConsecutiveAssistants(messages: AgentMessage[]): AgentMessa
   return result;
 }
 
+/**
+ * Hoist tool_result blocks to the front of a content array.
+ *
+ * The Anthropic / Bedrock / Gemini APIs require tool_result blocks to appear
+ * at the START of a user message's content array (a tool_result must follow
+ * the assistant tool_use that produced it). When mergeConsecutiveUsers
+ * merges two user messages, the previous content's text blocks may end up
+ * before tool_results from the second message — this function fixes the order.
+ *
+ * Same pattern as Claude Code's hoistToolResults in src/utils/messages.ts.
+ */
+function hoistToolResults<T>(content: T[]): T[] {
+  const toolResults: T[] = [];
+  const others: T[] = [];
+  for (const block of content) {
+    if (
+      block &&
+      typeof block === "object" &&
+      "type" in block &&
+      (block as { type?: string }).type === "tool_result"
+    ) {
+      toolResults.push(block);
+    } else {
+      others.push(block);
+    }
+  }
+  return [...toolResults, ...others];
+}
+
+/**
+ * Merge consecutive user messages by concatenating their content arrays.
+ *
+ * Mirror of mergeConsecutiveAssistants. Required because Gemini and Anthropic
+ * APIs reject consecutive same-role messages with stopReason=stop payloads=0
+ * (empty response). Three independent sources can inject role: "user":
+ *
+ *   1. Archive commit: "[Session History Summary]" via buildArchiveMemory
+ *   2. OpenClaw yield events: "[sessions_yield interrupt]" / "Turn yielded. ..."
+ *   3. Audio/Telegram metadata: "[Audio] User text: [Telegram <name>...]"
+ *
+ * Without merging, these can stack into 2-5 consecutive user turns. The
+ * 1P Anthropic API would merge server-side, but Bedrock/Gemini won't —
+ * we merge client-side for wire-format consistency.
+ *
+ * Note: this MUST run AFTER sanitizeToolUseResultPairing because that pass
+ * may strip orphaned tool_use / tool_result blocks and thereby create new
+ * user-user adjacencies that didn't exist in the input.
+ *
+ * Tracks issue #1724.
+ */
+export function mergeConsecutiveUsers(messages: AgentMessage[]): AgentMessage[] {
+  const result: AgentMessage[] = [];
+  for (const msg of messages) {
+    const prev = result[result.length - 1];
+    if (msg.role === "user" && prev?.role === "user") {
+      const prevContent = Array.isArray(prev.content) ? prev.content : [{ type: "text", text: prev.content }];
+      const currContent = Array.isArray(msg.content) ? msg.content : [{ type: "text", text: msg.content }];
+      prev.content = hoistToolResults([...prevContent, ...currContent]) as typeof prev.content;
+    } else {
+      result.push({ ...msg });
+    }
+  }
+  return result;
+}
+
+/**
+ * Defensive role-alternation invariant check.
+ *
+ * After mergeConsecutiveUsers + mergeConsecutiveAssistants, the message stream
+ * should already alternate user/assistant. But sanitizeToolUseResultPairing
+ * can in rare cases strip a user_with_tool_result message that was the only
+ * thing separating two assistant messages, leaving an assistant-assistant
+ * adjacency that upstream merge passes can't fix.
+ *
+ * When detected, we insert a placeholder user message — matching Claude Code's
+ * NO_CONTENT_MESSAGE pattern (see CC src/utils/messages.ts:5375-5388) — to
+ * preserve the alternation contract that Gemini / Anthropic require.
+ */
+export function ensureAlternation(messages: AgentMessage[]): AgentMessage[] {
+  const result: AgentMessage[] = [];
+  for (const msg of messages) {
+    const prev = result[result.length - 1];
+    if (prev && prev.role === "assistant" && msg.role === "assistant") {
+      result.push({
+        role: "user",
+        content: "(no content)",
+      });
+    }
+    result.push(msg);
+  }
+  return result;
+}
+
 function buildSessionContext(
   ovMessages: OVMessage[],
   budget: number,
@@ -921,7 +1014,18 @@ export function createMemoryOpenVikingContextEngine(params: {
 
     normalizeAssistantContent(assembled);
     const canonical = canonicalizeAgentMessages(assembled);
-    const sanitized = sanitizeToolUseResultPairing(canonical as never[]) as AgentMessage[];
+    // Defense in depth (issue #1724):
+    //   1) sanitizeToolUseResultPairing may strip orphaned tool_use/tool_result,
+    //      potentially creating new user-user or assistant-assistant adjacencies.
+    //   2) mergeConsecutiveUsers fixes user-user (mirror of mergeConsecutiveAssistants
+    //      already running inside buildSessionContext).
+    //   3) ensureAlternation is a final invariant check for the rare
+    //      assistant-assistant case that the merges can't reach.
+    const sanitized = ensureAlternation(
+      mergeConsecutiveUsers(
+        sanitizeToolUseResultPairing(canonical as never[]) as AgentMessage[],
+      ),
+    );
 
     return { sanitized, archive, session, budgets, instruction };
   }
