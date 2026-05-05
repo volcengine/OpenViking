@@ -74,7 +74,7 @@ npx opencode plugin ./openviking
     └── node_modules/
 ```
 
-顶层 `openviking.mjs` 只负责把 OpenCode 能发现的一级 `.mjs` 入口转发到插件目录：
+顶层 `openviking.js` 只负责把 OpenCode 能发现的一级 `.mjs` 入口转发到插件目录：
 
 ```js
 export { OpenVikingPlugin, default } from "./openviking/index.mjs"

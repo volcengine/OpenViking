@@ -52,7 +52,7 @@ Run the following commands from the repository root:
 
 ```bash
 mkdir -p ~/.config/opencode/plugins/openviking
-cp examples/opencode-plugin/wrappers/openviking.mjs ~/.config/opencode/plugins/openviking.mjs
+cp examples/opencode-plugin/wrappers/openviking.js ~/.config/opencode/plugins/openviking.js
 cp examples/opencode-plugin/index.mjs examples/opencode-plugin/package.json ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/lib ~/.config/opencode/plugins/openviking/
 cd ~/.config/opencode/plugins/openviking
@@ -74,7 +74,7 @@ After installation, the layout should look like this:
     └── node_modules/
 ```
 
-The top-level `openviking.mjs` only forwards the first-level `.mjs` entry that OpenCode can discover to the actual plugin directory:
+The top-level `openviking.js` only forwards the first-level `.js` entry that OpenCode can discover to the actual plugin directory:
 
 ```js
 export { OpenVikingPlugin, default } from "./openviking/index.mjs"

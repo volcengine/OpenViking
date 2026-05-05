@@ -73,7 +73,7 @@ For development or PR testing, copy the package into OpenCode's plugin directory
 
 ```bash
 mkdir -p ~/.config/opencode/plugins/openviking
-cp examples/opencode-plugin/wrappers/openviking.mjs ~/.config/opencode/plugins/openviking.mjs
+cp examples/opencode-plugin/wrappers/openviking.js ~/.config/opencode/plugins/openviking.js
 cp examples/opencode-plugin/index.mjs examples/opencode-plugin/package.json ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/lib ~/.config/opencode/plugins/openviking/
 cd ~/.config/opencode/plugins/openviking
@@ -84,7 +84,7 @@ This creates a stable OpenCode plugin layout:
 
 ```text
 ~/.config/opencode/plugins/
-├── openviking.mjs
+├── openviking.js
 └── openviking/
     ├── index.mjs
     ├── package.json
@@ -92,7 +92,7 @@ This creates a stable OpenCode plugin layout:
     └── node_modules/
 ```
 
-The top-level `openviking.mjs` is only a wrapper:
+The top-level `openviking.js` is only a wrapper:
 
 ```js
 export { OpenVikingPlugin, default } from "./openviking/index.mjs"
