@@ -108,7 +108,10 @@ class EmbeddingModelConfig(BaseModel):
             self.provider = self.backend
 
         if not self.model:
-            raise ValueError("Embedding model name is required")
+            if self.provider == "local_bm25":
+                self.model = "bm25"
+            else:
+                raise ValueError("Embedding model name is required")
 
         if not self.provider:
             raise ValueError("Embedding provider is required")
@@ -127,10 +130,11 @@ class EmbeddingModelConfig(BaseModel):
             "cohere",
             "litellm",
             "local",
+            "local_bm25",
         ]:
             raise ValueError(
                 f"Invalid embedding provider: '{self.provider}'. Must be one of: "
-                "'openai', 'azure', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'dashscope', 'minimax', 'cohere', 'litellm', 'local'"
+                "'openai', 'azure', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'dashscope', 'minimax', 'cohere', 'litellm', 'local', 'local_bm25'"
             )
 
         # Provider-specific validation
@@ -230,6 +234,9 @@ class EmbeddingModelConfig(BaseModel):
             from openviking.models.embedder.local_embedders import get_local_model_spec
 
             get_local_model_spec(self.model)
+
+        elif self.provider == "local_bm25":
+            pass
 
         return self
 
@@ -433,6 +440,7 @@ class EmbeddingConfig(BaseModel):
             GeminiDenseEmbedder,
             JinaDenseEmbedder,
             LiteLLMDenseEmbedder,
+            LocalBM25Embedder,
             LocalDenseEmbedder,
             MinimaxDenseEmbedder,
             OpenAIDenseEmbedder,
@@ -674,6 +682,13 @@ class EmbeddingConfig(BaseModel):
                     "model_path": cfg.model_path,
                     "cache_dir": cfg.cache_dir,
                     "dimension": cfg.dimension,
+                    "config": dict(runtime_config),
+                },
+            ),
+            ("local_bm25", "sparse"): (
+                LocalBM25Embedder,
+                lambda cfg: {
+                    "model_name": cfg.model or "bm25",
                     "config": dict(runtime_config),
                 },
             ),
