@@ -1519,9 +1519,66 @@ class Session:
                 f"{len(latest_archive_overview or '')}B)"
             )
             try:
+                config = get_openviking_config()
+                memory_config = getattr(config, "memory", None)
+                creation_messages = formatted
+                if bool(getattr(memory_config, "wm_v2_preprocess_enabled", False)):
+                    try:
+                        from openviking.session.extraction_preprocessor import (
+                            PreprocessorOptions,
+                            build_wm_compact_packet,
+                        )
+
+                        creation_span_budget = int(
+                            getattr(memory_config, "wm_v2_preprocess_max_span_tokens", 1200)
+                        )
+                        packet = build_wm_compact_packet(
+                            messages,
+                            latest_overview=latest_archive_overview or "",
+                            options=PreprocessorOptions(
+                                max_span_tokens=creation_span_budget,
+                                fallback_if_compact_ratio_above=float(
+                                    getattr(memory_config, "wm_v2_preprocess_fallback_ratio", 0.9)
+                                ),
+                                min_full_tokens_for_compact=int(
+                                    getattr(memory_config, "wm_v2_preprocess_min_full_tokens", 600)
+                                ),
+                            ),
+                        )
+                        if packet.should_fallback:
+                            logger.info(
+                                "WM_PREPROCESS CREATION FALLBACK: reason=%s full=%d compact=%d "
+                                "saved=%d spans=%d facts=%d risk=%s",
+                                packet.fallback_reason,
+                                packet.token_estimates.full_messages_tokens_est,
+                                packet.token_estimates.compact_packet_tokens_est,
+                                packet.token_estimates.saved_tokens_est,
+                                len(packet.selected_spans),
+                                len(packet.structured_facts),
+                                packet.risk_flags,
+                            )
+                        else:
+                            creation_messages = packet.wm_update_view
+                            logger.info(
+                                "WM_PREPROCESS CREATION ACTIVE: full=%d compact=%d saved=%d (%d%%) "
+                                "spans=%d facts=%d risk=%s",
+                                packet.token_estimates.full_messages_tokens_est,
+                                packet.token_estimates.compact_packet_tokens_est,
+                                packet.token_estimates.saved_tokens_est,
+                                int(packet.token_estimates.saved_tokens_est * 100
+                                    / max(packet.token_estimates.full_messages_tokens_est, 1)),
+                                len(packet.selected_spans),
+                                len(packet.structured_facts),
+                                packet.risk_flags,
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            "WM creation preprocessing failed (%s); using full messages", e
+                        )
+
                 prompt = render_prompt(
                     "compression.ov_wm_v2",
-                    {"messages": formatted, "latest_archive_overview": latest_archive_overview or ""},
+                    {"messages": creation_messages, "latest_archive_overview": latest_archive_overview or ""},
                 )
                 return await vlm.get_completion_async(prompt)
             except Exception as e:
@@ -1594,20 +1651,27 @@ class Session:
                         packet.fallback_reason or "",
                     )
                     if packet.should_fallback:
-                        _wm_debug(
-                            "preprocess fallback: "
-                            f"{packet.fallback_reason} "
-                            f"full={packet.token_estimates.full_messages_tokens_est} "
-                            f"compact={packet.token_estimates.compact_packet_tokens_est}"
+                        logger.info(
+                            "WM_PREPROCESS FALLBACK: reason=%s full=%d compact=%d saved=%d spans=%d facts=%d risk=%s",
+                            packet.fallback_reason,
+                            packet.token_estimates.full_messages_tokens_est,
+                            packet.token_estimates.compact_packet_tokens_est,
+                            packet.token_estimates.saved_tokens_est,
+                            len(packet.selected_spans),
+                            len(packet.structured_facts),
+                            packet.risk_flags,
                         )
                     else:
                         update_messages = packet.wm_update_view
-                        _wm_debug(
-                            "preprocess compact enabled: "
-                            f"full={packet.token_estimates.full_messages_tokens_est} "
-                            f"compact={packet.token_estimates.compact_packet_tokens_est} "
-                            f"spans={len(packet.selected_spans)} "
-                            f"facts={len(packet.structured_facts)}"
+                        logger.info(
+                            "WM_PREPROCESS ACTIVE: full=%d compact=%d saved=%d (%d%%) spans=%d facts=%d risk=%s",
+                            packet.token_estimates.full_messages_tokens_est,
+                            packet.token_estimates.compact_packet_tokens_est,
+                            packet.token_estimates.saved_tokens_est,
+                            int(packet.token_estimates.saved_tokens_est * 100 / max(packet.token_estimates.full_messages_tokens_est, 1)),
+                            len(packet.selected_spans),
+                            len(packet.structured_facts),
+                            packet.risk_flags,
                         )
                 except Exception as e:
                     get_current_telemetry().set("wm.preprocess.fallback_reason", "exception")
