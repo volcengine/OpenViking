@@ -380,9 +380,9 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
     }
 }
 
-pub async fn handle_add_memory(content: String, ctx: CliContext) -> Result<()> {
+pub async fn handle_remember(content: String, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
-    commands::session::add_memory(&client, &content, ctx.output_format, ctx.compact).await
+    commands::session::remember(&client, &content, ctx.output_format, ctx.compact).await
 }
 
 pub async fn handle_privacy(cmd: PrivacyCommands, ctx: CliContext) -> Result<()> {

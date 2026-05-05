@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 """MCP (Model Context Protocol) endpoint for OpenViking server.
 
-Exposes 7 tools to Claude Code (or any MCP client) via streamable HTTP:
-  search, read, list, store, add_resource, forget, health
+Exposes MCP tools to Claude Code (or any MCP client) via streamable HTTP:
+  search, read, list, remember, add_resource, grep, glob, forget, health
 
 Mounted on the FastAPI app at /mcp. The MCP session manager lifecycle is
 tied to the FastAPI app lifespan (not a sub-app lifespan) so the task group
@@ -26,6 +26,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from openviking.server.agent_tools import RememberMessage, RememberRequest
+from openviking.server.agent_tools import remember as agent_remember
 from openviking.server.auth import resolve_identity
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
@@ -213,7 +215,7 @@ async def ls(uri: str, recursive: bool = False) -> str:
     return "\n".join(lines)
 
 
-# -- store -----------------------------------------------------------------
+# -- remember --------------------------------------------------------------
 
 
 class StoreMessage(BaseModel):
@@ -222,20 +224,23 @@ class StoreMessage(BaseModel):
 
 
 @mcp.tool()
-async def store(messages: list[StoreMessage]) -> str:
+async def remember(messages: list[StoreMessage]) -> str:
     """Store information into OpenViking long-term memory. Use when the user says 'remember this', shares preferences, important facts, or decisions worth persisting."""
-    import uuid
-
-    from openviking.message.part import TextPart
-
     service = get_service()
     ctx = _get_ctx()
-    session_id = f"mcp-store-{uuid.uuid4().hex[:12]}"
-    session = await service.sessions.get(session_id, ctx, auto_create=True)
-    for msg in messages:
-        if msg.content:
-            session.add_message(msg.role, [TextPart(text=msg.content)])
-    await service.sessions.commit_async(session_id, ctx)
+    non_empty_messages = [msg for msg in messages if msg.content]
+    if not non_empty_messages:
+        return "Stored 0 message(s) and committed for memory extraction."
+    await agent_remember(
+        service,
+        ctx,
+        RememberRequest(
+            messages=[
+                RememberMessage(role=msg.role, content=msg.content) for msg in non_empty_messages
+            ],
+            wait=False,
+        ),
+    )
     return f"Stored {len(messages)} message(s) and committed for memory extraction."
 
 

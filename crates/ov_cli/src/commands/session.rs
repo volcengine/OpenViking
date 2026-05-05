@@ -122,13 +122,13 @@ pub async fn commit_session(
     Ok(())
 }
 
-/// Add memory in one shot: creates a session, adds messages, and commits.
+/// Remember content in one shot through the agent-facing remember API.
 ///
 /// Input can be:
 /// - A plain string → treated as a single "user" message
 /// - A JSON object with "role" and "content" → single message with specified role
 /// - A JSON array of {role, content} objects → multiple messages
-pub async fn add_memory(
+pub async fn remember(
     client: &HttpClient,
     input: &str,
     output_format: OutputFormat,
@@ -160,27 +160,16 @@ pub async fn add_memory(
             vec![("user".to_string(), input.to_string())]
         };
 
-    // 1. Create a new session
-    let session_response: serde_json::Value = client.post("/api/v1/sessions", &json!({})).await?;
-    let session_id = session_response["session_id"].as_str().ok_or_else(|| {
-        crate::error::Error::Api("Failed to get session_id from new session response".to_string())
-    })?;
-
-    // 2. Add messages
-    for (role, content) in &messages {
-        let path = format!("/api/v1/sessions/{}/messages", url_encode(session_id));
-        let body = json!({
-            "role": role,
-            "content": content
-        });
-        let _: serde_json::Value = client.post(&path, &body).await?;
-    }
-
-    // 3. Commit (async — don't read response)
-    let commit_path = format!("/api/v1/sessions/{}/commit", url_encode(session_id));
-    let _: serde_json::Value = client.post(&commit_path, &json!({})).await?;
-
-    output_success(&json!("OK"), output_format, compact);
+    let body = json!({
+        "messages": messages
+            .iter()
+            .map(|(role, content)| json!({ "role": role, "content": content }))
+            .collect::<Vec<_>>(),
+        "wait": false,
+        "keep_recent_count": 0
+    });
+    let response: serde_json::Value = client.post("/api/v1/agent/remember", &body).await?;
+    output_success(&response, output_format, compact);
     Ok(())
 }
 

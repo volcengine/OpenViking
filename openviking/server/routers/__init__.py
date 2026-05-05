@@ -3,6 +3,7 @@
 """OpenViking HTTP Server routers."""
 
 from openviking.server.routers.admin import router as admin_router
+from openviking.server.routers.agent import router as agent_router
 from openviking.server.routers.bot import router as bot_router
 from openviking.server.routers.content import router as content_router
 from openviking.server.routers.debug import router as debug_router
@@ -23,6 +24,7 @@ from openviking.server.routers.webdav import router as webdav_router
 
 __all__ = [
     "admin_router",
+    "agent_router",
     "bot_router",
     "system_router",
     "resources_router",

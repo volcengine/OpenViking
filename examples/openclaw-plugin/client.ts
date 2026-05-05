@@ -750,6 +750,51 @@ export class OpenVikingClient {
     return result;
   }
 
+  async remember(input: {
+    text: string;
+    role: string;
+    sessionId: string;
+    roleId?: string;
+    agentId?: string;
+    wait?: boolean;
+    keepRecentCount?: number;
+    timeoutMs?: number;
+  }): Promise<CommitSessionResult> {
+    const body: Record<string, unknown> = {
+      session_id: input.sessionId,
+      messages: [
+        {
+          role: input.role,
+          content: input.text,
+          ...(input.roleId ? { role_id: input.roleId } : {}),
+        },
+      ],
+      wait: input.wait ?? true,
+      keep_recent_count: Math.max(0, Math.floor(input.keepRecentCount ?? 0)),
+    };
+    if (input.timeoutMs !== undefined) {
+      body.timeout_ms = Math.max(1000, Math.floor(input.timeoutMs));
+    }
+    await this.emitRoutingDebug(
+      "agent remember POST (message + commit)",
+      {
+        path: "/api/v1/agent/remember",
+        sessionId: input.sessionId,
+        role: input.role,
+        role_id: input.roleId ?? null,
+        wait: body.wait,
+        keepRecentCount: body.keep_recent_count,
+      },
+      input.agentId,
+    );
+    return this.request<CommitSessionResult>(
+      "/api/v1/agent/remember",
+      { method: "POST", body: JSON.stringify(body) },
+      input.agentId,
+      input.timeoutMs,
+    );
+  }
+
   /** Poll a background task by ID. */
   async getTask(taskId: string, agentId?: string): Promise<TaskResult> {
     return this.request<TaskResult>(

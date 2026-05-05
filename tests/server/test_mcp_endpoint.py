@@ -7,6 +7,8 @@ Tests the tool functions directly by setting up the identity contextvar
 and service dependency, avoiding MCP protocol complexity.
 """
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 from openviking.server.dependencies import set_service
@@ -21,10 +23,12 @@ from openviking.server.mcp_endpoint import (
     grep,
     health,
     read,
+    remember,
     search,
-    store,
 )
-from openviking.server.mcp_endpoint import list_dir as list_tool
+from openviking.server.mcp_endpoint import (
+    ls as list_tool,
+)
 from openviking_cli.exceptions import UnauthenticatedError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -154,13 +158,13 @@ async def test_list_empty_dir(service):
 
 
 async def test_store_single_message(service):
-    result = await store(messages=[StoreMessage(role="user", content="The sky is blue")])
+    result = await remember(messages=[StoreMessage(role="user", content="The sky is blue")])
     assert "stored" in result.lower()
     assert "1 message" in result
 
 
 async def test_store_batch_messages(service):
-    result = await store(
+    result = await remember(
         messages=[
             StoreMessage(role="user", content="Remember my favorite color is blue"),
             StoreMessage(role="assistant", content="Noted, your favorite color is blue."),
@@ -168,6 +172,22 @@ async def test_store_batch_messages(service):
     )
     assert "stored" in result.lower()
     assert "2 message" in result
+
+
+async def test_store_skips_empty_message_content(service):
+    with patch("openviking.server.mcp_endpoint.agent_remember", new_callable=AsyncMock) as mocked:
+        result = await remember(
+            messages=[
+                StoreMessage(role="user", content=""),
+                StoreMessage(role="assistant", content="Noted."),
+            ]
+        )
+
+    assert "2 message" in result
+    mocked.assert_awaited_once()
+    request = mocked.await_args.args[2]
+    assert len(request.messages) == 1
+    assert request.messages[0].content == "Noted."
 
 
 # ---------------------------------------------------------------------------

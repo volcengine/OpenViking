@@ -13,7 +13,7 @@
 - 不写 `~/.codex`
 - 不留 build 产物
 
-Codex 拿到的只是几个显式记忆工具：`openviking_recall`、`openviking_store`，外加几个辅助。
+Codex 拿到的只是几个显式记忆工具：`openviking_recall`、`remember`，外加几个辅助。
 
 如果你只需要 Codex 显式调用记忆（不需要自动召回/捕获），这是最简方案。
 
