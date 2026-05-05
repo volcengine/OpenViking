@@ -106,6 +106,26 @@ class EmbeddingModelConfig(BaseModel):
         default=None,
         description="Local model cache directory for provider='local'.",
     )
+    k1: Optional[float] = Field(
+        default=None,
+        description="BM25 k1 saturation parameter for provider='local_bm25'.",
+    )
+    b: Optional[float] = Field(
+        default=None,
+        description="BM25 length normalization parameter for provider='local_bm25'.",
+    )
+    tokenizer: Optional[str] = Field(
+        default=None,
+        description="Tokenizer for provider='local_bm25': 'jieba' (default) or 'regex'.",
+    )
+    token_pattern: Optional[str] = Field(
+        default=None,
+        description="Regex token pattern for provider='local_bm25' when tokenizer='regex'.",
+    )
+    stats_path: Optional[str] = Field(
+        default=None,
+        description="Path for persisted BM25 corpus statistics for provider='local_bm25'.",
+    )
     enable_fusion: Optional[bool] = Field(
         default=None,
         description="Enable multimodal fusion for DashScope provider (multimodal models only).",
@@ -147,6 +167,9 @@ class EmbeddingModelConfig(BaseModel):
                 value = data.get(key)
                 if isinstance(value, str):
                     data[key] = value.lower()
+            tokenizer = data.get("tokenizer")
+            if isinstance(tokenizer, str):
+                data["tokenizer"] = tokenizer.lower()
         return data
 
     _VALID_PROVIDERS: ClassVar[Tuple[str, ...]] = (
@@ -163,6 +186,7 @@ class EmbeddingModelConfig(BaseModel):
         "cohere",
         "litellm",
         "local",
+        "local_bm25",
     )
 
     @classmethod
@@ -236,7 +260,7 @@ class EmbeddingModelConfig(BaseModel):
                     f"{label}: VikingDB provider requires the following fields: "
                     f"{', '.join(missing)}"
                 )
-        # ollama / litellm / local: no auth requirement enforced here
+        # ollama / litellm / local / local_bm25: no auth requirement enforced here
 
     @model_validator(mode="after")
     def validate_config(self):
@@ -244,8 +268,11 @@ class EmbeddingModelConfig(BaseModel):
         if self.backend and not self.provider:
             self.provider = self.backend
 
-        if not self.model and not any(c.model for c in self.credentials):
-            raise ValueError("Embedding model name is required")
+        if not self.model:
+            if self.provider == "local_bm25":
+                self.model = "bm25"
+            elif not any(c.model for c in self.credentials):
+                raise ValueError("Embedding model name is required")
 
         # When credentials are configured, defer provider/api_key validation to
         # per-credential checks; the parent-level provider/api_key may be left
@@ -334,6 +361,12 @@ class EmbeddingModelConfig(BaseModel):
             from openviking.models.embedder.local_embedders import get_local_model_spec
 
             get_local_model_spec(model)
+
+        elif provider == "local_bm25":
+            if self.tokenizer and self.tokenizer not in {"jieba", "regex"}:
+                raise ValueError(
+                    f"{label}: local_bm25 tokenizer must be one of: 'jieba', 'regex'"
+                )
 
     def _validate_credentials(self) -> None:
         """Validate each credential when credentials list is non-empty.
@@ -493,7 +526,6 @@ class EmbeddingModelConfig(BaseModel):
         if self.credentials and self.credentials[0].model:
             return self.credentials[0].model
         return self.model
-
     def get_effective_dimension(self) -> int:
         """Resolve the dimension used for schema creation and validation."""
         if self.dimension is not None:
@@ -708,6 +740,7 @@ class EmbeddingConfig(BaseModel):
             GeminiDenseEmbedder,
             JinaDenseEmbedder,
             LiteLLMDenseEmbedder,
+            LocalBM25Embedder,
             LocalDenseEmbedder,
             MinimaxDenseEmbedder,
             OpenAIDenseEmbedder,
@@ -960,6 +993,18 @@ class EmbeddingConfig(BaseModel):
                     "model_path": cfg.model_path,
                     "cache_dir": cfg.cache_dir,
                     "dimension": cfg.dimension,
+                    "config": dict(runtime_config),
+                },
+            ),
+            ("local_bm25", "sparse"): (
+                LocalBM25Embedder,
+                lambda cfg: {
+                    "model_name": cfg.model or "bm25",
+                    **({"k1": cfg.k1} if cfg.k1 is not None else {}),
+                    **({"b": cfg.b} if cfg.b is not None else {}),
+                    **({"tokenizer": cfg.tokenizer} if cfg.tokenizer else {}),
+                    **({"token_pattern": cfg.token_pattern} if cfg.token_pattern else {}),
+                    **({"stats_path": cfg.stats_path} if cfg.stats_path else {}),
                     "config": dict(runtime_config),
                 },
             ),
