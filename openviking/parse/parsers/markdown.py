@@ -180,7 +180,7 @@ class MarkdownParser(BaseParser):
             # the temp upload name (e.g. upload_<uuid>.txt).
             doc_title = meta.get("frontmatter", {}).get(
                 "title",
-                Path(explicit_name).stem
+                explicit_name
                 if explicit_name
                 else Path(source_path).stem
                 if source_path
@@ -200,7 +200,7 @@ class MarkdownParser(BaseParser):
                 headings,
                 root_dir,
                 source_path,
-                doc_name=self._sanitize_for_path(Path(doc_title).stem),
+                doc_name=self._sanitize_for_path(doc_title),
             )
 
             parse_time = time.time() - start_time
