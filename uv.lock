@@ -3673,6 +3673,14 @@ gemini-async = [
     { name = "anyio" },
     { name = "google-genai" },
 ]
+langchain = [
+    { name = "langchain-core" },
+]
+langgraph = [
+    { name = "langchain" },
+    { name = "langchain-core" },
+    { name = "langgraph" },
+]
 local-embed = [
     { name = "llama-cpp-python" },
 ]
@@ -3728,9 +3736,13 @@ requires-dist = [
     { name = "jinja2", specifier = ">=3.1.6" },
     { name = "json-repair", specifier = ">=0.25.0" },
     { name = "langchain", marker = "extra == 'benchmark'", specifier = ">=1.0.0" },
+    { name = "langchain", marker = "extra == 'langgraph'", specifier = ">=1.0.0,<2.0.0" },
     { name = "langchain-core", marker = "extra == 'benchmark'", specifier = ">=1.0.0" },
+    { name = "langchain-core", marker = "extra == 'langchain'", specifier = ">=1.0.0,<2.0.0" },
+    { name = "langchain-core", marker = "extra == 'langgraph'", specifier = ">=1.0.0,<2.0.0" },
     { name = "langchain-openai", marker = "extra == 'benchmark'", specifier = ">=1.0.0" },
     { name = "langfuse", marker = "extra == 'bot-langfuse'", specifier = ">=3.0.0" },
+    { name = "langgraph", marker = "extra == 'langgraph'", specifier = ">=1.0.0,<2.0.0" },
     { name = "lark-oapi", specifier = ">=1.5.3" },
     { name = "lark-oapi", marker = "extra == 'bot-feishu'", specifier = ">=1.0.0" },
     { name = "litellm", specifier = ">=1.83.7,<1.83.13" },
@@ -3818,7 +3830,7 @@ requires-dist = [
     { name = "xlrd", specifier = ">=2.0.1" },
     { name = "xxhash", specifier = ">=3.0.0" },
 ]
-provides-extras = ["test", "dev", "doc", "eval", "gemini", "gemini-async", "ocr", "build", "bot", "bot-langfuse", "bot-telegram", "bot-feishu", "bot-dingtalk", "bot-slack", "bot-qq", "bot-sandbox", "bot-fuse", "bot-opencode", "bot-full", "benchmark", "local-embed"]
+provides-extras = ["test", "dev", "doc", "eval", "gemini", "gemini-async", "ocr", "build", "bot", "bot-langfuse", "bot-telegram", "bot-feishu", "bot-dingtalk", "bot-slack", "bot-qq", "bot-sandbox", "bot-fuse", "bot-opencode", "bot-full", "benchmark", "langchain", "langgraph", "local-embed"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=9.0.2" }]
