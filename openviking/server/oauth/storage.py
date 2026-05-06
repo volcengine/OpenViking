@@ -84,10 +84,16 @@ CREATE TABLE IF NOT EXISTS oauth_pending_authorizations (
     scopes TEXT,
     resource TEXT,
     state TEXT,
+    display_code TEXT NOT NULL DEFAULT '',
+    verified INTEGER NOT NULL DEFAULT 0,
+    verified_account_id TEXT,
+    verified_user_id TEXT,
+    verified_role TEXT,
     expires_at INTEGER NOT NULL,
     created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_oauth_pending_expires ON oauth_pending_authorizations(expires_at);
+CREATE INDEX IF NOT EXISTS idx_oauth_pending_display ON oauth_pending_authorizations(display_code);
 
 CREATE TABLE IF NOT EXISTS oauth_access_tokens (
     token_hash TEXT PRIMARY KEY,
@@ -604,9 +610,15 @@ class OAuthStore:
         scopes: Optional[list[str]],
         resource: Optional[str],
         state: Optional[str],
+        display_code: str,
         ttl_seconds: int = 600,
     ) -> str:
-        """Stash the AuthorizationParams under a fresh pending_id and return it."""
+        """Stash the AuthorizationParams under a fresh pending_id and return it.
+
+        ``display_code`` is the human-readable verification code that will be
+        shown on the authorize page; the user re-types it into the console
+        verify form and the server resolves the pending row by it.
+        """
         pending_id = secrets.token_urlsafe(16)
         now = int(time.time())
 
@@ -615,8 +627,8 @@ class OAuthStore:
             self._conn.execute(
                 "INSERT INTO oauth_pending_authorizations "
                 "(pending_id, client_id, redirect_uri, redirect_uri_provided_explicitly, "
-                "code_challenge, scopes, resource, state, expires_at, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "code_challenge, scopes, resource, state, display_code, expires_at, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     pending_id,
                     client_id,
@@ -626,6 +638,7 @@ class OAuthStore:
                     json.dumps(scopes) if scopes else None,
                     resource,
                     state,
+                    display_code,
                     now + ttl_seconds,
                     now,
                 ),
@@ -652,10 +665,68 @@ class OAuthStore:
             record["redirect_uri_provided_explicitly"] = bool(
                 record["redirect_uri_provided_explicitly"]
             )
+            record["verified"] = bool(record.get("verified", 0))
             record["scopes"] = json.loads(record["scopes"]) if record["scopes"] else None
             return record
 
         return await asyncio.to_thread(_q)
+
+    async def find_pending_by_display_code(
+        self, display_code: str
+    ) -> Optional[dict[str, Any]]:
+        """Return the pending row whose display_code matches, or None."""
+        if not display_code:
+            return None
+        normalized = display_code.strip().upper()
+        now = int(time.time())
+
+        def _q() -> Optional[dict[str, Any]]:
+            assert self._conn is not None
+            cur = self._conn.execute(
+                "SELECT * FROM oauth_pending_authorizations "
+                "WHERE display_code = ? AND expires_at > ? AND verified = 0",
+                (normalized, now),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            record = _row_to_dict(cur, row)
+            record["redirect_uri_provided_explicitly"] = bool(
+                record["redirect_uri_provided_explicitly"]
+            )
+            record["verified"] = bool(record.get("verified", 0))
+            record["scopes"] = json.loads(record["scopes"]) if record["scopes"] else None
+            return record
+
+        return await asyncio.to_thread(_q)
+
+    async def mark_pending_verified(
+        self,
+        *,
+        pending_id: str,
+        account_id: str,
+        user_id: str,
+        role: str,
+    ) -> bool:
+        """Atomically mark a pending authorization as verified and bind identity.
+
+        Returns True on success, False if the row is missing, expired, or
+        already verified (one-shot).
+        """
+        now = int(time.time())
+
+        def _u() -> bool:
+            assert self._conn is not None
+            cur = self._conn.execute(
+                "UPDATE oauth_pending_authorizations SET verified = 1, "
+                "verified_account_id = ?, verified_user_id = ?, verified_role = ? "
+                "WHERE pending_id = ? AND verified = 0 AND expires_at > ?",
+                (account_id, user_id, role, pending_id, now),
+            )
+            return cur.rowcount > 0
+
+        async with self._lock:
+            return await asyncio.to_thread(_u)
 
     async def delete_pending_authorization(self, pending_id: str) -> None:
         def _del() -> None:

@@ -29,6 +29,7 @@ from mcp.server.auth.provider import (
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from pydantic import AnyUrl
 
+from openviking.server.oauth.otp import generate_otp
 from openviking.server.oauth.storage import OAuthStore
 
 logger = logging.getLogger(__name__)
@@ -129,13 +130,17 @@ class OpenVikingOAuthProvider(
     async def authorize(
         self, client: OAuthClientInformationFull, params: AuthorizationParams
     ) -> str:
-        """Stash the AuthorizationParams and return the OTP-entry page URL.
+        """Mint a verification code and stash the AuthorizationParams.
 
-        The user's browser will be redirected to ``/oauth/authorize/page?pending=...``
-        where the OTP form is rendered. Submitting a valid OTP there mints an
-        authorization code and 302s back to ``params.redirect_uri``.
+        Returns the URL of our authorize page, which displays a 6-character
+        verification code. The user re-types that code into the OpenViking
+        console (where they're already authenticated), the console calls our
+        ``/api/v1/auth/oauth-verify`` endpoint to bind the caller's identity
+        to the pending row, and the page polls until verified to redirect
+        back to the client's redirect_uri.
         """
         assert client.client_id is not None
+        display_code = generate_otp()
         pending_id = await self._store.create_pending_authorization(
             client_id=client.client_id,
             redirect_uri=str(params.redirect_uri),
@@ -144,6 +149,7 @@ class OpenVikingOAuthProvider(
             scopes=params.scopes,
             resource=params.resource,
             state=params.state,
+            display_code=display_code,
             ttl_seconds=600,
         )
         return f"{self._issuer}{self._authorize_page}?{urlencode({'pending': pending_id})}"

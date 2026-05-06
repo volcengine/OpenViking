@@ -66,6 +66,10 @@ const elements = {
   otpValue: document.getElementById("otpValue"),
   otpCopyBtn: document.getElementById("otpCopyBtn"),
   otpExpiry: document.getElementById("otpExpiry"),
+  oauthVerifyInput: document.getElementById("oauthVerifyInput"),
+  oauthVerifyBtn: document.getElementById("oauthVerifyBtn"),
+  oauthDenyBtn: document.getElementById("oauthDenyBtn"),
+  oauthVerifyHint: document.getElementById("oauthVerifyHint"),
   writeBadge: document.getElementById("writeBadge"),
   output: document.getElementById("output"),
   tabs: document.querySelectorAll(".tab"),
@@ -1591,6 +1595,67 @@ function bindConnection() {
       } catch (_error) {
         setOutput("Could not copy to clipboard — long-press the code to copy manually.");
       }
+    });
+  }
+
+  // OAuth verification (device-flow style: user reads code from the MCP
+  // client's authorize page and pastes it here).
+  async function submitOAuthVerify(decision) {
+    if (!getApiKey()) {
+      elements.oauthVerifyHint.textContent =
+        "Save an API key first — verification requires authentication.";
+      return;
+    }
+    const code = (elements.oauthVerifyInput.value || "").trim().toUpperCase();
+    if (!code) {
+      elements.oauthVerifyHint.textContent = "Enter the 6-character code shown on the authorize page.";
+      return;
+    }
+    elements.oauthVerifyBtn.disabled = true;
+    elements.oauthDenyBtn.disabled = true;
+    elements.oauthVerifyHint.textContent = decision === "deny" ? "Denying…" : "Authorizing…";
+    try {
+      const payload = await callConsole("/ov/auth/oauth-verify", {
+        method: "POST",
+        body: JSON.stringify({ code, decision }),
+      });
+      const result = payload && payload.result ? payload.result : payload;
+      const status = result && result.status;
+      if (status === "approved") {
+        const name = (result && result.client_name) || "the client";
+        elements.oauthVerifyHint.textContent =
+          `Authorized ${name}. Switch back to the client tab — it will continue automatically.`;
+        elements.oauthVerifyInput.value = "";
+      } else if (status === "denied") {
+        elements.oauthVerifyHint.textContent = "Denied. The client will see an error.";
+        elements.oauthVerifyInput.value = "";
+      } else {
+        elements.oauthVerifyHint.textContent =
+          "Server returned an unexpected response — check the result panel.";
+        setOutput(payload);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      elements.oauthVerifyHint.textContent = `Failed: ${message}`;
+    } finally {
+      elements.oauthVerifyBtn.disabled = false;
+      elements.oauthDenyBtn.disabled = false;
+    }
+  }
+
+  if (elements.oauthVerifyBtn) {
+    elements.oauthVerifyBtn.addEventListener("click", () => submitOAuthVerify("approve"));
+  }
+  if (elements.oauthDenyBtn) {
+    elements.oauthDenyBtn.addEventListener("click", () => submitOAuthVerify("deny"));
+  }
+  if (elements.oauthVerifyInput) {
+    elements.oauthVerifyInput.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") {
+        return;
+      }
+      event.preventDefault();
+      submitOAuthVerify("approve");
     });
   }
 }

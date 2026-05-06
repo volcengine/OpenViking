@@ -58,10 +58,25 @@ def _get_ctx() -> RequestContext:
 def _scope_to_origin(scope: Scope) -> Optional[str]:
     """Derive the public-facing origin (scheme://host) from an ASGI scope.
 
-    Honors X-Forwarded-Proto / X-Forwarded-Host when present, otherwise falls
-    back to the scope's own scheme and Host header. Returns None if no host
-    can be determined (which would only happen on malformed scopes).
+    Resolution order matches openviking.server.oauth.router._public_origin:
+      1. ``OPENVIKING_PUBLIC_BASE_URL`` environment variable
+      2. ``app.state.oauth_config.issuer`` (if OAuth enabled)
+      3. ``X-Forwarded-Proto`` / ``X-Forwarded-Host``
+      4. scope's own scheme + Host header
     """
+    import os as _os
+
+    env_value = _os.environ.get("OPENVIKING_PUBLIC_BASE_URL", "").strip()
+    if env_value:
+        return env_value.rstrip("/")
+
+    app = scope.get("app")
+    if app is not None:
+        cfg = getattr(app.state, "oauth_config", None)
+        configured = getattr(cfg, "issuer", None) if cfg else None
+        if configured:
+            return configured.rstrip("/")
+
     headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
     proto = headers.get("x-forwarded-proto") or scope.get("scheme") or "http"
     proto = proto.split(",", 1)[0].strip()

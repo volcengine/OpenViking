@@ -268,6 +268,13 @@ def _create_proxy_router() -> APIRouter:
         # not a data mutation.
         return await _forward_request(request, "/api/v1/auth/otp")
 
+    @router.post("/ov/auth/oauth-verify")
+    async def oauth_verify(request: Request):
+        # Confirm a pending OAuth authorization (device-flow style). The
+        # caller is the console-authenticated user; the API key in their
+        # session storage is what binds the issuing identity.
+        return await _forward_request(request, "/api/v1/auth/oauth-verify")
+
     # ---- Write routes ----
 
     @router.post("/ov/fs/mkdir")

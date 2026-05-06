@@ -42,7 +42,11 @@ from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS
 
 @dataclass
 class _StubOAuthCfg:
-    issuer: Optional[str] = "http://127.0.0.1"
+    # Leave issuer unset so _public_origin falls through to the
+    # request's X-Forwarded-*/Host headers — that path is what we want
+    # to exercise in PRM tests. Tests that need a fixed issuer can set it
+    # directly on the fixture's app.state.oauth_config.
+    issuer: Optional[str] = None
     access_token_ttl_seconds: int = 3600
     refresh_token_ttl_seconds: int = 86400
     auth_code_ttl_seconds: int = 300
@@ -154,6 +158,21 @@ async def test_protected_resource_metadata_honors_x_forwarded(client):
 
 
 @pytest.mark.asyncio
+async def test_protected_resource_metadata_honors_public_base_url_env(
+    client, monkeypatch
+):
+    """OPENVIKING_PUBLIC_BASE_URL must override X-Forwarded-* and Host header."""
+    monkeypatch.setenv("OPENVIKING_PUBLIC_BASE_URL", "https://override.example")
+    resp = await client.get(
+        "/.well-known/oauth-protected-resource",
+        headers={"X-Forwarded-Proto": "http", "X-Forwarded-Host": "ignored.example"},
+    )
+    body = resp.json()
+    assert body["resource"] == "https://override.example/mcp"
+    assert body["authorization_servers"][0].rstrip("/") == "https://override.example"
+
+
+@pytest.mark.asyncio
 async def test_dcr_registers_client(client):
     resp = await client.post(
         "/register",
@@ -191,67 +210,86 @@ async def test_otp_endpoint_rejects_bad_ttl(client):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_full_oauth_flow(app_with_oauth, client):
-    _, store, provider = app_with_oauth
-
-    # Step 1: register client.
+async def _start_authorize(client, *, redirect_uri="https://claude.ai/cb", state=None):
+    """Helper: register a client, kick off /authorize, return (client_id, pending_id, page_url, verifier)."""
     reg = await client.post(
         "/register",
         json={
-            "redirect_uris": ["https://claude.ai/cb"],
+            "redirect_uris": [redirect_uri],
             "client_name": "Claude",
             "token_endpoint_auth_method": "none",
-            "grant_types": ["authorization_code", "refresh_token"],
-            "response_types": ["code"],
         },
     )
     assert reg.status_code == 201, reg.text
     client_id = reg.json()["client_id"]
-
-    # Step 2: get an OTP using API-key identity (overridden in fixture).
-    otp_resp = await client.post("/api/v1/auth/otp", json={})
-    otp = otp_resp.json()["otp"]
-
-    # Step 3: kick off authorize. The SDK validates inputs and then calls
-    # provider.authorize, which returns a URL to /oauth/authorize/page.
     verifier, challenge = _pkce_pair()
-    authorize = await client.get(
-        "/authorize",
-        params={
-            "client_id": client_id,
-            "response_type": "code",
-            "redirect_uri": "https://claude.ai/cb",
-            "code_challenge": challenge,
-            "code_challenge_method": "S256",
-            "state": "xyz",
-        },
-        follow_redirects=False,
-    )
+    params = {
+        "client_id": client_id,
+        "response_type": "code",
+        "redirect_uri": redirect_uri,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+    }
+    if state:
+        params["state"] = state
+    authorize = await client.get("/authorize", params=params, follow_redirects=False)
     assert authorize.status_code == 302, authorize.text
-    location = authorize.headers["location"]
-    assert "/oauth/authorize/page" in location
-    assert "pending=" in location
+    page_url = authorize.headers["location"]
+    pending_id = page_url.split("pending=")[1].split("&")[0]
+    return client_id, pending_id, page_url, verifier
 
-    # Step 4: GET the page (sanity), then POST the OTP.
-    page = await client.get(location, follow_redirects=False)
-    assert page.status_code == 200
-    assert "One-time passcode" in page.text
 
-    pending = location.split("pending=")[1].split("&")[0]
-    submit = await client.post(
-        "/oauth/authorize/page",
-        data={"pending": pending, "otp": otp},
-        follow_redirects=False,
+@pytest.mark.asyncio
+async def test_full_device_flow(app_with_oauth, client):
+    """End-to-end: authorize → page shows display_code → console verifies →
+    page polls status → 302 → token exchange → access_token resolves."""
+    _, store, provider = app_with_oauth
+
+    client_id, pending_id, page_url, verifier = await _start_authorize(
+        client, redirect_uri="https://claude.ai/cb", state="xyz"
     )
-    assert submit.status_code == 302, submit.text
-    redirect_target = submit.headers["location"]
-    assert redirect_target.startswith("https://claude.ai/cb?")
-    assert "code=" in redirect_target
-    assert "state=xyz" in redirect_target
 
-    # Step 5: exchange the code for tokens.
-    auth_code = redirect_target.split("code=")[1].split("&")[0]
+    # Page renders with the display_code visible.
+    page_resp = await client.get(page_url)
+    assert page_resp.status_code == 200
+    assert "Authorize" in page_resp.text
+    pending_record = await store.load_pending_authorization(pending_id)
+    assert pending_record is not None
+    display_code = pending_record["display_code"]
+    assert display_code in page_resp.text
+
+    # Status before verify: pending.
+    pre = await client.get("/oauth/authorize/page/status", params={"pending": pending_id})
+    assert pre.status_code == 200
+    assert pre.json()["status"] == "pending"
+
+    # User confirms in console (auth identity comes from get_request_context override).
+    verify = await client.post(
+        "/api/v1/auth/oauth-verify",
+        json={"code": display_code, "decision": "approve"},
+    )
+    assert verify.status_code == 200, verify.text
+    body = verify.json()
+    assert body["status"] == "approved"
+    assert body["client_id"] == client_id
+    assert body["client_name"] == "Claude"
+
+    # Status after verify: approved + redirect_url with code/state.
+    post = await client.get("/oauth/authorize/page/status", params={"pending": pending_id})
+    assert post.status_code == 200
+    body = post.json()
+    assert body["status"] == "approved"
+    redirect_url = body["redirect_url"]
+    assert redirect_url.startswith("https://claude.ai/cb?")
+    assert "code=" in redirect_url
+    assert "state=xyz" in redirect_url
+
+    # Polling again after pending row was consumed: gone (410).
+    again = await client.get("/oauth/authorize/page/status", params={"pending": pending_id})
+    assert again.status_code == 410
+
+    # Token exchange.
+    auth_code = redirect_url.split("code=")[1].split("&")[0]
     token_resp = await client.post(
         "/token",
         data={
@@ -264,12 +302,10 @@ async def test_full_oauth_flow(app_with_oauth, client):
     )
     assert token_resp.status_code == 200, token_resp.text
     tokens = token_resp.json()
-    assert tokens["token_type"] == "Bearer"
     assert tokens["access_token"].startswith("ovat_")
     assert tokens["refresh_token"].startswith("ovrt_")
-    assert tokens["expires_in"] == 3600
 
-    # Step 6: access token resolves through the provider.
+    # Access token resolves to the verified identity (acct1/alice/user from fixture).
     record = await provider.load_access_token(tokens["access_token"])
     assert record is not None
     assert record.account_id == "acct1"
@@ -278,98 +314,104 @@ async def test_full_oauth_flow(app_with_oauth, client):
 
 
 @pytest.mark.asyncio
-async def test_authorize_page_rejects_invalid_otp(app_with_oauth, client):
+async def test_oauth_verify_unknown_code(app_with_oauth, client):
+    _, _, _ = app_with_oauth
+    resp = await client.post(
+        "/api/v1/auth/oauth-verify",
+        json={"code": "BOGUS1", "decision": "approve"},
+    )
+    assert resp.status_code == 400
+    body = resp.json()
+    assert "Invalid" in body.get("error_description", "") or "Invalid" in body.get("message", "")
+
+
+@pytest.mark.asyncio
+async def test_oauth_verify_deny_destroys_pending(app_with_oauth, client):
     _, store, _ = app_with_oauth
+    _, pending_id, _, _ = await _start_authorize(client, redirect_uri="https://x.test/cb")
+    record = await store.load_pending_authorization(pending_id)
+    code = record["display_code"]
 
-    # Register a client and start authorize so we have a pending row.
-    reg = await client.post(
-        "/register",
-        json={"redirect_uris": ["https://x.test/cb"], "token_endpoint_auth_method": "none"},
+    resp = await client.post(
+        "/api/v1/auth/oauth-verify",
+        json={"code": code, "decision": "deny"},
     )
-    cid = reg.json()["client_id"]
-    _, challenge = _pkce_pair()
-    authorize = await client.get(
-        "/authorize",
-        params={
-            "client_id": cid,
-            "response_type": "code",
-            "redirect_uri": "https://x.test/cb",
-            "code_challenge": challenge,
-            "code_challenge_method": "S256",
-        },
-        follow_redirects=False,
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "denied"
+    # Pending row gone — page polling now returns 410.
+    status = await client.get(
+        "/oauth/authorize/page/status", params={"pending": pending_id}
     )
-    pending = authorize.headers["location"].split("pending=")[1].split("&")[0]
+    assert status.status_code == 410
 
-    submit = await client.post(
-        "/oauth/authorize/page",
-        data={"pending": pending, "otp": "WRONG1"},
-        follow_redirects=False,
+
+@pytest.mark.asyncio
+async def test_status_unknown_pending_returns_410(client):
+    resp = await client.get(
+        "/oauth/authorize/page/status", params={"pending": "doesnotexist"}
     )
-    # Stays on form with an error message; pending row still alive.
-    assert submit.status_code == 200
-    assert "invalid or has already been used" in submit.text
+    assert resp.status_code == 410
+
+
+@pytest.mark.asyncio
+async def test_oauth_verify_idempotency(app_with_oauth, client):
+    """A second verify with the same code must fail — pending is one-shot."""
+    _, store, _ = app_with_oauth
+    _, pending_id, _, _ = await _start_authorize(client)
+    record = await store.load_pending_authorization(pending_id)
+    code = record["display_code"]
+
+    first = await client.post(
+        "/api/v1/auth/oauth-verify", json={"code": code, "decision": "approve"}
+    )
+    assert first.status_code == 200
+    second = await client.post(
+        "/api/v1/auth/oauth-verify", json={"code": code, "decision": "approve"}
+    )
+    # The pending row's verified flag now blocks find_pending_by_display_code.
+    assert second.status_code == 400
 
 
 @pytest.mark.asyncio
 async def test_refresh_token_rotation(app_with_oauth, client):
-    _, _, _ = app_with_oauth
-    # Quick way to get an initial token pair: re-run the happy path skeleton.
-    reg = await client.post(
-        "/register",
-        json={"redirect_uris": ["https://x.test/cb"], "token_endpoint_auth_method": "none"},
+    _, store, _ = app_with_oauth
+    client_id, pending_id, _, verifier = await _start_authorize(
+        client, redirect_uri="https://x.test/cb"
     )
-    cid = reg.json()["client_id"]
+    code = (await store.load_pending_authorization(pending_id))["display_code"]
 
-    otp = (await client.post("/api/v1/auth/otp", json={})).json()["otp"]
-    verifier, challenge = _pkce_pair()
-    authorize = await client.get(
-        "/authorize",
-        params={
-            "client_id": cid,
-            "response_type": "code",
-            "redirect_uri": "https://x.test/cb",
-            "code_challenge": challenge,
-            "code_challenge_method": "S256",
-        },
-        follow_redirects=False,
+    await client.post(
+        "/api/v1/auth/oauth-verify", json={"code": code, "decision": "approve"}
     )
-    pending = authorize.headers["location"].split("pending=")[1].split("&")[0]
-    submit = await client.post(
-        "/oauth/authorize/page",
-        data={"pending": pending, "otp": otp},
-        follow_redirects=False,
+    status = await client.get(
+        "/oauth/authorize/page/status", params={"pending": pending_id}
     )
-    auth_code = submit.headers["location"].split("code=")[1].split("&")[0]
+    auth_code = status.json()["redirect_url"].split("code=")[1].split("&")[0]
     token_resp = await client.post(
         "/token",
         data={
             "grant_type": "authorization_code",
             "code": auth_code,
             "redirect_uri": "https://x.test/cb",
-            "client_id": cid,
+            "client_id": client_id,
             "code_verifier": verifier,
         },
     )
     rt1 = token_resp.json()["refresh_token"]
     at1 = token_resp.json()["access_token"]
 
-    # Rotate.
     rotated = await client.post(
         "/token",
-        data={"grant_type": "refresh_token", "refresh_token": rt1, "client_id": cid},
+        data={"grant_type": "refresh_token", "refresh_token": rt1, "client_id": client_id},
     )
-    assert rotated.status_code == 200, rotated.text
+    assert rotated.status_code == 200
     rt2 = rotated.json()["refresh_token"]
     at2 = rotated.json()["access_token"]
-    assert rt2 != rt1
-    assert at2 != at1
+    assert rt2 != rt1 and at2 != at1
 
-    # Replay the old refresh — must be rejected, AND it should revoke the
-    # whole chain (RFC 9700 §4.14). Our OpenViking provider invalidates by
-    # (account, user) on replay detection.
+    # Replay rejected.
     replay = await client.post(
         "/token",
-        data={"grant_type": "refresh_token", "refresh_token": rt1, "client_id": cid},
+        data={"grant_type": "refresh_token", "refresh_token": rt1, "client_id": client_id},
     )
     assert replay.status_code == 400

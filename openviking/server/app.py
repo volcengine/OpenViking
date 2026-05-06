@@ -480,7 +480,17 @@ def create_app(
             _workspace = _Path(ov_cfg.storage.workspace).expanduser().resolve()
             _workspace.mkdir(parents=True, exist_ok=True)
             _route_store = OAuthStore(_workspace / ov_cfg.oauth.db_filename)
-            _route_issuer = ov_cfg.oauth.issuer or "http://127.0.0.1:1933"
+            # Resolution order for the AS issuer URL:
+            #   1. OPENVIKING_PUBLIC_BASE_URL env var (deployment override)
+            #   2. oauth.issuer in ov.conf (operator config)
+            #   3. http://127.0.0.1:1933 (dev default; SDK accepts loopback http)
+            import os as _os
+
+            _route_issuer = (
+                _os.environ.get("OPENVIKING_PUBLIC_BASE_URL", "").strip().rstrip("/")
+                or ov_cfg.oauth.issuer
+                or "http://127.0.0.1:1933"
+            )
             _route_provider = OpenVikingOAuthProvider(
                 store=_route_store,
                 issuer=_route_issuer,

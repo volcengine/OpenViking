@@ -30,9 +30,11 @@ class OAuthConfig(BaseModel):
     issuer: Optional[str] = Field(
         default=None,
         description=(
-            "Public issuer URL (e.g. 'https://ov.example.com'). When unset, the issuer is "
-            "derived from each request's Host/X-Forwarded-Proto headers. Strongly recommended "
-            "to set this explicitly when deployed behind a reverse proxy."
+            "Public issuer URL (e.g. 'https://ov.example.com'). Resolution order: the "
+            "OPENVIKING_PUBLIC_BASE_URL environment variable wins; otherwise this field; "
+            "otherwise the request's X-Forwarded-Proto/Host headers; otherwise the Host "
+            "header. Strongly recommended to set one of (env var, this field) when deployed "
+            "behind a reverse proxy or any host other than localhost."
         ),
     )
 

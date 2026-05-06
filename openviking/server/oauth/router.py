@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import html
 import logging
+import os
 from typing import Optional
 from urllib.parse import urlencode
 
@@ -64,42 +65,143 @@ _AUTHORIZE_PAGE_TEMPLATE = """<!DOCTYPE html>
   <style>
     body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
            background: #f5f5f7; margin: 0; padding: 2rem 1rem; color: #1d1d1f; }}
-    .card {{ max-width: 420px; margin: 4rem auto; background: white;
+    .card {{ max-width: 460px; margin: 4rem auto; background: white;
              border-radius: 12px; padding: 2rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }}
     h1 {{ font-size: 1.25rem; margin: 0 0 0.5rem; }}
     .client {{ font-weight: 600; }}
     p {{ color: #515154; line-height: 1.5; margin: 0.75rem 0; }}
-    label {{ display: block; font-size: 0.9rem; color: #515154; margin: 1rem 0 0.4rem; }}
-    input[type=text] {{ width: 100%; padding: 0.6rem 0.75rem; font-size: 1.1rem;
-                       border: 1px solid #d2d2d7; border-radius: 6px;
-                       letter-spacing: 0.1em; font-family: ui-monospace, monospace; }}
-    button {{ margin-top: 1.25rem; width: 100%; padding: 0.7rem; border: 0;
-              border-radius: 6px; background: #0071e3; color: white;
-              font-size: 1rem; cursor: pointer; }}
-    button:hover {{ background: #0077ed; }}
-    .error {{ background: #fff1f0; color: #b91c1c; padding: 0.6rem 0.75rem;
-              border-radius: 6px; font-size: 0.9rem; margin: 1rem 0 0; }}
+    .codebox {{ background: #f5f5f7; border-radius: 8px; padding: 1.25rem;
+                margin: 1.5rem 0 1rem; text-align: center; }}
+    .code {{ font-family: ui-monospace, monospace; font-size: 2.4rem;
+             letter-spacing: 0.4rem; font-weight: 600; color: #1d1d1f; }}
+    .console-link {{ display: inline-block; margin-top: 0.5rem; padding: 0.4rem 0.85rem;
+                     border-radius: 6px; background: #0071e3; color: white;
+                     text-decoration: none; font-size: 0.9rem; }}
+    .console-link:hover {{ background: #0077ed; }}
     .hint {{ font-size: 0.85rem; color: #86868b; margin-top: 1rem; }}
     code {{ background: #f5f5f7; padding: 1px 6px; border-radius: 4px;
-            font-family: ui-monospace, monospace; }}
+            font-family: ui-monospace, monospace; font-size: 0.85rem; }}
+    .same-origin-panel {{ display: none; background: #f1f8e9; border: 1px solid #c5e1a5;
+                          border-radius: 8px; padding: 1rem; margin: 1rem 0; }}
+    .same-origin-panel.visible {{ display: block; }}
+    .same-origin-panel h2 {{ margin: 0 0 0.5rem; font-size: 1rem; color: #33691e; }}
+    .same-origin-panel button {{ margin-top: 0.75rem; padding: 0.6rem 1.25rem; border: 0;
+                                 border-radius: 6px; background: #33691e; color: white;
+                                 font-size: 0.95rem; cursor: pointer; }}
+    .same-origin-panel button:hover {{ background: #3d7a22; }}
+    .same-origin-panel button:disabled {{ background: #aab; cursor: not-allowed; }}
+    .status {{ margin-top: 1rem; padding: 0.6rem 0.75rem; border-radius: 6px;
+               font-size: 0.9rem; display: none; }}
+    .status.visible {{ display: block; }}
+    .status.error {{ background: #fff1f0; color: #b91c1c; }}
+    .status.info {{ background: #e3f2fd; color: #1565c0; }}
   </style>
 </head>
 <body>
   <div class="card">
     <h1>Authorize <span class="client">{client_name}</span></h1>
-    <p>This client wants to access your OpenViking workspace.
-       Enter a one-time passcode generated from your CLI or REST API to continue.</p>
-    {error_block}
-    <form method="POST" action="{action}">
-      <input type="hidden" name="pending" value="{pending_id}">
-      <label for="otp">One-time passcode</label>
-      <input type="text" id="otp" name="otp" autofocus autocomplete="off"
-             pattern="[A-Za-z0-9]+" maxlength="12" placeholder="ABC234" required>
-      <button type="submit">Authorize</button>
-    </form>
-    <p class="hint">To get an OTP, run<br>
-      <code>curl -X POST -H "X-Api-Key: $KEY" {issuer}/api/v1/auth/otp</code></p>
+    <p>This client is requesting access to your OpenViking workspace. To continue,
+       go to the OpenViking console and enter the verification code below.</p>
+
+    <div class="codebox">
+      <div class="code" id="displayCode">{display_code}</div>
+      <a class="console-link" href="{public_base_url}/console" target="_blank" rel="noopener">
+        Open OpenViking console →
+      </a>
+    </div>
+
+    <div class="same-origin-panel" id="sameOriginPanel">
+      <h2>Quick authorize</h2>
+      <p style="margin: 0;">You're signed in to the console in this browser.
+        Click below to authorize <strong>{client_name}</strong> with that identity.</p>
+      <button id="quickAuthBtn" type="button">Authorize</button>
+    </div>
+
+    <div class="status" id="statusBox"></div>
+
+    <p class="hint">Waiting for verification… this page will redirect automatically once you confirm.</p>
   </div>
+
+  <script>
+  (function() {{
+    const PENDING = "{pending_id}";
+    const DISPLAY_CODE = "{display_code}";
+    const STATUS_URL = "/oauth/authorize/page/status?pending=" + encodeURIComponent(PENDING);
+    // Same-origin verify endpoint exposed by the 8020 console proxy. When the
+    // console isn't reverse-proxied to the same origin as this page, the
+    // detection below will simply not find a key and the panel stays hidden.
+    const VERIFY_URL = "/console/api/v1/ov/auth/oauth-verify";
+    const SESSION_KEY = "ov_console_api_key";
+    const statusEl = document.getElementById("statusBox");
+    const panelEl = document.getElementById("sameOriginPanel");
+    const buttonEl = document.getElementById("quickAuthBtn");
+
+    function showStatus(msg, kind) {{
+      statusEl.textContent = msg;
+      statusEl.className = "status visible " + (kind || "info");
+    }}
+    function clearStatus() {{
+      statusEl.className = "status";
+    }}
+
+    // Show the quick-authorize panel only if we can find an API key in this
+    // browser's sessionStorage (i.e. the console is on the same origin and
+    // the user is signed in). Click still requires explicit confirmation.
+    let sameOriginKey = null;
+    try {{
+      sameOriginKey = window.sessionStorage.getItem(SESSION_KEY);
+    }} catch (e) {{ /* sessionStorage may be unavailable; ignore */ }}
+    if (sameOriginKey) {{
+      panelEl.classList.add("visible");
+      buttonEl.addEventListener("click", async function() {{
+        buttonEl.disabled = true;
+        clearStatus();
+        try {{
+          const resp = await fetch(VERIFY_URL, {{
+            method: "POST",
+            headers: {{
+              "Content-Type": "application/json",
+              "X-Api-Key": sameOriginKey,
+            }},
+            body: JSON.stringify({{code: DISPLAY_CODE, decision: "approve"}}),
+          }});
+          if (!resp.ok) {{
+            const text = await resp.text();
+            showStatus("Authorize failed: " + text.slice(0, 200), "error");
+            buttonEl.disabled = false;
+            return;
+          }}
+          showStatus("Authorized — redirecting…", "info");
+        }} catch (err) {{
+          showStatus("Network error: " + err.message, "error");
+          buttonEl.disabled = false;
+        }}
+      }});
+    }}
+
+    // Poll the status endpoint until verified, then redirect.
+    async function pollOnce() {{
+      try {{
+        const resp = await fetch(STATUS_URL, {{cache: "no-store"}});
+        if (resp.status === 410) {{
+          showStatus("This authorization has expired. Restart from your client.", "error");
+          return false;
+        }}
+        const body = await resp.json();
+        if (body.status === "approved" && body.redirect_url) {{
+          window.location.replace(body.redirect_url);
+          return false;
+        }}
+      }} catch (e) {{ /* transient failure; retry */ }}
+      return true;
+    }}
+    (async function loop() {{
+      while (await pollOnce()) {{
+        await new Promise(function(r) {{ setTimeout(r, 2000); }});
+      }}
+    }})();
+  }})();
+  </script>
 </body>
 </html>"""
 
@@ -107,26 +209,28 @@ _AUTHORIZE_PAGE_TEMPLATE = """<!DOCTYPE html>
 def _render_page(
     *,
     pending_id: str,
+    display_code: str,
     client_name: Optional[str],
-    issuer: str,
-    error: Optional[str] = None,
+    public_base_url: str,
 ) -> HTMLResponse:
-    error_block = (
-        f'<div class="error">{html.escape(error)}</div>' if error else ""
-    )
     body = _AUTHORIZE_PAGE_TEMPLATE.format(
         client_name=html.escape(client_name or "MCP Client"),
-        action="/oauth/authorize/page",
         pending_id=html.escape(pending_id),
-        error_block=error_block,
-        issuer=html.escape(issuer),
+        display_code=html.escape(display_code),
+        public_base_url=html.escape(public_base_url),
     )
     return HTMLResponse(
         body,
         headers={
             "Cache-Control": "no-store",
+            # Allow inline script + style for our self-contained page; same-origin
+            # only. frame-ancestors 'none' protects against clickjacking.
             "Content-Security-Policy": (
-                "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; "
+                "default-src 'self'; "
+                "style-src 'unsafe-inline'; "
+                "script-src 'unsafe-inline'; "
+                "connect-src 'self'; "
+                "form-action 'self'; "
                 "frame-ancestors 'none'"
             ),
             "X-Frame-Options": "DENY",
@@ -139,15 +243,29 @@ def _render_page(
 # ---------------------------------------------------------------------------
 
 
+PUBLIC_BASE_URL_ENV = "OPENVIKING_PUBLIC_BASE_URL"
+
+
 def _public_origin(request: Request) -> str:
     """Pick the public-facing origin for metadata responses.
 
-    Prefers X-Forwarded-Proto/Host (set by typical reverse proxies) over
-    the raw scope.scheme/Host so the URLs we publish match the address
-    the client actually used. The MCP SDK's create_auth_routes already
-    honors a configured ``issuer_url`` for /.well-known/oauth-authorization-server;
-    we keep the same convention here for the resource metadata.
+    Resolution order:
+      1. ``OPENVIKING_PUBLIC_BASE_URL`` environment variable (operator override)
+      2. ``oauth.issuer`` from OAuthConfig if explicitly set
+      3. ``X-Forwarded-Proto`` / ``X-Forwarded-Host`` (reverse-proxy chain)
+      4. Request scheme + ``Host`` header (direct hit)
+
+    The same helper is used by every URL the server publishes to clients
+    (issuer, PRM resource, WWW-Authenticate, authorize-page links) so they
+    all agree on a single public address.
     """
+    env_value = os.environ.get(PUBLIC_BASE_URL_ENV, "").strip()
+    if env_value:
+        return env_value.rstrip("/")
+    cfg = getattr(request.app.state, "oauth_config", None)
+    configured = getattr(cfg, "issuer", None) if cfg else None
+    if configured:
+        return configured.rstrip("/")
     proto = request.headers.get("x-forwarded-proto") or request.url.scheme or "http"
     host = request.headers.get("x-forwarded-host") or request.headers.get("host")
     if not host:
@@ -201,40 +319,33 @@ async def authorize_page_get(request: Request, pending: str = "") -> HTMLRespons
     client = await provider.get_client(record["client_id"])
     return _render_page(
         pending_id=pending,
+        display_code=record["display_code"],
         client_name=client.client_name if client else None,
-        issuer=str(request.base_url).rstrip("/"),
+        public_base_url=_public_origin(request),
     )
 
 
-@router.post("/oauth/authorize/page", response_model=None)
-async def authorize_page_post(
-    request: Request,
-    pending: str = Form(...),
-    otp: str = Form(...),
-):
+@router.get("/oauth/authorize/page/status")
+async def authorize_page_status(request: Request, pending: str = "") -> JSONResponse:
+    """Polled by the authorize page until verification + auth-code mint.
+
+    Status values:
+      - ``pending``: not yet verified
+      - ``approved``: caller confirmed; ``redirect_url`` carries the auth code
+      - ``expired``: pending row gone (TTL or denied)
+    """
     store, provider = _get_store_and_provider(request)
+    if not pending:
+        return JSONResponse({"status": "expired"}, status_code=410)
 
     record = await store.load_pending_authorization(pending)
     if record is None:
-        return HTMLResponse(
-            "<h1>Authorization expired</h1><p>Please restart the connection from your client.</p>",
-            status_code=410,
-        )
+        return JSONResponse({"status": "expired"}, status_code=410)
 
-    client = await provider.get_client(record["client_id"])
-    issuer = str(request.base_url).rstrip("/")
+    if not record["verified"]:
+        return JSONResponse({"status": "pending"}, headers={"Cache-Control": "no-store"})
 
-    consumed = await store.consume_otp(otp.strip().upper())
-    if consumed is None:
-        return _render_page(
-            pending_id=pending,
-            client_name=client.client_name if client else None,
-            issuer=issuer,
-            error="That code is invalid or has already been used. Generate a new one and try again.",
-        )
-
-    # Mint and persist the authorization code, then redirect back to the
-    # client's redirect_uri with code+state.
+    # Verified — mint auth code and tear down pending row.
     auth_code = provider.mint_authorization_code()
     scope_str = " ".join(record["scopes"]) if record.get("scopes") else None
     await store.insert_auth_code(
@@ -245,9 +356,9 @@ async def authorize_page_post(
         code_challenge_method="S256",
         scope=scope_str,
         resource=record.get("resource"),
-        account_id=consumed["account_id"],
-        user_id=consumed["user_id"],
-        role=consumed["role"],
+        account_id=record["verified_account_id"],
+        user_id=record["verified_user_id"],
+        role=record["verified_role"],
         ttl_seconds=provider.code_ttl_seconds,
     )
     await store.delete_pending_authorization(pending)
@@ -256,10 +367,79 @@ async def authorize_page_post(
     if record.get("state"):
         params["state"] = record["state"]
     sep = "&" if "?" in record["redirect_uri"] else "?"
-    return RedirectResponse(
-        url=f"{record['redirect_uri']}{sep}{urlencode(params)}",
-        status_code=302,
+    return JSONResponse(
+        {
+            "status": "approved",
+            "redirect_url": f"{record['redirect_uri']}{sep}{urlencode(params)}",
+        },
         headers={"Cache-Control": "no-store"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/auth/oauth-verify (authenticated; binds caller identity)
+# ---------------------------------------------------------------------------
+
+
+class OAuthVerifyRequest(BaseModel):
+    code: str = Field(..., description="The 6-character display code from the authorize page")
+    decision: str = Field(
+        default="approve",
+        description="'approve' to authorize the client, 'deny' to reject",
+    )
+
+
+class OAuthVerifyResponse(BaseModel):
+    status: str  # "approved" | "denied"
+    client_id: Optional[str] = None
+    client_name: Optional[str] = None
+
+
+@router.post("/api/v1/auth/oauth-verify", response_model=OAuthVerifyResponse)
+async def oauth_verify(
+    request: Request,
+    body: OAuthVerifyRequest,
+    ctx: RequestContext = Depends(get_request_context),
+) -> JSONResponse:
+    """Bind the caller's identity to a pending OAuth authorization.
+
+    The user reads a 6-character verification code off the MCP client's
+    authorize page, then submits it here from a session that's already
+    authenticated (typically via the OpenViking console). On approve we
+    write the caller's (account, user, role) into the pending row; the
+    authorize page's polling then catches that and redirects the client
+    back to ``redirect_uri`` with a fresh authorization code.
+    """
+    store, provider = _get_store_and_provider(request)
+
+    decision = body.decision.lower().strip()
+    if decision not in {"approve", "deny"}:
+        raise InvalidArgumentError("decision must be 'approve' or 'deny'")
+
+    record = await store.find_pending_by_display_code(body.code)
+    if record is None:
+        raise InvalidArgumentError("Invalid or expired verification code")
+
+    if decision == "deny":
+        await store.delete_pending_authorization(record["pending_id"])
+        return JSONResponse({"status": "denied"})
+
+    ok = await store.mark_pending_verified(
+        pending_id=record["pending_id"],
+        account_id=ctx.user.account_id,
+        user_id=ctx.user.user_id,
+        role=ctx.role.value,
+    )
+    if not ok:
+        raise InvalidArgumentError("Verification raced — please restart from the authorize page")
+
+    client = await provider.get_client(record["client_id"])
+    return JSONResponse(
+        {
+            "status": "approved",
+            "client_id": record["client_id"],
+            "client_name": client.client_name if client else None,
+        }
     )
 
 
