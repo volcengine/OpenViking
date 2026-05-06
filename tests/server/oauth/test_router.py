@@ -132,6 +132,28 @@ async def test_metadata_endpoint(client):
 
 
 @pytest.mark.asyncio
+async def test_protected_resource_metadata(client):
+    resp = await client.get("/.well-known/oauth-protected-resource")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["resource"].endswith("/mcp")
+    assert body["authorization_servers"]
+    assert "header" in body["bearer_methods_supported"]
+    # Must be cacheable.
+    assert "max-age" in resp.headers.get("cache-control", "")
+
+
+@pytest.mark.asyncio
+async def test_protected_resource_metadata_honors_x_forwarded(client):
+    resp = await client.get(
+        "/.well-known/oauth-protected-resource",
+        headers={"X-Forwarded-Proto": "https", "X-Forwarded-Host": "public.example"},
+    )
+    body = resp.json()
+    assert body["resource"] == "https://public.example/mcp"
+
+
+@pytest.mark.asyncio
 async def test_dcr_registers_client(client):
     resp = await client.post(
         "/register",

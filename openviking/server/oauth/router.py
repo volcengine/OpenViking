@@ -24,7 +24,8 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from pydantic import BaseModel, Field
+from mcp.shared.auth import ProtectedResourceMetadata
+from pydantic import AnyHttpUrl, BaseModel, Field
 
 from openviking.server.auth import get_request_context
 from openviking.server.identity import RequestContext
@@ -130,6 +131,52 @@ def _render_page(
             ),
             "X-Frame-Options": "DENY",
         },
+    )
+
+
+# ---------------------------------------------------------------------------
+# /.well-known/oauth-protected-resource (RFC 9728)
+# ---------------------------------------------------------------------------
+
+
+def _public_origin(request: Request) -> str:
+    """Pick the public-facing origin for metadata responses.
+
+    Prefers X-Forwarded-Proto/Host (set by typical reverse proxies) over
+    the raw scope.scheme/Host so the URLs we publish match the address
+    the client actually used. The MCP SDK's create_auth_routes already
+    honors a configured ``issuer_url`` for /.well-known/oauth-authorization-server;
+    we keep the same convention here for the resource metadata.
+    """
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme or "http"
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    if not host:
+        host = request.url.netloc or "localhost"
+    return f"{proto.split(',', 1)[0].strip()}://{host.split(',', 1)[0].strip()}"
+
+
+@router.get("/.well-known/oauth-protected-resource")
+async def oauth_protected_resource(request: Request) -> JSONResponse:
+    """RFC 9728 — protected resource metadata for /mcp.
+
+    MCP clients reach this URL via the ``WWW-Authenticate: Bearer
+    resource_metadata=..."`` hint emitted by the /mcp 401 path. The body
+    points them at our authorization server so they can run discovery
+    against /.well-known/oauth-authorization-server.
+    """
+    cfg = getattr(request.app.state, "oauth_config", None)
+    issuer = (cfg.issuer if cfg and cfg.issuer else _public_origin(request)).rstrip("/")
+    resource = f"{_public_origin(request)}/mcp"
+
+    metadata = ProtectedResourceMetadata(
+        resource=AnyHttpUrl(resource),
+        authorization_servers=[AnyHttpUrl(issuer)],
+        bearer_methods_supported=["header"],
+        resource_name="OpenViking MCP",
+    )
+    return JSONResponse(
+        metadata.model_dump(mode="json", exclude_none=True),
+        headers={"Cache-Control": "public, max-age=3600"},
     )
 
 
