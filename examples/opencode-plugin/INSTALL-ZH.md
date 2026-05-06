@@ -3,7 +3,7 @@
 这个插件新增了一个面向 OpenCode 的统一 OpenViking 插件：
 
 - 外部仓库语义检索
-- 长期记忆、session 同步、自动 commit、自动 recall
+- 长期记忆、session 同步、生命周期边界 commit、自动 recall
 
 旧示例目前仍然保留，后续会下线。这个插件不再安装 `skills/openviking/SKILL.md`，也不要求 agent 使用 `ov` 命令。原 skill 中的能力会通过 OpenCode tools 暴露。
 
@@ -77,6 +77,8 @@ npm install
 export { OpenVikingPlugin, default } from "./openviking/index.mjs"
 ```
 
+这个 wrapper 只用于上面这种源码安装目录结构。npm 包安装会通过 `package.json` 直接加载 `index.mjs`。
+
 如果你使用 npm 包方式安装，也可以将 `examples/opencode-plugin` 作为一个普通 OpenCode 插件包使用。
 
 ## 配置
@@ -98,9 +100,7 @@ export { OpenVikingPlugin, default } from "./openviking/index.mjs"
   "agentId": "",
   "enabled": true,
   "timeoutMs": 30000,
-  "runtime": { "autoStartServer": false },
   "repoContext": { "enabled": true, "cacheTtlMs": 60000 },
-  "autoCommit": { "enabled": true, "intervalMinutes": 10 },
   "autoRecall": {
     "enabled": true,
     "limit": 6,
@@ -180,7 +180,6 @@ memadd path="file:///home/alice/project/notes.md" reason="project notes"
 
 - `openviking-memory.log`
 - `openviking-session-map.json`
-- `openviking-server.log`
 
 可以通过配置里的 `runtime.dataDir` 修改这个目录。
 

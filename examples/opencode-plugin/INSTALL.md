@@ -3,7 +3,7 @@
 This plugin adds one unified OpenViking plugin for OpenCode:
 
 - Semantic retrieval for external repositories
-- Long-term memory, session synchronization, automatic commit, and automatic recall
+- Long-term memory, session synchronization, lifecycle commit, and automatic recall
 
 The older split examples remain available for now and will be deprecated in a future update. This plugin does not install `skills/openviking/SKILL.md`, and it does not require the agent to use the `ov` command. The capabilities from the former skill are exposed as OpenCode tools here.
 
@@ -77,6 +77,8 @@ The top-level `openviking.mjs` forwards the first-level `.mjs` entry that OpenCo
 export { OpenVikingPlugin, default } from "./openviking/index.mjs"
 ```
 
+This wrapper is only for source installs with the directory layout shown above. npm package installs load `index.mjs` directly through `package.json`.
+
 If you install through an npm package, you can also use `examples/opencode-plugin` as a normal OpenCode plugin package.
 
 ## Configuration
@@ -98,9 +100,7 @@ Example configuration:
   "agentId": "",
   "enabled": true,
   "timeoutMs": 30000,
-  "runtime": { "autoStartServer": false },
   "repoContext": { "enabled": true, "cacheTtlMs": 60000 },
-  "autoCommit": { "enabled": true, "intervalMinutes": 10 },
   "autoRecall": {
     "enabled": true,
     "limit": 6,
@@ -177,7 +177,6 @@ Possible files include:
 
 - `openviking-memory.log`
 - `openviking-session-map.json`
-- `openviking-server.log`
 
 You can change this directory with `runtime.dataDir` in the configuration.
 

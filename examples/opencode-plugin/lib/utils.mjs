@@ -11,16 +11,11 @@ export const DEFAULT_CONFIG = {
   enabled: true,
   timeoutMs: 30000,
   runtime: {
-    autoStartServer: false,
     dataDir: "",
   },
   repoContext: {
     enabled: true,
     cacheTtlMs: 60000,
-  },
-  autoCommit: {
-    enabled: true,
-    intervalMinutes: 10,
   },
   autoRecall: {
     enabled: true,
@@ -40,10 +35,14 @@ function cloneDefaultConfig() {
 
 function mergeConfig(fileConfig = {}) {
   const config = cloneDefaultConfig()
-  Object.assign(config, fileConfig)
-  config.runtime = { ...DEFAULT_CONFIG.runtime, ...(fileConfig.runtime ?? {}) }
+  for (const key of ["endpoint", "apiKey", "account", "user", "agentId", "enabled", "timeoutMs"]) {
+    if (fileConfig[key] !== undefined) config[key] = fileConfig[key]
+  }
+  config.runtime = {
+    ...DEFAULT_CONFIG.runtime,
+    dataDir: fileConfig.runtime?.dataDir ?? DEFAULT_CONFIG.runtime.dataDir,
+  }
   config.repoContext = { ...DEFAULT_CONFIG.repoContext, ...(fileConfig.repoContext ?? {}) }
-  config.autoCommit = { ...DEFAULT_CONFIG.autoCommit, ...(fileConfig.autoCommit ?? {}) }
   config.autoRecall = { ...DEFAULT_CONFIG.autoRecall, ...(fileConfig.autoRecall ?? {}) }
 
   if (process.env.OPENVIKING_API_KEY) {
@@ -66,7 +65,6 @@ function mergeConfig(fileConfig = {}) {
     1000,
     60 * 60 * 1000,
   )
-  config.autoCommit.intervalMinutes = getAutoCommitIntervalMinutes(config)
   clampRecallConfig(config.autoRecall)
   return config
 }
@@ -82,12 +80,6 @@ function clampRecallConfig(recall) {
   recall.scoreThreshold = Math.max(0, Math.min(1, Number(recall.scoreThreshold) || 0))
   recall.maxContentChars = Math.max(100, Math.min(5000, Math.round(Number(recall.maxContentChars) || 500)))
   recall.tokenBudget = Math.max(100, Math.min(10000, Math.round(Number(recall.tokenBudget) || 2000)))
-}
-
-export function getAutoCommitIntervalMinutes(config) {
-  const configured = Number(config.autoCommit?.intervalMinutes ?? DEFAULT_CONFIG.autoCommit.intervalMinutes)
-  if (!Number.isFinite(configured)) return DEFAULT_CONFIG.autoCommit.intervalMinutes
-  return Math.max(1, configured)
 }
 
 export function loadConfig(pluginRoot, projectDirectory) {

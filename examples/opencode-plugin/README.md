@@ -15,7 +15,7 @@ The new plugin exposes everything through OpenCode tool hooks and talks to OpenV
 - Exposes repository search, grep, glob, read, browse, add, remove, and queue status as tools.
 - Maps each OpenCode session to an OpenViking session.
 - Captures user and assistant text messages into OpenViking.
-- Runs automatic background session commits for memory extraction.
+- Commits sessions at lifecycle boundaries for memory extraction.
 - Automatically recalls relevant memories and appends them to the latest user message.
 
 ## Files
@@ -98,6 +98,8 @@ The top-level `openviking.mjs` is only a wrapper:
 export { OpenVikingPlugin, default } from "./openviking/index.mjs"
 ```
 
+This wrapper is only for source installs with the directory layout shown above. npm package installs load `index.mjs` directly through `package.json`.
+
 ## Configuration
 
 Create `~/.config/opencode/openviking-config.json`:
@@ -111,9 +113,7 @@ Create `~/.config/opencode/openviking-config.json`:
   "agentId": "",
   "enabled": true,
   "timeoutMs": 30000,
-  "runtime": { "autoStartServer": false },
   "repoContext": { "enabled": true, "cacheTtlMs": 60000 },
-  "autoCommit": { "enabled": true, "intervalMinutes": 10 },
   "autoRecall": {
     "enabled": true,
     "limit": 6,
@@ -158,7 +158,7 @@ Use to discover exact URIs before reading content.
 
 Commit the current OpenCode session to OpenViking and trigger memory extraction.
 
-The plugin also runs automatic commits on a configurable interval.
+The plugin also commits at session deletion, session error, compaction, and plugin shutdown boundaries.
 
 ### `memgrep`
 
@@ -210,6 +210,5 @@ The plugin writes runtime files to `~/.config/opencode/openviking/` by default:
 
 - `openviking-memory.log`
 - `openviking-session-map.json`
-- `openviking-server.log` when `runtime.autoStartServer` is enabled
 
 Set `runtime.dataDir` in config to override this directory.

@@ -11,13 +11,12 @@
   "files": [
     "index.mjs",
     "lib/",
-    "wrappers/",
     "README.md",
     "INSTALL.md",
     "INSTALL-ZH.md"
   ],
   "scripts": {
-    "check": "node --check index.mjs && node --check wrappers/openviking.mjs"
+    "check": "node --check index.mjs && node --check lib/runtime.mjs && node --check lib/repo-context.mjs && node --check lib/memory-session.mjs && node --check lib/memadd-local.mjs && node --check lib/memory-tools.mjs && node --check lib/memory-recall.mjs && node --check lib/utils.mjs"
   },
   "dependencies": {
     "@opencode-ai/plugin": "^1.14.37"

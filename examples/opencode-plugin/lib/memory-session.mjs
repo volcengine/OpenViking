@@ -1,7 +1,6 @@
 import fs from "fs"
 import path from "path"
 import {
-  getAutoCommitIntervalMinutes,
   log,
   makeRequest,
   safeStringify,
@@ -16,14 +15,14 @@ const COMMIT_WAIT_TIMEOUT_MS = 180000
 export function createMemorySessionManager({ config, pluginRoot }) {
   const sessionMap = new Map()
   const sessionMessageBuffer = new Map()
+  const commitWatchers = new Map()
   let sessionMapPath = path.join(pluginRoot, "openviking-session-map.json")
   let saveTimer = null
-  let autoCommitTimer = null
   let lastBufferCleanupAt = 0
 
   async function init() {
     await loadSessionMap()
-    startAutoCommit()
+    resumeBackgroundCommits()
   }
 
   async function loadSessionMap() {
@@ -117,6 +116,8 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       await handleSessionDeleted(event)
     } else if (event.type === "session.error") {
       await handleSessionError(event)
+    } else if (event.type === "session.compacted") {
+      await handleSessionCompacted(event)
     } else if (event.type === "message.updated") {
       await handleMessageUpdated(event)
     } else if (event.type === "message.part.updated") {
@@ -187,6 +188,32 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     if (!sessionId) return
     log("ERROR", "event", "OpenCode session error", { session_id: sessionId, error: safeStringify(event.error) })
     await handleSessionDeleted(event)
+  }
+
+  async function handleSessionCompacted(event) {
+    await commitSessionBoundary(event, "session.compacted")
+  }
+
+  async function commitSessionBoundary(event, reason) {
+    const sessionId = resolveEventSessionId(event)
+    if (!sessionId) return
+
+    const mapping = sessionMap.get(sessionId)
+    if (!mapping) return
+
+    await flushPendingMessages(sessionId, mapping)
+    if (mapping.commitInFlight) {
+      monitorBackgroundCommit(mapping, sessionId)
+      return
+    }
+    if (mapping.capturedMessages.size > 0) {
+      log("INFO", "session", "Committing OpenViking session at lifecycle boundary", {
+        opencode_session: sessionId,
+        openviking_session: mapping.ovSessionId,
+        reason,
+      })
+      await startBackgroundCommit(mapping, sessionId)
+    }
   }
 
   async function handleMessageUpdated(event) {
@@ -319,6 +346,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
 
   async function startBackgroundCommit(mapping, opencodeSessionId, abortSignal) {
     if (mapping.commitInFlight && mapping.commitTaskId) {
+      if (!abortSignal) monitorBackgroundCommit(mapping, opencodeSessionId)
       return { mode: "background", taskId: mapping.commitTaskId }
     }
 
@@ -341,6 +369,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       mapping.commitTaskId = taskId
       mapping.commitStartedAt = Date.now()
       debouncedSaveSessionMap()
+      if (!abortSignal) monitorBackgroundCommit(mapping, opencodeSessionId)
       return { mode: "background", taskId }
     } catch (error) {
       if (error?.message?.includes("already has a commit in progress")) {
@@ -350,6 +379,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
           mapping.commitTaskId = taskId
           mapping.commitStartedAt = mapping.commitStartedAt ?? Date.now()
           debouncedSaveSessionMap()
+          if (!abortSignal) monitorBackgroundCommit(mapping, opencodeSessionId)
           return { mode: "background", taskId }
         }
       }
@@ -389,33 +419,6 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       await sleep(2000, abortSignal)
     }
     return null
-  }
-
-  async function pollCommitTaskOnce(mapping, opencodeSessionId) {
-    if (!mapping.commitInFlight) return "unknown"
-    if (!mapping.commitTaskId) {
-      mapping.commitTaskId = await findRunningCommitTaskId(mapping.ovSessionId)
-      if (!mapping.commitTaskId) {
-        clearCommitState(mapping)
-        debouncedSaveSessionMap()
-        return "unknown"
-      }
-    }
-
-    try {
-      const task = await getTask(mapping.commitTaskId)
-      if (task.status === "pending" || task.status === "running") return task.status
-      if (task.status === "completed") {
-        await finalizeCommitSuccess(mapping, opencodeSessionId)
-        return task.status
-      }
-      clearCommitState(mapping)
-      debouncedSaveSessionMap()
-      return task.status
-    } catch (error) {
-      log("ERROR", "session", "Failed to poll commit task", { task_id: mapping.commitTaskId, error: error?.message })
-      return "unknown"
-    }
   }
 
   async function getTask(taskId, abortSignal) {
@@ -458,51 +461,55 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     }
   }
 
-  function startAutoCommit() {
-    if (autoCommitTimer || !config.autoCommit?.enabled) return
-    autoCommitTimer = setInterval(() => {
-      checkAndCommitSessions().catch((error) => {
-        log("ERROR", "auto-commit", "Auto-commit check failed", { error: error?.message })
-      })
-    }, 60 * 1000)
-    log("INFO", "auto-commit", "Auto-commit scheduler started", {
-      commit_interval_minutes: getAutoCommitIntervalMinutes(config),
-    })
-  }
-
-  function stopAutoCommit() {
-    if (!autoCommitTimer) return
-    clearInterval(autoCommitTimer)
-    autoCommitTimer = null
-  }
-
-  async function checkAndCommitSessions() {
-    const intervalMs = getAutoCommitIntervalMinutes(config) * 60 * 1000
-    const now = Date.now()
-    cleanupOrphanedMessageBuffers(now)
-
+  function resumeBackgroundCommits() {
     for (const [opencodeSessionId, mapping] of sessionMap.entries()) {
-      if (mapping.commitInFlight) {
-        await pollCommitTaskOnce(mapping, opencodeSessionId)
-        continue
-      }
-      if (mapping.pendingMessages.size > 0) {
-        await flushPendingMessages(opencodeSessionId, mapping)
-      }
-      const timeSinceLastCommit = now - (mapping.lastCommitTime ?? mapping.createdAt)
-      if (timeSinceLastCommit >= intervalMs && mapping.capturedMessages.size > 0) {
-        await startBackgroundCommit(mapping, opencodeSessionId)
-      }
+      if (mapping.commitInFlight) monitorBackgroundCommit(mapping, opencodeSessionId)
     }
   }
 
-  async function flushAll() {
+  function monitorBackgroundCommit(mapping, opencodeSessionId) {
+    if (!mapping.commitTaskId) return
+    if (commitWatchers.has(mapping.commitTaskId)) return
+
+    const taskId = mapping.commitTaskId
+    const watcher = waitForCommitCompletion(mapping, opencodeSessionId)
+      .then((task) => {
+        if (!task) {
+          log("WARN", "session", "Background commit is still pending after the wait timeout", {
+            task_id: taskId,
+            openviking_session: mapping.ovSessionId,
+            opencode_session: opencodeSessionId,
+          })
+        }
+      })
+      .catch((error) => {
+        log("ERROR", "session", "Background commit watcher failed", {
+          task_id: taskId,
+          openviking_session: mapping.ovSessionId,
+          opencode_session: opencodeSessionId,
+          error: error?.message,
+        })
+      })
+      .finally(() => {
+        commitWatchers.delete(taskId)
+      })
+    commitWatchers.set(taskId, watcher)
+  }
+
+  async function flushAll({ commit = false } = {}) {
     if (saveTimer) {
       clearTimeout(saveTimer)
       saveTimer = null
     }
     for (const [sessionId, mapping] of sessionMap.entries()) {
       await flushPendingMessages(sessionId, mapping)
+      if (commit) {
+        if (mapping.commitInFlight) {
+          monitorBackgroundCommit(mapping, sessionId)
+        } else if (mapping.capturedMessages.size > 0) {
+          await startBackgroundCommit(mapping, sessionId)
+        }
+      }
     }
     await saveSessionMap()
   }
@@ -535,7 +542,6 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     getMappedSessionId,
     commitSession,
     flushAll,
-    stopAutoCommit,
   }
 
   function createSessionMapping(ovSessionId) {
@@ -617,4 +623,3 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     })
   }
 }
-

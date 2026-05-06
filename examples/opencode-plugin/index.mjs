@@ -30,7 +30,7 @@ export async function OpenVikingPlugin({ client, directory }) {
   await sessionManager.init()
 
   Promise.resolve().then(async () => {
-    const ready = await initializeRuntime(config, client, dataDir)
+    const ready = await initializeRuntime(config, client)
     if (ready) await repoContext.refreshRepos({ force: true })
   })
 
@@ -55,8 +55,7 @@ export async function OpenVikingPlugin({ client, directory }) {
 
 
     stop: async () => {
-      sessionManager.stopAutoCommit()
-      await sessionManager.flushAll()
+      await sessionManager.flushAll({ commit: true })
       log("INFO", "plugin", "OpenViking plugin stopped")
     },
   }
