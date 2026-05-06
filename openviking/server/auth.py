@@ -7,7 +7,13 @@ from typing import Optional
 
 from fastapi import Depends, Header, Request
 
-from openviking.server.identity import AuthMode, RequestContext, ResolvedIdentity, Role
+from openviking.server.identity import (
+    AccountNamespacePolicy,
+    AuthMode,
+    RequestContext,
+    ResolvedIdentity,
+    Role,
+)
 from openviking.telemetry.span_models import update_root_span_identity
 from openviking_cli.exceptions import (
     InvalidArgumentError,
@@ -100,6 +106,89 @@ def _explicit_identity_from_request(request: Request) -> tuple[Optional[str], Op
         user_id = _normalize_request_value(query_params.get("user_id"))
 
     return account_id, user_id
+
+
+def _try_resolve_oauth_jwt(
+    request: Request,
+    api_key: str,
+    *,
+    x_openviking_account: Optional[str],
+    x_openviking_user: Optional[str],
+    x_openviking_agent: Optional[str],
+) -> Optional[ResolvedIdentity]:
+    """Attempt to verify the bearer as an OAuth-issued JWT.
+
+    Returns the resolved identity on success. Returns None when the bearer is
+    not JWT-shaped or no signer is configured (caller falls back to API key).
+    Raises UnauthenticatedError when the bearer IS JWT-shaped but verification
+    fails — fail-closed semantics.
+    """
+    from openviking.server.oauth.jwt import OAuthInvalidTokenError, looks_like_jwt
+
+    if not looks_like_jwt(api_key):
+        return None
+    signer = getattr(request.app.state, "oauth_signer", None)
+    if signer is None:
+        return None
+
+    try:
+        claims = signer.verify(api_key)
+    except OAuthInvalidTokenError as exc:
+        raise UnauthenticatedError(f"Invalid OAuth token: {exc}") from exc
+
+    role_value = claims.get("role")
+    account_id = claims.get("account_id")
+    user_id = claims.get("user_id")
+    if not isinstance(role_value, str) or not account_id or not user_id:
+        raise UnauthenticatedError("OAuth token missing required claims")
+    try:
+        role = Role(role_value)
+    except ValueError as exc:
+        raise UnauthenticatedError(f"OAuth token has unknown role: {role_value}") from exc
+
+    # Override behavior mirrors the API-key path: ROOT may override identity
+    # via X-OpenViking-* headers; ADMIN may override agent and (within own
+    # account) user; USER may override only agent.
+    if role == Role.ROOT:
+        effective_account = x_openviking_account or account_id
+        effective_user = x_openviking_user or user_id
+    elif role == Role.ADMIN:
+        if x_openviking_account and x_openviking_account != account_id:
+            raise PermissionDeniedError(
+                "X-OpenViking-Account cannot override the account for ADMIN OAuth tokens."
+            )
+        effective_account = account_id
+        effective_user = x_openviking_user or user_id
+    else:  # Role.USER
+        if x_openviking_account and x_openviking_account != account_id:
+            raise PermissionDeniedError(
+                "X-OpenViking-Account cannot override the account for USER OAuth tokens."
+            )
+        if x_openviking_user and x_openviking_user != user_id:
+            raise PermissionDeniedError(
+                "X-OpenViking-User cannot override the user for USER OAuth tokens."
+            )
+        effective_account = account_id
+        effective_user = user_id
+
+    effective_agent = x_openviking_agent or claims.get("agent_id") or "default"
+
+    namespace_policy = AccountNamespacePolicy()
+    api_key_manager = getattr(request.app.state, "api_key_manager", None)
+    if api_key_manager is not None and hasattr(api_key_manager, "get_account_policy"):
+        try:
+            namespace_policy = api_key_manager.get_account_policy(effective_account)
+        except Exception:  # noqa: BLE001
+            pass
+
+    return ResolvedIdentity(
+        role=role,
+        account_id=effective_account,
+        user_id=effective_user,
+        agent_id=effective_agent,
+        namespace_policy=namespace_policy,
+        from_oauth=True,
+    )
 
 
 async def resolve_identity(
@@ -201,6 +290,21 @@ async def resolve_identity(
     if not api_key:
         raise UnauthenticatedError("Missing API Key when resolving identity.")
 
+    # OAuth 2.1 fast path: if the bearer is a JWT and an OAuth signer is
+    # configured, verify it directly. Failure is fail-closed (no fallback to
+    # API key) so a forged token claiming alg=HS256 cannot be retried as a
+    # plain key. When OAuth is disabled, looks_like_jwt is checked but the
+    # signer is None and we drop through to the API key path.
+    oauth_identity = _try_resolve_oauth_jwt(
+        request,
+        api_key,
+        x_openviking_account=x_openviking_account,
+        x_openviking_user=x_openviking_user,
+        x_openviking_agent=x_openviking_agent,
+    )
+    if oauth_identity is not None:
+        return oauth_identity
+
     identity = api_key_manager.resolve(api_key)
     if identity.role == Role.ROOT:
         identity.account_id = x_openviking_account or identity.account_id or "default"
@@ -241,6 +345,7 @@ async def get_request_context(
         auth_mode == AuthMode.API_KEY
         and api_key_manager is not None
         and identity.role == Role.ROOT
+        and not identity.from_oauth
         and _root_request_requires_explicit_tenant(path)
     ):
         account_header = request.headers.get("X-OpenViking-Account")

@@ -24,7 +24,7 @@ from openviking.server.mcp_endpoint import (
     search,
     store,
 )
-from openviking.server.mcp_endpoint import list_dir as list_tool
+from openviking.server.mcp_endpoint import ls as list_tool
 from openviking_cli.exceptions import UnauthenticatedError
 from openviking_cli.session.user_id import UserIdentifier
 

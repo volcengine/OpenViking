@@ -49,6 +49,7 @@ from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
 from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.utils import get_logger
+from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import init_otel_log_handler_from_server_config
 
 logger = get_logger(__name__)
@@ -196,6 +197,48 @@ def create_app(
         if config.observability.metrics.enabled:
             logger.info("Prometheus metrics enabled at /metrics")
 
+        # Initialize OAuth 2.1 store + signer when enabled in OpenViking config.
+        # OAuth is layered on top of API_KEY mode; in DEV/TRUSTED modes it's a no-op.
+        ov_cfg = get_openviking_config()
+        oauth_gc_task: Optional[asyncio.Task] = None
+        if ov_cfg.oauth.enabled:
+            from pathlib import Path as _Path
+
+            from openviking.server.oauth.jwt import JwtSigner, load_or_generate_secret
+            from openviking.server.oauth.storage import OAuthStore
+
+            workspace = _Path(ov_cfg.storage.workspace).expanduser().resolve()
+            workspace.mkdir(parents=True, exist_ok=True)
+            oauth_store = OAuthStore(workspace / ov_cfg.oauth.db_filename)
+            await oauth_store.initialize()
+            oauth_secret = load_or_generate_secret(workspace, ov_cfg.oauth.signing_key_b64)
+            app.state.oauth_store = oauth_store
+            app.state.oauth_signer = JwtSigner(oauth_secret)
+            app.state.oauth_config = ov_cfg.oauth
+
+            async def _oauth_gc_loop(store: OAuthStore) -> None:
+                while True:
+                    try:
+                        await asyncio.sleep(60)
+                        await store.gc_expired()
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning("OAuth GC loop error: %s", e)
+
+            oauth_gc_task = asyncio.create_task(_oauth_gc_loop(oauth_store))
+            app.state.oauth_gc_task = oauth_gc_task
+            logger.info(
+                "OAuth 2.1 enabled: db=%s, access_token_ttl=%ds, otp_ttl=%ds",
+                workspace / ov_cfg.oauth.db_filename,
+                ov_cfg.oauth.access_token_ttl_seconds,
+                ov_cfg.oauth.otp_ttl_seconds,
+            )
+        else:
+            app.state.oauth_store = None
+            app.state.oauth_signer = None
+            app.state.oauth_config = None
+
         # Start TaskTracker cleanup loop
         task_tracker = get_task_tracker()
         task_tracker.start_cleanup_loop()
@@ -217,6 +260,18 @@ def create_app(
 
         await shutdown_metrics_async(app=app)
         task_tracker.stop_cleanup_loop()
+        if oauth_gc_task is not None:
+            oauth_gc_task.cancel()
+            try:
+                await oauth_gc_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        oauth_store_state = getattr(app.state, "oauth_store", None)
+        if oauth_store_state is not None:
+            try:
+                await oauth_store_state.close()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("OAuth store close failed: %s", e)
         if owns_service and service:
             try:
                 await service.close()
@@ -414,6 +469,19 @@ def create_app(
     app.include_router(webdav_router)
     app.include_router(maintenance_router)
     app.include_router(bot_router, prefix="/bot/v1")
+
+    # OAuth 2.1 router: registered only when enabled in OpenViking config.
+    # Lifespan still runs the store/signer initialization above; registering
+    # the router unconditionally would just expose endpoints that 503.
+    try:
+        ov_cfg = get_openviking_config()
+        if ov_cfg.oauth.enabled:
+            from openviking.server.oauth.router import router as oauth_router
+
+            app.include_router(oauth_router)
+            logger.info("OAuth 2.1 router mounted at /oauth/*")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Skipping OAuth router registration: %s", e)
 
     # MCP endpoint — serves 5 tools (search, read, store, forget, health)
     # via streamable HTTP for Claude Code and other MCP clients.

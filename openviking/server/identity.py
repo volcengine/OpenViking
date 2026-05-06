@@ -60,6 +60,11 @@ class ResolvedIdentity:
     user_id: Optional[str] = None
     agent_id: Optional[str] = None
     namespace_policy: AccountNamespacePolicy = field(default_factory=AccountNamespacePolicy)
+    # True when this identity was minted from an OAuth-issued bearer token;
+    # downstream checks (e.g. ROOT-requires-explicit-tenant headers) can skip
+    # rules that target raw API-key auth, since OAuth claims already pin
+    # account/user.
+    from_oauth: bool = False
 
 
 @dataclass

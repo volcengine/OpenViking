@@ -23,6 +23,7 @@ from .embedding_config import EmbeddingConfig
 from .encryption_config import EncryptionConfig
 from .log_config import LogConfig
 from .memory_config import MemoryConfig
+from .oauth_config import OAuthConfig
 from .parser_config import (
     AudioConfig,
     CodeConfig,
@@ -168,6 +169,11 @@ class OpenVikingConfig(BaseModel):
     log: LogConfig = Field(default_factory=LogConfig, description="Logging configuration")
 
     memory: MemoryConfig = Field(default_factory=MemoryConfig, description="Memory configuration")
+
+    oauth: OAuthConfig = Field(
+        default_factory=OAuthConfig,
+        description="OAuth 2.1 (MCP) configuration",
+    )
 
     telemetry: "TelemetryConfig" = Field(
         default_factory=TelemetryConfig, description="Telemetry configuration"

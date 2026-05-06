@@ -1,0 +1,87 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
+"""OAuth 2.1 (MCP-flavored) configuration.
+
+Phase 1 supports OTP-only authorization. JWT (HS256) is used for access tokens
+and opaque random strings for refresh tokens, authorization codes and OTPs;
+all but access tokens are stored hashed in {workspace}/oauth.db.
+"""
+
+from typing import Optional
+
+from pydantic import BaseModel, Field
+
+
+class OAuthConfig(BaseModel):
+    """OAuth 2.1 server configuration.
+
+    OAuth is layered on top of `AuthMode.API_KEY`: when enabled, the existing
+    `Authorization: Bearer <api_key>` path is augmented with a JWT discriminator
+    that resolves OAuth-issued tokens to the same `ResolvedIdentity` shape.
+    Disabled by default — turning it on registers `/oauth/*` routes and the
+    well-known metadata endpoints.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable OAuth 2.1 endpoints (DCR, authorize, token, well-known metadata).",
+    )
+
+    issuer: Optional[str] = Field(
+        default=None,
+        description=(
+            "Public issuer URL (e.g. 'https://ov.example.com'). When unset, the issuer is "
+            "derived from each request's Host/X-Forwarded-Proto headers. Strongly recommended "
+            "to set this explicitly when deployed behind a reverse proxy."
+        ),
+    )
+
+    access_token_ttl_seconds: int = Field(
+        default=3600,
+        ge=60,
+        le=24 * 3600,
+        description="Lifetime of issued JWT access tokens in seconds.",
+    )
+
+    refresh_token_ttl_seconds: int = Field(
+        default=30 * 24 * 3600,
+        ge=3600,
+        le=365 * 24 * 3600,
+        description="Lifetime of refresh tokens in seconds.",
+    )
+
+    auth_code_ttl_seconds: int = Field(
+        default=300,
+        ge=30,
+        le=600,
+        description="Lifetime of authorization codes in seconds (RFC 6749 recommends short).",
+    )
+
+    otp_ttl_seconds: int = Field(
+        default=300,
+        ge=60,
+        le=600,
+        description="Lifetime of one-time passcodes in seconds.",
+    )
+
+    signing_key_b64: Optional[str] = Field(
+        default=None,
+        description=(
+            "Base64-encoded 32-byte HMAC secret for JWT signing. When unset, a key is "
+            "generated and persisted to {workspace}/oauth_jwt.key on first launch."
+        ),
+    )
+
+    db_filename: str = Field(
+        default="oauth.db",
+        description="SQLite database filename (relative to OpenVikingConfig.storage.workspace).",
+    )
+
+    authorize_rate_limit_per_min: int = Field(
+        default=10,
+        ge=1,
+        le=600,
+        description="Per-IP rate limit on POST /oauth/authorize (OTP submissions per minute).",
+    )
+
+    model_config = {"extra": "forbid"}
