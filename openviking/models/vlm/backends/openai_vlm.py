@@ -66,6 +66,8 @@ def _build_openai_client_kwargs(
     else:
         kwargs = {"api_key": api_key, "base_url": api_base}
     kwargs["timeout"] = timeout
+    # OpenViking owns provider retry/backoff via retry_sync/retry_async.
+    kwargs["max_retries"] = 0
     if extra_headers:
         kwargs["default_headers"] = extra_headers
     return kwargs
