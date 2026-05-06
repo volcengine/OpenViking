@@ -190,7 +190,13 @@ template: |
      - Queries should be short, specific, and retrievable
      - Avoid lengthy descriptions
 
-  5. **Priority setting**:
+  5. **Do not leak conversation transcript into query text**:
+     - Query text must stay close to the user's current message and the concrete retrieval target
+     - Do not include speaker roles, chat history summaries, review workflow narration, or multi-step task decomposition in query text
+     - Recent conversation is for disambiguation only, not for copying into the final query
+     - If the current message is already a focused search intent, prefer minimal rewrite or keep it unchanged
+
+  6. **Priority setting**:
      - 1 = Highest priority (core requirement)
      - 3 = Medium priority (helpful)
      - 5 = Lowest priority (optional)
