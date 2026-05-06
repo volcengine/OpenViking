@@ -190,6 +190,26 @@ async def test_add_skill_business_error_uses_error_envelope(
     assert body["error"]["message"] == "Skill parse error: boom"
 
 
+async def test_add_skill_missing_name_returns_invalid_argument(client: httpx.AsyncClient):
+    resp = await client.post(
+        "/api/v1/skills",
+        json={
+            "data": {
+                "description": "Skill without name",
+                "content": "# No Name Skill\nTest content.",
+            },
+            "wait": True,
+        },
+    )
+
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["status"] == "error"
+    assert "result" not in body or body["result"] is None
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
+    assert body["error"]["message"] == "Skill must have 'name' field"
+
+
 async def test_add_resource_with_summary_only_telemetry(
     client: httpx.AsyncClient,
     sample_markdown_file,
