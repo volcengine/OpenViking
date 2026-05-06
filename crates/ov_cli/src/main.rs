@@ -828,7 +828,7 @@ fn find_command_index(args: &[OsString]) -> Option<usize> {
             "--output" | "-o" | "--compact" | "--account" | "--user" | "--agent-id" => {
                 i += 2;
             }
-            "--sudo" => {
+            "--sudo" | "--progress" | "--no-progress" | "--verbose" | "-v" => {
                 i += 1;
             }
             _ if token.starts_with('-') => {

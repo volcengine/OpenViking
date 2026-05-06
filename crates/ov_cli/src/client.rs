@@ -793,7 +793,7 @@ impl HttpClient {
             let pb = ProgressBar::new(total_size);
             pb.set_style(
                 ProgressStyle::default_bar()
-                    .template("{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} ({eta}) {msg}")
+                    .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta}) {msg}")
                     .unwrap_or_else(|_| ProgressStyle::default_bar())
                     .progress_chars("#>-"),
             );
@@ -843,7 +843,7 @@ impl HttpClient {
         file_path: &Path,
         verbose: bool,
     ) -> Result<String> {
-        use indicatif::{ProgressBar, ProgressStyle};
+        use indicatif::ProgressBar;
 
         let url = format!("{}/api/v1/resources/temp_upload", self.base_url);
         let file_name = file_path
@@ -894,7 +894,12 @@ impl HttpClient {
 
         pb.finish_with_message("Upload complete");
 
-        self.handle_response(response).await
+        let result: Value = self.handle_response(response).await?;
+        result
+            .get("temp_file_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| Error::Parse("Missing temp_file_id in response".to_string()))
     }
 
     pub async fn add_skill(
