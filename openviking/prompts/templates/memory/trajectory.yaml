@@ -30,25 +30,30 @@ fields:
     type: string
     description: |
       Execution trace in EXACTLY this format:
-      - Goal: <what the agent wanted to achieve — one sentence>
-      - Process:
-        1. <first key step or decision>
-        2. <second key step or decision>
-        3. <... continue for each major step>
-      - Result: <final outcome, evaluation score if known, and specific feedback received — one to two sentences>
+      - Goal: <what the user wanted to achieve — one sentence>
+      - Trajectory:
+        1. <what the agent aimed to achieve>. 
+           Actions: <summarized interactions, tools used, and summarized responses>. 
+           Progress: <how this shifted the state>.
+        2. <...>. 
+           Actions: <...>. 
+           Progress: <...>.
+        3. <... continue sequentially to capture the entire execution>
+      - Result: <final outcome and any important side effects — one sentence>
+      - Fail reason: <If task succeeded, leave empty or write "None". If failed, provide a detailed analysis of why the failure occurred and suggest how the agent's approach could be improved.>
 
-      Rules:
-      - Use exactly these 3 labels in this order.
-      - Goal is ONE sentence.
-      - Result is one to two sentences: state the outcome, then include the evaluation score (e.g., "score=0.7") and any specific feedback about what was missing or deducted, if available.
-      - Process lists the major steps in order as a numbered list. Each step is one concise sentence.
-      - If a step involves a tool call, record: tool name, key input parameters, and execution status.
-        For failures, include the SPECIFIC error: error type + exact message excerpt (not just "failed").
-        Example: "Called execute_code(read Excel) → failed: ValueError 'Length mismatch: Expected 28 elements, new values have 27'."
-        Example: "Called submit_work(artifact=None) → rejected: feedback 'missing required PDF artifact path'."
-      - For a step that fixes a previous failure, explicitly record what changed: "Fixed by setting header=4 and dropping the unnamed index column."
-      - Record task-specific facts discovered during execution that are not obvious from the task description:
-        e.g., actual column count, header row index, file encoding issues, missing library names, exact artifact paths printed by the sandbox.
-      - Keep the full critical path intact. Omit only noise: routine confirmations and setup steps with no bearing on the outcome.
-      - No extra headings or free paragraphs.
+      Rules for 'Trajectory' section:
+      - STANDALONE COMPLETENESS: The trajectory must be comprehensive enough that a reader can fully understand exactly how the agent performed the task, what attempts it made, and what tools it used, entirely without the raw logs.
+      - EXHAUSTIVE TRACKING: Record every logical interaction, tool use, and system response in chronological order as a numbered list.
+      - SUMMARIZE LONG TEXTS: Do NOT record exact tool responses, raw JSON payloads, or verbatim user/agent messages, especially when they are very long. You MUST use a concise, summarized version that captures the core meaning without losing any key information, constraints, or data points critical to the task.
+      - CAPTURE ALL MISTAKES: You MUST explicitly detail any errors, false attempts, wrong function calls, or agent misunderstandings. Do not gloss over failures, dead ends, or retry loops.
+      - INTENT & PROGRESS TRACKING: Every step must clearly state the current agent intention, summarize the 'Actions/Events' taken, and conclude with 'Progress' (evaluating what was achieved or blocked).
+      - TOOL TRACKING (under 'Actions'): 
+        * Format (Success): "Called <tool_name(s)> -> Response: <summarized output retaining key info>."
+        * Format (Error/Mistake): "Called <tool_name(s)> -> Error/Issue: <summarized error> | Context: <why it failed or why it was the wrong call>."
+
+      General Rules:
+      - Use exactly the 4 labels (Goal, Trajectory, Result, Fail reason) in this exact order.
+      - Goal and Result are ONE sentence each.
+      - No extra headings, free paragraphs, or closing remarks.
     merge_op: patch
