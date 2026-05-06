@@ -106,17 +106,13 @@ async def _mint_token(provider: OpenVikingOAuthProvider, store: OAuthStore, **id
 
 @pytest.mark.asyncio
 async def test_oauth_token_resolves_to_bound_identity(provider, store):
-    token = await _mint_token(
-        provider, store, account_id="tenant-a", user_id="alice", role="user"
-    )
+    token = await _mint_token(provider, store, account_id="tenant-a", user_id="alice", role="user")
     request = _make_request(
         bearer=token,
         api_key_manager=_StubKeyManager(),
         oauth_provider=provider,
     )
-    identity = await resolve_identity(
-        request, x_api_key=None, authorization=f"Bearer {token}"
-    )
+    identity = await resolve_identity(request, x_api_key=None, authorization=f"Bearer {token}")
     assert identity.role == Role.USER
     assert identity.account_id == "tenant-a"
     assert identity.user_id == "alice"
@@ -133,16 +129,12 @@ async def test_unknown_oauth_token_fails_closed(provider):
         oauth_provider=provider,
     )
     with pytest.raises(UnauthenticatedError, match="OAuth access token"):
-        await resolve_identity(
-            request, x_api_key=None, authorization=f"Bearer {bogus}"
-        )
+        await resolve_identity(request, x_api_key=None, authorization=f"Bearer {bogus}")
 
 
 @pytest.mark.asyncio
 async def test_revoked_oauth_token_rejected(provider, store):
-    token = await _mint_token(
-        provider, store, account_id="acct", user_id="alice", role="user"
-    )
+    token = await _mint_token(provider, store, account_id="acct", user_id="alice", role="user")
     await store.revoke_access(token)
     request = _make_request(
         bearer=token,
@@ -162,9 +154,7 @@ async def test_non_prefixed_bearer_falls_through_to_api_key(provider):
         api_key_manager=_StubKeyManager(raise_on_resolve=False),
         oauth_provider=provider,
     )
-    identity = await resolve_identity(
-        request, x_api_key=None, authorization=f"Bearer {plain_key}"
-    )
+    identity = await resolve_identity(request, x_api_key=None, authorization=f"Bearer {plain_key}")
     assert identity.role == Role.USER
     assert identity.account_id == "api-acct"
     assert identity.from_oauth is False
@@ -179,9 +169,7 @@ async def test_oauth_path_skipped_when_disabled(store):
         api_key_manager=_StubKeyManager(raise_on_resolve=False),
         oauth_provider=None,
     )
-    identity = await resolve_identity(
-        request, x_api_key=None, authorization=f"Bearer {plain_key}"
-    )
+    identity = await resolve_identity(request, x_api_key=None, authorization=f"Bearer {plain_key}")
     # Falls through to API key; stub returns USER identity.
     assert identity.from_oauth is False
 
@@ -189,9 +177,7 @@ async def test_oauth_path_skipped_when_disabled(store):
 @pytest.mark.asyncio
 async def test_oauth_user_role_rejects_account_override(provider, store):
     """A USER OAuth token cannot impersonate another tenant via header."""
-    token = await _mint_token(
-        provider, store, account_id="tenant-a", user_id="alice", role="user"
-    )
+    token = await _mint_token(provider, store, account_id="tenant-a", user_id="alice", role="user")
     request = _make_request(
         bearer=token,
         api_key_manager=_StubKeyManager(),
@@ -210,16 +196,12 @@ async def test_oauth_user_role_rejects_account_override(provider, store):
 @pytest.mark.asyncio
 async def test_oauth_root_can_be_used_without_explicit_tenant_headers(provider, store):
     """ROOT OAuth tokens carry account/user in claims — no header requirement."""
-    token = await _mint_token(
-        provider, store, account_id="tenant-a", user_id="alice", role="root"
-    )
+    token = await _mint_token(provider, store, account_id="tenant-a", user_id="alice", role="root")
     request = _make_request(
         bearer=token,
         api_key_manager=_StubKeyManager(),
         oauth_provider=provider,
     )
-    identity = await resolve_identity(
-        request, x_api_key=None, authorization=f"Bearer {token}"
-    )
+    identity = await resolve_identity(request, x_api_key=None, authorization=f"Bearer {token}")
     assert identity.role == Role.ROOT
     assert identity.from_oauth is True

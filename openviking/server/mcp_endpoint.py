@@ -77,7 +77,9 @@ def _scope_to_origin(scope: Scope) -> Optional[str]:
         if configured:
             return configured.rstrip("/")
 
-    headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
+    headers = {
+        k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])
+    }
     proto = headers.get("x-forwarded-proto") or scope.get("scheme") or "http"
     proto = proto.split(",", 1)[0].strip()
     host = headers.get("x-forwarded-host") or headers.get("host")
@@ -135,8 +137,7 @@ class _IdentityASGIMiddleware:
                 origin = _scope_to_origin(scope)
                 if origin:
                     headers["WWW-Authenticate"] = (
-                        f'Bearer resource_metadata="{origin}'
-                        f'/.well-known/oauth-protected-resource"'
+                        f'Bearer resource_metadata="{origin}/.well-known/oauth-protected-resource"'
                     )
             resp = JSONResponse(
                 {"jsonrpc": "2.0", "id": None, "error": {"code": -32001, "message": str(exc)}},

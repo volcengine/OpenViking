@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import secrets
-from typing import Any, Optional
+from typing import Optional
 from urllib.parse import urlencode
 
 from mcp.server.auth.provider import (
@@ -230,7 +230,13 @@ class OpenVikingOAuthProvider(
             token_plain=refresh_token.token, replaced_by_plain=new_refresh
         )
         if consumed is None:
-            # Reuse detection: if known but already consumed, revoke chain.
+            # Replay detection: if a previously-issued refresh token is being
+            # reused after consumption, RFC 9700 §4.14 requires invalidating
+            # the entire token family. We go broader than per-(client, account,
+            # user) chain and revoke ALL outstanding access + refresh + auth
+            # codes for the (account, user) pair — replay implies the chain is
+            # compromised, and we'd rather force a full reauthorization than
+            # risk leaving sibling tokens live.
             if await self._store.is_refresh_known_but_consumed(refresh_token.token):
                 logger.warning(
                     "OAuth refresh replay detected for client_id=%s account=%s user=%s",
@@ -273,9 +279,7 @@ class OpenVikingOAuthProvider(
             role=record["role"],
         )
 
-    async def revoke_token(
-        self, token: OVAccessToken | OVRefreshToken
-    ) -> None:
+    async def revoke_token(self, token: OVAccessToken | OVRefreshToken) -> None:
         # Idempotent — no error if already revoked / unknown.
         if isinstance(token, AccessToken):
             await self._store.revoke_access(token.token)

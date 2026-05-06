@@ -65,9 +65,7 @@ async def test_otp_consume_returns_identity(store):
 @pytest.mark.asyncio
 async def test_otp_double_consume_only_one_wins(store):
     otp = generate_otp()
-    await store.insert_otp(
-        otp_plain=otp, account_id="a", user_id="u", role="user", ttl_seconds=300
-    )
+    await store.insert_otp(otp_plain=otp, account_id="a", user_id="u", role="user", ttl_seconds=300)
     first = await store.consume_otp(otp)
     second = await store.consume_otp(otp)
     assert first is not None
@@ -78,9 +76,7 @@ async def test_otp_double_consume_only_one_wins(store):
 async def test_otp_concurrent_consume_race(store):
     """Two coroutines racing to consume the same OTP — exactly one wins."""
     otp = generate_otp()
-    await store.insert_otp(
-        otp_plain=otp, account_id="a", user_id="u", role="user", ttl_seconds=300
-    )
+    await store.insert_otp(otp_plain=otp, account_id="a", user_id="u", role="user", ttl_seconds=300)
     results = await asyncio.gather(store.consume_otp(otp), store.consume_otp(otp))
     winners = [r for r in results if r is not None]
     assert len(winners) == 1
@@ -91,9 +87,7 @@ async def test_otp_expired_rejected(store):
     otp = generate_otp()
     # ttl=60 but we monkey-patch expiry by inserting and waiting — instead,
     # directly insert a stale row using a tiny ttl plus manual time travel.
-    await store.insert_otp(
-        otp_plain=otp, account_id="a", user_id="u", role="user", ttl_seconds=60
-    )
+    await store.insert_otp(otp_plain=otp, account_id="a", user_id="u", role="user", ttl_seconds=60)
     # Fast path: forge expiry by editing the row to be in the past.
     assert store._conn is not None
     store._conn.execute(
@@ -112,9 +106,7 @@ async def test_consume_unknown_otp_returns_none(store):
 async def test_otp_kind_isolation(store):
     """An OTP cannot be consumed via the auth-code path or vice versa."""
     otp = generate_otp()
-    await store.insert_otp(
-        otp_plain=otp, account_id="a", user_id="u", role="user", ttl_seconds=300
-    )
+    await store.insert_otp(otp_plain=otp, account_id="a", user_id="u", role="user", ttl_seconds=300)
     # Trying to consume as auth code must fail (kind mismatch) and leave OTP usable.
     assert await store.consume_auth_code(otp) is None
     assert await store.consume_otp(otp) is not None

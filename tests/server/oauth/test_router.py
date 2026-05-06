@@ -158,9 +158,7 @@ async def test_protected_resource_metadata_honors_x_forwarded(client):
 
 
 @pytest.mark.asyncio
-async def test_protected_resource_metadata_honors_public_base_url_env(
-    client, monkeypatch
-):
+async def test_protected_resource_metadata_honors_public_base_url_env(client, monkeypatch):
     """OPENVIKING_PUBLIC_BASE_URL must override X-Forwarded-* and Host header."""
     monkeypatch.setenv("OPENVIKING_PUBLIC_BASE_URL", "https://override.example")
     resp = await client.get(
@@ -339,17 +337,13 @@ async def test_oauth_verify_deny_destroys_pending(app_with_oauth, client):
     assert resp.status_code == 200
     assert resp.json()["status"] == "denied"
     # Pending row gone — page polling now returns 410.
-    status = await client.get(
-        "/oauth/authorize/page/status", params={"pending": pending_id}
-    )
+    status = await client.get("/oauth/authorize/page/status", params={"pending": pending_id})
     assert status.status_code == 410
 
 
 @pytest.mark.asyncio
 async def test_status_unknown_pending_returns_410(client):
-    resp = await client.get(
-        "/oauth/authorize/page/status", params={"pending": "doesnotexist"}
-    )
+    resp = await client.get("/oauth/authorize/page/status", params={"pending": "doesnotexist"})
     assert resp.status_code == 410
 
 
@@ -380,12 +374,8 @@ async def test_refresh_token_rotation(app_with_oauth, client):
     )
     code = (await store.load_pending_authorization(pending_id))["display_code"]
 
-    await client.post(
-        "/api/v1/auth/oauth-verify", json={"code": code, "decision": "approve"}
-    )
-    status = await client.get(
-        "/oauth/authorize/page/status", params={"pending": pending_id}
-    )
+    await client.post("/api/v1/auth/oauth-verify", json={"code": code, "decision": "approve"})
+    status = await client.get("/oauth/authorize/page/status", params={"pending": pending_id})
     auth_code = status.json()["redirect_url"].split("code=")[1].split("&")[0]
     token_resp = await client.post(
         "/token",

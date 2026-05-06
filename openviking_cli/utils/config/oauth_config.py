@@ -1,10 +1,11 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""OAuth 2.1 (MCP-flavored) configuration.
+"""OAuth 2.1 configuration.
 
-Phase 1 supports OTP-only authorization. JWT (HS256) is used for access tokens
-and opaque random strings for refresh tokens, authorization codes and OTPs;
-all but access tokens are stored hashed in {workspace}/oauth.db.
+All issued tokens (access, refresh, authorization code, OTP) are opaque random
+strings stored as SHA-256 hashes in ``{workspace}/oauth.db``. Access tokens
+carry an ``ovat_`` prefix used as a fast-path discriminator in the bearer
+auth path.
 """
 
 from typing import Optional
@@ -16,10 +17,10 @@ class OAuthConfig(BaseModel):
     """OAuth 2.1 server configuration.
 
     OAuth is layered on top of `AuthMode.API_KEY`: when enabled, the existing
-    `Authorization: Bearer <api_key>` path is augmented with a JWT discriminator
-    that resolves OAuth-issued tokens to the same `ResolvedIdentity` shape.
-    Disabled by default — turning it on registers `/oauth/*` routes and the
-    well-known metadata endpoints.
+    `Authorization: Bearer <token>` path is augmented with a prefix
+    discriminator (``ovat_``) that resolves OAuth-issued tokens via SQLite
+    lookup to the same `ResolvedIdentity` shape. Disabled by default — turning
+    it on registers `/oauth/*` routes and the well-known metadata endpoints.
     """
 
     enabled: bool = Field(
@@ -42,7 +43,7 @@ class OAuthConfig(BaseModel):
         default=3600,
         ge=60,
         le=24 * 3600,
-        description="Lifetime of issued JWT access tokens in seconds.",
+        description="Lifetime of issued opaque access tokens in seconds.",
     )
 
     refresh_token_ttl_seconds: int = Field(
@@ -69,13 +70,6 @@ class OAuthConfig(BaseModel):
     db_filename: str = Field(
         default="oauth.db",
         description="SQLite database filename (relative to OpenVikingConfig.storage.workspace).",
-    )
-
-    authorize_rate_limit_per_min: int = Field(
-        default=10,
-        ge=1,
-        le=600,
-        description="Per-IP rate limit on POST /oauth/authorize (OTP submissions per minute).",
     )
 
     model_config = {"extra": "forbid"}

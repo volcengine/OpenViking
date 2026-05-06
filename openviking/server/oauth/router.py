@@ -23,8 +23,8 @@ import os
 from typing import Optional
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from mcp.shared.auth import ProtectedResourceMetadata
 from pydantic import AnyHttpUrl, BaseModel, Field
 
@@ -48,9 +48,7 @@ router = APIRouter(tags=["oauth"])
 
 def _get_store_and_provider(request: Request) -> tuple[OAuthStore, OpenVikingOAuthProvider]:
     store: Optional[OAuthStore] = getattr(request.app.state, "oauth_store", None)
-    provider: Optional[OpenVikingOAuthProvider] = getattr(
-        request.app.state, "oauth_provider", None
-    )
+    provider: Optional[OpenVikingOAuthProvider] = getattr(request.app.state, "oauth_provider", None)
     if store is None or provider is None:
         raise UnavailableError(service="oauth", reason="OAuth subsystem is not enabled")
     return store, provider

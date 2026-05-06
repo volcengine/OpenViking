@@ -83,6 +83,7 @@ class RequestContext:
 @dataclass
 class ToolContext:
     """Tool-level context, containing request context and additional tool-specific information."""
+
     viking_fs: VikingFS
     request_ctx: RequestContext
     default_search_uris: List[str] = field(default_factory=list)

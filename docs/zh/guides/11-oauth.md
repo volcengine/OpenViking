@@ -232,8 +232,7 @@ curl -X POST -H "Authorization: Bearer ovat_..." \
     "refresh_token_ttl_seconds": 2592000,   // 30 天
     "auth_code_ttl_seconds": 300,           // 5 分钟
     "otp_ttl_seconds": 300,                 // 5 分钟
-    "db_filename": "oauth.db",              // 相对 storage.workspace
-    "authorize_rate_limit_per_min": 10
+    "db_filename": "oauth.db"               // 相对 storage.workspace
   }
 }
 ```

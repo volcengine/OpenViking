@@ -7,6 +7,12 @@ this table, distinguished by ``kind``), and refresh tokens. Uses stdlib
 ``sqlite3`` wrapped in ``asyncio.to_thread`` for async ergonomics; Phase 1
 QPS doesn't justify the new ``aiosqlite`` dependency.
 
+Concurrency: a single ``sqlite3.Connection`` is shared across worker threads
+(``check_same_thread=False``). Every DB access — both reads and writes —
+serializes through ``self._lock``, because the stdlib connection's cursor
+state is not safe for concurrent use across threads. With ``isolation_level=
+None`` each statement is autocommitted, so the lock granularity is per-call.
+
 Atomicity guarantee: one-shot consumption (OTP / auth code / refresh) is done
 via a single ``UPDATE ... WHERE used = 0 RETURNING ...`` so that two concurrent
 consumers cannot both succeed — the loser sees zero rows and is rejected.
@@ -222,7 +228,8 @@ class OAuthStore:
             record["response_types"] = json.loads(record["response_types"])
             return record
 
-        return await asyncio.to_thread(_query)
+        async with self._lock:
+            return await asyncio.to_thread(_query)
 
     # ---- OTPs ----
 
@@ -316,9 +323,7 @@ class OAuthStore:
         """
         return await self._peek_code(code_plain, expected_kind="code")
 
-    async def _peek_code(
-        self, plain: str, *, expected_kind: str
-    ) -> Optional[dict[str, Any]]:
+    async def _peek_code(self, plain: str, *, expected_kind: str) -> Optional[dict[str, Any]]:
         code_hash = hash_secret(plain)
         now = int(time.time())
 
@@ -336,7 +341,8 @@ class OAuthStore:
                 return None
             return _row_to_dict(cur, row)
 
-        return await asyncio.to_thread(_q)
+        async with self._lock:
+            return await asyncio.to_thread(_q)
 
     async def _atomic_consume_code(
         self, plain: str, *, expected_kind: str
@@ -421,7 +427,8 @@ class OAuthStore:
                 return None
             return _row_to_dict(cur, row)
 
-        return await asyncio.to_thread(_q)
+        async with self._lock:
+            return await asyncio.to_thread(_q)
 
     async def consume_refresh(
         self,
@@ -470,7 +477,8 @@ class OAuthStore:
             row = cur.fetchone()
             return bool(row and row[0])
 
-        return await asyncio.to_thread(_q)
+        async with self._lock:
+            return await asyncio.to_thread(_q)
 
     async def revoke_chain(self, *, client_id: str, account_id: str, user_id: str) -> int:
         """Revoke every refresh token for (client, account, user). Returns count."""
@@ -546,7 +554,8 @@ class OAuthStore:
                 return None
             return _row_to_dict(cur, row)
 
-        return await asyncio.to_thread(_q)
+        async with self._lock:
+            return await asyncio.to_thread(_q)
 
     async def revoke_access(self, token_plain: str) -> bool:
         token_hash = hash_secret(token_plain)
@@ -554,8 +563,7 @@ class OAuthStore:
         def _revoke() -> bool:
             assert self._conn is not None
             cur = self._conn.execute(
-                "UPDATE oauth_access_tokens SET revoked = 1 "
-                "WHERE token_hash = ? AND revoked = 0",
+                "UPDATE oauth_access_tokens SET revoked = 1 WHERE token_hash = ? AND revoked = 0",
                 (token_hash,),
             )
             return cur.rowcount > 0
@@ -585,8 +593,7 @@ class OAuthStore:
                 (account_id, user_id),
             ).rowcount
             codes = self._conn.execute(
-                "UPDATE oauth_codes SET used = 1 "
-                "WHERE account_id = ? AND user_id = ? AND used = 0",
+                "UPDATE oauth_codes SET used = 1 WHERE account_id = ? AND user_id = ? AND used = 0",
                 (account_id, user_id),
             ).rowcount
             return {
@@ -669,11 +676,10 @@ class OAuthStore:
             record["scopes"] = json.loads(record["scopes"]) if record["scopes"] else None
             return record
 
-        return await asyncio.to_thread(_q)
+        async with self._lock:
+            return await asyncio.to_thread(_q)
 
-    async def find_pending_by_display_code(
-        self, display_code: str
-    ) -> Optional[dict[str, Any]]:
+    async def find_pending_by_display_code(self, display_code: str) -> Optional[dict[str, Any]]:
         """Return the pending row whose display_code matches, or None."""
         if not display_code:
             return None
@@ -698,7 +704,8 @@ class OAuthStore:
             record["scopes"] = json.loads(record["scopes"]) if record["scopes"] else None
             return record
 
-        return await asyncio.to_thread(_q)
+        async with self._lock:
+            return await asyncio.to_thread(_q)
 
     async def mark_pending_verified(
         self,
@@ -779,4 +786,5 @@ class OAuthStore:
             cur = self._conn.execute("SELECT * FROM oauth_codes")
             return [_row_to_dict(cur, r) for r in cur.fetchall()]
 
-        return await asyncio.to_thread(_q)
+        async with self._lock:
+            return await asyncio.to_thread(_q)
