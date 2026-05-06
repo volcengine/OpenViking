@@ -236,3 +236,74 @@ class TestCommit:
         session.add_message("user", [TextPart("Second round message")])
         with pytest.raises(FailedPreconditionError, match="unresolved failed archive"):
             await session.commit_async()
+
+    async def test_commit_fails_phase2_when_archive_artifact_is_missing(
+        self, client: AsyncOpenViking
+    ):
+        """Phase 2 must not write .done until required archive artifacts are readable."""
+        session = client.session(session_id="missing_archive_artifact_guard")
+        session.add_message("user", [TextPart("First round message")])
+        session.add_message("assistant", [TextPart("First round response")])
+
+        original_write_file = session._viking_fs.write_file
+
+        async def drop_overview_artifact(*args, **kwargs):
+            uri = kwargs.get("uri", args[0] if args else None)
+            if uri and uri.endswith("/.overview.md"):
+                return None
+            return await original_write_file(*args, **kwargs)
+
+        session._viking_fs.write_file = drop_overview_artifact
+
+        result = await session.commit_async()
+        task_result = await _wait_for_task(result["task_id"])
+
+        assert task_result["status"] == "failed"
+        failed_marker = await session._viking_fs.read_file(
+            f"{result['archive_uri']}/.failed.json",
+            ctx=session.ctx,
+        )
+        failed_payload = json.loads(failed_marker)
+        assert failed_payload["stage"] == "memory_extraction"
+        assert ".overview.md" in failed_payload["error"]
+
+        done_exists = True
+        try:
+            await session._viking_fs.read_file(
+                f"{result['archive_uri']}/.done", ctx=session.ctx
+            )
+        except Exception:
+            done_exists = False
+        assert done_exists is False
+
+    async def test_commit_rolls_back_when_live_messages_not_cleared(
+        self, client: AsyncOpenViking
+    ):
+        """Commit must fail if persisted live messages.jsonl stays non-empty."""
+        session = client.session(session_id="commit_durability_guard")
+        session.add_message("user", [TextPart("First round message")])
+        session.add_message("assistant", [TextPart("First round response")])
+        initial_message_count = len(session.messages)
+
+        original_write_file = session._viking_fs.write_file
+
+        async def stale_empty_messages(*args, **kwargs):
+            uri = kwargs.get("uri", args[0] if args else None)
+            content = kwargs.get("content", args[1] if len(args) > 1 else None)
+            if uri == f"{session._session_uri}/messages.jsonl" and content == "":
+                return None
+            return await original_write_file(*args, **kwargs)
+
+        session._viking_fs.write_file = stale_empty_messages
+
+        with pytest.raises(
+            FailedPreconditionError, match="live messages.jsonl contains"
+        ):
+            await session.commit_async()
+
+        assert len(session.messages) == initial_message_count
+        assert session._compression.compression_index == 0
+        assert (
+            await session._read_live_message_count(fallback_to_memory=False)
+            == initial_message_count
+        )

@@ -616,6 +616,7 @@ class Session:
 
         # Use filesystem-based distributed lock so this works across workers/processes.
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
+        live_message_count = len(self._messages)
         async with LockContext(get_lock_manager(), [session_path], lock_mode="point"):
             # Authoritative check under lock: handles the race where two concurrent
             # callers both passed the pre-check but only the first should archive.
@@ -668,12 +669,29 @@ class Session:
                 # replaces messages.jsonl under the lock, consistent with the
                 # previous behavior of writing empty messages on full clear.
                 await self._write_to_agfs_async(messages=self._messages)
+                live_message_count = await self._read_live_message_count(
+                    fallback_to_memory=False
+                )
             except Exception as e:
                 # Rollback: restore messages so they aren't lost
-                logger.error(f"[commit] Failed to write messages.jsonl: {e}")
+                logger.error(f"[commit] Failed to write messages.jsonl durably: {e}")
                 self._messages = list(messages_to_archive) + list(self._messages)
                 self._compression.compression_index -= 1
                 raise
+
+            expected_live_message_count = len(self._messages)
+            if live_message_count != expected_live_message_count:
+                self._messages = list(messages_to_archive) + list(self._messages)
+                self._compression.compression_index -= 1
+                raise FailedPreconditionError(
+                    f"Session {self.session_id} live messages.jsonl contains "
+                    f"{live_message_count} messages after commit clear; "
+                    f"expected {expected_live_message_count}.",
+                    details={
+                        "live_message_count": live_message_count,
+                        "expected_live_message_count": expected_live_message_count,
+                    },
+                )
         # Lock released — live session now contains only the retained tail.
 
         # ===== Phase 1 continued: Write raw archive (no LLM calls, no lock needed) =====
@@ -690,7 +708,7 @@ class Session:
 
         # WM v2: live session is now the retained tail; pending_tokens resets
         # because anything that was pending has been archived.
-        self._meta.message_count = len(self._messages)
+        self._meta.message_count = live_message_count
         self._meta.pending_tokens = 0
         self._meta.keep_recent_count = keep_recent_count
         await self._save_meta()
@@ -908,7 +926,11 @@ class Session:
                 telemetry_snapshot=snapshot,
             )
 
-            # Write .done file last — signals that all state is finalized
+            # Verify required archive artifacts before writing .done. The .done marker is
+            # the completion signal consumed by later context assembly, so do not expose an
+            # archive as completed until the durable messages and summary artifacts are all
+            # readable.
+            await self._verify_archive_completion_artifacts(archive_uri)
             await self._write_done_file(archive_uri, first_message_id, last_message_id)
 
             tracker.complete(
@@ -939,6 +961,32 @@ class Session:
             )
             tracker.fail(task_id, str(e))
             logger.exception(f"Memory extraction failed for session {self.session_id}")
+
+    async def _verify_archive_completion_artifacts(self, archive_uri: str) -> None:
+        """Ensure an archive has all required artifacts before marking it done."""
+        if not self._viking_fs:
+            return
+
+        required_files = (
+            "messages.jsonl",
+            ".abstract.md",
+            ".overview.md",
+            ".meta.json",
+        )
+        missing_files = []
+        for file_name in required_files:
+            try:
+                await self._viking_fs.read_file(
+                    f"{archive_uri}/{file_name}", ctx=self.ctx
+                )
+            except Exception:
+                missing_files.append(file_name)
+
+        if missing_files:
+            raise RuntimeError(
+                f"Archive {archive_uri} is missing required artifacts before .done: "
+                + ", ".join(missing_files)
+            )
 
     async def _write_done_file(
         self,
@@ -1396,7 +1444,7 @@ class Session:
         self._meta = latest_meta
         await self._save_meta()
 
-    async def _read_live_message_count(self) -> int:
+    async def _read_live_message_count(self, fallback_to_memory: bool = True) -> int:
         """Count current live session messages from persisted storage."""
         if not self._viking_fs:
             return len(self._messages)
@@ -1406,7 +1454,9 @@ class Session:
                 ctx=self.ctx,
             )
         except Exception:
-            return len(self._messages)
+            if fallback_to_memory:
+                return len(self._messages)
+            raise
         return len([line for line in content.strip().split("\n") if line.strip()])
 
     def _extract_abstract_from_summary(self, summary: str) -> str:
