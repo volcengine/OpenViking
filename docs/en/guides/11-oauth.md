@@ -10,46 +10,24 @@ work just as well.
 
 ## Recommended setup
 
-This is the minimum config that works end to end with Claude.ai and similar
-public clients. You'll need a public domain, ports 80/443 reachable, and
-docker compose.
+> **Prerequisite**: public HTTPS. OAuth 2.1 (and the MCP SDK) **requires
+> HTTPS** for any non-localhost issuer. See the
+> [Public Access Guide](12-public-access.md) for how to set up HTTPS with
+> Caddy or nginx.
 
-1. **Create `.env` next to `docker-compose.yml`:**
+1. **Set up HTTPS** — follow [Public Access Guide](12-public-access.md) to
+   get `https://ov.your-domain.com` working (Caddy + `.env` +
+   `docker compose up`).
 
-   ```dotenv
-   OPENVIKING_PUBLIC_BASE_URL=https://ov.your-domain.com
-   OV_ACME_EMAIL=admin@your-domain.com   # optional; recommended for Let's Encrypt
-   ```
-
-2. **Drop a `Caddyfile` next to `docker-compose.yml`:**
-
-   ```caddyfile
-   {$OPENVIKING_PUBLIC_BASE_URL} {
-       @console path /console /console/*
-       handle @console {
-           reverse_proxy openviking:8020
-       }
-       handle {
-           reverse_proxy openviking:1933
-       }
-   }
-   ```
-
-3. **Enable OAuth in `~/.openviking/ov.conf`** (the server otherwise ignores
-   the env var and the `/oauth/*` routes don't mount):
+2. **Enable OAuth in `~/.openviking/ov.conf`:**
 
    ```json
    { "oauth": { "enabled": true } }
    ```
 
-4. **Uncomment the `caddy:` service and the `volumes:` block** at the bottom
-   of `docker-compose.yml`, point DNS at this host, then:
+3. **Restart** (`docker compose restart openviking`).
 
-   ```bash
-   docker compose up -d
-   ```
-
-5. **Connect a client.** In Claude.ai → Connectors → Add, enter
+4. **Connect a client.** In Claude.ai → Connectors → Add, enter
    `https://ov.your-domain.com/mcp`. The browser will open an authorize page
    that displays a 6-character code; open
    `https://ov.your-domain.com/console`, sign in with your API key, paste
@@ -57,8 +35,8 @@ docker compose.
    browser flips back to Claude.ai and the connector is live.
 
 That's the whole production path. The rest of this guide explains why each
-piece exists, how to do it without docker compose, and how to verify with
-curl when something doesn't work.
+piece exists, how to test locally without HTTPS, and how to verify with curl
+when something doesn't work.
 
 ---
 
@@ -133,7 +111,13 @@ endpoints, so this mode is only useful for local testing with tools like
    }
    ```
 
-2. **Start the API server (port 1933) and the console (port 8020):**
+2. **Start the services:**
+
+   ```bash
+   docker compose up -d
+   ```
+
+   Or without Docker:
 
    ```bash
    openviking-server
@@ -141,182 +125,35 @@ endpoints, so this mode is only useful for local testing with tools like
    python -m openviking.console.bootstrap --write-enabled
    ```
 
-3. **Sign in to the console** at <http://127.0.0.1:8020/console>, paste your
-   API key into Settings, click Save. The "Authorize an MCP client" form is
-   now available.
+3. **Sign in to the console** at <http://127.0.0.1:1934/console> (or
+   `:8020/console` if running without the aggregated proxy), paste your API
+   key into Settings, click Save. The "Authorize an MCP client" form is now
+   available.
 
 4. **Connect a local MCP client** (e.g. MCP Inspector) to
-   `http://127.0.0.1:1933/mcp`. The client will hit the OAuth flow above; copy
-   the 6-character code from the authorize page into the console form, click
-   Authorize, and the client will receive a token.
+   `http://127.0.0.1:1934/mcp` (or `:1933/mcp`). The client will hit the
+   OAuth flow above; copy the 6-character code from the authorize page into
+   the console form, click Authorize, and the client will receive a token.
 
-For Claude.ai / Claude Desktop, continue to the production deployment below.
+For Claude.ai / Claude Desktop on the public internet, see the
+[Public Access Guide](12-public-access.md).
 
 ---
 
 ## Production deployment (HTTPS)
 
-For OAuth clients on the public internet you need:
+OAuth 2.1 **requires HTTPS** for any non-localhost issuer. The
+[Public Access Guide](12-public-access.md) covers the full setup — Caddy,
+nginx, docker compose, CDN — in detail. The short version:
 
-1. A public domain pointing at your server (`my.ov` in the examples below)
-2. TLS termination at a reverse proxy (Caddy or nginx)
-3. Both `openviking-server` (1933) and the console (8020) running locally
-4. The reverse proxy fronting them on the same domain so the OAuth page and
-   the console can share a session origin
+1. Follow [Public Access Guide § Adding HTTPS](12-public-access.md#adding-https-for-public-access)
+   to get `https://your-domain.com` serving port 1934 over TLS.
+2. Enable OAuth: `{ "oauth": { "enabled": true } }` in `ov.conf`.
+3. Restart: `docker compose restart openviking`.
+4. Set `OPENVIKING_PUBLIC_BASE_URL=https://your-domain.com` in `.env` (the
+   server uses this as the issuer in OAuth metadata and `WWW-Authenticate`).
 
-### Why a reverse proxy
-
-The MCP and OAuth endpoints **must live at the public domain root**:
-
-| Path | Required by |
-|---|---|
-| `/.well-known/oauth-authorization-server` | RFC 8414 — clients append this path to the issuer URL |
-| `/.well-known/oauth-protected-resource` | RFC 9728 — discovered via the 401 `WWW-Authenticate` hint |
-| `/register`, `/authorize`, `/token` | MCP SDK, mounted at root |
-| `/mcp` | Default MCP convention |
-
-This means **`openviking-server` (1933) is the "root" service**, and the
-console (8020) lives at the `/console/...` sub-path (it was designed this way:
-all of its static asset URLs are hard-coded to `/console/styles.css`,
-`/console/app.js`, etc.).
-
-### Tell the server its public origin
-
-The OAuth subsystem publishes URLs that contain the public host name (issuer,
-PRM, `WWW-Authenticate`). Resolution order, highest-priority first:
-
-1. `OPENVIKING_PUBLIC_BASE_URL` environment variable
-2. `oauth.issuer` in `ov.conf`
-3. `X-Forwarded-Proto` + `X-Forwarded-Host` request headers
-4. The request `Host` header
-
-Set option 1 or 2 explicitly when you're behind a reverse proxy. Either:
-
-```bash
-# Process env (systemd, docker, …)
-export OPENVIKING_PUBLIC_BASE_URL="https://my.ov"
-```
-
-```jsonc
-// ov.conf
-{
-  "oauth": {
-    "enabled": true,
-    "issuer": "https://my.ov"
-  }
-}
-```
-
-### Reverse proxy config — Caddy (recommended)
-
-Caddy obtains and renews Let's Encrypt certificates automatically. The
-console expects to live under `/console/...` (its HTML hard-codes
-`/console/styles.css`, `/console/app.js`, etc.) — use `handle` rather than
-`handle_path` so the prefix is **not** stripped before forwarding.
-
-`/etc/caddy/Caddyfile`:
-
-```caddyfile
-my.ov {
-    @console path /console /console/*
-    handle @console {
-        reverse_proxy 127.0.0.1:8020
-    }
-    handle {
-        # Everything else: MCP, OAuth, REST, .well-known
-        reverse_proxy 127.0.0.1:1933
-    }
-}
-```
-
-After `caddy reload`, browse to <https://my.ov/console>, sign in with your
-API key, and the OAuth flow is ready. Caddy adds `X-Forwarded-Proto` and
-`X-Forwarded-Host` automatically.
-
-### Reverse proxy config — nginx
-
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name my.ov;
-
-    ssl_certificate     /etc/letsencrypt/live/my.ov/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/my.ov/privkey.pem;
-
-    # 8020 console at /console/...
-    location /console {
-        proxy_pass http://127.0.0.1:8020;
-        proxy_set_header Host              $host;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Host  $host;
-    }
-
-    # Everything else → 1933 (MCP, OAuth, REST, .well-known)
-    location / {
-        proxy_pass http://127.0.0.1:1933;
-        proxy_set_header Host              $host;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Host  $host;
-    }
-}
-
-# HTTP → HTTPS redirect
-server {
-    listen 80;
-    server_name my.ov;
-    return 301 https://$host$request_uri;
-}
-```
-
-You don't need `proxy_pass_header Authorization` or `proxy_pass_header
-X-Api-Key` — those directives forward upstream **response** headers, while
-client request headers are forwarded to the upstream by default.
-
-### Docker Compose
-
-The shipped `docker-compose.yml` includes a commented-out Caddy service. To
-go from "local 1933/8020" to "public HTTPS at `https://my.ov`":
-
-1. **Create a `.env`** next to `docker-compose.yml`. The same
-   `OPENVIKING_PUBLIC_BASE_URL` is read by both the OpenViking container and
-   Caddy — set it once:
-
-   ```dotenv
-   OPENVIKING_PUBLIC_BASE_URL=https://ov.your-domain.com
-   OV_ACME_EMAIL=admin@your-domain.com   # optional; recommended for Let's Encrypt
-   ```
-
-2. **Drop a `Caddyfile`** next to `docker-compose.yml`. Caddy accepts a full
-   URL as the site address (the `https://` prefix tells it to enable HTTPS):
-
-   ```caddyfile
-   {$OPENVIKING_PUBLIC_BASE_URL} {
-       @console path /console /console/*
-       handle @console {
-           reverse_proxy openviking:8020
-       }
-       handle {
-           reverse_proxy openviking:1933
-       }
-   }
-   ```
-
-   To pin Let's Encrypt registration to a specific email, add `tls
-   {$OV_ACME_EMAIL}` inside the site block.
-
-3. **Uncomment the `caddy:` service and the `volumes:` block** at the bottom
-   of `docker-compose.yml`.
-
-4. **Point DNS** at this host's public IP and ensure ports 80/443 are
-   reachable.
-
-5. `docker compose up -d`. The first HTTPS request triggers ACME issuance;
-   subsequent requests are cached.
-
-> The Caddy service uses the compose network's container DNS, so
-> `reverse_proxy openviking:8020` works without exposing 8020 publicly. You
-> can drop the host-side port mappings (`"8020:8020"`, `"1933:1933"`) once
-> Caddy is the public entry point.
+Once HTTPS + OAuth are both up, connect clients as described below.
 
 ---
 
@@ -501,10 +338,10 @@ curl -i https://my.ov/mcp -d '{}' -H 'Content-Type: application/json' | grep -i 
 
 ## References
 
+- [Public Access & Reverse Proxy Guide](12-public-access.md) — HTTPS, Caddy, nginx, docker compose
 - [MCP Specification — Authorization](https://modelcontextprotocol.io/specification/2025-03-26/server/authorization)
 - [RFC 8414 — OAuth 2.0 Authorization Server Metadata](https://datatracker.ietf.org/doc/html/rfc8414)
 - [RFC 9728 — OAuth 2.0 Protected Resource Metadata](https://datatracker.ietf.org/doc/html/rfc9728)
 - [RFC 7591 — Dynamic Client Registration](https://datatracker.ietf.org/doc/html/rfc7591)
 - [RFC 7636 — PKCE](https://datatracker.ietf.org/doc/html/rfc7636)
-- [Caddyfile syntax](https://caddyserver.com/docs/caddyfile)
 - [OpenViking MCP Integration Guide](06-mcp-integration.md)

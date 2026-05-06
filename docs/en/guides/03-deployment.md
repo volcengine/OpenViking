@@ -276,8 +276,11 @@ docker compose up -d
 ```
 
 After startup, you can access:
-- API service: `http://localhost:1933`
-- Console UI: `http://localhost:8020`
+- Aggregated entry point: `http://localhost:1934` (Caddy merges API + Console)
+- API service (direct): `http://localhost:1933`
+- Console UI (direct): `http://localhost:8020`
+
+For public HTTPS access, see the [Public Access Guide](12-public-access.md).
 
 To build the image yourself, pass an explicit OpenViking version:
 `docker build --build-arg OPENVIKING_VERSION=0.3.12 -t openviking:latest .`
@@ -314,6 +317,8 @@ Use `/health` for Kubernetes liveness probes and `/ready` for readiness probes.
 
 ## Related Documentation
 
+- [Public Access & Reverse Proxy](12-public-access.md) - HTTPS, Caddy, nginx
 - [Authentication](04-authentication.md) - API key setup
+- [OAuth Guide](11-oauth.md) - OAuth 2.1 for MCP clients
 - [Observability & Diagnostics](05-observability.md) - Health checks, tracing, and debugging
 - [API Overview](../api/01-overview.md) - Complete API reference
