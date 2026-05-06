@@ -1,5 +1,18 @@
 version: "3.8"
 
+# Set OPENVIKING_PUBLIC_BASE_URL in a `.env` file next to this compose file —
+# both services read the same variable, so the domain is configured once.
+#
+#   .env example for local-only on 127.0.0.1
+#     (leave the variable empty or unset)
+#
+#   .env example for public HTTPS deployment with Caddy
+#     OPENVIKING_PUBLIC_BASE_URL=https://ov.your-domain.com
+#     OV_ACME_EMAIL=admin@your-domain.com   # optional, for Let's Encrypt
+#
+# When OPENVIKING_PUBLIC_BASE_URL is unset, the server falls back to
+# request-header inference (works for direct localhost connections).
+
 services:
   openviking:
     image: ghcr.io/volcengine/openviking:latest
@@ -10,6 +23,13 @@ services:
     volumes:
       # All persistent state (ov.conf, ovcli.conf, workspace) lives here.
       - ~/.openviking:/app/.openviking
+    environment:
+      # Public-facing URL the server publishes to MCP clients (issuer in
+      # OAuth metadata, host in WWW-Authenticate hints, base URL the
+      # `add_resource` tool tells agents to upload to). Behind a reverse
+      # proxy you should set this explicitly — request-header inference
+      # only works if the proxy chain forwards X-Forwarded-Host correctly.
+      OPENVIKING_PUBLIC_BASE_URL: ${OPENVIKING_PUBLIC_BASE_URL:-}
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:1933/health || exit 1"]
       interval: 30s
@@ -20,3 +40,38 @@ services:
     # If you need to override the default command (which runs openviking-server),
     # you can do so here. For example, to run the CLI:
     # command: ["openviking", "--help"]
+
+  # ---------------------------------------------------------------------------
+  # Optional Caddy reverse proxy with automatic HTTPS via Let's Encrypt.
+  #
+  # Required for OAuth-only MCP clients (Claude.ai, Claude Desktop, ChatGPT,
+  # Cursor, …) which only accept https:// MCP server URLs. To enable:
+  #
+  #   1. Set OPENVIKING_PUBLIC_BASE_URL=https://ov.your-domain.com in `.env`.
+  #   2. Drop a Caddyfile next to this compose file (template in
+  #      docs/en/guides/11-mcp-oauth.md). Caddy reads the URL from the
+  #      OPENVIKING_PUBLIC_BASE_URL env var via {$OPENVIKING_PUBLIC_BASE_URL}.
+  #   3. Point your DNS A/AAAA record at this host's public IP.
+  #   4. Uncomment the caddy service + the `volumes:` block at the bottom.
+  #   5. `docker compose up -d`. ACME issuance happens on the first request.
+  # ---------------------------------------------------------------------------
+  # caddy:
+  #   image: caddy:2
+  #   container_name: openviking-caddy
+  #   restart: unless-stopped
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./Caddyfile:/etc/caddy/Caddyfile:ro
+  #     - caddy_data:/data
+  #     - caddy_config:/config
+  #   environment:
+  #     OPENVIKING_PUBLIC_BASE_URL: ${OPENVIKING_PUBLIC_BASE_URL}
+  #     OV_ACME_EMAIL: ${OV_ACME_EMAIL:-}
+  #   depends_on:
+  #     - openviking
+
+# volumes:
+#   caddy_data:
+#   caddy_config:
