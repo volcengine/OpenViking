@@ -1,11 +1,11 @@
 # Install the Unified OpenViking OpenCode Plugin
 
-This plugin merges two OpenViking capabilities for OpenCode into one unified plugin:
+This plugin adds one unified OpenViking plugin for OpenCode:
 
 - Semantic retrieval for external repositories
 - Long-term memory, session synchronization, automatic commit, and automatic recall
 
-The new plugin no longer installs `skills/openviking/SKILL.md`, and it does not require the agent to use the `ov` command. The capabilities from the former skill have been migrated to OpenCode tools.
+The older split examples remain available for now and will be deprecated in a future update. This plugin does not install `skills/openviking/SKILL.md`, and it does not require the agent to use the `ov` command. The capabilities from the former skill are exposed as OpenCode tools here.
 
 ## Prerequisites
 
@@ -52,21 +52,18 @@ Run the following commands from the repository root:
 
 ```bash
 mkdir -p ~/.config/opencode/plugins/openviking
-cp examples/opencode-plugin/wrappers/openviking.js ~/.config/opencode/plugins/openviking.js
+cp examples/opencode-plugin/wrappers/openviking.mjs ~/.config/opencode/plugins/openviking.mjs
 cp examples/opencode-plugin/index.mjs examples/opencode-plugin/package.json ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/lib ~/.config/opencode/plugins/openviking/
 cd ~/.config/opencode/plugins/openviking
 npm install
-\\If it cannot be loaded automatically, try running it manually:
-cd D:\OV-intern\ov-plugins-merge\.opencode\plugins
-npx opencode plugin ./openviking
 ```
 
 After installation, the layout should look like this:
 
 ```text
 ~/.config/opencode/plugins/
-├── openviking.js
+├── openviking.mjs
 └── openviking/
     ├── index.mjs
     ├── package.json
@@ -74,7 +71,7 @@ After installation, the layout should look like this:
     └── node_modules/
 ```
 
-The top-level `openviking.js` only forwards the first-level `.js` entry that OpenCode can discover to the actual plugin directory:
+The top-level `openviking.mjs` forwards the first-level `.mjs` entry that OpenCode can discover to the actual plugin directory:
 
 ```js
 export { OpenVikingPlugin, default } from "./openviking/index.mjs"

@@ -13,15 +13,14 @@
     "lib/",
     "wrappers/",
     "README.md",
-    "README_ZH.md",
     "INSTALL.md",
     "INSTALL-ZH.md"
   ],
   "scripts": {
-    "check": "node --check index.mjs && node --check wrappers/openviking.js"
+    "check": "node --check index.mjs && node --check wrappers/openviking.mjs"
   },
   "dependencies": {
-    "@opencode-ai/plugin": "latest"
+    "@opencode-ai/plugin": "^1.14.37"
   },
   "repository": {
   "type": "git",

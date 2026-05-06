@@ -1,11 +1,11 @@
 # 安装 OpenViking OpenCode 统一插件
 
-这个插件把 OpenViking 对 OpenCode 的两类能力合并到一个插件里：
+这个插件新增了一个面向 OpenCode 的统一 OpenViking 插件：
 
 - 外部仓库语义检索
 - 长期记忆、session 同步、自动 commit、自动 recall
 
-新插件不再安装 `skills/openviking/SKILL.md`，也不要求 agent 使用 `ov` 命令。原 skill 中的能力已经迁移为 OpenCode tools。
+旧示例目前仍然保留，后续会下线。这个插件不再安装 `skills/openviking/SKILL.md`，也不要求 agent 使用 `ov` 命令。原 skill 中的能力会通过 OpenCode tools 暴露。
 
 ## 前置条件
 
@@ -52,21 +52,18 @@ curl http://localhost:1933/health
 
 ```bash
 mkdir -p ~/.config/opencode/plugins/openviking
-cp examples/opencode-plugin/wrappers/openviking.js ~/.config/opencode/plugins/openviking.js
+cp examples/opencode-plugin/wrappers/openviking.mjs ~/.config/opencode/plugins/openviking.mjs
 cp examples/opencode-plugin/index.mjs examples/opencode-plugin/package.json ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/lib ~/.config/opencode/plugins/openviking/
 cd ~/.config/opencode/plugins/openviking
 npm install
-\\ 如果无法自动加载插件，可以尝试手动执行
-cd D:\OV-intern\ov-plugins-merge\.opencode\plugins
-npx opencode plugin ./openviking
 ```
 
 安装后结构应类似：
 
 ```text
 ~/.config/opencode/plugins/
-├── openviking.js
+├── openviking.mjs
 └── openviking/
     ├── index.mjs
     ├── package.json
@@ -74,7 +71,7 @@ npx opencode plugin ./openviking
     └── node_modules/
 ```
 
-顶层 `openviking.js` 只负责把 OpenCode 能发现的一级 `.mjs` 入口转发到插件目录：
+顶层 `openviking.mjs` 只负责把 OpenCode 能发现的一级 `.mjs` 入口转发到插件目录：
 
 ```js
 export { OpenVikingPlugin, default } from "./openviking/index.mjs"
