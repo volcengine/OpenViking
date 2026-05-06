@@ -29,6 +29,9 @@ class IndexManagerImpl : public IndexManager {
 
   int search(const SearchRequest& req, SearchResult& result) override;
 
+  int search_batch(const std::vector<SearchRequest>& reqs,
+                   std::vector<SearchResult>& results) override;
+
   int add_data(const std::vector<AddDataRequest>& data_list) override;
 
   int delete_data(const std::vector<DeleteDataRequest>& data_list) override;

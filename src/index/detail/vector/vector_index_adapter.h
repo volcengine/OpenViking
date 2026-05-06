@@ -41,6 +41,24 @@ class VectorIndexAdapter {
   virtual uint64_t get_label_by_offset(const int& offset) {
     return 0;
   }
+
+  // Batch recall: all queries share the same filter.
+  // Default implementation loops over single-query recall.
+  virtual int recall_batch(
+      const std::vector<const float*>& dense_vectors,
+      uint32_t topk,
+      const Bitmap* filter_bitmap,
+      std::vector<VectorRecallResult>& results) {
+    results.resize(dense_vectors.size());
+    for (size_t i = 0; i < dense_vectors.size(); ++i) {
+      VectorRecallRequest req;
+      req.dense_vector = dense_vectors[i];
+      req.topk = topk;
+      req.bitmap = filter_bitmap;
+      recall(req, results[i]);
+    }
+    return 0;
+  }
 };
 
 class BruteForceIndex : public VectorIndexAdapter {
@@ -102,6 +120,24 @@ class BruteForceIndex : public VectorIndexAdapter {
 
   virtual uint64_t get_label_by_offset(const int& offset) {
     return index_->get_label_by_offset(offset);
+  }
+
+  int recall_batch(
+      const std::vector<const float*>& dense_vectors,
+      uint32_t topk,
+      const Bitmap* filter_bitmap,
+      std::vector<VectorRecallResult>& results) override {
+    size_t nq = dense_vectors.size();
+    std::vector<std::vector<uint64_t>> batch_labels;
+    std::vector<std::vector<float>> batch_scores;
+    index_->search_knn_batch(dense_vectors.data(), nq, topk,
+                             filter_bitmap, batch_labels, batch_scores);
+    results.resize(nq);
+    for (size_t i = 0; i < nq; ++i) {
+      std::swap(results[i].labels, batch_labels[i]);
+      std::swap(results[i].scores, batch_scores[i]);
+    }
+    return 0;
   }
 
  private:

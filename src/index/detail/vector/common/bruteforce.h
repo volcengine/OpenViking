@@ -205,20 +205,80 @@ class BruteforceSearch {
     void* dist_params = space_->get_metric_params();
 
     if (!filter_bitmap) {
-      for (size_t i = 0; i < current_count_; ++i) {
-        char* ptr = data_buffer_ + (i * element_byte_size_);
+#if defined(OV_SIMD_AMX)
+      // AMX batch path: process int8 vectors in blocks of 16 using tiles
+      if (meta_->quantization_type == "int8") {
+        const int8_t* query_int8 =
+            reinterpret_cast<const int8_t*>(encoded_query.data());
+        const float* query_meta_ptr =
+            reinterpret_cast<const float*>(
+                encoded_query.data() + meta_->dimension);
+        float query_scale = query_meta_ptr[0];
+        bool is_l2 = reverse_query_score_;
+        float query_norm_sq = is_l2 ? query_meta_ptr[1] : 0.0f;
 
-        float dist = compute_score(encoded_query.data(), ptr, query_sparse_view,
-                                   i, dist_func, dist_params);
+        constexpr size_t kAmxBlock = 16;
+        int32_t ip_results[kAmxBlock];
 
-        uint64_t label;
-        std::memcpy(&label, ptr + vector_byte_size_, sizeof(uint64_t));
+        for (size_t blk = 0; blk < current_count_; blk += kAmxBlock) {
+          size_t n = std::min(kAmxBlock, current_count_ - blk);
+          const char* blk_base =
+              data_buffer_ + blk * element_byte_size_;
 
-        if (pq.size() < k) {
-          pq.emplace(dist, label);
-        } else if (dist > pq.top().first) {
-          pq.pop();
-          pq.emplace(dist, label);
+          batch_inner_product_int8_amx(
+              blk_base, element_byte_size_,
+              query_int8, ip_results, n, meta_->dimension);
+
+          for (size_t j = 0; j < n; ++j) {
+            size_t idx = blk + j;
+            char* ptr = data_buffer_ + (idx * element_byte_size_);
+            const float* db_meta_ptr =
+                reinterpret_cast<const float*>(ptr + meta_->dimension);
+            float db_scale = db_meta_ptr[0];
+
+            float real_ip =
+                static_cast<float>(ip_results[j]) * query_scale * db_scale;
+            float raw_dist;
+            if (is_l2) {
+              float db_norm_sq = db_meta_ptr[1];
+              raw_dist = std::max(0.0f,
+                  query_norm_sq + db_norm_sq - 2.0f * real_ip);
+            } else {
+              raw_dist = real_ip;
+            }
+
+            float score =
+                finalize_score(raw_dist, query_sparse_view, idx);
+
+            uint64_t label;
+            std::memcpy(&label, ptr + vector_byte_size_, sizeof(uint64_t));
+
+            if (pq.size() < k) {
+              pq.emplace(score, label);
+            } else if (score > pq.top().first) {
+              pq.pop();
+              pq.emplace(score, label);
+            }
+          }
+        }
+      } else
+#endif
+      {
+        for (size_t i = 0; i < current_count_; ++i) {
+          char* ptr = data_buffer_ + (i * element_byte_size_);
+
+          float dist = compute_score(encoded_query.data(), ptr, query_sparse_view,
+                                     i, dist_func, dist_params);
+
+          uint64_t label;
+          std::memcpy(&label, ptr + vector_byte_size_, sizeof(uint64_t));
+
+          if (pq.size() < k) {
+            pq.emplace(dist, label);
+          } else if (dist > pq.top().first) {
+            pq.pop();
+            pq.emplace(dist, label);
+          }
         }
       }
     } else {
@@ -262,6 +322,132 @@ class BruteforceSearch {
       scores[i] = top.first;
       labels[i] = top.second;
       pq.pop();
+    }
+  }
+
+  // Batch search: compute top-k for nq queries simultaneously.
+  // Uses AMX multi-query tiles to process up to 16 queries per tile operation.
+  void search_knn_batch(
+      const float* const* query_data_array,
+      size_t nq,
+      size_t k,
+      const Bitmap* filter_bitmap,
+      std::vector<std::vector<uint64_t>>& labels,
+      std::vector<std::vector<float>>& scores) const {
+
+    labels.resize(nq);
+    scores.resize(nq);
+
+    if (nq == 0 || k == 0 || current_count_ == 0) return;
+
+#if defined(OV_SIMD_AMX)
+    // AMX multi-query batch path: int8 quantization, no filter
+    if (meta_->quantization_type == "int8" && !filter_bitmap) {
+      // Encode all queries
+      std::vector<std::vector<char>> encoded_queries(nq);
+      std::vector<const int8_t*> query_int8_ptrs(nq);
+      std::vector<float> query_scales(nq);
+      std::vector<float> query_norm_sqs(nq);
+      bool is_l2 = reverse_query_score_;
+
+      for (size_t q = 0; q < nq; ++q) {
+        encoded_queries[q].resize(vector_byte_size_);
+        quantizer_->encode(query_data_array[q], meta_->dimension,
+                           encoded_queries[q].data());
+        query_int8_ptrs[q] =
+            reinterpret_cast<const int8_t*>(encoded_queries[q].data());
+        const float* meta_ptr = reinterpret_cast<const float*>(
+            encoded_queries[q].data() + meta_->dimension);
+        query_scales[q] = meta_ptr[0];
+        query_norm_sqs[q] = is_l2 ? meta_ptr[1] : 0.0f;
+      }
+
+      using ResultPair = std::pair<float, uint64_t>;
+      std::vector<std::priority_queue<ResultPair, std::vector<ResultPair>,
+                                      std::greater<ResultPair>>>
+          pqs(nq);
+
+      constexpr size_t kAmxBlock = 16;
+      constexpr size_t kMaxTileN = 16;
+
+      // Process queries in groups of ≤16 (tile N dimension limit)
+      for (size_t q_start = 0; q_start < nq; q_start += kMaxTileN) {
+        size_t q_count = std::min(kMaxTileN, nq - q_start);
+
+        const int8_t* batch_q[kMaxTileN];
+        for (size_t q = 0; q < q_count; ++q) {
+          batch_q[q] = query_int8_ptrs[q_start + q];
+        }
+
+        int32_t ip_results[kAmxBlock * kMaxTileN];
+
+        for (size_t blk = 0; blk < current_count_; blk += kAmxBlock) {
+          size_t n = std::min(kAmxBlock, current_count_ - blk);
+          const char* blk_base = data_buffer_ + blk * element_byte_size_;
+
+          batch_inner_product_int8_amx_multi_query(
+              blk_base, element_byte_size_, batch_q, ip_results,
+              n, q_count, meta_->dimension);
+
+          for (size_t j = 0; j < n; ++j) {
+            size_t idx = blk + j;
+            char* ptr = data_buffer_ + (idx * element_byte_size_);
+            const float* db_meta_ptr =
+                reinterpret_cast<const float*>(ptr + meta_->dimension);
+            float db_scale = db_meta_ptr[0];
+            float db_norm_sq = is_l2 ? db_meta_ptr[1] : 0.0f;
+
+            uint64_t label;
+            std::memcpy(&label, ptr + vector_byte_size_, sizeof(uint64_t));
+
+            for (size_t q = 0; q < q_count; ++q) {
+              size_t qi = q_start + q;
+              float real_ip =
+                  static_cast<float>(ip_results[j * q_count + q]) *
+                  query_scales[qi] * db_scale;
+              float raw_dist;
+              if (is_l2) {
+                raw_dist = std::max(
+                    0.0f, query_norm_sqs[qi] + db_norm_sq - 2.0f * real_ip);
+              } else {
+                raw_dist = real_ip;
+              }
+
+              float score =
+                  reverse_query_score_ ? (1.0f - raw_dist) : raw_dist;
+
+              auto& pq = pqs[qi];
+              if (pq.size() < k) {
+                pq.emplace(score, label);
+              } else if (score > pq.top().first) {
+                pq.pop();
+                pq.emplace(score, label);
+              }
+            }
+          }
+        }
+      }
+
+      // Extract results
+      for (size_t q = 0; q < nq; ++q) {
+        auto& pq = pqs[q];
+        size_t result_size = pq.size();
+        labels[q].resize(result_size);
+        scores[q].resize(result_size);
+        for (int i = static_cast<int>(result_size) - 1; i >= 0; --i) {
+          scores[q][i] = pq.top().first;
+          labels[q][i] = pq.top().second;
+          pq.pop();
+        }
+      }
+      return;
+    }
+#endif
+
+    // Fallback: single-query loop
+    for (size_t q = 0; q < nq; ++q) {
+      search_knn(query_data_array[q], k, filter_bitmap, nullptr,
+                 labels[q], scores[q]);
     }
   }
 
@@ -416,6 +602,15 @@ class BruteforceSearch {
       size_t idx, MetricFunc<float> dist_func,
       void* dist_params) const {
     float dense_raw = dist_func(encoded_query, data_ptr, dist_params);
+    return finalize_score(dense_raw, query_sparse_view, idx);
+  }
+
+  // Convert a raw distance value (from metric function or AMX batch kernel)
+  // to a final score, including sparse index blending.
+  float finalize_score(
+      float dense_raw,
+      const std::shared_ptr<SparseDatapointView>& query_sparse_view,
+      size_t idx) const {
     float dense_score =
         reverse_query_score_ ? (1.0f - dense_raw) : dense_raw;
     if (!sparse_index_ || !query_sparse_view ||
