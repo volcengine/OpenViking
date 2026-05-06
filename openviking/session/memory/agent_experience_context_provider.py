@@ -13,11 +13,15 @@ source_trajectories as grounding material.
 import jinja2
 from typing import Any, Dict, List
 
+from openviking.core.namespace import to_user_space, to_agent_space
 from openviking.server.identity import RequestContext, ToolContext
+from openviking.session.memory.dataclass import MemoryFileContent
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
 from openviking.session.memory.tools import get_tool
+from openviking.session.memory.utils import parse_memory_file_with_fields
+from openviking.session.memory.utils.content import deserialize_content, deserialize_metadata
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.utils import get_logger
 
@@ -92,8 +96,14 @@ All memory content must be written in {output_language}.
         schema = registry.get(EXPERIENCE_MEMORY_TYPE)
         if schema is None or not schema.directory:
             return ""
-        user_space = ctx.user.user_space_name() if ctx and ctx.user else "default"
-        agent_space = ctx.user.agent_space_name() if ctx and ctx.user else "default"
+
+        if ctx and ctx.user:
+            user_space = to_user_space(ctx.namespace_policy, ctx.user.user_id, ctx.user.agent_id)
+            agent_space = to_agent_space(ctx.namespace_policy, ctx.user.user_id, ctx.user.agent_id)
+        else:
+            user_space = "default"
+            agent_space = "default"
+
         env = jinja2.Environment(autoescape=False)
         return env.from_string(schema.directory).render(
             user_space=user_space, agent_space=agent_space
@@ -115,8 +125,6 @@ All memory content must be written in {output_language}.
         else:
             uris = []
 
-        from openviking.session.memory.utils.content import deserialize_content
-
         recent_uris = uris[-MAX_SOURCE_TRAJS:]
         results = []
         for uri in recent_uris:
@@ -127,49 +135,62 @@ All memory content must be written in {output_language}.
                 logger.warning(f"Failed to read source trajectory {uri}: {e}")
         return results
 
-    async def prefetch(
-        self,
-        ctx: RequestContext,
-        viking_fs: VikingFS,
-        transaction_handle,
-        vlm,
-    ) -> List[Dict]:
+    async def prefetch(self) -> List[Dict]:
         if not isinstance(self.messages, list):
             logger.warning(f"Expected List[Message], got {type(self.messages)}")
             return []
+
+        ctx = self._ctx
+        viking_fs = self._viking_fs
+        transaction_handle = self._transaction_handle
 
         experience_dir = self._render_experience_dir(ctx)
         search_tool = get_tool("search")
 
         candidate_uris: List[str] = []
-        if experience_dir and search_tool and viking_fs:
-            tool_ctx_search = ToolContext(
-                request_ctx=ctx,
-                transaction_handle=transaction_handle,
-                default_search_uris=[experience_dir],
-            )
-            try:
-                search_result = await search_tool.execute(
+        if experience_dir and viking_fs:
+            if search_tool:
+                tool_ctx_search = ToolContext(
                     viking_fs=viking_fs,
-                    ctx=tool_ctx_search,
-                    query=self.trajectory_summary[:500] or "experience",
-                    limit=SEARCH_TOP_K,
+                    request_ctx=ctx,
+                    transaction_handle=transaction_handle,
+                    default_search_uris=[experience_dir],
                 )
-                if isinstance(search_result, list):
-                    candidate_uris = [m.get("uri", "") for m in search_result if m.get("uri")]
-                elif isinstance(search_result, dict) and "memories" in search_result:
-                    candidate_uris = [
-                        m.get("uri", "")
-                        for m in search_result.get("memories", [])
-                        if m.get("uri")
-                    ]
-            except Exception as e:
-                logger.warning(f"Failed to search experiences in {experience_dir}: {e}")
+                try:
+                    search_result = await search_tool.execute(
+                        viking_fs=viking_fs,
+                        ctx=tool_ctx_search,
+                        query=self.trajectory_summary[:500] or "experience",
+                        limit=SEARCH_TOP_K,
+                    )
+                    if isinstance(search_result, list):
+                        candidate_uris = [m.get("uri", "") for m in search_result if m.get("uri")]
+                    elif isinstance(search_result, dict) and "memories" in search_result:
+                        candidate_uris = [
+                            m.get("uri", "")
+                            for m in search_result.get("memories", [])
+                            if m.get("uri")
+                        ]
+                except Exception as e:
+                    logger.warning(f"Failed to search experiences in {experience_dir}: {e}")
 
-        from openviking.session.memory.utils.content import (
-            deserialize_content,
-            deserialize_metadata,
-        )
+            if not candidate_uris:
+                try:
+                    entries = await viking_fs.ls(experience_dir, output="original", ctx=ctx)
+                    fallback_uris: List[str] = []
+                    for entry in entries or []:
+                        uri = str(entry.get("uri", "")) if isinstance(entry, dict) else ""
+                        name = str(entry.get("name", "")) if isinstance(entry, dict) else ""
+                        if not uri.endswith(".md"):
+                            continue
+                        if name in {".overview.md", ".abstract.md"}:
+                            continue
+                        if uri.endswith("/.overview.md") or uri.endswith("/.abstract.md"):
+                            continue
+                        fallback_uris.append(uri)
+                    candidate_uris = fallback_uris[:SEARCH_TOP_K]
+                except Exception as e:
+                    logger.warning(f"Failed to list experiences in {experience_dir}: {e}")
 
         # Build candidate experiences section
         exp_sections: List[str] = []
@@ -181,6 +202,16 @@ All memory content must be written in {output_language}.
                 continue
 
             self.prefetched_uris.append(exp_uri)
+            # Populate read_file_contents so that:
+            # 1. Update path: _check_unread_existing_files skips refetch (saves 1 LLM call)
+            # 2. Replace path: resolve_operations can build delete_file_contents, enabling
+            #    old file deletion and source_trajectories inheritance.
+            parsed_fields = parse_memory_file_with_fields(exp_raw)
+            self._read_file_contents[exp_uri] = MemoryFileContent(
+                uri=exp_uri,
+                plain_content=parsed_fields.get("content", ""),
+                memory_fields=parsed_fields,
+            )
             body = deserialize_content(exp_raw)
             meta = deserialize_metadata(exp_raw) or {}
             exp_name = meta.get("experience_name", "")

@@ -37,6 +37,8 @@ from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
+MAX_SOURCE_TRAJECTORIES = 5  # keep only the most recent N trajectory URIs per experience
+
 
 def _stamp_trajectory_names(operations) -> None:
     """Append a timestamp suffix to trajectory_name in all trajectory operations.
@@ -444,13 +446,67 @@ class SessionCompressorV2:
                 strict_extract_errors=strict_extract_errors,
                 phase_label=f"experience({traj_uri})",
             )
+
+            exp_dir = exp_provider._render_experience_dir(ctx)
+
+            async def _single_existing_experience_uri() -> List[str]:
+                if not exp_dir:
+                    return []
+                try:
+                    entries = await viking_fs.ls(exp_dir, output="original", ctx=ctx)
+                except Exception:
+                    return []
+                uris = []
+                for e in entries or []:
+                    uri = str(e.get("uri", "")) if isinstance(e, dict) else ""
+                    name = str(e.get("name", "")) if isinstance(e, dict) else ""
+                    if not uri.endswith(".md"):
+                        continue
+                    if name in {".overview.md", ".abstract.md"}:
+                        continue
+                    if uri.endswith("/.overview.md") or uri.endswith("/.abstract.md"):
+                        continue
+                    uris.append(uri)
+                uris = list(dict.fromkeys(uris))
+                return uris if len(uris) == 1 else []
+
             if exp_result is None:
+                fallback_uris = await _single_existing_experience_uri()
+                if fallback_uris:
+                    tracer.info(
+                        f"[source_traj] phase2 failed; fallback append to sole experience: {fallback_uris[0]}"
+                    )
+                    await self._append_trajectories_to_experiences(
+                        fallback_uris, [traj_uri], ctx, viking_fs
+                    )
                 continue
 
             exp_written_uris, exp_edited_uris, exp_contexts, inherited_traj_uris = exp_result
             contexts.extend(exp_contexts)
 
             all_exp_uris = exp_written_uris + exp_edited_uris
+            if not all_exp_uris:
+                candidate_uris = list(dict.fromkeys(getattr(exp_provider, "prefetched_uris", []) or []))
+                candidate_exp_uris = [
+                    uri
+                    for uri in candidate_uris
+                    if uri.endswith(".md")
+                    and not uri.endswith("/.overview.md")
+                    and not uri.endswith("/.abstract.md")
+                    and "/memories/experiences/" in uri
+                ]
+                if len(candidate_exp_uris) == 1:
+                    all_exp_uris = candidate_exp_uris
+                    tracer.info(
+                        f"[source_traj] fallback append to sole candidate experience: {candidate_exp_uris[0]}"
+                    )
+                else:
+                    all_exp_uris = await _single_existing_experience_uri()
+                    if all_exp_uris:
+                        tracer.info(
+                            f"[source_traj] fallback append by directory scan: {all_exp_uris[0]}"
+                        )
+
             if all_exp_uris:
                 # Include inherited source_trajectories from any deleted (superseded) experiences
                 traj_uris_to_append = list(dict.fromkeys([traj_uri] + inherited_traj_uris))
@@ -481,11 +537,23 @@ class SessionCompressorV2:
         vlm = config.vlm.get_vlm_instance()
         viking_fs = get_viking_fs()
 
+        # Build isolation_handler BEFORE creating the orchestrator so that
+        # ExtractLoop.resolve_operations() can call fill_role_ids() correctly.
+        extract_context = ExtractContext(messages)
+        isolation_handler = MemoryIsolationHandler(ctx, extract_context)
+        isolation_handler.prepare_messages()
+
+        # Inject context into provider (mirrors extract_long_term_memories pattern)
+        provider._isolation_handler = isolation_handler
+        provider._ctx = ctx
+        provider._viking_fs = viking_fs
+
         orchestrator = ExtractLoop(
             vlm=vlm,
             viking_fs=viking_fs,
             ctx=ctx,
             context_provider=provider,
+            isolation_handler=isolation_handler,
         )
 
         lock_manager = None
@@ -502,8 +570,17 @@ class SessionCompressorV2:
                 for schema in schemas:
                     if not schema.directory:
                         continue
-                    user_space = ctx.user.user_space_name() if ctx and ctx.user else "default"
-                    agent_space = ctx.user.agent_space_name() if ctx and ctx.user else "default"
+
+                    if ctx and ctx.user:
+                        user_space = to_user_space(
+                            ctx.namespace_policy, ctx.user.user_id, ctx.user.agent_id
+                        )
+                        agent_space = to_agent_space(
+                            ctx.namespace_policy, ctx.user.user_id, ctx.user.agent_id
+                        )
+                    else:
+                        user_space = "default"
+                        agent_space = "default"
                     import jinja2
 
                     env = jinja2.Environment(autoescape=False)
@@ -533,6 +610,7 @@ class SessionCompressorV2:
                     if retry_interval > 0:
                         await asyncio.sleep(retry_interval)
 
+            provider._transaction_handle = transaction_handle
             orchestrator._transaction_handle = transaction_handle
             operations, _ = await orchestrator.run()
 
@@ -632,8 +710,9 @@ class SessionCompressorV2:
         for exp_uri in exp_uris:
             try:
                 raw = await viking_fs.read_file(exp_uri, ctx=ctx) or ""
-                plain_content, metadata = deserialize_full(raw)
-                metadata = metadata or {}
+                file_content = deserialize_full(raw)
+                plain_content = file_content.plain_content
+                metadata = file_content.memory_fields or {}
 
                 existing = metadata.get("source_trajectories", [])
                 if isinstance(existing, list):
@@ -648,6 +727,11 @@ class SessionCompressorV2:
                     if traj_uri not in uris:
                         uris.append(traj_uri)
                         changed = True
+
+                # Trim to the most recent N entries so the list doesn't grow unboundedly.
+                if len(uris) > MAX_SOURCE_TRAJECTORIES:
+                    uris = uris[-MAX_SOURCE_TRAJECTORIES:]
+                    changed = True
 
                 if changed:
                     metadata["source_trajectories"] = uris

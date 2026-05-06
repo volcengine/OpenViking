@@ -47,13 +47,7 @@ All memory content must be written in {output_language}.
             return []
         return [schema]
 
-    async def prefetch(
-        self,
-        ctx: RequestContext,
-        viking_fs: VikingFS,
-        transaction_handle,
-        vlm,
-    ) -> List[Dict]:
+    async def prefetch(self) -> List[Dict]:
         """Only inject the conversation. Trajectory is add_only so no ls/search."""
         if not isinstance(self.messages, list):
             logger.warning(f"Expected List[Message], got {type(self.messages)}")

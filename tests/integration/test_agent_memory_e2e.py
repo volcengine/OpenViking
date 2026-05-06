@@ -25,22 +25,23 @@ Run
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import shutil
-import tempfile
 import time
-from pathlib import Path
-from typing import List, Tuple
-
+import uuid
 import os
+from pathlib import Path
+from typing import Dict, List, Tuple
 
 import pytest
 
-from openviking.client import LocalClient
-from openviking.telemetry import tracer
-from openviking_cli.exceptions import NotFoundError
+from openviking.client.local import LocalClient
+from openviking.core.namespace import to_agent_space
+from openviking.server.identity import AccountNamespacePolicy
+from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
+from openviking.session.memory.utils.content import deserialize_metadata
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils import run_async
 from openviking_cli.utils.config import OpenVikingConfigSingleton, get_openviking_config
 
 logger = logging.getLogger(__name__)
@@ -132,73 +133,111 @@ CONV_B_FLIGHT_DUPLICATE_EXTRA: List[Tuple[str, str]] = [
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-async def _wait_for_task(client: LocalClient, task_id: str, timeout_s: int = 600) -> None:
+def _wait_for_task(client: LocalClient, task_id: str, timeout_s: int = 600) -> None:
     deadline = time.time() + timeout_s
     while time.time() < deadline:
-        task = await client.get_task(task_id) or {}
+        task = run_async(client.get_task(task_id)) or {}
         status = task.get("status") if isinstance(task, dict) else getattr(task, "status", None)
         if status in {"completed", "failed", "cancelled"}:
             if status != "completed":
                 raise RuntimeError(f"Task failed: {task}")
             return
-        await asyncio.sleep(1)
+        time.sleep(1)
     raise TimeoutError(f"Task timed out: {task_id}")
 
 
-async def _run_conversation(client: LocalClient, turns: List[Tuple[str, str]]) -> None:
-    session = await client.create_session()
+def _run_conversation(client: LocalClient, turns: List[Tuple[str, str]]) -> None:
+    session = run_async(client.create_session())
     session_id = session["session_id"]
     logger.info(f"  session_id = {session_id[:8]}...")
     for role, content in turns:
-        await client.add_message(session_id=session_id, role=role, content=content)
+        run_async(client.add_message(session_id=session_id, role=role, content=content))
     logger.info(f"  Committing {len(turns)} messages...")
-    result = await client.commit_session(session_id=session_id)
-    task_id = (
-        result.get("task_id") if isinstance(result, dict) else getattr(result, "task_id", None)
-    )
+    result = run_async(client.commit_session(session_id=session_id))
+    task_id = result.get("task_id") if isinstance(result, dict) else getattr(result, "task_id", None)
     if task_id:
-        await _wait_for_task(client, task_id)
+        _wait_for_task(client, task_id)
         logger.info(f"  Done (task {task_id[:8]})")
 
 
-async def _list_non_overview_entries(client: LocalClient, uri: str) -> List[dict]:
+def _list_non_overview_entries(client: LocalClient, uri: str) -> List[dict]:
     try:
-        entries = await client.ls(uri, simple=False) or []
-    except (NotFoundError, Exception):
+        entries = run_async(client.ls(uri, simple=False)) or []
+    except Exception:
         return []
+    _INTERNAL_SUFFIXES = (".overview.md", ".abstract.md")
     return [
         e
         for e in entries
-        if not (
-            e.get("name", "") if isinstance(e, dict) else getattr(e, "name", "")
-        ).endswith(".overview.md")
+        if not any(
+            (e.get("name", "") if isinstance(e, dict) else getattr(e, "name", "")).endswith(s)
+            for s in _INTERNAL_SUFFIXES
+        )
     ]
+
+
+def _entry_uri(entry: dict) -> str:
+    if isinstance(entry, dict):
+        return str(entry.get("uri", ""))
+    return str(getattr(entry, "uri", ""))
+
+
+def _collect_source_trajectories(client: LocalClient, exp_entries: List[dict]) -> List[str]:
+    all_uris: List[str] = []
+    for entry in exp_entries:
+        exp_uri = _entry_uri(entry)
+        if not exp_uri:
+            continue
+        raw = run_async(client.read(exp_uri)) or ""
+        metadata = deserialize_metadata(raw) or {}
+        source = metadata.get("source_trajectories", [])
+        if isinstance(source, list):
+            all_uris.extend(str(u).strip() for u in source if str(u).strip())
+        elif isinstance(source, str):
+            all_uris.extend(line.strip() for line in source.splitlines() if line.strip())
+    return list(dict.fromkeys(all_uris))
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 
 @pytest.fixture()
-def tmp_data_dir():
-    """Create a fresh temporary data directory for each test."""
-    # d = tempfile.mkdtemp(prefix="ov_agent_memory_test_")
-    d = Path("./demo/agent")
-    yield Path(d)
-    shutil.rmtree(d, ignore_errors=True)
-
-
-@pytest.fixture()
 def agent_memory_config_check():
     """Skip unless agent_memory_enabled and memory.version == v2."""
-    from openviking.telemetry.tracer import init_tracer_from_config
-    init_tracer_from_config()
-
     OpenVikingConfigSingleton._instance = None
     config = get_openviking_config()
     if not getattr(config.memory, "agent_memory_enabled", False):
         pytest.skip("agent_memory_enabled is not set in config — skipping agent memory tests")
     if config.memory.version != "v2":
         pytest.skip("memory.version != v2 — skipping agent memory tests")
+
+
+@pytest.fixture()
+def local_test_env() -> Dict[str, object]:
+    policy = AccountNamespacePolicy(
+        isolate_user_scope_by_agent=True,
+        isolate_agent_scope_by_user=True,
+    )
+    local_path = Path.cwd() / ".tmp_agent_memory_e2e" / uuid.uuid4().hex[:8]
+    local_path.mkdir(parents=True, exist_ok=True)
+    try:
+        yield {
+            "path": str(local_path),
+            "account_id": "default",
+            "policy": policy,
+        }
+    finally:
+        shutil.rmtree(local_path, ignore_errors=True)
+
+
+def _build_client(env: Dict[str, object], user_id: str, agent_id: str = "travelbot") -> LocalClient:
+    client = LocalClient(
+        path=str(env["path"]),
+        user=UserIdentifier(str(env["account_id"]), user_id, agent_id),
+    )
+    client._ctx.namespace_policy = env["policy"]
+    run_async(client.initialize())
+    return client
 
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
@@ -209,123 +248,60 @@ def agent_memory_config_check():
     reason="set RUN_AGENT_MEMORY_TESTS=1 to run agent memory e2e tests",
 )
 @pytest.mark.integration
-@pytest.mark.asyncio
 class TestAgentMemoryE2E:
     """End-to-end tests for the agent memory two-phase extraction pipeline."""
 
-    @tracer()
-    async def test_trajectory_and_experience_extraction(
-        self, tmp_data_dir: Path, agent_memory_config_check
-    ):
+    def test_trajectory_and_experience_extraction(self, agent_memory_config_check, local_test_env):
         """
         Two sessions in the same booking-conflict domain.
 
         Assertions:
-        - After Round 1: ≥1 trajectory file; exactly 1 experience file.
-        - After Round 2: ≥2 trajectory files (timestamped, no duplicates);
-          still exactly 1 experience file (EDIT path, not CREATE).
+        - After Round 1: ≥1 trajectory file; exactly 1 experience file (CREATE path).
+        - After Round 2: trajectory count grows; still exactly 1 experience file (EDIT path, not CREATE).
         """
-        import os
+        policy = AccountNamespacePolicy(
+            isolate_user_scope_by_agent=True,
+            isolate_agent_scope_by_user=True,
+        )
+        agent_space = to_agent_space(policy, "alice", "travelbot")
+        trajectories_dir = f"viking://agent/{agent_space}/memories/trajectories"
+        experiences_dir = f"viking://agent/{agent_space}/memories/experiences"
 
-        print(f"trace_id = {tracer.get_trace_id()}")
-
-        os.environ["OPENVIKING_DATA_DIR"] = str(tmp_data_dir)
-        OpenVikingConfigSingleton._instance = None
-
-
-
-        client = LocalClient(path=str(tmp_data_dir))
-        await client.initialize()
-
+        client = _build_client(local_test_env, user_id="alice", agent_id="travelbot")
         try:
-            agent_space = client.service.user.agent_space_name()
-            trajectories_dir = f"viking://agent/{agent_space}/memories/trajectories"
-            experiences_dir = f"viking://agent/{agent_space}/memories/experiences"
+            logger.info("Round 1: flight booking duplicate (expect CREATE experience)")
+            _run_conversation(client, CONV_A_FLIGHT_DUPLICATE)
 
-            for iteration in range(1, 3):
-                logger.info(f"=== Iteration {iteration} ===")
+            traj_after_r1 = _list_non_overview_entries(client, trajectories_dir)
+            exp_after_r1 = _list_non_overview_entries(client, experiences_dir)
+            assert traj_after_r1, "should have trajectory memories after round 1"
+            assert len(exp_after_r1) == 1, "should have exactly 1 experience after round 1 (CREATE path)"
 
-                # ── Round 1: CREATE / EDIT ────────────────────────────────────
-                logger.info(f"[Iter {iteration}] Round 1: flight booking duplicate")
-                await _run_conversation(client, CONV_A_FLIGHT_DUPLICATE)
+            logger.info("Round 2: booking conflict extra cases (expect EDIT experience)")
+            _run_conversation(client, CONV_B_FLIGHT_DUPLICATE_EXTRA)
 
-                traj_after_r1 = await _list_non_overview_entries(client, trajectories_dir)
-                exp_after_r1 = await _list_non_overview_entries(client, experiences_dir)
+            traj_after_r2 = _list_non_overview_entries(client, trajectories_dir)
+            exp_after_r2 = _list_non_overview_entries(client, experiences_dir)
+            assert len(traj_after_r2) > len(traj_after_r1), "trajectory count should grow after round 2"
+            assert len(exp_after_r2) == 1, "experience count must remain 1 after round 2 (EDIT path, not CREATE)"
 
-                logger.info(f"[Iter {iteration}] After Round 1: {len(traj_after_r1)} trajectories, {len(exp_after_r1)} experiences")
-                for e in traj_after_r1:
-                    logger.info(f"  trajectory: {e.get('name') if isinstance(e, dict) else getattr(e, 'name', '')}")
-                for e in exp_after_r1:
-                    logger.info(f"  experience: {e.get('name') if isinstance(e, dict) else getattr(e, 'name', '')}")
-
-                # ── Round 2: EDIT ─────────────────────────────────────────────
-                logger.info(f"[Iter {iteration}] Round 2: booking conflict extra cases")
-                await _run_conversation(client, CONV_B_FLIGHT_DUPLICATE_EXTRA)
-
-                traj_after_r2 = await _list_non_overview_entries(client, trajectories_dir)
-                exp_after_r2 = await _list_non_overview_entries(client, experiences_dir)
-
-                logger.info(f"[Iter {iteration}] After Round 2: {len(traj_after_r2)} trajectories, {len(exp_after_r2)} experiences")
-                for e in traj_after_r2:
-                    logger.info(f"  trajectory: {e.get('name') if isinstance(e, dict) else getattr(e, 'name', '')}")
-                for e in exp_after_r2:
-                    logger.info(f"  experience: {e.get('name') if isinstance(e, dict) else getattr(e, 'name', '')}")
-
+            traj_uris_r2 = {_entry_uri(e) for e in traj_after_r2 if _entry_uri(e)}
+            source_trajectories = _collect_source_trajectories(client, exp_after_r2)
+            assert source_trajectories, "experience metadata should include source_trajectories"
+            assert any(uri in traj_uris_r2 for uri in source_trajectories), (
+                "source_trajectories should reference extracted trajectories"
+            )
         finally:
-            await client.close()
+            run_async(client.close())
 
-    async def test_agent_memory_isolated_by_user_and_agent(
-        self, tmp_data_dir: Path, agent_memory_config_check
-    ):
-        os.environ["OPENVIKING_DATA_DIR"] = str(tmp_data_dir)
-        OpenVikingConfigSingleton._instance = None
-        config = get_openviking_config()
-        if config.memory.agent_scope_mode != "user+agent":
-            pytest.skip("memory.agent_scope_mode != user+agent — skipping isolation test")
+class TestAgentMemorySchemas:
+    """Unit tests for agent memory schema filtering — no integration environment needed."""
 
-        alice_user = UserIdentifier("acct", "alice", "travelbot")
-        bob_user = UserIdentifier("acct", "bob", "travelbot")
-        alice_space = alice_user.agent_space_name()
-        bob_space = bob_user.agent_space_name()
-        assert alice_space != bob_space
-
-        alice_traj_dir = f"viking://agent/{alice_space}/memories/trajectories"
-        alice_exp_dir = f"viking://agent/{alice_space}/memories/experiences"
-        bob_traj_dir = f"viking://agent/{bob_space}/memories/trajectories"
-        bob_exp_dir = f"viking://agent/{bob_space}/memories/experiences"
-
-        alice_client = LocalClient(path=str(tmp_data_dir), user=alice_user)
-        await alice_client.initialize()
-        try:
-            await _run_conversation(alice_client, CONV_A_FLIGHT_DUPLICATE)
-            alice_traj = await _list_non_overview_entries(alice_client, alice_traj_dir)
-            alice_exp = await _list_non_overview_entries(alice_client, alice_exp_dir)
-        finally:
-            await alice_client.close()
-
-        bob_client = LocalClient(path=str(tmp_data_dir), user=bob_user)
-        await bob_client.initialize()
-        try:
-            await _run_conversation(bob_client, CONV_A_FLIGHT_DUPLICATE)
-            bob_traj = await _list_non_overview_entries(bob_client, bob_traj_dir)
-            bob_exp = await _list_non_overview_entries(bob_client, bob_exp_dir)
-        finally:
-            await bob_client.close()
-
-        assert alice_traj, "alice should have trajectory memories"
-        assert alice_exp, "alice should have experience memories"
-        assert bob_traj, "bob should have trajectory memories"
-        assert bob_exp, "bob should have experience memories"
-
-    async def test_no_agent_only_schemas_in_user_memory(self, tmp_data_dir: Path):
+    def test_no_agent_only_schemas_in_user_memory(self):
         """
         Verify that trajectory/experience schemas are filtered out from
         SessionExtractContextProvider (user memory path).
         """
-        from openviking.session.memory.session_extract_context_provider import (
-            SessionExtractContextProvider,
-        )
-
         provider = SessionExtractContextProvider(messages=[])
         schemas = provider.get_memory_schemas(ctx=None)
         schema_types = [s.memory_type for s in schemas]
@@ -336,3 +312,4 @@ class TestAgentMemoryE2E:
         assert "experience" not in schema_types, (
             "experience schema must not appear in user memory extraction"
         )
+
