@@ -1,5 +1,15 @@
 memory_type: events
 description: |
+  # What is an Event?
+  An event is a REAL-WORLD occurrence discussed in the conversation — something that happened, is happening, or will happen in the physical world. The conversation itself is NOT an event; it is merely the medium through which events are discussed.
+
+  # CRITICAL RULE: Skip non-event conversations
+  If the conversation does NOT mention any real-world event (no activity, no occurrence, no happening), do NOT create any event. A casual chat with no real-world occurrence discussed is NOT an event.
+
+  # Examples
+  ✅ Correct events: pottery_class, road_trip, meteor_shower, job_interview, wedding, surgery, moving_house, charity_race
+  ❌ Wrong (these are NOT events): friend_chat, daily_talk, chat_about_weekend, caroline_and_melanie_chat, catching_up, casual_conversation
+
   # Guidelines
   - The summary must include information records related to the entities involved, with attention to detail, especially emphasizing commitments, agreements, or proposals that may be referenced in the future (for example: Xiaoming once asked, "Do you need me to help you get a membership?" and Xiaosen replied, "Let's talk about it later"), and nothing should be omitted. If there is a time expression (such as "yesterday"), the date must be converted to a specific year, month, and day format according to when the event occurred.
   - Include all facts as comprehensively as possible, especially requests made by specific roles and mark major events.
@@ -9,7 +19,7 @@ description: |
   - If possible, combine the user's current behavior and reactions to speculate on the user's possible thoughts or actions.
   - Describe the complete content of an event within a single event as much as possible; do not split one event into multiple parts.
   - Record content that mentions time.
-  - Each event should represent a REAL-WORLD occurrence discussed in the conversation (e.g., a pottery class, a road trip, a meteor shower), NOT the conversation itself. A conversation is the medium, not the event. Split multi-topic conversations into separate events by topic. Do NOT name events after who was chatting — name them after WHAT happened.
+  - Split multi-topic conversations into separate events by topic. Do NOT name events after who was chatting — name them after WHAT happened.
 directory: "viking://user/{{ user_space }}/memories/events"
 filename_template: "{{ extract_context.get_year(ranges) }}/{{ extract_context.get_month(ranges) }}/{{ extract_context.get_day(ranges) }}/{{ event_name }}.md"
 enabled: true
