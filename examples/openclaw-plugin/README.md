@@ -19,7 +19,7 @@ This document is not an installation guide. It is an implementation-focused desi
 In the current implementation, the plugin plays four roles at once:
 
 - `context-engine`: implements `assemble`, `afterTurn`, and `compact`
-- hook layer: handles `session_start`, `session_end`, `agent_end`, and `before_reset`
+- hook layer: handles `session_start`, `session_end`, and `before_reset`
 - tool provider: registers memory/archive tools plus OpenViking resource and skill import tools
 - runtime manager: connects to and monitors a remote OpenViking service
 

@@ -19,7 +19,7 @@
 按当前代码职责看，插件同时扮演四个角色：
 
 - `context-engine`：实现 `assemble`、`afterTurn`、`compact`
-- Hook 层：接管 `session_start`、`session_end`、`agent_end`、`before_reset`
+- Hook 层：接管 `session_start`、`session_end`、`before_reset`
 - Tool 提供者：注册 memory/archive 工具，以及 OpenViking resource 和 skill 导入工具
 - 运行时管理器：连接并监控远程 OpenViking 服务
 
