@@ -16,8 +16,13 @@ are extracted from HTTP request scope and propagated via contextvars.
 from __future__ import annotations
 
 import contextvars
+import os
+import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Literal, Optional
+from urllib.parse import quote
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -27,8 +32,11 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from openviking.server.auth import resolve_identity
-from openviking.server.dependencies import get_service
+from openviking.server.dependencies import get_server_config, get_service
 from openviking.server.identity import RequestContext
+from openviking.server.local_input_guard import TEMP_FILE_ID_RE, is_remote_resource_source
+from openviking.server.routers.resources import _resolve_temp_or_path
+from openviking.server.upload_token_store import upload_token_store
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     PermissionDeniedError,
@@ -36,6 +44,7 @@ from openviking_cli.exceptions import (
 )
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
+from openviking_cli.utils.config.open_viking_config import get_openviking_config
 
 logger = get_logger(__name__)
 
@@ -45,6 +54,14 @@ logger = get_logger(__name__)
 
 _mcp_ctx: contextvars.ContextVar[Optional[RequestContext]] = contextvars.ContextVar(
     "_mcp_ctx", default=None
+)
+
+# URL hints from the incoming request, captured by middleware so MCP tools can
+# reconstruct the agent-facing public URL without knowing about ASGI/Starlette.
+# Only used as a fallback when neither OPENVIKING_PUBLIC_BASE_URL nor
+# ServerConfig.public_base_url is set.
+_request_url_ctx: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
+    "_request_url_ctx", default=None
 )
 
 
@@ -97,11 +114,18 @@ class _IdentityASGIMiddleware:
             role=identity.role,
             namespace_policy=identity.namespace_policy,
         )
-        token = _mcp_ctx.set(ctx)
+        url_info = {
+            "x_forwarded_proto": request.headers.get("x-forwarded-proto"),
+            "x_forwarded_host": request.headers.get("x-forwarded-host"),
+            "host": request.headers.get("host"),
+        }
+        ctx_token = _mcp_ctx.set(ctx)
+        url_token = _request_url_ctx.set(url_info)
         try:
             return await self.app(scope, receive, send)
         finally:
-            _mcp_ctx.reset(token)
+            _mcp_ctx.reset(ctx_token)
+            _request_url_ctx.reset(url_token)
 
 
 # ---------------------------------------------------------------------------
@@ -242,46 +266,187 @@ async def store(messages: list[StoreMessage]) -> str:
 # -- add_resource ----------------------------------------------------------
 
 
-_LOCAL_FILE_HINT = (
-    "MCP add_resource only accepts remote URLs (http(s)://, git@, ssh://, git://). "
-    "For local files or directories, use the `ov` CLI:\n"
-    "  1. Try first: ov add-resource <path>\n"
-    "     (if `ov` is already on PATH, this is all you need)\n"
-    "  2. If `ov` is not installed, run:\n"
-    "     curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/crates/ov_cli/install.sh | bash\n"
-    "  3. Only if connecting to a remote / multi-tenant OpenViking server, "
-    "configure ~/.openviking/ovcli.conf:\n"
-    '       {"url": "https://your-host", "api_key": "your-key"}'
-)
+_DEFAULT_UPLOAD_TTL_SECONDS = 600
+
+
+def _resolve_public_base_url() -> tuple[str, str]:
+    """Pick the URL the agent should PUT uploads to. Returns ``(base_url, source)``.
+
+    Resolution order (first match wins):
+
+    1. ``env`` — ``OPENVIKING_PUBLIC_BASE_URL`` environment variable. Operator-set,
+       always wins.
+    2. ``config`` — ``ServerConfig.public_base_url``. Operator-set baseline in ov.conf.
+    3. ``forwarded`` — ``X-Forwarded-Host`` (+ ``X-Forwarded-Proto``) from the request.
+       Set by reverse proxies (nginx, ALB, ingress controllers, MCP proxies). Reliable
+       when the proxy chain forwards these headers, which is the standard default.
+    4. ``host`` — the raw ``Host`` header from a direct connection. Reliable for
+       same-host MCP clients (e.g. local Claude Code talking to localhost server).
+    5. ``listen`` — ``http://{listen_host}:{listen_port}`` last-resort fallback.
+       Only produces an agent-reachable URL when the server is bound to a routable
+       address; commonly wrong behind reverse proxies.
+
+    Sources 1 and 2 are "explicit" — operator vouched for the URL. Sources 3-5 are
+    inferred and may be wrong when the proxy chain doesn't forward request headers.
+    Callers should append a "set OPENVIKING_PUBLIC_BASE_URL if upload fails" hint
+    in that case.
+    """
+    env_url = os.environ.get("OPENVIKING_PUBLIC_BASE_URL")
+    if env_url:
+        return env_url.rstrip("/"), "env"
+    config = get_server_config()
+    if config is not None and config.public_base_url:
+        return config.public_base_url.rstrip("/"), "config"
+
+    url_info = _request_url_ctx.get()
+    if url_info:
+        xfh = url_info.get("x_forwarded_host")
+        xfp = url_info.get("x_forwarded_proto")
+        host_hdr = url_info.get("host")
+        if xfh:
+            proto = xfp or "https"
+            return f"{proto}://{xfh}", "forwarded"
+        if host_hdr:
+            return f"http://{host_hdr}", "host"
+
+    if config is not None:
+        return f"http://{config.host}:{config.port}", "listen"
+    return "http://127.0.0.1:1933", "listen"
 
 
 @mcp.tool()
-async def add_resource(path: str, description: str = "") -> str:
-    """Add a remote resource (HTTP/HTTPS URL or git URL) to OpenViking. Asynchronous — processed in the background. Local file paths are not supported here; use the `ov add-resource` CLI for local files."""
-    from openviking.server.local_input_guard import require_remote_resource_source
+async def add_resource(
+    path: str = "",
+    temp_file_id: str = "",
+    description: str = "",
+) -> str:
+    """Add a resource to OpenViking. Asynchronous — processing happens in the background.
 
+    Two ways to invoke:
+
+    1. Remote URL: pass ``path`` set to an http(s)://, git@, ssh://, or git:// URL.
+       Returns a success message immediately.
+
+    2. Local file: pass ``path`` set to a local filesystem path (e.g. ``/tmp/foo.pdf``).
+       The response will NOT be a success message — it will be a multi-step upload
+       instruction. Follow the instructions: HTTP-upload the file bytes to the URL
+       given in the response, then call this tool again with ``temp_file_id`` set to
+       the value the response gave you (and omit ``path``).
+    """
     service = get_service()
     ctx = _get_ctx()
-    try:
-        path = require_remote_resource_source(path)
-    except PermissionDeniedError:
-        return f"Error: {_LOCAL_FILE_HINT}"
-    try:
-        result = await service.resources.add_resource(
-            path=path,
-            ctx=ctx,
-            reason=description,
-            wait=False,
-            enforce_public_remote_targets=True,
-        )
+
+    # Branch 1: ingest by temp_file_id (second leg of progressive upload, or REST-style)
+    if temp_file_id:
+        upload_temp_dir = get_openviking_config().storage.get_upload_temp_dir()
+        try:
+            resolved_path, allow_local, original_filename = _resolve_temp_or_path(
+                path=None,
+                temp_file_id=temp_file_id,
+                upload_temp_dir=upload_temp_dir,
+                account_id=ctx.user.account_id,
+                user_id=ctx.user.user_id,
+            )
+        except (PermissionDeniedError, InvalidArgumentError) as exc:
+            return f"Error: {exc}"
+        try:
+            result = await service.resources.add_resource(
+                path=resolved_path,
+                ctx=ctx,
+                reason=description,
+                source_name=original_filename,
+                wait=False,
+                allow_local_path_resolution=allow_local,
+                enforce_public_remote_targets=True,
+            )
+        except Exception as exc:
+            return f"Error adding resource: {exc}"
         root_uri = result.get("root_uri", "")
         return (
             f"Resource added: {root_uri}"
             if root_uri
             else "Resource added (processing in background)."
         )
-    except Exception as e:
-        return f"Error adding resource: {e}"
+
+    if not path:
+        return "Error: provide either 'path' (remote URL or local file) or 'temp_file_id'."
+
+    # Branch 2: agent passed a temp_file_id-shaped string as `path` — guide them
+    if TEMP_FILE_ID_RE.match(path):
+        return (
+            f"Error: '{path}' looks like a temp_file_id, not a path. "
+            f'Pass it as the temp_file_id kwarg: add_resource(temp_file_id="{path}")'
+        )
+
+    # Branch 3: remote URL — same flow as before
+    if is_remote_resource_source(path):
+        try:
+            result = await service.resources.add_resource(
+                path=path,
+                ctx=ctx,
+                reason=description,
+                wait=False,
+                enforce_public_remote_targets=True,
+            )
+        except Exception as exc:
+            return f"Error adding resource: {exc}"
+        root_uri = result.get("root_uri", "")
+        return (
+            f"Resource added: {root_uri}"
+            if root_uri
+            else "Resource added (processing in background)."
+        )
+
+    # Branch 4: local path — mint token, return upload instruction
+    server_config = get_server_config()
+    ttl_seconds = (
+        server_config.upload_signed_ttl_seconds
+        if server_config is not None
+        else _DEFAULT_UPLOAD_TTL_SECONDS
+    )
+    suffix = Path(path).suffix
+    minted_tfid = f"upload_{uuid.uuid4().hex}{suffix}"
+
+    token, expires_at = upload_token_store.issue(
+        ctx.user.account_id,
+        ctx.user.user_id,
+        minted_tfid,
+        ttl_seconds=ttl_seconds,
+    )
+    base_url, url_source = _resolve_public_base_url()
+    upload_url = (
+        f"{base_url}/api/v1/resources/temp_upload_signed"
+        f"?token={quote(token, safe='')}&temp_file_id={quote(minted_tfid, safe='')}"
+    )
+    expires_iso = datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat(timespec="seconds")
+    minutes = max(1, ttl_seconds // 60)
+
+    prose = (
+        "Local file detected — upload required before this resource can be ingested.\n"
+        "\n"
+        'Step 1. HTTP POST the file bytes (multipart/form-data, field name "file") to:\n'
+        "\n"
+        f"  {upload_url}\n"
+        "\n"
+        "Step 2. After the upload returns 200, call this tool again:\n"
+        "\n"
+        f'  add_resource(temp_file_id="{minted_tfid}")\n'
+        "\n"
+        f"This upload URL expires in ~{minutes} minutes ({expires_iso})."
+    )
+
+    if url_source not in ("env", "config"):
+        prose += (
+            "\n\n"
+            "Note for the user: this upload URL was auto-detected from the incoming "
+            "request because OPENVIKING_PUBLIC_BASE_URL is not set on the server. "
+            "If Step 1 fails (connection refused, wrong host, TLS error), ask the "
+            "server operator to set OPENVIKING_PUBLIC_BASE_URL to the agent-facing "
+            "URL of the OpenViking server (e.g. via docker-compose `environment:` "
+            "or systemd unit) and retry."
+        )
+
+    return prose
 
 
 # -- grep ------------------------------------------------------------------

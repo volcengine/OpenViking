@@ -115,11 +115,48 @@ Once connected, OpenViking exposes 9 tools:
 | `read` | Read one or more `viking://` URIs | `uris` (single string or array) |
 | `list` | List entries under a `viking://` directory | `uri`, `recursive` (optional) |
 | `store` | Store messages into long-term memory (triggers extraction) | `messages` (list of `{role, content}`) |
-| `add_resource` | Add a local file or URL as a resource | `path`, `description` (optional) |
+| `add_resource` | Add a local file or URL as a resource (local files trigger a progressive upload flow) | `path`, `temp_file_id` (optional), `description` (optional) |
 | `grep` | Regex content search across `viking://` files | `uri`, `pattern` (string or array), `case_insensitive` |
 | `glob` | Find files matching a glob pattern | `pattern`, `uri` (optional scope) |
 | `forget` | Delete any `viking://` URI (use `search` to find it first) | `uri` |
 | `health` | Check OpenViking service health | none |
+
+### Adding local-file resources (progressive upload)
+
+The `add_resource` tool accepts both **remote URLs** and **local file paths**, handled differently:
+
+- **Remote URL** (`http(s)://`, `git@`, `ssh://`, `git://`): single round-trip — the server fetches and ingests directly.
+- **Local file path**: the tool returns a **two-step upload instruction** (plain prose with `Step 1` / `Step 2` formatting). The agent must:
+  1. POST the file as `multipart/form-data` to the `temp_upload_signed` URL given in the response (URL embeds a one-shot token; 10-minute TTL by default).
+  2. After receiving 200, call `add_resource(temp_file_id="upload_xxx.ext")` again — the server ingests.
+
+This lets any MCP client — including sandboxed environments without a local filesystem (Claude web, Manus, etc.) — push files into OpenViking without pre-installing the `ov` CLI.
+
+#### When you must set `OPENVIKING_PUBLIC_BASE_URL`
+
+The upload URL the tool returns is resolved server-side in this order:
+
+1. Environment variable `OPENVIKING_PUBLIC_BASE_URL`
+2. `server.public_base_url` in `ov.conf`
+3. Request headers `X-Forwarded-Host` / `X-Forwarded-Proto` (forwarded by the reverse-proxy chain)
+4. Request `Host` header (direct connection)
+5. Listen-address fallback: `http://{host}:{port}`
+
+If the server runs behind a reverse proxy (nginx / cloud LB / k8s ingress / MCP proxy), **set `OPENVIKING_PUBLIC_BASE_URL` explicitly**. Layers 3–5 are inferred and break in these cases:
+
+- The reverse proxy / MCP proxy does not forward `X-Forwarded-*` headers
+- The server listens on `0.0.0.0` (fallback URL contains `0.0.0.0`, unreachable from agents)
+- Multi-hop proxy with host rewriting
+
+When the variable is unset and inference is used, the tool response automatically appends a hint asking the user to configure it. Docker Compose example:
+
+```yaml
+services:
+  openviking:
+    image: ghcr.io/volcengine/openviking:latest
+    environment:
+      OPENVIKING_PUBLIC_BASE_URL: "https://ov.your-domain.com"
+```
 
 ## Troubleshooting
 
