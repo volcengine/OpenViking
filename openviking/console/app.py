@@ -260,6 +260,14 @@ def _create_proxy_router() -> APIRouter:
             return invalid
         return await _forward_request(request, f"/api/v1/observer/{component}")
 
+    @router.post("/ov/auth/otp")
+    async def issue_otp(request: Request):
+        # OTP issuance binds to the caller's existing API key identity, so it
+        # uses the same auth flow as any other read endpoint. Not gated by
+        # write_enabled — minting an authentication artifact for yourself is
+        # not a data mutation.
+        return await _forward_request(request, "/api/v1/auth/otp")
+
     # ---- Write routes ----
 
     @router.post("/ov/fs/mkdir")

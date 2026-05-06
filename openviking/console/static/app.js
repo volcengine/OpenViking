@@ -61,6 +61,11 @@ const elements = {
   saveKeyBtn: document.getElementById("saveKeyBtn"),
   clearKeyBtn: document.getElementById("clearKeyBtn"),
   connectionHint: document.getElementById("connectionHint"),
+  getOtpBtn: document.getElementById("getOtpBtn"),
+  otpBox: document.getElementById("otpBox"),
+  otpValue: document.getElementById("otpValue"),
+  otpCopyBtn: document.getElementById("otpCopyBtn"),
+  otpExpiry: document.getElementById("otpExpiry"),
   writeBadge: document.getElementById("writeBadge"),
   output: document.getElementById("output"),
   tabs: document.querySelectorAll(".tab"),
@@ -1531,6 +1536,63 @@ function bindConnection() {
     updateConnectionHint();
     setOutput("Connection settings cleared from browser storage.");
   });
+
+  if (elements.getOtpBtn) {
+    elements.getOtpBtn.addEventListener("click", async () => {
+      if (!getApiKey()) {
+        setOutput("Save an API key first — OTP issuance requires authentication.");
+        return;
+      }
+      elements.getOtpBtn.disabled = true;
+      const originalLabel = elements.getOtpBtn.textContent;
+      elements.getOtpBtn.textContent = "Generating…";
+      try {
+        const payload = await callConsole("/ov/auth/otp", {
+          method: "POST",
+          body: JSON.stringify({}),
+        });
+        const result = payload && payload.result ? payload.result : payload;
+        const otp = result && (result.otp || result.code);
+        if (!otp) {
+          throw new Error("Server did not return an OTP");
+        }
+        elements.otpValue.textContent = otp;
+        const ttl = result.ttl_seconds || 300;
+        const expiresAt = result.expires_at
+          ? new Date(result.expires_at * 1000).toLocaleTimeString()
+          : null;
+        elements.otpExpiry.textContent = expiresAt
+          ? `Expires at ${expiresAt} (${ttl}s). One-time use.`
+          : `Expires in ${ttl}s. One-time use.`;
+        elements.otpBox.hidden = false;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setOutput(`Failed to generate OTP: ${message}`);
+      } finally {
+        elements.getOtpBtn.disabled = false;
+        elements.getOtpBtn.textContent = originalLabel;
+      }
+    });
+  }
+
+  if (elements.otpCopyBtn) {
+    elements.otpCopyBtn.addEventListener("click", async () => {
+      const otp = elements.otpValue.textContent.trim();
+      if (!otp) {
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(otp);
+        const originalLabel = elements.otpCopyBtn.textContent;
+        elements.otpCopyBtn.textContent = "Copied";
+        setTimeout(() => {
+          elements.otpCopyBtn.textContent = originalLabel;
+        }, 1500);
+      } catch (_error) {
+        setOutput("Could not copy to clipboard — long-press the code to copy manually.");
+      }
+    });
+  }
 }
 
 function bindFilesystem() {
