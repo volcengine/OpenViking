@@ -830,8 +830,20 @@ impl HttpClient {
 
         zip.finish()?;
 
+        let zip_size = std::fs::metadata(temp_file.path())?.len();
+        let zip_size_mb = zip_size as f64 / 1024.0 / 1024.0;
+        let original_size_mb = if total_size > 0 {
+            total_size as f64 / 1024.0 / 1024.0
+        } else {
+            0.0
+        };
+
         if let Some(pb) = pb {
-            pb.finish_with_message("Compression complete");
+            if total_size > 0 {
+                pb.finish_with_message(format!("Compression complete: {:.2} MiB → {:.2} MiB", original_size_mb, zip_size_mb));
+            } else {
+                pb.finish_with_message(format!("Compression complete: {:.2} MiB", zip_size_mb));
+            }
         }
 
         Ok(temp_file)
