@@ -329,10 +329,10 @@ async def test_admin_can_register_user_in_own_account(admin_client: httpx.AsyncC
     assert resp.status_code == 200
 
 
-async def test_admin_cannot_register_admin_role_user(
+async def test_admin_can_register_admin_role_user(
     lightweight_admin_client: httpx.AsyncClient,
 ):
-    """ADMIN should not be able to mint another ADMIN via register_user."""
+    """ADMIN can create another ADMIN in the same account via register_user."""
     acct = _uid()
     resp = await lightweight_admin_client.post(
         "/api/v1/admin/accounts",
@@ -346,7 +346,14 @@ async def test_admin_cannot_register_admin_role_user(
         json={"user_id": "mallory-admin", "role": "admin"},
         headers={"X-API-Key": alice_key},
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 200
+
+    admin_key = resp.json()["result"]["user_key"]
+    list_users = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/users",
+        headers={"X-API-Key": admin_key},
+    )
+    assert list_users.status_code == 200
 
 
 async def test_admin_cannot_register_root_role_user(

@@ -64,7 +64,7 @@ def _validate_register_user_role(ctx: RequestContext, role: str) -> Role:
 
     register_user is the user-creation path, not the privileged role-escalation path.
     - ROOT may create USER or ADMIN accounts here.
-    - ADMIN may only create USER accounts in their own account.
+    - ADMIN may create USER or ADMIN accounts in their own account.
     - ROOT role assignment must go through the dedicated ROOT-only set_role endpoint.
     """
     try:
@@ -75,10 +75,6 @@ def _validate_register_user_role(ctx: RequestContext, role: str) -> Role:
     if resolved_role == Role.ROOT:
         raise PermissionDeniedError(
             "register_user cannot mint ROOT users; use the ROOT-only set_role endpoint instead."
-        )
-    if ctx.role == Role.ADMIN and resolved_role != Role.USER:
-        raise PermissionDeniedError(
-            "ADMIN can only register USER accounts; privileged role changes require ROOT."
         )
     return resolved_role
 
