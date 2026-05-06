@@ -1,30 +1,32 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Integration tests for the JWT discriminator path in openviking/server/auth.py."""
+"""Integration tests for the OAuth opaque-token discriminator in auth.py."""
 
 from __future__ import annotations
 
 from typing import Optional
 
 import pytest
+import pytest_asyncio
 from fastapi import FastAPI
 from starlette.requests import Request
 
 from openviking.server.auth import resolve_identity
 from openviking.server.config import ServerConfig
 from openviking.server.identity import Role
-from openviking.server.oauth.jwt import JwtSigner
+from openviking.server.oauth.provider import (
+    ACCESS_TOKEN_PREFIX,
+    OpenVikingOAuthProvider,
+)
+from openviking.server.oauth.storage import OAuthStore
 from openviking_cli.exceptions import PermissionDeniedError, UnauthenticatedError
-
-
-SECRET = b"k" * 32
 
 
 def _make_request(
     *,
     bearer: Optional[str],
     api_key_manager,
-    oauth_signer: Optional[JwtSigner],
+    oauth_provider: Optional[OpenVikingOAuthProvider],
     extra_headers: Optional[dict[str, str]] = None,
     path: str = "/api/v1/system/status",
 ) -> Request:
@@ -36,8 +38,8 @@ def _make_request(
     app = FastAPI()
     app.state.config = ServerConfig(auth_mode="api_key", root_api_key="root-test-1234567890abcd")
     app.state.api_key_manager = api_key_manager
-    if oauth_signer is not None:
-        app.state.oauth_signer = oauth_signer
+    if oauth_provider is not None:
+        app.state.oauth_provider = oauth_provider
     scope = {
         "type": "http",
         "path": path,
@@ -49,10 +51,10 @@ def _make_request(
 
 
 class _StubKeyManager:
-    """Minimal APIKeyManager replacement that fails when called.
+    """API-key manager that asserts when reached unexpectedly.
 
-    Tests that exercise the JWT path want to assert the API-key path is
-    *not* invoked; tests on backwards compat patch this stub to behave.
+    Tests for the OAuth path want to assert API-key fallback is *not* taken;
+    backwards-compat tests flip ``raise_on_resolve`` to False.
     """
 
     def __init__(self, raise_on_resolve: bool = True):
@@ -71,27 +73,49 @@ class _StubKeyManager:
         return AccountNamespacePolicy()
 
 
+@pytest_asyncio.fixture
+async def store(tmp_path):
+    s = OAuthStore(tmp_path / "oauth.db")
+    await s.initialize()
+    try:
+        yield s
+    finally:
+        await s.close()
+
+
+@pytest_asyncio.fixture
+async def provider(store):
+    return OpenVikingOAuthProvider(store=store, issuer="https://ov.test")
+
+
+async def _mint_token(provider: OpenVikingOAuthProvider, store: OAuthStore, **identity) -> str:
+    """Helper: directly insert an access token bound to the given identity."""
+    token = provider._mint_access()
+    await store.insert_access(
+        token_plain=token,
+        client_id="test-client",
+        account_id=identity["account_id"],
+        user_id=identity["user_id"],
+        role=identity["role"],
+        scope=identity.get("scope"),
+        resource=identity.get("resource"),
+        ttl_seconds=3600,
+    )
+    return token
+
+
 @pytest.mark.asyncio
-async def test_jwt_resolves_to_claims_identity():
-    signer = JwtSigner(SECRET)
-    token = signer.sign(
-        {
-            "iss": "https://ov.test",
-            "role": "user",
-            "account_id": "tenant-a",
-            "user_id": "alice",
-        },
-        ttl_seconds=60,
+async def test_oauth_token_resolves_to_bound_identity(provider, store):
+    token = await _mint_token(
+        provider, store, account_id="tenant-a", user_id="alice", role="user"
     )
     request = _make_request(
         bearer=token,
-        api_key_manager=_StubKeyManager(),  # would assert if invoked
-        oauth_signer=signer,
+        api_key_manager=_StubKeyManager(),
+        oauth_provider=provider,
     )
     identity = await resolve_identity(
-        request,
-        x_api_key=None,
-        authorization=f"Bearer {token}",
+        request, x_api_key=None, authorization=f"Bearer {token}"
     )
     assert identity.role == Role.USER
     assert identity.account_id == "tenant-a"
@@ -100,34 +124,43 @@ async def test_jwt_resolves_to_claims_identity():
 
 
 @pytest.mark.asyncio
-async def test_jwt_invalid_signature_fails_closed():
-    """A token that LOOKS like a JWT but doesn't verify must NOT fall back to API key."""
-    signer = JwtSigner(SECRET)
-    token = signer.sign({"role": "user", "account_id": "a", "user_id": "u"}, ttl_seconds=60)
-    # Tamper signature.
-    head, payload, sig = token.split(".")
-    tampered = f"{head}.{payload}.{sig[:-2]}AA"
-
+async def test_unknown_oauth_token_fails_closed(provider):
+    """A bearer with the OAuth prefix but unknown to the store must NOT fall back to API key."""
+    bogus = ACCESS_TOKEN_PREFIX + "not-a-real-token"
     request = _make_request(
-        bearer=tampered,
-        # API-key manager would have been a fallback; raise_on_resolve=False
-        # would let it succeed if reached. Test asserts it's NOT reached.
+        bearer=bogus,
         api_key_manager=_StubKeyManager(raise_on_resolve=True),
-        oauth_signer=signer,
+        oauth_provider=provider,
     )
-    with pytest.raises(UnauthenticatedError, match="Invalid OAuth token"):
-        await resolve_identity(request, x_api_key=None, authorization=f"Bearer {tampered}")
+    with pytest.raises(UnauthenticatedError, match="OAuth access token"):
+        await resolve_identity(
+            request, x_api_key=None, authorization=f"Bearer {bogus}"
+        )
 
 
 @pytest.mark.asyncio
-async def test_non_jwt_bearer_falls_through_to_api_key():
-    """A plain API key (no JWT shape) must still resolve via APIKeyManager."""
-    signer = JwtSigner(SECRET)
-    plain_key = "ov_user_NOTAJWT_abcdefghijklmnop"
+async def test_revoked_oauth_token_rejected(provider, store):
+    token = await _mint_token(
+        provider, store, account_id="acct", user_id="alice", role="user"
+    )
+    await store.revoke_access(token)
+    request = _make_request(
+        bearer=token,
+        api_key_manager=_StubKeyManager(raise_on_resolve=True),
+        oauth_provider=provider,
+    )
+    with pytest.raises(UnauthenticatedError):
+        await resolve_identity(request, x_api_key=None, authorization=f"Bearer {token}")
+
+
+@pytest.mark.asyncio
+async def test_non_prefixed_bearer_falls_through_to_api_key(provider):
+    """A plain API key (no OAuth prefix) must still resolve via APIKeyManager."""
+    plain_key = "ov_user_NOTAOATAH_abcdefghijklmnop"
     request = _make_request(
         bearer=plain_key,
         api_key_manager=_StubKeyManager(raise_on_resolve=False),
-        oauth_signer=signer,
+        oauth_provider=provider,
     )
     identity = await resolve_identity(
         request, x_api_key=None, authorization=f"Bearer {plain_key}"
@@ -138,31 +171,31 @@ async def test_non_jwt_bearer_falls_through_to_api_key():
 
 
 @pytest.mark.asyncio
-async def test_jwt_path_skipped_when_oauth_disabled():
-    """When no oauth_signer is on app.state, JWT-shaped tokens go to API key path."""
-    signer = JwtSigner(SECRET)
-    token = signer.sign({"role": "user", "account_id": "a", "user_id": "u"}, ttl_seconds=60)
+async def test_oauth_path_skipped_when_disabled(store):
+    """If no oauth_provider on app.state, prefixed tokens go to API-key path."""
+    plain_key = ACCESS_TOKEN_PREFIX + "anything"
     request = _make_request(
-        bearer=token,
+        bearer=plain_key,
         api_key_manager=_StubKeyManager(raise_on_resolve=False),
-        oauth_signer=None,  # OAuth disabled
+        oauth_provider=None,
     )
-    identity = await resolve_identity(request, x_api_key=None, authorization=f"Bearer {token}")
-    # Falls through to API key: stub returns a fixed user identity.
+    identity = await resolve_identity(
+        request, x_api_key=None, authorization=f"Bearer {plain_key}"
+    )
+    # Falls through to API key; stub returns USER identity.
     assert identity.from_oauth is False
 
 
 @pytest.mark.asyncio
-async def test_jwt_user_role_rejects_account_override():
+async def test_oauth_user_role_rejects_account_override(provider, store):
     """A USER OAuth token cannot impersonate another tenant via header."""
-    signer = JwtSigner(SECRET)
-    token = signer.sign(
-        {"role": "user", "account_id": "tenant-a", "user_id": "alice"}, ttl_seconds=60
+    token = await _mint_token(
+        provider, store, account_id="tenant-a", user_id="alice", role="user"
     )
     request = _make_request(
         bearer=token,
         api_key_manager=_StubKeyManager(),
-        oauth_signer=signer,
+        oauth_provider=provider,
         extra_headers={"x-openviking-account": "tenant-b"},
     )
     with pytest.raises(PermissionDeniedError):
@@ -175,19 +208,18 @@ async def test_jwt_user_role_rejects_account_override():
 
 
 @pytest.mark.asyncio
-async def test_jwt_root_role_can_be_used_without_explicit_tenant_headers():
+async def test_oauth_root_can_be_used_without_explicit_tenant_headers(provider, store):
     """ROOT OAuth tokens carry account/user in claims — no header requirement."""
-    signer = JwtSigner(SECRET)
-    token = signer.sign(
-        {"role": "root", "account_id": "tenant-a", "user_id": "alice"}, ttl_seconds=60
+    token = await _mint_token(
+        provider, store, account_id="tenant-a", user_id="alice", role="root"
     )
     request = _make_request(
         bearer=token,
         api_key_manager=_StubKeyManager(),
-        oauth_signer=signer,
+        oauth_provider=provider,
     )
-    identity = await resolve_identity(request, x_api_key=None, authorization=f"Bearer {token}")
+    identity = await resolve_identity(
+        request, x_api_key=None, authorization=f"Bearer {token}"
+    )
     assert identity.role == Role.ROOT
-    # from_oauth must propagate so get_request_context skips the
-    # ROOT-requires-explicit-tenant-headers guard.
     assert identity.from_oauth is True

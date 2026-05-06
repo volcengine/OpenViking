@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS oauth_codes (
     created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_oauth_codes_expires ON oauth_codes(expires_at);
+CREATE INDEX IF NOT EXISTS idx_oauth_codes_user ON oauth_codes(account_id, user_id);
 
 CREATE TABLE IF NOT EXISTS oauth_refresh_tokens (
     token_hash TEXT PRIMARY KEY,
@@ -72,6 +73,36 @@ CREATE TABLE IF NOT EXISTS oauth_refresh_tokens (
     created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_oauth_refresh_expires ON oauth_refresh_tokens(expires_at);
+CREATE INDEX IF NOT EXISTS idx_oauth_refresh_user ON oauth_refresh_tokens(account_id, user_id);
+
+CREATE TABLE IF NOT EXISTS oauth_pending_authorizations (
+    pending_id TEXT PRIMARY KEY,
+    client_id TEXT NOT NULL,
+    redirect_uri TEXT NOT NULL,
+    redirect_uri_provided_explicitly INTEGER NOT NULL,
+    code_challenge TEXT NOT NULL,
+    scopes TEXT,
+    resource TEXT,
+    state TEXT,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_pending_expires ON oauth_pending_authorizations(expires_at);
+
+CREATE TABLE IF NOT EXISTS oauth_access_tokens (
+    token_hash TEXT PRIMARY KEY,
+    client_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    scope TEXT,
+    resource TEXT,
+    expires_at INTEGER NOT NULL,
+    revoked INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_access_expires ON oauth_access_tokens(expires_at);
+CREATE INDEX IF NOT EXISTS idx_oauth_access_user ON oauth_access_tokens(account_id, user_id);
 """
 
 
@@ -116,6 +147,7 @@ class OAuthStore:
     async def register_client(
         self,
         *,
+        client_id: Optional[str] = None,
         redirect_uris: list[str],
         client_name: Optional[str] = None,
         token_endpoint_auth_method: str = "none",
@@ -123,10 +155,16 @@ class OAuthStore:
         response_types: Optional[list[str]] = None,
         client_secret: Optional[str] = None,
     ) -> dict[str, Any]:
-        """Persist a freshly registered client and return the public record."""
+        """Persist a freshly registered client and return the public record.
+
+        ``client_id`` may be supplied by the caller (e.g. the MCP SDK's
+        RegistrationHandler generates one via uuid4); otherwise we mint a
+        URL-safe random ID for in-process callers.
+        """
         if not redirect_uris:
             raise ValueError("redirect_uris must be non-empty")
-        client_id = secrets.token_urlsafe(16)
+        if client_id is None:
+            client_id = secrets.token_urlsafe(16)
         secret_hash = hash_secret(client_secret) if client_secret else None
         now = int(time.time())
         record = {
@@ -263,6 +301,37 @@ class OAuthStore:
     async def consume_auth_code(self, code_plain: str) -> Optional[dict[str, Any]]:
         return await self._atomic_consume_code(code_plain, expected_kind="code")
 
+    async def peek_auth_code(self, code_plain: str) -> Optional[dict[str, Any]]:
+        """Non-destructive lookup of an unused, unexpired auth code.
+
+        Used by the SDK to inspect the code (e.g. read code_challenge for PKCE)
+        before deciding whether to exchange. Pairs with ``consume_auth_code``,
+        which is the only one-shot operation.
+        """
+        return await self._peek_code(code_plain, expected_kind="code")
+
+    async def _peek_code(
+        self, plain: str, *, expected_kind: str
+    ) -> Optional[dict[str, Any]]:
+        code_hash = hash_secret(plain)
+        now = int(time.time())
+
+        def _q() -> Optional[dict[str, Any]]:
+            assert self._conn is not None
+            cur = self._conn.execute(
+                "SELECT client_id, redirect_uri, code_challenge, "
+                "code_challenge_method, scope, resource, account_id, user_id, role, "
+                "expires_at, created_at FROM oauth_codes "
+                "WHERE code_hash = ? AND kind = ? AND used = 0 AND expires_at > ?",
+                (code_hash, expected_kind, now),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return _row_to_dict(cur, row)
+
+        return await asyncio.to_thread(_q)
+
     async def _atomic_consume_code(
         self, plain: str, *, expected_kind: str
     ) -> Optional[dict[str, Any]]:
@@ -328,6 +397,26 @@ class OAuthStore:
             await asyncio.to_thread(_insert)
         return expires_at
 
+    async def peek_refresh(self, token_plain: str) -> Optional[dict[str, Any]]:
+        """Non-destructive lookup of a still-active refresh token."""
+        token_hash = hash_secret(token_plain)
+        now = int(time.time())
+
+        def _q() -> Optional[dict[str, Any]]:
+            assert self._conn is not None
+            cur = self._conn.execute(
+                "SELECT client_id, account_id, user_id, role, scope, resource, "
+                "expires_at, created_at FROM oauth_refresh_tokens "
+                "WHERE token_hash = ? AND consumed = 0 AND expires_at > ?",
+                (token_hash, now),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return _row_to_dict(cur, row)
+
+        return await asyncio.to_thread(_q)
+
     async def consume_refresh(
         self,
         *,
@@ -392,6 +481,193 @@ class OAuthStore:
         async with self._lock:
             return await asyncio.to_thread(_revoke)
 
+    # ---- Access tokens ----
+
+    async def insert_access(
+        self,
+        *,
+        token_plain: str,
+        client_id: str,
+        account_id: str,
+        user_id: str,
+        role: str,
+        scope: Optional[str],
+        resource: Optional[str],
+        ttl_seconds: int,
+    ) -> int:
+        now = int(time.time())
+        expires_at = now + ttl_seconds
+
+        def _insert() -> None:
+            assert self._conn is not None
+            self._conn.execute(
+                "INSERT INTO oauth_access_tokens "
+                "(token_hash, client_id, account_id, user_id, role, scope, "
+                "resource, expires_at, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    hash_secret(token_plain),
+                    client_id,
+                    account_id,
+                    user_id,
+                    role,
+                    scope,
+                    resource,
+                    expires_at,
+                    now,
+                ),
+            )
+
+        async with self._lock:
+            await asyncio.to_thread(_insert)
+        return expires_at
+
+    async def load_access(self, token_plain: str) -> Optional[dict[str, Any]]:
+        """Return the access token's claims dict, or None if invalid/expired/revoked."""
+        token_hash = hash_secret(token_plain)
+        now = int(time.time())
+
+        def _q() -> Optional[dict[str, Any]]:
+            assert self._conn is not None
+            cur = self._conn.execute(
+                "SELECT client_id, account_id, user_id, role, scope, resource, "
+                "expires_at, created_at FROM oauth_access_tokens "
+                "WHERE token_hash = ? AND revoked = 0 AND expires_at > ?",
+                (token_hash, now),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return _row_to_dict(cur, row)
+
+        return await asyncio.to_thread(_q)
+
+    async def revoke_access(self, token_plain: str) -> bool:
+        token_hash = hash_secret(token_plain)
+
+        def _revoke() -> bool:
+            assert self._conn is not None
+            cur = self._conn.execute(
+                "UPDATE oauth_access_tokens SET revoked = 1 "
+                "WHERE token_hash = ? AND revoked = 0",
+                (token_hash,),
+            )
+            return cur.rowcount > 0
+
+        async with self._lock:
+            return await asyncio.to_thread(_revoke)
+
+    async def revoke_user_tokens(self, *, account_id: str, user_id: str) -> dict[str, int]:
+        """Revoke all access + refresh tokens for a (account, user) pair.
+
+        Used when an API key for that user is rotated / deleted: every OAuth
+        token derived from that user identity gets invalidated. Auth codes
+        and OTPs for the same user are also wiped to prevent in-flight
+        completion of an exchange started before the revocation.
+        """
+
+        def _revoke() -> dict[str, int]:
+            assert self._conn is not None
+            access = self._conn.execute(
+                "UPDATE oauth_access_tokens SET revoked = 1 "
+                "WHERE account_id = ? AND user_id = ? AND revoked = 0",
+                (account_id, user_id),
+            ).rowcount
+            refresh = self._conn.execute(
+                "UPDATE oauth_refresh_tokens SET consumed = 1 "
+                "WHERE account_id = ? AND user_id = ? AND consumed = 0",
+                (account_id, user_id),
+            ).rowcount
+            codes = self._conn.execute(
+                "UPDATE oauth_codes SET used = 1 "
+                "WHERE account_id = ? AND user_id = ? AND used = 0",
+                (account_id, user_id),
+            ).rowcount
+            return {
+                "access_tokens_revoked": access,
+                "refresh_tokens_revoked": refresh,
+                "codes_revoked": codes,
+            }
+
+        async with self._lock:
+            return await asyncio.to_thread(_revoke)
+
+    # ---- Pending authorizations (carry OAuth params across the OTP page) ----
+
+    async def create_pending_authorization(
+        self,
+        *,
+        client_id: str,
+        redirect_uri: str,
+        redirect_uri_provided_explicitly: bool,
+        code_challenge: str,
+        scopes: Optional[list[str]],
+        resource: Optional[str],
+        state: Optional[str],
+        ttl_seconds: int = 600,
+    ) -> str:
+        """Stash the AuthorizationParams under a fresh pending_id and return it."""
+        pending_id = secrets.token_urlsafe(16)
+        now = int(time.time())
+
+        def _insert() -> None:
+            assert self._conn is not None
+            self._conn.execute(
+                "INSERT INTO oauth_pending_authorizations "
+                "(pending_id, client_id, redirect_uri, redirect_uri_provided_explicitly, "
+                "code_challenge, scopes, resource, state, expires_at, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    pending_id,
+                    client_id,
+                    redirect_uri,
+                    int(redirect_uri_provided_explicitly),
+                    code_challenge,
+                    json.dumps(scopes) if scopes else None,
+                    resource,
+                    state,
+                    now + ttl_seconds,
+                    now,
+                ),
+            )
+
+        async with self._lock:
+            await asyncio.to_thread(_insert)
+        return pending_id
+
+    async def load_pending_authorization(self, pending_id: str) -> Optional[dict[str, Any]]:
+        now = int(time.time())
+
+        def _q() -> Optional[dict[str, Any]]:
+            assert self._conn is not None
+            cur = self._conn.execute(
+                "SELECT * FROM oauth_pending_authorizations "
+                "WHERE pending_id = ? AND expires_at > ?",
+                (pending_id, now),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            record = _row_to_dict(cur, row)
+            record["redirect_uri_provided_explicitly"] = bool(
+                record["redirect_uri_provided_explicitly"]
+            )
+            record["scopes"] = json.loads(record["scopes"]) if record["scopes"] else None
+            return record
+
+        return await asyncio.to_thread(_q)
+
+    async def delete_pending_authorization(self, pending_id: str) -> None:
+        def _del() -> None:
+            assert self._conn is not None
+            self._conn.execute(
+                "DELETE FROM oauth_pending_authorizations WHERE pending_id = ?",
+                (pending_id,),
+            )
+
+        async with self._lock:
+            await asyncio.to_thread(_del)
+
     # ---- Maintenance ----
 
     async def gc_expired(self) -> dict[str, int]:
@@ -406,7 +682,20 @@ class OAuthStore:
                 "DELETE FROM oauth_refresh_tokens WHERE expires_at < ? OR consumed = 1",
                 (now,),
             ).rowcount
-            return {"codes_deleted": codes, "refresh_tokens_deleted": refreshes}
+            access = self._conn.execute(
+                "DELETE FROM oauth_access_tokens WHERE expires_at < ? OR revoked = 1",
+                (now,),
+            ).rowcount
+            pending = self._conn.execute(
+                "DELETE FROM oauth_pending_authorizations WHERE expires_at < ?",
+                (now,),
+            ).rowcount
+            return {
+                "codes_deleted": codes,
+                "refresh_tokens_deleted": refreshes,
+                "access_tokens_deleted": access,
+                "pending_authorizations_deleted": pending,
+            }
 
         async with self._lock:
             return await asyncio.to_thread(_gc)

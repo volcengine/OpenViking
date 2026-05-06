@@ -64,14 +64,6 @@ class OAuthConfig(BaseModel):
         description="Lifetime of one-time passcodes in seconds.",
     )
 
-    signing_key_b64: Optional[str] = Field(
-        default=None,
-        description=(
-            "Base64-encoded 32-byte HMAC secret for JWT signing. When unset, a key is "
-            "generated and persisted to {workspace}/oauth_jwt.key on first launch."
-        ),
-    )
-
     db_filename: str = Field(
         default="oauth.db",
         description="SQLite database filename (relative to OpenVikingConfig.storage.workspace).",

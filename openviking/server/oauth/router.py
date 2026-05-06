@@ -1,27 +1,40 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""OAuth 2.1 router (Phase 1, M2: token endpoint only).
+"""OpenViking-side OAuth routes.
 
-DCR / authorize / well-known metadata land in M3. For now this module only
-handles `POST /oauth/token` with the `authorization_code` and `refresh_token`
-grants — sufficient to validate the JWT signing path against a hand-issued
-auth code.
+The OAuth 2.1 protocol surface (DCR, /authorize parsing, /token, well-known
+metadata) is delegated to the official ``mcp.server.auth`` SDK (mounted from
+``app.py``). This module only owns:
+
+- ``/oauth/authorize/page`` — HTML form where the user submits an OTP. The
+  SDK's AuthorizationHandler returns this URL from ``provider.authorize()``;
+  on successful OTP submission we mint an authorization code and 302 back
+  to the client's redirect_uri.
+- ``POST /api/v1/auth/otp`` — short-code issuance, authenticated with the
+  caller's existing API key. The OTP is bound to that API key's identity
+  (account / user / role) so it can be redeemed on the authorize page.
 """
 
 from __future__ import annotations
 
-import base64
-import hashlib
+import html
 import logging
-import secrets
 from typing import Optional
+from urllib.parse import urlencode
 
-from fastapi import APIRouter, Form, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, Form, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from pydantic import BaseModel, Field
 
+from openviking.server.auth import get_request_context
+from openviking.server.identity import RequestContext
+from openviking.server.oauth.otp import generate_otp
+from openviking.server.oauth.provider import OpenVikingOAuthProvider
 from openviking.server.oauth.storage import OAuthStore
+from openviking_cli.exceptions import InvalidArgumentError, UnavailableError
 
 logger = logging.getLogger(__name__)
+
 
 router = APIRouter(tags=["oauth"])
 
@@ -31,308 +44,225 @@ router = APIRouter(tags=["oauth"])
 # ---------------------------------------------------------------------------
 
 
-def _oauth_error(
-    code: str,
-    description: str,
-    *,
-    status: int = 400,
-    extra_headers: Optional[dict[str, str]] = None,
-) -> JSONResponse:
-    return JSONResponse(
-        {"error": code, "error_description": description},
-        status_code=status,
-        headers=extra_headers or {},
+def _get_store_and_provider(request: Request) -> tuple[OAuthStore, OpenVikingOAuthProvider]:
+    store: Optional[OAuthStore] = getattr(request.app.state, "oauth_store", None)
+    provider: Optional[OpenVikingOAuthProvider] = getattr(
+        request.app.state, "oauth_provider", None
     )
-
-
-def _require_state(request: Request) -> tuple[OAuthStore, "object", "object"]:
-    """Pull the OAuth runtime state attached by app.lifespan.
-
-    Returns (store, signer, config). Raises a clean 503 when OAuth is
-    disabled — typically misconfiguration that landed a request on this
-    router despite enabled=False (not expected if app.py guards routing).
-    """
-    store = getattr(request.app.state, "oauth_store", None)
-    signer = getattr(request.app.state, "oauth_signer", None)
-    config = getattr(request.app.state, "oauth_config", None)
-    if store is None or signer is None or config is None:
-        from openviking_cli.exceptions import UnavailableError
-
+    if store is None or provider is None:
         raise UnavailableError(service="oauth", reason="OAuth subsystem is not enabled")
-    return store, signer, config
+    return store, provider
 
 
-def _verify_pkce_s256(code_verifier: str, code_challenge: str) -> bool:
-    if not isinstance(code_verifier, str) or not isinstance(code_challenge, str):
-        return False
-    if not (43 <= len(code_verifier) <= 128):
-        return False
-    digest = hashlib.sha256(code_verifier.encode("ascii")).digest()
-    expected = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
-    return secrets.compare_digest(expected, code_challenge)
+_AUTHORIZE_PAGE_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Authorize {client_name}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+           background: #f5f5f7; margin: 0; padding: 2rem 1rem; color: #1d1d1f; }}
+    .card {{ max-width: 420px; margin: 4rem auto; background: white;
+             border-radius: 12px; padding: 2rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }}
+    h1 {{ font-size: 1.25rem; margin: 0 0 0.5rem; }}
+    .client {{ font-weight: 600; }}
+    p {{ color: #515154; line-height: 1.5; margin: 0.75rem 0; }}
+    label {{ display: block; font-size: 0.9rem; color: #515154; margin: 1rem 0 0.4rem; }}
+    input[type=text] {{ width: 100%; padding: 0.6rem 0.75rem; font-size: 1.1rem;
+                       border: 1px solid #d2d2d7; border-radius: 6px;
+                       letter-spacing: 0.1em; font-family: ui-monospace, monospace; }}
+    button {{ margin-top: 1.25rem; width: 100%; padding: 0.7rem; border: 0;
+              border-radius: 6px; background: #0071e3; color: white;
+              font-size: 1rem; cursor: pointer; }}
+    button:hover {{ background: #0077ed; }}
+    .error {{ background: #fff1f0; color: #b91c1c; padding: 0.6rem 0.75rem;
+              border-radius: 6px; font-size: 0.9rem; margin: 1rem 0 0; }}
+    .hint {{ font-size: 0.85rem; color: #86868b; margin-top: 1rem; }}
+    code {{ background: #f5f5f7; padding: 1px 6px; border-radius: 4px;
+            font-family: ui-monospace, monospace; }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Authorize <span class="client">{client_name}</span></h1>
+    <p>This client wants to access your OpenViking workspace.
+       Enter a one-time passcode generated from your CLI or REST API to continue.</p>
+    {error_block}
+    <form method="POST" action="{action}">
+      <input type="hidden" name="pending" value="{pending_id}">
+      <label for="otp">One-time passcode</label>
+      <input type="text" id="otp" name="otp" autofocus autocomplete="off"
+             pattern="[A-Za-z0-9]+" maxlength="12" placeholder="ABC234" required>
+      <button type="submit">Authorize</button>
+    </form>
+    <p class="hint">To get an OTP, run<br>
+      <code>curl -X POST -H "X-Api-Key: $KEY" {issuer}/api/v1/auth/otp</code></p>
+  </div>
+</body>
+</html>"""
 
 
-def _resolve_issuer(request: Request, configured_issuer: Optional[str]) -> str:
-    """Pick a stable `iss` for issued tokens.
-
-    Prefer the operator-configured issuer; otherwise derive scheme+host from
-    the request, honoring X-Forwarded-* when present.
-    """
-    if configured_issuer:
-        return configured_issuer.rstrip("/")
-    proto = request.headers.get("x-forwarded-proto") or request.url.scheme or "http"
-    host = request.headers.get("x-forwarded-host") or request.headers.get("host")
-    if not host:
-        host = f"{request.url.hostname or 'localhost'}:{request.url.port or 80}"
-    return f"{proto.split(',')[0].strip()}://{host.split(',')[0].strip()}"
-
-
-def _build_token_response(
+def _render_page(
     *,
-    request: Request,
-    store: OAuthStore,
-    signer,
-    config,
-    client_id: str,
-    account_id: str,
-    user_id: str,
-    role: str,
-    scope: Optional[str],
-    resource: Optional[str],
-) -> dict:
-    """Mint a fresh access+refresh token pair bound to the given identity."""
-    issuer = _resolve_issuer(request, config.issuer)
-    claims: dict[str, object] = {
-        "iss": issuer,
-        "sub": f"{account_id}/{user_id}",
-        "role": role,
-        "account_id": account_id,
-        "user_id": user_id,
-        "client_id": client_id,
-    }
-    if scope:
-        claims["scope"] = scope
-    if resource:
-        claims["aud"] = resource
-    access_token = signer.sign(claims, ttl_seconds=config.access_token_ttl_seconds)
-
-    refresh_plain = secrets.token_urlsafe(48)
-    return {
-        "access_token": access_token,
-        "token_type": "Bearer",
-        "expires_in": config.access_token_ttl_seconds,
-        "refresh_token": refresh_plain,
-        "scope": scope or "",
-        "_refresh_plain": refresh_plain,  # pulled out by the caller for storage
-    }
-
-
-# ---------------------------------------------------------------------------
-# /oauth/token
-# ---------------------------------------------------------------------------
-
-
-@router.post("/oauth/token")
-async def oauth_token(
-    request: Request,
-    grant_type: str = Form(...),
-    code: Optional[str] = Form(None),
-    redirect_uri: Optional[str] = Form(None),
-    client_id: Optional[str] = Form(None),
-    code_verifier: Optional[str] = Form(None),
-    refresh_token: Optional[str] = Form(None),
-    scope: Optional[str] = Form(None),
-    resource: Optional[str] = Form(None),
-) -> JSONResponse:
-    """RFC 6749 token endpoint — authorization_code (PKCE S256) and refresh_token grants.
-
-    Confidential clients (`token_endpoint_auth_method=client_secret_basic`)
-    are not yet supported; Phase 1 issues only public clients via DCR.
-    """
-    store, signer, config = _require_state(request)
-
-    if grant_type == "authorization_code":
-        return await _grant_authorization_code(
-            request,
-            store,
-            signer,
-            config,
-            code=code,
-            redirect_uri=redirect_uri,
-            client_id=client_id,
-            code_verifier=code_verifier,
-            resource=resource,
-        )
-    if grant_type == "refresh_token":
-        return await _grant_refresh_token(
-            request,
-            store,
-            signer,
-            config,
-            refresh_token=refresh_token,
-            client_id=client_id,
-            scope=scope,
-            resource=resource,
-        )
-    return _oauth_error("unsupported_grant_type", f"Unsupported grant_type: {grant_type}")
-
-
-async def _grant_authorization_code(
-    request: Request,
-    store: OAuthStore,
-    signer,
-    config,
-    *,
-    code: Optional[str],
-    redirect_uri: Optional[str],
-    client_id: Optional[str],
-    code_verifier: Optional[str],
-    resource: Optional[str],
-) -> JSONResponse:
-    if not code or not redirect_uri or not client_id or not code_verifier:
-        return _oauth_error(
-            "invalid_request",
-            "code, redirect_uri, client_id and code_verifier are all required",
-        )
-
-    client = await store.get_client(client_id)
-    if client is None:
-        return _oauth_error("invalid_client", "Unknown client_id", status=401)
-
-    record = await store.consume_auth_code(code)
-    if record is None:
-        return _oauth_error("invalid_grant", "Authorization code is invalid, expired, or reused")
-
-    if record["client_id"] != client_id:
-        return _oauth_error("invalid_grant", "client_id does not match the issued code")
-
-    # Strict-equal redirect_uri match (RFC 6749 §10.6).
-    if record["redirect_uri"] != redirect_uri:
-        return _oauth_error("invalid_grant", "redirect_uri does not match the original request")
-
-    # PKCE S256: enforce — Phase 1 does not accept plain.
-    if record.get("code_challenge_method") != "S256":
-        return _oauth_error("invalid_grant", "Only PKCE S256 is supported")
-    if not _verify_pkce_s256(code_verifier, record["code_challenge"]):
-        return _oauth_error("invalid_grant", "PKCE verifier does not match challenge")
-
-    # Resource indicators: if the original code was bound to a resource, the
-    # caller may either omit `resource` (token inherits) or echo the same
-    # value. Cross-resource downgrade is rejected.
-    bound_resource = record.get("resource")
-    final_resource = resource or bound_resource
-    if bound_resource and resource and resource != bound_resource:
-        return _oauth_error(
-            "invalid_target",
-            "resource parameter does not match the resource bound at authorize-time",
-        )
-
-    pair = _build_token_response(
-        request=request,
-        store=store,
-        signer=signer,
-        config=config,
-        client_id=client_id,
-        account_id=record["account_id"],
-        user_id=record["user_id"],
-        role=record["role"],
-        scope=record.get("scope"),
-        resource=final_resource,
+    pending_id: str,
+    client_name: Optional[str],
+    issuer: str,
+    error: Optional[str] = None,
+) -> HTMLResponse:
+    error_block = (
+        f'<div class="error">{html.escape(error)}</div>' if error else ""
     )
-    refresh_plain = pair.pop("_refresh_plain")
-    await store.insert_refresh(
-        token_plain=refresh_plain,
-        client_id=client_id,
-        account_id=record["account_id"],
-        user_id=record["user_id"],
-        role=record["role"],
-        scope=record.get("scope"),
-        resource=final_resource,
-        ttl_seconds=config.refresh_token_ttl_seconds,
+    body = _AUTHORIZE_PAGE_TEMPLATE.format(
+        client_name=html.escape(client_name or "MCP Client"),
+        action="/oauth/authorize/page",
+        pending_id=html.escape(pending_id),
+        error_block=error_block,
+        issuer=html.escape(issuer),
     )
-    return JSONResponse(pair, status_code=200, headers={"Cache-Control": "no-store"})
-
-
-async def _grant_refresh_token(
-    request: Request,
-    store: OAuthStore,
-    signer,
-    config,
-    *,
-    refresh_token: Optional[str],
-    client_id: Optional[str],
-    scope: Optional[str],
-    resource: Optional[str],
-) -> JSONResponse:
-    if not refresh_token or not client_id:
-        return _oauth_error("invalid_request", "refresh_token and client_id are required")
-
-    client = await store.get_client(client_id)
-    if client is None:
-        return _oauth_error("invalid_client", "Unknown client_id", status=401)
-
-    new_refresh = secrets.token_urlsafe(48)
-    record = await store.consume_refresh(token_plain=refresh_token, replaced_by_plain=new_refresh)
-    if record is None:
-        # Reuse detection: if the token is *known* but already consumed, this
-        # is a replay — invalidate the entire family per RFC 9700 §4.14.
-        if await store.is_refresh_known_but_consumed(refresh_token):
-            logger.warning(
-                "OAuth refresh token replay detected for client_id=%s; revoking chain", client_id
-            )
-            # We don't know which (account, user) was bound — best effort revoke
-            # is left to a future tightening. For now, just reject.
-        return _oauth_error("invalid_grant", "refresh_token is invalid, expired, or reused")
-
-    if record["client_id"] != client_id:
-        return _oauth_error("invalid_grant", "client_id does not match the issued refresh_token")
-
-    # Downscope: caller may narrow scope but not widen.
-    bound_scope = record.get("scope") or ""
-    final_scope = scope if scope is not None else bound_scope
-    if final_scope and bound_scope:
-        bound_set = set(bound_scope.split())
-        new_set = set(final_scope.split())
-        if not new_set.issubset(bound_set):
-            return _oauth_error("invalid_scope", "scope is broader than the original grant")
-
-    bound_resource = record.get("resource")
-    final_resource = resource or bound_resource
-
-    issuer = _resolve_issuer(request, config.issuer)
-    claims: dict[str, object] = {
-        "iss": issuer,
-        "sub": f"{record['account_id']}/{record['user_id']}",
-        "role": record["role"],
-        "account_id": record["account_id"],
-        "user_id": record["user_id"],
-        "client_id": client_id,
-    }
-    if final_scope:
-        claims["scope"] = final_scope
-    if final_resource:
-        claims["aud"] = final_resource
-    access_token = signer.sign(claims, ttl_seconds=config.access_token_ttl_seconds)
-
-    await store.insert_refresh(
-        token_plain=new_refresh,
-        client_id=client_id,
-        account_id=record["account_id"],
-        user_id=record["user_id"],
-        role=record["role"],
-        scope=final_scope or None,
-        resource=final_resource,
-        ttl_seconds=config.refresh_token_ttl_seconds,
-    )
-
-    return JSONResponse(
-        {
-            "access_token": access_token,
-            "token_type": "Bearer",
-            "expires_in": config.access_token_ttl_seconds,
-            "refresh_token": new_refresh,
-            "scope": final_scope or "",
+    return HTMLResponse(
+        body,
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Security-Policy": (
+                "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; "
+                "frame-ancestors 'none'"
+            ),
+            "X-Frame-Options": "DENY",
         },
-        status_code=200,
+    )
+
+
+# ---------------------------------------------------------------------------
+# /oauth/authorize/page
+# ---------------------------------------------------------------------------
+
+
+@router.get("/oauth/authorize/page")
+async def authorize_page_get(request: Request, pending: str = "") -> HTMLResponse:
+    store, provider = _get_store_and_provider(request)
+    if not pending:
+        return HTMLResponse(
+            "<h1>Bad request</h1><p>Missing 'pending' parameter.</p>", status_code=400
+        )
+    record = await store.load_pending_authorization(pending)
+    if record is None:
+        return HTMLResponse(
+            "<h1>Authorization expired</h1><p>Please restart the connection from your client.</p>",
+            status_code=410,
+        )
+    client = await provider.get_client(record["client_id"])
+    return _render_page(
+        pending_id=pending,
+        client_name=client.client_name if client else None,
+        issuer=str(request.base_url).rstrip("/"),
+    )
+
+
+@router.post("/oauth/authorize/page", response_model=None)
+async def authorize_page_post(
+    request: Request,
+    pending: str = Form(...),
+    otp: str = Form(...),
+):
+    store, provider = _get_store_and_provider(request)
+
+    record = await store.load_pending_authorization(pending)
+    if record is None:
+        return HTMLResponse(
+            "<h1>Authorization expired</h1><p>Please restart the connection from your client.</p>",
+            status_code=410,
+        )
+
+    client = await provider.get_client(record["client_id"])
+    issuer = str(request.base_url).rstrip("/")
+
+    consumed = await store.consume_otp(otp.strip().upper())
+    if consumed is None:
+        return _render_page(
+            pending_id=pending,
+            client_name=client.client_name if client else None,
+            issuer=issuer,
+            error="That code is invalid or has already been used. Generate a new one and try again.",
+        )
+
+    # Mint and persist the authorization code, then redirect back to the
+    # client's redirect_uri with code+state.
+    auth_code = provider.mint_authorization_code()
+    scope_str = " ".join(record["scopes"]) if record.get("scopes") else None
+    await store.insert_auth_code(
+        code_plain=auth_code,
+        client_id=record["client_id"],
+        redirect_uri=record["redirect_uri"],
+        code_challenge=record["code_challenge"],
+        code_challenge_method="S256",
+        scope=scope_str,
+        resource=record.get("resource"),
+        account_id=consumed["account_id"],
+        user_id=consumed["user_id"],
+        role=consumed["role"],
+        ttl_seconds=provider.code_ttl_seconds,
+    )
+    await store.delete_pending_authorization(pending)
+
+    params: dict[str, str] = {"code": auth_code}
+    if record.get("state"):
+        params["state"] = record["state"]
+    sep = "&" if "?" in record["redirect_uri"] else "?"
+    return RedirectResponse(
+        url=f"{record['redirect_uri']}{sep}{urlencode(params)}",
+        status_code=302,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/auth/otp
+# ---------------------------------------------------------------------------
+
+
+class OTPRequest(BaseModel):
+    ttl_seconds: Optional[int] = Field(
+        default=None, ge=60, le=600, description="Override OTP lifetime (60-600 seconds)"
+    )
+
+
+class OTPResponse(BaseModel):
+    otp: str
+    expires_at: int
+    ttl_seconds: int
+
+
+@router.post("/api/v1/auth/otp", response_model=OTPResponse)
+async def issue_otp(
+    request: Request,
+    body: Optional[OTPRequest] = None,
+    ctx: RequestContext = Depends(get_request_context),
+) -> JSONResponse:
+    """Issue a one-time passcode bound to the caller's identity.
+
+    The caller must already be authenticated with an API key (or other
+    bearer accepted by ``resolve_identity``); the resulting OTP carries
+    that account / user / role triple, so any OAuth client that submits
+    the OTP on the authorize page is granted that identity.
+    """
+    store, provider = _get_store_and_provider(request)
+
+    cfg = getattr(request.app.state, "oauth_config", None)
+    default_ttl = getattr(cfg, "otp_ttl_seconds", 300) if cfg else 300
+    ttl = body.ttl_seconds if body and body.ttl_seconds else default_ttl
+    if ttl < 60 or ttl > 600:
+        raise InvalidArgumentError("ttl_seconds must be between 60 and 600")
+
+    otp = generate_otp()
+    expires_at = await store.insert_otp(
+        otp_plain=otp,
+        account_id=ctx.user.account_id,
+        user_id=ctx.user.user_id,
+        role=ctx.role.value,
+        ttl_seconds=ttl,
+    )
+    return JSONResponse(
+        {"otp": otp, "expires_at": expires_at, "ttl_seconds": ttl},
         headers={"Cache-Control": "no-store"},
     )

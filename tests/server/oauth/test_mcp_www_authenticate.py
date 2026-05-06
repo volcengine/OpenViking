@@ -14,7 +14,8 @@ from fastapi import FastAPI
 
 from openviking.server.config import ServerConfig
 from openviking.server.mcp_endpoint import _IdentityASGIMiddleware
-from openviking.server.oauth.jwt import JwtSigner
+from openviking.server.oauth.provider import OpenVikingOAuthProvider
+from openviking.server.oauth.storage import OAuthStore
 
 
 async def _noop_app(scope, receive, send):
@@ -22,12 +23,18 @@ async def _noop_app(scope, receive, send):
     raise AssertionError("Downstream app should not be called for unauthenticated requests")
 
 
-def _build_test_app(*, oauth_enabled: bool) -> FastAPI:
+def _build_test_app(*, oauth_enabled: bool, tmp_path=None) -> FastAPI:
     app = FastAPI()
     app.state.config = ServerConfig(auth_mode="api_key", root_api_key="root-test-1234567890abcd")
     app.state.api_key_manager = object()  # presence triggers API_KEY auth path
     if oauth_enabled:
-        app.state.oauth_signer = JwtSigner(b"k" * 32)
+        # Provider just needs to exist on app.state to flag oauth as enabled —
+        # the bearer middleware emits WWW-Authenticate based on its presence,
+        # not on any specific verifier behavior.
+        app.state.oauth_provider = OpenVikingOAuthProvider(
+            store=OAuthStore(tmp_path / "oauth.db") if tmp_path else None,
+            issuer="http://ov.test",
+        )
     return app
 
 

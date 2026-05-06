@@ -77,11 +77,11 @@ def _scope_to_origin(scope: Scope) -> Optional[str]:
 
 
 def _oauth_enabled(scope: Scope) -> bool:
-    """Return True if app.state has an oauth_signer (i.e. OAuth is configured)."""
+    """Return True if app.state has an oauth_provider (i.e. OAuth is configured)."""
     app = scope.get("app")
     if app is None:
         return False
-    return getattr(app.state, "oauth_signer", None) is not None
+    return getattr(app.state, "oauth_provider", None) is not None
 
 
 class _IdentityASGIMiddleware:

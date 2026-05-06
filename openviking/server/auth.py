@@ -108,7 +108,7 @@ def _explicit_identity_from_request(request: Request) -> tuple[Optional[str], Op
     return account_id, user_id
 
 
-def _try_resolve_oauth_jwt(
+async def _try_resolve_oauth_token(
     request: Request,
     api_key: str,
     *,
@@ -116,39 +116,37 @@ def _try_resolve_oauth_jwt(
     x_openviking_user: Optional[str],
     x_openviking_agent: Optional[str],
 ) -> Optional[ResolvedIdentity]:
-    """Attempt to verify the bearer as an OAuth-issued JWT.
+    """Attempt to verify the bearer as an OAuth-issued opaque access token.
 
-    Returns the resolved identity on success. Returns None when the bearer is
-    not JWT-shaped or no signer is configured (caller falls back to API key).
-    Raises UnauthenticatedError when the bearer IS JWT-shaped but verification
-    fails — fail-closed semantics.
+    Returns the resolved identity on success. Returns None when the bearer
+    doesn't carry the OAuth access-token prefix or when OAuth isn't enabled
+    (caller falls back to the API-key path). Raises UnauthenticatedError
+    when the bearer IS prefix-tagged but lookup fails — fail-closed.
     """
-    from openviking.server.oauth.jwt import OAuthInvalidTokenError, looks_like_jwt
+    from openviking.server.oauth.provider import ACCESS_TOKEN_PREFIX
 
-    if not looks_like_jwt(api_key):
+    if not api_key.startswith(ACCESS_TOKEN_PREFIX):
         return None
-    signer = getattr(request.app.state, "oauth_signer", None)
-    if signer is None:
+    provider = getattr(request.app.state, "oauth_provider", None)
+    if provider is None:
         return None
+
+    record = await provider.load_access_token(api_key)
+    if record is None:
+        raise UnauthenticatedError("OAuth access token is invalid, expired, or revoked")
 
     try:
-        claims = signer.verify(api_key)
-    except OAuthInvalidTokenError as exc:
-        raise UnauthenticatedError(f"Invalid OAuth token: {exc}") from exc
-
-    role_value = claims.get("role")
-    account_id = claims.get("account_id")
-    user_id = claims.get("user_id")
-    if not isinstance(role_value, str) or not account_id or not user_id:
-        raise UnauthenticatedError("OAuth token missing required claims")
-    try:
-        role = Role(role_value)
+        role = Role(record.role)
     except ValueError as exc:
-        raise UnauthenticatedError(f"OAuth token has unknown role: {role_value}") from exc
+        raise UnauthenticatedError(f"OAuth token has unknown role: {record.role}") from exc
 
-    # Override behavior mirrors the API-key path: ROOT may override identity
-    # via X-OpenViking-* headers; ADMIN may override agent and (within own
-    # account) user; USER may override only agent.
+    account_id = record.account_id
+    user_id = record.user_id
+
+    # Header overrides mirror the API-key path: ROOT may override identity;
+    # ADMIN may override user and agent (within its own account); USER may
+    # override only agent. The OAuth claims pin the issuing identity, so any
+    # cross-account/user override beyond what each role can do is a 403.
     if role == Role.ROOT:
         effective_account = x_openviking_account or account_id
         effective_user = x_openviking_user or user_id
@@ -171,7 +169,7 @@ def _try_resolve_oauth_jwt(
         effective_account = account_id
         effective_user = user_id
 
-    effective_agent = x_openviking_agent or claims.get("agent_id") or "default"
+    effective_agent = x_openviking_agent or "default"
 
     namespace_policy = AccountNamespacePolicy()
     api_key_manager = getattr(request.app.state, "api_key_manager", None)
@@ -290,12 +288,12 @@ async def resolve_identity(
     if not api_key:
         raise UnauthenticatedError("Missing API Key when resolving identity.")
 
-    # OAuth 2.1 fast path: if the bearer is a JWT and an OAuth signer is
-    # configured, verify it directly. Failure is fail-closed (no fallback to
-    # API key) so a forged token claiming alg=HS256 cannot be retried as a
-    # plain key. When OAuth is disabled, looks_like_jwt is checked but the
-    # signer is None and we drop through to the API key path.
-    oauth_identity = _try_resolve_oauth_jwt(
+    # OAuth 2.1 fast path: bearer tokens minted by our OAuth provider carry
+    # a recognizable prefix; look them up directly and skip the API-key path.
+    # Failure is fail-closed — a forged token claiming the prefix cannot be
+    # retried as a plain key. When OAuth is disabled or the bearer lacks the
+    # prefix, this returns None and the API-key path runs.
+    oauth_identity = await _try_resolve_oauth_token(
         request,
         api_key,
         x_openviking_account=x_openviking_account,

@@ -197,6 +197,102 @@ async def test_refresh_replay_revokes_chain(store):
 
 
 @pytest.mark.asyncio
+async def test_access_token_load_and_revoke(store):
+    token = "at-secret"
+    await store.insert_access(
+        token_plain=token,
+        client_id="cx",
+        account_id="acct",
+        user_id="alice",
+        role="user",
+        scope="mcp",
+        resource="https://ov.test/mcp",
+        ttl_seconds=3600,
+    )
+    record = await store.load_access(token)
+    assert record is not None
+    assert record["account_id"] == "acct"
+    assert record["user_id"] == "alice"
+    assert record["scope"] == "mcp"
+    assert record["resource"] == "https://ov.test/mcp"
+    # Revoke and confirm it's invisible.
+    assert await store.revoke_access(token) is True
+    assert await store.load_access(token) is None
+    # Idempotent revoke.
+    assert await store.revoke_access(token) is False
+
+
+@pytest.mark.asyncio
+async def test_access_token_expired_invisible(store):
+    token = "at-stale"
+    await store.insert_access(
+        token_plain=token,
+        client_id="cx",
+        account_id="acct",
+        user_id="alice",
+        role="user",
+        scope=None,
+        resource=None,
+        ttl_seconds=60,
+    )
+    assert store._conn is not None
+    store._conn.execute(
+        "UPDATE oauth_access_tokens SET expires_at = ? WHERE token_hash = ?",
+        (int(time.time()) - 10, hash_secret(token)),
+    )
+    assert await store.load_access(token) is None
+
+
+@pytest.mark.asyncio
+async def test_revoke_user_tokens_cascades(store):
+    """Revoking a user wipes their access, refresh, and unused codes."""
+    await store.insert_access(
+        token_plain="at-1",
+        client_id="cx",
+        account_id="acct",
+        user_id="alice",
+        role="user",
+        scope=None,
+        resource=None,
+        ttl_seconds=3600,
+    )
+    await store.insert_access(
+        token_plain="at-other",
+        client_id="cx",
+        account_id="acct",
+        user_id="bob",  # different user — must NOT be revoked
+        role="user",
+        scope=None,
+        resource=None,
+        ttl_seconds=3600,
+    )
+    await store.insert_refresh(
+        token_plain="rt-1",
+        client_id="cx",
+        account_id="acct",
+        user_id="alice",
+        role="user",
+        scope=None,
+        resource=None,
+        ttl_seconds=3600,
+    )
+    otp = generate_otp()
+    await store.insert_otp(
+        otp_plain=otp, account_id="acct", user_id="alice", role="user", ttl_seconds=300
+    )
+
+    counts = await store.revoke_user_tokens(account_id="acct", user_id="alice")
+    assert counts["access_tokens_revoked"] == 1
+    assert counts["refresh_tokens_revoked"] == 1
+    assert counts["codes_revoked"] == 1
+
+    # Alice's everything dead, Bob's untouched.
+    assert await store.load_access("at-1") is None
+    assert await store.load_access("at-other") is not None
+    assert await store.consume_otp(otp) is None
+
+
+@pytest.mark.asyncio
 async def test_gc_expired_removes_stale_rows(store):
     fresh = generate_otp()
     stale = generate_otp()

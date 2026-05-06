@@ -197,26 +197,16 @@ def create_app(
         if config.observability.metrics.enabled:
             logger.info("Prometheus metrics enabled at /metrics")
 
-        # Initialize OAuth 2.1 store + signer when enabled in OpenViking config.
-        # OAuth is layered on top of API_KEY mode; in DEV/TRUSTED modes it's a no-op.
-        ov_cfg = get_openviking_config()
+        # Initialize OAuth 2.1 store + provider when enabled in OpenViking config.
+        # The store + provider instances were already constructed at app
+        # creation time so the SDK routes could capture them; here we just
+        # async-initialize the SQLite connection on the same instance.
+        oauth_store = getattr(app.state, "oauth_store", None)
         oauth_gc_task: Optional[asyncio.Task] = None
-        if ov_cfg.oauth.enabled:
-            from pathlib import Path as _Path
-
-            from openviking.server.oauth.jwt import JwtSigner, load_or_generate_secret
-            from openviking.server.oauth.storage import OAuthStore
-
-            workspace = _Path(ov_cfg.storage.workspace).expanduser().resolve()
-            workspace.mkdir(parents=True, exist_ok=True)
-            oauth_store = OAuthStore(workspace / ov_cfg.oauth.db_filename)
+        if oauth_store is not None:
             await oauth_store.initialize()
-            oauth_secret = load_or_generate_secret(workspace, ov_cfg.oauth.signing_key_b64)
-            app.state.oauth_store = oauth_store
-            app.state.oauth_signer = JwtSigner(oauth_secret)
-            app.state.oauth_config = ov_cfg.oauth
 
-            async def _oauth_gc_loop(store: OAuthStore) -> None:
+            async def _oauth_gc_loop(store) -> None:  # noqa: ANN001
                 while True:
                     try:
                         await asyncio.sleep(60)
@@ -228,16 +218,7 @@ def create_app(
 
             oauth_gc_task = asyncio.create_task(_oauth_gc_loop(oauth_store))
             app.state.oauth_gc_task = oauth_gc_task
-            logger.info(
-                "OAuth 2.1 enabled: db=%s, access_token_ttl=%ds, otp_ttl=%ds",
-                workspace / ov_cfg.oauth.db_filename,
-                ov_cfg.oauth.access_token_ttl_seconds,
-                ov_cfg.oauth.otp_ttl_seconds,
-            )
-        else:
-            app.state.oauth_store = None
-            app.state.oauth_signer = None
-            app.state.oauth_config = None
+            logger.info("OAuth 2.1 store initialized at %s", oauth_store._db_path)
 
         # Start TaskTracker cleanup loop
         task_tracker = get_task_tracker()
@@ -470,16 +451,60 @@ def create_app(
     app.include_router(maintenance_router)
     app.include_router(bot_router, prefix="/bot/v1")
 
-    # OAuth 2.1 router: registered only when enabled in OpenViking config.
-    # Lifespan still runs the store/signer initialization above; registering
-    # the router unconditionally would just expose endpoints that 503.
+    # OAuth 2.1: when enabled, mount the official MCP SDK auth routes
+    # (DCR / authorize / token / metadata) plus our authorize page + OTP
+    # issuance endpoint. The Provider that backs the SDK routes is built
+    # in the lifespan; here we only register the route handlers, since the
+    # SDK routes inspect request.app.state at call time.
     try:
         ov_cfg = get_openviking_config()
         if ov_cfg.oauth.enabled:
+            from mcp.server.auth.routes import create_auth_routes
+            from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOptions
+            from pydantic import AnyHttpUrl
+
             from openviking.server.oauth.router import router as oauth_router
 
+            # Custom routes (authorize page + /api/v1/auth/otp).
             app.include_router(oauth_router)
-            logger.info("OAuth 2.1 router mounted at /oauth/*")
+
+            # SDK-owned routes (DCR / authorize / token / metadata / revoke).
+            # We need a live Provider here; create_auth_routes captures it by
+            # reference. Re-build the same construction the lifespan does so
+            # the routes work as soon as they're hit (lifespan re-binds the
+            # same instance to app.state for the OTP / authorize-page path).
+            from openviking.server.oauth.provider import OpenVikingOAuthProvider
+            from openviking.server.oauth.storage import OAuthStore
+            from pathlib import Path as _Path
+
+            _workspace = _Path(ov_cfg.storage.workspace).expanduser().resolve()
+            _workspace.mkdir(parents=True, exist_ok=True)
+            _route_store = OAuthStore(_workspace / ov_cfg.oauth.db_filename)
+            _route_issuer = ov_cfg.oauth.issuer or "http://127.0.0.1:1933"
+            _route_provider = OpenVikingOAuthProvider(
+                store=_route_store,
+                issuer=_route_issuer,
+                access_token_ttl_seconds=ov_cfg.oauth.access_token_ttl_seconds,
+                refresh_token_ttl_seconds=ov_cfg.oauth.refresh_token_ttl_seconds,
+                auth_code_ttl_seconds=ov_cfg.oauth.auth_code_ttl_seconds,
+            )
+            # Stash the route-time instances; the lifespan replaces these with
+            # initialized copies before the first request lands.
+            app.state.oauth_store = _route_store
+            app.state.oauth_provider = _route_provider
+
+            sdk_routes = create_auth_routes(
+                provider=_route_provider,
+                issuer_url=AnyHttpUrl(_route_issuer),
+                client_registration_options=ClientRegistrationOptions(enabled=True),
+                revocation_options=RevocationOptions(enabled=True),
+            )
+            app.routes.extend(sdk_routes)
+            app.state.oauth_config = ov_cfg.oauth
+            logger.info(
+                "OAuth 2.1 routes mounted (SDK + authorize-page + otp): %s",
+                [r.path for r in sdk_routes],
+            )
     except Exception as e:  # noqa: BLE001
         logger.warning("Skipping OAuth router registration: %s", e)
 
