@@ -323,13 +323,23 @@ else
 fi
 
 # ----- Done -----
+#
+# We can't auto-source the rc into the user's shell — this script runs in a
+# subshell (e.g. `bash <(curl ...)`), so any export/source we do here dies
+# when the script exits. The user has to run `source` themselves, hence the
+# bold callout below. (`source <(curl ...)` would work but is unsafe to
+# recommend — it pipes remote code straight into the user's interactive shell.)
 
 heading 'Done!'
 info "Source:    $REPO_DIR"
 info "Config:    $OVCLI_CONF"
 [ -n "$RC" ] && info "Shell rc:  $RC"
 printf '\n'
-info 'Next:'
-[ -n "$RC" ] && info "  source $RC          # or open a new shell"
+if [ -n "$RC" ]; then
+  printf '%s%sNext — run this in your shell to pick up the wrapper:%s\n' "$BOLD" "$YELLOW" "$RESET"
+  printf '    %s%ssource %s%s\n' "$BOLD" "$CYAN" "$RC" "$RESET"
+  printf '  (or just open a new terminal window)\n\n'
+fi
+info 'Then:'
 info '  claude              # start Claude Code'
 info '  /mcp                # inside Claude Code, verify the OpenViking entry'
