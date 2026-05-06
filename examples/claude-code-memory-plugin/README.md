@@ -55,7 +55,7 @@ claude plugin marketplace add "$(pwd)/examples"
 claude plugin install claude-code-memory-plugin@openviking-plugins-local
 ```
 
-> Both commands install at user scope by default — the plugin is active from any directory. We don't pass `--scope user` explicitly because older Claude Code 2.0.x builds (e.g. 2.0.76) reject the flag. If your install ends up at local scope, run `claude plugin enable claude-code-memory-plugin@openviking-plugins-local --scope user` to lift it.
+> Both commands install at user scope by default — the plugin is active from any directory. We don't pass `--scope user` explicitly because older Claude Code 2.0.x builds (e.g. 2.0.76) reject the flag. On newer builds that do accept `--scope`, you can lift a local-scoped install to user scope with `claude plugin enable claude-code-memory-plugin@openviking-plugins-local --scope user`.
 >
 > The marketplace entry points Claude Code at the source directory. Edits to `scripts/`, `hooks/`, and config files take effect on the next hook invocation — no reinstall. But moving / renaming / deleting the source dir, or `git checkout`-ing to a branch without these files, breaks the plugin. A public marketplace listing for one-click install will follow.
 

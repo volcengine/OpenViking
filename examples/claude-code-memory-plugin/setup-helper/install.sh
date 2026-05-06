@@ -263,20 +263,35 @@ install_legacy() {
   cp -p "$settings" "$settings.bak.$ts"
   info "Backup: $settings.bak.$ts"
 
-  local tmp_h="${TMPDIR:-/tmp}/ov-hooks.$$.json"
-  local tmp_s="${TMPDIR:-/tmp}/ov-settings.$$.json"
-  sed "s|\${CLAUDE_PLUGIN_ROOT}|$plugin_dir|g" "$hooks_src" > "$tmp_h"
+  # mktemp instead of `$$` — predictable PID-based names are vulnerable to
+  # symlink races on shared /tmp.
+  local tmp_h tmp_s
+  tmp_h=$(mktemp "${TMPDIR:-/tmp}/ov-hooks.XXXXXX") || { err 'mktemp failed'; return 1; }
+  tmp_s=$(mktemp "${TMPDIR:-/tmp}/ov-settings.XXXXXX") || { err 'mktemp failed'; rm -f "$tmp_h"; return 1; }
+
+  # Replace ${CLAUDE_PLUGIN_ROOT} via jq, not sed — $plugin_dir comes from a
+  # user-configurable env var and may contain &, |, or \ which would corrupt
+  # sed substitution.
+  if ! jq --arg root "$plugin_dir" \
+      'walk(if type == "string" then gsub("\\$\\{CLAUDE_PLUGIN_ROOT\\}"; $root) else . end)' \
+      "$hooks_src" > "$tmp_h" 2>/dev/null; then
+    err "expanding CLAUDE_PLUGIN_ROOT in $hooks_src failed"
+    rm -f "$tmp_h" "$tmp_s"
+    return 1
+  fi
+
   # Shallow merge — keep user's other hook events; same-event keys get overwritten.
-  jq --slurpfile h "$tmp_h" '.hooks = ((.hooks // {}) * $h[0].hooks)' "$settings" > "$tmp_s"
-  if jq -e . "$tmp_s" >/dev/null 2>&1; then
-    mv "$tmp_s" "$settings"
-    info 'hooks merged'
-  else
-    err "hooks merge produced invalid JSON; settings.json untouched (see $tmp_s)"
+  # Explicit error branch so a malformed settings.json doesn't kill the whole
+  # script via `set -e` and skip our cleanup.
+  if ! jq --slurpfile h "$tmp_h" '.hooks = ((.hooks // {}) * $h[0].hooks)' \
+      "$settings" > "$tmp_s" 2>/dev/null; then
+    err "merging hooks into $settings failed; original untouched (intermediate: $tmp_s)"
     rm -f "$tmp_h"
     return 1
   fi
+  mv "$tmp_s" "$settings"
   rm -f "$tmp_h"
+  info 'hooks merged'
 }
 
 install_modern() {

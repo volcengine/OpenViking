@@ -55,7 +55,7 @@ claude plugin marketplace add "$(pwd)/examples"
 claude plugin install claude-code-memory-plugin@openviking-plugins-local
 ```
 
-> 两条命令默认都装在 user scope —— 插件在任何目录下都生效。这里**不显式传 `--scope user`**，因为老的 Claude Code 2.0.x（比如 2.0.76）不识别这个 flag 会直接报错。如果装完发现落到了 local scope，跑一次 `claude plugin enable claude-code-memory-plugin@openviking-plugins-local --scope user` 提升即可。
+> 两条命令默认都装在 user scope —— 插件在任何目录下都生效。这里**不显式传 `--scope user`**，因为老的 Claude Code 2.0.x（比如 2.0.76）不识别这个 flag 会直接报错。在支持 `--scope` 的新版本上，如果装完发现落到了 local scope，可以跑一次 `claude plugin enable claude-code-memory-plugin@openviking-plugins-local --scope user` 提升到 user scope。
 >
 > marketplace 条目让 Claude Code 直接引用源码目录,对 `scripts/`、`hooks/`、配置文件的修改下次 hook 触发即生效,无需重装。但移动 / 重命名 / 删除源码目录,或 `git checkout` 到不含这些文件的分支,会立刻让插件失效。后续会发布公开 marketplace 以支持一键安装。
 
