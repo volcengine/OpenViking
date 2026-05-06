@@ -67,17 +67,17 @@ def levenshtein_distance(s1: str, s2: str) -> int:
 def normalize_string(text: str) -> str:
     """Normalize string by handling smart quotes and special characters."""
     replacements = {
-        "\u2018": "'",
-        "\u2019": "'",
-        "\u201c": '"',
-        "\u201d": '"',
-        "\u00a0": " ",
-        "\u200b": "",
-        "\u200c": "",
-        "\u200d": "",
-        "\u200e": "",
-        "\u200f": "",
-        "\ufeff": "",
+        "‘": "'",
+        "’": "'",
+        "“": '"',
+        "”": '"',
+        " ": " ",
+        "​": "",
+        "‌": "",
+        "‍": "",
+        "‎": "",
+        "‏": "",
+        "﻿": "",
     }
     for old, new in replacements.items():
         text = text.replace(old, new)
@@ -426,21 +426,57 @@ class MultiSearchReplaceDiffStrategy:
         if not matches:
             return DiffResult(success=True, content=original_content)
 
+        # First try simple substring replacement - this handles the common case
+        result_content = original_content
+        all_applied = True
+        processed_matches = []
+
+        for match in matches:
+            search_content = unescape_markers(match.get("searchContent", ""))
+            replace_content = unescape_markers(match.get("replaceContent", ""))
+
+            if search_content == replace_content:
+                continue
+
+            has_line_numbers = (
+                every_line_has_line_numbers(search_content)
+                and every_line_has_line_numbers(replace_content)
+            ) or (every_line_has_line_numbers(search_content) and replace_content.strip() == "")
+
+            if has_line_numbers:
+                search_content = strip_line_numbers(search_content)
+                replace_content = strip_line_numbers(replace_content)
+
+            if not search_content:
+                all_applied = False
+                break
+
+            if search_content not in result_content:
+                all_applied = False
+                break
+
+            processed_matches.append((search_content, replace_content))
+
+        if all_applied and processed_matches:
+            for search_content, replace_content in processed_matches:
+                result_content = result_content.replace(search_content, replace_content)
+            return DiffResult(success=True, content=result_content)
+
+        # Fall back to line-based approach for complex cases
         # Detect line ending from original content
         line_ending = "\r\n" if "\r\n" in original_content else "\n"
         result_lines = re.split(r"\r?\n", original_content)
-        delta = 0
         diff_results = []
         applied_count = 0
 
-        # Sort replacements by start_line
+        # Sort replacements by startLine
         replacements = [
             {
-                "startLine": int(match.get("startLine", 0)),
-                "searchContent": match.get("searchContent", ""),
-                "replaceContent": match.get("replaceContent", ""),
+                "startLine": int(m.get("startLine", 0)),
+                "searchContent": m.get("searchContent", ""),
+                "replaceContent": m.get("replaceContent", ""),
             }
-            for match in matches
+            for m in matches
         ]
         replacements.sort(key=lambda x: x["startLine"])
 
@@ -675,7 +711,6 @@ class MultiSearchReplaceDiffStrategy:
             before_match = result_lines[:match_index]
             after_match = result_lines[match_index + len(search_lines) :]
             result_lines = before_match + indented_replace_lines + after_match
-            delta = delta - len(matched_lines) + len(replace_lines)
             applied_count += 1
 
         final_content = line_ending.join(result_lines)
@@ -856,7 +891,31 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
     if not patch.blocks:
         return original_content
 
-    # Directly convert StrPatch to internal format, skip string conversion
+    # First try simple substring replacement - this handles the common case
+    result_content = original_content
+    all_applied = True
+
+    for block in patch.blocks:
+        search_content = unescape_markers(block.search)
+        replace_content = unescape_markers(block.replace)
+
+        if search_content == replace_content:
+            continue
+
+        if not search_content:
+            all_applied = False
+            break
+
+        if search_content not in result_content:
+            all_applied = False
+            break
+
+        result_content = result_content.replace(search_content, replace_content)
+
+    if all_applied:
+        return result_content
+
+    # Fall back to line-based approach for complex cases
     strategy = MultiSearchReplaceDiffStrategy(fuzzy_threshold=0.8)
 
     # Convert StrPatch blocks to internal match format
@@ -874,7 +933,6 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
     if not matches:
         return original_content
 
-    # Apply using the same logic as apply_diff, but with pre-parsed matches
     # Detect line ending from original content
     line_ending = "\r\n" if "\r\n" in original_content else "\n"
     result_lines = re.split(r"\r?\n", original_content)
@@ -884,11 +942,11 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
     # Sort replacements by start_line
     replacements = [
         {
-            "startLine": int(match.get("startLine", 0)),
-            "searchContent": match.get("searchContent", ""),
-            "replaceContent": match.get("replaceContent", ""),
+            "startLine": int(m.get("startLine", 0)),
+            "searchContent": m.get("searchContent", ""),
+            "replaceContent": m.get("replaceContent", ""),
         }
-        for match in matches
+        for m in matches
     ]
     replacements.sort(key=lambda x: x["startLine"])
 
@@ -1095,7 +1153,9 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
 
             # Get indent from current replace line
             current_replace_match = re.match(r"^[\t ]*", line)
-            current_replace_indent = current_replace_match.group(0) if current_replace_match else ""
+            current_replace_indent = (
+                current_replace_match.group(0) if current_replace_match else ""
+            )
 
             # Calculate relative indent level (how much deeper/shallower this line is compared to search)
             relative_level = len(current_replace_indent) - len(search_indent)
