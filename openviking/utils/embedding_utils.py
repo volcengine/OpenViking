@@ -465,7 +465,7 @@ async def index_resource(
 
     # 2. Index Files
     try:
-        files = await viking_fs.ls(uri, ctx=ctx)
+        files = await viking_fs.ls(uri, ctx=ctx, node_limit=10000)
         for file_info in files:
             file_name = file_info["name"]
 
