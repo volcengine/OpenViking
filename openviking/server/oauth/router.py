@@ -145,12 +145,16 @@ _AUTHORIZE_PAGE_TEMPLATE = """<!DOCTYPE html>
     }}
 
     // Show the quick-authorize panel only if we can find an API key in this
-    // browser's sessionStorage (i.e. the console is on the same origin and
-    // the user is signed in). Click still requires explicit confirmation.
+    // browser's localStorage (i.e. the console is on the same origin and
+    // the user is signed in). The console persists the API key here for
+    // cross-tab use; sessionStorage holds a per-tab copy that this page
+    // (a different tab) can't see, so we deliberately read localStorage.
+    // Click still requires explicit confirmation.
     let sameOriginKey = null;
     try {{
-      sameOriginKey = window.sessionStorage.getItem(SESSION_KEY);
-    }} catch (e) {{ /* sessionStorage may be unavailable; ignore */ }}
+      sameOriginKey = window.localStorage.getItem(SESSION_KEY)
+                   || window.sessionStorage.getItem(SESSION_KEY);
+    }} catch (e) {{ /* storage may be unavailable; ignore */ }}
     if (sameOriginKey) {{
       panelEl.classList.add("visible");
       buttonEl.addEventListener("click", async function() {{
