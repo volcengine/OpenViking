@@ -54,11 +54,15 @@ Inside Claude Code, run `/mcp` after the next start — the OpenViking entry sho
 From the OpenViking repo root:
 
 ```bash
-claude plugin marketplace add "$(pwd)/examples" --scope local
-claude plugin install claude-code-memory-plugin@openviking-plugins-local --scope local
+claude plugin marketplace add "$(pwd)/examples"
+claude plugin install claude-code-memory-plugin@openviking-plugins-local
 ```
 
-> Local install points Claude Code at the source directory. Edits to `scripts/`, `hooks/`, and config files take effect on the next hook invocation — no reinstall. But moving / renaming / deleting the source dir, or `git checkout`-ing to a branch without these files, breaks the plugin.
+> The plugin installs at user scope by default — active from any directory. We don't pass `--scope` because older Claude Code 2.0.x builds (e.g. 2.0.76) reject the flag.
+>
+> The marketplace entry points Claude Code at the source directory. Edits to `scripts/`, `hooks/`, and config files take effect on the next hook invocation — no reinstall. But moving / renaming / deleting the source dir, or `git checkout`-ing to a branch without these files, breaks the plugin.
+>
+> **Claude Code < 2.0?** `claude plugin` shipped in 2.0 (Oct 2025). Older builds still expose `claude mcp add` + the hooks system — the [plugin README's Legacy mode section](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#legacy-mode-claude-code--20) shows how to wire the same functionality by hand, and the one-line installer detects the version and offers it automatically.
 
 #### 3. Start Claude Code
 

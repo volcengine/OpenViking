@@ -10,7 +10,10 @@
 #   2. Set up ~/.openviking/ovcli.conf — reuse if present, prompt otherwise.
 #   3. Clone (or refresh) the OpenViking repo to ~/.openviking/openviking-repo.
 #   4. Add a `claude` shell function to your rc that injects creds at invocation.
-#   5. Install the plugin via `claude plugin marketplace add` + `claude plugin install`.
+#   5. Install the plugin. On Claude Code >= 2.0 (with `claude plugin` support) we
+#      use marketplace + plugin install. On older builds — or if marketplace is
+#      unavailable — we fall back to legacy mode: `claude mcp add` + a merge into
+#      ~/.claude/settings.json.
 #
 # Env overrides:
 #   OPENVIKING_HOME        default: $HOME/.openviking
@@ -205,27 +208,118 @@ EOF
 fi
 
 # ----- 5. Plugin install -----
+#
+# `claude plugin` was introduced in Claude Code 2.0 (2025-10). Older builds only
+# expose `claude mcp add` and the hooks system. We detect the major version and
+# offer a legacy install path that wires the same functionality through
+# `claude mcp add` + a merge into ~/.claude/settings.json.
+#
+# Note on `--scope`:
+#   - `claude mcp add --scope user` has been supported since MCP first shipped,
+#     and the default (`local`) ties the server to one project, so we DO pass it.
+#   - `claude plugin install` / `claude plugin marketplace add` already default to
+#     user scope, and the `--scope` flag is rejected by older 2.0.x builds (e.g.
+#     2.0.76). We omit it.
 
 heading '5. Plugin install'
 
-if [ "$CLAUDE_AVAILABLE" -eq 1 ]; then
-  # Use --scope user so the plugin is active from any directory, not just $REPO_DIR.
-  # `local` scope binds enablement to $REPO_DIR's .claude/settings.local.json, which
-  # surfaces as "disabled" the moment the user `cd`s elsewhere and forces a manual
-  # `claude plugin enable` post-install.
+# Probe for `claude plugin` support directly rather than parsing --version output.
+# The version-string format isn't a stable contract; the subcommand's existence is.
+has_plugin_subcommand() {
+  claude plugin --help >/dev/null 2>&1
+}
+
+install_legacy() {
+  local plugin_dir="$REPO_DIR/examples/claude-code-memory-plugin"
+  local hooks_src="$plugin_dir/hooks/hooks.json"
+  local settings="$HOME/.claude/settings.json"
+  local ts; ts=$(date +%Y%m%d-%H%M%S)
+
+  info "Legacy mode: registering MCP server + merging hooks into $settings"
+
+  # 1) MCP server. Single-quoted ${VAR} literals so Claude Code expands them at
+  # MCP launch time using whatever the rc wrapper has injected.
+  info 'claude mcp add openviking (user scope)'
+  claude mcp remove openviking -s user >/dev/null 2>&1 || true
+  claude mcp add --scope user --transport http openviking \
+    '${OPENVIKING_URL:-http://127.0.0.1:1933}/mcp' \
+    --header 'Authorization: Bearer ${OPENVIKING_API_KEY:-}' \
+    --header 'X-OpenViking-Account: ${OPENVIKING_ACCOUNT:-}' \
+    --header 'X-OpenViking-User: ${OPENVIKING_USER:-}' \
+    --header 'X-OpenViking-Agent: ${OPENVIKING_AGENT_ID:-}' || {
+      err 'claude mcp add failed'
+      return 1
+    }
+
+  # 2) Hooks: replace ${CLAUDE_PLUGIN_ROOT} (only expanded by 2.0+ plugin loader)
+  # with an absolute path, then merge into ~/.claude/settings.json. Back up
+  # first; verify the merged JSON before overwriting.
+  if [ ! -f "$hooks_src" ]; then
+    err "hooks source not found: $hooks_src"
+    return 1
+  fi
+  mkdir -p "$HOME/.claude"
+  [ -f "$settings" ] || echo '{}' > "$settings"
+  cp -p "$settings" "$settings.bak.$ts"
+  info "Backup: $settings.bak.$ts"
+
+  local tmp_h="${TMPDIR:-/tmp}/ov-hooks.$$.json"
+  local tmp_s="${TMPDIR:-/tmp}/ov-settings.$$.json"
+  sed "s|\${CLAUDE_PLUGIN_ROOT}|$plugin_dir|g" "$hooks_src" > "$tmp_h"
+  # Shallow merge — keep user's other hook events; same-event keys get overwritten.
+  jq --slurpfile h "$tmp_h" '.hooks = ((.hooks // {}) * $h[0].hooks)' "$settings" > "$tmp_s"
+  if jq -e . "$tmp_s" >/dev/null 2>&1; then
+    mv "$tmp_s" "$settings"
+    info 'hooks merged'
+  else
+    err "hooks merge produced invalid JSON; settings.json untouched (see $tmp_s)"
+    rm -f "$tmp_h"
+    return 1
+  fi
+  rm -f "$tmp_h"
+}
+
+install_modern() {
+  # `--scope` intentionally omitted. Default scope is already user; passing it
+  # breaks older 2.0.x builds that don't recognize the flag.
   info 'claude plugin marketplace add'
-  ( cd "$REPO_DIR" && claude plugin marketplace add "$REPO_DIR/examples" --scope user ) || \
+  ( cd "$REPO_DIR" && claude plugin marketplace add "$REPO_DIR/examples" ) || \
     warn 'marketplace add returned non-zero (likely already added) — continuing'
   info 'claude plugin install'
-  ( cd "$REPO_DIR" && claude plugin install claude-code-memory-plugin@openviking-plugins-local --scope user )
-  # Belt-and-suspenders: make sure it ends up enabled even if `install` left it
-  # in a disabled state (observed on some Claude Code versions).
-  claude plugin enable claude-code-memory-plugin@openviking-plugins-local --scope user >/dev/null 2>&1 || true
+  ( cd "$REPO_DIR" && claude plugin install claude-code-memory-plugin@openviking-plugins-local ) || {
+    warn 'plugin install failed — falling back to legacy mode'
+    install_legacy
+    return $?
+  }
+  # Belt-and-suspenders: ensure enabled even if `install` left it disabled.
+  claude plugin enable claude-code-memory-plugin@openviking-plugins-local >/dev/null 2>&1 || true
+}
+
+USE_LEGACY=0
+if [ "$CLAUDE_AVAILABLE" -eq 1 ] && ! has_plugin_subcommand; then
+  warn "This Claude Code build doesn't expose 'claude plugin' (introduced in 2.0)."
+  ask 'Use legacy compatibility mode (claude mcp add + settings.json merge)? [Y/n] '
+  read -r reply || reply=""
+  case "$reply" in
+    n|N|no|No|NO)
+      warn "Skipping plugin install. Upgrade to Claude Code >= 2.0 and re-run."
+      CLAUDE_AVAILABLE=0
+      ;;
+    *) USE_LEGACY=1 ;;
+  esac
+fi
+
+if [ "$CLAUDE_AVAILABLE" -eq 1 ]; then
+  if [ "$USE_LEGACY" -eq 1 ]; then
+    install_legacy
+  else
+    install_modern
+  fi
 else
   warn "Run these manually after installing Claude Code:"
   warn "  cd \"$REPO_DIR\""
-  warn '  claude plugin marketplace add "$(pwd)/examples" --scope user'
-  warn '  claude plugin install claude-code-memory-plugin@openviking-plugins-local --scope user'
+  warn '  claude plugin marketplace add "$(pwd)/examples"'
+  warn '  claude plugin install claude-code-memory-plugin@openviking-plugins-local'
 fi
 
 # ----- Done -----
