@@ -204,7 +204,9 @@ export default defineConfig({
   // and historical design notes that are outside the VitePress page tree.
   ignoreDeadLinks: true,
   head: [
-    ['link', { rel: 'icon', href: `${base}ov-logo.png` }]
+    ['link', { rel: 'icon', type: 'image/x-icon', href: `${base}favicon.ico` }],
+    ['link', { rel: 'icon', type: 'image/png', sizes: '32x32', href: `${base}favicon-32.png` }],
+    ['link', { rel: 'apple-touch-icon', href: `${base}apple-touch-icon.png` }]
   ],
   transformPageData(pageData, { siteConfig }) {
     const srcPath = path.join(siteConfig.srcDir, pageData.relativePath)
