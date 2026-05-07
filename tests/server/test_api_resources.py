@@ -540,12 +540,9 @@ async def test_add_resource_async_failure_cleans_up_tracker(
     registry must not leak state."""
 
     from openviking.server.identity import RequestContext, Role
-    from openviking.telemetry import get_current_telemetry
     from openviking.telemetry.registry import _REGISTERED_TELEMETRY
     from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
     from openviking_cli.session.user_id import UserIdentifier
-
-    original_add_resource = service.resources.add_resource
 
     async def _failing_add_resource(**kwargs):
         raise RuntimeError("processor exploded")
