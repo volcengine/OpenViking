@@ -224,7 +224,8 @@ class SchemaModelGenerator:
             field_definitions[mt.memory_type] = (
                 List[flat_model],  # type: ignore
                 Field(
-                    default_factory=list, description=f"{mt.memory_type} memories (top-level field, do not nest inside other arrays)"
+                    default_factory=list,
+                    description=f"{mt.memory_type} memories: {mt.description} (top-level field, do not nest inside other arrays)"
                 ),
             )
 
