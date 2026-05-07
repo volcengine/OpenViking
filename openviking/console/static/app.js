@@ -61,6 +61,15 @@ const elements = {
   saveKeyBtn: document.getElementById("saveKeyBtn"),
   clearKeyBtn: document.getElementById("clearKeyBtn"),
   connectionHint: document.getElementById("connectionHint"),
+  getOtpBtn: document.getElementById("getOtpBtn"),
+  otpBox: document.getElementById("otpBox"),
+  otpValue: document.getElementById("otpValue"),
+  otpCopyBtn: document.getElementById("otpCopyBtn"),
+  otpExpiry: document.getElementById("otpExpiry"),
+  oauthVerifyInput: document.getElementById("oauthVerifyInput"),
+  oauthVerifyBtn: document.getElementById("oauthVerifyBtn"),
+  oauthDenyBtn: document.getElementById("oauthDenyBtn"),
+  oauthVerifyHint: document.getElementById("oauthVerifyHint"),
   writeBadge: document.getElementById("writeBadge"),
   output: document.getElementById("output"),
   tabs: document.querySelectorAll(".tab"),
@@ -1531,6 +1540,124 @@ function bindConnection() {
     updateConnectionHint();
     setOutput("Connection settings cleared from browser storage.");
   });
+
+  if (elements.getOtpBtn) {
+    elements.getOtpBtn.addEventListener("click", async () => {
+      if (!getApiKey()) {
+        setOutput("Save an API key first — OTP issuance requires authentication.");
+        return;
+      }
+      elements.getOtpBtn.disabled = true;
+      const originalLabel = elements.getOtpBtn.textContent;
+      elements.getOtpBtn.textContent = "Generating…";
+      try {
+        const payload = await callConsole("/ov/auth/otp", {
+          method: "POST",
+          body: JSON.stringify({}),
+        });
+        const result = payload && payload.result ? payload.result : payload;
+        const otp = result && (result.otp || result.code);
+        if (!otp) {
+          throw new Error("Server did not return an OTP");
+        }
+        elements.otpValue.textContent = otp;
+        const ttl = result.ttl_seconds || 300;
+        const expiresAt = result.expires_at
+          ? new Date(result.expires_at * 1000).toLocaleTimeString()
+          : null;
+        elements.otpExpiry.textContent = expiresAt
+          ? `Expires at ${expiresAt} (${ttl}s). One-time use.`
+          : `Expires in ${ttl}s. One-time use.`;
+        elements.otpBox.hidden = false;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setOutput(`Failed to generate OTP: ${message}`);
+      } finally {
+        elements.getOtpBtn.disabled = false;
+        elements.getOtpBtn.textContent = originalLabel;
+      }
+    });
+  }
+
+  if (elements.otpCopyBtn) {
+    elements.otpCopyBtn.addEventListener("click", async () => {
+      const otp = elements.otpValue.textContent.trim();
+      if (!otp) {
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(otp);
+        const originalLabel = elements.otpCopyBtn.textContent;
+        elements.otpCopyBtn.textContent = "Copied";
+        setTimeout(() => {
+          elements.otpCopyBtn.textContent = originalLabel;
+        }, 1500);
+      } catch (_error) {
+        setOutput("Could not copy to clipboard — long-press the code to copy manually.");
+      }
+    });
+  }
+
+  // OAuth verification (device-flow style: user reads code from the MCP
+  // client's authorize page and pastes it here).
+  async function submitOAuthVerify(decision) {
+    if (!getApiKey()) {
+      elements.oauthVerifyHint.textContent =
+        "Save an API key first — verification requires authentication.";
+      return;
+    }
+    const code = (elements.oauthVerifyInput.value || "").trim().toUpperCase();
+    if (!code) {
+      elements.oauthVerifyHint.textContent = "Enter the 6-character code shown on the authorize page.";
+      return;
+    }
+    elements.oauthVerifyBtn.disabled = true;
+    elements.oauthDenyBtn.disabled = true;
+    elements.oauthVerifyHint.textContent = decision === "deny" ? "Denying…" : "Authorizing…";
+    try {
+      const payload = await callConsole("/ov/auth/oauth-verify", {
+        method: "POST",
+        body: JSON.stringify({ code, decision }),
+      });
+      const result = payload && payload.result ? payload.result : payload;
+      const status = result && result.status;
+      if (status === "approved") {
+        const name = (result && result.client_name) || "the client";
+        elements.oauthVerifyHint.textContent =
+          `Authorized ${name}. Switch back to the client tab — it will continue automatically.`;
+        elements.oauthVerifyInput.value = "";
+      } else if (status === "denied") {
+        elements.oauthVerifyHint.textContent = "Denied. The client will see an error.";
+        elements.oauthVerifyInput.value = "";
+      } else {
+        elements.oauthVerifyHint.textContent =
+          "Server returned an unexpected response — check the result panel.";
+        setOutput(payload);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      elements.oauthVerifyHint.textContent = `Failed: ${message}`;
+    } finally {
+      elements.oauthVerifyBtn.disabled = false;
+      elements.oauthDenyBtn.disabled = false;
+    }
+  }
+
+  if (elements.oauthVerifyBtn) {
+    elements.oauthVerifyBtn.addEventListener("click", () => submitOAuthVerify("approve"));
+  }
+  if (elements.oauthDenyBtn) {
+    elements.oauthDenyBtn.addEventListener("click", () => submitOAuthVerify("deny"));
+  }
+  if (elements.oauthVerifyInput) {
+    elements.oauthVerifyInput.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") {
+        return;
+      }
+      event.preventDefault();
+      submitOAuthVerify("approve");
+    });
+  }
 }
 
 function bindFilesystem() {

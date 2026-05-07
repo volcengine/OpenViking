@@ -18,7 +18,7 @@ MCP 端点位于 `http://<server>:1933/mcp`，与 REST API 同进程、同端口
 |------|----------|
 | **Claude Code** | `type: http` 接入 |
 | **ChatGPT & Codex** | 标准 MCP 配置 |
-| **Claude.ai / Claude Desktop** | 通过 MCP-Key2OAuth 代理接入 |
+| **Claude.ai / Claude Desktop** | 原生 OAuth 2.1（见 [11-oauth](11-oauth.md)） |
 | **Manus** | 标准 MCP 配置 |
 | **Trae** | 标准 MCP 配置 |
 
@@ -78,31 +78,19 @@ claude mcp add --transport http openviking \
 
 加 `--scope user` 可将配置设为全局（所有项目共享）。
 
-### Claude.ai / Claude Desktop（OAuth 代理鉴权）
+### Claude.ai / Claude Desktop / ChatGPT / Cursor（OAuth）
 
-Claude.ai 和 Claude Desktop Connector 强制要求 MCP 服务器使用 OAuth 2.1 鉴权，无法直接传入 API Key。
+这些客户端只接受 OAuth 2.1，不接受 API Key。OpenViking 已经原生实现 OAuth 2.1（DCR + PKCE + opaque token，SQLite 后端，配合 console 驱动的 OTP 授权页），不再需要外部代理。
 
-#### 官方 OAuth 支持（规划中）
+**详见 [OAuth 2.1 接入指南](11-oauth.md)**：
 
-我们正在考虑在 `openviking-server` 中内置 OAuth 2.1 授权端点，初步方案包括：
+- 端到端流程（device-flow 风格：authorize 页显示 6 字符码，用户在 console 确认）
+- HTTP（本地）与 HTTPS（生产）两阶段部署，包含 Caddy / nginx 反代模板和 docker-compose 示例
+- Claude.ai / Claude Desktop / Cursor / ChatGPT 接入步骤
+- `OPENVIKING_PUBLIC_BASE_URL` 与 `oauth` 配置项
+- Token 模型（`ovat_` / `ovrt_` / `ovac_` 前缀）与撤销
 
-- **OTP 授权**：通过 CLI (`ov otp`) 或 REST API 获取一次性口令，在 OAuth 授权页面输入完成认证，无需外部依赖
-- **Console 快捷授权**：利用 Web Console (8020) 同源 session 实现一键授权
-- **第三方登录**：可选的 GitHub / Google 等 IdP 委托登录
-
-上述方案尚在设计评审阶段，实现时间待定。
-
-#### 当前可用方案：MCP-Key2OAuth（社区项目）
-
-在官方 OAuth 实现就绪之前，可以借助社区项目 [MCP-Key2OAuth](https://github.com/t0saki/MCP-Key2OAuth) 将 API Key 认证代理为 OAuth 流程：
-
-1. 参照项目 README 自行部署代理服务（Cloudflare Workers）
-2. 填入你的 OpenViking MCP 服务器 URL（如 `https://your-server.com/mcp`）
-3. 生成代理后的新 URL
-4. 在 Claude.ai / Claude Desktop 中填入生成的新 URL，连接时会跳转至代理站进行鉴权
-5. 授权完成后即可正常使用
-
-> ⚠️ **免责声明：** MCP-Key2OAuth 为社区维护的第三方项目，OpenViking 团队不对其安全性、可用性或数据处理方式做任何保证。使用前请自行评估风险。如有顾虑，建议等待官方 OAuth 实现或自行搭建代理。
+> 社区项目 [MCP-Key2OAuth](https://github.com/t0saki/MCP-Key2OAuth) Cloudflare Worker 代理仍可作为第三方备选方案，但现在更推荐原生流程：无需额外部署单元，也不会引入第三方对 API Key 的信任面。
 
 
 ## 可用的 MCP 工具

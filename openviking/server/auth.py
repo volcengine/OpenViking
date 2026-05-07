@@ -7,7 +7,13 @@ from typing import Optional
 
 from fastapi import Depends, Header, Request
 
-from openviking.server.identity import AuthMode, RequestContext, ResolvedIdentity, Role
+from openviking.server.identity import (
+    AccountNamespacePolicy,
+    AuthMode,
+    RequestContext,
+    ResolvedIdentity,
+    Role,
+)
 from openviking.telemetry.span_models import update_root_span_identity
 from openviking_cli.exceptions import (
     InvalidArgumentError,
@@ -15,6 +21,13 @@ from openviking_cli.exceptions import (
     UnauthenticatedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
+
+# Privilege ranking for role-downgrade detection in OAuth bearer auth. Higher
+# rank ⇒ more privilege. Used to compare an OAuth token's embedded role
+# against the user's current role: a token whose role outranks the current
+# role is a stale token from before a `set_role` demotion and must be rejected.
+_ROLE_RANK = {Role.USER: 0, Role.ADMIN: 1, Role.ROOT: 2}
+
 
 _ROOT_IMPLICIT_TENANT_ALLOWED_PATHS = {
     "/api/v1/system/status",
@@ -100,6 +113,119 @@ def _explicit_identity_from_request(request: Request) -> tuple[Optional[str], Op
         user_id = _normalize_request_value(query_params.get("user_id"))
 
     return account_id, user_id
+
+
+async def _try_resolve_oauth_token(
+    request: Request,
+    api_key: str,
+    *,
+    x_openviking_account: Optional[str],
+    x_openviking_user: Optional[str],
+    x_openviking_agent: Optional[str],
+) -> Optional[ResolvedIdentity]:
+    """Attempt to verify the bearer as an OAuth-issued opaque access token.
+
+    Returns the resolved identity on success. Returns None when the bearer
+    doesn't carry the OAuth access-token prefix or when OAuth isn't enabled
+    (caller falls back to the API-key path). Raises UnauthenticatedError
+    when the bearer IS prefix-tagged but lookup fails — fail-closed.
+    """
+    from openviking.server.oauth.provider import ACCESS_TOKEN_PREFIX
+
+    if not api_key.startswith(ACCESS_TOKEN_PREFIX):
+        return None
+    provider = getattr(request.app.state, "oauth_provider", None)
+    if provider is None:
+        return None
+
+    record = await provider.load_access_token(api_key)
+    if record is None:
+        raise UnauthenticatedError("OAuth access token is invalid, expired, or revoked")
+
+    # Lifecycle binding: every OAuth token carries the SHA-256 fingerprint of
+    # the API key that authorized it. We recompute the user's current key fp
+    # and demand strict equality. If the user removed (no fp) or rotated
+    # (different fp) the authorizing key, the token must die — this is the
+    # invariant "OAuth lifetime ≤ authorizing key lifetime". Tokens missing a
+    # recorded fp also fail closed: there is no way to validate them safely.
+    api_key_manager = getattr(request.app.state, "api_key_manager", None)
+    recorded_fp = record.authorizing_key_fp
+    current_fp: Optional[str] = None
+    if api_key_manager is not None and hasattr(api_key_manager, "get_user_key_fingerprint"):
+        current_fp = api_key_manager.get_user_key_fingerprint(record.account_id, record.user_id)
+    if not recorded_fp or not current_fp or not hmac.compare_digest(recorded_fp, current_fp):
+        raise UnauthenticatedError(
+            "OAuth token's authorizing API key has been rotated or revoked; "
+            "please re-authorize the client."
+        )
+
+    try:
+        role = Role(record.role)
+    except ValueError as exc:
+        raise UnauthenticatedError(f"OAuth token has unknown role: {record.role}") from exc
+
+    # Role downgrade protection: fp binds to the key value, but `set_role`
+    # changes role without rotating the key. Re-fetch the user's current
+    # role and reject the token if its embedded role exceeds it (demotion).
+    # Promotion is harmless — the embedded lower privilege is still valid —
+    # so only downgrades trigger rejection.
+    if api_key_manager is not None and hasattr(api_key_manager, "get_user_role"):
+        try:
+            current_role = api_key_manager.get_user_role(record.account_id, record.user_id)
+        except Exception:  # noqa: BLE001
+            current_role = role
+        if _ROLE_RANK[role] > _ROLE_RANK[current_role]:
+            raise UnauthenticatedError(
+                "OAuth token's embedded role exceeds the user's current role; "
+                "please re-authorize the client."
+            )
+
+    account_id = record.account_id
+    user_id = record.user_id
+
+    # Header overrides mirror the API-key path: ROOT may override identity;
+    # ADMIN may override user and agent (within its own account); USER may
+    # override only agent. The OAuth claims pin the issuing identity, so any
+    # cross-account/user override beyond what each role can do is a 403.
+    if role == Role.ROOT:
+        effective_account = x_openviking_account or account_id
+        effective_user = x_openviking_user or user_id
+    elif role == Role.ADMIN:
+        if x_openviking_account and x_openviking_account != account_id:
+            raise PermissionDeniedError(
+                "X-OpenViking-Account cannot override the account for ADMIN OAuth tokens."
+            )
+        effective_account = account_id
+        effective_user = x_openviking_user or user_id
+    else:  # Role.USER
+        if x_openviking_account and x_openviking_account != account_id:
+            raise PermissionDeniedError(
+                "X-OpenViking-Account cannot override the account for USER OAuth tokens."
+            )
+        if x_openviking_user and x_openviking_user != user_id:
+            raise PermissionDeniedError(
+                "X-OpenViking-User cannot override the user for USER OAuth tokens."
+            )
+        effective_account = account_id
+        effective_user = user_id
+
+    effective_agent = x_openviking_agent or "default"
+
+    namespace_policy = AccountNamespacePolicy()
+    if api_key_manager is not None and hasattr(api_key_manager, "get_account_policy"):
+        try:
+            namespace_policy = api_key_manager.get_account_policy(effective_account)
+        except Exception:  # noqa: BLE001
+            pass
+
+    return ResolvedIdentity(
+        role=role,
+        account_id=effective_account,
+        user_id=effective_user,
+        agent_id=effective_agent,
+        namespace_policy=namespace_policy,
+        from_oauth=True,
+    )
 
 
 async def resolve_identity(
@@ -201,6 +327,21 @@ async def resolve_identity(
     if not api_key:
         raise UnauthenticatedError("Missing API Key when resolving identity.")
 
+    # OAuth 2.1 fast path: bearer tokens minted by our OAuth provider carry
+    # a recognizable prefix; look them up directly and skip the API-key path.
+    # Failure is fail-closed — a forged token claiming the prefix cannot be
+    # retried as a plain key. When OAuth is disabled or the bearer lacks the
+    # prefix, this returns None and the API-key path runs.
+    oauth_identity = await _try_resolve_oauth_token(
+        request,
+        api_key,
+        x_openviking_account=x_openviking_account,
+        x_openviking_user=x_openviking_user,
+        x_openviking_agent=x_openviking_agent,
+    )
+    if oauth_identity is not None:
+        return oauth_identity
+
     identity = api_key_manager.resolve(api_key)
     if identity.role == Role.ROOT:
         identity.account_id = x_openviking_account or identity.account_id or "default"
@@ -241,6 +382,7 @@ async def get_request_context(
         auth_mode == AuthMode.API_KEY
         and api_key_manager is not None
         and identity.role == Role.ROOT
+        and not identity.from_oauth
         and _root_request_requires_explicit_tenant(path)
     ):
         account_header = request.headers.get("X-OpenViking-Account")
@@ -273,6 +415,7 @@ async def get_request_context(
             if api_key_manager is not None and hasattr(api_key_manager, "get_account_policy")
             else identity.namespace_policy
         ),
+        from_oauth=identity.from_oauth,
     )
     # Update the unified root observability context after authentication succeeds.
     update_root_span_identity(

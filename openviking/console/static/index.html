@@ -342,6 +342,40 @@
                   <button id="clearKeyBtn" class="ghost">Clear</button>
                 </div>
                 <p id="connectionHint" class="muted">No API key in session.</p>
+
+                <h3 style="margin-top: 1.75rem;">Authorize an MCP client</h3>
+                <p class="muted" style="margin-top: -0.25rem;">
+                  Confirm a pending OAuth authorization for Claude.ai / Claude Desktop /
+                  ChatGPT / Cursor. The client shows a 6-character verification code
+                  on its authorize page — paste it here and click Authorize.
+                </p>
+                <label for="oauthVerifyInput">Verification code</label>
+                <input id="oauthVerifyInput" type="text" maxlength="12"
+                       autocomplete="off" placeholder="ABC234"
+                       style="font-family: ui-monospace, monospace; letter-spacing: 0.15em; text-transform: uppercase;">
+                <div class="row" style="gap: 0.5rem;">
+                  <button id="oauthVerifyBtn" type="button">Authorize</button>
+                  <button id="oauthDenyBtn" class="ghost" type="button">Deny</button>
+                </div>
+                <p id="oauthVerifyHint" class="muted" style="margin: 0.5rem 0 0; font-size: 0.85rem;"></p>
+
+                <details style="margin-top: 1.25rem;">
+                  <summary class="muted" style="cursor: pointer;">Generate OTP for legacy push flow</summary>
+                  <p class="muted" style="margin: 0.75rem 0;">
+                    For CLI / scripted clients that drive the older push-style flow:
+                    generate an OTP here, then paste it on the client side.
+                  </p>
+                  <div class="row">
+                    <button id="getOtpBtn" type="button">Get OTP</button>
+                  </div>
+                  <div id="otpBox" hidden style="margin-top: 0.75rem; padding: 0.75rem; border-radius: 6px; background: var(--surface-soft, #f5f5f7);">
+                    <div class="row" style="gap: 0.5rem; align-items: center;">
+                      <code id="otpValue" style="font-size: 1.4rem; letter-spacing: 0.15em; padding: 4px 10px; border-radius: 4px; background: var(--surface, white);"></code>
+                      <button id="otpCopyBtn" class="ghost" type="button">Copy</button>
+                    </div>
+                    <p id="otpExpiry" class="muted" style="margin: 0.5rem 0 0; font-size: 0.85rem;"></p>
+                  </div>
+                </details>
               </section>
             </div>
 
