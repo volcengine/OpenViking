@@ -574,6 +574,9 @@ enum Commands {
         /// Force regenerate summaries even if they exist
         #[arg(short, long)]
         regenerate: bool,
+        /// Recursively index subdirectories (only applies when --regenerate is not set)
+        #[arg(short, long)]
+        recursive: bool,
         /// Wait for reindex to complete
         #[arg(long, default_value = "true")]
         wait: bool,
@@ -1141,8 +1144,9 @@ async fn main() {
         Commands::Reindex {
             uri,
             regenerate,
+            recursive,
             wait,
-        } => handlers::handle_reindex(uri, regenerate, wait, ctx).await,
+        } => handlers::handle_reindex(uri, regenerate, recursive, wait, ctx).await,
         Commands::Get { uri, local_path } => handlers::handle_get(uri, local_path, ctx).await,
         Commands::Find {
             query,

@@ -229,7 +229,7 @@ async def test_reindex_sync_conflict_returns_error_payload(client, monkeypatch):
 
 
 async def test_reindex_sync_business_error_returns_error_envelope(client, monkeypatch):
-    async def fake_do_reindex(service, uri, regenerate, ctx):
+    async def fake_do_reindex(service, uri, regenerate, recursive, ctx):
         return {"status": "error", "message": "bad summarize"}
 
     monkeypatch.setattr(
@@ -258,7 +258,7 @@ async def test_reindex_sync_business_error_returns_error_envelope(client, monkey
 
 
 async def test_maintenance_reindex_sync_business_error_returns_error_envelope(client, monkeypatch):
-    async def fake_do_reindex(service, uri, regenerate, ctx):
+    async def fake_do_reindex(service, uri, regenerate, recursive, ctx):
         return {"status": "error", "message": "bad maintenance summarize"}
 
     monkeypatch.setattr(
@@ -287,7 +287,7 @@ async def test_maintenance_reindex_sync_business_error_returns_error_envelope(cl
 
 
 async def test_reindex_sync_success_returns_ok_payload(client, monkeypatch):
-    async def fake_do_reindex(service, uri, regenerate, ctx):
+    async def fake_do_reindex(service, uri, regenerate, recursive, ctx):
         return {"status": "success", "message": "Indexed 1 resources"}
 
     monkeypatch.setattr(

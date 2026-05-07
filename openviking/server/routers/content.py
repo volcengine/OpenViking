@@ -208,7 +208,7 @@ async def reindex(
             owner_user_id=ctx.user.user_id,
         ):
             return error_response("CONFLICT", f"URI {uri} already has a reindex in progress")
-        result = await _do_reindex(service, uri, body.regenerate, ctx)
+        result = await _do_reindex(service, uri, body.regenerate, body.recursive, ctx)
         return response_from_result(result)
 
     task = tracker.create_if_no_running(
@@ -220,7 +220,9 @@ async def reindex(
     if task is None:
         return error_response("CONFLICT", f"URI {uri} already has a reindex in progress")
     asyncio.create_task(
-        _background_reindex_tracked(service, uri, body.regenerate, ctx, task.task_id)
+        _background_reindex_tracked(
+            service, uri, body.regenerate, body.recursive, ctx, task.task_id
+        )
     )
     return Response(
         status="ok",
