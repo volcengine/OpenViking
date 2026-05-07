@@ -263,9 +263,23 @@ curl -X POST -H "Authorization: Bearer ovat_..." \
 每个 token 在签发时绑定一个 `(account_id, user_id, role)` 三元组。OAuth
 token 拥有的权限 = 颁发它时所用 API Key 的权限，**不更多也不更少**。
 
-API Key 轮换或删除时，运维侧应同时撤销该 user 名下的 OAuth token：
-`OAuthStore.revoke_user_tokens(account_id, user_id)`（后续会通过 console
-admin 端点暴露）。
+### OAuth 生命周期 ≤ 授权 Key 生命周期
+
+每个 token 额外记录授权方 API Key 的 SHA-256 指纹。每次 OAuth bearer
+鉴权时服务端重算该用户当前的 key 指纹并严格比对，效果：
+
+- **轮换** 用户 API Key（`regenerate_key`）立即让该用户名下所有 OAuth
+  access / refresh token 失效。无需手动撤销，下一次 bearer 请求即返回
+  401，客户端需重新走授权流程。
+- **删除** 用户（`remove_user`）同理：指纹查找返回 `None`，所有 OAuth
+  token 立即停用。
+- **ROOT** key 和 **trusted-mode** 身份无法签发 OAuth（没有 per-user
+  key 可绑定）。`/api/v1/auth/otp` 和 `/api/v1/auth/oauth-verify` 会以
+  400 拒绝这类调用方。
+
+指纹算法为 `sha256(stored_key_value)`：API Key 哈希未开启时即明文 key
+的 SHA-256，开启时即 Argon2id 哈希结果的 SHA-256。两种情况下 stored
+值都是创建/轮换时写入一次后不再变动，因此指纹在两次轮换之间稳定。
 
 ---
 

@@ -280,9 +280,27 @@ Each issued token is bound to a single `(account_id, user_id, role)` triple
 recorded at authorization time. An OAuth token grants the same permissions
 as the API key that produced it — *not* more, *not* less.
 
-When an API key is rotated or removed, the operator should also revoke that
-user's outstanding OAuth tokens via `OAuthStore.revoke_user_tokens(account_id,
-user_id)` (a follow-up admin endpoint will expose this from the console).
+### OAuth lifetime ≤ authorizing key lifetime
+
+Every issued token additionally records the SHA-256 fingerprint of the API
+key whose holder authorized it. On every OAuth bearer request the server
+recomputes the user's current key fingerprint and demands a strict match.
+The practical effects:
+
+- **Rotating** a user's API key (`regenerate_key`) immediately invalidates
+  every OAuth access and refresh token previously issued under that user.
+  No manual revocation step is needed — the next bearer request gets a 401
+  asking the client to re-authorize.
+- **Removing** a user (`remove_user`) has the same effect: the fingerprint
+  lookup returns `None` and all the user's OAuth tokens stop working.
+- **ROOT** keys and **trusted-mode** identities cannot issue OAuth state
+  (no per-user key to bind to). `/api/v1/auth/otp` and
+  `/api/v1/auth/oauth-verify` reject these callers with 400.
+
+The fingerprint is `sha256(stored_key_value)`, where the stored value is
+either the plaintext key (when API key hashing is disabled) or its
+Argon2id hash (when enabled). Both are written once at create / regenerate
+and never mutate, so the fingerprint is stable until the next rotation.
 
 ---
 
