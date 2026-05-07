@@ -58,6 +58,12 @@ CREATE TABLE IF NOT EXISTS oauth_codes (
     account_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
     role TEXT NOT NULL,
+    -- SHA-256 hex of the API key value that authorized this row. Recorded at
+    -- OTP issuance / oauth-verify time and copied forward into refresh/access
+    -- so that key rotation or deletion invalidates every derived OAuth token.
+    -- Nullable only for backwards compat with rows written before this field
+    -- existed; auth path treats NULL as fail-closed.
+    authorizing_key_fp TEXT,
     expires_at INTEGER NOT NULL,
     used INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL
@@ -73,6 +79,7 @@ CREATE TABLE IF NOT EXISTS oauth_refresh_tokens (
     role TEXT NOT NULL,
     scope TEXT,
     resource TEXT,
+    authorizing_key_fp TEXT,  -- see oauth_codes for semantics
     expires_at INTEGER NOT NULL,
     consumed INTEGER NOT NULL DEFAULT 0,
     replaced_by TEXT,
@@ -95,6 +102,9 @@ CREATE TABLE IF NOT EXISTS oauth_pending_authorizations (
     verified_account_id TEXT,
     verified_user_id TEXT,
     verified_role TEXT,
+    -- Recorded at oauth-verify time from the verifier's API key; copied
+    -- into the auth code on mint, then into refresh/access on exchange.
+    verified_key_fp TEXT,
     expires_at INTEGER NOT NULL,
     created_at INTEGER NOT NULL
 );
@@ -109,6 +119,7 @@ CREATE TABLE IF NOT EXISTS oauth_access_tokens (
     role TEXT NOT NULL,
     scope TEXT,
     resource TEXT,
+    authorizing_key_fp TEXT,  -- see oauth_codes for semantics
     expires_at INTEGER NOT NULL,
     revoked INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL
@@ -144,7 +155,27 @@ class OAuthStore:
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA foreign_keys=ON")
         conn.executescript(_SCHEMA)
+        self._migrate(conn)
         self._conn = conn
+
+    def _migrate(self, conn: sqlite3.Connection) -> None:
+        """Idempotent column additions for dev DBs that predate a field.
+
+        ``CREATE TABLE IF NOT EXISTS`` does not retrofit columns onto an
+        existing table, so for any field added after the original schema we
+        ALTER TABLE ADD COLUMN guarded by a ``PRAGMA table_info`` check.
+        """
+        column_additions = (
+            ("oauth_codes", "authorizing_key_fp", "TEXT"),
+            ("oauth_pending_authorizations", "verified_key_fp", "TEXT"),
+            ("oauth_refresh_tokens", "authorizing_key_fp", "TEXT"),
+            ("oauth_access_tokens", "authorizing_key_fp", "TEXT"),
+        )
+        for table, column, decl in column_additions:
+            cur = conn.execute(f"PRAGMA table_info({table})")
+            existing = {row[1] for row in cur.fetchall()}
+            if column not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
     async def close(self) -> None:
         await asyncio.to_thread(self._close_sync)
@@ -240,9 +271,16 @@ class OAuthStore:
         account_id: str,
         user_id: str,
         role: str,
+        authorizing_key_fp: str,
         ttl_seconds: int,
     ) -> int:
-        """Insert an OTP row and return its expires_at timestamp."""
+        """Insert an OTP row and return its expires_at timestamp.
+
+        ``authorizing_key_fp`` is the SHA-256 fingerprint of the API key the
+        caller presented when requesting the OTP. It is propagated forward to
+        any auth code / access / refresh token derived from this OTP so that
+        rotating or removing the key invalidates the entire downstream chain.
+        """
         now = int(time.time())
         expires_at = now + ttl_seconds
 
@@ -251,8 +289,17 @@ class OAuthStore:
             self._conn.execute(
                 "INSERT INTO oauth_codes "
                 "(code_hash, kind, account_id, user_id, role, "
-                "expires_at, created_at) VALUES (?, 'otp', ?, ?, ?, ?, ?)",
-                (hash_secret(otp_plain), account_id, user_id, role, expires_at, now),
+                "authorizing_key_fp, expires_at, created_at) "
+                "VALUES (?, 'otp', ?, ?, ?, ?, ?, ?)",
+                (
+                    hash_secret(otp_plain),
+                    account_id,
+                    user_id,
+                    role,
+                    authorizing_key_fp,
+                    expires_at,
+                    now,
+                ),
             )
 
         async with self._lock:
@@ -278,6 +325,7 @@ class OAuthStore:
         account_id: str,
         user_id: str,
         role: str,
+        authorizing_key_fp: str,
         ttl_seconds: int,
     ) -> int:
         now = int(time.time())
@@ -289,8 +337,8 @@ class OAuthStore:
                 "INSERT INTO oauth_codes "
                 "(code_hash, kind, client_id, redirect_uri, code_challenge, "
                 "code_challenge_method, scope, resource, account_id, user_id, "
-                "role, expires_at, created_at) "
-                "VALUES (?, 'code', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "role, authorizing_key_fp, expires_at, created_at) "
+                "VALUES (?, 'code', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     hash_secret(code_plain),
                     client_id,
@@ -302,6 +350,7 @@ class OAuthStore:
                     account_id,
                     user_id,
                     role,
+                    authorizing_key_fp,
                     expires_at,
                     now,
                 ),
@@ -332,7 +381,7 @@ class OAuthStore:
             cur = self._conn.execute(
                 "SELECT client_id, redirect_uri, code_challenge, "
                 "code_challenge_method, scope, resource, account_id, user_id, role, "
-                "expires_at, created_at FROM oauth_codes "
+                "authorizing_key_fp, expires_at, created_at FROM oauth_codes "
                 "WHERE code_hash = ? AND kind = ? AND used = 0 AND expires_at > ?",
                 (code_hash, expected_kind, now),
             )
@@ -357,7 +406,7 @@ class OAuthStore:
                 "WHERE code_hash = ? AND kind = ? AND used = 0 AND expires_at > ? "
                 "RETURNING client_id, redirect_uri, code_challenge, "
                 "code_challenge_method, scope, resource, account_id, user_id, role, "
-                "expires_at, created_at",
+                "authorizing_key_fp, expires_at, created_at",
                 (code_hash, expected_kind, now),
             )
             row = cur.fetchone()
@@ -380,6 +429,7 @@ class OAuthStore:
         role: str,
         scope: Optional[str],
         resource: Optional[str],
+        authorizing_key_fp: str,
         ttl_seconds: int,
     ) -> int:
         now = int(time.time())
@@ -390,8 +440,8 @@ class OAuthStore:
             self._conn.execute(
                 "INSERT INTO oauth_refresh_tokens "
                 "(token_hash, client_id, account_id, user_id, role, scope, "
-                "resource, expires_at, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "resource, authorizing_key_fp, expires_at, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     hash_secret(token_plain),
                     client_id,
@@ -400,6 +450,7 @@ class OAuthStore:
                     role,
                     scope,
                     resource,
+                    authorizing_key_fp,
                     expires_at,
                     now,
                 ),
@@ -418,7 +469,7 @@ class OAuthStore:
             assert self._conn is not None
             cur = self._conn.execute(
                 "SELECT client_id, account_id, user_id, role, scope, resource, "
-                "expires_at, created_at FROM oauth_refresh_tokens "
+                "authorizing_key_fp, expires_at, created_at FROM oauth_refresh_tokens "
                 "WHERE token_hash = ? AND consumed = 0 AND expires_at > ?",
                 (token_hash, now),
             )
@@ -453,7 +504,7 @@ class OAuthStore:
                 "UPDATE oauth_refresh_tokens SET consumed = 1, replaced_by = ? "
                 "WHERE token_hash = ? AND consumed = 0 AND expires_at > ? "
                 "RETURNING client_id, account_id, user_id, role, scope, resource, "
-                "expires_at, created_at",
+                "authorizing_key_fp, expires_at, created_at",
                 (replaced_hash, token_hash, now),
             )
             row = cur.fetchone()
@@ -507,6 +558,7 @@ class OAuthStore:
         role: str,
         scope: Optional[str],
         resource: Optional[str],
+        authorizing_key_fp: str,
         ttl_seconds: int,
     ) -> int:
         now = int(time.time())
@@ -517,8 +569,8 @@ class OAuthStore:
             self._conn.execute(
                 "INSERT INTO oauth_access_tokens "
                 "(token_hash, client_id, account_id, user_id, role, scope, "
-                "resource, expires_at, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "resource, authorizing_key_fp, expires_at, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     hash_secret(token_plain),
                     client_id,
@@ -527,6 +579,7 @@ class OAuthStore:
                     role,
                     scope,
                     resource,
+                    authorizing_key_fp,
                     expires_at,
                     now,
                 ),
@@ -545,7 +598,7 @@ class OAuthStore:
             assert self._conn is not None
             cur = self._conn.execute(
                 "SELECT client_id, account_id, user_id, role, scope, resource, "
-                "expires_at, created_at FROM oauth_access_tokens "
+                "authorizing_key_fp, expires_at, created_at FROM oauth_access_tokens "
                 "WHERE token_hash = ? AND revoked = 0 AND expires_at > ?",
                 (token_hash, now),
             )
@@ -714,8 +767,13 @@ class OAuthStore:
         account_id: str,
         user_id: str,
         role: str,
+        verified_key_fp: str,
     ) -> bool:
         """Atomically mark a pending authorization as verified and bind identity.
+
+        ``verified_key_fp`` is the SHA-256 fingerprint of the API key behind
+        the verifying request — every OAuth token derived from this pending
+        row inherits it for lifecycle binding.
 
         Returns True on success, False if the row is missing, expired, or
         already verified (one-shot).
@@ -726,9 +784,10 @@ class OAuthStore:
             assert self._conn is not None
             cur = self._conn.execute(
                 "UPDATE oauth_pending_authorizations SET verified = 1, "
-                "verified_account_id = ?, verified_user_id = ?, verified_role = ? "
+                "verified_account_id = ?, verified_user_id = ?, verified_role = ?, "
+                "verified_key_fp = ? "
                 "WHERE pending_id = ? AND verified = 0 AND expires_at > ?",
-                (account_id, user_id, role, pending_id, now),
+                (account_id, user_id, role, verified_key_fp, pending_id, now),
             )
             return cur.rowcount > 0
 

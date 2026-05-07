@@ -13,6 +13,11 @@ import pytest_asyncio
 from openviking.server.oauth.otp import generate_otp, hash_secret
 from openviking.server.oauth.storage import OAuthStore
 
+# Test stand-in for an API key fingerprint. Real fps come from
+# APIKeyManager.get_user_key_fingerprint() — sha256 hex, 64 chars.
+_FP = "a" * 64
+_FP_OTHER = "b" * 64
+
 
 @pytest_asyncio.fixture
 async def store(tmp_path):
@@ -53,6 +58,7 @@ async def test_otp_consume_returns_identity(store):
         account_id="acct1",
         user_id="user1",
         role="user",
+        authorizing_key_fp=_FP,
         ttl_seconds=300,
     )
     claims = await store.consume_otp(otp)
@@ -60,12 +66,20 @@ async def test_otp_consume_returns_identity(store):
     assert claims["account_id"] == "acct1"
     assert claims["user_id"] == "user1"
     assert claims["role"] == "user"
+    assert claims["authorizing_key_fp"] == _FP
 
 
 @pytest.mark.asyncio
 async def test_otp_double_consume_only_one_wins(store):
     otp = generate_otp()
-    await store.insert_otp(otp_plain=otp, account_id="a", user_id="u", role="user", ttl_seconds=300)
+    await store.insert_otp(
+        otp_plain=otp,
+        account_id="a",
+        user_id="u",
+        role="user",
+        authorizing_key_fp=_FP,
+        ttl_seconds=300,
+    )
     first = await store.consume_otp(otp)
     second = await store.consume_otp(otp)
     assert first is not None
@@ -76,7 +90,14 @@ async def test_otp_double_consume_only_one_wins(store):
 async def test_otp_concurrent_consume_race(store):
     """Two coroutines racing to consume the same OTP — exactly one wins."""
     otp = generate_otp()
-    await store.insert_otp(otp_plain=otp, account_id="a", user_id="u", role="user", ttl_seconds=300)
+    await store.insert_otp(
+        otp_plain=otp,
+        account_id="a",
+        user_id="u",
+        role="user",
+        authorizing_key_fp=_FP,
+        ttl_seconds=300,
+    )
     results = await asyncio.gather(store.consume_otp(otp), store.consume_otp(otp))
     winners = [r for r in results if r is not None]
     assert len(winners) == 1
@@ -87,7 +108,14 @@ async def test_otp_expired_rejected(store):
     otp = generate_otp()
     # ttl=60 but we monkey-patch expiry by inserting and waiting — instead,
     # directly insert a stale row using a tiny ttl plus manual time travel.
-    await store.insert_otp(otp_plain=otp, account_id="a", user_id="u", role="user", ttl_seconds=60)
+    await store.insert_otp(
+        otp_plain=otp,
+        account_id="a",
+        user_id="u",
+        role="user",
+        authorizing_key_fp=_FP,
+        ttl_seconds=60,
+    )
     # Fast path: forge expiry by editing the row to be in the past.
     assert store._conn is not None
     store._conn.execute(
@@ -106,7 +134,14 @@ async def test_consume_unknown_otp_returns_none(store):
 async def test_otp_kind_isolation(store):
     """An OTP cannot be consumed via the auth-code path or vice versa."""
     otp = generate_otp()
-    await store.insert_otp(otp_plain=otp, account_id="a", user_id="u", role="user", ttl_seconds=300)
+    await store.insert_otp(
+        otp_plain=otp,
+        account_id="a",
+        user_id="u",
+        role="user",
+        authorizing_key_fp=_FP,
+        ttl_seconds=300,
+    )
     # Trying to consume as auth code must fail (kind mismatch) and leave OTP usable.
     assert await store.consume_auth_code(otp) is None
     assert await store.consume_otp(otp) is not None
@@ -126,6 +161,7 @@ async def test_auth_code_roundtrip(store):
         account_id="a",
         user_id="u",
         role="user",
+        authorizing_key_fp=_FP,
         ttl_seconds=300,
     )
     record = await store.consume_auth_code(code)
@@ -135,6 +171,7 @@ async def test_auth_code_roundtrip(store):
     assert record["code_challenge"] == "challenge-xyz"
     assert record["scope"] == "mcp"
     assert record["resource"] == "https://example.com/mcp"
+    assert record["authorizing_key_fp"] == _FP
     # Second consume rejected
     assert await store.consume_auth_code(code) is None
 
@@ -150,11 +187,13 @@ async def test_refresh_token_roundtrip(store):
         role="user",
         scope="mcp",
         resource=None,
+        authorizing_key_fp=_FP,
         ttl_seconds=86400,
     )
     record = await store.consume_refresh(token_plain=rt, replaced_by_plain="rt-secret-2")
     assert record is not None
     assert record["client_id"] == "client-x"
+    assert record["authorizing_key_fp"] == _FP
     # Reuse detection: second use returns None but the row is still flagged consumed.
     assert await store.consume_refresh(token_plain=rt, replaced_by_plain=None) is None
     assert await store.is_refresh_known_but_consumed(rt) is True
@@ -175,6 +214,7 @@ async def test_refresh_replay_revokes_chain(store):
             role="user",
             scope=None,
             resource=None,
+            authorizing_key_fp=_FP,
             ttl_seconds=86400,
         )
     # Consume rt1 (rotate to rt2). Then attacker replays rt1.
@@ -199,6 +239,7 @@ async def test_access_token_load_and_revoke(store):
         role="user",
         scope="mcp",
         resource="https://ov.test/mcp",
+        authorizing_key_fp=_FP,
         ttl_seconds=3600,
     )
     record = await store.load_access(token)
@@ -207,6 +248,7 @@ async def test_access_token_load_and_revoke(store):
     assert record["user_id"] == "alice"
     assert record["scope"] == "mcp"
     assert record["resource"] == "https://ov.test/mcp"
+    assert record["authorizing_key_fp"] == _FP
     # Revoke and confirm it's invisible.
     assert await store.revoke_access(token) is True
     assert await store.load_access(token) is None
@@ -225,6 +267,7 @@ async def test_access_token_expired_invisible(store):
         role="user",
         scope=None,
         resource=None,
+        authorizing_key_fp=_FP,
         ttl_seconds=60,
     )
     assert store._conn is not None
@@ -246,6 +289,7 @@ async def test_revoke_user_tokens_cascades(store):
         role="user",
         scope=None,
         resource=None,
+        authorizing_key_fp=_FP,
         ttl_seconds=3600,
     )
     await store.insert_access(
@@ -256,6 +300,7 @@ async def test_revoke_user_tokens_cascades(store):
         role="user",
         scope=None,
         resource=None,
+        authorizing_key_fp=_FP_OTHER,
         ttl_seconds=3600,
     )
     await store.insert_refresh(
@@ -266,11 +311,17 @@ async def test_revoke_user_tokens_cascades(store):
         role="user",
         scope=None,
         resource=None,
+        authorizing_key_fp=_FP,
         ttl_seconds=3600,
     )
     otp = generate_otp()
     await store.insert_otp(
-        otp_plain=otp, account_id="acct", user_id="alice", role="user", ttl_seconds=300
+        otp_plain=otp,
+        account_id="acct",
+        user_id="alice",
+        role="user",
+        authorizing_key_fp=_FP,
+        ttl_seconds=300,
     )
 
     counts = await store.revoke_user_tokens(account_id="acct", user_id="alice")
@@ -289,10 +340,20 @@ async def test_gc_expired_removes_stale_rows(store):
     fresh = generate_otp()
     stale = generate_otp()
     await store.insert_otp(
-        otp_plain=fresh, account_id="a", user_id="u", role="user", ttl_seconds=300
+        otp_plain=fresh,
+        account_id="a",
+        user_id="u",
+        role="user",
+        authorizing_key_fp=_FP,
+        ttl_seconds=300,
     )
     await store.insert_otp(
-        otp_plain=stale, account_id="a", user_id="u", role="user", ttl_seconds=300
+        otp_plain=stale,
+        account_id="a",
+        user_id="u",
+        role="user",
+        authorizing_key_fp=_FP,
+        ttl_seconds=300,
     )
     # Backdate stale row
     assert store._conn is not None

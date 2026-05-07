@@ -50,15 +50,30 @@ def _make_request(
     return Request(scope)
 
 
+_TEST_FP = "f" * 64  # stand-in sha256 fingerprint shared across tests
+
+
 class _StubKeyManager:
     """API-key manager that asserts when reached unexpectedly.
 
     Tests for the OAuth path want to assert API-key fallback is *not* taken;
     backwards-compat tests flip ``raise_on_resolve`` to False.
+
+    ``fingerprints`` maps (account_id, user_id) → fp. Defaults to a permissive
+    map that returns ``_TEST_FP`` for any user, so existing tests don't have
+    to know about the binding. Tests that exercise rotation / deletion pass
+    a sparser map.
     """
 
-    def __init__(self, raise_on_resolve: bool = True):
+    def __init__(
+        self,
+        raise_on_resolve: bool = True,
+        fingerprints: Optional[dict[tuple[str, str], str]] = None,
+        default_fingerprint: Optional[str] = _TEST_FP,
+    ):
         self._raise = raise_on_resolve
+        self._fps = fingerprints
+        self._default_fp = default_fingerprint
 
     def resolve(self, key: str):  # noqa: D401
         if self._raise:
@@ -71,6 +86,11 @@ class _StubKeyManager:
         from openviking.server.identity import AccountNamespacePolicy
 
         return AccountNamespacePolicy()
+
+    def get_user_key_fingerprint(self, account_id: str, user_id: str) -> Optional[str]:
+        if self._fps is None:
+            return self._default_fp
+        return self._fps.get((account_id, user_id))
 
 
 @pytest_asyncio.fixture
@@ -99,6 +119,7 @@ async def _mint_token(provider: OpenVikingOAuthProvider, store: OAuthStore, **id
         role=identity["role"],
         scope=identity.get("scope"),
         resource=identity.get("resource"),
+        authorizing_key_fp=identity.get("authorizing_key_fp", _TEST_FP),
         ttl_seconds=3600,
     )
     return token
@@ -205,3 +226,75 @@ async def test_oauth_root_can_be_used_without_explicit_tenant_headers(provider, 
     identity = await resolve_identity(request, x_api_key=None, authorization=f"Bearer {token}")
     assert identity.role == Role.ROOT
     assert identity.from_oauth is True
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle binding: OAuth lifetime ≤ authorizing key lifetime.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_oauth_token_rejected_when_authorizing_key_rotated(provider, store):
+    """Rotating the user's API key must invalidate every derived OAuth token."""
+    token = await _mint_token(
+        provider,
+        store,
+        account_id="tenant-a",
+        user_id="alice",
+        role="user",
+        authorizing_key_fp=_TEST_FP,
+    )
+    # Simulate rotation: the manager now reports a different fingerprint.
+    rotated_manager = _StubKeyManager(
+        raise_on_resolve=True,
+        fingerprints={("tenant-a", "alice"): "9" * 64},
+    )
+    request = _make_request(
+        bearer=token,
+        api_key_manager=rotated_manager,
+        oauth_provider=provider,
+    )
+    with pytest.raises(UnauthenticatedError, match="rotated or revoked"):
+        await resolve_identity(request, x_api_key=None, authorization=f"Bearer {token}")
+
+
+@pytest.mark.asyncio
+async def test_oauth_token_rejected_when_authorizing_user_removed(provider, store):
+    """Removing the user (fp lookup → None) invalidates the token."""
+    token = await _mint_token(
+        provider,
+        store,
+        account_id="tenant-a",
+        user_id="alice",
+        role="user",
+        authorizing_key_fp=_TEST_FP,
+    )
+    # Sparse map ⇒ no fp for (tenant-a, alice) ⇒ user is gone.
+    removed_manager = _StubKeyManager(raise_on_resolve=True, fingerprints={})
+    request = _make_request(
+        bearer=token,
+        api_key_manager=removed_manager,
+        oauth_provider=provider,
+    )
+    with pytest.raises(UnauthenticatedError, match="rotated or revoked"):
+        await resolve_identity(request, x_api_key=None, authorization=f"Bearer {token}")
+
+
+@pytest.mark.asyncio
+async def test_oauth_token_without_recorded_fp_fails_closed(provider, store):
+    """Tokens missing a recorded fingerprint (legacy / stub) must NOT validate."""
+    token = await _mint_token(
+        provider,
+        store,
+        account_id="tenant-a",
+        user_id="alice",
+        role="user",
+        authorizing_key_fp="",  # writes empty fp into the row
+    )
+    request = _make_request(
+        bearer=token,
+        api_key_manager=_StubKeyManager(raise_on_resolve=True),
+        oauth_provider=provider,
+    )
+    with pytest.raises(UnauthenticatedError, match="rotated or revoked"):
+        await resolve_identity(request, x_api_key=None, authorization=f"Bearer {token}")

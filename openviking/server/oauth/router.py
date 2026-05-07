@@ -361,6 +361,9 @@ async def authorize_page_status(request: Request, pending: str = "") -> JSONResp
         account_id=record["verified_account_id"],
         user_id=record["verified_user_id"],
         role=record["verified_role"],
+        # Carry the verifier's API key fingerprint forward so every token
+        # derived from this code is bound to the same key lifecycle.
+        authorizing_key_fp=record.get("verified_key_fp") or "",
         ttl_seconds=provider.code_ttl_seconds,
     )
     await store.delete_pending_authorization(pending)
@@ -426,11 +429,30 @@ async def oauth_verify(
         await store.delete_pending_authorization(record["pending_id"])
         return JSONResponse({"status": "denied"})
 
+    # Bind the verifier's current API-key fingerprint into the pending row.
+    # The fp is propagated through auth_code → access/refresh tokens, and
+    # every OAuth bearer auth re-checks it against the user's current key.
+    # If the verifier has no resolvable key (ROOT, trusted-mode requester
+    # without a real key), refuse to mint OAuth: there's no key to bind to,
+    # so we cannot honor the "OAuth lifetime ≤ key lifetime" invariant.
+    api_key_manager = getattr(request.app.state, "api_key_manager", None)
+    verifier_fp: Optional[str] = None
+    if api_key_manager is not None and hasattr(api_key_manager, "get_user_key_fingerprint"):
+        verifier_fp = api_key_manager.get_user_key_fingerprint(
+            ctx.user.account_id, ctx.user.user_id
+        )
+    if not verifier_fp:
+        raise InvalidArgumentError(
+            "OAuth authorization requires a verifier with a registered API key "
+            "(ROOT or trusted-mode identities cannot authorize OAuth clients)."
+        )
+
     ok = await store.mark_pending_verified(
         pending_id=record["pending_id"],
         account_id=ctx.user.account_id,
         user_id=ctx.user.user_id,
         role=ctx.role.value,
+        verified_key_fp=verifier_fp,
     )
     if not ok:
         raise InvalidArgumentError("Verification raced — please restart from the authorize page")
@@ -483,12 +505,25 @@ async def issue_otp(
     if ttl < 60 or ttl > 600:
         raise InvalidArgumentError("ttl_seconds must be between 60 and 600")
 
+    # See oauth_verify for the rationale: an OTP that can't be tied back to
+    # a real, current API key cannot uphold the lifecycle-binding invariant.
+    api_key_manager = getattr(request.app.state, "api_key_manager", None)
+    caller_fp: Optional[str] = None
+    if api_key_manager is not None and hasattr(api_key_manager, "get_user_key_fingerprint"):
+        caller_fp = api_key_manager.get_user_key_fingerprint(ctx.user.account_id, ctx.user.user_id)
+    if not caller_fp:
+        raise InvalidArgumentError(
+            "OTP issuance requires a caller with a registered API key "
+            "(ROOT or trusted-mode identities cannot issue OAuth OTPs)."
+        )
+
     otp = generate_otp()
     expires_at = await store.insert_otp(
         otp_plain=otp,
         account_id=ctx.user.account_id,
         user_id=ctx.user.user_id,
         role=ctx.role.value,
+        authorizing_key_fp=caller_fp,
         ttl_seconds=ttl,
     )
     return JSONResponse(

@@ -48,6 +48,9 @@ class OVAuthorizationCode(AuthorizationCode):
     account_id: str
     user_id: str
     role: str
+    # SHA-256 fp of the API key that authorized this code; copied forward
+    # into refresh/access tokens so rotation invalidates the entire chain.
+    authorizing_key_fp: str | None = None
 
 
 class OVRefreshToken(RefreshToken):
@@ -55,12 +58,14 @@ class OVRefreshToken(RefreshToken):
     user_id: str
     role: str
     resource: str | None = None
+    authorizing_key_fp: str | None = None
 
 
 class OVAccessToken(AccessToken):
     account_id: str
     user_id: str
     role: str
+    authorizing_key_fp: str | None = None
 
 
 class OpenVikingOAuthProvider(
@@ -178,6 +183,7 @@ class OpenVikingOAuthProvider(
             account_id=record["account_id"],
             user_id=record["user_id"],
             role=record["role"],
+            authorizing_key_fp=record.get("authorizing_key_fp"),
         )
 
     async def exchange_authorization_code(
@@ -196,6 +202,7 @@ class OpenVikingOAuthProvider(
             role=authorization_code.role,
             scope=" ".join(authorization_code.scopes) if authorization_code.scopes else None,
             resource=authorization_code.resource,
+            authorizing_key_fp=authorization_code.authorizing_key_fp,
         )
 
     # ---- Refresh tokens ----
@@ -217,6 +224,7 @@ class OpenVikingOAuthProvider(
             user_id=record["user_id"],
             role=record["role"],
             resource=record.get("resource"),
+            authorizing_key_fp=record.get("authorizing_key_fp"),
         )
 
     async def exchange_refresh_token(
@@ -257,6 +265,7 @@ class OpenVikingOAuthProvider(
             role=refresh_token.role,
             scope=scope or (refresh_token.scopes and " ".join(refresh_token.scopes)) or None,
             resource=refresh_token.resource,
+            authorizing_key_fp=refresh_token.authorizing_key_fp,
             new_refresh_override=new_refresh,
         )
 
@@ -277,6 +286,7 @@ class OpenVikingOAuthProvider(
             account_id=record["account_id"],
             user_id=record["user_id"],
             role=record["role"],
+            authorizing_key_fp=record.get("authorizing_key_fp"),
         )
 
     async def revoke_token(self, token: OVAccessToken | OVRefreshToken) -> None:
@@ -303,10 +313,18 @@ class OpenVikingOAuthProvider(
         role: str,
         scope: Optional[str],
         resource: Optional[str],
+        authorizing_key_fp: Optional[str],
         new_refresh_override: Optional[str] = None,
     ) -> OAuthToken:
         access = self._mint_access()
         refresh = new_refresh_override or self._mint_refresh()
+        # ``authorizing_key_fp`` should always be set — every legitimate flow
+        # records the fingerprint at OTP/oauth-verify time. We tolerate None
+        # only because the dataclass default is None for upgrade safety; the
+        # bearer-auth path will fail-closed against a NULL stored value, so a
+        # missing fp here just makes the resulting token unusable rather than
+        # silently bypassing the binding.
+        fp = authorizing_key_fp or ""
         await self._store.insert_access(
             token_plain=access,
             client_id=client_id,
@@ -315,6 +333,7 @@ class OpenVikingOAuthProvider(
             role=role,
             scope=scope,
             resource=resource,
+            authorizing_key_fp=fp,
             ttl_seconds=self._access_ttl,
         )
         await self._store.insert_refresh(
@@ -325,6 +344,7 @@ class OpenVikingOAuthProvider(
             role=role,
             scope=scope,
             resource=resource,
+            authorizing_key_fp=fp,
             ttl_seconds=self._refresh_ttl,
         )
         return OAuthToken(

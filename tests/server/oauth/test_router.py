@@ -24,7 +24,7 @@ from typing import Optional
 import httpx
 import pytest
 import pytest_asyncio
-from fastapi import Depends, FastAPI
+from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from mcp.server.auth.routes import create_auth_routes
 from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOptions
@@ -32,12 +32,27 @@ from pydantic import AnyHttpUrl
 
 from openviking.server.auth import get_request_context
 from openviking.server.config import ServerConfig
-from openviking.server.identity import ResolvedIdentity, Role
+from openviking.server.identity import Role
+from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS
 from openviking.server.oauth.provider import OpenVikingOAuthProvider
 from openviking.server.oauth.router import router as oauth_router
 from openviking.server.oauth.storage import OAuthStore
 from openviking_cli.exceptions import OpenVikingError
-from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS
+
+
+class _FpOnlyKeyManager:
+    """Minimal stand-in: returns SHA-256 fingerprints for known (account, user) pairs.
+
+    Router code only touches ``get_user_key_fingerprint`` on this object; the
+    full APIKeyManager surface is irrelevant for OAuth flow tests because
+    ``get_request_context`` is dependency-overridden to a fixed identity.
+    """
+
+    def __init__(self, fingerprints: dict[tuple[str, str], str]):
+        self._fps = fingerprints
+
+    def get_user_key_fingerprint(self, account_id: str, user_id: str) -> Optional[str]:
+        return self._fps.get((account_id, user_id))
 
 
 @dataclass
@@ -63,7 +78,11 @@ async def app_with_oauth(tmp_path):
 
     app = FastAPI()
     app.state.config = ServerConfig(auth_mode="api_key", root_api_key="root-test-1234567890abcd")
-    app.state.api_key_manager = object()
+    # OTP / oauth-verify routes look up the caller's API key fingerprint via
+    # ``api_key_manager.get_user_key_fingerprint(account_id, user_id)`` and
+    # refuse to issue OAuth state if the call returns None. Provide a tiny
+    # stub that returns a stable fingerprint for the fixture's identity.
+    app.state.api_key_manager = _FpOnlyKeyManager({("acct1", "alice"): "f" * 64})
     app.state.oauth_store = store
     app.state.oauth_provider = provider
     app.state.oauth_config = _StubOAuthCfg()
@@ -405,3 +424,81 @@ async def test_refresh_token_rotation(app_with_oauth, client):
         data={"grant_type": "refresh_token", "refresh_token": rt1, "client_id": client_id},
     )
     assert replay.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Authorizing-key fingerprint binding (router level).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_otp_endpoint_rejects_caller_without_fingerprint(app_with_oauth, client):
+    """If the API-key manager has no fingerprint for the caller (e.g. ROOT or
+    trusted-mode identity), OTP issuance must refuse — there's no key whose
+    lifetime we could bind the resulting OAuth tokens to."""
+    app, _, _ = app_with_oauth
+    # Swap in an empty fingerprint map so get_user_key_fingerprint returns None
+    # for the fixture's (acct1, alice) identity.
+    app.state.api_key_manager = _FpOnlyKeyManager({})
+    resp = await client.post("/api/v1/auth/otp", json={})
+    assert resp.status_code == 400, resp.text
+    body = resp.json()
+    msg = body.get("error_description") or body.get("message") or ""
+    assert "registered API key" in msg
+
+
+@pytest.mark.asyncio
+async def test_oauth_verify_rejects_verifier_without_fingerprint(app_with_oauth, client):
+    """oauth-verify must refuse to bind OAuth state to an identity that has
+    no fingerprint — same invariant as OTP issuance."""
+    app, store, _ = app_with_oauth
+    _, pending_id, _, _ = await _start_authorize(client, redirect_uri="https://x.test/cb")
+    code = (await store.load_pending_authorization(pending_id))["display_code"]
+
+    app.state.api_key_manager = _FpOnlyKeyManager({})  # verifier has no key
+    resp = await client.post(
+        "/api/v1/auth/oauth-verify",
+        json={"code": code, "decision": "approve"},
+    )
+    assert resp.status_code == 400
+    msg = resp.json().get("error_description") or resp.json().get("message") or ""
+    assert "registered API key" in msg
+
+
+@pytest.mark.asyncio
+async def test_oauth_token_carries_authorizing_key_fp(app_with_oauth, client):
+    """Happy path: every minted token records the verifier's fp; rotation of
+    that fingerprint at the manager level invalidates the token at bearer
+    auth time. Here we just verify the fp is correctly recorded — auth-time
+    rejection has its own coverage in test_auth_integration."""
+    app, store, provider = app_with_oauth
+    expected_fp = "f" * 64
+
+    client_id, pending_id, _, verifier = await _start_authorize(
+        client, redirect_uri="https://x.test/cb"
+    )
+    code = (await store.load_pending_authorization(pending_id))["display_code"]
+
+    await client.post("/api/v1/auth/oauth-verify", json={"code": code, "decision": "approve"})
+    pending = await store.load_pending_authorization(pending_id)
+    # After verify, the pending row carries the verifier's fp.
+    assert pending["verified_key_fp"] == expected_fp
+
+    status = await client.get("/oauth/authorize/page/status", params={"pending": pending_id})
+    auth_code = status.json()["redirect_url"].split("code=")[1].split("&")[0]
+    token_resp = await client.post(
+        "/token",
+        data={
+            "grant_type": "authorization_code",
+            "code": auth_code,
+            "redirect_uri": "https://x.test/cb",
+            "client_id": client_id,
+            "code_verifier": verifier,
+        },
+    )
+    access_token = token_resp.json()["access_token"]
+    record = await provider.load_access_token(access_token)
+    assert record is not None
+    assert record.authorizing_key_fp == expected_fp
+    refresh_record = await store.peek_refresh(token_resp.json()["refresh_token"])
+    assert refresh_record["authorizing_key_fp"] == expected_fp

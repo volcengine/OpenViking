@@ -3,6 +3,7 @@
 """Legacy API Key management (original implementation)."""
 
 import fnmatch
+import hashlib
 import hmac
 import json
 import secrets
@@ -566,6 +567,35 @@ class LegacyAPIKeyManager:
         if user is None:
             return Role.USER
         return Role(user.get("role", "user"))
+
+    def get_user_key_fingerprint(self, account_id: str, user_id: str) -> Optional[str]:
+        """Return SHA-256 hex digest of the user's stored API key value, or None.
+
+        The "stored value" is whatever is persisted in ``user_info["key"]``:
+        either the plaintext API key (when hashing is disabled) or its
+        Argon2id hash (when hashing is enabled). Both are stable per
+        key-generation — they are written once on create / regenerate and
+        never mutate in place — so the fingerprint is stable as long as the
+        key is unchanged, and changes the moment ``regenerate_key`` runs.
+
+        Used by OAuth to bind issued tokens to the API key that authorized
+        them: at OTP / authorize time we record this fingerprint; at every
+        OAuth bearer auth we recompute and compare. Mismatch (rotation) or
+        ``None`` (user removed) fails the request closed.
+
+        Returns None when the account or user does not exist, or when the
+        stored value is empty (no fingerprint to bind to).
+        """
+        account = self._accounts.get(account_id)
+        if account is None:
+            return None
+        user = account.users.get(user_id)
+        if user is None:
+            return None
+        stored = user.get("key", "")
+        if not stored:
+            return None
+        return hashlib.sha256(stored.encode("utf-8")).hexdigest()
 
     # ---- internal helpers ----
 

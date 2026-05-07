@@ -135,6 +135,23 @@ async def _try_resolve_oauth_token(
     if record is None:
         raise UnauthenticatedError("OAuth access token is invalid, expired, or revoked")
 
+    # Lifecycle binding: every OAuth token carries the SHA-256 fingerprint of
+    # the API key that authorized it. We recompute the user's current key fp
+    # and demand strict equality. If the user removed (no fp) or rotated
+    # (different fp) the authorizing key, the token must die — this is the
+    # invariant "OAuth lifetime ≤ authorizing key lifetime". Tokens missing a
+    # recorded fp also fail closed: there is no way to validate them safely.
+    api_key_manager = getattr(request.app.state, "api_key_manager", None)
+    recorded_fp = record.authorizing_key_fp
+    current_fp: Optional[str] = None
+    if api_key_manager is not None and hasattr(api_key_manager, "get_user_key_fingerprint"):
+        current_fp = api_key_manager.get_user_key_fingerprint(record.account_id, record.user_id)
+    if not recorded_fp or not current_fp or not hmac.compare_digest(recorded_fp, current_fp):
+        raise UnauthenticatedError(
+            "OAuth token's authorizing API key has been rotated or revoked; "
+            "please re-authorize the client."
+        )
+
     try:
         role = Role(record.role)
     except ValueError as exc:
@@ -172,7 +189,6 @@ async def _try_resolve_oauth_token(
     effective_agent = x_openviking_agent or "default"
 
     namespace_policy = AccountNamespacePolicy()
-    api_key_manager = getattr(request.app.state, "api_key_manager", None)
     if api_key_manager is not None and hasattr(api_key_manager, "get_account_policy"):
         try:
             namespace_policy = api_key_manager.get_account_policy(effective_account)
