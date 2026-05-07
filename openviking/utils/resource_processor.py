@@ -86,8 +86,9 @@ class ResourceProcessor:
         self, resource_uris: List[str], ctx: RequestContext, **kwargs
     ) -> Dict[str, Any]:
         """Expose index building as a standalone method."""
+        recursive = kwargs.get("recursive", False)
         for uri in resource_uris:
-            await index_resource(uri, ctx)
+            await index_resource(uri, ctx, recursive=recursive)
         return {"status": "success", "message": f"Indexed {len(resource_uris)} resources"}
 
     async def summarize(

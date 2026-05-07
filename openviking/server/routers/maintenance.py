@@ -25,6 +25,7 @@ class ReindexRequest(BaseModel):
 
     uri: str
     regenerate: bool = False
+    recursive: bool = False
     wait: bool = True
 
 
@@ -40,7 +41,7 @@ async def reindex(
 
     Re-embeds existing .abstract.md/.overview.md content into the vector
     database. If regenerate=True, also regenerates L0/L1 summaries via LLM
-    before re-embedding.
+    before re-embedding. If recursive=True, also indexes all subdirectories.
 
     Uses path locking to prevent concurrent reindexes on the same URI.
     Set wait=False to run in the background and track progress via task API.
@@ -67,7 +68,7 @@ async def reindex(
             owner_user_id=ctx.user.user_id,
         ):
             return error_response("CONFLICT", f"URI {uri} already has a reindex in progress")
-        result = await _do_reindex(service, uri, body.regenerate, ctx)
+        result = await _do_reindex(service, uri, body.regenerate, body.recursive, ctx)
         return response_from_result(result)
     else:
         # Async path: run in background, return task_id for polling
@@ -80,7 +81,9 @@ async def reindex(
         if task is None:
             return error_response("CONFLICT", f"URI {uri} already has a reindex in progress")
         asyncio.create_task(
-            _background_reindex_tracked(service, uri, body.regenerate, ctx, task.task_id)
+            _background_reindex_tracked(
+                service, uri, body.regenerate, body.recursive, ctx, task.task_id
+            )
         )
         return Response(
             status="ok",
@@ -97,6 +100,7 @@ async def _do_reindex(
     service,
     uri: str,
     regenerate: bool,
+    recursive: bool,
     ctx: RequestContext,
 ) -> dict:
     """Execute reindex within a lock scope."""
@@ -107,15 +111,18 @@ async def _do_reindex(
 
     async with LockContext(get_lock_manager(), [path], lock_mode="point"):
         if regenerate:
+            if recursive:
+                logger.warning("recursive=True is ignored when regenerate=True for uri=%s", uri)
             return await service.resources.summarize([uri], ctx=ctx)
         else:
-            return await service.resources.build_index([uri], ctx=ctx)
+            return await service.resources.build_index([uri], ctx=ctx, recursive=recursive)
 
 
 async def _background_reindex_tracked(
     service,
     uri: str,
     regenerate: bool,
+    recursive: bool,
     ctx: RequestContext,
     task_id: str,
 ) -> None:
@@ -125,7 +132,7 @@ async def _background_reindex_tracked(
     tracker = get_task_tracker()
     tracker.start(task_id)
     try:
-        result = await _do_reindex(service, uri, regenerate, ctx)
+        result = await _do_reindex(service, uri, regenerate, recursive, ctx)
         tracker.complete(task_id, {"uri": uri, **result})
         logger.info("Background reindex completed: uri=%s task=%s", uri, task_id)
     except Exception as exc:

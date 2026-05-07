@@ -431,6 +431,7 @@ async def vectorize_file(
 async def index_resource(
     uri: str,
     ctx: RequestContext,
+    recursive: bool = False,
 ) -> None:
     """
     Build vector index for a resource directory.
@@ -441,6 +442,8 @@ async def index_resource(
     The context_type is derived from the URI so that memory directories
     (``/memories/``) are indexed as ``"memory"`` rather than the default
     ``"resource"``.
+
+    If recursive=True, subdirectories are recursively indexed as well.
     """
     viking_fs = get_viking_fs()
     context_type = get_context_type_for_uri(uri)
@@ -474,7 +477,9 @@ async def index_resource(
                 continue
 
             if file_info.get("type") == "directory" or file_info.get("isDir"):
-                # TODO: Recursive indexing? For now, skip subdirectories to match previous behavior
+                if recursive:
+                    sub_uri = file_info.get("uri") or f"{uri}/{file_name}"
+                    await index_resource(sub_uri, ctx, recursive=True)
                 continue
 
             file_uri = file_info.get("uri") or f"{uri}/{file_name}"

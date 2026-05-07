@@ -153,7 +153,7 @@ async def test_reindex_uses_request_tenant_for_exists(monkeypatch):
         def has_running(self, task_type, uri, owner_account_id=None, owner_user_id=None):
             return False
 
-    async def fake_do_reindex(service, uri, regenerate, ctx):
+    async def fake_do_reindex(service, uri, regenerate, recursive, ctx):
         return {"status": "success", "message": "Indexed 1 resources"}
 
     ctx = RequestContext(
@@ -181,7 +181,7 @@ async def test_reindex_uses_request_tenant_for_exists(monkeypatch):
 
 
 async def test_maintenance_reindex_sync_success_returns_ok_payload(client, monkeypatch):
-    async def fake_do_reindex(service, uri, regenerate, ctx):
+    async def fake_do_reindex(service, uri, regenerate, recursive, ctx):
         return {"status": "success", "message": "Indexed 1 resources"}
 
     class FakeVikingFS:
@@ -215,3 +215,91 @@ async def test_maintenance_reindex_sync_success_returns_ok_payload(client, monke
     body = response.json()
     assert body["status"] == "ok"
     assert body["result"]["status"] == "success"
+
+
+async def test_reindex_recursive_parameter_schema(client):
+    """Test reindex accepts recursive parameter in request schema."""
+    resp = await client.post(
+        "/api/v1/maintenance/reindex",
+        json={"uri": "viking://resources/test", "recursive": True, "wait": True},
+    )
+    assert resp.status_code != 404
+    assert resp.status_code != 405
+
+
+async def test_reindex_recursive_defaults_to_false(client, monkeypatch):
+    """Test that recursive defaults to False when not provided."""
+    captured = {}
+
+    async def fake_do_reindex(service, uri, regenerate, recursive, ctx):
+        captured["recursive"] = recursive
+        return {"status": "success", "message": "Indexed 1 resources"}
+
+    class FakeVikingFS:
+        async def exists(self, uri, ctx=None):
+            return True
+
+    class FakeTracker:
+        def has_running(self, task_type, uri, owner_account_id=None, owner_user_id=None):
+            return False
+
+    monkeypatch.setattr(
+        "openviking.storage.viking_fs.get_viking_fs",
+        lambda: FakeVikingFS(),
+    )
+    monkeypatch.setattr(
+        "openviking.service.task_tracker.get_task_tracker",
+        lambda: FakeTracker(),
+    )
+    monkeypatch.setattr(
+        "openviking.server.routers.maintenance.get_service",
+        lambda: SimpleNamespace(),
+    )
+    monkeypatch.setattr("openviking.server.routers.maintenance._do_reindex", fake_do_reindex)
+
+    response = await client.post(
+        "/api/v1/maintenance/reindex",
+        json={"uri": "viking://resources/demo", "wait": True},
+    )
+
+    assert response.status_code == 200
+    assert captured["recursive"] is False
+
+
+async def test_reindex_recursive_true_is_forwarded(client, monkeypatch):
+    """Test that recursive=True is forwarded to _do_reindex."""
+    captured = {}
+
+    async def fake_do_reindex(service, uri, regenerate, recursive, ctx):
+        captured["recursive"] = recursive
+        return {"status": "success", "message": "Indexed 1 resources"}
+
+    class FakeVikingFS:
+        async def exists(self, uri, ctx=None):
+            return True
+
+    class FakeTracker:
+        def has_running(self, task_type, uri, owner_account_id=None, owner_user_id=None):
+            return False
+
+    monkeypatch.setattr(
+        "openviking.storage.viking_fs.get_viking_fs",
+        lambda: FakeVikingFS(),
+    )
+    monkeypatch.setattr(
+        "openviking.service.task_tracker.get_task_tracker",
+        lambda: FakeTracker(),
+    )
+    monkeypatch.setattr(
+        "openviking.server.routers.maintenance.get_service",
+        lambda: SimpleNamespace(),
+    )
+    monkeypatch.setattr("openviking.server.routers.maintenance._do_reindex", fake_do_reindex)
+
+    response = await client.post(
+        "/api/v1/maintenance/reindex",
+        json={"uri": "viking://resources/demo", "recursive": True, "wait": True},
+    )
+
+    assert response.status_code == 200
+    assert captured["recursive"] is True
