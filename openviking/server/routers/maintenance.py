@@ -3,6 +3,7 @@
 """Maintenance endpoints for OpenViking HTTP Server."""
 
 import asyncio
+import os
 
 from fastapi import APIRouter, Body
 from pydantic import BaseModel
@@ -99,17 +100,50 @@ async def _do_reindex(
     regenerate: bool,
     ctx: RequestContext,
 ) -> dict:
-    """Execute reindex within a lock scope."""
+    """Execute reindex within a lock scope.
+
+    For files, acquires a point lock on the parent directory and reindexes
+    the parent directory to include the file. This avoids "Not a directory"
+    errors when creating lock files inside file paths.
+    For directories, acquires a point lock on the directory itself.
+    """
     from openviking.storage.transaction import LockContext, get_lock_manager
 
     viking_fs = service.viking_fs
     path = viking_fs._uri_to_path(uri, ctx=ctx)
 
-    async with LockContext(get_lock_manager(), [path], lock_mode="point"):
-        if regenerate:
-            return await service.resources.summarize([uri], ctx=ctx)
-        else:
-            return await service.resources.build_index([uri], ctx=ctx)
+    # Determine if path is a file or directory
+    try:
+        stat_info = await viking_fs.stat(uri, ctx=ctx)
+        is_dir = stat_info.get("isDir", False)
+    except Exception:
+        # Fallback: if stat fails, check if the path has a file extension
+        _, ext = os.path.splitext(path)
+        is_dir = not ext
+
+    if not is_dir:
+        # For files:
+        # 1. Lock the parent directory (following the rm() pattern from design docs)
+        # 2. Reindex the parent directory so the file is included in vector indexing
+        lock_path = os.path.dirname(path)
+        parent_uri = os.path.dirname(uri.rstrip("/"))
+        if not lock_path or lock_path == path:
+            lock_path = "/"
+        if not parent_uri or parent_uri == uri:
+            parent_uri = "viking://"
+
+        async with LockContext(get_lock_manager(), [lock_path], lock_mode="point"):
+            if regenerate:
+                return await service.resources.summarize([parent_uri], ctx=ctx)
+            else:
+                return await service.resources.build_index([parent_uri], ctx=ctx)
+    else:
+        # For directories, lock the directory itself
+        async with LockContext(get_lock_manager(), [path], lock_mode="point"):
+            if regenerate:
+                return await service.resources.summarize([uri], ctx=ctx)
+            else:
+                return await service.resources.build_index([uri], ctx=ctx)
 
 
 async def _background_reindex_tracked(
