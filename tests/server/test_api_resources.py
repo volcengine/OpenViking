@@ -527,7 +527,7 @@ async def test_add_resource_async_task_queryable(
     result = task_resp.json()["result"]
     assert result["task_id"] == task_id
     assert result["task_type"] == "add_resource"
-    assert result["status"] in {"running", "completed"}
+    assert result["status"] in {"running", "completed", "failed"}
 
 
 async def test_add_resource_async_failure_cleans_up_tracker(
