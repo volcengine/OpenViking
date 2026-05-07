@@ -98,16 +98,40 @@ impl LocalFileSystem {
             .map_err(|e| Error::Internal(format!("spawn_blocking failed: {}", e)))?
     }
 
-    /// Convert an exclude path in "virtual mount" form (often starts with "/") to a query-root-relative path.
+    /// Convert an exclude path (plugin-relative "virtual mount" form, often starts with "/")
+    /// into a query-root-relative path.
     ///
-    /// This is used to compare with `file_virtual`, which is always query-root-relative.
-    fn exclude_to_query_relative_path(exclude_path: &str) -> Option<String> {
+    /// Contract:
+    /// - Returns `Some(".")` when the exclude path covers the entire query root (exclude all).
+    /// - Returns `Some(rel)` when the exclude path is under the query root (so it can be
+    ///   compared with `file_virtual`, which is always query-root-relative).
+    /// - Returns `None` when the exclude path is outside the query root (no effect).
+    fn exclude_to_query_root_relative_path(
+        base_path: &Path,
+        query_root_local: &Path,
+        exclude_path: &str,
+    ) -> Option<String> {
         let p = exclude_path.trim_end_matches('/');
-        let rel = p.strip_prefix('/').unwrap_or(p);
-        if rel.is_empty() {
+        if p.is_empty() {
+            return Some(".".to_string());
+        }
+
+        let exclude_local = Self::resolve_virtual_path(base_path, p);
+
+        // If the exclude prefix includes the query root itself, exclude everything under the query root.
+        if query_root_local == exclude_local
+            || query_root_local.strip_prefix(&exclude_local).is_ok()
+        {
+            return Some(".".to_string());
+        }
+
+        // If exclude is under query root, convert it to query-root-relative.
+        let rel = exclude_local.strip_prefix(query_root_local).ok()?;
+        let s = rel.to_string_lossy();
+        if s.is_empty() {
             Some(".".to_string())
         } else {
-            Some(rel.to_string())
+            Some(s.to_string())
         }
     }
 
@@ -139,7 +163,7 @@ impl LocalFileSystem {
     /// Returns `Ok(None)` when `rg` is unavailable or cannot be executed (e.g. not in PATH),
     /// so the caller can fall back to the in-process implementation.
     fn grep_via_rg(
-        _base_path: &Path,
+        base_path: &Path,
         target_path: &Path,
         pattern: &str,
         recursive: bool,
@@ -155,6 +179,7 @@ impl LocalFileSystem {
         let mut cmd = Command::new("rg");
         cmd.arg("--json");
         cmd.arg("--no-messages"); // Avoid interleaving permission/IO warnings with JSON output
+        cmd.arg("--no-ignore-parent"); // Match fallback `.parents(false)` semantics.
 
         if case_insensitive {
             cmd.arg("-i");
@@ -209,7 +234,8 @@ impl LocalFileSystem {
 
         let mut out = GrepResult::new();
         let mut killed_for_limit = false;
-        let exclude_rel = exclude_path.and_then(|p| Self::exclude_to_query_relative_path(p));
+        let exclude_rel = exclude_path
+            .and_then(|p| Self::exclude_to_query_root_relative_path(base_path, target_path, p));
 
         #[derive(Debug, Deserialize)]
         struct RgEvent {
@@ -369,7 +395,8 @@ impl LocalFileSystem {
 
         let mut out = GrepResult::new();
         let limit = node_limit.unwrap_or(usize::MAX);
-        let exclude_rel = exclude_path.and_then(|p| Self::exclude_to_query_relative_path(p));
+        let exclude_rel = exclude_path
+            .and_then(|p| Self::exclude_to_query_root_relative_path(base_path, &local_root, p));
 
         // Single file: search directly.
         if local_root.is_file() {
@@ -1014,6 +1041,86 @@ mod tests {
         assert_eq!(out.count, 1);
         assert_eq!(out.matches.len(), 1);
         assert_eq!(out.matches[0].file, "ok/y.txt");
+    }
+
+    #[tokio::test]
+    async fn test_localfs_grep_exclude_path_is_query_root_relative_for_nested_query_root() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let nested_root = dir.path().join("acct/resources/docs");
+        std::fs::create_dir_all(nested_root.join("excluded")).unwrap();
+        std::fs::create_dir_all(nested_root.join("ok")).unwrap();
+        std::fs::write(nested_root.join("excluded/x.txt"), "hit\n").unwrap();
+        std::fs::write(nested_root.join("ok/y.txt"), "hit\n").unwrap();
+
+        let mut fs = LocalFileSystem::new(dir.path().to_str().unwrap()).unwrap();
+        fs.has_rg = false;
+
+        // Simulate MountableFS -> LocalFS: query root and exclude path are plugin-relative and nested.
+        let out = fs
+            .grep(
+                "/acct/resources/docs",
+                "hit",
+                true,
+                false,
+                Some(1),
+                Some("/acct/resources/docs/excluded"),
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(out.count, 1);
+        assert_eq!(out.matches.len(), 1);
+        assert_eq!(out.matches[0].file, "ok/y.txt");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_localfs_grep_rg_fast_path_disables_parent_ignore_inheritance() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join(".gitignore"), "mount/\n").unwrap();
+
+        let mount_dir = dir.path().join("mount");
+        std::fs::create_dir_all(&mount_dir).unwrap();
+        std::fs::write(mount_dir.join("a.txt"), "hello\n").unwrap();
+
+        // Fake `rg` verifies `--no-ignore-parent` is present, then emits one JSON match.
+        let bin_dir = dir.path().join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let rg_path = bin_dir.join("rg");
+        std::fs::write(
+            &rg_path,
+            format!(
+                "#!/bin/sh\nfor arg in \"$@\"; do\n  if [ \"$arg\" = \"--no-ignore-parent\" ]; then\n    printf '%s\\n' '{{\"type\":\"match\",\"data\":{{\"path\":{{\"text\":\"a.txt\"}},\"line_number\":1,\"lines\":{{\"text\":\"hello\\\\n\"}}}}}}'\n    exit 0\n  fi\ndone\necho missing --no-ignore-parent 1>&2\nexit 2\n"
+            ),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&rg_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&rg_path, perms).unwrap();
+
+        let old_path = std::env::var_os("PATH").unwrap_or_default();
+        let mut new_path = std::ffi::OsString::new();
+        new_path.push(bin_dir.as_os_str());
+        new_path.push(std::ffi::OsStr::new(":"));
+        new_path.push(old_path);
+        let _path_guard = EnvVarGuard::set("PATH", &new_path);
+
+        let fs = LocalFileSystem::new(mount_dir.to_str().unwrap()).unwrap();
+        let result = fs
+            .grep("/", "hello", true, false, None, None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(result.count, 1);
+        assert_eq!(result.matches.len(), 1);
+        assert_eq!(result.matches[0].file, "a.txt");
+        assert_eq!(result.matches[0].content, "hello");
     }
 }
 

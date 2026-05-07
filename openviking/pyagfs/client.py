@@ -506,6 +506,8 @@ class AGFSClient:
         case_insensitive: bool = False,
         stream: bool = False,
         node_limit: Optional[int] = None,
+        exclude_path: Optional[str] = None,
+        level_limit: Optional[int] = None,
     ):
         """Search for a pattern in files using regular expressions
 
@@ -516,6 +518,8 @@ class AGFSClient:
             case_insensitive: Whether to perform case-insensitive matching (default: False)
             stream: Whether to stream results as NDJSON (default: False)
             node_limit: Maximum number of results to return (default: None)
+            exclude_path: Optional path prefix to exclude from search (default: None)
+            level_limit: Optional maximum depth relative to query root (default: None)
 
         Returns:
             If stream=False: Dict with 'matches' (list of match objects) and 'count'
@@ -543,6 +547,10 @@ class AGFSClient:
             }
             if node_limit is not None:
                 json_payload["node_limit"] = node_limit
+            if exclude_path is not None:
+                json_payload["exclude_path"] = exclude_path
+            if level_limit is not None:
+                json_payload["level_limit"] = level_limit
             response = self.session.post(
                 f"{self.api_base}/grep",
                 json=json_payload,

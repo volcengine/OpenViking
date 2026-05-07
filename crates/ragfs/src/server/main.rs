@@ -72,6 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("  GET    /api/v1/mounts");
     tracing::info!("  POST   /api/v1/mount");
     tracing::info!("  POST   /api/v1/unmount");
+    tracing::info!("  POST   /api/v1/grep");
     tracing::info!("");
     tracing::info!("Example: Mount MemFS");
     tracing::info!("  curl -X POST http://{}/api/v1/mount \\", addr);
