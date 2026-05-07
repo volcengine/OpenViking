@@ -64,7 +64,9 @@ jobs:
         if: steps.tos_config.outputs.configured == 'true'
         id: install_aws_cli
         continue-on-error: true
-        run: python -m pip install --upgrade awscli
+        run: |
+          python -m pip install --upgrade awscli
+          aws configure set default.s3.addressing_style virtual
 
       - name: Upload docs dist to TOS
         id: upload_tos
