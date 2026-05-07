@@ -82,47 +82,6 @@ RUN --mount=type=cache,target=/root/.cache/uv,id=uv-${TARGETPLATFORM} \
             ;; \
     esac
 
-# Build ragfs-python (Rust RAGFS binding) and extract the native extension
-# into the installed openviking package.
-RUN --mount=type=cache,target=/root/.cache/uv,id=uv-${TARGETPLATFORM} \
-    --mount=type=cache,target=/cargo-target,id=cargo-target-${TARGETPLATFORM} \
-    --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-${TARGETPLATFORM} \
-    --mount=type=cache,target=/usr/local/cargo/git,id=cargo-git-${TARGETPLATFORM} \
-    --mount=type=cache,target=/root/.ccache,id=ccache-${TARGETPLATFORM} \
-    uv pip install maturin && \
-    export _TMPDIR=$(mktemp -d) && \
-    trap 'rm -rf "$_TMPDIR"' EXIT && \
-    cd crates/ragfs-python && \
-    python -m maturin build --release --out "$_TMPDIR" && \
-    cd ../.. && \
-    export _OV_LIB=$(python -c "import openviking; from pathlib import Path; print(Path(openviking.__file__).resolve().parent / 'lib')") && \
-    mkdir -p "$_OV_LIB" && \
-    python - <<'PY'
-import glob
-import os
-import sys
-import zipfile
-
-tmpdir = os.environ["_TMPDIR"]
-ov_lib = os.environ["_OV_LIB"]
-whls = glob.glob(os.path.join(tmpdir, "ragfs_python-*.whl"))
-assert whls, "maturin produced no wheel"
-
-with zipfile.ZipFile(whls[0]) as zf:
-    for name in zf.namelist():
-        bn = os.path.basename(name)
-        if bn.startswith("ragfs_python") and (bn.endswith(".so") or bn.endswith(".pyd")):
-            dst = os.path.join(ov_lib, bn)
-            with zf.open(name) as src, open(dst, "wb") as f:
-                f.write(src.read())
-            os.chmod(dst, 0o755)
-            print(f"ragfs-python: extracted {bn} -> {dst}")
-            sys.exit(0)
-
-print("WARNING: No ragfs_python .so/.pyd in wheel")
-sys.exit(1)
-PY
-
 # Stage 3: runtime
 FROM python:3.13-slim-trixie
 
