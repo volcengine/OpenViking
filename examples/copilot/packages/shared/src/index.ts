@@ -23,3 +23,8 @@ export {
   type RunWriteTaskOptions,
   type SpawnDetachedResult,
 } from "./util/async-writer.js";
+
+export {
+  deriveSessionId,
+  SESSION_ID_PREFIX,
+} from "./session/id.js";
