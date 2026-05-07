@@ -247,4 +247,9 @@ async def glob(
         if "not found" in err_msg or "no such file or directory" in err_msg:
             raise NotFoundError(request.uri or request.pattern, "file")
         raise
+    except Exception as exc:
+        mapped = map_exception(exc, resource=request.uri, resource_type="file")
+        if mapped is not None:
+            raise mapped from exc
+        raise
     return Response(status="ok", result=result)
