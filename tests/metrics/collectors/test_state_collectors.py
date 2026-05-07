@@ -10,6 +10,7 @@ from openviking.metrics.collectors.observer_health import ObserverHealthCollecto
 from openviking.metrics.collectors.queue import QueueCollector
 from openviking.metrics.collectors.task_tracker import TaskTrackerCollector
 from openviking.metrics.collectors.vikingdb import VikingDBCollector
+from openviking.metrics.core.base import ReadEnvelope
 from openviking.metrics.core.registry import MetricRegistry
 from openviking.metrics.datasources.observer_state import (
     LockStateDataSource,
@@ -274,7 +275,194 @@ def test_vikingdb_collector_exports_health_and_count(monkeypatch):
     registry = MetricRegistry()
     VikingDBCollector(data_source=VikingDBStateDataSource(service=Service())).collect(registry)
     text = PrometheusExporter(registry=registry).render()
-    assert 'openviking_vikingdb_collection_health{collection="my_collection",valid="1"} 1.0' in text
     assert (
-        'openviking_vikingdb_collection_vectors{collection="my_collection",valid="1"} 123.0' in text
+        'openviking_vikingdb_collection_health{account_id="__unknown__",collection="my_collection",valid="1"} 1.0'
+        in text
+    )
+    assert (
+        'openviking_vikingdb_collection_vectors{account_id="__unknown__",collection="my_collection",valid="1"} 123.0'
+        in text
+    )
+
+
+def test_vikingdb_collector_emits_multi_account_series(registry, render_prometheus, configure_account_dimension):
+    class DS:
+        def read_vikingdb_state(self):
+            return [
+                ("acct_a", "context", True, 10),
+                ("acct_b", "context", True, 20),
+            ]
+
+    configure_account_dimension(
+        enabled=True,
+        metric_allowlist={
+            VikingDBCollector.COLLECTION_HEALTH,
+            VikingDBCollector.COLLECTION_VECTORS,
+        },
+        max_active_accounts=100,
+    )
+    collector = VikingDBCollector(data_source=DS())
+    collector.collect(registry)
+    text = render_prometheus(registry)
+    assert (
+        'openviking_vikingdb_collection_vectors{account_id="acct_a",collection="context",valid="1"} 10.0'
+        in text
+    )
+    assert (
+        'openviking_vikingdb_collection_vectors{account_id="acct_b",collection="context",valid="1"} 20.0'
+        in text
+    )
+
+
+def test_vikingdb_collector_stale_valid_zero_fallback_keeps_multi_account_vectors(
+    registry, render_prometheus, configure_account_dimension
+):
+    class DS:
+        def __init__(self):
+            self.fail = False
+
+        def read_vikingdb_state(self):
+            if self.fail:
+                raise RuntimeError("boom")
+            return [
+                ("acct_a", "context", True, 10),
+                ("acct_b", "context", True, 20),
+            ]
+
+    configure_account_dimension(
+        enabled=True,
+        metric_allowlist={
+            VikingDBCollector.COLLECTION_HEALTH,
+            VikingDBCollector.COLLECTION_VECTORS,
+        },
+        max_active_accounts=100,
+    )
+    ds = DS()
+    collector = VikingDBCollector(data_source=ds)
+    collector.collect(registry)
+    ds.fail = True
+    collector.collect(registry)
+    text = render_prometheus(registry)
+    # Dashboard query compatibility: each account keeps a `valid=0` fallback series.
+    assert (
+        'openviking_vikingdb_collection_vectors{account_id="acct_a",collection="context",valid="0"} 10.0'
+        in text
+    )
+    assert (
+        'openviking_vikingdb_collection_vectors{account_id="acct_b",collection="context",valid="0"} 20.0'
+        in text
+    )
+
+
+def test_vikingdb_collector_cold_start_failure_emits_default_stale_series(
+    registry, render_prometheus
+):
+    class DS:
+        def read_vikingdb_state(self):
+            raise RuntimeError("boom")
+
+    collector = VikingDBCollector(data_source=DS())
+    collector.collect(registry)
+    text = render_prometheus(registry)
+    assert (
+        'openviking_vikingdb_collection_health{account_id="__unknown__",collection="default",valid="0"} 0.0'
+        in text
+    )
+    assert (
+        'openviking_vikingdb_collection_vectors{account_id="__unknown__",collection="default",valid="0"} 0.0'
+        in text
+    )
+
+
+def test_vikingdb_collector_cold_start_fallback_is_removed_after_recovery(
+    registry, render_prometheus
+):
+    class DS:
+        def __init__(self):
+            self.fail = True
+
+        def read_vikingdb_state(self):
+            if self.fail:
+                raise RuntimeError("boom")
+            return [("default", "context", True, 10)]
+
+    ds = DS()
+    collector = VikingDBCollector(data_source=ds)
+    collector.collect(registry)
+    ds.fail = False
+    collector.collect(registry)
+    text = render_prometheus(registry)
+    assert (
+        'openviking_vikingdb_collection_health{account_id="__unknown__",collection="default",valid="0"}'
+        not in text
+    )
+    assert (
+        'openviking_vikingdb_collection_vectors{account_id="__unknown__",collection="default",valid="0"}'
+        not in text
+    )
+    assert (
+        'openviking_vikingdb_collection_vectors{account_id="__unknown__",collection="context",valid="1"} 10.0'
+        in text
+    )
+
+
+def test_vikingdb_collector_partial_fanout_failure_emits_stale_series_for_failed_account(
+    registry, render_prometheus, configure_account_dimension
+):
+    class DS:
+        def __init__(self):
+            self.round = 0
+
+        def read_vikingdb_state(self):
+            self.round += 1
+            if self.round == 1:
+                return ReadEnvelope(
+                    ok=True,
+                    value=[
+                        ("acct_a", "context", True, 10),
+                        ("acct_b", "context", True, 20),
+                    ],
+                )
+            return ReadEnvelope(
+                ok=True,
+                value=[
+                    ("acct_a", "context", True, 11),
+                    ("acct_b", "context", False, 0),
+                ],
+                error_type="RuntimeError",
+                error_message="acct_b down",
+            )
+
+    configure_account_dimension(
+        enabled=True,
+        metric_allowlist={
+            VikingDBCollector.COLLECTION_HEALTH,
+            VikingDBCollector.COLLECTION_VECTORS,
+        },
+        max_active_accounts=100,
+    )
+    ds = DS()
+    collector = VikingDBCollector(data_source=ds)
+    collector.collect(registry)
+    collector.collect(registry)
+    text = render_prometheus(registry)
+    assert (
+        'openviking_vikingdb_collection_vectors{account_id="acct_a",collection="context",valid="1"} 11.0'
+        in text
+    )
+    assert (
+        'openviking_vikingdb_collection_health{account_id="acct_a",collection="context",valid="0"}'
+        not in text
+    )
+    assert (
+        'openviking_vikingdb_collection_health{account_id="acct_b",collection="context",valid="0"} 0.0'
+        in text
+    )
+    assert (
+        'openviking_vikingdb_collection_vectors{account_id="acct_b",collection="context",valid="0"} 20.0'
+        in text
+    )
+    assert (
+        'openviking_vikingdb_collection_vectors{account_id="acct_b",collection="context",valid="1"}'
+        not in text
     )

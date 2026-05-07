@@ -83,7 +83,7 @@ def create_default_collector_manager(*, app=None, service=None) -> CollectorMana
     manager.register(ObserverHealthCollector(data_source=ObserverStateDataSource(service=service)))
     manager.register(ObserverStateCollector(data_source=ObserverStateDataSource(service=service)))
     manager.register(LockCollector(data_source=LockStateDataSource()))
-    manager.register(VikingDBCollector(data_source=VikingDBStateDataSource(service=service)))
+    manager.register(VikingDBCollector(data_source=VikingDBStateDataSource(service=service, app=app)))
     manager.register(
         ModelUsageCollector(
             data_source=ModelUsageDataSource(config_provider=get_openviking_config, service=service)
