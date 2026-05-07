@@ -164,6 +164,13 @@ class OpenVikingConfig(BaseModel):
             "When disabled (default), only public IP addresses and hostnames are allowed."
         ),
     )
+    allow_local_path: bool = Field(
+        default=False,
+        description=(
+            "Allow HTTP add_resource to accept direct local filesystem paths. "
+            "When disabled (default), HTTP only accepts remote URLs or temp-uploaded files."
+        ),
+    )
 
     log: LogConfig = Field(default_factory=LogConfig, description="Logging configuration")
 

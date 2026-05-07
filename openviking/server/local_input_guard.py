@@ -44,6 +44,29 @@ def require_remote_resource_source(source: str) -> str:
     return source
 
 
+def resolve_local_resource_path_for_http(source: str) -> str:
+    """Resolve and validate a local resource path accepted by HTTP add_resource."""
+    path = Path(source)
+    if not path.is_absolute():
+        raise PermissionDeniedError(
+            "HTTP local resource paths must be absolute paths and point to an existing file or directory."
+        )
+
+    try:
+        resolved = path.resolve(strict=True)
+    except (FileNotFoundError, OSError) as exc:
+        raise PermissionDeniedError(
+            "HTTP local resource paths must be absolute paths and point to an existing file or directory."
+        ) from exc
+
+    if not (resolved.is_file() or resolved.is_dir()):
+        raise PermissionDeniedError(
+            "HTTP local resource paths must point to a regular file or directory."
+        )
+
+    return str(resolved)
+
+
 def deny_direct_local_skill_input(value: str) -> None:
     """Reject obvious local filesystem paths for skill uploads over HTTP."""
     if looks_like_local_path(value):

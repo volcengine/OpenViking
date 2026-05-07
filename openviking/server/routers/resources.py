@@ -14,7 +14,9 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import (
+    is_remote_resource_source,
     require_remote_resource_source,
+    resolve_local_resource_path_for_http,
     resolve_uploaded_temp_file_id,
 )
 from openviking.server.responses import response_from_result
@@ -30,7 +32,8 @@ class AddResourceRequest(BaseModel):
     """Request model for add_resource.
 
     Attributes:
-        path: Remote resource source such as an HTTP(S) URL or repository URL.
+        path: Resource source path. Always supports remote HTTP(S)/repository URLs.
+            Supports absolute local file/directory paths only when allow_local_path=true.
             Either path or temp_file_id must be provided.
         temp_file_id: Temporary upload id returned by /api/v1/resources/temp_upload.
             Either path or temp_file_id must be provided.
@@ -192,7 +195,8 @@ async def add_resource(
     if request.to and request.parent:
         raise InvalidArgumentError("Cannot specify both 'to' and 'parent' at the same time.")
 
-    upload_temp_dir = get_openviking_config().storage.get_upload_temp_dir()
+    config = get_openviking_config()
+    upload_temp_dir = config.storage.get_upload_temp_dir()
     path = request.path
     allow_local_path_resolution = False
     original_filename = None
@@ -202,7 +206,11 @@ async def add_resource(
         )
         allow_local_path_resolution = True
     elif path is not None:
-        path = require_remote_resource_source(path)
+        if config.allow_local_path and not is_remote_resource_source(path):
+            path = resolve_local_resource_path_for_http(path)
+            allow_local_path_resolution = True
+        else:
+            path = require_remote_resource_source(path)
     if path is None:
         raise InvalidArgumentError("Either 'path' or 'temp_file_id' must be provided.")
 
