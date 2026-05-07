@@ -18,6 +18,7 @@ import {
   isBypassed,
   makeFetchJSON,
 } from "./lib/ov-session.mjs";
+import { writeJsonState } from "./lib/state.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -114,6 +115,14 @@ async function main() {
   }
 
   log("inject", { ovSessionId, source, blockLength: block.length });
+  // One-shot signal for the statusline: surface "🔗 resumed" / "🔗 compact"
+  // briefly after a session resumes, so the user knows OV did re-hydrate
+  // context. Statusline applies a short TTL so it doesn't linger.
+  writeJsonState("last-session-event.json", {
+    source,
+    cc_session_id: sessionId,
+    ov_session_id: ovSessionId,
+  });
   approve(block);
 }
 

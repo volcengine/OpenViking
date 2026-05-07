@@ -33,7 +33,7 @@ import {
   makeFetchJSON,
 } from "./lib/ov-session.mjs";
 import { maybeDetach, readHookStdin } from "./lib/async-writer.mjs";
-import { writeJsonState } from "./lib/state.mjs";
+import { readJsonState, writeJsonState } from "./lib/state.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -476,6 +476,16 @@ async function main() {
     ov_session_id: ovSessionId,
     cc_session_id: sessionId,
   });
+
+  // Cross-session daily counter — number of archives produced today across
+  // all CC sessions. Cheap proxy for "how much OV digested today" without
+  // hitting the server again. Resets on date rollover.
+  if (committed) {
+    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD, UTC
+    const prior = readJsonState("daily-stats.json") || {};
+    const archives = prior.date === today ? Number(prior.archives || 0) + 1 : 1;
+    writeJsonState("daily-stats.json", { date: today, archives });
+  }
 
   if (result.ok > 0) {
     approve(

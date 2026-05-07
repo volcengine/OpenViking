@@ -22,7 +22,8 @@ import { isBypassed } from "./lib/ov-session.mjs";
 import { readJsonState } from "./lib/state.mjs";
 import { probeServer } from "./lib/server-probe.mjs";
 
-const STATE_MAX_AGE_MS = 30 * 60_000; // 30 min — older = "idle"
+const STATE_MAX_AGE_MS = 30 * 60_000;        // 30 min — older = "idle"
+const SESSION_EVENT_MAX_AGE_MS = 60_000;     // 1 min — "🔗 resumed" fades
 const MAX_WIDTH = 80;
 const ESC = "\x1b[";
 
@@ -40,6 +41,7 @@ const dim = (s) => c("2", s);
 const green = (s) => c("32", s);
 const red = (s) => c("31", s);
 const yellow = (s) => c("33", s);
+const cyan = (s) => c("36", s);
 
 function human(n) {
   if (typeof n !== "number" || !Number.isFinite(n)) return "?";
@@ -119,6 +121,8 @@ async function main() {
 
   const recall = readJsonState("last-recall.json", { maxAgeMs: STATE_MAX_AGE_MS });
   const capture = readJsonState("last-capture.json", { maxAgeMs: STATE_MAX_AGE_MS });
+  const sessionEvent = readJsonState("last-session-event.json", { maxAgeMs: SESSION_EVENT_MAX_AGE_MS });
+  const daily = readJsonState("daily-stats.json");
   const probe = await probeServer(cfg);
 
   const parts = [];
@@ -132,9 +136,13 @@ async function main() {
 
   // Recall summary: only meaningful when we actually injected memories this
   // turn. Skip the segment for empty/bypass/no-results reasons to keep the
-  // line tight.
+  // line tight. The (0.92) trailing parens is the top score among picked
+  // items — quality hint without an extra segment.
   if (recall && recall.reason === "ok" && recall.count > 0) {
-    const seg = `↩ ${recall.count} mem`
+    const top = typeof recall.top_score === "number" && recall.top_score > 0
+      ? ` (${recall.top_score.toFixed(2)})`
+      : "";
+    const seg = `↩ ${recall.count} mem${top}`
       + (recall.tokens_used ? ` · ${human(recall.tokens_used)} tok` : "")
       + (typeof recall.latency_ms === "number" ? ` · ${recall.latency_ms}ms` : "");
     parts.push(dim(seg));
@@ -157,6 +165,29 @@ async function main() {
     } else if (archived > 0) {
       parts.push(dim(`✎ ${archived} arch`));
     }
+
+    // Capture failure alert. turns_failed comes from THIS batch only —
+    // auto-capture overwrites the state every Stop hook, so transient
+    // single-turn failures clear themselves after the next successful
+    // capture. Sustained failures stay visible (which is the point).
+    if (Number(capture.turns_failed) > 0) {
+      parts.push(red(`✗ ${capture.turns_failed} dropped`));
+    }
+  }
+
+  // Resumed/compact indicator: 1-minute TTL so it shows once after the
+  // SessionStart hook re-hydrated context, then fades.
+  if (sessionEvent && sessionEvent.cc_session_id === sessionId) {
+    const label = sessionEvent.source === "compact" ? "compact" : "resumed";
+    parts.push(cyan(`🔗 ${label}`));
+  }
+
+  // Cross-session daily archive count. Tracks "how much OV digested today"
+  // without hitting the server. Resets on date rollover. Hidden when 0 to
+  // keep fresh-day mornings unobtrusive.
+  const todayStr = new Date().toISOString().slice(0, 10);
+  if (daily && daily.date === todayStr && Number(daily.archives) > 0) {
+    parts.push(dim(`+${daily.archives} today`));
   }
 
   const line = parts.join(dim(" │ "));

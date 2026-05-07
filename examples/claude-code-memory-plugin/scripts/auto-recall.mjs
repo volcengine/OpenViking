@@ -386,12 +386,14 @@ async function main() {
   }
 
   const built = await buildInjectionBlock(picked);
+  const topScore = picked.reduce((m, it) => Math.max(m, clampScore(it.score)), 0);
   writeRecallState({
     count: picked.length,
     content_items: built?.contentCount ?? 0,
     hint_items: built?.hintCount ?? 0,
     tokens_used: built?.budgetUsed ?? 0,
     tokens_budget: cfg.recallTokenBudget,
+    top_score: topScore,
     session_id: sessionId,
     reason: "ok",
   });
