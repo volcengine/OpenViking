@@ -213,26 +213,9 @@ def main():
         print(e, file=sys.stderr)
         sys.exit(1)
 
-    # Ensure Ollama is running if configured
-    try:
-        from openviking_cli.utils.ollama import detect_ollama_in_config, ensure_ollama_for_server
+    from openviking.server.preflight import run_preflight_checks
 
-        ov_config = OpenVikingConfigSingleton.get_instance()
-        uses_ollama, ollama_host, ollama_port = detect_ollama_in_config(ov_config)
-        if uses_ollama:
-            result = ensure_ollama_for_server(ollama_host, ollama_port)
-            if result.success:
-                print(f"Ollama is running at {ollama_host}:{ollama_port}")
-            else:
-                print(
-                    f"Warning: Ollama not available at {ollama_host}:{ollama_port}. "
-                    f"Embedding/VLM may fail. ({result.message})",
-                    file=sys.stderr,
-                )
-                if result.stderr_output:
-                    print(f"  Ollama stderr: {result.stderr_output}", file=sys.stderr)
-    except Exception as e:
-        print(f"Warning: Ollama pre-flight check failed: {e}", file=sys.stderr)
+    run_preflight_checks(OpenVikingConfigSingleton.get_instance())
 
     # Override with command line arguments
     if args.host is not None:
