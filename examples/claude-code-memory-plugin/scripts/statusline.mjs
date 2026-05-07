@@ -159,12 +159,6 @@ async function main() {
     }
   }
 
-  // Queue alert: server is up but its queue has errors. Rare; flagged loud
-  // because it usually means extraction is stalled.
-  if (probe.healthy && probe.queue_healthy === false) {
-    parts.push(yellow("⚠ queue"));
-  }
-
   const line = parts.join(dim(" │ "));
   process.stdout.write(truncate(line));
 }

@@ -269,13 +269,12 @@ OV ✓ │ ↩ 6 mem · 1.2k tok · 180ms        last turn injected 6 memories
 OV ✗ offline                              server unreachable (≤1 s hard timeout)
 OV ⚡ bypass                               OPENVIKING_BYPASS_SESSION* matched
 OV ✓ │ ✎ 12k/20k tok                     pending capture, not yet committed
-OV ✓ │ ⚠ queue                            server up but background queue has errors
 ```
 
 Data flow:
 
 - `auto-recall.mjs` and `auto-capture.mjs` write small snapshots to `~/.openviking/state/{last-recall,last-capture}.json` after each turn.
-- `scripts/statusline.mjs` reads those snapshots plus a 5 s shared cache of `GET /health` (with a best-effort `GET /api/v1/observer/queue` for the queue badge).
+- `scripts/statusline.mjs` reads those snapshots plus a 5 s shared cache of `GET /health`.
 - Network calls have a hard 250 ms timeout. Cache is shared across CC sessions to prevent stampedes.
 
 Disable / customize:

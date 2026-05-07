@@ -69,7 +69,6 @@ export async function probeServer(cfg, { ttlMs = DEFAULT_TTL_MS } = {}) {
 
   const t0 = Date.now();
   let healthy = false;
-  let queueHealthy = null;
   let error;
 
   try {
@@ -80,35 +79,15 @@ export async function probeServer(cfg, { ttlMs = DEFAULT_TTL_MS } = {}) {
     error = err?.name === "AbortError" ? "timeout" : (err?.message || "unreachable");
   }
 
-  // Queue badge: independent timeout. Sharing with /health caused visible
-  // flapping on remote servers — slow /health left no budget for the queue
-  // probe, so the badge appeared only when /health was unusually fast.
-  // Worst case here is ~2 s total (1 s + 1 s); typical is ~150 ms because
-  // both endpoints respond in tens of ms when the server is colocated.
-  if (healthy) {
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-      try {
-        const res = await fetch(`${cfg.baseUrl}/api/v1/observer/queue`, {
-          headers,
-          signal: controller.signal,
-        });
-        if (res.ok) {
-          const body = await res.json().catch(() => ({}));
-          if (body?.status === "ok" && typeof body.result?.is_healthy === "boolean") {
-            queueHealthy = body.result.is_healthy;
-          }
-        }
-      } finally {
-        clearTimeout(timer);
-      }
-    } catch { /* leave queueHealthy null */ }
-  }
+  // Note: /api/v1/observer/queue was probed here in earlier iterations to
+  // surface a "queue unhealthy" badge, but its `is_healthy` boolean is
+  // derived from `QueueManager.has_errors()` — a lifetime cumulative counter
+  // that flips to true on the first error and never resets. In practice
+  // this means a server with 95%+ success rate still reports unhealthy
+  // forever, producing a permanent false-alarm badge. Removed.
 
   const payload = {
     healthy,
-    queue_healthy: queueHealthy,
     latency_ms: Date.now() - t0,
     base_url: cfg.baseUrl,
     error,

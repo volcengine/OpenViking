@@ -133,10 +133,9 @@ OV ✓ │ ↩ 6 mem · 1.2k tok · 180ms       本轮注入了 6 条记忆
 OV ✗ offline                             服务器不可达（≤1s 硬超时）
 OV ⚡ bypass                              命中 OPENVIKING_BYPASS_SESSION*
 OV ✓ │ ✎ 12k/20k tok                    有未提交的 pending 捕获
-OV ✓ │ ⚠ queue                           服务器在但后台队列报错
 ```
 
-hook 脚本把每轮的小快照写到 `~/.openviking/state/`；statusline 脚本读快照，再加 5 秒共享缓存的 `GET /health`（外加 best-effort 的 `/api/v1/observer/queue`）。网络调用 1s 硬超时（每个端点独立），多 session 共享缓存避免风暴。
+hook 脚本把每轮的小快照写到 `~/.openviking/state/`；statusline 脚本读快照，再加 5 秒共享缓存的 `GET /health`。探针 1s 硬超时，多 session 共享缓存避免风暴。
 
 `OPENVIKING_STATUSLINE=off` 可静默不删；`jq 'del(.statusLine)' ~/.claude/settings.json` 彻底移除。已有自定义 statusline 时安装会询问替换 / 跳过 / 手动 compose。
 
