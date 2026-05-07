@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
-from jinja2 import Template
+from jinja2.sandbox import SandboxedEnvironment
 from pydantic import BaseModel, Field
 
 from openviking_cli.utils.config import (
@@ -70,7 +70,10 @@ class PromptManager:
 
         Args:
             templates_dir: Directory containing YAML templates.
-                          If None, uses bundled templates.
+                          If provided explicitly, this trusted in-process override
+                          takes precedence over config-based custom template loading.
+                          If None, PromptManager uses bundled templates unless
+                          prompts.enable_custom_templates is enabled.
             enable_caching: Enable prompt template caching
         """
         self.templates_dir = self._resolve_templates_dir(templates_dir)
@@ -84,14 +87,17 @@ class PromptManager:
         if templates_dir is not None:
             return Path(templates_dir)
 
-        env_dir = os.environ.get(OPENVIKING_PROMPT_TEMPLATES_DIR_ENV)
-        if env_dir:
-            return Path(env_dir).expanduser()
-
         try:
             config = get_openviking_config()
         except FileNotFoundError:
             return cls._get_bundled_templates_dir()
+
+        if not config.prompts.enable_custom_templates:
+            return cls._get_bundled_templates_dir()
+
+        env_dir = os.environ.get(OPENVIKING_PROMPT_TEMPLATES_DIR_ENV)
+        if env_dir:
+            return Path(env_dir).expanduser()
 
         config_dir = config.prompts.templates_dir.strip()
         if config_dir:
@@ -200,8 +206,8 @@ class PromptManager:
             ):
                 variables[var_def.name] = variables[var_def.name][: var_def.max_length]
 
-        # Render template with Jinja2
-        jinja_template = Template(template.template)
+        # Render template with sandboxed Jinja2
+        jinja_template = SandboxedEnvironment(autoescape=False).from_string(template.template)
         return jinja_template.render(**variables)
 
     def _validate_variables(self, template: PromptTemplate, variables: Dict[str, Any]) -> None:

@@ -38,7 +38,12 @@ def _write_template(templates_dir: Path, content: str) -> None:
     )
 
 
-def _write_config(config_path: Path, templates_dir: Path) -> None:
+def _write_config(
+    config_path: Path,
+    templates_dir: Path,
+    *,
+    enable_custom_templates: bool = False,
+) -> None:
     config_path.write_text(
         json.dumps(
             {
@@ -51,10 +56,11 @@ def _write_config(config_path: Path, templates_dir: Path) -> None:
                     "dense": {
                         "provider": "openai",
                         "model": "text-embedding-3-small",
-                        "api_key": "test-key",
+                        "api_key": "***",
                     }
                 },
                 "prompts": {
+                    "enable_custom_templates": enable_custom_templates,
                     "templates_dir": str(templates_dir),
                 },
             }
@@ -74,7 +80,7 @@ def test_prompt_manager_prefers_environment_templates_dir(tmp_path, monkeypatch)
 
     _write_template(env_dir, "env-template")
     _write_template(config_dir, "config-template")
-    _write_config(config_path, config_dir)
+    _write_config(config_path, config_dir, enable_custom_templates=True)
 
     OpenVikingConfigSingleton.reset_instance()
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, str(config_path))
@@ -91,7 +97,7 @@ def test_prompt_manager_uses_ov_conf_templates_dir_when_env_is_unset(tmp_path, m
     config_path = tmp_path / "ov.conf"
 
     _write_template(config_dir, "config-template")
-    _write_config(config_path, config_dir)
+    _write_config(config_path, config_dir, enable_custom_templates=True)
 
     OpenVikingConfigSingleton.reset_instance()
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, str(config_path))
@@ -103,14 +109,58 @@ def test_prompt_manager_uses_ov_conf_templates_dir_when_env_is_unset(tmp_path, m
     assert manager.render("memory.profile") == "config-template"
 
 
-def test_prompt_manager_falls_back_to_bundled_templates_dir(monkeypatch):
+def test_prompt_manager_falls_back_to_bundled_templates_dir(tmp_path, monkeypatch):
+    missing_config = tmp_path / "missing-ov.conf"
+
     OpenVikingConfigSingleton.reset_instance()
-    monkeypatch.delenv(OPENVIKING_CONFIG_ENV, raising=False)
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, str(missing_config))
     monkeypatch.delenv(OPENVIKING_PROMPT_TEMPLATES_DIR_ENV, raising=False)
 
     manager = PromptManager(enable_caching=False)
 
     assert manager.templates_dir == PromptManager._get_bundled_templates_dir()
+
+
+def test_prompt_manager_ignores_custom_templates_from_config_when_not_enabled(
+    tmp_path, monkeypatch
+):
+    custom_dir = tmp_path / "custom-prompts"
+    config_path = tmp_path / "ov.conf"
+
+    _write_template(custom_dir, "custom-profile-template")
+    _write_config(config_path, custom_dir, enable_custom_templates=False)
+
+    OpenVikingConfigSingleton.reset_instance()
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, str(config_path))
+    monkeypatch.delenv(OPENVIKING_PROMPT_TEMPLATES_DIR_ENV, raising=False)
+
+    manager = PromptManager(enable_caching=False)
+
+    assert manager.templates_dir == PromptManager._get_bundled_templates_dir()
+    bundled_template = manager.load_template("vision.image_understanding")
+    assert bundled_template.metadata.id == "vision.image_understanding"
+    assert (
+        manager._resolve_template_path("memory.profile") != custom_dir / "memory" / "profile.yaml"
+    )
+
+
+def test_prompt_manager_ignores_environment_templates_dir_when_not_enabled(tmp_path, monkeypatch):
+    env_dir = tmp_path / "env-prompts"
+    config_dir = tmp_path / "config-prompts"
+    config_path = tmp_path / "ov.conf"
+
+    _write_template(env_dir, "env-template")
+    _write_template(config_dir, "config-template")
+    _write_config(config_path, config_dir, enable_custom_templates=False)
+
+    OpenVikingConfigSingleton.reset_instance()
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, str(config_path))
+    monkeypatch.setenv(OPENVIKING_PROMPT_TEMPLATES_DIR_ENV, str(env_dir))
+
+    manager = PromptManager(enable_caching=False)
+
+    assert manager.templates_dir == PromptManager._get_bundled_templates_dir()
+    assert manager._resolve_template_path("memory.profile") != env_dir / "memory" / "profile.yaml"
 
 
 def test_prompt_manager_falls_back_to_bundled_template_when_custom_dir_is_partial(
@@ -120,7 +170,7 @@ def test_prompt_manager_falls_back_to_bundled_template_when_custom_dir_is_partia
     config_path = tmp_path / "ov.conf"
 
     _write_template(custom_dir, "custom-profile-template")
-    _write_config(config_path, custom_dir)
+    _write_config(config_path, custom_dir, enable_custom_templates=True)
 
     OpenVikingConfigSingleton.reset_instance()
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, str(config_path))
@@ -178,11 +228,17 @@ def test_context_provider_schema_directories_use_prompt_manager_resolved_templat
         "_resolve_templates_dir",
         classmethod(lambda cls, templates_dir=None: resolved_templates_dir),
     )
+    config = SimpleNamespace(
+        memory=SimpleNamespace(custom_templates_dir="", eager_prefetch=False),
+        output_language_override="",
+    )
     monkeypatch.setattr(
         "openviking.session.memory.session_extract_context_provider.get_openviking_config",
-        lambda: SimpleNamespace(
-            memory=SimpleNamespace(custom_templates_dir="", eager_prefetch=False)
-        ),
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.utils.language.get_openviking_config",
+        lambda: config,
     )
 
     provider = SessionExtractContextProvider(messages=[])
