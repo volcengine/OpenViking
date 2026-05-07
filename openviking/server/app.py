@@ -6,12 +6,13 @@ import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Callable, Optional
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from openviking.server.api_keys import APIKeyManager
@@ -414,6 +415,28 @@ def create_app(
     app.include_router(webdav_router)
     app.include_router(maintenance_router)
     app.include_router(bot_router, prefix="/bot/v1")
+
+    # Favicon: shared with the console static assets so 1933/console use the same logo.
+    _static_dir = Path(__file__).resolve().parent.parent / "console" / "static"
+    _favicon_headers = {"Cache-Control": "public, max-age=86400"}
+    _favicon_files = {
+        "/favicon.ico": ("favicon.ico", "image/x-icon"),
+        "/favicon.png": ("favicon-32.png", "image/png"),
+        "/apple-touch-icon.png": ("apple-touch-icon.png", "image/png"),
+    }
+
+    def _make_favicon_handler(filename: str, media_type: str):
+        path = _static_dir / filename
+
+        async def _handler():
+            return FileResponse(path, media_type=media_type, headers=_favicon_headers)
+
+        return _handler
+
+    for _route, (_fname, _mime) in _favicon_files.items():
+        app.add_api_route(
+            _route, _make_favicon_handler(_fname, _mime), include_in_schema=False
+        )
 
     # MCP endpoint — serves 5 tools (search, read, store, forget, health)
     # via streamable HTTP for Claude Code and other MCP clients.
