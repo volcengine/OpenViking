@@ -18,6 +18,7 @@ import {
   toJsonLog,
 } from "./memory-ranking.js";
 import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
+import { compressToolResults, prePersistOversizedResults } from "./tool-result-compression.js";
 
 type AgentMessage = {
   role?: string;
@@ -1169,6 +1170,14 @@ export function createMemoryOpenVikingContextEngine(params: {
           });
         }
 
+        // Pre-persist oversized tool results BEFORE session trimming so that
+        // even messages discarded by buildSessionContext have their full
+        // content saved to disk and remain recoverable.
+        const prePersistedFiles = await prePersistOversizedResults(
+          ctx.messages,
+          { ...cfg, sessionId: OVSessionId },
+        );
+
         const { sanitized, archive, session, budgets, instruction } = buildAssembledContext(
           ctx.latest_archive_overview,
           preAbstracts,
@@ -1183,7 +1192,13 @@ export function createMemoryOpenVikingContextEngine(params: {
           });
         }
 
-        const assembledTokens = roughEstimate(sanitized) + instruction.tokens;
+        const { messages: compressedMessages, stats: compressionStats } = await compressToolResults(
+          sanitized,
+          { ...cfg, sessionId: OVSessionId },
+        );
+        const finalMessages = compressionStats.compressedCount > 0 ? compressedMessages : sanitized;
+
+        const assembledTokens = roughEstimate(finalMessages) + instruction.tokens;
         const tokensSaved = originalTokens - assembledTokens;
         const savingPct = originalTokens > 0 ? Math.round((tokensSaved / originalTokens) * 100) : 0;
 
@@ -1191,7 +1206,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           passthrough: false,
           archiveCount: preAbstracts.length,
           activeCount,
-          outputMessagesCount: sanitized.length,
+          outputMessagesCount: finalMessages.length,
           inputTokenEstimate: originalTokens,
           estimatedTokens: assembledTokens,
           tokensSaved,
@@ -1203,11 +1218,15 @@ export function createMemoryOpenVikingContextEngine(params: {
           reservedBudget: budgets.reserved,
           senderIdFound: sender.found,
           senderId: sender.senderId ?? null,
-          messages: messageDigest(sanitized),
+          toolResultCompression: compressionStats.compressedCount > 0
+            ? { compressedCount: compressionStats.compressedCount, originalChars: compressionStats.totalOriginalChars, compressedChars: compressionStats.totalCompressedChars, aggregateBudgetTriggered: compressionStats.aggregateBudgetTriggered }
+            : undefined,
+          prePersistedFiles: prePersistedFiles.length > 0 ? prePersistedFiles.length : undefined,
+          messages: messageDigest(finalMessages),
         });
 
         return {
-          messages: sanitized,
+          messages: finalMessages,
           estimatedTokens: assembledTokens,
           ...(instruction.text ? { systemPromptAddition: instruction.text } : {}),
         };
