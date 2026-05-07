@@ -22,6 +22,13 @@ from openviking_cli.exceptions import (
 )
 from openviking_cli.session.user_id import UserIdentifier
 
+# Privilege ranking for role-downgrade detection in OAuth bearer auth. Higher
+# rank ⇒ more privilege. Used to compare an OAuth token's embedded role
+# against the user's current role: a token whose role outranks the current
+# role is a stale token from before a `set_role` demotion and must be rejected.
+_ROLE_RANK = {Role.USER: 0, Role.ADMIN: 1, Role.ROOT: 2}
+
+
 _ROOT_IMPLICIT_TENANT_ALLOWED_PATHS = {
     "/api/v1/system/status",
     "/api/v1/system/wait",
@@ -156,6 +163,22 @@ async def _try_resolve_oauth_token(
         role = Role(record.role)
     except ValueError as exc:
         raise UnauthenticatedError(f"OAuth token has unknown role: {record.role}") from exc
+
+    # Role downgrade protection: fp binds to the key value, but `set_role`
+    # changes role without rotating the key. Re-fetch the user's current
+    # role and reject the token if its embedded role exceeds it (demotion).
+    # Promotion is harmless — the embedded lower privilege is still valid —
+    # so only downgrades trigger rejection.
+    if api_key_manager is not None and hasattr(api_key_manager, "get_user_role"):
+        try:
+            current_role = api_key_manager.get_user_role(record.account_id, record.user_id)
+        except Exception:  # noqa: BLE001
+            current_role = role
+        if _ROLE_RANK[role] > _ROLE_RANK[current_role]:
+            raise UnauthenticatedError(
+                "OAuth token's embedded role exceeds the user's current role; "
+                "please re-authorize the client."
+            )
 
     account_id = record.account_id
     user_id = record.user_id
@@ -392,6 +415,7 @@ async def get_request_context(
             if api_key_manager is not None and hasattr(api_key_manager, "get_account_policy")
             else identity.namespace_policy
         ),
+        from_oauth=identity.from_oauth,
     )
     # Update the unified root observability context after authentication succeeds.
     update_root_span_identity(

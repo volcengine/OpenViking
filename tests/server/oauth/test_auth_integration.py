@@ -70,10 +70,14 @@ class _StubKeyManager:
         raise_on_resolve: bool = True,
         fingerprints: Optional[dict[tuple[str, str], str]] = None,
         default_fingerprint: Optional[str] = _TEST_FP,
+        roles: Optional[dict[tuple[str, str], Role]] = None,
+        default_role: Role = Role.USER,
     ):
         self._raise = raise_on_resolve
         self._fps = fingerprints
         self._default_fp = default_fingerprint
+        self._roles = roles
+        self._default_role = default_role
 
     def resolve(self, key: str):  # noqa: D401
         if self._raise:
@@ -91,6 +95,11 @@ class _StubKeyManager:
         if self._fps is None:
             return self._default_fp
         return self._fps.get((account_id, user_id))
+
+    def get_user_role(self, account_id: str, user_id: str) -> Role:
+        if self._roles is None:
+            return self._default_role
+        return self._roles.get((account_id, user_id), self._default_role)
 
 
 @pytest_asyncio.fixture
@@ -218,9 +227,10 @@ async def test_oauth_user_role_rejects_account_override(provider, store):
 async def test_oauth_root_can_be_used_without_explicit_tenant_headers(provider, store):
     """ROOT OAuth tokens carry account/user in claims — no header requirement."""
     token = await _mint_token(provider, store, account_id="tenant-a", user_id="alice", role="root")
+    # Manager must report alice as ROOT so the role-downgrade gate passes.
     request = _make_request(
         bearer=token,
-        api_key_manager=_StubKeyManager(),
+        api_key_manager=_StubKeyManager(default_role=Role.ROOT),
         oauth_provider=provider,
     )
     identity = await resolve_identity(request, x_api_key=None, authorization=f"Bearer {token}")
@@ -278,6 +288,59 @@ async def test_oauth_token_rejected_when_authorizing_user_removed(provider, stor
     )
     with pytest.raises(UnauthenticatedError, match="rotated or revoked"):
         await resolve_identity(request, x_api_key=None, authorization=f"Bearer {token}")
+
+
+@pytest.mark.asyncio
+async def test_oauth_token_rejected_after_role_downgrade(provider, store):
+    """set_role demotion must invalidate OAuth tokens whose embedded role
+    outranks the user's current role — fp alone won't catch this because
+    the key value is unchanged."""
+    token = await _mint_token(
+        provider,
+        store,
+        account_id="tenant-a",
+        user_id="alice",
+        role="admin",  # token issued when alice was admin
+        authorizing_key_fp=_TEST_FP,
+    )
+    # Manager now reports alice as USER (post-set_role demotion).
+    demoted_manager = _StubKeyManager(
+        raise_on_resolve=True,
+        roles={("tenant-a", "alice"): Role.USER},
+    )
+    request = _make_request(
+        bearer=token,
+        api_key_manager=demoted_manager,
+        oauth_provider=provider,
+    )
+    with pytest.raises(UnauthenticatedError, match="exceeds the user's current role"):
+        await resolve_identity(request, x_api_key=None, authorization=f"Bearer {token}")
+
+
+@pytest.mark.asyncio
+async def test_oauth_token_survives_role_promotion(provider, store):
+    """Promotion (current role > token role) is harmless — token's lower
+    privilege is still authorized. Only downgrades trigger rejection."""
+    token = await _mint_token(
+        provider,
+        store,
+        account_id="tenant-a",
+        user_id="alice",
+        role="user",
+        authorizing_key_fp=_TEST_FP,
+    )
+    promoted_manager = _StubKeyManager(
+        raise_on_resolve=True,
+        roles={("tenant-a", "alice"): Role.ADMIN},
+    )
+    request = _make_request(
+        bearer=token,
+        api_key_manager=promoted_manager,
+        oauth_provider=provider,
+    )
+    identity = await resolve_identity(request, x_api_key=None, authorization=f"Bearer {token}")
+    # Token's USER role is preserved — promotion doesn't auto-elevate.
+    assert identity.role == Role.USER
 
 
 @pytest.mark.asyncio

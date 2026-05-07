@@ -191,9 +191,16 @@ async def test_protected_resource_metadata_honors_public_base_url_env(client, mo
 
 @pytest.mark.asyncio
 async def test_dcr_registers_client(client):
+    # OpenViking only accepts public clients (PKCE). Real MCP clients
+    # always send "none" — the SDK's OAuth 2.0 default is client_secret_post,
+    # which we deliberately reject (see test_dcr_rejects_confidential_auth_methods).
     resp = await client.post(
         "/register",
-        json={"redirect_uris": ["https://claude.ai/cb"], "client_name": "Claude"},
+        json={
+            "redirect_uris": ["https://claude.ai/cb"],
+            "client_name": "Claude",
+            "token_endpoint_auth_method": "none",
+        },
     )
     assert resp.status_code == 201, resp.text
     body = resp.json()
@@ -463,6 +470,99 @@ async def test_oauth_verify_rejects_verifier_without_fingerprint(app_with_oauth,
     assert resp.status_code == 400
     msg = resp.json().get("error_description") or resp.json().get("message") or ""
     assert "registered API key" in msg
+
+
+@pytest.mark.asyncio
+async def test_dcr_rejects_confidential_auth_methods(client):
+    """OpenViking only supports public clients (PKCE). DCR must refuse
+    client_secret_basic / client_secret_post — the SDK doesn't enforce
+    secrets when get_client returns client_secret=None, so silently
+    accepting them is a security hazard."""
+    for method in ("client_secret_basic", "client_secret_post"):
+        resp = await client.post(
+            "/register",
+            json={
+                "redirect_uris": ["https://x.test/cb"],
+                "client_name": "Confidential",
+                "token_endpoint_auth_method": method,
+            },
+        )
+        assert resp.status_code == 400, f"{method}: {resp.text}"
+        body = resp.json()
+        msg = (body.get("error_description") or body.get("message") or "").lower()
+        assert "public" in msg or "pkce" in msg or "none" in msg
+
+
+@pytest.mark.asyncio
+async def test_otp_rejects_oauth_issued_caller(app_with_oauth, client):
+    """A caller authenticated via an OAuth bearer (from_oauth=True) MUST
+    NOT be able to mint new OTPs — that would let a stolen access token
+    launder itself into a fresh refresh-token chain."""
+    app, _, _ = app_with_oauth
+    from openviking.server.identity import RequestContext
+    from openviking_cli.session.user_id import UserIdentifier
+
+    def _oauth_ctx() -> RequestContext:
+        return RequestContext(
+            user=UserIdentifier("acct1", "alice", "default"),
+            role=Role.USER,
+            from_oauth=True,
+        )
+
+    app.dependency_overrides[get_request_context] = _oauth_ctx
+    try:
+        resp = await client.post("/api/v1/auth/otp", json={})
+        assert resp.status_code == 403, resp.text
+        msg = resp.json().get("error_description") or resp.json().get("message") or ""
+        assert "OAuth-issued tokens" in msg
+    finally:
+        # Reset to the fixture's default (non-OAuth) ctx for other tests.
+        def _fixed_ctx() -> RequestContext:
+            return RequestContext(
+                user=UserIdentifier("acct1", "alice", "default"),
+                role=Role.USER,
+            )
+
+        app.dependency_overrides[get_request_context] = _fixed_ctx
+
+
+@pytest.mark.asyncio
+async def test_oauth_verify_rejects_oauth_issued_caller(app_with_oauth, client):
+    """Same gate as OTP issuance: oauth-verify with an OAuth-issued ctx
+    must be refused, otherwise short-lived bearers can launder into
+    long-lived refresh tokens."""
+    app, store, _ = app_with_oauth
+    from openviking.server.identity import RequestContext
+    from openviking_cli.session.user_id import UserIdentifier
+
+    _, pending_id, _, _ = await _start_authorize(client, redirect_uri="https://x.test/cb")
+    code = (await store.load_pending_authorization(pending_id))["display_code"]
+
+    def _oauth_ctx() -> RequestContext:
+        return RequestContext(
+            user=UserIdentifier("acct1", "alice", "default"),
+            role=Role.USER,
+            from_oauth=True,
+        )
+
+    app.dependency_overrides[get_request_context] = _oauth_ctx
+    try:
+        resp = await client.post(
+            "/api/v1/auth/oauth-verify",
+            json={"code": code, "decision": "approve"},
+        )
+        assert resp.status_code == 403, resp.text
+        msg = resp.json().get("error_description") or resp.json().get("message") or ""
+        assert "OAuth-issued tokens" in msg
+    finally:
+
+        def _fixed_ctx() -> RequestContext:
+            return RequestContext(
+                user=UserIdentifier("acct1", "alice", "default"),
+                role=Role.USER,
+            )
+
+        app.dependency_overrides[get_request_context] = _fixed_ctx
 
 
 @pytest.mark.asyncio

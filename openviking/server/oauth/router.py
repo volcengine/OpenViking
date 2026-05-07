@@ -33,7 +33,11 @@ from openviking.server.identity import RequestContext
 from openviking.server.oauth.otp import generate_otp
 from openviking.server.oauth.provider import OpenVikingOAuthProvider
 from openviking.server.oauth.storage import OAuthStore
-from openviking_cli.exceptions import InvalidArgumentError, UnavailableError
+from openviking_cli.exceptions import (
+    InvalidArgumentError,
+    PermissionDeniedError,
+    UnavailableError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -417,6 +421,18 @@ async def oauth_verify(
     """
     store, provider = _get_store_and_provider(request)
 
+    # Privilege-elevation gate: an OAuth-issued access token must NOT be
+    # able to mint new OAuth state. Otherwise a stolen short-lived bearer
+    # could launder itself into a fresh 30-day refresh chain whose fp is
+    # bound to the still-valid key. Force this endpoint to require primary
+    # auth (raw API key or console session, both of which set
+    # from_oauth=False).
+    if ctx.from_oauth:
+        raise PermissionDeniedError(
+            "OAuth-issued tokens cannot authorize new OAuth clients. "
+            "Use your API key or sign in to the console to verify."
+        )
+
     decision = body.decision.lower().strip()
     if decision not in {"approve", "deny"}:
         raise InvalidArgumentError("decision must be 'approve' or 'deny'")
@@ -498,6 +514,14 @@ async def issue_otp(
     the OTP on the authorize page is granted that identity.
     """
     store, provider = _get_store_and_provider(request)
+
+    # Same gate as oauth_verify: an OAuth-issued bearer cannot mint a new
+    # OTP and re-launch the authorization flow. See router note on
+    # /api/v1/auth/oauth-verify.
+    if ctx.from_oauth:
+        raise PermissionDeniedError(
+            "OAuth-issued tokens cannot issue OTPs. Use your API key or sign in to the console."
+        )
 
     cfg = getattr(request.app.state, "oauth_config", None)
     default_ttl = getattr(cfg, "otp_ttl_seconds", 300) if cfg else 300

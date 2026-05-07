@@ -815,8 +815,14 @@ class OAuthStore:
             codes = self._conn.execute(
                 "DELETE FROM oauth_codes WHERE expires_at < ? OR used = 1", (now,)
             ).rowcount
+            # Refresh tombstones (consumed=1) are KEPT until the row's natural
+            # expires_at. Replay detection (RFC 9700 §4.14) depends on being
+            # able to distinguish "I've seen this token, it was consumed" from
+            # "never seen this token" — deleting tombstones early collapses
+            # those two cases and silently breaks family revocation. Storage
+            # cost is bounded by the refresh TTL (default 30d).
             refreshes = self._conn.execute(
-                "DELETE FROM oauth_refresh_tokens WHERE expires_at < ? OR consumed = 1",
+                "DELETE FROM oauth_refresh_tokens WHERE expires_at < ?",
                 (now,),
             ).rowcount
             access = self._conn.execute(

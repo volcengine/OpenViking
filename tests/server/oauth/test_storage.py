@@ -30,6 +30,72 @@ async def store(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_refresh_path_role_downgrade_rejected():
+    """Provider's exchange_refresh_token must refuse to mint new tokens
+    when the user's role has been downgraded since the refresh was issued.
+    Mirrors the bearer-auth role check; covered here because the refresh
+    path lives in provider.py, not in the storage layer."""
+    import tempfile
+    from pathlib import Path
+
+    from mcp.server.auth.provider import TokenError
+    from mcp.shared.auth import OAuthClientInformationFull
+    from pydantic import AnyUrl
+
+    from openviking.server.identity import Role
+    from openviking.server.oauth.provider import OpenVikingOAuthProvider, OVRefreshToken
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        store = OAuthStore(Path(tmpdir) / "oauth.db")
+        await store.initialize()
+        try:
+            # role_resolver reports current role as USER (post-demotion).
+            current_roles = {("acct", "alice"): Role.USER}
+            provider = OpenVikingOAuthProvider(
+                store=store,
+                issuer="https://ov.test",
+                role_resolver=lambda a, u: current_roles.get((a, u), Role.USER),
+            )
+            await store.register_client(
+                client_id="cx",
+                redirect_uris=["https://x.test/cb"],
+            )
+            rt = "rt-admin-era"
+            await store.insert_refresh(
+                token_plain=rt,
+                client_id="cx",
+                account_id="acct",
+                user_id="alice",
+                role="admin",  # token issued when alice was admin
+                scope=None,
+                resource=None,
+                authorizing_key_fp="f" * 64,
+                ttl_seconds=86400,
+            )
+            client = OAuthClientInformationFull(
+                client_id="cx",
+                redirect_uris=[AnyUrl("https://x.test/cb")],
+            )
+            refresh_obj = OVRefreshToken(
+                token=rt,
+                client_id="cx",
+                scopes=[],
+                expires_at=None,
+                account_id="acct",
+                user_id="alice",
+                role="admin",
+                resource=None,
+                authorizing_key_fp="f" * 64,
+            )
+            with pytest.raises(TokenError) as exc_info:
+                await provider.exchange_refresh_token(client, refresh_obj, scopes=[])
+            assert exc_info.value.error == "invalid_grant"
+            assert "downgraded" in (exc_info.value.error_description or "")
+        finally:
+            await store.close()
+
+
+@pytest.mark.asyncio
 async def test_register_and_get_client(store):
     record = await store.register_client(
         redirect_uris=["https://claude.ai/api/mcp/auth_callback"],
@@ -333,6 +399,38 @@ async def test_revoke_user_tokens_cascades(store):
     assert await store.load_access("at-1") is None
     assert await store.load_access("at-other") is not None
     assert await store.consume_otp(otp) is None
+
+
+@pytest.mark.asyncio
+async def test_gc_keeps_refresh_tombstones_until_natural_expiry(store):
+    """RFC 9700 §4.14 replay detection needs consumed-but-unexpired tombstones
+    to stick around — only after the original expires_at can we GC them."""
+    rt = "rt-tomb"
+    await store.insert_refresh(
+        token_plain=rt,
+        client_id="cx",
+        account_id="acct",
+        user_id="alice",
+        role="user",
+        scope=None,
+        resource=None,
+        authorizing_key_fp=_FP,
+        ttl_seconds=86400,  # 1 day, well beyond GC window
+    )
+    # Consume (rotate) — row now has consumed=1 but is still within expires_at.
+    consumed = await store.consume_refresh(token_plain=rt, replaced_by_plain="rt-next")
+    assert consumed is not None
+    # GC must NOT delete the tombstone yet.
+    await store.gc_expired()
+    assert await store.is_refresh_known_but_consumed(rt) is True
+    # Backdate to past expiry — only now should GC reap it.
+    assert store._conn is not None
+    store._conn.execute(
+        "UPDATE oauth_refresh_tokens SET expires_at = ? WHERE token_hash = ?",
+        (int(time.time()) - 10, hash_secret(rt)),
+    )
+    await store.gc_expired()
+    assert await store.is_refresh_known_but_consumed(rt) is False  # row truly gone now
 
 
 @pytest.mark.asyncio

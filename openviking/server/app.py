@@ -24,7 +24,7 @@ from openviking.server.config import (
 )
 from openviking.server.dependencies import set_service
 from openviking.server.error_mapping import map_exception
-from openviking.server.identity import AuthMode
+from openviking.server.identity import AuthMode, Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 from openviking.server.routers import (
     admin_router,
@@ -474,9 +474,10 @@ def create_app(
             # reference. Re-build the same construction the lifespan does so
             # the routes work as soon as they're hit (lifespan re-binds the
             # same instance to app.state for the OTP / authorize-page path).
+            from pathlib import Path as _Path
+
             from openviking.server.oauth.provider import OpenVikingOAuthProvider
             from openviking.server.oauth.storage import OAuthStore
-            from pathlib import Path as _Path
 
             _workspace = _Path(ov_cfg.storage.workspace).expanduser().resolve()
             _workspace.mkdir(parents=True, exist_ok=True)
@@ -492,12 +493,23 @@ def create_app(
                 or ov_cfg.oauth.issuer
                 or "http://127.0.0.1:1933"
             )
+
+            # Late-binding role resolver: app.state.api_key_manager is wired
+            # during lifespan, after the provider is constructed. Lambda
+            # closes over `app` and looks up at call time.
+            def _current_role(account_id: str, user_id: str) -> Role:
+                mgr = getattr(app.state, "api_key_manager", None)
+                if mgr is None or not hasattr(mgr, "get_user_role"):
+                    return Role.USER
+                return mgr.get_user_role(account_id, user_id)
+
             _route_provider = OpenVikingOAuthProvider(
                 store=_route_store,
                 issuer=_route_issuer,
                 access_token_ttl_seconds=ov_cfg.oauth.access_token_ttl_seconds,
                 refresh_token_ttl_seconds=ov_cfg.oauth.refresh_token_ttl_seconds,
                 auth_code_ttl_seconds=ov_cfg.oauth.auth_code_ttl_seconds,
+                role_resolver=_current_role,
             )
             # Stash the route-time instances; the lifespan replaces these with
             # initialized copies before the first request lands.
@@ -537,9 +549,7 @@ def create_app(
         return _handler
 
     for _route, (_fname, _mime) in _favicon_files.items():
-        app.add_api_route(
-            _route, _make_favicon_handler(_fname, _mime), include_in_schema=False
-        )
+        app.add_api_route(_route, _make_favicon_handler(_fname, _mime), include_in_schema=False)
 
     # MCP endpoint — serves 5 tools (search, read, store, forget, health)
     # via streamable HTTP for Claude Code and other MCP clients.

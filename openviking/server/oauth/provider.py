@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import secrets
-from typing import Optional
+from typing import Callable, Optional
 from urllib.parse import urlencode
 
 from mcp.server.auth.provider import (
@@ -29,8 +29,13 @@ from mcp.server.auth.provider import (
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from pydantic import AnyUrl
 
+from openviking.server.identity import Role
 from openviking.server.oauth.otp import generate_otp
 from openviking.server.oauth.storage import OAuthStore
+
+# Mirrors auth.py:_ROLE_RANK; duplicated here to avoid the import cycle
+# (auth.py already depends on this module via the Provider Protocol).
+_ROLE_RANK = {Role.USER: 0, Role.ADMIN: 1, Role.ROOT: 2}
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +87,7 @@ class OpenVikingOAuthProvider(
         refresh_token_ttl_seconds: int = 30 * 24 * 3600,
         auth_code_ttl_seconds: int = 300,
         authorize_page_path: str = "/oauth/authorize/page",
+        role_resolver: Optional[Callable[[str, str], "Role"]] = None,
     ) -> None:
         self._store = store
         self._issuer = issuer.rstrip("/")
@@ -89,6 +95,12 @@ class OpenVikingOAuthProvider(
         self._refresh_ttl = refresh_token_ttl_seconds
         self._code_ttl = auth_code_ttl_seconds
         self._authorize_page = authorize_page_path
+        # Optional callback to look up a user's current role at refresh time.
+        # When supplied, exchange_refresh_token will reject if the embedded
+        # role outranks the current role — mirrors the bearer-auth check so
+        # that `set_role` demotion can't be laundered through token rotation.
+        # Wired in app.py from the APIKeyManager.
+        self._role_resolver = role_resolver
 
     # ---- Clients (DCR) ----
 
@@ -113,17 +125,33 @@ class OpenVikingOAuthProvider(
                 error="invalid_client_metadata",
                 error_description="client_id is required",
             )
+        # OpenViking only supports public clients with PKCE. Confidential
+        # auth methods (`client_secret_basic` / `client_secret_post`) would
+        # require us to enforce client_secret server-side; the SDK doesn't
+        # do that when get_client returns client_secret=None, so silently
+        # accepting them is a security hazard. RFC 8252 §8.4 also says
+        # native apps (the entire MCP audience) MUST NOT use client_secret
+        # auth — PKCE is the actual proof-of-possession. Reject up front.
+        auth_method = client_info.token_endpoint_auth_method or "none"
+        if auth_method != "none":
+            raise RegistrationError(
+                error="invalid_client_metadata",
+                error_description=(
+                    "OpenViking only supports public clients (PKCE). "
+                    f"token_endpoint_auth_method must be 'none', got '{auth_method}'."
+                ),
+            )
         try:
             await self._store.register_client(
                 client_id=client_info.client_id,
                 redirect_uris=[str(u) for u in (client_info.redirect_uris or [])],
                 client_name=client_info.client_name,
-                token_endpoint_auth_method=client_info.token_endpoint_auth_method or "none",
+                token_endpoint_auth_method=auth_method,
                 grant_types=list(client_info.grant_types) if client_info.grant_types else None,
                 response_types=list(client_info.response_types)
                 if client_info.response_types
                 else None,
-                client_secret=client_info.client_secret,
+                client_secret=None,  # public client; never stored
             )
         except ValueError as exc:
             raise RegistrationError(
@@ -233,6 +261,29 @@ class OpenVikingOAuthProvider(
         refresh_token: OVRefreshToken,
         scopes: list[str],
     ) -> OAuthToken:
+        # Role downgrade gate: if the embedded role outranks the user's
+        # current role (post-`set_role` demotion), refuse to rotate. Same
+        # invariant the bearer-auth path enforces; checked here so a
+        # demoted user can't keep minting fresh access tokens at the old
+        # privilege level just because they hold a long-lived refresh.
+        if self._role_resolver is not None:
+            try:
+                token_role = Role(refresh_token.role)
+                current_role = self._role_resolver(refresh_token.account_id, refresh_token.user_id)
+            except (ValueError, Exception):  # noqa: BLE001
+                token_role = None
+                current_role = None
+            if (
+                token_role is not None
+                and current_role is not None
+                and _ROLE_RANK[token_role] > _ROLE_RANK[current_role]
+            ):
+                raise TokenError(
+                    error="invalid_grant",
+                    error_description=(
+                        "user role has been downgraded; please re-authorize the client"
+                    ),
+                )
         new_refresh = self._mint_refresh()
         consumed = await self._store.consume_refresh(
             token_plain=refresh_token.token, replaced_by_plain=new_refresh
