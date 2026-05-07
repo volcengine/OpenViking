@@ -1,0 +1,47 @@
+project_name: "RAG_Benchmark"
+
+# ===========Modify Configuration================
+dataset_name: "FinanceBench" 
+
+adapter:
+  module: "src.adapters.financebench_adapter"  
+  class_name: "FinanceBenchAdapter"     
+
+execution:
+  max_workers: 8
+  ingest_workers: 8
+  retrieval_topk: 10
+  max_queries: null
+  ingest_mode: "directory"
+  retrieval_instruction: ""  
+  use_vikingbot: true
+
+# ===========VikingBot Configuration============
+vikingbot:
+  max_iterations: 50
+
+  # Custom prompt configuration
+  # Option 1: Use a fully custom prompt with placeholders
+  # Supported placeholders: {question}
+  # prompt: |
+  #   Answer this question as concisely as possible using only the information in the database.
+  #   Do not use any external knowledge or web search.
+  #   
+  #   Question: {question}
+  
+  # Option 2: Or use a custom base instruction while keeping the default scope handling
+  # base_instruction: "Answer this question briefly. Use only database information."
+
+paths:
+  dataset_path: "datasets/{dataset_name}/financebench_open_source.jsonl"
+  doc_output_dir: "ov_storage/{dataset_name}/{dataset_name}_processed_docs"
+  vector_store: "ov_storage/{dataset_name}/{dataset_name}_viking_store_index"
+  output_dir: "Output/{dataset_name}/experiment_test_bot_top_{retrieval_topk}"
+  log_file: "Output/{dataset_name}/experiment_test_bot_top_{retrieval_topk}/benchmark.log"
+
+
+llm:
+  model: "doubao-seed-2-0-pro-260215"
+  temperature: 0
+  base_url: "https://ark.cn-beijing.volces.com/api/v3"
+  api_key: "your_api_key_here"
