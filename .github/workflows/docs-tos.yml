@@ -92,9 +92,9 @@ jobs:
             *) TOS_S3_ENDPOINT="${TOS_ENDPOINT}" ;;
           esac
 
-          aws s3 sync docs/.vitepress/dist "s3://${TOS_BUCKET}/" \
+          aws s3 cp docs/.vitepress/dist "s3://${TOS_BUCKET}/" \
             --endpoint-url "https://${TOS_S3_ENDPOINT}" \
-            --delete \
+            --recursive \
             --only-show-errors
 
       - name: Report TOS deployment failure
