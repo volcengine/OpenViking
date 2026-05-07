@@ -10,6 +10,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 from pydantic import BaseModel, ConfigDict, model_validator
 
+from openviking.core.path_variables import resolve_path_variables
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
@@ -223,14 +224,18 @@ async def add_resource(
     if request.preserve_structure is not None:
         kwargs["preserve_structure"] = request.preserve_structure
 
+    # Resolve path variables before passing to service
+    to = resolve_path_variables(request.to) if request.to else None
+    parent = resolve_path_variables(request.parent) if request.parent else None
+
     execution = await run_operation(
         operation="resources.add_resource",
         telemetry=request.telemetry,
         fn=lambda: service.resources.add_resource(
             path=path,
             ctx=_ctx,
-            to=request.to,
-            parent=request.parent,
+            to=to,
+            parent=parent,
             reason=request.reason,
             instruction=request.instruction,
             wait=request.wait,
