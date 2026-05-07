@@ -443,6 +443,7 @@ async def index_resource(
     ``"resource"``.
     """
     viking_fs = get_viking_fs()
+    vector_store = viking_fs.vector_store
     context_type = get_context_type_for_uri(uri)
 
     # 1. Index Directory Metadata
@@ -479,11 +480,21 @@ async def index_resource(
 
             file_uri = file_info.get("uri") or f"{uri}/{file_name}"
 
-            # For direct indexing, we might not have summaries.
-            # We pass empty summary_dict, vectorize_file will try to read content for text files.
+            # Preserve existing abstract from vector index during reindex.
+            # Without this, reindex overwrites VLM-generated abstracts with empty
+            # strings, causing rerank to lose document differentiation ability.
+            existing_abstract = ""
+            if vector_store:
+                try:
+                    existing = await vector_store.fetch_by_uri(file_uri, ctx=ctx)
+                    if existing:
+                        existing_abstract = existing.get("abstract", "") or ""
+                except Exception:
+                    pass
+
             await vectorize_file(
                 file_path=file_uri,
-                summary_dict={"name": file_name},
+                summary_dict={"name": file_name, "summary": existing_abstract},
                 parent_uri=uri,
                 context_type=context_type,
                 ctx=ctx,
