@@ -137,13 +137,15 @@ async function main() {
   // Recall summary: only meaningful when we actually injected memories this
   // turn. Skip the segment for empty/bypass/no-results reasons to keep the
   // line tight. The (0.92) trailing parens is the top score among picked
-  // items — quality hint without an extra segment.
+  // items — quality hint without an extra segment. The size number is a
+  // chars/4 estimate (heuristic, not real tokens), so we don't label it
+  // with a unit — the magnitude alone conveys "small / medium / large".
   if (recall && recall.reason === "ok" && recall.count > 0) {
     const top = typeof recall.top_score === "number" && recall.top_score > 0
       ? ` (${recall.top_score.toFixed(2)})`
       : "";
     const seg = `↩ ${recall.count} mem${top}`
-      + (recall.tokens_used ? ` · ${human(recall.tokens_used)} tok` : "")
+      + (recall.tokens_used ? ` · ${human(recall.tokens_used)}` : "")
       + (typeof recall.latency_ms === "number" ? ` · ${recall.latency_ms}ms` : "");
     parts.push(dim(seg));
   }
@@ -159,8 +161,12 @@ async function main() {
     if (capture.committed) {
       parts.push(dim(`✎ committed${archivedTail}`));
     } else if (capture.pending_tokens > 0) {
+      // No "tok" suffix: server-side counter is approximate (chars/N), and
+      // mixing it with the recall side (which is a pure heuristic) under the
+      // same label invites the wrong mental model. Pending/threshold ratio
+      // is meaningful on its own.
       parts.push(dim(
-        `✎ ${human(capture.pending_tokens)}/${human(capture.commit_threshold)} tok${archivedTail}`,
+        `✎ ${human(capture.pending_tokens)}/${human(capture.commit_threshold)}${archivedTail}`,
       ));
     } else if (archived > 0) {
       parts.push(dim(`✎ ${archived} arch`));
