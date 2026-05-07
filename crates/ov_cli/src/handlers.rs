@@ -10,6 +10,7 @@ pub async fn handle_add_resource(
     mut path: String,
     to: Option<String>,
     parent: Option<String>,
+    parent_auto_create: Option<String>,
     reason: String,
     instruction: String,
     wait: bool,
@@ -56,9 +57,14 @@ pub async fn handle_add_resource(
         path = unescaped_path;
     }
 
-    // Check that only one of --to or --parent is set
-    if to.is_some() && parent.is_some() {
-        eprintln!("Error: Cannot specify both --to and --parent at the same time.");
+    // Check that only one of --to, --parent, or --parent-auto-create is set
+    let mut exclusive_count = 0;
+    if to.is_some() { exclusive_count += 1; }
+    if parent.is_some() { exclusive_count += 1; }
+    if parent_auto_create.is_some() { exclusive_count += 1; }
+
+    if exclusive_count > 1 {
+        eprintln!("Error: Cannot specify more than one of --to, --parent, or --parent-auto-create at the same time.");
         std::process::exit(1);
     }
 
@@ -89,6 +95,7 @@ pub async fn handle_add_resource(
         &path,
         to,
         parent,
+        parent_auto_create,
         reason,
         instruction,
         wait,

@@ -7,10 +7,19 @@ from typing import List, Union
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
+from openviking.core.path_variables import resolve_path_variables
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
+
+
+def _resolve_uri_or_uris(uri: Union[str, List[str]]) -> Union[str, List[str]]:
+    """Resolve path variables in a single URI or list of URIs."""
+    if isinstance(uri, list):
+        return [resolve_path_variables(u) for u in uri]
+    return resolve_path_variables(uri)
+
 
 router = APIRouter(prefix="/api/v1/relations", tags=["relations"])
 
@@ -37,6 +46,7 @@ async def relations(
 ):
     """Get relations for a resource."""
     service = get_service()
+    uri = resolve_path_variables(uri)
     result = await service.relations.relations(uri, ctx=_ctx)
     return Response(status="ok", result=result)
 
@@ -48,8 +58,10 @@ async def link(
 ):
     """Create link between resources."""
     service = get_service()
-    await service.relations.link(request.from_uri, request.to_uris, ctx=_ctx, reason=request.reason)
-    return Response(status="ok", result={"from": request.from_uri, "to": request.to_uris})
+    from_uri = resolve_path_variables(request.from_uri)
+    to_uris = _resolve_uri_or_uris(request.to_uris)
+    await service.relations.link(from_uri, to_uris, ctx=_ctx, reason=request.reason)
+    return Response(status="ok", result={"from": from_uri, "to": to_uris})
 
 
 @router.delete("/link")
@@ -59,5 +71,7 @@ async def unlink(
 ):
     """Remove link between resources."""
     service = get_service()
-    await service.relations.unlink(request.from_uri, request.to_uri, ctx=_ctx)
-    return Response(status="ok", result={"from": request.from_uri, "to": request.to_uri})
+    from_uri = resolve_path_variables(request.from_uri)
+    to_uri = resolve_path_variables(request.to_uri)
+    await service.relations.unlink(from_uri, to_uri, ctx=_ctx)
+    return Response(status="ok", result={"from": from_uri, "to": to_uri})
