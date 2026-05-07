@@ -575,8 +575,12 @@ class ContentWriteCoordinator:
                 )
             root_uri = VikingURI.build(*parts[: memories_idx + 2])
         elif parts[0] == "agent":
-            if len(parts) >= 3 and parts[1] == "skills":
-                root_uri = VikingURI.build(*parts[:3])
+            try:
+                skills_idx = parts.index("skills")
+            except ValueError:
+                skills_idx = -1
+            if skills_idx >= 0 and len(parts) > skills_idx + 1:
+                root_uri = VikingURI.build(*parts[: skills_idx + 2])
             else:
                 try:
                     memories_idx = parts.index("memories")

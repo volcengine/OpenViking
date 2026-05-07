@@ -144,17 +144,9 @@ def create_app(
 
     validate_server_config(config)
 
-    @asynccontextmanager
-    async def lifespan(app: FastAPI):
-        """Application lifespan handler."""
-        nonlocal service
-        owns_service = service is None
-        if owns_service:
-            service = OpenVikingService()
-            await service.initialize()
-
-        assert service is not None
-        set_service(service)
+    async def _deferred_init(service, app, config):
+        """Run heavy initialization in background after server starts accepting requests."""
+        await service.initialize()
 
         # Initialize APIKeyManager after service (needs VikingFS)
         effective_auth_mode = config.get_effective_auth_mode()
@@ -189,6 +181,19 @@ def create_app(
         else:
             # AuthMode.DEV - logging already handled in validate_server_config
             app.state.api_key_manager = None
+
+        logger.info("OpenVikingService initialization complete")
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        """Application lifespan handler."""
+        nonlocal service
+        owns_service = service is None
+        if owns_service:
+            service = OpenVikingService()
+
+        assert service is not None
+        set_service(service)
 
         from openviking.metrics.global_api import (
             init_metrics_from_server_config,
@@ -234,8 +239,27 @@ def create_app(
         # Start MCP session manager (must be active before /mcp requests)
         from openviking.server.mcp_endpoint import mcp_lifespan
 
+        deferred_task = None
+
         async with mcp_lifespan():
+            # Start heavy initialization as background task after yield
+            if service is not None:
+                deferred_task = asyncio.create_task(_deferred_init(service, app, config))
+                deferred_task.add_done_callback(
+                    lambda t: (
+                        logger.error("Deferred initialization failed", exc_info=t.exception())
+                        if t.exception()
+                        else None
+                    )
+                )
             yield
+
+        # Wait for deferred initialization to complete before shutdown
+        if deferred_task and not deferred_task.done():
+            try:
+                await deferred_task
+            except Exception:
+                logger.exception("Deferred initialization failed")
 
         # Cleanup
         from openviking.metrics.global_api import shutdown_metrics_async
