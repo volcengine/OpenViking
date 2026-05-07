@@ -139,6 +139,8 @@ The hook scripts write small JSON snapshots to `~/.openviking/state/`; the statu
 
 Set `OPENVIKING_STATUSLINE=off` to silence without removing the registration, or `jq 'del(.statusLine)' ~/.claude/settings.json` to remove. If you already had a custom statusline, the installer prompts replace / skip / manual compose.
 
+To personalize the statusline (hide segments, recolor, compose with another statusline, add a custom segment), see [`examples/claude-code-memory-plugin/docs/STATUSLINE.md`](../../examples/claude-code-memory-plugin/docs/STATUSLINE.md). It's written for an AI assistant to read end-to-end, so the easiest path is to open Claude Code and ask it to read the doc and tailor the statusline to your preference.
+
 ## Compared to Claude Code's built-in `MEMORY.md`
 
 This plugin **complements** Claude Code's native memory system, it doesn't replace it:
