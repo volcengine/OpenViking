@@ -15,7 +15,12 @@ from enum import Enum
 from typing import Dict, List, Optional
 
 from openviking.core.context import Context
-from openviking.core.namespace import canonical_agent_root, canonical_user_root
+from openviking.core.namespace import (
+    agent_space_fragment,
+    canonical_agent_root,
+    canonical_user_root,
+    user_space_fragment,
+)
 from openviking.models.embedder.base import EmbedResult, embed_compat
 from openviking.prompts import render_prompt
 from openviking.server.identity import RequestContext
@@ -83,6 +88,15 @@ class MemoryDeduplicator:
             return f"{canonical_agent_root(ctx)}/memories/{category}/"
         return ""
 
+    @staticmethod
+    def _owner_space(category: str, ctx: RequestContext) -> str | None:
+        """Return the owner space for the candidate category."""
+        if category in MemoryDeduplicator._USER_CATEGORIES:
+            return user_space_fragment(ctx)
+        if category in MemoryDeduplicator._AGENT_CATEGORIES:
+            return agent_space_fragment(ctx)
+        return None
+
     def __init__(
         self,
         vikingdb: VikingDBManager,
@@ -102,11 +116,15 @@ class MemoryDeduplicator:
         ctx: RequestContext,
         *,
         batch_memories: list[tuple[list[float], Context]] | None = None,
+        strict_errors: bool = False,
     ) -> DedupResult:
         """Decide how to handle a candidate memory."""
         # Step 1: Vector pre-filtering - find similar memories in same category
         similar_memories, query_vector = await self._find_similar_memories(
-            candidate, ctx=ctx, batch_memories=batch_memories
+            candidate,
+            ctx=ctx,
+            batch_memories=batch_memories,
+            strict_errors=strict_errors,
         )
 
         if not similar_memories:
@@ -138,6 +156,7 @@ class MemoryDeduplicator:
         ctx: RequestContext,
         *,
         batch_memories: list[tuple[list[float], Context]] | None = None,
+        strict_errors: bool = False,
     ) -> tuple[list[Context], list[float]]:
         """Find similar existing memories using vector search.
 
@@ -147,7 +166,14 @@ class MemoryDeduplicator:
         telemetry = get_current_telemetry()
         query_vector: list[float] = []  # Initialize early for safe returns
 
+        if self.vikingdb is None:
+            if strict_errors:
+                raise RuntimeError("Memory dedup requires VikingDBManager")
+            return [], query_vector
+
         if not self.embedder:
+            if strict_errors:
+                raise RuntimeError("Memory dedup requires an embedder")
             return [], query_vector
 
         # Generate embedding for candidate
@@ -155,18 +181,19 @@ class MemoryDeduplicator:
         embed_result: EmbedResult = await embed_compat(self.embedder, query_text, is_query=True)
         query_vector = embed_result.dense_vector
 
+        owner_space = self._owner_space(candidate.category.value, ctx)
         category_uri_prefix = self._category_uri_prefix(candidate.category.value, ctx)
         logger.debug(
             "Dedup prefilter candidate category=%s owner_space=%s uri_prefix=%s",
             candidate.category.value,
-            None,
+            owner_space,
             category_uri_prefix,
         )
 
         try:
             # Search with memory-scope filter.
             results = await self.vikingdb.search_similar_memories(
-                owner_space=None,
+                owner_space=owner_space,
                 category_uri_prefix=category_uri_prefix,
                 query_vector=query_vector,
                 limit=5,
@@ -224,6 +251,8 @@ class MemoryDeduplicator:
             logger.warning(f"Vector search cancelled during dedup prefilter: {e}")
             return [], query_vector
         except Exception as e:
+            if strict_errors:
+                raise RuntimeError(f"Memory dedup vector search failed: {e}") from e
             logger.warning(f"Vector search failed: {e}")
             return [], query_vector
 
