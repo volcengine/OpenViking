@@ -4,6 +4,7 @@
 
 import asyncio
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -183,6 +184,14 @@ def create_app(
 
         logger.info("OpenVikingService initialization complete")
 
+    def _on_deferred_init_done(task):
+        if task.exception():
+            logger.error(
+                "Deferred initialization failed, exiting",
+                exc_info=task.exception(),
+            )
+            os._exit(1)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """Application lifespan handler."""
@@ -221,13 +230,7 @@ def create_app(
             # Start heavy initialization as background task after yield
             if service is not None:
                 deferred_task = asyncio.create_task(_deferred_init(service, app, config))
-                deferred_task.add_done_callback(
-                    lambda t: (
-                        logger.error("Deferred initialization failed", exc_info=t.exception())
-                        if t.exception()
-                        else None
-                    )
-                )
+                deferred_task.add_done_callback(_on_deferred_init_done)
             yield
 
         # Wait for deferred initialization to complete before shutdown
@@ -458,9 +461,7 @@ def create_app(
         return _handler
 
     for _route, (_fname, _mime) in _favicon_files.items():
-        app.add_api_route(
-            _route, _make_favicon_handler(_fname, _mime), include_in_schema=False
-        )
+        app.add_api_route(_route, _make_favicon_handler(_fname, _mime), include_in_schema=False)
 
     # MCP endpoint — serves 5 tools (search, read, store, forget, health)
     # via streamable HTTP for Claude Code and other MCP clients.
