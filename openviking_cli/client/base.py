@@ -245,6 +245,11 @@ class BaseClient(ABC):
         ...
 
     @abstractmethod
+    async def preview_memory_extraction(self, session_id: str) -> Dict[str, Any]:
+        """Preview extracted memories for a session without persisting them."""
+        ...
+
+    @abstractmethod
     async def delete_session(self, session_id: str) -> None:
         """Delete a session."""
         ...

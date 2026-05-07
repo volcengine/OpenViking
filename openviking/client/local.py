@@ -426,6 +426,11 @@ class LocalClient(BaseClient):
         result = await session.get_session_archive(archive_id)
         return _to_jsonable(result)
 
+    async def preview_memory_extraction(self, session_id: str) -> Dict[str, Any]:
+        """Preview extracted memories for a session without persisting them."""
+        result = await self._service.sessions.preview_extract(session_id, self._ctx)
+        return _to_jsonable(result)
+
     async def delete_session(self, session_id: str) -> None:
         """Delete a session."""
         await self._service.sessions.delete(session_id, self._ctx)

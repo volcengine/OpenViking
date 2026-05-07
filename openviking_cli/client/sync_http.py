@@ -107,6 +107,10 @@ class SyncHTTPClient:
         """Get one completed archive for a session."""
         return run_async(self._async_client.get_session_archive(session_id, archive_id))
 
+    def preview_memory_extraction(self, session_id: str) -> Dict[str, Any]:
+        """Preview extracted memories for a session without persisting them."""
+        return run_async(self._async_client.preview_memory_extraction(session_id))
+
     def delete_session(self, session_id: str) -> None:
         """Delete a session."""
         run_async(self._async_client.delete_session(session_id))

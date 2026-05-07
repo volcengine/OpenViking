@@ -801,6 +801,13 @@ class AsyncHTTPClient(BaseClient):
         )
         return self._handle_response(response)
 
+    async def preview_memory_extraction(self, session_id: str) -> Dict[str, Any]:
+        """Preview extracted memories for a session without persisting them."""
+        response = await self._http.post(
+            f"/api/v1/sessions/{session_id}/extract-preview",
+        )
+        return self._handle_response(response)
+
     async def delete_session(self, session_id: str) -> None:
         """Delete a session."""
         response = await self._http.delete(f"/api/v1/sessions/{session_id}")
