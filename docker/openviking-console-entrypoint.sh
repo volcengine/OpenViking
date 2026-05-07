@@ -3,6 +3,7 @@ set -eu
 
 SERVER_URL="http://127.0.0.1:1933"
 SERVER_HEALTH_URL="${SERVER_URL}/health"
+SERVER_READY_URL="${SERVER_URL}/ready"
 CONSOLE_PORT="${OPENVIKING_CONSOLE_PORT:-8020}"
 CONSOLE_HOST="${OPENVIKING_CONSOLE_HOST:-0.0.0.0}"
 WITH_BOT="${OPENVIKING_WITH_BOT:-1}"
@@ -131,6 +132,25 @@ until curl -fsS "${SERVER_HEALTH_URL}" >/dev/null 2>&1; do
     fi
     sleep 1
 done
+
+# Wait for server to become fully ready before starting console
+ready_attempt=0
+until curl -fsS "${SERVER_READY_URL}" 2>/dev/null | grep -q '"status":"ready"'; do
+    ready_attempt=$((ready_attempt + 1))
+    if ! kill -0 "${SERVER_PID}" 2>/dev/null; then
+        echo "[openviking-console-entrypoint] openviking-server exited before becoming ready" >&2
+        wait "${SERVER_PID}" || true
+        exit 1
+    fi
+    if [ "${ready_attempt}" -ge 300 ]; then
+        echo "[openviking-console-entrypoint] timed out waiting for ${SERVER_READY_URL}" >&2
+        forward_signal
+        wait "${SERVER_PID}" || true
+        exit 1
+    fi
+    sleep 2
+done
+echo "[openviking-console-entrypoint] openviking-server is ready"
 
 python -m openviking.console.bootstrap \
     --host "${CONSOLE_HOST}" \
