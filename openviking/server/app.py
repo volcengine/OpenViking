@@ -218,7 +218,7 @@ def create_app(
 
         async with mcp_lifespan():
             # Start heavy initialization as background task after yield
-            if owns_service:
+            if service is not None:
                 deferred_task = asyncio.create_task(_deferred_init(service, app, config))
             yield
 
