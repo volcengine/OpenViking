@@ -51,13 +51,40 @@ If `ov.conf` is what you already maintain, the plugin reads it too — see [Conf
 The repo's `examples/.claude-plugin/marketplace.json` exposes the plugin as a local marketplace entry. From the OpenViking repo root:
 
 ```bash
-claude plugin marketplace add "$(pwd)/examples" --scope user
-claude plugin install claude-code-memory-plugin@openviking-plugins-local --scope user
+claude plugin marketplace add "$(pwd)/examples"
+claude plugin install claude-code-memory-plugin@openviking-plugins-local
 ```
 
-> `--scope user` makes the plugin active from any directory. Using `--scope local` ties enablement to the current dir and the plugin shows up disabled the moment you `cd` elsewhere.
+> Both commands install at user scope by default — the plugin is active from any directory. We don't pass `--scope user` explicitly because older Claude Code 2.0.x builds (e.g. 2.0.76) reject the flag. On newer builds that do accept `--scope`, you can lift a local-scoped install to user scope with `claude plugin enable claude-code-memory-plugin@openviking-plugins-local --scope user`.
 >
 > The marketplace entry points Claude Code at the source directory. Edits to `scripts/`, `hooks/`, and config files take effect on the next hook invocation — no reinstall. But moving / renaming / deleting the source dir, or `git checkout`-ing to a branch without these files, breaks the plugin. A public marketplace listing for one-click install will follow.
+
+##### Legacy mode (Claude Code < 2.0)
+
+`claude plugin` ships in Claude Code 2.0+ (Oct 2025). Older builds still have `claude mcp add` and the hooks system, so the same functionality can be wired up by hand:
+
+```bash
+PLUGIN_DIR="$(pwd)/examples/claude-code-memory-plugin"
+
+claude mcp remove openviking -s user 2>/dev/null
+claude mcp add --scope user --transport http openviking \
+  '${OPENVIKING_URL:-http://127.0.0.1:1933}/mcp' \
+  --header 'Authorization: Bearer ${OPENVIKING_API_KEY:-}' \
+  --header 'X-OpenViking-Account: ${OPENVIKING_ACCOUNT:-}' \
+  --header 'X-OpenViking-User: ${OPENVIKING_USER:-}' \
+  --header 'X-OpenViking-Agent: ${OPENVIKING_AGENT_ID:-}'
+
+# Merge plugin hooks into ~/.claude/settings.json (with backup).
+mkdir -p ~/.claude && [ -f ~/.claude/settings.json ] || echo '{}' > ~/.claude/settings.json
+cp -p ~/.claude/settings.json ~/.claude/settings.json.bak.$(date +%s)
+sed "s|\${CLAUDE_PLUGIN_ROOT}|$PLUGIN_DIR|g" "$PLUGIN_DIR/hooks/hooks.json" > /tmp/ov-hooks.json
+jq --slurpfile h /tmp/ov-hooks.json '.hooks = ((.hooks // {}) * $h[0].hooks)' \
+  ~/.claude/settings.json > /tmp/ov-settings.json
+jq -e . /tmp/ov-settings.json >/dev/null && mv /tmp/ov-settings.json ~/.claude/settings.json
+rm -f /tmp/ov-hooks.json
+```
+
+The single-quoted `${VAR}` literals in `claude mcp add` are intentional — Claude Code expands them at MCP launch time using whatever the shell wrapper injects. Don't switch to double quotes; your shell would expand them to empty strings before the command runs. The one-line installer does all of this for you and prompts before touching `~/.claude/settings.json`.
 
 #### 4. Start Claude Code
 

@@ -7,13 +7,18 @@ import uuid
 
 import httpx
 import pytest_asyncio
+from fastapi import FastAPI
+from fastapi import Request as FastAPIRequest
+from fastapi.responses import JSONResponse
 
 from openviking.server.api_keys import APIKeyManager
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
 from openviking.server.dependencies import set_service
 from openviking.server.identity import RequestContext, Role
+from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 from openviking.service.core import OpenVikingService
+from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -22,6 +27,84 @@ def _uid() -> str:
 
 
 ROOT_KEY = "admin-api-test-root-key-abcdef1234567890ab"
+
+
+class _FakeAGFS:
+    def __init__(self):
+        self._files = {}
+        self._dirs = {"/", "/local"}
+
+    def read(self, path):
+        if path not in self._files:
+            raise FileNotFoundError(path)
+        return self._files[path]
+
+    def write(self, path, content):
+        self._files[path] = content
+
+    def mkdir(self, path):
+        self._dirs.add(path)
+
+
+class _FakeVikingFS:
+    def __init__(self):
+        self.agfs = _FakeAGFS()
+
+    async def encrypt_bytes(self, account_id, content):
+        return content
+
+    async def decrypt_bytes(self, account_id, content):
+        return content
+
+
+class _FakeService:
+    def __init__(self):
+        self.viking_fs = _FakeVikingFS()
+
+    async def initialize_account_directories(self, ctx):
+        return None
+
+    async def initialize_user_directories(self, ctx):
+        return None
+
+
+def _build_lightweight_admin_test_app() -> FastAPI:
+    from openviking.server.routers import admin as admin_router
+
+    app = FastAPI()
+    app.state.config = ServerConfig(root_api_key=ROOT_KEY)
+    fake_service = _FakeService()
+    set_service(fake_service)
+
+    @app.exception_handler(OpenVikingError)
+    async def openviking_error_handler(request: FastAPIRequest, exc: OpenVikingError):
+        http_status = ERROR_CODE_TO_HTTP_STATUS.get(exc.code, 500)
+        return JSONResponse(
+            status_code=http_status,
+            content=Response(
+                status="error",
+                error=ErrorInfo(code=exc.code, message=exc.message, details=exc.details),
+            ).model_dump(),
+        )
+
+    manager = APIKeyManager(root_key=ROOT_KEY, viking_fs=fake_service.viking_fs)
+    app.state.api_key_manager = manager
+    app.include_router(admin_router.router)
+    return app
+
+
+@pytest_asyncio.fixture(scope="function")
+async def lightweight_admin_app():
+    app = _build_lightweight_admin_test_app()
+    await app.state.api_key_manager.load()
+    return app
+
+
+@pytest_asyncio.fixture(scope="function")
+async def lightweight_admin_client(lightweight_admin_app):
+    transport = httpx.ASGITransport(app=lightweight_admin_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:
+        yield c
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -183,6 +266,51 @@ async def test_register_user(admin_client: httpx.AsyncClient):
     assert resp.status_code == 200
 
 
+async def test_root_can_register_admin_role_user(
+    lightweight_admin_client: httpx.AsyncClient,
+):
+    """ROOT can create an ADMIN user via register_user."""
+    acct = _uid()
+    await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+
+    resp = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={"user_id": "bob-admin", "role": "admin"},
+        headers=root_headers(),
+    )
+    assert resp.status_code == 200
+
+    admin_key = resp.json()["result"]["user_key"]
+    list_users = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/users",
+        headers={"X-API-Key": admin_key},
+    )
+    assert list_users.status_code == 200
+
+
+async def test_root_cannot_register_root_role_user(
+    lightweight_admin_client: httpx.AsyncClient,
+):
+    """ROOT must use set_role instead of minting ROOT directly in register_user."""
+    acct = _uid()
+    await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+
+    resp = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={"user_id": "mallory-root", "role": "root"},
+        headers=root_headers(),
+    )
+    assert resp.status_code == 403
+
+
 async def test_admin_can_register_user_in_own_account(admin_client: httpx.AsyncClient):
     """ADMIN can register users in their own account."""
     acct = _uid()
@@ -199,6 +327,83 @@ async def test_admin_can_register_user_in_own_account(admin_client: httpx.AsyncC
         headers={"X-API-Key": alice_key},
     )
     assert resp.status_code == 200
+
+
+async def test_admin_can_register_admin_role_user(
+    lightweight_admin_client: httpx.AsyncClient,
+):
+    """ADMIN can create another ADMIN in the same account via register_user."""
+    acct = _uid()
+    resp = await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    alice_key = resp.json()["result"]["user_key"]
+
+    resp = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={"user_id": "mallory-admin", "role": "admin"},
+        headers={"X-API-Key": alice_key},
+    )
+    assert resp.status_code == 200
+
+    admin_key = resp.json()["result"]["user_key"]
+    list_users = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/users",
+        headers={"X-API-Key": admin_key},
+    )
+    assert list_users.status_code == 200
+
+
+async def test_admin_cannot_register_root_role_user(
+    lightweight_admin_client: httpx.AsyncClient,
+):
+    """ADMIN should not be able to mint a ROOT key via register_user."""
+    acct = _uid()
+    resp = await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    alice_key = resp.json()["result"]["user_key"]
+
+    resp = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={"user_id": "mallory-root", "role": "root"},
+        headers={"X-API-Key": alice_key},
+    )
+    assert resp.status_code == 403
+
+
+async def test_admin_cannot_mint_root_key_that_reaches_root_only_endpoint(
+    lightweight_admin_client: httpx.AsyncClient,
+):
+    """ADMIN registration must never yield a key that works on ROOT-only endpoints."""
+    acct = _uid()
+    resp = await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    alice_key = resp.json()["result"]["user_key"]
+
+    resp = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={"user_id": "mallory-root", "role": "root"},
+        headers={"X-API-Key": alice_key},
+    )
+    assert resp.status_code == 403
+    result = resp.json().get("result") or {}
+    assert "user_key" not in result
+
+    mallory_key = result.get("user_key")
+    if mallory_key:
+        root_only = await lightweight_admin_client.get(
+            "/api/v1/admin/accounts",
+            headers={"X-API-Key": mallory_key},
+        )
+        assert root_only.status_code == 403
 
 
 async def test_admin_cannot_register_user_in_other_account(admin_client: httpx.AsyncClient):

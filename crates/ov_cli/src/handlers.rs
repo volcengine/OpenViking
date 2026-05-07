@@ -101,6 +101,8 @@ pub async fn handle_add_resource(
         watch_interval,
         ctx.output_format,
         ctx.compact,
+        ctx.should_show_progress(),
+        ctx.is_verbose(),
     )
     .await
 }

@@ -39,6 +39,10 @@ pub struct Config {
     pub output: String,
     #[serde(default = "default_echo_command")]
     pub echo_command: bool,
+    #[serde(default = "default_show_progress")]
+    pub show_progress: bool,
+    #[serde(default = "default_verbose")]
+    pub verbose: bool,
     #[serde(default)]
     pub upload: UploadConfig,
     #[serde(default, alias = "extra_header")]
@@ -61,6 +65,14 @@ fn default_echo_command() -> bool {
     true
 }
 
+fn default_show_progress() -> bool {
+    false
+}
+
+fn default_verbose() -> bool {
+    false
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -73,6 +85,8 @@ impl Default for Config {
             timeout: 60.0,
             output: "table".to_string(),
             echo_command: true,
+            show_progress: false,
+            verbose: false,
             upload: UploadConfig::default(),
             extra_headers: None,
         }
