@@ -56,6 +56,22 @@ from openviking_cli.utils.logger import init_otel_log_handler_from_server_config
 logger = get_logger(__name__)
 
 
+def _on_deferred_init_done(task):
+    if task.cancelled():
+        logger.warning("Deferred initialization cancelled")
+        return
+
+    exc = task.exception()
+    if exc is None:
+        return
+
+    logger.error(
+        "Deferred initialization failed, exiting",
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
+    os._exit(1)
+
+
 def _format_error_location(loc: object) -> str:
     if not isinstance(loc, (list, tuple)):
         return "request"
@@ -183,14 +199,6 @@ def create_app(
             app.state.api_key_manager = None
 
         logger.info("OpenVikingService initialization complete")
-
-    def _on_deferred_init_done(task):
-        if task.exception():
-            logger.error(
-                "Deferred initialization failed, exiting",
-                exc_info=task.exception(),
-            )
-            os._exit(1)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
