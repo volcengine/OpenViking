@@ -7,6 +7,7 @@ import io
 import threading
 import zipfile
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -14,6 +15,17 @@ import pytest
 from openviking.parse.parsers.html import URLTypeDetector
 from openviking.utils.network_guard import ensure_public_remote_target
 from openviking_cli.exceptions import PermissionDeniedError
+
+
+def _patch_resources_config(monkeypatch, upload_temp_dir, *, allow_local_path: bool) -> None:
+    config = SimpleNamespace(
+        allow_local_path=allow_local_path,
+        storage=SimpleNamespace(get_upload_temp_dir=lambda: upload_temp_dir),
+    )
+    monkeypatch.setattr(
+        "openviking.server.routers.resources.get_openviking_config",
+        lambda: config,
+    )
 
 
 async def test_add_skill_accepts_temp_uploaded_file(
@@ -205,6 +217,81 @@ async def test_add_resource_rejects_loopback_remote_url(client: httpx.AsyncClien
     assert body["status"] == "error"
     assert body["error"]["code"] == "PERMISSION_DENIED"
     assert "public remote resource targets" in body["error"]["message"]
+
+
+async def test_add_resource_rejects_local_path_when_allow_local_path_disabled(
+    client: httpx.AsyncClient,
+    temp_dir,
+    upload_temp_dir,
+    monkeypatch,
+):
+    _patch_resources_config(monkeypatch, upload_temp_dir, allow_local_path=False)
+    source_file = temp_dir / "source.md"
+    source_file.write_text("# test\n")
+
+    resp = await client.post(
+        "/api/v1/resources",
+        json={"path": str(source_file), "reason": "local path disabled"},
+    )
+    assert resp.status_code == 403
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "PERMISSION_DENIED"
+
+
+async def test_add_resource_accepts_local_path_when_allow_local_path_enabled(
+    client: httpx.AsyncClient,
+    temp_dir,
+    upload_temp_dir,
+    monkeypatch,
+):
+    _patch_resources_config(monkeypatch, upload_temp_dir, allow_local_path=True)
+    source_file = temp_dir / "source.md"
+    source_file.write_text("# test\n")
+
+    resp = await client.post(
+        "/api/v1/resources",
+        json={"path": str(source_file), "reason": "local path enabled"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["root_uri"].startswith("viking://")
+
+
+async def test_add_resource_rejects_non_absolute_local_path_when_enabled(
+    client: httpx.AsyncClient,
+    upload_temp_dir,
+    monkeypatch,
+):
+    _patch_resources_config(monkeypatch, upload_temp_dir, allow_local_path=True)
+
+    resp = await client.post(
+        "/api/v1/resources",
+        json={"path": "relative/path.md", "reason": "must be absolute"},
+    )
+    assert resp.status_code == 403
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "PERMISSION_DENIED"
+
+
+async def test_add_resource_rejects_nonexistent_local_path_when_enabled(
+    client: httpx.AsyncClient,
+    temp_dir,
+    upload_temp_dir,
+    monkeypatch,
+):
+    _patch_resources_config(monkeypatch, upload_temp_dir, allow_local_path=True)
+
+    resp = await client.post(
+        "/api/v1/resources",
+        json={"path": str(temp_dir / "missing.md"), "reason": "missing path"},
+    )
+    assert resp.status_code == 403
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "PERMISSION_DENIED"
 
 
 async def test_add_resource_rejects_private_git_ssh_url(client: httpx.AsyncClient):

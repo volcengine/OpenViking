@@ -3,11 +3,33 @@
 
 """Tests for resource management endpoints."""
 
+from types import SimpleNamespace
 import zipfile
 
 import httpx
 
 from openviking.telemetry import get_current_telemetry
+
+
+def _patch_resources_config(monkeypatch, upload_temp_dir, *, allow_local_path: bool) -> None:
+    config = SimpleNamespace(
+        allow_local_path=allow_local_path,
+        storage=SimpleNamespace(get_upload_temp_dir=lambda: upload_temp_dir),
+    )
+    monkeypatch.setattr(
+        "openviking.server.routers.resources.get_openviking_config",
+        lambda: config,
+    )
+
+
+def _snapshot_directory(dir_path):
+    snapshot = {}
+    for file_path in sorted(dir_path.rglob("*")):
+        if file_path.is_file():
+            relative = str(file_path.relative_to(dir_path))
+            stat = file_path.stat()
+            snapshot[relative] = (stat.st_size, stat.st_mtime_ns, file_path.read_bytes())
+    return snapshot
 
 
 async def test_add_resource_success(
@@ -447,7 +469,12 @@ async def test_temp_upload_with_telemetry_returns_summary(
     assert body["telemetry"]["summary"]["operation"] == "resources.temp_upload"
 
 
-async def test_add_resource_rejects_direct_local_path(client: httpx.AsyncClient):
+async def test_add_resource_rejects_direct_local_path(
+    client: httpx.AsyncClient,
+    upload_temp_dir,
+    monkeypatch,
+):
+    _patch_resources_config(monkeypatch, upload_temp_dir, allow_local_path=False)
     resp = await client.post(
         "/api/v1/resources",
         json={"path": "/app/ov.conf", "reason": "security test"},
@@ -456,6 +483,58 @@ async def test_add_resource_rejects_direct_local_path(client: httpx.AsyncClient)
     body = resp.json()
     assert body["status"] == "error"
     assert body["error"]["code"] == "PERMISSION_DENIED"
+
+
+async def test_add_resource_accepts_local_file_path_when_enabled(
+    client: httpx.AsyncClient,
+    temp_dir,
+    upload_temp_dir,
+    monkeypatch,
+):
+    _patch_resources_config(monkeypatch, upload_temp_dir, allow_local_path=True)
+    source_file = temp_dir / "source.md"
+    source_file.write_text("# local file\n\nhello\n")
+    before_content = source_file.read_text()
+    before_mtime = source_file.stat().st_mtime_ns
+
+    resp = await client.post(
+        "/api/v1/resources",
+        json={"path": str(source_file), "reason": "local file path"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["root_uri"].startswith("viking://")
+    assert source_file.read_text() == before_content
+    assert source_file.stat().st_mtime_ns == before_mtime
+
+
+async def test_add_resource_accepts_local_directory_path_when_enabled(
+    client: httpx.AsyncClient,
+    temp_dir,
+    upload_temp_dir,
+    monkeypatch,
+):
+    _patch_resources_config(monkeypatch, upload_temp_dir, allow_local_path=True)
+    source_dir = temp_dir / "source_dir"
+    source_dir.mkdir()
+    (source_dir / "a.md").write_text("# a\n")
+    nested_dir = source_dir / "nested"
+    nested_dir.mkdir()
+    (nested_dir / "b.txt").write_text("hello\n")
+    before_snapshot = _snapshot_directory(source_dir)
+
+    resp = await client.post(
+        "/api/v1/resources",
+        json={"path": str(source_dir), "reason": "local directory path"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["root_uri"].startswith("viking://")
+    assert _snapshot_directory(source_dir) == before_snapshot
 
 
 async def test_add_resource_accepts_temp_uploaded_file(
