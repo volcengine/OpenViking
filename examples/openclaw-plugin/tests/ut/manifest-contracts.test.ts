@@ -12,6 +12,25 @@ const manifest = JSON.parse(
   activation?: { onStartup?: boolean; onCapabilities?: string[] };
   contracts?: { tools?: string[] };
 };
+const packageJson = JSON.parse(
+  readFileSync(resolve(pluginRoot, "package.json"), "utf8"),
+) as {
+  files?: string[];
+  scripts?: Record<string, string>;
+};
+const installManifest = JSON.parse(
+  readFileSync(resolve(pluginRoot, "install-manifest.json"), "utf8"),
+) as {
+  compatibility?: { minOpenclawVersion?: string };
+  files?: { required?: string[]; optional?: string[] };
+  npm?: {
+    build?: boolean;
+    buildMinOpenclawVersion?: string;
+    buildScript?: string;
+    omitDev?: boolean;
+    pruneAfterBuild?: boolean;
+  };
+};
 
 function collectRegisteredToolNames(): string[] {
   const names: string[] = [];
@@ -53,5 +72,33 @@ describe("OpenClaw 5.2 manifest contracts", () => {
   it("opts into startup and capability-triggered hook/tool activation", () => {
     expect(manifest.activation?.onStartup).toBe(true);
     expect(manifest.activation?.onCapabilities?.toSorted()).toEqual(["hook", "tool"]);
+  });
+});
+
+describe("OpenClaw 5.5 package runtime contract", () => {
+  it("builds and publishes compiled runtime output for TypeScript entries", () => {
+    expect(packageJson.scripts?.build).toBe("tsc -p tsconfig.build.json");
+    expect(packageJson.scripts?.prepack).toBe("npm run build");
+    expect(packageJson.files).toContain("dist/");
+    expect(packageJson.files).toContain("install-manifest.json");
+  });
+
+  it("lets ov-install build runtime output from downloaded source", () => {
+    expect(installManifest.npm).toMatchObject({
+      build: true,
+      buildMinOpenclawVersion: "2026.5.3",
+      buildScript: "build",
+      omitDev: true,
+      pruneAfterBuild: true,
+    });
+    expect(installManifest.files?.required).toEqual(expect.arrayContaining([
+      "index.ts",
+      "commands/setup.ts",
+      "tsconfig.json",
+      "tsconfig.build.json",
+      "package.json",
+      "openclaw.plugin.json",
+    ]));
+    expect(installManifest.compatibility?.minOpenclawVersion).toBe("2026.4.8");
   });
 });

@@ -1,17 +1,43 @@
-# Installing OpenViking for OpenClaw
+# Install OpenViking for OpenClaw
 
-Use [OpenViking](https://github.com/volcengine/OpenViking) as the long-term memory backend for [OpenClaw](https://github.com/openclaw/openclaw). After installation, OpenClaw will automatically remember important facts from conversations and recall relevant context before replying.
+OpenViking provides long-term memory, knowledge base search, semantic retrieval, and RAG-style context for OpenClaw through the `@openclaw/openviking` plugin.
 
-> This document covers the current OpenViking plugin built on OpenClaw's `context-engine` architecture.
+This guide describes the current plugin install flow. It is written for both people and automation agents.
 
-## Prerequisites
+## Do Not Install The Skill By Mistake
 
-| Component | Required Version |
+`@openclaw/openviking` is an OpenClaw plugin.
+
+Do not use this command for plugin installation:
+
+```bash
+clawhub install openviking
+```
+
+That command installs an AgentSkill named `openviking`, not the OpenClaw plugin.
+
+Use this plugin command instead:
+
+```bash
+openclaw plugins install @openclaw/openviking
+```
+
+## Requirements
+
+| Component | Required |
 | --- | --- |
 | Node.js | >= 22 |
-| OpenClaw | >= 2026.4.24 |
+| OpenClaw | >= 2026.4.8 |
 
 The plugin connects to an existing OpenViking server. It does not start the OpenViking server for you. Start OpenViking first, keep it running, then point the plugin `baseUrl` at that HTTP service. The default local URL is `http://127.0.0.1:1933`.
+
+OpenClaw plugin package boundaries:
+
+- `2026.4.8` is the minimum supported OpenClaw version for the current plugin.
+- `2026.5.3` starts validating package installs so TypeScript plugin entries need compiled JavaScript output.
+- `2026.5.4` and later stop falling back to `.ts` source for installed/global plugin runtime loading when compiled JavaScript is missing.
+- The recommended `openclaw plugins install @openclaw/openviking` path installs a published package that already includes `dist/*.js`.
+- `ov-install` is the backup/source install path. Use it when ClawHub or the OpenClaw plugin manager path is unavailable/rate-limited, or when explicitly testing a source ref. For OpenClaw `>= 2026.5.3`, it builds the plugin during installation.
 
 Quick check:
 
@@ -54,82 +80,224 @@ Verify the server before installing or restarting the plugin:
 curl http://127.0.0.1:1933/health
 ```
 
-## Legacy Upgrade Note
+## Recommended Install Path
 
-If you previously installed the legacy `memory-openviking` plugin, remove it first, then continue with the install or upgrade commands below.
+Use this path for normal users, production installs, and agent-assisted installs.
 
-- The new `openviking` plugin is not compatible with the legacy `memory-openviking` plugin.
-- If you never installed the legacy plugin, skip this section.
+### 1. Install The Plugin
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/upgrade_scripts/cleanup-memory-openviking.sh -o cleanup-memory-openviking.sh
-bash cleanup-memory-openviking.sh
+openclaw plugins install @openclaw/openviking
 ```
 
-## Install via ClawHub (Recommended)
+If your OpenClaw installation requires an explicit registry prefix, use:
 
 ```bash
 openclaw plugins install clawhub:@openclaw/openviking
 ```
 
-After installation, run the interactive setup wizard:
+### 2. Configure The Plugin
+
+For interactive human setup:
 
 ```bash
 openclaw openviking setup
 ```
 
-The wizard prompts for your remote OpenViking server URL and optional API key, then writes configuration to `$OPENCLAW_STATE_DIR/openclaw.json` (default: `~/.openclaw/openclaw.json`).
+For non-interactive agent setup:
 
-## Install via ov-install (Alternative)
+```bash
+openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --json
+```
 
-The `ov-install` helper automates plugin deployment:
+Example:
+
+```bash
+openclaw openviking setup --base-url http://127.0.0.1:1933 --api-key sk-xxx --json
+```
+
+The setup command writes `plugins.entries.openviking.config` and activates `plugins.slots.contextEngine=openviking`.
+
+If the OpenViking server is temporarily unreachable but you still want to save the config:
+
+```bash
+openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --allow-offline --json
+```
+
+If your API key is a root key, setup may require tenant context:
+
+```bash
+openclaw openviking setup \
+  --base-url <OPENVIKING_URL> \
+  --api-key <ROOT_API_KEY> \
+  --account-id <ACCOUNT_ID> \
+  --user-id <USER_ID> \
+  --json
+```
+
+If another context engine already owns the slot, setup will not replace it by default. To intentionally replace the current owner:
+
+```bash
+openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --force-slot --json
+```
+
+If you need a custom agent routing prefix (optional; most users leave this empty):
+
+```bash
+openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --agent-prefix <PREFIX> --json
+```
+
+### 3. Restart OpenClaw Gateway
+
+```bash
+openclaw gateway restart
+```
+
+If your OpenClaw version uses a different restart command, use the equivalent gateway restart for your environment.
+
+### 4. Verify
+
+```bash
+openclaw openviking status --json
+```
+
+Expected result:
+
+| JSON field | Expected value |
+| --- | --- |
+| `configured` | `true` |
+| `slotActive` | `true` |
+| `health.ok` | `true` when the server is reachable |
+
+You can also inspect the raw OpenClaw config:
+
+```bash
+openclaw config get plugins.entries.openviking.config
+openclaw config get plugins.slots.contextEngine
+```
+
+`plugins.slots.contextEngine` should be `openviking`.
+
+## Agent Result Handling
+
+Automation should prefer `--json` and branch on these fields:
+
+| Result | Meaning | Recommended action |
+| --- | --- | --- |
+| `success: true` | Config saved and setup completed | Restart gateway, then run status |
+| `success: false`, `action: "slot_blocked"` | Config may be saved, but another plugin owns `contextEngine` | Ask before rerunning with `--force-slot` |
+| `success: false`, `action: "error"` | Validation failed | Show `error`; do not claim install succeeded |
+| `health.ok: false` | Server unreachable | Check URL/server, or rerun with `--allow-offline` only if the user accepts |
+| `keyProbe.keyType: "root_key"` | Root key needs tenant context | Rerun with `--account-id` and `--user-id` |
+
+## Configuration Reference
+
+The plugin config lives at:
+
+```text
+plugins.entries.openviking.config
+```
+
+Core fields:
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `mode` | `remote` | Legacy compatibility field. Only remote mode is supported. |
+| `baseUrl` | `http://127.0.0.1:1933` | OpenViking HTTP endpoint |
+| `apiKey` | empty | OpenViking API key |
+| `agent_prefix` | empty | Optional prefix for OpenClaw agent IDs. If no agent ID is available, the plugin uses `main`. Interactive setup accepts only letters, digits, `_`, and `-`. |
+| `accountId` | empty | Required when using a root API key |
+| `userId` | empty | Required when using a root API key |
+
+Use setup for normal changes when possible:
+
+```bash
+openclaw openviking setup --reconfigure
+```
+
+Manual config inspection:
+
+```bash
+openclaw config get plugins.entries.openviking.config
+```
+
+## Upgrade
+
+```bash
+openclaw plugins update openviking
+openclaw gateway restart
+openclaw openviking status --json
+```
+
+Confirm that `configured` and `slotActive` are both `true`.
+
+## Uninstall
+
+```bash
+openclaw plugins uninstall openviking
+openclaw config set plugins.slots.contextEngine legacy
+openclaw gateway restart
+```
+
+Current OpenClaw native uninstall does not always reset `plugins.slots.contextEngine`. The explicit `config set` step avoids leaving the slot pointed at an uninstalled plugin.
+
+## Optional Pipeline Health Check
+
+After status passes, you can run the bundled end-to-end health check from a repository checkout:
+
+```bash
+python examples/openclaw-plugin/health_check_tools/ov-healthcheck.py
+```
+
+This checks the Gateway to OpenViking path by injecting a real conversation and verifying capture, commit, archive, and memory extraction. See [health_check_tools/HEALTHCHECK.md](./health_check_tools/HEALTHCHECK.md).
+
+## Backup Path: ov-install
+
+`ov-install` is the backup path, not the primary install path. Use it when `openclaw plugins install @openclaw/openviking` cannot reach ClawHub, is rate-limited, or when you explicitly need to install/test plugin files from a Git branch or source ref.
+
+Try the OpenClaw plugin manager first. If that path is unavailable, run:
 
 ```bash
 npm install -g openclaw-openviking-setup-helper
 ov-install
 ```
 
-Common variant:
+Useful backup/source flags:
 
-```bash
-ov-install --workdir ~/.openclaw-second
-```
-
-## Upgrade
-
-To upgrade the plugin to the latest version:
-
-```bash
-npm install -g openclaw-openviking-setup-helper@latest && ov-install -y
-```
-
-## Install or Upgrade a Specific Release
-
-To install or upgrade to a specific release:
-
-```bash
-ov-install -y --version 0.2.9
-```
-
-## Parameters
-
-| Parameter | Meaning |
+| Flag | Meaning |
 | --- | --- |
-| `--workdir PATH` | Target OpenClaw data directory |
-| `--version VER` | Set plugin version. For example, `0.2.9` maps to plugin `v0.2.9` |
-| `--current-version` | Print the currently installed plugin version |
-| `--plugin-version REF` | Set only the plugin version. Supports tag, branch, or commit |
-| `--github-repo owner/repo` | Use a different GitHub repository for plugin files. Default: `volcengine/OpenViking` |
-| `--update` | Upgrade only the plugin |
-| `-y` | Non-interactive mode, use default values |
+| `--workdir PATH` | Target OpenClaw state directory |
+| `--version REF` | Git ref, tag, branch, or release version to install |
+| `--current-version` | Print the version tracked by the helper |
+| `--base-url URL` | OpenViking server URL (enables non-interactive mode) |
+| `--api-key KEY` | OpenViking API key |
+| `--agent-prefix PREFIX` | Agent routing prefix |
+| `--update` | Update an existing helper-managed install |
 
-If you need to pin the installer itself:
+For user-facing installs, use `openclaw plugins install @openclaw/openviking` first. Choose `ov-install` only as the backup path.
+
+## Migrate From ov-install To openclaw plugin install
+
+If you previously installed OpenViking with `ov-install`, follow these steps before switching to the recommended `openclaw plugins install` path.
+
+### Same Plugin ID (openviking, version >= 0.3.x)
+
+The ov-install context-engine deployment writes files to `~/.openclaw/extensions/openviking/`. After installing via npm, OpenClaw may still load from the old directory. Clean it up:
 
 ```bash
-npm install -g openclaw-openviking-setup-helper@VERSION
+# Remove ov-install deployed files
+rm -rf ~/.openclaw/extensions/openviking/
+
+# Install via the OpenClaw plugin manager
+openclaw plugins install @openclaw/openviking
+
+# Reconfigure (your existing config in openclaw.json is preserved)
+openclaw openviking setup --reconfigure
+openclaw gateway restart
+openclaw openviking status --json
 ```
 
-## OpenClaw Plugin Configuration
+Your existing config fields (`baseUrl`, `apiKey`, `agentId`, etc.) are preserved. The new plugin version reads old field names at runtime — no manual config edits needed.
 
 The plugin configuration lives under `plugins.entries.openviking.config`.
 
@@ -159,76 +327,36 @@ openclaw config set plugins.entries.openviking.config.agent_prefix your-prefix
 
 ## Start
 
-After installation:
+After installation (if you skipped reconfigure above):
 
 ```bash
 openclaw gateway restart
+openclaw openviking status --json
 ```
 
-Windows PowerShell:
+### Old Plugin ID (memory-openviking, version < 0.3.x)
 
-```powershell
+The old memory plugin used a different plugin ID and slot:
+
+```bash
+# Uninstall old plugin
+openclaw plugins uninstall memory-openviking 2>/dev/null || true
+
+# Clean up old slot and files
+openclaw config set plugins.slots.memory none
+rm -rf ~/.openclaw/extensions/memory-openviking/
+
+# Install new plugin
+openclaw plugins install @openclaw/openviking
+openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --json
 openclaw gateway restart
+openclaw openviking status --json
 ```
 
-## Verify
-
-Check that the plugin owns the `contextEngine` slot:
+Or use the cleanup script:
 
 ```bash
-openclaw config get plugins.slots.contextEngine
+bash examples/openclaw-plugin/upgrade_scripts/cleanup-memory-openviking.sh
 ```
 
-If the output is `openviking`, the plugin is active.
-
-Follow OpenClaw logs:
-
-```bash
-openclaw logs --follow
-```
-
-If you see `openviking: registered context-engine`, the plugin loaded successfully.
-
-Check the OpenViking service log:
-
-By default the log file lives under `workspace/data/log/openviking.log`. With the default setup this is usually:
-
-```bash
-cat ~/.openviking/data/log/openviking.log
-```
-
-Check installed versions:
-
-```bash
-ov-install --current-version
-```
-
-### Pipeline Health Check (Optional)
-
-If the steps above all look good and you want to further verify the full Gateway → OpenViking pipeline, run the plugin's health check script:
-
-```bash
-python examples/openclaw-plugin/health_check_tools/ov-healthcheck.py
-```
-
-This script injects a real conversation through Gateway and then verifies from the OpenViking side that the session was captured, committed, archived, and had memories extracted. See [health_check_tools/HEALTHCHECK.md](./health_check_tools/HEALTHCHECK.md) for full details.
-
-## Uninstall
-
-To remove the OpenClaw plugin:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/upgrade_scripts/uninstall-openclaw-plugin.sh -o uninstall-openviking.sh
-bash uninstall-openviking.sh
-```
-
-For a non-default OpenClaw state directory:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/upgrade_scripts/uninstall-openclaw-plugin.sh -o uninstall-openviking.sh
-bash uninstall-openviking.sh --workdir ~/.openclaw-second
-```
-
----
-
-See also: [INSTALL-ZH.md](./INSTALL-ZH.md)
+See also: [INSTALL-ZH.md](./INSTALL-ZH.md) and [INSTALL-AGENT.md](./INSTALL-AGENT.md).

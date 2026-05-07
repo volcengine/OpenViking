@@ -1,0 +1,281 @@
+name: ClawHub release (OpenViking plugin)
+
+# Publishes examples/openclaw-plugin to ClawHub. The publish branch
+# intentionally does not commit dist/; this workflow builds and npm-packs the
+# plugin into a generated package branch, then lets ClawHub's official reusable
+# workflow perform trusted publishing from that package source while preserving
+# the original workflow commit as source metadata.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Optional plugin version. Leave empty to auto-generate YYYY.M.D / YYYY.M.D-N / YYYY.M.D-dev.N."
+        required: false
+      channel:
+        description: "Publish channel. auto publishes latest from the configured upstream repository and dev from forks."
+        required: false
+        type: choice
+        default: "auto"
+        options:
+          - auto
+          - dev
+          - latest
+      changelog:
+        description: "Changelog text for this release."
+        required: false
+        default: "OpenViking plugin release via OIDC trusted publishing."
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    name: Resolve release channel
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tags: ${{ steps.resolve.outputs.tags }}
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - name: Resolve release channel and version
+        id: resolve
+        shell: bash
+        run: |
+          repo="${{ github.repository }}"
+          requested="${{ github.event.inputs.channel || 'auto' }}"
+          requested_version="${{ github.event.inputs.version || '' }}"
+          configured_upstream="${{ vars.CLAWHUB_UPSTREAM_REPOSITORY }}"
+          configured_latest_repos="${{ vars.CLAWHUB_LATEST_REPOSITORIES }}"
+          configured_dev_repos="${{ vars.CLAWHUB_DEV_REPOSITORIES }}"
+          configured_timezone="${{ vars.CLAWHUB_RELEASE_TIMEZONE }}"
+          upstream_repo="${configured_upstream:-volcengine/OpenViking}"
+          release_timezone="${configured_timezone:-Asia/Shanghai}"
+
+          repo_in_list() {
+            local needle="$1"
+            local list="${2//,/ }"
+            for item in $list; do
+              if [ "$item" = "$needle" ]; then
+                return 0
+              fi
+            done
+            return 1
+          }
+
+          can_publish_latest=false
+          if [ "$repo" = "$upstream_repo" ] || repo_in_list "$repo" "$configured_latest_repos"; then
+            can_publish_latest=true
+          fi
+
+          can_publish_dev=true
+          if [ "$repo" = "$upstream_repo" ]; then
+            can_publish_dev=true
+          elif [ -n "$configured_dev_repos" ] && ! repo_in_list "$repo" "$configured_dev_repos"; then
+            can_publish_dev=false
+          fi
+
+          if [ "$requested" = "auto" ]; then
+            if [ "$can_publish_latest" = "true" ]; then
+              channel="latest"
+            elif [ "$can_publish_dev" = "true" ]; then
+              channel="dev"
+            else
+              echo "::error title=Repository not allowed::Repository '$repo' is not allowed to publish to ClawHub. Set CLAWHUB_DEV_REPOSITORIES or CLAWHUB_LATEST_REPOSITORIES repository variables if this is intentional."
+              exit 1
+            fi
+          else
+            channel="$requested"
+          fi
+
+          if [ "$channel" != "dev" ] && [ "$channel" != "latest" ]; then
+            echo "::error title=Invalid channel::Unsupported ClawHub channel '$channel'."
+            exit 1
+          fi
+
+          if [ "$channel" = "latest" ] && [ "$can_publish_latest" != "true" ]; then
+            echo "::error title=Refusing to publish::Repository '$repo' may not publish the latest channel. Only '$upstream_repo' and repositories listed in CLAWHUB_LATEST_REPOSITORIES may publish latest."
+            exit 1
+          fi
+
+          if [ "$channel" = "dev" ] && [ "$can_publish_dev" != "true" ]; then
+            echo "::error title=Refusing to publish::Repository '$repo' may not publish the dev channel. Configure CLAWHUB_DEV_REPOSITORIES if this repository should be allowed."
+            exit 1
+          fi
+
+          collect_published_versions() {
+            local target_repo="$1"
+            local remote="https://x-access-token:${{ github.token }}@github.com/${target_repo}.git"
+            local tmpdir
+            tmpdir="$(mktemp -d)"
+            git -C "$tmpdir" init -q
+            git -C "$tmpdir" remote add origin "$remote"
+            if git -C "$tmpdir" fetch --quiet --depth=1 origin '+refs/heads/clawhub-package-*:refs/remotes/origin/clawhub-package-*'; then
+              git -C "$tmpdir" for-each-ref --format='%(refname)' refs/remotes/origin/clawhub-package-* | while IFS= read -r ref; do
+                branch_version="$(
+                  git -C "$tmpdir" show "$ref:package.json" 2>/dev/null \
+                    | sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+                    | head -n 1 || true
+                )"
+                if [ -n "$branch_version" ]; then
+                  echo "$branch_version"
+                fi
+              done
+            fi
+            rm -rf "$tmpdir"
+          }
+
+          next_version_for_channel() {
+            local channel="$1"
+            local base_version
+            local existing_versions
+            base_version="$(TZ="$release_timezone" date +'%Y.%-m.%-d')"
+            existing_versions="$(collect_published_versions "$repo" | sort -u)"
+
+            if [ "$channel" = "dev" ]; then
+              local prefix="${base_version}-dev."
+              local max_dev=0
+              while IFS= read -r candidate; do
+                if [[ "$candidate" == "$prefix"* ]]; then
+                  local suffix="${candidate#$prefix}"
+                  if [[ "$suffix" =~ ^[0-9]+$ ]] && [ "$((10#$suffix))" -gt "$max_dev" ]; then
+                    max_dev="$((10#$suffix))"
+                  fi
+                fi
+              done <<< "$existing_versions"
+              echo "${base_version}-dev.$((max_dev + 1))"
+              return
+            fi
+
+            local max_latest=-1
+            while IFS= read -r candidate; do
+              if [ "$candidate" = "$base_version" ]; then
+                if [ "$max_latest" -lt 0 ]; then
+                  max_latest=0
+                fi
+              elif [[ "$candidate" == "${base_version}-"* ]]; then
+                local suffix="${candidate#${base_version}-}"
+                if [[ "$suffix" =~ ^[0-9]+$ ]] && [ "$((10#$suffix))" -gt "$max_latest" ]; then
+                  max_latest="$((10#$suffix))"
+                fi
+              fi
+            done <<< "$existing_versions"
+
+            if [ "$max_latest" -lt 0 ]; then
+              echo "$base_version"
+            else
+              echo "${base_version}-$((max_latest + 1))"
+            fi
+          }
+
+          if [ -n "$requested_version" ]; then
+            version="$requested_version"
+          else
+            version="$(next_version_for_channel "$channel")"
+          fi
+
+          if [ "$channel" = "dev" ] && [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-dev\.[0-9]+$ ]]; then
+            echo "::error title=Invalid dev version::The dev channel requires YYYY.M.D-dev.N, got '$version'."
+            exit 1
+          fi
+
+          if [ "$channel" = "latest" ] && [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
+            echo "::error title=Invalid latest version::The latest channel requires YYYY.M.D or YYYY.M.D-N, got '$version'."
+            exit 1
+          fi
+
+          echo "tags=$channel" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Show inputs
+        run: |
+          echo "requested_version=${{ github.event.inputs.version || '' }}"
+          echo "resolved_version=${{ steps.resolve.outputs.version }}"
+          echo "channel=${{ github.event.inputs.channel || 'auto' }}"
+          echo "resolved_tags=${{ steps.resolve.outputs.tags }}"
+          echo "changelog=${{ github.event.inputs.changelog || 'OpenViking plugin release via OIDC trusted publishing.' }}"
+
+  prepare-package-source:
+    name: Prepare ClawHub package source
+    needs: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    outputs:
+      package_branch: ${{ steps.package_branch.outputs.branch }}
+      source_url: ${{ steps.package_branch.outputs.source_url }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: examples/openclaw-plugin/package-lock.json
+
+      - name: Pack OpenViking plugin
+        id: pack
+        working-directory: examples/openclaw-plugin
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: |
+          set -euo pipefail
+          npm version --no-git-tag-version --allow-same-version "$VERSION"
+          npm ci
+          pack_dir="$RUNNER_TEMP/openviking-pack"
+          package_dir="$RUNNER_TEMP/openviking-package"
+          mkdir -p "$pack_dir" "$package_dir"
+          npm pack --pack-destination "$pack_dir"
+          tarball="$(find "$pack_dir" -maxdepth 1 -name '*.tgz' -print -quit)"
+          if [ -z "$tarball" ]; then
+            echo "::error title=Pack failed::npm pack did not produce a tgz file."
+            exit 1
+          fi
+          tar -xzf "$tarball" -C "$package_dir"
+          echo "package_dir=$package_dir/package" >> "$GITHUB_OUTPUT"
+          find "$package_dir/package" -maxdepth 3 -type f | sort
+
+      - name: Push generated package branch
+        id: package_branch
+        env:
+          PACKAGE_DIR: ${{ steps.pack.outputs.package_dir }}
+          VERSION: ${{ needs.guard.outputs.version }}
+          BRANCH: clawhub-package-${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch --orphan "$BRANCH"
+          git rm -r --cached . || true
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -a "$PACKAGE_DIR"/. .
+          git add .
+          git commit -m "chore(clawhub): package openviking plugin $VERSION"
+          git push --force origin "HEAD:$BRANCH"
+          source_url="${GITHUB_REPOSITORY}@${BRANCH}"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "source_url=$source_url" >> "$GITHUB_OUTPUT"
+          echo "source_url=$source_url"
+
+  publish:
+    name: Publish to ClawHub (official trusted workflow)
+    needs:
+      - guard
+      - prepare-package-source
+    permissions:
+      contents: read
+      id-token: write
+    uses: openclaw/clawhub/.github/workflows/package-publish.yml@v0.12.0
+    with:
+      source: ${{ needs.prepare-package-source.outputs.source_url }}
+      dry_run: false
+      json: true
+      version: ${{ needs.guard.outputs.version }}
+      tags: ${{ needs.guard.outputs.tags }}
+      source_repo: ${{ github.repository }}
+      source_commit: ${{ github.sha }}
+      source_ref: ${{ github.ref }}

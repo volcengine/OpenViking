@@ -154,18 +154,25 @@ describe("extractNewTurnTexts", () => {
     expect(texts[0]).toContain("[user]: hello");
   });
 
-  it("preserves toolUse content from assistant", () => {
+  it("preserves assistant text and associates toolUse with toolResult", () => {
     const messages = [
       {
         role: "assistant",
         content: [
           { type: "text", text: "Let me search" },
-          { type: "toolUse", name: "grep", input: { pattern: "TODO" } },
+          { type: "toolUse", id: "call_1", name: "grep", input: { pattern: "TODO" } },
         ],
+      },
+      {
+        role: "toolResult",
+        toolName: "grep",
+        toolCallId: "call_1",
+        content: [{ type: "text", text: "found 3 matches" }],
       },
     ];
     const { texts } = extractNewTurnTexts(messages, 0);
-    expect(texts.some((t) => t.includes("[toolUse: grep]"))).toBe(true);
+    expect(texts.some((t) => t.includes("[assistant]: Let me search"))).toBe(true);
+    expect(texts.some((t) => t.includes("[grep result]"))).toBe(true);
     expect(texts.some((t) => t.includes("TODO"))).toBe(true);
   });
 
