@@ -538,6 +538,7 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 | `model` | str | Model name |
 | `api_base` | str | API endpoint (optional) |
 | `thinking` | bool | Enable thinking mode for VolcEngine models (default: `false`) |
+| `enable_thinking` | bool\|null | Control whether OpenAI-compatible and LiteLLM backends send `extra_body.enable_thinking`; `null` keeps the backend default allowlist behavior |
 | `max_concurrent` | int | Maximum concurrent semantic LLM calls (default: `100`) |
 | `max_retries` | int | Maximum retry attempts for transient VLM provider errors (default: `3`; `0` disables retry) |
 | `timeout` | float | Per-request HTTP timeout in seconds passed to the underlying OpenAI/LiteLLM client. Increase for slow endpoints (e.g., DashScope, local inference). Must be `> 0` (default: `60.0`) |
@@ -545,6 +546,8 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 | `stream` | bool | Enable streaming mode (for OpenAI-compatible providers, default: `false`) |
 
 `vlm.max_retries` only applies to transient errors such as `429`, `5xx`, timeouts, and connection failures. Permanent authentication, authorization, and billing errors are not retried automatically. The backoff strategy is exponential backoff with jitter, starting at `0.5s` and capped at `8s`.
+
+Set `vlm.enable_thinking` to `true` to force sending `extra_body.enable_thinking` on OpenAI-compatible or LiteLLM backends, or to `false` to suppress that field entirely. Leaving it unset preserves the existing provider-detection behavior.
 
 **Available Models**
 
@@ -1180,6 +1183,7 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
     "model": "string",
     "api_base": "string",
     "thinking": false,
+    "enable_thinking": null,
     "max_concurrent": 100,
     "max_retries": 3,
     "extra_headers": {},

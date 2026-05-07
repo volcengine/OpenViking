@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for LiteLLM thinking parameter scoping to DashScope providers."""
 
+from openviking_cli.utils.config.vlm_config import VLMConfig
 from openviking.models.vlm.backends.litellm_vlm import LiteLLMVLMProvider
 
 
@@ -88,3 +89,73 @@ class TestLiteLLMThinkingParam:
 
         assert "extra_body" in kwargs
         assert kwargs["extra_body"]["enable_thinking"] is True
+
+    def test_litellm_explicit_enable_thinking_for_non_dashscope_model(self):
+        """Explicit config should force enable_thinking on unsupported-by-default models."""
+        vlm = self._make_provider("gpt-4o", enable_thinking=True)
+        model = vlm._resolve_model("gpt-4o")
+        messages = [{"role": "user", "content": "hello"}]
+
+        kwargs = vlm._build_kwargs(model, messages, thinking=True)
+
+        assert kwargs["extra_body"]["enable_thinking"] is True
+
+    def test_litellm_explicit_disable_thinking_for_dashscope_model(self):
+        """Explicit config should suppress enable_thinking even for DashScope models."""
+        vlm = self._make_provider("qwen-plus", enable_thinking=False)
+        model = vlm._resolve_model("qwen-plus")
+        messages = [{"role": "user", "content": "hello"}]
+
+        kwargs = vlm._build_kwargs(model, messages, thinking=True)
+
+        assert "enable_thinking" not in kwargs.get("extra_body", {})
+
+
+class TestVLMConfigEnableThinking:
+    """Test VLMConfig passes enable_thinking controls to VLM instances."""
+
+    def test_vlm_config_enable_thinking_defaults_to_none(self):
+        """VLMConfig should default enable_thinking to provider-specific behavior."""
+        config = VLMConfig(
+            model="gpt-4o",
+            provider="openai",
+            providers={
+                "openai": {
+                    "api_key": "sk-test",
+                }
+            },
+        )
+
+        assert config.enable_thinking is None
+        assert config._build_vlm_config_dict()["enable_thinking"] is None
+
+    def test_vlm_config_enable_thinking_passed_to_vlm_dict(self):
+        """VLMConfig should pass explicit enable_thinking to the VLM config dict."""
+        config = VLMConfig(
+            model="gpt-4o",
+            provider="openai",
+            enable_thinking=True,
+            providers={
+                "openai": {
+                    "api_key": "sk-test",
+                }
+            },
+        )
+
+        assert config._build_vlm_config_dict()["enable_thinking"] is True
+
+    def test_vlm_config_provider_enable_thinking_takes_precedence(self):
+        """Provider-level enable_thinking should override the flat VLM setting."""
+        config = VLMConfig(
+            model="gpt-4o",
+            provider="openai",
+            enable_thinking=True,
+            providers={
+                "openai": {
+                    "api_key": "sk-test",
+                    "enable_thinking": False,
+                }
+            },
+        )
+
+        assert config._build_vlm_config_dict()["enable_thinking"] is False
