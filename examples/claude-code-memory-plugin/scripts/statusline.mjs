@@ -137,15 +137,15 @@ async function main() {
   // Recall summary: only meaningful when we actually injected memories this
   // turn. Skip the segment for empty/bypass/no-results reasons to keep the
   // line tight. The (0.92) trailing parens is the top score among picked
-  // items — quality hint without an extra segment. The size number is a
-  // chars/4 estimate (heuristic, not real tokens), so we don't label it
-  // with a unit — the magnitude alone conveys "small / medium / large".
+  // items — quality hint without an extra segment. Token/char count is
+  // omitted: the only number we have is a chars/4 heuristic, which is
+  // misleading enough on CJK text that displaying it does more harm than
+  // good. Count + score + latency convey the relevant signal.
   if (recall && recall.reason === "ok" && recall.count > 0) {
     const top = typeof recall.top_score === "number" && recall.top_score > 0
       ? ` (${recall.top_score.toFixed(2)})`
       : "";
     const seg = `↩ ${recall.count} mem${top}`
-      + (recall.tokens_used ? ` · ${human(recall.tokens_used)}` : "")
       + (typeof recall.latency_ms === "number" ? ` · ${recall.latency_ms}ms` : "");
     parts.push(dim(seg));
   }
