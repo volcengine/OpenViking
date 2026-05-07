@@ -116,6 +116,7 @@ curl -X POST http://localhost:1933/api/v1/resources/temp_upload \
 ```
 
 这个接口当前只支持布尔形态的表单参数。
+这个接口的 `upload_mode` 也是表单字段；默认值为 `local`，只有在明确需要分布式共享临时上传时，才应设置为 `shared`。
 
 ## 常见 summary 分组
 

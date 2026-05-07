@@ -133,6 +133,7 @@ client.initialize()
 
 - CLI、`SyncHTTPClient`、`AsyncHTTPClient` 遇到本地文件或目录时，会先自动上传，再调用服务端 API。
 - 裸 HTTP 调用没有这层封装。使用 `curl` 或其他 HTTP 客户端时，需要先调用 `POST /api/v1/resources/temp_upload`，再把返回的 `temp_file_id` 传给目标 API。
+- `temp_upload` 默认使用 `upload_mode=local`。只有在你显式需要分布式共享临时上传、且服务端已支持时，才应传 `upload_mode=shared`。
 - 裸 HTTP 如果导入本地目录，需要先自行打成 `.zip` 再通过上述方法上传；服务端不接受直接传宿主机目录路径。
 - `POST /api/v1/resources` 可以直接接收远端 URL，但不接受 `./doc.md`、`/tmp/doc.md` 这类宿主机本地路径。
 

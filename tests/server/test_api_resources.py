@@ -7,6 +7,7 @@ import zipfile
 
 import httpx
 
+from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
 
 
@@ -476,6 +477,66 @@ async def test_add_resource_accepts_temp_uploaded_file(
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"]["root_uri"].startswith("viking://")
+
+
+async def test_shared_temp_upload_and_add_resource_deletes_upload_dir(
+    client: httpx.AsyncClient,
+    service,
+):
+    upload_resp = await client.post(
+        "/api/v1/resources/temp_upload",
+        files={"file": ("shared.md", b"# shared upload\n", "text/markdown")},
+        data={"upload_mode": "shared"},
+    )
+    assert upload_resp.status_code == 200
+    temp_file_id = upload_resp.json()["result"]["temp_file_id"]
+    assert temp_file_id.startswith("shared_")
+
+    ctx = service.user
+    upload_id = temp_file_id[len("shared_") :]
+    upload_root = f"viking://temp/upload/{ctx.user_id}/{ctx.account_id}/{upload_id}"
+    vfs = get_viking_fs()
+    assert await vfs.exists(f"{upload_root}/meta.json")
+    assert await vfs.exists(f"{upload_root}/content")
+
+    resp = await client.post(
+        "/api/v1/resources",
+        json={"temp_file_id": temp_file_id, "reason": "shared upload"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["root_uri"].startswith("viking://")
+    assert not await vfs.exists(upload_root)
+
+
+async def test_shared_temp_upload_failed_consume_is_retryable(
+    client: httpx.AsyncClient,
+    service,
+    monkeypatch,
+):
+    upload_resp = await client.post(
+        "/api/v1/resources/temp_upload",
+        files={"file": ("shared.md", b"# shared upload\n", "text/markdown")},
+        data={"upload_mode": "shared"},
+    )
+    temp_file_id = upload_resp.json()["result"]["temp_file_id"]
+
+    async def fake_add_resource(**kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
+    resp = await client.post(
+        "/api/v1/resources",
+        json={"temp_file_id": temp_file_id, "reason": "shared upload"},
+    )
+    assert resp.status_code == 500
+
+    upload_id = temp_file_id[len("shared_") :]
+    ctx = service.user
+    meta_uri = f"viking://temp/upload/{ctx.user_id}/{ctx.account_id}/{upload_id}/meta.json"
+    meta_raw = await get_viking_fs().read_file(meta_uri)
+    assert '"state": "uploaded"' in meta_raw
 
 
 async def test_add_resource_rejects_temp_file_id_directory(

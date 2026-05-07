@@ -133,6 +133,7 @@ client.initialize()
 
 - CLI, `SyncHTTPClient`, and `AsyncHTTPClient` automatically upload local files or directories before calling the server API.
 - Raw HTTP calls don't get this convenience layer. When using `curl` or other HTTP clients, you need to first call `POST /api/v1/resources/temp_upload`, then pass the returned `temp_file_id` to the target API.
+- `temp_upload` defaults to `upload_mode=local`. Use `upload_mode=shared` only when you explicitly want distributed shared temporary uploads and the server supports it.
 - For raw HTTP imports of local directories, you need to first zip them into a `.zip` file and upload using the above method; the server does not accept direct host directory paths.
 - `POST /api/v1/resources` can directly accept remote URLs, but does not accept host local paths like `./doc.md` or `/tmp/doc.md`.
 

@@ -2,12 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Resource endpoints for OpenViking HTTP Server."""
 
-import time
-import uuid
-from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from openviking.server.auth import get_request_context
@@ -15,13 +12,12 @@ from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import (
     require_remote_resource_source,
-    resolve_uploaded_temp_file_id,
 )
 from openviking.server.responses import response_from_result
 from openviking.server.telemetry import run_operation
+from openviking.server.temp_upload_store import TempUploadStore
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import InvalidArgumentError
-from openviking_cli.utils.config.open_viking_config import get_openviking_config
 
 router = APIRouter(prefix="/api/v1", tags=["resources"])
 
@@ -116,63 +112,20 @@ class AddSkillRequest(BaseModel):
         return self
 
 
-def _cleanup_temp_files(temp_dir: Path, max_age_hours: int = 1):
-    """Clean up temporary files older than max_age_hours."""
-    if not temp_dir.exists():
-        return
-
-    now = time.time()
-    max_age_seconds = max_age_hours * 3600
-
-    for file_path in temp_dir.iterdir():
-        if file_path.is_file():
-            file_age = now - file_path.stat().st_mtime
-            if file_age > max_age_seconds:
-                file_path.unlink(missing_ok=True)
-
-                # Also clean up corresponding .ov_upload.meta file
-                if not file_path.name.endswith(".ov_upload.meta"):
-                    meta_path = temp_dir / f"{file_path.name}.ov_upload.meta"
-                    if meta_path.exists():
-                        meta_path.unlink(missing_ok=True)
-
-
 @router.post("/resources/temp_upload")
 async def temp_upload(
+    request: Request,
     file: UploadFile = File(...),
     telemetry: bool = Form(False),
+    upload_mode: str = Form("local"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Upload a temporary file for add_resource or import_ovpack."""
 
     async def _upload() -> dict[str, str]:
-        import json
-
-        config = get_openviking_config()
-        temp_dir = config.storage.get_upload_temp_dir()
-
-        # Clean up old temporary files
-        _cleanup_temp_files(temp_dir)
-
-        # Save the uploaded file
-        file_ext = Path(file.filename).suffix if file.filename else ".tmp"
-        temp_filename = f"upload_{uuid.uuid4().hex}{file_ext}"
-        temp_file_path = temp_dir / temp_filename
-
-        with open(temp_file_path, "wb") as f:
-            f.write(await file.read())
-
-        # Save metadata with original filename
-        if file.filename:
-            meta_path = temp_dir / f"{temp_filename}.ov_upload.meta"
-            meta = {
-                "original_filename": file.filename,
-                "upload_time": time.time(),
-            }
-            with open(meta_path, "w") as f:
-                json.dump(meta, f)
-
-        return {"temp_file_id": temp_filename}
+        store = TempUploadStore.build(request.app.state.config)
+        temp_file_id = await store.save_upload(file, upload_mode, _ctx)
+        return {"temp_file_id": temp_file_id}
 
     execution = await run_operation(
         operation="resources.temp_upload",
@@ -184,6 +137,7 @@ async def temp_upload(
 
 @router.post("/resources")
 async def add_resource(
+    http_request: Request,
     request: AddResourceRequest,
     _ctx: RequestContext = Depends(get_request_context),
 ):
@@ -192,14 +146,15 @@ async def add_resource(
     if request.to and request.parent:
         raise InvalidArgumentError("Cannot specify both 'to' and 'parent' at the same time.")
 
-    upload_temp_dir = get_openviking_config().storage.get_upload_temp_dir()
     path = request.path
     allow_local_path_resolution = False
     original_filename = None
+    resolved = None
     if request.temp_file_id:
-        path, original_filename = resolve_uploaded_temp_file_id(
-            request.temp_file_id, upload_temp_dir
-        )
+        store = TempUploadStore.build(http_request.app.state.config)
+        resolved = await store.resolve_for_consume(request.temp_file_id, _ctx)
+        path = resolved.local_path
+        original_filename = resolved.original_filename
         allow_local_path_resolution = True
     elif path is not None:
         path = require_remote_resource_source(path)
@@ -223,49 +178,86 @@ async def add_resource(
     if request.preserve_structure is not None:
         kwargs["preserve_structure"] = request.preserve_structure
 
+    store = TempUploadStore.build(http_request.app.state.config) if resolved else None
+
+    async def _add() -> dict[str, Any]:
+        try:
+            result = await service.resources.add_resource(
+                path=path,
+                ctx=_ctx,
+                to=request.to,
+                parent=request.parent,
+                reason=request.reason,
+                instruction=request.instruction,
+                wait=request.wait,
+                timeout=request.timeout,
+                allow_local_path_resolution=allow_local_path_resolution,
+                enforce_public_remote_targets=True,
+                **kwargs,
+            )
+        except Exception:
+            if resolved and store:
+                await store.mark_failed(resolved, _ctx)
+            raise
+        else:
+            if resolved and store:
+                await store.mark_consumed(resolved, _ctx)
+            return result
+        finally:
+            if resolved:
+                await resolved.cleanup()
+
     execution = await run_operation(
         operation="resources.add_resource",
         telemetry=request.telemetry,
-        fn=lambda: service.resources.add_resource(
-            path=path,
-            ctx=_ctx,
-            to=request.to,
-            parent=request.parent,
-            reason=request.reason,
-            instruction=request.instruction,
-            wait=request.wait,
-            timeout=request.timeout,
-            allow_local_path_resolution=allow_local_path_resolution,
-            enforce_public_remote_targets=True,
-            **kwargs,
-        ),
+        fn=_add,
     )
     return response_from_result(execution.result, telemetry=execution.telemetry)
 
 
 @router.post("/skills")
 async def add_skill(
+    http_request: Request,
     request: AddSkillRequest,
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Add skill to OpenViking."""
     service = get_service()
-    upload_temp_dir = get_openviking_config().storage.get_upload_temp_dir()
     data = request.data
     allow_local_path_resolution = False
+    resolved = None
     if request.temp_file_id:
-        data, _ = resolve_uploaded_temp_file_id(request.temp_file_id, upload_temp_dir)
+        store = TempUploadStore.build(http_request.app.state.config)
+        resolved = await store.resolve_for_consume(request.temp_file_id, _ctx)
+        data = resolved.local_path
         allow_local_path_resolution = True
+
+    store = TempUploadStore.build(http_request.app.state.config) if resolved else None
+
+    async def _add() -> dict[str, Any]:
+        try:
+            result = await service.resources.add_skill(
+                data=data,
+                ctx=_ctx,
+                wait=request.wait,
+                timeout=request.timeout,
+                allow_local_path_resolution=allow_local_path_resolution,
+            )
+        except Exception:
+            if resolved and store:
+                await store.mark_failed(resolved, _ctx)
+            raise
+        else:
+            if resolved and store:
+                await store.mark_consumed(resolved, _ctx)
+            return result
+        finally:
+            if resolved:
+                await resolved.cleanup()
 
     execution = await run_operation(
         operation="resources.add_skill",
         telemetry=request.telemetry,
-        fn=lambda: service.resources.add_skill(
-            data=data,
-            ctx=_ctx,
-            wait=request.wait,
-            timeout=request.timeout,
-            allow_local_path_resolution=allow_local_path_resolution,
-        ),
+        fn=_add,
     )
     return response_from_result(execution.result, telemetry=execution.telemetry)

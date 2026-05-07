@@ -181,6 +181,7 @@ Skills are a special type of resource that define actions or tools agents can pe
     - Send structured skill data directly in `data`
     - Send raw `SKILL.md` content in `data`
     - First call `POST /api/v1/resources/temp_upload` to upload a local `SKILL.md` file/zip directory, then call `POST /api/v1/skills` with `temp_file_id`
+    - `temp_upload` defaults to local temporary storage; pass `upload_mode=shared` only when you explicitly need distributed shared temporary uploads
   - `POST /api/v1/skills` does not accept direct host filesystem paths in `data`.
 
 - **Supported data formats**:

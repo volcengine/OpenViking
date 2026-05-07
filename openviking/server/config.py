@@ -95,6 +95,19 @@ class ObservabilityConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class TempUploadConfig(BaseModel):
+    """Temporary upload configuration."""
+
+    default_mode: str = "local"
+    shared_enabled: bool = False
+    shared_ttl_seconds: int = 3600
+    shared_max_size_bytes: int = 512 * 1024 * 1024
+    shared_consuming_timeout_seconds: int = 900
+    shared_prefix: str = "viking://temp/upload"
+
+    model_config = {"extra": "forbid"}
+
+
 class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 1933
@@ -107,6 +120,7 @@ class ServerConfig(BaseModel):
     encryption_enabled: bool = False  # Whether file-level AES encryption is enabled
     api_key_hashing_enabled: bool = False  # Whether API key Argon2id hashing is enabled (default: false, rely on file encryption)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
+    temp_upload: TempUploadConfig = Field(default_factory=TempUploadConfig)
 
     model_config = {"extra": "forbid"}
 

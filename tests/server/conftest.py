@@ -149,6 +149,7 @@ async def app(service: OpenVikingService):
     from openviking.server.dependencies import set_service
 
     config = ServerConfig()
+    config.temp_upload.shared_enabled = True
     fastapi_app = create_app(config=config, service=service)
     # ASGITransport doesn't trigger lifespan, so wire up the service manually
     set_service(service)
