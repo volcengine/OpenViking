@@ -87,6 +87,23 @@ class DirectoryParser(BaseParser):
         if not source_path.is_dir():
             raise NotADirectoryError(f"Not a directory: {source_path}")
 
+        # Check if this is a git repository, delegate to CodeRepositoryParser
+        if await self._is_git_repository(source_path):
+            logger.debug(
+                f"Directory {source_path} is a git repository, delegating to CodeRepositoryParser"
+            )
+            from openviking.parse.parsers.code.code import CodeRepositoryParser
+
+            # Don't add git metadata if we already have _source_meta from DataAccessor
+            # This is crucial:
+            #   1. _source_meta already contains repo_name in org/repo format from GitAccessor
+            #   2. kwargs also has original_source with the full GitHub/GitLab URL
+            #   3. Calling _add_git_metadata would overwrite repo_name with just directory name
+            #      and lose the org prefix!
+            if "_source_meta" not in kwargs:
+                await self._add_git_metadata(source_path, kwargs)
+            return await CodeRepositoryParser().parse(str(source_path), instruction, **kwargs)
+
         dir_name = kwargs.get("source_name") or source_path.name
         warnings: List[str] = []
 
@@ -451,6 +468,51 @@ class DirectoryParser(BaseParser):
             await viking_fs.delete_temp(src_temp_uri)
         except Exception:
             pass
+
+    @staticmethod
+    async def _is_git_repository(source_path: Path) -> bool:
+        """Check if the directory contains a git repository (or has our .git_source_repo marker)."""
+        try:
+            git_dir = source_path / ".git"
+            marker_file = source_path / ".git_source_repo"
+            return (git_dir.exists() and git_dir.is_dir()) or marker_file.exists()
+        except (OSError, PermissionError):
+            return False
+
+    @staticmethod
+    async def _add_git_metadata(source_path: Path, kwargs: dict) -> None:
+        """Add git metadata (branch, commit) from .git directory if available."""
+        try:
+            from openviking.parse.accessors.git_accessor import GitAccessor
+
+            git_dir = source_path / ".git"
+            if not git_dir.exists():
+                return  # No .git directory, skip (we already have meta from accessor)
+
+            git_accessor = GitAccessor()
+
+            # Get branch
+            try:
+                branch = await git_accessor._run_git(
+                    ["git", "-C", str(source_path), "rev-parse", "--abbrev-ref", "HEAD"]
+                )
+                kwargs["repo_ref"] = branch
+            except Exception as e:
+                logger.debug(f"Failed to get git branch: {e}")
+
+            # Get commit
+            try:
+                commit = await git_accessor._run_git(
+                    ["git", "-C", str(source_path), "rev-parse", "HEAD"]
+                )
+                kwargs["repo_commit"] = commit
+            except Exception as e:
+                logger.debug(f"Failed to get git commit: {e}")
+
+            # repo_name and original_source are already set from accessor, no need to get from git
+
+        except Exception as e:
+            logger.debug(f"Failed to get git metadata: {e}")
 
     @staticmethod
     async def _recursive_move(

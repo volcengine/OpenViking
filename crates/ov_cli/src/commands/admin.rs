@@ -62,10 +62,24 @@ pub async fn register_user(
 pub async fn list_users(
     client: &HttpClient,
     account_id: &str,
+    limit: u32,
+    name: Option<String>,
+    role: Option<String>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let response = client.admin_list_users(account_id).await?;
+    let response = client.admin_list_users(account_id, limit, name, role).await?;
+    output_success(&response, output_format, compact);
+    Ok(())
+}
+
+pub async fn list_agents(
+    client: &HttpClient,
+    account_id: &str,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let response = client.admin_list_agents(account_id).await?;
     output_success(&response, output_format, compact);
     Ok(())
 }

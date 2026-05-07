@@ -11,6 +11,7 @@ from typing import Any, Optional
 
 from openviking.core.directories import DirectoryInitializer
 from openviking.crypto.config import bootstrap_encryption
+from openviking.privacy import UserPrivacyConfigService
 from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.server.identity import RequestContext, Role
 from openviking.service.debug_service import DebugService
@@ -31,7 +32,7 @@ from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.exceptions import NotInitializedError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
-from openviking_cli.utils.config import get_openviking_config
+from openviking_cli.utils.config import OPENVIKING_ENABLE_RECORDER_ENV, get_openviking_config
 from openviking_cli.utils.config.open_viking_config import initialize_openviking_config
 from openviking_cli.utils.config.storage_config import StorageConfig
 
@@ -79,6 +80,7 @@ class OpenVikingService:
         self._directory_initializer: Optional[DirectoryInitializer] = None
         self._watch_scheduler: Optional[WatchScheduler] = None
         self._encryptor: Optional[Any] = None
+        self._privacy_config_service: Optional[UserPrivacyConfigService] = None
 
         # Sub-services
         self._fs_service = FSService()
@@ -213,6 +215,11 @@ class OpenVikingService:
         return self._session_service
 
     @property
+    def privacy_configs(self) -> Optional[UserPrivacyConfigService]:
+        """Get UserPrivacyConfigService instance."""
+        return self._privacy_config_service
+
+    @property
     def debug(self) -> DebugService:
         """Get DebugService instance."""
         return self._debug_service
@@ -250,7 +257,7 @@ class OpenVikingService:
             logger.info("Encryption module not enabled")
 
         # Initialize VikingFS and VikingDB with recorder if enabled
-        enable_recorder = os.environ.get("OPENVIKING_ENABLE_RECORDER", "").lower() == "true"
+        enable_recorder = os.environ.get(OPENVIKING_ENABLE_RECORDER_ENV, "").lower() == "true"
 
         # Create context collection
         if self._vikingdb_manager is None:
@@ -267,6 +274,7 @@ class OpenVikingService:
             query_embedder=self._embedder,
             rerank_config=config.rerank,
             vector_store=self._vikingdb_manager,
+            retrieval_config=config.retrieval,
             enable_recorder=enable_recorder,
             encryptor=self._encryptor,
         )
@@ -282,7 +290,10 @@ class OpenVikingService:
             logger.info("QueueManager workers started")
 
         # Initialize directories
-        directory_initializer = DirectoryInitializer(vikingdb=self._vikingdb_manager)
+        directory_initializer = DirectoryInitializer(
+            vikingdb=self._vikingdb_manager,
+            viking_fs=self._viking_fs,
+        )
         self._directory_initializer = directory_initializer
         default_ctx = RequestContext(user=self._user, role=Role.ROOT)
         account_count = await directory_initializer.initialize_account_directories(default_ctx)
@@ -293,11 +304,16 @@ class OpenVikingService:
             user_count,
         )
 
+        self._privacy_config_service = UserPrivacyConfigService(self._viking_fs)
+
         # Initialize processors
         self._resource_processor = ResourceProcessor(
             vikingdb=self._vikingdb_manager,
         )
-        self._skill_processor = SkillProcessor(vikingdb=self._vikingdb_manager)
+        self._skill_processor = SkillProcessor(
+            vikingdb=self._vikingdb_manager,
+            privacy_config_service=self._privacy_config_service,
+        )
         self._session_compressor = create_session_compressor(vikingdb=self._vikingdb_manager)
 
         # Start LockManager if initialized
@@ -313,7 +329,10 @@ class OpenVikingService:
         logger.info("WatchScheduler started")
 
         # Wire up sub-services
-        self._fs_service.set_viking_fs(self._viking_fs)
+        self._fs_service.set_dependencies(
+            viking_fs=self._viking_fs,
+            privacy_config_service=self._privacy_config_service,
+        )
         self._relation_service.set_viking_fs(self._viking_fs)
         self._pack_service.set_viking_fs(self._viking_fs)
         self._search_service.set_viking_fs(self._viking_fs)
@@ -365,6 +384,7 @@ class OpenVikingService:
         self._skill_processor = None
         self._session_compressor = None
         self._directory_initializer = None
+        self._privacy_config_service = None
         self._initialized = False
 
         logger.info("OpenVikingService closed")

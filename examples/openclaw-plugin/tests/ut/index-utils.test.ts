@@ -45,17 +45,17 @@ describe("sanitizeOpenVikingAgentIdHeader", () => {
 });
 
 describe("createSessionAgentResolver", () => {
-  it("resolves to 'default' when no session info and configAgentId is 'default'", () => {
+  it("falls back to OpenClaw default agent when no session agent is available", () => {
     const resolver = createSessionAgentResolver("default");
     const result = resolver.resolve();
-    expect(result.resolved).toBe("default");
+    expect(result.resolved).toBe("main");
     expect(result.branch).toBe("default_no_session");
   });
 
-  it("resolves to configAgentId when no session info", () => {
+  it("combines prefix with OpenClaw default agent when no session agent is available", () => {
     const resolver = createSessionAgentResolver("custom-agent");
     const result = resolver.resolve();
-    expect(result.resolved).toBe("custom-agent");
+    expect(result.resolved).toBe("custom-agent_main");
     expect(result.branch).toBe("config_only_fallback");
   });
 

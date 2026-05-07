@@ -6,7 +6,7 @@ Synchronous OpenViking client implementation.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 if TYPE_CHECKING:
     from openviking.session import Session
@@ -77,6 +77,7 @@ class SyncOpenViking:
         content: str | None = None,
         parts: list[dict] | None = None,
         created_at: str | None = None,
+        role_id: str | None = None,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -86,11 +87,12 @@ class SyncOpenViking:
             content: Text content (simple mode)
             parts: Parts array (full Part support: TextPart, ContextPart, ToolPart)
             created_at: Message creation time (ISO format string). If not provided, current time is used.
+            role_id: Optional explicit actor identity. Omit to let the client/server derive it.
 
         If both content and parts are provided, parts takes precedence.
         """
         return run_async(
-            self._async_client.add_message(session_id, role, content, parts, created_at)
+            self._async_client.add_message(session_id, role, content, parts, created_at, role_id)
         )
 
     def commit_session(
@@ -158,29 +160,45 @@ class SyncOpenViking:
     def search(
         self,
         query: str,
-        target_uri: str = "",
+        target_uri: Union[str, List[str]] = "",
         session: Optional["Session"] = None,
         session_id: Optional[str] = None,
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         telemetry: TelemetryRequest = False,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
     ):
         """Execute complex retrieval (intent analysis, hierarchical retrieval)."""
         return run_async(
             self._async_client.search(
-                query, target_uri, session, session_id, limit, score_threshold, filter, telemetry
+                query=query,
+                target_uri=target_uri,
+                session=session,
+                session_id=session_id,
+                limit=limit,
+                score_threshold=score_threshold,
+                filter=filter,
+                telemetry=telemetry,
+                since=since,
+                until=until,
+                time_field=time_field,
             )
         )
 
     def find(
         self,
         query: str,
-        target_uri: str = "",
+        target_uri: Union[str, List[str]] = "",
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         telemetry: TelemetryRequest = False,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
     ):
         """Quick retrieval"""
         return run_async(
@@ -191,6 +209,9 @@ class SyncOpenViking:
                 score_threshold,
                 filter,
                 telemetry,
+                since,
+                until,
+                time_field,
             )
         )
 
@@ -282,9 +303,7 @@ class SyncOpenViking:
     ) -> Dict:
         """Content search"""
         return run_async(
-            self._async_client.grep(
-                uri, pattern, case_insensitive, node_limit, exclude_uri
-            )
+            self._async_client.grep(uri, pattern, case_insensitive, node_limit, exclude_uri)
         )
 
     def glob(self, pattern: str, uri: str = "viking://") -> Dict:
@@ -303,9 +322,9 @@ class SyncOpenViking:
         """Get resource status"""
         return run_async(self._async_client.stat(uri))
 
-    def mkdir(self, uri: str) -> None:
+    def mkdir(self, uri: str, description: Optional[str] = None) -> None:
         """Create directory"""
-        return run_async(self._async_client.mkdir(uri))
+        return run_async(self._async_client.mkdir(uri, description=description))
 
     def get_status(self):
         """Get system status.

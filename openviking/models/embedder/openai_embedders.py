@@ -75,6 +75,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         extra_headers: Optional[Dict[str, str]] = None,
         input_type: Optional[str] = None,
         provider: str = "openai",
+        configured_provider: Optional[str] = None,
     ):
         """Initialize OpenAI-Compatible Dense Embedder
 
@@ -118,6 +119,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         self.query_param = query_param
         self.document_param = document_param
         self._provider = provider.lower()
+        self.provider = (configured_provider or provider).lower()
         self._client_kwargs: Dict[str, Any] = {"api_key": self.api_key or "no-key"}
 
         # Allow missing api_key when api_base is set (e.g. local OpenAI-compatible servers)
@@ -415,6 +417,10 @@ class OpenAISparseEmbedder(SparseEmbedderBase):
     """
 
     def __init__(self, *args, **kwargs):
+        model_name = kwargs.get("model_name")
+        if model_name is None and args:
+            model_name = str(args[0])
+        super().__init__(model_name=model_name or "openai-sparse-unsupported")
         raise NotImplementedError(
             "OpenAI does not support sparse embeddings. "
             "Consider using VolcengineSparseEmbedder or other providers."
@@ -431,6 +437,10 @@ class OpenAIHybridEmbedder(HybridEmbedderBase):
     """
 
     def __init__(self, *args, **kwargs):
+        model_name = kwargs.get("model_name")
+        if model_name is None and args:
+            model_name = str(args[0])
+        super().__init__(model_name=model_name or "openai-hybrid-unsupported")
         raise NotImplementedError(
             "OpenAI does not support hybrid embeddings. "
             "Consider using VolcengineHybridEmbedder or other providers."

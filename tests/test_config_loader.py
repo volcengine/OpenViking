@@ -4,6 +4,9 @@
 
 import pytest
 
+from openviking_cli.utils.config import (
+    OPENVIKING_CONFIG_ENV,
+)
 from openviking_cli.utils.config.config_loader import (
     load_json_config,
     require_config,
@@ -110,7 +113,7 @@ class TestRequireConfig:
 
 
 def test_openviking_config_rejects_unknown_nested_parser_section(monkeypatch):
-    monkeypatch.setenv("OPENVIKING_CONFIG_FILE", "/tmp/codex-no-config.json")
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 
     from openviking_cli.utils.config.open_viking_config import (
         OpenVikingConfig,
@@ -135,7 +138,7 @@ def test_openviking_config_rejects_unknown_nested_parser_section(monkeypatch):
 
 
 def test_openviking_config_rejects_unknown_top_level_section_with_suggestion(monkeypatch):
-    monkeypatch.setenv("OPENVIKING_CONFIG_FILE", "/tmp/codex-no-config.json")
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 
     from openviking_cli.utils.config.open_viking_config import (
         OpenVikingConfig,
@@ -166,8 +169,56 @@ def test_openviking_config_rejects_unknown_top_level_section_with_suggestion(mon
     OpenVikingConfigSingleton.reset_instance()
 
 
-def test_openviking_config_singleton_preserves_value_error_for_bad_config(tmp_path, monkeypatch):
+def test_openviking_config_warns_when_agent_scope_mode_is_configured(monkeypatch, caplog):
     monkeypatch.setenv("OPENVIKING_CONFIG_FILE", "/tmp/codex-no-config.json")
+
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    with caplog.at_level("WARNING"):
+        config = OpenVikingConfig.from_dict({"memory": {"agent_scope_mode": "agent"}})
+
+    assert config.memory.agent_scope_mode == "agent"
+    assert "memory.agent_scope_mode is deprecated and ignored" in caplog.text
+
+    OpenVikingConfigSingleton.reset_instance()
+
+
+def test_openviking_config_retrieval_hotness_alpha_defaults_to_zero(monkeypatch):
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
+
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    config = OpenVikingConfig.from_dict({})
+
+    assert config.retrieval.hotness_alpha == 0.0
+    assert config.retrieval.score_propagation_alpha == 0.5
+
+    OpenVikingConfigSingleton.reset_instance()
+
+
+@pytest.mark.parametrize("field_name", ["hotness_alpha", "score_propagation_alpha"])
+def test_openviking_config_retrieval_alpha_validates_range(monkeypatch, field_name):
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
+
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    with pytest.raises(ValueError):
+        OpenVikingConfig.from_dict({"retrieval": {field_name: 1.5}})
+
+    OpenVikingConfigSingleton.reset_instance()
+
+
+def test_openviking_config_singleton_preserves_value_error_for_bad_config(tmp_path, monkeypatch):
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 
     from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 
@@ -180,3 +231,59 @@ def test_openviking_config_singleton_preserves_value_error_for_bad_config(tmp_pa
     with pytest.raises(ValueError, match="server"):
         OpenVikingConfigSingleton.initialize(config_path=str(config_path))
     OpenVikingConfigSingleton.reset_instance()
+
+
+def test_require_config_missing_message_uses_openviking_ai_docs(tmp_path, monkeypatch):
+    import openviking_cli.utils.config.config_loader as loader
+
+    monkeypatch.delenv("TEST_MISSING_ENV", raising=False)
+    monkeypatch.setattr(loader, "DEFAULT_CONFIG_DIR", tmp_path / "user")
+    monkeypatch.setattr(loader, "SYSTEM_CONFIG_DIR", tmp_path / "system")
+
+    with pytest.raises(FileNotFoundError, match=r"https://openviking\.ai/docs"):
+        loader.require_config(None, "TEST_MISSING_ENV", "missing.conf", "test")
+
+
+def test_load_server_config_missing_message_uses_openviking_ai_docs(tmp_path, monkeypatch):
+    import openviking.server.config as server_config
+
+    monkeypatch.delenv(OPENVIKING_CONFIG_ENV, raising=False)
+    monkeypatch.setattr(server_config, "DEFAULT_CONFIG_DIR", tmp_path / "user")
+    monkeypatch.setattr(server_config, "SYSTEM_CONFIG_DIR", tmp_path / "system")
+
+    with pytest.raises(FileNotFoundError, match=r"https://openviking\.ai/docs"):
+        server_config.load_server_config()
+
+
+def test_openviking_config_singleton_missing_message_uses_openviking_ai_docs(tmp_path, monkeypatch):
+    import openviking_cli.utils.config.open_viking_config as config_module
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+
+    monkeypatch.delenv(OPENVIKING_CONFIG_ENV, raising=False)
+    monkeypatch.setattr(config_module, "DEFAULT_CONFIG_DIR", tmp_path / "user")
+    monkeypatch.setattr(config_module, "SYSTEM_CONFIG_DIR", tmp_path / "system")
+
+    OpenVikingConfigSingleton.reset_instance()
+    try:
+        with pytest.raises(FileNotFoundError, match=r"https://openviking\.ai/docs"):
+            OpenVikingConfigSingleton.get_instance()
+    finally:
+        OpenVikingConfigSingleton.reset_instance()
+
+
+def test_openviking_config_singleton_initialize_missing_message_uses_openviking_ai_docs(
+    tmp_path, monkeypatch
+):
+    import openviking_cli.utils.config.open_viking_config as config_module
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+
+    monkeypatch.delenv(OPENVIKING_CONFIG_ENV, raising=False)
+    monkeypatch.setattr(config_module, "DEFAULT_CONFIG_DIR", tmp_path / "user")
+    monkeypatch.setattr(config_module, "SYSTEM_CONFIG_DIR", tmp_path / "system")
+
+    OpenVikingConfigSingleton.reset_instance()
+    try:
+        with pytest.raises(FileNotFoundError, match=r"https://openviking\.ai/docs"):
+            OpenVikingConfigSingleton.initialize()
+    finally:
+        OpenVikingConfigSingleton.reset_instance()

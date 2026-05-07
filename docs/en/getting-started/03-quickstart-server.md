@@ -11,6 +11,16 @@ Run OpenViking as a standalone HTTP server and connect from any client.
 
 Make sure you have a config file at `~/.openviking/ov.conf` with your model and storage settings (see [Configuration](../guides/01-configuration.md)).
 
+For first-time setup, run `openviking-server init` first.
+
+Before startup, validate local setup:
+
+```bash
+openviking-server doctor
+```
+
+`openviking-server doctor` validates that the configured local setup is usable, including provider-specific auth when required.
+
 ```bash
 # Config file at default path ~/.openviking/ov.conf — just start
 openviking-server
@@ -34,6 +44,8 @@ INFO:     Uvicorn running on http://0.0.0.0:1933
 curl http://localhost:1933/health
 # {"status": "ok"}
 ```
+
+`openviking-server doctor` checks local configuration, model access, and auth readiness. `curl /health` only confirms that the server process is already running.
 
 ## Connect with Python SDK
 
@@ -272,7 +284,7 @@ vim ~/.openviking/ov.conf
       "api_key"  : "<your-api-key>",   // Model service API Key
       "provider" : "<provider-type>",  // volcengine or openai
       "dimension": 1024,               // Vector dimension
-      "model"    : "<model-name>",     // e.g., doubao-embedding-vision-250615
+      "model"    : "<model-name>",     // e.g., doubao-embedding-vision-251215
       "input"    : "multimodal"        // Use "multimodal" for doubao-embedding-vision models
     }
   },

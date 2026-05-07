@@ -8,7 +8,8 @@ Provides session management operations: session, sessions, add_message, commit, 
 
 from typing import Any, Dict, List, Optional
 
-from openviking.server.identity import RequestContext
+from openviking.core.namespace import canonical_session_uri
+from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
 from openviking.session.compressor import SessionCompressor
@@ -49,6 +50,35 @@ class SessionService:
         if not self._viking_fs:
             raise NotInitializedError("VikingFS")
 
+    @staticmethod
+    def _record_lifecycle_metric(action: str, status: str) -> None:
+        """Best-effort session lifecycle metrics should never break the main flow."""
+        try:
+            from openviking.metrics.datasources.session import SessionLifecycleDataSource
+
+            SessionLifecycleDataSource.record_lifecycle(action=action, status=status)
+        except Exception:
+            logger.debug(
+                "Failed to record session lifecycle metric action=%s status=%s",
+                action,
+                status,
+                exc_info=True,
+            )
+
+    @staticmethod
+    def _record_archive_metric(status: str) -> None:
+        """Best-effort archive metrics should never break the main flow."""
+        try:
+            from openviking.metrics.datasources.session import SessionLifecycleDataSource
+
+            SessionLifecycleDataSource.record_archive(status=status)
+        except Exception:
+            logger.debug(
+                "Failed to record session archive metric status=%s",
+                status,
+                exc_info=True,
+            )
+
     def session(self, ctx: RequestContext, session_id: Optional[str] = None) -> Session:
         """Create a new session or load an existing one.
 
@@ -79,13 +109,19 @@ class SessionService:
         Raises:
             AlreadyExistsError: If a session with the given ID already exists
         """
-        if session_id:
-            existing = self.session(ctx, session_id)
-            if await existing.exists():
-                raise AlreadyExistsError(f"Session '{session_id}' already exists")
-        session = self.session(ctx, session_id)
-        await session.ensure_exists()
-        return session
+        self._record_lifecycle_metric("create", "attempt")
+        try:
+            if session_id:
+                existing = self.session(ctx, session_id)
+                if await existing.exists():
+                    raise AlreadyExistsError(f"Session '{session_id}' already exists")
+            session = self.session(ctx, session_id)
+            await session.ensure_exists()
+            self._record_lifecycle_metric("create", "ok")
+            return session
+        except Exception:
+            self._record_lifecycle_metric("create", "error")
+            raise
 
     async def get(
         self, session_id: str, ctx: RequestContext, *, auto_create: bool = False
@@ -98,13 +134,18 @@ class SessionService:
             auto_create: If True, create the session when it does not exist.
                          Default is False (raise NotFoundError).
         """
-        session = self.session(ctx, session_id)
-        if not await session.exists():
-            if not auto_create:
-                raise NotFoundError(session_id, "session")
-            await session.ensure_exists()
-        await session.load()
-        return session
+        try:
+            session = self.session(ctx, session_id)
+            if not await session.exists():
+                if not auto_create:
+                    raise NotFoundError(session_id, "session")
+                await session.ensure_exists()
+            await session.load()
+            self._record_lifecycle_metric("get", "ok")
+            return session
+        except Exception:
+            self._record_lifecycle_metric("get", "error")
+            raise
 
     async def sessions(self, ctx: RequestContext) -> List[Dict[str, Any]]:
         """Get all sessions for the current user.
@@ -113,7 +154,7 @@ class SessionService:
             List of session info dicts
         """
         self._ensure_initialized()
-        session_base_uri = f"viking://session/{ctx.user.user_space_name()}"
+        session_base_uri = canonical_session_uri()
 
         try:
             entries = await self._viking_fs.ls(session_base_uri, ctx=ctx)
@@ -131,6 +172,7 @@ class SessionService:
                 )
             return sessions
         except Exception:
+            logger.debug("Failed to list sessions", exc_info=True)
             return []
 
     async def delete(self, session_id: str, ctx: RequestContext) -> bool:
@@ -143,30 +185,48 @@ class SessionService:
             True if deleted successfully
         """
         self._ensure_initialized()
-        session_uri = f"viking://session/{ctx.user.user_space_name()}/{session_id}"
+        if ctx.role not in {Role.ADMIN, Role.ROOT}:
+            from openviking_cli.exceptions import PermissionDeniedError
+
+            raise PermissionDeniedError("Deleting shared sessions requires ADMIN or ROOT role")
+
+        session_uri = canonical_session_uri(session_id)
 
         try:
             await self._viking_fs.rm(session_uri, recursive=True, ctx=ctx)
             logger.info(f"Deleted session: {session_id}")
+            self._record_lifecycle_metric("delete", "ok")
             return True
         except Exception as e:
             logger.error(f"Failed to delete session {session_id}: {e}")
+            self._record_lifecycle_metric("delete", "error")
             raise NotFoundError(session_id, "session")
 
-    async def commit(self, session_id: str, ctx: RequestContext) -> Dict[str, Any]:
+    async def commit(
+        self,
+        session_id: str,
+        ctx: RequestContext,
+        keep_recent_count: int = 0,
+    ) -> Dict[str, Any]:
         """Commit a session (archive messages and extract memories).
 
         Delegates to commit_async() for true non-blocking behavior.
 
         Args:
             session_id: Session ID to commit
+            keep_recent_count: See :meth:`commit_async`.
 
         Returns:
             Commit result
         """
-        return await self.commit_async(session_id, ctx)
+        return await self.commit_async(session_id, ctx, keep_recent_count=keep_recent_count)
 
-    async def commit_async(self, session_id: str, ctx: RequestContext) -> Dict[str, Any]:
+    async def commit_async(
+        self,
+        session_id: str,
+        ctx: RequestContext,
+        keep_recent_count: int = 0,
+    ) -> Dict[str, Any]:
         """Async commit a session.
 
         Phase 1 (archive) always runs inline.  Phase 2 (memory extraction)
@@ -174,6 +234,8 @@ class SessionService:
 
         Args:
             session_id: Session ID to commit
+            keep_recent_count: Number of most-recent messages to keep in the
+                live session after commit. ``0`` archives everything.
 
         Returns:
             Commit result with keys: session_id, status, task_id,
@@ -181,14 +243,16 @@ class SessionService:
         """
         self._ensure_initialized()
         session = await self.get(session_id, ctx)
-        return await session.commit_async()
+        result = await session.commit_async(keep_recent_count=keep_recent_count)
+        self._record_lifecycle_metric("commit", "ok" if result.get("status") else "error")
+        self._record_archive_metric("ok" if result.get("archived") else "skip")
+        return result
 
     async def get_commit_task(self, task_id: str, ctx: RequestContext) -> Optional[Dict[str, Any]]:
         """Query background commit task status by task_id for the calling owner."""
         task = get_task_tracker().get(
             task_id,
             owner_account_id=ctx.account_id,
-            owner_user_id=ctx.user.user_id,
         )
         return task.to_dict() if task else None
 
@@ -206,10 +270,15 @@ class SessionService:
             raise NotInitializedError("SessionCompressor")
 
         session = await self.get(session_id, ctx)
+        session_uri = canonical_session_uri(session_id)
+        archive_uri = f"{session_uri}/manual_extract"
 
-        return await self._session_compressor.extract_long_term_memories(
+        memories = await self._session_compressor.extract_long_term_memories(
             messages=session.messages,
             user=ctx.user,
             session_id=session_id,
             ctx=ctx,
+            archive_uri=archive_uri,
         )
+        self._record_lifecycle_metric("extract", "ok")
+        return memories

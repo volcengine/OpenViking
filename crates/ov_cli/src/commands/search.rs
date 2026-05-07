@@ -8,11 +8,22 @@ pub async fn find(
     uri: &str,
     node_limit: i32,
     threshold: Option<f64>,
+    since: Option<&str>,
+    until: Option<&str>,
+    time_field: Option<&str>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     let result = client
-        .find(query.to_string(), uri.to_string(), node_limit, threshold)
+        .find(
+            query.to_string(),
+            uri.to_string(),
+            node_limit,
+            threshold,
+            since.map(|s| s.to_string()),
+            until.map(|s| s.to_string()),
+            time_field.map(|s| s.to_string()),
+        )
         .await?;
     output_success(&result, output_format, compact);
     Ok(())
@@ -25,6 +36,9 @@ pub async fn search(
     session_id: Option<String>,
     node_limit: i32,
     threshold: Option<f64>,
+    since: Option<&str>,
+    until: Option<&str>,
+    time_field: Option<&str>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -35,12 +49,14 @@ pub async fn search(
             session_id,
             node_limit,
             threshold,
+            since.map(|s| s.to_string()),
+            until.map(|s| s.to_string()),
+            time_field.map(|s| s.to_string()),
         )
         .await?;
     output_success(&result, output_format, compact);
     Ok(())
 }
-
 pub async fn grep(
     client: &HttpClient,
     uri: &str,
@@ -53,7 +69,14 @@ pub async fn grep(
     compact: bool,
 ) -> Result<()> {
     let result = client
-        .grep(uri, exclude_uri, pattern, ignore_case, node_limit, level_limit)
+        .grep(
+            uri,
+            exclude_uri,
+            pattern,
+            ignore_case,
+            node_limit,
+            level_limit,
+        )
         .await?;
     output_success(&result, output_format, compact);
     Ok(())

@@ -9,7 +9,7 @@ viking://{scope}/{path}
 ```
 
 - **scheme**: 始终为 `viking`
-- **scope**: 顶级命名空间（resources、user、agent、session、queue）
+- **scope**: 顶级命名空间（`resources`、`user`、`agent`、`session`；`temp` 和 `queue` 为内部作用域）
 - **path**: 作用域内的资源路径
 
 ## 作用域
@@ -22,6 +22,10 @@ viking://{scope}/{path}
 | **session** | 会话级数据 | 会话生命周期 | 当前会话 |
 | **queue** | 处理队列 | 临时 | 内部 |
 | **temp** | 临时文件 | 解析期间 | 内部 |
+
+公开 API 和 CLI 的文件系统/内容操作只接受公开作用域：
+`resources`、`user`、`agent`、`session`，以及根 URI `viking://`。
+`temp` 和 `queue` 是内部实现作用域，不能通过公开 API 的 URI 参数直接访问。
 
 ## 初始目录
 
@@ -120,11 +124,16 @@ viking://
 │       ├── entities/             # 每条独立
 │       └── events/               # 每条独立
 │
-├── agent/{agent_space}/          # agent_space 由 memory.agent_scope_mode 决定
+├── agent/{agent_id}/             # isolate_agent_scope_by_user = false 时的 agent 根目录
 │   ├── skills/                   # 技能定义
 │   ├── memories/
 │   │   ├── cases/
 │   │   └── patterns/
+│   └── instructions/
+│
+├── agent/{agent_id}/user/{user_id}/   # isolate_agent_scope_by_user = true 时的 agent 根目录
+│   ├── skills/
+│   ├── memories/
 │   └── instructions/
 │
 └── session/{session_id}/
@@ -133,10 +142,12 @@ viking://
     └── history/
 ```
 
-其中 `agent_space` 的计算方式取决于 `memory.agent_scope_mode`：
+其中 agent 命名空间形状由 account 级 namespace policy 决定：
 
-- `user+agent`（默认）：`agent_space = md5(f"{user_id}:{agent_id}")[:12]`
-- `agent`：`agent_space = md5(agent_id)[:12]`
+- `isolate_agent_scope_by_user = false`：`viking://agent/{agent_id}/...`
+- `isolate_agent_scope_by_user = true`：`viking://agent/{agent_id}/user/{user_id}/...`
+
+`memory.agent_scope_mode` 已废弃且被忽略。
 
 ## URI 操作
 

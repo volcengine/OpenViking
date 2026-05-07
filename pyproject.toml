@@ -58,7 +58,7 @@ dependencies = [
     "protobuf>=6.33.5",
     "pdfminer-six>=20251230",
     "typer>=0.12.0",
-    "litellm>=1.0.0,<1.83.1",
+    "litellm>=1.0.0,<1.83.13",
     "python-multipart>=0.0.22",
     "tree-sitter>=0.23.0",
     "tree-sitter-python>=0.23.0",
@@ -75,11 +75,14 @@ dependencies = [
     "opentelemetry-api>=1.14",
     "opentelemetry-sdk>=1.14",
     "opentelemetry-exporter-otlp-proto-grpc>=1.14",
+    "opentelemetry-exporter-otlp-proto-http>=1.14",
     "opentelemetry-instrumentation-asyncio>=0.61b0",
     "loguru>=0.7.3",
     "cryptography>=42.0.0",
     "argon2-cffi>=23.0.0",
     "lark-oapi>=1.5.3",
+    "mcp>=1.27.0",
+    "pathspec>=1.1.1",
 ]
 
 
@@ -148,6 +151,7 @@ bot = [
     "tavily-python>=0.5.0",
     "gradio>=6.6.0",
     "py-machineid>=1.0.0",
+    "mcp>=1.0.0",
 ]
 # vikingbot optional features
 bot-langfuse = ["langfuse>=3.0.0"]
@@ -173,6 +177,9 @@ benchmark = [
     "tiktoken>=0.5.0",
     "datasets>=2.0.0",
     "pandas>=2.0.0",
+]
+local-embed = [
+    "llama-cpp-python>=0.3.0",
 ]
 
 [project.urls]

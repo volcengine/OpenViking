@@ -3,17 +3,17 @@
 """Sessions endpoints for OpenViking HTTP Server."""
 
 import logging
-from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, Path, Query
-from pydantic import BaseModel, model_validator
+from fastapi import APIRouter, Body, Depends, Path, Query, Request
+from pydantic import BaseModel, Field, model_validator
 
 from openviking.message.part import TextPart, part_from_dict
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
-from openviking.server.identity import RequestContext
+from openviking.server.identity import AuthMode, RequestContext
 from openviking.server.models import ErrorInfo, Response
+from openviking.server.responses import error_response
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
 logger = logging.getLogger(__name__)
@@ -62,6 +62,7 @@ class AddMessageRequest(BaseModel):
     """
 
     role: str
+    role_id: Optional[str] = None
     content: Optional[str] = None
     parts: Optional[List[Dict[str, Any]]] = None
     created_at: Optional[str] = None
@@ -96,6 +97,28 @@ def _to_jsonable(value: Any) -> Any:
     if isinstance(value, dict):
         return {k: _to_jsonable(v) for k, v in value.items()}
     return value
+
+
+def _request_auth_mode(request: Request) -> AuthMode:
+    config = getattr(request.app.state, "config", None)
+    if config is not None and hasattr(config, "get_effective_auth_mode"):
+        return config.get_effective_auth_mode()
+    return AuthMode.API_KEY
+
+
+def _resolve_message_role_id(
+    http_request: Request,
+    request: AddMessageRequest,
+    ctx: RequestContext,
+) -> Optional[str]:
+    if request.role not in {"user", "assistant"}:
+        return request.role_id
+
+    role_id = request.role_id
+    if not role_id:
+        role_id = ctx.user.user_id if request.role == "user" else ctx.user.agent_id
+
+    return role_id
 
 
 @router.post("")
@@ -151,8 +174,7 @@ async def get_session(
         )
     result = session.meta.to_dict()
     result["user"] = session.user.to_dict()
-    pending_tokens = sum(len(m.content) // 4 for m in session.messages)
-    result["pending_tokens"] = pending_tokens
+    result["pending_tokens"] = int(session.meta.pending_tokens or 0)
     return Response(status="ok", result=result)
 
 
@@ -163,6 +185,13 @@ async def get_session_context(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get assembled session context."""
+    if token_budget < 0:
+        return error_response(
+            "INVALID_ARGUMENT",
+            "token_budget must be greater than or equal to 0",
+            details={"field": "token_budget", "value": token_budget},
+        )
+
     service = get_service()
     session = service.sessions.session(_ctx, session_id)
     await session.load()
@@ -203,9 +232,31 @@ async def delete_session(
     return Response(status="ok", result={"session_id": session_id})
 
 
+class CommitRequest(BaseModel):
+    """Commit request body.
+
+    WM v2: ``keep_recent_count`` allows the plugin to retain a tail of recent
+    messages in the live session after commit so the next turn still has
+    immediate context. Default 0 preserves the pre-v2 "archive everything"
+    behavior.
+    """
+
+    keep_recent_count: int = Field(
+        default=0,
+        ge=0,
+        le=10_000,
+        description=(
+            "Number of most-recent messages to keep live after commit. "
+            "Plugin's afterTurn path typically passes its configured value "
+            "(default 10); compact path passes 0 to archive everything."
+        ),
+    )
+
+
 @router.post("/{session_id}/commit")
 async def commit_session(
     session_id: str = Path(..., description="Session ID"),
+    body: CommitRequest = Body(default_factory=CommitRequest),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Commit a session (archive and extract memories).
@@ -215,7 +266,9 @@ async def commit_session(
     polling progress via ``GET /tasks/{task_id}``.
     """
     service = get_service()
-    result = await service.sessions.commit_async(session_id, _ctx)
+    result = await service.sessions.commit_async(
+        session_id, _ctx, keep_recent_count=body.keep_recent_count
+    )
     return Response(status="ok", result=result).model_dump(exclude_none=True)
 
 
@@ -233,6 +286,7 @@ async def extract_session(
 @router.post("/{session_id}/messages")
 async def add_message(
     request: AddMessageRequest,
+    http_request: Request,
     session_id: str = Path(..., description="Session ID"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
@@ -253,6 +307,7 @@ async def add_message(
     """
     service = get_service()
     session = await service.sessions.get(session_id, _ctx, auto_create=True)
+    role_id = _resolve_message_role_id(http_request, request, _ctx)
 
     if request.parts is not None:
         parts = [part_from_dict(p) for p in request.parts]
@@ -260,7 +315,12 @@ async def add_message(
         parts = [TextPart(text=request.content or "")]
 
     # created_at 直接传递给 session (ISO string)
-    session.add_message(request.role, parts, created_at=request.created_at)
+    session.add_message(
+        request.role,
+        parts,
+        role_id=role_id,
+        created_at=request.created_at,
+    )
     return Response(
         status="ok",
         result={

@@ -5,20 +5,18 @@ import json
 import os
 import re
 import zipfile
-from datetime import datetime
-from typing import cast
 
-from openviking.core.context import Context
+from openviking.core.directories import get_context_type_for_uri
+from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
-from openviking.storage.queuefs import EmbeddingQueue, get_queue_manager
-from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.utils.embedding_utils import vectorize_directory_meta, vectorize_file
-from openviking_cli.exceptions import NotFoundError
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
 
 logger = get_logger(__name__)
 
+_DERIVED_FILENAMES = frozenset({".relations.json"})
 
 _UNSAFE_PATH_RE = re.compile(r"(^|[\\/])\.\.($|[\\/])")
 _DRIVE_RE = re.compile(r"^[A-Za-z]:")
@@ -91,6 +89,19 @@ def get_viking_rel_path_from_zip(zip_path: str) -> str:
     return "/".join(new_parts)
 
 
+def _validate_import_target_uri(uri: str) -> None:
+    """Enforce the same target-policy boundary as direct content writes."""
+    parsed = VikingURI(uri)
+    if parsed.scope not in {"resources", "user", "agent"}:
+        raise InvalidArgumentError(f"ovpack import is not supported for scope: {parsed.scope}")
+
+    name = uri.rstrip("/").split("/")[-1]
+    if name in _DERIVED_FILENAMES:
+        raise InvalidArgumentError(f"cannot import derived semantic file: {uri}")
+    if is_watch_task_control_uri(uri):
+        raise InvalidArgumentError(f"cannot import watch task control file: {uri}")
+
+
 async def _enqueue_direct_vectorization(viking_fs, uri: str, ctx: RequestContext) -> None:
     entries = await viking_fs.tree(uri, node_limit=100000, level_limit=1000, ctx=ctx)
     dir_uris = {uri}
@@ -122,11 +133,17 @@ async def _enqueue_direct_vectorization(viking_fs, uri: str, ctx: RequestContext
                 overview = content.decode("utf-8") if isinstance(content, bytes) else content
         except Exception:
             return
-        await vectorize_directory_meta(dir_uri, abstract, overview, ctx=ctx)
+        await vectorize_directory_meta(
+            dir_uri, abstract, overview, context_type=get_context_type_for_uri(dir_uri), ctx=ctx
+        )
 
     async def index_file(file_uri: str, parent_uri: str, name: str) -> None:
         await vectorize_file(
-            file_path=file_uri, summary_dict={"name": name}, parent_uri=parent_uri, ctx=ctx
+            file_path=file_uri,
+            summary_dict={"name": name},
+            parent_uri=parent_uri,
+            context_type=get_context_type_for_uri(file_uri),
+            ctx=ctx,
         )
 
     await asyncio.gather(*(index_dir(dir_uri) for dir_uri in dir_uris))
@@ -185,6 +202,7 @@ async def import_ovpack(
             raise ValueError("Could not determine root directory name from ovpack")
 
         root_uri = f"{parent}/{base_name}"
+        _validate_import_target_uri(root_uri)
 
         # 2. Conflict check
         try:
@@ -235,6 +253,7 @@ async def import_ovpack(
             # Handle file entries
             rel_path = get_viking_rel_path_from_zip(safe_zip_path)
             target_file_uri = f"{root_uri}/{rel_path}" if rel_path else root_uri
+            _validate_import_target_uri(target_file_uri)
 
             try:
                 data = zf.read(safe_zip_path)

@@ -17,7 +17,7 @@ from openviking.server.local_input_guard import (
     require_remote_resource_source,
     resolve_uploaded_temp_file_id,
 )
-from openviking.server.models import Response
+from openviking.server.responses import response_from_result
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import InvalidArgumentError
@@ -130,6 +130,12 @@ def _cleanup_temp_files(temp_dir: Path, max_age_hours: int = 1):
             if file_age > max_age_seconds:
                 file_path.unlink(missing_ok=True)
 
+                # Also clean up corresponding .ov_upload.meta file
+                if not file_path.name.endswith(".ov_upload.meta"):
+                    meta_path = temp_dir / f"{file_path.name}.ov_upload.meta"
+                    if meta_path.exists():
+                        meta_path.unlink(missing_ok=True)
+
 
 @router.post("/resources/temp_upload")
 async def temp_upload(
@@ -140,6 +146,8 @@ async def temp_upload(
     """Upload a temporary file for add_resource or import_ovpack."""
 
     async def _upload() -> dict[str, str]:
+        import json
+
         config = get_openviking_config()
         temp_dir = config.storage.get_upload_temp_dir()
 
@@ -154,6 +162,16 @@ async def temp_upload(
         with open(temp_file_path, "wb") as f:
             f.write(await file.read())
 
+        # Save metadata with original filename
+        if file.filename:
+            meta_path = temp_dir / f"{temp_filename}.ov_upload.meta"
+            meta = {
+                "original_filename": file.filename,
+                "upload_time": time.time(),
+            }
+            with open(meta_path, "w") as f:
+                json.dump(meta, f)
+
         return {"temp_file_id": temp_filename}
 
     execution = await run_operation(
@@ -161,11 +179,7 @@ async def temp_upload(
         telemetry=telemetry,
         fn=_upload,
     )
-    return Response(
-        status="ok",
-        result=execution.result,
-        telemetry=execution.telemetry,
-    ).model_dump(exclude_none=True)
+    return response_from_result(execution.result, telemetry=execution.telemetry)
 
 
 @router.post("/resources")
@@ -181,17 +195,25 @@ async def add_resource(
     upload_temp_dir = get_openviking_config().storage.get_upload_temp_dir()
     path = request.path
     allow_local_path_resolution = False
+    original_filename = None
     if request.temp_file_id:
-        path = resolve_uploaded_temp_file_id(request.temp_file_id, upload_temp_dir)
+        path, original_filename = resolve_uploaded_temp_file_id(
+            request.temp_file_id, upload_temp_dir
+        )
         allow_local_path_resolution = True
     elif path is not None:
         path = require_remote_resource_source(path)
     if path is None:
         raise InvalidArgumentError("Either 'path' or 'temp_file_id' must be provided.")
 
+    # Use original_filename from upload if source_name not explicitly provided
+    source_name = request.source_name
+    if source_name is None and original_filename is not None:
+        source_name = original_filename
+
     kwargs = {
         "strict": request.strict,
-        "source_name": request.source_name,
+        "source_name": source_name,
         "ignore_dirs": request.ignore_dirs,
         "include": request.include,
         "exclude": request.exclude,
@@ -218,11 +240,7 @@ async def add_resource(
             **kwargs,
         ),
     )
-    return Response(
-        status="ok",
-        result=execution.result,
-        telemetry=execution.telemetry,
-    ).model_dump(exclude_none=True)
+    return response_from_result(execution.result, telemetry=execution.telemetry)
 
 
 @router.post("/skills")
@@ -236,7 +254,7 @@ async def add_skill(
     data = request.data
     allow_local_path_resolution = False
     if request.temp_file_id:
-        data = resolve_uploaded_temp_file_id(request.temp_file_id, upload_temp_dir)
+        data, _ = resolve_uploaded_temp_file_id(request.temp_file_id, upload_temp_dir)
         allow_local_path_resolution = True
 
     execution = await run_operation(
@@ -250,8 +268,4 @@ async def add_skill(
             allow_local_path_resolution=allow_local_path_resolution,
         ),
     )
-    return Response(
-        status="ok",
-        result=execution.result,
-        telemetry=execution.telemetry,
-    ).model_dump(exclude_none=True)
+    return response_from_result(execution.result, telemetry=execution.telemetry)

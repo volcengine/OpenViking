@@ -16,7 +16,9 @@ import httpx
 from openviking.telemetry import TelemetryRequest, normalize_telemetry_request
 from openviking_cli.client.base import BaseClient
 from openviking_cli.exceptions import (
+    AbortedError,
     AlreadyExistsError,
+    ConflictError,
     DeadlineExceededError,
     EmbeddingFailedError,
     FailedPreconditionError,
@@ -28,9 +30,11 @@ from openviking_cli.exceptions import (
     OpenVikingError,
     PermissionDeniedError,
     ProcessingError,
+    ResourceExhaustedError,
     SessionExpiredError,
     UnauthenticatedError,
     UnavailableError,
+    UnimplementedError,
     VLMFailedError,
 )
 from openviking_cli.retrieve.types import FindResult
@@ -45,17 +49,22 @@ ERROR_CODE_TO_EXCEPTION = {
     "INVALID_URI": InvalidURIError,
     "NOT_FOUND": NotFoundError,
     "ALREADY_EXISTS": AlreadyExistsError,
+    "CONFLICT": ConflictError,
     "FAILED_PRECONDITION": FailedPreconditionError,
+    "ABORTED": AbortedError,
     "UNAUTHENTICATED": UnauthenticatedError,
     "PERMISSION_DENIED": PermissionDeniedError,
+    "RESOURCE_EXHAUSTED": ResourceExhaustedError,
     "UNAVAILABLE": UnavailableError,
     "INTERNAL": InternalError,
     "DEADLINE_EXCEEDED": DeadlineExceededError,
+    "UNIMPLEMENTED": UnimplementedError,
     "NOT_INITIALIZED": NotInitializedError,
     "PROCESSING_ERROR": ProcessingError,
     "EMBEDDING_FAILED": EmbeddingFailedError,
     "VLM_FAILED": VLMFailedError,
     "SESSION_EXPIRED": SessionExpiredError,
+    "UNKNOWN": OpenVikingError,
 }
 
 
@@ -134,6 +143,7 @@ class AsyncHTTPClient(BaseClient):
         account: Optional[str] = None,
         user: Optional[str] = None,
         timeout: float = 60.0,
+        extra_headers: Optional[Dict[str, str]] = None,
     ):
         """Initialize AsyncHTTPClient.
 
@@ -147,6 +157,7 @@ class AsyncHTTPClient(BaseClient):
             user: User identifier for multi-tenant auth. Required when using root key
                   to access tenant-scoped APIs. If not provided, reads from ovcli.conf.
             timeout: HTTP request timeout in seconds. Default 60.0.
+            extra_headers: Additional HTTP headers to send with requests. If not provided, reads from ovcli.conf.
         """
         should_load_cli_config = (
             url is None
@@ -155,6 +166,7 @@ class AsyncHTTPClient(BaseClient):
             or account is None
             or user is None
             or timeout == 60.0
+            or extra_headers is None
         )
         if should_load_cli_config:
             cli_config = load_ovcli_config()
@@ -166,6 +178,8 @@ class AsyncHTTPClient(BaseClient):
                 user = user or cli_config.user
                 if timeout == 60.0:  # only override default with config value
                     timeout = cli_config.timeout
+                if extra_headers is None:
+                    extra_headers = cli_config.extra_headers
         if not url:
             raise ValueError(
                 "url is required. Pass it explicitly or configure in "
@@ -178,6 +192,7 @@ class AsyncHTTPClient(BaseClient):
         self._user_id = user
         self._user = UserIdentifier.the_default_user()
         self._timeout = timeout
+        self._extra_headers = extra_headers
         self._http: Optional[httpx.AsyncClient] = None
         self._observer: Optional[_HTTPObserver] = None
 
@@ -194,6 +209,8 @@ class AsyncHTTPClient(BaseClient):
             headers["X-OpenViking-Account"] = self._account
         if self._user_id:
             headers["X-OpenViking-User"] = self._user_id
+        if self._extra_headers:
+            headers.update(self._extra_headers)
         self._http = httpx.AsyncClient(
             base_url=self._url,
             headers=headers,
@@ -242,6 +259,21 @@ class AsyncHTTPClient(BaseClient):
         return telemetry
 
     @staticmethod
+    def _normalize_target_uri(
+        target_uri: Union[str, List[str]],
+    ) -> Union[str, List[str]]:
+        """Normalize target_uri for the search endpoints.
+
+        Accepts either a single string or a list of strings and applies
+        ``VikingURI.normalize`` to each non-empty entry.
+        """
+        if isinstance(target_uri, list):
+            return [VikingURI.normalize(u) if u else u for u in target_uri]
+        if target_uri:
+            return VikingURI.normalize(target_uri)
+        return target_uri
+
+    @staticmethod
     def _attach_telemetry(result: Any, response_data: Dict[str, Any]) -> Any:
         telemetry = response_data.get("telemetry")
         if telemetry is None:
@@ -267,7 +299,15 @@ class AsyncHTTPClient(BaseClient):
         exc_class = ERROR_CODE_TO_EXCEPTION.get(code, OpenVikingError)
 
         # Handle different exception constructors
-        if exc_class in (InvalidArgumentError,):
+        if exc_class == OpenVikingError:
+            raise exc_class(message, code=code, details=details)
+        elif exc_class in (
+            InvalidArgumentError,
+            FailedPreconditionError,
+            ResourceExhaustedError,
+            AbortedError,
+            UnimplementedError,
+        ):
             raise exc_class(message, details=details)
         elif exc_class == InvalidURIError:
             uri = details.get("uri", "") if details else ""
@@ -491,12 +531,15 @@ class AsyncHTTPClient(BaseClient):
         )
         return self._handle_response(response)
 
-    async def mkdir(self, uri: str) -> None:
+    async def mkdir(self, uri: str, description: Optional[str] = None) -> None:
         """Create directory."""
         uri = VikingURI.normalize(uri)
+        payload = {"uri": uri}
+        if description is not None:
+            payload["description"] = description
         response = await self._http.post(
             "/api/v1/fs/mkdir",
-            json={"uri": uri},
+            json=payload,
         )
         self._handle_response(response)
 
@@ -586,7 +629,7 @@ class AsyncHTTPClient(BaseClient):
     async def find(
         self,
         query: str,
-        target_uri: str = "",
+        target_uri: Union[str, List[str]] = "",
         limit: int = 10,
         node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
@@ -595,14 +638,13 @@ class AsyncHTTPClient(BaseClient):
     ) -> FindResult:
         """Semantic search without session context."""
         telemetry = self._validate_telemetry(telemetry)
-        if target_uri:
-            target_uri = VikingURI.normalize(target_uri)
+        normalized_target = self._normalize_target_uri(target_uri)
         actual_limit = node_limit if node_limit is not None else limit
         response = await self._http.post(
             "/api/v1/search/find",
             json={
                 "query": query,
-                "target_uri": target_uri,
+                "target_uri": normalized_target,
                 "limit": actual_limit,
                 "score_threshold": score_threshold,
                 "filter": filter,
@@ -615,7 +657,7 @@ class AsyncHTTPClient(BaseClient):
     async def search(
         self,
         query: str,
-        target_uri: str = "",
+        target_uri: Union[str, List[str]] = "",
         session: Optional[Any] = None,
         session_id: Optional[str] = None,
         limit: int = 10,
@@ -626,15 +668,14 @@ class AsyncHTTPClient(BaseClient):
     ) -> FindResult:
         """Semantic search with optional session context."""
         telemetry = self._validate_telemetry(telemetry)
-        if target_uri:
-            target_uri = VikingURI.normalize(target_uri)
+        normalized_target = self._normalize_target_uri(target_uri)
         actual_limit = node_limit if node_limit is not None else limit
         sid = session_id or (session.session_id if session else None)
         response = await self._http.post(
             "/api/v1/search/search",
             json={
                 "query": query,
-                "target_uri": target_uri,
+                "target_uri": normalized_target,
                 "session_id": sid,
                 "limit": actual_limit,
                 "score_threshold": score_threshold,
@@ -798,6 +839,7 @@ class AsyncHTTPClient(BaseClient):
         content: str | None = None,
         parts: list[dict] | None = None,
         created_at: str | None = None,
+        role_id: str | None = None,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -807,6 +849,7 @@ class AsyncHTTPClient(BaseClient):
             content: Text content (simple mode, backward compatible)
             parts: Parts array (full Part support mode)
             created_at: Message creation time (ISO format string)
+            role_id: Optional explicit actor identity. Omit to let the server derive it.
 
         If both content and parts are provided, parts takes precedence.
         """
@@ -820,6 +863,8 @@ class AsyncHTTPClient(BaseClient):
 
         if created_at is not None:
             payload["created_at"] = created_at
+        if role_id is not None:
+            payload["role_id"] = role_id
 
         response = await self._http.post(
             f"/api/v1/sessions/{session_id}/messages",

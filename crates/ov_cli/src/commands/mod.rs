@@ -5,6 +5,7 @@ pub mod crypto;
 pub mod filesystem;
 pub mod observer;
 pub mod pack;
+pub mod privacy;
 pub mod relations;
 pub mod resources;
 pub mod search;

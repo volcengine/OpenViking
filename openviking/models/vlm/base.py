@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """VLM base interface and abstract classes"""
 
+import logging
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -13,6 +14,7 @@ from openviking.utils.time_utils import format_iso8601
 from .token_usage import TokenUsageTracker
 
 _THINK_TAG_RE = re.compile(r"<think>[\s\S]*?</think>")
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -59,6 +61,7 @@ class VLMBase(ABC):
         self.api_base = config.get("api_base")
         self.temperature = config.get("temperature", 0.0)
         self.max_retries = config.get("max_retries", 3)
+        self.timeout = config.get("timeout", 60.0)
         self.max_tokens = config.get("max_tokens")
         self.extra_headers = config.get("extra_headers")
         self.stream = config.get("stream", False)
@@ -196,22 +199,49 @@ class VLMBase(ABC):
         )
         # Operation-level telemetry aggregation (no-op when telemetry is disabled).
         try:
-            from openviking.telemetry import get_current_telemetry
+            from openviking.telemetry import get_current_telemetry, get_current_telemetry_stage
 
-            get_current_telemetry().add_token_usage(prompt_tokens, completion_tokens)
-        except Exception:
+            get_current_telemetry().add_token_usage(
+                prompt_tokens,
+                completion_tokens,
+                stage=get_current_telemetry_stage() or "vlm",
+            )
+        except Exception as e:
             # Telemetry must never break model inference.
-            pass
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "vlm.update_token_usage telemetry emit failed provider=%s model_name=%s err=%s: %s",
+                    provider,
+                    model_name,
+                    type(e).__name__,
+                    e,
+                )
 
         # Record the VLM call in Prometheus metrics (if enabled).
         try:
-            from openviking.storage.observers.prometheus_observer import get_prometheus_observer
+            from openviking.metrics.datasources import VLMEventDataSource
+            from openviking.observability.context import get_root_observability_context
 
-            prom = get_prometheus_observer()
-            if prom is not None:
-                prom.record_vlm_call(duration_seconds)
-        except Exception:
-            pass
+            root_context = get_root_observability_context()
+
+            VLMEventDataSource.record_call(
+                provider=str(provider),
+                model_name=str(model_name),
+                duration_seconds=float(duration_seconds),
+                prompt_tokens=int(prompt_tokens),
+                completion_tokens=int(completion_tokens),
+                account_id=root_context.account_id if root_context is not None else None,
+            )
+        except Exception as e:
+            # Metrics must never break model inference.
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "vlm.update_token_usage metrics emit failed provider=%s model_name=%s err=%s: %s",
+                    provider,
+                    model_name,
+                    type(e).__name__,
+                    e,
+                )
 
     def get_token_usage(self) -> Dict[str, Any]:
         """Get token usage
@@ -273,6 +303,21 @@ class VLMFactory:
             from .backends.openai_vlm import OpenAIVLM
 
             return OpenAIVLM(config)
+
+        elif provider == "openai-codex":
+            from .backends.codex_vlm import CodexVLM
+
+            return CodexVLM(config)
+
+        elif provider == "kimi":
+            from .backends.kimi_vlm import KimiVLM
+
+            return KimiVLM(config)
+
+        elif provider == "glm":
+            from .backends.glm_vlm import GLMVLM
+
+            return GLMVLM(config)
 
         else:
             from .backends.litellm_vlm import LiteLLMVLMProvider

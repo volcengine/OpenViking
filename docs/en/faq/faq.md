@@ -56,7 +56,7 @@ viking://
 ### What are the environment requirements?
 
 - **Python Version**: 3.10 or higher
-- **Build Tools** (if installing from source or on unsupported platforms): Go 1.19+, GCC 9+ or Clang 11+
+- **Build Tools** (if installing from source or on unsupported platforms): Rust/Cargo, GCC 9+ or Clang 11+
 - **Required Dependencies**: Embedding model (Volcengine Doubao recommended)
 - **Optional Dependencies**:
   - VLM (Vision Language Model): For multimodal content processing and semantic extraction
@@ -92,7 +92,7 @@ Create an `~/.openviking/ov.conf` configuration file in your project directory:
     "dense": {
       "provider": "volcengine",
       "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-250615",
+      "model": "doubao-embedding-vision-251215",
       "dimension": 1024,
       "input": "multimodal"
     }

@@ -2,22 +2,8 @@ name: 06. API Integration Tests
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - 'api_test'
-      - 'main'
-    paths-ignore:
-      - 'docs/**'
-      - '**.md'
-      - 'LICENSE'
-      - 'CONTRIBUTING.md'
-      - '**.png'
-      - '**.jpg'
-      - '**.jpeg'
-      - '**.gif'
-      - '**.svg'
-      - '.gitignore'
-      - '.editorconfig'
+  schedule:
+    - cron: '0 1,4,7,10,13 * * *'
   pull_request:
     branches:
       - 'main'
@@ -42,17 +28,19 @@ jobs:
   api-tests:
     name: API Integration Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 50
+    timeout-minutes: 60
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request' || github.repository == 'volcengine/OpenViking'
     strategy:
       fail-fast: false
       max-parallel: 1
       matrix:
-        os: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && fromJSON('["ubuntu-24.04", "macos-14", "windows-latest"]') || fromJSON('["ubuntu-24.04"]') }}
+        os: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && fromJSON('["ubuntu-24.04", "macos-14", "windows-latest"]') || fromJSON('["ubuntu-24.04"]') }}
     
     steps:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
+          fetch-depth: 100
 
       - name: Set up Python 3.10
         uses: actions/setup-python@v6
@@ -80,12 +68,12 @@ jobs:
       - name: Install system dependencies (Ubuntu)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update -y && sudo apt-get install -y cmake build-essential --no-install-recommends
+          sudo apt-get update -y && sudo apt-get install -y cmake build-essential ffmpeg --no-install-recommends
 
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install cmake
+          brew install cmake ffmpeg
 
       - name: Install system dependencies (Windows)
         if: runner.os == 'Windows'
@@ -112,11 +100,78 @@ jobs:
       - name: Install build dependencies (uv pip)
         run: |
           echo "Installing build dependencies to uv environment..."
-          uv pip install setuptools setuptools_scm cmake wheel
+          uv pip install setuptools setuptools_scm cmake wheel maturin
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
 
       - name: Build C++ extensions
+        shell: bash
         run: |
+          export OV_SKIP_OV_BUILD=1
+          mkdir -p openviking/bin
+          touch openviking/bin/ov
+          chmod +x openviking/bin/ov
+          echo "OV_SKIP_OV_BUILD=1 set, skipping ov CLI Rust build (ragfs build still needed for server)"
+          
+          if [ -z "$SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING" ]; then
+            PRETEND_VERSION=$(git describe --tags --always 2>/dev/null | sed -E 's/^v?([0-9]+\.[0-9]+\.[0-9]+).*/\1.dev0/' || echo "0.0.0.dev0")
+            echo "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING=$PRETEND_VERSION" >> $GITHUB_ENV
+            echo "Using pretend version: $PRETEND_VERSION"
+          fi
+          
           uv run python setup.py build_ext --inplace
+
+      - name: Build ragfs-python native extension
+        shell: bash
+        run: |
+          RAGFS_LIB_DIR="openviking/lib"
+          RAGFS_SO_COUNT=$(ls -1 "$RAGFS_LIB_DIR"/ragfs_python*.so "$RAGFS_LIB_DIR"/ragfs_python*.pyd "$RAGFS_LIB_DIR"/ragfs_python*.dylib 2>/dev/null | wc -l | tr -d '[:space:]' || echo "0")
+          
+          if [ "$RAGFS_SO_COUNT" -gt 0 ]; then
+            echo "✅ ragfs_python native extension already exists:"
+            ls -la "$RAGFS_LIB_DIR"/ragfs_python*
+            exit 0
+          fi
+          
+          echo "ragfs_python native lib not found after build_ext, building via maturin..."
+          TMPDIR_RAGFS=$(mktemp -d)
+          cd crates/ragfs-python
+          uv run --no-project maturin build --release --features s3 --out "$TMPDIR_RAGFS"
+          cd ../..
+          
+          WHL_FILE=$(ls -1 "$TMPDIR_RAGFS"/ragfs_python-*.whl 2>/dev/null | head -1)
+          if [ -z "$WHL_FILE" ]; then
+            echo "❌ ERROR: maturin build produced no wheel"
+            ls -la "$TMPDIR_RAGFS"/
+            exit 1
+          fi
+          
+          echo "Extracting ragfs_python from wheel: $WHL_FILE"
+          mkdir -p "$RAGFS_LIB_DIR"
+          WHL_FILE_PY=$(echo "$WHL_FILE" | sed 's/\\/\\\\/g')
+          RAGFS_LIB_DIR_PY=$(echo "$RAGFS_LIB_DIR" | sed 's/\\/\\\\/g')
+          uv run python -c "
+          import zipfile, os, sys, stat
+          with zipfile.ZipFile('${WHL_FILE_PY}') as zf:
+              for name in zf.namelist():
+                  bn = os.path.basename(name)
+                  if bn.startswith('ragfs_python') and (bn.endswith('.so') or bn.endswith('.pyd') or bn.endswith('.dylib')):
+                      dst = os.path.join('${RAGFS_LIB_DIR_PY}', bn)
+                      with zf.open(name) as src, open(dst, 'wb') as f:
+                          f.write(src.read())
+                      os.chmod(dst, 0o755)
+                      print(f'  [OK] ragfs-python: extracted {bn} -> {dst}')
+                      sys.exit(0)
+          print('[ERROR] No ragfs_python native library found in wheel')
+          sys.exit(1)
+          "
+          rm -rf "$TMPDIR_RAGFS"
+          
+          echo "Verifying ragfs_python native extension:"
+          ls -la "$RAGFS_LIB_DIR"/ragfs_python*
 
       - name: Install API test dependencies
         run: |
@@ -391,7 +446,8 @@ jobs:
           
           if [ "${{ env.HAS_SECRETS }}" = "true" ]; then
             echo "Running full test suite with VLM/Embedding"
-            uv run python -m pytest . -v --html=api-test-report.html --self-contained-html
+            uv run python -m pytest . -v --html=api-test-report.html --self-contained-html \
+              --ignore=scenarios/resources_retrieval_slow/
           else
             echo "Running basic tests only (no VLM/Embedding)"
             uv run python -m pytest . -v --html=api-test-report.html --self-contained-html \
@@ -412,7 +468,7 @@ jobs:
           
           if ($env:HAS_SECRETS -eq "true") {
             Write-Host "Running full test suite with VLM/Embedding (Windows: skipping filesystem tests)"
-            uv run python -m pytest . -v --html=api-test-report.html --self-contained-html --ignore=filesystem/
+            uv run python -m pytest . -v --html=api-test-report.html --self-contained-html --ignore=filesystem/ --ignore=scenarios/resources_retrieval_slow/
           } else {
             Write-Host "Running basic tests only (no VLM/Embedding, Windows: skipping filesystem tests)"
             uv run python -m pytest . -v --html=api-test-report.html --self-contained-html --ignore=retrieval/ --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py --ignore=filesystem/ --ignore=scenarios/ -k "not test_observer"

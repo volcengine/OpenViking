@@ -389,6 +389,75 @@ class TestIncludeExclude:
         assert "excluded by include" in skipped_reasons or "excluded by exclude" in skipped_reasons
 
 
+class TestGitignoreHandling:
+    """Test gitignore-aware exclusion in scan_directory."""
+
+    def test_respects_root_gitignore(self, tmp_path: Path, registry: ParserRegistry) -> None:
+        (tmp_path / ".gitignore").write_text("*.log\n", encoding="utf-8")
+        (tmp_path / "keep.txt").write_text("ok", encoding="utf-8")
+        (tmp_path / "skip.log").write_text("no", encoding="utf-8")
+
+        result = scan_directory(tmp_path, registry=registry, strict=False)
+        rel_paths = [f.rel_path for f in result.processable + result.unsupported]
+
+        assert "keep.txt" in rel_paths
+        assert "skip.log" not in rel_paths
+        assert any("skip.log (gitignore)" in s for s in result.skipped)
+
+    def test_respects_nested_gitignore(self, tmp_path: Path, registry: ParserRegistry) -> None:
+        (tmp_path / ".gitignore").write_text("*.log\n", encoding="utf-8")
+
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "skip.log").write_text("no", encoding="utf-8")
+        (tmp_path / "src" / "keep.tmp").write_text("ok", encoding="utf-8")
+
+        (tmp_path / "src" / "sub").mkdir()
+        (tmp_path / "src" / "sub" / ".gitignore").write_text("*.tmp\n", encoding="utf-8")
+        (tmp_path / "src" / "sub" / "keep.txt").write_text("ok", encoding="utf-8")
+        (tmp_path / "src" / "sub" / "skip.log").write_text("no", encoding="utf-8")
+        (tmp_path / "src" / "sub" / "skip.tmp").write_text("no", encoding="utf-8")
+
+        result = scan_directory(tmp_path, registry=registry, strict=False)
+        rel_paths = [f.rel_path for f in result.processable + result.unsupported]
+
+        # .tmp is accepted in src/
+        assert "src/keep.tmp" in rel_paths
+        assert "src/skip.log" not in rel_paths
+        assert "src/sub/keep.txt" in rel_paths
+        assert "src/sub/skip.tmp" not in rel_paths
+        # .tmp is no longer accepted in src/sub/ due to nested gitignore
+        assert "src/sub/skip.log" not in rel_paths
+        assert any("src/skip.log (gitignore)" in s for s in result.skipped)
+        assert any("src/sub/skip.tmp (gitignore)" in s for s in result.skipped)
+        assert any("src/sub/skip.log (gitignore)" in s for s in result.skipped)
+
+    def test_respects_negation(self, tmp_path: Path, registry: ParserRegistry) -> None:
+        (tmp_path / ".gitignore").write_text("*.tmp\n!important.tmp\n", encoding="utf-8")
+        (tmp_path / "a.tmp").write_text("no", encoding="utf-8")
+        (tmp_path / "important.tmp").write_text("yes", encoding="utf-8")
+
+        result = scan_directory(tmp_path, registry=registry, strict=False)
+        rel_paths = [f.rel_path for f in result.processable + result.unsupported]
+
+        assert "a.tmp" not in rel_paths
+        assert "important.tmp" in rel_paths
+        skipped_reasons = " ".join(result.skipped)
+        assert "gitignore" in skipped_reasons
+
+    def test_ignored_directory_is_pruned(self, tmp_path: Path, registry: ParserRegistry) -> None:
+        (tmp_path / ".gitignore").write_text("generated/\n", encoding="utf-8")
+        (tmp_path / "generated").mkdir()
+        (tmp_path / "generated" / "skip.txt").write_text("no", encoding="utf-8")
+        (tmp_path / "keep.txt").write_text("ok", encoding="utf-8")
+
+        result = scan_directory(tmp_path, registry=registry, strict=False)
+        rel_paths = [f.rel_path for f in result.processable + result.unsupported]
+
+        assert "keep.txt" in rel_paths
+        assert "generated/skip.txt" not in rel_paths
+        assert any("generated (gitignore)" in s for s in result.skipped)
+
+
 class TestClassifiedFileAndResult:
     """Test ClassifiedFile and DirectoryScanResult types."""
 

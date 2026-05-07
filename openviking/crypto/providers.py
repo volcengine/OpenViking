@@ -11,8 +11,10 @@ Provides multiple key management methods:
 
 import abc
 import asyncio
+import importlib
 import os
 import secrets
+import time
 from abc import ABC
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -24,6 +26,22 @@ from openviking.crypto.exceptions import (
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _record_encryption_metrics(
+    *metrics: Tuple[str, Dict[str, Any]],
+    debug_message: Optional[str] = None,
+) -> None:
+    """Emit encryption metrics without creating a hard import edge back into crypto."""
+    try:
+        encryption_module = importlib.import_module("openviking.metrics.datasources.encryption")
+        datasource = encryption_module.EncryptionEventDataSource
+        for metric_name, metric_kwargs in metrics:
+            getattr(datasource, metric_name)(**metric_kwargs)
+    except Exception:
+        if debug_message:
+            logger.debug(debug_message, exc_info=True)
+
 
 # HKDF related constants
 HKDF_SALT = b"openviking-kek-salt-v1"
@@ -73,6 +91,8 @@ class RootKeyProvider(ABC):
         Returns:
             Derived key
         """
+        start = time.perf_counter()
+        status = "ok"
         try:
             from cryptography.hazmat.primitives import hashes
             from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -85,7 +105,20 @@ class RootKeyProvider(ABC):
             )
             return hkdf.derive(root_key)
         except ImportError:
+            status = "error"
             raise ConfigError("cryptography library is required for encryption")
+        except Exception:
+            status = "error"
+            raise
+        finally:
+            elapsed = time.perf_counter() - start
+            _record_encryption_metrics(
+                (
+                    "record_key_derivation",
+                    {"status": status, "duration_seconds": elapsed},
+                ),
+                debug_message="Failed to record encryption key derivation metrics",
+            )
 
 
 class BaseProvider(RootKeyProvider):
@@ -160,9 +193,34 @@ class LocalFileProvider(BaseProvider):
 
     async def get_root_key(self) -> bytes:
         """Get Root Key."""
-        if self._root_key is None:
+        if self._root_key is not None:
+            _record_encryption_metrics(("record_key_cache_hit", {"provider": "local"}))
+            return self._root_key
+
+        _record_encryption_metrics(("record_key_cache_miss", {"provider": "local"}))
+
+        start = time.perf_counter()
+        status = "ok"
+        try:
             self._root_key = await self._load_or_create_root_key()
-        return self._root_key
+            return self._root_key
+        except Exception:
+            status = "error"
+            raise
+        finally:
+            elapsed = time.perf_counter() - start
+            _record_encryption_metrics(
+                (
+                    "record_key_load",
+                    {
+                        "status": status,
+                        "provider": "local",
+                        "duration_seconds": elapsed,
+                    },
+                ),
+                ("record_key_version_usage", {"key_version": "local"}),
+                debug_message="Failed to record encryption key metrics for provider=local",
+            )
 
     async def _load_or_create_root_key(self) -> bytes:
         """Load or create Root Key."""
@@ -232,7 +290,7 @@ class VaultProvider(BaseProvider):
         self.kv_version = kv_version
         self.root_key_name = root_key_name
         self.encrypted_root_key_key = encrypted_root_key_key
-        self._client = None
+        self._client: Any = None
         self._root_key: Optional[bytes] = None
 
     async def _get_client(self):
@@ -424,7 +482,34 @@ class VaultProvider(BaseProvider):
         Returns:
             Root key
         """
-        return await self._get_or_create_root_key()
+        if self._root_key is not None:
+            _record_encryption_metrics(("record_key_cache_hit", {"provider": "vault"}))
+            return self._root_key
+
+        _record_encryption_metrics(("record_key_cache_miss", {"provider": "vault"}))
+
+        start = time.perf_counter()
+        status = "ok"
+        try:
+            self._root_key = await self._get_or_create_root_key()
+            return self._root_key
+        except Exception:
+            status = "error"
+            raise
+        finally:
+            elapsed = time.perf_counter() - start
+            _record_encryption_metrics(
+                (
+                    "record_key_load",
+                    {
+                        "status": status,
+                        "provider": "vault",
+                        "duration_seconds": elapsed,
+                    },
+                ),
+                ("record_key_version_usage", {"key_version": str(self.root_key_name)}),
+                debug_message="Failed to record encryption key metrics for provider=vault",
+            )
 
     async def derive_account_key(self, account_id: str) -> bytes:
         """
@@ -481,7 +566,7 @@ class VolcengineKMSProvider(BaseProvider):
             self.key_file = Path(key_file).expanduser()
         else:
             self.key_file = Path.home() / ".openviking" / self.ROOT_KEY_FILENAME
-        self._kms_client = None
+        self._kms_client: Any = None
         self._root_key: Optional[bytes] = None
 
     async def _get_kms_client(self):
@@ -651,7 +736,34 @@ class VolcengineKMSProvider(BaseProvider):
         Returns:
             Root key
         """
-        return await self._get_or_create_root_key()
+        if self._root_key is not None:
+            _record_encryption_metrics(("record_key_cache_hit", {"provider": "volcengine_kms"}))
+            return self._root_key
+
+        _record_encryption_metrics(("record_key_cache_miss", {"provider": "volcengine_kms"}))
+
+        start = time.perf_counter()
+        status = "ok"
+        try:
+            self._root_key = await self._get_or_create_root_key()
+            return self._root_key
+        except Exception:
+            status = "error"
+            raise
+        finally:
+            elapsed = time.perf_counter() - start
+            _record_encryption_metrics(
+                (
+                    "record_key_load",
+                    {
+                        "status": status,
+                        "provider": "volcengine_kms",
+                        "duration_seconds": elapsed,
+                    },
+                ),
+                ("record_key_version_usage", {"key_version": str(self.key_id)}),
+                debug_message="Failed to record encryption key metrics for provider=volcengine_kms",
+            )
 
     async def derive_account_key(self, account_id: str) -> bytes:
         """

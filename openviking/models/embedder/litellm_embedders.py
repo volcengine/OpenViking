@@ -68,6 +68,7 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
             config: Additional configuration dict.
         """
         super().__init__(model_name, config)
+        self.provider = "litellm"
 
         os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 

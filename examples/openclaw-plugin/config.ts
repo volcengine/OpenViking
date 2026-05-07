@@ -1,35 +1,51 @@
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { resolve as resolvePath } from "node:path";
+import { getEnv } from "./runtime-utils.js";
 
 export type MemoryOpenVikingConfig = {
-  /** "local" = plugin starts OpenViking server as child process (like Claude Code); "remote" = use existing HTTP server */
-  mode?: "local" | "remote";
-  /** Path to ov.conf; used when mode is "local". Default ~/.openviking/ov.conf */
-  configPath?: string;
-  /** Port for local server when mode is "local". Ignored when mode is "remote". */
-  port?: number;
+  mode?: "remote";
   baseUrl?: string;
-  agentId?: string;
+  agent_prefix?: string;
   apiKey?: string;
+  /** Advanced option. Only needed when explicitly sending tenant identity headers. With a user key the server derives identity from the key. */
+  accountId?: string;
+  /** Advanced option. Only needed when explicitly sending tenant identity headers. */
+  userId?: string;
+  /**
+   * Canonical namespace policy. Must match the server-side account namespace
+   * policy because current /system/status does not expose it.
+   */
+  isolateUserScopeByAgent?: boolean;
+  isolateAgentScopeByUser?: boolean;
+  /**
+   * Deprecated compatibility alias for older hash-based agent space behavior.
+   * Prefer isolateUserScopeByAgent / isolateAgentScopeByUser.
+   */
+  agentScopeMode?: "user_agent" | "agent";
   targetUri?: string;
   timeoutMs?: number;
   autoCapture?: boolean;
   captureMode?: "semantic" | "keyword";
   captureMaxLength?: number;
   autoRecall?: boolean;
+  /** Include resources in auto-recall and default memory_recall search. Default false. */
+  recallResources?: boolean;
   recallLimit?: number;
   recallScoreThreshold?: number;
+  /** Maximum total characters injected by auto-recall. */
+  recallMaxInjectedChars?: number;
+  /** @deprecated Auto-recall no longer truncates individual memories. */
   recallMaxContentChars?: number;
   recallPreferAbstract?: boolean;
+  /** @deprecated Use recallMaxInjectedChars. */
   recallTokenBudget?: number;
   commitTokenThreshold?: number;
+  /**
+   * WM v2: number of most-recent messages to keep live after an afterTurn
+   * commit so the next turn still has immediate context. Forwarded to the
+   * server as `keep_recent_count`. Default 10. The compact path ignores this
+   * value and always passes 0.
+   */
+  commitKeepRecentCount?: number;
   bypassSessionPatterns?: string[];
-  ingestReplyAssist?: boolean;
-  ingestReplyAssistMinSpeakerTurns?: number;
-  ingestReplyAssistMinChars?: number;
-  /** Deprecated alias for bypassSessionPatterns. */
-  ingestReplyAssistIgnoreSessionPatterns?: string[];
   /**
    * When true (default), emit structured `openviking: diag {...}` lines (and any future
    * standard-diagnostics file writes) for assemble/afterTurn. Set false to disable.
@@ -40,37 +56,32 @@ export type MemoryOpenVikingConfig = {
 };
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:1933";
-const DEFAULT_PORT = 1933;
 const DEFAULT_TARGET_URI = "viking://user/memories";
 const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_CAPTURE_MODE = "semantic";
 const DEFAULT_CAPTURE_MAX_LENGTH = 24000;
 const DEFAULT_RECALL_LIMIT = 6;
 const DEFAULT_RECALL_SCORE_THRESHOLD = 0.15;
-const DEFAULT_RECALL_MAX_CONTENT_CHARS = 500;
-const DEFAULT_RECALL_PREFER_ABSTRACT = true;
-const DEFAULT_RECALL_TOKEN_BUDGET = 2000;
+const DEFAULT_RECALL_MAX_CONTENT_CHARS = 5000;
+const DEFAULT_RECALL_PREFER_ABSTRACT = false;
+const DEFAULT_RECALL_MAX_INJECTED_CHARS = 4000;
 const DEFAULT_COMMIT_TOKEN_THRESHOLD = 20000;
+const DEFAULT_COMMIT_KEEP_RECENT_COUNT = 10;
 const DEFAULT_BYPASS_SESSION_PATTERNS: string[] = [];
-const DEFAULT_INGEST_REPLY_ASSIST = true;
-const DEFAULT_INGEST_REPLY_ASSIST_MIN_SPEAKER_TURNS = 2;
-const DEFAULT_INGEST_REPLY_ASSIST_MIN_CHARS = 120;
-const DEFAULT_INGEST_REPLY_ASSIST_IGNORE_SESSION_PATTERNS: string[] = [];
 const DEFAULT_EMIT_STANDARD_DIAGNOSTICS = false;
-const DEFAULT_LOCAL_CONFIG_PATH = join(homedir(), ".openviking", "ov.conf");
+const DEFAULT_AGENT_PREFIX = "";
 
-const DEFAULT_AGENT_ID = "default";
-
-function resolveAgentId(configured: unknown): string {
+function resolveAgentPrefix(configured: unknown): string {
   if (typeof configured === "string" && configured.trim()) {
-    return configured.trim();
+    const trimmed = configured.trim();
+    return trimmed === "default" ? DEFAULT_AGENT_PREFIX : trimmed;
   }
-  return DEFAULT_AGENT_ID;
+  return DEFAULT_AGENT_PREFIX;
 }
 
 function resolveEnvVars(value: string): string {
   return value.replace(/\$\{([^}]+)\}/g, (_, envVar) => {
-    const envValue = process.env[envVar];
+    const envValue = getEnv(envVar);
     if (!envValue) {
       throw new Error(`Environment variable ${envVar} is not set`);
     }
@@ -109,7 +120,7 @@ function toStringArray(value: unknown, fallback: string[]): string[] {
 
 /** True when env is 1 / true / yes (case-insensitive). Used for debug flags without editing plugin JSON. */
 function envFlag(name: string): boolean {
-  const v = process.env[name];
+  const v = getEnv(name);
   if (v == null || v === "") {
     return false;
   }
@@ -126,7 +137,7 @@ function assertAllowedKeys(value: Record<string, unknown>, allowed: string[], la
 }
 
 function resolveDefaultBaseUrl(): string {
-  const fromEnv = process.env.OPENVIKING_BASE_URL || process.env.OPENVIKING_URL;
+  const fromEnv = getEnv("OPENVIKING_BASE_URL") || getEnv("OPENVIKING_URL");
   if (fromEnv) {
     return fromEnv;
   }
@@ -139,27 +150,41 @@ export const memoryOpenVikingConfigSchema = {
       value = {};
     }
     const cfg = value as Record<string, unknown>;
+    if ("agentId" in cfg) {
+      if (!("agent_prefix" in cfg)) {
+        cfg.agent_prefix = cfg.agentId;
+      }
+      delete cfg.agentId;
+    }
     assertAllowedKeys(
       cfg,
       [
         "mode",
-        "configPath",
-        "port",
         "baseUrl",
+        "agent_prefix",
         "agentId",
+        "serverAuthMode",
         "apiKey",
+        "accountId",
+        "userId",
+        "isolateUserScopeByAgent",
+        "isolateAgentScopeByUser",
+        "agentScopeMode",
         "targetUri",
         "timeoutMs",
         "autoCapture",
         "captureMode",
         "captureMaxLength",
         "autoRecall",
+        "recallResources",
         "recallLimit",
         "recallScoreThreshold",
+        "recallMaxInjectedChars",
         "recallMaxContentChars",
         "recallPreferAbstract",
         "recallTokenBudget",
         "commitTokenThreshold",
+        "commitKeepRecentCount",
         "bypassSessionPatterns",
         "ingestReplyAssist",
         "ingestReplyAssistMinSpeakerTurns",
@@ -171,21 +196,8 @@ export const memoryOpenVikingConfigSchema = {
       "openviking config",
     );
 
-    const mode = (cfg.mode === "local" || cfg.mode === "remote" ? cfg.mode : "local") as
-      | "local"
-      | "remote";
-    const port = Math.max(1, Math.min(65535, Math.floor(toNumber(cfg.port, DEFAULT_PORT))));
-    const rawConfigPath =
-      typeof cfg.configPath === "string" && cfg.configPath.trim()
-        ? cfg.configPath.trim()
-        : DEFAULT_LOCAL_CONFIG_PATH;
-    const configPath = resolvePath(
-      resolveEnvVars(rawConfigPath).replace(/^~/, homedir()),
-    );
-
-    const localBaseUrl = `http://127.0.0.1:${port}`;
-    const rawBaseUrl =
-      mode === "local" ? localBaseUrl : (typeof cfg.baseUrl === "string" ? cfg.baseUrl : resolveDefaultBaseUrl());
+    const mode = "remote" as const;
+    const rawBaseUrl = typeof cfg.baseUrl === "string" ? cfg.baseUrl : resolveDefaultBaseUrl();
     const resolvedBaseUrl = resolveEnvVars(rawBaseUrl).replace(/\/+$/, "");
     const rawApiKey = typeof cfg.apiKey === "string" ? cfg.apiKey : process.env.OPENVIKING_API_KEY;
     const captureMode = cfg.captureMode;
@@ -197,13 +209,69 @@ export const memoryOpenVikingConfigSchema = {
       throw new Error(`openviking captureMode must be "semantic" or "keyword"`);
     }
 
+    const accountId =
+      typeof cfg.accountId === "string" && cfg.accountId.trim()
+        ? cfg.accountId.trim()
+        : (process.env.OPENVIKING_ACCOUNT_ID?.trim() || "");
+    const userId =
+      typeof cfg.userId === "string" && cfg.userId.trim()
+        ? cfg.userId.trim()
+        : (process.env.OPENVIKING_USER_ID?.trim() || "");
+
+    const hasExplicitAgentScopeMode =
+      typeof cfg.agentScopeMode === "string" || process.env.OPENVIKING_AGENT_SCOPE_MODE !== undefined;
+    const rawAgentScope = cfg.agentScopeMode ?? process.env.OPENVIKING_AGENT_SCOPE_MODE;
+    const agentScopeMode =
+      rawAgentScope === "user_agent" ? "user_agent" as const : "agent" as const;
+    const explicitIsolateUserScopeByAgent =
+      typeof cfg.isolateUserScopeByAgent === "boolean"
+        ? cfg.isolateUserScopeByAgent
+        : undefined;
+    const explicitIsolateAgentScopeByUser =
+      typeof cfg.isolateAgentScopeByUser === "boolean"
+        ? cfg.isolateAgentScopeByUser
+        : undefined;
+    const envIsolateUserScopeByAgent =
+      explicitIsolateUserScopeByAgent === undefined &&
+      process.env.OPENVIKING_ISOLATE_USER_SCOPE_BY_AGENT !== undefined
+        ? envFlag("OPENVIKING_ISOLATE_USER_SCOPE_BY_AGENT")
+        : undefined;
+    const envIsolateAgentScopeByUser =
+      explicitIsolateAgentScopeByUser === undefined &&
+      process.env.OPENVIKING_ISOLATE_AGENT_SCOPE_BY_USER !== undefined
+        ? envFlag("OPENVIKING_ISOLATE_AGENT_SCOPE_BY_USER")
+        : undefined;
+    const isolateUserScopeByAgent =
+      explicitIsolateUserScopeByAgent ??
+      envIsolateUserScopeByAgent ??
+      false;
+    const isolateAgentScopeByUser =
+      explicitIsolateAgentScopeByUser ??
+      envIsolateAgentScopeByUser ??
+      (hasExplicitAgentScopeMode && agentScopeMode === "user_agent" ? true : false);
+    const recallMaxInjectedChars = Math.max(
+      100,
+      Math.min(
+        50000,
+        Math.floor(
+          toNumber(
+            cfg.recallMaxInjectedChars,
+            toNumber(cfg.recallTokenBudget, DEFAULT_RECALL_MAX_INJECTED_CHARS),
+          ),
+        ),
+      ),
+    );
+
     return {
       mode,
-      configPath,
-      port,
       baseUrl: resolvedBaseUrl,
-      agentId: resolveAgentId(cfg.agentId),
+      agent_prefix: resolveAgentPrefix(cfg.agent_prefix),
       apiKey: rawApiKey ? resolveEnvVars(rawApiKey) : "",
+      accountId,
+      userId,
+      isolateUserScopeByAgent,
+      isolateAgentScopeByUser,
+      agentScopeMode,
       targetUri: typeof cfg.targetUri === "string" ? cfg.targetUri : DEFAULT_TARGET_URI,
       timeoutMs: Math.max(1000, Math.floor(toNumber(cfg.timeoutMs, DEFAULT_TIMEOUT_MS))),
       autoCapture: cfg.autoCapture !== false,
@@ -213,6 +281,7 @@ export const memoryOpenVikingConfigSchema = {
         Math.min(200_000, Math.floor(toNumber(cfg.captureMaxLength, DEFAULT_CAPTURE_MAX_LENGTH))),
       ),
       autoRecall: cfg.autoRecall !== false,
+      recallResources: cfg.recallResources === true || envFlag("OPENVIKING_RECALL_RESOURCES"),
       recallLimit: Math.max(1, Math.floor(toNumber(cfg.recallLimit, DEFAULT_RECALL_LIMIT))),
       recallScoreThreshold: Math.min(
         1,
@@ -222,14 +291,22 @@ export const memoryOpenVikingConfigSchema = {
         50,
         Math.min(10000, Math.floor(toNumber(cfg.recallMaxContentChars, DEFAULT_RECALL_MAX_CONTENT_CHARS))),
       ),
-      recallPreferAbstract: cfg.recallPreferAbstract === true,
-      recallTokenBudget: Math.max(
-        100,
-        Math.min(50000, Math.floor(toNumber(cfg.recallTokenBudget, DEFAULT_RECALL_TOKEN_BUDGET))),
-      ),
+      recallPreferAbstract:
+        typeof cfg.recallPreferAbstract === "boolean"
+          ? cfg.recallPreferAbstract
+          : DEFAULT_RECALL_PREFER_ABSTRACT,
+      recallMaxInjectedChars,
+      recallTokenBudget: recallMaxInjectedChars,
       commitTokenThreshold: Math.max(
         0,
         Math.min(100_000, Math.floor(toNumber(cfg.commitTokenThreshold, DEFAULT_COMMIT_TOKEN_THRESHOLD))),
+      ),
+      commitKeepRecentCount: Math.max(
+        0,
+        Math.min(
+          1_000,
+          Math.floor(toNumber(cfg.commitKeepRecentCount, DEFAULT_COMMIT_KEEP_RECENT_COUNT)),
+        ),
       ),
       bypassSessionPatterns: toStringArray(
         cfg.bypassSessionPatterns,
@@ -237,30 +314,6 @@ export const memoryOpenVikingConfigSchema = {
           cfg.ingestReplyAssistIgnoreSessionPatterns,
           DEFAULT_BYPASS_SESSION_PATTERNS,
         ),
-      ),
-      ingestReplyAssist: cfg.ingestReplyAssist === true,
-      ingestReplyAssistMinSpeakerTurns: Math.max(
-        1,
-        Math.min(
-          12,
-          Math.floor(
-            toNumber(
-              cfg.ingestReplyAssistMinSpeakerTurns,
-              DEFAULT_INGEST_REPLY_ASSIST_MIN_SPEAKER_TURNS,
-            ),
-          ),
-        ),
-      ),
-      ingestReplyAssistMinChars: Math.max(
-        32,
-        Math.min(
-          10000,
-          Math.floor(toNumber(cfg.ingestReplyAssistMinChars, DEFAULT_INGEST_REPLY_ASSIST_MIN_CHARS)),
-        ),
-      ),
-      ingestReplyAssistIgnoreSessionPatterns: toStringArray(
-        cfg.ingestReplyAssistIgnoreSessionPatterns,
-        DEFAULT_INGEST_REPLY_ASSIST_IGNORE_SESSION_PATTERNS,
       ),
       emitStandardDiagnostics:
         typeof cfg.emitStandardDiagnostics === "boolean"
@@ -273,36 +326,51 @@ export const memoryOpenVikingConfigSchema = {
     };
   },
   uiHints: {
-    mode: {
-      label: "Mode",
-      help: "local = plugin starts OpenViking server (like Claude Code); remote = use existing HTTP server",
-    },
-    configPath: {
-      label: "Config path (local)",
-      placeholder: DEFAULT_LOCAL_CONFIG_PATH,
-      help: "Path to ov.conf when mode is local",
-    },
-    port: {
-      label: "Port (local)",
-      placeholder: String(DEFAULT_PORT),
-      help: "Port for local OpenViking server",
-      advanced: true,
-    },
     baseUrl: {
-      label: "OpenViking Base URL (remote)",
+      label: "OpenViking Base URL",
       placeholder: DEFAULT_BASE_URL,
       help: "HTTP URL when mode is remote (or use ${OPENVIKING_BASE_URL})",
     },
-    agentId: {
-      label: "Agent ID",
-      placeholder: "auto-generated",
-      help: 'OpenViking X-OpenViking-Agent: non-default values combine with OpenClaw ctx.agentId as "<config>_<sessionAgent>" (then sanitized to [a-zA-Z0-9_-]). Use "default" to send only ctx.agentId.',
+    agent_prefix: {
+      label: "Agent Prefix",
+      placeholder: "optional-prefix",
+      help: 'Optional prefix for OpenViking X-OpenViking-Agent. Empty means use OpenClaw ctx.agentId directly. Non-empty values are prepended as "<prefix>_<ctx.agentId>" (sanitized to [a-zA-Z0-9_-]). If ctx.agentId is unavailable, OpenClaw default agent "main" is used.',
     },
     apiKey: {
       label: "OpenViking API Key",
       sensitive: true,
       placeholder: "${OPENVIKING_API_KEY}",
       help: "Optional API key for OpenViking server",
+    },
+    accountId: {
+      label: "Account ID",
+      placeholder: "(derived from API key)",
+      help: "Advanced option. Tenant account ID. Only needed when explicitly sending identity headers, such as root-key or trusted deployments. With a user key the server derives identity from the key.",
+      advanced: true,
+    },
+    userId: {
+      label: "User ID",
+      placeholder: "(derived from API key)",
+      help: "Advanced option. Tenant user ID. Only needed when explicitly sending identity headers.",
+      advanced: true,
+    },
+    isolateUserScopeByAgent: {
+      label: "Isolate User Scope By Agent",
+      placeholder: "false",
+      help: "Canonical namespace policy. false (default): user alias expands to viking://user/<user_id>/... . true: expands to viking://user/<user_id>/agent/<agent_id>/... . Must match the server-side account namespace policy.",
+      advanced: true,
+    },
+    isolateAgentScopeByUser: {
+      label: "Isolate Agent Scope By User",
+      placeholder: "false",
+      help: "Canonical namespace policy. false (default): agent alias expands to viking://agent/<agent_id>/... . true: expands to viking://agent/<agent_id>/user/<user_id>/... . Must match the server-side account namespace policy.",
+      advanced: true,
+    },
+    agentScopeMode: {
+      label: "Deprecated Agent Scope Mode",
+      placeholder: "agent",
+      help: 'Deprecated compatibility alias for older routing behavior. Prefer isolateUserScopeByAgent / isolateAgentScopeByUser. Mapping: explicit "user_agent" => false/true, explicit "agent" => false/false. When fully unset, the plugin defaults to false/false to match the current server-side default policy.',
+      advanced: true,
     },
     targetUri: {
       label: "Search Target URI",
@@ -334,6 +402,11 @@ export const memoryOpenVikingConfigSchema = {
       label: "Auto-Recall",
       help: "Inject relevant OpenViking memories into agent context",
     },
+    recallResources: {
+      label: "Recall Resources",
+      help: "Include resources (viking://resources) in auto-recall and default memory_recall search. Enables account-level shared knowledge retrieval.",
+      advanced: true,
+    },
     recallLimit: {
       label: "Recall Limit",
       placeholder: String(DEFAULT_RECALL_LIMIT),
@@ -344,11 +417,17 @@ export const memoryOpenVikingConfigSchema = {
       placeholder: String(DEFAULT_RECALL_SCORE_THRESHOLD),
       advanced: true,
     },
+    recallMaxInjectedChars: {
+      label: "Recall Max Injected Chars",
+      placeholder: String(DEFAULT_RECALL_MAX_INJECTED_CHARS),
+      advanced: true,
+      help: "Maximum total characters for auto-recall memory injection. Complete memories that do not fit are skipped, not truncated.",
+    },
     recallMaxContentChars: {
-      label: "Recall Max Content Chars",
+      label: "Deprecated Recall Max Content Chars",
       placeholder: String(DEFAULT_RECALL_MAX_CONTENT_CHARS),
       advanced: true,
-      help: "Maximum characters per memory content in auto-recall injection. Content exceeding this is truncated.",
+      help: "Deprecated compatibility option and will be removed in a future release. Auto-recall now keeps individual memories intact and uses recallMaxInjectedChars.",
     },
     recallPreferAbstract: {
       label: "Recall Prefer Abstract",
@@ -356,10 +435,10 @@ export const memoryOpenVikingConfigSchema = {
       help: "Use memory abstract instead of fetching full content when abstract is available. Reduces token usage.",
     },
     recallTokenBudget: {
-      label: "Recall Token Budget",
-      placeholder: String(DEFAULT_RECALL_TOKEN_BUDGET),
+      label: "Deprecated Recall Token Budget",
+      placeholder: String(DEFAULT_RECALL_MAX_INJECTED_CHARS),
       advanced: true,
-      help: "Maximum estimated tokens for auto-recall memory injection. Injection stops when budget is exhausted.",
+      help: "Deprecated compatibility alias and will be removed in a future release. Use recallMaxInjectedChars.",
     },
     bypassSessionPatterns: {
       label: "Bypass Session Patterns",
@@ -373,28 +452,13 @@ export const memoryOpenVikingConfigSchema = {
       advanced: true,
       help: "Minimum estimated pending tokens before auto-commit triggers. Set to 0 to commit every turn.",
     },
-    ingestReplyAssist: {
-      label: "Ingest Reply Assist",
-      help: "When transcript-like memory ingestion is detected, add a lightweight reply instruction to reduce NO_REPLY.",
+    commitKeepRecentCount: {
+      label: "Commit Keep Recent Count",
+      placeholder: String(DEFAULT_COMMIT_KEEP_RECENT_COUNT),
       advanced: true,
-    },
-    ingestReplyAssistMinSpeakerTurns: {
-      label: "Ingest Min Speaker Turns",
-      placeholder: String(DEFAULT_INGEST_REPLY_ASSIST_MIN_SPEAKER_TURNS),
-      help: "Minimum speaker-tag turns (e.g. Name:) to detect transcript-like ingest text.",
-      advanced: true,
-    },
-    ingestReplyAssistMinChars: {
-      label: "Ingest Min Chars",
-      placeholder: String(DEFAULT_INGEST_REPLY_ASSIST_MIN_CHARS),
-      help: "Minimum sanitized text length required before ingest reply assist can trigger.",
-      advanced: true,
-    },
-    ingestReplyAssistIgnoreSessionPatterns: {
-      label: "Deprecated Ingest Ignore Session Patterns",
-      placeholder: "agent:*:cron:**",
-      help: "Deprecated alias for bypassSessionPatterns. Matching sessions now bypass OpenViking entirely.",
-      advanced: true,
+      help:
+        "Number of most-recent messages to keep live after an afterTurn commit. " +
+        "Forwarded as keep_recent_count to the server. Compact path always uses 0.",
     },
     emitStandardDiagnostics: {
       label: "Standard diagnostics (diag JSON lines)",
@@ -405,15 +469,8 @@ export const memoryOpenVikingConfigSchema = {
       label: "Log find requests",
       help:
         "Log tenant routing: POST /api/v1/search/find (query, target_uri) and session POST .../messages + .../commit (sessionId, X-OpenViking-*). Never logs apiKey. " +
-        "Or set env OPENVIKING_LOG_ROUTING=1 or OPENVIKING_DEBUG=1 (no JSON edit). When on, local-mode OpenViking subprocess stderr is also logged at info.",
+        "Or set env OPENVIKING_LOG_ROUTING=1 or OPENVIKING_DEBUG=1 (no JSON edit).",
       advanced: true,
     },
   },
 };
-
-export const DEFAULT_MEMORY_OPENVIKING_DATA_DIR = join(
-  homedir(),
-  ".openclaw",
-  "memory",
-  "openviking",
-);

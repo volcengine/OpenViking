@@ -12,6 +12,9 @@ import re
 from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
+from openviking.session.memory.dataclass import MemoryFileContent
+from openviking.utils.time_utils import parse_iso_datetime
+
 # Regex pattern to match the MEMORY_FIELDS HTML comment
 MEMORY_FIELDS_PATTERN = re.compile(r"\n\n<!--\s*MEMORY_FIELDS\s*\n(.*?)\n-->", re.DOTALL)
 
@@ -32,7 +35,7 @@ def _deserialize_datetime(metadata: Dict[str, Any]) -> Dict[str, Any]:
     for key in ["created_at", "updated_at"]:
         if key in result and isinstance(result[key], str):
             try:
-                result[key] = datetime.fromisoformat(result[key])
+                result[key] = parse_iso_datetime(result[key])
             except (ValueError, TypeError):
                 # Keep as string if parsing fails
                 pass
@@ -154,19 +157,10 @@ def deserialize_metadata(full_content: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def deserialize_full(full_content: str) -> Tuple[str, Optional[Dict[str, Any]]]:
-    """
-    Extract both content and metadata from a serialized string.
-
-    Args:
-        full_content: Complete content including metadata comment
-
-    Returns:
-        Tuple of (content, metadata) where metadata may be None
-    """
+def deserialize_full(full_content: str) -> MemoryFileContent:
     content = deserialize_content(full_content)
     metadata = deserialize_metadata(full_content)
-    return content, metadata
+    return MemoryFileContent(plain_content=content, memory_fields=metadata)
 
 
 # 默认截断配置

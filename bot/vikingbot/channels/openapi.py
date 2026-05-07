@@ -19,6 +19,8 @@ from vikingbot.channels.openapi_models import (
     ChatResponse,
     ChatStreamEvent,
     EventType,
+    FeedbackRequest,
+    FeedbackResponse,
     HealthResponse,
     SessionCreateRequest,
     SessionCreateResponse,
@@ -28,10 +30,14 @@ from vikingbot.channels.openapi_models import (
 )
 from vikingbot.config.schema import (
     BaseChannelConfig,
+    BotChannelConfig,
     Config,
     SessionKey,
-    BotChannelConfig,
+    requires_gateway_token,
 )
+from vikingbot.integrations.langfuse import LangfuseClient
+from vikingbot.observability.outcome import evaluate_response_outcome, should_update_outcome
+from vikingbot.session.manager import SessionManager
 
 
 class PendingResponse:
@@ -40,6 +46,8 @@ class PendingResponse:
     def __init__(self):
         self.events: List[Dict[str, Any]] = []
         self.final_content: Optional[str] = None
+        self.response_id: Optional[str] = None
+        self.relevant_memories: Optional[str] = None
         self.event = asyncio.Event()
         self.stream_queue: asyncio.Queue[Optional[ChatStreamEvent]] = asyncio.Queue()
 
@@ -54,6 +62,10 @@ class PendingResponse:
         self.final_content = content
         self.event.set()
 
+    def set_response_id(self, response_id: str | None):
+        """Track the response ID for the final assistant response."""
+        self.response_id = response_id
+
     async def close_stream(self):
         """Close the stream queue."""
         await self.stream_queue.put(None)
@@ -64,7 +76,6 @@ class OpenAPIChannelConfig(BaseChannelConfig):
 
     enabled: bool = True
     type: str = "cli"
-    api_key: str = ""  # If empty, no auth required
     allow_from: list[str] = []
     max_concurrent_requests: int = 100
     _channel_id: str = "default"
@@ -104,6 +115,7 @@ class OpenAPIChannel(BaseChannel):
         self._router: Optional[APIRouter] = None
         self._app = app  # External FastAPI app to register routes on
         self._server: Optional[asyncio.Task] = None  # Server task
+        self._session_manager = SessionManager(self._resolve_bot_data_path())
 
         # Load BotChannel configurations immediately in constructor
         # so that subscriptions are setup before ChannelManager starts
@@ -179,11 +191,21 @@ class OpenAPIChannel(BaseChannel):
 
             pending = self._bot_pending[channel_id].get(session_id)
             if not pending:
-                logger.warning(f"No pending request for BotChannel {channel_id} session: {session_id}")
+                logger.warning(
+                    f"No pending request for BotChannel {channel_id} session: {session_id}"
+                )
                 return
 
-            if msg.event_type == OutboundEventType.RESPONSE or msg.event_type == OutboundEventType.NO_REPLY:
-                await pending.add_event("response", msg.content or "")
+            if (
+                msg.event_type == OutboundEventType.RESPONSE
+                or msg.event_type == OutboundEventType.NO_REPLY
+            ):
+                pending.set_response_id(msg.response_id)
+                pending.relevant_memories = (msg.metadata or {}).get("relevant_memories")
+                await pending.add_event(
+                    "response",
+                    {"content": msg.content or "", "response_id": msg.response_id},
+                )
                 pending.set_final(msg.content or "")
                 await pending.close_stream()
             elif msg.event_type == OutboundEventType.REASONING:
@@ -204,7 +226,12 @@ class OpenAPIChannel(BaseChannel):
 
         if msg.event_type == OutboundEventType.RESPONSE:
             # Final response - add to stream first
-            await pending.add_event("response", msg.content or "")
+            pending.set_response_id(msg.response_id)
+            pending.relevant_memories = (msg.metadata or {}).get("relevant_memories")
+            await pending.add_event(
+                "response",
+                {"content": msg.content or "", "response_id": msg.response_id},
+            )
             pending.set_final(msg.content or "")
             await pending.close_stream()
         elif msg.event_type == OutboundEventType.REASONING:
@@ -220,19 +247,44 @@ class OpenAPIChannel(BaseChannel):
             self._router = self._create_router()
         return self._router
 
+    def _resolve_bot_data_path(self) -> Path:
+        """Resolve the bot data path used for session persistence."""
+        if self._global_config is not None and hasattr(self._global_config, "bot_data_path"):
+            return Path(self._global_config.bot_data_path)
+        if self.workspace_path is not None:
+            return (
+                self.workspace_path.parent
+                if self.workspace_path.name == "workspace"
+                else self.workspace_path
+            )
+        return Path("~/.openviking/data/bot").expanduser()
+
     def _create_router(self) -> APIRouter:
         """Create the FastAPI router with all routes."""
         router = APIRouter()
         channel = self  # Capture for closures
 
-        async def verify_api_key(x_api_key: Optional[str] = Header(None)) -> bool:
-            """Verify API key if configured."""
-            if not channel.config.api_key:
-                return True  # No auth required
-            if not x_api_key:
-                raise HTTPException(status_code=401, detail="X-API-Key header required")
+        async def verify_api_key(
+            x_gateway_token: Optional[str] = Header(None, alias="X-Gateway-Token"),
+        ) -> bool:
+            """Verify API key for privileged HTTP chat/session routes."""
+            gateway_token = ""
+            gateway_host = "127.0.0.1"
+            if channel._global_config is not None:
+                gateway = getattr(channel._global_config, "gateway", None)
+                gateway_host = getattr(gateway, "host", "127.0.0.1") or "127.0.0.1"
+                gateway_token = getattr(gateway, "token", "") or ""
+            if not gateway_token:
+                if requires_gateway_token(gateway_host, gateway_token):
+                    raise HTTPException(
+                        status_code=503,
+                        detail="OpenAPI gateway token is required when host is non-localhost",
+                    )
+                return True
+            if not x_gateway_token:
+                raise HTTPException(status_code=401, detail="X-Gateway-Token header required")
             # Use secrets.compare_digest for timing-safe comparison
-            if not secrets.compare_digest(x_api_key, channel.config.api_key):
+            if not secrets.compare_digest(x_gateway_token, gateway_token):
                 raise HTTPException(status_code=403, detail="Invalid API key")
             return True
 
@@ -263,6 +315,14 @@ class OpenAPIChannel(BaseChannel):
             if not request.stream:
                 request.stream = True
             return await channel._handle_chat_stream(request)
+
+        @router.post("/feedback", response_model=FeedbackResponse)
+        async def submit_feedback(
+            request: FeedbackRequest,
+            authorized: bool = Depends(verify_api_key),
+        ):
+            """Submit explicit user feedback for a prior assistant response."""
+            return await channel._handle_feedback(request)
 
         @router.get("/sessions", response_model=SessionListResponse)
         async def list_sessions(
@@ -332,14 +392,10 @@ class OpenAPIChannel(BaseChannel):
 
         # ========== Bot Channel Routes ==========
 
-        async def verify_bot_channel_api_key(x_api_key: Optional[str] = Header(None)) -> Optional[str]:
-            """Verify API key and return it if valid."""
-            return x_api_key
-
         @router.post("/chat/channel", response_model=ChatResponse)
         async def chat_channel(
             request: ChatRequest,
-            x_api_key: Optional[str] = Depends(verify_bot_channel_api_key),
+            authorized: bool = Depends(verify_api_key),
         ):
             """Send a chat message to a specific bot channel and get a response."""
             channel_id = request.channel_id
@@ -348,20 +404,12 @@ class OpenAPIChannel(BaseChannel):
             if channel_id not in channel._bot_configs:
                 raise HTTPException(status_code=404, detail=f"Channel '{channel_id}' not found")
 
-            # Verify API key for the specific channel
-            bot_config = channel._bot_configs[channel_id]
-            if bot_config.api_key:
-                if not x_api_key:
-                    raise HTTPException(status_code=401, detail="X-API-Key header required")
-                if not secrets.compare_digest(x_api_key, bot_config.api_key):
-                    raise HTTPException(status_code=403, detail="Invalid API key")
-
             return await channel._handle_bot_chat(channel_id, request)
 
         @router.post("/chat/channel/stream")
         async def chat_channel_stream(
             request: ChatRequest,
-            x_api_key: Optional[str] = Depends(verify_bot_channel_api_key),
+            authorized: bool = Depends(verify_api_key),
         ):
             """Send a chat message to a specific bot channel and get a streaming response."""
             channel_id = request.channel_id
@@ -369,14 +417,6 @@ class OpenAPIChannel(BaseChannel):
                 raise HTTPException(status_code=400, detail="channel_id is required")
             if channel_id not in channel._bot_configs:
                 raise HTTPException(status_code=404, detail=f"Channel '{channel_id}' not found")
-
-            # Verify API key for the specific channel
-            bot_config = channel._bot_configs[channel_id]
-            if bot_config.api_key:
-                if not x_api_key:
-                    raise HTTPException(status_code=401, detail="X-API-Key header required")
-                if not secrets.compare_digest(x_api_key, bot_config.api_key):
-                    raise HTTPException(status_code=403, detail="Invalid API key")
 
             if not request.stream:
                 request.stream = True
@@ -454,8 +494,10 @@ class OpenAPIChannel(BaseChannel):
 
             return ChatResponse(
                 session_id=session_id,
+                response_id=pending.response_id,
                 message=response_content,
                 events=pending.events if pending.events else None,
+                relevant_memories=pending.relevant_memories,
             )
 
         except HTTPException:
@@ -595,8 +637,10 @@ class OpenAPIChannel(BaseChannel):
 
             return ChatResponse(
                 session_id=session_id,
+                response_id=pending.response_id,
                 message=response_content,
                 events=pending.events if pending.events else None,
+                relevant_memories=pending.relevant_memories,
             )
 
         except HTTPException:
@@ -609,7 +653,9 @@ class OpenAPIChannel(BaseChannel):
             if channel_id in self._bot_pending:
                 self._bot_pending[channel_id].pop(session_id, None)
 
-    async def _handle_bot_chat_stream(self, channel_id: str, request: ChatRequest) -> StreamingResponse:
+    async def _handle_bot_chat_stream(
+        self, channel_id: str, request: ChatRequest
+    ) -> StreamingResponse:
         """Handle a BotChannel streaming chat request."""
         session_id = request.session_id or str(uuid.uuid4())
         user_id = request.user_id or "anonymous"
@@ -679,6 +725,128 @@ class OpenAPIChannel(BaseChannel):
                 "Connection": "keep-alive",
             },
         )
+
+    async def _handle_feedback(self, request: FeedbackRequest) -> FeedbackResponse:
+        """Persist explicit user feedback and emit an analytics event."""
+        session_key = self._get_feedback_session_key(request)
+        feedback_timestamp = datetime.now()
+
+        def apply_feedback(
+            session: Any,
+        ) -> tuple[dict[str, Any], float | None, Optional[dict[str, Any]]]:
+            response_message = self._find_response_message(session.messages, request.response_id)
+            if response_message is None:
+                raise HTTPException(status_code=404, detail="Response not found")
+
+            response_timestamp = self._parse_message_timestamp(response_message)
+            feedback_delay_sec = None
+            if response_timestamp is not None:
+                feedback_delay_sec = round(
+                    (feedback_timestamp - response_timestamp).total_seconds(), 3
+                )
+
+            feedback_event = {
+                "response_id": request.response_id,
+                "session_id": request.session_id,
+                "user_id": request.user_id or response_message.get("sender_id"),
+                "feedback_type": request.feedback_type.value,
+                "feedback_score": request.feedback_score,
+                "feedback_reason": request.feedback_reason,
+                "feedback_text": request.feedback_text,
+                "feedback_delay_sec": feedback_delay_sec,
+                "channel": session_key.channel_key(),
+                "created_at": feedback_timestamp.isoformat(),
+            }
+            session.metadata.setdefault("feedback_events", []).append(feedback_event)
+            outcome_payload = self._build_outcome_payload(session, request.response_id)
+            return feedback_event, feedback_delay_sec, outcome_payload
+
+        session, feedback_update = await self._session_manager.update_session(
+            session_key, apply_feedback
+        )
+        feedback_event, feedback_delay_sec, outcome_payload = feedback_update
+        if outcome_payload is not None:
+            LangfuseClient.get_instance().update_response_outcome(
+                request.response_id,
+                outcome_payload["outcome_label"],
+                outcome_payload,
+            )
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    session_key=session_key,
+                    content="",
+                    event_type=OutboundEventType.RESPONSE_OUTCOME_EVALUATED,
+                    response_id=request.response_id,
+                    metadata={"response_outcome_evaluated": outcome_payload},
+                )
+            )
+
+        await self.bus.publish_outbound(
+            OutboundMessage(
+                session_key=session_key,
+                content="",
+                event_type=OutboundEventType.FEEDBACK_SUBMITTED,
+                response_id=request.response_id,
+                metadata={"feedback_submitted": feedback_event},
+            )
+        )
+
+        return FeedbackResponse(
+            accepted=True,
+            response_id=request.response_id,
+            session_id=request.session_id,
+            feedback_type=request.feedback_type,
+            feedback_delay_sec=feedback_delay_sec,
+            timestamp=feedback_timestamp,
+        )
+
+    def _get_feedback_session_key(self, request: FeedbackRequest) -> SessionKey:
+        """Resolve the persisted session key for a feedback request."""
+        if request.channel_id:
+            return SessionKey(
+                type="bot_api", channel_id=request.channel_id, chat_id=request.session_id
+            )
+        return SessionKey(
+            type="cli", channel_id=self.config.channel_id(), chat_id=request.session_id
+        )
+
+    @staticmethod
+    def _find_response_message(
+        messages: List[Dict[str, Any]], response_id: str
+    ) -> Optional[Dict[str, Any]]:
+        for message in reversed(messages):
+            if message.get("role") == "assistant" and message.get("response_id") == response_id:
+                return message
+        return None
+
+    @staticmethod
+    def _parse_message_timestamp(message: Dict[str, Any]) -> Optional[datetime]:
+        timestamp = message.get("timestamp")
+        if not isinstance(timestamp, str) or not timestamp:
+            return None
+        try:
+            return datetime.fromisoformat(timestamp)
+        except ValueError:
+            return None
+
+    def _build_outcome_payload(self, session: Any, response_id: str) -> Optional[dict[str, Any]]:
+        """Evaluate and persist the latest known outcome for a response."""
+        evaluation = evaluate_response_outcome(
+            session.messages,
+            response_id,
+            feedback_events=session.metadata.get("feedback_events", []),
+        )
+        if evaluation is None:
+            return None
+
+        outcomes = session.metadata.setdefault("response_outcomes", {})
+        previous = outcomes.get(response_id)
+        if not should_update_outcome(previous, evaluation):
+            return None
+
+        outcome_payload = evaluation.to_dict()
+        outcomes[response_id] = outcome_payload
+        return outcome_payload
 
 
 def get_openapi_router(bus: MessageBus, config: Config) -> APIRouter:

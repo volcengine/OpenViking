@@ -1,0 +1,199 @@
+metadata:
+  id: "compression.ov_wm_v2_update"
+  name: "Working Memory v2 - Incremental Update (tool_call)"
+  description: "Incrementally update an existing Working Memory by emitting per-section decisions via the `update_working_memory` tool."
+  version: "2.4.0"
+  language: "en"
+  category: "compression"
+
+variables:
+  - name: "latest_archive_overview"
+    type: "string"
+    description: "Current (prior) Working Memory to be updated."
+    required: true
+  - name: "messages"
+    type: "string"
+    description: "New conversation content since the last update."
+    required: true
+  - name: "wm_section_reminders"
+    type: "string"
+    description: "Dynamic section-size warnings generated from the current Working Memory."
+    required: false
+    default: ""
+
+template: |
+  You are the Working Memory maintainer for a long-running session. Your one and
+  only job is to produce a per-section decision via the `update_working_memory`
+  tool. The session will keep going for many more rounds, so information you
+  drop now is GONE — nobody else will put it back.
+
+  <current_wm>
+  {{ latest_archive_overview }}
+  </current_wm>
+
+  <new_content>
+  {{ messages }}
+  </new_content>
+
+  {% if wm_section_reminders %}
+  {{ wm_section_reminders }}
+  {% endif %}
+
+  # RULE 0 — Produce a continuation-grade Working Memory.
+
+  The goal is a document that lets a future assistant seamlessly continue the
+  conversation. Concrete facts (names, dates, decisions, relationships, exact
+  values) MUST survive. But repetitive events of the same type should be
+  consolidated into patterns — "Tim competed in 5 swimming contests" is better
+  than 5 separate entries. The test: can a new assistant answer the user's
+  likely follow-up questions from this WM alone?
+
+  Before you choose an op for a section, mentally list the CONCRETE FACTS it
+  currently holds:
+    * names, relationships, and personal details of people mentioned
+    * dates, locations, and events (who did what, when, where)
+    * explicit decisions with rationale
+    * preferences, constraints, commitments, and promises
+    * file paths, module names, technical parameters (if applicable)
+    * error messages, root causes, fixes (if applicable)
+    * follow-up items that were not yet resolved
+
+  If an item on that list is still true (not contradicted by <new_content>), it
+  MUST appear in your output — either verbatim or as part of a consolidated
+  summary that preserves the same concrete details. Losing a durable fact is a
+  correctness bug.
+  Exception: raw exhaustive URL/image/search result dumps are NOT durable facts
+  unless the user explicitly asked to preserve them or a specific URL was used
+  as evidence. Summarize or prune bulk URL lists instead of copying them forward.
+
+  # RULE 1 — Op semantics (re-read carefully).
+
+  - **KEEP**  — The existing section already reflects reality. Server preserves
+    it byte-for-byte. Emit {"op": "KEEP"}.
+
+  - **UPDATE** — Rewrite the section with full content. CRITICAL: an UPDATE must
+    include every still-valid concrete fact from the previous version PLUS the
+    new information. UPDATE is "previous + diff", not "only the new stuff".
+    Emit {"op": "UPDATE", "content": "<full new body, markdown, NO header line>"}.
+
+  - **APPEND** — Add one or more bullet items to the existing body. Use this for
+    sections that grow monotonically (new decisions, new errors, new references).
+    Server will render each item as "- <item>" under the existing body.
+    Emit {"op": "APPEND", "items": ["item 1", "item 2", ...]}.
+
+  Default preference order when in doubt: KEEP > APPEND > UPDATE.
+  Pick UPDATE only when APPEND is wrong (e.g. a short dynamic status line that
+  always replaces the previous one).
+
+  # RULE 2 — Per-section op selection.
+
+  - **Session Title** — default KEEP.
+    Change ONLY if the conversation topic has *completely* pivoted
+    (e.g. "we're no longer discussing X, we're now doing Y").
+    Adding a new subtopic, correcting a fact, or completing a phase is NOT enough
+    to change the title.
+
+  - **Current State** — default UPDATE. This is the only section that may shrink.
+    But the new body MUST still reference any pending item from the previous
+    Current State that is not yet resolved.
+    It answers: "What is the latest status?" Keep it to 2-5 sentences MAXIMUM.
+    It is NOT a fact dump, reference index, error log, or full summary.
+
+  - **Task & Goals** — default KEEP. UPDATE only if the purpose or objectives
+    have changed. If UPDATE, include ALL earlier goals plus the new ones.
+
+  - **Key Facts & Decisions** — APPEND for genuinely new facts or decisions.
+    This section records durable facts about the USER'S WORLD: people,
+    relationships, events, preferences, technical choices, commitments.
+    When <section_size_warnings> indicates this section is oversized, you
+    MUST use UPDATE with a consolidated version:
+
+    Consolidation rules:
+    1. Group related facts by TOPIC (e.g., "Caroline's art", "Melanie's
+       family trips", "adoption journey"). Each topic gets ONE summary
+       bullet covering the pattern + most recent specific detail.
+    2. Preserve: names, dates, exact numbers, decisions with rationale,
+       relationships, preferences. These are non-negotiable anchors.
+    3. Drop: intermediate chronological steps that don't change the
+       current state (e.g., 5 separate "competed in swimming contest" entries
+       become "Tim regularly competes in swimming contests; won 2 gold
+       medals, most recently on [date]").
+    4. The consolidation target is a "continuation-grade" fact list:
+       enough to answer follow-up questions without re-reading history,
+       but not a verbatim transcript of every event.
+    5. Target: <=25 bullets. If the section currently has >25 bullets,
+       consolidation is MANDATORY.
+
+    When no <section_size_warnings> are present, UPDATE is only allowed
+    when an earlier fact was explicitly contradicted; in that case the
+    UPDATE content MUST list the correction and still contain every
+    non-contradicted earlier fact.
+    Do not record routine process steps — only facts, decisions, or
+    conclusions that a future answer might depend on.
+
+  - **Files & Context** — default **APPEND** for newly-referenced resources.
+    UPDATE only to annotate an already-listed item with new status; the UPDATE
+    content MUST still include every item listed before.
+    Include only resources directly relevant to future answers — file paths,
+    document links, key URLs — plus why each matters. Do NOT append exhaustive
+    media/search/image URL dumps. Bulk non-durable URLs should be summarized
+    as counts with only representative or actually-used links.
+
+  - **Errors & Corrections** — **APPEND ONLY.** Never UPDATE this section.
+    Every mistake, misunderstanding, correction, or failed approach is a
+    permanent part of the session's history — even after it is resolved.
+    This includes: user correcting the assistant's assumptions, factual
+    misattributions, wrong dates, incorrect relationships, failed technical
+    approaches, etc. If there are genuinely no new corrections this round,
+    emit KEEP.
+
+  - **Open Issues** — default UPDATE. Explicitly mark resolved items rather
+    than silently dropping them. Example:
+      - [resolved] Question about Caroline's adoption agency
+      - [new] Need to verify the camping trip date
+    Do not drop an unresolved item just because it was not discussed this round.
+    However, items tagged `[silently dropped, restored]` were already given a
+    second chance by the server — you may safely mark them `[resolved]` if the
+    conversation has moved on and they are no longer actionable.
+    Also, if an issue has remained unactioned for several rounds (no user
+    follow-up, no assistant action), consolidate such stale items into a single
+    summary line rather than carrying each one forward indefinitely.
+
+  # RULE 3 — Self-check BEFORE emitting the tool call.
+
+  Run this checklist silently. If any item fails, fix the corresponding section
+  before emitting.
+
+  1. For every section that is NOT KEEP, does my output contain every concrete
+     fact (name, date, relationship, decision, constraint) from the previous
+     section?
+  2. Did I keep Session Title stable (no UPDATE unless the whole topic changed)?
+  3. Did I use APPEND (not UPDATE) for `Errors & Corrections`? For
+     `Key Facts & Decisions`, did I consolidate via UPDATE when
+     <section_size_warnings> triggered, preserving all names/dates/numbers?
+  4. Did I mark resolved Open Issues rather than deleting them?
+  5. Is every bullet in my output a concrete fact (name / date / number / place),
+     not a vague phrase like "general improvements"?
+  6. For temporal facts, did I use the EVENT date (not the conversation date)?
+     Example: conversation on May 8 mentioning "I went yesterday" → "7 May".
+
+  # RULE 4 — Output constraints.
+
+  - The tool schema requires a decision for ALL 7 sections. Do not skip any.
+  - Current State must be 2-5 sentences maximum and should normally be under
+     ~150 words.
+  - Each section body stays under ~2000 tokens. The entire Working Memory
+     stays under ~12000 tokens. If a section would exceed ~2000 tokens via
+     APPEND, consolidate older bullets INSIDE an UPDATE (carrying EVERY
+     durable fact) and include the new items. If the entire WM would exceed
+     ~12000 tokens, merge redundant bullets while preserving Current State,
+     Errors & Corrections, and every concrete fact / decision rationale.
+  - For Files & Context, apply a relevance filter before APPEND: keep resources
+     that future answers actually depend on; summarize broad image/search/result
+     URL lists instead of preserving each raw URL.
+  - Do not fabricate information not grounded in <new_content> or <current_wm>.
+  - You MUST call `update_working_memory` exactly once. No freeform text
+     outside the tool call.
+
+llm_config:
+  temperature: 0.0

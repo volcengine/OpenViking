@@ -32,18 +32,22 @@ class SyncHTTPClient:
         self,
         url: Optional[str] = None,
         api_key: Optional[str] = None,
+        user_id: Optional[str] = None,
         agent_id: Optional[str] = None,
         account: Optional[str] = None,
         user: Optional[str] = None,
         timeout: float = 60.0,
+        extra_headers: Optional[Dict[str, str]] = None,
     ):
         self._async_client = AsyncHTTPClient(
             url=url,
             api_key=api_key,
+            user_id=user_id,
             agent_id=agent_id,
             account=account,
             user=user,
             timeout=timeout,
+            extra_headers=extra_headers,
         )
         self._initialized = False
 
@@ -114,6 +118,7 @@ class SyncHTTPClient:
         content: str | None = None,
         parts: list[dict] | None = None,
         created_at: str | None = None,
+        role_id: str | None = None,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -123,11 +128,12 @@ class SyncHTTPClient:
             content: Text content (simple mode)
             parts: Parts array (full Part support: TextPart, ContextPart, ToolPart)
             created_at: Message creation time (ISO format string)
+            role_id: Optional explicit actor identity. Omit to let the server derive it.
 
         If both content and parts are provided, parts takes precedence.
         """
         return run_async(
-            self._async_client.add_message(session_id, role, content, parts, created_at)
+            self._async_client.add_message(session_id, role, content, parts, created_at, role_id)
         )
 
     def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
@@ -200,7 +206,7 @@ class SyncHTTPClient:
     def search(
         self,
         query: str,
-        target_uri: str = "",
+        target_uri: Union[str, List[str]] = "",
         session: Optional[Any] = None,
         session_id: Optional[str] = None,
         limit: int = 10,
@@ -227,7 +233,7 @@ class SyncHTTPClient:
     def find(
         self,
         query: str,
-        target_uri: str = "",
+        target_uri: Union[str, List[str]] = "",
         limit: int = 10,
         node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
@@ -312,9 +318,9 @@ class SyncHTTPClient:
         """Get resource status."""
         return run_async(self._async_client.stat(uri))
 
-    def mkdir(self, uri: str) -> None:
+    def mkdir(self, uri: str, description: Optional[str] = None) -> None:
         """Create directory."""
-        run_async(self._async_client.mkdir(uri))
+        run_async(self._async_client.mkdir(uri, description=description))
 
     def rm(self, uri: str, recursive: bool = False) -> None:
         """Remove resource."""

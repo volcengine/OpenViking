@@ -14,6 +14,7 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+from openviking.core.namespace import canonical_agent_root, canonical_user_root
 from openviking.models.embedder.base import EmbedResult, embed_compat
 from openviking.models.rerank import RerankClient
 from openviking.retrieve.memory_lifecycle import hotness_score
@@ -30,7 +31,7 @@ from openviking_cli.retrieve.types import (
     RelatedContext,
     TypedQuery,
 )
-from openviking_cli.utils.config import RerankConfig
+from openviking_cli.utils.config import RerankConfig, RetrievalConfig
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -46,10 +47,8 @@ class HierarchicalRetriever:
 
     MAX_CONVERGENCE_ROUNDS = 3  # Stop after multiple rounds with unchanged topk
     MAX_RELATIONS = 5  # Maximum relations per resource
-    SCORE_PROPAGATION_ALPHA = 0.5  # Score propagation coefficient
     DIRECTORY_DOMINANCE_RATIO = 1.2  # Directory score must exceed max child score
     GLOBAL_SEARCH_TOPK = 10  # Global retrieval count (more candidates = better rerank precision)
-    HOTNESS_ALPHA = 0.2  # Weight for hotness score in final ranking (0 = disabled)
     LEVEL_URI_SUFFIX = {0: ".abstract.md", 1: ".overview.md"}
 
     def __init__(
@@ -57,6 +56,7 @@ class HierarchicalRetriever:
         storage: VikingDBManager,
         embedder: Optional[Any],
         rerank_config: Optional[RerankConfig] = None,
+        retrieval_config: Optional[RetrievalConfig] = None,
     ):
         """Initialize hierarchical retriever with rerank_config.
 
@@ -64,10 +64,14 @@ class HierarchicalRetriever:
             storage: VikingVectorIndexBackend instance
             embedder: Embedder instance (supports dense/sparse/hybrid)
             rerank_config: Rerank configuration (optional, will fallback to vector search only)
+            retrieval_config: Retrieval ranking configuration.
         """
         self.vector_store = storage
         self.embedder = embedder
         self.rerank_config = rerank_config
+        self.retrieval_config = retrieval_config or RetrievalConfig()
+        self.hotness_alpha = self.retrieval_config.hotness_alpha
+        self.score_propagation_alpha = self.retrieval_config.score_propagation_alpha
 
         # Use rerank threshold if available, otherwise use a default
         self.threshold = rerank_config.threshold if rerank_config else 0
@@ -398,13 +402,18 @@ class HierarchicalRetriever:
                     # 只添加 level 2 的文件
                     if r.get("level", 2) == 2:
                         score = r.get("_score", 0.0)
+                        if not passes_threshold(score):
+                            logger.debug(
+                                f"[RecursiveSearch] Initial candidate URI {uri} score {score:.4f} did not pass threshold {effective_threshold}"
+                            )
+                            continue
                         r["_final_score"] = score
                         collected_by_uri[uri] = r
                         logger.debug(
                             f"[RecursiveSearch] Added initial candidate: {uri} (score: {score:.4f})"
                         )
 
-        alpha = self.SCORE_PROPAGATION_ALPHA
+        alpha = self.score_propagation_alpha
 
         # Initialize: process starting points
         for uri, score in starting_points:
@@ -504,9 +513,8 @@ class HierarchicalRetriever:
         """Convert candidate results to MatchedContext list.
 
         Blends semantic similarity with a hotness score derived from
-        ``active_count`` and ``updated_at`` so that frequently-accessed,
-        recently-updated contexts get a ranking boost.  The blend weight
-        is controlled by ``HOTNESS_ALPHA`` (0 disables the boost).
+        ``active_count`` and ``updated_at`` when configured. The blend weight
+        is controlled by ``retrieval.hotness_alpha`` (0 disables the boost).
         """
         results = []
 
@@ -529,25 +537,26 @@ class HierarchicalRetriever:
             if not math.isfinite(semantic_score):
                 semantic_score = 0.0
 
-            # --- hotness boost ---
-            updated_at_raw = c.get("updated_at")
-            if isinstance(updated_at_raw, str):
-                try:
-                    updated_at_val = parse_iso_datetime(updated_at_raw)
-                except (ValueError, TypeError):
+            alpha = self.hotness_alpha
+            if alpha > 0:
+                updated_at_raw = c.get("updated_at")
+                if isinstance(updated_at_raw, str):
+                    try:
+                        updated_at_val = parse_iso_datetime(updated_at_raw)
+                    except (ValueError, TypeError):
+                        updated_at_val = None
+                elif isinstance(updated_at_raw, datetime):
+                    updated_at_val = updated_at_raw
+                else:
                     updated_at_val = None
-            elif isinstance(updated_at_raw, datetime):
-                updated_at_val = updated_at_raw
+
+                h_score = hotness_score(
+                    active_count=c.get("active_count", 0),
+                    updated_at=updated_at_val,
+                )
+                final_score = (1 - alpha) * semantic_score + alpha * h_score
             else:
-                updated_at_val = None
-
-            h_score = hotness_score(
-                active_count=c.get("active_count", 0),
-                updated_at=updated_at_val,
-            )
-
-            alpha = self.HOTNESS_ALPHA
-            final_score = (1 - alpha) * semantic_score + alpha * h_score
+                final_score = semantic_score
             if not math.isfinite(final_score):
                 final_score = 0.0
             level = c.get("level", 2)
@@ -596,22 +605,22 @@ class HierarchicalRetriever:
         if not ctx or ctx.role == Role.ROOT:
             return []
 
-        user_space = ctx.user.user_space_name()
-        agent_space = ctx.user.agent_space_name()
+        user_root = canonical_user_root(ctx)
+        agent_root = canonical_agent_root(ctx)
         if context_type is None:
             return [
-                f"viking://user/{user_space}/memories",
-                f"viking://agent/{agent_space}/memories",
+                f"{user_root}/memories",
+                f"{agent_root}/memories",
                 "viking://resources",
-                f"viking://agent/{agent_space}/skills",
+                f"{agent_root}/skills",
             ]
         elif context_type == ContextType.MEMORY:
             return [
-                f"viking://user/{user_space}/memories",
-                f"viking://agent/{agent_space}/memories",
+                f"{user_root}/memories",
+                f"{agent_root}/memories",
             ]
         elif context_type == ContextType.RESOURCE:
             return ["viking://resources"]
         elif context_type == ContextType.SKILL:
-            return [f"viking://agent/{agent_space}/skills"]
+            return [f"{agent_root}/skills"]
         return []

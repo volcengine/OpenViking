@@ -1,6 +1,14 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Storage layer interfaces and implementations."""
+"""Storage layer interfaces and implementations.
+
+Heavy submodules (vectordb engine, adapters) are loaded lazily via
+``__getattr__`` to avoid an import-lock deadlock that occurs when the
+native C++ engine extension is loaded while ``storage/__init__`` is
+still executing.
+"""
+
+from typing import TYPE_CHECKING
 
 from openviking.storage.errors import (
     CollectionNotFoundError,
@@ -10,11 +18,40 @@ from openviking.storage.errors import (
     SchemaError,
     StorageException,
 )
-from openviking.storage.observers import BaseObserver, QueueObserver
-from openviking.storage.queuefs import QueueManager, get_queue_manager, init_queue_manager
-from openviking.storage.viking_fs import VikingFS, get_viking_fs, init_viking_fs
-from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
-from openviking.storage.vikingdb_manager import VikingDBManager, VikingDBManagerProxy
+
+if TYPE_CHECKING:
+    from openviking.storage.observers import BaseObserver, QueueObserver
+    from openviking.storage.queuefs import QueueManager, get_queue_manager, init_queue_manager
+    from openviking.storage.viking_fs import VikingFS, get_viking_fs, init_viking_fs
+    from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
+    from openviking.storage.vikingdb_manager import VikingDBManager, VikingDBManagerProxy
+
+_LAZY_IMPORTS = {
+    "BaseObserver": "openviking.storage.observers",
+    "QueueObserver": "openviking.storage.observers",
+    "QueueManager": "openviking.storage.queuefs",
+    "get_queue_manager": "openviking.storage.queuefs",
+    "init_queue_manager": "openviking.storage.queuefs",
+    "VikingFS": "openviking.storage.viking_fs",
+    "get_viking_fs": "openviking.storage.viking_fs",
+    "init_viking_fs": "openviking.storage.viking_fs",
+    "VikingVectorIndexBackend": "openviking.storage.viking_vector_index_backend",
+    "VikingDBManager": "openviking.storage.vikingdb_manager",
+    "VikingDBManagerProxy": "openviking.storage.vikingdb_manager",
+}
+
+
+def __getattr__(name: str):
+    module_path = _LAZY_IMPORTS.get(name)
+    if module_path is not None:
+        import importlib
+
+        module = importlib.import_module(module_path)
+        value = getattr(module, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     # Exceptions

@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1.9
 
 # Stage 1: provide Rust toolchain (required by setup.py -> build_ov_cli_artifact -> cargo build)
-FROM rust:1.88-trixie AS rust-toolchain
+# ragfs-python's default S3-enabled dependency set currently requires rustc >= 1.91.1.
+FROM rust:1.91.1-trixie AS rust-toolchain
 
 # Stage 2: build Python environment with uv (builds Rust CLI + C++ extension from source)
 FROM ghcr.io/astral-sh/uv:python3.13-trixie-slim AS py-builder
@@ -12,10 +13,9 @@ COPY --from=rust-toolchain /usr/local/rustup /usr/local/rustup
 ENV CARGO_HOME=/usr/local/cargo
 ENV RUSTUP_HOME=/usr/local/rustup
 ENV PATH="/app/.venv/bin:/usr/local/cargo/bin:${PATH}"
-ARG OPENVIKING_VERSION=0.0.0
+ARG OPENVIKING_VERSION=
 ARG TARGETPLATFORM
 ARG UV_LOCK_STRATEGY=auto
-ENV SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING=${OPENVIKING_VERSION}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -37,12 +37,21 @@ COPY crates/ crates/
 COPY openviking/ openviking/
 COPY openviking_cli/ openviking_cli/
 COPY src/ src/
+COPY third_party/ third_party/
 
 # Install project and dependencies (triggers setup.py artifact builds + build_extension).
 # Default to auto-refreshing uv.lock inside the ephemeral build context when it is
 # stale, so Docker builds stay unblocked after dependency changes. Set
 # UV_LOCK_STRATEGY=locked to keep fail-fast reproducibility checks.
 RUN --mount=type=cache,target=/root/.cache/uv,id=uv-${TARGETPLATFORM} \
+    if [ -n "${OPENVIKING_VERSION:-}" ]; then \
+        export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING="${OPENVIKING_VERSION}"; \
+    elif [ -f openviking/_version.py ]; then \
+        export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING="$(python -c "import runpy; print(runpy.run_path('openviking/_version.py')['version'])")"; \
+    else \
+        echo "OPENVIKING_VERSION build arg is required when building without openviking/_version.py" >&2; \
+        exit 2; \
+    fi; \
     case "${UV_LOCK_STRATEGY}" in \
         locked) \
             uv sync --locked --no-editable --extra bot --extra gemini \
@@ -109,15 +118,25 @@ WORKDIR /app
 
 COPY --from=py-builder /app/.venv /app/.venv
 COPY docker/openviking-console-entrypoint.sh /usr/local/bin/openviking-console-entrypoint
-RUN chmod +x /usr/local/bin/openviking-console-entrypoint
-ENV PATH="/app/.venv/bin:$PATH"
-ENV OPENVIKING_CONFIG_FILE="/app/ov.conf"
+COPY docker/pending_health_server.py /usr/local/bin/openviking-pending-health
+RUN mkdir -p /app/.openviking \
+ && chmod +x /usr/local/bin/openviking-console-entrypoint /usr/local/bin/openviking-pending-health
+ENV HOME="/app" \
+    PATH="/app/.venv/bin:$PATH" \
+    OPENVIKING_CONFIG_FILE="/app/.openviking/ov.conf" \
+    OPENVIKING_CLI_CONFIG_FILE="/app/.openviking/ovcli.conf"
 
 EXPOSE 1933 8020
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl -fsS http://127.0.0.1:1933/health || exit 1
 
-# Default runs server + console; override command to run CLI, e.g.:
-# docker run --rm <image> -v "$HOME/.openviking/ovcli.conf:/root/.openviking/ovcli.conf" openviking --help
+# All persistent state (ov.conf, ovcli.conf, workspace data) lives under
+# /app/.openviking, which mirrors the host's ~/.openviking layout. Mount one
+# volume there to persist everything across container restarts:
+#   docker run -v ~/.openviking:/app/.openviking <image>
+# If ov.conf is absent on first start, set OPENVIKING_CONF_CONTENT to the full
+# JSON, or `docker exec` in and run `openviking-server init`.
+# Override command to run CLI, e.g.:
+# docker run --rm -v ~/.openviking:/app/.openviking <image> openviking --help
 ENTRYPOINT ["openviking-console-entrypoint"]

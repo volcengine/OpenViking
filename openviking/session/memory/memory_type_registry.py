@@ -9,12 +9,19 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
+from openviking.core.namespace import agent_space_fragment, user_space_fragment
+from openviking.prompts.manager import PromptManager
 from openviking.session.memory.dataclass import MemoryField, MemoryTypeSchema
 from openviking.session.memory.merge_op import MergeOp
 from openviking.session.memory.merge_op.base import FieldType
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+
+def resolve_memory_templates_dir() -> Path:
+    """Resolve the memory templates directory from PromptManager semantics."""
+    return PromptManager._resolve_templates_dir(None) / "memory"
 
 
 class MemoryTypeRegistry:
@@ -32,38 +39,44 @@ class MemoryTypeRegistry:
             self._load_schemas()
 
     def _load_schemas(self) -> None:
-        """Load schemas from built-in and custom directories. Fails on error."""
+        """Load schemas from the resolved memory templates directory and custom directory."""
         import os
 
         from openviking_cli.utils.config import get_openviking_config
 
-        builtin_dir = os.path.join(
-            os.path.dirname(__file__), "..", "..", "prompts", "templates", "memory"
-        )
+        memory_templates_dir = str(resolve_memory_templates_dir())
         config = get_openviking_config()
         custom_dir = config.memory.custom_templates_dir
 
-        # Load from builtin directory (must succeed)
-        if not os.path.exists(builtin_dir):
-            raise RuntimeError(f"Builtin memory templates directory not found: {builtin_dir}")
-        loaded = self.load_from_directory(builtin_dir)
+        if not os.path.exists(memory_templates_dir):
+            raise RuntimeError(f"Memory templates directory not found: {memory_templates_dir}")
+        loaded = self.load_from_directory(memory_templates_dir)
         if loaded == 0:
-            raise RuntimeError(f"No memory schemas loaded from builtin directory: {builtin_dir}")
-        logger.info(f"Loaded {loaded} memory schemas from builtin: {builtin_dir}")
+            raise RuntimeError(
+                f"No memory schemas loaded from memory templates directory: {memory_templates_dir}"
+            )
+        logger.info(f"Loaded {loaded} memory schemas from templates: {memory_templates_dir}")
 
-        # Load from custom directory (if configured)
+        # Load from custom directory (if configured) - use replace to allow overriding built-in templates
         if custom_dir:
             custom_dir_expanded = os.path.expanduser(custom_dir)
             if os.path.exists(custom_dir_expanded):
-                custom_loaded = self.load_from_directory(custom_dir_expanded)
+                custom_loaded = self.load_from_directory(custom_dir_expanded, replace=True)
                 logger.info(
                     f"Loaded {custom_loaded} memory schemas from custom: {custom_dir_expanded}"
                 )
 
     def register(self, memory_type: MemoryTypeSchema) -> None:
-        """Register a memory type."""
+        """Register a memory type. Raises error if already exists."""
+        if memory_type.memory_type in self._types:
+            raise ValueError(f"Duplicate memory type '{memory_type.memory_type}'")
         self._types[memory_type.memory_type] = memory_type
         logger.debug(f"Registered memory type: {memory_type.memory_type}")
+
+    def replace(self, memory_type: MemoryTypeSchema) -> None:
+        """Replace an existing memory type."""
+        self._types[memory_type.memory_type] = memory_type
+        logger.debug(f"Replaced memory type: {memory_type.memory_type}")
 
     def get(self, name: str) -> Optional[MemoryTypeSchema]:
         """Get a memory type by name."""
@@ -116,25 +129,30 @@ class MemoryTypeRegistry:
                 uris.append(dir_path)
         return uris
 
-    def load_from_yaml(self, yaml_path: str) -> None:
+    def load_from_yaml(self, yaml_path: str, replace: bool = False) -> None:
         """
         Load memory type from a YAML file.
 
         Args:
             yaml_path: Path to YAML file
+            replace: If True, replace existing memory type; if False, raise error on duplicate
         """
         with open(yaml_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
         memory_type = self._parse_memory_type(data)
-        self.register(memory_type)
+        if replace:
+            self.replace(memory_type)
+        else:
+            self.register(memory_type)
 
-    def load_from_directory(self, dir_path: str) -> int:
+    def load_from_directory(self, dir_path: str, replace: bool = False) -> int:
         """
         Load all YAML files from a directory.
 
         Args:
             dir_path: Directory path
+            replace: If True, replace existing memory types; if False, raise error on duplicate
 
         Returns:
             Number of types loaded
@@ -148,14 +166,14 @@ class MemoryTypeRegistry:
 
         for yaml_file in dir_path_obj.glob("*.yaml"):
             try:
-                self.load_from_yaml(str(yaml_file))
+                self.load_from_yaml(str(yaml_file), replace=replace)
                 count += 1
             except Exception as e:
                 logger.error(f"Failed to load {yaml_file}: {e}")
 
         for yaml_file in dir_path_obj.glob("*.yml"):
             try:
-                self.load_from_yaml(str(yaml_file))
+                self.load_from_yaml(str(yaml_file), replace=replace)
                 count += 1
             except Exception as e:
                 logger.error(f"Failed to load {yaml_file}: {e}")
@@ -186,6 +204,7 @@ class MemoryTypeRegistry:
             directory=data.get("directory", ""),
             enabled=data.get("enabled", data.get("enable", True)),
             operation_mode=data.get("operation_mode", "upsert"),
+            overview_template=data.get("overview_template"),
         )
 
     async def initialize_memory_files(self, ctx: Any) -> None:
@@ -204,8 +223,8 @@ class MemoryTypeRegistry:
 
         logger = get_logger(__name__)
 
-        user_space = ctx.user.user_space_name() if ctx and ctx.user else "default"
-        agent_space = ctx.user.agent_space_name() if ctx and ctx.user else "default"
+        user_space = user_space_fragment(ctx) if ctx and ctx.user else "default"
+        agent_space = agent_space_fragment(ctx) if ctx and ctx.user else "default"
 
         logger.info(
             f"[MemoryTypeRegistry] Starting memory files initialization for user={user_space}, agent={agent_space}"

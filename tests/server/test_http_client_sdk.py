@@ -7,11 +7,12 @@ import asyncio
 import io
 import zipfile
 
+import httpx
 import pytest
 import pytest_asyncio
 
 from openviking_cli.client.http import AsyncHTTPClient
-from openviking_cli.exceptions import FailedPreconditionError
+from openviking_cli.exceptions import ConflictError, FailedPreconditionError, ProcessingError
 from tests.server.conftest import SAMPLE_MD_CONTENT, TEST_TMP_DIR
 
 
@@ -55,6 +56,43 @@ async def test_sdk_add_resource(http_client):
     assert result["root_uri"].startswith("viking://")
 
 
+async def test_sdk_add_resource_raises_processing_error_for_business_error(
+    http_client,
+    monkeypatch,
+):
+    client, svc = http_client
+
+    async def fake_add_resource(**kwargs):
+        return {
+            "status": "error",
+            "errors": ["Parse error: boom"],
+        }
+
+    monkeypatch.setattr(svc.resources, "add_resource", fake_add_resource)
+
+    with pytest.raises(ProcessingError, match="Parse error: boom"):
+        await client.add_resource(path="https://example.com/bad.md", wait=True)
+
+
+def test_sdk_maps_conflict_error_envelope():
+    client = AsyncHTTPClient(url="http://127.0.0.1:1933")
+    response = httpx.Response(
+        409,
+        json={
+            "status": "error",
+            "error": {
+                "code": "CONFLICT",
+                "message": "URI viking://resources/demo already has a reindex in progress",
+            },
+        },
+    )
+
+    with pytest.raises(ConflictError, match="already has a reindex in progress") as exc_info:
+        client._handle_response_data(response)
+
+    assert exc_info.value.code == "CONFLICT"
+
+
 async def test_sdk_add_skill_from_local_file(http_client):
     client, _ = http_client
     f = TEST_TMP_DIR / "sdk_skill.md"
@@ -70,8 +108,10 @@ description: SDK localhost upload test
     )
 
     result = await client.add_skill(data=str(f), wait=True)
+    assert "root_uri" in result
     assert "uri" in result
-    assert result["uri"].startswith("viking://agent/skills/")
+    assert result["root_uri"] == result["uri"]
+    assert result["uri"].startswith("viking://agent/default/skills/")
 
 
 def _build_ovpack_bytes() -> bytes:
@@ -119,6 +159,17 @@ async def test_sdk_mkdir_and_ls(http_client):
     await client.mkdir("viking://resources/sdk_dir/")
     result = await client.ls("viking://resources/")
     assert isinstance(result, list)
+
+
+async def test_sdk_mkdir_with_description_sets_abstract(http_client):
+    client, _ = http_client
+    uri = "viking://resources/sdk_dir_desc/"
+    description = "SDK directory description"
+
+    await client.mkdir(uri, description=description)
+
+    abstract = await client.abstract(uri)
+    assert abstract == description
 
 
 async def test_sdk_tree(http_client):

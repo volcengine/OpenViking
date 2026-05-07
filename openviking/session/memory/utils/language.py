@@ -5,8 +5,10 @@ Language detection utilities.
 """
 
 import re
+from typing import Callable
 
 from openviking_cli.utils import get_logger
+from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
@@ -15,7 +17,7 @@ def _detect_language_from_text(user_text: str, fallback_language: str) -> str:
     """Internal shared helper to detect dominant language from text."""
     fallback = (fallback_language or "en").strip() or "en"
 
-    #return "zh-CN"
+    # return "zh-CN"
 
     if not user_text:
         return fallback
@@ -44,6 +46,35 @@ def _detect_language_from_text(user_text: str, fallback_language: str) -> str:
         return "zh-CN"
 
     return fallback
+
+
+def resolve_with_override(config, detect: Callable[[], str]) -> str:
+    """Return config override if set, else call `detect()`.
+
+    The callable returns the detected output language, letting callers choose
+    the detector (text vs conversation vs messages) without duplicating the
+    override resolution logic.
+    """
+    if config is None:
+        config = get_openviking_config()
+    override = (getattr(config, "output_language_override", None) or "").strip()
+    if override:
+        return override
+    return detect()
+
+
+def resolve_output_language(text: str, config=None) -> str:
+    """Resolve output language from text, honoring config override before detection."""
+    return resolve_with_override(config, lambda: _detect_language_from_text(text, "en"))
+
+
+def resolve_output_language_from_conversation(conversation: str, config=None) -> str:
+    """Resolve output language from a conversation, honoring config override.
+
+    When no override is set, uses `detect_language_from_conversation` which
+    scopes detection to user-role content only.
+    """
+    return resolve_with_override(config, lambda: detect_language_from_conversation(conversation))
 
 
 def detect_language_from_conversation(conversation: str, fallback_language: str = "en") -> str:

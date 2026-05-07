@@ -1662,7 +1662,7 @@ function bindFind() {
 
 function buildAddResourcePayload() {
   const payload = {
-    target: elements.addResourceTarget.value.trim(),
+    to: elements.addResourceTarget.value.trim(),
     reason: elements.addResourceReason.value.trim(),
     instruction: elements.addResourceInstruction.value.trim(),
     wait: elements.addResourceWait.checked,
@@ -2337,9 +2337,10 @@ function bindAddMemory() {
       }
 
       for (const msg of messages) {
+        const payload = { ...msg };
         await callConsole(`/ov/sessions/${sessionId}/messages`, {
           method: "POST",
-          body: JSON.stringify(msg),
+          body: JSON.stringify(payload),
         });
       }
 

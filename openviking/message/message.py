@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 from typing import List, Literal, Optional
 
 from openviking.message.part import ContextPart, Part, TextPart, ToolPart
-from openviking.utils.time_utils import format_iso8601, parse_iso_datetime
 
 
 @dataclass
@@ -21,6 +20,7 @@ class Message:
     id: str
     role: Literal["user", "assistant"]
     parts: List[Part]
+    role_id: Optional[str] = None
     created_at: str = None
 
     @property
@@ -65,9 +65,16 @@ class Message:
     def to_dict(self) -> dict:
         """Serialize to JSONL."""
         created_at_val = self.created_at or datetime.now(timezone.utc).isoformat()
+        if isinstance(created_at_val, datetime):
+            created_at_val = (
+                created_at_val.astimezone(timezone.utc)
+                .isoformat(timespec="milliseconds")
+                .replace("+00:00", "Z")
+            )
         return {
             "id": self.id,
             "role": self.role,
+            "role_id": self.role_id,
             "parts": [self._part_to_dict(p) for p in self.parts],
             "created_at": created_at_val,
         }
@@ -108,7 +115,15 @@ class Message:
     def from_dict(cls, data: dict) -> "Message":
         """Deserialize from JSONL."""
         parts = []
-        for p in data.get("parts", []):
+        raw_parts = data.get("parts")
+        if raw_parts is None:
+            legacy_content = data.get("content")
+            if legacy_content is not None:
+                raw_parts = [{"type": "text", "text": legacy_content}]
+            else:
+                raw_parts = []
+
+        for p in raw_parts:
             if p["type"] == "text":
                 parts.append(TextPart(text=p.get("text", "")))
             elif p["type"] == "context":
@@ -138,11 +153,17 @@ class Message:
             id=data["id"],
             role=data["role"],
             parts=parts,
-            created_at=data["created_at"],
+            role_id=data.get("role_id"),
+            created_at=data.get("created_at"),
         )
 
     @classmethod
-    def create_user(cls, content: str, msg_id: str = None) -> "Message":
+    def create_user(
+        cls,
+        content: str,
+        msg_id: str = None,
+        role_id: Optional[str] = None,
+    ) -> "Message":
         """Create user message."""
         from uuid import uuid4
 
@@ -150,6 +171,7 @@ class Message:
             id=msg_id or f"msg_{uuid4().hex}",
             role="user",
             parts=[TextPart(text=content)],
+            role_id=role_id,
             created_at=datetime.now(timezone.utc).isoformat(),
         )
 
@@ -160,6 +182,7 @@ class Message:
         context_refs: List[dict] = None,
         tool_calls: List[dict] = None,
         msg_id: str = None,
+        role_id: Optional[str] = None,
     ) -> "Message":
         """Create assistant message."""
         from uuid import uuid4
@@ -193,7 +216,8 @@ class Message:
             id=msg_id or f"msg_{uuid4().hex}",
             role="assistant",
             parts=parts,
-            created_at=datetime.now(timezone.utc).isoformat()
+            role_id=role_id,
+            created_at=datetime.now(timezone.utc).isoformat(),
         )
 
     def get_context_parts(self) -> List[ContextPart]:

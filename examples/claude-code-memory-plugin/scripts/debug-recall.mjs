@@ -68,7 +68,9 @@ async function fetchJSON(path, init = {}) {
   const timer = setTimeout(() => controller.abort(), cfg.timeoutMs);
   try {
     const headers = { "Content-Type": "application/json" };
-    if (cfg.apiKey) headers["X-API-Key"] = cfg.apiKey;
+    if (cfg.apiKey) headers["Authorization"] = `Bearer ${cfg.apiKey}`;
+    if (cfg.accountId) headers["X-OpenViking-Account"] = cfg.accountId;
+    if (cfg.userId) headers["X-OpenViking-User"] = cfg.userId;
     if (cfg.agentId) headers["X-OpenViking-Agent"] = cfg.agentId;
     const res = await fetch(url, { ...init, headers, signal: controller.signal });
     const body = await res.json();

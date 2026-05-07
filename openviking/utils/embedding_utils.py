@@ -6,20 +6,63 @@ Embedding utilities for OpenViking.
 Common logic for creating Context objects and enqueuing them to EmbeddingQueue.
 """
 
+import math
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Optional
 
 from openviking.core.context import Context, ContextLevel, ResourceContentType, Vectorize
 from openviking.core.directories import get_context_type_for_uri
+from openviking.core.namespace import agent_space_fragment, user_space_fragment
 from openviking.server.identity import RequestContext
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.viking_fs import get_viking_fs
+from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.utils import VikingURI, get_logger
 from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
+_EMBEDDING_TRUNCATION_SUFFIX = "\n...(truncated for embedding)"
+
+
+def _estimate_embedding_input_tokens(text: str) -> int:
+    """Estimate tokens for the raw text embedding input guard."""
+    if not text:
+        return 0
+    cjk_chars = sum(
+        1
+        for char in text
+        if "\u4e00" <= char <= "\u9fff"
+        or "\u3040" <= char <= "\u30ff"
+        or "\uac00" <= char <= "\ud7af"
+    )
+    other_chars = len(text) - cjk_chars
+    return max(1, cjk_chars + math.ceil(other_chars / 4))
+
+
+def _truncate_embedding_input(
+    text: str,
+    max_tokens: int,
+    suffix: str = _EMBEDDING_TRUNCATION_SUFFIX,
+) -> str:
+    """Trim raw text before embedding using the local estimate above."""
+    if not text:
+        return text
+    if max_tokens <= 0:
+        return suffix.lstrip()
+    if _estimate_embedding_input_tokens(text) <= max_tokens:
+        return text
+
+    low = 0
+    high = len(text)
+    while low < high:
+        mid = (low + high + 1) // 2
+        if _estimate_embedding_input_tokens(text[:mid]) <= max_tokens:
+            low = mid
+        else:
+            high = mid - 1
+    return text[:low].rstrip() + suffix
 
 
 async def _decrement_embedding_tracker(semantic_msg_id: Optional[str], count: int) -> None:
@@ -41,10 +84,65 @@ async def _decrement_embedding_tracker(semantic_msg_id: Optional[str], count: in
 def _owner_space_for_uri(uri: str, ctx: RequestContext) -> str:
     """Derive owner_space from a URI."""
     if uri.startswith("viking://agent/"):
-        return ctx.user.agent_space_name()
+        return agent_space_fragment(ctx)
     if uri.startswith("viking://user/") or uri.startswith("viking://session/"):
-        return ctx.user.user_space_name()
+        return user_space_fragment(ctx)
     return ""
+
+
+def _coerce_datetime(value: object) -> Optional[datetime]:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str) and value:
+        try:
+            return parse_iso_datetime(value)
+        except Exception:
+            return None
+    return None
+
+
+async def _get_existing_created_at(
+    uri: str,
+    ctx: Optional[RequestContext],
+) -> Optional[datetime]:
+    if ctx is None:
+        return None
+    try:
+        from openviking.server.dependencies import get_service
+
+        service = get_service()
+        if not service or not service.vikingdb_manager:
+            return None
+        record = await service.vikingdb_manager.fetch_by_uri(uri, ctx=ctx)
+        if not record:
+            return None
+        return _coerce_datetime(record.get("created_at"))
+    except Exception:
+        return None
+
+
+async def _resolve_context_timestamps(
+    uri: str,
+    ctx: Optional[RequestContext],
+    *,
+    preserve_existing_created_at: bool = False,
+) -> tuple[datetime, datetime]:
+    updated_at = datetime.now(timezone.utc)
+    try:
+        stat_result = await get_viking_fs().stat(uri, ctx=ctx)
+        stat_mod_time = _coerce_datetime((stat_result or {}).get("modTime"))
+        if stat_mod_time is not None:
+            updated_at = stat_mod_time
+    except Exception:
+        pass
+
+    created_at = updated_at
+    if preserve_existing_created_at:
+        existing_created_at = await _get_existing_created_at(uri, ctx)
+        if existing_created_at is not None:
+            created_at = existing_created_at
+
+    return created_at, updated_at
 
 
 def get_resource_content_type(file_name: str) -> Optional[ResourceContentType]:
@@ -135,6 +233,7 @@ async def vectorize_directory_meta(
     context_type: str = "resource",
     ctx: Optional[RequestContext] = None,
     semantic_msg_id: Optional[str] = None,
+    include_overview: bool = True,
 ) -> None:
     """
     Vectorize directory metadata (.abstract.md and .overview.md).
@@ -142,6 +241,7 @@ async def vectorize_directory_meta(
     Creates Context objects for abstract and overview and enqueues them.
     """
     enqueued = 0
+    expected = 2 if include_overview else 1
     try:
         if not ctx:
             logger.warning("No context provided for vectorization")
@@ -153,6 +253,8 @@ async def vectorize_directory_meta(
         parent_uri = VikingURI(uri).parent.uri
         owner_space = _owner_space_for_uri(uri, ctx)
 
+        created_at, updated_at = await _resolve_context_timestamps(uri, ctx)
+
         # Vectorize L0: .abstract.md (abstract)
         context_abstract = Context(
             uri=uri,
@@ -161,6 +263,8 @@ async def vectorize_directory_meta(
             abstract=abstract,
             context_type=context_type,
             level=ContextLevel.ABSTRACT,
+            created_at=created_at,
+            updated_at=updated_at,
             user=ctx.user,
             account_id=ctx.account_id,
             owner_space=owner_space,
@@ -179,33 +283,36 @@ async def vectorize_directory_meta(
                     exc_info=True,
                 )
 
-        # Vectorize L1: .overview.md (overview)
-        context_overview = Context(
-            uri=uri,
-            parent_uri=parent_uri,
-            is_leaf=False,
-            abstract=abstract,
-            context_type=context_type,
-            level=ContextLevel.OVERVIEW,
-            user=ctx.user,
-            account_id=ctx.account_id,
-            owner_space=owner_space,
-        )
-        context_overview.set_vectorize(Vectorize(text=overview))
-        msg_overview = EmbeddingMsgConverter.from_context(context_overview)
-        if msg_overview:
-            msg_overview.semantic_msg_id = semantic_msg_id
-            try:
-                await embedding_queue.enqueue(msg_overview)
-                enqueued += 1
-                logger.debug(f"Enqueued directory L1 (overview) for vectorization: {uri}")
-            except Exception as e:
-                logger.error(
-                    f"Failed to enqueue directory L1 (overview) for vectorization: {uri}: {e}",
-                    exc_info=True,
-                )
+        if include_overview:
+            # Vectorize L1: .overview.md (overview)
+            context_overview = Context(
+                uri=uri,
+                parent_uri=parent_uri,
+                is_leaf=False,
+                abstract=abstract,
+                context_type=context_type,
+                level=ContextLevel.OVERVIEW,
+                created_at=created_at,
+                updated_at=updated_at,
+                user=ctx.user,
+                account_id=ctx.account_id,
+                owner_space=owner_space,
+            )
+            context_overview.set_vectorize(Vectorize(text=overview))
+            msg_overview = EmbeddingMsgConverter.from_context(context_overview)
+            if msg_overview:
+                msg_overview.semantic_msg_id = semantic_msg_id
+                try:
+                    await embedding_queue.enqueue(msg_overview)
+                    enqueued += 1
+                    logger.debug(f"Enqueued directory L1 (overview) for vectorization: {uri}")
+                except Exception as e:
+                    logger.error(
+                        f"Failed to enqueue directory L1 (overview) for vectorization: {uri}: {e}",
+                        exc_info=True,
+                    )
     finally:
-        await _decrement_embedding_tracker(semantic_msg_id, 2 - enqueued)
+        await _decrement_embedding_tracker(semantic_msg_id, expected - enqueued)
 
 
 async def vectorize_file(
@@ -216,6 +323,7 @@ async def vectorize_file(
     ctx: Optional[RequestContext] = None,
     semantic_msg_id: Optional[str] = None,
     use_summary: bool = False,
+    preserve_existing_created_at: bool = False,
 ) -> None:
     """
     Vectorize a single file.
@@ -238,13 +346,20 @@ async def vectorize_file(
         file_name = summary_dict.get("name") or os.path.basename(file_path)
         summary = summary_dict.get("summary", "")
 
+        created_at, updated_at = await _resolve_context_timestamps(
+            file_path,
+            ctx,
+            preserve_existing_created_at=preserve_existing_created_at,
+        )
+
         context = Context(
             uri=file_path,
             parent_uri=parent_uri,
             is_leaf=True,
             abstract=summary,
             context_type=context_type,
-            created_at=datetime.now(),
+            created_at=created_at,
+            updated_at=updated_at,
             user=ctx.user,
             account_id=ctx.account_id,
             owner_space=_owner_space_for_uri(file_path, ctx),
@@ -252,14 +367,9 @@ async def vectorize_file(
 
         content_type = get_resource_content_type(file_name)
         embedding_cfg = get_openviking_config().embedding
-        configured_text_source = getattr(embedding_cfg, "text_source", "summary_first")
+        configured_text_source = getattr(embedding_cfg, "text_source", "content_only")
         effective_text_source = "summary_only" if use_summary else configured_text_source
-        max_input_chars = int(getattr(embedding_cfg, "max_input_chars", 1000) or 1000)
-
-        def _truncate_text(value: str) -> str:
-            if len(value) <= max_input_chars:
-                return value
-            return value[:max_input_chars] + "\n...(truncated for embedding)"
+        max_input_tokens = int(getattr(embedding_cfg, "max_input_tokens", 4096) or 4096)
 
         if content_type is None:
             # Unsupported file type: fall back to summary if available
@@ -282,7 +392,7 @@ async def vectorize_file(
                     content = await viking_fs.read_file(file_path, ctx=ctx)
                     if isinstance(content, bytes):
                         content = content.decode("utf-8", errors="replace")
-                    content = _truncate_text(content)
+                    content = _truncate_embedding_input(content, max_input_tokens)
                     context.set_vectorize(Vectorize(text=content))
                 except Exception as e:
                     logger.warning(
@@ -344,18 +454,14 @@ async def index_resource(
 
     if await viking_fs.exists(abstract_uri, ctx=ctx):
         content = await viking_fs.read_file(abstract_uri, ctx=ctx)
-        if isinstance(content, bytes):
-            abstract = content.decode("utf-8")
+        abstract = content.decode("utf-8") if isinstance(content, bytes) else content
 
     if await viking_fs.exists(overview_uri, ctx=ctx):
         content = await viking_fs.read_file(overview_uri, ctx=ctx)
-        if isinstance(content, bytes):
-            overview = content.decode("utf-8")
+        overview = content.decode("utf-8") if isinstance(content, bytes) else content
 
     if abstract or overview:
-        await vectorize_directory_meta(
-            uri, abstract, overview, context_type=context_type, ctx=ctx
-        )
+        await vectorize_directory_meta(uri, abstract, overview, context_type=context_type, ctx=ctx)
 
     # 2. Index Files
     try:

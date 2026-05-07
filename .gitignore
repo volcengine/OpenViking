@@ -22,6 +22,7 @@ share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+.ttadk
 MANIFEST
 openviking.egg-info/
 data/
@@ -118,6 +119,7 @@ docker-compose.override.yml
 *.code-workspace
 .openviking.pid
 exports/
+.local-data/
 
 # API Test temporary files
 tests/api_test/api-test-report.html
@@ -174,6 +176,9 @@ celerybeat-schedule
 # mkdocs documentation
 /site
 docs/superpowers/
+docs/node_modules/
+docs/.vitepress/cache/
+docs/.vitepress/dist/
 
 # mypy
 .mypy_cache/
@@ -195,3 +200,5 @@ examples/data/
 openviking/_version.py
 specs/
 .trae/
+.codex/
+.ttadk/

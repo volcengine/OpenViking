@@ -56,7 +56,7 @@ viking://
 ### 环境要求是什么？
 
 - **Python 版本**：3.10 或更高
-- **编译工具**（如果从源码安装或在不支持的平台上）：Go 1.19+, GCC 9+ 或 Clang 11+
+- **编译工具**（如果从源码安装或在不支持的平台上）：Rust/Cargo, GCC 9+ 或 Clang 11+
 - **必需依赖**：Embedding 模型（推荐火山引擎 Doubao）
 - **可选依赖**：
   - VLM（视觉语言模型）：用于多模态内容处理和语义提取
@@ -91,7 +91,7 @@ pip install openviking --upgrade --force-reinstall
     "dense": {
       "provider": "volcengine",
       "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-250615",
+      "model": "doubao-embedding-vision-251215",
       "dimension": 1024,
       "input": "multimodal"
     }

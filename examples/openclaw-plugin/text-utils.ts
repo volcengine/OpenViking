@@ -19,15 +19,14 @@ const SENDER_METADATA_BLOCK_RE = /Sender\s*\([^)]*\)\s*:\s*```[\s\S]*?```/gi;
 const FENCED_JSON_BLOCK_RE = /```json\s*([\s\S]*?)```/gi;
 const METADATA_JSON_KEY_RE =
   /"(session|sessionid|sessionkey|conversationid|channel|sender|userid|agentid|timestamp|timezone)"\s*:/gi;
-const LEADING_TIMESTAMP_PREFIX_RE = /^\s*\[[^\]\n]{1,120}\]\s*/;
+const LEADING_TIMESTAMP_PREFIX_RE = /^\s*(?!\[\[)\[(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*\s+)?(?:\d{4}[-/]\d{2}[-/]\d{2}|\d{2}[-/]\d{2}[-/]\d{2,4})(?:\s+\d{1,2}:\d{2}(?::\d{2})?(?:\s*[A-Z]{1,5}(?:[+-]\d{1,2})?)?)?\s*\]\s*/i;
+const COMPACTED_SYSTEM_MSG_RE = /^System:\s*\[.*?\]\s*Compacted\s*(.+)$/i;
 const COMMAND_TEXT_RE = /^\/[a-z0-9_-]{1,64}\b/i;
 const NON_CONTENT_TEXT_RE = /^[\p{P}\p{S}\s]+$/u;
 const SUBAGENT_CONTEXT_RE = /^\s*\[Subagent Context\]/i;
 const MEMORY_INTENT_RE = /记住|记下|remember|save|store|偏好|preference|规则|rule|事实|fact/i;
 const QUESTION_CUE_RE =
   /[?？]|\b(?:what|when|where|who|why|how|which|can|could|would|did|does|is|are)\b|^(?:请问|能否|可否|怎么|如何|什么时候|谁|什么|哪|是否)/i;
-const SPEAKER_TAG_RE = /(?:^|\s)([A-Za-z\u4e00-\u9fa5][A-Za-z0-9_\u4e00-\u9fa5-]{1,30}):\s/g;
-
 export const CAPTURE_LIMIT = 3;
 
 function resolveCaptureMinLength(text: string): number {
@@ -46,7 +45,22 @@ function looksLikeMetadataJsonBlock(content: string): boolean {
   return matchedKeys.size >= 3;
 }
 
+const HEARTBEAT_RE = /\bHEARTBEAT(?:\.md|_OK)\b/;
+
 export function sanitizeUserTextForCapture(text: string): string {
+  // 过滤 HEARTBEAT 健康检查消息
+  if (HEARTBEAT_RE.test(text)) {
+    return "";
+  }
+  // 处理 Compactor 系统消息，提取实际用户输入
+  // 格式: "System: [时间] Compacted ... Context ... [时间] 实际内容"
+  if (COMPACTED_SYSTEM_MSG_RE.test(text)) {
+    const match = text.match(COMPACTED_SYSTEM_MSG_RE);
+    if (match) {
+      return match[1].replace(/\s+/g, " ").trim();
+    }
+    return "";
+  }
   return text
     .replace(RELEVANT_MEMORIES_BLOCK_RE, " ")
     .replace(CONVERSATION_METADATA_BLOCK_RE, " ")
@@ -71,14 +85,6 @@ export function looksLikeQuestionOnlyText(text: string): boolean {
   }
   return true;
 }
-
-export type TranscriptLikeIngestDecision = {
-  shouldAssist: boolean;
-  reason: string;
-  normalizedText: string;
-  speakerTurns: number;
-  chars: number;
-};
 
 export function compileSessionPattern(pattern: string): RegExp {
   const escaped = pattern
@@ -124,113 +130,6 @@ export function shouldBypassSession(
     return false;
   }
   return matchesSessionPattern(candidate, patterns);
-}
-
-export function shouldSkipIngestReplyAssistSession(
-  params: {
-    sessionId?: string;
-    sessionKey?: string;
-  },
-  patterns: RegExp[],
-): boolean {
-  return shouldBypassSession(params, patterns);
-}
-
-function countSpeakerTurns(text: string): number {
-  let count = 0;
-  for (const _match of text.matchAll(SPEAKER_TAG_RE)) {
-    count += 1;
-  }
-  return count;
-}
-
-export function isTranscriptLikeIngest(
-  text: string,
-  options: {
-    minSpeakerTurns: number;
-    minChars: number;
-  },
-): TranscriptLikeIngestDecision {
-  const normalizedText = sanitizeUserTextForCapture(text.trim());
-  if (!normalizedText) {
-    return {
-      shouldAssist: false,
-      reason: "empty_text",
-      normalizedText,
-      speakerTurns: 0,
-      chars: 0,
-    };
-  }
-
-  if (COMMAND_TEXT_RE.test(normalizedText)) {
-    return {
-      shouldAssist: false,
-      reason: "command_text",
-      normalizedText,
-      speakerTurns: 0,
-      chars: normalizedText.length,
-    };
-  }
-
-  if (SUBAGENT_CONTEXT_RE.test(normalizedText)) {
-    return {
-      shouldAssist: false,
-      reason: "subagent_context",
-      normalizedText,
-      speakerTurns: 0,
-      chars: normalizedText.length,
-    };
-  }
-
-  if (NON_CONTENT_TEXT_RE.test(normalizedText)) {
-    return {
-      shouldAssist: false,
-      reason: "non_content_text",
-      normalizedText,
-      speakerTurns: 0,
-      chars: normalizedText.length,
-    };
-  }
-
-  if (looksLikeQuestionOnlyText(normalizedText)) {
-    return {
-      shouldAssist: false,
-      reason: "question_text",
-      normalizedText,
-      speakerTurns: 0,
-      chars: normalizedText.length,
-    };
-  }
-
-  const chars = normalizedText.length;
-  if (chars < options.minChars) {
-    return {
-      shouldAssist: false,
-      reason: "chars_below_threshold",
-      normalizedText,
-      speakerTurns: 0,
-      chars,
-    };
-  }
-
-  const speakerTurns = countSpeakerTurns(normalizedText);
-  if (speakerTurns < options.minSpeakerTurns) {
-    return {
-      shouldAssist: false,
-      reason: "speaker_turns_below_threshold",
-      normalizedText,
-      speakerTurns,
-      chars,
-    };
-  }
-
-  return {
-    shouldAssist: true,
-    reason: "transcript_like_ingest",
-    normalizedText,
-    speakerTurns,
-    chars,
-  };
 }
 
 function normalizeDedupeText(text: string): string {
@@ -445,47 +344,142 @@ export function extractSingleMessageText(msg: unknown): string {
 }
 
 /**
- * 提取从 startIndex 开始的新消息（user + assistant + toolResult），返回格式化的文本。
- * 保留 toolUse 完整内容（tool name + input）和 toolResult 完整内容，
- * 跳过 system 消息（框架注入的元数据）。
+ * 提取消息中的一个 part 的文本内容，并清理时间戳等噪音
  */
-export function extractNewTurnTexts(
+function extractPartText(content: unknown): string {
+  if (typeof content === "string") {
+    return content.trim();
+  }
+  if (Array.isArray(content)) {
+    const parts: string[] = [];
+    for (const block of content) {
+      const b = block as Record<string, unknown>;
+      if (b?.type === "text" && typeof b.text === "string") {
+        parts.push((b.text as string).trim());
+      }
+    }
+    return parts.join(" ");
+  }
+  return "";
+}
+
+/**
+ * 结构化消息类型 - 用于 afterTurn 发送到 OpenViking
+ */
+export type ExtractedMessage = {
+  role: "user" | "assistant";
+  parts: Array<{
+    type: "text";
+    text: string;
+  } | {
+    type: "tool";
+    toolCallId?: string;
+    toolName: string;
+    toolInput?: Record<string, unknown>;
+    toolOutput: string;
+    toolStatus: string;
+  }>;
+};
+
+/**
+ * 提取从 startIndex 开始的新消息，返回结构化消息。
+ * - 用户输入 → type: "text"
+ * - 工具结果 → type: "tool"
+ * - 跳过 system 消息
+ * - 清理时间戳前缀（如 [Fri 2026-04-10 17:20 GMT+8]）
+ */
+export function extractNewTurnMessages(
   messages: unknown[],
   startIndex: number,
-): { texts: string[]; newCount: number } {
-  const texts: string[] = [];
+): { messages: ExtractedMessage[]; newCount: number } {
+  const result: ExtractedMessage[] = [];
   let count = 0;
-  for (let i = startIndex; i < messages.length; i++) {
+
+  // First pass: collect toolUse inputs indexed by toolCallId/toolUseId
+  // Scan all messages (including after startIndex) to find toolUse before each toolResult
+  const toolUseInputs: Record<string, Record<string, unknown>> = {};
+  for (let i = 0; i < messages.length; i++) {
     const msg = messages[i] as Record<string, unknown>;
     if (!msg || typeof msg !== "object") continue;
     const role = msg.role as string;
-    if (!role || role === "system") continue;
-    count++;
-
-    if (role === "toolResult") {
-      const toolName = typeof msg.toolName === "string" ? msg.toolName : "tool";
-      const resultText = formatToolResultContent(msg.content);
-      if (resultText) {
-        texts.push(`[${toolName} result]: ${resultText}`);
-      }
-      continue;
-    }
-
-    const content = msg.content;
-    if (typeof content === "string" && content.trim()) {
-      texts.push(`[${role}]: ${content.trim()}`);
-    } else if (Array.isArray(content)) {
-      for (const block of content) {
-        const b = block as Record<string, unknown>;
-        if (b?.type === "text" && typeof b.text === "string") {
-          texts.push(`[${role}]: ${(b.text as string).trim()}`);
-        } else if (b?.type === "toolUse") {
-          texts.push(`[${role}]: ${formatToolUseBlock(b)}`);
+    if (role === "assistant") {
+      const content = msg.content;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          const b = block as Record<string, unknown>;
+          // Handle toolCall, toolUse, tool_call types
+          if (b?.type === "toolCall" || b?.type === "toolUse" || b?.type === "tool_call") {
+            const id = (b.id as string) || (b.toolUseId as string) || (b.toolCallId as string);
+            // Try multiple field names for tool input: arguments, input, toolInput
+            const input = b.arguments ?? b.input ?? b.toolInput;
+            if (id && input && typeof input === "object") {
+              toolUseInputs[id] = input as Record<string, unknown>;
+            }
+          }
         }
       }
     }
   }
-  return { texts, newCount: count };
+
+  for (let i = startIndex; i < messages.length; i++) {
+    const msg = messages[i] as Record<string, unknown>;
+    if (!msg || typeof msg !== "object") continue;
+
+    const role = msg.role as string;
+    if (!role || role === "system") continue;
+
+    count++;
+
+    // toolResult -> type: "tool"
+    if (role === "toolResult") {
+      const toolName = typeof msg.toolName === "string" ? msg.toolName : "tool";
+      const output = formatToolResultContent(msg.content) || "";
+      // Try multiple field names for tool call ID
+      const toolCallId = (msg.toolCallId as string) || (msg.toolUseId as string) || (msg.tool_call_id as string);
+      const toolInput = toolCallId && toolUseInputs[toolCallId]
+        ? toolUseInputs[toolCallId]
+        : (typeof msg.toolInput === "object" && msg.toolInput !== null
+          ? msg.toolInput as Record<string, unknown>
+          : undefined);
+      if (output) {
+        result.push({
+          role: "user",
+          parts: [{
+            type: "tool",
+            toolCallId: toolCallId || undefined,
+            toolName,
+            toolInput,
+            toolOutput: output,
+            toolStatus: "completed",
+          }],
+        });
+      }
+      continue;
+    }
+
+    // user/assistant -> type: "text"
+    // 统一 role 为 user
+    const content = msg.content;
+    const text = extractPartText(content);
+
+    if (text) {
+      // 使用 sanitizeUserTextForCapture 清理所有噪音（Sender 元数据、时间戳等）
+      const cleanedText = sanitizeUserTextForCapture(text);
+      if (cleanedText) {
+        // 保持原始 role，assistant 保持 assistant，user 保持 user
+        const ovRole: "user" | "assistant" = role === "assistant" ? "assistant" : "user";
+        result.push({
+          role: ovRole,
+          parts: [{
+            type: "text",
+            text: cleanedText,
+          }],
+        });
+      }
+    }
+  }
+
+  return { messages: result, newCount: count };
 }
 
 export function extractLatestUserText(messages: unknown[] | undefined): string {

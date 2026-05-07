@@ -138,7 +138,7 @@ async def bootstrap_encryption(config: Dict[str, Any]) -> Optional[FileEncryptor
     """
     encryption_config = config.get("encryption", {})
     if not encryption_config.get("enabled", False):
-        logger.info("Encryption is disabled")
+        logger.debug("Encryption is disabled")
         return None
 
     # Validate configuration

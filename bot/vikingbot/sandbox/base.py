@@ -1,5 +1,6 @@
 """Abstract interface for sandbox backends."""
 
+import asyncio
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
@@ -73,6 +74,28 @@ class SandboxBackend(ABC):
             return self.workspace / path.lstrip("/")
         return self.workspace / path
 
+    async def read_file_bytes(self, path: str) -> bytes:
+        """Read file bytes from sandbox (default implementation: host filesystem).
+
+        Args:
+            path: Path to file (absolute or relative to sandbox_cwd)
+
+        Returns:
+            File content as bytes
+
+        Raises:
+            FileNotFoundError: If file doesn't exist
+            IOError: If read fails
+            PermissionError: If path outside workspace and restriction is enabled
+        """
+        sandbox_path = self._resolve_path(path)
+        self._check_path_restriction(sandbox_path)
+        if not sandbox_path.exists():
+            raise FileNotFoundError(f"File not found: {path}")
+        if not sandbox_path.is_file():
+            raise IOError(f"Not a file: {path}")
+        return await asyncio.to_thread(sandbox_path.read_bytes)
+
     async def read_file(self, path: str) -> str:
         """Read file from sandbox (default implementation: host filesystem).
 
@@ -87,13 +110,7 @@ class SandboxBackend(ABC):
             IOError: If read fails
             PermissionError: If path outside workspace and restriction is enabled
         """
-        sandbox_path = self._resolve_path(path)
-        self._check_path_restriction(sandbox_path)
-        if not sandbox_path.exists():
-            raise FileNotFoundError(f"File not found: {path}")
-        if not sandbox_path.is_file():
-            raise IOError(f"Not a file: {path}")
-        return sandbox_path.read_text(encoding="utf-8")
+        return (await self.read_file_bytes(path)).decode("utf-8")
 
     async def write_file(self, path: str, content: str) -> None:
         """Write file to sandbox (default implementation: host filesystem).

@@ -1,12 +1,13 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 import json
+import logging
 import os
 from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, Optional
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -37,6 +38,7 @@ from .parser_config import (
 )
 from .prompts_config import PromptsConfig
 from .rerank_config import RerankConfig
+from .retrieval_config import RetrievalConfig
 from .storage_config import StorageConfig
 from .telemetry_config import TelemetryConfig
 from .vlm_config import VLMConfig
@@ -52,68 +54,63 @@ class OpenVikingConfig(BaseModel):
     default_agent: Optional[str] = Field(default="default", description="Default agent identifier")
 
     storage: StorageConfig = Field(
-        default_factory=lambda: StorageConfig(), description="Storage configuration"
+        default_factory=StorageConfig, description="Storage configuration"
     )
 
     embedding: EmbeddingConfig = Field(
-        default_factory=lambda: EmbeddingConfig(), description="Embedding configuration"
+        default_factory=EmbeddingConfig, description="Embedding configuration"
     )
 
-    vlm: VLMConfig = Field(default_factory=lambda: VLMConfig(), description="VLM configuration")
+    vlm: VLMConfig = Field(default_factory=VLMConfig, description="VLM configuration")
 
-    rerank: RerankConfig = Field(
-        default_factory=lambda: RerankConfig(), description="Rerank configuration"
+    rerank: RerankConfig = Field(default_factory=RerankConfig, description="Rerank configuration")
+
+    retrieval: RetrievalConfig = Field(
+        default_factory=RetrievalConfig,
+        description="Retrieval ranking configuration",
     )
 
     # Encryption configuration
     encryption: EncryptionConfig = Field(
-        default_factory=lambda: EncryptionConfig(), description="Encryption configuration"
+        default_factory=EncryptionConfig, description="Encryption configuration"
     )
 
     # Parser configurations
-    pdf: PDFConfig = Field(
-        default_factory=lambda: PDFConfig(), description="PDF parsing configuration"
-    )
+    pdf: PDFConfig = Field(default_factory=PDFConfig, description="PDF parsing configuration")
 
-    code: CodeConfig = Field(
-        default_factory=lambda: CodeConfig(), description="Code parsing configuration"
-    )
+    code: CodeConfig = Field(default_factory=CodeConfig, description="Code parsing configuration")
 
     image: ImageConfig = Field(
-        default_factory=lambda: ImageConfig(), description="Image parsing configuration"
+        default_factory=ImageConfig, description="Image parsing configuration"
     )
 
     audio: AudioConfig = Field(
-        default_factory=lambda: AudioConfig(), description="Audio parsing configuration"
+        default_factory=AudioConfig, description="Audio parsing configuration"
     )
 
     video: VideoConfig = Field(
-        default_factory=lambda: VideoConfig(), description="Video parsing configuration"
+        default_factory=VideoConfig, description="Video parsing configuration"
     )
 
     markdown: MarkdownConfig = Field(
-        default_factory=lambda: MarkdownConfig(), description="Markdown parsing configuration"
+        default_factory=MarkdownConfig, description="Markdown parsing configuration"
     )
 
-    html: HTMLConfig = Field(
-        default_factory=lambda: HTMLConfig(), description="HTML parsing configuration"
-    )
+    html: HTMLConfig = Field(default_factory=HTMLConfig, description="HTML parsing configuration")
 
-    text: TextConfig = Field(
-        default_factory=lambda: TextConfig(), description="Text parsing configuration"
-    )
+    text: TextConfig = Field(default_factory=TextConfig, description="Text parsing configuration")
 
     directory: DirectoryConfig = Field(
-        default_factory=lambda: DirectoryConfig(), description="Directory parsing configuration"
+        default_factory=DirectoryConfig, description="Directory parsing configuration"
     )
 
     feishu: FeishuConfig = Field(
-        default_factory=lambda: FeishuConfig(),
+        default_factory=FeishuConfig,
         description="Feishu/Lark document parsing configuration",
     )
 
     semantic: SemanticConfig = Field(
-        default_factory=lambda: SemanticConfig(),
+        default_factory=SemanticConfig,
         description="Semantic processing configuration (overview/abstract limits)",
     )
 
@@ -132,31 +129,51 @@ class OpenVikingConfig(BaseModel):
 
     default_search_limit: int = Field(default=3, description="Default number of results to return")
 
-    enable_memory_decay: bool = Field(default=True, description="Enable automatic memory decay")
-
-    memory_decay_check_interval: int = Field(
-        default=3600, description="Interval (seconds) to check for expired memories"
-    )
-
     language_fallback: str = Field(
         default="en",
         description=(
-            "Fallback language used by memory extraction and semantic processing when dominant "
-            "user language cannot be confidently detected"
+            "Deprecated. No longer used — detection falls back to 'en' when no language can be "
+            "inferred. Set output_language_override instead to pin an explicit language."
         ),
     )
 
-    log: LogConfig = Field(default_factory=lambda: LogConfig(), description="Logging configuration")
-
-    memory: MemoryConfig = Field(
-        default_factory=lambda: MemoryConfig(), description="Memory configuration"
+    output_language_override: str = Field(
+        default="",
+        description=(
+            "When non-empty, bypasses content-based language detection for memory extraction "
+            "and semantic summaries/overviews and forces this language instead. Use when your "
+            "corpus is mixed-language but you want summaries pinned to a single language "
+            "(e.g., 'en', 'zh-CN', 'ja'). Leave empty (default) to auto-detect per content."
+        ),
     )
+
+    @model_validator(mode="after")
+    def _warn_on_deprecated_language_fallback(self) -> "OpenVikingConfig":
+        if self.language_fallback and self.language_fallback != "en":
+            logging.getLogger(__name__).warning(
+                "Config field 'language_fallback=%s' is deprecated and has no effect; "
+                "remove it, or set 'output_language_override' to pin an explicit language.",
+                self.language_fallback,
+            )
+        return self
+
+    allow_private_networks: bool = Field(
+        default=False,
+        description=(
+            "Allow fetching resources from private/non-public network addresses. "
+            "When disabled (default), only public IP addresses and hostnames are allowed."
+        ),
+    )
+
+    log: LogConfig = Field(default_factory=LogConfig, description="Logging configuration")
+
+    memory: MemoryConfig = Field(default_factory=MemoryConfig, description="Memory configuration")
 
     telemetry: "TelemetryConfig" = Field(
-        default_factory=lambda: TelemetryConfig(), description="Telemetry configuration"
+        default_factory=TelemetryConfig, description="Telemetry configuration"
     )
     prompts: PromptsConfig = Field(
-        default_factory=lambda: PromptsConfig(),
+        default_factory=PromptsConfig,
         description="Prompt template configuration",
     )
 
@@ -226,6 +243,15 @@ class OpenVikingConfig(BaseModel):
 
             # Apply memory configuration
             if memory_config_data is not None:
+                if (
+                    isinstance(memory_config_data, dict)
+                    and "agent_scope_mode" in memory_config_data
+                ):
+                    logging.getLogger(__name__).warning(
+                        "memory.agent_scope_mode is deprecated and ignored. "
+                        "User/agent namespace behavior is now controlled by per-account "
+                        "namespace policy."
+                    )
                 instance.memory = MemoryConfig.from_dict(memory_config_data)
 
             # Apply parser configurations
@@ -243,8 +269,6 @@ class OpenVikingConfig(BaseModel):
                 db_dim = instance.storage.vectordb.dimension
                 emb_dim = instance.embedding.dimension
                 if db_dim > 0 and emb_dim > 0 and db_dim != emb_dim:
-                    import logging
-
                     logging.warning(
                         f"Dimension mismatch: VectorDB dimension is {db_dim}, "
                         f"but Embedding dimension is {emb_dim}. "
@@ -268,31 +292,52 @@ class OpenVikingConfigSingleton:
       3. ~/.openviking/ov.conf
       4. /etc/openviking/ov.conf
       5. Error with clear guidance
+
+    ``_initializing`` prevents a same-thread deadlock: loading the config
+    triggers pydantic validation which can import modules whose module-level
+    ``get_logger()`` calls ``get_instance()`` again *before* the lock is
+    released.  The flag is checked **before** ``_lock.acquire()`` so the
+    re-entrant call raises immediately, letting ``_load_log_config()``
+    fall back to default logging.
     """
 
     _instance: Optional[OpenVikingConfig] = None
     _lock: Lock = Lock()
+    _initializing: bool = False
 
     @classmethod
     def get_instance(cls) -> OpenVikingConfig:
         """Get the global singleton instance.
 
         Raises FileNotFoundError if no config file is found.
+        Raises RuntimeError if called re-entrantly during initialization.
         """
+        if cls._initializing:
+            raise RuntimeError(
+                "OpenVikingConfigSingleton is still initializing "
+                "(re-entrant call detected, falling back to defaults)"
+            )
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
-                    config_path = resolve_config_path(None, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
-                    if config_path is not None:
-                        cls._instance = cls._load_from_file(str(config_path))
-                    else:
-                        default_path_user = DEFAULT_CONFIG_DIR / DEFAULT_OV_CONF
-                        default_path_system = SYSTEM_CONFIG_DIR / DEFAULT_OV_CONF
-                        raise FileNotFoundError(
-                            f"OpenViking configuration file not found.\n"
-                            f"Please create {default_path_user} or {default_path_system}, or set {OPENVIKING_CONFIG_ENV}.\n"
-                            f"See: https://openviking.dev/docs/guides/configuration"
+                    cls._initializing = True
+                    try:
+                        config_path = resolve_config_path(
+                            None, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF
                         )
+                        if config_path is not None:
+                            cls._instance = cls._load_from_file(str(config_path))
+                        else:
+                            default_path_user = DEFAULT_CONFIG_DIR / DEFAULT_OV_CONF
+                            default_path_system = SYSTEM_CONFIG_DIR / DEFAULT_OV_CONF
+                            raise FileNotFoundError(
+                                f"OpenViking configuration file not found.\n"
+                                f"Please create {default_path_user} or {default_path_system}, "
+                                f"or set {OPENVIKING_CONFIG_ENV}.\n"
+                                f"See: https://openviking.ai/docs"
+                            )
+                    finally:
+                        cls._initializing = False
         return cls._instance
 
     @classmethod
@@ -308,20 +353,25 @@ class OpenVikingConfigSingleton:
             config_path: Explicit path to ov.conf file.
         """
         with cls._lock:
-            if config_dict is not None:
-                cls._instance = OpenVikingConfig.from_dict(config_dict)
-            else:
-                path = resolve_config_path(config_path, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
-                if path is not None:
-                    cls._instance = cls._load_from_file(str(path))
+            cls._initializing = True
+            try:
+                if config_dict is not None:
+                    cls._instance = OpenVikingConfig.from_dict(config_dict)
                 else:
-                    default_path_user = DEFAULT_CONFIG_DIR / DEFAULT_OV_CONF
-                    default_path_system = SYSTEM_CONFIG_DIR / DEFAULT_OV_CONF
-                    raise FileNotFoundError(
-                        f"OpenViking configuration file not found.\n"
-                        f"Please create {default_path_user} or {default_path_system}, or set {OPENVIKING_CONFIG_ENV}.\n"
-                        f"See: https://openviking.dev/docs/guides/configuration"
-                    )
+                    path = resolve_config_path(config_path, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
+                    if path is not None:
+                        cls._instance = cls._load_from_file(str(path))
+                    else:
+                        default_path_user = DEFAULT_CONFIG_DIR / DEFAULT_OV_CONF
+                        default_path_system = SYSTEM_CONFIG_DIR / DEFAULT_OV_CONF
+                        raise FileNotFoundError(
+                            f"OpenViking configuration file not found.\n"
+                            f"Please create {default_path_user} or {default_path_system}, "
+                            f"or set {OPENVIKING_CONFIG_ENV}.\n"
+                            f"See: https://openviking.ai/docs"
+                        )
+            finally:
+                cls._initializing = False
         return cls._instance
 
     @classmethod

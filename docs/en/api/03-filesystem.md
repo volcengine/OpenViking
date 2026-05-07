@@ -2,6 +2,27 @@
 
 OpenViking provides Unix-like file system operations for managing context.
 
+## WebDAV (Phase 1)
+
+OpenViking Server also exposes a minimal WebDAV adapter for resource files:
+
+```text
+/webdav/resources
+```
+
+Phase 1 intentionally keeps the scope narrow:
+
+- Resources only. Memories, skills, sessions, and other namespaces are not exposed.
+- Text-first writes. `PUT` currently accepts UTF-8 text content only.
+- WebDAV subset only. `OPTIONS`, `PROPFIND`, `GET`, `HEAD`, `PUT`, `DELETE`, `MKCOL`, and `MOVE` are supported.
+- Semantic sidecars stay internal. Derived files such as `.abstract.md`, `.overview.md`, `.relations.json`, and `.path.ovlock` are hidden from listings and cannot be accessed directly through WebDAV.
+
+Behavior notes:
+
+- Creating a new file through WebDAV triggers OpenViking semantic generation for that file path.
+- Replacing an existing file through WebDAV refreshes related semantics and vectors, same as `write()`.
+- User-created dot-directories and dot-files remain visible unless they match one of the reserved internal filenames above.
+
 ## API Reference
 
 ### abstract()
@@ -106,6 +127,13 @@ Read L2 full content.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI |
+| offset | int | No | 0 | Starting line number (0-indexed) |
+| limit | int | No | -1 | Number of lines to read, `-1` means read to end |
+
+**Notes**
+
+- `read()` accepts file URIs only. Passing an existing directory URI returns `INVALID_ARGUMENT` (`400`), not `NOT_FOUND`.
+- Public URI parameters accept `resources`, `user`, `agent`, and `session` scopes. Internal scopes such as `temp` and `queue` return `INVALID_URI`.
 
 **Python SDK (Embedded / HTTP)**
 
@@ -145,7 +173,7 @@ openviking read viking://resources/docs/api.md
 
 ### write()
 
-Update an existing file and automatically refresh related semantics and vectors.
+Update an existing file, or create a new one when `mode="create"`, and automatically refresh related semantics and vectors.
 
 **Parameters**
 
@@ -153,14 +181,16 @@ Update an existing file and automatically refresh related semantics and vectors.
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Existing file URI |
 | content | str | Yes | - | New content to write |
-| mode | str | No | `replace` | `replace` or `append` |
+| mode | str | No | `replace` | `replace`, `append`, or `create` |
 | wait | bool | No | `false` | Wait for background semantic/vector refresh |
 | timeout | float | No | `null` | Timeout in seconds when `wait=true` |
 
 **Notes**
 
-- Only existing files are supported; directories are rejected.
+- `replace` and `append` require the file to exist; `create` targets a new file and returns `409 Conflict` when the path already exists. Directories are always rejected.
+- `create` only accepts text-writable extensions: `.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.toml`, `.py`, `.js`, `.ts`. Parent directories are created automatically.
 - Derived semantic files cannot be written directly: `.abstract.md`, `.overview.md`, `.relations.json`.
+- File content is updated before the API returns. `wait` only controls whether the call waits for semantic/vector refresh to finish.
 - The public API no longer accepts `regenerate_semantics` or `revectorize`; write always refreshes related semantics and vectors.
 
 **Python SDK (Embedded / HTTP)**
@@ -212,8 +242,9 @@ openviking write viking://resources/docs/api.md \
     "context_type": "resource",
     "mode": "replace",
     "written_bytes": 29,
-    "semantic_updated": true,
-    "vector_updated": true,
+    "content_updated": true,
+    "semantic_status": "complete",
+    "vector_status": "complete",
     "queue_status": {
       "Semantic": {
         "processed": 1,
@@ -243,6 +274,11 @@ List directory contents.
 | uri | str | Yes | - | Viking URI |
 | simple | bool | No | False | Return only relative paths |
 | recursive | bool | No | False | List all subdirectories recursively |
+| output | str | No | `agent` | Output format: `agent` or `original` |
+| abs_limit | int | No | 256 | Abstract length limit for `agent` output |
+| show_all_hidden | bool | No | False | Include hidden files like `-a` |
+| node_limit | int | No | 1000 | Maximum number of nodes to return |
+| limit | int | No | None | Alias for `node_limit` |
 
 **Entry Structure**
 
@@ -323,6 +359,12 @@ Get directory tree structure.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI |
+| output | str | No | `agent` | Output format: `agent` or `original` |
+| abs_limit | int | No | 256 | Abstract length limit for `agent` output |
+| show_all_hidden | bool | No | False | Include hidden files like `-a` |
+| node_limit | int | No | 1000 | Maximum number of nodes to return |
+| limit | int | No | None | Alias for `node_limit` |
+| level_limit | int | No | 3 | Maximum directory depth to traverse |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -440,11 +482,13 @@ Create a directory.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI for the new directory |
+| description | str | No | `null` | Initial directory description. When provided, it is written to `.abstract.md` and queued for L0 vectorization. |
 
 **Python SDK (Embedded / HTTP)**
 
 ```python
 client.mkdir("viking://resources/new-project/")
+client.mkdir("viking://resources/new-project/", description="API docs directory")
 ```
 
 **HTTP API**
@@ -458,7 +502,8 @@ curl -X POST http://localhost:1933/api/v1/fs/mkdir \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
   -d '{
-    "uri": "viking://resources/new-project/"
+    "uri": "viking://resources/new-project/",
+    "description": "API docs directory"
   }'
 ```
 
@@ -466,6 +511,7 @@ curl -X POST http://localhost:1933/api/v1/fs/mkdir \
 
 ```bash
 openviking mkdir viking://resources/new-project/
+openviking mkdir viking://resources/new-project/ --description "API docs directory"
 ```
 
 **Response**
@@ -485,6 +531,9 @@ openviking mkdir viking://resources/new-project/
 ### rm()
 
 Remove file or directory.
+
+`rm` is idempotent: removing a valid URI that does not exist still succeeds.
+Invalid URI formats, unsupported schemes, and non-public scopes return `INVALID_URI`.
 
 **Parameters**
 
@@ -607,6 +656,9 @@ Search content by pattern.
 | uri | str | Yes | - | Viking URI to search in |
 | pattern | str | Yes | - | Search pattern (regex) |
 | case_insensitive | bool | No | False | Ignore case |
+| exclude_uri | str | No | None | URI prefix to exclude from search |
+| node_limit | int | No | None | Maximum number of nodes to search |
+| level_limit | int | No | 5 | Maximum directory depth to traverse |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -677,6 +729,7 @@ Match files by pattern.
 |-----------|------|----------|---------|-------------|
 | pattern | str | Yes | - | Glob pattern (e.g., `**/*.md`) |
 | uri | str | No | "viking://" | Starting URI |
+| node_limit | int | No | None | Maximum number of matches to return |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -741,7 +794,7 @@ Create relations between resources.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | from_uri | str | Yes | - | Source URI |
-| uris | str or List[str] | Yes | - | Target URI(s) |
+| to_uris | str or List[str] | Yes | - | Target URI(s) |
 | reason | str | No | "" | Reason for the link |
 
 **Python SDK (Embedded / HTTP)**
@@ -874,7 +927,7 @@ Remove a relation.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | from_uri | str | Yes | - | Source URI |
-| uri | str | Yes | - | Target URI to unlink |
+| to_uri | str | Yes | - | Target URI to unlink |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -917,6 +970,182 @@ openviking unlink viking://resources/docs/auth/ viking://resources/docs/security
     "to": "viking://resources/docs/security/"
   },
   "time": 0.1
+}
+```
+
+---
+
+### export_ovpack
+
+Export a resource tree as a `.ovpack` file.
+
+#### 1. API Implementation Overview
+
+Packages all resources under the specified URI into a `.ovpack` file for backup or migration. Requires ROOT or ADMIN permissions.
+
+**Processing Flow**:
+1. Verify user permissions
+2. Traverse resources under the specified URI
+3. Package into zip format (`.ovpack`)
+4. Return as file stream
+
+**Code Entry Points**:
+- `openviking/server/routers/pack.py:export_ovpack` - HTTP router
+- `openviking/service/pack_service.py` - Core service implementation
+- `crates/ov_cli/src/handlers.rs:handle_export` - CLI handler
+
+#### 2. Interface and Parameter Description
+
+**Parameters**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| uri | string | Yes | - | Viking URI to export |
+
+**Permission Requirements**: ROOT or ADMIN
+
+#### 3. Usage Examples
+
+**HTTP API**
+
+```
+POST /api/v1/pack/export
+Content-Type: application/json
+```
+
+```bash
+curl -X POST http://localhost:1933/api/v1/pack/export \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-admin-key" \
+  -d '{
+    "uri": "viking://resources/my-project/"
+  }' \
+  --output my-project.ovpack
+```
+
+**Python SDK**
+
+```python
+import openviking as ov
+
+client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-admin-key")
+client.initialize()
+
+# Export to local file (HTTP SDK automatically handles download)
+# Note: Export functionality is primarily used via CLI
+```
+
+**CLI**
+
+```bash
+# Export resource
+ov export viking://resources/my-project/ ./exports/my-project.ovpack
+```
+
+**Response Example**
+
+This endpoint directly returns a file stream (`Content-Type: application/zip`), does not return a JSON envelope.
+
+---
+
+### import_ovpack
+
+Import a `.ovpack` file.
+
+#### 1. API Implementation Overview
+
+Imports a `.ovpack` file to a specified location for restoring or migrating data. Requires ROOT or ADMIN permissions.
+
+**Processing Flow**:
+1. Verify user permissions
+2. Parse uploaded `.ovpack` file
+3. Import resources to target location
+4. Optionally trigger vectorization
+
+**Code Entry Points**:
+- `openviking/server/routers/pack.py:import_ovpack` - HTTP router
+- `openviking/service/pack_service.py` - Core service implementation
+- `crates/ov_cli/src/handlers.rs:handle_import` - CLI handler
+
+#### 2. Interface and Parameter Description
+
+**Parameters**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| temp_file_id | string | Yes | - | Temporary upload file ID (obtained via [temp_upload](02-resources.md#temp_upload)) |
+| parent | string | Yes | - | Target parent URI (import to this location) |
+| force | bool | No | False | Whether to overwrite existing resources |
+| vectorize | bool | No | True | Whether to trigger vectorization |
+
+**Permission Requirements**: ROOT or ADMIN
+
+#### 3. Usage Examples
+
+**HTTP API**
+
+```
+POST /api/v1/pack/import
+Content-Type: application/json
+```
+
+```bash
+# Step 1: Upload .ovpack file
+TEMP_FILE_ID=$(
+  curl -s -X POST http://localhost:1933/api/v1/resources/temp_upload \
+    -H "X-API-Key: your-admin-key" \
+    -F "file=@./exports/my-project.ovpack" \
+  | jq -r '.result.temp_file_id'
+)
+
+# Step 2: Import
+curl -X POST http://localhost:1933/api/v1/pack/import \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-admin-key" \
+  -d "{
+    \"temp_file_id\": \"$TEMP_FILE_ID\",
+    \"parent\": \"viking://resources/imported/\",
+    \"force\": true,
+    \"vectorize\": true
+  }"
+```
+
+**Python SDK**
+
+```python
+import openviking as ov
+
+client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-admin-key")
+client.initialize()
+
+# Import .ovpack file (HTTP SDK automatically handles upload)
+# Note: Import functionality is primarily used via CLI
+```
+
+**CLI**
+
+```bash
+# Import .ovpack file
+ov import ./exports/my-project.ovpack viking://resources/imported/
+
+# Force overwrite existing content
+ov import ./exports/my-project.ovpack viking://resources/imported/ --force
+
+# Skip vectorization
+ov import ./exports/my-project.ovpack viking://resources/imported/ --no-vectorize
+```
+
+**Response Example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://resources/imported/my-project/"
+  },
+  "telemetry": {
+    "operation_id": "550e8400-e29b-41d4-a716-446655440000"
+  }
 }
 ```
 

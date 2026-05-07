@@ -172,6 +172,7 @@ class AsyncOpenViking:
         content: str | None = None,
         parts: list[dict] | None = None,
         created_at: str | None = None,
+        role_id: str | None = None,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -181,12 +182,18 @@ class AsyncOpenViking:
             content: Text content (simple mode)
             parts: Parts array (full Part support: TextPart, ContextPart, ToolPart)
             created_at: Message creation time (ISO format string)
+            role_id: Optional explicit actor identity. Omit to let the client/server derive it.
 
         If both content and parts are provided, parts takes precedence.
         """
         await self._ensure_initialized()
         return await self._client.add_message(
-            session_id=session_id, role=role, content=content, parts=parts, created_at=created_at
+            session_id=session_id,
+            role=role,
+            content=content,
+            parts=parts,
+            created_at=created_at,
+            role_id=role_id,
         )
 
     async def commit_session(
@@ -307,13 +314,16 @@ class AsyncOpenViking:
     async def search(
         self,
         query: str,
-        target_uri: str = "",
+        target_uri: Union[str, List[str]] = "",
         session: Optional[Union["Session", Any]] = None,
         session_id: Optional[str] = None,
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         telemetry: TelemetryRequest = False,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
     ):
         """
         Complex search with session context.
@@ -339,16 +349,22 @@ class AsyncOpenViking:
             score_threshold=score_threshold,
             filter=filter,
             telemetry=telemetry,
+            since=since,
+            until=until,
+            time_field=time_field,
         )
 
     async def find(
         self,
         query: str,
-        target_uri: str = "",
+        target_uri: Union[str, List[str]] = "",
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         telemetry: TelemetryRequest = False,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
     ):
         """Semantic search"""
         await self._ensure_initialized()
@@ -359,6 +375,9 @@ class AsyncOpenViking:
             score_threshold=score_threshold,
             filter=filter,
             telemetry=telemetry,
+            since=since,
+            until=until,
+            time_field=time_field,
         )
 
     # ============= FS methods =============
@@ -470,10 +489,10 @@ class AsyncOpenViking:
             node_limit=node_limit,
         )
 
-    async def mkdir(self, uri: str) -> None:
+    async def mkdir(self, uri: str, description: Optional[str] = None) -> None:
         """Create directory"""
         await self._ensure_initialized()
-        await self._client.mkdir(uri)
+        await self._client.mkdir(uri, description=description)
 
     async def stat(self, uri: str) -> Dict:
         """Get resource status"""

@@ -282,7 +282,7 @@ impl FileSystem for S3FileSystem {
         // Add files
         for obj in &listing.files {
             let rel_path = self.client.strip_prefix(&obj.key);
-            let name = rel_path.rsplit('/').next().unwrap_or(rel_path);
+            let name = rel_path.rsplit('/').next().unwrap_or(&rel_path);
 
             if name.is_empty() {
                 continue;
@@ -300,7 +300,7 @@ impl FileSystem for S3FileSystem {
         // Add directories
         for dir_key in &listing.directories {
             let rel_path = self.client.strip_prefix(dir_key);
-            let name = rel_path.rsplit('/').next().unwrap_or(rel_path);
+            let name = rel_path.rsplit('/').next().unwrap_or(&rel_path);
 
             if name.is_empty() {
                 continue;
@@ -527,6 +527,12 @@ impl S3FSPlugin {
                     "Key prefix for namespace isolation (e.g. 'agfs/')",
                 ),
                 ConfigParameter::optional(
+                    "normalize_encoding_chars",
+                    "string",
+                    "?#%+@",
+                    "Characters to escape in S3 object keys as !HH hexadecimal bytes; empty string disables normalization",
+                ),
+                ConfigParameter::optional(
                     "directory_marker_mode",
                     "string",
                     "empty",
@@ -600,6 +606,7 @@ A file system backed by Amazon S3 or S3-compatible object storage.
 - Dual-layer caching (directory listings + stat metadata)
 - Range-based reads for partial file access
 - Configurable directory marker modes
+- Optional configurable key normalization for selected characters
 
 ## Configuration
 
@@ -640,6 +647,7 @@ plugins:
       endpoint: https://tos-cn-beijing.volces.com
       use_path_style: false
       directory_marker_mode: nonempty
+      normalize_encoding_chars: "?#%+@"
 ```
 
 ### Alibaba Cloud OSS
@@ -660,6 +668,12 @@ plugins:
 - `empty` (default): Zero-byte marker objects for directories
 - `nonempty`: Single-byte marker (for TOS and services that reject zero-byte objects)
 - `none`: No markers, pure prefix-based directory detection
+
+## Key Normalization
+
+- `normalize_encoding_chars: "?#%+@"` (default): escape only `?`, `#`, `%`, `+`, and `@` as `!HH`
+- `normalize_encoding_chars: ""`: keep original path segments in object keys
+- Characters not listed in `normalize_encoding_chars`, including Chinese and other Unicode characters, remain unchanged
 
 ## Notes
 
@@ -691,6 +705,14 @@ plugins:
                     "invalid directory_marker_mode: {} (valid: none, empty, nonempty)",
                     mode
                 )));
+            }
+        }
+
+        if let Some(value) = config.params.get("normalize_encoding_chars") {
+            if value.as_string().is_none() {
+                return Err(Error::config(
+                    "invalid normalize_encoding_chars: expected string",
+                ));
             }
         }
 
@@ -784,6 +806,43 @@ mod tests {
         params.insert(
             "directory_marker_mode".to_string(),
             crate::core::ConfigValue::String("nonempty".to_string()),
+        );
+        let config = PluginConfig {
+            name: "s3fs".to_string(),
+            mount_path: "/s3".to_string(),
+            params,
+        };
+        assert!(plugin.validate(&config).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_plugin_validate_normalize_encoding_chars() {
+        let plugin = S3FSPlugin::new();
+
+        let mut params = std::collections::HashMap::new();
+        params.insert(
+            "bucket".to_string(),
+            crate::core::ConfigValue::String("test".to_string()),
+        );
+        params.insert(
+            "normalize_encoding_chars".to_string(),
+            crate::core::ConfigValue::Bool(true),
+        );
+        let config = PluginConfig {
+            name: "s3fs".to_string(),
+            mount_path: "/s3".to_string(),
+            params,
+        };
+        assert!(plugin.validate(&config).await.is_err());
+
+        let mut params = std::collections::HashMap::new();
+        params.insert(
+            "bucket".to_string(),
+            crate::core::ConfigValue::String("test".to_string()),
+        );
+        params.insert(
+            "normalize_encoding_chars".to_string(),
+            crate::core::ConfigValue::String("?#%+@".to_string()),
         );
         let config = PluginConfig {
             name: "s3fs".to_string(),

@@ -11,32 +11,47 @@ from openviking_cli.session.user_id import UserIdentifier
 
 
 @pytest.mark.parametrize(
-    ("uri", "expected_space"),
+    ("uri", "expected_owner_user_id", "expected_owner_agent_id"),
     [
         (
             "viking://user/memories/preferences/me.md",
-            lambda user: user.user_space_name(),
+            lambda user: user.user_id,
+            None,
         ),
         (
             "viking://agent/memories/cases/me.md",
-            lambda user: user.agent_space_name(),
+            None,
+            lambda user: user.agent_id,
         ),
         (
             "viking://resources/doc.md",
-            lambda _user: "",
+            None,
+            None,
         ),
     ],
 )
-def test_embedding_msg_converter_backfills_account_and_owner_space(uri, expected_space):
+def test_embedding_msg_converter_backfills_account_and_owner_fields(
+    uri, expected_owner_user_id, expected_owner_agent_id
+):
     user = UserIdentifier("acme", "alice", "helper")
     context = Context(uri=uri, abstract="hello", user=user)
 
     # Simulate legacy producer that forgot tenant fields.
     context.account_id = ""
-    context.owner_space = ""
+    context.owner_user_id = None
+    context.owner_agent_id = None
 
     msg = EmbeddingMsgConverter.from_context(context)
 
     assert msg is not None
     assert msg.context_data["account_id"] == "acme"
-    assert msg.context_data["owner_space"] == expected_space(user)
+    expected_user = (
+        expected_owner_user_id(user) if callable(expected_owner_user_id) else expected_owner_user_id
+    )
+    expected_agent = (
+        expected_owner_agent_id(user)
+        if callable(expected_owner_agent_id)
+        else expected_owner_agent_id
+    )
+    assert msg.context_data["owner_user_id"] == expected_user
+    assert msg.context_data["owner_agent_id"] == expected_agent

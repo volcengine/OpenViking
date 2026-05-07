@@ -107,6 +107,10 @@ class TestParseFeishuUrl:
         with pytest.raises(ValueError, match="Cannot parse"):
             FeishuParser._parse_feishu_url("https://example.feishu.cn/")
 
+    def test_invalid_host_raises(self):
+        with pytest.raises(ValueError, match="host not allowed"):
+            FeishuParser._parse_feishu_url("https://evil.example/docx/doxcnABC123")
+
 
 class TestIsFeishuUrl:
     def test_feishu_docx(self):
@@ -119,6 +123,13 @@ class TestIsFeishuUrl:
 
         assert UnifiedResourceProcessor._is_feishu_url(
             "https://example.larksuite.com/sheets/abc123"
+        )
+
+    def test_larkoffice(self):
+        from openviking.utils.media_processor import UnifiedResourceProcessor
+
+        assert UnifiedResourceProcessor._is_feishu_url(
+            "https://example.larkoffice.com/wiki/wikicn123"
         )
 
     def test_non_feishu_url(self):
@@ -561,15 +572,14 @@ class TestParseAsyncIntegration:
         mock_md_result.parse_time = 0.1
         mock_md_result.meta = {}
 
-        with patch("openviking.parse.parsers.feishu.MarkdownParser") as MockMD:
-            mock_md_instance = MagicMock()
+        mock_md_instance = MagicMock()
 
-            async def _mock_parse_content(*a, **kw):
-                return mock_md_result
+        async def _mock_parse_content(*a, **kw):
+            return mock_md_result
 
-            mock_md_instance.parse_content = _mock_parse_content
-            MockMD.return_value = mock_md_instance
+        mock_md_instance.parse_content = _mock_parse_content
 
+        with patch.object(parser, "_get_markdown_parser", return_value=mock_md_instance):
             result = asyncio.get_event_loop().run_until_complete(
                 parser.parse("https://example.feishu.cn/docx/test123")
             )
@@ -606,15 +616,14 @@ class TestParseAsyncIntegration:
         mock_md_result.parse_time = 0.1
         mock_md_result.meta = {}
 
-        with patch("openviking.parse.parsers.feishu.MarkdownParser") as MockMD:
-            mock_md_instance = MagicMock()
+        mock_md_instance = MagicMock()
 
-            async def _mock_parse_content(*a, **kw):
-                return mock_md_result
+        async def _mock_parse_content(*a, **kw):
+            return mock_md_result
 
-            mock_md_instance.parse_content = _mock_parse_content
-            MockMD.return_value = mock_md_instance
+        mock_md_instance.parse_content = _mock_parse_content
 
+        with patch.object(parser, "_get_markdown_parser", return_value=mock_md_instance):
             result = asyncio.get_event_loop().run_until_complete(
                 parser.parse("https://example.feishu.cn/wiki/wiki_token")
             )
@@ -622,6 +631,30 @@ class TestParseAsyncIntegration:
         assert result.source_format == "feishu_docx"
         assert result.meta["feishu_doc_type"] == "docx"
         assert result.meta["feishu_token"] == "real_token"
+
+    def test_parse_content_routes_larkoffice_url(self):
+        """Test that parse_content routes larkoffice.com URLs to FeishuParser.parse() correctly."""
+        parser = FeishuParser()
+
+        # Mock the underlying parse() method to avoid network/SDK calls
+        mock_result = MagicMock()
+        mock_result.source_format = "feishu_docx"
+        mock_result.meta = {"feishu_token": "larkoffice123"}
+        
+        async def _mock_parse(*a, **kw):
+            return mock_result
+            
+        parser.parse = _mock_parse
+
+        result = asyncio.get_event_loop().run_until_complete(
+            parser.parse_content(
+                content="", 
+                source_path="https://bytedance.larkoffice.com/wiki/larkoffice123"
+            )
+        )
+
+        assert result.source_format == "feishu_docx"
+        assert result.meta["feishu_token"] == "larkoffice123"
 
     def test_parse_unsupported_type(self):
         """Test that unsupported document types return error ParseResult."""
@@ -634,3 +667,17 @@ class TestParseAsyncIntegration:
 
         assert result.warnings
         assert "Unsupported" in result.warnings[0]
+
+    def test_parse_rejects_invalid_host(self):
+        """Main parse() entry point must reject non-Feishu hosts."""
+        parser = FeishuParser()
+
+        result = asyncio.get_event_loop().run_until_complete(
+            parser.parse("https://evil.example/docx/doxcn123")
+        )
+
+        assert result.source_format == "feishu"
+        assert result.warnings
+        assert "host not allowed" in result.warnings[0]
+        assert "feishu_doc_type" not in result.meta
+        assert "feishu_token" not in result.meta

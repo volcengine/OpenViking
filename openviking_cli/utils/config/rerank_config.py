@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-from typing import Optional
+from typing import Dict, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -29,6 +29,11 @@ class RerankConfig(BaseModel):
     api_base: Optional[str] = Field(default=None, description="Custom endpoint URL")
     model: Optional[str] = Field(
         default=None, description="Model name for OpenAI-compatible or LiteLLM providers"
+    )
+
+    extra_headers: Optional[Dict[str, str]] = Field(
+        default=None,
+        description="Extra HTTP headers for OpenAI-compatible providers"
     )
 
     threshold: float = Field(

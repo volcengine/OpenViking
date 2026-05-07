@@ -8,7 +8,7 @@ OV_CLI_DIR := crates/ov_cli
 # Dependency Versions
 MIN_PYTHON_VERSION := 3.10
 MIN_CMAKE_VERSION := 3.12
-MIN_RUST_VERSION := 1.88
+MIN_RUST_VERSION := 1.91.1
 MIN_GCC_VERSION := 9
 MIN_CLANG_VERSION := 11
 
@@ -64,7 +64,7 @@ check-deps:
 	@# Rust check
 	@command -v rustc > /dev/null 2>&1 || (echo "Error: Rust is not installed."; exit 1)
 	@RUST_VER=$$(rustc --version | awk '{print $$2}'); \
-	$(PYTHON) -c "v='$$RUST_VER'.split('.'); exit(0 if int(v[0]) > 1 or (int(v[0]) == 1 and int(v[1]) >= 88) else 1)" || (echo "Error: Rust >= $(MIN_RUST_VERSION) is required. Found $$RUST_VER"; exit 1); \
+	$(PYTHON) -c "import sys; parse=lambda v: tuple(int(x) for x in v.split('.')); raise SystemExit(0 if parse(sys.argv[1]) >= parse(sys.argv[2]) else 1)" "$$RUST_VER" "$(MIN_RUST_VERSION)" || (echo "Error: Rust >= $(MIN_RUST_VERSION) is required. Found $$RUST_VER"; exit 1); \
 	echo "  [OK] Rust $$RUST_VER"
 	@# C++ Compiler check
 	@if command -v clang++ > /dev/null 2>&1; then \
@@ -103,19 +103,20 @@ build: check-deps check-pip
 		cd crates/ragfs-python && $$MATURIN_CMD build --release --out "$$TMPDIR" 2>&1; \
 		cd ../..; \
 		mkdir -p openviking/lib; \
+		rm -f openviking/lib/ragfs_python*.so openviking/lib/ragfs_python*.pyd openviking/lib/ragfs_python*.dylib; \
 		echo "import zipfile, glob, shutil, os, sys" > /tmp/extract_ragfs.py; \
 		echo "whls = glob.glob(os.path.join('$$TMPDIR', 'ragfs_python-*.whl'))" >> /tmp/extract_ragfs.py; \
 		echo "assert whls, 'maturin produced no wheel'" >> /tmp/extract_ragfs.py; \
 		echo "with zipfile.ZipFile(whls[0]) as zf:" >> /tmp/extract_ragfs.py; \
 		echo "    for name in zf.namelist():" >> /tmp/extract_ragfs.py; \
 		echo "        bn = os.path.basename(name)" >> /tmp/extract_ragfs.py; \
-		echo "        if bn.startswith('ragfs_python') and (bn.endswith('.so') or bn.endswith('.pyd')):" >> /tmp/extract_ragfs.py; \
+		echo "        if bn.startswith('ragfs_python.abi3.') and (bn.endswith('.so') or bn.endswith('.pyd')):" >> /tmp/extract_ragfs.py; \
 		echo "            dst = os.path.join('openviking', 'lib', bn)" >> /tmp/extract_ragfs.py; \
 		echo "            with zf.open(name) as src, open(dst, 'wb') as f: f.write(src.read())" >> /tmp/extract_ragfs.py; \
 		echo "            os.chmod(dst, 0o755)" >> /tmp/extract_ragfs.py; \
 		echo "            print(f'  [OK] ragfs-python: extracted {bn} -> {dst}')" >> /tmp/extract_ragfs.py; \
 		echo "            sys.exit(0)" >> /tmp/extract_ragfs.py; \
-		echo "print('[Warning] No ragfs_python .so/.pyd found in wheel')" >> /tmp/extract_ragfs.py; \
+		echo "print('[Warning] No ragfs_python abi3 .so/.pyd found in wheel')" >> /tmp/extract_ragfs.py; \
 		echo "sys.exit(1)" >> /tmp/extract_ragfs.py; \
 		$(PYTHON) /tmp/extract_ragfs.py; \
 		rm -f /tmp/extract_ragfs.py; \

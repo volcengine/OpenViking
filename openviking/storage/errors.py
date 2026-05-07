@@ -31,6 +31,14 @@ class SchemaError(StorageException):
     """Raised when schema validation fails."""
 
 
+class EmbeddingConfigurationError(StorageException):
+    """Raised when embedding provider setup is invalid or unavailable."""
+
+
+class EmbeddingRebuildRequiredError(StorageException):
+    """Raised when existing vector data is incompatible with current embedding config."""
+
+
 class LockError(VikingDBException):
     """Raised when a lock operation fails."""
 

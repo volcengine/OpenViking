@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Optional
 
+from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
 from openviking.session.memory.utils.content import deserialize_full, serialize_with_metadata
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
@@ -17,17 +18,25 @@ from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import build_queue_status_payload
 from openviking.utils.embedding_utils import vectorize_file
-from openviking_cli.exceptions import DeadlineExceededError, InvalidArgumentError, NotFoundError
+from openviking_cli.exceptions import (
+    AlreadyExistsError,
+    DeadlineExceededError,
+    InvalidArgumentError,
+    NotFoundError,
+)
 from openviking_cli.utils import VikingURI
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 _DERIVED_FILENAMES = frozenset({".abstract.md", ".overview.md", ".relations.json"})
+_CREATE_ALLOWED_EXTENSIONS = frozenset(
+    {".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".py", ".js", ".ts"}
+)
 
 
 class ContentWriteCoordinator:
-    """Write an existing file and trigger downstream maintenance."""
+    """Write a file (create or modify) and trigger downstream maintenance."""
 
     def __init__(self, viking_fs: VikingFS):
         self._viking_fs = viking_fs
@@ -45,6 +54,15 @@ class ContentWriteCoordinator:
         normalized_uri = VikingURI.normalize(uri)
         self._validate_mode(mode)
         self._validate_target_uri(normalized_uri)
+
+        if mode == "create":
+            return await self._create_and_write(
+                uri=normalized_uri,
+                content=content,
+                ctx=ctx,
+                wait=wait,
+                timeout=timeout,
+            )
 
         stat = await self._safe_stat(normalized_uri, ctx=ctx)
         if stat.get("isDir"):
@@ -68,35 +86,109 @@ class ContentWriteCoordinator:
                 telemetry_id=telemetry_id,
             )
 
+        return await self._write_direct_with_refresh(
+            uri=normalized_uri,
+            root_uri=root_uri,
+            content=content,
+            mode=mode,
+            context_type=context_type,
+            wait=wait,
+            timeout=timeout,
+            ctx=ctx,
+            written_bytes=written_bytes,
+            telemetry_id=telemetry_id,
+        )
+
+    def _build_write_result(
+        self,
+        *,
+        uri: str,
+        root_uri: str,
+        context_type: str,
+        mode: str,
+        written_bytes: int,
+        wait: bool,
+        queue_status: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        semantic_status, vector_status = self._refresh_statuses(
+            wait=wait,
+            queue_status=queue_status,
+        )
+        return {
+            "uri": uri,
+            "root_uri": root_uri,
+            "context_type": context_type,
+            "mode": mode,
+            "written_bytes": written_bytes,
+            "content_updated": True,
+            "semantic_status": semantic_status,
+            "vector_status": vector_status,
+            "queue_status": queue_status,
+        }
+
+    def _refresh_statuses(
+        self,
+        *,
+        wait: bool,
+        queue_status: Optional[Dict[str, Any]],
+    ) -> tuple[str, str]:
+        if not wait:
+            return "queued", "queued"
+        if not queue_status:
+            return "complete", "complete"
+
+        def _has_errors(name: str) -> bool:
+            status = queue_status.get(name, {})
+            if not isinstance(status, dict):
+                return False
+            try:
+                return int(status.get("error_count", 0) or 0) > 0
+            except (TypeError, ValueError):
+                return bool(status.get("errors"))
+
+        semantic_status = "failed" if _has_errors("Semantic") else "complete"
+        vector_status = "failed" if _has_errors("Embedding") else "complete"
+        return semantic_status, vector_status
+
+    async def _write_direct_with_refresh(
+        self,
+        *,
+        uri: str,
+        root_uri: str,
+        content: str,
+        mode: str,
+        context_type: str,
+        wait: bool,
+        timeout: Optional[float],
+        ctx: RequestContext,
+        written_bytes: int,
+        telemetry_id: str,
+    ) -> Dict[str, Any]:
         lock_manager = get_lock_manager()
         handle = lock_manager.create_handle()
         lock_path = self._viking_fs._uri_to_path(root_uri, ctx=ctx)
         acquired = await lock_manager.acquire_subtree(handle, lock_path)
         if not acquired:
             await lock_manager.release(handle)
-            raise InvalidArgumentError(
-                f"resource is busy and cannot be written now: {normalized_uri}"
-            )
+            raise InvalidArgumentError(f"resource is busy and cannot be written now: {uri}")
 
-        temp_root_uri = ""
+        previous_content: Optional[str] = None
+        content_written = False
         lock_transferred = False
         try:
+            if mode != "create":
+                previous_content = await self._viking_fs.read_file(uri, ctx=ctx)
             if wait and telemetry_id:
                 get_request_wait_tracker().register_request(telemetry_id)
-            temp_root_uri, temp_target_uri = await self._prepare_temp_write(
-                uri=normalized_uri,
-                root_uri=root_uri,
-                content=content,
-                mode=mode,
-                ctx=ctx,
-            )
+            await self._write_in_place(uri, content, mode=mode, ctx=ctx)
+            content_written = True
             await self._enqueue_semantic_refresh(
-                temp_root_uri=temp_root_uri,
-                target_root_uri=root_uri,
-                temp_target_uri=temp_target_uri,
+                root_uri=root_uri,
+                changed_uri=uri,
                 context_type=context_type,
                 ctx=ctx,
                 lifecycle_lock_handle_id=handle.id,
+                change_type="added" if mode == "create" else "modified",
             )
             lock_transferred = True
             queue_status = (
@@ -104,22 +196,24 @@ class ContentWriteCoordinator:
                 if wait
                 else None
             )
-            return {
-                "uri": normalized_uri,
-                "root_uri": root_uri,
-                "context_type": context_type,
-                "mode": mode,
-                "written_bytes": written_bytes,
-                "semantic_updated": True,
-                "vector_updated": True,
-                "queue_status": queue_status,
-            }
+            return self._build_write_result(
+                uri=uri,
+                root_uri=root_uri,
+                context_type=context_type,
+                mode=mode,
+                written_bytes=written_bytes,
+                wait=wait,
+                queue_status=queue_status,
+            )
         except Exception:
-            if not lock_transferred and temp_root_uri:
-                try:
-                    await self._viking_fs.delete_temp(temp_root_uri, ctx=ctx)
-                except Exception:
-                    logger.debug("Failed to clean temp tree after write failure", exc_info=True)
+            if not lock_transferred and content_written:
+                await self._rollback_direct_write(
+                    uri=uri,
+                    previous_content=previous_content,
+                    mode=mode,
+                    ctx=ctx,
+                    lock_handle=handle,
+                )
             if not lock_transferred:
                 await lock_manager.release(handle)
             raise
@@ -127,26 +221,115 @@ class ContentWriteCoordinator:
             if wait and telemetry_id:
                 get_request_wait_tracker().cleanup(telemetry_id)
 
+    async def _rollback_direct_write(
+        self,
+        *,
+        uri: str,
+        previous_content: Optional[str],
+        mode: str,
+        ctx: RequestContext,
+        lock_handle: Any,
+    ) -> None:
+        try:
+            if mode == "create":
+                await self._viking_fs.rm(uri, ctx=ctx, lock_handle=lock_handle)
+                return
+            if previous_content is not None:
+                await self._viking_fs.write_file(uri, previous_content, ctx=ctx)
+        except Exception:
+            logger.error("Failed to rollback direct content write for %s", uri, exc_info=True)
+
     def _validate_mode(self, mode: str) -> None:
-        if mode not in {"replace", "append"}:
+        if mode not in {"replace", "append", "create"}:
             raise InvalidArgumentError(f"unsupported write mode: {mode}")
 
     def _validate_target_uri(self, uri: str) -> None:
         name = uri.rstrip("/").split("/")[-1]
         if name in _DERIVED_FILENAMES:
             raise InvalidArgumentError(f"cannot write derived semantic file directly: {uri}")
+        if is_watch_task_control_uri(uri):
+            raise InvalidArgumentError(f"cannot write watch task control file directly: {uri}")
 
         parsed = VikingURI(uri)
         if parsed.scope not in {"resources", "user", "agent"}:
             raise InvalidArgumentError(f"write is not supported for scope: {parsed.scope}")
 
-    async def _safe_stat(self, uri: str, *, ctx: RequestContext) -> Dict[str, Any]:
+    def _is_not_found(self, exc: Exception) -> bool:
+        """Check if an exception indicates a not-found error (OpenViking or AGFS)."""
+        if isinstance(exc, NotFoundError):
+            return True
+        # AGFS raises its own AGFSNotFoundError which is unrelated to our NotFoundError
+        try:
+            from openviking.pyagfs import AGFSNotFoundError
+
+            return isinstance(exc, AGFSNotFoundError)
+        except ImportError:
+            return False
+
+    async def _safe_stat(
+        self, uri: str, *, ctx: RequestContext, allow_not_found: bool = False
+    ) -> Dict[str, Any]:
         try:
             return await self._viking_fs.stat(uri, ctx=ctx)
         except Exception as exc:
-            if isinstance(exc, NotFoundError):
-                raise
+            if self._is_not_found(exc):
+                if allow_not_found:
+                    return {"not_found": True}
+                if isinstance(exc, NotFoundError):
+                    raise
+                raise NotFoundError(uri, "file") from exc
             raise NotFoundError(uri, "file") from exc
+
+    def _validate_create_extension(self, uri: str) -> None:
+        _, ext = os.path.splitext(uri)
+        if ext.lower() not in _CREATE_ALLOWED_EXTENSIONS:
+            raise InvalidArgumentError(f"create mode does not allow extension '{ext}': {uri}")
+
+    async def _create_and_write(
+        self,
+        *,
+        uri: str,
+        content: str,
+        ctx: RequestContext,
+        wait: bool,
+        timeout: Optional[float],
+    ) -> Dict[str, Any]:
+        self._validate_create_extension(uri)
+
+        stat = await self._safe_stat(uri, ctx=ctx, allow_not_found=True)
+        if not stat.get("not_found"):
+            raise AlreadyExistsError(uri, "file")
+
+        context_type = self._context_type_for_uri(uri)
+        root_uri = await self._resolve_root_uri(uri, ctx=ctx, _allow_not_found=True)
+        written_bytes = len(content.encode("utf-8"))
+        telemetry_id = get_current_telemetry().telemetry_id
+
+        if context_type == "memory":
+            return await self._write_memory_with_refresh(
+                uri=uri,
+                root_uri=root_uri,
+                content=content,
+                mode="create",
+                wait=wait,
+                timeout=timeout,
+                ctx=ctx,
+                written_bytes=written_bytes,
+                telemetry_id=telemetry_id,
+            )
+
+        return await self._write_direct_with_refresh(
+            uri=uri,
+            root_uri=root_uri,
+            content=content,
+            mode="create",
+            context_type=context_type,
+            wait=wait,
+            timeout=timeout,
+            ctx=ctx,
+            written_bytes=written_bytes,
+            telemetry_id=telemetry_id,
+        )
 
     async def _write_in_place(
         self,
@@ -158,91 +341,47 @@ class ContentWriteCoordinator:
     ) -> None:
         if mode == "replace" and self._context_type_for_uri(uri) == "memory":
             existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
-            _, metadata = deserialize_full(existing_raw)
-            if metadata:
-                content = serialize_with_metadata(content, metadata)
+            existing = deserialize_full(existing_raw)
+            if existing.memory_fields:
+                metadata_with_content = existing.memory_fields.copy()
+                metadata_with_content["content"] = content
+                content = serialize_with_metadata(metadata_with_content)
             await self._viking_fs.write_file(uri, content, ctx=ctx)
             return
 
         if mode == "append":
             existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
-            existing_content, metadata = deserialize_full(existing_raw)
+            existing = deserialize_full(existing_raw)
+            existing_content = existing.plain_content
+            metadata = existing.memory_fields
             updated_content = existing_content + content
             if metadata:
-                updated_raw = serialize_with_metadata(updated_content, metadata)
+                metadata_with_content = metadata.copy()
+                metadata_with_content["content"] = updated_content
+                updated_raw = serialize_with_metadata(metadata_with_content)
             else:
                 updated_raw = updated_content
             await self._viking_fs.write_file(uri, updated_raw, ctx=ctx)
             return
         await self._viking_fs.write_file(uri, content, ctx=ctx)
 
-    async def _prepare_temp_write(
-        self,
-        *,
-        uri: str,
-        root_uri: str,
-        content: str,
-        mode: str,
-        ctx: RequestContext,
-    ) -> tuple[str, str]:
-        temp_base = self._viking_fs.create_temp_uri()
-        await self._viking_fs.mkdir(temp_base, exist_ok=True, ctx=ctx)
-        root_name = root_uri.rstrip("/").split("/")[-1]
-        temp_root_uri = f"{temp_base.rstrip('/')}/{root_name}"
-        await self._copy_tree(root_uri, temp_root_uri, ctx=ctx)
-
-        temp_target_uri = self._translate_to_temp_uri(
-            uri=uri, root_uri=root_uri, temp_root_uri=temp_root_uri
-        )
-        await self._write_in_place(temp_target_uri, content, mode=mode, ctx=ctx)
-        return temp_root_uri, temp_target_uri
-
-    async def _copy_tree(self, src_uri: str, dst_uri: str, *, ctx: RequestContext) -> None:
-        stat = await self._safe_stat(src_uri, ctx=ctx)
-        if not stat.get("isDir"):
-            raise InvalidArgumentError(f"incremental write root must be a directory: {src_uri}")
-
-        await self._viking_fs.mkdir(dst_uri, exist_ok=True, ctx=ctx)
-        entries = await self._viking_fs.ls(
-            src_uri, output="original", show_all_hidden=True, ctx=ctx
-        )
-        for entry in entries:
-            name = entry.get("name", "")
-            if not name or name in {".", ".."}:
-                continue
-            src_child = VikingURI(src_uri).join(name).uri
-            dst_child = VikingURI(dst_uri).join(name).uri
-            if entry.get("isDir", False):
-                await self._copy_tree(src_child, dst_child, ctx=ctx)
-                continue
-            content = await self._viking_fs.read_file_bytes(src_child, ctx=ctx)
-            await self._viking_fs.write_file_bytes(dst_child, content, ctx=ctx)
-
-    def _translate_to_temp_uri(self, *, uri: str, root_uri: str, temp_root_uri: str) -> str:
-        if uri == root_uri:
-            return temp_root_uri
-        prefix = root_uri.rstrip("/") + "/"
-        if not uri.startswith(prefix):
-            raise InvalidArgumentError(f"uri {uri} is not inside write root {root_uri}")
-        relative = uri[len(prefix) :]
-        return f"{temp_root_uri.rstrip('/')}/{relative}"
-
     async def _enqueue_semantic_refresh(
         self,
         *,
-        temp_root_uri: str,
-        target_root_uri: str,
-        temp_target_uri: str,
+        root_uri: str,
+        changed_uri: str,
         context_type: str,
         ctx: RequestContext,
         lifecycle_lock_handle_id: str,
+        change_type: str = "modified",
+        target_uri: str = "",
     ) -> None:
         queue_manager = get_queue_manager()
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
         telemetry = get_current_telemetry()
         msg = SemanticMsg(
-            uri=temp_root_uri,
-            target_uri=target_root_uri,
+            uri=root_uri,
+            target_uri=target_uri,
             context_type=context_type,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
@@ -251,7 +390,7 @@ class ContentWriteCoordinator:
             skip_vectorization=False,
             telemetry_id=telemetry.telemetry_id,
             lifecycle_lock_handle_id=lifecycle_lock_handle_id,
-            changes={"modified": [temp_target_uri]},
+            changes={change_type: [changed_uri]},
         )
         await semantic_queue.enqueue(msg)
         if msg.telemetry_id:
@@ -326,6 +465,7 @@ class ContentWriteCoordinator:
             parent_uri=parent.uri,
             context_type=context_type,
             ctx=ctx,
+            preserve_existing_created_at=True,
         )
 
     async def _summary_dict_for_vectorize(
@@ -389,16 +529,15 @@ class ContentWriteCoordinator:
                 if wait
                 else None
             )
-            return {
-                "uri": uri,
-                "root_uri": root_uri,
-                "context_type": "memory",
-                "mode": mode,
-                "written_bytes": written_bytes,
-                "semantic_updated": True,
-                "vector_updated": True,
-                "queue_status": queue_status,
-            }
+            return self._build_write_result(
+                uri=uri,
+                root_uri=root_uri,
+                context_type="memory",
+                mode=mode,
+                written_bytes=written_bytes,
+                wait=wait,
+                queue_status=queue_status,
+            )
         except Exception:
             if not lock_transferred:
                 await lock_manager.release(handle)
@@ -407,7 +546,13 @@ class ContentWriteCoordinator:
             if wait and telemetry_id:
                 get_request_wait_tracker().cleanup(telemetry_id)
 
-    async def _resolve_root_uri(self, uri: str, *, ctx: RequestContext) -> str:
+    async def _resolve_root_uri(
+        self,
+        uri: str,
+        *,
+        ctx: RequestContext,
+        _allow_not_found: bool = False,
+    ) -> str:
         parsed = VikingURI(uri)
         parts = [part for part in parsed.full_path.split("/") if part]
         if not parts:
@@ -445,8 +590,8 @@ class ContentWriteCoordinator:
                     )
                 root_uri = VikingURI.build(*parts[: memories_idx + 2])
 
-        stat = await self._safe_stat(root_uri, ctx=ctx)
-        if not stat.get("isDir"):
+        stat = await self._safe_stat(root_uri, ctx=ctx, allow_not_found=_allow_not_found)
+        if stat.get("not_found") or not stat.get("isDir"):
             parent = VikingURI(uri).parent
             if parent is None:
                 raise InvalidArgumentError(f"could not resolve write root for {uri}")

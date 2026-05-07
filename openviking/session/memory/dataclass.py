@@ -59,6 +59,12 @@ class MemoryTypeSchema(BaseModel):
     operation_mode: str = Field(
         "upsert", description="Operation mode: 'upsert' (default), 'add_only', or 'update_only'"
     )
+    overview_template: Optional[str] = Field(
+        None, description="Overview template for auto-generating .overview.md files"
+    )
+
+    def filename_has_variables(self):
+        return "{{" in self.filename_template and "}}" in self.filename_template
 
 
 class MemoryData(BaseModel):
@@ -82,6 +88,31 @@ class MemoryData(BaseModel):
     def set_field(self, field_name: str, value: Any) -> None:
         """Set field value."""
         self.fields[field_name] = value
+
+
+class MemoryFileContent(BaseModel):
+    uri: Optional[str] = None
+    plain_content: str
+    memory_fields: Dict
+
+
+class ResolvedOperation(BaseModel):
+    old_memory_file_content: Optional[MemoryFileContent]
+    memory_fields: Dict
+    memory_type: str  # The memory type (e.g., 'tools', 'skills', 'events')
+    uris: List[str]
+
+    def is_edit(self):
+        return self.old_memory_file_content is not None
+
+
+class ResolvedOperations(BaseModel):
+    upsert_operations: List[ResolvedOperation]
+    delete_file_contents: List[MemoryFileContent]
+    errors: List[str]
+
+    def has_errors(self) -> bool:
+        return len(self.errors) > 0
 
 
 # ============================================================================
@@ -115,7 +146,7 @@ class FaultTolerantBaseModel(BaseModel):
         origin = get_origin(annotation)
         if origin is Union:
             args = get_args(annotation)
-            if len(args) == 2 and args[1] == type(None):
+            if len(args) == 2 and args[1] is type(None):
                 return cls.get_origin_type(args[0])
         elif origin is list:
             return list
@@ -127,7 +158,7 @@ class FaultTolerantBaseModel(BaseModel):
         origin = get_origin(annotation)
         if origin is Union:
             args = get_args(annotation)
-            if len(args) == 2 and args[1] == type(None):
+            if len(args) == 2 and args[1] is type(None):
                 return cls.get_arg_type(args[0])
         elif origin is list:
             args = get_args(annotation)
@@ -205,7 +236,6 @@ class MemoryOperationsProtocol(Protocol):
     reasoning: str
     write_uris: List[Any]
     edit_uris: List[Any]
-    edit_overview_uris: List[Any]
     delete_uris: List[str]
 
     def is_empty(self) -> bool: ...
@@ -231,10 +261,6 @@ class StructuredMemoryOperations(FaultTolerantBaseModel):
         default_factory=list,
         description="Edit operations with flat data format",
     )
-    edit_overview_uris: List[Any] = Field(
-        default_factory=list,
-        description="Edit operations for .overview.md files using memory_type",
-    )
     delete_uris: List[str] = Field(
         default_factory=list,
         description="Delete operations as URI strings",
@@ -242,19 +268,13 @@ class StructuredMemoryOperations(FaultTolerantBaseModel):
 
     def is_empty(self) -> bool:
         """Check if there are any operations."""
-        return (
-            len(self.write_uris) == 0
-            and len(self.edit_uris) == 0
-            and len(self.edit_overview_uris) == 0
-            and len(self.delete_uris) == 0
-        )
+        return len(self.write_uris) == 0 and len(self.edit_uris) == 0 and len(self.delete_uris) == 0
 
     def to_legacy_operations(self) -> Dict[str, Any]:
         """Convert to legacy format (identity for fallback)."""
         return {
             "write_uris": self.write_uris,
             "edit_uris": self.edit_uris,
-            "edit_overview_uris": self.edit_overview_uris,
             "delete_uris": self.delete_uris,
         }
 

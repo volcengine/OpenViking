@@ -3,18 +3,29 @@
 """Bootstrap script for OpenViking HTTP Server."""
 
 import argparse
+import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import uvicorn
 
 from openviking.server.app import create_app
 from openviking.server.config import load_server_config
+from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
+from openviking_cli.utils.config.config_loader import resolve_config_path
+from openviking_cli.utils.config.consts import (
+    DEFAULT_CONFIG_DIR,
+    DEFAULT_OV_CONF,
+    DEFAULT_OVCLI_CONF,
+    OPENVIKING_CLI_CONFIG_ENV,
+)
 from openviking_cli.utils.logger import configure_uvicorn_logging
 
 
@@ -33,6 +44,35 @@ def _get_version() -> str:
         return "unknown"
 
 
+VIKINGBOT_DEFAULT_HOST = "127.0.0.1"
+VIKINGBOT_DEFAULT_PORT = 18790
+
+
+def _abort_if_port_in_use(port: int, label: str) -> None:
+    """Exit with a clear message if anything is already listening on ``port``.
+
+    Without this, ``--with-bot`` would spawn a vikingbot subprocess that
+    silently fails to bind while a stale process keeps serving traffic —
+    the operator believes they upgraded but the old binary still answers.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        try:
+            s.connect(("127.0.0.1", port))
+            in_use = True
+        except (ConnectionRefusedError, socket.timeout, OSError):
+            in_use = False
+    if in_use:
+        print(
+            f"Error: {label} port {port} is already in use.\n"
+            f"  A previous process is still bound — refusing to start a duplicate.\n"
+            f"  Identify it:  lsof -nP -iTCP:{port} -sTCP:LISTEN\n"
+            f"  Kill it, then retry.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
 def _normalize_host_arg(host: Optional[str]) -> Optional[str]:
     """Normalize special CLI host values."""
     if host is None:
@@ -40,6 +80,47 @@ def _normalize_host_arg(host: Optional[str]) -> Optional[str]:
     if host.strip().lower() == "all":
         return None
     return host
+
+
+def _resolve_default_bot_log_dir(config_path: Optional[str]) -> str:
+    """Resolve default bot log directory from current ov.conf storage.workspace."""
+    default_storage = DEFAULT_CONFIG_DIR / "data"
+    default_log_dir = default_storage / "bot" / "logs"
+
+    resolved_path = resolve_config_path(config_path, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
+    if resolved_path is None:
+        return str(default_log_dir)
+
+    try:
+        with open(resolved_path, "r", encoding="utf-8-sig") as f:
+            raw = os.path.expandvars(f.read())
+        data = json.loads(raw)
+        storage = data.get("storage", {})
+        workspace = storage.get("workspace") if isinstance(storage, dict) else None
+        if not workspace:
+            return str(default_log_dir)
+        return str(Path(workspace).expanduser().resolve() / "bot" / "logs")
+    except Exception:
+        return str(default_log_dir)
+
+
+def _resolve_cli_config_for_bot(config_path: Optional[str]) -> Optional[str]:
+    """Resolve which ovcli.conf the vikingbot child process should use."""
+    explicit_cli_config = os.environ.get(OPENVIKING_CLI_CONFIG_ENV)
+    if explicit_cli_config:
+        return explicit_cli_config
+
+    resolved_ov_conf = resolve_config_path(config_path, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
+    if resolved_ov_conf is not None:
+        colocated_cli_config = Path(resolved_ov_conf).resolve().parent / DEFAULT_OVCLI_CONF
+        if colocated_cli_config.exists():
+            return str(colocated_cli_config)
+
+    default_cli_config = DEFAULT_CONFIG_DIR / DEFAULT_OVCLI_CONF
+    if default_cli_config.exists():
+        return str(default_cli_config)
+
+    return None
 
 
 def main():
@@ -89,10 +170,11 @@ def main():
         help="Enable Bot API proxy to Vikingbot (requires Vikingbot running)",
     )
     parser.add_argument(
-        "--bot-url",
-        default="http://localhost:18790",
-        dest="bot_url",
-        help="Vikingbot OpenAPIChannel URL (default: http://localhost:18790)",
+        "--bot-port",
+        type=int,
+        default=VIKINGBOT_DEFAULT_PORT,
+        dest="bot_port",
+        help=f"Vikingbot gateway port (default: {VIKINGBOT_DEFAULT_PORT})",
     )
     parser.add_argument(
         "--enable-bot-logging",
@@ -110,8 +192,8 @@ def main():
     parser.add_argument(
         "--bot-log-dir",
         type=str,
-        default=os.path.expanduser("~/.openviking/data/bot/logs"),
-        help="Directory to store vikingbot log files",
+        default=None,
+        help="Directory to store vikingbot log files (default: {storage.workspace or ~/.openviking/data}/bot/logs)",
     )
 
     args = parser.parse_args()
@@ -119,7 +201,7 @@ def main():
     # Set OPENVIKING_CONFIG_FILE environment variable if --config is provided
     # This allows OpenVikingConfigSingleton to load from the specified config file
     if args.config is not None:
-        os.environ["OPENVIKING_CONFIG_FILE"] = args.config
+        os.environ[OPENVIKING_CONFIG_ENV] = args.config
 
     from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 
@@ -131,6 +213,27 @@ def main():
         print(e, file=sys.stderr)
         sys.exit(1)
 
+    # Ensure Ollama is running if configured
+    try:
+        from openviking_cli.utils.ollama import detect_ollama_in_config, ensure_ollama_for_server
+
+        ov_config = OpenVikingConfigSingleton.get_instance()
+        uses_ollama, ollama_host, ollama_port = detect_ollama_in_config(ov_config)
+        if uses_ollama:
+            result = ensure_ollama_for_server(ollama_host, ollama_port)
+            if result.success:
+                print(f"Ollama is running at {ollama_host}:{ollama_port}")
+            else:
+                print(
+                    f"Warning: Ollama not available at {ollama_host}:{ollama_port}. "
+                    f"Embedding/VLM may fail. ({result.message})",
+                    file=sys.stderr,
+                )
+                if result.stderr_output:
+                    print(f"  Ollama stderr: {result.stderr_output}", file=sys.stderr)
+    except Exception as e:
+        print(f"Warning: Ollama pre-flight check failed: {e}", file=sys.stderr)
+
     # Override with command line arguments
     if args.host is not None:
         config.host = _normalize_host_arg(args.host)
@@ -140,21 +243,28 @@ def main():
         config.workers = args.workers
     if args.with_bot:
         config.with_bot = True
-    if args.bot_url:
-        config.bot_api_url = args.bot_url
 
     # Configure logging for Uvicorn
     configure_uvicorn_logging()
 
     bot_process: Optional[BotProcess] = None
     if config.with_bot:
+        bot_port = args.bot_port
+        config.bot_api_url = f"http://{VIKINGBOT_DEFAULT_HOST}:{bot_port}"
+        _abort_if_port_in_use(bot_port, "vikingbot gateway")
         print(f"Bot API proxy enabled, forwarding to {config.bot_api_url}")
         # Determine if bot logging should be enabled
         enable_bot_logging = args.enable_bot_logging
         if enable_bot_logging is None:
             enable_bot_logging = args.with_bot
+        bot_log_dir = args.bot_log_dir or _resolve_default_bot_log_dir(args.config)
         # Start vikingbot gateway if --with-bot is set
-        bot_process = _start_vikingbot_gateway(enable_bot_logging, args.bot_log_dir)
+        bot_process = _start_vikingbot_gateway(
+            enable_bot_logging,
+            bot_log_dir,
+            bot_port,
+            config_path=args.config,
+        )
 
     # Create and run server app
     app = create_app(config)
@@ -203,7 +313,12 @@ def _handle_vikingbot_failure(output: str, returncode: int) -> None:
         print(f"\nDetailed error:\n{output}", file=sys.stderr)
 
 
-def _start_vikingbot_gateway(enable_logging: bool, log_dir: str) -> Optional[BotProcess]:
+def _start_vikingbot_gateway(
+    enable_logging: bool,
+    log_dir: str,
+    port: int = VIKINGBOT_DEFAULT_PORT,
+    config_path: Optional[str] = None,
+) -> Optional[BotProcess]:
     """Start vikingbot gateway as a subprocess."""
     print("Starting vikingbot gateway...")
 
@@ -227,6 +342,8 @@ def _start_vikingbot_gateway(enable_logging: bool, log_dir: str) -> Optional[Bot
         print("Warning: vikingbot not found. Please install vikingbot first.")
         print("  uv pip install -e '.[bot,dev]'")
         return None
+
+    vikingbot_cmd.extend(["--host", VIKINGBOT_DEFAULT_HOST, "--port", str(port)])
 
     # Prepare logging
     log_file = None
@@ -255,6 +372,9 @@ def _start_vikingbot_gateway(enable_logging: bool, log_dir: str) -> Optional[Bot
     try:
         # Set environment to ensure it uses the same Python environment
         env = os.environ.copy()
+        cli_config_path = _resolve_cli_config_for_bot(config_path)
+        if cli_config_path is not None:
+            env[OPENVIKING_CLI_CONFIG_ENV] = cli_config_path
 
         process = subprocess.Popen(
             vikingbot_cmd,

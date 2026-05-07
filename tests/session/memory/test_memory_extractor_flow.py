@@ -17,15 +17,6 @@ from unittest.mock import patch
 
 import pytest
 
-# 让 openviking logger 的日志 propagate 到 pytest
-for logger_name in ["openviking", "openviking.session.memory"]:
-    logger = logging.getLogger(logger_name)
-    logger.propagate = True
-    logger.setLevel(logging.DEBUG)
-
-# Module logger for this test
-logger = logging.getLogger(__name__)
-
 from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory import (
@@ -35,6 +26,15 @@ from openviking.session.memory import (
 )
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import get_openviking_config, initialize_openviking_config
+
+# 让 openviking logger 的日志 propagate 到 pytest
+for logger_name in ["openviking", "openviking.session.memory"]:
+    logger = logging.getLogger(logger_name)
+    logger.propagate = True
+    logger.setLevel(logging.DEBUG)
+
+# Module logger for this test
+logger = logging.getLogger(__name__)
 
 
 class MockVikingFS:
@@ -307,9 +307,6 @@ def _print_inline_diff(
 
 def create_test_conversation() -> List[Message]:
     """Create a test conversation focused on cards and events."""
-    user = UserIdentifier.the_default_user()
-    ctx = RequestContext(user=user, role=Role.ROOT)
-
     messages = []
 
     # Message 1: User starts talking about a project
@@ -430,9 +427,6 @@ Today we started working on the memory extraction feature for the OpenViking pro
 
 def create_update_conversation() -> List[Message]:
     """Create a conversation for updating existing cards and events."""
-    user = UserIdentifier.the_default_user()
-    ctx = RequestContext(user=user, role=Role.ROOT)
-
     messages = []
 
     # Message 1: User corrects and adds details to existing OpenViking project card
@@ -540,9 +534,8 @@ class TestMemoryExtractorFlow:
         with patch(
             "openviking.session.memory.memory_updater.get_viking_fs", return_value=viking_fs
         ):
-            updater = MemoryUpdater()
-            # Pass the registry from orchestrator
-            result = await updater.apply_operations(operations, ctx, registry=orchestrator.registry)
+            updater = MemoryUpdater(registry=orchestrator.registry)
+            result = await updater.apply_operations(operations, ctx)
 
             assert isinstance(result, MemoryUpdateResult)
 
@@ -658,9 +651,8 @@ class TestMemoryExtractorFlow:
         with patch(
             "openviking.session.memory.memory_updater.get_viking_fs", return_value=viking_fs
         ):
-            updater = MemoryUpdater()
-            # Pass the registry from orchestrator
-            result = await updater.apply_operations(operations, ctx, registry=orchestrator.registry)
+            updater = MemoryUpdater(registry=orchestrator.registry)
+            result = await updater.apply_operations(operations, ctx)
 
             assert isinstance(result, MemoryUpdateResult)
 

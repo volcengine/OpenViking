@@ -30,9 +30,9 @@ async def test_observer_vikingdb(client: httpx.AsyncClient):
     assert "is_healthy" in result
 
 
-async def test_observer_vlm(client: httpx.AsyncClient):
-    """GET /api/v1/observer/vlm should return VLM status."""
-    resp = await client.get("/api/v1/observer/vlm")
+async def test_observer_models(client: httpx.AsyncClient):
+    """GET /api/v1/observer/models should return models status."""
+    resp = await client.get("/api/v1/observer/models")
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"

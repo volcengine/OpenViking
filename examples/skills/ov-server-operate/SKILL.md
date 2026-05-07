@@ -55,12 +55,13 @@ Note 2: Replace the root_api_key with your own root-api-key. Ask the user to set
   },
   "parsers": {
     "code": {
-      "gitlab_domains": ["code.byted.org"]
+      "gitlab_domains": ["code.byted.org"],
+      "azure_devops_domains": ["ssh.dev.azure.com", "vs-ssh.visualstudio.com"]
     }
   },
   "embedding": {
     "dense": {
-        "model": "doubao-embedding-vision-250615",
+        "model": "doubao-embedding-vision-251215",
         "api_key": "your-volcengine-api-key",
         "api_base": "https://ark.cn-beijing.volces.com/api/v3",
         "dimension": 1024,

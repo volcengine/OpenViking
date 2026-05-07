@@ -140,3 +140,53 @@ class ClientForDataApi:
             data=req.body,
             timeout=DEFAULT_TIMEOUT,
         )
+
+
+class ClientForDataApiWithApiKey:
+    """Data-plane-only client for Volcengine VikingDB using Bearer API key."""
+
+    def __init__(self, api_key: str, host: str):
+        self.api_key = api_key
+        self.host = host.rstrip("/")
+
+        if not self.api_key or not self.host:
+            raise ValueError("api_key and host are required for ClientForDataApiWithApiKey")
+
+    def prepare_request(self, method, path, params=None, data=None):
+        if Request is None:
+            raise ImportError(
+                "volcengine package is required. Please install it via 'pip install volcengine'"
+            )
+
+        r = Request()
+        r.set_shema("https")
+        r.set_method(method)
+        r.set_connection_timeout(DEFAULT_TIMEOUT)
+        r.set_socket_timeout(DEFAULT_TIMEOUT)
+        mheaders = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Host": self.host,
+            "Authorization": f"Bearer {self.api_key}",
+        }
+        r.set_headers(mheaders)
+        if params:
+            r.set_query(params)
+        r.set_host(self.host)
+        r.set_path(path)
+        if data is not None:
+            r.set_body(json.dumps(data))
+        return r
+
+    def do_req(self, req_method, req_path, req_params=None, req_body=None):
+        req = self.prepare_request(
+            method=req_method, path=req_path, params=req_params, data=req_body
+        )
+        return requests.request(
+            method=req.method,
+            url=f"https://{self.host}{req.path}",
+            headers=req.headers,
+            params=req.query,
+            data=req.body,
+            timeout=DEFAULT_TIMEOUT,
+        )

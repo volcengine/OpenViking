@@ -14,8 +14,9 @@ from pydantic import BaseModel, Field, create_model
 from pydantic.config import ConfigDict
 
 from openviking.session.memory.dataclass import FaultTolerantBaseModel, MemoryTypeSchema
+from openviking.session.memory.memory_isolation_handler import RoleScope
 from openviking.session.memory.merge_op import MergeOp, MergeOpFactory
-from openviking.session.memory.merge_op.base import FieldType, StrPatch, get_python_type_for_field
+from openviking.session.memory.merge_op.base import FieldType, get_python_type_for_field
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -38,14 +39,10 @@ class SchemaModelGenerator:
     for polymorphic memory data.
     """
 
-    # Generic overview edit model shared by all memory types
-    _generic_overview_edit_model: Optional[Type[BaseModel]] = None
-
     def __init__(self, schemas: List[MemoryTypeSchema]):
         self.schemas = schemas
         self._model_cache: Dict[str, Type[BaseModel]] = {}
         self._flat_data_models: Dict[str, Type[BaseModel]] = {}
-        self._overview_edit_models: Dict[str, Type[BaseModel]] = {}
         self._union_model: Optional[Type[BaseModel]] = None
         self._operations_model: Optional[Type[BaseModel]] = None
 
@@ -53,7 +50,9 @@ class SchemaModelGenerator:
         """Map YAML field type to Python type."""
         return get_python_type_for_field(field_type)
 
-    def create_flat_data_model(self, memory_type: MemoryTypeSchema) -> Type[BaseModel]:
+    def create_flat_data_model(
+        self, memory_type: MemoryTypeSchema, role_scope: Optional[RoleScope] = None
+    ) -> Type[BaseModel]:
         """
         Create a fully flat Pydantic model for a specific memory type.
 
@@ -62,19 +61,39 @@ class SchemaModelGenerator:
 
         Args:
             memory_type: The memory type schema
+            role_scope: Role scope to determine if user_id/agent_id fields are needed
 
         Returns:
             Dynamically created flat Pydantic model class
         """
-        cache_key = memory_type.memory_type
+        # Determine cache key based on role_scope
+        if role_scope and len(role_scope.user_ids) > 1:
+            cache_key = f"{memory_type.memory_type}_multi_user"
+            model_name = f"{to_pascal_case(memory_type.memory_type)}DataMultiUser"
+        else:
+            cache_key = memory_type.memory_type
+            model_name = f"{to_pascal_case(memory_type.memory_type)}Data"
 
+        # Check cache for both single and multi-user cases
         if cache_key in self._flat_data_models:
             return self._flat_data_models[cache_key]
 
-        model_name = f"{to_pascal_case(memory_type.memory_type)}Data"
-
         # Build field definitions - no memory_type field needed
         field_definitions: Dict[str, Tuple[Type[Any], Any]] = {}
+
+        # Add user_id and agent_id fields when multiple users are in scope
+        # Skip if schema has "ranges" field (like events) - these are message-based and don't need user isolation
+        has_ranges = any(field.name == "ranges" for field in memory_type.fields)
+        if role_scope and len(role_scope.user_ids) > 1 and not has_ranges:
+            field_definitions["user_id"] = (
+                str,
+                Field(..., description="User ID to distinguish which user's memory to write"),
+            )
+        if role_scope and len(role_scope.agent_ids) > 1 and not has_ranges:
+            field_definitions["agent_id"] = (
+                str,
+                Field(..., description="Agent ID to distinguish which agent's memory to write"),
+            )
 
         # Add business fields from schema
         for field in memory_type.fields:
@@ -98,11 +117,11 @@ class SchemaModelGenerator:
         # Create the model
         model = create_model(
             model_name,
-            __config__=ConfigDict(extra="forbid"),
+            __config__=ConfigDict(extra="ignore"),
             **field_definitions,
         )
 
-        # Store in cache
+        # Store in cache with appropriate key
         self._flat_data_models[cache_key] = model
         return model
 
@@ -120,44 +139,6 @@ class SchemaModelGenerator:
         for memory_type in self.schemas:
             models[memory_type.memory_type] = self.create_flat_data_model(memory_type)
         return models
-
-    def create_overview_edit_model(self, memory_type: MemoryTypeSchema) -> Type[BaseModel]:
-        """
-        Create a simplified model for editing .overview.md files.
-
-        The model includes:
-        - memory_type (literal discriminator)
-        - overview (Union[str, StrPatch])
-
-        Args:
-            memory_type: The memory type schema
-
-        Returns:
-            Dynamically created overview edit model class
-        """
-        # Use cached generic model
-        if SchemaModelGenerator._generic_overview_edit_model is not None:
-            return SchemaModelGenerator._generic_overview_edit_model
-
-        # Create generic model with string memory_type (not Literal)
-        model = create_model(
-            "GenericOverviewEdit",
-            __config__=ConfigDict(extra="forbid"),
-            memory_type=(
-                str,
-                Field(..., description="Memory type to edit (e.g., 'profile', 'skills')"),
-            ),
-            overview=(
-                Optional[Union[str, StrPatch]],
-                Field(
-                    None,
-                    description="Overview content (L1). Use Markdown with internal links: [filename](filename.md), e.g., [python](python.md), [go](go.md). Supports direct string or patch format.",
-                ),
-            ),
-        )
-
-        SchemaModelGenerator._generic_overview_edit_model = model
-        return model
 
     def create_discriminated_union_model(self) -> Type[BaseModel]:
         """
@@ -207,18 +188,8 @@ class SchemaModelGenerator:
         self._union_model = MemoryDataWrapper
         return self._union_model
 
-    def _is_single_value_schema(self, schema: MemoryTypeSchema) -> bool:
-        """
-        Determine if a schema should output as single value (not list).
 
-        Single value if filename_template does NOT contain {xxx} variable.
-        For example:
-        - "profile.md" -> single value
-        - "{skill_name}.md" -> list
-        """
-        return "{" not in schema.filename_template
-
-    def create_structured_operations_model(self) -> Type[BaseModel]:
+    def create_structured_operations_model(self, role_scope: RoleScope) -> Type[BaseModel]:
         """
         Create a structured MemoryOperations model with type-safe write operations.
 
@@ -248,36 +219,14 @@ class SchemaModelGenerator:
         # )
 
         for mt in enabled_memory_types:
-            flat_model = self.create_flat_data_model(mt)
-            is_single = self._is_single_value_schema(mt)
-
-            if is_single:
-                # Single value: Optional[FlatModel] = None
-                field_definitions[mt.memory_type] = (
-                    Optional[flat_model],  # type: ignore
-                    Field(None, description=f"{mt.memory_type} memory (add or edit)"),
-                )
-            else:
-                # List: List[FlatModel] = []
-                field_definitions[mt.memory_type] = (
-                    List[flat_model],  # type: ignore
-                    Field(
-                        default_factory=list, description=f"{mt.memory_type} memories (add or edit)"
-                    ),
-                )
-
-        # Use single generic model for overview edit (same for all memory types)
-        # generic_overview_edit = self.create_overview_edit_model(
-        #     enabled_memory_types[0] if enabled_memory_types else None
-        # )
-
-        # field_definitions["edit_overview_uris"] = (
-        #     List[generic_overview_edit],  # type: ignore
-        #     Field(
-        #         default_factory=list,
-        #         description="Edit operations for .overview.md files using memory_type",
-        #     ),
-        # )
+            flat_model = self.create_flat_data_model(mt, role_scope)
+            # Always use List to support multiple users' memories (e.g., identity for different user_id/agent_id)
+            field_definitions[mt.memory_type] = (
+                List[flat_model],  # type: ignore
+                Field(
+                    default_factory=list, description=f"{mt.memory_type} memories (top-level field, do not nest inside other arrays)"
+                ),
+            )
 
         field_definitions["delete_uris"] = (
             List[str],
@@ -295,8 +244,8 @@ class SchemaModelGenerator:
         # Add custom methods
         def is_empty(self) -> bool:
             """Check if there are any operations."""
-            for field_name in memory_type_fields:
-                value = getattr(self, field_name, None)
+            for mt_name in memory_type_fields:
+                value = getattr(self, mt_name, None)
                 if value is not None:
                     if isinstance(value, list):
                         if len(value) > 0:
@@ -304,15 +253,15 @@ class SchemaModelGenerator:
                     else:
                         # Single value (not None)
                         return False
-            return len(self.edit_overview_uris) == 0 and len(self.delete_uris) == 0
+            return len(self.delete_uris) == 0
 
         def to_legacy_operations(self) -> Dict[str, Any]:
             """Convert new per-type structure to legacy write_uris/edit_uris format."""
             write_uris = []
             edit_uris = []
 
-            for field_name in memory_type_fields:
-                value = getattr(self, field_name, None)
+            for mt_name in memory_type_fields:
+                value = getattr(self, mt_name, None)
                 if value is None:
                     continue
                 if isinstance(value, list):
@@ -330,7 +279,6 @@ class SchemaModelGenerator:
             return {
                 "write_uris": write_uris,
                 "edit_uris": edit_uris,
-                #"edit_overview_uris": self.edit_overview_uris,
                 "delete_uris": self.delete_uris,
             }
 
@@ -342,15 +290,6 @@ class SchemaModelGenerator:
         self._operations_model = StructuredMemoryOperations
         return self._operations_model
 
-    def get_llm_json_schema(self) -> Dict[str, Any]:
-        """
-        Get the JSON schema for LLM structured output.
-
-        Returns:
-            JSON schema dictionary suitable for LLM API
-        """
-        operations_model = self.create_structured_operations_model()
-        return operations_model.model_json_schema()
 
     def get_memory_data_json_schema(self) -> Dict[str, Any]:
         """

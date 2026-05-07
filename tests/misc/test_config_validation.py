@@ -4,10 +4,12 @@
 """Test if config validators work correctly"""
 
 import sys
+from pathlib import Path
 
+from openviking.utils.agfs_utils import _generate_plugin_config
 from openviking_cli.utils.config.agfs_config import AGFSConfig, S3Config
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
-from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
+from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig, VolcengineConfig
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
@@ -24,6 +26,40 @@ def test_agfs_validation():
         print(f"   Pass (path={config.path})")
     except ValueError as e:
         print(f"   Fail: {e}")
+
+
+def test_agfs_s3_normalize_encoding_chars_defaults_to_target_set():
+    config = AGFSConfig(
+        backend="s3",
+        s3=S3Config(
+            bucket="my-bucket",
+            region="us-west-1",
+            access_key="fake-access-key-for-testing",
+            secret_key="fake-secret-key-for-testing-12345",
+            endpoint="https://s3.amazonaws.com",
+        ),
+    )
+
+    assert config.s3.normalize_encoding_chars == "?#%+@"
+
+
+def test_agfs_s3_normalize_encoding_chars_is_forwarded_to_ragfs_plugin_config():
+    config = AGFSConfig(
+        path="/tmp/ov-test",
+        backend="s3",
+        s3=S3Config(
+            bucket="my-bucket",
+            region="us-west-1",
+            access_key="fake-access-key-for-testing",
+            secret_key="fake-secret-key-for-testing-12345",
+            endpoint="https://s3.amazonaws.com",
+            normalize_encoding_chars="?#",
+        ),
+    )
+
+    plugins = _generate_plugin_config(config, Path("/tmp/ov-test"))
+
+    assert plugins["s3fs"]["config"]["normalize_encoding_chars"] == "?#"
 
     # Test 2: invalid backend
     print("\n2. Test invalid backend...")
@@ -86,11 +122,72 @@ def test_vectordb_validation():
     try:
         _ = VectorDBBackendConfig(
             backend="volcengine",
-            volcengine={"ak": "test_ak", "sk": "test_sk", "region": "cn-beijing"},
+            volcengine=VolcengineConfig(ak="test_ak", sk="test_sk", region="cn-beijing"),
         )
         print("   Pass")
     except ValueError as e:
         print(f"   Fail: {e}")
+
+    # Test 4: volcengine backend with api_key complete config
+    print("\n4. Test volcengine backend with api_key complete config...")
+    try:
+        _ = VectorDBBackendConfig(
+            backend="volcengine",
+            volcengine=VolcengineConfig(
+                api_key="vk-test-token",
+                host="api-vikingdb.vikingdb.cn-beijing.volces.com",
+            ),
+        )
+        print("   Pass")
+    except ValueError as e:
+        print(f"   Fail: {e}")
+
+
+def test_vectordb_volcengine_validation_accepts_api_key_without_ak_sk():
+    config = VectorDBBackendConfig(
+        backend="volcengine",
+        volcengine=VolcengineConfig(
+            api_key="vk-test-token",
+            host="api-vikingdb.vikingdb.cn-beijing.volces.com",
+        ),
+    )
+
+    assert config.backend == "volcengine"
+    assert config.volcengine is not None
+    assert config.volcengine.api_key == "vk-test-token"
+    assert config.volcengine.host == "api-vikingdb.vikingdb.cn-beijing.volces.com"
+
+
+def test_vectordb_volcengine_without_api_key_still_requires_ak_sk():
+    try:
+        VectorDBBackendConfig(
+            backend="volcengine",
+            volcengine=VolcengineConfig(host="api-vikingdb.vikingdb.cn-beijing.volces.com"),
+        )
+        raise AssertionError("Expected ValueError for missing ak/sk")
+    except ValueError as e:
+        assert "ak" in str(e)
+
+
+def test_removed_volcengine_api_key_backend_name_is_rejected():
+    try:
+        VectorDBBackendConfig(
+            backend="volcengine_api_key",
+        )
+        raise AssertionError("Expected ValueError for removed backend name")
+    except ValueError as e:
+        assert "volcengine_api_key" in str(e)
+
+
+def test_vectordb_volcengine_api_key_auth_requires_host_or_region():
+    try:
+        VectorDBBackendConfig(
+            backend="volcengine",
+            volcengine=VolcengineConfig(api_key="vk-test-token"),
+        )
+        raise AssertionError("Expected ValueError for missing host/region in api_key mode")
+    except ValueError as e:
+        assert "host' or 'region" in str(e)
 
 
 def test_vectordb_index_name_defaults_and_overrides():
@@ -107,13 +204,16 @@ def test_embedding_validation():
     print("Test Embedding config validation")
     print("=" * 60)
 
-    # Test 1: no embedder config
+    # Test 1: no embedder config -> default local dense
     print("\n1. Test no embedder config...")
     try:
-        _ = EmbeddingConfig()
-        print("   Should fail but passed")
+        config = EmbeddingConfig()
+        assert config.dense is not None
+        print(
+            f"   Pass (default provider={config.dense.provider}, model={config.dense.model}, dim={config.dimension})"
+        )
     except ValueError as e:
-        print(f"   Correctly raised exception: {e}")
+        print(f"   Fail: {e}")
 
     # Test 2: OpenAI provider missing api_key
     print("\n2. Test OpenAI provider missing api_key...")

@@ -1,6 +1,8 @@
 {
   "endpoint": "http://localhost:1933",
   "apiKey": "your-api-key-here",
+  "account": "default",
+  "user": "opencode",
   "enabled": true,
   "timeoutMs": 30000,
   "autoCommit": {

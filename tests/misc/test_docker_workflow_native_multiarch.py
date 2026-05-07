@@ -40,6 +40,22 @@ def test_build_docker_workflow_uses_manual_input_version_for_dispatch_tags():
     assert "type=ref,event=tag" in workflow
 
 
+def test_build_docker_workflow_does_not_force_zero_version_on_main_builds():
+    workflow = _read_text(".github/workflows/build-docker-image.yml")
+    zero_build_arg = (
+        "OPENVIKING_VERSION=${{ (github.event_name == 'workflow_dispatch' && "
+        "github.event.inputs.version) || (github.ref_type == 'tag' && "
+        "github.ref_name) || '0.0.0' }}"
+    )
+
+    assert "fetch-depth: 0" in workflow
+    assert "id: openviking-version" in workflow
+    assert "from build_support.versioning import resolve_openviking_version" in workflow
+    assert "OPENVIKING_VERSION=${{ steps.openviking-version.outputs.version }}" in workflow
+    assert zero_build_arg not in workflow
+    assert "fallback to 0.0.0" not in workflow
+
+
 def test_docker_workflows_normalize_image_names_to_lowercase():
     build_workflow = _read_text(".github/workflows/build-docker-image.yml")
     release_workflow = _read_text(".github/workflows/release.yml")

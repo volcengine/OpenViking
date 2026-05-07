@@ -62,14 +62,14 @@ class TestObserver:
             print(f"Error: {e}")
             raise
 
-    def test_observer_vlm(self, api_client):
+    def test_observer_models(self, api_client):
         try:
-            response = api_client.observer_vlm()
-            print(f"\nObserver VLM API status code: {response.status_code}")
+            response = api_client.observer_models()
+            print(f"\nObserver Models API status code: {response.status_code}")
 
             data = response.json()
             print("\n" + "=" * 80)
-            print("Observer VLM API Response:")
+            print("Observer Models API Response:")
             print("=" * 80)
             print(json.dumps(data, indent=2, ensure_ascii=False))
             print("=" * 80 + "\n")
