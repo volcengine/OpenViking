@@ -1,35 +1,43 @@
 # Personalizing the OpenViking Statusline
 
-A guide for an AI assistant (or you) to **customize** the OpenViking statusline beyond the defaults the installer sets up. For the canonical environment-variable reference and segment glossary, see `docs/en/agent-integrations/02-claude-code.md` in the OpenViking repository (locally at `~/.openviking/openviking-repo/docs/en/agent-integrations/02-claude-code.md`). This doc focuses on **personalization recipes** that env vars don't cover.
+A guide for an AI assistant (or you) to **customize** the OpenViking statusline beyond the defaults the installer sets up. This doc focuses on **personalization recipes** that env vars don't cover. For the canonical environment-variable reference and segment glossary, see `$REPO/docs/en/agent-integrations/02-claude-code.md` (path notation defined just below).
 
 The intent is to give an assistant enough orientation to make tasteful changes without prescribing every tweak. If a user asks for something unusual, prefer the smallest local edit over a configurable knob.
 
 ---
 
-## Where to look first
+## Where everything lives
 
-| Concern                                    | File                                     |
-|--------------------------------------------|------------------------------------------|
-| Composing the line / segment order         | `scripts/statusline.mjs`                 |
-| Server-reachability probe + cache          | `scripts/lib/server-probe.mjs`           |
-| Atomic state read/write under `~/.openviking/state/` | `scripts/lib/state.mjs`        |
-| Recall summary (writes `last-recall.json`) | `scripts/auto-recall.mjs`                |
-| Capture summary (writes `last-capture.json`, `daily-stats.json`) | `scripts/auto-capture.mjs` |
-| Resume/compact event marker (`last-session-event.json`) | `scripts/session-start.mjs` |
-| Where CC actually invokes the script       | `~/.claude/settings.json` `.statusLine.command` |
+The OpenViking repo and plugin code are checked out to a known location by the installer. Throughout this doc:
+
+- **`$REPO`** = the OpenViking repo root. Default: `~/.openviking/openviking-repo` (override via `OPENVIKING_REPO_DIR` at install time). Verify with `ls "$REPO/examples/claude-code-memory-plugin"` — if that path is wrong, find the real one with `jq -r '.statusLine.command' ~/.claude/settings.json` (the registered command points into the plugin) or `find ~ -path '*/claude-code-memory-plugin/scripts/statusline.mjs' 2>/dev/null`.
+- **`$PLUGIN`** = `$REPO/examples/claude-code-memory-plugin`. The plugin's own root.
+- **`$STATE`** = `~/.openviking/state` (override via `OPENVIKING_HOME`). Where hook-written JSON snapshots live.
+
+Resolve `$REPO` once before editing anything — every relative path below is anchored to it.
+
+| Concern                                    | File                                              |
+|--------------------------------------------|---------------------------------------------------|
+| Composing the line / segment order         | `$PLUGIN/scripts/statusline.mjs`                  |
+| Server-reachability probe + cache          | `$PLUGIN/scripts/lib/server-probe.mjs`            |
+| Atomic state read/write under `$STATE/`    | `$PLUGIN/scripts/lib/state.mjs`                   |
+| Recall summary (writes `last-recall.json`) | `$PLUGIN/scripts/auto-recall.mjs`                 |
+| Capture summary (writes `last-capture.json`, `daily-stats.json`) | `$PLUGIN/scripts/auto-capture.mjs` |
+| Resume/compact event marker (`last-session-event.json`) | `$PLUGIN/scripts/session-start.mjs`  |
+| Where CC actually invokes the script       | `~/.claude/settings.json` `.statusLine.command`   |
 | Per-host / per-shell env overrides         | `~/.zshrc` (or equivalent) — env vars beat config files |
 
-State files live at `~/.openviking/state/`. They are small JSON snapshots written atomically (temp + rename); deleting them clears the corresponding segment until the next hook fires.
+State files live at `$STATE/`. They are small JSON snapshots written atomically (temp + rename); deleting them clears the corresponding segment until the next hook fires.
 
 ---
 
 ## Recipes
 
-These are sketches, not scripts to copy verbatim. The composer in `statusline.mjs` is small enough that an assistant can read it end-to-end before editing.
+These are sketches, not scripts to copy verbatim. The composer in `$PLUGIN/scripts/statusline.mjs` is small enough that an assistant can read it end-to-end before editing.
 
 ### Drop a specific segment
 
-Each segment in `statusline.mjs` is gated by an `if`. To make a segment user-suppressible, wrap its branch in an env-var check (e.g. `process.env.OPENVIKING_STATUSLINE_HIDE_DAILY === "1"`). To remove it permanently, delete the branch — the line keeps composing the rest.
+Each segment in `$PLUGIN/scripts/statusline.mjs` is gated by an `if`. To make a segment user-suppressible, wrap its branch in an env-var check (e.g. `process.env.OPENVIKING_STATUSLINE_HIDE_DAILY === "1"`). To remove it permanently, delete the branch — the line keeps composing the rest.
 
 ### Reorder or change the separator
 
@@ -41,12 +49,12 @@ Helpers `green / red / yellow / cyan / dim` wrap an ANSI SGR code. Adjust the co
 
 ### Compose with an existing statusline
 
-The installer detects an existing `.statusLine.command` and offers replace / skip. To run **both**, write a small wrapper that fans the same JSON payload to each and concatenates the outputs:
+The installer detects an existing `.statusLine.command` and offers replace / skip. To run **both**, write a small wrapper that fans the same JSON payload to each and concatenates the outputs (substitute the actual `$PLUGIN` path you resolved above):
 
 ```bash
 #!/usr/bin/env bash
 INPUT=$(cat)
-ov=$(node ~/.openviking/openviking-repo/examples/claude-code-memory-plugin/scripts/statusline.mjs <<<"$INPUT")
+ov=$(node "$PLUGIN/scripts/statusline.mjs" <<<"$INPUT")
 mine=$(your_other_statusline <<<"$INPUT")
 printf '%s  %s\n' "$mine" "$ov"
 ```
@@ -55,16 +63,16 @@ Then point `.statusLine.command` at that wrapper. Keep the OV portion last so it
 
 ### Tighten or relax the network timeout
 
-`REQUEST_TIMEOUT_MS` in `server-probe.mjs`. The default 1000 ms is generous for LAN and tight for transcontinental SaaS. The probe is cached for 5 s across processes (file-locked under `~/.openviking/state/`), so this only affects the first hit per cache window.
+`REQUEST_TIMEOUT_MS` in `$PLUGIN/scripts/lib/server-probe.mjs`. The default 1000 ms is generous for LAN and tight for transcontinental SaaS. The probe is cached for 5 s across processes (file-locked under `$STATE/`), so this only affects the first hit per cache window.
 
 ### Add a custom segment
 
-Read the existing segments for the pattern: read state (or call a fast endpoint), guard with a condition, `parts.push(dim("⋯ ..."))`. Keep custom segments cheap — the whole script must finish in well under CC's statusline timeout (≈300 ms wall clock is the working budget). Anything that needs the network should go through the file-cached probe pattern in `server-probe.mjs`.
+Read the existing segments for the pattern: read state (or call a fast endpoint), guard with a condition, `parts.push(dim("⋯ ..."))`. Keep custom segments cheap — the whole script must finish in well under CC's statusline timeout (≈300 ms wall clock is the working budget). Anything that needs the network should go through the file-cached probe pattern in `$PLUGIN/scripts/lib/server-probe.mjs`.
 
 ### Reset stale state without restarting CC
 
 ```bash
-rm -f ~/.openviking/state/last-*.json
+rm -f "$STATE"/last-*.json
 ```
 
 The next hook fire repopulates whichever segments are currently active. This is handy after testing or when a session ID got out of sync.
@@ -79,7 +87,7 @@ The next hook fire repopulates whichever segments are currently active. This is 
 
 ## State file shapes
 
-For an assistant adding a segment that consumes existing state. All files use the same atomic-write helper in `lib/state.mjs`; readers should pass `{ maxAgeMs }` to filter stale snapshots.
+For an assistant adding a segment that consumes existing state. All files live under `$STATE/` and use the same atomic-write helper in `$PLUGIN/scripts/lib/state.mjs`; readers should pass `{ maxAgeMs }` to filter stale snapshots.
 
 `last-recall.json`:
 ```jsonc
@@ -133,6 +141,6 @@ If a request can't be served by an env var or a small local edit (a custom backe
 
 1. Identify which segment block the change belongs near (or whether it warrants a new one).
 2. Propose the smallest patch that delivers it.
-3. Suggest a feature branch and a quick eyeball test (`node scripts/statusline.mjs <<<'{"session_id":"...","cwd":"/tmp"}'`).
+3. Suggest a feature branch and a quick eyeball test: `node "$PLUGIN/scripts/statusline.mjs" <<<'{"session_id":"...","cwd":"/tmp"}'`.
 
-Keep changes to `statusline.mjs` shallow; the value of this script is that it stays readable in one screen.
+Keep changes to `$PLUGIN/scripts/statusline.mjs` shallow; the value of this script is that it stays readable in one screen.
