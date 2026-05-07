@@ -75,14 +75,15 @@ export async function probeServer(cfg, { ttlMs = DEFAULT_TTL_MS } = {}) {
     error = err?.name === "AbortError" ? "timeout" : (err?.message || "unreachable");
   }
 
-  // Best-effort queue badge: only fetched when /health passed and we still
-  // have request budget. Failures here don't flip the overall healthy bit —
-  // the statusline just omits the queue badge.
-  if (healthy && Date.now() - t0 < REQUEST_TIMEOUT_MS) {
+  // Queue badge: independent 250 ms budget. Sharing with /health caused
+  // visible flapping on remote servers — slow /health left no budget for
+  // the queue probe, so the badge appeared only when /health was unusually
+  // fast. Worst case here is ~500 ms total (250 + 250); typical is ~200 ms
+  // because both endpoints respond in tens of ms when colocated.
+  if (healthy) {
     try {
-      const remain = Math.max(50, REQUEST_TIMEOUT_MS - (Date.now() - t0));
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), remain);
+      const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
       try {
         const res = await fetch(`${cfg.baseUrl}/api/v1/observer/queue`, {
           headers,
