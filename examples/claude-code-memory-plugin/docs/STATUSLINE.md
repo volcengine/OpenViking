@@ -31,6 +31,36 @@ State files live at `$STATE/`. They are small JSON snapshots written atomically 
 
 ---
 
+## What each segment means
+
+The default composition runs left to right, joined by ` │ `. Segments are conditional — most only appear when their underlying signal is non-trivial, so a quiet line in a fresh session is normal, not a bug.
+
+| Segment       | Example                | Color  | Shows when                                                                                                            |
+|---------------|------------------------|--------|-----------------------------------------------------------------------------------------------------------------------|
+| Health        | `OV ✓`                 | green  | server reachable in ≤1 s                                                                                              |
+|               | `OV ⚠ slow`            | yellow | probe timed out (>1 s) — server may be alive but lagging                                                              |
+|               | `OV ✗ offline`         | red    | probe errored (refused, DNS fail, network down)                                                                       |
+|               | `OV ⚡ bypass`         | yellow | session matched `OPENVIKING_BYPASS_SESSION` or `*_PATTERNS`                                                           |
+| Recall        | `↩ 6 mem (0.92) · 50ms` | dim    | last user prompt actually injected memories. `(0.92)` is the top similarity score among picked items; latency is the recall round-trip |
+| Capture       | `✎ 573/20k · 2 arch`   | dim    | tokens pending toward the next archive (sawtooth — resets on commit), `2 arch` = archives produced this session       |
+|               | `✎ committed · 2 arch` | dim    | the turn that just finished produced an archive                                                                       |
+|               | `✎ 2 arch`             | dim    | nothing pending, but archives already exist this session                                                              |
+| Failures      | `✗ 1 dropped`          | red    | auto-capture failed N turns this batch — overwrites every Stop, so transient single-turn failures self-clear          |
+| Session event | `🔗 resumed`           | cyan   | SessionStart hook fired with `source: resume` within the last minute (1 min TTL)                                      |
+|               | `🔗 compact`           | cyan   | same, with `source: compact`                                                                                          |
+| Daily         | `+3 today`             | dim    | archives committed across **all** sessions today (UTC date rollover)                                                  |
+
+When a segment is **missing** but you'd expect it, the most common reasons are:
+
+- **`✎` capture** — `cc_session_id` mismatch. After `/branch` or a freshly started CC session, no Stop hook has run yet for the new ID, so `last-capture.json` is from a different session and statusline filters it out. Self-resolves on the next assistant turn.
+- **`🔗` session event** — only `resume` and `compact` write a marker; `startup` and `clear` don't. The 60 s TTL is intentional so the badge fades.
+- **`+N today`** — no archives committed yet today, or `daily-stats.json` is missing entirely.
+- **`↩` recall** — last prompt produced no usable memories (too-short query, score under threshold, or all results filtered out). The hook ran; it just had nothing worth showing.
+
+The whole line is hard-capped at 80 visible chars and trailing-truncated with `…` if it overflows.
+
+---
+
 ## Recipes
 
 These are sketches, not scripts to copy verbatim. The composer in `$PLUGIN/scripts/statusline.mjs` is small enough that an assistant can read it end-to-end before editing.

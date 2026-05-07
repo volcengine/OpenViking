@@ -129,9 +129,14 @@ async function main() {
 
   if (probe.healthy) {
     parts.push(green("OV ✓"));
+  } else if (probe.error === "timeout") {
+    // "slow" means the probe missed its 1 s budget — the server might be alive
+    // but lagging (remote SaaS, GC pause). Yellow keeps it advisory; reserving
+    // red for actual unreachability (refused, DNS, etc.) makes the distinction
+    // legible at a glance.
+    parts.push(yellow("OV ⚠ slow"));
   } else {
-    const reason = probe.error === "timeout" ? "slow" : "offline";
-    parts.push(red(`OV ✗ ${reason}`));
+    parts.push(red("OV ✗ offline"));
   }
 
   // Recall summary: only meaningful when we actually injected memories this
