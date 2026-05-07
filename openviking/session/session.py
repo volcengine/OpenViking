@@ -122,9 +122,7 @@ WM_UPDATE_TOOL: Dict[str, Any] = {
                     "type": "object",
                     "required": list(WM_SEVEN_SECTIONS),
                     "additionalProperties": False,
-                    "properties": {
-                        name: _WM_SECTION_OP_SCHEMA for name in WM_SEVEN_SECTIONS
-                    },
+                    "properties": dict.fromkeys(WM_SEVEN_SECTIONS, _WM_SECTION_OP_SCHEMA),
                 }
             },
         },
@@ -384,9 +382,7 @@ class Session:
         keep = max(0, int(self._meta.keep_recent_count or 0))
         total = len(self._messages)
         if keep <= 0:
-            self._meta.pending_tokens = sum(
-                int(m.estimated_tokens or 0) for m in self._messages
-            )
+            self._meta.pending_tokens = sum(int(m.estimated_tokens or 0) for m in self._messages)
         elif total > keep:
             self._meta.pending_tokens = sum(
                 int(m.estimated_tokens or 0) for m in self._messages[: total - keep]
@@ -669,9 +665,7 @@ class Session:
                 # replaces messages.jsonl under the lock, consistent with the
                 # previous behavior of writing empty messages on full clear.
                 await self._write_to_agfs_async(messages=self._messages)
-                live_message_count = await self._read_live_message_count(
-                    fallback_to_memory=False
-                )
+                live_message_count = await self._read_live_message_count(fallback_to_memory=False)
             except Exception as e:
                 # Rollback: restore messages so they aren't lost
                 logger.error(f"[commit] Failed to write messages.jsonl durably: {e}")
@@ -877,7 +871,9 @@ class Session:
                     if self._viking_fs:
                         for usage in usage_records:
                             try:
-                                await self._viking_fs.link(self._session_uri, usage.uri, ctx=self.ctx)
+                                await self._viking_fs.link(
+                                    self._session_uri, usage.uri, ctx=self.ctx
+                                )
                             except Exception as e:
                                 logger.warning(f"Failed to create relation to {usage.uri}: {e}")
 
@@ -887,8 +883,8 @@ class Session:
                     if self._vikingdb_manager:
                         uris = [u.uri for u in usage_records if u.uri]
                         try:
-                            active_count_updated = await self._vikingdb_manager.increment_active_count(
-                                self.ctx, uris
+                            active_count_updated = (
+                                await self._vikingdb_manager.increment_active_count(self.ctx, uris)
                             )
                         except Exception as e:
                             logger.debug(f"Could not update active_count for usage URIs: {e}")
@@ -976,9 +972,7 @@ class Session:
         missing_files = []
         for file_name in required_files:
             try:
-                await self._viking_fs.read_file(
-                    f"{archive_uri}/{file_name}", ctx=self.ctx
-                )
+                await self._viking_fs.read_file(f"{archive_uri}/{file_name}", ctx=self.ctx)
             except Exception:
                 missing_files.append(file_name)
 
@@ -1538,8 +1532,10 @@ class Session:
           tool_call / JSON / schema anomaly, fall back to the creation
           prompt so we never persist malformed output as WM.
         """
-        _wm_debug(f"_generate_archive_summary_async called "
-                  f"messages={len(messages)} prior_wm={len(latest_archive_overview)}B")
+        _wm_debug(
+            f"_generate_archive_summary_async called "
+            f"messages={len(messages)} prior_wm={len(latest_archive_overview)}B"
+        )
         if not messages:
             return ""
 
@@ -1549,8 +1545,7 @@ class Session:
         if not (vlm and vlm.is_available()):
             turn_count = len([m for m in messages if m.role == "user"])
             return (
-                f"# Session Summary\n\n"
-                f"**Overview**: {turn_count} turns, {len(messages)} messages"
+                f"# Session Summary\n\n**Overview**: {turn_count} turns, {len(messages)} messages"
             )
 
         try:
@@ -1559,8 +1554,7 @@ class Session:
             logger.warning(f"Prompt module unavailable: {e}")
             turn_count = len([m for m in messages if m.role == "user"])
             return (
-                f"# Session Summary\n\n"
-                f"**Overview**: {turn_count} turns, {len(messages)} messages"
+                f"# Session Summary\n\n**Overview**: {turn_count} turns, {len(messages)} messages"
             )
 
         # -------- Detect WM v2 format --------
@@ -1577,7 +1571,10 @@ class Session:
             try:
                 prompt = render_prompt(
                     "compression.ov_wm_v2",
-                    {"messages": formatted, "latest_archive_overview": latest_archive_overview or ""},
+                    {
+                        "messages": formatted,
+                        "latest_archive_overview": latest_archive_overview or "",
+                    },
                 )
                 return await vlm.get_completion_async(prompt)
             except Exception as e:
@@ -1613,14 +1610,12 @@ class Session:
             )
         except Exception as e:
             import traceback as _tb
-            _wm_debug(
-                f"tool_call raised: {type(e).__name__}: {e} "
-                f"tb={_tb.format_exc()[-400:]}"
+
+            _wm_debug(f"tool_call raised: {type(e).__name__}: {e} tb={_tb.format_exc()[-400:]}")
+            logger.warning("WM update tool_call failed (%s); falling back to creation prompt", e)
+            return await self._fallback_generate_wm_creation(
+                formatted, messages, latest_archive_overview
             )
-            logger.warning(
-                "WM update tool_call failed (%s); falling back to creation prompt", e
-            )
-            return await self._fallback_generate_wm_creation(formatted, messages, latest_archive_overview)
 
         has_tc = bool(getattr(resp, "has_tool_calls", False) and getattr(resp, "tool_calls", None))
         _preview = (str(resp)[:200]).replace(chr(10), " ")
@@ -1632,17 +1627,14 @@ class Session:
         )
 
         if not has_tc:
-            logger.warning(
-                "WM update: LLM returned no tool_call; falling back to creation prompt"
+            logger.warning("WM update: LLM returned no tool_call; falling back to creation prompt")
+            return await self._fallback_generate_wm_creation(
+                formatted, messages, latest_archive_overview
             )
-            return await self._fallback_generate_wm_creation(formatted, messages, latest_archive_overview)
 
         try:
             raw_args = resp.tool_calls[0].arguments
-            _wm_debug(
-                f"raw_args type={type(raw_args).__name__} "
-                f"preview={str(raw_args)[:400]!r}"
-            )
+            _wm_debug(f"raw_args type={type(raw_args).__name__} preview={str(raw_args)[:400]!r}")
             args = raw_args
             if isinstance(args, str):
                 args = json.loads(args)
@@ -1668,8 +1660,7 @@ class Session:
                             patched = raw_str.rstrip().rstrip(",") + ("}" * opens)
                             recovered = json.loads(patched)
                             _wm_debug(
-                                f"recovered by closing {opens} brace(s); "
-                                f"patched_len={len(patched)}"
+                                f"recovered by closing {opens} brace(s); patched_len={len(patched)}"
                             )
                     except Exception as e2:
                         _wm_debug(f"brace-close recovery failed: {e2}")
@@ -1686,15 +1677,12 @@ class Session:
                 _wm_debug("args has section keys directly; accepting as ops")
                 ops = args
             else:
-                raise ValueError(
-                    f"tool_call arguments.sections missing; keys={list(args.keys())}"
-                )
+                raise ValueError(f"tool_call arguments.sections missing; keys={list(args.keys())}")
             if not isinstance(ops, dict):
                 raise ValueError("ops is not a dict")
         except Exception as e:
             _wm_debug(
-                f"args parse failed: {type(e).__name__}: {e}; "
-                f"attempting regex recovery from raw"
+                f"args parse failed: {type(e).__name__}: {e}; attempting regex recovery from raw"
             )
             # Regex salvage: when the LLM emits slightly-broken JSON (curly
             # quote, unescaped newline, truncated string), OV's VLM backend
@@ -1727,15 +1715,15 @@ class Session:
                     len(WM_SEVEN_SECTIONS),
                 )
                 return self._merge_wm_sections(latest_archive_overview, salvaged)
-            _wm_debug(
-                "regex recovery salvaged 0 sections; falling back to creation prompt"
-            )
+            _wm_debug("regex recovery salvaged 0 sections; falling back to creation prompt")
             logger.warning(
                 "WM update: tool_call arguments parse failed (%s); "
                 "regex recovery found nothing; falling back to creation prompt",
                 e,
             )
-            return await self._fallback_generate_wm_creation(formatted, messages, latest_archive_overview)
+            return await self._fallback_generate_wm_creation(
+                formatted, messages, latest_archive_overview
+            )
 
         _wm_debug(
             f"ops keys={list(ops.keys())[:7]} "
@@ -1770,8 +1758,7 @@ class Session:
             logger.warning(f"WM creation fallback failed: {e}")
             turn_count = len([m for m in messages if m.role == "user"])
             return (
-                f"# Session Summary\n\n"
-                f"**Overview**: {turn_count} turns, {len(messages)} messages"
+                f"# Session Summary\n\n**Overview**: {turn_count} turns, {len(messages)} messages"
             )
 
     @staticmethod
@@ -1843,9 +1830,11 @@ class Session:
         return "<section_size_warnings>\n" + "\n\n".join(warnings) + "\n</section_size_warnings>"
 
     # Sections where server enforces APPEND-only regardless of what the LLM emits.
-    _WM_APPEND_ONLY_SECTIONS = frozenset({
-        "Errors & Corrections",
-    })
+    _WM_APPEND_ONLY_SECTIONS = frozenset(
+        {
+            "Errors & Corrections",
+        }
+    )
 
     # Very loose path-like token regex used to detect file paths that existed
     # in prior Files & Context and MUST NOT silently disappear after UPDATE.
@@ -1855,11 +1844,32 @@ class Session:
         re.IGNORECASE,
     )
 
-    _WM_TITLE_STOPWORDS = frozenset({
-        "the", "a", "an", "and", "or", "of", "to", "in", "on", "for",
-        "with", "by", "at", "from", "session", "title", "working", "memory",
-        "plan", "plans", "notes", "note",
-    })
+    _WM_TITLE_STOPWORDS = frozenset(
+        {
+            "the",
+            "a",
+            "an",
+            "and",
+            "or",
+            "of",
+            "to",
+            "in",
+            "on",
+            "for",
+            "with",
+            "by",
+            "at",
+            "from",
+            "session",
+            "title",
+            "working",
+            "memory",
+            "plan",
+            "plans",
+            "notes",
+            "note",
+        }
+    )
 
     @staticmethod
     def _wm_recover_ops_from_raw(raw_str: str) -> Dict[str, Any]:
@@ -1884,9 +1894,7 @@ class Session:
         names_alt = "|".join(re.escape(n) for n in WM_SEVEN_SECTIONS)
 
         # --- KEEP: "Name": {"op": "KEEP"} ---
-        keep_re = re.compile(
-            rf'"({names_alt})"\s*:\s*\{{\s*"op"\s*:\s*"KEEP"\s*\}}'
-        )
+        keep_re = re.compile(rf'"({names_alt})"\s*:\s*\{{\s*"op"\s*:\s*"KEEP"\s*\}}')
         for m in keep_re.finditer(raw_str):
             ops.setdefault(m.group(1), {"op": "KEEP"})
 
@@ -1916,7 +1924,7 @@ class Session:
         # Tolerate truncated array (no closing ']').
         append_re = re.compile(
             rf'"({names_alt})"\s*:\s*\{{\s*"op"\s*:\s*"APPEND"\s*,\s*"items"\s*:\s*\['
-            rf'([\s\S]*?)(?:\]|$)',
+            rf"([\s\S]*?)(?:\]|$)",
         )
         item_re = re.compile(r'"((?:[^"\\]|\\.)*)"', re.DOTALL)
         for m in append_re.finditer(raw_str):
@@ -1957,9 +1965,7 @@ class Session:
         return items
 
     @staticmethod
-    def _wm_enforce_append_only(
-        header: str, op: Any, old_content: str
-    ) -> Dict[str, Any]:
+    def _wm_enforce_append_only(header: str, op: Any, old_content: str) -> Dict[str, Any]:
         """Guard: force KEEP/APPEND semantics on APPEND-only sections.
 
         - KEEP and APPEND pass through.
@@ -2015,22 +2021,117 @@ class Session:
         r"\b(?:because|decided|chose|committed|agreed|resolved)\b",
         re.IGNORECASE,
     )
-    _WM_ANCHOR_STOPWORDS = frozenset({
-        "the", "a", "an", "and", "or", "of", "to", "in", "on", "for",
-        "with", "by", "at", "from", "is", "are", "was", "were", "has",
-        "have", "had", "been", "be", "will", "would", "could", "should",
-        "may", "might", "shall", "this", "that", "these", "those",
-        "not", "no", "but", "if", "then", "so", "as", "it", "its",
-        "they", "their", "them", "she", "her", "he", "him", "his",
-        "we", "our", "us", "you", "your", "who", "which", "what",
-        "when", "where", "how", "why", "all", "each", "every",
-        "both", "few", "more", "most", "other", "some", "such",
-        "than", "too", "very", "also", "just", "about", "after",
-        "before", "between", "into", "through", "during", "again",
-        "further", "once", "here", "there", "over", "under", "out",
-        "up", "down", "off", "own", "same", "only", "new", "old",
-        "key", "facts", "decisions", "session", "working", "memory",
-    })
+    _WM_ANCHOR_STOPWORDS = frozenset(
+        {
+            "the",
+            "a",
+            "an",
+            "and",
+            "or",
+            "of",
+            "to",
+            "in",
+            "on",
+            "for",
+            "with",
+            "by",
+            "at",
+            "from",
+            "is",
+            "are",
+            "was",
+            "were",
+            "has",
+            "have",
+            "had",
+            "been",
+            "be",
+            "will",
+            "would",
+            "could",
+            "should",
+            "may",
+            "might",
+            "shall",
+            "this",
+            "that",
+            "these",
+            "those",
+            "not",
+            "no",
+            "but",
+            "if",
+            "then",
+            "so",
+            "as",
+            "it",
+            "its",
+            "they",
+            "their",
+            "them",
+            "she",
+            "her",
+            "he",
+            "him",
+            "his",
+            "we",
+            "our",
+            "us",
+            "you",
+            "your",
+            "who",
+            "which",
+            "what",
+            "when",
+            "where",
+            "how",
+            "why",
+            "all",
+            "each",
+            "every",
+            "both",
+            "few",
+            "more",
+            "most",
+            "other",
+            "some",
+            "such",
+            "than",
+            "too",
+            "very",
+            "also",
+            "just",
+            "about",
+            "after",
+            "before",
+            "between",
+            "into",
+            "through",
+            "during",
+            "again",
+            "further",
+            "once",
+            "here",
+            "there",
+            "over",
+            "under",
+            "out",
+            "up",
+            "down",
+            "off",
+            "own",
+            "same",
+            "only",
+            "new",
+            "old",
+            "key",
+            "facts",
+            "decisions",
+            "session",
+            "working",
+            "memory",
+        }
+    )
 
     @staticmethod
     def _extract_lexical_anchors(text: str) -> set:
@@ -2063,16 +2164,12 @@ class Session:
             if key and key not in old_lower:
                 fresh_items.append(it)
         if fresh_items:
-            _wm_debug(
-                f"guard: salvaged {len(fresh_items)} new items from rejected UPDATE"
-            )
+            _wm_debug(f"guard: salvaged {len(fresh_items)} new items from rejected UPDATE")
             return {"op": "APPEND", "items": fresh_items}
         return {"op": "KEEP"}
 
     @staticmethod
-    def _wm_enforce_key_facts_consolidation(
-        op: Any, old_content: str
-    ) -> Dict[str, Any]:
+    def _wm_enforce_key_facts_consolidation(op: Any, old_content: str) -> Dict[str, Any]:
         """Guard: allow controlled consolidation for Key Facts & Decisions.
 
         Layer 1 — reject trivially small UPDATEs (< 15% bullet count).
@@ -2106,10 +2203,7 @@ class Session:
                 append_items = Session._wm_extract_bullet_items(raw)
             append_items = [str(it) for it in append_items if it]
             old_lower = (old_content or "").lower()
-            fresh = [
-                it for it in append_items
-                if it.strip("_* `").lower() not in old_lower
-            ]
+            fresh = [it for it in append_items if it.strip("_* `").lower() not in old_lower]
             emergency = (
                 len(old_items) > Session._WM_SECTION_BULLET_THRESHOLD * 2
                 or est_tokens > Session._WM_SECTION_TOKEN_THRESHOLD * 2
@@ -2166,13 +2260,9 @@ class Session:
                 f"new={len(new_items)} / old={len(old_items)} = "
                 f"{ratio:.2%} < {Session._WM_KEY_FACTS_MIN_BULLET_RATIO:.0%}"
             )
-            salvaged = Session._salvage_new_items_from_rejected_update(
-                new_content, old_content
-            )
+            salvaged = Session._salvage_new_items_from_rejected_update(new_content, old_content)
             if is_emergency and salvaged.get("op") == "APPEND":
-                _wm_debug(
-                    "guard: suppressing salvage APPEND (emergency level)"
-                )
+                _wm_debug("guard: suppressing salvage APPEND (emergency level)")
                 return {"op": "KEEP"}
             return salvaged
 
@@ -2189,13 +2279,9 @@ class Session:
                     f"({covered}/{len(old_anchors)}) < "
                     f"{Session._WM_KEY_FACTS_MIN_ANCHOR_COVERAGE:.0%}"
                 )
-                salvaged = Session._salvage_new_items_from_rejected_update(
-                    new_content, old_content
-                )
+                salvaged = Session._salvage_new_items_from_rejected_update(new_content, old_content)
                 if is_emergency and salvaged.get("op") == "APPEND":
-                    _wm_debug(
-                        "guard: suppressing salvage APPEND (emergency level)"
-                    )
+                    _wm_debug("guard: suppressing salvage APPEND (emergency level)")
                     return {"op": "KEEP"}
                 return salvaged
             _wm_debug(
@@ -2236,7 +2322,7 @@ class Session:
         added_paths = new_paths - old_paths
         _wm_debug(
             f"guard: 'Files & Context' UPDATE drops {len(missing)} paths "
-            f"{sorted(list(missing))[:5]}; forcing KEEP (+ APPEND new paths="
+            f"{sorted(missing)[:5]}; forcing KEEP (+ APPEND new paths="
             f"{len(added_paths)})"
         )
         if added_paths:
@@ -2273,10 +2359,7 @@ class Session:
 
         def meaningful_words(text: str) -> set:
             tokens = re.findall(r"[A-Za-z][A-Za-z0-9\.]{2,}|[\d\.]+", text or "")
-            return {
-                t.lower() for t in tokens
-                if t.lower() not in Session._WM_TITLE_STOPWORDS
-            }
+            return {t.lower() for t in tokens if t.lower() not in Session._WM_TITLE_STOPWORDS}
 
         old_w = meaningful_words(old_content)
         new_w = meaningful_words(new_content)
@@ -2326,9 +2409,7 @@ class Session:
             f"guard: Open Issues UPDATE silently dropped {len(dropped)} "
             f"items; restoring once (will not restore again if re-dropped)"
         )
-        restored = "\n".join(
-            f"- [silently dropped, restored] {it}" for it in dropped
-        )
+        restored = "\n".join(f"- [silently dropped, restored] {it}" for it in dropped)
         merged = (new_content + ("\n" if new_content else "") + restored).strip()
         return {"op": "UPDATE", "content": merged}
 
@@ -2402,7 +2483,9 @@ class Session:
                     if bad_items:
                         logger.warning(
                             "wm_v2: dropped %d non-string APPEND item(s) in section %r: %s",
-                            len(bad_items), header, [type(s).__name__ for s in bad_items],
+                            len(bad_items),
+                            header,
+                            [type(s).__name__ for s in bad_items],
                         )
                     appended = "\n".join(
                         f"- {s.strip()}" for s in items if isinstance(s, str) and s.strip()

@@ -269,16 +269,12 @@ class TestCommit:
 
         done_exists = True
         try:
-            await session._viking_fs.read_file(
-                f"{result['archive_uri']}/.done", ctx=session.ctx
-            )
+            await session._viking_fs.read_file(f"{result['archive_uri']}/.done", ctx=session.ctx)
         except Exception:
             done_exists = False
         assert done_exists is False
 
-    async def test_commit_rolls_back_when_live_messages_not_cleared(
-        self, client: AsyncOpenViking
-    ):
+    async def test_commit_rolls_back_when_live_messages_not_cleared(self, client: AsyncOpenViking):
         """Commit must fail if persisted live messages.jsonl stays non-empty."""
         session = client.session(session_id="commit_durability_guard")
         session.add_message("user", [TextPart("First round message")])
@@ -296,9 +292,7 @@ class TestCommit:
 
         session._viking_fs.write_file = stale_empty_messages
 
-        with pytest.raises(
-            FailedPreconditionError, match="live messages.jsonl contains"
-        ):
+        with pytest.raises(FailedPreconditionError, match="live messages.jsonl contains"):
             await session.commit_async()
 
         assert len(session.messages) == initial_message_count
