@@ -153,6 +153,37 @@ def estimate_tokens(text: str) -> int:
     return -(-len(text) // 4)
 
 
+def _resolve_adaptive_options(
+    full_tokens: int, opts: PreprocessorOptions
+) -> PreprocessorOptions:
+    """Apply tiered adaptive parameters based on session size.
+
+    * Tier 1 (< 2,000 tokens): lightweight – smaller spans/facts budget.
+    * Tier 2 (2,000 – 8,000 tokens): moderate – scaled budget.
+    * Tier 3 (> 8,000 tokens): full – original parameter caps apply.
+    """
+    if full_tokens <= 0:
+        return opts
+
+    # Adaptive span budget: proportional to session size, clamped to [200, 1200]
+    adaptive_span = max(200, min(opts.max_span_tokens, full_tokens // 3))
+
+    # Adaptive facts cap: proportional, clamped to [4, 24]
+    adaptive_facts = max(4, min(opts.max_facts_total, max(4, full_tokens // 150)))
+
+    return PreprocessorOptions(
+        max_span_tokens=adaptive_span,
+        min_span_tokens=opts.min_span_tokens,
+        max_span_chars=opts.max_span_chars,
+        mmr_similarity_threshold=opts.mmr_similarity_threshold,
+        fallback_if_compact_ratio_above=opts.fallback_if_compact_ratio_above,
+        expand_budget_on_risk=opts.expand_budget_on_risk,
+        max_facts_total=adaptive_facts,
+        min_full_tokens_for_compact=opts.min_full_tokens_for_compact,
+        max_tool_output_chars=opts.max_tool_output_chars,
+    )
+
+
 def build_wm_compact_packet(
     messages: Sequence[Message],
     latest_overview: str = "",
@@ -170,6 +201,9 @@ def build_wm_compact_packet(
     full_tokens = sum(int(getattr(m, "estimated_tokens", 0) or 0) for m in messages)
     if full_tokens <= 0:
         full_tokens = estimate_tokens(full_text)
+
+    # Apply adaptive parameters based on session size
+    opts = _resolve_adaptive_options(full_tokens, opts)
 
     section_signals = _extract_section_signals(normalized)
     structured_facts = [
@@ -210,6 +244,7 @@ def build_wm_compact_packet(
         selected_spans=selected_spans,
         risk_flags=risk_flags,
         expanded_budget=expanded_budget,
+        full_tokens=full_tokens,
     )
     compact_tokens = estimate_tokens(view)
     fallback_reason = None
@@ -646,8 +681,87 @@ def _render_wm_update_view(
     selected_spans: Sequence[SelectedSpan],
     risk_flags: Sequence[str],
     expanded_budget: bool,
+    full_tokens: int = 0,
 ) -> str:
-    lines: List[str] = [
+    """Render the compact packet view.
+
+    Uses a tiered format:
+    * Tier 1 (< 2,000 tokens): terse, minimal headers – maximize compression for small sessions.
+    * Tier 2 (2,000 – 8,000 tokens): moderate – key sections only.
+    * Tier 3 (> 8,000 tokens): full format – current behaviour.
+    """
+    total_tokens = full_tokens
+    if total_tokens <= 0:
+        total_tokens = int(session_meta.get("full_messages_tokens_est", 0) or 0)
+
+    tier = 1 if total_tokens < 2000 else 2 if total_tokens < 8000 else 3
+
+    # ---- Tier 1: ultra-compact (< 2,000 tokens) ----
+    if tier == 1:
+        lines: List[str] = ["# WM-Compact"]
+        msg_count = session_meta.get("message_count", "?")
+        archive = session_meta.get("archive_uri", "")
+        if archive:
+            lines.append(f"  session={msg_count}msgs archive={archive}")
+        else:
+            lines.append(f"  {msg_count} messages")
+
+        overview = latest_overview.strip()
+        if overview and overview != "(none)":
+            lines.append(f"  memory: {overview}")
+
+        if risk_flags:
+            lines.append(f"  risk: {', '.join(risk_flags)}")
+
+        # Inline structured facts (terse format)
+        if structured_facts:
+            fact_texts = []
+            for f in structured_facts:
+                fact_texts.append(f"[{f.kind}] {f.text}")
+            lines.append(f"  facts: {'; '.join(fact_texts)}")
+
+        # Evidence spans without per-span headers
+        if selected_spans:
+            lines.append("---")
+            for span in selected_spans:
+                lines.append(span.text)
+                lines.append("")
+
+        return "\n".join(lines).rstrip() + "\n"
+
+    # ---- Tier 2: moderate (2,000 – 8,000 tokens) ----
+    if tier == 2:
+        lines = [
+            "# Compact WM Update",
+            "",
+            f"  {session_meta.get('message_count', '?')} messages, archive: {session_meta.get('archive_uri', 'none')}",
+            "",
+            "## Memory",
+        ]
+        overview = latest_overview.strip()
+        lines.append(overview if overview else "(none)")
+
+        if risk_flags:
+            lines.extend(["", "## Risk"])
+            for flag in risk_flags:
+                lines.append(f"- {flag}")
+
+        if structured_facts:
+            lines.extend(["", "## Facts"])
+            for fact in structured_facts:
+                lines.append(f"- [{fact.kind}] {fact.text}")
+
+        if selected_spans:
+            lines.extend(["", "## Evidence"])
+            for span in selected_spans:
+                lines.append(f"### [{span.role}] (score={span.score:.2f})")
+                lines.append(span.text)
+                lines.append("")
+
+        return "\n".join(lines).rstrip() + "\n"
+
+    # ---- Tier 3: full format (> 8,000 tokens) ----
+    lines = [
         "# Compact Working Memory Update Packet",
         "",
         "Full raw archive is still stored outside this prompt and can be searched or expanded if needed.",
