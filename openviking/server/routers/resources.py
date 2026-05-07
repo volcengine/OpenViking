@@ -36,6 +36,8 @@ class AddResourceRequest(BaseModel):
             Either path or temp_file_id must be provided.
         to: Target URI for the resource (e.g., "viking://resources/my_resource").
             If not specified, an auto-generated URI will be used.
+        target: Deprecated legacy alias for 'to'. Older console bundles used this
+            field name when creating resources after temp_upload.
         parent: Parent URI under which the resource will be stored.
             Cannot be used together with 'to'.
         reason: Reason for adding the resource. Used for documentation and monitoring.
@@ -68,6 +70,7 @@ class AddResourceRequest(BaseModel):
     path: Optional[str] = None
     temp_file_id: Optional[str] = None
     to: Optional[str] = None
+    target: Optional[str] = None
     parent: Optional[str] = None
     reason: str = ""
     instruction: str = ""
@@ -82,6 +85,17 @@ class AddResourceRequest(BaseModel):
     preserve_structure: Optional[bool] = None
     telemetry: TelemetryRequest = False
     watch_interval: float = 0
+
+    @model_validator(mode="before")
+    @classmethod
+    def apply_legacy_target_alias(cls, data):
+        if not isinstance(data, dict):
+            return data
+
+        if not data.get("to") and data.get("target"):
+            data = dict(data)
+            data["to"] = data["target"]
+        return data
 
     @model_validator(mode="after")
     def check_path_or_temp_file_id(self):
