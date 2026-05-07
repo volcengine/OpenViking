@@ -106,21 +106,6 @@ def _request_auth_mode(request: Request) -> AuthMode:
     return AuthMode.API_KEY
 
 
-def _resolve_message_role_id(
-    http_request: Request,
-    request: AddMessageRequest,
-    ctx: RequestContext,
-) -> Optional[str]:
-    if request.role not in {"user", "assistant"}:
-        return request.role_id
-
-    role_id = request.role_id
-    if not role_id:
-        role_id = ctx.user.user_id if request.role == "user" else ctx.user.agent_id
-
-    return role_id
-
-
 @router.post("")
 async def create_session(
     request: Optional[CreateSessionRequest] = None,
@@ -286,7 +271,6 @@ async def extract_session(
 @router.post("/{session_id}/messages")
 async def add_message(
     request: AddMessageRequest,
-    http_request: Request,
     session_id: str = Path(..., description="Session ID"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
@@ -307,7 +291,7 @@ async def add_message(
     """
     service = get_service()
     session = await service.sessions.get(session_id, _ctx, auto_create=True)
-    role_id = _resolve_message_role_id(http_request, request, _ctx)
+    role_id = _ctx.resolve_role_id(request.role, request.role_id)
 
     if request.parts is not None:
         parts = [part_from_dict(p) for p in request.parts]
