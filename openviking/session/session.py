@@ -829,7 +829,7 @@ class Session:
                             ctx=self.ctx,
                         )
 
-                    # Memory extraction
+                    # Memory extraction — user memory and agent memory run concurrently.
                     if self._session_compressor:
                         ov_config = get_openviking_config()
                         if not ov_config.memory.extraction_enabled:
@@ -840,20 +840,70 @@ class Session:
                             logger.info(
                                 f"Starting memory extraction from {len(messages)} archived messages"
                             )
-                            extracted = await self._session_compressor.extract_long_term_memories(
-                                messages=messages,
-                                user=self.user,
-                                session_id=self.session_id,
-                                ctx=self.ctx,
-                                latest_archive_overview=latest_archive_overview,
-                                archive_uri=archive_uri,
+
+                            has_agent_memory = hasattr(
+                                self._session_compressor, "extract_agent_memories"
                             )
+
+                            user_task = asyncio.ensure_future(
+                                self._session_compressor.extract_long_term_memories(
+                                    messages=messages,
+                                    user=self.user,
+                                    session_id=self.session_id,
+                                    ctx=self.ctx,
+                                    latest_archive_overview=latest_archive_overview,
+                                    archive_uri=archive_uri,
+                                )
+                            )
+
+                            async def _noop_agent():
+                                return []
+
+                            agent_task = asyncio.ensure_future(
+                                self._session_compressor.extract_agent_memories(
+                                    messages=messages,
+                                    ctx=self.ctx,
+                                )
+                                if has_agent_memory
+                                else _noop_agent()
+                            )
+
+                            _results = await asyncio.gather(
+                                user_task, agent_task, return_exceptions=True
+                            )
+                            extracted_result, agent_result = _results
+
+                            if isinstance(extracted_result, Exception):
+                                logger.error(
+                                    f"User memory extraction failed: {extracted_result}",
+                                    exc_info=extracted_result,
+                                )
+                                extracted = []
+                            else:
+                                extracted = extracted_result
+
+                            if isinstance(agent_result, Exception):
+                                logger.error(
+                                    f"Agent memory extraction failed: {agent_result}",
+                                    exc_info=agent_result,
+                                )
+                                agent_extracted = []
+                            else:
+                                agent_extracted = agent_result
+
                             logger.info(f"Extracted {len(extracted)} memories")
                             for ctx_item in extracted:
                                 cat = getattr(ctx_item, "category", "") or "unknown"
                                 memories_extracted[cat] = memories_extracted.get(cat, 0) + 1
                             self._stats.memories_extracted += len(extracted)
                             get_current_telemetry().set("memory.extracted", len(extracted))
+
+                            if agent_extracted:
+                                logger.info(f"Extracted {len(agent_extracted)} agent memories")
+                                for ctx_item in agent_extracted:
+                                    cat = getattr(ctx_item, "category", "") or "unknown"
+                                    memories_extracted[cat] = memories_extracted.get(cat, 0) + 1
+                                self._stats.memories_extracted += len(agent_extracted)
 
                     # Write relations (using snapshot, not self._usage_records)
                     if self._viking_fs:

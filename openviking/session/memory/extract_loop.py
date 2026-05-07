@@ -410,7 +410,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
         # Call LLM with tools - use tools from strategy
         tools = None
         tool_choice = None
-        if not self._disable_tools_for_iteration:
+        if not self._disable_tools_for_iteration and self._tool_schemas:
             tools = self._tool_schemas
             tool_choice = "auto"
         with bind_telemetry_stage("memory_extract"):

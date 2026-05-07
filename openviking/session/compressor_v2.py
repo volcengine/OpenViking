@@ -37,6 +37,47 @@ from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
+MAX_SOURCE_TRAJECTORIES = 5  # keep only the most recent N trajectory URIs per experience
+
+
+def _stamp_trajectory_names(operations) -> None:
+    """Append a timestamp suffix to trajectory_name in all trajectory operations.
+
+    This ensures every trajectory gets a unique filename and that the embedded
+    MEMORY_FIELDS comment also records the full timestamped name.
+    Only applies to add_only trajectory writes (no existing uri).
+    """
+    from datetime import datetime
+
+    now_suffix = datetime.now().strftime("%Y%m%d%H%M%S")
+
+    # New model: ResolvedOperations with upsert_operations list
+    if hasattr(operations, "upsert_operations"):
+        for op in operations.upsert_operations:
+            if getattr(op, "memory_type", None) == "trajectories":
+                fields = getattr(op, "memory_fields", None)
+                if fields and isinstance(fields, dict):
+                    name = fields.get("trajectory_name")
+                    if name and not fields.get("uri"):
+                        fields["trajectory_name"] = f"{name}_{now_suffix}"
+        return
+
+    # Old model: operations with "trajectory" attribute
+    traj_field = getattr(operations, "trajectory", None)
+    if traj_field is None:
+        return
+    items = traj_field if isinstance(traj_field, list) else [traj_field]
+    for item in items:
+        if isinstance(item, dict):
+            name = item.get("trajectory_name")
+            if name and not item.get("uri"):
+                item["trajectory_name"] = f"{name}_{now_suffix}"
+        else:
+            name = getattr(item, "trajectory_name", None)
+            uri = getattr(item, "uri", None)
+            if name and not uri:
+                item.trajectory_name = f"{name}_{now_suffix}"
+
 
 class SessionCompressorV2:
     """Session memory extractor with v2 templating system."""
@@ -333,6 +374,374 @@ class SessionCompressorV2:
                     await lock_manager.release(transaction_handle)
                 except Exception as e:
                     logger.warning(f"Failed to release transaction lock: {e}")
+
+    @tracer("agent.memory.extract", ignore_result=True)
+    async def extract_agent_memories(
+        self,
+        messages: List[Message],
+        ctx: Optional[RequestContext] = None,
+        strict_extract_errors: bool = False,
+    ) -> List[Context]:
+        """Two-phase agent-scope memory extraction (trajectory + experience).
+
+        Phase 1: extract execution trajectories from the conversation and persist them.
+        Phase 2: for each newly written trajectory, decide whether to update an existing
+        experience, create a new one, or do nothing.
+
+        Gated by `config.memory.agent_memory_enabled`. Returns [] when disabled.
+        """
+        config = get_openviking_config()
+        if not getattr(config.memory, "agent_memory_enabled", False):
+            return []
+        if not messages or not ctx:
+            return []
+
+        from openviking.session.memory.agent_experience_context_provider import (
+            AgentExperienceContextProvider,
+        )
+        from openviking.session.memory.agent_trajectory_context_provider import (
+            AgentTrajectoryContextProvider,
+        )
+
+        contexts: List[Context] = []
+
+        # Phase 1: trajectory extraction
+        traj_provider = AgentTrajectoryContextProvider(messages=messages)
+        traj_result = await self._run_extract_phase(
+            provider=traj_provider,
+            messages=messages,
+            ctx=ctx,
+            strict_extract_errors=strict_extract_errors,
+            phase_label="trajectory",
+        )
+        if traj_result is None:
+            return []
+
+        written_trajectory_uris, _, traj_contexts, _ = traj_result
+        contexts.extend(traj_contexts)
+
+        if not written_trajectory_uris:
+            tracer.info("No trajectories extracted; skipping experience phase")
+            return contexts
+
+        # Phase 2: for each new trajectory, consolidate into experiences.
+        viking_fs = get_viking_fs()
+        for traj_uri in written_trajectory_uris:
+            try:
+                from openviking.session.memory.utils.content import deserialize_content as _deser_content
+                traj_content = _deser_content(await viking_fs.read_file(traj_uri, ctx=ctx) or "")
+            except Exception as e:
+                logger.warning(f"Failed to read new trajectory {traj_uri}: {e}")
+                continue
+
+            exp_provider = AgentExperienceContextProvider(
+                messages=messages,
+                trajectory_summary=traj_content,
+                trajectory_uri=traj_uri,
+            )
+            exp_result = await self._run_extract_phase(
+                provider=exp_provider,
+                messages=messages,
+                ctx=ctx,
+                strict_extract_errors=strict_extract_errors,
+                phase_label=f"experience({traj_uri})",
+            )
+
+            exp_dir = exp_provider._render_experience_dir(ctx)
+
+            async def _single_existing_experience_uri() -> List[str]:
+                if not exp_dir:
+                    return []
+                try:
+                    entries = await viking_fs.ls(exp_dir, output="original", ctx=ctx)
+                except Exception:
+                    return []
+                uris = []
+                for e in entries or []:
+                    uri = str(e.get("uri", "")) if isinstance(e, dict) else ""
+                    name = str(e.get("name", "")) if isinstance(e, dict) else ""
+                    if not uri.endswith(".md"):
+                        continue
+                    if name in {".overview.md", ".abstract.md"}:
+                        continue
+                    if uri.endswith("/.overview.md") or uri.endswith("/.abstract.md"):
+                        continue
+                    uris.append(uri)
+                uris = list(dict.fromkeys(uris))
+                return uris if len(uris) == 1 else []
+
+            if exp_result is None:
+                fallback_uris = await _single_existing_experience_uri()
+                if fallback_uris:
+                    tracer.info(
+                        f"[source_traj] phase2 failed; fallback append to sole experience: {fallback_uris[0]}"
+                    )
+                    await self._append_trajectories_to_experiences(
+                        fallback_uris, [traj_uri], ctx, viking_fs
+                    )
+                continue
+
+            exp_written_uris, exp_edited_uris, exp_contexts, inherited_traj_uris = exp_result
+            contexts.extend(exp_contexts)
+
+            all_exp_uris = exp_written_uris + exp_edited_uris
+            if not all_exp_uris:
+                candidate_uris = list(dict.fromkeys(getattr(exp_provider, "prefetched_uris", []) or []))
+                candidate_exp_uris = [
+                    uri
+                    for uri in candidate_uris
+                    if uri.endswith(".md")
+                    and not uri.endswith("/.overview.md")
+                    and not uri.endswith("/.abstract.md")
+                    and "/memories/experiences/" in uri
+                ]
+                if len(candidate_exp_uris) == 1:
+                    all_exp_uris = candidate_exp_uris
+                    tracer.info(
+                        f"[source_traj] fallback append to sole candidate experience: {candidate_exp_uris[0]}"
+                    )
+                else:
+                    all_exp_uris = await _single_existing_experience_uri()
+                    if all_exp_uris:
+                        tracer.info(
+                            f"[source_traj] fallback append by directory scan: {all_exp_uris[0]}"
+                        )
+
+            if all_exp_uris:
+                # Include inherited source_trajectories from any deleted (superseded) experiences
+                traj_uris_to_append = list(dict.fromkeys([traj_uri] + inherited_traj_uris))
+                await self._append_trajectories_to_experiences(
+                    all_exp_uris, traj_uris_to_append, ctx, viking_fs
+                )
+
+        return contexts
+
+    async def _run_extract_phase(
+        self,
+        provider,
+        messages: List[Message],
+        ctx: RequestContext,
+        strict_extract_errors: bool,
+        phase_label: str,
+    ):
+        """Run one ExtractLoop phase with its own lock scope, then apply operations.
+
+        Returns (written_uris, edited_uris, contexts, inherited_traj_uris) on success,
+        or None on failure (unless strict_extract_errors is True, in which case
+        the exception is re-raised).
+        """
+        from openviking.session.memory.memory_updater import ExtractContext
+        from openviking.storage.transaction import get_lock_manager, init_lock_manager
+
+        config = get_openviking_config()
+        vlm = config.vlm.get_vlm_instance()
+        viking_fs = get_viking_fs()
+
+        # Build isolation_handler BEFORE creating the orchestrator so that
+        # ExtractLoop.resolve_operations() can call fill_role_ids() correctly.
+        extract_context = ExtractContext(messages)
+        isolation_handler = MemoryIsolationHandler(ctx, extract_context)
+        isolation_handler.prepare_messages()
+
+        # Inject context into provider (mirrors extract_long_term_memories pattern)
+        provider._isolation_handler = isolation_handler
+        provider._ctx = ctx
+        provider._viking_fs = viking_fs
+
+        orchestrator = ExtractLoop(
+            vlm=vlm,
+            viking_fs=viking_fs,
+            ctx=ctx,
+            context_provider=provider,
+            isolation_handler=isolation_handler,
+        )
+
+        lock_manager = None
+        transaction_handle = None
+        if viking_fs and hasattr(viking_fs, "agfs") and viking_fs.agfs:
+            init_lock_manager(viking_fs.agfs)
+            lock_manager = get_lock_manager()
+            transaction_handle = lock_manager.create_handle()
+
+        try:
+            if lock_manager:
+                schemas = provider.get_memory_schemas(ctx)
+                memory_schema_dirs = []
+                for schema in schemas:
+                    if not schema.directory:
+                        continue
+
+                    if ctx and ctx.user:
+                        user_space = to_user_space(
+                            ctx.namespace_policy, ctx.user.user_id, ctx.user.agent_id
+                        )
+                        agent_space = to_agent_space(
+                            ctx.namespace_policy, ctx.user.user_id, ctx.user.agent_id
+                        )
+                    else:
+                        user_space = "default"
+                        agent_space = "default"
+                    import jinja2
+
+                    env = jinja2.Environment(autoescape=False)
+                    template = env.from_string(schema.directory)
+                    dir_path = template.render(user_space=user_space, agent_space=agent_space)
+                    dir_path = viking_fs._uri_to_path(dir_path, ctx)
+                    if dir_path not in memory_schema_dirs:
+                        memory_schema_dirs.append(dir_path)
+
+                retry_interval = config.memory.v2_lock_retry_interval_seconds
+                max_retries = config.memory.v2_lock_max_retries
+                retry_count = 0
+                while True:
+                    lock_acquired = await lock_manager.acquire_subtree_batch(
+                        transaction_handle,
+                        memory_schema_dirs,
+                        timeout=None,
+                    )
+                    if lock_acquired:
+                        break
+                    retry_count += 1
+                    if max_retries > 0 and retry_count >= max_retries:
+                        raise TimeoutError(
+                            f"[{phase_label}] Failed to acquire memory locks after "
+                            f"{retry_count} retries (max={max_retries})"
+                        )
+                    if retry_interval > 0:
+                        await asyncio.sleep(retry_interval)
+
+            provider._transaction_handle = transaction_handle
+            orchestrator._transaction_handle = transaction_handle
+            operations, _ = await orchestrator.run()
+
+            if operations is None:
+                tracer.info(f"[{phase_label}] No memory operations generated")
+                return [], [], [], []
+
+            # Log raw LLM operations before applying.
+            _op_items = [
+                f"{op.memory_type}(uris={op.uris!r})"
+                for op in getattr(operations, "upsert_operations", [])
+            ]
+            _delete_uris_raw = [
+                dc.uri for dc in getattr(operations, "delete_file_contents", [])
+            ]
+            tracer.info(
+                f"[{phase_label}] LLM operations: ops={_op_items}, delete_uris={_delete_uris_raw}"
+            )
+
+            # Collect source_trajectories from files about to be deleted, before apply_operations
+            # removes them. This is experience-specific: allows merge operations to inherit
+            # historical source_trajectories into the replacement experience.
+            inherited_traj_uris: List[str] = []
+            for dc in getattr(operations, "delete_file_contents", []):
+                existing = (dc.memory_fields or {}).get("source_trajectories", [])
+                if isinstance(existing, list):
+                    inherited_traj_uris.extend(existing)
+                elif isinstance(existing, str) and existing.strip():
+                    inherited_traj_uris.extend(
+                        line.strip() for line in existing.splitlines() if line.strip()
+                    )
+
+            # Append timestamp suffix to trajectory_name so each trajectory gets a
+            # unique filename and MEMORY_FIELDS also records the timestamped name.
+            _stamp_trajectory_names(operations)
+
+            registry = provider._get_registry()
+            updater = self._get_or_create_updater(registry, transaction_handle)
+            result = await updater.apply_operations(
+                operations, ctx, extract_context=extract_context, isolation_handler=isolation_handler
+            )
+
+            tracer.info(
+                f"[{phase_label}] Applied: written={len(result.written_uris)}, "
+                f"edited={len(result.edited_uris)}, deleted={len(result.deleted_uris)}, "
+                f"errors={len(result.errors)}"
+            )
+
+            contexts: List[Context] = []
+            for uri in result.written_uris:
+                contexts.append(
+                    Context(uri=uri, category="memory_write", context_type="memory")
+                )
+            for uri in result.edited_uris:
+                contexts.append(
+                    Context(uri=uri, category="memory_edit", context_type="memory")
+                )
+            for uri in result.deleted_uris:
+                contexts.append(
+                    Context(uri=uri, category="memory_delete", context_type="memory")
+                )
+
+            return list(result.written_uris), list(result.edited_uris), contexts, inherited_traj_uris
+        except Exception as e:
+            logger.error(f"[{phase_label}] Failed to extract: {e}", exc_info=True)
+            if strict_extract_errors:
+                raise
+            return None
+        finally:
+            if lock_manager and transaction_handle:
+                try:
+                    await lock_manager.release(transaction_handle)
+                except Exception as e:
+                    logger.warning(f"[{phase_label}] Failed to release transaction lock: {e}")
+
+    async def _append_trajectories_to_experiences(
+        self,
+        exp_uris: List[str],
+        traj_uris: List[str],
+        ctx,
+        viking_fs,
+    ) -> None:
+        """Append traj_uris to the source_trajectories list of each experience file.
+
+        This is the system-side management of source_trajectories — the LLM never
+        outputs this field; the pipeline appends the batch after a write or edit.
+        """
+        from openviking.session.memory.utils.content import deserialize_full, serialize_with_metadata
+
+        normalized_traj_uris = [uri for uri in traj_uris if uri]
+        if not normalized_traj_uris:
+            return
+
+        for exp_uri in exp_uris:
+            try:
+                raw = await viking_fs.read_file(exp_uri, ctx=ctx) or ""
+                file_content = deserialize_full(raw)
+                plain_content = file_content.plain_content
+                metadata = file_content.memory_fields or {}
+
+                existing = metadata.get("source_trajectories", [])
+                if isinstance(existing, list):
+                    uris = list(existing)
+                elif isinstance(existing, str) and existing.strip():
+                    uris = [line.strip() for line in existing.splitlines() if line.strip()]
+                else:
+                    uris = []
+
+                changed = False
+                for traj_uri in normalized_traj_uris:
+                    if traj_uri not in uris:
+                        uris.append(traj_uri)
+                        changed = True
+
+                # Trim to the most recent N entries so the list doesn't grow unboundedly.
+                if len(uris) > MAX_SOURCE_TRAJECTORIES:
+                    uris = uris[-MAX_SOURCE_TRAJECTORIES:]
+                    changed = True
+
+                if changed:
+                    metadata["source_trajectories"] = uris
+                    metadata["content"] = plain_content
+                    new_raw = serialize_with_metadata(metadata)
+                    await viking_fs.write_file(exp_uri, new_raw, ctx=ctx)
+                    tracer.info(
+                        f"[source_traj] appended {len(normalized_traj_uris)} trajectories -> {exp_uri}"
+                    )
+                else:
+                    tracer.info(f"[source_traj] already present, skip: {exp_uri}")
+            except Exception as e:
+                logger.warning(f"Failed to append source trajectories to {exp_uri}: {e}")
 
     async def _build_memory_diff(
         self,

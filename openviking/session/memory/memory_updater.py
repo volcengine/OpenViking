@@ -82,6 +82,26 @@ class ExtractContext:
         first_time = msg_range._first_message_time()
         return first_time.split("-")[2] if first_time else None
 
+    def get_timestamp_from_ranges(self, ranges_str: str) -> str:
+        """根据 ranges 获取第一条消息的紧凑时间戳（YYYYMMDDHHMMSS），用于文件名去重。
+
+        Fallback 到 datetime.now() 以保证总是返回非空字符串。
+        """
+        from datetime import datetime
+
+        msg_range = self.read_message_ranges(ranges_str) if ranges_str else None
+        if msg_range:
+            for elem in msg_range.elements:
+                if isinstance(elem, str):
+                    continue
+                created_at = getattr(elem, "created_at", None)
+                if created_at:
+                    try:
+                        return datetime.fromisoformat(created_at).strftime("%Y%m%d%H%M%S")
+                    except (ValueError, TypeError):
+                        continue
+        return datetime.now().strftime("%Y%m%d%H%M%S")
+
     def get_event_content(self, ranges_str: str, summary: str, ratio_threshold: float = 0.2) -> str:
         """根据原始消息与 summary 的字符数比例，决定返回原始消息还是摘要。"""
         if not ranges_str or not summary:
@@ -353,6 +373,7 @@ class MemoryUpdater:
     ):
         """Apply upsert operation from a flat model."""
         viking_fs = self._get_viking_fs()
+
         memory_type = resolved_op.memory_type
         schema = self._registry.get(memory_type)
         metadata: Dict[str, Any] = dict(resolved_op.memory_fields)

@@ -59,6 +59,9 @@ class MemoryTypeSchema(BaseModel):
     operation_mode: str = Field(
         "upsert", description="Operation mode: 'upsert' (default), 'add_only', or 'update_only'"
     )
+    agent_only: bool = Field(
+        False, description="If true, only used by agent memory extraction, not user memory"
+    )
     overview_template: Optional[str] = Field(
         None, description="Overview template for auto-generating .overview.md files"
     )

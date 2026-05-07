@@ -94,22 +94,21 @@ PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
         children=[
             DirectoryDefinition(
                 path="memories",
-                abstract="Agent's long-term memory storage. Contains cases and patterns, managed hierarchically by type.",
+                abstract="Agent's long-term memory storage. Contains trajectories and experiences, managed hierarchically by type.",
                 overview="Use this directory to access Agent's learning memories. Contains two main categories: "
-                "1) cases-specific cases, 2) patterns-reusable patterns.",
+                "1) trajectories-task execution records, 2) experiences-generalized lessons from trajectories.",
                 children=[
                     DirectoryDefinition(
-                        path="cases",
-                        abstract="Agent's case records. Stores specific problems and solutions, new problems and resolution processes encountered in each interaction.",
-                        overview="Access cases when encountering similar problems, reference historical solutions. "
-                        "Cases are records of specific conversations, each independent and not updated.",
+                        path="trajectories",
+                        abstract="Agent's execution trajectory records. Stores end-to-end task execution traces from each interaction, each trajectory is independent and not updated.",
+                        overview="Access when reviewing how the agent handled past tasks or diagnosing execution history. "
+                        "Trajectories are records of specific task executions, each independent and not updated once created.",
                     ),
                     DirectoryDefinition(
-                        path="patterns",
-                        abstract="Agent's effective patterns. Stores reusable processes and best practices distilled from multiple interactions, "
-                        "validated general solutions.",
-                        overview="Access patterns when executing tasks requiring strategy selection or process determination. "
-                        "Patterns are highly distilled experiences, each independent and not updated; create new pattern if modification needed.",
+                        path="experiences",
+                        abstract="Agent's generalized experience memories. Reusable insights and lessons distilled from execution trajectories, updated as new evidence accumulates.",
+                        overview="Access when the agent encounters recurring situations or needs guidance from past lessons. "
+                        "Experiences are distilled from trajectories and updated incrementally as more supporting evidence accumulates.",
                     ),
                 ],
             ),
