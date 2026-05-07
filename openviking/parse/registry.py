@@ -15,6 +15,7 @@ from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.directory import DirectoryParser
 from openviking.parse.parsers.epub import EPubParser
 from openviking.parse.parsers.excel import ExcelParser
+from openviking.parse.plugin_manager import ParserPluginManager
 
 # Import will be handled dynamically to avoid dependency issues
 from openviking.parse.parsers.html import HTMLParser
@@ -47,6 +48,7 @@ class ParserRegistry:
         self,
         register_optional: bool = True,
         parser_configs: Optional[Dict[str, ParserConfig]] = None,
+        plugin_manager: Optional[ParserPluginManager] = None,
     ):
         """
         Initialize registry with default parsers.
@@ -55,14 +57,22 @@ class ParserRegistry:
             register_optional: Whether to register optional parsers
                               that require extra dependencies
             parser_configs: Dictionary of parser configurations (from load_parser_configs_from_dict)
+            plugin_manager: Optional provider manager override for builtin parser loading
         """
         self._parsers: Dict[str, BaseParser] = {}
         self._extension_map: Dict[str, str] = {}
         self._parser_configs = parser_configs or {}
+        self._plugin_manager = plugin_manager or ParserPluginManager(
+            parser_configs=self._parser_configs
+        )
 
-        # Register core parsers
-        self.register("text", TextParser(config=self._parser_configs.get("text")))
-        self.register("markdown", MarkdownParser(config=self._parser_configs.get("markdown")))
+        # Register provider-backed core parsers with direct-instantiation fallback.
+        self._register_builtin_parser(
+            "text", lambda: TextParser(config=self._parser_configs.get("text"))
+        )
+        self._register_builtin_parser(
+            "markdown", lambda: MarkdownParser(config=self._parser_configs.get("markdown"))
+        )
         self.register("pdf", PDFParser(config=self._parser_configs.get("pdf")))
         self.register("html", HTMLParser(config=self._parser_configs.get("html")))
 
@@ -78,6 +88,13 @@ class ParserRegistry:
         self.register("image", ImageParser())
         self.register("audio", AudioParser())
         self.register("video", VideoParser())
+
+    def _register_builtin_parser(self, name: str, legacy_factory: Callable[[], BaseParser]) -> None:
+        """Register a builtin parser from a provider, with legacy fallback."""
+        parser = self._plugin_manager.create_parser(name)
+        if parser is None:
+            parser = legacy_factory()
+        self.register(name, parser)
 
     def register(self, name: str, parser: BaseParser) -> None:
         """
