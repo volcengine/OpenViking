@@ -1153,6 +1153,52 @@ OpenKB 的编译管线是精心设计的多步 LLM 调用链：摘要 → 概念
 
 ## 3. OpenViking 链接设计
 
+### 3.0 memory-wiki 定位：人脑、世界知识与 memory-wiki/memory/resource 的关系
+
+<div style="position: relative; width: 480px; height: 400px; margin: 20px 0;">
+  <div style="position: absolute; width: 350px; height: 250px; 
+              background: #e6f7ff; border: 2px solid #1890ff; 
+              border-radius: 50%; left: 0; top: 20px; 
+              display: flex; align-items: center; justify-content: center;
+              font-size: 16px; color: #1890ff;">
+    世界知识
+  </div>
+  <div style="position: absolute; width: 350px; height: 250px; 
+              background: rgba(255, 247, 230, 0.8); border: 2px solid #fa8c16; 
+              border-radius: 50%; left: 130px; top: 20px; 
+              display: flex; align-items: center; justify-content: center;
+              font-size: 16px; color: #fa8c16;">
+    人脑中的知识
+  </div>
+  <div style="position: absolute; width: 180px; height: 140px; 
+              background: #fff7e6; border: 2px solid #faad14; 
+              border-radius: 50%; left: 145px; top: 75px; 
+              display: flex; align-items: center; justify-content: center;
+              font-size: 14px; color: #faad14;">
+    memory
+  </div>
+  <div style="position: absolute; width: 100px; height: 80px; 
+              background: #ffccc7; border: 2px solid #ff4d4f; 
+              border-radius: 50%; left: 185px; top: 105px; 
+              display: flex; align-items: center; justify-content: center;
+              font-weight: bold; font-size: 13px; color: #ff4d4f;
+              z-index: 10;">
+    memory-wiki
+  </div>
+  <div style="position: absolute; left: 200px; top: 280px;
+              padding: 10px 25px; background: #bae7ff; 
+              border: 2px solid #1890ff; border-radius: 8px;
+              font-size: 16px; color: #1890ff; text-align: center;">
+    resource
+  </div>
+  <div style="position: absolute; left: 225px; top: 260px;
+              width: 2px; height: 25px; background: #1890ff;"></div>
+</div>
+
+> **设计示意**：世界知识与人脑中的知识部分重叠，resource 作为原始素材从外部输入，加工成 memory 进入交叠区域，memory-wiki 又在 memory 之内进一步沉淀——它既来源于客观世界知识，又经过人脑认知的提炼。
+
+---
+
 ### 3.1 设计总览
 
 **定位：** AI agent 的持久化记忆系统，在对话中实时写入记忆，外部 Bot T+1 触发整理发现主题生成研究报告。

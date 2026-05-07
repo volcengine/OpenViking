@@ -107,6 +107,8 @@ def fuzzy_search(
     """
     Perform a "middle-out" search to find the slice most similar to search_chunk.
 
+    For single-line search, also checks for substring matches within each line.
+
     Returns dict with bestScore, bestMatchIndex, bestMatchContent
     """
     best_score = 0.0
@@ -119,23 +121,63 @@ def fuzzy_search(
     left_index = mid_point
     right_index = mid_point + 1
 
+    # For single-line search, enable substring matching mode
+    is_single_line = search_len == 1
+    search_str = search_lines[0] if is_single_line else ""
+
     while left_index >= start_index or right_index <= end_index - search_len:
         if left_index >= start_index:
-            original_chunk = "\n".join(lines[left_index : left_index + search_len])
-            similarity = get_similarity(original_chunk, search_chunk)
-            if similarity > best_score:
-                best_score = similarity
-                best_match_index = left_index
-                best_match_content = original_chunk
+            if is_single_line:
+                # Check substring match in this single line
+                line = lines[left_index]
+                # First check for exact substring match
+                if search_str in line:
+                    best_score = 1.0
+                    best_match_index = left_index
+                    best_match_content = line
+                    left_index -= 1
+                    continue
+                # If no exact match, try the best similarity with substrings
+                line_score, line_content = _find_best_substring_match(line, search_str)
+                if line_score > best_score:
+                    best_score = line_score
+                    best_match_index = left_index
+                    best_match_content = line_content
+            else:
+                # Original multi-line logic
+                original_chunk = "\n".join(lines[left_index : left_index + search_len])
+                similarity = get_similarity(original_chunk, search_chunk)
+                if similarity > best_score:
+                    best_score = similarity
+                    best_match_index = left_index
+                    best_match_content = original_chunk
             left_index -= 1
 
         if right_index <= end_index - search_len:
-            original_chunk = "\n".join(lines[right_index : right_index + search_len])
-            similarity = get_similarity(original_chunk, search_chunk)
-            if similarity > best_score:
-                best_score = similarity
-                best_match_index = right_index
-                best_match_content = original_chunk
+            if is_single_line:
+                # Check substring match in this single line
+                line = lines[right_index]
+                # First check for exact substring match
+                if search_str in line:
+                    best_score = 1.0
+                    best_match_index = right_index
+                    best_match_content = line
+                    right_index += 1
+                    continue
+                # If no exact match, try the best similarity with substrings
+                line_score, line_content = _find_best_substring_match(line, search_str)
+                if line_score > best_score:
+                    best_score = line_score
+                    best_match_index = right_index
+                    best_match_content = line_content
+            else:
+                # Original multi-line logic
+                original_chunk = "\n".join(lines[right_index : right_index + search_len])
+                similarity = get_similarity(original_chunk, search_chunk)
+                if similarity > best_score:
+                    best_score = similarity
+                    best_match_index = right_index
+                    best_match_content = original_chunk
             right_index += 1
 
     return {
@@ -143,6 +185,40 @@ def fuzzy_search(
         "bestMatchIndex": best_match_index,
         "bestMatchContent": best_match_content,
     }
+
+
+def _find_best_substring_match(line: str, search_str: str) -> tuple[float, str]:
+    """Find the best matching substring in a line."""
+    best_score = 0.0
+    best_content = ""
+    search_len = len(search_str)
+    line_len = len(line)
+
+    # If search string is longer than line, just compare the whole line
+    if search_len >= line_len:
+        return get_similarity(line, search_str), line
+
+    # Try sliding window for best match (limit to reasonable checks for performance)
+    # First check at start, end, and a few positions in between
+    positions_to_check = [0, line_len - search_len]
+    if line_len > search_len * 3:
+        positions_to_check.append(line_len // 2 - search_len // 2)
+
+    for i in positions_to_check:
+        if 0 <= i <= line_len - search_len:
+            substring = line[i:i+search_len]
+            score = get_similarity(substring, search_str)
+            if score > best_score:
+                best_score = score
+                best_content = substring
+
+    # Also compare with the whole line as fallback
+    whole_line_score = get_similarity(line, search_str)
+    if whole_line_score > best_score:
+        best_score = whole_line_score
+        best_content = line
+
+    return best_score, best_content
 
 
 # ============================================================================
