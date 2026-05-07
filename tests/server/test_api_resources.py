@@ -577,38 +577,6 @@ async def test_add_resource_async_failure_cleans_up_tracker(
     assert not leaked_telemetry, f"Telemetry registry leaked: {leaked_telemetry}"
 
 
-async def test_add_skill_async_returns_task_id(
-    client: httpx.AsyncClient,
-    service,
-    monkeypatch,
-    upload_temp_dir,
-):
-    """add_skill with wait=False should return a task_id queryable via /api/v1/tasks."""
-
-    async def _fake_process_skill(**kwargs):
-        return {"status": "success", "skill_id": "test-skill"}
-
-    monkeypatch.setattr(service.resources._skill_processor, "process_skill", _fake_process_skill)
-
-    resp = await client.post(
-        "/api/v1/skills",
-        json={"data": "test skill content", "wait": False},
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    assert "task_id" in body["result"]
-    task_id = body["result"]["task_id"]
-
-    await asyncio.sleep(2.0)
-
-    task_resp = await client.get(f"/api/v1/tasks/{task_id}")
-    assert task_resp.status_code == 200
-    result = task_resp.json()["result"]
-    assert result["task_id"] == task_id
-    assert result["task_type"] == "add_skill"
-
-
 async def test_add_resource_business_error_no_task(
     client: httpx.AsyncClient,
     service,

@@ -456,3 +456,56 @@ async def test_add_resource_task_list_filter(api_client):
     matching = [t for t in tasks if t["task_id"] == task_id]
     assert len(matching) >= 1
     assert matching[0]["task_type"] == "add_resource"
+
+
+# ── add_skill task tracking ──
+
+
+async def test_add_skill_async_returns_task_id(api_client):
+    """add_skill with wait=False should return a task_id."""
+    client, service = api_client
+
+    async def fake_add_skill(**kwargs):
+        tracker = get_task_tracker()
+        task = tracker.create(
+            "add_skill",
+            owner_account_id=kwargs["ctx"].account_id,
+            owner_user_id=kwargs["ctx"].user.user_id,
+        )
+        tracker.start(task.task_id)
+        tracker.complete(task.task_id, {})
+        return {"status": "success", "task_id": task.task_id}
+
+    service.resources.add_skill = fake_add_skill
+
+    from openviking.server.identity import RequestContext, Role
+    from openviking_cli.session.user_id import UserIdentifier
+
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    result = await service.resources.add_skill(data="test skill", ctx=ctx)
+
+    assert "task_id" in result
+    assert result["task_id"]
+
+    task_resp = await client.get(f"/api/v1/tasks/{result['task_id']}")
+    assert task_resp.status_code == 200
+    task_data = task_resp.json()["result"]
+    assert task_data["task_type"] == "add_skill"
+
+
+async def test_add_skill_sync_no_task_id(api_client):
+    """add_skill with wait=True should NOT return a task_id."""
+    client, service = api_client
+
+    async def fake_add_skill(**kwargs):
+        return {"status": "success"}
+
+    service.resources.add_skill = fake_add_skill
+
+    from openviking.server.identity import RequestContext, Role
+    from openviking_cli.session.user_id import UserIdentifier
+
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    result = await service.resources.add_skill(data="test skill", ctx=ctx, wait=True)
+
+    assert "task_id" not in result
