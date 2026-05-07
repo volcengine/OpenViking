@@ -2,7 +2,7 @@ import { Type } from "@sinclair/typebox";
 import { memoryOpenVikingConfigSchema } from "./config.js";
 import { registerSetupCli } from "./commands/setup.js";
 
-import { OpenVikingClient, isMemoryUri } from "./client.js";
+import { DEFAULT_PHASE2_POLL_TIMEOUT_MS, OpenVikingClient, isMemoryUri } from "./client.js";
 import type {
   AddResourceInput,
   AddResourceResult,
@@ -1096,18 +1096,15 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
               usedTempSession = true;
             }
             const roleId = role === "user" ? toRoleId(extractToolSenderId(ctx)) : undefined;
-            await c.addSessionMessage(
-              sessionId,
+            const commitResult = await c.remember({
+              text,
               role,
-              [{ type: "text" as const, text }],
-              session.agentId,
-              undefined,
+              sessionId,
               roleId,
-            );
-            const commitResult = await c.commitSession(sessionId, {
-              wait: true,
               agentId: session.agentId,
+              wait: true,
               keepRecentCount: 0,
+              timeoutMs: DEFAULT_PHASE2_POLL_TIMEOUT_MS,
             });
             const memoriesCount = totalCommitMemories(commitResult);
             if (commitResult.status === "failed") {

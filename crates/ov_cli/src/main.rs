@@ -449,8 +449,8 @@ enum Commands {
         #[command(subcommand)]
         action: SessionCommands,
     },
-    /// [Experimental][Data] Add memory in one shot (creates session, adds messages, commits)
-    AddMemory {
+    /// [Experimental][Data] Remember content in one shot
+    Remember {
         /// Content to memorize. Plain string (treated as user message),
         /// JSON {"role":"...","content":"..."} for a single message,
         /// or JSON array of such objects for multiple messages.
@@ -1064,7 +1064,7 @@ async fn main() {
         Commands::Rm { uri, recursive } => handlers::handle_rm(uri, recursive, ctx).await,
         Commands::Mv { from_uri, to_uri } => handlers::handle_mv(from_uri, to_uri, ctx).await,
         Commands::Stat { uri } => handlers::handle_stat(uri, ctx).await,
-        Commands::AddMemory { content } => handlers::handle_add_memory(content, ctx).await,
+        Commands::Remember { content } => handlers::handle_remember(content, ctx).await,
         Commands::Tui { uri } => handlers::handle_tui(uri, ctx).await,
         Commands::Chat {
             message,

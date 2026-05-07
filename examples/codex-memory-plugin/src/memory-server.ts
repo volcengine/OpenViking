@@ -120,9 +120,13 @@ class OpenVikingClient {
     private readonly timeoutMs: number,
   ) {}
 
-  private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  private async request<T>(
+    path: string,
+    init: RequestInit = {},
+    options: { timeoutMs?: number } = {},
+  ): Promise<T> {
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs)
+    const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? this.timeoutMs)
 
     try {
       const headers = new Headers(init.headers ?? {})
@@ -258,6 +262,25 @@ class OpenVikingClient {
     await this.request(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" })
   }
 
+  async remember(text: string, role: string): Promise<CommitSessionResult> {
+    const waitTimeoutMs = Math.max(this.timeoutMs, 30000)
+    return this.request<CommitSessionResult>(
+      "/api/v1/agent/remember",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          text,
+          role: role || "user",
+          wait: true,
+          cleanup_session: true,
+          keep_recent_count: 0,
+          timeout_ms: waitTimeoutMs,
+        }),
+      },
+      { timeoutMs: waitTimeoutMs + 5000 },
+    )
+  }
+
   async deleteUri(uri: string): Promise<void> {
     await this.request(`/api/v1/fs?uri=${encodeURIComponent(uri)}&recursive=false`, { method: "DELETE" })
   }
@@ -310,49 +333,42 @@ server.tool(
 )
 
 server.tool(
-  "openviking_store",
+  "remember",
   "Store information in OpenViking long-term memory.",
   {
     text: z.string().describe("Information to store"),
     role: z.string().optional().describe("Message role, default user"),
   },
   async ({ text, role }) => {
-    let sessionId: string | undefined
-    try {
-      sessionId = await client.createSession()
-      await client.addSessionMessage(sessionId, role || "user", text)
-      const result = await client.commitSession(sessionId)
-      const count = totalCommitMemories(result)
+    const result = await client.remember(text, role || "user")
+    const count = totalCommitMemories(result)
 
-      if (result.status === "failed") {
-        return { content: [{ type: "text" as const, text: `Memory extraction failed: ${String(result.error)}` }] }
-      }
-      if (result.status === "timeout") {
-        return {
-          content: [{
-            type: "text" as const,
-            text: `Memory extraction is still running (task_id=${result.task_id ?? "unknown"}).`,
-          }],
-        }
-      }
-      if (count === 0) {
-        return {
-          content: [{
-            type: "text" as const,
-            text: "Committed session, but OpenViking extracted 0 memory item(s).",
-          }],
-        }
-      }
-
-      return { content: [{ type: "text" as const, text: `Stored memory. Extracted ${count} item(s).` }] }
-    } finally {
-      if (sessionId) await client.deleteSession(sessionId).catch(() => {})
+    if (result.status === "failed") {
+      return { content: [{ type: "text" as const, text: `Memory extraction failed: ${String(result.error)}` }] }
     }
+    if (result.status === "timeout") {
+      return {
+        content: [{
+          type: "text" as const,
+          text: `Memory extraction is still running (task_id=${result.task_id ?? "unknown"}).`,
+        }],
+      }
+    }
+    if (count === 0) {
+      return {
+        content: [{
+          type: "text" as const,
+          text: "Committed session, but OpenViking extracted 0 memory item(s).",
+        }],
+      }
+    }
+
+    return { content: [{ type: "text" as const, text: `Stored memory. Extracted ${count} item(s).` }] }
   },
 )
 
 server.tool(
-  "openviking_forget",
+  "viking_forget",
   "Delete an exact OpenViking memory URI. Use openviking_recall first if you only have a query.",
   {
     uri: z.string().describe("Exact memory URI to delete"),
@@ -368,7 +384,7 @@ server.tool(
 )
 
 server.tool(
-  "openviking_health",
+  "viking_health",
   "Check whether the OpenViking server is reachable.",
   {},
   async () => {

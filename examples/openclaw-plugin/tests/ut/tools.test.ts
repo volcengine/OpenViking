@@ -58,6 +58,11 @@ function setupPlugin(clientOverrides?: Record<string, unknown>) {
       archived: false,
       memories_extracted: { core: 2 },
     }),
+    remember: vi.fn().mockResolvedValue({
+      status: "completed",
+      archived: false,
+      memories_extracted: { core: 2 },
+    }),
     deleteUri: vi.fn().mockResolvedValue(undefined),
     getSessionArchive: vi.fn().mockResolvedValue({
       archive_id: "archive_001",
@@ -187,11 +192,9 @@ describe("Tool: memory_store (behavioral)", () => {
       if (url.endsWith("/api/v1/system/status")) {
         return okResponse({ user: "default" });
       }
-      if (url.includes("/messages")) {
-        return okResponse({ session_id: "sess-1" });
-      }
-      if (url.endsWith("/commit")) {
+      if (url.endsWith("/api/v1/agent/remember")) {
         return okResponse({
+          session_id: "sess-1",
           status: "completed",
           archived: false,
           memories_extracted: { core: 1 },
@@ -214,14 +217,14 @@ describe("Tool: memory_store (behavioral)", () => {
 
     await tool.execute("tc-memory-store", { text: "hello from tool" });
 
-    const messageCall = fetchMock.mock.calls.find(([url]) =>
-      String(url).includes("/api/v1/sessions/") && String(url).includes("/messages"),
+    const rememberCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).endsWith("/api/v1/agent/remember"),
     );
-    expect(messageCall).toBeDefined();
-    const [, init] = messageCall as [string, RequestInit];
+    expect(rememberCall).toBeDefined();
+    const [, init] = rememberCall as [string, RequestInit];
     const body = JSON.parse(String(init.body));
-    expect(body.role).toBe("user");
-    expect(body.role_id).toBe("wx_user-01_abc");
+    expect(body.messages[0].role).toBe("user");
+    expect(body.messages[0].role_id).toBe("wx_user-01_abc");
   });
 
   it("uses a temporary session by default instead of the current tool session", async () => {
@@ -229,11 +232,13 @@ describe("Tool: memory_store (behavioral)", () => {
       if (url.endsWith("/api/v1/system/status")) {
         return okResponse({ user: "default" });
       }
-      if (url.includes("/messages")) {
-        return okResponse({ session_id: "sess-1" });
-      }
-      if (url.endsWith("/commit")) {
-        return okResponse({ status: "completed", archived: false, memories_extracted: {} });
+      if (url.endsWith("/api/v1/agent/remember")) {
+        return okResponse({
+          session_id: "sess-1",
+          status: "completed",
+          archived: false,
+          memories_extracted: {},
+        });
       }
       return okResponse({});
     });
@@ -248,10 +253,11 @@ describe("Tool: memory_store (behavioral)", () => {
 
     await tool.execute("tc-memory-store", { text: "hello from tool" });
 
-    const messageCall = fetchMock.mock.calls.find(([url]) =>
-      String(url).includes("/api/v1/sessions/") && String(url).includes("/messages"),
+    const rememberCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).endsWith("/api/v1/agent/remember"),
     );
-    expect(String(messageCall?.[0])).toContain("/api/v1/sessions/memory-store-");
+    const body = JSON.parse(String((rememberCall?.[1] as RequestInit).body));
+    expect(body.session_id).toContain("memory-store-");
   });
 
   it("normalizes explicit memory_store sessionId without using current sessionKey", async () => {
@@ -259,11 +265,13 @@ describe("Tool: memory_store (behavioral)", () => {
       if (url.endsWith("/api/v1/system/status")) {
         return okResponse({ user: "default" });
       }
-      if (url.includes("/messages")) {
-        return okResponse({ session_id: "sess-1" });
-      }
-      if (url.endsWith("/commit")) {
-        return okResponse({ status: "completed", archived: false, memories_extracted: {} });
+      if (url.endsWith("/api/v1/agent/remember")) {
+        return okResponse({
+          session_id: "sess-1",
+          status: "completed",
+          archived: false,
+          memories_extracted: {},
+        });
       }
       return okResponse({});
     });
@@ -281,12 +289,13 @@ describe("Tool: memory_store (behavioral)", () => {
       sessionId: "C:\\Users\\test",
     });
 
-    const messageCall = fetchMock.mock.calls.find(([url]) =>
-      String(url).includes("/api/v1/sessions/") && String(url).includes("/messages"),
+    const rememberCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).endsWith("/api/v1/agent/remember"),
     );
-    expect(String(messageCall?.[0])).not.toContain("runtime-session");
-    expect(String(messageCall?.[0])).not.toContain("agent%3Amain%3Amain");
-    expect(String(messageCall?.[0])).toMatch(/\/api\/v1\/sessions\/[a-f0-9]{64}\/messages$/);
+    const body = JSON.parse(String((rememberCall?.[1] as RequestInit).body));
+    expect(body.session_id).not.toContain("runtime-session");
+    expect(body.session_id).not.toContain("agent:main:main");
+    expect(body.session_id).toMatch(/^[a-f0-9]{64}$/);
   });
 });
 

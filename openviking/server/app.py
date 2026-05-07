@@ -28,6 +28,7 @@ from openviking.server.identity import AuthMode
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 from openviking.server.routers import (
     admin_router,
+    agent_router,
     bot_router,
     content_router,
     debug_router,
@@ -422,6 +423,7 @@ def create_app(
 
     # Register routers
     app.include_router(system_router)
+    app.include_router(agent_router)
     app.include_router(admin_router)
     app.include_router(resources_router)
     app.include_router(filesystem_router)
