@@ -1410,16 +1410,38 @@ class Session:
         return len([line for line in content.strip().split("\n") if line.strip()])
 
     def _extract_abstract_from_summary(self, summary: str) -> str:
-        """Extract one-sentence overview from structured summary."""
+        """Extract a short abstract from the archive summary.
+
+        Handles both v1 (structured_summary) and v2 (Working Memory) formats:
+        - v1: extracts from ``**One-sentence overview**: <text>``
+        - v2: extracts the Session Title content line
+        - fallback: first non-empty, non-heading line
+        """
         if not summary:
             return ""
 
+        # v1 format: **One-sentence overview**: <text>
         match = re.search(r"^\*\*[^*]+\*\*:\s*(.+)$", summary, re.MULTILINE)
         if match:
             return match.group(1).strip()
 
-        first_line = summary.split("\n")[0].strip()
-        return first_line if first_line else ""
+        # v2 format: extract content under "## Session Title"
+        title_match = re.search(
+            r"^##\s+Session\s+Title\s*\n"  # section header
+            r"(?:_[^_]+_\s*\n)?"            # optional italic description
+            r"(.+)",                         # title content
+            summary,
+            re.MULTILINE,
+        )
+        if title_match:
+            return title_match.group(1).strip()
+
+        # Fallback: first non-empty, non-heading line
+        for line in summary.split("\n"):
+            line = line.strip()
+            if line and not line.startswith("#"):
+                return line
+        return ""
 
     @staticmethod
     def _format_message_for_wm(m: Message) -> str:

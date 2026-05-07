@@ -663,3 +663,73 @@ class TestFormatMessageForWm:
         ])
         result = Session._format_message_for_wm(m)
         assert "(pending)" in result
+
+
+# -----------------------------------------------------------------------
+# _extract_abstract_from_summary
+# -----------------------------------------------------------------------
+
+class TestExtractAbstract:
+    """Tests for _extract_abstract_from_summary across v1 and v2 formats."""
+
+    def _extract(self, text: str) -> str:
+        return Session._extract_abstract_from_summary(None, text)
+
+    # -- v1 format --
+
+    def test_v1_one_sentence_overview(self):
+        summary = (
+            "# Session Summary\n\n"
+            "**One-sentence overview**: User discussed Go microservices.\n\n"
+            "## Historical Context\n- None\n"
+        )
+        assert self._extract(summary) == "User discussed Go microservices."
+
+    def test_v1_bold_key_with_extra_spaces(self):
+        summary = "**Overview**:   A brief chat about Python.  \n"
+        assert self._extract(summary) == "A brief chat about Python."
+
+    # -- v2 format --
+
+    def test_v2_session_title_with_italic_desc(self):
+        summary = _make_wm(session_title="Wang Fang Tencent Backend Onboarding")
+        assert self._extract(summary) == "Wang Fang Tencent Backend Onboarding"
+
+    def test_v2_session_title_with_explicit_italic(self):
+        summary = (
+            "# Working Memory\n\n"
+            "## Session Title\n"
+            "_A short and distinctive 5-10 word descriptive title._\n"
+            "Debugging gRPC Timeout in Payment Service\n\n"
+            "## Current State\nInvestigating...\n"
+        )
+        assert self._extract(summary) == "Debugging gRPC Timeout in Payment Service"
+
+    def test_v2_session_title_without_italic(self):
+        summary = (
+            "# Working Memory\n\n"
+            "## Session Title\n"
+            "Redis Cluster Migration Plan\n\n"
+            "## Current State\nPlanning phase.\n"
+        )
+        assert self._extract(summary) == "Redis Cluster Migration Plan"
+
+    def test_v2_not_return_heading(self):
+        """Must never return '# Working Memory' as the abstract."""
+        summary = _make_wm(session_title="Real Title Here")
+        result = self._extract(summary)
+        assert result != "# Working Memory"
+        assert result == "Real Title Here"
+
+    # -- edge cases --
+
+    def test_empty_summary(self):
+        assert self._extract("") == ""
+
+    def test_no_match_fallback_skips_headings(self):
+        summary = "# Heading\n## Subheading\nActual content line\n"
+        assert self._extract(summary) == "Actual content line"
+
+    def test_only_headings_returns_empty(self):
+        summary = "# Heading\n## Another Heading\n"
+        assert self._extract(summary) == ""
