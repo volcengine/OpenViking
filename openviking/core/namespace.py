@@ -105,7 +105,7 @@ def resolve_uri(
         return _resolve_agent_uri(parts, ctx=ctx, require_canonical=require_canonical)
     if scope == "session":
         return _resolve_session_uri(parts)
-    if scope in {"resources", "temp", "queue"}:
+    if scope in {"resources", "temp", "queue", "upload"}:
         return ResolvedNamespace(uri=VikingURI.normalize(uri).rstrip("/"), scope=scope)
     return ResolvedNamespace(uri=VikingURI.normalize(uri).rstrip("/"), scope=scope)
 
@@ -125,6 +125,8 @@ def is_accessible(uri: str, ctx: RequestContext) -> bool:
 
     if target.scope in {"", "resources", "temp", "queue", "session"}:
         return True
+    if target.scope == "upload":
+        return False
     if target.scope == "user":
         if target.owner_user_id and target.owner_user_id != ctx.user.user_id:
             return False

@@ -1673,6 +1673,8 @@ class VikingFS:
             return None
         if self._is_legacy_temp_uri_parts(parts):
             return None
+        if scope == "upload":
+            return None
         if scope == "user" and second not in self._USER_STRUCTURE_DIRS:
             return second
         if scope == "agent" and second not in self._AGENT_STRUCTURE_DIRS:
@@ -1700,6 +1702,8 @@ class VikingFS:
             if parts[1] == ctx.user.user_space_name():
                 return True
             return self._is_legacy_temp_uri_parts(parts)
+        if scope == "upload":
+            return ctx.role == Role.ROOT
         if scope == "_system":
             return False
         return namespace_is_accessible(normalized_uri, ctx)

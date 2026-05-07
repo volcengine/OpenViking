@@ -485,12 +485,12 @@ Upload a temporary file for subsequent importing of local files via [add_resourc
 
 #### 1. API Implementation Overview
 
-This endpoint is used to upload local files to server temporary storage, returning a `temp_file_id` for use with subsequent API calls. This is a helper endpoint typically not called directly but used automatically via the SDK or CLI.
+This endpoint uploads a local file into temporary server-managed storage and returns a `temp_file_id` for subsequent API calls. This is a helper endpoint typically not called directly but used automatically via the SDK or CLI.
 
 **Processing Flow**:
 1. Receive uploaded file
-2. Clean up expired temporary files
-3. Save to temporary directory and record original filename
+2. Choose temporary upload backend based on `upload_mode`
+3. Save the file and record original filename
 4. Return temporary file ID
 
 **Code Entry Points**:
@@ -505,6 +505,14 @@ This endpoint is used to upload local files to server temporary storage, returni
 |-----------|------|----------|---------|-------------|
 | file | UploadFile | Yes | - | Uploaded file (multipart/form-data) |
 | telemetry | bool | No | False | Whether to return telemetry data |
+| upload_mode | string | No | `"local"` | Temporary upload mode. `local` keeps the existing single-node behavior. `shared` uploads to shared temporary storage for distributed deployments. |
+
+Notes:
+
+- The default is `local`, so existing clients keep the original behavior unless they explicitly opt into `shared`.
+- Use `upload_mode=shared` only when you explicitly want distributed shared temporary uploads.
+- `shared` mode returns a one-time `temp_file_id` in the `shared_<upload_id>` form.
+- Shared upload objects live under the internal `viking://upload/...` namespace and are not part of the normal filesystem browsing surface.
 
 #### 3. Usage Examples
 
@@ -521,9 +529,18 @@ curl -X POST http://localhost:1933/api/v1/resources/temp_upload \
   -F "file=@./documents/guide.md"
 ```
 
+Distributed / shared upload:
+
+```bash
+curl -X POST http://localhost:1933/api/v1/resources/temp_upload \
+  -H "X-API-Key: your-key" \
+  -F "file=@./documents/guide.md" \
+  -F "upload_mode=shared"
+```
+
 **Python SDK**
 
-The `add_resource`, `add_skill` and other endpoints in the Python SDK automatically handle local file uploads, no need to call this endpoint manually.
+The `add_resource`, `add_skill` and other endpoints in the Python SDK automatically handle local file uploads, no need to call this endpoint manually. To opt into distributed shared temporary uploads in HTTP client mode, set `upload.mode` to `"shared"` in `ovcli.conf`.
 
 **CLI**
 
@@ -539,6 +556,17 @@ CLI commands also automatically handle local file uploads, no need to call this 
   },
   "telemetry": {
     "operation_id": "550e8400-e29b-41d4-a716-446655440000"
+  }
+}
+```
+
+Possible shared response:
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "temp_file_id": "shared_7f3c1b8d4f2e4b1bb0f6e8b2d9a4c123"
   }
 }
 ```

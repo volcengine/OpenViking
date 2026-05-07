@@ -1,6 +1,7 @@
 use reqwest::{Client as ReqwestClient, StatusCode};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use std::env;
 use std::fs::File;
 use std::path::Path;
 use std::str::FromStr;
@@ -48,6 +49,20 @@ pub struct HttpClient {
 }
 
 impl HttpClient {
+    fn upload_mode(&self) -> Option<String> {
+        match env::var("OPENVIKING_UPLOAD_MODE") {
+            Ok(value) => {
+                let normalized = value.trim().to_ascii_lowercase();
+                if normalized == "shared" || normalized == "local" {
+                    Some(normalized)
+                } else {
+                    None
+                }
+            }
+            Err(_) => None,
+        }
+    }
+
     /// Create a new HTTP client
     pub fn new(
         base_url: impl Into<String>,
@@ -137,7 +152,10 @@ impl HttpClient {
             .mime_str("application/octet-stream")
             .map_err(|e| Error::Network(format!("Failed to set mime type: {}", e)))?;
 
-        let form = reqwest::multipart::Form::new().part("file", part);
+        let mut form = reqwest::multipart::Form::new().part("file", part);
+        if let Some(upload_mode) = self.upload_mode() {
+            form = form.text("upload_mode", upload_mode);
+        }
 
         let mut headers = self.build_headers();
         // Remove Content-Type: application/json, let reqwest set multipart/form-data automatically
@@ -884,7 +902,10 @@ impl HttpClient {
             .mime_str("application/octet-stream")
             .map_err(|e| Error::Network(format!("Failed to set mime type: {}", e)))?;
 
-        let form = reqwest::multipart::Form::new().part("file", part);
+        let mut form = reqwest::multipart::Form::new().part("file", part);
+        if let Some(upload_mode) = self.upload_mode() {
+            form = form.text("upload_mode", upload_mode);
+        }
 
         let mut headers = self.build_headers();
         headers.remove(reqwest::header::CONTENT_TYPE);

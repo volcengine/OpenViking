@@ -40,7 +40,7 @@ class VikingURI:
         "session",
     }
     PUBLIC_SCOPES = frozenset(LISTABLE_SCOPES)
-    INTERNAL_SCOPES = frozenset({"temp", "queue"})
+    INTERNAL_SCOPES = frozenset({"temp", "queue", "upload"})
     # All valid scopes that can be addressed by the URI parser/storage internals.
     # Public API handlers must not use this as their external whitelist.
     VISITABLE_SCOPES = PUBLIC_SCOPES | INTERNAL_SCOPES

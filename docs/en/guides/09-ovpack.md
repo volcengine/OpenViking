@@ -69,6 +69,9 @@ async def import_example():
 **HTTP API**
 ```bash
 # Step 1: Upload the local ovpack file
+# This uses local temporary storage by default.
+# Add: -F "upload_mode=shared" only when you explicitly need distributed shared temporary uploads.
+# Python HTTP client / CLI users can instead set ovcli.conf: upload.mode = "shared".
 TEMP_FILE_ID=$(
   curl -sS -X POST http://localhost:1933/api/v1/resources/temp_upload \
     -H "X-API-Key: your-key" \

@@ -478,12 +478,12 @@ auxiliary_files 2
 
 #### 1. API 实现介绍
 
-此接口用于上传本地文件到服务器临时存储，返回 `temp_file_id` 供后续 API 使用。这是一个辅助接口，通常不直接调用，而是通过 SDK 或 CLI 自动使用。
+此接口用于把本地文件上传到服务端托管的临时存储中，返回 `temp_file_id` 供后续 API 使用。这是一个辅助接口，通常不直接调用，而是通过 SDK 或 CLI 自动使用。
 
 **处理流程**：
 1. 接收上传的文件
-2. 清理过期的临时文件
-3. 保存到临时目录并记录原始文件名
+2. 根据 `upload_mode` 选择临时上传后端
+3. 保存文件并记录原始文件名
 4. 返回临时文件 ID
 
 **代码入口**：
@@ -498,6 +498,14 @@ auxiliary_files 2
 |------|------|------|--------|------|
 | file | UploadFile | 是 | - | 上传的文件（multipart/form-data） |
 | telemetry | bool | 否 | False | 是否返回遥测数据 |
+| upload_mode | string | 否 | `"local"` | 临时上传模式。`local` 保持现有单机行为；`shared` 将文件上传到共享临时存储，适用于分布式部署。 |
+
+说明：
+
+- 默认值是 `local`，所以现有客户端在不改动的情况下仍保持原有行为。
+- 只有在你明确需要分布式共享临时上传时，才应显式使用 `upload_mode=shared`。
+- `shared` 模式下返回的一次性 `temp_file_id` 形如 `shared_<upload_id>`。
+- shared 上传对象存放在内部 `viking://upload/...` 命名空间下，不属于普通文件系统浏览空间。
 
 #### 3. 使用示例
 
@@ -514,9 +522,18 @@ curl -X POST http://localhost:1933/api/v1/resources/temp_upload \
   -F "file=@./documents/guide.md"
 ```
 
+分布式 / shared 上传：
+
+```bash
+curl -X POST http://localhost:1933/api/v1/resources/temp_upload \
+  -H "X-API-Key: your-key" \
+  -F "file=@./documents/guide.md" \
+  -F "upload_mode=shared"
+```
+
 **Python SDK**
 
-Python SDK 中的 `add_resource`、`add_skill` 等接口会自动处理本地文件上传，无需手动调用此接口。
+Python SDK 中的 `add_resource`、`add_skill` 等接口会自动处理本地文件上传，无需手动调用此接口。在 Python HTTP client 模式下，如果要启用分布式 shared 临时上传，可以在 `ovcli.conf` 中设置 `upload.mode = "shared"`。
 
 **CLI**
 
@@ -532,6 +549,17 @@ CLI 命令也会自动处理本地文件上传，无需手动调用此接口。
   },
   "telemetry": {
     "operation_id": "550e8400-e29b-41d4-a716-446655440000"
+  }
+}
+```
+
+shared 模式的响应示例：
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "temp_file_id": "shared_7f3c1b8d4f2e4b1bb0f6e8b2d9a4c123"
   }
 }
 ```
