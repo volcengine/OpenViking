@@ -211,7 +211,7 @@ class ResourceService:
             )
 
             if result.get("status") == "error":
-                pass
+                return result
             elif wait:
                 wait_start = time.perf_counter()
                 try:
