@@ -7,8 +7,9 @@
  * in a shared file under STATE_DIR and let any session within `ttlMs` reuse
  * it.
  *
- * Hard 250 ms request timeout — the statusline has its own outer budget and
- * we never want a slow server to make the user's terminal feel laggy.
+ * Hard request timeout (see REQUEST_TIMEOUT_MS below) — the statusline has
+ * its own outer budget and we never want a slow server to make the user's
+ * terminal feel laggy.
  */
 
 import { readFileSync, writeFileSync } from "node:fs";

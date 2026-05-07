@@ -265,17 +265,21 @@ bypass 命中时所有 hook 直接放行，不联系 OpenViking。
 示例：
 
 ```text
-OV ✓ │ ↩ 6 mem · 1.2k tok · 180ms        本轮注入了 6 条记忆
-OV ✗ offline                              服务器不可达（≤1s 硬超时）
-OV ⚡ bypass                               命中 OPENVIKING_BYPASS_SESSION*
-OV ✓ │ ✎ 12k/20k tok                     有未提交的 pending 捕获
+OV ✓ │ ↩ 6 mem (0.92) · 50ms              本轮注入 6 条记忆，最高分 0.92
+OV ⚠ slow                                  探针超过 1s 预算（服务器可能在抽风）
+OV ✗ offline                               服务器不可达
+OV ⚡ bypass                                命中 OPENVIKING_BYPASS_SESSION*
+OV ✓ │ ✎ 573/20k · 2 arch                  待提交进度 + 本 session 已归档 2 次
+OV ✓ │ 🔗 resumed │ +3 today               session 已恢复上下文；今日累计归档 3 次
 ```
+
+完整段位说明 + 个性化 recipe（隐藏段位、改色、与已有 statusline 组合、自定义段位），见 [`STATUSLINE.md`](./STATUSLINE.md)。
 
 数据来源：
 
-- `auto-recall.mjs` / `auto-capture.mjs` 每轮写一个快照到 `~/.openviking/state/{last-recall,last-capture}.json`。
+- `auto-recall.mjs` / `auto-capture.mjs` / `session-start.mjs` 每轮写快照到 `~/.openviking/state/{last-recall,last-capture,last-session-event,daily-stats}.json`。
 - `scripts/statusline.mjs` 读快照，再加 5 秒共享缓存的 `GET /health`。
-- 网络调用 250ms 硬超时；多个 CC session 共享缓存避免风暴。
+- 网络调用 1s 硬超时；多个 CC session 共享缓存避免风暴。
 
 关闭 / 调整：
 

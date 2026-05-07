@@ -337,14 +337,14 @@ async function main() {
 
   if (isBypassed(cfg, { sessionId, cwd })) {
     log("skip", { reason: "bypass_session_pattern" });
-    writeRecallState({ count: 0, reason: "bypass", session_id: sessionId });
+    writeRecallState({ count: 0, reason: "bypass", cc_session_id: sessionId });
     approve();
     return;
   }
 
   if (!userPrompt || userPrompt.length < cfg.minQueryLength) {
     log("skip", { reason: "query too short or empty" });
-    writeRecallState({ count: 0, reason: "short_query", session_id: sessionId });
+    writeRecallState({ count: 0, reason: "short_query", cc_session_id: sessionId });
     approve();
     return;
   }
@@ -352,7 +352,7 @@ async function main() {
   const health = await fetchJSON("/health");
   if (!health.ok) {
     logError("health_check", "server unreachable");
-    writeRecallState({ count: 0, reason: "offline", session_id: sessionId });
+    writeRecallState({ count: 0, reason: "offline", cc_session_id: sessionId });
     approve();
     return;
   }
@@ -361,7 +361,7 @@ async function main() {
   const raw = await searchAllSources(userPrompt, perSourceLimit);
   if (raw.length === 0) {
     log("skip", { reason: "no results" });
-    writeRecallState({ count: 0, reason: "no_results", session_id: sessionId });
+    writeRecallState({ count: 0, reason: "no_results", cc_session_id: sessionId });
     approve();
     return;
   }
@@ -380,7 +380,7 @@ async function main() {
   });
 
   if (picked.length === 0) {
-    writeRecallState({ count: 0, reason: "filtered_out", session_id: sessionId });
+    writeRecallState({ count: 0, reason: "filtered_out", cc_session_id: sessionId });
     approve();
     return;
   }
@@ -394,7 +394,7 @@ async function main() {
     tokens_used: built?.budgetUsed ?? 0,
     tokens_budget: cfg.recallTokenBudget,
     top_score: topScore,
-    session_id: sessionId,
+    cc_session_id: sessionId,
     reason: "ok",
   });
   approve(built?.block);

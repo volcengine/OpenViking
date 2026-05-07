@@ -317,12 +317,14 @@ install_modern() {
 # their own statusline they don't want clobbered.
 register_statusline() {
   local plugin_dir="$REPO_DIR/examples/claude-code-memory-plugin"
-  local cmd="node $plugin_dir/scripts/statusline.mjs"
+  # Quote the script path so install dirs containing spaces/metacharacters
+  # don't break when CC invokes the command via /bin/sh -c.
+  local cmd="node \"$plugin_dir/scripts/statusline.mjs\""
   local settings="$HOME/.claude/settings.json"
 
   heading 'Statusline (optional)'
   info 'OpenViking can show a one-line server/recall status under the input box.'
-  info 'Sample: "OV ✓ │ ↩ 6 mem · 1.2k tok · 180ms"'
+  info 'Sample: "OV ✓ │ ↩ 6 mem (0.92) · 50ms │ ✎ 573/20k · 2 arch │ +3 today"'
 
   mkdir -p "$HOME/.claude"
   [ -f "$settings" ] || echo '{}' > "$settings"
@@ -354,8 +356,11 @@ register_statusline() {
 
   local ts; ts=$(date +%Y%m%d-%H%M%S)
   cp -p "$settings" "$settings.bak.$ts"
+  # mktemp inside the same directory as $settings so the final `mv` is a
+  # rename within one filesystem (atomic). Using $TMPDIR risks crossing
+  # filesystems on Linux (tmpfs vs $HOME), which makes `mv` non-atomic.
   local tmp
-  tmp=$(mktemp "${TMPDIR:-/tmp}/ov-statusline.XXXXXX") || { err 'mktemp failed'; return 1; }
+  tmp=$(mktemp "$settings.XXXXXX") || { err 'mktemp failed'; return 1; }
   if ! jq --arg cmd "$cmd" \
        '.statusLine = {type: "command", command: $cmd, padding: 0}' \
        "$settings" > "$tmp" 2>/dev/null; then

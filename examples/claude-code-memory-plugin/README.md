@@ -265,17 +265,21 @@ The plugin renders a one-line status of OpenViking under your Claude Code input 
 Examples:
 
 ```text
-OV ✓ │ ↩ 6 mem · 1.2k tok · 180ms        last turn injected 6 memories
-OV ✗ offline                              server unreachable (≤1 s hard timeout)
-OV ⚡ bypass                               OPENVIKING_BYPASS_SESSION* matched
-OV ✓ │ ✎ 12k/20k tok                     pending capture, not yet committed
+OV ✓ │ ↩ 6 mem (0.92) · 50ms              last turn injected 6 memories, top score 0.92
+OV ⚠ slow                                  probe missed the 1 s budget (server may be lagging)
+OV ✗ offline                               server unreachable
+OV ⚡ bypass                                OPENVIKING_BYPASS_SESSION* matched
+OV ✓ │ ✎ 573/20k · 2 arch                  pending capture, two archives produced this session
+OV ✓ │ 🔗 resumed │ +3 today               session re-hydrated; 3 archives committed today
 ```
+
+For the full segment glossary and personalization recipes (hide segments, recolor, compose with another statusline, add a custom segment), see [`STATUSLINE.md`](./STATUSLINE.md).
 
 Data flow:
 
-- `auto-recall.mjs` and `auto-capture.mjs` write small snapshots to `~/.openviking/state/{last-recall,last-capture}.json` after each turn.
+- `auto-recall.mjs` / `auto-capture.mjs` / `session-start.mjs` write small snapshots to `~/.openviking/state/{last-recall,last-capture,last-session-event,daily-stats}.json` after each turn.
 - `scripts/statusline.mjs` reads those snapshots plus a 5 s shared cache of `GET /health`.
-- Network calls have a hard 250 ms timeout. Cache is shared across CC sessions to prevent stampedes.
+- Network calls have a hard 1 s timeout. Cache is shared across CC sessions to prevent stampedes.
 
 Disable / customize:
 

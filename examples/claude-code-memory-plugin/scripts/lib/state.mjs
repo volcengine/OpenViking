@@ -14,7 +14,10 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export const STATE_DIR = join(homedir(), ".openviking", "state");
+const OV_HOME = process.env.OPENVIKING_HOME && process.env.OPENVIKING_HOME.trim()
+  ? process.env.OPENVIKING_HOME.replace(/^~(?=$|\/)/, homedir())
+  : join(homedir(), ".openviking");
+export const STATE_DIR = join(OV_HOME, "state");
 
 function ensureDir() {
   try {
