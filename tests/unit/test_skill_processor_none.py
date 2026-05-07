@@ -10,6 +10,7 @@ skill data is None, instead of falling through to the generic
 import pytest
 
 from openviking.utils.skill_processor import SkillProcessor
+from openviking_cli.exceptions import InvalidArgumentError
 
 
 class TestParseSkillNoneData:
@@ -37,6 +38,13 @@ class TestParseSkillNoneData:
         assert skill_dict["name"] == "test-skill"
         assert aux_files == []
         assert base_path is None
+
+    @pytest.mark.parametrize("skill_dict", [{}, {"description": "missing name"}, {"name": ""}])
+    def test_validate_skill_dict_requires_name(self, skill_dict):
+        """Dict skill data should fail fast when required metadata is missing."""
+        processor = SkillProcessor(vikingdb=None)
+        with pytest.raises(InvalidArgumentError, match="non-empty 'name' field"):
+            processor._validate_skill_dict(skill_dict)
 
     def test_parse_skill_unsupported_type_still_raises(self):
         """Non-None unsupported types should still raise with type info."""
