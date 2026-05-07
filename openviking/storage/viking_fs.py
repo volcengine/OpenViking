@@ -681,7 +681,9 @@ class VikingFS:
                 return
 
             try:
-                entries = await self.ls(normalized_current_uri, ctx=ctx)
+                # Bypass ls()'s default 1000-child cap; grep's own node_limit
+                # and level_limit still bound total work.
+                entries = await self.ls(normalized_current_uri, node_limit=1000000, ctx=ctx)
             except Exception:
                 return
 
