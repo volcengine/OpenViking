@@ -140,13 +140,22 @@ async function main() {
     parts.push(dim(seg));
   }
 
-  // Capture summary: shown when there are pending tokens not yet committed,
-  // or recently committed in this session. Otherwise omitted.
+  // Capture summary: pending-tokens progress toward the next archive, plus a
+  // running total of archives this session has produced. The pending counter
+  // is a sawtooth (climbs to commit_threshold, snaps back to 0 on commit), so
+  // showing only "X/20k tok" of a long conversation can mislead — the
+  // archived count makes the cumulative work visible.
   if (capture && capture.cc_session_id === sessionId) {
+    const archived = Number(capture.commit_count || 0);
+    const archivedTail = archived > 0 ? ` · ${archived} arch` : "";
     if (capture.committed) {
-      parts.push(dim(`✎ committed`));
+      parts.push(dim(`✎ committed${archivedTail}`));
     } else if (capture.pending_tokens > 0) {
-      parts.push(dim(`✎ ${human(capture.pending_tokens)}/${human(capture.commit_threshold)} tok`));
+      parts.push(dim(
+        `✎ ${human(capture.pending_tokens)}/${human(capture.commit_threshold)} tok${archivedTail}`,
+      ));
+    } else if (archived > 0) {
+      parts.push(dim(`✎ ${archived} arch`));
     }
   }
 

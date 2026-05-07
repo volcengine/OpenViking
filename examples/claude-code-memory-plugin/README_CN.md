@@ -266,7 +266,7 @@ bypass 命中时所有 hook 直接放行，不联系 OpenViking。
 
 ```text
 OV ✓ │ ↩ 6 mem · 1.2k tok · 180ms        本轮注入了 6 条记忆
-OV ✗ offline                              服务器不可达（≤300ms 硬超时）
+OV ✗ offline                              服务器不可达（≤1s 硬超时）
 OV ⚡ bypass                               命中 OPENVIKING_BYPASS_SESSION*
 OV ✓ │ ✎ 12k/20k tok                     有未提交的 pending 捕获
 OV ✓ │ ⚠ queue                            服务器在但后台队列报错

@@ -266,7 +266,7 @@ Examples:
 
 ```text
 OV ✓ │ ↩ 6 mem · 1.2k tok · 180ms        last turn injected 6 memories
-OV ✗ offline                              server unreachable (≤300 ms hard timeout)
+OV ✗ offline                              server unreachable (≤1 s hard timeout)
 OV ⚡ bypass                               OPENVIKING_BYPASS_SESSION* matched
 OV ✓ │ ✎ 12k/20k tok                     pending capture, not yet committed
 OV ✓ │ ⚠ queue                            server up but background queue has errors

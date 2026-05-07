@@ -17,7 +17,12 @@ import { STATE_DIR } from "./state.mjs";
 
 const CACHE_FILE = join(STATE_DIR, "server-probe.json");
 const DEFAULT_TTL_MS = 5000;
-const REQUEST_TIMEOUT_MS = 250;
+// Per-request timeout. 1 s is loose enough that ordinary remote-server
+// hiccups (TLS resumption, occasional GC pause) don't show up as a flapping
+// "offline" badge, while still bounded so the statusline never blocks the
+// terminal. Combined with the 5 s cache it amortises to one network round-
+// trip per session per 5 s window.
+const REQUEST_TIMEOUT_MS = 1000;
 
 function readCache() {
   try {
@@ -75,11 +80,11 @@ export async function probeServer(cfg, { ttlMs = DEFAULT_TTL_MS } = {}) {
     error = err?.name === "AbortError" ? "timeout" : (err?.message || "unreachable");
   }
 
-  // Queue badge: independent 250 ms budget. Sharing with /health caused
-  // visible flapping on remote servers — slow /health left no budget for
-  // the queue probe, so the badge appeared only when /health was unusually
-  // fast. Worst case here is ~500 ms total (250 + 250); typical is ~200 ms
-  // because both endpoints respond in tens of ms when colocated.
+  // Queue badge: independent timeout. Sharing with /health caused visible
+  // flapping on remote servers — slow /health left no budget for the queue
+  // probe, so the badge appeared only when /health was unusually fast.
+  // Worst case here is ~2 s total (1 s + 1 s); typical is ~150 ms because
+  // both endpoints respond in tens of ms when the server is colocated.
   if (healthy) {
     try {
       const controller = new AbortController();

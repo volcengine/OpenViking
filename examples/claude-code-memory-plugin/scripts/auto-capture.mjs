@@ -445,25 +445,34 @@ async function main() {
   // poll pending_tokens ourselves and commit when the threshold is crossed.
   let committed = false;
   let pendingTokens = 0;
+  let commitCount = 0;
+  let totalMessageCount = 0;
   if (result.ok > 0) {
     const meta = await getSession(fetchJSON, ovSessionId);
     pendingTokens = Number(meta?.pending_tokens || 0);
+    commitCount = Number(meta?.commit_count || 0);
+    totalMessageCount = Number(meta?.total_message_count || 0);
     log("pending_tokens", { ovSessionId, pending: pendingTokens, threshold: cfg.commitTokenThreshold });
     if (pendingTokens >= cfg.commitTokenThreshold) {
       const commitRes = await commitSession(fetchJSON, ovSessionId);
       committed = commitRes.ok;
+      if (committed) commitCount += 1;
       log("commit", { ovSessionId, ok: commitRes.ok, pending: pendingTokens });
     }
   }
 
   // Snapshot for the statusline. Lives across sessions; statusline reads it
-  // alongside last-recall.json to show pending/committed counts.
+  // alongside last-recall.json to show pending/committed counts. commit_count
+  // is the running total of archives this session has produced — distinct
+  // from `committed` (which is just whether THIS turn triggered a commit).
   writeJsonState("last-capture.json", {
     turns_captured: result.ok,
     turns_failed: result.failed,
     pending_tokens: pendingTokens,
     commit_threshold: cfg.commitTokenThreshold,
     committed,
+    commit_count: commitCount,
+    total_message_count: totalMessageCount,
     ov_session_id: ovSessionId,
     cc_session_id: sessionId,
   });
