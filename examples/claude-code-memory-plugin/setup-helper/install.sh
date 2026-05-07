@@ -420,4 +420,4 @@ info '  claude              # start Claude Code'
 info '  /mcp                # inside Claude Code, verify the OpenViking entry'
 printf '\n'
 printf '%sCurious what your statusline shows, or want to tweak it?%s Open Claude Code and paste:\n' "$BOLD" "$RESET"
-printf '  %sRead %s/examples/claude-code-memory-plugin/docs/STATUSLINE.md. Walk me through what each segment of my OpenViking statusline means, then ask me whether I want to personalize anything.%s\n' "$CYAN" "$REPO_DIR" "$RESET"
+printf '  %sRead %s/examples/claude-code-memory-plugin/STATUSLINE.md. Walk me through what each segment of my OpenViking statusline means, then ask me whether I want to personalize anything.%s\n' "$CYAN" "$REPO_DIR" "$RESET"

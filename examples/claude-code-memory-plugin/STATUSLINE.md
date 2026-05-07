@@ -1,8 +1,8 @@
-# Personalizing the OpenViking Statusline
+# Reading and Personalizing the OpenViking Statusline
 
-A guide for an AI assistant (or you) to **customize** the OpenViking statusline beyond the defaults the installer sets up. This doc focuses on **personalization recipes** that env vars don't cover. For the canonical environment-variable reference and segment glossary, see `$REPO/docs/en/agent-integrations/02-claude-code.md` (path notation defined just below).
+A guide for an AI assistant (or you) to read the OpenViking statusline and **customize** it beyond the defaults the installer sets up. The "What each segment means" section below is the canonical glossary; the rest covers personalization recipes that env vars don't cover. For the environment-variable reference, see `$REPO/docs/en/agent-integrations/02-claude-code.md`.
 
-The intent is to give an assistant enough orientation to make tasteful changes without prescribing every tweak. If a user asks for something unusual, prefer the smallest local edit over a configurable knob.
+When a user asks for something the env vars don't cover, prefer the smallest local edit over inventing a new configurable knob.
 
 ---
 
