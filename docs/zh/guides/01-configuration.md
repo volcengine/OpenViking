@@ -358,13 +358,52 @@ openviking-server doctor
 ```
 
 可用 Gemini 嵌入模型:
-- `gemini-embedding-2-preview`: 8192 token 输入限制, 1–3072 输出维度 (MRL)
-- `gemini-embedding-001`: 2048 token 输入限制, 1–3072 输出维度 (MRL)
-- `text-embedding-004`: 2048 token 输入限制, 768 输出维度（固定）
+- `gemini-embedding-2`: 8192 token 输入限制, 1–3072 输出维度 (MRL); 支持文本及多模态 (图像/音频/视频/PDF)
+- `gemini-embedding-2-preview`: 与 `gemini-embedding-2` 同系, 保留兼容
+- `gemini-embedding-001`: 2048 token 输入限制, 1–3072 输出维度 (MRL); 仅文本
+- `text-embedding-004`: 2048 token 输入限制, 768 输出维度（固定）; 仅文本
 
 推荐维度: `768`、`1536` 或 `3072`（默认: `3072`）。
 
 获取 API Key: https://aistudio.google.com/apikey
+
+**多模态模式**（仅 `gemini-embedding-2` 系列支持）:
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "gemini",
+      "api_key": "${GOOGLE_API_KEY}",
+      "model": "gemini-embedding-2",
+      "input": "multimodal",
+      "dimension": 768,
+      "task_instruction": "Retrieve documents that answer:"
+    }
+  }
+}
+```
+
+多模态模式下，embedder 暴露 `embed_content(contents=[...])`，每个内容字典格式如下:
+
+| 形态 | 示例 | 说明 |
+|------|------|------|
+| 文本 | `{"text": "..."}` | UTF-8 字符串 |
+| 图像（URL） | `{"image": "https://..."}` | 由 Gemini 服务端拉取 |
+| 图像（字节） | `{"image": b"...", "mime_type": "image/png"}` | 内联 base64 |
+| 音频 | `{"audio": ..., "mime_type": "audio/mpeg"}` | URL 或字节 |
+| 视频 | `{"video": ..., "mime_type": "video/mp4"}` | URL 或字节 |
+| PDF | `{"pdf": ..., "mime_type": "application/pdf"}` | URL 或字节 |
+
+支持的 MIME 类型: PNG、JPEG、WebP、BMP、HEIC/HEIF、AVIF、MP3、WAV、MP4、MOV、MPEG、PDF。
+
+每次调用上限（服务端约束）: 8192 输入 token, 6 张图像, 180 秒音频, 120 帧视频（1 FPS 采样）, 6 页 PDF。
+
+`task_instruction`（可选）会在第一段文本前自动拼接, 用于检索任务路由（参见 Gemini Embedding 2 文档）。
+
+`/metrics` 中的 token 用量来自 Gemini `count_tokens` API 的精确服务端计数（每次 `embed_content` 调用增加一次往返；`count_tokens` 文档说明免费）。
+
+> **区域提示:** `gemini-embedding-2` 需可访问 Google API。受限地区用户建议使用 `provider: "dashscope"`（多模态）或 `provider: "volcengine"`。
 
 **DashScope（阿里通义）provider 配置示例:**
 
