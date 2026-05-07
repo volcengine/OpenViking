@@ -80,8 +80,8 @@ async def readiness_check(request: Request):
                 status_code=503,
                 content={"status": "not_ready", "reason": "initializing"},
             )
-    except Exception:
-        # If get_service() fails (service not yet set), also return 503
+    except RuntimeError:
+        # get_service() raises RuntimeError when service not yet set
         return JSONResponse(
             status_code=503,
             content={"status": "not_ready", "reason": "initializing"},
