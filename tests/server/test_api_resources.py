@@ -504,8 +504,6 @@ async def test_add_resource_async_task_queryable(
     sample_markdown_file,
     upload_temp_dir,
 ):
-    import asyncio
-
     from openviking.service.task_tracker import reset_task_tracker
 
     reset_task_tracker()
@@ -614,8 +612,6 @@ async def test_monitor_marks_failed_on_queue_error(
     monkeypatch,
 ):
     """When queue processing has errors, _monitor_queue_processing should mark task as failed."""
-
-    import asyncio
 
     from openviking.server.identity import RequestContext, Role
     from openviking.service.task_tracker import get_task_tracker, reset_task_tracker
