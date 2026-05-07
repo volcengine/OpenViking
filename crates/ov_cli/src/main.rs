@@ -1,3 +1,4 @@
+mod base_client;
 mod client;
 mod commands;
 mod config;

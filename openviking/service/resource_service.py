@@ -10,6 +10,7 @@ import json
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_optional_viking_uri
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import (
@@ -173,6 +174,12 @@ class ResourceService:
         telemetry.set("resource.flags.watch_enabled", watch_enabled)
 
         try:
+            # Resolve path variables before validation
+            if to:
+                to = resolve_path_variables(to)
+            if parent:
+                parent = resolve_path_variables(parent)
+
             to = validate_optional_viking_uri(
                 to,
                 field_name="to",
