@@ -8,3 +8,10 @@ export {
   type LoadConfigOptions,
   type PluginConfig,
 } from "./config.js";
+
+export {
+  createDebugLogger,
+  DEFAULT_MAX_BYTES as DEBUG_LOG_DEFAULT_MAX_BYTES,
+  type CreateDebugLoggerOptions,
+  type DebugLogger,
+} from "./debug/logger.js";
