@@ -124,6 +124,22 @@ OPENVIKING_BYPASS_SESSION=1 claude
 
 When bypass is active, every hook approves immediately without contacting OpenViking.
 
+## Statusline
+
+The plugin also renders a one-line OpenViking status under your Claude Code input box. The installer registers it in `~/.claude/settings.json` (CC's plugin manifest doesn't accept a `statusLine` field, so it has to live in user settings).
+
+```text
+OV ✓ │ ↩ 6 mem · 1.2k tok · 180ms       last turn injected 6 memories
+OV ✗ offline                             server unreachable (≤300 ms hard timeout)
+OV ⚡ bypass                              OPENVIKING_BYPASS_SESSION* matched
+OV ✓ │ ✎ 12k/20k tok                    pending capture, not yet committed
+OV ✓ │ ⚠ queue                           server up but background queue has errors
+```
+
+The hook scripts write small JSON snapshots to `~/.openviking/state/`; the statusline script reads those plus a 5 s shared cache of `GET /health` (and best-effort `GET /api/v1/observer/queue`). Network requests are bounded by a 250 ms hard timeout; the cache is shared across sessions to prevent stampedes.
+
+Set `OPENVIKING_STATUSLINE=off` to silence without removing the registration, or `jq 'del(.statusLine)' ~/.claude/settings.json` to remove. If you already had a custom statusline, the installer prompts replace / skip / manual compose.
+
 ## Compared to Claude Code's built-in `MEMORY.md`
 
 This plugin **complements** Claude Code's native memory system, it doesn't replace it:

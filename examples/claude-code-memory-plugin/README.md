@@ -258,6 +258,33 @@ Defaults in `hooks/hooks.json`:
 
 Keep `claude_code.captureTimeoutMs` below the `Stop` timeout so the script can fail gracefully and still update its incremental state.
 
+## Statusline
+
+The plugin renders a one-line status of OpenViking under your Claude Code input box. The installer registers it in `~/.claude/settings.json` (CC's plugin manifest doesn't accept a `statusLine` field, so this is the only way to wire it in).
+
+Examples:
+
+```text
+OV ✓ │ ↩ 6 mem · 1.2k tok · 180ms        last turn injected 6 memories
+OV ✗ offline                              server unreachable (≤300 ms hard timeout)
+OV ⚡ bypass                               OPENVIKING_BYPASS_SESSION* matched
+OV ✓ │ ✎ 12k/20k tok                     pending capture, not yet committed
+OV ✓ │ ⚠ queue                            server up but background queue has errors
+```
+
+Data flow:
+
+- `auto-recall.mjs` and `auto-capture.mjs` write small snapshots to `~/.openviking/state/{last-recall,last-capture}.json` after each turn.
+- `scripts/statusline.mjs` reads those snapshots plus a 5 s shared cache of `GET /health` (with a best-effort `GET /api/v1/observer/queue` for the queue badge).
+- Network calls have a hard 250 ms timeout. Cache is shared across CC sessions to prevent stampedes.
+
+Disable / customize:
+
+- `OPENVIKING_STATUSLINE=off` — silence without removing the registration.
+- `NO_COLOR=1` (or non-TTY) — strip ANSI colors automatically.
+- Remove entirely: `jq 'del(.statusLine)' ~/.claude/settings.json > t && mv t ~/.claude/settings.json`.
+- Already had a custom statusline? The installer prompts replace / skip / manual-compose.
+
 ## Debug logging
 
 Set `claude_code.debug: true` in `ov.conf` or `OPENVIKING_DEBUG=1` to write hook logs to `~/.openviking/logs/cc-hooks.log`.

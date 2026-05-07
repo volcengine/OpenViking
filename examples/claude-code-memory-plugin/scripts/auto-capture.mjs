@@ -33,6 +33,7 @@ import {
   makeFetchJSON,
 } from "./lib/ov-session.mjs";
 import { maybeDetach, readHookStdin } from "./lib/async-writer.mjs";
+import { writeJsonState } from "./lib/state.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -443,16 +444,29 @@ async function main() {
   // OV's Session._auto_commit_threshold is not consumed by addMessage, so we
   // poll pending_tokens ourselves and commit when the threshold is crossed.
   let committed = false;
+  let pendingTokens = 0;
   if (result.ok > 0) {
     const meta = await getSession(fetchJSON, ovSessionId);
-    const pending = Number(meta?.pending_tokens || 0);
-    log("pending_tokens", { ovSessionId, pending, threshold: cfg.commitTokenThreshold });
-    if (pending >= cfg.commitTokenThreshold) {
+    pendingTokens = Number(meta?.pending_tokens || 0);
+    log("pending_tokens", { ovSessionId, pending: pendingTokens, threshold: cfg.commitTokenThreshold });
+    if (pendingTokens >= cfg.commitTokenThreshold) {
       const commitRes = await commitSession(fetchJSON, ovSessionId);
       committed = commitRes.ok;
-      log("commit", { ovSessionId, ok: commitRes.ok, pending });
+      log("commit", { ovSessionId, ok: commitRes.ok, pending: pendingTokens });
     }
   }
+
+  // Snapshot for the statusline. Lives across sessions; statusline reads it
+  // alongside last-recall.json to show pending/committed counts.
+  writeJsonState("last-capture.json", {
+    turns_captured: result.ok,
+    turns_failed: result.failed,
+    pending_tokens: pendingTokens,
+    commit_threshold: cfg.commitTokenThreshold,
+    committed,
+    ov_session_id: ovSessionId,
+    cc_session_id: sessionId,
+  });
 
   if (result.ok > 0) {
     approve(
