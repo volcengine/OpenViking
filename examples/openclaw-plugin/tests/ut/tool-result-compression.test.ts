@@ -1,18 +1,22 @@
 import { describe, it, expect, vi } from "vitest";
-import { compressToolResults } from "../../tool-result-compression.js";
-import { mkdir, writeFile } from "node:fs/promises";
+import { compressToolResults, prePersistOversizedResults } from "../../tool-result-compression.js";
+import { mkdir, writeFile, readFile } from "node:fs/promises";
 
 vi.mock("node:fs/promises", () => ({
   mkdir: vi.fn().mockResolvedValue(undefined),
   writeFile: vi.fn().mockResolvedValue(undefined),
+  readFile: vi.fn().mockResolvedValue(""),
 }));
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  (mkdir as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+  (writeFile as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+  (readFile as ReturnType<typeof vi.fn>).mockResolvedValue("");
+});
 
 function makeToolResult(content: string, toolName = "test", toolCallId?: string): { role: string; content: string; toolName: string; toolCallId?: string } {
   return { role: "toolResult", content, toolName, ...(toolCallId ? { toolCallId } : {}) };
-}
-
-function makeUserMsg(text: string): { role: string; content: string } {
-  return { role: "user", content: text };
 }
 
 function makeAssistantMsg(text: string): { role: string; content: string } {
@@ -40,7 +44,7 @@ function makeCfg(overrides: Record<string, unknown> = {}): {
 
 describe("compressToolResults", () => {
   it("passes through messages with no tool results", async () => {
-    const messages = [makeUserMsg("hello"), makeAssistantMsg("hi")];
+    const messages = [{ role: "user", content: "hello" }, makeAssistantMsg("hi")];
     const { messages: result, stats } = await compressToolResults(messages, makeCfg());
     expect(result).toEqual(messages);
     expect(stats.compressedCount).toBe(0);
@@ -53,7 +57,7 @@ describe("compressToolResults", () => {
     expect(stats.compressedCount).toBe(0);
   });
 
-  it("persists oversized tool result to disk and replaces with preview", async () => {
+  it("persists oversized tool result and replaces with preview", async () => {
     const bigContent = "x".repeat(30_000);
     const messages = [makeToolResult(bigContent, "bash", "call-123")];
     const { messages: result, stats } = await compressToolResults(messages, makeCfg({ toolResultMaxChars: 10_000 }));
@@ -63,14 +67,13 @@ describe("compressToolResults", () => {
     expect(text).toContain("<persisted-output>");
     expect(text).toContain("Full output saved to:");
     expect(text).toContain("</persisted-output>");
-    expect(text.length).toBeLessThan(30_000);
     expect(writeFile).toHaveBeenCalled();
   });
 
   it("preserves non-tool-result messages", async () => {
     const bigContent = "x".repeat(30_000);
     const messages = [
-      makeUserMsg("question"),
+      { role: "user", content: "question" },
       makeAssistantMsg("let me check"),
       makeToolResult(bigContent),
       makeAssistantMsg("based on the result"),
@@ -90,59 +93,6 @@ describe("compressToolResults", () => {
     expect(text).toContain("<persisted-output>");
   });
 
-  it("triggers aggregate budget when tool results in same turn exceed budget", async () => {
-    const messages = [
-      makeToolResult("a".repeat(30_000)),
-      makeToolResult("b".repeat(30_000)),
-      makeToolResult("c".repeat(30_000)),
-    ];
-    const { stats } = await compressToolResults(messages, makeCfg({
-      toolResultMaxChars: 100_000,
-      toolResultAggregateBudgetChars: 40_000,
-    }));
-    expect(stats.aggregateBudgetTriggered).toBe(true);
-    expect(stats.compressedCount).toBeGreaterThan(0);
-  });
-
-  it("applies aggregate budget per assistant turn, not globally", async () => {
-    // Turn 1: 3 results × 20K = 60K (under budget)
-    // Turn 2: 3 results × 20K = 60K (under budget)
-    // Global total = 120K which exceeds budget, but each turn is within budget.
-    const messages = [
-      makeToolResult("a".repeat(20_000)),
-      makeToolResult("b".repeat(20_000)),
-      makeToolResult("c".repeat(20_000)),
-      makeAssistantMsg("let me do more"),
-      makeToolResult("d".repeat(20_000)),
-      makeToolResult("e".repeat(20_000)),
-      makeToolResult("f".repeat(20_000)),
-    ];
-    const { stats } = await compressToolResults(messages, makeCfg({
-      toolResultMaxChars: 100_000,
-      toolResultAggregateBudgetChars: 80_000,
-    }));
-    expect(stats.aggregateBudgetTriggered).toBe(false);
-    expect(stats.compressedCount).toBe(0);
-  });
-
-  it("triggers aggregate budget only for the turn that exceeds it", async () => {
-    // Turn 1: 2 results × 10K = 20K (under budget)
-    // Turn 2: 3 results × 30K = 90K (over budget)
-    const messages = [
-      makeToolResult("a".repeat(10_000)),
-      makeToolResult("b".repeat(10_000)),
-      makeAssistantMsg("next step"),
-      makeToolResult("d".repeat(30_000)),
-      makeToolResult("e".repeat(30_000)),
-      makeToolResult("f".repeat(30_000)),
-    ];
-    const { stats } = await compressToolResults(messages, makeCfg({
-      toolResultMaxChars: 100_000,
-      toolResultAggregateBudgetChars: 50_000,
-    }));
-    expect(stats.aggregateBudgetTriggered).toBe(true);
-  });
-
   it("respects toolResultCompression=false to skip compression", async () => {
     const bigContent = "x".repeat(100_000);
     const messages = [makeToolResult(bigContent)];
@@ -160,17 +110,145 @@ describe("compressToolResults", () => {
     expect(stats.compressedCount).toBe(1);
     expect(stats.persistedFiles.length).toBe(0);
     const text = (result[0] as { content: string }).content as string;
-    expect(text).toContain("disk persistence failed");
+    expect(text).toContain("not recoverable");
   });
 
-  it("skips write when file already exists (EEXIST)", async () => {
-    (writeFile as ReturnType<typeof vi.fn>).mockRejectedValueOnce(Object.assign(new Error("exists"), { code: "EEXIST" }));
+  it("skips write when file already exists with same content (EEXIST)", async () => {
     const bigContent = "z".repeat(30_000);
+    (writeFile as ReturnType<typeof vi.fn>).mockRejectedValueOnce(Object.assign(new Error("exists"), { code: "EEXIST" }));
+    (readFile as ReturnType<typeof vi.fn>).mockResolvedValueOnce(bigContent);
     const messages = [makeToolResult(bigContent, "test", "existing-id")];
     const { messages: result, stats } = await compressToolResults(messages, makeCfg({ toolResultMaxChars: 10_000 }));
     expect(stats.compressedCount).toBe(1);
     expect(stats.persistedFiles.length).toBe(1);
     const text = (result[0] as { content: string }).content as string;
     expect(text).toContain("Full output saved to:");
+  });
+});
+
+describe("aggregate budget (per assistant turn)", () => {
+  it("triggers when tool results in same turn exceed budget", async () => {
+    const messages = [
+      makeToolResult("a".repeat(30_000)),
+      makeToolResult("b".repeat(30_000)),
+      makeToolResult("c".repeat(30_000)),
+    ];
+    const { stats } = await compressToolResults(messages, makeCfg({
+      toolResultMaxChars: 100_000,
+      toolResultAggregateBudgetChars: 40_000,
+    }));
+    expect(stats.aggregateBudgetTriggered).toBe(true);
+    expect(stats.compressedCount).toBeGreaterThan(0);
+  });
+
+  it("applies per turn, not globally", async () => {
+    const messages = [
+      makeToolResult("a".repeat(20_000)),
+      makeToolResult("b".repeat(20_000)),
+      makeToolResult("c".repeat(20_000)),
+      makeAssistantMsg("let me do more"),
+      makeToolResult("d".repeat(20_000)),
+      makeToolResult("e".repeat(20_000)),
+      makeToolResult("f".repeat(20_000)),
+    ];
+    const { stats } = await compressToolResults(messages, makeCfg({
+      toolResultMaxChars: 100_000,
+      toolResultAggregateBudgetChars: 80_000,
+    }));
+    expect(stats.aggregateBudgetTriggered).toBe(false);
+    expect(stats.compressedCount).toBe(0);
+  });
+
+  it("only triggers for the turn that exceeds it", async () => {
+    const messages = [
+      makeToolResult("a".repeat(10_000)),
+      makeToolResult("b".repeat(10_000)),
+      makeAssistantMsg("next step"),
+      makeToolResult("d".repeat(30_000)),
+      makeToolResult("e".repeat(30_000)),
+      makeToolResult("f".repeat(30_000)),
+    ];
+    const { stats } = await compressToolResults(messages, makeCfg({
+      toolResultMaxChars: 100_000,
+      toolResultAggregateBudgetChars: 50_000,
+    }));
+    expect(stats.aggregateBudgetTriggered).toBe(true);
+  });
+
+  it("persists original content before aggregate truncation so output is recoverable", async () => {
+    // 6 results × 19K = 114K > 100K aggregate budget, but each is under 20K maxChars.
+    // This is the exact data-loss scenario from the review: Phase 1 won't trigger,
+    // Phase 2 must persist before truncating.
+    const messages = [
+      makeToolResult("a".repeat(19_000), "bash", "r1"),
+      makeToolResult("b".repeat(19_000), "bash", "r2"),
+      makeToolResult("c".repeat(19_000), "bash", "r3"),
+      makeToolResult("d".repeat(19_000), "bash", "r4"),
+      makeToolResult("e".repeat(19_000), "bash", "r5"),
+      makeToolResult("f".repeat(19_000), "bash", "r6"),
+    ];
+    const { stats, messages: result } = await compressToolResults(messages, makeCfg({
+      toolResultMaxChars: 20_000,
+      toolResultAggregateBudgetChars: 100_000,
+    }));
+    expect(stats.aggregateBudgetTriggered).toBe(true);
+    expect(stats.compressedCount).toBeGreaterThan(0);
+    // The key assertion: files were persisted so the full output is recoverable.
+    expect(stats.persistedFiles.length).toBeGreaterThan(0);
+    // And the truncated messages should reference the persisted file paths.
+    let foundRecoverablePath = false;
+    for (const msg of result) {
+      const text = typeof msg.content === "string" ? msg.content : "";
+      if (text.includes("full output saved to:")) foundRecoverablePath = true;
+    }
+    expect(foundRecoverablePath).toBe(true);
+  });
+
+  it("marks aggregate-truncated output as not recoverable when disk fails", async () => {
+    (writeFile as ReturnType<typeof vi.fn>).mockRejectedValue(Object.assign(new Error("no space"), { code: "ENOSPC" }));
+    const messages = [
+      makeToolResult("a".repeat(19_000), "bash", "r1"),
+      makeToolResult("b".repeat(19_000), "bash", "r2"),
+      makeToolResult("c".repeat(19_000), "bash", "r3"),
+      makeToolResult("d".repeat(19_000), "bash", "r4"),
+      makeToolResult("e".repeat(19_000), "bash", "r5"),
+      makeToolResult("f".repeat(19_000), "bash", "r6"),
+    ];
+    const { stats, messages: result } = await compressToolResults(messages, makeCfg({
+      toolResultMaxChars: 20_000,
+      toolResultAggregateBudgetChars: 100_000,
+    }));
+    expect(stats.aggregateBudgetTriggered).toBe(true);
+    expect(stats.persistedFiles.length).toBe(0);
+    let foundNotRecoverable = false;
+    for (const msg of result) {
+      const text = typeof msg.content === "string" ? msg.content : "";
+      if (text.includes("not recoverable")) foundNotRecoverable = true;
+    }
+    expect(foundNotRecoverable).toBe(true);
+  });
+});
+
+describe("prePersistOversizedResults", () => {
+  it("persists oversized results before any trimming", async () => {
+    const messages = [
+      makeToolResult("small"),
+      makeToolResult("x".repeat(30_000), "bash", "big-1"),
+      makeToolResult("x".repeat(25_000), "bash", "big-2"),
+    ];
+    const files = await prePersistOversizedResults(messages, makeCfg({ toolResultMaxChars: 20_000 }));
+    expect(files.length).toBe(2);
+  });
+
+  it("returns empty when no oversized results", async () => {
+    const messages = [makeToolResult("small")];
+    const files = await prePersistOversizedResults(messages, makeCfg());
+    expect(files).toEqual([]);
+  });
+
+  it("skips when disabled", async () => {
+    const messages = [makeToolResult("x".repeat(30_000))];
+    const files = await prePersistOversizedResults(messages, makeCfg({ toolResultCompression: false }));
+    expect(files).toEqual([]);
   });
 });

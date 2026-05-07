@@ -14,9 +14,10 @@
  *      snippet that includes the file path.
  *
  *   2. **Aggregate budget** — if the *total* size of all tool results in one
- *      assembled context still exceeds `toolResultAggregateBudgetChars` after
- *      individual persistence, the largest results are progressively
- *      re-truncated until the budget is met.
+ *      assistant turn exceeds `toolResultAggregateBudgetChars` after individual
+ *      persistence, the largest results are progressively truncated.  Before
+ *      truncation the original content is also persisted to disk so the model
+ *      can recover the full output.
  *
  * File persistence is scoped per-session to avoid cross-session collisions.
  * For array-type tool results (multiple text blocks), the budget is distributed
@@ -119,7 +120,7 @@ function makePersistFilename(msg: AgentMessage): string {
  */
 function resolveStorageDir(sessionId: string, override?: string): string {
   const base = override ?? join(homedir(), ".openclaw", "memory", TOOL_RESULTS_BASE_DIR);
-  const safeSession = sessionId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
+  const safeSession = sessionId.replace(/[^a-zA-Z0-9_-]/g, "_");
   return join(base, safeSession);
 }
 
@@ -264,14 +265,6 @@ function collectToolResults(messages: AgentMessage[]): ToolResultEntry[] {
   return entries;
 }
 
-/**
- * Group toolResult entries by assistant turn.  A "group" is a maximal run of
- * non-assistant messages between two assistant messages — i.e. all toolResult
- * messages that belong to the same parallel tool-call batch.
- *
- * This matches Claude Code's `collectCandidatesByMessage` which groups
- * consecutive user messages not separated by an assistant message.
- */
 function groupByAssistantTurn(messages: AgentMessage[], entries: ToolResultEntry[]): ToolResultEntry[][] {
   const groups: ToolResultEntry[][] = [];
   let current: ToolResultEntry[] = [];
@@ -304,7 +297,7 @@ function groupByAssistantTurn(messages: AgentMessage[], entries: ToolResultEntry
 /**
  * Replace the text content of a tool-result message with `newText`.
  * For array-type content, distributes the text proportionally across text
- * blocks (each block gets its own truncated slice), preserving non-text blocks.
+ * blocks (each block gets its own slice), preserving non-text blocks.
  * For string-type content, replaces directly.
  */
 function replaceToolResultText(
@@ -316,16 +309,10 @@ function replaceToolResultText(
     return { ...msg, content: newText };
   }
 
-  // Array content: distribute proportionally per block (like OpenClaw's
-  // truncateToolResultMessage).
   const totalTextLen = getToolResultTextLength(msg);
   if (totalTextLen === 0) return msg;
 
   let assigned = 0;
-  const textBlocks = content.filter(
-    (b: unknown) => (b as Record<string, unknown>)?.type === "text" && typeof (b as Record<string, unknown>).text === "string",
-  );
-
   const newContent = content.map((block: unknown) => {
     const b = block as Record<string, unknown>;
     if (b?.type !== "text" || typeof b.text !== "string") return block;
@@ -371,6 +358,42 @@ function truncateToolResultMessage(
   });
 
   return { ...msg, content: newContent };
+}
+
+/**
+ * Pre-persist all oversized tool results to disk *before* any session
+ * trimming or budget enforcement can discard them.  Called from assemble()
+ * before buildAssembledContext so that even messages shifted out by
+ * buildSessionContext have their full content saved.
+ *
+ * Returns the list of persisted file paths.
+ */
+export async function prePersistOversizedResults(
+  messages: AgentMessage[],
+  cfg: {
+    toolResultCompression: boolean;
+    toolResultMaxChars: number;
+    toolResultStorageDir?: string;
+    sessionId?: string;
+  },
+): Promise<string[]> {
+  if (!cfg.toolResultCompression) return [];
+
+  const sessionId = cfg.sessionId ?? "default";
+  const storageDir = resolveStorageDir(sessionId, cfg.toolResultStorageDir);
+  const entries = collectToolResults(messages);
+  const oversized = entries.filter(e => e.textLength > cfg.toolResultMaxChars);
+  if (oversized.length === 0) return [];
+
+  const persistedFiles: string[] = [];
+  const ops = oversized.map(async (entry) => {
+    const text = getToolResultText(entry.message);
+    const filename = makePersistFilename(entry.message);
+    const filepath = await persistToDisk(text, filename, storageDir);
+    if (filepath) persistedFiles.push(filepath);
+  });
+  await Promise.all(ops);
+  return persistedFiles;
 }
 
 export async function compressToolResults(
@@ -431,7 +454,7 @@ export async function compressToolResults(
         persistedFiles.push(filepath);
       } else {
         const { preview, hasMore } = generatePreview(text, previewChars);
-        newContent = preview + (hasMore ? "\n\n[... disk persistence failed, content truncated ...]" : "");
+        newContent = preview + (hasMore ? "\n\n[... disk persistence failed, content not recoverable ...]" : "");
       }
 
       return {
@@ -448,7 +471,6 @@ export async function compressToolResults(
   }
 
   // Phase 2: aggregate budget enforcement per assistant turn.
-  // Each group = toolResult messages between two assistant messages.
   const afterIndividual = collectToolResults(result);
   const groups = groupByAssistantTurn(result, afterIndividual);
 
@@ -467,9 +489,31 @@ export async function compressToolResults(
       let remaining = groupChars - aggregateBudget;
       for (const entry of candidates) {
         if (remaining <= 0) break;
-        const targetChars = Math.max(previewChars, entry.textLength - remaining);
-        result[entry.index] = truncateToolResultMessage(result[entry.index]!, targetChars);
 
+        // Persist original content before truncating so it remains recoverable.
+        const text = getToolResultText(result[entry.index]!);
+        const filename = makePersistFilename(entry.message);
+        const filepath = await persistToDisk(text, filename, storageDir);
+
+        const targetChars = Math.max(previewChars, entry.textLength - remaining);
+        let truncated = truncateToolResultMessage(result[entry.index]!, targetChars);
+
+        if (filepath) {
+          persistedFiles.push(filepath);
+          const truncationNote = `\n\n[... aggregate budget truncation: full output saved to: ${filepath} ...]`;
+          const tc = truncated.content;
+          if (typeof tc === "string") {
+            truncated = { ...truncated, content: tc + truncationNote };
+          }
+        } else {
+          const truncationNote = "\n\n[... aggregate budget truncation: disk persistence failed, content not recoverable ...]";
+          const tc = truncated.content;
+          if (typeof tc === "string") {
+            truncated = { ...truncated, content: tc + truncationNote };
+          }
+        }
+
+        result[entry.index] = truncated;
         const newTextLen = getToolResultTextLength(result[entry.index]!);
         remaining -= Math.max(0, entry.textLength - newTextLen);
         if (newTextLen < entry.textLength) compressedCount++;

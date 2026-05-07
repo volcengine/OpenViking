@@ -18,7 +18,7 @@ import {
   toJsonLog,
 } from "./memory-ranking.js";
 import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
-import { compressToolResults } from "./tool-result-compression.js";
+import { compressToolResults, prePersistOversizedResults } from "./tool-result-compression.js";
 
 type AgentMessage = {
   role?: string;
@@ -1170,6 +1170,14 @@ export function createMemoryOpenVikingContextEngine(params: {
           });
         }
 
+        // Pre-persist oversized tool results BEFORE session trimming so that
+        // even messages discarded by buildSessionContext have their full
+        // content saved to disk and remain recoverable.
+        const prePersistedFiles = await prePersistOversizedResults(
+          ctx.messages,
+          { ...cfg, sessionId: OVSessionId },
+        );
+
         const { sanitized, archive, session, budgets, instruction } = buildAssembledContext(
           ctx.latest_archive_overview,
           preAbstracts,
@@ -1213,6 +1221,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           toolResultCompression: compressionStats.compressedCount > 0
             ? { compressedCount: compressionStats.compressedCount, originalChars: compressionStats.totalOriginalChars, compressedChars: compressionStats.totalCompressedChars, aggregateBudgetTriggered: compressionStats.aggregateBudgetTriggered }
             : undefined,
+          prePersistedFiles: prePersistedFiles.length > 0 ? prePersistedFiles.length : undefined,
           messages: messageDigest(finalMessages),
         });
 
