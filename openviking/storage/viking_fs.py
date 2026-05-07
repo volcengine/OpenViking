@@ -1945,8 +1945,12 @@ class VikingFS:
             except AGFSHTTPError as e:
                 if e.status_code != 404:
                     raise
-            except AGFSClientError:
-                raise
+            except AGFSClientError as e:
+                if "not found" not in (str(e) or "").lower():
+                    raise
+            except RuntimeError as e:
+                if "not found" not in (str(e) or "").lower():
+                    raise
 
             await self._ensure_parent_dirs(path)
             final_content = (existing + content).encode("utf-8")
