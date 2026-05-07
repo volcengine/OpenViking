@@ -210,7 +210,9 @@ class ResourceService:
                 **kwargs,
             )
 
-            if wait:
+            if result.get("status") == "error":
+                pass
+            elif wait:
                 wait_start = time.perf_counter()
                 try:
                     with telemetry.measure("resource.wait"):
@@ -325,7 +327,11 @@ class ResourceService:
         try:
             await request_wait_tracker.wait_for_request(telemetry_id)
             status = request_wait_tracker.build_queue_status(telemetry_id)
-            task_tracker.complete(task_id, {"queue_status": status})
+            errors = sum(int(group.get("error_count", 0) or 0) for group in status.values())
+            if errors:
+                task_tracker.fail(task_id, f"queue processing failed: {status}")
+            else:
+                task_tracker.complete(task_id, {"queue_status": status})
         except Exception as exc:
             task_tracker.fail(task_id, str(exc))
         finally:
