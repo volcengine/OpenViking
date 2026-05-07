@@ -161,6 +161,7 @@ class ResourceService:
         telemetry = get_current_telemetry()
         telemetry_id = register_wait_telemetry(wait)
         request_wait_tracker = get_request_wait_tracker()
+        monitor_started = False
         if telemetry_id:
             request_wait_tracker.register_request(telemetry_id)
         watch_manager = self._get_watch_manager()
@@ -263,9 +264,8 @@ class ResourceService:
                 )
                 result["task_id"] = task.task_id
                 if telemetry_id:
-                    asyncio.create_task(
-                        self._monitor_queue_processing(task.task_id, telemetry_id)
-                    )
+                    monitor_started = True
+                    asyncio.create_task(self._monitor_queue_processing(task.task_id, telemetry_id))
                 else:
                     task_tracker.start(task.task_id)
                     task_tracker.complete(task.task_id, {"root_uri": root_uri})
@@ -312,7 +312,7 @@ class ResourceService:
                 "resource.request.duration_ms",
                 round((time.perf_counter() - request_start) * 1000, 3),
             )
-            if wait or not telemetry_id:
+            if wait or not telemetry_id or not monitor_started:
                 get_request_wait_tracker().cleanup(telemetry_id)
                 unregister_wait_telemetry(telemetry_id)
 
@@ -467,6 +467,7 @@ class ResourceService:
         self._ensure_initialized()
         telemetry_id = get_current_telemetry().telemetry_id
         request_wait_tracker = get_request_wait_tracker()
+        monitor_started = False
         if telemetry_id:
             request_wait_tracker.register_request(telemetry_id)
 
@@ -510,16 +511,15 @@ class ResourceService:
                 )
                 result["task_id"] = task.task_id
                 if telemetry_id:
-                    asyncio.create_task(
-                        self._monitor_queue_processing(task.task_id, telemetry_id)
-                    )
+                    monitor_started = True
+                    asyncio.create_task(self._monitor_queue_processing(task.task_id, telemetry_id))
                 else:
                     task_tracker.start(task.task_id)
                     task_tracker.complete(task.task_id, {})
 
             return result
         finally:
-            if wait or not telemetry_id:
+            if wait or not telemetry_id or not monitor_started:
                 request_wait_tracker.cleanup(telemetry_id)
 
     async def build_index(

@@ -527,3 +527,51 @@ async def test_add_resource_async_task_queryable(
     assert result["task_id"] == task_id
     assert result["task_type"] == "add_resource"
     assert result["status"] in {"running", "completed"}
+
+
+async def test_add_resource_async_failure_cleans_up_tracker(
+    client: httpx.AsyncClient,
+    service,
+    monkeypatch,
+    upload_temp_dir,
+):
+    """Regression: when wait=False and telemetry_id is registered but processor
+    raises before task/monitor creation, RequestWaitTracker and telemetry
+    registry must not leak state."""
+
+    from openviking.server.identity import RequestContext, Role
+    from openviking.telemetry import get_current_telemetry
+    from openviking.telemetry.registry import _REGISTERED_TELEMETRY
+    from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+    from openviking_cli.session.user_id import UserIdentifier
+
+    original_add_resource = service.resources.add_resource
+
+    async def _failing_add_resource(**kwargs):
+        raise RuntimeError("processor exploded")
+
+    monkeypatch.setattr(service.resources, "add_resource", _failing_add_resource)
+
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    rwt_before = set(get_request_wait_tracker()._states.keys())
+    tel_before = set(_REGISTERED_TELEMETRY.keys())
+
+    try:
+        await service.resources.add_resource(
+            path="/tmp/fail_test.md",
+            ctx=ctx,
+            reason="failure cleanup test",
+            wait=False,
+        )
+    except RuntimeError:
+        pass
+
+    rwt_after = set(get_request_wait_tracker()._states.keys())
+    tel_after = set(_REGISTERED_TELEMETRY.keys())
+
+    leaked_rwt = rwt_after - rwt_before
+    assert not leaked_rwt, f"RequestWaitTracker leaked: {leaked_rwt}"
+
+    leaked_telemetry = tel_after - tel_before
+    assert not leaked_telemetry, f"Telemetry registry leaked: {leaked_telemetry}"

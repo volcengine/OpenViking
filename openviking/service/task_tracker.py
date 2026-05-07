@@ -58,8 +58,8 @@ class TaskRecord:
         """Serialize for JSON response."""
         d = asdict(self)
         d["status"] = self.status.value
-        d["created_at"] = datetime.fromtimestamp(self.created_at, tz=timezone.utc).isoformat()
-        d["updated_at"] = datetime.fromtimestamp(self.updated_at, tz=timezone.utc).isoformat()
+        d["created_at_iso"] = datetime.fromtimestamp(self.created_at, tz=timezone.utc).isoformat()
+        d["updated_at_iso"] = datetime.fromtimestamp(self.updated_at, tz=timezone.utc).isoformat()
         d.pop("owner_account_id", None)
         d.pop("owner_user_id", None)
         return d
