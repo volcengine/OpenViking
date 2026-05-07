@@ -108,6 +108,19 @@ async function main() {
   const ovSessionId = deriveOvSessionId(sessionId);
   const sessionCtx = await getSessionContext(fetchJSON, ovSessionId, cfg.resumeContextBudget);
   const block = formatArchiveContext(sessionCtx, source);
+
+  // One-shot signal for the statusline: surface "🔗 resumed" / "🔗 compact"
+  // briefly after the event, regardless of whether OV had archive context to
+  // inject. Users expect the badge to reflect "the event happened", not "OV
+  // had something to add" — early sessions with no archive yet still want
+  // the indicator that compact occurred. Statusline applies a short TTL.
+  writeJsonState("last-session-event.json", {
+    source,
+    cc_session_id: sessionId,
+    ov_session_id: ovSessionId,
+    had_context: Boolean(block),
+  });
+
   if (!block) {
     log("no_archive", { ovSessionId, source });
     approve();
@@ -115,14 +128,6 @@ async function main() {
   }
 
   log("inject", { ovSessionId, source, blockLength: block.length });
-  // One-shot signal for the statusline: surface "🔗 resumed" / "🔗 compact"
-  // briefly after a session resumes, so the user knows OV did re-hydrate
-  // context. Statusline applies a short TTL so it doesn't linger.
-  writeJsonState("last-session-event.json", {
-    source,
-    cc_session_id: sessionId,
-    ov_session_id: ovSessionId,
-  });
   approve(block);
 }
 
