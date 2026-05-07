@@ -521,6 +521,7 @@ class ResourceService:
         finally:
             if wait or not telemetry_id or not monitor_started:
                 request_wait_tracker.cleanup(telemetry_id)
+                unregister_wait_telemetry(telemetry_id)
 
     async def build_index(
         self, resource_uris: List[str], ctx: RequestContext, **kwargs
