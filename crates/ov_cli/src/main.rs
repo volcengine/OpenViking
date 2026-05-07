@@ -539,6 +539,11 @@ enum Commands {
         #[arg(long)]
         timeout: Option<f64>,
     },
+    /// [Status] Track async resource processing tasks
+    Task {
+        #[command(subcommand)]
+        action: TaskCommands,
+    },
     /// [Status] All OpenViking Server components status
     Status,
     /// [Status] Observe OpenViking Server components status
@@ -590,6 +595,24 @@ impl Commands {
             _ => false,
         }
     }
+}
+
+#[derive(Subcommand)]
+enum TaskCommands {
+    /// Show status of a specific task
+    Status {
+        /// Task ID returned by add-resource/add-skill
+        task_id: String,
+    },
+    /// List all tracked tasks
+    List {
+        /// Filter by task type (e.g. add_resource, add_skill, session_commit, reindex)
+        #[arg(long)]
+        task_type: Option<String>,
+        /// Filter by status (pending, running, completed, failed)
+        #[arg(long)]
+        status: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1035,6 +1058,23 @@ async fn main() {
             let client = ctx.get_client();
             commands::system::wait(&client, timeout, ctx.output_format, ctx.compact).await
         }
+        Commands::Task { action } => match action {
+            TaskCommands::Status { task_id } => {
+                let client = ctx.get_client();
+                commands::task::status(&client, &task_id, ctx.output_format, ctx.compact).await
+            }
+            TaskCommands::List { task_type, status } => {
+                let client = ctx.get_client();
+                commands::task::list(
+                    &client,
+                    task_type.as_deref(),
+                    status.as_deref(),
+                    ctx.output_format,
+                    ctx.compact,
+                )
+                .await
+            }
+        },
         Commands::Status => {
             let client = ctx.get_client();
             commands::observer::system(&client, ctx.output_format, ctx.compact).await
