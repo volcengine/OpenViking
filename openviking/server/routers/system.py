@@ -72,6 +72,21 @@ async def readiness_check(request: Request):
     Returns 200 when all subsystems are operational, 503 otherwise.
     No authentication required (designed for K8s probes).
     """
+    # If service is still initializing, return 503 immediately
+    try:
+        service = get_service()
+        if not service._initialized:
+            return JSONResponse(
+                status_code=503,
+                content={"status": "not_ready", "reason": "initializing"},
+            )
+    except Exception:
+        # If get_service() fails (service not yet set), also return 503
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not_ready", "reason": "initializing"},
+        )
+
     checks = {}
 
     # 1. AGFS: try to list root
