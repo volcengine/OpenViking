@@ -125,22 +125,26 @@ class OpenVikingOAuthProvider(
                 error="invalid_client_metadata",
                 error_description="client_id is required",
             )
-        # OpenViking only supports public clients with PKCE. Confidential
-        # auth methods (`client_secret_basic` / `client_secret_post`) would
-        # require us to enforce client_secret server-side; the SDK doesn't
-        # do that when get_client returns client_secret=None, so silently
-        # accepting them is a security hazard. RFC 8252 §8.4 also says
-        # native apps (the entire MCP audience) MUST NOT use client_secret
-        # auth — PKCE is the actual proof-of-possession. Reject up front.
-        auth_method = client_info.token_endpoint_auth_method or "none"
-        if auth_method != "none":
-            raise RegistrationError(
-                error="invalid_client_metadata",
-                error_description=(
-                    "OpenViking only supports public clients (PKCE). "
-                    f"token_endpoint_auth_method must be 'none', got '{auth_method}'."
-                ),
+        # OpenViking treats every registered client as public + PKCE.
+        # We do not enforce client_secret on the token endpoint — get_client
+        # returns client_secret=None unconditionally, so the SDK's
+        # ClientAuthenticator skips secret validation regardless of what
+        # auth method was declared. To prevent confidential clients from
+        # *thinking* they're getting secret-based auth (silent security
+        # downgrade), we normalize whatever the registrar requested to
+        # "none" and log a warning. Real MCP clients use "none" anyway —
+        # RFC 8252 §8.4 says native apps MUST NOT use client_secret —
+        # but the OAuth 2.0 default that some SDKs fill in is
+        # "client_secret_basic", which would otherwise fail the gate.
+        requested = client_info.token_endpoint_auth_method
+        if requested and requested != "none":
+            logger.warning(
+                "DCR: client %s requested token_endpoint_auth_method=%s; "
+                "downgrading to 'none' (OpenViking only supports public PKCE clients).",
+                client_info.client_id,
+                requested,
             )
+        auth_method = "none"
         try:
             await self._store.register_client(
                 client_id=client_info.client_id,

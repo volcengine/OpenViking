@@ -473,11 +473,14 @@ async def test_oauth_verify_rejects_verifier_without_fingerprint(app_with_oauth,
 
 
 @pytest.mark.asyncio
-async def test_dcr_rejects_confidential_auth_methods(client):
-    """OpenViking only supports public clients (PKCE). DCR must refuse
-    client_secret_basic / client_secret_post — the SDK doesn't enforce
-    secrets when get_client returns client_secret=None, so silently
-    accepting them is a security hazard."""
+async def test_dcr_downgrades_confidential_auth_to_public(app_with_oauth, client):
+    """OpenViking treats every client as public+PKCE. A registrar that asks
+    for client_secret_basic / client_secret_post is silently downgraded to
+    'none' so that the OAuth 2.0 default (client_secret_basic, which some
+    SDKs fill in unconditionally) does not break compatibility — but the
+    stored record reflects the actual authentication contract.
+    """
+    _, store, _ = app_with_oauth
     for method in ("client_secret_basic", "client_secret_post"):
         resp = await client.post(
             "/register",
@@ -487,10 +490,12 @@ async def test_dcr_rejects_confidential_auth_methods(client):
                 "token_endpoint_auth_method": method,
             },
         )
-        assert resp.status_code == 400, f"{method}: {resp.text}"
-        body = resp.json()
-        msg = (body.get("error_description") or body.get("message") or "").lower()
-        assert "public" in msg or "pkce" in msg or "none" in msg
+        assert resp.status_code == 201, f"{method}: {resp.text}"
+        client_id = resp.json()["client_id"]
+        record = await store.get_client(client_id)
+        # Stored auth method is forced to "none"; client_secret never persisted.
+        assert record["token_endpoint_auth_method"] == "none"
+        assert record.get("client_secret_hash") is None
 
 
 @pytest.mark.asyncio
