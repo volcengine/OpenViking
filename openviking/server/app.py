@@ -219,15 +219,13 @@ def create_app(
         async with mcp_lifespan():
             # Start heavy initialization as background task after yield
             if service is not None:
-                deferred_task = asyncio.create_task(
-                    _deferred_init(service, app, config)
-                )
+                deferred_task = asyncio.create_task(_deferred_init(service, app, config))
                 deferred_task.add_done_callback(
-                    lambda t: logger.error(
-                        "Deferred initialization failed", exc_info=t.exception()
+                    lambda t: (
+                        logger.error("Deferred initialization failed", exc_info=t.exception())
+                        if t.exception()
+                        else None
                     )
-                    if t.exception()
-                    else None
                 )
             yield
 
