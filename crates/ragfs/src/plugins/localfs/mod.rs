@@ -5,7 +5,7 @@
 
 use async_trait::async_trait;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::core::errors::{Error, Result};
 use crate::core::filesystem::FileSystem;
@@ -45,27 +45,59 @@ impl LocalFileSystem {
             )));
         }
 
-        Ok(Self { base_path: path })
+        Ok(Self {
+            base_path: path
+                .canonicalize()
+                .map_err(|e| Error::plugin(format!("failed to canonicalize base path: {}", e)))?,
+        })
     }
 
     /// Resolve a virtual path to actual local path
-    fn resolve_path(&self, path: &str) -> PathBuf {
-        // Remove leading slash to make it relative
+    fn resolve_path(&self, path: &str) -> Result<PathBuf> {
         let relative = path.strip_prefix('/').unwrap_or(path);
+        let mut resolved = self.base_path.clone();
 
-        // Join with base path
-        if relative.is_empty() {
-            self.base_path.clone()
-        } else {
-            self.base_path.join(relative)
+        for component in Path::new(relative).components() {
+            match component {
+                Component::CurDir => {}
+                Component::Normal(segment) => resolved.push(segment),
+                Component::ParentDir => {
+                    return Err(Error::permission_denied(path.to_string()));
+                }
+                Component::RootDir | Component::Prefix(_) => {
+                    return Err(Error::invalid_path(path.to_string()));
+                }
+            }
         }
+
+        let boundary = if resolved.exists() {
+            resolved
+                .canonicalize()
+                .map_err(|e| Error::plugin(format!("failed to canonicalize path: {}", e)))?
+        } else {
+            let parent = resolved.parent().ok_or_else(|| Error::invalid_path(path.to_string()))?;
+            let canonical_parent = parent
+                .canonicalize()
+                .map_err(|e| Error::plugin(format!("failed to canonicalize parent path: {}", e)))?;
+            canonical_parent.join(
+                resolved
+                    .file_name()
+                    .ok_or_else(|| Error::invalid_path(path.to_string()))?,
+            )
+        };
+
+        if !boundary.starts_with(&self.base_path) {
+            return Err(Error::permission_denied(path.to_string()));
+        }
+
+        Ok(resolved)
     }
 }
 
 #[async_trait]
 impl FileSystem for LocalFileSystem {
     async fn create(&self, path: &str) -> Result<()> {
-        let local_path = self.resolve_path(path);
+        let local_path = self.resolve_path(path)?;
 
         // Check if file already exists
         if local_path.exists() {
@@ -87,7 +119,7 @@ impl FileSystem for LocalFileSystem {
     }
 
     async fn mkdir(&self, path: &str, _mode: u32) -> Result<()> {
-        let local_path = self.resolve_path(path);
+        let local_path = self.resolve_path(path)?;
 
         // Check if directory already exists
         if local_path.exists() {
@@ -109,7 +141,7 @@ impl FileSystem for LocalFileSystem {
     }
 
     async fn remove(&self, path: &str) -> Result<()> {
-        let local_path = self.resolve_path(path);
+        let local_path = self.resolve_path(path)?;
 
         // Check if exists
         if !local_path.exists() {
@@ -135,7 +167,7 @@ impl FileSystem for LocalFileSystem {
     }
 
     async fn remove_all(&self, path: &str) -> Result<()> {
-        let local_path = self.resolve_path(path);
+        let local_path = self.resolve_path(path)?;
 
         // Check if exists
         if !local_path.exists() {
@@ -150,7 +182,7 @@ impl FileSystem for LocalFileSystem {
     }
 
     async fn read(&self, path: &str, offset: u64, size: u64) -> Result<Vec<u8>> {
-        let local_path = self.resolve_path(path);
+        let local_path = self.resolve_path(path)?;
 
         // Check if exists and is not a directory
         let metadata = fs::metadata(&local_path)
@@ -181,7 +213,7 @@ impl FileSystem for LocalFileSystem {
     }
 
     async fn write(&self, path: &str, data: &[u8], offset: u64, flags: WriteFlag) -> Result<u64> {
-        let local_path = self.resolve_path(path);
+        let local_path = self.resolve_path(path)?;
 
         // Check if it's a directory
         if local_path.exists() && local_path.is_dir() {
@@ -222,7 +254,7 @@ impl FileSystem for LocalFileSystem {
     }
 
     async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
-        let local_path = self.resolve_path(path);
+        let local_path = self.resolve_path(path)?;
 
         // Check if directory exists
         if !local_path.exists() {
@@ -263,7 +295,7 @@ impl FileSystem for LocalFileSystem {
     }
 
     async fn stat(&self, path: &str) -> Result<FileInfo> {
-        let local_path = self.resolve_path(path);
+        let local_path = self.resolve_path(path)?;
 
         // Get file metadata
         let metadata = fs::metadata(&local_path)
@@ -289,8 +321,8 @@ impl FileSystem for LocalFileSystem {
     }
 
     async fn rename(&self, old_path: &str, new_path: &str) -> Result<()> {
-        let old_local = self.resolve_path(old_path);
-        let new_local = self.resolve_path(new_path);
+        let old_local = self.resolve_path(old_path)?;
+        let new_local = self.resolve_path(new_path)?;
 
         // Check if old path exists
         if !old_local.exists() {
@@ -312,7 +344,7 @@ impl FileSystem for LocalFileSystem {
     }
 
     async fn chmod(&self, path: &str, _mode: u32) -> Result<()> {
-        let local_path = self.resolve_path(path);
+        let local_path = self.resolve_path(path)?;
 
         // Check if exists
         if !local_path.exists() {
@@ -457,5 +489,41 @@ VERSION: 1.0.0
 
     fn config_params(&self) -> &[ConfigParameter] {
         &self.config_params
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn test_localfs_rejects_parent_dir_traversal() {
+        let tmp = tempdir().unwrap();
+        let base = tmp.path().join("safe");
+        let outside = tmp.path().join("outside.txt");
+        std::fs::create_dir(&base).unwrap();
+        std::fs::write(&outside, b"secret").unwrap();
+
+        let fs = LocalFileSystem::new(base.to_str().unwrap()).unwrap();
+        let err = fs.read("../outside.txt", 0, 0).await.unwrap_err();
+        assert!(matches!(err, Error::PermissionDenied(_)));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_localfs_rejects_symlink_escape() {
+        let tmp = tempdir().unwrap();
+        let base = tmp.path().join("safe");
+        let escaped_dir = tmp.path().join("escaped");
+        let outside = escaped_dir.join("outside.txt");
+        std::fs::create_dir(&base).unwrap();
+        std::fs::create_dir(&escaped_dir).unwrap();
+        std::fs::write(&outside, b"secret").unwrap();
+        std::os::unix::fs::symlink(&escaped_dir, base.join("link_out")).unwrap();
+
+        let fs = LocalFileSystem::new(base.to_str().unwrap()).unwrap();
+        let err = fs.read("link_out/outside.txt", 0, 0).await.unwrap_err();
+        assert!(matches!(err, Error::PermissionDenied(_)));
     }
 }
