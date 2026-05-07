@@ -1116,6 +1116,42 @@ class Session:
 
         raise NotFoundError(archive_id, "session archive")
 
+    async def get_raw_messages_tail(self, tail: int = 64) -> List[Message]:
+        """Return the latest raw transcript messages across archives and live state.
+
+        Unlike get_session_context(), this does not summarize completed archives.
+        It is intended for transcript-boundary checks such as append de-duplication.
+        """
+        tail = max(0, int(tail or 0))
+        if tail <= 0:
+            return []
+
+        result: List[Message] = list(self._messages[-tail:])
+        needed = tail - len(result)
+        if needed <= 0:
+            return result[-tail:]
+
+        pending_messages = await self._get_pending_archive_messages()
+        if pending_messages:
+            pending_tail = pending_messages[-needed:]
+            result = pending_tail + result
+            needed = tail - len(result)
+            if needed <= 0:
+                return result[-tail:]
+
+        completed_prefix: List[Message] = []
+        for archive in await self._get_completed_archive_refs():
+            if needed <= 0:
+                break
+            archive_messages = await self._read_archive_messages(archive["archive_uri"])
+            if not archive_messages:
+                continue
+            take = archive_messages[-needed:]
+            completed_prefix = take + completed_prefix
+            needed = tail - len(completed_prefix) - len(result)
+
+        return (completed_prefix + result)[-tail:]
+
     # ============= Internal methods =============
 
     async def _collect_session_context_components(self) -> Dict[str, Any]:

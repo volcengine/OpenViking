@@ -637,6 +637,44 @@ async def test_get_session_context_endpoint_returns_trimmed_latest_archive_and_m
     assert result["stats"]["failedArchives"] == 0
 
 
+async def test_get_session_messages_tail_includes_completed_archives_and_live_messages(
+    client: httpx.AsyncClient,
+):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    for content in ["archive one user", "archive one assistant"]:
+        await client.post(
+            f"/api/v1/sessions/{session_id}/messages",
+            json=_message_request("user", content=content),
+        )
+    commit_one = await client.post(f"/api/v1/sessions/{session_id}/commit")
+    await _wait_for_task(client, commit_one.json()["result"]["task_id"])
+
+    for content in ["archive two user", "archive two assistant"]:
+        await client.post(
+            f"/api/v1/sessions/{session_id}/messages",
+            json=_message_request("assistant", content=content),
+        )
+    commit_two = await client.post(f"/api/v1/sessions/{session_id}/commit")
+    await _wait_for_task(client, commit_two.json()["result"]["task_id"])
+
+    await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json=_message_request("user", content="live tail"),
+    )
+
+    resp = await client.get(f"/api/v1/sessions/{session_id}/messages?tail=3")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert [m["parts"][0]["text"] for m in body["result"]["messages"]] == [
+        "archive two user",
+        "archive two assistant",
+        "live tail",
+    ]
+
+
 async def test_get_session_archive_endpoint_returns_archive_details(client: httpx.AsyncClient):
     create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]

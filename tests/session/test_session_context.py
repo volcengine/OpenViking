@@ -331,6 +331,37 @@ class TestGetContextForSearch:
 class TestGetSessionContext:
     """Test get_session_context"""
 
+    async def test_get_raw_messages_tail_reads_completed_archives_and_live_messages(
+        self, client: AsyncOpenViking
+    ):
+        session = client.session(session_id="raw_tail_completed_archives_test")
+
+        for role, content in [
+            ("user", "archive one user"),
+            ("assistant", "archive one assistant"),
+        ]:
+            session.add_message(role, [TextPart(content)])
+        result_one = await session.commit_async()
+        await _wait_for_task(result_one["task_id"])
+
+        for role, content in [
+            ("user", "archive two user"),
+            ("assistant", "archive two assistant"),
+        ]:
+            session.add_message(role, [TextPart(content)])
+        result_two = await session.commit_async()
+        await _wait_for_task(result_two["task_id"])
+
+        session.add_message("user", [TextPart("live tail")])
+
+        tail = await session.get_raw_messages_tail(tail=3)
+
+        assert [m.content for m in tail] == [
+            "archive two user",
+            "archive two assistant",
+            "live tail",
+        ]
+
     async def test_get_session_context_returns_latest_archive_overview_and_history(
         self, client: AsyncOpenViking, monkeypatch
     ):

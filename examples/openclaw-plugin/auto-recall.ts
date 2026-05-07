@@ -1,9 +1,11 @@
 import type { FindResult, FindResultItem, OpenVikingClient } from "./client.js";
 import type { MemoryOpenVikingConfig } from "./config.js";
 import {
+  clampScore,
   pickMemoriesForInjection,
   postProcessMemories,
   summarizeInjectionMemories,
+  trimForLog,
   toJsonLog,
 } from "./memory-ranking.js";
 import { quickRecallPrecheck, withTimeout } from "./process-manager.js";
@@ -105,6 +107,125 @@ export type BuildMemoryLinesWithBudgetOptions = BuildMemoryLinesOptions & {
   recallTokenBudget?: number;
 };
 
+export type AutoRecallTraceResult =
+  | "disabled"
+  | "empty_query"
+  | "precheck_failed"
+  | "no_hits"
+  | "none_fit_budget"
+  | "injected";
+
+export type AutoRecallTraceMemory = {
+  rank: number;
+  uri: string;
+  category: string | null;
+  abstract: string;
+  score: number;
+  level: number | null;
+  is_leaf: boolean;
+  injected: boolean;
+  lineChars?: number;
+  skipReason?: "budget";
+};
+
+export type AutoRecallTrace = {
+  result: AutoRecallTraceResult;
+  query: {
+    chars: number;
+    preview: string;
+  };
+  settings: {
+    recallLimit: number;
+    recallResources: boolean;
+    recallPreferAbstract: boolean;
+  };
+  targets: string[];
+  candidateLimit: number;
+  counts: {
+    raw: number;
+    unique: number;
+    leafOnly: number;
+    processed: number;
+    selected: number;
+    injected: number;
+    skippedByBudget: number;
+    searchFailures: number;
+  };
+  budget: {
+    recallMaxInjectedChars: number;
+    injectedChars: number;
+    estimatedTokens: number;
+  };
+  memories: AutoRecallTraceMemory[];
+  reason?: string;
+};
+
+function makeBaseTrace(
+  cfg: Required<MemoryOpenVikingConfig>,
+  queryText: string,
+): AutoRecallTrace {
+  const candidateLimit = Math.max(cfg.recallLimit * 4, 20);
+  const targets = [
+    "viking://user/memories",
+    "viking://agent/memories",
+    ...(cfg.recallResources ? ["viking://resources"] : []),
+  ];
+
+  return {
+    result: "no_hits",
+    query: {
+      chars: queryText.length,
+      preview: trimForLog(queryText, 180),
+    },
+    settings: {
+      recallLimit: cfg.recallLimit,
+      recallResources: cfg.recallResources,
+      recallPreferAbstract: cfg.recallPreferAbstract,
+    },
+    targets,
+    candidateLimit,
+    counts: {
+      raw: 0,
+      unique: 0,
+      leafOnly: 0,
+      processed: 0,
+      selected: 0,
+      injected: 0,
+      skippedByBudget: 0,
+      searchFailures: 0,
+    },
+    budget: {
+      recallMaxInjectedChars: cfg.recallMaxInjectedChars,
+      injectedChars: 0,
+      estimatedTokens: 0,
+    },
+    memories: [],
+  };
+}
+
+function summarizeTraceMemory(
+  item: FindResultItem,
+  index: number,
+  extra: {
+    injected: boolean;
+    lineChars?: number;
+    skipReason?: "budget";
+  },
+): AutoRecallTraceMemory {
+  return {
+    rank: index + 1,
+    uri: item.uri,
+    category: item.category ?? null,
+    abstract: trimForLog(item.abstract?.trim() || item.overview?.trim() || item.uri, 180),
+    score: clampScore(item.score),
+    level: typeof item.level === "number" ? item.level : null,
+    is_leaf: item.level === 2,
+    injected: extra.injected,
+    ...(typeof extra.lineChars === "number" ? { lineChars: extra.lineChars } : {}),
+    ...(extra.skipReason ? { skipReason: extra.skipReason } : {}),
+  };
+}
+
 /**
  * Build memory lines with a character budget constraint.
  *
@@ -116,15 +237,26 @@ export async function buildMemoryLinesWithBudget(
   memories: FindResultItem[],
   readFn: (uri: string) => Promise<string>,
   options: BuildMemoryLinesWithBudgetOptions,
-): Promise<{ lines: string[]; estimatedTokens: number }> {
+): Promise<{
+  lines: string[];
+  estimatedTokens: number;
+  injectedChars: number;
+  skippedByBudget: number;
+  traceMemories: AutoRecallTraceMemory[];
+}> {
   const charBudget = options.recallMaxInjectedChars ?? options.recallTokenBudget ?? 0;
   const lines: string[] = [];
+  const traceMemories: AutoRecallTraceMemory[] = [];
   let totalTokens = 0;
   let totalChars = 0;
 
-  for (const item of memories) {
+  for (const [index, item] of memories.entries()) {
     if (totalChars >= charBudget) {
-      break;
+      traceMemories.push(summarizeTraceMemory(item, index, {
+        injected: false,
+        skipReason: "budget",
+      }));
+      continue;
     }
 
     const content = await resolveMemoryContent(item, readFn, options);
@@ -133,6 +265,11 @@ export async function buildMemoryLinesWithBudget(
     const projectedChars = totalChars + separatorChars + line.length;
 
     if (projectedChars > charBudget) {
+      traceMemories.push(summarizeTraceMemory(item, index, {
+        injected: false,
+        lineChars: line.length,
+        skipReason: "budget",
+      }));
       continue;
     }
 
@@ -141,9 +278,19 @@ export async function buildMemoryLinesWithBudget(
     lines.push(line);
     totalTokens += lineTokens;
     totalChars = projectedChars;
+    traceMemories.push(summarizeTraceMemory(item, index, {
+      injected: true,
+      lineChars: line.length,
+    }));
   }
 
-  return { lines, estimatedTokens: totalTokens };
+  return {
+    lines,
+    estimatedTokens: totalTokens,
+    injectedChars: totalChars,
+    skippedByBudget: traceMemories.filter((item) => item.skipReason === "budget").length,
+    traceMemories,
+  };
 }
 
 export function buildRecallContextBlock(memoryLines: string[]): string {
@@ -163,22 +310,38 @@ export async function buildAutoRecallContext(params: {
   queryText: string;
   logger: Logger;
   verbose?: (message: string) => void;
-}): Promise<{ block?: string; memoryCount: number; estimatedTokens: number }> {
+}): Promise<{ block?: string; memoryCount: number; estimatedTokens: number; trace: AutoRecallTrace }> {
   const { cfg, client, agentId, queryText, logger, verbose } = params;
+  const baseTrace = makeBaseTrace(cfg, queryText);
 
   if (!cfg.autoRecall || queryText.length < 5) {
-    return { memoryCount: 0, estimatedTokens: 0 };
+    return {
+      memoryCount: 0,
+      estimatedTokens: 0,
+      trace: {
+        ...baseTrace,
+        result: cfg.autoRecall ? "empty_query" : "disabled",
+      },
+    };
   }
 
   const precheck = await quickRecallPrecheck(cfg.baseUrl);
   if (!precheck.ok) {
     verbose?.(`openviking: skipping auto-recall because precheck failed (${precheck.reason})`);
-    return { memoryCount: 0, estimatedTokens: 0 };
+    return {
+      memoryCount: 0,
+      estimatedTokens: 0,
+      trace: {
+        ...baseTrace,
+        result: "precheck_failed",
+        reason: precheck.reason,
+      },
+    };
   }
 
   return withTimeout(
     (async () => {
-      const candidateLimit = Math.max(cfg.recallLimit * 4, 20);
+      const candidateLimit = baseTrace.candidateLimit;
       const autoRecallPromises: Promise<FindResult>[] = [
         client.find(queryText, {
           targetUri: "viking://user/memories",
@@ -203,10 +366,12 @@ export async function buildAutoRecallContext(params: {
       const autoRecallSettled = await Promise.allSettled(autoRecallPromises);
 
       const allMemories: FindResultItem[] = [];
+      let searchFailures = 0;
       for (const s of autoRecallSettled) {
         if (s.status === "fulfilled") {
           allMemories.push(...(s.value.memories ?? []), ...(s.value.resources ?? []));
         } else {
+          searchFailures += 1;
           logger.warn?.(`openviking: auto-recall search failed: ${String(s.reason)}`);
         }
       }
@@ -220,12 +385,34 @@ export async function buildAutoRecallContext(params: {
         scoreThreshold: cfg.recallScoreThreshold,
       });
       const memories = pickMemoriesForInjection(processed, cfg.recallLimit, queryText);
+      const trace: AutoRecallTrace = {
+        ...baseTrace,
+        counts: {
+          raw: allMemories.length,
+          unique: uniqueMemories.length,
+          leafOnly: leafOnly.length,
+          processed: processed.length,
+          selected: memories.length,
+          injected: 0,
+          skippedByBudget: 0,
+          searchFailures,
+        },
+        memories: memories.map((memory, index) =>
+          summarizeTraceMemory(memory, index, { injected: false }),
+        ),
+      };
 
       if (memories.length === 0) {
-        return { memoryCount: 0, estimatedTokens: 0 };
+        return { memoryCount: 0, estimatedTokens: 0, trace: { ...trace, result: "no_hits" } };
       }
 
-      const { lines: memoryLines, estimatedTokens } = await buildMemoryLinesWithBudget(
+      const {
+        lines: memoryLines,
+        estimatedTokens,
+        injectedChars,
+        skippedByBudget,
+        traceMemories,
+      } = await buildMemoryLinesWithBudget(
         memories,
         (uri) => client.read(uri, agentId),
         {
@@ -233,12 +420,30 @@ export async function buildAutoRecallContext(params: {
           recallMaxInjectedChars: cfg.recallMaxInjectedChars,
         },
       );
+      const budgetedTrace: AutoRecallTrace = {
+        ...trace,
+        counts: {
+          ...trace.counts,
+          injected: memoryLines.length,
+          skippedByBudget,
+        },
+        budget: {
+          recallMaxInjectedChars: cfg.recallMaxInjectedChars,
+          injectedChars,
+          estimatedTokens,
+        },
+        memories: traceMemories,
+      };
 
       if (memoryLines.length === 0) {
         verbose?.(
           `openviking: skipping auto-recall injection; no complete memories fit maxInjectedChars=${cfg.recallMaxInjectedChars}`,
         );
-        return { memoryCount: 0, estimatedTokens: 0 };
+        return {
+          memoryCount: 0,
+          estimatedTokens: 0,
+          trace: { ...budgetedTrace, result: "none_fit_budget" },
+        };
       }
 
       const block = buildRecallContextBlock(memoryLines);
@@ -249,7 +454,12 @@ export async function buildAutoRecallContext(params: {
         `openviking: inject-detail ${toJsonLog({ count: memories.length, memories: summarizeInjectionMemories(memories) })}`,
       );
 
-      return { block, memoryCount: memoryLines.length, estimatedTokens };
+      return {
+        block,
+        memoryCount: memoryLines.length,
+        estimatedTokens,
+        trace: { ...budgetedTrace, result: "injected" },
+      };
     })(),
     AUTO_RECALL_TIMEOUT_MS,
     "openviking: auto-recall search timeout",

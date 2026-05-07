@@ -7,9 +7,11 @@ import {
   buildAutoRecallContext,
   prepareRecallQuery,
 } from "./auto-recall.js";
+import type { AutoRecallTrace } from "./auto-recall.js";
 import {
   compileSessionPatterns,
   getCaptureDecision,
+  type ExtractedMessage,
   extractNewTurnMessages,
   shouldBypassSession,
 } from "./text-utils.js";
@@ -56,6 +58,22 @@ export function toRoleId(senderId: string | undefined): string | undefined {
 
 type IngestBatchResult = {
   ingestedCount: number;
+};
+
+type CapturedMessagePart = {
+  type: "text" | "tool";
+  text?: string;
+  tool_id?: string;
+  tool_name?: string;
+  tool_input?: unknown;
+  tool_output?: string;
+  tool_status?: string;
+};
+
+type CapturedOpenVikingMessage = {
+  msg: ExtractedMessage;
+  ovParts: CapturedMessagePart[];
+  signature: string;
 };
 
 type CompactResult = {
@@ -221,6 +239,67 @@ function messageDigest(messages: AgentMessage[], maxCharsPerMsg = 2000): Array<{
   });
 }
 
+function normalizeMessageParts(parts: Array<CapturedMessagePart | OVMessage["parts"][number]>): CapturedMessagePart[] {
+  return parts.map((part) => {
+    if (part.type === "text") {
+      return {
+        type: "text",
+        text: typeof part.text === "string" ? part.text : "",
+      };
+    }
+    return {
+      type: "tool",
+      tool_id: typeof part.tool_id === "string" ? part.tool_id : "",
+      tool_name: typeof part.tool_name === "string" ? part.tool_name : "",
+      tool_input: part.tool_input,
+      tool_output: typeof part.tool_output === "string" ? part.tool_output : "",
+      tool_status: typeof part.tool_status === "string" ? part.tool_status : "",
+    };
+  });
+}
+
+function capturedMessageSignature(params: {
+  role: ExtractedMessage["role"] | string;
+  parts: Array<CapturedMessagePart | OVMessage["parts"][number]>;
+}): string {
+  return createHash("sha256")
+    .update(JSON.stringify({
+      role: params.role,
+      parts: normalizeMessageParts(params.parts),
+    }))
+    .digest("hex");
+}
+
+function countPersistedPrefixOverlap(
+  storedTail: OVMessage[],
+  incoming: CapturedOpenVikingMessage[],
+): number {
+  const maxOverlap = Math.min(storedTail.length, incoming.length);
+  if (maxOverlap <= 0) {
+    return 0;
+  }
+
+  const storedSignatures = storedTail.map((message) =>
+    capturedMessageSignature({ role: message.role, parts: message.parts }),
+  );
+  const incomingSignatures = incoming.map((message) => message.signature);
+
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    let matches = true;
+    for (let i = 0; i < overlap; i += 1) {
+      if (storedSignatures[storedSignatures.length - overlap + i] !== incomingSignatures[i]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) {
+      return overlap;
+    }
+  }
+
+  return 0;
+}
+
 function extractAgentMessageText(message: AgentMessage | undefined): string {
   if (!message) {
     return "";
@@ -296,6 +375,16 @@ function prependRecallToLatestUserMessage(messages: AgentMessage[], recallBlock:
 function emitDiag(log: Logger, stage: string, sessionId: string, data: Record<string, unknown>, enabled = true): void {
   if (!enabled) return;
   log.info(`openviking: diag ${JSON.stringify({ ts: Date.now(), stage, sessionId, data })}`);
+}
+
+function emitAutoRecallTrace(log: Logger, data: Record<string, unknown>): void {
+  log.info(
+    `openviking: auto-recall-trace ${toJsonLog({
+      ts: Date.now(),
+      stage: "auto_recall_trace",
+      ...data,
+    }, 12000)}`,
+  );
 }
 
 function totalExtractedMemories(memories?: Record<string, number>): number {
@@ -1063,6 +1152,37 @@ export function createMemoryOpenVikingContextEngine(params: {
       const isTransformContextAssemble = !isMainAssemble;
 
       const originalTokens = roughEstimate(messages);
+      const traceRoutingRef = assembleParams.sessionId ?? sessionKey ?? OVSessionId;
+      const traceAgentId = () => resolveAgentId(traceRoutingRef, sessionKey, OVSessionId);
+      const logAutoRecallTrace = (
+        result: string,
+        extra?: Record<string, unknown>,
+      ) => {
+        emitAutoRecallTrace(logger, {
+          sessionId: assembleParams.sessionId,
+          sessionKey: sessionKey ?? null,
+          ovSessionId: OVSessionId,
+          agentId: traceAgentId(),
+          phase: "transform_context",
+          result,
+          ...extra,
+        });
+      };
+      const logBuildAutoRecallTrace = (
+        recallTrace: AutoRecallTrace,
+        agentId: string,
+        extra?: Record<string, unknown>,
+      ) => {
+        emitAutoRecallTrace(logger, {
+          sessionId: assembleParams.sessionId,
+          sessionKey: sessionKey ?? null,
+          ovSessionId: OVSessionId,
+          agentId,
+          phase: "transform_context",
+          ...recallTrace,
+          ...extra,
+        });
+      };
 
       rememberSessionAgentId?.({
         sessionId: assembleParams.sessionId,
@@ -1081,24 +1201,42 @@ export function createMemoryOpenVikingContextEngine(params: {
       });
 
       if (isBypassedSession({ sessionId: assembleParams.sessionId, sessionKey })) {
+        if (isTransformContextAssemble) {
+          logAutoRecallTrace("session_bypassed");
+        }
         return assemblePassthrough(OVSessionId, "session_bypassed", messages, originalTokens);
       }
 
       if (isTransformContextAssemble) {
         if (latestMessage?.role !== "user") {
+          logAutoRecallTrace("non_user_tail", {
+            latestRole: latestMessage?.role ?? null,
+          });
           return assemblePassthrough(OVSessionId, "transform_context_non_user_tail", messages, originalTokens, {
             latestRole: latestMessage?.role ?? null,
           });
         }
         if (!cfg.autoRecall) {
+          logAutoRecallTrace("disabled");
           return assemblePassthrough(OVSessionId, "transform_context_auto_recall_disabled", messages, originalTokens);
         }
         if (hasAutoRecallBlock(latestMessage)) {
+          logAutoRecallTrace("already_injected");
           return assemblePassthrough(OVSessionId, "transform_context_recall_already_injected", messages, originalTokens);
         }
 
         const recallQuery = prepareRecallQuery(extractAgentMessageText(latestMessage));
+        const queryTrace = {
+          query: {
+            chars: recallQuery.finalChars,
+            originalChars: recallQuery.originalChars,
+            finalChars: recallQuery.finalChars,
+            truncated: recallQuery.truncated,
+            preview: recallQuery.query.slice(0, 180),
+          },
+        };
         if (!recallQuery.query || recallQuery.query.length < 5) {
+          logAutoRecallTrace("empty_query", queryTrace);
           return assemblePassthrough(OVSessionId, "transform_context_empty_recall_query", messages, originalTokens);
         }
         if (recallQuery.truncated) {
@@ -1109,9 +1247,9 @@ export function createMemoryOpenVikingContextEngine(params: {
         }
 
         try {
-          const client = await getClient();
           const routingRef = assembleParams.sessionId ?? sessionKey ?? OVSessionId;
           const agentId = resolveAgentId(routingRef, sessionKey, OVSessionId);
+          const client = await getClient();
           const recall = await buildAutoRecallContext({
             cfg,
             client,
@@ -1122,6 +1260,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           });
 
           if (!recall.block) {
+            logBuildAutoRecallTrace(recall.trace, agentId, queryTrace);
             return assemblePassthrough(OVSessionId, "transform_context_no_recall_hits", messages, originalTokens, {
               memoryCount: recall.memoryCount,
             });
@@ -1129,6 +1268,12 @@ export function createMemoryOpenVikingContextEngine(params: {
 
           const withRecall = prependRecallToLatestUserMessage(messages, recall.block);
           const estimatedTokens = roughEstimate(withRecall);
+          logBuildAutoRecallTrace(recall.trace, agentId, {
+            ...queryTrace,
+            injectedInto: "latest_user_message",
+            outputMessagesCount: withRecall.length,
+            estimatedTokens,
+          });
           diag("assemble_result", OVSessionId, {
             passthrough: false,
             phase: "transform_context",
@@ -1142,6 +1287,13 @@ export function createMemoryOpenVikingContextEngine(params: {
           return { messages: withRecall, estimatedTokens };
         } catch (err) {
           logger.warn?.(`openviking: auto-recall failed: ${String(err)}`);
+          logAutoRecallTrace(
+            String(err).toLowerCase().includes("timeout") ? "timeout" : "error",
+            {
+              ...queryTrace,
+              error: String(err),
+            },
+          );
           return assemblePassthrough(OVSessionId, "transform_context_recall_failed", messages, originalTokens, {
             error: String(err),
           });
@@ -1314,7 +1466,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         const createdAt = pickLatestCreatedAt(turnMessages);
         const senderRoleId = toRoleId(sender.senderId);
         // 发送结构化消息：统一 role 为 user，通过 parts 区分类型
-        for (const msg of extractedMessages) {
+        const capturedMessages: CapturedOpenVikingMessage[] = extractedMessages.map((msg) => {
           const ovParts = msg.parts.map((part) => {
             if (part.type === "text") {
               // 清理 relevant-memories 块
@@ -1334,7 +1486,48 @@ export function createMemoryOpenVikingContextEngine(params: {
               };
             }
           });
+          return {
+            msg,
+            ovParts,
+            signature: capturedMessageSignature({ role: msg.role, parts: ovParts }),
+          };
+        });
 
+        let messagesToAppend = capturedMessages;
+        try {
+          // Match the persisted raw tail to the same live-tail policy used by commit,
+          // while still expanding for large finalizer replay batches.
+          const tailLimit = Math.min(
+            10_000,
+            Math.max(cfg.commitKeepRecentCount, capturedMessages.length * 2),
+          );
+          const persistedTail = await client.getSessionMessagesTail(OVSessionId, tailLimit, agentId);
+          const persistedMessages = Array.isArray(persistedTail.messages) ? persistedTail.messages : [];
+          const overlap = countPersistedPrefixOverlap(persistedMessages, capturedMessages);
+          if (overlap > 0) {
+            messagesToAppend = capturedMessages.slice(overlap);
+            diag("afterTurn_tail_dedup", OVSessionId, {
+              skippedMessages: overlap,
+              capturedMessages: capturedMessages.length,
+              persistedTailMessages: persistedMessages.length,
+              tailLimit,
+              senderIdFound: sender.found,
+              senderId: sender.senderId ?? null,
+            });
+          }
+        } catch (tailErr) {
+          logger.warn?.(
+            `openviking: afterTurn raw tail fetch failed for session=${OVSessionId}: ${String(tailErr)}`,
+          );
+          diag("afterTurn_tail_dedup_error", OVSessionId, {
+            error: String(tailErr),
+            capturedMessages: capturedMessages.length,
+            senderIdFound: sender.found,
+            senderId: sender.senderId ?? null,
+          });
+        }
+
+        for (const { msg, ovParts } of messagesToAppend) {
           if (ovParts.length > 0) {
             await client.addSessionMessage(
               OVSessionId,

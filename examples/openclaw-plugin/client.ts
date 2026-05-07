@@ -96,6 +96,12 @@ export type SessionContextResult = {
   };
 };
 
+export type SessionMessagesResult = {
+  messages: OVMessage[];
+  count?: number;
+  tail?: number;
+};
+
 export type SessionArchiveResult = {
   archive_id: string;
   abstract: string;
@@ -766,6 +772,19 @@ export class OpenVikingClient {
   ): Promise<SessionContextResult> {
     return this.request(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/context?token_budget=${tokenBudget}`,
+      { method: "GET" },
+      agentId,
+    );
+  }
+
+  async getSessionMessagesTail(
+    sessionId: string,
+    tail: number = 64,
+    agentId?: string,
+  ): Promise<SessionMessagesResult> {
+    const safeTail = Math.max(0, Math.min(10_000, Math.floor(Number.isFinite(tail) ? tail : 64)));
+    return this.request(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages?tail=${safeTail}`,
       { method: "GET" },
       agentId,
     );

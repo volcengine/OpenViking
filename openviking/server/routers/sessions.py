@@ -268,6 +268,31 @@ async def extract_session(
     return Response(status="ok", result=_to_jsonable(result))
 
 
+@router.get("/{session_id}/messages")
+async def get_session_messages(
+    session_id: str = Path(..., description="Session ID"),
+    tail: int = Query(64, ge=0, le=10_000, description="Number of latest raw messages to return"),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Get raw session transcript messages.
+
+    With ``tail`` this returns the latest raw messages across completed archives,
+    incomplete archives, and the current live session.
+    """
+    service = get_service()
+    session = service.sessions.session(_ctx, session_id)
+    await session.load()
+    messages = await session.get_raw_messages_tail(tail=tail)
+    return Response(
+        status="ok",
+        result={
+            "messages": [m.to_dict() for m in messages],
+            "count": len(messages),
+            "tail": tail,
+        },
+    )
+
+
 @router.post("/{session_id}/messages")
 async def add_message(
     request: AddMessageRequest,

@@ -559,4 +559,28 @@ describe("OpenVikingClient canonical namespace policy", () => {
     const body = JSON.parse(String(init.body));
     expect(body.role_id).toBe("telegram_12345");
   });
+
+  it("fetches raw session message tail with a bounded tail query", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse({
+      messages: [
+        {
+          id: "msg_1",
+          role: "user",
+          parts: [{ type: "text", text: "stored tail" }],
+          created_at: "2026-05-07T00:00:00.000Z",
+        },
+      ],
+      count: 1,
+      tail: 64,
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5000);
+    const result = await client.getSessionMessagesTail("s1", 64, "agent");
+
+    expect(result.messages[0].parts[0].text).toBe("stored tail");
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      "http://127.0.0.1:1933/api/v1/sessions/s1/messages?tail=64",
+    );
+  });
 });
