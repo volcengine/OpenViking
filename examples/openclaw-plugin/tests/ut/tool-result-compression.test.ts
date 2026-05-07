@@ -236,19 +236,75 @@ describe("prePersistOversizedResults", () => {
       makeToolResult("x".repeat(30_000), "bash", "big-1"),
       makeToolResult("x".repeat(25_000), "bash", "big-2"),
     ];
-    const files = await prePersistOversizedResults(messages, makeCfg({ toolResultMaxChars: 20_000 }));
+    const { files } = await prePersistOversizedResults(messages, makeCfg({ toolResultMaxChars: 20_000 }));
     expect(files.length).toBe(2);
   });
 
   it("returns empty when no oversized results", async () => {
     const messages = [makeToolResult("small")];
-    const files = await prePersistOversizedResults(messages, makeCfg());
+    const { files, contentHashes } = await prePersistOversizedResults(messages, makeCfg());
     expect(files).toEqual([]);
+    expect(contentHashes.size).toBe(0);
   });
 
   it("skips when disabled", async () => {
     const messages = [makeToolResult("x".repeat(30_000))];
-    const files = await prePersistOversizedResults(messages, makeCfg({ toolResultCompression: false }));
+    const { files } = await prePersistOversizedResults(messages, makeCfg({ toolResultCompression: false }));
     expect(files).toEqual([]);
+  });
+
+  it("returns content hashes for already-persisted results", async () => {
+    const bigContent = "x".repeat(30_000);
+    const messages = [makeToolResult(bigContent, "bash", "big-1")];
+    const { contentHashes } = await prePersistOversizedResults(messages, makeCfg({ toolResultMaxChars: 20_000 }));
+    expect(contentHashes.size).toBe(1);
+  });
+});
+
+describe("infinite loop prevention", () => {
+  it("skips compression for re-read of already-persisted content", async () => {
+    // Simulate: Turn 1 → 50K result gets persisted and replaced with preview.
+    // Turn 2 → agent re-reads the file, gets the same 50K content back.
+    // This must NOT be compressed again.
+    const bigContent = "x".repeat(50_000);
+    const { contentHashes } = await prePersistOversizedResults(
+      [makeToolResult(bigContent, "bash", "call-1")],
+      makeCfg({ toolResultMaxChars: 20_000 }),
+    );
+
+    // Now the agent re-reads the file — same content as a new toolResult.
+    const messages = [
+      makeToolResult(bigContent, "read_file", "call-2"),
+    ];
+    const { stats, messages: result } = await compressToolResults(messages, {
+      ...makeCfg({ toolResultMaxChars: 20_000 }),
+      alreadyPersistedHashes: contentHashes,
+    });
+
+    expect(stats.compressedCount).toBe(0);
+    expect(stats.persistedFiles.length).toBe(0);
+    expect(result[0]).toEqual(messages[0]);
+  });
+
+  it("still compresses new content even when some hashes are known", async () => {
+    const knownContent = "x".repeat(50_000);
+    const newContent = "y".repeat(50_000);
+    const { contentHashes } = await prePersistOversizedResults(
+      [makeToolResult(knownContent, "bash", "call-1")],
+      makeCfg({ toolResultMaxChars: 20_000 }),
+    );
+
+    const messages = [
+      makeToolResult(knownContent, "read_file", "call-2"),
+      makeToolResult(newContent, "bash", "call-3"),
+    ];
+    const { stats } = await compressToolResults(messages, {
+      ...makeCfg({ toolResultMaxChars: 20_000 }),
+      alreadyPersistedHashes: contentHashes,
+    });
+
+    // knownContent skipped, newContent compressed.
+    expect(stats.compressedCount).toBe(1);
+    expect(stats.persistedFiles.length).toBe(1);
   });
 });

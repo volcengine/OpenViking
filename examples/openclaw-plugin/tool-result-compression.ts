@@ -376,24 +376,26 @@ export async function prePersistOversizedResults(
     toolResultStorageDir?: string;
     sessionId?: string;
   },
-): Promise<string[]> {
-  if (!cfg.toolResultCompression) return [];
+): Promise<{ files: string[]; contentHashes: Set<string> }> {
+  if (!cfg.toolResultCompression) return { files: [], contentHashes: new Set() };
 
   const sessionId = cfg.sessionId ?? "default";
   const storageDir = resolveStorageDir(sessionId, cfg.toolResultStorageDir);
   const entries = collectToolResults(messages);
   const oversized = entries.filter(e => e.textLength > cfg.toolResultMaxChars);
-  if (oversized.length === 0) return [];
+  if (oversized.length === 0) return { files: [], contentHashes: new Set() };
 
   const persistedFiles: string[] = [];
+  const contentHashes = new Set<string>();
   const ops = oversized.map(async (entry) => {
     const text = getToolResultText(entry.message);
+    contentHashes.add(contentHash(text));
     const filename = makePersistFilename(entry.message);
     const filepath = await persistToDisk(text, filename, storageDir);
     if (filepath) persistedFiles.push(filepath);
   });
   await Promise.all(ops);
-  return persistedFiles;
+  return { files: persistedFiles, contentHashes };
 }
 
 export async function compressToolResults(
@@ -405,6 +407,7 @@ export async function compressToolResults(
     toolResultPreviewChars: number;
     toolResultStorageDir?: string;
     sessionId?: string;
+    alreadyPersistedHashes?: Set<string>;
   },
 ): Promise<{ messages: AgentMessage[]; stats: ToolResultCompressionStats }> {
   if (!cfg.toolResultCompression) {
@@ -438,12 +441,21 @@ export async function compressToolResults(
   let totalCompressedChars = 0;
   let aggregateBudgetTriggered = false;
   const persistedFiles: string[] = [];
+  const knownHashes = new Set(cfg.alreadyPersistedHashes ?? []);
 
   // Phase 1: persist oversized results to disk, replace with preview + path.
-  const oversized = entries.filter(e => e.textLength > maxChars);
+  // Skip results whose content was already persisted (e.g. agent re-read a
+  // persisted file — compressing that again would create an infinite loop).
+  const oversized = entries.filter(e => {
+    if (e.textLength <= maxChars) return false;
+    const hash = contentHash(getToolResultText(e.message));
+    return !knownHashes.has(hash);
+  });
   if (oversized.length > 0) {
     const persistOps = oversized.map(async (entry) => {
       const text = getToolResultText(entry.message);
+      const hash = contentHash(text);
+      knownHashes.add(hash);
       const filename = makePersistFilename(entry.message);
       const filepath = await persistToDisk(text, filename, storageDir);
 
@@ -490,8 +502,13 @@ export async function compressToolResults(
       for (const entry of candidates) {
         if (remaining <= 0) break;
 
-        // Persist original content before truncating so it remains recoverable.
+        // Skip if this content was already persisted (re-read of a persisted file).
         const text = getToolResultText(result[entry.index]!);
+        const hash = contentHash(text);
+        if (knownHashes.has(hash)) continue;
+
+        // Persist original content before truncating so it remains recoverable.
+        knownHashes.add(hash);
         const filename = makePersistFilename(entry.message);
         const filepath = await persistToDisk(text, filename, storageDir);
 

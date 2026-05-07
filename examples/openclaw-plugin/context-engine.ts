@@ -1173,7 +1173,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         // Pre-persist oversized tool results BEFORE session trimming so that
         // even messages discarded by buildSessionContext have their full
         // content saved to disk and remain recoverable.
-        const prePersistedFiles = await prePersistOversizedResults(
+        const { files: prePersistedFiles, contentHashes: prePersistedHashes } = await prePersistOversizedResults(
           ctx.messages,
           { ...cfg, sessionId: OVSessionId },
         );
@@ -1194,7 +1194,7 @@ export function createMemoryOpenVikingContextEngine(params: {
 
         const { messages: compressedMessages, stats: compressionStats } = await compressToolResults(
           sanitized,
-          { ...cfg, sessionId: OVSessionId },
+          { ...cfg, sessionId: OVSessionId, alreadyPersistedHashes: prePersistedHashes },
         );
         const finalMessages = compressionStats.compressedCount > 0 ? compressedMessages : sanitized;
 
