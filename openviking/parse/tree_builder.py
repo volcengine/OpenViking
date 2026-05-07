@@ -113,13 +113,15 @@ class TreeBuilder:
         parent_uri: Optional[str] = None,
         source_path: Optional[str] = None,
         source_format: Optional[str] = None,
+        create_parent: bool = False,
     ) -> "BuildingTree":
         """
         Finalize processing by moving from temp to AGFS.
 
         Args:
             to_uri: Exact target URI (must not exist)
-            parent_uri: Target parent URI (must exist)
+            parent_uri: Target parent URI (must exist unless create_parent is True)
+            create_parent: Whether to automatically create parent directory if it doesn't exist
         """
 
         viking_fs = get_viking_fs()
@@ -170,9 +172,22 @@ class TreeBuilder:
         else:
             effective_parent_uri = parent_uri or to_uri if use_to_as_parent else parent_uri
             if effective_parent_uri:
-                # Parent URI must exist and be a directory
+                # Parent URI must exist and be a directory, or create it if requested
                 try:
                     stat_result = await viking_fs.stat(effective_parent_uri, ctx=ctx)
+                except FileNotFoundError as e:
+                    if create_parent:
+                        # Automatically create parent directory
+                        logger.info(
+                            f"[TreeBuilder] Parent URI does not exist, creating: {effective_parent_uri}"
+                        )
+                        await viking_fs.mkdir(effective_parent_uri, parents=True, ctx=ctx)
+                        stat_result = await viking_fs.stat(effective_parent_uri, ctx=ctx)
+                    else:
+                        raise FileNotFoundError(
+                            f"Parent URI does not exist: {effective_parent_uri}. "
+                            f"Use --parent-auto-create/-p to automatically create it."
+                        ) from e
                 except Exception as e:
                     raise FileNotFoundError(
                         f"Parent URI does not exist: {effective_parent_uri}"

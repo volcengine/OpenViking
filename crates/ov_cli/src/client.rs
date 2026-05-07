@@ -375,6 +375,7 @@ impl HttpClient {
         path: &str,
         to: Option<String>,
         parent: Option<String>,
+        parent_auto_create: Option<String>,
         reason: &str,
         instruction: &str,
         wait: bool,
@@ -389,6 +390,14 @@ impl HttpClient {
         verbose: bool,
     ) -> Result<serde_json::Value> {
         let path_obj = Path::new(path);
+
+        // Determine effective parent and create_parent flag
+        let (effective_parent, create_parent) = match (parent, parent_auto_create) {
+            (Some(p), None) => (Some(p), false),
+            (None, Some(p)) => (Some(p), true),
+            (None, None) => (None, false),
+            (Some(_), Some(_)) => unreachable!("handled in cli"),
+        };
 
         if path_obj.exists() {
             if path_obj.is_dir() {
@@ -411,7 +420,8 @@ impl HttpClient {
                     "temp_file_id": temp_file_id,
                     "source_name": source_name,
                     "to": to,
-                    "parent": parent,
+                    "parent": effective_parent,
+                    "create_parent": create_parent,
                     "reason": reason,
                     "instruction": instruction,
                     "wait": wait,
@@ -441,7 +451,8 @@ impl HttpClient {
                     "temp_file_id": temp_file_id,
                     "source_name": source_name,
                     "to": to,
-                    "parent": parent,
+                    "parent": effective_parent,
+                    "create_parent": create_parent,
                     "reason": reason,
                     "instruction": instruction,
                     "wait": wait,
@@ -460,7 +471,8 @@ impl HttpClient {
                 let body = serde_json::json!({
                     "path": path,
                     "to": to,
-                    "parent": parent,
+                    "parent": effective_parent,
+                    "create_parent": create_parent,
                     "reason": reason,
                     "instruction": instruction,
                     "wait": wait,
@@ -479,7 +491,8 @@ impl HttpClient {
             let body = serde_json::json!({
                 "path": path,
                 "to": to,
-                "parent": parent,
+                "parent": effective_parent,
+                "create_parent": create_parent,
                 "reason": reason,
                 "instruction": instruction,
                 "wait": wait,

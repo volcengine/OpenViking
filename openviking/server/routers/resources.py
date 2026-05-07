@@ -39,6 +39,8 @@ class AddResourceRequest(BaseModel):
             If not specified, an auto-generated URI will be used.
         parent: Parent URI under which the resource will be stored.
             Cannot be used together with 'to'.
+        create_parent: Whether to automatically create the parent directory if it doesn't exist.
+            Default is False.
         reason: Reason for adding the resource. Used for documentation and monitoring.
         instruction: Processing instruction for semantic extraction.
             Provides hints for how the resource should be processed.
@@ -70,6 +72,7 @@ class AddResourceRequest(BaseModel):
     temp_file_id: Optional[str] = None
     to: Optional[str] = None
     parent: Optional[str] = None
+    create_parent: bool = False
     reason: str = ""
     instruction: str = ""
     wait: bool = False
@@ -220,6 +223,7 @@ async def add_resource(
         "exclude": request.exclude,
         "directly_upload_media": request.directly_upload_media,
         "watch_interval": request.watch_interval,
+        "create_parent": request.create_parent,
     }
     if request.preserve_structure is not None:
         kwargs["preserve_structure"] = request.preserve_structure

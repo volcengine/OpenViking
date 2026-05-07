@@ -52,8 +52,8 @@ async def debug_vector_scroll(
     filter_expr = None
     if uri:
         # Resolve path variables before using URI
-        resolved_uri = resolve_path_variables(uri)
-        filter_expr = {"op": "must", "field": "uri", "conds": [resolved_uri]}
+        uri = resolve_path_variables(uri)
+        filter_expr = {"op": "must", "field": "uri", "conds": [uri]}
 
     records, next_cursor = await proxy.scroll(filter=filter_expr, limit=limit, cursor=cursor)
 
@@ -90,8 +90,8 @@ async def debug_vector_count(
 
     if uri:
         # Resolve path variables before using URI
-        resolved_uri = resolve_path_variables(uri)
-        uri_filter = {"op": "must", "field": "uri", "conds": [resolved_uri]}
+        uri = resolve_path_variables(uri)
+        uri_filter = {"op": "must", "field": "uri", "conds": [uri]}
         if filter_expr:
             # For combining filters, we should use And from expr, but for simplicity, let's use RawDSL for now
             from openviking.storage.expr import And, RawDSL
