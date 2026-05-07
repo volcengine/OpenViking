@@ -217,7 +217,7 @@ class MarkdownParser(BaseParser):
             # the temp upload name (e.g. upload_<uuid>.txt).
             doc_title = meta.get("frontmatter", {}).get(
                 "title",
-                explicit_name
+                Path(explicit_name).stem
                 if explicit_name
                 else _smart_stem(source_path)
                 if source_path
