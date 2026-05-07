@@ -89,6 +89,7 @@ class SkillProcessor:
             data,
             allow_local_path_resolution=allow_local_path_resolution,
         )
+        self._validate_skill_dict(skill_dict)
         telemetry.set(
             "skill.parse.duration_ms", round((time.perf_counter() - parse_start) * 1000, 3)
         )
@@ -218,6 +219,7 @@ class SkillProcessor:
 
     @staticmethod
     def _validate_skill_dict(skill_dict: Dict[str, Any]) -> None:
+        """Validate normalized skill metadata before storage/indexing."""
         name = skill_dict.get("name")
         if name is None:
             raise InvalidArgumentError("Skill must have 'name' field", details={"field": "name"})

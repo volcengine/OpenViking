@@ -210,6 +210,19 @@ async def test_add_skill_missing_name_returns_invalid_argument(client: httpx.Asy
     assert body["error"]["message"] == "Skill must have 'name' field"
 
 
+async def test_add_skill_empty_dict_returns_invalid_argument(client: httpx.AsyncClient):
+    resp = await client.post(
+        "/api/v1/skills",
+        json={"data": {}, "wait": True},
+    )
+
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
+    assert "name" in body["error"]["message"]
+
+
 async def test_add_resource_with_summary_only_telemetry(
     client: httpx.AsyncClient,
     sample_markdown_file,

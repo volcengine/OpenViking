@@ -17,6 +17,7 @@
 import { isPluginEnabled, loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { isBypassed, makeFetchJSON } from "./lib/ov-session.mjs";
+import { writeJsonState } from "./lib/state.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -275,14 +276,15 @@ async function buildInjectionBlock(items) {
 
   lines.push("</openviking-context>");
 
+  const budgetUsed = cfg.recallTokenBudget - budgetRemaining;
   log("injection_built", {
     contentItems: contentCount,
     hintItems: hintCount,
-    budgetUsed: cfg.recallTokenBudget - budgetRemaining,
+    budgetUsed,
     budgetTotal: cfg.recallTokenBudget,
   });
 
-  return lines.join("\n");
+  return { block: lines.join("\n"), contentCount, hintCount, budgetUsed };
 }
 
 // ---------------------------------------------------------------------------
@@ -290,8 +292,19 @@ async function buildInjectionBlock(items) {
 // ---------------------------------------------------------------------------
 
 async function main() {
+  const t0 = Date.now();
+  // Snapshot state for the statusline. Always written, even on early-exit
+  // branches, so the indicator reflects the latest turn rather than stale
+  // data from the previous run.
+  const writeRecallState = (extra) => writeJsonState("last-recall.json", {
+    server_url: cfg.baseUrl,
+    latency_ms: Date.now() - t0,
+    ...extra,
+  });
+
   if (!cfg.autoRecall) {
     log("skip", { reason: "autoRecall disabled" });
+    writeRecallState({ count: 0, reason: "disabled" });
     approve();
     return;
   }
@@ -303,6 +316,7 @@ async function main() {
     input = JSON.parse(Buffer.concat(chunks).toString());
   } catch {
     log("skip", { reason: "invalid stdin" });
+    writeRecallState({ count: 0, reason: "bad_stdin" });
     approve();
     return;
   }
@@ -323,12 +337,14 @@ async function main() {
 
   if (isBypassed(cfg, { sessionId, cwd })) {
     log("skip", { reason: "bypass_session_pattern" });
+    writeRecallState({ count: 0, reason: "bypass", cc_session_id: sessionId });
     approve();
     return;
   }
 
   if (!userPrompt || userPrompt.length < cfg.minQueryLength) {
     log("skip", { reason: "query too short or empty" });
+    writeRecallState({ count: 0, reason: "short_query", cc_session_id: sessionId });
     approve();
     return;
   }
@@ -336,6 +352,7 @@ async function main() {
   const health = await fetchJSON("/health");
   if (!health.ok) {
     logError("health_check", "server unreachable");
+    writeRecallState({ count: 0, reason: "offline", cc_session_id: sessionId });
     approve();
     return;
   }
@@ -344,6 +361,7 @@ async function main() {
   const raw = await searchAllSources(userPrompt, perSourceLimit);
   if (raw.length === 0) {
     log("skip", { reason: "no results" });
+    writeRecallState({ count: 0, reason: "no_results", cc_session_id: sessionId });
     approve();
     return;
   }
@@ -362,12 +380,24 @@ async function main() {
   });
 
   if (picked.length === 0) {
+    writeRecallState({ count: 0, reason: "filtered_out", cc_session_id: sessionId });
     approve();
     return;
   }
 
-  const block = await buildInjectionBlock(picked);
-  approve(block);
+  const built = await buildInjectionBlock(picked);
+  const topScore = picked.reduce((m, it) => Math.max(m, clampScore(it.score)), 0);
+  writeRecallState({
+    count: picked.length,
+    content_items: built?.contentCount ?? 0,
+    hint_items: built?.hintCount ?? 0,
+    tokens_used: built?.budgetUsed ?? 0,
+    tokens_budget: cfg.recallTokenBudget,
+    top_score: topScore,
+    cc_session_id: sessionId,
+    reason: "ok",
+  });
+  approve(built?.block);
 }
 
 main().catch((err) => { logError("uncaught", err); approve(); });
