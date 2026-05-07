@@ -24,7 +24,7 @@ from openviking.server.mcp_endpoint import (
     search,
     store,
 )
-from openviking.server.mcp_endpoint import list_dir as list_tool
+from openviking.server.mcp_endpoint import ls as list_tool
 from openviking_cli.exceptions import UnauthenticatedError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -168,6 +168,39 @@ async def test_store_batch_messages(service):
     )
     assert "stored" in result.lower()
     assert "2 message" in result
+
+
+async def test_store_populates_role_id_from_ctx(service, monkeypatch):
+    """Regression: MCP store used to persist role_id=None because it skipped the
+    HTTP router's fallback resolver. With ctx.resolve_role_id, user msgs should
+    get user.user_id and assistant msgs should get user.agent_id.
+
+    We capture role_id at the add_message boundary instead of reading it back from
+    storage, because store() commits the session synchronously and committed
+    messages move out of session.messages into archive files.
+    """
+    from openviking.session.session import Session
+
+    captured: list[tuple[str, str | None]] = []
+    original = Session.add_message
+
+    def _spy(self, role, parts, role_id=None, created_at=None):
+        captured.append((role, role_id))
+        return original(self, role, parts, role_id=role_id, created_at=created_at)
+
+    monkeypatch.setattr(Session, "add_message", _spy)
+
+    await store(
+        messages=[
+            StoreMessage(role="user", content="user msg"),
+            StoreMessage(role="assistant", content="assistant msg"),
+        ]
+    )
+
+    assert captured == [
+        ("user", DEFAULT_CTX.user.user_id),
+        ("assistant", DEFAULT_CTX.user.agent_id),
+    ]
 
 
 # ---------------------------------------------------------------------------

@@ -118,17 +118,11 @@ async def _call_add_message_route(
     *,
     ctx: RequestContext,
     payload: dict,
-    auth_mode: str = "api_key",
-    api_key_manager=None,
     session_id: str = "test-session",
 ):
     monkeypatch.setattr(sessions_router, "get_service", lambda: service)
     return await sessions_router.add_message(
         request=sessions_router.AddMessageRequest.model_validate(payload),
-        http_request=_session_route_request(
-            auth_mode=auth_mode,
-            api_key_manager=api_key_manager,
-        ),
         session_id=session_id,
         _ctx=ctx,
     )
@@ -279,7 +273,6 @@ async def test_add_message_trusted_request_allows_explicit_role_id(service, monk
         monkeypatch,
         ctx=ctx,
         payload=_message_request("assistant", content="hello trusted", role_id="assistant-b"),
-        auth_mode="trusted",
         session_id=session_id,
     )
 
@@ -307,7 +300,6 @@ async def test_add_message_admin_request_allows_registered_user_role_id(service,
         monkeypatch,
         ctx=ctx,
         payload=_message_request("user", content="hello admin", role_id="alice"),
-        api_key_manager=manager,
         session_id=session_id,
     )
 
@@ -375,7 +367,6 @@ async def test_add_message_admin_request_allows_unregistered_user_role_id(servic
         monkeypatch,
         ctx=ctx,
         payload=_message_request("user", content="hello invalid", role_id="ghost"),
-        api_key_manager=manager,
         session_id="invalid-user-role-id",
     )
 

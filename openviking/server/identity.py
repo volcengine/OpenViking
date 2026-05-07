@@ -74,19 +74,22 @@ class RequestContext:
     def account_id(self) -> str:
         return self.user.account_id
 
-    def resolve_role_id(self, role: str, override: Optional[str] = None) -> Optional[str]:
+    def resolve_role_id(self, message_role: str, override: Optional[str] = None) -> Optional[str]:
         """Resolve the role_id for a message, with fallback to ctx identity.
 
+        `message_role` is the message-level role ("user" / "assistant"), distinct
+        from `RequestContext.role` (the authz role).
+
         - If `override` is truthy, returns it as-is (caller-supplied wins).
-        - For role="user", falls back to `user.user_id`.
-        - For role="assistant", falls back to `user.agent_id`.
-        - Any other role returns None when no override is given.
+        - For message_role="user", falls back to `user.user_id`.
+        - For message_role="assistant", falls back to `user.agent_id`.
+        - Any other message_role returns None when no override is given.
         """
         if override:
             return override
-        if role == "user":
+        if message_role == "user":
             return self.user.user_id
-        if role == "assistant":
+        if message_role == "assistant":
             return self.user.agent_id
         return None
 
@@ -94,6 +97,7 @@ class RequestContext:
 @dataclass
 class ToolContext:
     """Tool-level context, containing request context and additional tool-specific information."""
+
     viking_fs: VikingFS
     request_ctx: RequestContext
     default_search_uris: List[str] = field(default_factory=list)
