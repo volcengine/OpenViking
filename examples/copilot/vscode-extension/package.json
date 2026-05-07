@@ -1,0 +1,32 @@
+{
+  "name": "openviking-copilot",
+  "displayName": "OpenViking — Copilot Memory",
+  "description": "Long-term semantic memory for GitHub Copilot Chat, powered by OpenViking.",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "publisher": "Volcengine",
+  "license": "Apache-2.0",
+  "engines": {
+    "vscode": "^1.99.0",
+    "node": ">=22"
+  },
+  "categories": ["AI", "Chat", "Other"],
+  "main": "./dist/extension.cjs",
+  "activationEvents": [
+    "onChatParticipant:openviking.memory",
+    "onStartupFinished"
+  ],
+  "contributes": {},
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@openviking/copilot-shared": "*"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.99.0"
+  }
+}

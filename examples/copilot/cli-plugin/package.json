@@ -1,0 +1,24 @@
+{
+  "name": "@openviking/copilot-cli-memory",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenViking memory MCP server for the GitHub Copilot CLI.",
+  "license": "Apache-2.0",
+  "bin": {
+    "openviking-copilot-mcp": "./dist/mcp-server.js"
+  },
+  "main": "./dist/mcp-server.js",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@openviking/copilot-shared": "*"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

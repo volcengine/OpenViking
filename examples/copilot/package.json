@@ -1,0 +1,26 @@
+{
+  "name": "@openviking/copilot-monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenViking memory plugins for GitHub Copilot — workspace root",
+  "workspaces": [
+    "packages/*",
+    "vscode-extension",
+    "cli-plugin"
+  ],
+  "scripts": {
+    "build:shared": "npm run build -w @openviking/copilot-shared",
+    "typecheck": "npm run build:shared && npm run typecheck --workspaces --if-present",
+    "test": "npm run build:shared && npm run test --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.5"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
