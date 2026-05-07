@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { spawn } from "node:child_process";
 import { once } from "node:events";
 import { createWriteStream } from "node:fs";
 import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
@@ -28,22 +27,10 @@ export type FindResult = {
 export type CaptureMode = "semantic" | "keyword";
 export type ScopeName = "user" | "agent";
 export type AgentScopeMode = "user_agent" | "agent";
-export type ServerAuthMode = "api_key" | "trusted";
 export type RuntimeIdentity = {
   userId: string;
   agentId: string;
 };
-export type LocalClientCacheEntry = {
-  client: OpenVikingClient;
-  process: ReturnType<typeof spawn> | null;
-};
-
-export type PendingClientEntry = {
-  promise: Promise<OpenVikingClient>;
-  resolve: (c: OpenVikingClient) => void;
-  reject: (err: unknown) => void;
-};
-
 export type CommitSessionResult = {
   session_id: string;
   /** "accepted" (async), "completed", "failed", or "timeout" (wait mode). */
@@ -165,13 +152,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export const localClientCache = new Map<string, LocalClientCacheEntry>();
-
-// Module-level pending promise map: shared across all plugin registrations so
-// that both [gateway] and [plugins] contexts await the same promise and
-// don't create duplicate pending promises that never resolve.
-export const localClientPendingPromises = new Map<string, PendingClientEntry>();
-
 const MEMORY_URI_PATTERNS = [
   /^viking:\/\/user\/(?:[^/]+(?:\/agent\/[^/]+)?\/)?memories(?:\/|$)/,
   /^viking:\/\/agent\/(?:[^/]+(?:\/user\/[^/]+)?\/)?memories(?:\/|$)/,
@@ -223,8 +203,7 @@ export class OpenVikingClient {
     private readonly apiKey: string,
     private readonly defaultAgentId: string,
     private readonly timeoutMs: number,
-    private readonly serverAuthMode: ServerAuthMode = "api_key",
-    /** When set (or defaulted), sent so ROOT key can access tenant-scoped APIs. */
+    /** When set, sent so ROOT keys or trusted deployments can select tenant identity. */
     private readonly accountId: string = "",
     private readonly userId: string = "",
     /** When set, logs routing for find + session writes (tenant headers + paths; never apiKey). */
@@ -237,6 +216,15 @@ export class OpenVikingClient {
     return this.defaultAgentId;
   }
 
+  private resolveEffectiveAgentId(agentId?: string): string {
+    const explicit = agentId?.trim();
+    if (explicit) {
+      return explicit;
+    }
+    const prefix = this.defaultAgentId.trim();
+    return prefix ? `${prefix}_main` : "main";
+  }
+
   async getResolvedIdentity(agentId?: string): Promise<RuntimeIdentity> {
     return this.getRuntimeIdentity(agentId);
   }
@@ -247,23 +235,10 @@ export class OpenVikingClient {
     const apiKey = this.apiKey.trim();
     const accountId = this.accountId.trim();
     const userId = this.userId.trim();
-    if (this.serverAuthMode === "trusted") {
-      return {
-        ...(apiKey ? { apiKey } : {}),
-        accountId: accountId || "default",
-        userId: userId || "default",
-      };
-    }
-    if (apiKey) {
-      return {
-        apiKey,
-        ...(accountId ? { accountId } : {}),
-        ...(userId ? { userId } : {}),
-      };
-    }
     return {
-      accountId: accountId || "default",
-      userId: userId || "default",
+      ...(apiKey ? { apiKey } : {}),
+      ...(accountId ? { accountId } : {}),
+      ...(userId ? { userId } : {}),
     };
   }
 
@@ -275,7 +250,7 @@ export class OpenVikingClient {
     if (!this.routingDebugLog) {
       return;
     }
-    const effectiveAgentId = agentId ?? this.defaultAgentId;
+    const effectiveAgentId = this.resolveEffectiveAgentId(agentId);
     const identity = await this.getRuntimeIdentity(agentId);
     const tenantHeaders = this.resolveTenantHeaders();
     this.routingDebugLog(
@@ -299,7 +274,7 @@ export class OpenVikingClient {
     agentId?: string,
     requestTimeoutMs?: number,
   ): Promise<T> {
-    const effectiveAgentId = agentId ?? this.defaultAgentId;
+    const effectiveAgentId = this.resolveEffectiveAgentId(agentId);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), requestTimeoutMs ?? this.timeoutMs);
     try {
@@ -350,17 +325,17 @@ export class OpenVikingClient {
   }
 
   private async getRuntimeIdentity(agentId?: string): Promise<RuntimeIdentity> {
-    const effectiveAgentId = agentId ?? this.defaultAgentId;
+    const effectiveAgentId = this.resolveEffectiveAgentId(agentId);
     const cached = this.identityCache.get(effectiveAgentId);
     if (cached) {
       return cached;
     }
-    const fallback: RuntimeIdentity = { userId: "default", agentId: effectiveAgentId || "default" };
+    const fallback: RuntimeIdentity = { userId: "default", agentId: effectiveAgentId };
     try {
       const status = await this.request<{ user?: unknown }>("/api/v1/system/status", {}, agentId);
       const userId =
         typeof status.user === "string" && status.user.trim() ? status.user.trim() : "default";
-      const identity: RuntimeIdentity = { userId, agentId: effectiveAgentId || "default" };
+      const identity: RuntimeIdentity = { userId, agentId: effectiveAgentId };
       this.identityCache.set(effectiveAgentId, identity);
       return identity;
     } catch {
@@ -424,7 +399,7 @@ export class OpenVikingClient {
       limit: options.limit,
       score_threshold: options.scoreThreshold,
     };
-    const effectiveAgentId = agentId ?? this.defaultAgentId;
+    const effectiveAgentId = this.resolveEffectiveAgentId(agentId);
     const identity = await this.getRuntimeIdentity(agentId);
     const tenantHeaders = this.resolveTenantHeaders();
     this.routingDebugLog?.(
@@ -711,20 +686,39 @@ export class OpenVikingClient {
    */
   async commitSession(
     sessionId: string,
-    options?: { wait?: boolean; timeoutMs?: number; agentId?: string },
+    options?: {
+      wait?: boolean;
+      timeoutMs?: number;
+      agentId?: string;
+      /**
+       * WM v2: number of most-recent messages to keep live after commit.
+       * Forwarded as `keep_recent_count` in the POST body. 0 (default)
+       * preserves the pre-v2 "archive everything" behavior.
+       */
+      keepRecentCount?: number;
+    },
   ): Promise<CommitSessionResult> {
+    const keepRecentCount =
+      options?.keepRecentCount != null && Number.isFinite(options.keepRecentCount)
+        ? Math.max(0, Math.floor(options.keepRecentCount))
+        : 0;
     await this.emitRoutingDebug(
       "session commit POST (archive + memory extraction)",
       {
         path: `/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`,
         sessionId,
         wait: options?.wait ?? false,
+        keepRecentCount,
       },
       options?.agentId,
     );
+    const body: Record<string, unknown> = {};
+    if (keepRecentCount > 0) {
+      body.keep_recent_count = keepRecentCount;
+    }
     const result = await this.request<CommitSessionResult>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`,
-      { method: "POST", body: JSON.stringify({}) },
+      { method: "POST", body: JSON.stringify(body) },
       options?.agentId,
     );
 
@@ -786,6 +780,40 @@ export class OpenVikingClient {
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/archives/${encodeURIComponent(archiveId)}`,
       { method: "GET" },
       agentId,
+    );
+  }
+
+  async grepSessionArchives(
+    sessionId: string,
+    pattern: string,
+    options: {
+      archiveId?: string;
+      caseInsensitive?: boolean;
+      nodeLimit?: number;
+      levelLimit?: number;
+      agentId?: string;
+    } = {},
+  ): Promise<{
+    matches: Array<{ line: number; uri: string; content: string }>;
+    count: number;
+    match_count?: number;
+    files_scanned?: number;
+  }> {
+    const baseUri = `viking://session/${sessionId}/history`;
+    const uri = options.archiveId ? `${baseUri}/${options.archiveId}` : baseUri;
+    return this.request(
+      "/api/v1/search/grep",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          uri,
+          pattern,
+          case_insensitive: options.caseInsensitive ?? true,
+          ...(options.nodeLimit !== undefined ? { node_limit: options.nodeLimit } : {}),
+          ...(options.levelLimit !== undefined ? { level_limit: options.levelLimit } : {}),
+        }),
+      },
+      options.agentId,
     );
   }
 

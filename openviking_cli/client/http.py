@@ -16,7 +16,9 @@ import httpx
 from openviking.telemetry import TelemetryRequest, normalize_telemetry_request
 from openviking_cli.client.base import BaseClient
 from openviking_cli.exceptions import (
+    AbortedError,
     AlreadyExistsError,
+    ConflictError,
     DeadlineExceededError,
     EmbeddingFailedError,
     FailedPreconditionError,
@@ -28,9 +30,11 @@ from openviking_cli.exceptions import (
     OpenVikingError,
     PermissionDeniedError,
     ProcessingError,
+    ResourceExhaustedError,
     SessionExpiredError,
     UnauthenticatedError,
     UnavailableError,
+    UnimplementedError,
     VLMFailedError,
 )
 from openviking_cli.retrieve.types import FindResult
@@ -45,17 +49,22 @@ ERROR_CODE_TO_EXCEPTION = {
     "INVALID_URI": InvalidURIError,
     "NOT_FOUND": NotFoundError,
     "ALREADY_EXISTS": AlreadyExistsError,
+    "CONFLICT": ConflictError,
     "FAILED_PRECONDITION": FailedPreconditionError,
+    "ABORTED": AbortedError,
     "UNAUTHENTICATED": UnauthenticatedError,
     "PERMISSION_DENIED": PermissionDeniedError,
+    "RESOURCE_EXHAUSTED": ResourceExhaustedError,
     "UNAVAILABLE": UnavailableError,
     "INTERNAL": InternalError,
     "DEADLINE_EXCEEDED": DeadlineExceededError,
+    "UNIMPLEMENTED": UnimplementedError,
     "NOT_INITIALIZED": NotInitializedError,
     "PROCESSING_ERROR": ProcessingError,
     "EMBEDDING_FAILED": EmbeddingFailedError,
     "VLM_FAILED": VLMFailedError,
     "SESSION_EXPIRED": SessionExpiredError,
+    "UNKNOWN": OpenVikingError,
 }
 
 
@@ -250,6 +259,21 @@ class AsyncHTTPClient(BaseClient):
         return telemetry
 
     @staticmethod
+    def _normalize_target_uri(
+        target_uri: Union[str, List[str]],
+    ) -> Union[str, List[str]]:
+        """Normalize target_uri for the search endpoints.
+
+        Accepts either a single string or a list of strings and applies
+        ``VikingURI.normalize`` to each non-empty entry.
+        """
+        if isinstance(target_uri, list):
+            return [VikingURI.normalize(u) if u else u for u in target_uri]
+        if target_uri:
+            return VikingURI.normalize(target_uri)
+        return target_uri
+
+    @staticmethod
     def _attach_telemetry(result: Any, response_data: Dict[str, Any]) -> Any:
         telemetry = response_data.get("telemetry")
         if telemetry is None:
@@ -275,7 +299,15 @@ class AsyncHTTPClient(BaseClient):
         exc_class = ERROR_CODE_TO_EXCEPTION.get(code, OpenVikingError)
 
         # Handle different exception constructors
-        if exc_class in (InvalidArgumentError,):
+        if exc_class == OpenVikingError:
+            raise exc_class(message, code=code, details=details)
+        elif exc_class in (
+            InvalidArgumentError,
+            FailedPreconditionError,
+            ResourceExhaustedError,
+            AbortedError,
+            UnimplementedError,
+        ):
             raise exc_class(message, details=details)
         elif exc_class == InvalidURIError:
             uri = details.get("uri", "") if details else ""
@@ -597,7 +629,7 @@ class AsyncHTTPClient(BaseClient):
     async def find(
         self,
         query: str,
-        target_uri: str = "",
+        target_uri: Union[str, List[str]] = "",
         limit: int = 10,
         node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
@@ -606,14 +638,13 @@ class AsyncHTTPClient(BaseClient):
     ) -> FindResult:
         """Semantic search without session context."""
         telemetry = self._validate_telemetry(telemetry)
-        if target_uri:
-            target_uri = VikingURI.normalize(target_uri)
+        normalized_target = self._normalize_target_uri(target_uri)
         actual_limit = node_limit if node_limit is not None else limit
         response = await self._http.post(
             "/api/v1/search/find",
             json={
                 "query": query,
-                "target_uri": target_uri,
+                "target_uri": normalized_target,
                 "limit": actual_limit,
                 "score_threshold": score_threshold,
                 "filter": filter,
@@ -626,7 +657,7 @@ class AsyncHTTPClient(BaseClient):
     async def search(
         self,
         query: str,
-        target_uri: str = "",
+        target_uri: Union[str, List[str]] = "",
         session: Optional[Any] = None,
         session_id: Optional[str] = None,
         limit: int = 10,
@@ -637,15 +668,14 @@ class AsyncHTTPClient(BaseClient):
     ) -> FindResult:
         """Semantic search with optional session context."""
         telemetry = self._validate_telemetry(telemetry)
-        if target_uri:
-            target_uri = VikingURI.normalize(target_uri)
+        normalized_target = self._normalize_target_uri(target_uri)
         actual_limit = node_limit if node_limit is not None else limit
         sid = session_id or (session.session_id if session else None)
         response = await self._http.post(
             "/api/v1/search/search",
             json={
                 "query": query,
-                "target_uri": target_uri,
+                "target_uri": normalized_target,
                 "session_id": sid,
                 "limit": actual_limit,
                 "score_threshold": score_threshold,

@@ -24,10 +24,10 @@ pip install openviking --upgrade --force-reinstall
 
 If you prefer to run OpenViking as a standalone service, Docker is recommended.
 
-1. **Prepare Configuration and Data Directories**
-   Create a data directory on your host machine and prepare the `ov.conf` configuration file (see the "Configuration" section below for details):
+1. **Prepare Configuration Directory**
+   Create the OpenViking directory on your host and prepare the `ov.conf` configuration file (see the "Configuration" section below for details). All persistent state — config and workspace data — lives under this single directory:
    ```bash
-   mkdir -p ~/.openviking/data
+   mkdir -p ~/.openviking
    touch ~/.openviking/ov.conf
    ```
 
@@ -42,8 +42,7 @@ If you prefer to run OpenViking as a standalone service, Docker is recommended.
          - "1933:1933"
          - "8020:8020"
        volumes:
-         - ~/.openviking/ov.conf:/app/ov.conf
-         - ~/.openviking/data:/app/data
+         - ~/.openviking:/app/.openviking
        restart: unless-stopped
    ```
    Then run the following command in the same directory:
@@ -52,6 +51,8 @@ If you prefer to run OpenViking as a standalone service, Docker is recommended.
    ```
 
    By default, the container starts the OpenViking API server on `1933`, the Console UI on `8020`, and the bundled `vikingbot` gateway. If you need to disable `vikingbot`, add either `command: ["--without-bot"]` or `environment: ["OPENVIKING_WITH_BOT=0"]`.
+
+   On platforms that don't allow bind mounts, set `OPENVIKING_CONF_CONTENT` to the full config JSON to bootstrap on first start, or `docker exec` in and run `openviking-server init` after the container is up. See [Deployment Guide](../guides/03-deployment.md#when-docker--v-is-not-available) for details.
 
 > **💡 Mac Local Network Access Tip (Connection reset error):**
 >
@@ -67,8 +68,7 @@ If you prefer to run OpenViking as a standalone service, Docker is recommended.
 >       - "8020:8020"
 >       - "1933:1934" # Map host 1933 to container 1934
 >     volumes:
->       - ~/.openviking/ov.conf:/app/ov.conf
->       - ~/.openviking/data:/app/data
+>       - ~/.openviking:/app/.openviking
 >     command: /bin/sh -c "apt-get update && apt-get install -y socat && socat TCP-LISTEN:1934,fork,reuseaddr TCP:127.0.0.1:1933 & openviking-server"
 > ```
 > This perfectly solves the access issue for Mac host machines.
@@ -151,6 +151,7 @@ try:
     client.initialize()
 
     # Add resource (supports URL, file, or directory)
+    # Local directory scans respect .gitignore by default.
     add_result = client.add_resource(
         path="https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md"
     )

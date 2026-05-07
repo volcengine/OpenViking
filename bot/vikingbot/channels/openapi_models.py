@@ -26,6 +26,14 @@ class EventType(str, Enum):
     ITERATION = "iteration"
 
 
+class FeedbackType(str, Enum):
+    """Supported explicit feedback types."""
+
+    THUMB_UP = "thumb_up"
+    THUMB_DOWN = "thumb_down"
+    RATING = "rating"
+
+
 class ChatMessage(BaseModel):
     """A single chat message."""
 
@@ -58,6 +66,7 @@ class ChatResponse(BaseModel):
     """Response from chat endpoint (non-streaming)."""
 
     session_id: str = Field(..., description="Session ID")
+    response_id: Optional[str] = Field(default=None, description="Assistant response ID")
     message: str = Field(..., description="Assistant's response message")
     events: Optional[List[Dict[str, Any]]] = Field(
         default=None, description="Intermediate events (thinking, tool calls)"
@@ -67,6 +76,36 @@ class ChatResponse(BaseModel):
         description="OpenViking memories assembled during _process_message",
     )
     timestamp: datetime = Field(default_factory=datetime.now, description="Response timestamp")
+
+
+class FeedbackRequest(BaseModel):
+    """Request body for explicit feedback submission."""
+
+    response_id: str = Field(..., description="Assistant response ID", min_length=1)
+    session_id: str = Field(..., description="Session ID", min_length=1)
+    user_id: Optional[str] = Field(default=None, description="User identifier (optional)")
+    feedback_type: FeedbackType = Field(..., description="Feedback type")
+    feedback_score: Optional[float] = Field(default=None, description="Numeric feedback score")
+    feedback_reason: Optional[str] = Field(default=None, description="Feedback reason label")
+    feedback_text: Optional[str] = Field(default=None, description="Free-form feedback text")
+    channel_id: Optional[str] = Field(
+        default=None,
+        description="Bot channel ID for multi-channel routing (optional)",
+    )
+
+
+class FeedbackResponse(BaseModel):
+    """Response from feedback endpoint."""
+
+    accepted: bool = Field(default=True, description="Whether feedback was accepted")
+    response_id: str = Field(..., description="Assistant response ID")
+    session_id: str = Field(..., description="Session ID")
+    feedback_type: FeedbackType = Field(..., description="Feedback type")
+    feedback_delay_sec: Optional[float] = Field(
+        default=None,
+        description="Delay between response creation and feedback submission",
+    )
+    timestamp: datetime = Field(default_factory=datetime.now, description="Feedback timestamp")
 
 
 class ChatStreamEvent(BaseModel):

@@ -177,3 +177,4 @@ curl http://localhost:1933/api/v1/search/find \
 - [Data Encryption](./10-encryption.md) - At-rest encryption and key architecture
 - [Multi-Tenant](./11-multi-tenant.md) - Account / user / agent isolation model
 - [Metrics](./12-metrics.md) - `/metrics` usage and key metric explanations
+- [Privacy Configs and Skill Privacy Extraction/Restore](./13-privacy.md) - Versioning, placeholder extraction, and read-time restore

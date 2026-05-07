@@ -68,7 +68,7 @@ For `provider: "openai-codex"`, `vlm.api_key` is optional when Codex OAuth is al
     "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
     "api_key"  : "your-volcengine-api-key",
     "provider" : "volcengine",
-    "model"    : "doubao-seed-2-0-code-preview-260215"
+    "model"    : "doubao-seed-2-0-pro-260215"
   }
 }
 ```
@@ -193,6 +193,8 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
   "embedding": {
     "max_concurrent": 10,
     "max_retries": 3,
+    "text_source": "content_only",
+    "max_input_tokens": 4096,
     "dense": {
       "provider": "volcengine",
       "api_key": "your-api-key",
@@ -210,6 +212,8 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 |-----------|------|-------------|
 | `max_concurrent` | int | Maximum concurrent embedding requests (`embedding.max_concurrent`, default: `10`) |
 | `max_retries` | int | Maximum retry attempts for transient embedding provider errors (`embedding.max_retries`, default: `3`; `0` disables retry) |
+| `text_source` | str | Text used for vectorizing text files. `content_only` reads raw content, `summary_first` uses summary when available and falls back to content, `summary_only` uses only summary. Default: `content_only` |
+| `max_input_tokens` | int | Maximum estimated raw text tokens sent to the embedding model when content is used. Default: `4096` |
 | `provider` | str | `"volcengine"`, `"openai"`, `"vikingdb"`, `"jina"`, `"voyage"`, `"dashscope"`, or `"gemini"` |
 | `api_key` | str | API key |
 | `model` | str | Model name |
@@ -723,6 +727,26 @@ Reranking model for search result refinement. Supports VikingDB (Volcengine), Co
 
 If rerank is not configured, search uses vector similarity only.
 
+### retrieval
+
+Retrieval ranking configuration for final search scores.
+
+```json
+{
+  "retrieval": {
+    "hotness_alpha": 0.0,
+    "score_propagation_alpha": 0.5
+  }
+}
+```
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `hotness_alpha` | float | Weight for blending hotness into final retrieval scores. `0.0` disables the hotness boost and keeps scores equal to semantic similarity; `1.0` uses only hotness. Valid range: `0.0` to `1.0`. | `0.0` |
+| `score_propagation_alpha` | float | Weight for each child result's own score when blending with its parent score during hierarchical retrieval. `0.5` keeps the existing equal blend; `1.0` ignores the parent score; `0.0` uses only the parent score. Valid range: `0.0` to `1.0`. | `0.5` |
+
+Keep `hotness_alpha` at `0.0` when you need scores to reflect pure vector similarity. Set it above `0.0` only when frequently accessed or recently updated contexts should receive a ranking boost.
+
 ### storage
 
 Storage configuration for context data, including file storage (RAGFS) and vector database storage (VectorDB).
@@ -757,6 +781,7 @@ Storage configuration for context data, including file storage (RAGFS) and vecto
 |-----------|------|-------------|---------|
 | `backend` | str | `"local"`, `"s3"`, or `"memory"` | `"local"` |
 | `timeout` | float | Request timeout in seconds | `10.0` |
+| `queue_db_path` | str (optional) | Override path of the queuefs sqlite database file. Defaults to `{storage.workspace}/_system/queue/queue.db` when not set. Useful when the workspace volume does not support sqlite (e.g. some network filesystems) | `null` |
 | `s3` | object | S3 backend configuration (when backend is 's3') | - |
 
 **Configuration Examples**
@@ -772,12 +797,12 @@ RAGFS uses Rust binding mode by default, directly accessing the file system thro
 | `region` | str | AWS region where the bucket is located (e.g., us-east-1, cn-beijing) | null |
 | `access_key` | str | S3 access key ID | null |
 | `secret_key` | str | S3 secret access key corresponding to the access key ID | null |
-| `endpoint` | str | Custom S3 endpoint URL, required for S3-compatible services like MinIO or LocalStack | null |
+| `endpoint` | str | Custom S3 endpoint, required for S3-compatible services like MinIO or LocalStack. Accepts a full URL (`https://...` or `http://...`) or a bare hostname; bare hostnames are auto-prefixed with `https://` or `http://` based on `use_ssl` | null |
 | `prefix` | str | Optional key prefix for namespace isolation | "" |
-| `use_ssl` | bool | Enable/disable SSL (HTTPS) for S3 connections | true |
+| `use_ssl` | bool | Enable/disable SSL (HTTPS) for S3 connections. Also controls the scheme auto-prefixed onto bare-hostname `endpoint` values | true |
 | `use_path_style` | bool | true for PathStyle used by MinIO and some S3-compatible services; false for VirtualHostStyle used by TOS and some S3-compatible services | true |
 | `directory_marker_mode` | str | How to persist directory markers: `none`, `empty`, or `nonempty` | `"empty"` |
-| `normalize_encoding` | bool | Escape only URL-reserved or URL-unsafe characters in S3 object keys as `!HH` hexadecimal bytes while preserving safe characters | `true` |
+| `normalize_encoding_chars` | str | Characters to escape in S3 object keys as `!HH` hexadecimal bytes; empty string disables normalization | `"?#%+@"` |
 
 `directory_marker_mode` controls how RAGFS materializes directory objects in S3:
 
@@ -791,13 +816,12 @@ Typical choices:
 - For TOS or other VirtualHostStyle backends that reject zero-byte directory markers, use `nonempty`.
 - If you want pure prefix-style behavior and do not need persisted empty directories, use `none`.
 
-`normalize_encoding` controls whether RAGFS rewrites unsafe path segments before issuing S3 requests:
+`normalize_encoding_chars` controls which characters RAGFS rewrites before issuing S3 requests:
 
-- `true` is the default. RAGFS preserves safe path characters and rewrites only unsafe bytes.
-- Unsafe bytes are encoded as `!HH`, where `HH` is the uppercase hexadecimal value of the byte.
-- The characters `/`, `!`, `-`, `_`, `.`, `*`, `'`, `(`, and `)` remain unescaped.
-- Characters such as `?`, `&`, `#`, spaces, `%`, `@`, and `+` are escaped in place without rewriting the whole segment.
-- Set `false` to keep original path segments in object keys.
+- The default value is `"?#%+@"`, so only `?`, `#`, `%`, `+`, and `@` are escaped.
+- Escaped bytes are encoded as `!HH`, where `HH` is the uppercase hexadecimal value of the byte.
+- Characters not listed in `normalize_encoding_chars`, including Chinese and other Unicode characters, remain unchanged.
+- Set `normalize_encoding_chars` to `""` to keep original path segments in object keys.
 
 <details>
 <summary><b>PathStyle S3</b></summary>
@@ -814,7 +838,7 @@ Supports S3 storage in PathStyle mode, such as MinIO, SeaweedFS.
         "region": "us-east-1",
         "access_key": "your-ak",
         "secret_key": "your-sk",
-        "normalize_encoding": true
+        "normalize_encoding_chars": "?#%+@"
       }
     }
   }
@@ -840,7 +864,7 @@ Supports S3 storage in VirtualHostStyle mode, such as TOS.
         "secret_key": "your-sk",
         "use_path_style": false,
         "directory_marker_mode": "nonempty",
-        "normalize_encoding": true
+        "normalize_encoding_chars": "?#%+@"
       }
     }
   }
@@ -951,7 +975,6 @@ Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI t
   "account": "acme",
   "user": "alice",
   "agent_id": "my-agent",
-  "output": "table",
   "upload": {
     "ignore_dirs": "node_modules,.cache,.nx",
     "include": "*.md,*.pdf",
@@ -967,10 +990,11 @@ Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI t
 | `account` | Default account sent as `X-OpenViking-Account` | `null` |
 | `user` | Default user sent as `X-OpenViking-User` | `null` |
 | `agent_id` | Agent identifier for agent space isolation | `null` |
-| `output` | Default output format: `"table"` or `"json"` | `"table"` |
 | `upload.ignore_dirs` | Default directory ignore list for `add-resource` (CSV) | `null` |
 | `upload.include` | Default include patterns for `add-resource` (CSV) | `null` |
 | `upload.exclude` | Default exclude patterns for `add-resource` (CSV) | `null` |
+
+Local directory uploads respect `.gitignore` files (root and nested). `ignore_dirs/include/exclude` apply on top of that.
 
 CLI flags can override these identity fields per command:
 
@@ -995,7 +1019,7 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 ```json
 {
   "server": {
-    "host": "0.0.0.0",
+    "host": "127.0.0.1",
     "port": 1933,
     "auth_mode": "api_key",
     "root_api_key": "your-secret-root-key",
@@ -1006,7 +1030,7 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 
 | Field | Type | Description | Default |
 |-------|------|-------------|---------|
-| `host` | str | Bind address | `0.0.0.0` |
+| `host` | str | Bind address | `127.0.0.1` |
 | `port` | int | Bind port | `1933` |
 | `auth_mode` | str | Authentication mode: `"api_key"` or `"trusted"`. Default is `"api_key"` | `"api_key"` |
 | `root_api_key` | str | Root API key for multi-tenant auth in `api_key` mode. In `trusted` mode it is optional on localhost, but required for any non-localhost deployment; it does not become the source of user identity | `null` |
@@ -1057,6 +1081,7 @@ Enable at-rest data encryption to ensure data security and isolation in multi-te
 |-----------|------|-------------|---------|
 | `enabled` | bool | Whether encryption is enabled | `false` |
 | `provider` | str | Key provider: `"local"`, `"vault"`, or `"volcengine_kms"` | - |
+| `api_key_hashing.enabled` | bool | Whether to apply Argon2id one-way hashing to API key values (independent of file-level `enabled`); see [Encryption Guide](./08-encryption.md) | `false` |
 
 ### Local (File)
 
@@ -1139,6 +1164,8 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
   "embedding": {
     "max_concurrent": 10,
     "max_retries": 3,
+    "text_source": "content_only",
+    "max_input_tokens": 4096,
     "dense": {
       "provider": "volcengine",
       "api_key": "string",
@@ -1165,6 +1192,10 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
     "api_base": "string",
     "threshold": 0.1,
     "extra_headers": {}
+  },
+  "retrieval": {
+    "hotness_alpha": 0.0,
+    "score_propagation_alpha": 0.5
   },
   "encryption": {
     "enabled": false,
@@ -1205,7 +1236,7 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
     "code_summary_mode": "ast"
   },
   "server": {
-    "host": "0.0.0.0",
+    "host": "127.0.0.1",
     "port": 1933,
     "root_api_key": "string",
     "cors_origins": ["*"]

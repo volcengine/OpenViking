@@ -2398,7 +2398,7 @@ wheels = [
 
 [[package]]
 name = "llama-cpp-python"
-version = "0.3.20"
+version = "0.3.21"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "diskcache" },
@@ -2407,7 +2407,7 @@ dependencies = [
     { name = "numpy", version = "2.4.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/45/95/c69c47c9c8dda97f712f5864688d13a22b0159aa9adae91a69067a728532/llama_cpp_python-0.3.20.tar.gz", hash = "sha256:70f01b7d915d31c617dc66610a332cb2d51cde84c8b152d09a352206323616f5", size = 59323017, upload-time = "2026-04-03T06:56:32.455Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e6/0f/17c0e400ed17094b360e3bcc07e7fbca890e0042a5a1e9dabb056693d57f/llama_cpp_python-0.3.21.tar.gz", hash = "sha256:533636e23953d1efcf16ddf5862d963405e4bc0bccfc04ba90e9ee7afefefa75", size = 67604365, upload-time = "2026-04-27T05:17:44.296Z" }
 
 [[package]]
 name = "loguru"
@@ -3504,6 +3504,7 @@ dependencies = [
     { name = "litellm" },
     { name = "loguru" },
     { name = "markdownify" },
+    { name = "mcp" },
     { name = "olefile" },
     { name = "openai" },
     { name = "openpyxl" },
@@ -3512,6 +3513,7 @@ dependencies = [
     { name = "opentelemetry-exporter-otlp-proto-http" },
     { name = "opentelemetry-instrumentation-asyncio" },
     { name = "opentelemetry-sdk" },
+    { name = "pathspec" },
     { name = "pdfminer-six" },
     { name = "pdfplumber" },
     { name = "protobuf" },
@@ -3735,6 +3737,7 @@ requires-dist = [
     { name = "llama-cpp-python", marker = "extra == 'local-embed'", specifier = ">=0.3.0" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "markdownify", specifier = ">=0.11.0" },
+    { name = "mcp", specifier = ">=1.27.0" },
     { name = "mcp", marker = "extra == 'bot'", specifier = ">=1.0.0" },
     { name = "msgpack", marker = "extra == 'bot'", specifier = ">=1.0.8" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
@@ -3754,6 +3757,7 @@ requires-dist = [
     { name = "pandas", marker = "extra == 'benchmark'", specifier = ">=2.0.0" },
     { name = "pandas", marker = "extra == 'eval'", specifier = ">=2.0.0" },
     { name = "pandas", marker = "extra == 'test'", specifier = ">=2.0.0" },
+    { name = "pathspec", specifier = ">=1.1.1" },
     { name = "pdfminer-six", specifier = ">=20251230" },
     { name = "pdfplumber", specifier = ">=0.10.0" },
     { name = "prompt-toolkit", marker = "extra == 'bot'", specifier = ">=3.0.0" },
@@ -4105,11 +4109,11 @@ wheels = [
 
 [[package]]
 name = "pathspec"
-version = "1.0.4"
+version = "1.1.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/fa/36/e27608899f9b8d4dff0617b2d9ab17ca5608956ca44461ac14ac48b44015/pathspec-1.0.4.tar.gz", hash = "sha256:0210e2ae8a21a9137c0d470578cb0e595af87edaa6ebf12ff176f14a02e0e645", size = 131200, upload-time = "2026-01-27T03:59:46.938Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/5a/82/42f767fc1c1143d6fd36efb827202a2d997a375e160a71eb2888a925aac1/pathspec-1.1.1.tar.gz", hash = "sha256:17db5ecd524104a120e173814c90367a96a98d07c45b2e10c2f3919fff91bf5a", size = 135180, upload-time = "2026-04-27T01:46:08.907Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ef/3c/2c197d226f9ea224a9ab8d197933f9da0ae0aac5b6e0f884e2b8d9c8e9f7/pathspec-1.0.4-py3-none-any.whl", hash = "sha256:fb6ae2fd4e7c921a165808a552060e722767cfa526f99ca5156ed2ce45a5c723", size = 55206, upload-time = "2026-01-27T03:59:45.137Z" },
+    { url = "https://files.pythonhosted.org/packages/f1/d9/7fb5aa316bc299258e68c73ba3bddbc499654a07f151cba08f6153988714/pathspec-1.1.1-py3-none-any.whl", hash = "sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189", size = 57328, upload-time = "2026-04-27T01:46:07.06Z" },
 ]
 
 [[package]]

@@ -29,7 +29,7 @@ curl http://localhost:1933/health
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--config` | Path to ov.conf file | `~/.openviking/ov.conf` |
-| `--host` | Host to bind to | `0.0.0.0` |
+| `--host` | Host to bind to | `127.0.0.1` |
 | `--port` | Port to bind to | `1933` |
 
 **Examples**
@@ -184,24 +184,34 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 
 ### Docker
 
-OpenViking provides pre-built Docker images published to GitHub Container Registry:
+OpenViking provides pre-built Docker images published to GitHub Container Registry. All persistent state — `ov.conf`, `ovcli.conf`, and the workspace data — lives under `/app/.openviking` inside the container, so a single mount is enough:
 
 ```bash
-# Note: ov.conf needs to set storage.workspace to /app/data for data persistence
 docker run -d \
   --name openviking \
   -p 1933:1933 \
   -p 8020:8020 \
-  -v ~/.openviking/ov.conf:/app/ov.conf \
-  -v ~/.openviking/data:/app/data \
+  -v ~/.openviking:/app/.openviking \
   --restart unless-stopped \
   ghcr.io/volcengine/openviking:latest
 ```
 
 By default, the Docker image starts:
-- OpenViking HTTP service on port `1933`
+- OpenViking HTTP service on port `1933` (bound to `0.0.0.0`)
 - OpenViking Console on port `8020`
 - `vikingbot` gateway
+
+Since the server binds to `0.0.0.0` inside the container (required for Docker port-mapping to work), you **must** set `root_api_key` in your `ov.conf`:
+
+```json
+{
+  "server": {
+    "root_api_key": "your-secret-root-key"
+  }
+}
+```
+
+The server will refuse to start without it. You can override the bind address via the `OPENVIKING_SERVER_HOST` environment variable if needed.
 
 Upgrade the container:
 ```bash
@@ -218,8 +228,7 @@ docker run -d \
   --name openviking \
   -p 1933:1933 \
   -p 8020:8020 \
-  -v ~/.openviking/ov.conf:/app/ov.conf \
-  -v ~/.openviking/data:/app/data \
+  -v ~/.openviking:/app/.openviking \
   --restart unless-stopped \
   ghcr.io/volcengine/openviking:latest \
   --without-bot
@@ -231,11 +240,34 @@ docker run -d \
   -e OPENVIKING_WITH_BOT=0 \
   -p 1933:1933 \
   -p 8020:8020 \
-  -v ~/.openviking/ov.conf:/app/ov.conf \
-  -v ~/.openviking/data:/app/data \
+  -v ~/.openviking:/app/.openviking \
   --restart unless-stopped \
   ghcr.io/volcengine/openviking:latest
 ```
+
+#### When `docker -v` is not available
+
+Some managed platforms (Railway, Fly.io, Heroku-style PaaS) don't let you bind-mount a host path. If `ov.conf` doesn't exist when the container starts, the entrypoint will not crash — it prints a fix-it message and waits for the file to appear. You have two ways to provide it:
+
+**Option A: pass the full config through `OPENVIKING_CONF_CONTENT`.** The entrypoint writes the env value to `OPENVIKING_CONFIG_FILE` (defaults to `/app/.openviking/ov.conf`) before starting the server:
+
+```bash
+docker run -d \
+  --name openviking \
+  -p 1933:1933 \
+  -p 8020:8020 \
+  -e OPENVIKING_CONF_CONTENT="$(cat ~/.openviking/ov.conf)" \
+  --restart unless-stopped \
+  ghcr.io/volcengine/openviking:latest
+```
+
+**Option B: configure interactively after the container is up.** While the container is sleeping (waiting for `ov.conf`), `docker exec` in and run the setup wizard — it honors `OPENVIKING_CONFIG_FILE` and writes to the path the server is watching:
+
+```bash
+docker exec -it openviking openviking-server init
+```
+
+As soon as `ov.conf` appears, the entrypoint resumes and starts the server + console automatically.
 
 You can also use Docker Compose, which provides a `docker-compose.yml` in the project root:
 

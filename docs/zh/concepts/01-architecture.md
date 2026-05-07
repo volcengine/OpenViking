@@ -176,3 +176,4 @@ curl http://localhost:1933/api/v1/search/find \
 - [数据加密](./10-encryption.md) - 静态数据加密与密钥架构
 - [多租户](./11-multi-tenant.md) - account / user / agent 隔离模型
 - [指标](./12-metrics.md) - `/metrics` 使用方式与关键指标说明
+- [用户隐私配置](./13-privacy.md) - 隐私版本管理、自动提取Skill隐私配置

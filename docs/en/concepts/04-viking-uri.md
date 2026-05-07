@@ -9,7 +9,7 @@ viking://{scope}/{path}
 ```
 
 - **scheme**: Always `viking`
-- **scope**: Top-level namespace (resources, user, agent, session, queue)
+- **scope**: Top-level namespace (`resources`, `user`, `agent`, `session`; `temp` and `queue` are internal)
 - **path**: Resource path within the scope
 
 ## Scopes
@@ -22,6 +22,11 @@ viking://{scope}/{path}
 | **session** | Session-level data | Session lifetime | Current session |
 | **queue** | Processing queue | Temporary | Internal |
 | **temp** | Temporary files | During parsing | Internal |
+
+Public API and CLI filesystem/content operations accept only the public scopes:
+`resources`, `user`, `agent`, and `session` (plus the root URI `viking://`).
+`temp` and `queue` are internal implementation scopes and cannot be addressed
+directly through public API URI parameters.
 
 ## Initial Directory Structure
 

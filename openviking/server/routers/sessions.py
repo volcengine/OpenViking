@@ -5,14 +5,15 @@
 import logging
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, Path, Query, Request
-from pydantic import BaseModel, model_validator
+from fastapi import APIRouter, Body, Depends, Path, Query, Request
+from pydantic import BaseModel, Field, model_validator
 
 from openviking.message.part import TextPart, part_from_dict
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import AuthMode, RequestContext
 from openviking.server.models import ErrorInfo, Response
+from openviking.server.responses import error_response
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
 logger = logging.getLogger(__name__)
@@ -173,8 +174,7 @@ async def get_session(
         )
     result = session.meta.to_dict()
     result["user"] = session.user.to_dict()
-    pending_tokens = sum(m.estimated_tokens for m in session.messages)
-    result["pending_tokens"] = pending_tokens
+    result["pending_tokens"] = int(session.meta.pending_tokens or 0)
     return Response(status="ok", result=result)
 
 
@@ -185,6 +185,13 @@ async def get_session_context(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get assembled session context."""
+    if token_budget < 0:
+        return error_response(
+            "INVALID_ARGUMENT",
+            "token_budget must be greater than or equal to 0",
+            details={"field": "token_budget", "value": token_budget},
+        )
+
     service = get_service()
     session = service.sessions.session(_ctx, session_id)
     await session.load()
@@ -225,9 +232,31 @@ async def delete_session(
     return Response(status="ok", result={"session_id": session_id})
 
 
+class CommitRequest(BaseModel):
+    """Commit request body.
+
+    WM v2: ``keep_recent_count`` allows the plugin to retain a tail of recent
+    messages in the live session after commit so the next turn still has
+    immediate context. Default 0 preserves the pre-v2 "archive everything"
+    behavior.
+    """
+
+    keep_recent_count: int = Field(
+        default=0,
+        ge=0,
+        le=10_000,
+        description=(
+            "Number of most-recent messages to keep live after commit. "
+            "Plugin's afterTurn path typically passes its configured value "
+            "(default 10); compact path passes 0 to archive everything."
+        ),
+    )
+
+
 @router.post("/{session_id}/commit")
 async def commit_session(
     session_id: str = Path(..., description="Session ID"),
+    body: CommitRequest = Body(default_factory=CommitRequest),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Commit a session (archive and extract memories).
@@ -237,7 +266,9 @@ async def commit_session(
     polling progress via ``GET /tasks/{task_id}``.
     """
     service = get_service()
-    result = await service.sessions.commit_async(session_id, _ctx)
+    result = await service.sessions.commit_async(
+        session_id, _ctx, keep_recent_count=body.keep_recent_count
+    )
     return Response(status="ok", result=result).model_dump(exclude_none=True)
 
 

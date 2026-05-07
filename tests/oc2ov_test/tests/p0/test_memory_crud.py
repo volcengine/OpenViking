@@ -150,6 +150,7 @@ class TestMemoryDelete(BaseOpenClawCLITest):
         resp2 = self.send_and_retry_on_timeout(
             "我的临时密码是什么？请根据你记住的信息回答，不要调用外部工具",
             session_id=session_id,
+            timeout=300,
         )
         self.logger.info("删除验证完成，检查响应是否表明密码已过期或已删除")
         self.assertAnyKeywordInResponse(

@@ -64,7 +64,7 @@ With OpenViking, developers can build an Agent's brain just like managing local 
 Before starting with OpenViking, please ensure your environment meets the following requirements:
 
 - **Python Version**: 3.10 or higher
-- **Go Version**: 1.22 or higher (Required for building AGFS components)
+- **Rust Toolchain**: Cargo (Required for building RAGFS and CLI components from source)
 - **C++ Compiler**: GCC 9+ or Clang 11+ (Required for building core extensions)
 - **Operating System**: Linux, macOS, Windows
 - **Network Connection**: A stable network connection is required (for downloading dependencies and accessing model services)
@@ -323,7 +323,9 @@ If you prefer manual configuration, create `~/.openviking/ov.conf`, remove the c
       "dimension": 1024,               // Vector dimension
       "model"    : "<model-name>"      // Embedding model name (e.g., doubao-embedding-vision-251215 or text-embedding-3-large)
     },
-    "max_concurrent": 10               // Max concurrent embedding requests (default: 10)
+    "max_concurrent": 10,              // Max concurrent embedding requests (default: 10)
+    "text_source": "content_only",     // Text file vectorization source: content_only|summary_first|summary_only
+    "max_input_tokens": 4096           // Max estimated raw text tokens sent to embedding
   },
   "vlm": {
     "api_base" : "<api-endpoint>",     // API endpoint address
@@ -335,7 +337,7 @@ If you prefer manual configuration, create `~/.openviking/ov.conf`, remove the c
 }
 ```
 
-> **Note**: For embedding models, supported providers are `volcengine` (Doubao), `openai`, `jina`, `voyage`, `minimax`, `vikingdb`, and `gemini` (requires `pip install "google-genai>=1.0.0"`). For VLM models, common providers include `volcengine`, `openai`, `openai-codex`, `kimi`, and `glm`.
+> **Note**: For embedding models, supported providers are `volcengine` (Doubao), `openai`, `azure`, `jina`, `ollama`, `voyage`, `dashscope`, `minimax`, `cohere`, `vikingdb`, `gemini` (requires `pip install "google-genai>=1.0.0"`), `litellm`, and `local`. For VLM models, common providers include `volcengine`, `openai`, `openai-codex`, `kimi`, and `glm`.
 
 #### Server Configuration Examples
 
@@ -509,8 +511,7 @@ Example: ovcli.conf for visiting localhost server
 ```json
 {
   "url": "http://localhost:1933",
-  "timeout": 60.0,
-  "output": "table"
+  "timeout": 60.0
 }
 ```
 
@@ -747,6 +748,11 @@ Let's work together to define and build the future of AI Agent context managemen
 ### Star Trend
 
 [![Star History Chart](https://api.star-history.com/svg?repos=volcengine/OpenViking\&type=timeline\&legend=top-left)](https://www.star-history.com/#volcengine/OpenViking\&type=timeline\&legend=top-left)
+
+## Security and privacy
+
+This project takes security seriously.
+For vulnerability reporting and supported versions, see [SECURITY.md](SECURITY.md)
 
 ## License
 

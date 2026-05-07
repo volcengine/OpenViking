@@ -10,9 +10,9 @@ import asyncio
 import json
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from openviking.core.namespace import agent_space_fragment, user_space_fragment
-from openviking.models.vlm.base import VLMBase
+from openviking.models.vlm.base import VLMBase, ToolCall
 from openviking.server.identity import RequestContext
+from openviking.session.memory.memory_isolation_handler import RoleScope, MemoryIsolationHandler
 from openviking.session.memory.schema_model_generator import (
     SchemaModelGenerator,
     SchemaPromptGenerator,
@@ -26,8 +26,14 @@ from openviking.session.memory.utils import (
     parse_json_with_stability,
     parse_memory_file_with_fields,
     pretty_print_messages,
-    validate_operations_uris,
 )
+from openviking.session.memory.dataclass import (
+    MemoryFileContent,
+    ResolvedOperation,
+    ResolvedOperations,
+)
+from openviking.session.memory.utils.json_parser import JsonUtils
+from openviking.session.memory.utils.uri import supplement_operation_uris
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
 from openviking.telemetry import bind_telemetry_stage, tracer
 from openviking_cli.utils import get_logger
@@ -54,6 +60,7 @@ class ExtractLoop:
         max_iterations: int = 3,
         ctx: Optional[RequestContext] = None,
         context_provider: Optional[Any] = None,  # ExtractContextProvider
+        isolation_handler: MemoryIsolationHandler = None,
     ):
         """
         Initialize the ExtractLoop.
@@ -72,23 +79,27 @@ class ExtractLoop:
         self.max_iterations = max_iterations
         self.ctx = ctx
         self.context_provider = context_provider
+        # Use provided isolation_handler or create one in run()
+        self._isolation_handler = isolation_handler
+        # Track format error retry (max 1 retry)
+        self._format_retry_count = 0
 
         # Schema 生成器（在 run() 中初始化）
         self.schema_model_generator = None
         self.schema_prompt_generator = None
-        self._json_schema = None
 
         # 预计算：避免每次迭代重复计算
         self._tool_schemas: Optional[List[Dict[str, Any]]] = None
         self._expected_fields: Optional[List[str]] = None
         self._operations_model: Optional[Any] = None
 
-        # Track files read during ReAct for refetch detection
-        self._read_files: Set[str] = set()
+
         # Transaction handle for file locking
         self._transaction_handle = None
         # Flag to disable tools in next iteration after unknown tool error
         self._disable_tools_for_iteration = False
+
+        self._tool_ctx = None
 
     async def run(self) -> Tuple[Optional[Any], List[Dict[str, Any]]]:
         """
@@ -101,6 +112,8 @@ class ExtractLoop:
         max_iterations = self.max_iterations
         final_operations = None
         tools_used: List[Dict[str, Any]] = []
+        # Reset format retry counter for each run
+        self._format_retry_count = 0
 
         # 从 provider 获取 schemas（内部自动加载 registry）
         schemas = self.context_provider.get_memory_schemas(self.ctx)
@@ -109,7 +122,7 @@ class ExtractLoop:
         self.schema_model_generator = SchemaModelGenerator(schemas)
         self.schema_prompt_generator = SchemaPromptGenerator(schemas)
         self.schema_model_generator.generate_all_models()
-        self._json_schema = self.schema_model_generator.get_llm_json_schema()
+
 
         # 预计算工具 schemas
         allowed_tools = self.context_provider.get_tools()
@@ -127,18 +140,21 @@ class ExtractLoop:
         if self._extract_context is None:
             raise ValueError("Failed to get ExtractContext from provider")
         for schema in schemas:
-            self._expected_fields.append(schema.memory_type)
+            self._expected_fields.append(f"{schema.memory_type}")
 
         # 预计算 operations_model
-        self._operations_model = self.schema_model_generator.create_structured_operations_model()
+        role_scope = self._isolation_handler.get_read_scope() if self._isolation_handler else None
 
-        # Reset read files tracking for this run
-        self._read_files.clear()
+        self._operations_model = self.schema_model_generator.create_structured_operations_model(role_scope)
+
+        json_schema = self._operations_model.model_json_schema()
+
+
 
         # Build initial messages from provider
         import json
 
-        schema_str = json.dumps(self._json_schema, ensure_ascii=False)
+        schema_str = json.dumps(json_schema, ensure_ascii=False)
 
         messages = []
         messages.append(
@@ -158,27 +174,8 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
         await self._mark_cache_breakpoint(messages)
         # Pre-fetch context via provider
-        tool_call_messages = await self.context_provider.prefetch(
-            ctx=self.ctx,
-            viking_fs=self.viking_fs,
-            transaction_handle=self._transaction_handle,
-            vlm=self.vlm,
-        )
+        tool_call_messages = await self.context_provider.prefetch()
         messages.extend(tool_call_messages)
-
-        # Track prefetched files in _read_files to avoid unnecessary refetch
-        for msg in tool_call_messages:
-            if msg.get("role") == "user" and "tool_call_name" in msg.get("content", ""):
-                import json
-
-                try:
-                    content = json.loads(msg.get("content", "{}"))
-                    if content.get("tool_call_name") == "read":
-                        uri = content.get("args", {}).get("uri")
-                        if uri:
-                            self._read_files.add(uri)
-                except (json.JSONDecodeError, AttributeError):
-                    pass
 
         while iteration < max_iterations:
             iteration += 1
@@ -216,8 +213,9 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
             # If model returned final operations, check if refetch is needed
             if operations is not None:
+                final_operations = await self.resolve_operations(operations)
                 # Check if any write_uris target existing files that weren't read
-                refetch_uris = await self._check_unread_existing_files(operations)
+                refetch_uris = await self._check_unread_existing_files(final_operations)
                 if refetch_uris:
                     tracer.info(f"Found unread existing files: {refetch_uris}, refetching...")
                     # Add refetch results to messages and continue loop
@@ -228,18 +226,23 @@ The final output of the model must strictly follow the JSON Schema format shown 
                         tracer.info(f"Extended max_iterations to {max_iterations} for refetch")
 
                     continue
-
-                final_operations = operations
                 break
             # If no tool calls either, continue to next iteration (don't break!)
             logger.warning(
                 f"LLM returned neither tool calls nor operations (iteration {iteration}/{max_iterations})"
             )
+            # Add format error message if parse failed (max 1 retry)
+            if self._format_retry_count == 0:
+                self._format_retry_count += 1
+                max_iterations += 1
+                tracer.info(f"Extended max_iterations to {max_iterations} for format retry")
+                self._add_format_error_message(messages)
+
             # If it's the last iteration, use empty operations
-            if is_last_iteration:
-                final_operations = self._operations_model()
+            if iteration >= max_iterations:
+                final_operations = ResolvedOperations()
                 break
-            # Otherwise disable_tools and try again
+
             self._disable_tools_for_iteration = True
             continue
 
@@ -252,6 +255,84 @@ The final output of the model must strictly follow the JSON Schema format shown 
         tracer.info(f"final_operations={final_operations.model_dump_json(indent=4)}")
 
         return final_operations, tools_used
+
+
+    async def resolve_operations(self, operations) -> ResolvedOperations:
+        tracer.info(f'operations={JsonUtils.dumps(operations)}')
+        upsert_operations: List[ResolvedOperation] = []
+        delete_file_contents: List[MemoryFileContent] = []
+        errors: List[str] = []
+
+        # 获取 registry
+        registry = self.context_provider._get_registry()
+        role_scope = self._isolation_handler.get_read_scope()
+
+        # 遍历每个 memory_type 字段
+        for schema in self.context_provider.get_memory_schemas(self.ctx):
+            memory_type = schema.memory_type
+            value = getattr(operations, memory_type, None)
+            if value is None:
+                continue
+
+            # 统一转为列表
+            items = value if isinstance(value, list) else [value]
+
+            for item in items:
+                # 转换为 dict
+                item_dict = dict(item)
+                item_dict['memory_type'] = memory_type
+                # 填充 user_id 和 agent_id
+                self._isolation_handler.fill_role_ids(item_dict, role_scope=role_scope)
+
+                # 构建 ResolvedOperation
+                # 注意：此时 uris 为空，稍后由 supplement_operation_uris 填充
+
+                resolved_op = ResolvedOperation(
+                    old_memory_file_content=None,
+                    memory_fields=item_dict,
+                    memory_type=memory_type,
+                    uris=[],
+                )
+                upsert_operations.append(resolved_op)
+
+        # 处理 delete_uris - 转换为 delete_file_contents
+        delete_uris_raw = getattr(operations, "delete_uris", []) or []
+        for uri_str in delete_uris_raw:
+            uri_str = uri_str.strip()
+            if not uri_str:
+                continue
+            # 尝试从已读取的文件内容中获取
+            old_content = self.context_provider.read_file_contents.get(uri_str)
+            if old_content:
+                delete_file_contents.append(old_content)
+
+        # 构建 ResolvedOperations
+        resolved = ResolvedOperations(
+            upsert_operations=upsert_operations,
+            delete_file_contents=delete_file_contents,
+            errors=errors,
+        )
+        # 调用 supplement_operation_uris 填充 uris
+        if self._isolation_handler:
+            supplement_operation_uris(
+                operations=resolved,
+                registry=registry,
+                extract_context=self._extract_context,
+                isolation_handler=self._isolation_handler,
+            )
+
+        # 填充 old_memory_file_content：从 _read_file_contents 获取已读取的文件内容
+        for op in upsert_operations:
+            for uri in op.uris:
+                old_content = self.context_provider.read_file_contents.get(uri)
+                if old_content:
+                    op.old_memory_file_content = old_content
+                    break
+
+
+
+        return resolved
+
 
     @tracer("extract_loop.execute_tool_calls")
     async def _execute_tool_calls(self, messages, tool_calls, tools_used) -> bool:
@@ -266,7 +347,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
         # Execute all tool calls in parallel
         async def execute_single_tool_call(idx: int, tool_call):
             """Execute a single tool call."""
-            result = await self._execute_tool(tool_call)
+            result = await self.context_provider.execute_tool(tool_call)
             return idx, tool_call, result
 
         action_tasks = [
@@ -297,7 +378,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
             # Track read tool calls for refetch detection
             if tool_call.name == "read" and tool_call.arguments.get("uri"):
                 uri = tool_call.arguments["uri"]
-                self._read_files.add(uri)
+                # 内容由 ToolContext.read_file_contents 记录
 
             add_tool_call_pair_to_messages(
                 messages,
@@ -309,36 +390,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
         return has_unknown_tool
 
-    def _validate_operations(self, operations: Any) -> None:
-        """
-        Validate that all operations have allowed URIs.
-
-        Args:
-            operations: The operations to validate
-
-        Raises:
-            ValueError: If any operation has a disallowed URI
-        """
-        # Get registry from provider (internal method)
-        registry = self.context_provider._get_registry()
-        schemas = self.context_provider.get_memory_schemas(self.ctx)
-
-        # Use pre-initialized extract_context
-        if not hasattr(self, "_extract_context") or self._extract_context is None:
-            raise ValueError("ExtractContext not initialized")
-
-        is_valid, errors = validate_operations_uris(
-            operations,
-            schemas,
-            registry,
-            user_space=user_space_fragment(self.ctx),
-            agent_space=agent_space_fragment(self.ctx),
-            extract_context=self._extract_context,
-        )
-        if not is_valid:
-            error_msg = "Invalid memory operations:\n" + "\n".join(f"  - {err}" for err in errors)
-            logger.error(error_msg)
-            raise ValueError(error_msg)
 
     async def _call_llm(
         self, messages: List[Dict[str, Any]]
@@ -433,8 +484,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     logger.warning(f"Failed to parse memory operations: {error}")
                     return (None, None)
 
-                # Validate that all URIs are allowed
-                self._validate_operations(operations)
                 return (None, operations)
             except Exception as e:
                 logger.exception(f"Error parsing operations: {e}")
@@ -443,32 +492,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
         print("No tool calls or operations parsed")
         return (None, None)
 
-    @tracer("extract_loop.execute_tool", ignore_result=False)
-    async def _execute_tool(
-        self,
-        tool_call,
-    ) -> Any:
-        """Execute a single read action (read/search/ls/tree)."""
-        if not self.viking_fs:
-            return {"error": "VikingFS not available"}
 
-        tool = get_tool(tool_call.name)
-        if not tool:
-            return {"error": f"Unknown tool: {tool_call.name}"}
-
-        # 创建 ToolContext
-        from openviking.server.identity import ToolContext
-
-        tool_ctx = ToolContext(request_ctx=self.ctx, transaction_handle=self._transaction_handle)
-
-        try:
-            tracer.info(f"tool_call.arguments={tool_call.arguments}")
-            result = await tool.execute(self.viking_fs, tool_ctx, **tool_call.arguments)
-
-            return result
-        except Exception as e:
-            logger.error(f"Failed to execute {tool_call.name}: {e}")
-            return {"error": str(e)}
 
     async def _execute_in_parallel(
         self,
@@ -479,76 +503,65 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
     async def _check_unread_existing_files(
         self,
-        operations: Any,
-    ) -> List[str]:
-        """Check if write operations target existing files that weren't read during ReAct."""
-        memory_type_fields = getattr(operations, "_memory_type_fields", None)
-        if not memory_type_fields:
-            return []
+        operations: ResolvedOperations
+    ) -> Dict:
 
-        from openviking.session.memory.utils.uri import resolve_flat_model_uri
-
-        registry = self.context_provider._get_registry()
-        refetch_uris = []
-
-        for field_name in memory_type_fields:
-            value = getattr(operations, field_name, None)
-            if value is None:
-                continue
-            items = value if isinstance(value, list) else [value]
-            for item in items:
-                # Convert to dict
-                item_dict = dict(item) if hasattr(item, "model_dump") else dict(item)
+        refetch_uris = {}
+        for operation in operations.upsert_operations:
+            for uri in operation.uris:
+                if uri in self.context_provider.read_file_contents:
+                    continue
                 try:
-                    uri = resolve_flat_model_uri(
-                        item_dict,
-                        registry,
-                        user_space=user_space_fragment(self.ctx),
-                        agent_space=agent_space_fragment(self.ctx),
-                        memory_type=field_name,
-                        extract_context=self._extract_context,
+                    content = await self.context_provider.execute_tool(
+                        ToolCall(
+                            id="",
+                            name="read",
+                            arguments={
+                                "uri": uri
+                            }
+                        )
                     )
-                except Exception as e:
-                    logger.warning(f"Failed to resolve URI for {item}: {e}")
-                    continue
+                    # 读取出错表示文件不存在
+                    if isinstance(content, Dict):
+                        continue
 
-                if uri in self._read_files:
-                    continue
-                try:
-                    await self.viking_fs.read_file(uri, ctx=self.ctx)
-                    refetch_uris.append(uri)
-                except Exception:
-                    pass
+                    parsed = parse_memory_file_with_fields(content)
+                    refetch_uris[uri] = parsed
+                except Exception as e:
+                    tracer.error("read tool execute fail", e)
         return refetch_uris
+
+    def _add_format_error_message(self, messages: List[Dict[str, Any]]) -> None:
+        """Add format error guidance message to prompt."""
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "Your previous output could not be parsed as valid JSON. "
+                    "Please output ONLY a valid JSON object matching the required schema. "
+                    "Do not include any explanation, markdown formatting, or text outside the JSON."
+                ),
+            }
+        )
 
     async def _add_refetch_results_to_messages(
         self,
         messages: List[Dict[str, Any]],
-        refetch_uris: List[str],
+        refetch_uris: Dict[str, Any],
     ) -> None:
         """Add existing file content as read tool results to messages."""
         # Calculate call_id based on existing tool messages
         call_id_seq = len([m for m in messages if m.get("role") == "tool"]) + 1000
-
-        for uri in refetch_uris:
-            try:
-                content = await self.viking_fs.read_file(uri, ctx=self.ctx)
-                parsed = parse_memory_file_with_fields(content)
-
-                # Add as read tool call + result
-                add_tool_call_pair_to_messages(
-                    messages=messages,
-                    call_id=call_id_seq,
-                    tool_name="read",
-                    params={"uri": uri},
-                    result=parsed,
-                )
-                call_id_seq += 1
-
-                # Mark as read
-                self._read_files.add(uri)
-            except Exception as e:
-                logger.warning(f"Failed to refetch {uri}: {e}")
+        for uri, parsed in refetch_uris.items():
+            # Add as read tool call + result
+            add_tool_call_pair_to_messages(
+                messages=messages,
+                call_id=call_id_seq,
+                tool_name="read",
+                params={"uri": uri},
+                result=parsed,
+            )
+            call_id_seq += 1
 
         # Add reminder message for the model
         messages.append(

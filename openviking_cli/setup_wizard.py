@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from openviking_cli.utils.config.consts import DEFAULT_CONFIG_DIR
+from openviking_cli.utils.config.consts import DEFAULT_CONFIG_DIR, OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.ollama import (
     check_ollama_running,
     get_ollama_models,
@@ -95,12 +95,80 @@ def _prompt_choice(prompt: str, options: list[tuple[str, str]], default: int = 1
         print(f"  {_red('Please enter a number between 1 and ' + str(len(options)))}")
 
 
-def _prompt_required_input(prompt: str, default: str | None = None) -> str:
-    """Prompt for a required free-text value."""
+def _mask_secret(value: str, prefix: int = 7, suffix: int = 4) -> str:
+    """Mask a secret string, showing only the first ``prefix`` and last ``suffix`` chars."""
+    if not value:
+        return ""
+    if len(value) <= prefix + suffix:
+        return "*" * len(value)
+    return f"{value[:prefix]}{'*' * (len(value) - prefix - suffix)}{value[-suffix:]}"
+
+
+def _masked_input(prompt: str) -> str:
+    """Read a line of input, echoing ``*`` per character; on submit, rewrite
+    the line to show ``prompt + _mask_secret(value)`` (prefix 7 + suffix 4).
+
+    Falls back to plain ``input()`` when stdin/stdout aren't TTYs (tests,
+    pipes) and to ``getpass.getpass`` (no echo at all) on platforms
+    without ``termios`` (Windows).
+    """
+    import sys
+
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return input(prompt)
+
+    try:
+        import termios
+        import tty
+    except ImportError:
+        import getpass
+
+        return getpass.getpass(prompt)
+
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+    fd = sys.stdin.fileno()
+    old_attrs = termios.tcgetattr(fd)
+    chars: list[str] = []
+    try:
+        tty.setraw(fd)
+        while True:
+            ch = sys.stdin.read(1)
+            if ch in ("\r", "\n"):
+                break
+            if ch == "\x03":  # Ctrl-C
+                raise KeyboardInterrupt
+            if ch == "\x04":  # Ctrl-D / EOF
+                if not chars:
+                    raise EOFError
+                break
+            if ch in ("\x7f", "\b"):  # Backspace / DEL
+                if chars:
+                    chars.pop()
+                    sys.stdout.write("\b \b")
+                    sys.stdout.flush()
+                continue
+            if ch < " ":  # Other control chars — ignore
+                continue
+            chars.append(ch)
+            sys.stdout.write("*")
+            sys.stdout.flush()
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
+        value = "".join(chars)
+        # Rewrite the line: \r → clear → prompt + masked preview + \n.
+        sys.stdout.write("\r\033[2K" + prompt + _mask_secret(value) + "\n")
+        sys.stdout.flush()
+    return value
+
+
+def _prompt_required_input(prompt: str, default: str | None = None, *, mask: bool = False) -> str:
+    """Prompt for a required free-text value. When ``mask`` is True, echo ``*`` per char."""
+    reader = _masked_input if mask else input
     while True:
         try:
             prompt_text = f"  {prompt} [{default}]: " if default is not None else f"  {prompt}: "
-            raw = input(prompt_text).strip()
+            raw = reader(prompt_text).strip()
         except EOFError:
             return default or ""
         if not raw and default is not None:
@@ -108,6 +176,11 @@ def _prompt_required_input(prompt: str, default: str | None = None) -> str:
         if raw:
             return raw
         print(f"  {_red(prompt + ' is required')}")
+
+
+def _prompt_api_key(prompt: str = "API Key") -> str:
+    """Prompt for an API key with inline masked echo (no extra confirmation line)."""
+    return _prompt_required_input(prompt, mask=True)
 
 
 def _prompt_required_int(prompt: str, default: int | None = None) -> int | None:
@@ -356,6 +429,22 @@ class CloudProvider:
 
 CLOUD_PROVIDERS: list[CloudProvider] = [
     CloudProvider(
+        "VolcEngine (火山引擎)",
+        "volcengine",
+        "https://ark.cn-beijing.volces.com/api/v3",
+        "doubao-embedding-vision-251215",
+        1024,
+        "doubao-seed-2-0-code-preview-260215",
+    ),
+    CloudProvider(
+        "BytePlus",
+        "openai",
+        "https://ark.ap-southeast.bytepluses.com/api/v3",
+        "doubao-embedding-vision-251215",
+        1024,
+        "doubao-seed-2-0-code-preview-260215",
+    ),
+    CloudProvider(
         "OpenAI",
         "openai",
         "https://api.openai.com/v1",
@@ -363,27 +452,20 @@ CLOUD_PROVIDERS: list[CloudProvider] = [
         1536,
         "gpt-5.4",
     ),
-    CloudProvider(
-        "Volcengine (Doubao)",
-        "volcengine",
-        "https://ark.cn-beijing.volces.com/api/v3",
-        "doubao-embedding-vision-251215",
-        1024,
-        "doubao-seed-2-0-code-preview-260215",
-    ),
 ]
 
 
-def _get_cloud_provider(provider_name: str) -> CloudProvider:
+def _get_cloud_provider_by_label(label: str) -> CloudProvider:
     for provider in CLOUD_PROVIDERS:
-        if provider.provider == provider_name:
+        if provider.label == label:
             return provider
-    raise ValueError(f"Unknown cloud provider: {provider_name}")
+    raise ValueError(f"Unknown cloud provider: {label}")
 
 
 _WIZARD_VLM_OPTIONS: list[tuple[str, str]] = [
+    ("VolcEngine (火山引擎)", "(API)"),
+    ("BytePlus", "(API)"),
     ("OpenAI", "(API)"),
-    ("Volcengine", "(API)"),
     ("OpenAI Codex", "(Subscription)"),
     ("Kimi", "(Subscription API Key)"),
     ("GLM", "(Subscription API Key)"),
@@ -553,17 +635,41 @@ def _build_cloud_config(
 # Config I/O
 # ---------------------------------------------------------------------------
 
-_DEFAULT_CONFIG_PATH = DEFAULT_CONFIG_DIR / "ov.conf"
-_DEFAULT_WORKSPACE = str(DEFAULT_CONFIG_DIR / "data")
 _PIP_LOCAL_EMBED = 'pip install "openviking[local-embed]"'
 
 
+def _config_path() -> Path:
+    """Where init writes ov.conf — honors OPENVIKING_CONFIG_FILE."""
+    override = os.environ.get(OPENVIKING_CONFIG_ENV)
+    if override:
+        return Path(override).expanduser()
+    return DEFAULT_CONFIG_DIR / "ov.conf"
+
+
+def _workspace_path() -> str:
+    """Workspace lives next to ov.conf so a single mount captures everything."""
+    return str(_config_path().parent / "data")
+
+
+def _next_backup_path(config_path: Path) -> Path:
+    """Return a non-conflicting backup path: .bak, then .bak.1, .bak.2, ..."""
+    base = config_path.with_suffix(".conf.bak")
+    if not base.exists():
+        return base
+    i = 1
+    while True:
+        candidate = base.with_suffix(f".bak.{i}")
+        if not candidate.exists():
+            return candidate
+        i += 1
+
+
 def _write_config(config_dict: dict[str, Any], config_path: Path) -> bool:
-    """Write config dict as JSON. Backs up existing file as .bak."""
+    """Write config dict as JSON. Backs up existing file as .bak (rotates on conflict)."""
     try:
         config_path.parent.mkdir(parents=True, exist_ok=True)
         if config_path.exists():
-            backup = config_path.with_suffix(".conf.bak")
+            backup = _next_backup_path(config_path)
             config_path.rename(backup)
             print(f"  {_dim('Existing config backed up to ' + str(backup))}")
         config_path.write_text(
@@ -656,7 +762,7 @@ def _wizard_ollama() -> dict[str, Any] | None:
             else:
                 print(f"  {_green('OK')} {vlm.ollama_model} pulled successfully")
 
-    return _build_ollama_config(embedding, vlm, _DEFAULT_WORKSPACE)
+    return _build_ollama_config(embedding, vlm, _workspace_path())
 
 
 def _wizard_llamacpp() -> dict[str, Any] | None:
@@ -759,7 +865,7 @@ def _wizard_llamacpp() -> dict[str, Any] | None:
         "VLM (language model) setup:",
         [
             ("Use Ollama for VLM", _dim("(requires Ollama installed)")),
-            ("Use Cloud API for VLM", _dim("(OpenAI, Volcengine, etc.)")),
+            ("Use Cloud API for VLM", _dim("(VolcEngine, BytePlus, OpenAI, etc.)")),
             ("Skip VLM", _dim("(embedding only, add VLM later)")),
         ],
         default=1,
@@ -814,7 +920,7 @@ def _wizard_llamacpp() -> dict[str, Any] | None:
         choice = _prompt_choice("Cloud provider for VLM:", provider_options, default=1)
         provider = CLOUD_PROVIDERS[choice - 1]
 
-        vlm_api_key = _prompt_required_input("VLM API Key")
+        vlm_api_key = _prompt_api_key("VLM API Key")
         if not vlm_api_key:
             print(f"  {_red('API key is required')}")
             return None
@@ -833,7 +939,7 @@ def _wizard_llamacpp() -> dict[str, Any] | None:
     return _build_local_config(
         model_name=model_name,
         dimension=dimension,
-        workspace=_DEFAULT_WORKSPACE,
+        workspace=_workspace_path(),
         model_path=custom_model_path,
         vlm_config=vlm_config,
     )
@@ -849,14 +955,15 @@ def _wizard_cloud() -> dict[str, Any] | None:
     if choice > len(CLOUD_PROVIDERS):
         # Manual / Other
         print(f"\n  See example config: {_cyan('examples/ov.conf.example')}")
-        print(f"  Edit {_cyan(str(_DEFAULT_CONFIG_PATH))} manually.\n")
+        print(f"  Edit {_cyan(str(_config_path()))} manually.\n")
         return None
 
     provider = CLOUD_PROVIDERS[choice - 1]
+    workspace = _workspace_path()
 
     # Embedding config
     print(f"\n  {_bold('Embedding configuration')}")
-    embedding_api_key = _prompt_required_input("API Key")
+    embedding_api_key = _prompt_api_key("API Key")
     if not embedding_api_key:
         print(f"  {_red('API key is required')}")
         return None
@@ -870,55 +977,60 @@ def _wizard_cloud() -> dict[str, Any] | None:
     vlm_mode = _prompt_choice("VLM provider:", _WIZARD_VLM_OPTIONS, default=1)
 
     if vlm_mode == 1:
-        vlm_choice = _get_cloud_provider("openai")
-        print(f"\n  {_bold('VLM configuration')}")
-        vlm_api_key = _prompt_required_input("API Key")
+        vlm_choice = _get_cloud_provider_by_label("VolcEngine (火山引擎)")
+        print(f"\n  {_bold('VolcEngine VLM configuration')}")
+        vlm_api_key = _prompt_api_key("API Key")
         if not vlm_api_key:
             print(f"  {_red('API key is required')}")
             return None
         vlm_model = _prompt_required_input("Model", default=vlm_choice.default_vlm_model)
         vlm_api_base = vlm_choice.default_api_base
         vlm_provider = vlm_choice.provider
-        workspace = _DEFAULT_WORKSPACE
     elif vlm_mode == 2:
-        vlm_choice = _get_cloud_provider("volcengine")
-        print(f"\n  {_bold('VLM configuration')}")
-        vlm_api_key = _prompt_required_input("API Key")
+        vlm_choice = _get_cloud_provider_by_label("BytePlus")
+        print(f"\n  {_bold('BytePlus VLM configuration')}")
+        vlm_api_key = _prompt_api_key("API Key")
         if not vlm_api_key:
             print(f"  {_red('API key is required')}")
             return None
         vlm_model = _prompt_required_input("Model", default=vlm_choice.default_vlm_model)
         vlm_api_base = vlm_choice.default_api_base
         vlm_provider = vlm_choice.provider
-        workspace = _DEFAULT_WORKSPACE
     elif vlm_mode == 3:
+        vlm_choice = _get_cloud_provider_by_label("OpenAI")
+        print(f"\n  {_bold('OpenAI VLM configuration')}")
+        vlm_api_key = _prompt_api_key("API Key")
+        if not vlm_api_key:
+            print(f"  {_red('API key is required')}")
+            return None
+        vlm_model = _prompt_required_input("Model", default=vlm_choice.default_vlm_model)
+        vlm_api_base = vlm_choice.default_api_base
+        vlm_provider = vlm_choice.provider
+    elif vlm_mode == 4:
         _ensure_codex_auth()
         print(f"\n  {_bold('Codex VLM configuration')}")
         vlm_model = _prompt_required_input("Model", default=_DEFAULT_CODEX_MODEL)
         vlm_api_base = _DEFAULT_CODEX_BASE_URL
         vlm_api_key = None
         vlm_provider = "openai-codex"
-        workspace = _DEFAULT_WORKSPACE
-    elif vlm_mode == 4:
+    elif vlm_mode == 5:
         print(f"\n  {_bold('Kimi VLM configuration')}")
-        vlm_api_key = _prompt_required_input("API Key")
+        vlm_api_key = _prompt_api_key("API Key")
         if not vlm_api_key:
             print(f"  {_red('API key is required')}")
             return None
         vlm_model = _prompt_required_input("Model", default=_DEFAULT_KIMI_MODEL)
         vlm_api_base = _DEFAULT_KIMI_BASE_URL
         vlm_provider = "kimi"
-        workspace = _DEFAULT_WORKSPACE
     else:
         print(f"\n  {_bold('GLM VLM configuration')}")
-        vlm_api_key = _prompt_required_input("API Key")
+        vlm_api_key = _prompt_api_key("API Key")
         if not vlm_api_key:
             print(f"  {_red('API key is required')}")
             return None
         vlm_model = _prompt_required_input("Model", default=_DEFAULT_GLM_MODEL)
         vlm_api_base = _DEFAULT_GLM_BASE_URL
         vlm_provider = "glm"
-        workspace = _DEFAULT_WORKSPACE
 
     return _build_cloud_config(
         provider,
@@ -934,26 +1046,52 @@ def _wizard_cloud() -> dict[str, Any] | None:
     )
 
 
+def _wizard_server() -> dict[str, Any] | None:
+    """Prompt for server host binding and root_api_key (when remote)."""
+    print(f"\n  {_bold('Server binding')}")
+    print(f"  {_dim('Local: only this machine can reach the server.')}")
+    print(f"  {_dim('Remote: bind to 0.0.0.0 — required for Docker / LAN access.')}")
+
+    mode = _prompt_choice(
+        "Bind server host to:",
+        [
+            ("Local (127.0.0.1)", _dim("(default, safer)")),
+            ("Remote (0.0.0.0)", _dim("(required for Docker / remote access)")),
+        ],
+        default=1,
+    )
+
+    if mode == 1:
+        return {"host": "127.0.0.1"}
+
+    print(f"\n  {_bold('Remote binding requires a root API key.')}")
+    print(f"  {_dim('Clients must send this key as a Bearer token to authenticate.')}")
+    root_api_key = _prompt_api_key("Root API Key")
+    if not root_api_key:
+        print(f"  {_red('Root API key is required for remote binding')}")
+        return None
+    return {"host": "0.0.0.0", "root_api_key": root_api_key}
+
+
 def _wizard_custom() -> dict[str, Any] | None:
     """Custom configuration - point user to example config."""
+    config_path = _config_path()
     example = Path(__file__).parent.parent / "examples" / "ov.conf.example"
     if example.exists():
         print(f"\n  Example config: {_cyan(str(example))}")
-    print(f"  Config path:    {_cyan(str(_DEFAULT_CONFIG_PATH))}")
+    print(f"  Config path:    {_cyan(str(config_path))}")
 
     editor = os.environ.get("EDITOR", os.environ.get("VISUAL", ""))
     if editor:
-        if _prompt_confirm(f"Open {_DEFAULT_CONFIG_PATH} in {editor}?"):
-            _DEFAULT_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-            if not _DEFAULT_CONFIG_PATH.exists():
+        if _prompt_confirm(f"Open {config_path} in {editor}?"):
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            if not config_path.exists():
                 # Copy example as starting point
                 try:
-                    _DEFAULT_CONFIG_PATH.write_text(
-                        example.read_text(encoding="utf-8"), encoding="utf-8"
-                    )
+                    config_path.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
                 except OSError:
                     pass
-            subprocess.run([editor, str(_DEFAULT_CONFIG_PATH)], check=False)
+            subprocess.run([editor, str(config_path)], check=False)
     else:
         print(f"\n  {_dim('Set $EDITOR to open the config file automatically.')}")
     return None
@@ -966,15 +1104,16 @@ def _wizard_custom() -> dict[str, Any] | None:
 
 def run_init() -> int:
     """Run the interactive setup wizard."""
+    config_path = _config_path()
+    workspace = _workspace_path()
+
     print(f"\n  {_bold('OpenViking Setup')}")
     print(f"  {'=' * 16}\n")
-    print(
-        f"  {_dim('Data will be stored under ~/.openviking/data unless you edit ov.conf later.')}\n"
-    )
+    print(f"  {_dim(f'Data will be stored under {workspace} unless you edit ov.conf later.')}\n")
 
     # Check for existing config
-    if _DEFAULT_CONFIG_PATH.exists():
-        print(f"  {_yellow('Existing config found:')} {_DEFAULT_CONFIG_PATH}")
+    if config_path.exists():
+        print(f"  {_yellow('Existing config found:')} {config_path}")
         if not _prompt_confirm("Overwrite? (current config will be backed up as .bak)"):
             print("  Setup cancelled.\n")
             return 0
@@ -983,9 +1122,9 @@ def run_init() -> int:
     mode = _prompt_choice(
         "Choose setup mode:",
         [
+            ("Cloud API", "(VolcEngine, BytePlus, OpenAI, etc.)"),
             ("Local embedding via llama.cpp", "(CPU embedding, no GPU required)"),
             ("Local models via Ollama", "(recommended for macOS / Apple Silicon)"),
-            ("Cloud API", "(OpenAI, Volcengine, etc.)"),
             ("Custom", "(manual editing)"),
         ],
         default=1,
@@ -994,11 +1133,11 @@ def run_init() -> int:
     config_dict: dict[str, Any] | None = None
 
     if mode == 1:
-        config_dict = _wizard_llamacpp()
-    elif mode == 2:
-        config_dict = _wizard_ollama()
-    elif mode == 3:
         config_dict = _wizard_cloud()
+    elif mode == 2:
+        config_dict = _wizard_llamacpp()
+    elif mode == 3:
+        config_dict = _wizard_ollama()
     else:
         _wizard_custom()
         return 0
@@ -1006,6 +1145,12 @@ def run_init() -> int:
     if config_dict is None:
         print("\n  Setup cancelled.\n")
         return 0
+
+    server_dict = _wizard_server()
+    if server_dict is None:
+        print("\n  Setup cancelled.\n")
+        return 0
+    config_dict["server"] = server_dict
 
     # Summary
     emb = config_dict.get("embedding", {}).get("dense", {})
@@ -1017,6 +1162,9 @@ def run_init() -> int:
         print("    Model path: custom local model (hidden)")
     vlm_summary = _configured_hint(bool(vlm))
     print(f"    VLM:        {vlm_summary}")
+    print(f"    Server:     bound to {server_dict['host']}")
+    if server_dict.get("root_api_key"):
+        print("    Root API key: configured (hidden)")
     print("    Workspace:  configured (hidden)")
     print("    Config:     default config location")
 
@@ -1025,7 +1173,7 @@ def run_init() -> int:
         return 0
 
     # Write
-    if not _write_config(config_dict, _DEFAULT_CONFIG_PATH):
+    if not _write_config(config_dict, config_path):
         return 1
 
     print(f"  {_green('OK')} Configuration written to the default config location\n")

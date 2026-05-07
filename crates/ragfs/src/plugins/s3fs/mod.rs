@@ -18,7 +18,7 @@ pub mod client;
 
 use async_trait::async_trait;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 use cache::{S3ListDirCache, S3StatCache};
 use client::S3Client;
@@ -111,13 +111,6 @@ impl S3FileSystem {
             .next()
             .unwrap_or("")
             .to_string()
-    }
-
-    /// Prefer the directory marker's timestamp when available.
-    /// Pure prefix-based directories in S3 have no real mtime, so fall back
-    /// to a stable sentinel instead of returning a fresh timestamp on each call.
-    fn directory_mod_time(marker: Option<SystemTime>) -> SystemTime {
-        marker.unwrap_or(UNIX_EPOCH)
     }
 }
 
@@ -313,17 +306,11 @@ impl FileSystem for S3FileSystem {
                 continue;
             }
 
-            let marker_time = self
-                .client
-                .head_object(&format!("{}/", dir_key))
-                .await?
-                .map(|meta| meta.last_modified);
-
             files.push(FileInfo {
                 name: name.to_string(),
                 size: 0,
                 mode: 0o755,
-                mod_time: Self::directory_mod_time(marker_time),
+                mod_time: SystemTime::now(),
                 is_dir: true,
             });
         }
@@ -379,17 +366,11 @@ impl FileSystem for S3FileSystem {
 
         // Check if it's a directory
         if self.client.directory_exists(&normalized).await? {
-            let dir_key = format!("{}/", self.client.build_key(&normalized));
-            let marker_time = self
-                .client
-                .head_object(&dir_key)
-                .await?
-                .map(|meta| meta.last_modified);
             let info = FileInfo {
                 name: Self::file_name(&normalized),
                 size: 0,
                 mode: 0o755,
-                mod_time: Self::directory_mod_time(marker_time),
+                mod_time: SystemTime::now(),
                 is_dir: true,
             };
             self.stat_cache
@@ -546,10 +527,10 @@ impl S3FSPlugin {
                     "Key prefix for namespace isolation (e.g. 'agfs/')",
                 ),
                 ConfigParameter::optional(
-                    "normalize_encoding",
-                    "bool",
-                    "false",
-                    "Normalize unsafe path segments by base32-encoding URL-unsafe characters in S3 object keys",
+                    "normalize_encoding_chars",
+                    "string",
+                    "?#%+@",
+                    "Characters to escape in S3 object keys as !HH hexadecimal bytes; empty string disables normalization",
                 ),
                 ConfigParameter::optional(
                     "directory_marker_mode",
@@ -625,7 +606,7 @@ A file system backed by Amazon S3 or S3-compatible object storage.
 - Dual-layer caching (directory listings + stat metadata)
 - Range-based reads for partial file access
 - Configurable directory marker modes
-- Optional URL-safe key normalization for unsafe path segments
+- Optional configurable key normalization for selected characters
 
 ## Configuration
 
@@ -666,7 +647,7 @@ plugins:
       endpoint: https://tos-cn-beijing.volces.com
       use_path_style: false
       directory_marker_mode: nonempty
-      normalize_encoding: true
+      normalize_encoding_chars: "?#%+@"
 ```
 
 ### Alibaba Cloud OSS
@@ -690,10 +671,9 @@ plugins:
 
 ## Key Normalization
 
-- `normalize_encoding: false`: keep original path segments in object keys
-- `normalize_encoding: true` (default): escape only URL-reserved or URL-unsafe bytes as `!HH`
-- Allowed special characters without encoding: `/`, `!`, `-`, `_`, `.`, `*`, `'`, `(`, `)`
-- Characters such as `?`, `&`, `#`, spaces, `%`, `@`, and `+` are escaped in place without rewriting the whole path segment
+- `normalize_encoding_chars: "?#%+@"` (default): escape only `?`, `#`, `%`, `+`, and `@` as `!HH`
+- `normalize_encoding_chars: ""`: keep original path segments in object keys
+- Characters not listed in `normalize_encoding_chars`, including Chinese and other Unicode characters, remain unchanged
 
 ## Notes
 
@@ -728,10 +708,10 @@ plugins:
             }
         }
 
-        if let Some(value) = config.params.get("normalize_encoding") {
-            if value.as_bool().is_none() {
+        if let Some(value) = config.params.get("normalize_encoding_chars") {
+            if value.as_string().is_none() {
                 return Err(Error::config(
-                    "invalid normalize_encoding: expected bool",
+                    "invalid normalize_encoding_chars: expected string",
                 ));
             }
         }
@@ -768,17 +748,6 @@ mod tests {
         assert_eq!(S3FileSystem::file_name("/"), "/");
         assert_eq!(S3FileSystem::file_name("/foo.txt"), "foo.txt");
         assert_eq!(S3FileSystem::file_name("/dir/file.txt"), "file.txt");
-    }
-
-    #[test]
-    fn test_directory_mod_time_prefers_marker_time() {
-        let marker_time = UNIX_EPOCH + std::time::Duration::from_secs(123);
-        assert_eq!(S3FileSystem::directory_mod_time(Some(marker_time)), marker_time);
-    }
-
-    #[test]
-    fn test_directory_mod_time_is_stable_without_marker() {
-        assert_eq!(S3FileSystem::directory_mod_time(None), UNIX_EPOCH);
     }
 
     #[tokio::test]
@@ -847,7 +816,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_plugin_validate_normalize_encoding() {
+    async fn test_plugin_validate_normalize_encoding_chars() {
         let plugin = S3FSPlugin::new();
 
         let mut params = std::collections::HashMap::new();
@@ -856,8 +825,8 @@ mod tests {
             crate::core::ConfigValue::String("test".to_string()),
         );
         params.insert(
-            "normalize_encoding".to_string(),
-            crate::core::ConfigValue::String("true".to_string()),
+            "normalize_encoding_chars".to_string(),
+            crate::core::ConfigValue::Bool(true),
         );
         let config = PluginConfig {
             name: "s3fs".to_string(),
@@ -872,8 +841,8 @@ mod tests {
             crate::core::ConfigValue::String("test".to_string()),
         );
         params.insert(
-            "normalize_encoding".to_string(),
-            crate::core::ConfigValue::Bool(true),
+            "normalize_encoding_chars".to_string(),
+            crate::core::ConfigValue::String("?#%+@".to_string()),
         );
         let config = PluginConfig {
             name: "s3fs".to_string(),

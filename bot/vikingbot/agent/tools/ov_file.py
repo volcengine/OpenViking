@@ -239,7 +239,35 @@ class VikingSearchTool(OVFileTool):
         try:
             client = await self._get_client(tool_context)
             search_client = getattr(client, "admin_user_client", client)
-            results = await search_client.search(query, target_uri=target_uri, limit=20)
+
+            # If no target_uri specified, use memory_user_ids to search specific user memories
+            if not target_uri and tool_context.memory_user_ids:
+                all_results = []
+                for user_id in tool_context.memory_user_ids:
+                    user_uri = f"viking://user/{user_id}/memories/"
+                    logger.info(f"openviking_search: searching {user_uri} for query: {query}")
+                    results = await search_client.search(query, target_uri=user_uri, limit=20)
+                    if results:
+                        # Extract memories from results
+                        if isinstance(results, dict):
+                            memories = results.get("memories", [])
+                        elif isinstance(results, list):
+                            memories = results
+                        else:
+                            memories = []
+                        all_results.extend(memories)
+
+                if not all_results:
+                    return f"No results found for query: {query}"
+
+                # Reuse unified formatting pipeline
+                grouped_items = self._filter_search_items(all_results, min_score=min_score)
+                total = sum(len(items) for items in grouped_items.values())
+                if total == 0:
+                    return f"No results found for query: {query}"
+                return self._format_search_items_json(grouped_items, min_score=min_score)
+            else:
+                results = await search_client.search(query, target_uri=target_uri, limit=20)
 
             if not results:
                 return f"No results found for query: {query}"

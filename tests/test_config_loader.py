@@ -186,6 +186,37 @@ def test_openviking_config_warns_when_agent_scope_mode_is_configured(monkeypatch
     OpenVikingConfigSingleton.reset_instance()
 
 
+def test_openviking_config_retrieval_hotness_alpha_defaults_to_zero(monkeypatch):
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
+
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    config = OpenVikingConfig.from_dict({})
+
+    assert config.retrieval.hotness_alpha == 0.0
+    assert config.retrieval.score_propagation_alpha == 0.5
+
+    OpenVikingConfigSingleton.reset_instance()
+
+
+@pytest.mark.parametrize("field_name", ["hotness_alpha", "score_propagation_alpha"])
+def test_openviking_config_retrieval_alpha_validates_range(monkeypatch, field_name):
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
+
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    with pytest.raises(ValueError):
+        OpenVikingConfig.from_dict({"retrieval": {field_name: 1.5}})
+
+    OpenVikingConfigSingleton.reset_instance()
+
+
 def test_openviking_config_singleton_preserves_value_error_for_bad_config(tmp_path, monkeypatch):
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 

@@ -264,10 +264,10 @@ async def test_legacy_account_without_settings_infers_user_and_agent_policy(mana
 
 
 async def test_create_account_with_encryption_enabled(manager_service):
-    """create_account with encryption_enabled=True should create hashed keys."""
+    """create_account with api_key_hashing_enabled=True should create hashed keys."""
     acct = _uid()
     mgr = APIKeyManager(
-        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, encryption_enabled=True
+        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, api_key_hashing_enabled=True
     )
     await mgr.load()
 
@@ -287,10 +287,10 @@ async def test_create_account_with_encryption_enabled(manager_service):
 
 
 async def test_register_user_with_encryption_enabled(manager_service):
-    """register_user with encryption_enabled=True should create hashed keys."""
+    """register_user with api_key_hashing_enabled=True should create hashed keys."""
     acct = _uid()
     mgr = APIKeyManager(
-        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, encryption_enabled=True
+        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, api_key_hashing_enabled=True
     )
     await mgr.load()
 
@@ -308,10 +308,10 @@ async def test_register_user_with_encryption_enabled(manager_service):
 
 
 async def test_regenerate_key_with_encryption_enabled(manager_service):
-    """regenerate_key with encryption_enabled=True should create new hashed key."""
+    """regenerate_key with api_key_hashing_enabled=True should create new hashed key."""
     acct = _uid()
     mgr = APIKeyManager(
-        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, encryption_enabled=True
+        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, api_key_hashing_enabled=True
     )
     await mgr.load()
 
@@ -341,19 +341,19 @@ async def test_regenerate_key_with_encryption_enabled(manager_service):
 
 
 async def test_migrate_plaintext_keys_to_encrypted(manager_service):
-    """Keys created with encryption disabled should be migrated when encryption is enabled."""
+    """Keys created with api_key_hashing disabled should be migrated when api_key_hashing is enabled."""
     acct = _uid()
 
-    # First, create a key with encryption disabled
+    # First, create a key with api_key_hashing disabled
     mgr1 = APIKeyManager(
-        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, encryption_enabled=False
+        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, api_key_hashing_enabled=False
     )
     await mgr1.load()
     key = await mgr1.create_account(acct, "alice")
 
-    # Now, reload with encryption enabled - should migrate the key
+    # Now, reload with api_key_hashing enabled - should migrate the key
     mgr2 = APIKeyManager(
-        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, encryption_enabled=True
+        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, api_key_hashing_enabled=True
     )
     await mgr2.load()
 
@@ -366,7 +366,7 @@ async def test_migrate_plaintext_keys_to_encrypted(manager_service):
 async def test_persistence_with_encryption_enabled(manager_service):
     """Hashed keys should survive manager reload from AGFS."""
     mgr1 = APIKeyManager(
-        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, encryption_enabled=True
+        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, api_key_hashing_enabled=True
     )
     await mgr1.load()
 
@@ -379,7 +379,7 @@ async def test_persistence_with_encryption_enabled(manager_service):
 
     # Create new manager instance and reload
     mgr2 = APIKeyManager(
-        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, encryption_enabled=True
+        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, api_key_hashing_enabled=True
     )
     await mgr2.load()
 
@@ -514,7 +514,7 @@ async def test_regenerate_key_upgrades_to_new_format(manager_service):
 
     # First create a legacy key using LegacyAPIKeyManager
     legacy_mgr = LegacyAPIKeyManager(
-        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, encryption_enabled=False
+        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, api_key_hashing_enabled=False
     )
     await legacy_mgr.load()
     legacy_key = await legacy_mgr.create_account(acct, "alice")
@@ -523,7 +523,7 @@ async def test_regenerate_key_upgrades_to_new_format(manager_service):
 
     # Now load with NewAPIKeyManager and regenerate
     new_mgr = APIKeyManager(
-        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, encryption_enabled=False
+        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, api_key_hashing_enabled=False
     )
     await new_mgr.load()
 
@@ -556,7 +556,7 @@ async def test_mixed_key_formats(manager_service):
 
     # Create account with legacy manager
     legacy_mgr = LegacyAPIKeyManager(
-        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, encryption_enabled=False
+        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, api_key_hashing_enabled=False
     )
     await legacy_mgr.load()
     legacy_key = await legacy_mgr.create_account(acct, "alice")
@@ -564,7 +564,7 @@ async def test_mixed_key_formats(manager_service):
 
     # Add another user with new format using NewAPIKeyManager
     new_mgr = APIKeyManager(
-        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, encryption_enabled=False
+        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, api_key_hashing_enabled=False
     )
     await new_mgr.load()
     new_key = await new_mgr.register_user(acct, "bob", "user")
@@ -584,7 +584,7 @@ async def test_new_format_with_encryption(manager_service):
 
     acct = _uid()
     mgr = APIKeyManager(
-        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, encryption_enabled=True
+        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, api_key_hashing_enabled=True
     )
     await mgr.load()
 

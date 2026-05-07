@@ -29,7 +29,7 @@ curl http://localhost:1933/health
 | 选项 | 描述 | 默认值 |
 |------|------|--------|
 | `--config` | 配置文件路径 | `~/.openviking/ov.conf` |
-| `--host` | 绑定的主机地址 | `0.0.0.0` |
+| `--host` | 绑定的主机地址 | `127.0.0.1` |
 | `--port` | 绑定的端口 | `1933` |
 
 **示例**
@@ -182,24 +182,34 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 
 ### Docker
 
-OpenViking 提供预构建的 Docker 镜像，发布在 GitHub Container Registry：
+OpenViking 提供预构建的 Docker 镜像，发布在 GitHub Container Registry。容器内所有持久化状态（`ov.conf`、`ovcli.conf` 以及工作区数据）都放在 `/app/.openviking` 下，挂载一个目录即可：
 
 ```bash
-# 注意 ov.conf 需要指定 storage.workspace 为 /app/data 以确保数据持久化
 docker run -d \
   --name openviking \
   -p 1933:1933 \
   -p 8020:8020 \
-  -v ~/.openviking/ov.conf:/app/ov.conf \
-  -v ~/.openviking/data:/app/data \
+  -v ~/.openviking:/app/.openviking \
   --restart unless-stopped \
   ghcr.io/volcengine/openviking:latest
 ```
 
 Docker 镜像默认会同时启动：
-- OpenViking HTTP 服务，端口 `1933`
+- OpenViking HTTP 服务，端口 `1933`（绑定 `0.0.0.0`）
 - OpenViking Console，端口 `8020`
 - `vikingbot` gateway
+
+由于容器内服务绑定 `0.0.0.0`（Docker 端口映射所必需），你**必须**在 `ov.conf` 中设置 `root_api_key`：
+
+```json
+{
+  "server": {
+    "root_api_key": "your-secret-root-key"
+  }
+}
+```
+
+未设置时服务将拒绝启动。如需自定义绑定地址，可通过环境变量 `OPENVIKING_SERVER_HOST` 覆盖。
 
 升级容器的方式
 ```bash
@@ -216,8 +226,7 @@ docker run -d \
   --name openviking \
   -p 1933:1933 \
   -p 8020:8020 \
-  -v ~/.openviking/ov.conf:/app/ov.conf \
-  -v ~/.openviking/data:/app/data \
+  -v ~/.openviking:/app/.openviking \
   --restart unless-stopped \
   ghcr.io/volcengine/openviking:latest \
   --without-bot
@@ -229,11 +238,34 @@ docker run -d \
   -e OPENVIKING_WITH_BOT=0 \
   -p 1933:1933 \
   -p 8020:8020 \
-  -v ~/.openviking/ov.conf:/app/ov.conf \
-  -v ~/.openviking/data:/app/data \
+  -v ~/.openviking:/app/.openviking \
   --restart unless-stopped \
   ghcr.io/volcengine/openviking:latest
 ```
+
+#### 无法使用 `docker -v` 时
+
+部分托管平台（如 Railway、Fly.io、Heroku 这类 PaaS）不支持把宿主机目录绑定挂载进容器。这种环境下，如果容器启动时找不到 `ov.conf`，entrypoint 不会崩溃 —— 它会打印一段修复指引并阻塞等待文件出现。你可以选用以下两种方式之一：
+
+**方案 A：通过 `OPENVIKING_CONF_CONTENT` 注入完整配置内容。** entrypoint 会在启动 server 前把这个环境变量的值写入到 `OPENVIKING_CONFIG_FILE`（默认 `/app/.openviking/ov.conf`）：
+
+```bash
+docker run -d \
+  --name openviking \
+  -p 1933:1933 \
+  -p 8020:8020 \
+  -e OPENVIKING_CONF_CONTENT="$(cat ~/.openviking/ov.conf)" \
+  --restart unless-stopped \
+  ghcr.io/volcengine/openviking:latest
+```
+
+**方案 B：容器起来之后再 `docker exec` 进去用向导配置。** 容器在等待 `ov.conf` 期间是存活的，`exec` 进去运行 setup wizard，它会按 `OPENVIKING_CONFIG_FILE` 写到 server 正在监听的位置：
+
+```bash
+docker exec -it openviking openviking-server init
+```
+
+`ov.conf` 出现后，entrypoint 会自动恢复并启动 server 与 console。
 
 也可以使用 Docker Compose，项目根目录提供了 `docker-compose.yml`：
 

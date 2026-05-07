@@ -3,3 +3,6 @@ servers/*.mjs
 servers/*.js
 !servers/memory-server.js
 *.tsbuildinfo
+# Top-level .gitignore excludes lib/ (Python setuptools convention); the
+# plugin's scripts/lib/ is a JS module directory and must be tracked.
+!scripts/lib/

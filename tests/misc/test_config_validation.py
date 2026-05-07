@@ -28,7 +28,7 @@ def test_agfs_validation():
         print(f"   Fail: {e}")
 
 
-def test_agfs_s3_normalize_encoding_defaults_to_false():
+def test_agfs_s3_normalize_encoding_chars_defaults_to_target_set():
     config = AGFSConfig(
         backend="s3",
         s3=S3Config(
@@ -40,10 +40,10 @@ def test_agfs_s3_normalize_encoding_defaults_to_false():
         ),
     )
 
-    assert config.s3.normalize_encoding is False
+    assert config.s3.normalize_encoding_chars == "?#%+@"
 
 
-def test_agfs_s3_normalize_encoding_is_forwarded_to_ragfs_plugin_config():
+def test_agfs_s3_normalize_encoding_chars_is_forwarded_to_ragfs_plugin_config():
     config = AGFSConfig(
         path="/tmp/ov-test",
         backend="s3",
@@ -53,13 +53,13 @@ def test_agfs_s3_normalize_encoding_is_forwarded_to_ragfs_plugin_config():
             access_key="fake-access-key-for-testing",
             secret_key="fake-secret-key-for-testing-12345",
             endpoint="https://s3.amazonaws.com",
-            normalize_encoding=True,
+            normalize_encoding_chars="?#",
         ),
     )
 
     plugins = _generate_plugin_config(config, Path("/tmp/ov-test"))
 
-    assert plugins["s3fs"]["config"]["normalize_encoding"] is True
+    assert plugins["s3fs"]["config"]["normalize_encoding_chars"] == "?#"
 
     # Test 2: invalid backend
     print("\n2. Test invalid backend...")
