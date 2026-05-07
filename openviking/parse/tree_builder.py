@@ -174,20 +174,25 @@ class TreeBuilder:
             if effective_parent_uri:
                 # Parent URI must exist and be a directory, or create it if requested
                 try:
+                    # First check if parent exists
+                    parent_exists = await viking_fs.exists(effective_parent_uri, ctx=ctx)
+                    if not parent_exists:
+                        if create_parent:
+                            # Automatically create parent directory
+                            logger.info(
+                                f"[TreeBuilder] Parent URI does not exist, creating: {effective_parent_uri}"
+                            )
+                            await viking_fs.mkdir(effective_parent_uri, exist_ok=True, ctx=ctx)
+                        else:
+                            raise FileNotFoundError(
+                                f"Parent URI does not exist: {effective_parent_uri}. "
+                                f"Use --parent-auto-create/-p to automatically create it."
+                            )
+                    # Now get stat result
                     stat_result = await viking_fs.stat(effective_parent_uri, ctx=ctx)
-                except FileNotFoundError as e:
-                    if create_parent:
-                        # Automatically create parent directory
-                        logger.info(
-                            f"[TreeBuilder] Parent URI does not exist, creating: {effective_parent_uri}"
-                        )
-                        await viking_fs.mkdir(effective_parent_uri, parents=True, ctx=ctx)
-                        stat_result = await viking_fs.stat(effective_parent_uri, ctx=ctx)
-                    else:
-                        raise FileNotFoundError(
-                            f"Parent URI does not exist: {effective_parent_uri}. "
-                            f"Use --parent-auto-create/-p to automatically create it."
-                        ) from e
+                except FileNotFoundError:
+                    # Re-raise without wrapping
+                    raise
                 except Exception as e:
                     raise FileNotFoundError(
                         f"Parent URI does not exist: {effective_parent_uri}"
