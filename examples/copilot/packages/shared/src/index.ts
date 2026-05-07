@@ -15,3 +15,11 @@ export {
   type CreateDebugLoggerOptions,
   type DebugLogger,
 } from "./debug/logger.js";
+
+export {
+  runWriteTask,
+  spawnDetached,
+  type DetachedSpawnOptions,
+  type RunWriteTaskOptions,
+  type SpawnDetachedResult,
+} from "./util/async-writer.js";
