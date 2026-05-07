@@ -1,9 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-"""Tests for content endpoints: read, abstract, overview."""
-
-from types import SimpleNamespace
+"""Tests for content endpoints: read, abstract, overview, reindex."""
 
 import pytest
 
@@ -97,12 +95,12 @@ async def test_overview_missing_uri_returns_not_found(client):
 
 
 async def test_reindex_missing_uri(client):
-    """Test reindex without uri field returns 422."""
+    """Test reindex without uri field returns structured INVALID_ARGUMENT."""
     resp = await client.post(
         "/api/v1/content/reindex",
-        json={"regenerate": False},
+        json={"mode": "vectors_only"},
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 400
 
 
 async def test_reindex_endpoint_registered(client):
@@ -115,15 +113,14 @@ async def test_reindex_request_validation(client):
     """Test reindex validates the request body schema."""
     # Empty body — uri is required
     resp = await client.post("/api/v1/content/reindex", json={})
-    assert resp.status_code == 422
+    assert resp.status_code == 400
 
-    # Invalid type for regenerate
+    # Invalid mode should not be accepted by the endpoint
     resp = await client.post(
         "/api/v1/content/reindex",
-        json={"uri": "viking://resources/test", "regenerate": "not_a_bool"},
+        json={"uri": "viking://resources/test", "mode": "not_a_mode"},
     )
-    # Pydantic coerces strings to bool, so this may or may not fail
-    assert resp.status_code in (200, 422, 500)
+    assert resp.status_code in (200, 400)
 
 
 async def test_reindex_wait_parameter_schema(client):
@@ -143,75 +140,46 @@ async def test_reindex_uses_request_tenant_for_exists(monkeypatch):
     """Reindex must validate URI existence inside the caller's tenant."""
     seen = {}
 
-    class FakeVikingFS:
-        async def exists(self, uri, ctx=None):
+    class FakeService:
+        async def reindex(self, *, uri, mode, wait, ctx):
             seen["uri"] = uri
+            seen["mode"] = mode
+            seen["wait"] = wait
             seen["ctx"] = ctx
-            return True
-
-    class FakeTracker:
-        def has_running(self, task_type, uri, owner_account_id=None, owner_user_id=None):
-            return False
-
-    async def fake_do_reindex(service, uri, regenerate, ctx):
-        return {"status": "success", "message": "Indexed 1 resources"}
+            return {"status": "completed", "uri": uri, "mode": mode}
 
     ctx = RequestContext(
         user=UserIdentifier(account_id="test", user_id="alice", agent_id="default"),
         role=Role.ADMIN,
     )
-    request = ReindexRequest(uri="viking://resources/demo/demo-note.md", wait=True)
+    request = ReindexRequest(
+        uri="viking://resources/demo/demo-note.md",
+        mode="semantic_and_vectors",
+        wait=True,
+    )
 
-    monkeypatch.setattr("openviking.storage.viking_fs.get_viking_fs", lambda: FakeVikingFS())
-    monkeypatch.setattr(
-        "openviking.service.task_tracker.get_task_tracker",
-        lambda: FakeTracker(),
-    )
-    monkeypatch.setattr(
-        "openviking.server.routers.content.get_service",
-        lambda: SimpleNamespace(),
-    )
-    monkeypatch.setattr("openviking.server.routers.content._do_reindex", fake_do_reindex)
+    monkeypatch.setattr("openviking.server.routers.content.get_service", lambda: FakeService())
 
     response = await reindex(body=request, ctx=ctx)
 
     assert response.status == "ok"
     assert seen["uri"] == "viking://resources/demo/demo-note.md"
+    assert seen["mode"] == "semantic_and_vectors"
+    assert seen["wait"] is True
     assert seen["ctx"] == ctx
 
 
-async def test_maintenance_reindex_sync_success_returns_ok_payload(client, monkeypatch):
-    async def fake_do_reindex(service, uri, regenerate, ctx):
-        return {"status": "success", "message": "Indexed 1 resources"}
-
-    class FakeVikingFS:
-        async def exists(self, uri, ctx=None):
-            return True
-
-    class FakeTracker:
-        def has_running(self, task_type, uri, owner_account_id=None, owner_user_id=None):
-            return False
-
-    monkeypatch.setattr(
-        "openviking.storage.viking_fs.get_viking_fs",
-        lambda: FakeVikingFS(),
+async def test_content_rebuild_endpoint_removed(client):
+    response = await client.post(
+        "/api/v1/content/rebuild",
+        json={"uri": "viking://resources/demo", "mode": "vectors_only"},
     )
-    monkeypatch.setattr(
-        "openviking.service.task_tracker.get_task_tracker",
-        lambda: FakeTracker(),
-    )
-    monkeypatch.setattr(
-        "openviking.server.routers.maintenance.get_service",
-        lambda: SimpleNamespace(),
-    )
-    monkeypatch.setattr("openviking.server.routers.maintenance._do_reindex", fake_do_reindex)
+    assert response.status_code == 404
 
+
+async def test_maintenance_reindex_endpoint_removed(client):
     response = await client.post(
         "/api/v1/maintenance/reindex",
         json={"uri": "viking://resources/demo", "wait": True},
     )
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["status"] == "ok"
-    assert body["result"]["status"] == "success"
+    assert response.status_code == 404

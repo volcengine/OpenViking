@@ -567,15 +567,15 @@ enum Commands {
         #[command(subcommand)]
         action: SystemCommands,
     },
-    /// [Admin] Reindex content at URI (regenerates .abstract.md and .overview.md)
+    /// [Admin] Reindex semantic/vector artifacts for a URI
     Reindex {
         /// Viking URI
         uri: String,
-        /// Force regenerate summaries even if they exist
-        #[arg(short, long)]
-        regenerate: bool,
+        /// Reindex mode
+        #[arg(long, default_value = "vectors_only")]
+        mode: String,
         /// Wait for reindex to complete
-        #[arg(long, default_value = "true")]
+        #[arg(long, default_value_t = true, action = ArgAction::Set)]
         wait: bool,
     },
 }
@@ -1140,9 +1140,9 @@ async fn main() {
         }
         Commands::Reindex {
             uri,
-            regenerate,
+            mode,
             wait,
-        } => handlers::handle_reindex(uri, regenerate, wait, ctx).await,
+        } => handlers::handle_reindex(uri, mode, wait, ctx).await,
         Commands::Get { uri, local_path } => handlers::handle_get(uri, local_path, ctx).await,
         Commands::Find {
             query,
@@ -1324,6 +1324,20 @@ mod tests {
         ]);
 
         assert!(result.is_err(), "removed write flags should not parse");
+    }
+
+    #[test]
+    fn cli_parses_reindex_command() {
+        let result = Cli::try_parse_from([
+            "ov",
+            "reindex",
+            "viking://resources/demo",
+            "--mode",
+            "semantic_and_vectors",
+            "--wait=false",
+        ]);
+
+        assert!(result.is_ok(), "reindex command should parse");
     }
 
     #[test]
