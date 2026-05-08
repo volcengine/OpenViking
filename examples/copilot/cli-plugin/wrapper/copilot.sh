@@ -9,7 +9,7 @@
 #
 #   1. Before launch: derive a stable OV session id and export it as
 #      OPENVIKING_CLI_SESSION_ID. The MCP server (mounted via the user's
-#      mcp.json) reads this env var and uses it as the default capture
+#      mcp-config.json) reads this env var and uses it as the default capture
 #      session id. So every `openviking_capture` tool call the model
 #      makes during this `copilot` run lands in the same OV session.
 #

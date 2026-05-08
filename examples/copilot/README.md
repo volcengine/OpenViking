@@ -9,7 +9,7 @@ config file, and one TypeScript codebase wherever surface differences allow:
 | Target | Path | What it is |
 |---|---|---|
 | **VS Code Copilot Chat** | [`vscode-extension/`](./vscode-extension/) | A VS Code extension that registers an `@openviking` chat participant + language-model tools + an MCP server entry. |
-| **GitHub Copilot CLI** | [`cli-plugin/`](./cli-plugin/) | An npm-distributed stdio MCP server (`openviking-copilot-mcp`) that the new agentic `copilot` CLI mounts via its `mcp.json`. |
+| **GitHub Copilot CLI** | [`cli-plugin/`](./cli-plugin/) | An npm-distributed stdio MCP server (`openviking-copilot-mcp`) that the new agentic `copilot` CLI mounts via `~/.copilot/mcp-config.json` (or `COPILOT_HOME`). |
 | _shared_ | [`packages/shared/`](./packages/shared/) | Common TypeScript: config loader, OpenViking HTTP client, recall ranker, capture sanitiser, async-writer, debug logger. |
 
 Design and rationale: see [`PLAN.md`](../../PLAN.md) at the repo root.
@@ -21,7 +21,8 @@ Design and rationale: see [`PLAN.md`](../../PLAN.md) at the repo root.
 ## Status
 
 Pre-release scaffold. Implementation tracked in the issues under the
-`Copilot memory plugins` milestone (epic: #1).
+`Copilot memory plugins` milestone (epic: #1). Phase 0 findings are recorded in
+[`docs/phase-0-spike.md`](./docs/phase-0-spike.md).
 
 Current VS Code support:
 
@@ -41,7 +42,7 @@ Current CLI support:
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/copilot/setup-helper/install.sh)
 ```
 
-The setup helper configures `~/.openviking/ovcli.conf`, installs the VS Code `.vsix` when the `code` CLI is available, installs `@openviking/copilot-cli-memory`, merges the Copilot CLI `mcp.json` entry, and can optionally add the `copilot()` shell wrapper.
+The setup helper configures `~/.openviking/ovcli.conf`, installs the VS Code `.vsix` when the `code` CLI is available, installs `@openviking/copilot-cli-memory`, merges the Copilot CLI user-level `mcp-config.json` entry, and can optionally add the `copilot()` shell wrapper.
 
 ## Quickstart (development)
 

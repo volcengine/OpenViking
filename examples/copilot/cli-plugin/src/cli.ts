@@ -6,7 +6,7 @@
  *   - `--help` / `-h` — usage text
  *   - `--version` / `-v` — package version
  *   - `--check` — load PluginConfig and print a redacted summary so
- *     users can verify their `mcp.json` env passthrough is wired up
+ *     users can verify their `mcp-config.json` env passthrough is wired up
  *   - default invocation (no flags) — start the stdio MCP server
  *
  * Issue #27 adds:
@@ -50,7 +50,7 @@ const HELP = `\
 openviking-copilot-mcp [options]
 
 OpenViking memory MCP server for the GitHub Copilot CLI. Mounted via
-the CLI's mcp.json configuration. The server reads connection
+the CLI's mcp-config.json configuration. The server reads connection
 settings from \`~/.openviking/ovcli.conf\` and \`OPENVIKING_*\`
 environment variables (priority: env > ovcli.conf > ov.conf >
 defaults).
@@ -59,7 +59,7 @@ Options:
   -h, --help                   Show this help message and exit
   -v, --version                Show package version and exit
   --check                      Load PluginConfig and print a redacted
-                               summary (verifies your mcp.json env
+                               summary (verifies your mcp-config.json env
                                passthrough is wired up)
   --commit-flush --session=ID  Force-commit the given OpenViking
                                session (used by the copilot() shell-

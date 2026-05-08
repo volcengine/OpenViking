@@ -10,7 +10,7 @@
 #   2. Set up ~/.openviking/ovcli.conf — reuse if present, prompt otherwise.
 #   3. Clone (or refresh) the OpenViking repo to ~/.openviking/openviking-repo.
 #   4. Optionally install the VS Code extension from a .vsix.
-#   5. Install the Copilot CLI MCP server npm package and merge mcp.json.
+#   5. Install the Copilot CLI MCP server npm package and merge mcp-config.json.
 #   6. Optionally append the copilot() shell-wrapper fallback.
 #
 # Env overrides:
@@ -19,7 +19,7 @@
 #   OPENVIKING_REPO_URL    default: https://github.com/volcengine/OpenViking.git
 #   OPENVIKING_REPO_BRANCH default: main
 #   OPENVIKING_COPILOT_VSIX path to a prebuilt openviking-copilot .vsix
-#   COPILOT_MCP_JSON       path to the Copilot CLI mcp.json to merge
+#   COPILOT_MCP_JSON       path to the Copilot CLI mcp-config.json to merge
 #
 # Targets bash 3.2+ (macOS /bin/bash) and Linux.
 
@@ -284,16 +284,14 @@ else
   warn 'Skipped npm global install because npm is unavailable.'
 fi
 
-case "$OS_NAME" in
-  Darwin) DEFAULT_MCP_JSON="$HOME/Library/Application Support/GitHub Copilot/mcp.json" ;;
-  *) DEFAULT_MCP_JSON="$HOME/.config/github-copilot/mcp.json" ;;
-esac
+COPILOT_HOME_DEFAULT="${COPILOT_HOME:-$HOME/.copilot}"
+DEFAULT_MCP_JSON="$COPILOT_HOME_DEFAULT/mcp-config.json"
 MCP_JSON="${COPILOT_MCP_JSON:-$DEFAULT_MCP_JSON}"
-ask "Copilot CLI mcp.json path [$MCP_JSON]: "
+ask "Copilot CLI mcp-config.json path [$MCP_JSON]: "
 read -r MCP_INPUT || MCP_INPUT=""
 MCP_JSON="${MCP_INPUT:-$MCP_JSON}"
 
-if prompt_yes_no 'Merge OpenViking MCP server entry into this mcp.json?' 1; then
+if prompt_yes_no 'Merge OpenViking MCP server entry into this mcp-config.json?' 1; then
   mkdir -p "$(dirname "$MCP_JSON")"
   if [ -f "$MCP_JSON" ]; then
     backup_file "$MCP_JSON"
@@ -310,12 +308,14 @@ if prompt_yes_no 'Merge OpenViking MCP server entry into this mcp.json?' 1; then
   if ! jq --arg conf "$OVCLI_CONF" '
       .mcpServers = (.mcpServers // {}) |
       .mcpServers.openviking = {
+        type: "local",
         command: "openviking-copilot-mcp",
         args: [],
         env: {
           OPENVIKING_MEMORY_ENABLED: "true",
           OPENVIKING_CLI_CONFIG_FILE: $conf
-        }
+        },
+        tools: ["*"]
       }
     ' "$input_json" > "$tmp" 2>/dev/null; then
     err "Could not merge MCP entry into $MCP_JSON; original left untouched."
@@ -326,7 +326,7 @@ if prompt_yes_no 'Merge OpenViking MCP server entry into this mcp.json?' 1; then
   [ "${input_json:-}" != "$MCP_JSON" ] && rm -f "${input_json:-}"
   info "Merged OpenViking MCP server into $MCP_JSON"
 else
-  info 'Skipped mcp.json merge.'
+  info 'Skipped mcp-config.json merge.'
 fi
 
 # ----- 6. Shell wrapper -----
