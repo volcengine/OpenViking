@@ -20,7 +20,8 @@ fields:
   - name: skill_name
     type: string
     description: |
-      Skill name, copied exactly from [ToolCall] if skill_name is present, otherwise inferred from conversation context.
+      Skill name, must be copied exactly from [ToolCall].
+      If no [ToolCall] contains a valid skill_name, do not generate a skills memory item.
       Used to uniquely identify this skill memory.
       Examples: "create_presentation", "analyze_code", "write_document"
     merge_op: immutable
