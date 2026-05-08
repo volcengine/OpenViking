@@ -16,6 +16,11 @@ from openviking.core.context import (
     ResourceContentType,
     Vectorize,
 )
+from openviking.core.namespace import (
+    classify_uri,
+    context_type_for_uri,
+    owner_space_for_uri,
+)
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker import get_task_tracker
@@ -26,10 +31,7 @@ from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.transaction import LockContext, get_lock_manager
 from openviking.storage.viking_fs import get_viking_fs
-from openviking.utils.embedding_utils import (
-    get_context_type_for_uri,
-    get_resource_content_type,
-)
+from openviking.utils.embedding_utils import get_resource_content_type
 from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.exceptions import NotFoundError, OpenVikingError
 from openviking_cli.utils import VikingURI, get_logger
@@ -65,6 +67,7 @@ class ReindexExecutor:
         "global_namespace": {"vectors_only", "semantic_and_vectors"},
         "agent_namespace": {"vectors_only", "semantic_and_vectors"},
         "user_namespace": {"vectors_only", "semantic_and_vectors"},
+        "skill_namespace": {"vectors_only", "semantic_and_vectors"},
         "resource": {"vectors_only", "semantic_and_vectors"},
         "skill": {"vectors_only", "semantic_and_vectors"},
         "memory": {"vectors_only", "semantic_and_vectors"},
@@ -138,40 +141,146 @@ class ReindexExecutor:
                 code="UNSUPPORTED_URI",
                 details={"uri": uri},
             )
-        if uri == "viking://":
+        classification = classify_uri(uri)
+        parts = classification.parts
+        if not parts:
             return "global_namespace"
-        normalized_uri = uri.rstrip("/")
-        path = normalized_uri[len("viking://") :]
-        parts = [part for part in path.split("/") if part]
-        if normalized_uri == "viking://user":
+        if parts == ("user",):
             return "user_namespace"
-        if normalized_uri == "viking://agent":
+        if parts == ("agent",):
             return "agent_namespace"
-        if len(parts) >= 3 and parts[0] == "user" and parts[2] == "memories":
+        if classification.is_user_namespace_root:
+            return "user_namespace"
+        if classification.is_agent_namespace_root:
+            return "agent_namespace"
+        if classification.is_memory:
             return "memory"
-        if len(parts) >= 3 and parts[0] == "agent" and parts[2] == "memories":
-            return "memory"
-        if len(parts) >= 3 and parts[0] == "agent" and parts[2] == "skills":
+        if classification.is_skill_namespace:
+            return "skill_namespace"
+        if classification.is_skill_root:
             return "skill"
-        if normalized_uri.startswith("viking://user/"):
-            remainder = normalized_uri[len("viking://user/") :]
-            if remainder and "/" not in remainder:
-                return "user_namespace"
-        if normalized_uri.startswith("viking://agent/"):
-            remainder = normalized_uri[len("viking://agent/") :]
-            if remainder and "/" not in remainder:
-                return "agent_namespace"
-        if (
-            uri.startswith("viking://resources/")
-            or uri.startswith("viking://user/")
-            or uri.startswith("viking://agent/")
-        ):
+        if classification.is_skill:
+            raise OpenVikingError(
+                f"Unsupported reindex URI: {uri}",
+                code="UNSUPPORTED_URI",
+                details={"uri": uri},
+            )
+        if parts[0] in {"resources", "user", "agent"}:
             return "resource"
         raise OpenVikingError(
             f"Unsupported reindex URI: {uri}",
             code="UNSUPPORTED_URI",
             details={"uri": uri},
         )
+
+    async def _tree_all(
+        self,
+        viking_fs: Any,
+        uri: str,
+        *,
+        show_all_hidden: bool,
+        ctx: RequestContext,
+    ) -> list[dict[str, Any]]:
+        return await viking_fs.tree(
+            uri,
+            output="original",
+            show_all_hidden=show_all_hidden,
+            node_limit=None,
+            level_limit=None,
+            ctx=ctx,
+        )
+
+    async def _refresh_namespace_resource_semantics(
+        self,
+        *,
+        target_root: str,
+        directories: list[str],
+        files: list[str],
+        counters: _ReindexCounters,
+        ctx: RequestContext,
+    ) -> tuple[list[str], list[str]]:
+        prefix = self._child_prefix(target_root)
+        semantic_roots = sorted(
+            {
+                directory_uri
+                for directory_uri in directories
+                if directory_uri.startswith(prefix)
+                and "/" not in directory_uri[len(prefix) :]
+                and directory_uri[len(prefix) :]
+            }
+        )
+        filtered_directories = [
+            directory_uri
+            for directory_uri in directories
+            if any(
+                directory_uri == root or directory_uri.startswith(root + "/")
+                for root in semantic_roots
+            )
+        ]
+        filtered_files = [
+            file_uri
+            for file_uri in files
+            if any(file_uri.startswith(root + "/") for root in semantic_roots)
+        ]
+        filtered_file_set = set(filtered_files)
+        for file_uri in files:
+            if file_uri in filtered_file_set:
+                continue
+            counters.unsupported_records += 1
+            counters.warnings.append(
+                f"Skipped {file_uri}: namespace semantic_and_vectors only refreshes resource directories"
+            )
+        for semantic_root in semantic_roots:
+            await self._run_semantic_processor(
+                uri=semantic_root,
+                context_type="resource",
+                ctx=ctx,
+            )
+        return filtered_directories, filtered_files
+
+    @staticmethod
+    def _child_prefix(root: str) -> str:
+        if root.rstrip("/") == "viking:":
+            return "viking://"
+        return root.rstrip("/") + "/"
+
+    def _is_resource_entry_for_namespace(self, uri: str, target_root: str) -> bool:
+        if not uri.startswith(self._child_prefix(target_root)):
+            return False
+        classification = classify_uri(uri)
+        if classification.is_memory or classification.is_skill:
+            return False
+        return True
+
+    def _is_global_resource_entry(self, uri: str) -> bool:
+        return uri == "viking://resources" or uri.startswith("viking://resources/")
+
+    async def _reindex_skill_namespace(
+        self,
+        *,
+        uri: str,
+        mode: str,
+        counters: _ReindexCounters,
+        ctx: RequestContext,
+    ) -> None:
+        viking_fs = get_viking_fs()
+        try:
+            entries = await self._tree_all(viking_fs, uri, show_all_hidden=True, ctx=ctx)
+        except Exception as exc:
+            raise NotFoundError(uri, "resource") from exc
+
+        skill_roots = []
+        for entry in entries:
+            entry_uri = entry.get("uri")
+            if entry_uri and entry.get("isDir") and classify_uri(entry_uri).is_skill_root:
+                skill_roots.append(entry_uri)
+
+        for skill_root in sorted(set(skill_roots)):
+            await self._reindex_skill(uri=skill_root, mode=mode, counters=counters, ctx=ctx)
+
+        if not skill_roots:
+            counters.unsupported_records += 1
+            counters.warnings.append(f"No skill roots found under {uri}")
 
     def _validate_mode(self, object_type: str, mode: str) -> None:
         supported_modes = self.SUPPORTED_MODES_BY_TYPE[object_type]
@@ -219,6 +328,13 @@ class ReindexExecutor:
                 )
             elif object_type == "user_namespace":
                 await self._reindex_user_namespace(
+                    uri=uri,
+                    mode=mode,
+                    counters=counters,
+                    ctx=ctx,
+                )
+            elif object_type == "skill_namespace":
+                await self._reindex_skill_namespace(
                     uri=uri,
                     mode=mode,
                     counters=counters,
@@ -337,20 +453,31 @@ class ReindexExecutor:
     ) -> None:
         viking_fs = get_viking_fs()
         try:
-            entries = await viking_fs.tree(uri, output="original", show_all_hidden=True, ctx=ctx)
+            if not await viking_fs.exists(uri, ctx=ctx):
+                raise NotFoundError(uri, "resource")
+            stat = await viking_fs.stat(uri, ctx=ctx)
+            is_dir = stat.get("isDir", stat.get("is_dir")) if isinstance(stat, dict) else False
+            if is_dir:
+                entries = await self._tree_all(viking_fs, uri, show_all_hidden=True, ctx=ctx)
+            else:
+                entries = []
         except Exception as exc:
             raise NotFoundError(uri, "resource") from exc
 
-        directories = [uri]
-        files: list[str] = []
-        for entry in entries:
-            entry_uri = entry.get("uri")
-            if not entry_uri:
-                continue
-            if entry.get("isDir"):
-                directories.append(entry_uri)
-            elif not self._is_hidden_meta_file(entry_uri):
-                files.append(entry_uri)
+        if is_dir:
+            directories = [uri]
+            files: list[str] = []
+            for entry in entries:
+                entry_uri = entry.get("uri")
+                if not entry_uri:
+                    continue
+                if entry.get("isDir"):
+                    directories.append(entry_uri)
+                elif not self._is_hidden_meta_file(entry_uri):
+                    files.append(entry_uri)
+        else:
+            directories = []
+            files = [uri]
 
         await self._reindex_resource_vectors_from_entries(
             root_uri=uri,
@@ -403,7 +530,7 @@ class ReindexExecutor:
                         abstract=abstract,
                         vector_text=abstract,
                         is_leaf=False,
-                        context_type=get_context_type_for_uri(directory_uri),
+                        context_type=context_type_for_uri(directory_uri),
                         level=ContextLevel.ABSTRACT,
                         ctx=ctx,
                     )
@@ -419,7 +546,7 @@ class ReindexExecutor:
                         abstract=abstract,
                         vector_text=overview,
                         is_leaf=False,
-                        context_type=get_context_type_for_uri(directory_uri),
+                        context_type=context_type_for_uri(directory_uri),
                         level=ContextLevel.OVERVIEW,
                         ctx=ctx,
                     )
@@ -445,7 +572,7 @@ class ReindexExecutor:
                     abstract=abstract,
                     vector_text=vector_text,
                     is_leaf=True,
-                    context_type=get_context_type_for_uri(file_uri),
+                    context_type=context_type_for_uri(file_uri),
                     level=ContextLevel.DETAIL,
                     ctx=ctx,
                 )
@@ -466,15 +593,25 @@ class ReindexExecutor:
         target_root = normalized_uri if normalized_uri else uri
         viking_fs = get_viking_fs()
         try:
-            entries = await viking_fs.tree(
-                target_root,
-                output="original",
-                show_all_hidden=True,
-                level_limit=None,
-                ctx=ctx,
-            )
+            entries = await self._tree_all(viking_fs, target_root, show_all_hidden=True, ctx=ctx)
         except Exception as exc:
             raise NotFoundError(uri, "resource") from exc
+
+        if target_root == "viking://user":
+            user_roots = [
+                entry.get("uri")
+                for entry in entries
+                if entry.get("isDir") and classify_uri(entry.get("uri", "")).is_user_namespace_root
+            ]
+            if user_roots:
+                for user_root in sorted(set(user_roots)):
+                    await self._reindex_user_namespace(
+                        uri=user_root,
+                        mode=mode,
+                        counters=counters,
+                        ctx=ctx,
+                    )
+                return
 
         memory_roots: list[str] = []
         resource_directories: list[str] = []
@@ -484,9 +621,12 @@ class ReindexExecutor:
             entry_uri = entry.get("uri")
             if not entry_uri:
                 continue
-            if self._is_memory_path(entry_uri):
-                if self._is_exact_memory_root(entry_uri, entry):
+            classification = classify_uri(entry_uri)
+            if classification.is_memory:
+                if entry.get("isDir") and classification.is_memory_root:
                     memory_roots.append(entry_uri)
+                continue
+            if not self._is_resource_entry_for_namespace(entry_uri, target_root):
                 continue
             if entry.get("isDir"):
                 resource_directories.append(entry_uri)
@@ -501,12 +641,15 @@ class ReindexExecutor:
                 uri=memory_root, mode=memory_mode, counters=counters, ctx=ctx
             )
 
-        # 只对 resources 目录运行语义处理，而不是整个 namespace
-        resources_uri = f"{target_root}/resources"
-        if mode == "semantic_and_vectors" and resources_uri in resource_directories:
-            await self._run_semantic_processor(
-                uri=resources_uri,
-                context_type="resource",
+        if mode == "semantic_and_vectors":
+            (
+                resource_directories,
+                resource_files,
+            ) = await self._refresh_namespace_resource_semantics(
+                target_root=target_root,
+                directories=resource_directories,
+                files=resource_files,
+                counters=counters,
                 ctx=ctx,
             )
 
@@ -530,15 +673,25 @@ class ReindexExecutor:
         target_root = normalized_uri if normalized_uri else uri
         viking_fs = get_viking_fs()
         try:
-            entries = await viking_fs.tree(
-                target_root,
-                output="original",
-                show_all_hidden=True,
-                level_limit=None,
-                ctx=ctx,
-            )
+            entries = await self._tree_all(viking_fs, target_root, show_all_hidden=True, ctx=ctx)
         except Exception as exc:
             raise NotFoundError(uri, "resource") from exc
+
+        if target_root == "viking://agent":
+            agent_roots = [
+                entry.get("uri")
+                for entry in entries
+                if entry.get("isDir") and classify_uri(entry.get("uri", "")).is_agent_namespace_root
+            ]
+            if agent_roots:
+                for agent_root in sorted(set(agent_roots)):
+                    await self._reindex_agent_namespace(
+                        uri=agent_root,
+                        mode=mode,
+                        counters=counters,
+                        ctx=ctx,
+                    )
+                return
 
         memory_roots: list[str] = []
         skill_roots: list[str] = []
@@ -549,13 +702,16 @@ class ReindexExecutor:
             entry_uri = entry.get("uri")
             if not entry_uri:
                 continue
-            if self._is_memory_path(entry_uri):
-                if self._is_exact_memory_root(entry_uri, entry):
+            classification = classify_uri(entry_uri)
+            if classification.is_memory:
+                if entry.get("isDir") and classification.is_memory_root:
                     memory_roots.append(entry_uri)
                 continue
-            if self._is_skill_path(entry_uri):
-                if self._is_exact_skill_root(entry_uri, entry):
+            if classification.is_skill:
+                if entry.get("isDir") and classification.is_skill_root:
                     skill_roots.append(entry_uri)
+                continue
+            if not self._is_resource_entry_for_namespace(entry_uri, target_root):
                 continue
             if entry.get("isDir"):
                 resource_directories.append(entry_uri)
@@ -576,12 +732,15 @@ class ReindexExecutor:
             )
             await self._reindex_skill(uri=skill_root, mode=skill_mode, counters=counters, ctx=ctx)
 
-        # 只对 resources 目录运行语义处理，而不是整个 namespace
-        resources_uri = f"{target_root}/resources"
-        if mode == "semantic_and_vectors" and resources_uri in resource_directories:
-            await self._run_semantic_processor(
-                uri=resources_uri,
-                context_type="resource",
+        if mode == "semantic_and_vectors":
+            (
+                resource_directories,
+                resource_files,
+            ) = await self._refresh_namespace_resource_semantics(
+                target_root=target_root,
+                directories=resource_directories,
+                files=resource_files,
+                counters=counters,
                 ctx=ctx,
             )
 
@@ -604,13 +763,7 @@ class ReindexExecutor:
         target_root = "viking://"
         viking_fs = get_viking_fs()
         try:
-            entries = await viking_fs.tree(
-                target_root,
-                output="original",
-                show_all_hidden=True,
-                level_limit=None,
-                ctx=ctx,
-            )
+            entries = await self._tree_all(viking_fs, target_root, show_all_hidden=True, ctx=ctx)
         except Exception as exc:
             raise NotFoundError(uri, "resource") from exc
 
@@ -637,6 +790,8 @@ class ReindexExecutor:
                 continue
             if entry_uri == "viking://session" or entry_uri.startswith("viking://session/"):
                 continue
+            if not self._is_global_resource_entry(entry_uri):
+                continue
             if entry.get("isDir"):
                 resource_directories.append(entry_uri)
             elif not self._is_hidden_meta_file(entry_uri):
@@ -658,10 +813,15 @@ class ReindexExecutor:
                 ctx=ctx,
             )
 
-        if mode == "semantic_and_vectors" and "viking://resources" in resource_directories:
-            await self._run_semantic_processor(
-                uri="viking://resources",
-                context_type="resource",
+        if mode == "semantic_and_vectors":
+            (
+                resource_directories,
+                resource_files,
+            ) = await self._refresh_namespace_resource_semantics(
+                target_root=target_root,
+                directories=resource_directories,
+                files=resource_files,
+                counters=counters,
                 ctx=ctx,
             )
 
@@ -815,13 +975,7 @@ class ReindexExecutor:
         if await viking_fs.exists(uri, ctx=ctx):
             stat = await viking_fs.stat(uri, ctx=ctx)
             if stat.get("isDir", stat.get("is_dir")):
-                entries = await viking_fs.tree(
-                    uri,
-                    output="original",
-                    show_all_hidden=False,
-                    level_limit=None,
-                    ctx=ctx,
-                )
+                entries = await self._tree_all(viking_fs, uri, show_all_hidden=False, ctx=ctx)
                 directory_uris = {uri}
                 for entry in entries:
                     entry_uri = entry.get("uri")
@@ -1066,7 +1220,7 @@ class ReindexExecutor:
             level=level,
             user=ctx.user,
             account_id=ctx.account_id,
-            owner_space=self._owner_space_for_uri(uri, ctx),
+            owner_space=owner_space_for_uri(uri, ctx),
             meta=meta or {},
         )
         context.set_vectorize(Vectorize(text=vector_text))
@@ -1105,27 +1259,6 @@ class ReindexExecutor:
             ctx=ctx,
         )
         return records[0] if records else None
-
-    def _is_memory_path(self, uri: str) -> bool:
-        """Check if URI points to a memory directory or its children."""
-        return "/memories" in uri
-
-    def _is_skill_path(self, uri: str) -> bool:
-        """Check if URI points to a skill directory or its children."""
-        return "/skills" in uri
-
-    def _is_exact_memory_root(self, uri: str, entry: dict) -> bool:
-        """Check if entry is exactly a memories directory (not child)."""
-        if not entry.get("isDir"):
-            return False
-        normalized_uri = uri.rstrip("/")
-        return normalized_uri.endswith("/memories")
-
-    def _is_exact_skill_root(self, uri: str, entry: dict) -> bool:
-        """Check if entry is a skill root directory."""
-        if not entry.get("isDir"):
-            return False
-        return uri.count("/skills/") == 1
 
     async def _skill_meta(
         self,
@@ -1197,14 +1330,6 @@ class ReindexExecutor:
         for value in values:
             if value:
                 return value
-        return ""
-
-    @staticmethod
-    def _owner_space_for_uri(uri: str, ctx: RequestContext) -> str:
-        if uri.startswith("viking://agent/"):
-            return ctx.user.agent_space_name()
-        if uri.startswith("viking://user/") or uri.startswith("viking://session/"):
-            return ctx.user.user_space_name()
         return ""
 
     @staticmethod

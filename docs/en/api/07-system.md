@@ -251,7 +251,7 @@ This API operates on existing `viking://...` content. It does not import new fil
 
 **Authentication**
 
-- HTTP endpoint: requires root/admin access when authentication is enabled
+- HTTP endpoint: requires root/admin access when authentication is enabled; root-key requests must include `X-OpenViking-Account`
 - Python embedded mode: uses the current service context
 - Python HTTP client / CLI: sends the current authenticated identity
 
@@ -270,10 +270,12 @@ This API operates on existing `viking://...` content. It does not import new fil
 - `viking://user/<user_id>`
 - `viking://agent`
 - `viking://agent/<agent_id>`
+- `viking://resources`
 - `viking://resources/...`
 - `viking://user/<user_id>/memories/...`
 - `viking://agent/<agent_id>/memories/...`
-- `viking://agent/<agent_id>/skills/...`
+- `viking://agent/<agent_id>/skills`
+- `viking://agent/<agent_id>/skills/<skill_name>`
 
 `viking://session/...` is not supported by `reindex()`.
 
@@ -314,6 +316,7 @@ POST /api/v1/content/reindex
 curl -X POST http://localhost:1933/api/v1/content/reindex \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
+  -H "X-OpenViking-Account: default" \
   -d '{
     "uri": "viking://resources",
     "mode": "vectors_only",
@@ -340,12 +343,13 @@ openviking reindex viking://agent/default/skills --mode semantic_and_vectors --w
     "uri": "viking://resources",
     "mode": "vectors_only",
     "status": "completed",
-    "stats": {
-      "visited": 120,
-      "rebuilt": 118,
-      "skipped": 2,
-      "failed": 0
-    }
+    "object_type": "resource",
+    "scanned_records": 120,
+    "rebuilt_records": 118,
+    "unsupported_records": 2,
+    "failed_records": 0,
+    "duration_ms": 1284,
+    "warnings": []
   },
   "time": 0.1
 }

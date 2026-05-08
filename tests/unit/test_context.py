@@ -170,8 +170,8 @@ class TestContextInit:
         assert ctx.vectorize.text == "Test"
 
 
-class TestContextDeriveContextType:
-    """Test Context._derive_context_type."""
+class TestContextContextType:
+    """Test Context context_type inference."""
 
     def test_derive_skill(self):
         """Test deriving skill type from URI."""
