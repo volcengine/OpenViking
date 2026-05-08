@@ -60,7 +60,7 @@ class OpenVikingStore(BaseStore):
         path: str | None = None,
         root_uri: str = "viking://user/memories/langgraph_store",
         index: bool | list[str] | None = None,
-        wait: bool = False,
+        wait: bool = True,
         timeout: float | None = None,
         search_fetch_limit: int = 50,
         auto_initialize: bool = True,

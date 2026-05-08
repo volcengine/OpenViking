@@ -8,6 +8,7 @@ import fnmatch
 import re
 import uuid
 from collections import defaultdict
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -20,7 +21,11 @@ class InMemoryOpenVikingClient:
 
     def __init__(self, records: dict[str, str] | None = None):
         self.records: dict[str, str] = dict(records or {})
-        self.sessions: dict[str, list[dict[str, str]]] = defaultdict(list)
+        self.sessions: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        self.archives: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        self.pending_tokens: dict[str, int] = defaultdict(int)
+        self.find_calls: list[dict[str, Any]] = []
+        self.search_calls: list[dict[str, Any]] = []
         self._initialized = False
 
     def initialize(self) -> None:
@@ -38,6 +43,14 @@ class InMemoryOpenVikingClient:
         filter: dict[str, Any] | None = None,
         **_: Any,
     ) -> dict[str, Any]:
+        self.find_calls.append(
+            {
+                "query": query,
+                "target_uri": target_uri,
+                "limit": limit,
+                "score_threshold": score_threshold,
+            }
+        )
         return self._search(query, target_uri, limit, score_threshold)
 
     def search(
@@ -50,8 +63,17 @@ class InMemoryOpenVikingClient:
         filter: dict[str, Any] | None = None,
         **_: Any,
     ) -> dict[str, Any]:
+        self.search_calls.append(
+            {
+                "query": query,
+                "target_uri": target_uri,
+                "session_id": session_id,
+                "limit": limit,
+                "score_threshold": score_threshold,
+            }
+        )
         session_text = " ".join(
-            message.get("content", "") for message in self.sessions.get(session_id or "", [])
+            _message_text(message) for message in self.sessions.get(session_id or "", [])
         )
         return self._search(f"{query} {session_text}", target_uri, limit, score_threshold)
 
@@ -204,13 +226,112 @@ class InMemoryOpenVikingClient:
         parts: list[dict] | None = None,
         **_: Any,
     ) -> dict[str, Any]:
-        self.sessions.setdefault(session_id, []).append(
-            {"role": role, "content": content or str(parts or "")}
-        )
-        return {"session_id": session_id, "role": role}
+        message_parts = list(parts or [{"type": "text", "text": content or ""}])
+        message = {
+            "id": f"msg_{uuid.uuid4().hex}",
+            "role": role,
+            "parts": message_parts,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self.sessions.setdefault(session_id, []).append(message)
+        self.pending_tokens[session_id] += max(1, len(_message_text(message)) // 4)
+        return {
+            "session_id": session_id,
+            "role": role,
+            "message_count": len(self.sessions[session_id]),
+        }
 
-    def commit_session(self, session_id: str, **_: Any) -> dict[str, Any]:
-        return {"session_id": session_id, "status": "completed"}
+    def get_session(self, session_id: str, auto_create: bool = False) -> dict[str, Any]:
+        if auto_create:
+            self.create_session(session_id=session_id)
+        return {
+            "session_id": session_id,
+            "message_count": len(self.sessions.get(session_id, [])),
+            "pending_tokens": self.pending_tokens.get(session_id, 0),
+            "keep_recent_count": 0,
+        }
+
+    def get_session_context(
+        self,
+        session_id: str,
+        token_budget: int = 128_000,
+        **_: Any,
+    ) -> dict[str, Any]:
+        del token_budget
+        latest_archive = self.archives.get(session_id, [])[-1:] or []
+        latest = latest_archive[0] if latest_archive else {}
+        messages = list(self.sessions.get(session_id, []))
+        active_tokens = sum(max(1, len(_message_text(message)) // 4) for message in messages)
+        archive_tokens = max(0, len(str(latest.get("overview", ""))) // 4)
+        return {
+            "latest_archive_overview": latest.get("overview", ""),
+            "pre_archive_abstracts": [
+                {"archive_id": archive["archive_id"], "abstract": archive["abstract"]}
+                for archive in self.archives.get(session_id, [])[:-1]
+            ],
+            "messages": messages,
+            "estimatedTokens": active_tokens + archive_tokens,
+            "stats": {
+                "totalArchives": len(self.archives.get(session_id, [])),
+                "includedArchives": 1 if latest else 0,
+                "droppedArchives": 0,
+                "failedArchives": 0,
+                "activeTokens": active_tokens,
+                "archiveTokens": archive_tokens,
+            },
+        }
+
+    def get_session_archive(self, session_id: str, archive_id: str, **_: Any) -> dict[str, Any]:
+        for archive in self.archives.get(session_id, []):
+            if archive["archive_id"] == archive_id:
+                return dict(archive)
+        raise FileNotFoundError(archive_id)
+
+    def commit_session(
+        self,
+        session_id: str,
+        keep_recent_count: int = 0,
+        **_: Any,
+    ) -> dict[str, Any]:
+        messages = list(self.sessions.get(session_id, []))
+        keep = max(0, keep_recent_count)
+        archived_messages = messages[:-keep] if keep else messages
+        retained_messages = messages[-keep:] if keep else []
+        archive_id = f"archive_{len(self.archives[session_id]) + 1:03d}"
+        overview = "\n".join(_message_text(message) for message in archived_messages)
+        if archived_messages:
+            archive_uri = f"viking://session/{session_id}/history/{archive_id}"
+            self.archives[session_id].append(
+                {
+                    "archive_id": archive_id,
+                    "abstract": overview[:240],
+                    "overview": overview,
+                    "messages": archived_messages,
+                }
+            )
+            self.records[f"{archive_uri}/messages.jsonl"] = (
+                "\n".join(_message_text(message) for message in archived_messages) + "\n"
+            )
+            self.records[f"{archive_uri}/.abstract.md"] = overview[:240]
+            self.records[f"{archive_uri}/.overview.md"] = overview
+            self.records[f"{archive_uri}/.done"] = "{}"
+        self.sessions[session_id] = retained_messages
+        self.pending_tokens[session_id] = 0
+        return {
+            "session_id": session_id,
+            "status": "completed",
+            "archive_id": archive_id if archived_messages else None,
+            "archived": bool(archived_messages),
+        }
+
+    def delete_session(self, session_id: str) -> None:
+        self.sessions.pop(session_id, None)
+        self.archives.pop(session_id, None)
+        self.pending_tokens.pop(session_id, None)
+        session_uri = f"viking://session/{session_id}"
+        for uri in list(self.records):
+            if uri == session_uri or uri.startswith(f"{session_uri}/"):
+                del self.records[uri]
 
     def add_resource(self, path: str, to: str | None = None, **_: Any) -> dict[str, Any]:
         uri = to or f"viking://resources/{path.rstrip('/').split('/')[-1]}"
@@ -229,3 +350,14 @@ class InMemoryOpenVikingClient:
     def is_healthy(self) -> bool:
         return True
 
+
+def _message_text(message: dict[str, Any]) -> str:
+    chunks: list[str] = []
+    for part in message.get("parts") or []:
+        if part.get("type") == "text" and part.get("text"):
+            chunks.append(str(part["text"]))
+        elif part.get("type") == "context" and part.get("abstract"):
+            chunks.append(str(part["abstract"]))
+        elif part.get("type") == "tool" and part.get("tool_output"):
+            chunks.append(str(part["tool_output"]))
+    return "\n".join(chunks)

@@ -137,4 +137,3 @@ class OpenVikingRetriever(BaseRetriever):
             except Exception:
                 pass
         return stringify(fallback, max_chars=self.max_content_chars)
-

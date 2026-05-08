@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Iterable
 
 try:
@@ -122,15 +123,28 @@ def create_openviking_tools(
             result = call_openviking(active_client, "ls", uri=uri, recursive=recursive)
         return stringify(result, max_chars=12_000)
 
-    def viking_read(uris: str | list[str], max_chars: int = 12_000) -> str:
-        """Read one or more OpenViking URIs."""
+    def viking_read(
+        uris: str | list[str],
+        max_chars: int = 12_000,
+        content_mode: str = "read",
+    ) -> str:
+        """Read one or more OpenViking URIs as L0 abstract, L1 overview, or L2 content."""
 
         active_client = get_client()
         uri_list = [uris] if isinstance(uris, str) else uris
+        mode = str(content_mode or "read").lower().strip()
+        if mode not in {"abstract", "overview", "read"}:
+            raise ValueError("content_mode must be one of: abstract, overview, read")
         payload = []
         for uri in uri_list:
-            content = call_openviking(active_client, "read", uri=uri)
-            payload.append({"uri": uri, "content": stringify(content, max_chars=max_chars)})
+            content = call_openviking(active_client, mode, uri=uri)
+            payload.append(
+                {
+                    "uri": uri,
+                    "content_mode": mode,
+                    "content": stringify(content, max_chars=max_chars),
+                }
+            )
         return stringify(payload, max_chars=max_chars * max(1, len(uri_list)))
 
     def viking_grep(
@@ -155,6 +169,7 @@ def create_openviking_tools(
         messages: str | list[dict[str, Any]],
         session_id: str | None = None,
         commit: bool = True,
+        keep_recent_count: int = 0,
     ) -> str:
         """Store a conversation turn in an OpenViking session and optionally commit it."""
 
@@ -169,7 +184,8 @@ def create_openviking_tools(
                 "add_message",
                 session_id=session_id,
                 role=message["role"],
-                content=message["content"],
+                content=message.get("content"),
+                parts=message.get("parts"),
             )
         result: dict[str, Any] = {
             "session_id": session_id,
@@ -180,8 +196,60 @@ def create_openviking_tools(
                 active_client,
                 "commit_session",
                 session_id=session_id,
+                keep_recent_count=keep_recent_count,
             )
         return compact_json(result)
+
+    def viking_archive_search(
+        session_id: str,
+        query: str,
+        archive_id: str | None = None,
+        token_budget: int = 128_000,
+        max_matches: int = 8,
+    ) -> str:
+        """Search committed OpenViking session archive context."""
+
+        active_client = get_client()
+        if archive_id:
+            archive = call_openviking(
+                active_client,
+                "get_session_archive",
+                session_id=session_id,
+                archive_id=archive_id,
+            )
+            matches = _search_archive_payload(archive, query, max_matches=max_matches)
+        else:
+            matches = _grep_session_history(
+                active_client,
+                session_id=session_id,
+                query=query,
+                max_matches=max_matches,
+            )
+            if _match_count(matches) > 0:
+                return stringify(matches, max_chars=12_000)
+            context = call_openviking(
+                active_client,
+                "get_session_context",
+                session_id=session_id,
+                token_budget=token_budget,
+            )
+            matches = _search_archive_payload(context, query, max_matches=max_matches)
+        return stringify(matches or {"matches": [], "count": 0}, max_chars=12_000)
+
+    def viking_archive_expand(
+        session_id: str,
+        archive_id: str,
+        max_chars: int = 20_000,
+    ) -> str:
+        """Expand one OpenViking session archive by archive ID."""
+
+        archive = call_openviking(
+            get_client(),
+            "get_session_archive",
+            session_id=session_id,
+            archive_id=archive_id,
+        )
+        return stringify(archive, max_chars=max_chars)
 
     def viking_add_resource(
         path: str,
@@ -245,6 +313,8 @@ def create_openviking_tools(
         "viking_browse": StructuredTool.from_function(viking_browse),
         "viking_read": StructuredTool.from_function(viking_read),
         "viking_grep": StructuredTool.from_function(viking_grep),
+        "viking_archive_search": StructuredTool.from_function(viking_archive_search),
+        "viking_archive_expand": StructuredTool.from_function(viking_archive_expand),
         "viking_store": StructuredTool.from_function(viking_store),
         "viking_add_resource": StructuredTool.from_function(viking_add_resource),
         "viking_add_skill": StructuredTool.from_function(viking_add_skill),
@@ -260,7 +330,15 @@ def create_openviking_tools(
 
 
 def _profile_tool_names(profile: str, *, allow_forget: bool) -> list[str]:
-    retrieval = ["viking_find", "viking_search", "viking_browse", "viking_read", "viking_grep"]
+    retrieval = [
+        "viking_find",
+        "viking_search",
+        "viking_browse",
+        "viking_read",
+        "viking_grep",
+        "viking_archive_search",
+        "viking_archive_expand",
+    ]
     if profile == "retrieval":
         names = retrieval + ["viking_health"]
     elif profile == "admin":
@@ -283,16 +361,42 @@ def _profile_tool_names(profile: str, *, allow_forget: bool) -> list[str]:
     return names
 
 
-def _normalize_messages(messages: str | list[dict[str, Any]]) -> list[dict[str, str]]:
+def _normalize_messages(messages: str | list[dict[str, Any]]) -> list[dict[str, Any]]:
     if isinstance(messages, str):
-        return [{"role": "user", "content": messages}]
+        return [{"role": "user", "parts": [{"type": "text", "text": messages}]}]
     normalized = []
     for message in messages:
         role = str(message.get("role") or "user")
         if role not in {"user", "assistant", "system", "tool"}:
             role = "user"
-        content = message.get("content", "")
-        normalized.append({"role": role, "content": str(content)})
+        if message.get("parts") is not None:
+            normalized.append(
+                {
+                    "role": "assistant" if role in {"system", "tool"} else role,
+                    "parts": list(message.get("parts") or []),
+                }
+            )
+            continue
+        content = str(message.get("content", ""))
+        if role == "tool":
+            normalized.append(
+                {
+                    "role": "assistant",
+                    "parts": [
+                        {
+                            "type": "tool",
+                            "tool_id": str(message.get("tool_call_id") or message.get("id") or ""),
+                            "tool_name": str(message.get("name") or ""),
+                            "tool_output": content,
+                            "tool_status": "completed",
+                        }
+                    ],
+                }
+            )
+        elif role == "system":
+            normalized.append({"role": "assistant", "parts": [{"type": "text", "text": content}]})
+        else:
+            normalized.append({"role": role, "parts": [{"type": "text", "text": content}]})
     return normalized
 
 
@@ -308,3 +412,107 @@ def _format_retrieval_result(result: Any) -> str:
         return "No OpenViking contexts matched."
     return "\n\n".join(lines)
 
+
+def _search_archive_payload(
+    payload: dict[str, Any],
+    query: str,
+    *,
+    max_matches: int,
+) -> dict[str, Any]:
+    tokens = [token for token in re.findall(r"[a-z0-9_]+", query.lower()) if len(token) > 1]
+    sections = _archive_sections(payload)
+    matches: list[dict[str, str]] = []
+    for label, text in sections:
+        haystack = text.lower()
+        if tokens and not all(token in haystack for token in tokens):
+            continue
+        matches.append({"section": label, "snippet": _snippet(text, tokens)})
+        if len(matches) >= max_matches:
+            break
+    return {"matches": matches, "count": len(matches)}
+
+
+def _grep_session_history(
+    client: Any,
+    *,
+    session_id: str,
+    query: str,
+    max_matches: int,
+) -> dict[str, Any]:
+    history_uri = f"viking://session/{session_id}/history"
+    try:
+        result = call_openviking(
+            client,
+            "grep",
+            uri=history_uri,
+            pattern=_archive_grep_pattern(query),
+            case_insensitive=True,
+            node_limit=max_matches,
+        )
+    except Exception:
+        return {"matches": [], "count": 0, "source": history_uri}
+    if isinstance(result, dict):
+        return {"source": history_uri, **result}
+    return {
+        "matches": result,
+        "count": len(result) if isinstance(result, list) else 0,
+        "source": history_uri,
+    }
+
+
+def _match_count(result: dict[str, Any] | None) -> int:
+    if not result:
+        return 0
+    for key in ("count", "match_count"):
+        value = result.get(key)
+        if value is not None:
+            return int(value or 0)
+    matches = result.get("matches")
+    return len(matches) if isinstance(matches, list) else 0
+
+
+def _archive_grep_pattern(query: str) -> str:
+    tokens = [token for token in re.findall(r"[a-z0-9_]+", query.lower()) if len(token) > 1]
+    if not tokens:
+        return re.escape(query)
+    return "".join(f"(?=.*{re.escape(token)})" for token in tokens) + ".*"
+
+
+def _archive_sections(payload: dict[str, Any]) -> list[tuple[str, str]]:
+    sections: list[tuple[str, str]] = []
+    if payload.get("overview"):
+        sections.append((f"archive:{payload.get('archive_id', 'archive')}:overview", payload["overview"]))
+    if payload.get("abstract"):
+        sections.append((f"archive:{payload.get('archive_id', 'archive')}:abstract", payload["abstract"]))
+    if payload.get("latest_archive_overview"):
+        sections.append(("latest_archive_overview", payload["latest_archive_overview"]))
+    for archive in payload.get("pre_archive_abstracts") or []:
+        sections.append(
+            (
+                f"archive:{archive.get('archive_id', 'archive')}:abstract",
+                str(archive.get("abstract") or ""),
+            )
+        )
+    for index, message in enumerate(payload.get("messages") or [], start=1):
+        text_parts = []
+        for part in message.get("parts") or []:
+            text_parts.extend(
+                str(part.get(key) or "")
+                for key in ("text", "abstract", "tool_output")
+                if part.get(key)
+            )
+        if text_parts:
+            sections.append((f"message:{index}:{message.get('role', '')}", "\n".join(text_parts)))
+    return sections
+
+
+def _snippet(text: str, tokens: list[str], *, radius: int = 240) -> str:
+    if not text:
+        return ""
+    lower = text.lower()
+    positions = [lower.find(token) for token in tokens if token and lower.find(token) >= 0]
+    start = max(0, min(positions) - radius) if positions else 0
+    end = min(len(text), start + radius * 2)
+    prefix = "..." if start else ""
+    suffix = "..." if end < len(text) else ""
+    return prefix + text[start:end] + suffix

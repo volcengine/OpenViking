@@ -12,10 +12,14 @@ from typing import Any
 
 __all__ = [
     "InMemoryOpenVikingClient",
+    "OpenVikingChatMessageHistory",
+    "OpenVikingCommitPolicy",
     "OpenVikingContextMiddleware",
     "OpenVikingRetriever",
+    "OpenVikingSessionContextAssembler",
     "OpenVikingStore",
     "create_openviking_tools",
+    "with_openviking_context",
 ]
 
 
@@ -32,6 +36,22 @@ def __getattr__(name: str) -> Any:
         from openviking.integrations.langchain.store import OpenVikingStore
 
         return OpenVikingStore
+    if name == "OpenVikingChatMessageHistory":
+        from openviking.integrations.langchain.history import OpenVikingChatMessageHistory
+
+        return OpenVikingChatMessageHistory
+    if name == "OpenVikingSessionContextAssembler":
+        from openviking.integrations.langchain.context import OpenVikingSessionContextAssembler
+
+        return OpenVikingSessionContextAssembler
+    if name == "OpenVikingCommitPolicy":
+        from openviking.integrations.langchain.client import OpenVikingCommitPolicy
+
+        return OpenVikingCommitPolicy
+    if name == "with_openviking_context":
+        from openviking.integrations.langchain.context import with_openviking_context
+
+        return with_openviking_context
     if name == "OpenVikingContextMiddleware":
         from openviking.integrations.langchain.middleware import OpenVikingContextMiddleware
 
@@ -41,4 +61,3 @@ def __getattr__(name: str) -> Any:
 
         return InMemoryOpenVikingClient
     raise AttributeError(name)
-

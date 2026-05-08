@@ -7,7 +7,7 @@ from __future__ import annotations
 import inspect
 import json
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any, Iterable, Literal
 
 
 class OptionalDependencyError(ImportError):
@@ -39,12 +39,21 @@ class OpenVikingConnection:
     auto_initialize: bool = True
 
 
+@dataclass(slots=True)
+class OpenVikingCommitPolicy:
+    """Commit behavior for OpenViking-backed agent sessions."""
+
+    mode: Literal["never", "always", "pending_tokens"] = "never"
+    pending_token_threshold: int = 8_000
+    keep_recent_count: int = 10
+
+
 def ensure_client(connection: OpenVikingConnection) -> Any:
     """Return an initialized OpenViking client from explicit or connection settings."""
 
     client = connection.client
     if client is None:
-        if connection.url:
+        if connection.url or connection.path is None:
             from openviking.client import SyncHTTPClient
 
             client = SyncHTTPClient(
@@ -66,6 +75,40 @@ def ensure_client(connection: OpenVikingConnection) -> Any:
         if not getattr(client, "_initialized", False):
             client.initialize()
     return client
+
+
+def maybe_commit_session(
+    client: Any,
+    session_id: str,
+    policy: OpenVikingCommitPolicy | None,
+) -> dict[str, Any] | None:
+    """Commit a session if the configured policy says the live tail is ready."""
+
+    if policy is None or policy.mode == "never":
+        return None
+    if policy.mode == "always":
+        return call_openviking(
+            client,
+            "commit_session",
+            session_id=session_id,
+            keep_recent_count=policy.keep_recent_count,
+        )
+    if policy.mode != "pending_tokens":
+        raise ValueError(f"Unsupported OpenViking commit policy: {policy.mode}")
+
+    try:
+        session = call_openviking(client, "get_session", session_id=session_id, auto_create=True)
+    except Exception:
+        return None
+    pending_tokens = int(item_value(session, "pending_tokens", 0) or 0)
+    if pending_tokens < policy.pending_token_threshold:
+        return None
+    return call_openviking(
+        client,
+        "commit_session",
+        session_id=session_id,
+        keep_recent_count=policy.keep_recent_count,
+    )
 
 
 def call_openviking(client: Any, method_name: str, /, **kwargs: Any) -> Any:
