@@ -2887,7 +2887,7 @@ checksum = "1a80800c0488c3a21695ea981a54918fbb37abf04f4d0720c453632255e2ff0e"
 
 [[package]]
 name = "ov_cli"
-version = "0.2.6"
+version = "0.3.14"
 dependencies = [
  "anyhow",
  "bytes",
