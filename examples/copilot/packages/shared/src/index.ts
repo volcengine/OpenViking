@@ -47,6 +47,18 @@ export {
 } from "./capture/sanitize.js";
 
 export {
+  canonicaliseTranscript,
+  fromCaptureToolArgs,
+  fromVSCodeChatHistory,
+  type CanonicalTurnInput,
+  type CaptureToolArgs,
+  type TranscriptOptions,
+  type VSCodeChatRequestTurnLike,
+  type VSCodeChatResponseTurnLike,
+  type VSCodeChatTurnLike,
+} from "./capture/transcript.js";
+
+export {
   buildQueryProfile,
   clampScore,
   dedupeItems,
