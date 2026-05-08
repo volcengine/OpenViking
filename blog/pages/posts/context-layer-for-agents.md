@@ -13,7 +13,7 @@ excerpt: OpenViking treats context as a first-class layer for agents, so memory,
 description: A mock engineering note about why agents need a dedicated context layer.
 ---
 
-# Building a Context Layer for Agents
+![Context retrieval provenance view](/covers/context-provenance.png)
 
 Most agent products eventually need more than a prompt and a vector search call. They need a durable way to organize memories, resources, skills, and retrieval behavior across sessions.
 

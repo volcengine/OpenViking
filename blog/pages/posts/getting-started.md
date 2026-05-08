@@ -13,7 +13,7 @@ excerpt: Blog posts are a better place for product thinking, architecture notes,
 description: A short note on separating long-form project writing from the documentation site.
 ---
 
-# Why OpenViking Needs a Blog
+![OpenViking interface banner](/covers/openviking-banner.jpg)
 
 OpenViking already has documentation for installation, concepts, APIs, and operational guides. A blog gives the project a different surface: one for product thinking, architecture notes, release context, and implementation tradeoffs that do not belong in the docs navigation.
 

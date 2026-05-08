@@ -20,6 +20,17 @@ function categoryText(post: Post) {
     return categories.join(' / ')
   return categories || 'OpenViking'
 }
+
+function formatDate(value?: string | number | Date) {
+  if (!value)
+    return ''
+
+  return new Date(value).toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+  })
+}
 </script>
 
 <template>
@@ -43,7 +54,9 @@ function categoryText(post: Post) {
         <div class="post-body">
           <div class="post-meta">
             <span>{{ categoryText(post) }}</span>
-            <PressDate :date="post.date" />
+            <time v-if="formatDate(post.date)" :datetime="String(post.date)">
+              {{ formatDate(post.date) }}
+            </time>
           </div>
 
           <h2>

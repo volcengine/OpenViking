@@ -18,8 +18,11 @@ export default defineValaxyConfig({
       fullText: false,
     },
   },
-  theme: 'press',
+  theme: 'starter',
   themeConfig: {
+    colors: {
+      primary: '#0f766e',
+    },
     logo: '/ov-logo.png',
     nav: [
       { text: 'Blog', link: '/' },
@@ -34,6 +37,15 @@ export default defineValaxyConfig({
       },
     ],
     footer: {
+      since: 2026,
+      icon: {
+        name: 'i-ri-github-line',
+        animated: false,
+        color: 'var(--va-c-primary)',
+        url: 'https://github.com/volcengine/OpenViking',
+        title: 'OpenViking on GitHub',
+      },
+      powered: false,
       message: 'Released under the Apache-2.0 License.',
       copyright: 'Copyright OpenViking contributors',
     },
