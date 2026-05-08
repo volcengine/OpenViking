@@ -93,7 +93,6 @@ class ExtractLoop:
         self._expected_fields: Optional[List[str]] = None
         self._operations_model: Optional[Any] = None
 
-
         # Transaction handle for file locking
         self._transaction_handle = None
         # Flag to disable tools in next iteration after unknown tool error
@@ -123,7 +122,6 @@ class ExtractLoop:
         self.schema_prompt_generator = SchemaPromptGenerator(schemas)
         self.schema_model_generator.generate_all_models()
 
-
         # 预计算工具 schemas
         allowed_tools = self.context_provider.get_tools()
         self._tool_schemas = [
@@ -145,11 +143,11 @@ class ExtractLoop:
         # 预计算 operations_model
         role_scope = self._isolation_handler.get_read_scope() if self._isolation_handler else None
 
-        self._operations_model = self.schema_model_generator.create_structured_operations_model(role_scope)
+        self._operations_model = self.schema_model_generator.create_structured_operations_model(
+            role_scope
+        )
 
         json_schema = self._operations_model.model_json_schema()
-
-
 
         # Build initial messages from provider
         import json
@@ -256,9 +254,8 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
         return final_operations, tools_used
 
-
     async def resolve_operations(self, operations) -> ResolvedOperations:
-        tracer.info(f'operations={JsonUtils.dumps(operations)}')
+        tracer.info(f"operations={JsonUtils.dumps(operations)}")
         upsert_operations: List[ResolvedOperation] = []
         delete_file_contents: List[MemoryFileContent] = []
         errors: List[str] = []
@@ -280,7 +277,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
             for item in items:
                 # 转换为 dict
                 item_dict = dict(item)
-                item_dict['memory_type'] = memory_type
+                item_dict["memory_type"] = memory_type
                 # 填充 user_id 和 agent_id
                 self._isolation_handler.fill_role_ids(item_dict, role_scope=role_scope)
 
@@ -329,10 +326,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     op.old_memory_file_content = old_content
                     break
 
-
-
         return resolved
-
 
     @tracer("extract_loop.execute_tool_calls")
     async def _execute_tool_calls(self, messages, tool_calls, tools_used) -> bool:
@@ -389,7 +383,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
             )
 
         return has_unknown_tool
-
 
     async def _call_llm(
         self, messages: List[Dict[str, Any]]
@@ -492,8 +485,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
         print("No tool calls or operations parsed")
         return (None, None)
 
-
-
     async def _execute_in_parallel(
         self,
         tasks: List[Any],
@@ -501,10 +492,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
         """Execute tasks in parallel, similar to AgentLoop."""
         return await asyncio.gather(*tasks)
 
-    async def _check_unread_existing_files(
-        self,
-        operations: ResolvedOperations
-    ) -> Dict:
+    async def _check_unread_existing_files(self, operations: ResolvedOperations) -> Dict:
 
         refetch_uris = {}
         for operation in operations.upsert_operations:
@@ -513,16 +501,10 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     continue
                 try:
                     content = await self.context_provider.execute_tool(
-                        ToolCall(
-                            id="",
-                            name="read",
-                            arguments={
-                                "uri": uri
-                            }
-                        )
+                        ToolCall(id="", name="read", arguments={"uri": uri})
                     )
-                    # 读取出错表示文件不存在
-                    if isinstance(content, Dict):
+                    # 读取出错表示文件不存在（error dict 含 "error" key）
+                    if isinstance(content, Dict) and "error" in content:
                         continue
 
                     parsed = parse_memory_file_with_fields(content)
