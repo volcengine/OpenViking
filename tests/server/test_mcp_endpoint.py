@@ -7,10 +7,12 @@ Tests the tool functions directly by setting up the identity contextvar
 and service dependency, avoiding MCP protocol complexity.
 """
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
+import openviking.server.mcp_endpoint as mcp_endpoint
 from openviking.server.dependencies import set_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.mcp_endpoint import (
@@ -108,6 +110,75 @@ async def test_search_with_target_uri(service):
 async def test_search_respects_min_score(service):
     result = await search(query="test", min_score=0.35)
     assert isinstance(result, str)
+
+
+async def test_find_tool_calls_lightweight_find(service, monkeypatch):
+    captured = {}
+
+    async def fake_find(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(memories=[], resources=[], skills=[])
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+
+    result = await mcp_endpoint.find(
+        query="fast lookup",
+        target_uri="viking://resources",
+        limit=2,
+        min_score=0.2,
+    )
+
+    assert result == "No matching context found."
+    assert captured["query"] == "fast lookup"
+    assert captured["ctx"] == DEFAULT_CTX
+    assert captured["target_uri"] == "viking://resources"
+    assert captured["limit"] == 2
+    assert captured["score_threshold"] == 0.2
+
+
+async def test_search_tool_calls_context_aware_search_with_session(service, monkeypatch):
+    captured = {}
+    session = SimpleNamespace(load_called=False)
+
+    async def load():
+        session.load_called = True
+
+    session.load = load
+
+    def session_factory(ctx, session_id):
+        captured["session_factory_ctx"] = ctx
+        captured["session_id"] = session_id
+        return session
+
+    async def fake_search(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(memories=[], resources=[], skills=[])
+
+    async def fail_find(**kwargs):
+        raise AssertionError("MCP search should call service.search.search, not find")
+
+    monkeypatch.setattr(service.sessions, "session", session_factory)
+    monkeypatch.setattr(service.search, "search", fake_search)
+    monkeypatch.setattr(service.search, "find", fail_find)
+
+    result = await search(
+        query="deep lookup",
+        target_uri="viking://resources",
+        session_id="session-1",
+        limit=4,
+        min_score=0.1,
+    )
+
+    assert result == "No matching context found."
+    assert session.load_called is True
+    assert captured["session_factory_ctx"] == DEFAULT_CTX
+    assert captured["session_id"] == "session-1"
+    assert captured["query"] == "deep lookup"
+    assert captured["ctx"] == DEFAULT_CTX
+    assert captured["target_uri"] == "viking://resources"
+    assert captured["session"] == session
+    assert captured["limit"] == 4
+    assert captured["score_threshold"] == 0.1
 
 
 # ---------------------------------------------------------------------------

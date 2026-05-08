@@ -159,7 +159,7 @@ Beyond automatic behavior, the plugin exposes six tools directly:
 - `memory_forget`: delete by URI, or search first and remove a single strong match
 - `ov_archive_expand`: expand a concrete archive back into raw messages
 - `ov_import`: import a resource or skill; defaults to resource and uses `kind: "skill"` for skills
-- `ov_search`: search OpenViking resources and skills, especially after importing them
+- `memory_search`: search OpenViking resources and skills, especially after importing them
 
 They serve different roles:
 
@@ -168,7 +168,7 @@ They serve different roles:
 - `memory_store` is for immediately persisting clearly important information
 - `ov_archive_expand` is the "go back to archive detail" escape hatch when summaries are not enough
 - `ov_import` lets the agent complete explicit import requests without asking the user to remember slash commands
-- `ov_search` closes the loop after import by letting the user or agent confirm and consume resources and skills
+- `memory_search` closes the loop after import by letting the user or agent confirm and consume resources and skills
 
 `ov_archive_expand` is especially important because `assemble()` normally returns archive summaries and indexes, not the full raw transcript.
 
@@ -184,8 +184,8 @@ The plugin also registers explicit slash commands for manual imports:
 ```text
 /ov-import ./README.md --to viking://resources/openviking-readme --wait
 /ov-import ./skills/install-openviking-memory --kind skill --wait
-/ov-search "OpenViking install" --uri viking://resources/openviking-readme
-/ov-search "memory install skill" --uri viking://agent/skills
+/memory-search "OpenViking install" --uri viking://resources/openviking-readme
+/memory-search "memory install skill" --uri viking://agent/skills
 ```
 
 Resource import supports remote URLs, Git URLs, local files, local directories, and uploaded zip files. OpenViking's built-in parsers cover common documents and media such as Markdown, text, PDF, HTML, Word, PowerPoint, Excel, EPUB, images, audio, and video. Directory imports also accept common code, documentation, and config file extensions such as `.py`, `.js`, `.ts`, `.go`, `.rs`, `.java`, `.cpp`, `.json`, `.yaml`, `.toml`, `.csv`, `.rst`, `.proto`, `.tf`, and `.vue`.
@@ -200,7 +200,7 @@ The plugin operates exclusively in remote mode as a pure HTTP client:
 
 - `baseUrl` and optional `apiKey` come from plugin config
 - no local subprocess is started or managed
-- session context, memory find/read, commit, and archive expansion behavior stays the same
+- session context, memory search/read, commit, and archive expansion behavior stays the same
 
 The OpenViking service must be deployed and running independently before the plugin can connect to it.
 

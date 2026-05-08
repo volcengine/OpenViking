@@ -13,7 +13,7 @@ A minimal MCP-only server for [Codex](https://github.com/openai/codex). Intentio
 - no writes to `~/.codex`
 - no checked-in build output
 
-Codex gets four explicit memory tools: `openviking_recall`, `remember`, plus a couple more.
+Codex gets four explicit memory tools: `find`, `remember`, plus a couple more.
 
 If you only need explicit memory operations from Codex (no auto-recall or auto-capture), this is the simplest option.
 

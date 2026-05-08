@@ -141,7 +141,7 @@ type OvImportInput = {
   timeout?: number;
 };
 
-type OvSearchInput = {
+type MemorySearchInput = {
   query: string;
   uri?: string;
   limit?: number;
@@ -362,13 +362,13 @@ export function parseOvImportCommandArgs(args: string): OvImportInput {
   };
 }
 
-export function parseOvSearchCommandArgs(args: string): OvSearchInput {
+export function parseMemorySearchCommandArgs(args: string): MemorySearchInput {
   const parsed = parseFlagArgs(args);
-  // `/ov-search` only accepts a single query string, so positional segments are
+  // `/memory-search` only accepts a single query string, so positional segments are
   // always re-joined to preserve unquoted multi-word searches.
   const query = parsed.positionals.join(" ").trim();
   if (!query) {
-    throw new Error('Usage: /ov-search "<query>" [--uri URI] [--limit N]');
+    throw new Error('Usage: /memory-search "<query>" [--uri URI] [--limit N]');
   }
   return {
     query,
@@ -702,7 +702,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
       };
     };
 
-    const formatSearchRows = (result: FindResult): string[] => {
+    const formatMemorySearchRows = (result: FindResult): string[] => {
       const truncateSummary = (value: string, maxChars = 220): string => {
         const collapsed = value.replace(/\s+/g, " ").trim();
         if (collapsed.length <= maxChars) {
@@ -743,7 +743,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
       ];
     };
 
-    const formatSearchText = (query: string, uri: string | undefined, result: FindResult): string => {
+    const formatMemorySearchText = (query: string, uri: string | undefined, result: FindResult): string => {
       if ((result.total ?? 0) <= 0) {
         const scope = uri ? ` under ${uri}` : "";
         return `No OpenViking resource or skill results found for "${query}"${scope}.`;
@@ -752,12 +752,12 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
       const lines = [
         `Found ${result.total ?? 0} OpenViking results for "${query}"${scope}`,
         "",
-        ...formatSearchRows(result),
+        ...formatMemorySearchRows(result),
       ].filter((line, index, all) => line || (all[index - 1] && all[index + 1]));
       return lines.join("\n");
     };
 
-    const searchOpenViking = async (input: OvSearchInput, agentId?: string) => {
+    const memorySearchOpenViking = async (input: MemorySearchInput, agentId?: string) => {
       const query = input.query.trim();
       if (!query) {
         throw new Error("query is required");
@@ -797,7 +797,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
         result = mergeFindResults(successful);
       }
       return {
-        content: [{ type: "text" as const, text: formatSearchText(query, input.uri, result) }],
+        content: [{ type: "text" as const, text: formatMemorySearchText(query, input.uri, result) }],
         details: {
           action: "searched",
           query,
@@ -851,8 +851,8 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
 
     api.registerTool(
       (ctx: ToolContext) => ({
-        name: "ov_search",
-        label: "Search (OpenViking)",
+        name: "memory_search",
+        label: "Memory Search (OpenViking)",
         description:
           "Search OpenViking resources and skills. Use after importing, or when the user asks to search OpenViking resources or skills.",
         parameters: Type.Object({
@@ -862,17 +862,17 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
           if (isBypassedSession(ctx)) {
-            return makeBypassedToolResult("ov_search");
+            return makeBypassedToolResult("memory_search");
           }
           const session = resolvePluginSessionRouting(ctx);
-          return searchOpenViking({
+          return memorySearchOpenViking({
             query: String((params as { query?: unknown }).query ?? ""),
             uri: typeof params.uri === "string" ? params.uri : undefined,
             limit: typeof params.limit === "number" ? params.limit : undefined,
           }, session.agentId);
         },
       }),
-      { name: "ov_search" },
+      { name: "memory_search" },
     );
 
     api.registerCommand?.({
@@ -896,21 +896,21 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
     });
 
     api.registerCommand?.({
-      name: "ov-search",
+      name: "memory-search",
       description: "Search OpenViking resources and skills.",
       acceptsArgs: true,
       handler: async (ctx: PluginCommandContext) => {
         try {
           if (isBypassedSession(ctx)) {
-            const bypassed = makeBypassedToolResult("ov_search");
+            const bypassed = makeBypassedToolResult("memory_search");
             return { text: bypassed.content[0]!.text, details: bypassed.details };
           }
           const session = resolvePluginSessionRouting(ctx);
-          const input = parseOvSearchCommandArgs(ctx.args ?? "");
-          const result = await searchOpenViking(input, session.agentId);
+          const input = parseMemorySearchCommandArgs(ctx.args ?? "");
+          const result = await memorySearchOpenViking(input, session.agentId);
           return { text: result.content[0]!.text, details: result.details };
         } catch (err) {
-          return { text: `OpenViking search failed: ${err instanceof Error ? err.message : String(err)}` };
+          return { text: `OpenViking memory search failed: ${err instanceof Error ? err.message : String(err)}` };
         }
       },
     });

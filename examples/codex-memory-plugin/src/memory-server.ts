@@ -284,11 +284,11 @@ const client = new OpenVikingClient(
 const server = new McpServer({ name: "openviking-memory-codex", version: "0.1.0" })
 
 server.tool(
-  "openviking_recall",
-  "Search OpenViking long-term memory.",
+  "find",
+  "Find OpenViking long-term memory.",
   {
-    query: z.string().describe("Search query"),
-    target_uri: z.string().optional().describe("Search scope URI, default viking://user/memories"),
+    query: z.string().describe("Find query"),
+    target_uri: z.string().optional().describe("Find scope URI, default viking://user/memories"),
     limit: z.number().optional().describe("Max results, default 6"),
     score_threshold: z.number().optional().describe("Minimum relevance score 0-1, default 0.01"),
   },
@@ -352,8 +352,8 @@ server.tool(
 )
 
 server.tool(
-  "viking_forget",
-  "Delete an exact OpenViking memory URI. Use openviking_recall first if you only have a query.",
+  "forget",
+  "Delete an exact OpenViking memory URI. Use find first if you only have a query.",
   {
     uri: z.string().describe("Exact memory URI to delete"),
   },
@@ -368,7 +368,7 @@ server.tool(
 )
 
 server.tool(
-  "viking_health",
+  "health",
   "Check whether the OpenViking server is reachable.",
   {},
   async () => {

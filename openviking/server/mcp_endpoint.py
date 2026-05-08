@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 """MCP (Model Context Protocol) endpoint for OpenViking server.
 
-Exposes MCP tools to Claude Code (or any MCP client) via streamable HTTP:
-  search, read, list, remember, add_resource, grep, glob, forget, health
+Exposes tools to Claude Code (or any MCP client) via streamable HTTP:
+  find, search, read, list, remember, add_resource, grep, glob, forget, health
 
 Mounted on the FastAPI app at /mcp. The MCP session manager lifecycle is
 tied to the FastAPI app lifespan (not a sub-app lifespan) so the task group
@@ -105,7 +105,7 @@ class _IdentityASGIMiddleware:
 
 
 # ---------------------------------------------------------------------------
-# MCP server + 7 tools (aligned with vikingbot/agent/tools/ov_file.py)
+# MCP server tools (aligned with vikingbot/agent/tools/ov_file.py)
 # ---------------------------------------------------------------------------
 
 mcp = FastMCP(
@@ -114,23 +114,50 @@ mcp = FastMCP(
 )
 
 
-# -- search ----------------------------------------------------------------
+# -- find / search ---------------------------------------------------------
 
 
 @mcp.tool()
-async def search(query: str, target_uri: str = "", limit: int = 10, min_score: float = 0.35) -> str:
-    """Search OpenViking context database (memories, resources, skills). Returns ranked results with URI, abstract, and score. Leave target_uri empty to search everything, or pass a viking:// URI to narrow scope."""
+async def find(query: str, target_uri: str = "", limit: int = 10, min_score: float = 0.35) -> str:
+    """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, and score."""
     service = get_service()
-    ctx = _get_ctx()
-
     result = await service.search.find(
         query=query,
-        ctx=ctx,
+        ctx=_get_ctx(),
         target_uri=target_uri,
         limit=limit,
         score_threshold=min_score,
     )
+    return _format_search_result(result)
 
+
+@mcp.tool()
+async def search(
+    query: str,
+    target_uri: str = "",
+    session_id: Optional[str] = None,
+    limit: int = 10,
+    min_score: float = 0.35,
+) -> str:
+    """Deep semantic retrieval with optional session context and intent analysis. Returns ranked memories, resources, and skills with URI, abstract, and score."""
+    service = get_service()
+    ctx = _get_ctx()
+    session = None
+    if session_id:
+        session = service.sessions.session(ctx, session_id)
+        await session.load()
+    result = await service.search.search(
+        query=query,
+        ctx=ctx,
+        target_uri=target_uri,
+        session=session,
+        limit=limit,
+        score_threshold=min_score,
+    )
+    return _format_search_result(result)
+
+
+def _format_search_result(result) -> str:
     items = []
     for ctx_type, contexts in [
         ("memory", result.memories),
@@ -145,8 +172,11 @@ async def search(query: str, target_uri: str = "", limit: int = 10, min_score: f
 
     lines = []
     for ctx_type, m in items:
-        abstract = (m.abstract or m.overview or "(no abstract)").strip()
-        lines.append(f"- [{ctx_type} {m.score * 100:.0f}%] {m.uri}\n    {abstract}")
+        abstract = (
+            getattr(m, "abstract", "") or getattr(m, "overview", "") or "(no abstract)"
+        ).strip()
+        score = getattr(m, "score", 0.0)
+        lines.append(f"- [{ctx_type} {score * 100:.0f}%] {m.uri}\n    {abstract}")
 
     return (
         f"Found {len(items)} item(s):\n\n"
@@ -399,7 +429,7 @@ async def mcp_lifespan():
     """Run the MCP session manager. Call this inside the FastAPI lifespan."""
     async with mcp.session_manager.run():
         logger.info(
-            "MCP endpoint ready (9 tools: search, read, list, store, add_resource, grep, glob, forget, health)"
+            "MCP endpoint ready (10 tools: find, search, read, list, remember, add_resource, grep, glob, forget, health)"
         )
         yield
 
