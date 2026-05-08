@@ -261,6 +261,26 @@ describe("OVClient — endpoint shapes", () => {
     expect(calls[1]!.body).toEqual({ force: true });
   });
 
+  it("read GETs /api/v1/content/read with URL-encoded uri and returns text", async () => {
+    const { calls, impl } = makeMockFetch({ responses: [{ body: { result: "hello memory" } }] });
+    const client = new OVClient(baseCfg(), { fetchImpl: impl });
+    const res = await client.read("viking://m/1", { offset: 5, limit: 20 });
+    expect(res.ok).toBe(true);
+    if (!res.ok) throw new Error();
+    expect(res.value).toBe("hello memory");
+    expect(calls[0]!.method).toBe("GET");
+    expect(calls[0]!.url).toBe("http://ov.test/api/v1/content/read?uri=viking%3A%2F%2Fm%2F1&offset=5&limit=20");
+  });
+
+  it("read serialises object and array results as formatted JSON text", async () => {
+    const { impl } = makeMockFetch({ responses: [{ body: { result: { uri: "viking://m/1", content: ["a"] } } }] });
+    const client = new OVClient(baseCfg(), { fetchImpl: impl });
+    const res = await client.read("viking://m/1");
+    expect(res.ok).toBe(true);
+    if (!res.ok) throw new Error();
+    expect(res.value).toBe(JSON.stringify({ uri: "viking://m/1", content: ["a"] }, null, 2));
+  });
+
   it("fetchArchiveOverview returns latest_archive_overview when present", async () => {
     const { calls, impl } = makeMockFetch({
       responses: [{ body: { result: { latest_archive_overview: "summary text" } } }],
@@ -369,12 +389,14 @@ describe("OVClient — bypass", () => {
     const client = new OVClient(baseCfg({ bypassSession: true }), { fetchImpl: impl });
     const h = await client.health();
     const r = await client.recall("q", { limit: 3, sessionId: "cp-z" });
+    const read = await client.read("viking://m/1");
     const a = await client.appendTurns("cp-z", [{ role: "user", content: "x" }]);
     const c = await client.commit("cp-z");
     const o = await client.fetchArchiveOverview("cp-z", 1000);
 
     expect(h.ok).toBe(true);
     expect(r.ok && r.value).toEqual([]);
+    expect(read.ok && read.value).toBe("");
     expect(a.ok).toBe(true);
     expect(c.ok).toBe(true);
     expect(o.ok && o.value).toBe(null);

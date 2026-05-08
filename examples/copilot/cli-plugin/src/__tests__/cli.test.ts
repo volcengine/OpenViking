@@ -150,12 +150,19 @@ describe("runMain — --check", () => {
 });
 
 describe("runMain — default invocation (no flags)", () => {
-  it("prints the issue-#21 stub message to stderr and exits 0", async () => {
+  it("starts the stdio MCP server and exits 0", async () => {
     const s = makeStreams();
-    const code = await runMain([], { stdout: s.stdoutFn, stderr: s.stderrFn });
+    const loadConfig = vi.fn((_opts: LoadConfigOptions) => fakeCfg());
+    const runStdioMcpServer = vi.fn(async () => undefined);
+    const code = await runMain([], {
+      stdout: s.stdoutFn,
+      stderr: s.stderrFn,
+      loadConfig,
+      runStdioMcpServer,
+    });
     expect(code).toBe(0);
-    expect(s.stderr).toContain("scaffold");
-    expect(s.stderr).toContain("#21");
+    expect(runStdioMcpServer).toHaveBeenCalledWith({ version: "0.0.0", loadConfig });
+    expect(s.stderr).toBe("");
     expect(s.stdout).toBe("");
   });
 });

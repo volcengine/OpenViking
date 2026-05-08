@@ -9,6 +9,7 @@
  * Endpoints:
  *   GET    /health                                          — health
  *   POST   /api/v1/search/find                              — recall
+ *   GET    /api/v1/content/read?uri=...                     — read
  *   POST   /api/v1/sessions/{id}/messages                   — appendTurns
  *   POST   /api/v1/sessions/{id}/commit                     — commit
  *   GET    /api/v1/sessions/{id}/context?token_budget=N     — fetchArchiveOverview
@@ -61,6 +62,12 @@ export interface RecallOptions {
   /** Server-side score floor; default 0 to let the caller's ranker decide. */
   scoreThreshold?: number;
   /** Per-call timeout override. Falls back to `cfg.timeoutMs`. */
+  timeoutMs?: number;
+}
+
+export interface ReadOptions {
+  offset?: number;
+  limit?: number;
   timeoutMs?: number;
 }
 
@@ -164,6 +171,19 @@ export class OVClient {
     });
     if (!res.ok) return res;
     return { ok: true, value: flattenRecallBuckets(res.value) };
+  }
+
+  async read(uri: string, opts: ReadOptions = {}): Promise<OVResult<string>> {
+    if (this.isBypassed()) return this.bypassed("read", "");
+    const qs = new URLSearchParams({ uri });
+    if (opts.offset !== undefined) qs.set("offset", String(Math.max(0, Math.floor(opts.offset))));
+    if (opts.limit !== undefined) qs.set("limit", String(Math.max(0, Math.floor(opts.limit))));
+
+    const res = await this.fetchJSON<unknown>("GET", `/api/v1/content/read?${qs.toString()}`, {
+      timeoutMs: opts.timeoutMs,
+    });
+    if (!res.ok) return res;
+    return { ok: true, value: stringifyReadValue(res.value) };
   }
 
   async appendTurns(sessionId: string, turns: OVTurn[]): Promise<OVResult<unknown>> {
@@ -308,4 +328,9 @@ function singulariseBucketName(name: string): string {
   if (name.endsWith("ies")) return `${name.slice(0, -3)}y`;
   if (name.endsWith("s") && !name.endsWith("ss")) return name.slice(0, -1);
   return name;
+}
+
+function stringifyReadValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  return JSON.stringify(value, null, 2);
 }

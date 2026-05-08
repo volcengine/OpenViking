@@ -29,7 +29,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.21.0",
-    "@openviking/copilot-shared": "*"
+    "@openviking/copilot-shared": "*",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "esbuild": "^0.24.0"

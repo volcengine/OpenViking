@@ -13,7 +13,9 @@ import { runMain } from "./cli.js";
 
 const argv = process.argv.slice(2);
 runMain(argv).then(
-  (code) => process.exit(code),
+  (code) => {
+    process.exitCode = code;
+  },
   (err: unknown) => {
     process.stderr.write(
       `openviking-copilot-mcp: fatal: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`,
