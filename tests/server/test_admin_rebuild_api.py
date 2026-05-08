@@ -921,6 +921,62 @@ async def test_reindex_resource_l2_falls_back_to_vector_text_when_summary_missin
 
 
 @pytest.mark.asyncio
+async def test_reindex_resource_vector_text_uses_existing_record_for_non_text(monkeypatch):
+    from openviking.service.reindex_executor import ReindexExecutor
+
+    async def fake_safe_read_text(self, uri, *, ctx):
+        return "decoded binary payload"
+
+    async def fake_fetch_existing_record(self, *, uri, level, ctx):
+        return {"abstract": "existing image summary"}
+
+    monkeypatch.setattr(ReindexExecutor, "_safe_read_text", fake_safe_read_text)
+    monkeypatch.setattr(ReindexExecutor, "_fetch_existing_record", fake_fetch_existing_record)
+
+    service = ReindexExecutor()
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="test", user_id="alice", agent_id="default"),
+        role=Role.ROOT,
+    )
+
+    vector_text = await service._best_resource_file_vector_text(
+        "viking://resources/demo/image.png",
+        "",
+        ctx=ctx,
+    )
+
+    assert vector_text == "existing image summary"
+
+
+@pytest.mark.asyncio
+async def test_reindex_resource_vector_text_skips_non_text_body_without_summary(monkeypatch):
+    from openviking.service.reindex_executor import ReindexExecutor
+
+    async def fail_if_content_read(self, uri, *, ctx):
+        raise AssertionError("non-text resource content should not be read for vector text")
+
+    async def fake_fetch_existing_record(self, *, uri, level, ctx):
+        return None
+
+    monkeypatch.setattr(ReindexExecutor, "_safe_read_text", fail_if_content_read)
+    monkeypatch.setattr(ReindexExecutor, "_fetch_existing_record", fake_fetch_existing_record)
+
+    service = ReindexExecutor()
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="test", user_id="alice", agent_id="default"),
+        role=Role.ROOT,
+    )
+
+    vector_text = await service._best_resource_file_vector_text(
+        "viking://resources/demo/image.png",
+        "",
+        ctx=ctx,
+    )
+
+    assert vector_text == ""
+
+
+@pytest.mark.asyncio
 async def test_reindex_resource_vectors_accepts_single_file_uri(monkeypatch):
     from openviking.service.reindex_executor import ReindexExecutor, _ReindexCounters
 

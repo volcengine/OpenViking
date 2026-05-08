@@ -1175,12 +1175,12 @@ class ReindexExecutor:
         ctx: RequestContext,
     ) -> str:
         text_source = getattr(get_openviking_config().embedding, "text_source", "summary_first")
-        content = await self._safe_read_text(uri, ctx=ctx)
         existing = await self._fetch_existing_record(uri=uri, level=2, ctx=ctx)
         fallback = self._record_abstract(existing)
         content_type = get_resource_content_type(uri.rsplit("/", 1)[-1])
 
         if content_type == ResourceContentType.TEXT:
+            content = await self._safe_read_text(uri, ctx=ctx)
             if text_source in {"summary_first", "summary_only"} and summary:
                 return summary
             if content:
@@ -1191,8 +1191,6 @@ class ReindexExecutor:
 
         if summary:
             return summary
-        if content:
-            return self._truncate_embedding_text(content)
         return fallback
 
     async def _upsert_context(

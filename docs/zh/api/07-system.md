@@ -263,6 +263,8 @@ ov system wait --timeout 60
 | mode | str | 否 | `vectors_only` | 重建模式：`vectors_only` 或 `semantic_and_vectors` |
 | wait | bool | 否 | `true` | 是否等待任务完成 |
 
+HTTP 请求体不接受未知字段。`uri` 可以使用其他 content API 支持的 OpenViking 路径变量，服务端会先解析再校验。
+
 **支持的 URI 范围**
 
 - `viking://`
@@ -285,6 +287,8 @@ ov system wait --timeout 60
 - `semantic_and_vectors`：先重新生成语义产物，再基于新的语义结果重建向量
 
 对于 `resource` 和 `skill`，`semantic_and_vectors` 会刷新目录/文件语义产物，包括 `.abstract.md` 和 `.overview.md`。对于 `memory`，它会重建当前已持久化 memory 子树的语义和向量，但不会回放历史记忆抽取顺序。
+
+对于 `semantic_and_vectors`，语义刷新和向量重建由 reindex executor 串行编排。语义刷新阶段不会再额外向后台 embedding queue 投递自己的向量化任务；向量由 reindex 阶段统一重建，因此 `wait=true` 表示等待 reindex 操作本身完成。
 
 **Python SDK (Embedded / HTTP)**
 
@@ -311,6 +315,8 @@ print(result["status"])
 ```
 POST /api/v1/content/reindex
 ```
+
+不存在 `/api/v1/maintenance/reindex` 端点。请使用 `/api/v1/content/reindex`。
 
 ```bash
 curl -X POST http://localhost:1933/api/v1/content/reindex \
@@ -363,12 +369,45 @@ openviking reindex viking://agent/default/skills --mode semantic_and_vectors --w
   "result": {
     "uri": "viking://resources",
     "mode": "vectors_only",
+    "object_type": "resource",
     "status": "accepted",
     "task_id": "task_xxx"
   },
   "time": 0.1
 }
 ```
+
+使用返回的 task 查询后台任务：
+
+```bash
+curl -X GET http://localhost:1933/api/v1/tasks/task_xxx \
+  -H "X-API-Key: your-key" \
+  -H "X-OpenViking-Account: default"
+```
+
+Reindex 后台任务的 `task_type` 为 `admin_reindex`，`resource_id` 等于请求中的 `uri`，也可以这样列出：
+
+```text
+GET /api/v1/tasks?task_type=admin_reindex&resource_id=viking://resources
+```
+
+任务记录保存在内存中，可能过期，也会在服务重启后丢失。
+
+**结果字段**
+
+| 字段 | 说明 |
+|------|------|
+| status | 同步完成时为 `completed`，后台执行时为 `accepted` |
+| uri | 解析路径变量后的请求 URI |
+| object_type | 推断出的目标类型，例如 `resource`、`skill`、`memory`、`user_namespace`、`agent_namespace`、`skill_namespace` 或 `global_namespace` |
+| mode | 实际执行的 reindex 模式 |
+| scanned_records | 被检查的记录或语义源数量 |
+| rebuilt_records | 成功重建的向量记录数量 |
+| unsupported_records | 因没有可用向量来源而跳过的记录数量 |
+| failed_records | 重建失败的记录数量 |
+| duration_ms | 同步执行耗时，单位毫秒 |
+| warnings | 可恢复的单条记录级 warning |
+| task_id | 后台任务 ID，仅 `wait=false` 时返回 |
 
 **行为说明**
 
@@ -377,6 +416,8 @@ openviking reindex viking://agent/default/skills --mode semantic_and_vectors --w
 - 命名空间级 reindex，例如 `viking://user` 或 `viking://agent/default`，会继续传播到其支持的子内容类型。
 - 如果只是 embedding 模型或向量索引需要刷新，应使用 `vectors_only`。
 - 如果语义产物本身也需要重建，再做重向量化，应使用 `semantic_and_vectors`。
+- 同一个 URI 和 owner 同时只能运行一个 reindex 任务。对同一目标的并发请求会返回 conflict。
+- 对 resource 文件，文本文件在没有 summary 时可以使用文件正文；非文本文件需要已生成的 summary 或已有向量记录 fallback，否则会计为 unsupported。
 
 **当前限制**
 

@@ -325,6 +325,7 @@ class SemanticProcessor(DequeueHandlerBase):
                             lifecycle_lock_handle_id=msg.lifecycle_lock_handle_id,
                             is_code_repo=msg.is_code_repo,
                             changes=msg.changes,
+                            skip_vectorization=msg.skip_vectorization,
                         )
                         self._dag_executor = executor
                         if msg.lifecycle_lock_handle_id:
@@ -572,6 +573,10 @@ class SemanticProcessor(DequeueHandlerBase):
             raise RuntimeError(f"Failed to write abstract/overview for {dir_uri}: {e}") from e
 
         try:
+            if msg.skip_vectorization:
+                logger.info(f"Skipping vectorization for {dir_uri} (requested via SemanticMsg)")
+                _mark_done()
+                return
             if msg.telemetry_id and msg.id:
                 from openviking.storage.queuefs.embedding_tracker import EmbeddingTaskTracker
 

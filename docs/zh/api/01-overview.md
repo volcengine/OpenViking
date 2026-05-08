@@ -384,7 +384,7 @@ JSON 输出 - 错误：
 | GET | `/api/v1/content/overview` | 读取概览（L1） |
 | GET | `/api/v1/content/download` | 下载原始文件字节流 |
 | POST | `/api/v1/content/write` | 修改已有文件并自动刷新语义与向量 |
-| POST | `/api/v1/content/reindex` | 重新构建语义/向量索引（已废弃，请使用 maintenance） |
+| POST | `/api/v1/content/reindex` | 重新构建已有内容的语义/向量索引 |
 
 ### 搜索端点
 
@@ -455,12 +455,6 @@ JSON 输出 - 错误：
 | GET | `/api/v1/debug/health` | 快速健康检查 |
 | GET | `/api/v1/debug/vector/scroll` | 分页查看向量记录 |
 | GET | `/api/v1/debug/vector/count` | 统计向量记录数量 |
-
-### 维护端点
-
-| 方法 | 路径 | 说明 | 权限 |
-|------|------|------|------|
-| POST | `/api/v1/maintenance/reindex` | 重新索引内容（可选择重新生成摘要） | ROOT/ADMIN |
 
 ### 统计端点
 
