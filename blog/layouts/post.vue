@@ -1,17 +1,120 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted } from 'vue'
+import type { Post } from 'valaxy'
+import { useFrontmatter, useSiteStore, useValaxyI18n } from 'valaxy'
+import { computed, nextTick, onMounted, onUnmounted, ref, watchEffect } from 'vue'
+import { useRoute } from 'vue-router'
+
+const route = useRoute()
+const site = useSiteStore()
+const frontmatter = useFrontmatter()
+const { $tO } = useValaxyI18n()
+const lastUpdated = ref('')
+const postTitle = computed(() => $tO(frontmatter.value.title))
+const postCover = computed(() => frontmatter.value.cover as string | undefined)
+
+const posts = computed(() => site.postList.filter(post => post.path && !post.path.endsWith('/')))
+const currentIndex = computed(() => posts.value.findIndex(post => post.path === route.path))
+const previousPost = computed<Post | null>(() => {
+  const index = currentIndex.value
+  return index >= 0 && index < posts.value.length - 1 ? posts.value[index + 1] : null
+})
+const nextPost = computed<Post | null>(() => {
+  const index = currentIndex.value
+  return index > 0 ? posts.value[index - 1] : null
+})
+
+function removeInjectedCover() {
+  document.querySelector('html.blog-post-detail .blog-post-cover')?.remove()
+}
+
+function syncInjectedCover() {
+  const cover = postCover.value
+
+  removeInjectedCover()
+
+  if (!cover)
+    return
+
+  void nextTick(() => {
+    window.requestAnimationFrame(() => {
+      const title = document.querySelector<HTMLHeadingElement>('html.blog-post-detail .markdown-body > h1:first-of-type')
+
+      if (!title)
+        return
+
+      const figure = document.createElement('figure')
+      figure.className = 'blog-post-cover'
+
+      const image = document.createElement('img')
+      image.src = cover
+      image.alt = postTitle.value || ''
+
+      figure.appendChild(image)
+      title.insertAdjacentElement('afterend', figure)
+    })
+  })
+}
 
 onMounted(() => {
   document.documentElement.classList.add('blog-post-detail')
+  watchEffect(() => {
+    const value = frontmatter.value.updated || frontmatter.value.date
+    lastUpdated.value = value
+      ? new Date(value).toLocaleString(window.navigator.language, {
+          year: 'numeric',
+          month: 'numeric',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        })
+      : ''
+
+    syncInjectedCover()
+  })
 })
 
 onUnmounted(() => {
+  removeInjectedCover()
   document.documentElement.classList.remove('blog-post-detail')
 })
 </script>
 
 <template>
-  <Layout />
+  <Layout>
+    <template #main-content-after>
+      <footer class="blog-post-footer">
+        <p v-if="lastUpdated" class="blog-post-updated">
+          Last updated: {{ lastUpdated }}
+        </p>
+
+        <nav
+          v-if="previousPost || nextPost"
+          class="blog-post-pager"
+          aria-label="Blog post pager"
+        >
+          <RouterLink
+            v-if="previousPost"
+            class="blog-post-pager-card previous"
+            :to="previousPost.path || ''"
+          >
+            <span class="pager-label">上一篇</span>
+            <span class="pager-title">{{ $tO(previousPost.title) }}</span>
+          </RouterLink>
+          <div v-else />
+
+          <RouterLink
+            v-if="nextPost"
+            class="blog-post-pager-card next"
+            :to="nextPost.path || ''"
+          >
+            <span class="pager-label">下一篇</span>
+            <span class="pager-title">{{ $tO(nextPost.title) }}</span>
+          </RouterLink>
+          <div v-else />
+        </nav>
+      </footer>
+    </template>
+  </Layout>
 </template>
 
 <style>
@@ -51,25 +154,29 @@ html.blog-post-detail .press-main > .relative {
 }
 
 html.blog-post-detail .press-main .container {
+  position: relative;
   display: grid !important;
-  grid-template-columns: minmax(0, 920px) 260px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 860px) minmax(300px, 1fr);
   justify-content: center;
   align-items: start;
-  width: min(1320px, calc(100vw - 96px));
+  width: min(1500px, calc(100vw - 96px));
   margin: 0 auto;
-  gap: 80px;
+  gap: 0;
 }
 
 html.blog-post-detail .vp-doc.content {
+  grid-column: 2;
   width: 100%;
-  max-width: 920px;
+  max-width: 860px;
   margin: 0;
 }
 
 html.blog-post-detail .markdown-body > div:first-child:has(> h1) {
+  order: 2;
   display: flex;
   justify-content: flex-end;
-  margin: 0 0 36px;
+  width: 100%;
+  margin: 0 0 24px;
 }
 
 html.blog-post-detail .markdown-body > div:first-child:has(> h1) > h1 {
@@ -84,19 +191,21 @@ html.blog-post-detail .press-post-actions {
 
 html.blog-post-detail .press-post-actions-main,
 html.blog-post-detail .press-post-actions-trigger {
-  min-height: 42px;
+  min-height: 40px;
   background: #17181b;
   color: #aeb6bf;
-  font-size: 15px;
+  font-size: 14px;
 }
 
 html.blog-post-detail .press-post-actions-main {
+  min-width: 0;
+  flex: 1;
   gap: 10px;
-  padding: 0 18px;
+  padding: 0 14px;
 }
 
 html.blog-post-detail .press-post-actions-trigger {
-  min-width: 48px;
+  min-width: 42px;
 }
 
 html.blog-post-detail .press-post-actions-main:hover,
@@ -106,35 +215,60 @@ html.blog-post-detail .press-post-actions-trigger:hover {
 }
 
 html.blog-post-detail .markdown-body {
-  max-width: 920px;
+  display: flex;
+  flex-direction: column;
+  max-width: 860px;
   color: #e6ece8;
 }
 
+html.blog-post-detail .markdown-body > * {
+  order: 10;
+}
+
 html.blog-post-detail .markdown-body h1 {
-  max-width: 760px;
-  margin: 0 0 28px;
+  order: 1;
+  max-width: 720px;
+  margin: 0 0 24px;
   color: #f4f7f5;
-  font-size: clamp(40px, 4vw, 56px);
-  font-weight: 850;
-  line-height: 1.08;
+  font-size: clamp(34px, 3.2vw, 46px);
+  font-weight: 820;
+  line-height: 1.12;
   letter-spacing: 0;
 }
 
+html.blog-post-detail .blog-post-cover {
+  order: 3;
+  overflow: hidden;
+  width: 100%;
+  margin: 0 0 34px;
+  border: 1px solid #24272d;
+  border-radius: 8px;
+  background: #070707;
+  aspect-ratio: 16 / 6;
+}
+
+html.blog-post-detail .blog-post-cover img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 html.blog-post-detail .markdown-body h2 {
-  margin-top: 52px;
-  padding-top: 34px;
+  margin-top: 46px;
+  padding-top: 28px;
   border-top: 1px solid #2b2d31;
   color: #f4f7f5;
-  font-size: clamp(28px, 3vw, 36px);
-  font-weight: 820;
+  font-size: clamp(24px, 2.4vw, 30px);
+  font-weight: 800;
   line-height: 1.15;
   letter-spacing: 0;
 }
 
 html.blog-post-detail .markdown-body h3 {
-  margin-top: 34px;
+  margin-top: 30px;
   color: #f4f7f5;
-  font-size: 24px;
+  font-size: 21px;
   line-height: 1.25;
   letter-spacing: 0;
 }
@@ -142,8 +276,8 @@ html.blog-post-detail .markdown-body h3 {
 html.blog-post-detail .markdown-body p,
 html.blog-post-detail .markdown-body li {
   color: #d8dfdb;
-  font-size: 19px;
-  line-height: 1.78;
+  font-size: 17px;
+  line-height: 1.72;
   letter-spacing: 0;
 }
 
@@ -168,17 +302,19 @@ html.blog-post-detail .markdown-body div[class*='language-'] {
 
 html.blog-post-detail .markdown-body pre {
   background: #050505;
-  font-size: 16px;
+  font-size: 14px;
 }
 
 html.blog-post-detail .press-aside {
+  grid-column: 3;
   width: 260px;
+  margin-left: 80px;
   padding-left: 0;
 }
 
 html.blog-post-detail .aside-container {
   margin-top: 0;
-  padding-top: 88px;
+  padding-top: 72px;
 }
 
 html.blog-post-detail .aside-content {
@@ -189,21 +325,21 @@ html.blog-post-detail .press-aside .content {
   width: 240px;
   padding-left: 22px;
   border-left-color: #2b2d31;
-  font-size: 17px;
+  font-size: 15px;
 }
 
 html.blog-post-detail .press-aside .outline-title {
   margin-bottom: 16px;
   color: #f4f7f5;
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 800;
   letter-spacing: 0;
 }
 
 html.blog-post-detail .press-aside .outline-link {
   color: #aeb6bf;
-  font-size: 17px;
-  line-height: 2.05;
+  font-size: 15px;
+  line-height: 1.9;
 }
 
 html.blog-post-detail .press-aside .outline-link:hover,
@@ -216,6 +352,69 @@ html.blog-post-detail .press-footer {
   background: #0f0f0f;
 }
 
+html.blog-post-detail .press-doc-footer {
+  display: none;
+}
+
+html.blog-post-detail .blog-post-footer {
+  width: 100%;
+  max-width: 860px;
+  margin: 72px 0 0;
+  padding-bottom: 56px;
+}
+
+html.blog-post-detail .blog-post-updated {
+  margin: 0 0 28px;
+  color: #b9c2bd;
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+html.blog-post-detail .blog-post-pager {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+  padding-top: 28px;
+  border-top: 1px solid #2b2d31;
+}
+
+html.blog-post-detail .blog-post-pager-card {
+  display: flex;
+  min-height: 92px;
+  flex-direction: column;
+  justify-content: center;
+  border: 1px solid #2b2d31;
+  border-radius: 8px;
+  padding: 20px 24px;
+  color: #edf2ef;
+  text-decoration: none;
+  transition: border-color 180ms ease, background 180ms ease;
+}
+
+html.blog-post-detail .blog-post-pager-card:hover {
+  border-color: #5eead4;
+  background: #141716;
+}
+
+html.blog-post-detail .blog-post-pager-card.next {
+  text-align: right;
+}
+
+html.blog-post-detail .pager-label {
+  margin-bottom: 8px;
+  color: #aeb6bf;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+html.blog-post-detail .pager-title {
+  color: #5eead4;
+  font-size: 16px;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
 @media (max-width: 1279px) {
   html.blog-post-detail .press-main .container {
     grid-template-columns: minmax(0, 920px);
@@ -224,7 +423,18 @@ html.blog-post-detail .press-footer {
   }
 
   html.blog-post-detail .vp-doc.content {
+    grid-column: 1;
     max-width: 100%;
+  }
+
+  html.blog-post-detail .press-aside {
+    grid-column: 1;
+    margin-left: 0;
+  }
+
+  html.blog-post-detail .markdown-body > div:first-child:has(> h1) {
+    justify-content: flex-end;
+    margin: 0 0 28px;
   }
 }
 
@@ -237,18 +447,30 @@ html.blog-post-detail .press-footer {
     width: min(100vw - 28px, 900px);
   }
 
-  html.blog-post-detail .blog-post-action-row {
+  html.blog-post-detail .markdown-body > div:first-child:has(> h1) {
     justify-content: flex-start;
+  }
+
+  html.blog-post-detail .blog-post-cover {
+    aspect-ratio: 16 / 8;
     margin-bottom: 28px;
   }
 
   html.blog-post-detail .markdown-body h1 {
-    font-size: 36px;
+    font-size: 32px;
   }
 
   html.blog-post-detail .markdown-body p,
   html.blog-post-detail .markdown-body li {
-    font-size: 17px;
+    font-size: 16px;
+  }
+
+  html.blog-post-detail .blog-post-pager {
+    grid-template-columns: 1fr;
+  }
+
+  html.blog-post-detail .blog-post-pager-card.next {
+    text-align: left;
   }
 }
 </style>
