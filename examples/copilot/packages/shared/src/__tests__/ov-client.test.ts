@@ -169,6 +169,41 @@ describe("OVClient — endpoint shapes", () => {
     });
   });
 
+  it("recall stamps the bucket name (singularised) onto each hit as `type`", async () => {
+    const { impl } = makeMockFetch({
+      responses: [{
+        body: {
+          result: {
+            memories: [{ uri: "viking://m/1", score: 0.9 }],
+            skills: [{ uri: "viking://s/1", score: 0.6 }],
+            resources: [{ uri: "viking://r/1", score: 0.5 }],
+          },
+        },
+      }],
+    });
+    const client = new OVClient(baseCfg(), { fetchImpl: impl });
+    const res = await client.recall("q", { limit: 5, sessionId: "cp-z" });
+    expect(res.ok).toBe(true);
+    if (!res.ok) throw new Error();
+    const byUri = Object.fromEntries(res.value.map((h) => [h.uri, h.type]));
+    expect(byUri["viking://m/1"]).toBe("memory");
+    expect(byUri["viking://s/1"]).toBe("skill");
+    expect(byUri["viking://r/1"]).toBe("resource");
+  });
+
+  it("recall preserves a server-set `type` rather than overwriting with the bucket name", async () => {
+    const { impl } = makeMockFetch({
+      responses: [{
+        body: { result: { memories: [{ uri: "viking://m/1", score: 0.9, type: "custom-type" }] } },
+      }],
+    });
+    const client = new OVClient(baseCfg(), { fetchImpl: impl });
+    const res = await client.recall("q", { limit: 1, sessionId: "cp-z" });
+    expect(res.ok).toBe(true);
+    if (!res.ok) throw new Error();
+    expect(res.value[0]!.type).toBe("custom-type");
+  });
+
   it("appendTurns POSTs each turn to /sessions/{id}/messages and reports the count", async () => {
     const { calls, impl } = makeMockFetch({ responses: [{ body: { result: {} } }] });
     const client = new OVClient(baseCfg(), { fetchImpl: impl });

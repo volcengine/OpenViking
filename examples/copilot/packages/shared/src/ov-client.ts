@@ -272,19 +272,32 @@ export class OVClient {
 
 /**
  * `/search/find` returns `{result: {memories: [...], skills: [...], ...}}`
- * — a bucketed shape. Flatten across all buckets so the caller gets one
- * RecallHit[] regardless of which target_uri scope they queried.
+ * — a bucketed shape. Flatten across all buckets and stamp the bucket
+ * name onto each item as `type` (when the server didn't set one) so
+ * downstream renderers can label items without the caller stitching the
+ * source label back. Singular-form bucket names are normalised
+ * (`memories` → `memory`) to match the CC plugin's `_sourceType`.
  */
 function flattenRecallBuckets(raw: unknown): RecallHit[] {
   if (Array.isArray(raw)) return raw as RecallHit[];
   if (!raw || typeof raw !== "object") return [];
   const out: RecallHit[] = [];
-  for (const value of Object.values(raw as Record<string, unknown>)) {
-    if (Array.isArray(value)) {
-      for (const item of value) {
-        if (item && typeof item === "object") out.push(item as RecallHit);
+  for (const [bucket, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!Array.isArray(value)) continue;
+    const typeLabel = singulariseBucketName(bucket);
+    for (const item of value) {
+      if (item && typeof item === "object") {
+        const hit = item as RecallHit;
+        if (typeof hit.type !== "string" || !hit.type) hit.type = typeLabel;
+        out.push(hit);
       }
     }
   }
   return out;
+}
+
+function singulariseBucketName(name: string): string {
+  if (name.endsWith("ies")) return `${name.slice(0, -3)}y`;
+  if (name.endsWith("s") && !name.endsWith("ss")) return name.slice(0, -1);
+  return name;
 }

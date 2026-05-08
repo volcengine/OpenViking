@@ -58,3 +58,9 @@ export {
   type QueryProfile,
   type RankRecallOptions,
 } from "./recall/rank.js";
+
+export {
+  formatRecallBlock,
+  type FormatRecallBlockOptions,
+  type FormatRecallBlockResult,
+} from "./recall/format.js";
