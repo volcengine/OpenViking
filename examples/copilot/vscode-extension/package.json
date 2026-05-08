@@ -4,9 +4,13 @@
   "description": "Long-term semantic memory for GitHub Copilot Chat, powered by OpenViking.",
   "version": "0.0.0",
   "private": true,
-  "type": "module",
   "publisher": "Volcengine",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/volcengine/OpenViking.git",
+    "directory": "examples/copilot/vscode-extension"
+  },
   "engines": {
     "vscode": "^1.99.0",
     "node": ">=22"
@@ -17,16 +21,75 @@
     "onChatParticipant:openviking.memory",
     "onStartupFinished"
   ],
-  "contributes": {},
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "openviking.memory",
+        "name": "openviking",
+        "fullName": "OpenViking",
+        "description": "Long-term memory backed by OpenViking",
+        "isSticky": true
+      }
+    ],
+    "languageModelTools": [],
+    "configuration": {
+      "title": "OpenViking",
+      "properties": {
+        "openviking.url": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "OpenViking server base URL (e.g. `https://your-openviking.example.com`). Leave empty to use `~/.openviking/ovcli.conf` or the local default `http://127.0.0.1:1933`."
+        },
+        "openviking.apiKey": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Bearer token for the OpenViking server. **Prefer the `OpenViking: Set API Key` command** (writes to VS Code SecretStorage) over inline values here."
+        },
+        "openviking.account": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Multi-tenant account header (`X-OpenViking-Account`)."
+        },
+        "openviking.user": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Multi-tenant user header (`X-OpenViking-User`)."
+        },
+        "openviking.agentId": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Agent identity header (`X-OpenViking-Agent`). Defaults to `copilot-vscode` when empty."
+        },
+        "openviking.autoRecall": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Inject relevant OpenViking memories at the top of each user turn."
+        },
+        "openviking.autoCapture": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Capture chat turns into OpenViking after each response."
+        },
+        "openviking.debug": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Write hook logs to `~/.openviking/logs/copilot-vscode-hooks.log`."
+        }
+      }
+    }
+  },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "esbuild src/extension.ts --bundle --platform=node --target=node22 --format=cjs --external:vscode --outfile=dist/extension.cjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "package": "npm run build && vsce package --out openviking-copilot.vsix --no-dependencies"
   },
   "dependencies": {
     "@openviking/copilot-shared": "*"
   },
   "devDependencies": {
-    "@types/vscode": "^1.99.0"
+    "@types/vscode": "^1.99.0",
+    "@vscode/vsce": "^3.2.1",
+    "esbuild": "^0.24.0"
   }
 }
