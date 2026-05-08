@@ -31,6 +31,8 @@ from openviking.session.memory.tools import (
     MemoryTool,
     add_tool_call_pair_to_messages,
     get_tool,
+    get_tool_schemas,
+    list_tools,
     register_tool,
 )
 from openviking.session.memory.utils import (
@@ -70,6 +72,8 @@ __all__ = [
     "MemoryLsTool",
     "register_tool",
     "get_tool",
+    "get_tool_schemas",
+    "list_tools",
     "add_tool_call_pair_to_messages",
     # Language utilities and helpers
     "detect_language_from_conversation",

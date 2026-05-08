@@ -367,8 +367,12 @@ class MemoryUpdater:
                 try:
                     content = await viking_fs.read_file(uri, ctx=ctx)
                     if content:
-                        old_content = parse_memory_file_with_fields(content)
-                        old_content.uri = uri
+                        parsed = parse_memory_file_with_fields(content)
+                        old_content = MemoryFileContent(
+                            uri=uri,
+                            plain_content=parsed.get("content", ""),
+                            memory_fields=parsed
+                        )
                 except Exception:
                     # File doesn't exist yet, that's okay
                     pass
