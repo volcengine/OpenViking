@@ -1,6 +1,6 @@
 # RAGFS Origin
 
-This crate (RAGFS) is a Rust reimplementation of the AGFS project originally authored by [c44pt0r](https://github.com/c44pt0r).
+This crate (RAGFS) is a Rust reimplementation of the AGFS project originally authored by [c4pt0r](https://github.com/c4pt0r).
 
 ## Source
 
