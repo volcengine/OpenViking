@@ -7,7 +7,6 @@ import {
   buildAutoRecallContext,
   prepareRecallQuery,
 } from "./auto-recall.js";
-import type { AutoRecallTrace } from "./auto-recall.js";
 import {
   compileSessionPatterns,
   getCaptureDecision,
@@ -375,16 +374,6 @@ function prependRecallToLatestUserMessage(messages: AgentMessage[], recallBlock:
 function emitDiag(log: Logger, stage: string, sessionId: string, data: Record<string, unknown>, enabled = true): void {
   if (!enabled) return;
   log.info(`openviking: diag ${JSON.stringify({ ts: Date.now(), stage, sessionId, data })}`);
-}
-
-function emitAutoRecallTrace(log: Logger, data: Record<string, unknown>): void {
-  log.info(
-    `openviking: auto-recall-trace ${toJsonLog({
-      ts: Date.now(),
-      stage: "auto_recall_trace",
-      ...data,
-    }, 12000)}`,
-  );
 }
 
 function totalExtractedMemories(memories?: Record<string, number>): number {
@@ -1152,37 +1141,6 @@ export function createMemoryOpenVikingContextEngine(params: {
       const isTransformContextAssemble = !isMainAssemble;
 
       const originalTokens = roughEstimate(messages);
-      const traceRoutingRef = assembleParams.sessionId ?? sessionKey ?? OVSessionId;
-      const traceAgentId = () => resolveAgentId(traceRoutingRef, sessionKey, OVSessionId);
-      const logAutoRecallTrace = (
-        result: string,
-        extra?: Record<string, unknown>,
-      ) => {
-        emitAutoRecallTrace(logger, {
-          sessionId: assembleParams.sessionId,
-          sessionKey: sessionKey ?? null,
-          ovSessionId: OVSessionId,
-          agentId: traceAgentId(),
-          phase: "transform_context",
-          result,
-          ...extra,
-        });
-      };
-      const logBuildAutoRecallTrace = (
-        recallTrace: AutoRecallTrace,
-        agentId: string,
-        extra?: Record<string, unknown>,
-      ) => {
-        emitAutoRecallTrace(logger, {
-          sessionId: assembleParams.sessionId,
-          sessionKey: sessionKey ?? null,
-          ovSessionId: OVSessionId,
-          agentId,
-          phase: "transform_context",
-          ...recallTrace,
-          ...extra,
-        });
-      };
 
       rememberSessionAgentId?.({
         sessionId: assembleParams.sessionId,
@@ -1201,42 +1159,24 @@ export function createMemoryOpenVikingContextEngine(params: {
       });
 
       if (isBypassedSession({ sessionId: assembleParams.sessionId, sessionKey })) {
-        if (isTransformContextAssemble) {
-          logAutoRecallTrace("session_bypassed");
-        }
         return assemblePassthrough(OVSessionId, "session_bypassed", messages, originalTokens);
       }
 
       if (isTransformContextAssemble) {
         if (latestMessage?.role !== "user") {
-          logAutoRecallTrace("non_user_tail", {
-            latestRole: latestMessage?.role ?? null,
-          });
           return assemblePassthrough(OVSessionId, "transform_context_non_user_tail", messages, originalTokens, {
             latestRole: latestMessage?.role ?? null,
           });
         }
         if (!cfg.autoRecall) {
-          logAutoRecallTrace("disabled");
           return assemblePassthrough(OVSessionId, "transform_context_auto_recall_disabled", messages, originalTokens);
         }
         if (hasAutoRecallBlock(latestMessage)) {
-          logAutoRecallTrace("already_injected");
           return assemblePassthrough(OVSessionId, "transform_context_recall_already_injected", messages, originalTokens);
         }
 
         const recallQuery = prepareRecallQuery(extractAgentMessageText(latestMessage));
-        const queryTrace = {
-          query: {
-            chars: recallQuery.finalChars,
-            originalChars: recallQuery.originalChars,
-            finalChars: recallQuery.finalChars,
-            truncated: recallQuery.truncated,
-            preview: recallQuery.query.slice(0, 180),
-          },
-        };
         if (!recallQuery.query || recallQuery.query.length < 5) {
-          logAutoRecallTrace("empty_query", queryTrace);
           return assemblePassthrough(OVSessionId, "transform_context_empty_recall_query", messages, originalTokens);
         }
         if (recallQuery.truncated) {
@@ -1247,9 +1187,9 @@ export function createMemoryOpenVikingContextEngine(params: {
         }
 
         try {
+          const client = await getClient();
           const routingRef = assembleParams.sessionId ?? sessionKey ?? OVSessionId;
           const agentId = resolveAgentId(routingRef, sessionKey, OVSessionId);
-          const client = await getClient();
           const recall = await buildAutoRecallContext({
             cfg,
             client,
@@ -1260,7 +1200,6 @@ export function createMemoryOpenVikingContextEngine(params: {
           });
 
           if (!recall.block) {
-            logBuildAutoRecallTrace(recall.trace, agentId, queryTrace);
             return assemblePassthrough(OVSessionId, "transform_context_no_recall_hits", messages, originalTokens, {
               memoryCount: recall.memoryCount,
             });
@@ -1268,12 +1207,6 @@ export function createMemoryOpenVikingContextEngine(params: {
 
           const withRecall = prependRecallToLatestUserMessage(messages, recall.block);
           const estimatedTokens = roughEstimate(withRecall);
-          logBuildAutoRecallTrace(recall.trace, agentId, {
-            ...queryTrace,
-            injectedInto: "latest_user_message",
-            outputMessagesCount: withRecall.length,
-            estimatedTokens,
-          });
           diag("assemble_result", OVSessionId, {
             passthrough: false,
             phase: "transform_context",
@@ -1287,13 +1220,6 @@ export function createMemoryOpenVikingContextEngine(params: {
           return { messages: withRecall, estimatedTokens };
         } catch (err) {
           logger.warn?.(`openviking: auto-recall failed: ${String(err)}`);
-          logAutoRecallTrace(
-            String(err).toLowerCase().includes("timeout") ? "timeout" : "error",
-            {
-              ...queryTrace,
-              error: String(err),
-            },
-          );
           return assemblePassthrough(OVSessionId, "transform_context_recall_failed", messages, originalTokens, {
             error: String(err),
           });

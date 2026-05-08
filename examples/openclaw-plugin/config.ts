@@ -252,7 +252,7 @@ export const memoryOpenVikingConfigSchema = {
     const recallMaxInjectedChars = Math.max(
       100,
       Math.min(
-        100000,
+        50000,
         Math.floor(
           toNumber(
             cfg.recallMaxInjectedChars,

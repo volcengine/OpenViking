@@ -38,13 +38,6 @@ function makeStats() {
   };
 }
 
-function getAutoRecallTraceLogs(logger: ReturnType<typeof makeLogger>): Array<Record<string, any>> {
-  return logger.info.mock.calls
-    .map(([message]) => String(message))
-    .filter((message) => message.startsWith("openviking: auto-recall-trace "))
-    .map((message) => JSON.parse(message.replace("openviking: auto-recall-trace ", "")));
-}
-
 function makeEngine(
   contextResult: unknown,
   opts?: {
@@ -157,86 +150,6 @@ describe("context-engine assemble()", () => {
       expect(result.messages[2]?.content).toContain("User prefers Rust for backend tasks.");
       expect(result.messages[2]?.content).toContain("what backend language should we use?");
       expect(result.systemPromptAddition).toBeUndefined();
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("emits structured auto-recall trace logs during transformContext injection", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({ status: "ok" }),
-      }),
-    );
-    try {
-      const { engine, client, logger } = makeEngine(
-        {
-          latest_archive_overview: "unused",
-          pre_archive_abstracts: [],
-          messages: [],
-          estimatedTokens: 0,
-          stats: makeStats(),
-        },
-        {
-          cfgOverrides: {
-            autoRecall: true,
-            recallPreferAbstract: true,
-            recallLimit: 6,
-            recallMaxInjectedChars: 16000,
-          },
-        },
-      );
-      client.find
-        .mockResolvedValueOnce({
-          memories: [
-            {
-              uri: "viking://user/default/memories/rust-pref",
-              level: 2,
-              category: "preferences",
-              abstract: "User prefers Rust for backend tasks.",
-              score: 0.93,
-            },
-          ],
-          total: 1,
-        })
-        .mockResolvedValueOnce({ memories: [], total: 0 });
-
-      await engine.assemble({
-        sessionId: "session-transform",
-        sessionKey: "agent:main:test-session",
-        messages: [{ role: "user", content: "what backend language should we use?" }],
-      });
-
-      const traces = getAutoRecallTraceLogs(logger);
-      expect(traces).toHaveLength(1);
-      expect(traces[0]).toMatchObject({
-        stage: "auto_recall_trace",
-        sessionId: "session-transform",
-        sessionKey: "agent:main:test-session",
-        ovSessionId: expect.any(String),
-        agentId: "agent:session-transform",
-        result: "injected",
-        counts: expect.objectContaining({
-          raw: 1,
-          unique: 1,
-          leafOnly: 1,
-          selected: 1,
-          injected: 1,
-        }),
-        budget: expect.objectContaining({
-          recallMaxInjectedChars: 16000,
-          estimatedTokens: expect.any(Number),
-        }),
-      });
-      expect(traces[0]?.memories).toEqual([
-        expect.objectContaining({
-          uri: "viking://user/default/memories/rust-pref",
-          category: "preferences",
-          injected: true,
-        }),
-      ]);
     } finally {
       vi.unstubAllGlobals();
     }
