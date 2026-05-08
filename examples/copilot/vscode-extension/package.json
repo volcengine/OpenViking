@@ -157,7 +157,7 @@
         "openviking.autoCapture": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Capture chat turns into OpenViking after each response."
+          "markdownDescription": "Capture completed `@openviking` participant turns into OpenViking after each response. Stable VS Code chat APIs do not expose default `@workspace` turns to extensions."
         },
         "openviking.captureMode": {
           "type": "string",
@@ -174,7 +174,7 @@
         "openviking.captureAssistantTurns": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Include assistant turns in the capture stream. Set to `false` for user-only mode."
+          "markdownDescription": "Include assistant turns in the `@openviking` participant capture stream. Set to `false` for user-only mode."
         },
         "openviking.commitTokenThreshold": {
           "type": "number",

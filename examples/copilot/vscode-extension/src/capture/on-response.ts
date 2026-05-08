@@ -9,10 +9,10 @@
  * `captureChatTurn` with the user prompt + the assembled assistant
  * text and we route through the canonicaliser → CommitQueue.
  *
- * Phase 3 (#25) will plug additional sources into this same entry
- * point if/when Phase 0's spike confirms VS Code exposes a default-
- * chat response event we can subscribe to. The shape stays the same
- * regardless: take user/assistant text, canonicalise, enqueue.
+ * Phase 3 (#25) confirmed the stable VS Code 1.99 chat API still
+ * has no default-chat response event to subscribe to. If VS Code adds
+ * one later, default-chat capture should plug into this same entry
+ * point: take user/assistant text, canonicalise, enqueue.
  *
  * Async-detach: CommitQueue's `async` flag is sourced from
  * `cfg.writePathAsync`; when true and an asyncSpawn factory is

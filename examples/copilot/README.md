@@ -23,6 +23,12 @@ Design and rationale: see [`PLAN.md`](../../PLAN.md) at the repo root.
 Pre-release scaffold. Implementation tracked in the issues under the
 `Copilot memory plugins` milestone (epic: #1).
 
+Current VS Code support:
+
+- Recall works in default Copilot Chat through the `openviking_recall` language-model tool.
+- Capture is participant-scoped: completed `@openviking` participant turns are committed to OpenViking.
+- Stable VS Code 1.99 chat APIs expose `vscode.chat.createChatParticipant(...)` for extension-owned participants, but do not expose a global default-chat response event such as `vscode.chat.onDidReceiveChatResponse`. Default `@workspace` turns therefore cannot be captured without VS Code adding a turn-level event.
+
 ## Quickstart (development)
 
 ```bash
