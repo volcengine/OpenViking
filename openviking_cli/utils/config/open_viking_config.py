@@ -388,7 +388,7 @@ class OpenVikingConfigSingleton:
             if not config_path.exists():
                 raise FileNotFoundError(f"Config file does not exist: {config_file}")
 
-            with open(config_path, "r", encoding="utf-8") as f:
+            with open(config_path, "r", encoding="utf-8-sig") as f:
                 raw = f.read()
 
             # Expand $VAR and ${VAR} inside the JSON text (useful for container deployments).

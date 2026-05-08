@@ -32,6 +32,14 @@ class TestCheckConfig:
         assert ok
         assert str(config) in detail
 
+    def test_pass_with_utf8_bom_config(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text("\ufeff" + json.dumps({"embedding": {"dense": {}}}))
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            ok, detail, fix = check_config()
+        assert ok
+        assert str(config) in detail
+
     def test_fail_missing_config(self):
         with patch("openviking_cli.doctor._find_config", return_value=None):
             ok, detail, fix = check_config()

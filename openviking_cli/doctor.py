@@ -54,7 +54,7 @@ def _find_config() -> Optional[Path]:
 def _load_config_json(config_path: Path) -> Optional[dict]:
     """Parse ov.conf as JSON. Returns None if the file is unreadable or not valid JSON."""
     try:
-        raw = config_path.read_text(encoding="utf-8")
+        raw = config_path.read_text(encoding="utf-8-sig")
         raw = os.path.expandvars(raw)
         return json.loads(raw)
     except (OSError, json.JSONDecodeError):
@@ -72,7 +72,7 @@ def check_config() -> tuple[bool, str, Optional[str]]:
         )
 
     try:
-        raw = config_path.read_text(encoding="utf-8")
+        raw = config_path.read_text(encoding="utf-8-sig")
         raw = os.path.expandvars(raw)
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
