@@ -13,8 +13,8 @@ use tower_http::{
 use tracing::Level;
 
 use super::handlers::{
-    create_directory, create_file, delete_file, health_check, list_directory, list_mounts,
-    mount_filesystem, read_file, stat_file, unmount_filesystem, write_file, AppState,
+    create_directory, create_file, delete_file, grep_content, health_check, list_directory,
+    list_mounts, mount_filesystem, read_file, stat_file, unmount_filesystem, write_file, AppState,
 };
 
 /// Create the main application router
@@ -33,12 +33,12 @@ pub fn create_router(state: AppState, enable_cors: bool) -> Router {
         .route("/mounts", get(list_mounts))
         .route("/mount", post(mount_filesystem))
         .route("/unmount", post(unmount_filesystem))
+        // Search operations
+        .route("/grep", post(grep_content))
         // Health check
         .route("/health", get(health_check));
 
-    let app = Router::new()
-        .nest("/api/v1", api_routes)
-        .with_state(state);
+    let app = Router::new().nest("/api/v1", api_routes).with_state(state);
 
     // Add tracing middleware
     let app = app.layer(

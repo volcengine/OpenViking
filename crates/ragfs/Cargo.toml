@@ -76,6 +76,16 @@ aws-types = { version = "1", optional = true }
 # Cache
 lru = "0.12"
 
+# Regular expressions for grep
+regex = "1.10"
+
+# Grep acceleration (localfs fallback, rg-like behavior)
+ignore = "0.4.25"
+grep = "0.4.1"
+grep-matcher = "0.1.8"
+grep-regex = "0.1.14"
+grep-searcher = "0.1.16"
+
 # Development dependencies
 [dev-dependencies]
 tempfile = "3.12"

@@ -258,6 +258,36 @@ bypass 命中时所有 hook 直接放行，不联系 OpenViking。
 
 `claude_code.captureTimeoutMs` 须低于 `Stop` hook 超时，让脚本能优雅失败并仍能更新增量 state。
 
+## Statusline 状态行
+
+插件会在 Claude Code 输入框下方渲染一行 OpenViking 状态。安装脚本会把它注册到 `~/.claude/settings.json`（CC 插件 manifest 不支持 `statusLine` 字段，必须走这条路）。
+
+示例：
+
+```text
+OV ✓ │ ↩ 6 mem (0.92) · 50ms              本轮注入 6 条记忆，最高分 0.92
+OV ⚠ slow                                  探针超过 1s 预算（服务器可能在抽风）
+OV ✗ offline                               服务器不可达
+OV ⚡ bypass                                命中 OPENVIKING_BYPASS_SESSION*
+OV ✓ │ ✎ 573/20k · 2 arch                  待提交进度 + 本 session 已归档 2 次
+OV ✓ │ 🔗 resumed │ +3 today               session 已恢复上下文；今日累计归档 3 次
+```
+
+完整段位说明 + 个性化 recipe（隐藏段位、改色、与已有 statusline 组合、自定义段位），见 [`STATUSLINE.md`](./STATUSLINE.md)。
+
+数据来源：
+
+- `auto-recall.mjs` / `auto-capture.mjs` / `session-start.mjs` 每轮写快照到 `~/.openviking/state/{last-recall,last-capture,last-session-event,daily-stats}.json`。
+- `scripts/statusline.mjs` 读快照，再加 5 秒共享缓存的 `GET /health`。
+- 网络调用 1s 硬超时；多个 CC session 共享缓存避免风暴。
+
+关闭 / 调整：
+
+- `OPENVIKING_STATUSLINE=off` ——不删注册，仅静默。
+- `NO_COLOR=1` 或非 TTY ——自动去 ANSI 颜色。
+- 彻底卸载：`jq 'del(.statusLine)' ~/.claude/settings.json > t && mv t ~/.claude/settings.json`。
+- 已有自定义 statusline？安装时会询问替换 / 跳过 / 稍后手动 compose。
+
 ## 调试日志
 
 设置 `claude_code.debug: true` 或 `OPENVIKING_DEBUG=1`，hook 日志写到 `~/.openviking/logs/cc-hooks.log`。

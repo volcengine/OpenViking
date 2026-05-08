@@ -76,8 +76,8 @@ async function main() {
     return;
   }
 
-  // Isolated ovSessionId: mix agent_id into the hash so the subagent has
-  // its own OV session distinct from the parent.
+  // Isolated ovSessionId: append agent_id so the subagent has its own OV
+  // session distinct from the parent (cc-<ccid>__agent-<agentid>).
   const ovSessionId = deriveOvSessionId(sessionId, `agent:${agentId}`);
   const ovAgentId = `${cfg.agentId || "claude-code"}_${agentType}`;
 

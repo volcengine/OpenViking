@@ -310,6 +310,70 @@ install_modern() {
   claude plugin enable claude-code-memory-plugin@openviking-plugins-local >/dev/null 2>&1 || true
 }
 
+# Statusline registration. CC's plugin manifest doesn't accept a statusLine
+# field (only hooks/MCP/agents/skills are bundle-able), so we have to inject
+# into the user's ~/.claude/settings.json. Always opt-in: we ask first, both
+# because terminal real-estate is opinionated and because users often have
+# their own statusline they don't want clobbered.
+register_statusline() {
+  local plugin_dir="$REPO_DIR/examples/claude-code-memory-plugin"
+  # Quote the script path so install dirs containing spaces/metacharacters
+  # don't break when CC invokes the command via /bin/sh -c.
+  local cmd="node \"$plugin_dir/scripts/statusline.mjs\""
+  local settings="$HOME/.claude/settings.json"
+
+  heading 'Statusline (optional)'
+  info 'OpenViking can show a one-line server/recall status under the input box.'
+  info 'Sample: "OV ✓ │ ↩ 6 mem (0.92) · 50ms │ ✎ 573/20k · 2 arch │ +3 today"'
+
+  mkdir -p "$HOME/.claude"
+  [ -f "$settings" ] || echo '{}' > "$settings"
+
+  local existing
+  existing=$(jq -r '.statusLine.command // empty' "$settings" 2>/dev/null || echo "")
+
+  if [ -n "$existing" ] && [ "$existing" = "$cmd" ]; then
+    info 'Already registered. (Re-run this installer with no changes to refresh.)'
+    return 0
+  fi
+
+  if [ -n "$existing" ]; then
+    warn "Existing statusline detected:"
+    warn "  $existing"
+    ask 'Replace it with OpenViking statusline? [y/N] '
+  else
+    ask 'Enable OpenViking statusline? [y/N] '
+  fi
+  local reply
+  read -r reply || reply=""
+  case "$reply" in
+    y|Y|yes|Yes|YES) ;;
+    *)
+      info 'Skipped statusline registration. Run this installer again to enable it later.'
+      return 0
+      ;;
+  esac
+
+  local ts; ts=$(date +%Y%m%d-%H%M%S)
+  cp -p "$settings" "$settings.bak.$ts"
+  # mktemp inside the same directory as $settings so the final `mv` is a
+  # rename within one filesystem (atomic). Using $TMPDIR risks crossing
+  # filesystems on Linux (tmpfs vs $HOME), which makes `mv` non-atomic.
+  local tmp
+  tmp=$(mktemp "$settings.XXXXXX") || { err 'mktemp failed'; return 1; }
+  if ! jq --arg cmd "$cmd" \
+       '.statusLine = {type: "command", command: $cmd, padding: 0}' \
+       "$settings" > "$tmp" 2>/dev/null; then
+    err "writing statusline into $settings failed; original untouched"
+    rm -f "$tmp"
+    return 1
+  fi
+  mv "$tmp" "$settings"
+  info "statusline registered (backup: $settings.bak.$ts)"
+  info 'Disable later:    jq "del(.statusLine)" '"$settings"' > t && mv t '"$settings"
+  info 'Or silence only:  export OPENVIKING_STATUSLINE=off'
+}
+
 USE_LEGACY=0
 if [ "$CLAUDE_AVAILABLE" -eq 1 ] && ! has_plugin_subcommand; then
   warn "This Claude Code build doesn't expose 'claude plugin' (introduced in 2.0)."
@@ -330,6 +394,7 @@ if [ "$CLAUDE_AVAILABLE" -eq 1 ]; then
   else
     install_modern
   fi
+  register_statusline || warn 'statusline registration skipped (continuing)'
 else
   warn "Run these manually after installing Claude Code:"
   warn "  cd \"$REPO_DIR\""
@@ -358,3 +423,6 @@ fi
 info 'Then:'
 info '  claude              # start Claude Code'
 info '  /mcp                # inside Claude Code, verify the OpenViking entry'
+printf '\n'
+printf '%sCurious what your statusline shows, or want to tweak it?%s Open Claude Code and paste:\n' "$BOLD" "$RESET"
+printf '  %sRead %s/examples/claude-code-memory-plugin/STATUSLINE.md. Walk me through what each segment of my OpenViking statusline means, then ask me whether I want to personalize anything.%s\n' "$CYAN" "$REPO_DIR" "$RESET"

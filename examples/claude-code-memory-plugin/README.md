@@ -258,6 +258,36 @@ Defaults in `hooks/hooks.json`:
 
 Keep `claude_code.captureTimeoutMs` below the `Stop` timeout so the script can fail gracefully and still update its incremental state.
 
+## Statusline
+
+The plugin renders a one-line status of OpenViking under your Claude Code input box. The installer registers it in `~/.claude/settings.json` (CC's plugin manifest doesn't accept a `statusLine` field, so this is the only way to wire it in).
+
+Examples:
+
+```text
+OV ✓ │ ↩ 6 mem (0.92) · 50ms              last turn injected 6 memories, top score 0.92
+OV ⚠ slow                                  probe missed the 1 s budget (server may be lagging)
+OV ✗ offline                               server unreachable
+OV ⚡ bypass                                OPENVIKING_BYPASS_SESSION* matched
+OV ✓ │ ✎ 573/20k · 2 arch                  pending capture, two archives produced this session
+OV ✓ │ 🔗 resumed │ +3 today               session re-hydrated; 3 archives committed today
+```
+
+For the full segment glossary and personalization recipes (hide segments, recolor, compose with another statusline, add a custom segment), see [`STATUSLINE.md`](./STATUSLINE.md).
+
+Data flow:
+
+- `auto-recall.mjs` / `auto-capture.mjs` / `session-start.mjs` write small snapshots to `~/.openviking/state/{last-recall,last-capture,last-session-event,daily-stats}.json` after each turn.
+- `scripts/statusline.mjs` reads those snapshots plus a 5 s shared cache of `GET /health`.
+- Network calls have a hard 1 s timeout. Cache is shared across CC sessions to prevent stampedes.
+
+Disable / customize:
+
+- `OPENVIKING_STATUSLINE=off` — silence without removing the registration.
+- `NO_COLOR=1` (or non-TTY) — strip ANSI colors automatically.
+- Remove entirely: `jq 'del(.statusLine)' ~/.claude/settings.json > t && mv t ~/.claude/settings.json`.
+- Already had a custom statusline? The installer prompts replace / skip / manual-compose.
+
 ## Debug logging
 
 Set `claude_code.debug: true` in `ov.conf` or `OPENVIKING_DEBUG=1` to write hook logs to `~/.openviking/logs/cc-hooks.log`.

@@ -124,6 +124,25 @@ OPENVIKING_BYPASS_SESSION=1 claude
 
 When bypass is active, every hook approves immediately without contacting OpenViking.
 
+## Statusline
+
+The plugin also renders a one-line OpenViking status under your Claude Code input box. The installer registers it in `~/.claude/settings.json` (CC's plugin manifest doesn't accept a `statusLine` field, so it has to live in user settings).
+
+```text
+OV ✓ │ ↩ 6 mem (0.92) · 50ms             last turn injected 6 memories, top score 0.92
+OV ⚠ slow                                 probe missed the 1 s budget (server may be lagging)
+OV ✗ offline                              server unreachable
+OV ⚡ bypass                               OPENVIKING_BYPASS_SESSION* matched
+OV ✓ │ ✎ 573/20k · 2 arch                 pending capture, two archives produced this session
+OV ✓ │ 🔗 resumed │ +3 today              session re-hydrated; 3 archives committed today
+```
+
+The hook scripts write small JSON snapshots to `~/.openviking/state/`; the statusline script reads those plus a 5 s shared cache of `GET /health`. The probe is bounded by a 1 s hard timeout; the cache is shared across sessions to prevent stampedes.
+
+Set `OPENVIKING_STATUSLINE=off` to silence without removing the registration, or `jq 'del(.statusLine)' ~/.claude/settings.json` to remove. If you already had a custom statusline, the installer prompts replace / skip / manual compose.
+
+For the full segment glossary (when each one shows, why one might be missing) and personalization recipes (hide segments, recolor, compose with another statusline, add a custom segment), see [`examples/claude-code-memory-plugin/STATUSLINE.md`](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/STATUSLINE.md). The easiest path is to open Claude Code and ask it to read the doc, explain the segments, and tailor anything to your preference.
+
 ## Compared to Claude Code's built-in `MEMORY.md`
 
 This plugin **complements** Claude Code's native memory system, it doesn't replace it:
@@ -152,6 +171,15 @@ This plugin **complements** Claude Code's native memory system, it doesn't repla
 `Stop`, `SessionEnd`, and `SubagentStop` use a detached-worker pattern so the user never waits for OpenViking. Disable with `OPENVIKING_WRITE_PATH_ASYNC=false` if you need deterministic ordering.
 
 `auto-capture` strips `<openviking-context>`, `<system-reminder>`, `<relevant-memories>`, and `[Subagent Context]` blocks before pushing to OV — without this, the recall context the plugin injects this turn would be captured back as part of the user's message next turn.
+
+### OV session ID derivation
+
+The OV session ID embeds the CC `session_id` verbatim, so you can map between the two by eye:
+
+- Parent: `cc-<ccSessionId>`, e.g. `cc-7d978bb3-cd9c-4ac6-828d-20965d66b783`
+- Subagent: `cc-<ccSessionId>__agent-<agentId>`, e.g. `cc-7d978bb3-cd9c-4ac6-828d-20965d66b783__agent-abc123`
+
+`~/.openviking/state/last-capture.json` shows the live `cc_session_id` and `ov_session_id` for the current session; the CC side's session ID is also the filename of `~/.claude/projects/<encoded-cwd>/<session_id>.jsonl`.
 
 ## Troubleshooting
 

@@ -7,6 +7,69 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::SystemTime;
 
+/// Grep match result
+///
+/// Represents a single match found during a grep operation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GrepMatch {
+    /// File path where the match was found
+    pub file: String,
+
+    /// Line number (1-based)
+    pub line: u64,
+
+    /// Content of the matched line
+    pub content: String,
+}
+
+/// Grep operation result
+///
+/// Contains all matches found during a grep operation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GrepResult {
+    /// List of matches
+    pub matches: Vec<GrepMatch>,
+
+    /// Total number of matches
+    pub count: usize,
+}
+
+impl GrepResult {
+    /// Create a new empty GrepResult
+    pub fn new() -> Self {
+        Self {
+            matches: Vec::new(),
+            count: 0,
+        }
+    }
+
+    /// Create a GrepResult from a list of matches
+    pub fn from_matches(matches: Vec<GrepMatch>) -> Self {
+        let count = matches.len();
+        Self { matches, count }
+    }
+
+    /// Add a match to the result
+    pub fn add_match(&mut self, file: String, line: u64, content: String) {
+        self.matches.push(GrepMatch { file, line, content });
+        self.count += 1;
+    }
+
+    /// Limit the number of matches
+    pub fn limit(&mut self, max_count: usize) {
+        if self.matches.len() > max_count {
+            self.matches.truncate(max_count);
+            self.count = max_count;
+        }
+    }
+}
+
+impl Default for GrepResult {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// File metadata information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileInfo {

@@ -133,7 +133,7 @@ function collectAllMdFiles(srcDir: string): { relativePath: string; absPath: str
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function buildLlmsTxt(siteConfig: any) {
-  const siteUrl = process.env.DOCS_SITE_URL || 'https://volcengine.github.io/OpenViking'
+  const siteUrl = (process.env.DOCS_SITE_URL || '').replace(/\/$/, '')
   const base = (siteConfig.site.base || '/').replace(/\/$/, '')
   const srcDir = siteConfig.srcDir
   const outDir = siteConfig.outDir

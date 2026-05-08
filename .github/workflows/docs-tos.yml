@@ -1,0 +1,115 @@
+name: 19. Docs TOS Deploy
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'docs/**'
+      - '.github/workflows/docs-tos.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOCS_BASE: /
+
+jobs:
+  deploy:
+    name: Build and Upload Docs to TOS
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+
+      - name: Install docs dependencies
+        run: npm ci
+        working-directory: docs
+
+      - name: Build docs
+        run: npm run docs:build
+        working-directory: docs
+
+      - name: Check TOS configuration
+        id: tos_config
+        env:
+          TOS_ACCESS_KEY: ${{ secrets.TOS_ACCESS_KEY }}
+          TOS_SECRET_KEY: ${{ secrets.TOS_SECRET_KEY }}
+          TOS_REGION: ${{ secrets.TOS_REGION }}
+          TOS_BUCKET: ${{ secrets.TOS_BUCKET }}
+          TOS_ENDPOINT: ${{ secrets.TOS_ENDPOINT }}
+        run: |
+          if [ -n "${TOS_ACCESS_KEY}" ] && [ -n "${TOS_SECRET_KEY}" ] && [ -n "${TOS_REGION}" ] && [ -n "${TOS_BUCKET}" ] && [ -n "${TOS_ENDPOINT}" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        if: steps.tos_config.outputs.configured == 'true'
+        id: setup_python
+        continue-on-error: true
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Install AWS CLI
+        if: steps.tos_config.outputs.configured == 'true'
+        id: install_aws_cli
+        continue-on-error: true
+        run: |
+          python -m pip install --upgrade awscli
+          aws configure set default.s3.addressing_style virtual
+
+      - name: Upload docs dist to TOS
+        id: upload_tos
+        if: steps.tos_config.outputs.configured == 'true'
+        continue-on-error: true
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.TOS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TOS_SECRET_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.TOS_REGION }}
+          TOS_BUCKET: ${{ secrets.TOS_BUCKET }}
+          TOS_ENDPOINT: ${{ secrets.TOS_ENDPOINT }}
+        run: |
+          set -euo pipefail
+          : "${AWS_ACCESS_KEY_ID:?Missing TOS_ACCESS_KEY secret}"
+          : "${AWS_SECRET_ACCESS_KEY:?Missing TOS_SECRET_KEY secret}"
+          : "${AWS_DEFAULT_REGION:?Missing TOS_REGION secret}"
+          : "${TOS_BUCKET:?Missing TOS_BUCKET secret}"
+          : "${TOS_ENDPOINT:?Missing TOS_ENDPOINT secret}"
+
+          TOS_ENDPOINT="${TOS_ENDPOINT#https://}"
+          TOS_ENDPOINT="${TOS_ENDPOINT#http://}"
+          case "${TOS_ENDPOINT}" in
+            tos-s3-*) TOS_S3_ENDPOINT="${TOS_ENDPOINT}" ;;
+            tos-*) TOS_S3_ENDPOINT="tos-s3-${TOS_ENDPOINT#tos-}" ;;
+            *) TOS_S3_ENDPOINT="${TOS_ENDPOINT}" ;;
+          esac
+
+          aws s3 cp docs/.vitepress/dist "s3://${TOS_BUCKET}/" \
+            --endpoint-url "https://${TOS_S3_ENDPOINT}" \
+            --recursive \
+            --only-show-errors
+
+      - name: Report TOS deployment failure
+        if: steps.setup_python.outcome == 'failure' || steps.install_aws_cli.outcome == 'failure' || steps.upload_tos.outcome == 'failure'
+        run: |
+          echo "::warning::Docs were built, but deploying to TOS failed. This deployment is non-blocking."
+          echo "## TOS deployment failed" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Docs build succeeded, but setting up TOS tooling or uploading docs/.vitepress/dist failed. This workflow keeps passing so TOS availability does not block other repository flows." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report skipped TOS upload
+        if: steps.tos_config.outputs.configured != 'true'
+        run: |
+          echo "## TOS upload skipped" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Docs build succeeded, but TOS secrets are not fully configured for this repository. Upload was skipped without failing the workflow." >> "$GITHUB_STEP_SUMMARY"

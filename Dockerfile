@@ -19,9 +19,19 @@ ARG UV_LOCK_STRATEGY=auto
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    ccache \
     cmake \
     git \
  && rm -rf /var/lib/apt/lists/*
+
+# Route gcc/g++/cc through ccache so cmake (which asks shutil.which("gcc")) picks
+# up /usr/lib/ccache/gcc and benefits from the BuildKit cache mount on /root/.ccache.
+ENV PATH="/usr/lib/ccache:${PATH}"
+ENV CCACHE_DIR=/root/.ccache
+# Pin Cargo's target dir to a stable path so a BuildKit cache mount can persist
+# build artifacts across layer reruns even when uv builds the wheel in an
+# ephemeral isolated tempdir.
+ENV CARGO_TARGET_DIR=/cargo-target
 
 ENV UV_COMPILE_BYTECODE=1
 ENV UV_LINK_MODE=copy
@@ -44,6 +54,10 @@ COPY third_party/ third_party/
 # stale, so Docker builds stay unblocked after dependency changes. Set
 # UV_LOCK_STRATEGY=locked to keep fail-fast reproducibility checks.
 RUN --mount=type=cache,target=/root/.cache/uv,id=uv-${TARGETPLATFORM} \
+    --mount=type=cache,target=/cargo-target,id=cargo-target-${TARGETPLATFORM} \
+    --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-${TARGETPLATFORM} \
+    --mount=type=cache,target=/usr/local/cargo/git,id=cargo-git-${TARGETPLATFORM} \
+    --mount=type=cache,target=/root/.ccache,id=ccache-${TARGETPLATFORM} \
     if [ -n "${OPENVIKING_VERSION:-}" ]; then \
         export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING="${OPENVIKING_VERSION}"; \
     elif [ -f openviking/_version.py ]; then \
@@ -67,43 +81,6 @@ RUN --mount=type=cache,target=/root/.cache/uv,id=uv-${TARGETPLATFORM} \
             exit 2 \
             ;; \
     esac
-
-# Build ragfs-python (Rust RAGFS binding) and extract the native extension
-# into the installed openviking package.
-RUN --mount=type=cache,target=/root/.cache/uv,id=uv-${TARGETPLATFORM} \
-    uv pip install maturin && \
-    export _TMPDIR=$(mktemp -d) && \
-    trap 'rm -rf "$_TMPDIR"' EXIT && \
-    cd crates/ragfs-python && \
-    python -m maturin build --release --out "$_TMPDIR" && \
-    cd ../.. && \
-    export _OV_LIB=$(python -c "import openviking; from pathlib import Path; print(Path(openviking.__file__).resolve().parent / 'lib')") && \
-    mkdir -p "$_OV_LIB" && \
-    python - <<'PY'
-import glob
-import os
-import sys
-import zipfile
-
-tmpdir = os.environ["_TMPDIR"]
-ov_lib = os.environ["_OV_LIB"]
-whls = glob.glob(os.path.join(tmpdir, "ragfs_python-*.whl"))
-assert whls, "maturin produced no wheel"
-
-with zipfile.ZipFile(whls[0]) as zf:
-    for name in zf.namelist():
-        bn = os.path.basename(name)
-        if bn.startswith("ragfs_python") and (bn.endswith(".so") or bn.endswith(".pyd")):
-            dst = os.path.join(ov_lib, bn)
-            with zf.open(name) as src, open(dst, "wb") as f:
-                f.write(src.read())
-            os.chmod(dst, 0o755)
-            print(f"ragfs-python: extracted {bn} -> {dst}")
-            sys.exit(0)
-
-print("WARNING: No ragfs_python .so/.pyd in wheel")
-sys.exit(1)
-PY
 
 # Stage 3: runtime
 FROM python:3.13-slim-trixie

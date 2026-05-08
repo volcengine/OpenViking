@@ -4,6 +4,7 @@
 
 import asyncio
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -53,6 +54,22 @@ from openviking_cli.utils import get_logger
 from openviking_cli.utils.logger import init_otel_log_handler_from_server_config
 
 logger = get_logger(__name__)
+
+
+def _on_deferred_init_done(task):
+    if task.cancelled():
+        logger.warning("Deferred initialization cancelled")
+        return
+
+    exc = task.exception()
+    if exc is None:
+        return
+
+    logger.error(
+        "Deferred initialization failed, exiting",
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
+    os._exit(1)
 
 
 def _format_error_location(loc: object) -> str:
@@ -143,17 +160,9 @@ def create_app(
 
     validate_server_config(config)
 
-    @asynccontextmanager
-    async def lifespan(app: FastAPI):
-        """Application lifespan handler."""
-        nonlocal service
-        owns_service = service is None
-        if owns_service:
-            service = OpenVikingService()
-            await service.initialize()
-
-        assert service is not None
-        set_service(service)
+    async def _deferred_init(service, app, config):
+        """Run heavy initialization in background after server starts accepting requests."""
+        await service.initialize()
 
         # Initialize APIKeyManager after service (needs VikingFS)
         effective_auth_mode = config.get_effective_auth_mode()
@@ -189,6 +198,19 @@ def create_app(
             # AuthMode.DEV - logging already handled in validate_server_config
             app.state.api_key_manager = None
 
+        logger.info("OpenVikingService initialization complete")
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        """Application lifespan handler."""
+        nonlocal service
+        owns_service = service is None
+        if owns_service:
+            service = OpenVikingService()
+
+        assert service is not None
+        set_service(service)
+
         from openviking.metrics.global_api import (
             init_metrics_from_server_config,
         )
@@ -210,8 +232,21 @@ def create_app(
         # Start MCP session manager (must be active before /mcp requests)
         from openviking.server.mcp_endpoint import mcp_lifespan
 
+        deferred_task = None
+
         async with mcp_lifespan():
+            # Start heavy initialization as background task after yield
+            if service is not None:
+                deferred_task = asyncio.create_task(_deferred_init(service, app, config))
+                deferred_task.add_done_callback(_on_deferred_init_done)
             yield
+
+        # Wait for deferred initialization to complete before shutdown
+        if deferred_task and not deferred_task.done():
+            try:
+                await deferred_task
+            except Exception:
+                logger.exception("Deferred initialization failed")
 
         # Cleanup
         from openviking.metrics.global_api import shutdown_metrics_async
@@ -434,9 +469,7 @@ def create_app(
         return _handler
 
     for _route, (_fname, _mime) in _favicon_files.items():
-        app.add_api_route(
-            _route, _make_favicon_handler(_fname, _mime), include_in_schema=False
-        )
+        app.add_api_route(_route, _make_favicon_handler(_fname, _mime), include_in_schema=False)
 
     # MCP endpoint — serves 5 tools (search, read, store, forget, health)
     # via streamable HTTP for Claude Code and other MCP clients.

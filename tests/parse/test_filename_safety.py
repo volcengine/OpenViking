@@ -3,6 +3,9 @@
 """Tests for filename safety: hash & shorten when names are too long (issue #171)."""
 
 import hashlib
+from unittest.mock import AsyncMock, patch
+
+import pytest
 
 
 class TestSanitizeForPath:
@@ -106,6 +109,27 @@ class TestGenerateMergedFilename:
         sec_list = [(f"very_long_section_name_{i}", f"content_{i}", 10) for i in range(20)]
         result = parser._generate_merged_filename(sec_list)
         assert len(result) <= 32
+
+
+@pytest.mark.asyncio
+async def test_markdown_resource_name_is_not_stemmed_again():
+    from openviking.parse.parsers.markdown import MarkdownParser
+
+    parser = MarkdownParser()
+    mock_vfs = type("MockVikingFS", (), {})()
+    mock_vfs.create_temp_uri = lambda: "viking://temp/test"
+    mock_vfs.mkdir = AsyncMock()
+    mock_vfs.write_file = AsyncMock()
+
+    with patch.object(parser, "_get_viking_fs", return_value=mock_vfs):
+        result = await parser.parse_content(
+            "short body",
+            source_path="/tmp/upload.yaml",
+            resource_name="access.dns.md",
+        )
+
+    assert result.root.title == "access.dns.md"
+    mock_vfs.mkdir.assert_any_await("viking://temp/test/access.dns.md")
 
 
 class TestShortenComponent:
