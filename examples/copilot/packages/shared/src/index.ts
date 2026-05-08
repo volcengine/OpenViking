@@ -28,3 +28,14 @@ export {
   deriveSessionId,
   SESSION_ID_PREFIX,
 } from "./session/id.js";
+
+export {
+  OVClient,
+  type CommitOptions,
+  type OVClientBypassContext,
+  type OVClientOptions,
+  type OVResult,
+  type OVTurn,
+  type RecallHit,
+  type RecallOptions,
+} from "./ov-client.js";
