@@ -11,10 +11,10 @@ import * as vscode from "vscode";
 import {
   CommitQueue,
   RecallCache,
-  canonicaliseTranscript,
   deriveSessionId,
 } from "@openviking/copilot-shared";
 import type { ActivationHandle } from "./extension-core";
+import { captureChatTurn } from "./capture/on-response";
 import {
   buildRecallContext,
   runForget,
@@ -180,17 +180,11 @@ async function captureTurn(
   userText: string,
   assistantText: string,
 ): Promise<void> {
-  if (!state.cfg.autoCapture) return;
-  const turns = canonicaliseTranscript(
-    [
-      { role: "user", text: userText },
-      { role: "assistant", text: assistantText },
-    ],
-    {
-      captureAssistantTurns: state.cfg.captureAssistantTurns,
-      captureMaxLength: state.cfg.captureMaxLength,
-    },
-  );
-  if (turns.length === 0) return;
-  await state.queue.enqueue(turns);
+  await captureChatTurn({
+    cfg: state.cfg,
+    queue: state.queue,
+    logger: state.logger,
+    userText,
+    assistantText,
+  });
 }
