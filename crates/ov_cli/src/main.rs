@@ -20,6 +20,10 @@ pub struct CliContext {
     pub output_format: OutputFormat,
     pub compact: bool,
     pub sudo: bool,
+    /// Whether to show upload progress (override config)
+    pub show_progress: Option<bool>,
+    /// Whether to enable verbose output (override config)
+    pub verbose: Option<bool>,
 }
 
 impl CliContext {
@@ -30,6 +34,8 @@ impl CliContext {
         user: Option<String>,
         agent_id: Option<String>,
         sudo: bool,
+        show_progress: Option<bool>,
+        verbose: Option<bool>,
     ) -> Result<Self> {
         let config = Config::load()?;
         Ok(Self::from_config(
@@ -40,6 +46,8 @@ impl CliContext {
             user,
             agent_id,
             sudo,
+            show_progress,
+            verbose,
         ))
     }
 
@@ -51,6 +59,8 @@ impl CliContext {
         user: Option<String>,
         agent_id: Option<String>,
         sudo: bool,
+        show_progress: Option<bool>,
+        verbose: Option<bool>,
     ) -> Self {
         if account.is_some() {
             config.account = account;
@@ -66,7 +76,19 @@ impl CliContext {
             output_format,
             compact,
             sudo,
+            show_progress,
+            verbose,
         }
+    }
+
+    /// Check if progress should be shown
+    pub fn should_show_progress(&self) -> bool {
+        self.show_progress.unwrap_or(self.config.show_progress)
+    }
+
+    /// Check if verbose output is enabled
+    pub fn is_verbose(&self) -> bool {
+        self.verbose.unwrap_or(self.config.verbose)
     }
 
     pub fn get_client(&self) -> client::HttpClient {
@@ -120,6 +142,18 @@ struct Cli {
     /// Use root API key for admin privileges
     #[arg(long, global = true)]
     sudo: bool,
+
+    /// Show upload progress (overrides config file)
+    #[arg(long, global = true)]
+    progress: bool,
+
+    /// Disable upload progress (overrides config file)
+    #[arg(long = "no-progress", global = true, conflicts_with = "progress")]
+    no_progress: bool,
+
+    /// Enable verbose output (overrides config file)
+    #[arg(short, long, global = true)]
+    verbose: bool,
 
     #[command(subcommand)]
     command: Commands,
@@ -794,7 +828,7 @@ fn find_command_index(args: &[OsString]) -> Option<usize> {
             "--output" | "-o" | "--compact" | "--account" | "--user" | "--agent-id" => {
                 i += 2;
             }
-            "--sudo" => {
+            "--sudo" | "--progress" | "--no-progress" | "--verbose" | "-v" => {
                 i += 1;
             }
             _ if token.starts_with('-') => {
@@ -904,6 +938,17 @@ async fn main() {
     let output_format = cli.output;
     let compact = cli.compact;
 
+    // Determine show_progress override:
+    let show_progress = if cli.progress {
+        Some(true)
+    } else if cli.no_progress {
+        Some(false)
+    } else {
+        None
+    };
+    // Determine verbose override:
+    let verbose = if cli.verbose { Some(true) } else { None };
+
     let ctx = match CliContext::new(
         output_format,
         compact,
@@ -911,6 +956,8 @@ async fn main() {
         cli.user.clone(),
         cli.agent_id.clone(),
         cli.sudo,
+        show_progress,
+        verbose,
     ) {
         Ok(ctx) => ctx,
         Err(e) => {
@@ -1192,6 +1239,8 @@ mod tests {
             timeout: 60.0,
             output: "table".to_string(),
             echo_command: true,
+            show_progress: false,
+            verbose: false,
             upload: Default::default(),
             extra_headers: None,
         };
@@ -1204,6 +1253,8 @@ mod tests {
             Some("from-cli-user".to_string()),
             Some("from-cli-agent".to_string()),
             false,
+            None,
+            None,
         );
 
         assert_eq!(ctx.config.account.as_deref(), Some("from-cli-account"));
@@ -1223,6 +1274,8 @@ mod tests {
             timeout: 60.0,
             output: "table".to_string(),
             echo_command: true,
+            show_progress: false,
+            verbose: false,
             upload: Default::default(),
             extra_headers: None,
         };
@@ -1236,6 +1289,8 @@ mod tests {
             None,
             None,
             false,
+            None,
+            None,
         );
         let client = ctx.get_client();
         assert_eq!(client.api_key(), Some("user-key"));
@@ -1249,6 +1304,8 @@ mod tests {
             None,
             None,
             true,
+            None,
+            None,
         );
         let client = ctx.get_client();
         assert_eq!(client.api_key(), Some("root-key"));

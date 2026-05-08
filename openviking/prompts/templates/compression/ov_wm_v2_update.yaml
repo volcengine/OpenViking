@@ -44,7 +44,7 @@ template: |
   The goal is a document that lets a future assistant seamlessly continue the
   conversation. Concrete facts (names, dates, decisions, relationships, exact
   values) MUST survive. But repetitive events of the same type should be
-  consolidated into patterns — "Caroline attended 5 pride parades" is better
+  consolidated into patterns — "Tim competed in 5 swimming contests" is better
   than 5 separate entries. The test: can a new assistant answer the user's
   likely follow-up questions from this WM alone?
 
@@ -115,9 +115,9 @@ template: |
     2. Preserve: names, dates, exact numbers, decisions with rationale,
        relationships, preferences. These are non-negotiable anchors.
     3. Drop: intermediate chronological steps that don't change the
-       current state (e.g., 5 separate "attended pride parade" entries
-       become "Caroline regularly attends pride parades; most recently
-       on [date], felt [emotion]").
+       current state (e.g., 5 separate "competed in swimming contest" entries
+       become "Tim regularly competes in swimming contests; won 2 gold
+       medals, most recently on [date]").
     4. The consolidation target is a "continuation-grade" fact list:
        enough to answer follow-up questions without re-reading history,
        but not a verbatim transcript of every event.

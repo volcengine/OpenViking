@@ -13,9 +13,8 @@ from starlette.background import BackgroundTask
 from openviking.server.auth import get_request_context, require_auth_root_or_admin
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
-from openviking.server.local_input_guard import resolve_uploaded_temp_file_id
 from openviking.server.models import Response
-from openviking_cli.utils.config.open_viking_config import get_openviking_config
+from openviking.server.temp_upload_store import TempUploadStore
 
 router = APIRouter(prefix="/api/v1/pack", tags=["pack"])
 
@@ -96,15 +95,21 @@ async def import_ovpack(
 ):
     """Import .ovpack file."""
     service = get_service()
-
-    upload_temp_dir = get_openviking_config().storage.get_upload_temp_dir()
-    file_path, _ = resolve_uploaded_temp_file_id(body.temp_file_id, upload_temp_dir)
-
-    result = await service.pack.import_ovpack(
-        file_path,
-        body.parent,
-        ctx=ctx,
-        force=body.force,
-        vectorize=body.vectorize,
-    )
+    store = TempUploadStore.build(request.app.state.config)
+    resolved = await store.resolve_for_consume(body.temp_file_id, ctx)
+    try:
+        result = await service.pack.import_ovpack(
+            resolved.local_path,
+            body.parent,
+            ctx=ctx,
+            force=body.force,
+            vectorize=body.vectorize,
+        )
+    except Exception:
+        await store.mark_failed(resolved, ctx)
+        raise
+    else:
+        await store.mark_consumed(resolved, ctx)
+    finally:
+        await resolved.cleanup()
     return Response(status="ok", result={"uri": result})

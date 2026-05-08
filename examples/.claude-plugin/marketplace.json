@@ -1,0 +1,15 @@
+{
+  "name": "openviking-plugins-local",
+  "description": "OpenViking plugins (local development)",
+  "owner": {
+    "name": "OpenViking"
+  },
+  "plugins": [
+    {
+      "name": "claude-code-memory-plugin",
+      "description": "Long-term semantic memory for Claude Code, powered by OpenViking",
+      "source": "./claude-code-memory-plugin",
+      "category": "productivity"
+    }
+  ]
+}

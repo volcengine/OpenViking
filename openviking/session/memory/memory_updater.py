@@ -355,7 +355,6 @@ class MemoryUpdater:
         viking_fs = self._get_viking_fs()
         memory_type = resolved_op.memory_type
         schema = self._registry.get(memory_type)
-
         # Process each URI independently
         for uri in resolved_op.uris:
             old_content = resolved_op.old_memory_file_content

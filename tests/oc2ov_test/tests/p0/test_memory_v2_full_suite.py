@@ -42,10 +42,12 @@ def _is_remote_mode() -> bool:
 def _get_api_headers() -> Dict[str, str]:
     headers = {
         "X-API-Key": OPENVIKING_API_KEY,
-        "X-OpenViking-Account": OPENVIKING_ACCOUNT,
-        "X-OpenViking-User": OPENVIKING_USER,
         "Content-Type": "application/json",
     }
+    if OPENVIKING_ACCOUNT and "." not in OPENVIKING_API_KEY:
+        headers["X-OpenViking-Account"] = OPENVIKING_ACCOUNT
+    if OPENVIKING_USER and "." not in OPENVIKING_API_KEY:
+        headers["X-OpenViking-User"] = OPENVIKING_USER
     return headers
 
 
@@ -613,22 +615,65 @@ class MemoryV2TestSuite:
             self.run_openclaw_command(scenario["test_message"], scenario_session_id)
             print("✓ OpenClaw 对话完成")
             result["steps"]["openclaw_chat"] = "success"
-            time.sleep(5)
+            time.sleep(8)
 
             # 步骤 3: 找到 OV session 并 commit
             print("\n[步骤 3/5] 查找 OV session 并 commit")
             ov_session_id = self.api.find_new_session_id(before_session_ids)
             if not ov_session_id:
-                print("  ⚠ 未找到新 session，尝试用场景 session ID 直接查找")
-                ov_session_id = self.api.find_session_by_id(scenario_session_id)
-            if not ov_session_id:
-                print("  ⚠ 场景 session ID 未命中，在已有 session 中查找消息最多的")
-                ov_session_id = self.api.find_session_with_most_messages()
-            if not ov_session_id:
-                print("  ⚠ 仍未找到新 session，跳过 commit 步骤，直接检查记忆文件")
-                result["steps"]["commit"] = "skipped"
+                print("  ⚠ 未找到新 session，等待 OV auto-capture 创建 session...")
+                for retry in range(3):
+                    time.sleep(5)
+                    ov_session_id = self.api.find_new_session_id(before_session_ids)
+                    if ov_session_id:
+                        print(f"  ✓ 第 {retry + 1} 次重试找到新 session")
+                        break
+                all_session_ids = self.api.list_session_ids()
+                committed_any = False
+                for sid in all_session_ids:
+                    try:
+                        commit_resp = self.api.commit_session(sid)
+                        commit_data = commit_resp.get("data") or {}
+                        commit_result = commit_data.get("result") or {}
+                        task_id = commit_result.get("task_id")
+                        if task_id:
+                            print(f"  ✓ Commit session {sid[:8]}... 成功 (task_id: {task_id})")
+                            ov_session_id = sid
+                            committed_any = True
+                            break
+                    except Exception:
+                        continue
+                if not committed_any:
+                    print("  ⚠ 所有 session commit 均无 task_id，跳过 commit，直接检查记忆文件")
+                    result["steps"]["commit"] = "skipped"
+                    result["ov_session_id"] = None
+                    print("\n[步骤 4/5] 跳过 (无有效 commit)")
+                    print("\n[步骤 5/5] 验证记忆文件变化")
+                    memory_files_result = self.check_memory_files(
+                        scenario["memory_type"], before_memory_files
+                    )
+                    result["memory_files"] = memory_files_result
+                    if memory_files_result["found"]:
+                        result["steps"]["memory_files"] = "success"
+                        result["status"] = "passed"
+                        return True, result
+                    else:
+                        result["steps"]["memory_files"] = "failed"
+                        result["status"] = "failed"
+                        result["error"] = f"{scenario['memory_type']}: 无有效 commit 且无新增记忆"
+                        return False, result
+
+            print(f"  OV session ID: {ov_session_id}")
+            commit_resp = self.api.commit_session(ov_session_id)
+            commit_data = commit_resp.get("data") or {}
+            commit_result = commit_data.get("result") or {}
+            task_id = commit_result.get("task_id")
+
+            if commit_resp.get("status_code") == 404:
+                print("  ⚠ OV session 不存在 (404)，跳过 commit，直接检查记忆文件")
+                result["steps"]["commit"] = "skipped_404"
                 result["ov_session_id"] = None
-                print("\n[步骤 4/5] 跳过 (无 OV session)")
+                print("\n[步骤 4/5] 跳过 (session 不存在)")
                 print("\n[步骤 5/5] 验证记忆文件变化")
                 memory_files_result = self.check_memory_files(
                     scenario["memory_type"], before_memory_files
@@ -641,19 +686,11 @@ class MemoryV2TestSuite:
                 else:
                     result["steps"]["memory_files"] = "failed"
                     result["status"] = "failed"
-                    result["error"] = f"{scenario['memory_type']}: 未找到 OV session 且无新增记忆"
+                    result["error"] = f"{scenario['memory_type']}: OV session 404 且无新增记忆"
                     return False, result
 
-            print(f"  OV session ID: {ov_session_id}")
-            commit_resp = self.api.commit_session(ov_session_id)
-            commit_data = commit_resp.get("data") or {}
-            commit_result = commit_data.get("result") or {}
-            task_id = commit_result.get("task_id")
-
             if not task_id and commit_result.get("status") == "accepted":
-                print(
-                    "  ⚠ Commit 返回 accepted 但无 task_id（对话 token 数可能不足阈值），补充对话后重试..."
-                )
+                print("  ⚠ Commit 返回 accepted 但无 task_id，补充对话后重试...")
                 follow_ups = [
                     "请详细总结一下我刚才告诉你的所有信息，逐条列出。",
                     "你能复述一下我的个人情况吗？越详细越好。",
@@ -669,46 +706,31 @@ class MemoryV2TestSuite:
                 commit_result = commit_data.get("result") or {}
                 task_id = commit_result.get("task_id")
 
-            if commit_resp["status_code"] == 200 and task_id:
+            if commit_resp.get("status_code") == 200 and task_id:
                 print(f"✓ Commit 成功 (task_id: {task_id})")
                 result["steps"]["commit"] = "success"
                 result["ov_session_id"] = ov_session_id
                 result["task_id"] = task_id
-            elif commit_resp["status_code"] == 200 and not task_id:
-                print("  ⚠ Commit 返回 task_id=None (session 可能无待处理消息)")
-                print("  等待 10 秒后重试 commit...")
-                time.sleep(10)
-                commit_resp = self.api.commit_session(ov_session_id)
-                commit_data = commit_resp.get("data") or {}
-                commit_result = commit_data.get("result") or {}
-                task_id = commit_result.get("task_id")
-                if task_id:
-                    print(f"✓ 重试 Commit 成功 (task_id: {task_id})")
-                    result["steps"]["commit"] = "success"
-                    result["ov_session_id"] = ov_session_id
-                    result["task_id"] = task_id
+            elif commit_resp.get("status_code") == 200 and not task_id:
+                print("  ⚠ Commit 返回 task_id=None，跳过记忆提取步骤")
+                result["steps"]["commit"] = "accepted_no_task"
+                result["ov_session_id"] = ov_session_id
+                result["steps"]["memory_extraction"] = "skipped"
+                print("\n[步骤 4/5] 跳过 (无 task_id)")
+                print("\n[步骤 5/5] 验证记忆文件变化")
+                memory_files_result = self.check_memory_files(
+                    scenario["memory_type"], before_memory_files
+                )
+                result["memory_files"] = memory_files_result
+                if memory_files_result["found"]:
+                    result["steps"]["memory_files"] = "success"
+                    result["status"] = "passed"
+                    return True, result
                 else:
-                    print("  ⚠ 重试仍无 task_id，跳过记忆提取步骤")
-                    result["steps"]["commit"] = "accepted_no_task"
-                    result["ov_session_id"] = ov_session_id
-                    result["steps"]["memory_extraction"] = "skipped"
-                    print("\n[步骤 4/5] 跳过 (无 task_id)")
-                    print("\n[步骤 5/5] 验证记忆文件变化")
-                    memory_files_result = self.check_memory_files(
-                        scenario["memory_type"], before_memory_files
-                    )
-                    result["memory_files"] = memory_files_result
-                    if memory_files_result["found"]:
-                        result["steps"]["memory_files"] = "success"
-                        result["status"] = "passed"
-                        return True, result
-                    else:
-                        result["steps"]["memory_files"] = "failed"
-                        result["status"] = "failed"
-                        result["error"] = (
-                            f"{scenario['memory_type']}: Commit 无 task_id 且无新增记忆"
-                        )
-                        return False, result
+                    result["steps"]["memory_files"] = "failed"
+                    result["status"] = "failed"
+                    result["error"] = f"{scenario['memory_type']}: Commit 无 task_id 且无新增记忆"
+                    return False, result
             else:
                 print(f"✗ Commit 失败: {commit_resp}")
                 result["steps"]["commit"] = "failed"
