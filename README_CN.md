@@ -436,7 +436,8 @@ set "OPENVIKING_CONFIG_FILE=%USERPROFILE%\.openviking\ov.conf"
 
 👇 展开查看您的 CLI/客户端的配置示例：
 
-示例：用于访问本地服务器的 ovcli.conf
+<details>
+<summary><b>示例：用于访问本地服务器的 ovcli.conf</b></summary>
 
 ```json
 {
@@ -465,6 +466,8 @@ $env:OPENVIKING_CLI_CONFIG_FILE = "$HOME/.openviking/ovcli.conf"
 ```bat
 set "OPENVIKING_CLI_CONFIG_FILE=%USERPROFILE%\.openviking\ovcli.conf"
 ```
+
+</details>
 
 ### 4. 运行您的第一个示例
 

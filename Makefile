@@ -27,15 +27,20 @@ CLEAN_DIRS := \
 	**/__pycache__/
 
 .PHONY: all build clean help check-pip check-deps
+.PHONY: build-cli build-cli-release install-cli run-cli
 
 all: build
 
 help:
 	@echo "Available targets:"
-	@echo "  build       - Build ragfs-python and C++ extensions using setup.py"
-	@echo "  clean       - Remove build artifacts and temporary files"
-	@echo "  check-deps  - Check if required dependencies (Rust, CMake, etc.) are installed"
-	@echo "  help        - Show this help message"
+	@echo "  build           - Build ragfs-python and C++ extensions using setup.py"
+	@echo "  build-cli       - Build Rust CLI (ov) in development mode (fast)"
+	@echo "  build-cli-release - Build Rust CLI (ov) in release mode (optimized)"
+	@echo "  install-cli     - Install Rust CLI to ~/.cargo/bin"
+	@echo "  run-cli         - Run the Rust CLI directly from source"
+	@echo "  clean           - Remove build artifacts and temporary files"
+	@echo "  check-deps      - Check if required dependencies (Rust, CMake, etc.) are installed"
+	@echo "  help            - Show this help message"
 
 check-pip:
 	@if command -v uv > /dev/null 2>&1 && uv pip --help > /dev/null 2>&1; then \
@@ -138,3 +143,22 @@ clean:
 	@find . -name "*.pyc" -delete
 	@find . -name "__pycache__" -type d -exec rm -rf {} +
 	@echo "Cleanup completed."
+
+# Rust CLI targets
+build-cli:
+	@echo "Building Rust CLI (ov) in development mode..."
+	@cd $(OV_CLI_DIR) && cargo build
+	@echo "  [OK] CLI built at $(OV_CLI_DIR)/target/debug/ov"
+
+build-cli-release:
+	@echo "Building Rust CLI (ov) in release mode (this may take a while)..."
+	@cd $(OV_CLI_DIR) && cargo build --release
+	@echo "  [OK] CLI built at $(OV_CLI_DIR)/target/release/ov"
+
+install-cli:
+	@echo "Installing Rust CLI (ov) to ~/.cargo/bin..."
+	@cd $(OV_CLI_DIR) && cargo install --path .
+	@echo "  [OK] CLI installed to $$(which ov)"
+
+run-cli:
+	@cd $(OV_CLI_DIR) && cargo run -- $(args)
