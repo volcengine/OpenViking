@@ -47,7 +47,7 @@ pub struct ChatCommand {
     pub session: Option<String>,
 
     /// Sender ID
-    #[arg(short, long, default_value = "user")]
+    #[arg(long, default_value = "user")]
     pub sender: String,
 
     /// Non-interactive mode (single message)
