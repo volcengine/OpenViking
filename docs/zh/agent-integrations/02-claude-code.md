@@ -54,11 +54,15 @@ type claude        # 期望输出：claude is a shell function
 在 OpenViking 仓库根目录执行：
 
 ```bash
-claude plugin marketplace add "$(pwd)/examples" --scope local
-claude plugin install claude-code-memory-plugin@openviking-plugins-local --scope local
+claude plugin marketplace add "$(pwd)/examples"
+claude plugin install claude-code-memory-plugin@openviking-plugins-local
 ```
 
-> 本地安装让 Claude Code 直接引用源码目录，对 `scripts/`、`hooks/`、配置文件的修改下次 hook 触发即生效，无需重装。但移动 / 重命名 / 删除源码目录，或 `git checkout` 到不含这些文件的分支，会让插件失效。
+> 默认装在 user scope —— 任何目录下都生效。这里**不显式传 `--scope`**，因为老的 Claude Code 2.0.x（比如 2.0.76）不识别这个 flag 会直接报错。
+>
+> marketplace 条目让 Claude Code 直接引用源码目录，对 `scripts/`、`hooks/`、配置文件的修改下次 hook 触发即生效，无需重装。但移动 / 重命名 / 删除源码目录，或 `git checkout` 到不含这些文件的分支，会让插件失效。
+>
+> **Claude Code < 2.0？** `claude plugin` 是 2.0（2025-10）才引入的。更老的版本仍然有 `claude mcp add` 和 hooks 系统，可以走[插件 README 的兼容模式章节](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README_CN.md#兼容模式claude-code--20)手动接同样的功能。一键安装脚本会自动检测版本并询问你是否走这条路径。
 
 #### 3. 启动 Claude Code
 
@@ -119,6 +123,25 @@ OPENVIKING_BYPASS_SESSION=1 claude
 ```
 
 bypass 启用时，所有 hook 立即返回 approve，不与 OpenViking 通信。
+
+## Statusline 状态行
+
+插件会在 Claude Code 输入框下方渲染一行 OpenViking 状态。安装脚本把它注册到 `~/.claude/settings.json`（CC 插件 manifest 不支持 `statusLine`，必须走用户 settings）。
+
+```text
+OV ✓ │ ↩ 6 mem (0.92) · 50ms             本轮注入 6 条记忆，最高分 0.92
+OV ⚠ slow                                 探针超过 1s 预算（服务器可能在抽风）
+OV ✗ offline                              服务器不可达
+OV ⚡ bypass                               命中 OPENVIKING_BYPASS_SESSION*
+OV ✓ │ ✎ 573/20k · 2 arch                 待提交进度 + 本 session 已归档 2 次
+OV ✓ │ 🔗 resumed │ +3 today              session 已恢复上下文；今日累计归档 3 次
+```
+
+hook 脚本把每轮的小快照写到 `~/.openviking/state/`；statusline 脚本读快照，再加 5 秒共享缓存的 `GET /health`。探针 1s 硬超时，多 session 共享缓存避免风暴。
+
+`OPENVIKING_STATUSLINE=off` 可静默不删；`jq 'del(.statusLine)' ~/.claude/settings.json` 彻底移除。已有自定义 statusline 时安装会询问替换 / 跳过 / 手动 compose。
+
+完整的段位说明（每个 segment 何时出现、为什么有时不显示）以及个性化 recipe（隐藏段位、改色、与已有 statusline 组合、自定义段位），参见 [`examples/claude-code-memory-plugin/STATUSLINE.md`](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/STATUSLINE.md)。最方便的方式是打开 Claude Code 把链接喂给它，让它读完文档既能解释你看到的内容，又能按你的偏好调整。
 
 ## 与 Claude Code 内置 `MEMORY.md` 的对比
 

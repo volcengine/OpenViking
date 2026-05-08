@@ -62,7 +62,10 @@ class TraceIdLoggingFilter(logging.Filter):
     """日志过滤器：注入 TraceID"""
 
     def filter(self, record):
-        record.trace_id = get_trace_id()
+        trace_id = get_trace_id()
+        record.trace_id = trace_id
+        if trace_id:
+            record.msg = f"[{trace_id}] {record.msg}"
         return True
 
 
@@ -213,7 +216,7 @@ def init_tracer(
         trace_provider.add_span_processor(
             BatchSpanProcessor(
                 trace_exporter,
-                max_export_batch_size=100,
+                max_export_batch_size=50,
                 schedule_delay_millis=1000,
                 export_timeout_millis=60000,
             )
@@ -400,10 +403,10 @@ class tracer:
                     try:
                         # 记录输入参数
                         if not self.ignore_args and args:
-                            self.info("func_args", str(args))
+                            self.set("func_args", str(args))
                         func_kwargs = {k: v for k, v in kwargs.items() if self.arg_trace_checker(k)}
                         if len(func_kwargs) > 0:
-                            self.info("func_kwargs", str(func_kwargs))
+                            self.set("func_kwargs", str(func_kwargs))
 
                         result = await func(*args, **kwargs)
 
@@ -412,6 +415,7 @@ class tracer:
 
                         return result
                     except Exception as e:
+                        self.error("e",e=e)
                         span.record_exception(exception=e)
                         span.set_status(Status(StatusCode.ERROR))
                         raise
@@ -441,6 +445,7 @@ class tracer:
 
                         return result
                     except Exception as e:
+                        self.error("e", e=e)
                         span.record_exception(exception=e)
                         span.set_status(Status(StatusCode.ERROR))
                         raise
@@ -506,6 +511,8 @@ class tracer:
     @staticmethod
     def info(line: str, console: bool = False) -> None:
         """Add an event to the current span."""
+        if console:
+            logger.info(line)
         if _otel_tracer is None:
             return
 
@@ -534,6 +541,11 @@ class tracer:
     @staticmethod
     def error(line: str, e: Optional[Exception] = None, console: bool = True) -> None:
         """Record an error on the current span."""
+        if console:
+            if e is not None:
+                logger.exception(f"{line}", exc_info=e)
+            else:
+                logger.exception(line)
         if _otel_tracer is None:
             return
 

@@ -51,13 +51,40 @@ curl http://localhost:1933/health   # 或者你的远程 URL
 仓库的 `examples/.claude-plugin/marketplace.json` 把本插件暴露为一个本地 marketplace 条目。在 OpenViking 仓库根目录：
 
 ```bash
-claude plugin marketplace add "$(pwd)/examples" --scope user
-claude plugin install claude-code-memory-plugin@openviking-plugins-local --scope user
+claude plugin marketplace add "$(pwd)/examples"
+claude plugin install claude-code-memory-plugin@openviking-plugins-local
 ```
 
-> `--scope user` 让插件在任意目录下都启用。用 `--scope local` 会把启用状态绑死在当前目录,一旦 `cd` 到别处插件就显示 disabled,需要手动 enable。
+> 两条命令默认都装在 user scope —— 插件在任何目录下都生效。这里**不显式传 `--scope user`**，因为老的 Claude Code 2.0.x（比如 2.0.76）不识别这个 flag 会直接报错。在支持 `--scope` 的新版本上，如果装完发现落到了 local scope，可以跑一次 `claude plugin enable claude-code-memory-plugin@openviking-plugins-local --scope user` 提升到 user scope。
 >
 > marketplace 条目让 Claude Code 直接引用源码目录,对 `scripts/`、`hooks/`、配置文件的修改下次 hook 触发即生效,无需重装。但移动 / 重命名 / 删除源码目录,或 `git checkout` 到不含这些文件的分支,会立刻让插件失效。后续会发布公开 marketplace 以支持一键安装。
+
+##### 兼容模式（Claude Code < 2.0）
+
+`claude plugin` 子命令是 Claude Code 2.0（2025-10）才引入的。再老的版本只有 `claude mcp add` 和 hooks 系统，但仍然能手动接出同样的功能：
+
+```bash
+PLUGIN_DIR="$(pwd)/examples/claude-code-memory-plugin"
+
+claude mcp remove openviking -s user 2>/dev/null
+claude mcp add --scope user --transport http openviking \
+  '${OPENVIKING_URL:-http://127.0.0.1:1933}/mcp' \
+  --header 'Authorization: Bearer ${OPENVIKING_API_KEY:-}' \
+  --header 'X-OpenViking-Account: ${OPENVIKING_ACCOUNT:-}' \
+  --header 'X-OpenViking-User: ${OPENVIKING_USER:-}' \
+  --header 'X-OpenViking-Agent: ${OPENVIKING_AGENT_ID:-}'
+
+# 把插件 hooks 合并进 ~/.claude/settings.json（自动备份）
+mkdir -p ~/.claude && [ -f ~/.claude/settings.json ] || echo '{}' > ~/.claude/settings.json
+cp -p ~/.claude/settings.json ~/.claude/settings.json.bak.$(date +%s)
+sed "s|\${CLAUDE_PLUGIN_ROOT}|$PLUGIN_DIR|g" "$PLUGIN_DIR/hooks/hooks.json" > /tmp/ov-hooks.json
+jq --slurpfile h /tmp/ov-hooks.json '.hooks = ((.hooks // {}) * $h[0].hooks)' \
+  ~/.claude/settings.json > /tmp/ov-settings.json
+jq -e . /tmp/ov-settings.json >/dev/null && mv /tmp/ov-settings.json ~/.claude/settings.json
+rm -f /tmp/ov-hooks.json
+```
+
+`claude mcp add` 的所有参数**必须用单引号**保留 `${VAR}` 字面量 —— Claude Code 在启动 MCP server 时才展开它们，用的就是 shell wrapper 注入的环境变量。换成双引号 shell 会提前把它们展开成空串，配置就废了。一键安装脚本会自动做这一切，并在改 `~/.claude/settings.json` 前提示你。
 
 #### 4. 启动 Claude Code
 
@@ -230,6 +257,36 @@ bypass 命中时所有 hook 直接放行，不联系 OpenViking。
 | `SubagentStop`      | `45s`  | 读子 agent transcript 并 commit；async detach                                                |
 
 `claude_code.captureTimeoutMs` 须低于 `Stop` hook 超时，让脚本能优雅失败并仍能更新增量 state。
+
+## Statusline 状态行
+
+插件会在 Claude Code 输入框下方渲染一行 OpenViking 状态。安装脚本会把它注册到 `~/.claude/settings.json`（CC 插件 manifest 不支持 `statusLine` 字段，必须走这条路）。
+
+示例：
+
+```text
+OV ✓ │ ↩ 6 mem (0.92) · 50ms              本轮注入 6 条记忆，最高分 0.92
+OV ⚠ slow                                  探针超过 1s 预算（服务器可能在抽风）
+OV ✗ offline                               服务器不可达
+OV ⚡ bypass                                命中 OPENVIKING_BYPASS_SESSION*
+OV ✓ │ ✎ 573/20k · 2 arch                  待提交进度 + 本 session 已归档 2 次
+OV ✓ │ 🔗 resumed │ +3 today               session 已恢复上下文；今日累计归档 3 次
+```
+
+完整段位说明 + 个性化 recipe（隐藏段位、改色、与已有 statusline 组合、自定义段位），见 [`STATUSLINE.md`](./STATUSLINE.md)。
+
+数据来源：
+
+- `auto-recall.mjs` / `auto-capture.mjs` / `session-start.mjs` 每轮写快照到 `~/.openviking/state/{last-recall,last-capture,last-session-event,daily-stats}.json`。
+- `scripts/statusline.mjs` 读快照，再加 5 秒共享缓存的 `GET /health`。
+- 网络调用 1s 硬超时；多个 CC session 共享缓存避免风暴。
+
+关闭 / 调整：
+
+- `OPENVIKING_STATUSLINE=off` ——不删注册，仅静默。
+- `NO_COLOR=1` 或非 TTY ——自动去 ANSI 颜色。
+- 彻底卸载：`jq 'del(.statusLine)' ~/.claude/settings.json > t && mv t ~/.claude/settings.json`。
+- 已有自定义 statusline？安装时会询问替换 / 跳过 / 稍后手动 compose。
 
 ## 调试日志
 

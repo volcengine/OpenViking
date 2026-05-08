@@ -831,23 +831,29 @@ class Session:
 
                     # Memory extraction
                     if self._session_compressor:
-                        logger.info(
-                            f"Starting memory extraction from {len(messages)} archived messages"
-                        )
-                        extracted = await self._session_compressor.extract_long_term_memories(
-                            messages=messages,
-                            user=self.user,
-                            session_id=self.session_id,
-                            ctx=self.ctx,
-                            latest_archive_overview=latest_archive_overview,
-                            archive_uri=archive_uri,
-                        )
-                        logger.info(f"Extracted {len(extracted)} memories")
-                        for ctx_item in extracted:
-                            cat = getattr(ctx_item, "category", "") or "unknown"
-                            memories_extracted[cat] = memories_extracted.get(cat, 0) + 1
-                        self._stats.memories_extracted += len(extracted)
-                        get_current_telemetry().set("memory.extracted", len(extracted))
+                        ov_config = get_openviking_config()
+                        if not ov_config.memory.extraction_enabled:
+                            logger.info(
+                                "Memory extraction is disabled by config (memory.extraction_enabled=false)"
+                            )
+                        else:
+                            logger.info(
+                                f"Starting memory extraction from {len(messages)} archived messages"
+                            )
+                            extracted = await self._session_compressor.extract_long_term_memories(
+                                messages=messages,
+                                user=self.user,
+                                session_id=self.session_id,
+                                ctx=self.ctx,
+                                latest_archive_overview=latest_archive_overview,
+                                archive_uri=archive_uri,
+                            )
+                            logger.info(f"Extracted {len(extracted)} memories")
+                            for ctx_item in extracted:
+                                cat = getattr(ctx_item, "category", "") or "unknown"
+                                memories_extracted[cat] = memories_extracted.get(cat, 0) + 1
+                            self._stats.memories_extracted += len(extracted)
+                            get_current_telemetry().set("memory.extracted", len(extracted))
 
                     # Write relations (using snapshot, not self._usage_records)
                     if self._viking_fs:

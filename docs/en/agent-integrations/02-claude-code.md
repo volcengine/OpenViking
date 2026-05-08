@@ -54,11 +54,15 @@ Inside Claude Code, run `/mcp` after the next start — the OpenViking entry sho
 From the OpenViking repo root:
 
 ```bash
-claude plugin marketplace add "$(pwd)/examples" --scope local
-claude plugin install claude-code-memory-plugin@openviking-plugins-local --scope local
+claude plugin marketplace add "$(pwd)/examples"
+claude plugin install claude-code-memory-plugin@openviking-plugins-local
 ```
 
-> Local install points Claude Code at the source directory. Edits to `scripts/`, `hooks/`, and config files take effect on the next hook invocation — no reinstall. But moving / renaming / deleting the source dir, or `git checkout`-ing to a branch without these files, breaks the plugin.
+> The plugin installs at user scope by default — active from any directory. We don't pass `--scope` because older Claude Code 2.0.x builds (e.g. 2.0.76) reject the flag.
+>
+> The marketplace entry points Claude Code at the source directory. Edits to `scripts/`, `hooks/`, and config files take effect on the next hook invocation — no reinstall. But moving / renaming / deleting the source dir, or `git checkout`-ing to a branch without these files, breaks the plugin.
+>
+> **Claude Code < 2.0?** `claude plugin` shipped in 2.0 (Oct 2025). Older builds still expose `claude mcp add` + the hooks system — the [plugin README's Legacy mode section](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#legacy-mode-claude-code--20) shows how to wire the same functionality by hand, and the one-line installer detects the version and offers it automatically.
 
 #### 3. Start Claude Code
 
@@ -119,6 +123,25 @@ OPENVIKING_BYPASS_SESSION=1 claude
 ```
 
 When bypass is active, every hook approves immediately without contacting OpenViking.
+
+## Statusline
+
+The plugin also renders a one-line OpenViking status under your Claude Code input box. The installer registers it in `~/.claude/settings.json` (CC's plugin manifest doesn't accept a `statusLine` field, so it has to live in user settings).
+
+```text
+OV ✓ │ ↩ 6 mem (0.92) · 50ms             last turn injected 6 memories, top score 0.92
+OV ⚠ slow                                 probe missed the 1 s budget (server may be lagging)
+OV ✗ offline                              server unreachable
+OV ⚡ bypass                               OPENVIKING_BYPASS_SESSION* matched
+OV ✓ │ ✎ 573/20k · 2 arch                 pending capture, two archives produced this session
+OV ✓ │ 🔗 resumed │ +3 today              session re-hydrated; 3 archives committed today
+```
+
+The hook scripts write small JSON snapshots to `~/.openviking/state/`; the statusline script reads those plus a 5 s shared cache of `GET /health`. The probe is bounded by a 1 s hard timeout; the cache is shared across sessions to prevent stampedes.
+
+Set `OPENVIKING_STATUSLINE=off` to silence without removing the registration, or `jq 'del(.statusLine)' ~/.claude/settings.json` to remove. If you already had a custom statusline, the installer prompts replace / skip / manual compose.
+
+For the full segment glossary (when each one shows, why one might be missing) and personalization recipes (hide segments, recolor, compose with another statusline, add a custom segment), see [`examples/claude-code-memory-plugin/STATUSLINE.md`](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/STATUSLINE.md). The easiest path is to open Claude Code and ask it to read the doc, explain the segments, and tailor anything to your preference.
 
 ## Compared to Claude Code's built-in `MEMORY.md`
 

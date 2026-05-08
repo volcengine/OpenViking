@@ -159,6 +159,24 @@ def test_thread_safety():
     assert cb._failure_count == 200
 
 
+def test_classify_filesystem_errors_as_permanent():
+    from openviking.utils.circuit_breaker import classify_api_error
+
+    assert classify_api_error(FileNotFoundError("/path/not/found")) == "permanent"
+    assert classify_api_error(PermissionError("Permission denied")) == "permanent"
+    assert classify_api_error(IsADirectoryError("Is a directory")) == "permanent"
+    assert classify_api_error(NotADirectoryError("Not a directory")) == "permanent"
+
+
+def test_classify_chained_filesystem_error_as_permanent():
+    from openviking.utils.circuit_breaker import classify_api_error
+
+    cause = FileNotFoundError("/missing")
+    wrapper = RuntimeError("storage layer failed")
+    wrapper.__cause__ = cause
+    assert classify_api_error(wrapper) == "permanent"
+
+
 def test_classify_permanent_errors():
     from openviking.utils.circuit_breaker import classify_api_error
 

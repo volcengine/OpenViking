@@ -153,10 +153,27 @@ def load_locomo_qa(
     else:
         samples = data
 
-    for sample in samples:
-        sample_id = sample.get("sample_id", "")
+    for s_idx, sample in enumerate(samples):
+        original_id = sample.get("sample_id", "")
+        # Find the sample's index in the full dataset
+        if sample_index is not None:
+            try:
+                data_idx = int(sample_index)
+            except ValueError:
+                data_idx = next(i for i, s in enumerate(data) if s.get("sample_id") == original_id)
+        else:
+            data_idx = next(i for i, s in enumerate(data) if s.get("sample_id") == original_id)
+        sample_id = f"sample_{data_idx}"
         question_time = get_sample_question_time(sample)
         qa_items = sample.get("qa", [])
+
+        # 获取对话中的所有说话者
+        conv = sample.get("conversation", {})
+        speakers = []
+        if conv.get("speaker_a"):
+            speakers.append(conv["speaker_a"])
+        if conv.get("speaker_b"):
+            speakers.append(conv["speaker_b"])
 
         # 如果指定了 question_index，只返回那一个问题
         if question_index is not None:
@@ -178,6 +195,7 @@ def load_locomo_qa(
                     "evidence": evidence_list,
                     "evidence_text": get_evidence_text(evidence_list, sample),
                     "question_time": question_time,
+                    "speakers": speakers,
                     "is_invalid": qa["question"] in invalid_questions
                     if invalid_questions
                     else False,
@@ -198,6 +216,7 @@ def load_locomo_qa(
                         "evidence": evidence_list,
                         "evidence_text": get_evidence_text(evidence_list, sample),
                         "question_time": question_time,
+                        "speakers": speakers,
                         "is_invalid": qa["question"] in invalid_questions
                         if invalid_questions
                         else False,
@@ -214,6 +233,7 @@ def run_vikingbot_chat(
     question_time: str | None = None,
     sample_id: str | None = None,
     question_id: str | None = None,
+    memory_users: list[str] | None = None,
 ) -> tuple[str, dict, float, int, list]:
     """执行vikingbot chat命令，返回回答、token使用情况、耗时（秒）、迭代次数、使用的工具列表"""
     # 先执行 /new 命令清除会话
@@ -229,6 +249,10 @@ def run_vikingbot_chat(
             "--session",
             question_id,
         ]
+        # 添加 --memory-user 参数
+        if memory_users:
+            for user in memory_users:
+                new_cmd.extend(["--memory-user", user])
         try:
             # print(f'new_cmd={new_cmd}')
             subprocess.run(new_cmd, capture_output=True, text=True, timeout=300)
@@ -246,6 +270,10 @@ def run_vikingbot_chat(
     # 添加 --sender 作为 user_id，--session 作为 agent_id，实现访问独立 userspace
     if sample_id:
         cmd.extend(["--sender", sample_id, "--session", question_id])
+    # 添加 --memory-user 参数，指定检索哪些用户的记忆
+    if memory_users:
+        for user in memory_users:
+            cmd.extend(["--memory-user", user])
     start_time = time.time()
     try:
         # print(f'cmd={cmd}')
@@ -351,6 +379,17 @@ def main():
         help="Update mode: if output file exists, update matching question_index rows instead of overwriting",
     )
     parser.add_argument(
+        "--group-chat",
+        action="store_true",
+        default=False,
+        help="Group-chat mode: pass --memory-user to vikingbot chat. Default is group-chat mode.",
+    )
+    parser.add_argument(
+        "--retry-wrong",
+        default=None,
+        help="Path to a judged result CSV. Only re-evaluate valid rows where result=WRONG.",
+    )
+    parser.add_argument(
         "--skip-done",
         action="store_true",
         help="Skip questions already present in the output file",
@@ -379,6 +418,23 @@ def main():
     else:
         print(f"No errors file found at {errors_path}, is_invalid will be False for all questions")
 
+    # --retry-wrong: 从结果 CSV 中提取有效错题
+    retry_wrong_questions = None
+    if args.retry_wrong:
+        retry_wrong_questions = set()
+        retry_wrong_samples = set()
+        with open(args.retry_wrong, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if row.get("is_invalid", "").lower() == "true":
+                    continue
+                if row.get("result") == "WRONG":
+                    retry_wrong_questions.add(row["question"])
+                    retry_wrong_samples.add(row["sample_id"])
+        print(f"[retry-wrong] Found {len(retry_wrong_questions)} valid wrong questions from {args.retry_wrong}")
+        if retry_wrong_samples:
+            print(f"[retry-wrong] Affected samples: {', '.join(sorted(retry_wrong_samples))}")
+
     # 加载QA数据（所有题目，包括无效题目，只标记 is_invalid）
     qa_list = load_locomo_qa(
         args.input,
@@ -388,6 +444,12 @@ def main():
         invalid_questions=invalid_questions,
     )
     total = len(qa_list)
+
+    # --retry-wrong: 只保留错题
+    if retry_wrong_questions is not None:
+        before = len(qa_list)
+        qa_list = [qa for qa in qa_list if qa["question"] in retry_wrong_questions]
+        print(f"[retry-wrong] Filtered {before} -> {len(qa_list)} questions (only wrong ones)")
 
     # 过滤掉 category=5 的问题
     qa_list = [qa for qa in qa_list if str(qa.get("category")) != "5"]
@@ -440,12 +502,16 @@ def main():
         # 使用 question_id 作为 session_id，实现完全独立并行
         sample_id = qa_item.get("sample_id")
         question_id = qa_item.get("question_id")
+        speakers = qa_item.get("speakers", [])
         print(f"Processing {idx}/{total_count}: {question[:60]}...")
         if question_time:
             print(f"  [time context: {question_time}]")
+        if speakers:
+            print(f"  [memory users: {speakers}]")
 
         response, token_usage, time_cost, iteration, tools_used_names = run_vikingbot_chat(
-            question, question_time, sample_id, question_id
+            question, question_time, sample_id, question_id,
+            memory_users=None if not args.group_chat else speakers,
         )
 
         row = {

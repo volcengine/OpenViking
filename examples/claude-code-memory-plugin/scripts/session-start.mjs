@@ -18,6 +18,7 @@ import {
   isBypassed,
   makeFetchJSON,
 } from "./lib/ov-session.mjs";
+import { writeJsonState } from "./lib/state.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -107,6 +108,19 @@ async function main() {
   const ovSessionId = deriveOvSessionId(sessionId);
   const sessionCtx = await getSessionContext(fetchJSON, ovSessionId, cfg.resumeContextBudget);
   const block = formatArchiveContext(sessionCtx, source);
+
+  // One-shot signal for the statusline: surface "🔗 resumed" / "🔗 compact"
+  // briefly after the event, regardless of whether OV had archive context to
+  // inject. Users expect the badge to reflect "the event happened", not "OV
+  // had something to add" — early sessions with no archive yet still want
+  // the indicator that compact occurred. Statusline applies a short TTL.
+  writeJsonState("last-session-event.json", {
+    source,
+    cc_session_id: sessionId,
+    ov_session_id: ovSessionId,
+    had_context: Boolean(block),
+  });
+
   if (!block) {
     log("no_archive", { ovSessionId, source });
     approve();

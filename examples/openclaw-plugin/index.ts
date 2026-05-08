@@ -1463,7 +1463,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
           };
         }
       },
-    }));
+    }), { name: "ov_archive_expand" });
 
     let contextEngineRef: ContextEngineWithCommit | null = null;
     const sessionAgentResolver = createSessionAgentResolver(cfg.agent_prefix);
@@ -1502,9 +1502,6 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
       rememberSessionAgentId(ctx ?? {});
     });
     api.on("session_end", async (_event: unknown, ctx?: HookAgentContext) => {
-      rememberSessionAgentId(ctx ?? {});
-    });
-    api.on("agent_end", async (_event: unknown, ctx?: HookAgentContext) => {
       rememberSessionAgentId(ctx ?? {});
     });
     api.on("before_reset", async (_event: unknown, ctx?: HookAgentContext) => {

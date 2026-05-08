@@ -3,6 +3,24 @@
   "name": "OpenViking",
   "kind": "context-engine",
   "description": "OpenClaw context-engine plugin for memory management — powered by OpenViking",
+  "activation": {
+    "onStartup": true,
+    "onCapabilities": [
+      "hook",
+      "tool"
+    ]
+  },
+  "contracts": {
+    "tools": [
+      "ov_import",
+      "ov_search",
+      "memory_recall",
+      "memory_store",
+      "memory_forget",
+      "ov_archive_search",
+      "ov_archive_expand"
+    ]
+  },
   "uiHints": {
     "baseUrl": {
       "label": "OpenViking Base URL",

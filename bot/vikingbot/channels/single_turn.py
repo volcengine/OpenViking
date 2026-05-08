@@ -62,6 +62,10 @@ class SingleTurnChannel(BaseChannel):
 
         # Send the message
         sender_id = self.sender or "user"
+        # Pass memory_user through metadata
+        metadata = {}
+        if self.config.memory_user:
+            metadata["memory_users"] = self.config.memory_user
         msg = InboundMessage(
             session_key=SessionKey(
                 type="cli",
@@ -70,6 +74,7 @@ class SingleTurnChannel(BaseChannel):
             ),
             sender_id=sender_id,
             content=self.message,
+            metadata=metadata,
         )
         await self.bus.publish_inbound(msg)
 

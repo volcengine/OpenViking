@@ -33,6 +33,7 @@ import {
   makeFetchJSON,
 } from "./lib/ov-session.mjs";
 import { maybeDetach, readHookStdin } from "./lib/async-writer.mjs";
+import { readJsonState, writeJsonState } from "./lib/state.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -443,15 +444,47 @@ async function main() {
   // OV's Session._auto_commit_threshold is not consumed by addMessage, so we
   // poll pending_tokens ourselves and commit when the threshold is crossed.
   let committed = false;
+  let pendingTokens = 0;
+  let commitCount = 0;
+  let totalMessageCount = 0;
   if (result.ok > 0) {
     const meta = await getSession(fetchJSON, ovSessionId);
-    const pending = Number(meta?.pending_tokens || 0);
-    log("pending_tokens", { ovSessionId, pending, threshold: cfg.commitTokenThreshold });
-    if (pending >= cfg.commitTokenThreshold) {
+    pendingTokens = Number(meta?.pending_tokens || 0);
+    commitCount = Number(meta?.commit_count || 0);
+    totalMessageCount = Number(meta?.total_message_count || 0);
+    log("pending_tokens", { ovSessionId, pending: pendingTokens, threshold: cfg.commitTokenThreshold });
+    if (pendingTokens >= cfg.commitTokenThreshold) {
       const commitRes = await commitSession(fetchJSON, ovSessionId);
       committed = commitRes.ok;
-      log("commit", { ovSessionId, ok: commitRes.ok, pending });
+      if (committed) commitCount += 1;
+      log("commit", { ovSessionId, ok: commitRes.ok, pending: pendingTokens });
     }
+  }
+
+  // Snapshot for the statusline. Lives across sessions; statusline reads it
+  // alongside last-recall.json to show pending/committed counts. commit_count
+  // is the running total of archives this session has produced — distinct
+  // from `committed` (which is just whether THIS turn triggered a commit).
+  writeJsonState("last-capture.json", {
+    turns_captured: result.ok,
+    turns_failed: result.failed,
+    pending_tokens: pendingTokens,
+    commit_threshold: cfg.commitTokenThreshold,
+    committed,
+    commit_count: commitCount,
+    total_message_count: totalMessageCount,
+    ov_session_id: ovSessionId,
+    cc_session_id: sessionId,
+  });
+
+  // Cross-session daily counter — number of archives produced today across
+  // all CC sessions. Cheap proxy for "how much OV digested today" without
+  // hitting the server again. Resets on date rollover.
+  if (committed) {
+    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD, UTC
+    const prior = readJsonState("daily-stats.json") || {};
+    const archives = prior.date === today ? Number(prior.archives || 0) + 1 : 1;
+    writeJsonState("daily-stats.json", { date: today, archives });
   }
 
   if (result.ok > 0) {

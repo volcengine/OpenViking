@@ -31,6 +31,7 @@ from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.zip_safe import safe_extract_zip
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
@@ -88,6 +89,7 @@ class SkillProcessor:
             data,
             allow_local_path_resolution=allow_local_path_resolution,
         )
+        self._validate_skill_dict(skill_dict)
         telemetry.set(
             "skill.parse.duration_ms", round((time.perf_counter() - parse_start) * 1000, 3)
         )
@@ -213,6 +215,13 @@ class SkillProcessor:
             raise ValueError(f"Unsupported data type: {type(data)}")
 
         return skill_dict, auxiliary_files, base_path
+
+    @staticmethod
+    def _validate_skill_dict(skill_dict: Dict[str, Any]) -> None:
+        """Validate normalized skill metadata before storage/indexing."""
+        name = skill_dict.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise InvalidArgumentError("Skill data must include a non-empty 'name' field")
 
     @staticmethod
     def _build_skill_abstract(skill_dict: Dict[str, Any]) -> str:

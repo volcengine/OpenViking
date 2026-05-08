@@ -48,9 +48,13 @@ def canonical_user_root(ctx: RequestContext) -> str:
 
 
 def user_space_fragment(ctx: RequestContext) -> str:
-    if ctx.namespace_policy.isolate_user_scope_by_agent:
-        return f"{ctx.user.user_id}/agent/{ctx.user.agent_id}"
-    return ctx.user.user_id
+    return to_user_space(ctx.namespace_policy, ctx.user.user_id, ctx.user.agent_id)
+
+
+def to_user_space(namespace_policy, user_id, agent_id) -> str:
+    if namespace_policy.isolate_user_scope_by_agent:
+        return f"{user_id}/agent/{agent_id}"
+    return user_id
 
 
 def canonical_agent_root(ctx: RequestContext) -> str:
@@ -58,9 +62,13 @@ def canonical_agent_root(ctx: RequestContext) -> str:
 
 
 def agent_space_fragment(ctx: RequestContext) -> str:
-    if ctx.namespace_policy.isolate_agent_scope_by_user:
-        return f"{ctx.user.agent_id}/user/{ctx.user.user_id}"
-    return ctx.user.agent_id
+    return to_agent_space(ctx.namespace_policy, ctx.user.user_id, ctx.user.agent_id)
+
+
+def to_agent_space(namespace_policy, user_id, agent_id) -> str:
+    if namespace_policy.isolate_agent_scope_by_user:
+        return f"{agent_id}/user/{user_id}"
+    return agent_id
 
 
 def canonical_session_uri(session_id: Optional[str] = None) -> str:

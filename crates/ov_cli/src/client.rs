@@ -8,6 +8,8 @@ use tempfile::{Builder, NamedTempFile};
 use zip::CompressionMethod;
 use zip::write::FileOptions;
 
+use indicatif::{ProgressBar, ProgressStyle};
+
 use crate::error::{Error, Result};
 
 fn api_error_from_envelope(json: &Value, status: StatusCode) -> String {
@@ -648,6 +650,8 @@ impl HttpClient {
         exclude: Option<String>,
         directly_upload_media: bool,
         watch_interval: f64,
+        show_progress: bool,
+        verbose: bool,
     ) -> Result<serde_json::Value> {
         let path_obj = Path::new(path);
 
@@ -657,8 +661,16 @@ impl HttpClient {
                     .file_name()
                     .and_then(|n| n.to_str())
                     .map(|s| s.to_string());
-                let zip_file = self.zip_directory(path_obj)?;
-                let temp_file_id = self.upload_temp_file(zip_file.path()).await?;
+                let zip_file = if show_progress {
+                    self.zip_directory_with_progress(path_obj, verbose)?
+                } else {
+                    self.zip_directory(path_obj)?
+                };
+                let temp_file_id = if show_progress {
+                    self.upload_temp_file_with_progress(zip_file.path(), verbose).await?
+                } else {
+                    self.upload_temp_file(zip_file.path()).await?
+                };
 
                 let body = serde_json::json!({
                     "temp_file_id": temp_file_id,
@@ -683,7 +695,11 @@ impl HttpClient {
                     .file_name()
                     .and_then(|n| n.to_str())
                     .map(|s| s.to_string());
-                let temp_file_id = self.upload_temp_file(path_obj).await?;
+                let temp_file_id = if show_progress {
+                    self.upload_temp_file_with_progress(path_obj, verbose).await?
+                } else {
+                    self.upload_temp_file(path_obj).await?
+                };
 
                 let body = serde_json::json!({
                     "temp_file_id": temp_file_id,
@@ -741,6 +757,161 @@ impl HttpClient {
 
             self.post("/api/v1/resources", &body).await
         }
+    }
+
+    /// Zip a directory to a temporary file with progress display
+    fn zip_directory_with_progress(&self, dir_path: &Path, verbose: bool) -> Result<NamedTempFile> {
+        if !dir_path.is_dir() {
+            return Err(Error::Network(format!(
+                "Path {} is not a directory",
+                dir_path.display()
+            )));
+        }
+
+        let temp_file = Builder::new().suffix(".zip").tempfile()?;
+        let file = File::create(temp_file.path())?;
+        let mut zip = zip::ZipWriter::new(file);
+        let options: FileOptions<'_, ()> =
+            FileOptions::default().compression_method(CompressionMethod::Deflated);
+
+        // First, calculate total size and file count
+        let mut total_size = 0u64;
+        let mut total_files = 0u64;
+        let walkdir = walkdir::WalkDir::new(dir_path);
+        for entry in walkdir.into_iter().filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.is_file() {
+                if let Ok(meta) = std::fs::metadata(path) {
+                    total_size += meta.len();
+                    total_files += 1;
+                }
+            }
+        }
+
+        // Now create progress bar and zip
+        let pb = if total_size > 0 {
+            let pb = ProgressBar::new(total_size);
+            pb.set_style(
+                ProgressStyle::default_bar()
+                    .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta}) {msg}")
+                    .unwrap_or_else(|_| ProgressStyle::default_bar())
+                    .progress_chars("#>-"),
+            );
+            pb.set_message(format!("Compressing {} files", total_files));
+            Some(pb)
+        } else {
+            let pb = ProgressBar::new_spinner();
+            pb.set_message("Compressing files...");
+            Some(pb)
+        };
+
+        let walkdir = walkdir::WalkDir::new(dir_path);
+        for entry in walkdir.into_iter().filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.is_file() {
+                let name = path.strip_prefix(dir_path).unwrap_or(path);
+                let name_str = name.to_str().ok_or_else(|| {
+                    Error::InvalidPath(format!("Non-UTF-8 path: {}", name.to_string_lossy()))
+                })?;
+                if verbose {
+                    eprintln!("  Adding: {}", name_str);
+                }
+                zip.start_file(name_str, options)?;
+                let mut file = File::open(path)?;
+                let file_size = std::io::copy(&mut file, &mut zip)?;
+
+                if let Some(pb) = &pb {
+                    if pb.length().is_some() {
+                        pb.inc(file_size);
+                    }
+                }
+            }
+        }
+
+        zip.finish()?;
+
+        let zip_size = std::fs::metadata(temp_file.path())?.len();
+        let zip_size_mb = zip_size as f64 / 1024.0 / 1024.0;
+        let original_size_mb = if total_size > 0 {
+            total_size as f64 / 1024.0 / 1024.0
+        } else {
+            0.0
+        };
+
+        if let Some(pb) = pb {
+            if total_size > 0 {
+                pb.finish_with_message(format!("Compression complete: {:.2} MiB → {:.2} MiB", original_size_mb, zip_size_mb));
+            } else {
+                pb.finish_with_message(format!("Compression complete: {:.2} MiB", zip_size_mb));
+            }
+        }
+
+        Ok(temp_file)
+    }
+
+    /// Upload a temporary file with progress display
+    async fn upload_temp_file_with_progress(
+        &self,
+        file_path: &Path,
+        verbose: bool,
+    ) -> Result<String> {
+        use indicatif::ProgressBar;
+
+        let url = format!("{}/api/v1/resources/temp_upload", self.base_url);
+        let file_name = file_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("temp_upload.zip");
+
+        // Read file content
+        let file_content = tokio::fs::read(file_path).await?;
+        let file_size = file_content.len() as u64;
+
+        if verbose {
+            eprintln!("Uploading: {} ({:.2} MB)", file_name, file_size as f64 / 1024.0 / 1024.0);
+        }
+
+        // Create progress bar (spinner style)
+        let pb = ProgressBar::new_spinner();
+        pb.set_message(format!("Uploading {} ({:.2} MB)...", file_name, file_size as f64 / 1024.0 / 1024.0));
+        pb.enable_steady_tick(std::time::Duration::from_millis(100));
+
+        // Create multipart form
+        let part = reqwest::multipart::Part::bytes(file_content)
+            .file_name(file_name.to_string());
+
+        let part = part
+            .mime_str("application/octet-stream")
+            .map_err(|e| Error::Network(format!("Failed to set mime type: {}", e)))?;
+
+        let form = reqwest::multipart::Form::new().part("file", part);
+
+        let mut headers = self.build_headers();
+        headers.remove(reqwest::header::CONTENT_TYPE);
+
+        // Use a separate HTTP client with a long timeout for large file uploads
+        let long_timeout_client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(1800))
+            .build()
+            .map_err(|e| Error::Network(format!("Failed to build long-timeout HTTP client: {}", e)))?;
+
+        let response = long_timeout_client
+            .post(&url)
+            .headers(headers)
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|e| Error::Network(format!("File upload failed: {}", e)))?;
+
+        pb.finish_with_message("Upload complete");
+
+        let result: Value = self.handle_response(response).await?;
+        result
+            .get("temp_file_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| Error::Parse("Missing temp_file_id in response".to_string()))
     }
 
     pub async fn add_skill(

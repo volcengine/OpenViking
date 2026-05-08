@@ -266,6 +266,7 @@ class AgentLoop:
         publish_events: bool = True,
         sender_id: str | None = None,
         ov_tools_enable: bool = True,
+        memory_user_ids: list[str] | None = None,
     ) -> tuple[str | None, str | None, list[dict], dict[str, int], int]:
         """
         Run the core agent loop: call LLM, execute tools, repeat until done.
@@ -275,6 +276,7 @@ class AgentLoop:
             session_key: Session key for tool execution context
             publish_events: Whether to publish ITERATION/REASONING/TOOL_CALL events to the bus
             ov_tools_enable: Whether to enable OpenViking tools for this session
+            memory_user_ids: List of user IDs for memory retrieval
 
         Returns:
             tuple of (final_content, final_reasoning_content, tools_used, token_usage, iteration)
@@ -353,6 +355,7 @@ class AgentLoop:
                         session_key=session_key,
                         sandbox_manager=self.sandbox_manager,
                         sender_id=sender_id,
+                        memory_user_ids=memory_user_ids,
                     )
                     tool_execute_duration = (time.time() - tool_execute_start_time) * 1000
                     return idx, tool_call, result, tool_execute_duration
@@ -487,12 +490,15 @@ class AgentLoop:
             ov_tools_enable = self._get_ov_tools_enable(session_key)
             # Get profile_user_list from channel config
             profile_user_list = []
-            memory_user = ""
+            # Try to get memory_users from message metadata first (CLI mode), then from channel config
+            memory_user = msg.metadata.get("memory_users", []) if msg.metadata else []
             channel_config = self._get_channel_config(session_key)
 
             if channel_config and ov_tools_enable:
                 profile_user_list = getattr(channel_config, "profile_user_list", [])
-                memory_user = getattr(channel_config, "memory_user", "")
+                # Only override if not already set from metadata
+                if not memory_user:
+                    memory_user = getattr(channel_config, "memory_user", None) or []
 
             # Handle slash commands
             is_group_chat = msg.metadata.get("chat_type") == "group" if msg.metadata else False
@@ -613,7 +619,7 @@ class AgentLoop:
                 session_key=msg.session_key,
                 ov_tools_enable=ov_tools_enable,
                 profile_user_list=profile_user_list,
-                memory_user=memory_user,
+                memory_users=memory_user,
             )
             relevant_memories = message_context.latest_relevant_memories
             # logger.info(f"New messages: {json.dumps(messages, indent=4)}")
@@ -633,6 +639,7 @@ class AgentLoop:
                     publish_events=True,
                     sender_id=msg.sender_id,
                     ov_tools_enable=ov_tools_enable,
+                    memory_user_ids=memory_user,
                 )
 
             # Log response preview
@@ -813,6 +820,7 @@ class AgentLoop:
             session_key=msg.session_key,
             publish_events=False,
             ov_tools_enable=ov_tools_enable,
+            memory_user_ids=None,
         )
 
         if final_content is None or (isinstance(final_content, str) and not final_content.strip()):

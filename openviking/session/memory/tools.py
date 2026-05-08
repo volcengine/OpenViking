@@ -10,6 +10,7 @@ import json
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
+from openviking.session.memory.dataclass import MemoryFileContent
 from openviking.session.memory.utils import parse_memory_file_with_fields
 from openviking.session.memory.utils.content import truncate_content
 from openviking.storage.viking_fs import VikingFS
@@ -81,20 +82,6 @@ def add_tool_call_pair_to_messages(
     )
 
 
-def add_tool_call_items_to_messages(
-    messages: List[Dict[str, Any]],
-    tool_call_items: List[Tuple[Union[str, int], str, Dict[str, Any], Any]],
-) -> None:
-    """
-    Add multiple tool call pairs to the messages list.
-
-    Args:
-        messages: List to append messages to
-        tool_call_items: List of tuples (call_id, tool_name, params, result)
-    """
-    for call_id, tool_name, params, result in tool_call_items:
-        add_tool_call_pair_to_messages(messages, call_id, tool_name, params, result)
-
 
 class MemoryTool(ABC):
     """
@@ -125,7 +112,6 @@ class MemoryTool(ABC):
     @abstractmethod
     async def execute(
         self,
-        viking_fs: VikingFS,
         ctx: Optional["ToolContext"],
         **kwargs: Any,
     ) -> Any:
@@ -133,7 +119,6 @@ class MemoryTool(ABC):
         Execute the tool with given parameters.
 
         Args:
-            viking_fs: VikingFS instance
             ctx: Tool context
             **kwargs: Tool-specific parameters
 
@@ -180,18 +165,22 @@ class MemoryReadTool(MemoryTool):
 
     async def execute(
         self,
-        viking_fs: VikingFS,
         ctx: Optional["ToolContext"],
         **kwargs: Any,
     ) -> Any:
         uri = kwargs.get("uri", "")
         try:
-            content = await viking_fs.read_file(
+            content = await ctx.viking_fs.read_file(
                 uri,
                 ctx=ctx.request_ctx,
             )
             # Parse MEMORY_FIELDS from comment and return dict directly
             parsed = parse_memory_file_with_fields(content)
+            ctx.read_file_contents[uri] = MemoryFileContent(
+                uri=uri,
+                plain_content=parsed.get("content", ""),
+                memory_fields=parsed,
+            )
             return parsed
         except NotFoundError as e:
             tracer.info(f"read not found: {uri}")
@@ -232,7 +221,6 @@ class MemorySearchTool(MemoryTool):
 
     async def execute(
         self,
-        viking_fs: VikingFS,
         ctx: Optional["ToolContext"],
         **kwargs: Any,
     ) -> Any:
@@ -240,12 +228,12 @@ class MemorySearchTool(MemoryTool):
             query = kwargs.get("query", "")
             # Get target_uri from ctx.default_search_uris
             target_uri = ""
-            if ctx and hasattr(ctx, "default_search_uris") and ctx.default_search_uris:
+            if ctx.default_search_uris:
                 target_uri = ctx.default_search_uris
             limit = kwargs.get("limit", 10)
             request_ctx = ctx.request_ctx if ctx else None
             # 多搜索 10 个，过滤抽象文件后再截断
-            search_result = await viking_fs.search(
+            search_result = await ctx.viking_fs.search(
                 query,
                 target_uri=target_uri,
                 limit=limit + 10,
@@ -293,13 +281,12 @@ class MemoryLsTool(MemoryTool):
 
     async def execute(
         self,
-        viking_fs: VikingFS,
         ctx: Optional["ToolContext"],
         **kwargs: Any,
     ) -> Any:
         try:
             uri = kwargs.get("uri", "")
-            entries = await viking_fs.ls(
+            entries = await ctx.viking_fs.ls(
                 uri,
                 output="agent",
                 abs_limit=256,
@@ -340,18 +327,10 @@ def get_tool(name: str) -> Optional[MemoryTool]:
     return MEMORY_TOOLS_REGISTRY.get(name)
 
 
-def list_tools() -> Dict[str, MemoryTool]:
-    """List all registered memory tools."""
-    return MEMORY_TOOLS_REGISTRY.copy()
-
 
 # Tools exposed to LLM (not all registered tools are exposed)
 LLM_TOOLS = ["read"]
 
-
-def get_tool_schemas() -> List[Dict[str, Any]]:
-    """Get tools exposed to LLM in OpenAI function schema format."""
-    return [tool.to_schema() for tool in MEMORY_TOOLS_REGISTRY.values() if tool.name in LLM_TOOLS]
 
 
 # Register default tools
