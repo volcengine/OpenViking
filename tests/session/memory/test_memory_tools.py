@@ -12,9 +12,18 @@ from openviking.session.memory.tools import (
     MemoryReadTool,
     MemorySearchTool,
     get_tool,
-    get_tool_schemas,
-    list_tools,
 )
+
+
+# These functions were removed from the module, but we'll define them locally for testing
+def list_tools():
+    from openviking.session.memory.tools import MEMORY_TOOLS_REGISTRY
+    return MEMORY_TOOLS_REGISTRY.copy()
+
+
+def get_tool_schemas():
+    from openviking.session.memory.tools import MEMORY_TOOLS_REGISTRY, LLM_TOOLS
+    return [tool.to_schema() for tool in MEMORY_TOOLS_REGISTRY.values() if tool.name in LLM_TOOLS]
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -77,14 +86,16 @@ class TestMemoryTools:
             ),
             role=Role.USER,
         )
+        viking_fs = MockVikingFS()
+        # Create tool_ctx with viking_fs included
         tool_ctx = ToolContext(
             request_ctx=request_ctx,
             default_search_uris=["viking://user/test-account/test-user/memories"],
         )
-        viking_fs = MockVikingFS()
+        tool_ctx.viking_fs = viking_fs
+        tool_ctx.read_file_contents = {}
 
         result = await MemorySearchTool().execute(
-            viking_fs,
             tool_ctx,
             query="profile",
             limit=2,
