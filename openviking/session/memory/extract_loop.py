@@ -325,10 +325,8 @@ The final output of the model must strictly follow the JSON Schema format shown 
         for op in upsert_operations:
             for uri in op.uris:
                 old_content = self.context_provider.read_file_contents.get(uri)
-                if old_content:
-                    op.old_memory_file_contents[uri] = old_content
-                    if op.old_memory_file_content is None:
-                        op.old_memory_file_content = old_content
+                if old_content and op.old_memory_file_content is None:
+                    op.old_memory_file_content = old_content
 
 
 

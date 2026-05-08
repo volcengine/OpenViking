@@ -98,13 +98,12 @@ class MemoryFileContent(BaseModel):
 
 class ResolvedOperation(BaseModel):
     old_memory_file_content: Optional[MemoryFileContent]
-    old_memory_file_contents: Dict[str, Optional[MemoryFileContent]] = Field(default_factory=dict)
     memory_fields: Dict
     memory_type: str  # The memory type (e.g., 'tools', 'skills', 'events')
     uris: List[str]
 
     def is_edit(self):
-        return self.old_memory_file_content is not None or (self.old_memory_file_contents is not None and any(content is not None for content in self.old_memory_file_contents.values()))
+        return self.old_memory_file_content is not None
 
 
 class ResolvedOperations(BaseModel):

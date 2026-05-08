@@ -358,10 +358,7 @@ class MemoryUpdater:
 
         # Process each URI independently
         for uri in resolved_op.uris:
-            # Get old content for this URI - try per-URI dict first, then fall back to single value
-            old_content = None
-            if uri in resolved_op.old_memory_file_contents:
-                old_content = resolved_op.old_memory_file_contents[uri]
+            old_content = resolved_op.old_memory_file_content
             if old_content is None:
                 # If no pre-fetched content, try to read it now
                 try:

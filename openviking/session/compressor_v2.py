@@ -359,7 +359,11 @@ class SessionCompressorV2:
         deletes = []
 
         # Build lookup maps for efficient access
-        upsert_by_uri = {op.uris[0]: op for op in operations.upsert_operations if op.uris}
+        # Handle multi-URI operations correctly
+        upsert_by_uri = {}
+        for op in operations.upsert_operations:
+            for uri in op.uris:
+                upsert_by_uri[uri] = op
         delete_by_uri = {dc.uri: dc for dc in operations.delete_file_contents}
 
         # Process written_uris - distinguish between add and update
