@@ -59,6 +59,13 @@ export {
 } from "./capture/transcript.js";
 
 export {
+  CommitQueue,
+  type CommitClient,
+  type CommitQueueOptions,
+  type EnqueueResult,
+} from "./capture/commit-queue.js";
+
+export {
   buildQueryProfile,
   clampScore,
   dedupeItems,
