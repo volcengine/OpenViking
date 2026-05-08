@@ -19,7 +19,7 @@ import json
 import re
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
@@ -1105,7 +1105,7 @@ class VikingFS:
         """Recursively list all contents (agent format with abstracts)."""
         path = self._uri_to_path(uri, ctx=ctx)
         all_entries = []
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         real_ctx = self._ctx_or_default(ctx)
 
         async def _walk(current_path: str, current_rel: str, current_depth: int):
@@ -2189,7 +2189,7 @@ class VikingFS:
         except Exception:
             raise NotFoundError(uri, "directory")
         # basic info
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         all_entries = []
         for entry in entries:
             if len(all_entries) >= node_limit:
@@ -2198,14 +2198,14 @@ class VikingFS:
             raw_time = entry.get("modTime", "")
             parsed_time = now
             if isinstance(raw_time, (int, float)):
-                parsed_time = datetime.fromtimestamp(raw_time)
+                parsed_time = datetime.fromtimestamp(raw_time, tz=timezone.utc)
             elif raw_time:
                 if len(raw_time) > 26 and "+" in raw_time:
                     parts = raw_time.split("+")
                     raw_time = parts[0][:26] + "+" + parts[1]
                 parsed_time = parse_iso_datetime(raw_time)
             elif isinstance(entry.get("mtime"), (int, float)):
-                parsed_time = datetime.fromtimestamp(entry["mtime"])
+                parsed_time = datetime.fromtimestamp(entry["mtime"], tz=timezone.utc)
             new_entry = {
                 "uri": self._path_to_uri(f"{path}/{name}", ctx=ctx),
                 "size": entry.get("size", 0),
