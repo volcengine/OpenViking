@@ -5,20 +5,33 @@
   "type": "module",
   "description": "OpenViking memory MCP server for the GitHub Copilot CLI.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/volcengine/OpenViking.git",
+    "directory": "examples/copilot/cli-plugin"
+  },
+  "engines": {
+    "node": ">=22"
+  },
   "bin": {
     "openviking-copilot-mcp": "./dist/mcp-server.js"
   },
   "main": "./dist/mcp-server.js",
-  "files": ["dist"],
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node scripts/build.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepack": "npm run build"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.21.0",
     "@openviking/copilot-shared": "*"
   },
-  "engines": {
-    "node": ">=22"
+  "devDependencies": {
+    "esbuild": "^0.24.0"
   }
 }

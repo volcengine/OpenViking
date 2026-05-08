@@ -4,3 +4,4 @@ dist/
 coverage/
 .vscode-test/
 *.vsix
+*.tgz
