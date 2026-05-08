@@ -35,6 +35,14 @@ Current CLI support:
 - Capture works through the `openviking_capture` MCP tool, which the model is asked to call at the end of a turn with `{ user, assistant }`.
 - CLI capture is model-discretion based. It can sanitize and commit a turn when called, but it cannot guarantee 100% coverage if the model declines or forgets to invoke the tool.
 
+## Install (preview)
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/copilot/setup-helper/install.sh)
+```
+
+The setup helper configures `~/.openviking/ovcli.conf`, installs the VS Code `.vsix` when the `code` CLI is available, installs `@openviking/copilot-cli-memory`, merges the Copilot CLI `mcp.json` entry, and can optionally add the `copilot()` shell wrapper.
+
 ## Quickstart (development)
 
 ```bash
