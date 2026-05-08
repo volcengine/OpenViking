@@ -11,30 +11,9 @@ import argparse
 import base64
 import json
 import os
-import re
 import sys
 from pathlib import Path
 from typing import Optional
-
-
-def load_dotenv(path: str = "~/.env"):
-    """Load environment variables from a .env file (only sets if not already defined)."""
-    env_path = Path(path).expanduser()
-    if not env_path.exists():
-        return
-    for line in env_path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        # Handle "export KEY=VALUE" or "KEY=VALUE"
-        m = re.match(r'^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$', line)
-        if m:
-            key, value = m.group(1), m.group(2)
-            # Remove surrounding quotes
-            if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
-                value = value[1:-1]
-            if key not in os.environ:
-                os.environ[key] = value
 
 
 JAEGER_BASE_URL = "https://tls-cn-beijing.volces.com:16686"
@@ -57,6 +36,47 @@ ENVIRONMENTS = {
     },
 }
 
+
+def _resolve_config_path() -> Optional[Path]:
+    """Resolve ov.conf path following the standard lookup chain."""
+    # 1. Explicit env var
+    env_path = os.environ.get("OPENVIKING_CONFIG_FILE")
+    if env_path:
+        p = Path(env_path)
+        if p.exists():
+            return p
+    # 2. ~/.openviking/ov.conf
+    p = Path.home() / ".openviking" / "ov.conf"
+    if p.exists():
+        return p
+    # 3. /etc/openviking/ov.conf
+    p = Path("/etc/openviking/ov.conf")
+    if p.exists():
+        return p
+    return None
+
+
+def _load_ak_sk_from_ov_conf() -> Optional[dict]:
+    """Try to load ak/sk from ov.conf telemetry.tracer section."""
+    config_path = _resolve_config_path()
+    if not config_path:
+        return None
+    try:
+        raw = config_path.read_text()
+        raw = os.path.expandvars(raw)
+        data = json.loads(raw)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+    tracer = data.get("telemetry", {}).get("tracer", {})
+    ak = tracer.get("ak", "")
+    sk = tracer.get("sk", "")
+    if not ak or not sk:
+        return None
+
+    return {"ak": ak, "sk": sk}
+
+
 NOISY_TAGS = {
     "internal.span.format",
     "sampler.param",
@@ -78,15 +98,27 @@ def fetch_trace(trace_id: str, env: str) -> Optional[dict]:
         print(f"Unknown environment: {env}. Choose from: boe, stg, prod", file=sys.stderr)
         return None
 
-    ak = os.environ.get(env_config["ak_var"])
-    sk = os.environ.get(env_config["sk_var"])
-    if not ak or not sk:
-        missing = [v for v in (env_config["ak_var"], env_config["sk_var"]) if not os.environ.get(v)]
-        print(f"Missing environment variable(s): {', '.join(missing)}", file=sys.stderr)
-        print(f"Export them before running, e.g.: export {env_config['ak_var']}=your_key", file=sys.stderr)
-        return None
-
+    # auth_user is Jaeger-specific, always from ENVIRONMENTS
     auth_user = env_config["auth_user"]
+
+    # Try ov.conf for ak/sk first, then fall back to env vars
+    ov_conf_creds = _load_ak_sk_from_ov_conf()
+    if ov_conf_creds:
+        ak = ov_conf_creds["ak"]
+        sk = ov_conf_creds["sk"]
+    else:
+        ak = os.environ.get(env_config["ak_var"])
+        sk = os.environ.get(env_config["sk_var"])
+        if not ak or not sk:
+            missing = [
+                v for v in (env_config["ak_var"], env_config["sk_var"]) if not os.environ.get(v)
+            ]
+            print(
+                f"Missing credentials. Set them via ov.conf (telemetry.tracer) or env vars: {', '.join(missing)}",
+                file=sys.stderr,
+            )
+            return None
+
     auth_pass = f"{ak}#{sk}"
     auth_header = base64.b64encode(f"{auth_user}:{auth_pass}".encode()).decode()
 
@@ -94,19 +126,29 @@ def fetch_trace(trace_id: str, env: str) -> Optional[dict]:
     if len(trace_id) == 16:
         trace_id = "0" * 16 + trace_id
     elif len(trace_id) != 32:
-        print(f"Invalid trace ID length: {len(trace_id)}. Expected 16 or 32 hex chars.", file=sys.stderr)
+        print(
+            f"Invalid trace ID length: {len(trace_id)}. Expected 16 or 32 hex chars.",
+            file=sys.stderr,
+        )
         return None
 
     url = f"{JAEGER_BASE_URL}/api/traces/{trace_id}"
 
     try:
         import requests
+
         resp = requests.get(url, headers={"Authorization": f"Basic {auth_header}"}, timeout=15)
         if resp.status_code == 401:
-            print("Authentication failed (401). Check your TLS_OTEL_AK/SK credentials.", file=sys.stderr)
+            print(
+                "Authentication failed (401). Check your TLS_OTEL_AK/SK credentials.",
+                file=sys.stderr,
+            )
             return None
         if resp.status_code == 404:
-            print(f"Trace {trace_id} not found or expired (Jaeger retains traces ~7 days).", file=sys.stderr)
+            print(
+                f"Trace {trace_id} not found or expired (Jaeger retains traces ~7 days).",
+                file=sys.stderr,
+            )
             return None
         resp.raise_for_status()
         return resp.json()
@@ -179,6 +221,7 @@ def format_offset(microseconds: int) -> str:
 
 def format_timestamp(microseconds: int) -> str:
     from datetime import datetime, timezone
+
     dt = datetime.fromtimestamp(microseconds / 1_000_000, tz=timezone.utc)
     return dt.strftime("%Y-%m-%d %H:%M:%S") + f".{microseconds % 1_000_000 // 1000:03d}"
 
@@ -198,7 +241,11 @@ def extract_tags(span: dict) -> dict:
         else:
             value = str(value)
             # Allow longer values for error-related fields
-            max_len = 2000 if key.startswith("error.") or key in ("exception.stacktrace", "exception.message") else 200
+            max_len = (
+                2000
+                if key.startswith("error.") or key in ("exception.stacktrace", "exception.message")
+                else 200
+            )
             if len(value) > max_len:
                 value = value[:max_len] + "..."
         tags[key] = value
@@ -313,7 +360,9 @@ def print_tree(roots, children_map, span_map, trace_start_us, mode, detail_span_
                         parts.append(msg)
                     for k, v in fields.items():
                         v_str = str(v)
-                        max_len = 2000 if k in ("exception.stacktrace", "exception.message") else 200
+                        max_len = (
+                            2000 if k in ("exception.stacktrace", "exception.message") else 200
+                        )
                         if len(v_str) > max_len:
                             v_str = v_str[:max_len] + "..."
                         parts.append(f"{k}={v_str}")
@@ -321,13 +370,17 @@ def print_tree(roots, children_map, span_map, trace_start_us, mode, detail_span_
 
 
 def main():
-    load_dotenv()
-
     parser = argparse.ArgumentParser(description="Query Jaeger trace by trace ID")
     parser.add_argument("trace_id", help="Trace ID (16 or 32 hex chars)")
-    parser.add_argument("--env", default="boe", choices=["boe", "stg", "prod"], help="Environment (default: boe)")
-    parser.add_argument("--detail", action="append", default=[], help="Span ID to show full detail (can repeat)")
-    parser.add_argument("--errors-only", action="store_true", help="Only show error spans and their parent chain")
+    parser.add_argument(
+        "--env", default="boe", choices=["boe", "stg", "prod"], help="Environment (default: boe)"
+    )
+    parser.add_argument(
+        "--detail", action="append", default=[], help="Span ID to show full detail (can repeat)"
+    )
+    parser.add_argument(
+        "--errors-only", action="store_true", help="Only show error spans and their parent chain"
+    )
     parser.add_argument("--raw", action="store_true", help="Output raw JSON")
     parser.add_argument("--no-color", action="store_true", help="Disable ANSI colors")
     args = parser.parse_args()
@@ -371,7 +424,9 @@ def main():
 
         # Header
         svc_str = ", ".join(f"{k}({v})" for k, v in sorted(service_counts.items()))
-        print(f"Trace: {trace_id[:16]}... | Time: {format_timestamp(trace_start)} | Duration: {format_duration(trace_duration)} | Spans: {len(spans)} | Errors: {error_count}")
+        print(
+            f"Trace: {trace_id[:16]}... | Time: {format_timestamp(trace_start)} | Duration: {format_duration(trace_duration)} | Spans: {len(spans)} | Errors: {error_count}"
+        )
         if svc_str:
             print(f"Services: {svc_str}")
         print()
