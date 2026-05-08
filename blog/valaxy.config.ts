@@ -12,6 +12,11 @@ export default defineValaxyConfig({
     url: 'https://blog.openviking.dev',
     lang: 'en-US',
     favicon: '/favicon.ico',
+    llms: {
+      enable: true,
+      files: true,
+      fullText: false,
+    },
   },
   theme: 'press',
   themeConfig: {
