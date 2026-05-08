@@ -8,11 +8,19 @@ from pydantic import BaseModel, Field
 class PromptsConfig(BaseModel):
     """Prompt template configuration for OpenViking."""
 
+    enable_custom_templates: bool = Field(
+        default=False,
+        description=(
+            "Enable loading prompt templates from operator-configured external directories. "
+            "Disabled by default so PromptManager only uses bundled templates unless a "
+            "trusted operator explicitly opts in."
+        ),
+    )
     templates_dir: str = Field(
         default="",
         description=(
-            "Custom prompt templates directory. If set, PromptManager loads prompt "
-            "templates from this directory instead of the bundled templates."
+            "Custom prompt templates directory. Only used when "
+            "prompts.enable_custom_templates is true."
         ),
     )
 
