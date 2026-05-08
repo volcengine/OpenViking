@@ -7,8 +7,7 @@
  *   - `--version` / `-v` — package version
  *   - `--check` — load PluginConfig and print a redacted summary so
  *     users can verify their `mcp.json` env passthrough is wired up
- *   - default invocation (no flags) — print a stub message routing
- *     the reader to issue #21 where the real MCP server lands
+ *   - default invocation (no flags) — start the stdio MCP server
  *
  * `runMain(argv, opts)` is exported as a vitest-friendly entry point;
  * the bin shim (`mcp-server.ts`) just calls it with `process.argv`.
@@ -24,6 +23,7 @@ import {
   type LoadConfigOptions,
   type PluginConfig,
 } from "@openviking/copilot-shared";
+import { runStdioMcpServer as defaultRunStdioMcpServer } from "./server.js";
 
 /** Pinned to `package.json#version` at build time by esbuild's define. */
 declare const __OV_CLI_VERSION__: string;
@@ -57,18 +57,6 @@ Environment variables (subset):
 See PLAN.md §8 for the full priority chain and field list.
 `;
 
-const STUB_MESSAGE = `\
-openviking-copilot-mcp scaffold (issue #20).
-
-The MCP server itself — \`tools/list\` + the on-demand
-search/read/store/forget/health tools — arrives in issue #21.
-
-For now you can probe the bin with:
-  openviking-copilot-mcp --help
-  openviking-copilot-mcp --version
-  openviking-copilot-mcp --check
-`;
-
 export interface RunMainStreams {
   stdout?: (chunk: string) => void;
   stderr?: (chunk: string) => void;
@@ -77,6 +65,7 @@ export interface RunMainStreams {
 export interface RunMainDeps {
   loadConfig?: (opts: LoadConfigOptions) => PluginConfig;
   isPluginEnabled?: () => boolean;
+  runStdioMcpServer?: (opts: { version: string; loadConfig: (opts: LoadConfigOptions) => PluginConfig }) => Promise<void>;
 }
 
 export interface RunMainOptions extends RunMainStreams, RunMainDeps {}
@@ -94,6 +83,7 @@ export async function runMain(
   const err = opts.stderr ?? ((c) => process.stderr.write(c));
   const loadConfig = opts.loadConfig ?? defaultLoadConfig;
   const isEnabled = opts.isPluginEnabled ?? defaultIsEnabled;
+  const runStdioMcpServer = opts.runStdioMcpServer ?? defaultRunStdioMcpServer;
 
   // Single-pass argv parser — only --flag forms, no values.
   const flags = new Set<string>();
@@ -120,10 +110,7 @@ export async function runMain(
     return runConfigCheck({ loadConfig, isEnabled, out, err });
   }
 
-  // Default no-flag invocation — issue #21 will replace this with the
-  // real MCP server bootstrap. Print a stub to stderr so a misconfigured
-  // mcp.json that drops us into a tty surfaces something useful.
-  err(STUB_MESSAGE);
+  await runStdioMcpServer({ version: VERSION, loadConfig });
   return 0;
 }
 

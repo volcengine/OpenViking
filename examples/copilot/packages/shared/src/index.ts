@@ -36,6 +36,7 @@ export {
   type OVClientOptions,
   type OVResult,
   type OVTurn,
+  type ReadOptions,
   type RecallHit,
   type RecallOptions,
 } from "./ov-client.js";
