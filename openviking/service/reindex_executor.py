@@ -13,7 +13,6 @@ from openviking.core.context import (
     Context,
     ContextLevel,
     ContextType,
-    ResourceContentType,
     Vectorize,
 )
 from openviking.core.namespace import (
@@ -24,14 +23,20 @@ from openviking.core.namespace import (
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker import get_task_tracker
+from openviking.session.memory.chunking import chunk_text
 from openviking.session.memory.utils.messages import parse_memory_file_with_fields
 from openviking.storage.collection_schemas import TextEmbeddingHandler
+from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
+from openviking.storage.queuefs.overview import parse_overview_md
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.transaction import LockContext, get_lock_manager
 from openviking.storage.viking_fs import get_viking_fs
-from openviking.utils.embedding_utils import get_resource_content_type
+from openviking.utils.embedding_utils import (
+    vectorize_directory_meta,
+    vectorize_file,
+)
 from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.exceptions import NotFoundError, OpenVikingError
 from openviking_cli.utils import VikingURI, get_logger
@@ -522,61 +527,42 @@ class ReindexExecutor:
                 counters.unsupported_records += 1
                 counters.warnings.append(f"No semantic source found for {directory_uri}")
                 continue
-            if abstract:
-                try:
-                    await self._upsert_context(
-                        uri=directory_uri,
-                        parent_uri=VikingURI(directory_uri).parent.uri,
-                        abstract=abstract,
-                        vector_text=abstract,
-                        is_leaf=False,
-                        context_type=context_type_for_uri(directory_uri),
-                        level=ContextLevel.ABSTRACT,
-                        ctx=ctx,
-                    )
-                    counters.rebuilt_records += 1
-                except Exception as exc:
-                    counters.failed_records += 1
-                    counters.warnings.append(f"Failed to reindex {directory_uri} L0 vector: {exc}")
-            if overview:
-                try:
-                    await self._upsert_context(
-                        uri=directory_uri,
-                        parent_uri=VikingURI(directory_uri).parent.uri,
-                        abstract=abstract,
-                        vector_text=overview,
-                        is_leaf=False,
-                        context_type=context_type_for_uri(directory_uri),
-                        level=ContextLevel.OVERVIEW,
-                        ctx=ctx,
-                    )
-                    counters.rebuilt_records += 1
-                except Exception as exc:
-                    counters.failed_records += 1
-                    counters.warnings.append(f"Failed to reindex {directory_uri} L1 vector: {exc}")
+            try:
+                submitted = await vectorize_directory_meta(
+                    uri=directory_uri,
+                    abstract=abstract,
+                    overview=overview,
+                    context_type=context_type_for_uri(directory_uri),
+                    ctx=ctx,
+                    submit_embedding_msg=self._submit_embedding_msg,
+                    raise_on_error=True,
+                )
+                counters.rebuilt_records += submitted
+            except Exception as exc:
+                counters.failed_records += 1
+                counters.warnings.append(
+                    f"Failed to reindex {directory_uri} directory vectors: {exc}"
+                )
 
         for file_uri in deduped_files:
             counters.scanned_records += 1
             parent_uri = VikingURI(file_uri).parent.uri
             summary = await self._best_file_summary(file_uri, ctx=ctx)
-            vector_text = await self._best_resource_file_vector_text(file_uri, summary, ctx=ctx)
-            if not vector_text:
-                counters.unsupported_records += 1
-                counters.warnings.append(f"No vector source found for {file_uri}")
-                continue
-            abstract = self._prefer_non_empty(summary, vector_text)
             try:
-                await self._upsert_context(
-                    uri=file_uri,
+                submitted = await vectorize_file(
+                    file_path=file_uri,
+                    summary_dict={"name": file_uri.rsplit("/", 1)[-1], "summary": summary},
                     parent_uri=parent_uri,
-                    abstract=abstract,
-                    vector_text=vector_text,
-                    is_leaf=True,
                     context_type=context_type_for_uri(file_uri),
-                    level=ContextLevel.DETAIL,
                     ctx=ctx,
+                    submit_embedding_msg=self._submit_embedding_msg,
+                    raise_on_error=True,
                 )
-                counters.rebuilt_records += 1
+                if not submitted:
+                    counters.unsupported_records += 1
+                    counters.warnings.append(f"No vector source found for {file_uri}")
+                    continue
+                counters.rebuilt_records += submitted
             except Exception as exc:
                 counters.failed_records += 1
                 counters.warnings.append(f"Failed to reindex {file_uri} vector: {exc}")
@@ -1026,14 +1012,25 @@ class ReindexExecutor:
                     counters.failed_records += 1
                     counters.warnings.append(f"Failed to reindex {file_uri} vector: {exc}")
                     continue
-                for chunk_uri, chunk_text in self._chunk_memory_body(file_uri, body):
+                semantic = get_openviking_config().semantic
+                chunks: list[str] = []
+                if len(body) > semantic.memory_chunk_chars:
+                    chunks = chunk_text(
+                        body,
+                        semantic.memory_chunk_chars,
+                        semantic.memory_chunk_overlap,
+                    )
+                for idx, memory_chunk in enumerate(chunks):
+                    if not memory_chunk:
+                        continue
+                    chunk_uri = f"{file_uri}#chunk_{idx:04d}"
                     counters.scanned_records += 1
                     try:
                         await self._upsert_context(
                             uri=chunk_uri,
                             parent_uri=file_uri,
                             abstract=detail_abstract,
-                            vector_text=chunk_text,
+                            vector_text=memory_chunk,
                             is_leaf=True,
                             context_type=ContextType.MEMORY.value,
                             level=ContextLevel.DETAIL,
@@ -1117,31 +1114,9 @@ class ReindexExecutor:
         if service.viking_fs is None or service.vikingdb_manager is None:
             raise RuntimeError("OpenVikingService not initialized")
 
-        viking_fs = service.viking_fs
-        skill_file_uri = f"{uri}/SKILL.md"
-        skill_content = await self._safe_read_text(skill_file_uri, ctx=ctx)
-        if not skill_content:
-            raise OpenVikingError(
-                f"SKILL.md not found for {uri}",
-                code="NOT_FOUND",
-                details={"uri": uri},
-            )
-
-        skill_dict, _, _ = SkillProcessor(service.vikingdb_manager)._parse_skill(
-            skill_content,
-            allow_local_path_resolution=False,
-        )
-        overview = await SkillProcessor(service.vikingdb_manager)._generate_overview(
-            skill_dict,
-            get_openviking_config(),
-        )
-        await viking_fs.write_context(
+        await SkillProcessor(service.vikingdb_manager).regenerate_existing_skill_semantics(
             uri=uri,
-            content=skill_content,
-            abstract=skill_dict.get("description", ""),
-            overview=overview,
-            content_filename="SKILL.md",
-            is_leaf=False,
+            viking_fs=service.viking_fs,
             ctx=ctx,
         )
 
@@ -1162,38 +1137,27 @@ class ReindexExecutor:
         file_name = uri.rsplit("/", 1)[-1]
         overviews = await self._safe_read_text(f"{parent_uri}/.overview.md", ctx=ctx)
         if overviews:
-            parsed = self._parse_overview_md(overviews)
+            parsed = parse_overview_md(overviews)
             if file_name in parsed:
                 return parsed[file_name]
         existing = await self._fetch_existing_record(uri=uri, level=2, ctx=ctx)
         return self._record_abstract(existing)
 
-    async def _best_resource_file_vector_text(
-        self,
-        uri: str,
-        summary: str,
-        ctx: RequestContext,
-    ) -> str:
-        text_source = getattr(get_openviking_config().embedding, "text_source", "summary_first")
-        content = await self._safe_read_text(uri, ctx=ctx)
-        existing = await self._fetch_existing_record(uri=uri, level=2, ctx=ctx)
-        fallback = self._record_abstract(existing)
-        content_type = get_resource_content_type(uri.rsplit("/", 1)[-1])
-
-        if content_type == ResourceContentType.TEXT:
-            if text_source in {"summary_first", "summary_only"} and summary:
-                return summary
-            if content:
-                return self._truncate_embedding_text(content)
-            if summary:
-                return summary
-            return fallback
-
-        if summary:
-            return summary
-        if content:
-            return self._truncate_embedding_text(content)
-        return fallback
+    async def _submit_embedding_msg(self, msg: EmbeddingMsg) -> None:
+        service = get_service()
+        assert service.vikingdb_manager is not None
+        result = await TextEmbeddingHandler(service.vikingdb_manager).on_dequeue(
+            {"data": msg.to_json()}
+        )
+        if result is None:
+            context_data = msg.context_data or {}
+            uri = context_data.get("uri", "")
+            level = context_data.get("level", 0)
+            raise OpenVikingError(
+                f"Failed to reindex vector for {uri}",
+                code="PROCESSING_ERROR",
+                details={"uri": uri, "level": level},
+            )
 
     async def _upsert_context(
         self,
@@ -1208,9 +1172,6 @@ class ReindexExecutor:
         ctx: RequestContext,
         meta: Optional[dict[str, Any]] = None,
     ) -> None:
-        service = get_service()
-        assert service.vikingdb_manager is not None
-
         context = Context(
             uri=uri,
             parent_uri=parent_uri,
@@ -1232,16 +1193,7 @@ class ReindexExecutor:
                 details={"uri": uri},
             )
 
-        result = await TextEmbeddingHandler(service.vikingdb_manager).on_dequeue(
-            {"data": msg.to_json()}
-        )
-        if result is None:
-            raise OpenVikingError(
-                f"Failed to reindex vector for {uri}",
-                code="PROCESSING_ERROR",
-                details={"uri": uri, "level": int(level)},
-            )
-        logger.debug("Reindexed vector for %s level=%s", uri, int(level))
+        await self._submit_embedding_msg(msg)
 
     async def _fetch_existing_record(
         self,
@@ -1278,14 +1230,6 @@ class ReindexExecutor:
     def _is_hidden_meta_file(self, uri: str) -> bool:
         return uri.endswith("/.abstract.md") or uri.endswith("/.overview.md")
 
-    def _truncate_embedding_text(self, value: str) -> str:
-        max_input_chars = int(
-            getattr(get_openviking_config().embedding, "max_input_chars", 1000) or 1000
-        )
-        if len(value) <= max_input_chars:
-            return value
-        return value[:max_input_chars] + "\n...(truncated for embedding)"
-
     async def _safe_read_text(self, uri: str, *, ctx: RequestContext) -> str:
         viking_fs = get_viking_fs()
         try:
@@ -1298,28 +1242,6 @@ class ReindexExecutor:
         except Exception:
             return ""
 
-    def _chunk_memory_body(self, uri: str, body: str) -> Iterable[tuple[str, str]]:
-        semantic = get_openviking_config().semantic
-        chunk_chars = semantic.memory_chunk_chars
-        overlap = semantic.memory_chunk_overlap
-        if len(body) <= chunk_chars:
-            return []
-
-        chunks: list[str] = []
-        start = 0
-        while start < len(body):
-            end = start + chunk_chars
-            if end < len(body):
-                boundary = body.rfind("\n\n", start, end)
-                if boundary > start + chunk_chars // 2:
-                    end = boundary + 2
-            chunks.append(body[start:end].strip())
-            start = end - overlap
-            if start >= len(body):
-                break
-
-        return [(f"{uri}#chunk_{idx:04d}", chunk) for idx, chunk in enumerate(chunks) if chunk]
-
     def _best_non_empty(self, *values: str) -> str:
         for value in values:
             if value:
@@ -1331,21 +1253,3 @@ class ReindexExecutor:
             if value:
                 return value
         return ""
-
-    @staticmethod
-    def _parse_overview_md(content: str) -> dict[str, str]:
-        parsed: dict[str, str] = {}
-        current_name: Optional[str] = None
-        current_lines: list[str] = []
-        for line in (content or "").splitlines():
-            if line.startswith("## "):
-                if current_name is not None:
-                    parsed[current_name] = "\n".join(current_lines).strip()
-                current_name = line[3:].strip()
-                current_lines = []
-                continue
-            if current_name is not None:
-                current_lines.append(line)
-        if current_name is not None:
-            parsed[current_name] = "\n".join(current_lines).strip()
-        return parsed

@@ -8,6 +8,7 @@ Common logic for creating Context objects and enqueuing them to EmbeddingQueue.
 
 import math
 import os
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Dict, Optional
 
@@ -15,6 +16,7 @@ from openviking.core.context import Context, ContextLevel, ResourceContentType, 
 from openviking.core.namespace import context_type_for_uri, owner_space_for_uri
 from openviking.server.identity import RequestContext
 from openviking.storage.queuefs import get_queue_manager
+from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.utils.time_utils import parse_iso_datetime
@@ -23,6 +25,7 @@ from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 _EMBEDDING_TRUNCATION_SUFFIX = "\n...(truncated for embedding)"
+EmbeddingSubmitter = Callable[[EmbeddingMsg], Awaitable[None]]
 
 
 def _estimate_embedding_input_tokens(text: str) -> int:
@@ -224,28 +227,30 @@ async def vectorize_directory_meta(
     ctx: Optional[RequestContext] = None,
     semantic_msg_id: Optional[str] = None,
     include_overview: bool = True,
-) -> None:
+    submit_embedding_msg: Optional[EmbeddingSubmitter] = None,
+    raise_on_error: bool = False,
+) -> int:
     """
     Vectorize directory metadata (.abstract.md and .overview.md).
 
     Creates Context objects for abstract and overview and enqueues them.
     """
-    enqueued = 0
+    submitted = 0
     expected = 2 if include_overview else 1
     try:
         if not ctx:
             logger.warning("No context provided for vectorization")
-            return
+            return 0
 
-        queue_manager = get_queue_manager()
-        embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING)
+        if submit_embedding_msg is None:
+            queue_manager = get_queue_manager()
+            embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING)
+            submit_embedding_msg = embedding_queue.enqueue
 
         parent_uri = VikingURI(uri).parent.uri
         owner_space = owner_space_for_uri(uri, ctx)
-
         created_at, updated_at = await _resolve_context_timestamps(uri, ctx)
 
-        # Vectorize L0: .abstract.md (abstract)
         context_abstract = Context(
             uri=uri,
             parent_uri=parent_uri,
@@ -264,17 +269,18 @@ async def vectorize_directory_meta(
         if msg_abstract:
             msg_abstract.semantic_msg_id = semantic_msg_id
             try:
-                await embedding_queue.enqueue(msg_abstract)
-                enqueued += 1
-                logger.debug(f"Enqueued directory L0 (abstract) for vectorization: {uri}")
+                await submit_embedding_msg(msg_abstract)
+                submitted += 1
+                logger.debug(f"Submitted directory L0 (abstract) for vectorization: {uri}")
             except Exception as e:
                 logger.error(
-                    f"Failed to enqueue directory L0 (abstract) for vectorization: {uri}: {e}",
+                    f"Failed to submit directory L0 (abstract) for vectorization: {uri}: {e}",
                     exc_info=True,
                 )
+                if raise_on_error:
+                    raise
 
         if include_overview:
-            # Vectorize L1: .overview.md (overview)
             context_overview = Context(
                 uri=uri,
                 parent_uri=parent_uri,
@@ -293,16 +299,19 @@ async def vectorize_directory_meta(
             if msg_overview:
                 msg_overview.semantic_msg_id = semantic_msg_id
                 try:
-                    await embedding_queue.enqueue(msg_overview)
-                    enqueued += 1
-                    logger.debug(f"Enqueued directory L1 (overview) for vectorization: {uri}")
+                    await submit_embedding_msg(msg_overview)
+                    submitted += 1
+                    logger.debug(f"Submitted directory L1 (overview) for vectorization: {uri}")
                 except Exception as e:
                     logger.error(
-                        f"Failed to enqueue directory L1 (overview) for vectorization: {uri}: {e}",
+                        f"Failed to submit directory L1 (overview) for vectorization: {uri}: {e}",
                         exc_info=True,
                     )
+                    if raise_on_error:
+                        raise
+        return submitted
     finally:
-        await _decrement_embedding_tracker(semantic_msg_id, expected - enqueued)
+        await _decrement_embedding_tracker(semantic_msg_id, expected - submitted)
 
 
 async def vectorize_file(
@@ -314,7 +323,9 @@ async def vectorize_file(
     semantic_msg_id: Optional[str] = None,
     use_summary: bool = False,
     preserve_existing_created_at: bool = False,
-) -> None:
+    submit_embedding_msg: Optional[EmbeddingSubmitter] = None,
+    raise_on_error: bool = False,
+) -> int:
     """
     Vectorize a single file.
 
@@ -322,17 +333,19 @@ async def vectorize_file(
     The effective vectorization strategy is resolved once from either the explicit
     `use_summary` flag (code path override) or the embedding config.
     """
-    enqueued = False
+    submitted = False
 
     try:
         if not ctx:
             logger.warning("No context provided for vectorization")
-            return
+            return 0
 
-        queue_manager = get_queue_manager()
-        embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING)
+        if submit_embedding_msg is None:
+            queue_manager = get_queue_manager()
+            embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING)
+            submit_embedding_msg = embedding_queue.enqueue
+
         viking_fs = get_viking_fs()
-
         file_name = summary_dict.get("name") or os.path.basename(file_path)
         summary = summary_dict.get("summary", "")
 
@@ -362,7 +375,6 @@ async def vectorize_file(
         max_input_tokens = int(getattr(embedding_cfg, "max_input_tokens", 4096) or 4096)
 
         if content_type is None:
-            # Unsupported file type: fall back to summary if available
             if summary:
                 logger.warning(
                     f"Unsupported file type for {file_path}, falling back to summary for vectorization"
@@ -370,19 +382,19 @@ async def vectorize_file(
                 context.set_vectorize(Vectorize(text=summary))
             else:
                 logger.warning(
-                    f"Unsupported file type for {file_path} and no summary available, skipping vectorization"
+                    f"Unsupported file type for {file_path} and no summary available, "
+                    "skipping vectorization"
                 )
-                return
+                return 0
         elif content_type == ResourceContentType.TEXT:
             if summary and effective_text_source in {"summary_first", "summary_only"}:
                 context.set_vectorize(Vectorize(text=summary))
             else:
-                # Read raw file content and apply configured truncation guard.
                 try:
                     content = await viking_fs.read_file(file_path, ctx=ctx)
                     if isinstance(content, bytes):
                         content = content.decode("utf-8", errors="replace")
-                    content = _truncate_embedding_input(content, max_input_tokens)
+                    content = _truncate_embedding_input(content or "", max_input_tokens)
                     context.set_vectorize(Vectorize(text=content))
                 except Exception as e:
                     logger.warning(
@@ -394,27 +406,30 @@ async def vectorize_file(
                         logger.warning(
                             f"No summary available for {file_path}, skipping vectorization"
                         )
-                        return
+                        return 0
         elif summary:
-            # For non-text files, use summary
             context.set_vectorize(Vectorize(text=summary))
         else:
             logger.debug(f"Skipping file {file_path} (no text content or summary)")
-            return
+            return 0
 
         embedding_msg = EmbeddingMsgConverter.from_context(context)
         if not embedding_msg:
-            return
+            return 0
 
         embedding_msg.semantic_msg_id = semantic_msg_id
-        await embedding_queue.enqueue(embedding_msg)
-        enqueued = True
-        logger.debug(f"Enqueued file for vectorization: {file_path}")
+        await submit_embedding_msg(embedding_msg)
+        submitted = True
+        logger.debug(f"Submitted file for vectorization: {file_path}")
+        return 1
 
     except Exception as e:
         logger.error(f"Failed to vectorize file {file_path}: {e}", exc_info=True)
+        if raise_on_error:
+            raise
+        return 0
     finally:
-        if not enqueued:
+        if not submitted:
             await _decrement_embedding_tracker(semantic_msg_id, 1)
 
 

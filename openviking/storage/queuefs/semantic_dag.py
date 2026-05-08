@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Dict, List, Optional
 
 from openviking.server.identity import RequestContext
+from openviking.storage.queuefs.overview import parse_overview_md
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking_cli.utils import VikingURI
@@ -388,9 +389,7 @@ class SemanticDagExecutor:
                             overview_path, ctx=self._ctx
                         )
                         if overview_content:
-                            self._overview_cache[parent_uri] = self._processor._parse_overview_md(
-                                overview_content
-                            )
+                            self._overview_cache[parent_uri] = parse_overview_md(overview_content)
                         else:
                             self._overview_cache[parent_uri] = {}
             else:

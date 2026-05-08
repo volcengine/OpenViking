@@ -31,7 +31,7 @@ from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.zip_safe import safe_extract_zip
-from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.exceptions import InvalidArgumentError, OpenVikingError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
@@ -95,7 +95,7 @@ class SkillProcessor:
         )
 
         skill_dict = await self._sanitize_skill_privacy(skill_dict, ctx)
-        skill_abstract = self._build_skill_abstract(skill_dict)
+        skill_abstract = self.build_skill_abstract(skill_dict)
 
         context = Context(
             uri=f"{canonical_agent_root(ctx)}/skills/{skill_dict['name']}",
@@ -230,7 +230,7 @@ class SkillProcessor:
             )
 
     @staticmethod
-    def _build_skill_abstract(skill_dict: Dict[str, Any]) -> str:
+    def build_skill_abstract(skill_dict: Dict[str, Any]) -> str:
         """Build the L0 skill abstract from normalized SKILL.md header metadata."""
         abstract_meta: Dict[str, Any] = {
             "name": skill_dict["name"],
@@ -246,6 +246,52 @@ class SkillProcessor:
             abstract_meta["allowed_tools"] = allowed_tools
 
         return yaml.safe_dump(abstract_meta, allow_unicode=True, sort_keys=False).strip()
+
+    async def regenerate_existing_skill_semantics(
+        self,
+        *,
+        uri: str,
+        viking_fs: VikingFS,
+        ctx: RequestContext,
+    ) -> None:
+        """Regenerate semantic files for a skill already stored in VikingFS."""
+        skill_file_uri = f"{uri}/SKILL.md"
+        try:
+            skill_content = await viking_fs.read_file(skill_file_uri, ctx=ctx)
+        except Exception as exc:
+            raise OpenVikingError(
+                f"SKILL.md not found for {uri}",
+                code="NOT_FOUND",
+                details={"uri": uri},
+            ) from exc
+
+        if isinstance(skill_content, bytes):
+            skill_content = skill_content.decode("utf-8", errors="replace")
+        if not skill_content:
+            raise OpenVikingError(
+                f"SKILL.md not found for {uri}",
+                code="NOT_FOUND",
+                details={"uri": uri},
+            )
+
+        skill_dict, _, _ = self._parse_skill(
+            skill_content,
+            allow_local_path_resolution=False,
+        )
+        self._validate_skill_dict(skill_dict)
+        skill_dict = await self._sanitize_skill_privacy(skill_dict, ctx)
+        skill_abstract = self.build_skill_abstract(skill_dict)
+        overview = await self._generate_overview(skill_dict, get_openviking_config())
+
+        await viking_fs.write_context(
+            uri=uri,
+            content=skill_content,
+            abstract=skill_abstract,
+            overview=overview,
+            content_filename="SKILL.md",
+            is_leaf=False,
+            ctx=ctx,
+        )
 
     async def _sanitize_skill_privacy(
         self, skill_dict: Dict[str, Any], ctx: RequestContext
