@@ -18,7 +18,12 @@ if TYPE_CHECKING:
 from openviking.core.namespace import agent_space_fragment, user_space_fragment
 from openviking.message import Message
 from openviking.server.identity import RequestContext
-from openviking.session.memory.dataclass import MemoryField, MemoryFileContent, ResolvedOperations, ResolvedOperation
+from openviking.session.memory.dataclass import (
+    MemoryField,
+    MemoryFileContent,
+    ResolvedOperations,
+    ResolvedOperation,
+)
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.merge_op import MergeOpFactory
 from openviking.session.memory.utils import (
@@ -378,21 +383,22 @@ class MemoryUpdater:
         schema = self._registry.get(memory_type)
         # Process each URI independently
         for uri in resolved_op.uris:
-            old_content = resolved_op.old_memory_file_content
+            # Always read from disk first to get the latest content,
+            # so consecutive patches to the same URI see each other's changes.
+            old_content = None
+            try:
+                content = await viking_fs.read_file(uri, ctx=ctx)
+                if content:
+                    parsed = parse_memory_file_with_fields(content)
+                    old_content = MemoryFileContent(
+                        uri=uri, plain_content=parsed.get("content", ""), memory_fields=parsed
+                    )
+            except Exception:
+                # File doesn't exist yet, that's okay
+                pass
+            # Fall back to pre-fetched content if disk read failed
             if old_content is None:
-                # If no pre-fetched content, try to read it now
-                try:
-                    content = await viking_fs.read_file(uri, ctx=ctx)
-                    if content:
-                        parsed = parse_memory_file_with_fields(content)
-                        old_content = MemoryFileContent(
-                            uri=uri,
-                            plain_content=parsed.get("content", ""),
-                            memory_fields=parsed
-                        )
-                except Exception:
-                    # File doesn't exist yet, that's okay
-                    pass
+                old_content = resolved_op.old_memory_file_content
 
             metadata: Dict[str, Any] = dict(resolved_op.memory_fields)
             # Process fields defined in schema (apply merge_op)
@@ -406,9 +412,7 @@ class MemoryUpdater:
                         if field.name == "content":
                             current_value = old_content.plain_content
                         else:
-                            current_value = old_content.memory_fields.get(
-                                field.name
-                            )
+                            current_value = old_content.memory_fields.get(field.name)
                     # Use merge_op to process field value
                     merge_op = MergeOpFactory.from_field(field)
                     new_value = merge_op.apply(current_value, patch_value)
