@@ -145,6 +145,8 @@ class InMemoryOpenVikingClient:
     ) -> dict[str, Any]:
         if mode == "create" and uri in self.records:
             raise FileExistsError(uri)
+        if mode == "replace" and uri not in self.records:
+            raise FileNotFoundError(uri)
         if mode == "append":
             self.records[uri] = self.records.get(uri, "") + content
         else:

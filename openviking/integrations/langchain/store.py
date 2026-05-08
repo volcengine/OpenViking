@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any, Iterable
 from urllib.parse import quote, unquote
@@ -37,6 +38,8 @@ except ImportError:  # pragma: no cover - exercised by optional import path
     Item = SearchItem = object  # type: ignore[misc,assignment]
 else:
     _LANGGRAPH_IMPORT_ERROR = None
+
+logger = logging.getLogger(__name__)
 
 
 class OpenVikingStore(BaseStore):
@@ -149,16 +152,8 @@ class OpenVikingStore(BaseStore):
     ) -> None:
         namespace = tuple(namespace)
         now = datetime.now(timezone.utc)
-        existing = self.get(namespace, key)
-        created_at = existing.created_at if existing else now
-        record = {
-            "namespace": list(namespace),
-            "key": key,
-            "value": value,
-            "created_at": created_at.isoformat(),
-            "updated_at": now.isoformat(),
-        }
-        self._write(self._data_uri(namespace, key), json.dumps(record, ensure_ascii=False, indent=2))
+        data_uri = self._data_uri(namespace, key)
+        record = self._write_record(data_uri, namespace, key, value, now)
 
         effective_index = self.index if index is None else index
         index_uri = self._index_uri(namespace, key)
@@ -283,37 +278,68 @@ class OpenVikingStore(BaseStore):
             content = content.decode("utf-8")
         return json.loads(str(content))
 
+    def _write_record(
+        self,
+        uri: str,
+        namespace: tuple[str, ...],
+        key: str,
+        value: dict[str, Any],
+        now: datetime,
+    ) -> dict[str, Any]:
+        record = _store_record(namespace, key, value, created_at=now, updated_at=now)
+        content = json.dumps(record, ensure_ascii=False, indent=2)
+        try:
+            self._write_create(uri, content)
+            return record
+        except Exception as create_exc:
+            try:
+                existing = self._read_record(uri)
+            except Exception:
+                raise create_exc
+
+            created_at = _parse_dt(existing["created_at"])
+            record = _store_record(namespace, key, value, created_at=created_at, updated_at=now)
+            self._write_replace(uri, json.dumps(record, ensure_ascii=False, indent=2))
+            return record
+
     def _write(self, uri: str, content: str) -> None:
         try:
-            call_openviking(
-                self._client(),
-                "write",
-                uri=uri,
-                content=content,
-                mode="replace",
-                wait=self.wait,
-                timeout=self.timeout,
-            )
+            self._write_create(uri, content)
             return
-        except Exception as replace_exc:
+        except Exception as create_exc:
             try:
-                call_openviking(
-                    self._client(),
-                    "write",
-                    uri=uri,
-                    content=content,
-                    mode="create",
-                    wait=self.wait,
-                    timeout=self.timeout,
-                )
+                self._write_replace(uri, content)
                 return
             except Exception:
-                raise replace_exc
+                raise create_exc
+
+    def _write_create(self, uri: str, content: str) -> None:
+        call_openviking(
+            self._client(),
+            "write",
+            uri=uri,
+            content=content,
+            mode="create",
+            wait=self.wait,
+            timeout=self.timeout,
+        )
+
+    def _write_replace(self, uri: str, content: str) -> None:
+        call_openviking(
+            self._client(),
+            "write",
+            uri=uri,
+            content=content,
+            mode="replace",
+            wait=self.wait,
+            timeout=self.timeout,
+        )
 
     def _remove(self, uri: str) -> None:
         try:
             call_openviking(self._client(), "rm", uri=uri, recursive=False)
         except Exception:
+            logger.debug("OpenVikingStore remove ignored missing/unavailable URI", exc_info=True)
             pass
 
     def _data_uri(self, namespace: tuple[str, ...], key: str) -> str:
@@ -401,6 +427,23 @@ def _parse_dt(value: str) -> datetime:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed
+
+
+def _store_record(
+    namespace: tuple[str, ...],
+    key: str,
+    value: dict[str, Any],
+    *,
+    created_at: datetime,
+    updated_at: datetime,
+) -> dict[str, Any]:
+    return {
+        "namespace": list(namespace),
+        "key": key,
+        "value": value,
+        "created_at": created_at.isoformat(),
+        "updated_at": updated_at.isoformat(),
+    }
 
 
 def _extract_uris(value: Any) -> list[str]:

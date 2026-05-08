@@ -5,7 +5,7 @@ import pytest
 pytest.importorskip("langchain_core")
 pytest.importorskip("langgraph")
 
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableLambda
 
 from openviking.integrations.langchain import (
@@ -19,12 +19,17 @@ from openviking.integrations.langchain import (
     create_openviking_tools,
     with_openviking_context,
 )
-from openviking.integrations.langchain.client import OpenVikingConnection, ensure_client
+from openviking.integrations.langchain.client import (
+    OpenVikingConnection,
+    ensure_client,
+    maybe_commit_session,
+)
 from openviking.integrations.langchain.history import (
     langchain_message_to_openviking,
     openviking_message_to_langchain,
 )
 from openviking.integrations.langchain.middleware import _message_signature
+from openviking.integrations.langchain.tools import _archive_grep_pattern
 
 
 def test_retriever_returns_langchain_documents():
@@ -250,6 +255,15 @@ def test_empty_human_message_uses_empty_text_part():
     assert payloads == [{"role": "user", "parts": [{"type": "text", "text": ""}]}]
 
 
+def test_system_messages_are_never_persisted_to_openviking_history():
+    payloads = langchain_message_to_openviking(
+        SystemMessage(content="Never persist runtime policy."),
+        persist_system_messages=True,
+    )
+
+    assert payloads == []
+
+
 def test_session_context_assembler_uses_archive_active_messages_and_recall():
     client = InMemoryOpenVikingClient(
         {"viking://resources/runbooks/deploy.md": "Azure deployments use OpenViking context."}
@@ -465,6 +479,11 @@ def test_archive_search_without_archive_id_searches_raw_history():
     assert "viking://session/archive-search-session/history" in searched
 
 
+def test_archive_grep_pattern_uses_backend_safe_token_regex():
+    assert _archive_grep_pattern("hidden cobalt archive") == "hidden"
+    assert "(?=" not in _archive_grep_pattern("hidden cobalt archive")
+
+
 def test_commit_policy_keeps_recent_messages():
     client = InMemoryOpenVikingClient()
     history = OpenVikingChatMessageHistory(
@@ -589,6 +608,44 @@ def test_langgraph_store_waits_for_indexing_by_default():
 
     assert async_client.write_wait_values
     assert all(wait is False for wait in async_client.write_wait_values)
+
+
+def test_langgraph_store_uses_create_first_and_preserves_created_at_on_replace():
+    class RecordingClient(InMemoryOpenVikingClient):
+        def __init__(self):
+            super().__init__()
+            self.write_modes = []
+
+        def write(self, uri, content, mode="replace", **kwargs):
+            self.write_modes.append((uri, mode))
+            return super().write(uri, content, mode=mode, **kwargs)
+
+    client = RecordingClient()
+    store = OpenVikingStore(client=client)
+
+    store.put(("users",), "ada", {"color": "azure"})
+    first = store.get(("users",), "ada")
+    store.put(("users",), "ada", {"color": "teal"})
+    second = store.get(("users",), "ada")
+
+    data_uri = "viking://user/memories/langgraph_store/data/users/ada.json"
+    assert client.write_modes[0] == (data_uri, "create")
+    assert (data_uri, "replace") in client.write_modes
+    assert second.created_at == first.created_at
+    assert second.updated_at >= first.updated_at
+    assert second.value["color"] == "teal"
+
+
+def test_pending_token_commit_does_not_create_missing_session():
+    client = InMemoryOpenVikingClient()
+    result = maybe_commit_session(
+        client,
+        "missing-commit-session",
+        OpenVikingCommitPolicy(mode="pending_tokens", pending_token_threshold=1),
+    )
+
+    assert result is None
+    assert "missing-commit-session" not in client.sessions
 
 
 def test_langgraph_middleware_injects_recall_and_captures_messages():

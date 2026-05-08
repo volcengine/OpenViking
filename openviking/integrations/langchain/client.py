@@ -6,8 +6,11 @@ from __future__ import annotations
 
 import inspect
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any, Iterable, Literal
+
+logger = logging.getLogger(__name__)
 
 
 class OptionalDependencyError(ImportError):
@@ -97,8 +100,12 @@ def maybe_commit_session(
         raise ValueError(f"Unsupported OpenViking commit policy: {policy.mode}")
 
     try:
-        session = call_openviking(client, "get_session", session_id=session_id, auto_create=True)
+        session = call_openviking(client, "get_session", session_id=session_id, auto_create=False)
     except Exception:
+        logger.debug(
+            "Skipping OpenViking pending-token commit because session lookup failed",
+            exc_info=True,
+        )
         return None
     pending_tokens = int(item_value(session, "pending_tokens", 0) or 0)
     if pending_tokens < policy.pending_token_threshold:

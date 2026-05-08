@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from typing import Any, Callable
 
@@ -29,6 +30,8 @@ from openviking.integrations.langchain.client import (
     extract_message_text,
     maybe_commit_session,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class OpenVikingChatMessageHistory(BaseChatMessageHistory):
@@ -56,7 +59,9 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
     ):
         self.session_id = session_id
         self.token_budget = token_budget
-        self.persist_system_messages = persist_system_messages
+        # Retained for constructor compatibility. System messages are runtime
+        # policy, not conversation memory, so they are never persisted.
+        self.persist_system_messages = False
         self.commit_policy = commit_policy
         self.context_parts_provider = context_parts_provider
         self._connection = OpenVikingConnection(
@@ -85,6 +90,7 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
                 token_budget=self.token_budget,
             )
         except Exception:
+            logger.debug("OpenViking chat history context fetch failed", exc_info=True)
             self._ensure_session(client)
             return []
 
@@ -92,7 +98,6 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
 
     def add_messages(self, messages: Sequence[BaseMessage]) -> None:
         client = self._get_client()
-        self._ensure_session(client)
         added = 0
         pending_context_parts = (
             list(self.context_parts_provider(self.session_id))
@@ -132,6 +137,7 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
         try:
             call_openviking(client, "create_session", session_id=self.session_id)
         except Exception:
+            logger.debug("OpenViking chat history session ensure failed", exc_info=True)
             pass
 
 
@@ -177,9 +183,7 @@ def langchain_message_to_openviking(
         ]
 
     if isinstance(message, SystemMessage):
-        if not persist_system_messages:
-            return []
-        return [{"role": "assistant", "parts": _text_parts(message.content)}]
+        return []
 
     text = extract_message_text(getattr(message, "content", ""))
     if not text:

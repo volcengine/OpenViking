@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
@@ -31,6 +32,7 @@ from openviking.integrations.langchain.history import (
 from openviking.integrations.langchain.retrievers import OpenVikingRetriever
 
 OPENVIKING_CONTEXT_MARKER = "<openviking_context>"
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -129,6 +131,7 @@ class OpenVikingSessionContextAssembler:
         try:
             call_openviking(client, "create_session", session_id=session_id)
         except Exception:
+            logger.debug("OpenViking session ensure failed", exc_info=True)
             pass
 
     def _get_session_context(self, client: Any, session_id: str) -> dict[str, Any]:
@@ -142,6 +145,7 @@ class OpenVikingSessionContextAssembler:
                 token_budget=self.token_budget,
             )
         except Exception:
+            logger.debug("OpenViking session context assembly failed", exc_info=True)
             return {}
 
     def _get_recall_documents(self, session_id: str, query: str) -> list[Any]:
@@ -150,6 +154,7 @@ class OpenVikingSessionContextAssembler:
         try:
             return list(_retriever_for_session(self.retriever, session_id).invoke(query))
         except Exception:
+            logger.debug("OpenViking recall retrieval failed", exc_info=True)
             return []
 
     def _format_context_block(

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, Iterable
 
@@ -23,6 +24,8 @@ from openviking.integrations.langchain.client import (
     iter_result_items,
     stringify,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def create_openviking_tools(
@@ -440,6 +443,7 @@ def _grep_session_history(
     max_matches: int,
 ) -> dict[str, Any]:
     history_uri = f"viking://session/{session_id}/history"
+    tokens = _archive_query_tokens(query)
     try:
         result = call_openviking(
             client,
@@ -447,17 +451,12 @@ def _grep_session_history(
             uri=history_uri,
             pattern=_archive_grep_pattern(query),
             case_insensitive=True,
-            node_limit=max_matches,
+            node_limit=None,
         )
     except Exception:
+        logger.debug("OpenViking archive history grep failed", exc_info=True)
         return {"matches": [], "count": 0, "source": history_uri}
-    if isinstance(result, dict):
-        return {"source": history_uri, **result}
-    return {
-        "matches": result,
-        "count": len(result) if isinstance(result, list) else 0,
-        "source": history_uri,
-    }
+    return _filter_grep_result(result, tokens=tokens, max_matches=max_matches, source=history_uri)
 
 
 def _match_count(result: dict[str, Any] | None) -> int:
@@ -472,10 +471,52 @@ def _match_count(result: dict[str, Any] | None) -> int:
 
 
 def _archive_grep_pattern(query: str) -> str:
-    tokens = [token for token in re.findall(r"[a-z0-9_]+", query.lower()) if len(token) > 1]
+    tokens = _archive_query_tokens(query)
     if not tokens:
-        return re.escape(query)
-    return "".join(f"(?=.*{re.escape(token)})" for token in tokens) + ".*"
+        return re.escape(query) or ".*"
+    return re.escape(tokens[0])
+
+
+def _archive_query_tokens(query: str) -> list[str]:
+    return [token for token in re.findall(r"[a-z0-9_]+", query.lower()) if len(token) > 1]
+
+
+def _filter_grep_result(
+    result: Any,
+    *,
+    tokens: list[str],
+    max_matches: int,
+    source: str,
+) -> dict[str, Any]:
+    raw_matches = result.get("matches", []) if isinstance(result, dict) else result
+    matches: list[Any] = []
+    for match in raw_matches if isinstance(raw_matches, list) else []:
+        text = _grep_match_text(match).lower()
+        if tokens and not all(token in text for token in tokens):
+            continue
+        matches.append(match)
+        if len(matches) >= max_matches:
+            break
+
+    filtered = {"source": source}
+    if isinstance(result, dict):
+        filtered.update({key: value for key, value in result.items() if key != "matches"})
+    filtered["matches"] = matches
+    filtered["count"] = len(matches)
+    filtered["match_count"] = len(matches)
+    return filtered
+
+
+def _grep_match_text(match: Any) -> str:
+    if isinstance(match, dict):
+        return str(
+            match.get("content")
+            or match.get("line")
+            or match.get("text")
+            or match.get("snippet")
+            or ""
+        )
+    return str(match)
 
 
 def _archive_sections(payload: dict[str, Any]) -> list[tuple[str, str]]:

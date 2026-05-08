@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Callable
 
 try:
@@ -37,6 +38,8 @@ from openviking.integrations.langchain.context import (
 )
 from openviking.integrations.langchain.history import langchain_message_to_openviking
 from openviking.integrations.langchain.retrievers import OpenVikingRetriever
+
+logger = logging.getLogger(__name__)
 
 
 class OpenVikingContextMiddleware(AgentMiddleware):
@@ -178,7 +181,6 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             start = len(previous_signatures)
 
         client = ensure_client(self._connection)
-        self._ensure_session(client, session_id)
         added = 0
         pending_context_parts = list(self._pending_context_parts.pop(session_id, []))
         for message in messages[start:]:
@@ -221,6 +223,7 @@ class OpenVikingContextMiddleware(AgentMiddleware):
         try:
             call_openviking(client, "create_session", session_id=session_id)
         except Exception:
+            logger.debug("OpenViking LangGraph middleware session ensure failed", exc_info=True)
             pass
 
 
