@@ -274,8 +274,11 @@ docker compose up -d
 ```
 
 启动后可以访问：
-- API 服务：`http://localhost:1933`
-- Console 界面：`http://localhost:8020`
+- 聚合入口：`http://localhost:1934`（Caddy 合并 API + Console）
+- API 服务（直连）：`http://localhost:1933`
+- Console 界面（直连）：`http://localhost:8020`
+
+如需公网 HTTPS 访问，请参考 [公网访问指南](12-public-access.md)。
 
 如需自行构建镜像，请显式传入 OpenViking 版本：
 `docker build --build-arg OPENVIKING_VERSION=0.3.12 -t openviking:latest .`
@@ -312,6 +315,8 @@ curl http://localhost:1933/ready
 
 ## 相关文档
 
+- [公网访问与反向代理](12-public-access.md) - HTTPS、Caddy、nginx
 - [认证](04-authentication.md) - API Key 设置
+- [OAuth 接入指南](11-oauth.md) - 面向 MCP 客户端的 OAuth 2.1
 - [可观测性与排障](05-observability.md) - 健康检查、追踪与排障
 - [API 概览](../api/01-overview.md) - 完整 API 参考

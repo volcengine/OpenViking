@@ -55,6 +55,52 @@ def _get_ctx() -> RequestContext:
     return ctx
 
 
+def _scope_to_origin(scope: Scope) -> Optional[str]:
+    """Derive the public-facing origin (scheme://host) from an ASGI scope.
+
+    Resolution order matches openviking.server.oauth.router._public_origin:
+      1. ``OPENVIKING_PUBLIC_BASE_URL`` environment variable
+      2. ``app.state.oauth_config.issuer`` (if OAuth enabled)
+      3. ``X-Forwarded-Proto`` / ``X-Forwarded-Host``
+      4. scope's own scheme + Host header
+    """
+    import os as _os
+
+    env_value = _os.environ.get("OPENVIKING_PUBLIC_BASE_URL", "").strip()
+    if env_value:
+        return env_value.rstrip("/")
+
+    app = scope.get("app")
+    if app is not None:
+        cfg = getattr(app.state, "oauth_config", None)
+        configured = getattr(cfg, "issuer", None) if cfg else None
+        if configured:
+            return configured.rstrip("/")
+
+    headers = {
+        k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])
+    }
+    proto = headers.get("x-forwarded-proto") or scope.get("scheme") or "http"
+    proto = proto.split(",", 1)[0].strip()
+    host = headers.get("x-forwarded-host") or headers.get("host")
+    if not host:
+        server = scope.get("server")
+        if isinstance(server, (list, tuple)) and len(server) >= 2:
+            host = f"{server[0]}:{server[1]}" if server[1] else str(server[0])
+    if not host:
+        return None
+    host = host.split(",", 1)[0].strip()
+    return f"{proto}://{host}"
+
+
+def _oauth_enabled(scope: Scope) -> bool:
+    """Return True if app.state has an oauth_provider (i.e. OAuth is configured)."""
+    app = scope.get("app")
+    if app is None:
+        return False
+    return getattr(app.state, "oauth_provider", None) is not None
+
+
 class _IdentityASGIMiddleware:
     """ASGI middleware: delegates to auth.resolve_identity (the same function
     used by all REST API routes) so authentication logic is never duplicated."""
@@ -82,9 +128,21 @@ class _IdentityASGIMiddleware:
                 if isinstance(exc, UnauthenticatedError)
                 else (403 if isinstance(exc, PermissionDeniedError) else 400)
             )
+            headers: dict[str, str] = {}
+            # When OAuth is enabled and the request is unauthenticated, advertise
+            # the OAuth 2.0 protected resource metadata so MCP clients (Claude.ai,
+            # Claude Desktop, etc.) can auto-discover the authorization server
+            # per RFC 9728 §5.1.
+            if status == 401 and _oauth_enabled(scope):
+                origin = _scope_to_origin(scope)
+                if origin:
+                    headers["WWW-Authenticate"] = (
+                        f'Bearer resource_metadata="{origin}/.well-known/oauth-protected-resource"'
+                    )
             resp = JSONResponse(
                 {"jsonrpc": "2.0", "id": None, "error": {"code": -32001, "message": str(exc)}},
                 status_code=status,
+                headers=headers,
             )
             return await resp(scope, receive, send)
 

@@ -85,6 +85,24 @@ pub struct BaseClient {
 }
 
 impl BaseClient {
+    /// Create a new BaseClient with minimal configuration for health probing
+    pub fn new_simple(base_url: impl Into<String>, timeout_secs: f64) -> Self {
+        let http = ReqwestClient::builder()
+            .timeout(std::time::Duration::from_secs_f64(timeout_secs))
+            .build()
+            .expect("Failed to build HTTP client");
+
+        Self {
+            http,
+            base_url: base_url.into().trim_end_matches('/').to_string(),
+            api_key: None,
+            account: None,
+            user: None,
+            agent_id: None,
+            extra_headers: None,
+        }
+    }
+
     pub fn new(
         base_url: impl Into<String>,
         api_key: Option<String>,

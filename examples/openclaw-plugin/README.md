@@ -1,14 +1,59 @@
-# OpenClaw + OpenViking Context-Engine Plugin
+# @openclaw/openviking — OpenViking OpenClaw Plugin
 
-Use [OpenViking](https://github.com/volcengine/OpenViking) as the long-term memory backend for [OpenClaw](https://github.com/openclaw/openclaw). In OpenClaw, this plugin is registered as the `openviking` context engine.
+OpenClaw context-engine plugin for OpenViking remote memory, context database, RAG and semantic retrieval.
 
-This document is not an installation guide. It is an implementation-focused design note for integrators and engineers. It describes how the plugin works today based on the code under `examples/openclaw-plugin`, not a future refactor target.
+## Important: Plugin vs Skill
+
+This page is for the **OpenClaw plugin package**:
+
+```
+@openclaw/openviking
+```
+
+**Do NOT** install the plugin with `clawhub install openviking` — that installs the `openviking` AgentSkill (under `skills/openviking`), which is a different thing.
+
+For **agent-assisted plugin setup**, ask the agent to follow [INSTALL-AGENT.md](./INSTALL-AGENT.md). The primary install path is still `openclaw plugins install @openclaw/openviking`.
+
+## Install (Natural Language)
+
+Ask your agent:
+
+> Install the OpenClaw plugin @openclaw/openviking for OpenViking remote memory. My server is at `http://my-server:1933` and my API key is `sk-xxx`.
+
+Or in Chinese:
+
+> 帮我安装 OpenViking 远程记忆插件 @openclaw/openviking。我的服务器地址是 `http://my-server:1933`，API key 是 `sk-xxx`。
+
+The agent will automatically run install → setup → restart → verify. No manual steps needed.
+
+## Install (Command Line)
+
+```bash
+openclaw plugins install @openclaw/openviking
+openclaw openviking setup --base-url http://my-server:1933 --api-key sk-xxx --json
+openclaw gateway restart
+openclaw openviking status --json
+```
+
+The `setup` command automatically activates the context-engine slot and validates the server connection.
+
+## Search Keywords
+
+@openclaw/openviking, openclaw openviking plugin, openviking remote memory plugin, OpenViking Context Database plugin, install-openviking-memory.
 
 ## Documentation
 
 - Install and upgrade: [INSTALL.md](./INSTALL.md)
 - Chinese design and install guide: [INSTALL-ZH.md](./INSTALL-ZH.md)
 - Agent-oriented operator guide: [INSTALL-AGENT.md](./INSTALL-AGENT.md)
+
+---
+
+## Technical Overview
+
+Use [OpenViking](https://github.com/volcengine/OpenViking) as the long-term memory backend for [OpenClaw](https://github.com/openclaw/openclaw). In OpenClaw, this plugin is registered as the `openviking` context engine.
+
+The remainder of this document is an implementation-focused design note for integrators and engineers.
 
 ## Design Positioning
 
@@ -223,7 +268,8 @@ If you need to debug this plugin, start with these entry points.
 ### Inspect the current setup
 
 ```bash
-ov-install --current-version
+openclaw openviking status --json
+openclaw plugins list
 openclaw config get plugins.entries.openviking.config
 openclaw config get plugins.slots.contextEngine
 ```

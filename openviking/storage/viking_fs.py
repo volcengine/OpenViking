@@ -19,13 +19,14 @@ import json
 import re
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from openviking.core.namespace import (
     NamespaceShapeError,
     canonicalize_uri,
+    classify_uri,
 )
 from openviking.core.namespace import (
     is_accessible as namespace_is_accessible,
@@ -1023,8 +1024,8 @@ class VikingFS:
         output: str = "original",
         abs_limit: int = 256,
         show_all_hidden: bool = False,
-        node_limit: int = 1000,
-        level_limit: int = 3,
+        node_limit: Optional[int] = 1000,
+        level_limit: Optional[int] = 3,
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """
@@ -1035,8 +1036,8 @@ class VikingFS:
             output: str = "original" or "agent"
             abs_limit: int = 256 (for agent output abstract truncation)
             show_all_hidden: bool = False (list all hidden files, like -a)
-            node_limit: int = 1000 (maximum number of nodes to list)
-            level_limit: int = 3 (maximum depth level to traverse)
+            node_limit: int | None = 1000 (maximum number of nodes to list, None means unlimited)
+            level_limit: int | None = 3 (maximum depth level to traverse, None means unlimited)
 
         output="original"
         [{'name': '.abstract.md', 'size': 100, 'mode': 420, 'modTime': '2026-02-11T16:52:16.256334192+08:00', 'isDir': False, 'meta': {...}, 'rel_path': '.abstract.md', 'uri': 'viking://resources...'}]
@@ -1058,8 +1059,8 @@ class VikingFS:
         self,
         uri: str,
         show_all_hidden: bool = False,
-        node_limit: int = 1000,
-        level_limit: int = 3,
+        node_limit: Optional[int] = 1000,
+        level_limit: Optional[int] = 3,
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """Recursively list all contents (original format)."""
@@ -1068,10 +1069,12 @@ class VikingFS:
         real_ctx = self._ctx_or_default(ctx)
 
         async def _walk(current_path: str, current_rel: str, current_depth: int):
-            if len(all_entries) >= node_limit or current_depth >= level_limit:
+            if node_limit is not None and len(all_entries) >= node_limit:
+                return
+            if level_limit is not None and current_depth >= level_limit:
                 return
             for entry in self._ls_entries(current_path):
-                if len(all_entries) >= node_limit:
+                if node_limit is not None and len(all_entries) >= node_limit:
                     break
                 name = entry.get("name", "")
                 if name in [".", ".."]:
@@ -1098,36 +1101,39 @@ class VikingFS:
         uri: str,
         abs_limit: int,
         show_all_hidden: bool = False,
-        node_limit: int = 1000,
-        level_limit: int = 3,
+        node_limit: Optional[int] = 1000,
+        level_limit: Optional[int] = 3,
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """Recursively list all contents (agent format with abstracts)."""
         path = self._uri_to_path(uri, ctx=ctx)
         all_entries = []
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         real_ctx = self._ctx_or_default(ctx)
 
         async def _walk(current_path: str, current_rel: str, current_depth: int):
-            if len(all_entries) >= node_limit or current_depth >= level_limit:
+            if node_limit is not None and len(all_entries) >= node_limit:
+                return
+            if level_limit is not None and current_depth >= level_limit:
                 return
             for entry in self._ls_entries(current_path):
-                if len(all_entries) >= node_limit:
+                if node_limit is not None and len(all_entries) >= node_limit:
                     break
                 name = entry.get("name", "")
                 if name in [".", ".."]:
                     continue
                 rel_path = f"{current_rel}/{name}" if current_rel else name
+                is_dir = entry.get("isDir", False)
                 new_entry = {
                     "uri": self._path_to_uri(f"{current_path}/{name}", ctx=ctx),
-                    "size": entry.get("size", 0),
-                    "isDir": entry.get("isDir", False),
+                    "size": 0 if is_dir else entry.get("size", 0),
+                    "isDir": is_dir,
                     "modTime": format_simplified(parse_iso_datetime(entry.get("modTime", "")), now),
                 }
                 new_entry["rel_path"] = rel_path
                 if not self._is_accessible(new_entry["uri"], real_ctx):
                     continue
-                if entry.get("isDir"):
+                if is_dir:
                     all_entries.append(new_entry)
                     await _walk(f"{current_path}/{name}", rel_path, current_depth + 1)
                 elif not name.startswith("."):
@@ -1758,11 +1764,12 @@ class VikingFS:
         """Infer context_type from URI. Returns None when ambiguous."""
         from openviking_cli.retrieve import ContextType
 
-        if "/memories" in uri:
+        classification = classify_uri(uri)
+        if classification.is_memory:
             return ContextType.MEMORY
-        elif "/skills" in uri:
+        elif classification.is_skill:
             return ContextType.SKILL
-        elif "/resources" in uri:
+        elif classification.parts[:1] == ("resources",) or "resources" in classification.parts:
             return ContextType.RESOURCE
         return None
 
@@ -2189,7 +2196,7 @@ class VikingFS:
         except Exception:
             raise NotFoundError(uri, "directory")
         # basic info
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         all_entries = []
         for entry in entries:
             if len(all_entries) >= node_limit:
@@ -2198,23 +2205,24 @@ class VikingFS:
             raw_time = entry.get("modTime", "")
             parsed_time = now
             if isinstance(raw_time, (int, float)):
-                parsed_time = datetime.fromtimestamp(raw_time)
+                parsed_time = datetime.fromtimestamp(raw_time, tz=timezone.utc)
             elif raw_time:
                 if len(raw_time) > 26 and "+" in raw_time:
                     parts = raw_time.split("+")
                     raw_time = parts[0][:26] + "+" + parts[1]
                 parsed_time = parse_iso_datetime(raw_time)
             elif isinstance(entry.get("mtime"), (int, float)):
-                parsed_time = datetime.fromtimestamp(entry["mtime"])
+                parsed_time = datetime.fromtimestamp(entry["mtime"], tz=timezone.utc)
+            is_dir = entry.get("isDir", False)
             new_entry = {
                 "uri": self._path_to_uri(f"{path}/{name}", ctx=ctx),
-                "size": entry.get("size", 0),
-                "isDir": entry.get("isDir", False),
+                "size": 0 if is_dir else entry.get("size", 0),
+                "isDir": is_dir,
                 "modTime": format_simplified(parsed_time, now),
             }
             if not self._is_accessible(new_entry["uri"], real_ctx):
                 continue
-            if entry.get("isDir"):
+            if is_dir:
                 all_entries.append(new_entry)
             elif not name.startswith("."):
                 all_entries.append(new_entry)

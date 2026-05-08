@@ -517,7 +517,31 @@ const contextEnginePlugin = {
       api.pluginConfig && typeof api.pluginConfig === "object" && !Array.isArray(api.pluginConfig)
         ? (api.pluginConfig as Record<string, unknown>)
         : {};
-    const cfg = memoryOpenVikingConfigSchema.parse(api.pluginConfig);
+
+    if (rawCfg.mode && rawCfg.mode !== "remote") {
+      api.logger.warn(
+        `openviking: legacy local mode detected (mode="${String(rawCfg.mode)}"). ` +
+          "Migrating to remote mode. Please run 'openclaw openviking setup' to configure the remote server.",
+      );
+      rawCfg.mode = "remote";
+      delete rawCfg.localBinaryPath;
+      delete rawCfg.localDataDir;
+      delete rawCfg.localPort;
+      delete rawCfg.autoStart;
+    }
+
+    let cfg: ReturnType<typeof memoryOpenVikingConfigSchema.parse>;
+    try {
+      cfg = memoryOpenVikingConfigSchema.parse(rawCfg);
+    } catch (parseErr) {
+      api.logger.warn(
+        `openviking: config parse failed (${parseErr instanceof Error ? parseErr.message : String(parseErr)}). ` +
+          "Plugin loaded in setup-only mode. Run: openclaw openviking setup",
+      );
+      registerSetupCli(api);
+      return;
+    }
+
     const bypassSessionPatterns = compileSessionPatterns(cfg.bypassSessionPatterns);
     const rawAgentId = rawCfg.agent_prefix;
     if (cfg.logFindRequests) {

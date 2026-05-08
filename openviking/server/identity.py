@@ -60,6 +60,11 @@ class ResolvedIdentity:
     user_id: Optional[str] = None
     agent_id: Optional[str] = None
     namespace_policy: AccountNamespacePolicy = field(default_factory=AccountNamespacePolicy)
+    # True when this identity was minted from an OAuth-issued bearer token;
+    # downstream checks (e.g. ROOT-requires-explicit-tenant headers) can skip
+    # rules that target raw API-key auth, since OAuth claims already pin
+    # account/user.
+    from_oauth: bool = False
 
 
 @dataclass
@@ -69,6 +74,11 @@ class RequestContext:
     user: UserIdentifier
     role: Role
     namespace_policy: AccountNamespacePolicy = field(default_factory=AccountNamespacePolicy)
+    # Mirrors ResolvedIdentity.from_oauth. Routes that mint OAuth state
+    # (OTP issuance, oauth-verify) reject callers with from_oauth=True to
+    # prevent a stolen access token from laundering itself into a long-lived
+    # refresh-token chain.
+    from_oauth: bool = False
 
     @property
     def account_id(self) -> str:
@@ -97,7 +107,6 @@ class RequestContext:
 @dataclass
 class ToolContext:
     """Tool-level context, containing request context and additional tool-specific information."""
-
 
     viking_fs: VikingFS
     request_ctx: RequestContext

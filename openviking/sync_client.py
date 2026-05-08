@@ -105,6 +105,21 @@ class SyncOpenViking:
         """Query background task status."""
         return run_async(self._async_client.get_task(task_id))
 
+    def reindex(
+        self,
+        uri: str,
+        mode: str = "vectors_only",
+        wait: bool = True,
+    ) -> Dict[str, Any]:
+        """Reindex semantic/vector artifacts for a URI."""
+        return run_async(
+            self._async_client.reindex(
+                uri=uri,
+                mode=mode,
+                wait=wait,
+            )
+        )
+
     def add_resource(
         self,
         path: str,

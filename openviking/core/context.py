@@ -7,7 +7,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from openviking.core.namespace import owner_fields_for_uri
+from openviking.core.namespace import context_type_for_uri, owner_fields_for_uri
 from openviking.utils.time_utils import format_iso8601, parse_iso_datetime
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.uri import VikingURI
@@ -86,7 +86,7 @@ class Context:
         self.temp_uri = temp_uri
         self.is_leaf = is_leaf
         self.abstract = abstract
-        self.context_type = context_type or self._derive_context_type()
+        self.context_type = context_type or context_type_for_uri(uri)
         self.category = category or self._derive_category()
         self.created_at = created_at or datetime.now(timezone.utc)
         self.updated_at = updated_at or self.created_at
@@ -124,15 +124,6 @@ class Context:
         if self.uri.startswith("viking://user/") or self.uri.startswith("viking://session/"):
             return user.user_id
         return ""
-
-    def _derive_context_type(self) -> str:
-        """Derive context type from URI using substring matching."""
-        if "/skills" in self.uri:
-            return "skill"
-        elif "/memories" in self.uri:
-            return "memory"
-        else:
-            return "resource"
 
     def _derive_category(self) -> str:
         """Derive category from URI using substring matching."""

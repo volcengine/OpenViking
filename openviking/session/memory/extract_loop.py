@@ -8,11 +8,16 @@ Reference: bot/vikingbot/agent/loop.py AgentLoop structure
 
 import asyncio
 import json
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from openviking.models.vlm.base import VLMBase, ToolCall
+from openviking.models.vlm.base import ToolCall, VLMBase
 from openviking.server.identity import RequestContext
-from openviking.session.memory.memory_isolation_handler import RoleScope, MemoryIsolationHandler
+from openviking.session.memory.dataclass import (
+    MemoryFileContent,
+    ResolvedOperation,
+    ResolvedOperations,
+)
+from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.schema_model_generator import (
     SchemaModelGenerator,
     SchemaPromptGenerator,
@@ -20,17 +25,11 @@ from openviking.session.memory.schema_model_generator import (
 from openviking.session.memory.tools import (
     MEMORY_TOOLS_REGISTRY,
     add_tool_call_pair_to_messages,
-    get_tool,
 )
 from openviking.session.memory.utils import (
     parse_json_with_stability,
     parse_memory_file_with_fields,
     pretty_print_messages,
-)
-from openviking.session.memory.dataclass import (
-    MemoryFileContent,
-    ResolvedOperation,
-    ResolvedOperations,
 )
 from openviking.session.memory.utils.json_parser import JsonUtils
 from openviking.session.memory.utils.uri import supplement_operation_uris
@@ -93,7 +92,6 @@ class ExtractLoop:
         self._expected_fields: Optional[List[str]] = None
         self._operations_model: Optional[Any] = None
 
-
         # Transaction handle for file locking
         self._transaction_handle = None
         # Flag to disable tools in next iteration after unknown tool error
@@ -123,7 +121,6 @@ class ExtractLoop:
         self.schema_prompt_generator = SchemaPromptGenerator(schemas)
         self.schema_model_generator.generate_all_models()
 
-
         # 预计算工具 schemas
         allowed_tools = self.context_provider.get_tools()
         self._tool_schemas = [
@@ -145,11 +142,11 @@ class ExtractLoop:
         # 预计算 operations_model
         role_scope = self._isolation_handler.get_read_scope() if self._isolation_handler else None
 
-        self._operations_model = self.schema_model_generator.create_structured_operations_model(role_scope)
+        self._operations_model = self.schema_model_generator.create_structured_operations_model(
+            role_scope
+        )
 
         json_schema = self._operations_model.model_json_schema()
-
-
 
         # Build initial messages from provider
         import json
@@ -189,7 +186,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 messages.append(
                     {
                         "role": "user",
-                        "content": "You have reached the maximum number of tool call iterations. Do not call any more tools - return your final result directly now.",
+                        "content": self._build_final_operations_instruction(),
                     }
                 )
 
@@ -238,10 +235,12 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 tracer.info(f"Extended max_iterations to {max_iterations} for format retry")
                 self._add_format_error_message(messages)
 
-            # If it's the last iteration, use empty operations
+            # If it's the last iteration, fail instead of silently treating an
+            # unparseable final response as "no memory operations".
             if iteration >= max_iterations:
-                final_operations = ResolvedOperations()
-                break
+                raise RuntimeError(
+                    "Memory extraction final response could not be parsed as JSON operations"
+                )
 
             self._disable_tools_for_iteration = True
             continue
@@ -256,9 +255,8 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
         return final_operations, tools_used
 
-
     async def resolve_operations(self, operations) -> ResolvedOperations:
-        tracer.info(f'operations={JsonUtils.dumps(operations)}')
+        tracer.info(f"operations={JsonUtils.dumps(operations)}")
         upsert_operations: List[ResolvedOperation] = []
         delete_file_contents: List[MemoryFileContent] = []
         errors: List[str] = []
@@ -280,7 +278,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
             for item in items:
                 # 转换为 dict
                 item_dict = dict(item)
-                item_dict['memory_type'] = memory_type
+                item_dict["memory_type"] = memory_type
                 # 填充 user_id 和 agent_id
                 self._isolation_handler.fill_role_ids(item_dict, role_scope=role_scope)
 
@@ -329,10 +327,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     op.old_memory_file_content = old_content
                     break
 
-
-
         return resolved
-
 
     @tracer("extract_loop.execute_tool_calls")
     async def _execute_tool_calls(self, messages, tool_calls, tools_used) -> bool:
@@ -375,11 +370,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 }
             )
 
-            # Track read tool calls for refetch detection
-            if tool_call.name == "read" and tool_call.arguments.get("uri"):
-                uri = tool_call.arguments["uri"]
-                # 内容由 ToolContext.read_file_contents 记录
-
             add_tool_call_pair_to_messages(
                 messages,
                 call_id=tool_call.id,
@@ -389,7 +379,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
             )
 
         return has_unknown_tool
-
 
     async def _call_llm(
         self, messages: List[Dict[str, Any]]
@@ -492,8 +481,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
         print("No tool calls or operations parsed")
         return (None, None)
 
-
-
     async def _execute_in_parallel(
         self,
         tasks: List[Any],
@@ -501,10 +488,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
         """Execute tasks in parallel, similar to AgentLoop."""
         return await asyncio.gather(*tasks)
 
-    async def _check_unread_existing_files(
-        self,
-        operations: ResolvedOperations
-    ) -> Dict:
+    async def _check_unread_existing_files(self, operations: ResolvedOperations) -> Dict:
 
         refetch_uris = {}
         for operation in operations.upsert_operations:
@@ -513,13 +497,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     continue
                 try:
                     content = await self.context_provider.execute_tool(
-                        ToolCall(
-                            id="",
-                            name="read",
-                            arguments={
-                                "uri": uri
-                            }
-                        )
+                        ToolCall(id="", name="read", arguments={"uri": uri})
                     )
                     # 读取出错表示文件不存在
                     if isinstance(content, Dict):
@@ -542,6 +520,26 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     "Do not include any explanation, markdown formatting, or text outside the JSON."
                 ),
             }
+        )
+
+    def _build_final_operations_skeleton(self) -> Dict[str, List[Any]]:
+        """Build an empty operations object matching the expected flat schema fields."""
+        fields = ["delete_uris", *(self._expected_fields or [])]
+        return {field: [] for field in dict.fromkeys(fields)}
+
+    def _build_final_operations_instruction(self) -> str:
+        """Build schema-aware final-iteration instructions for the LLM."""
+        skeleton = json.dumps(
+            self._build_final_operations_skeleton(),
+            ensure_ascii=False,
+            indent=2,
+        )
+        return (
+            "You have reached the maximum number of tool call iterations. "
+            "Do not call any more tools. Return your final result now as ONLY a valid JSON object "
+            "matching the required schema. Do not include explanations or markdown. "
+            "If there are no memory changes, return this exact empty-shape JSON with all fields present:\n"
+            f"{skeleton}"
         )
 
     async def _add_refetch_results_to_messages(

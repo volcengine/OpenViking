@@ -178,6 +178,34 @@ async def test_regenerate_key(manager: APIKeyManager):
     assert identity.account_id == acct
 
 
+async def test_get_user_key_fingerprint_changes_on_rotation(manager: APIKeyManager):
+    """fp must change when the key is regenerated and disappear when user is removed."""
+    acct = _uid()
+    await manager.create_account(acct, "alice")
+    await manager.register_user(acct, "bob", "user")
+
+    fp1 = manager.get_user_key_fingerprint(acct, "bob")
+    assert fp1 is not None
+    assert len(fp1) == 64  # sha256 hex
+
+    # Same call should be deterministic.
+    assert manager.get_user_key_fingerprint(acct, "bob") == fp1
+
+    # Rotation flips the stored value → fp must change.
+    await manager.regenerate_key(acct, "bob")
+    fp2 = manager.get_user_key_fingerprint(acct, "bob")
+    assert fp2 is not None
+    assert fp2 != fp1
+
+    # Removal → no fp at all.
+    await manager.remove_user(acct, "bob")
+    assert manager.get_user_key_fingerprint(acct, "bob") is None
+
+
+async def test_get_user_key_fingerprint_unknown_returns_none(manager: APIKeyManager):
+    assert manager.get_user_key_fingerprint("nope", "nobody") is None
+
+
 async def test_set_role(manager: APIKeyManager):
     """set_role should update user's role in both storage and index."""
     acct = _uid()

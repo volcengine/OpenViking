@@ -543,6 +543,11 @@ enum Commands {
         #[arg(long)]
         timeout: Option<f64>,
     },
+    /// [Status] Track async resource processing tasks
+    Task {
+        #[command(subcommand)]
+        action: TaskCommands,
+    },
     /// [Status] All OpenViking Server components status
     Status,
     /// [Status] Observe OpenViking Server components status
@@ -571,15 +576,15 @@ enum Commands {
         #[command(subcommand)]
         action: SystemCommands,
     },
-    /// [Admin] Reindex content at URI (regenerates .abstract.md and .overview.md)
+    /// [Admin] Reindex semantic/vector artifacts for a URI
     Reindex {
         /// Viking URI
         uri: String,
-        /// Force regenerate summaries even if they exist
-        #[arg(short, long)]
-        regenerate: bool,
+        /// Reindex mode
+        #[arg(long, default_value = "vectors_only")]
+        mode: String,
         /// Wait for reindex to complete
-        #[arg(long, default_value = "true")]
+        #[arg(long, default_value_t = true, action = ArgAction::Set)]
         wait: bool,
     },
 }
@@ -594,6 +599,24 @@ impl Commands {
             _ => false,
         }
     }
+}
+
+#[derive(Subcommand)]
+enum TaskCommands {
+    /// Show status of a specific task
+    Status {
+        /// Task ID returned by add-resource/add-skill
+        task_id: String,
+    },
+    /// List all tracked tasks
+    List {
+        /// Filter by task type (e.g. add_resource, add_skill, session_commit, reindex)
+        #[arg(long)]
+        task_type: Option<String>,
+        /// Filter by status (pending, running, completed, failed)
+        #[arg(long)]
+        status: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -822,6 +845,10 @@ enum ConfigCommands {
     Show,
     /// Validate configuration file
     Validate,
+    /// Interactive setup to configure CLI
+    SetupCli,
+    /// Switch between saved configurations
+    Switch,
 }
 
 fn find_command_index(args: &[OsString]) -> Option<usize> {
@@ -1041,6 +1068,23 @@ async fn main() {
             let client = ctx.get_client();
             commands::system::wait(&client, timeout, ctx.output_format, ctx.compact).await
         }
+        Commands::Task { action } => match action {
+            TaskCommands::Status { task_id } => {
+                let client = ctx.get_client();
+                commands::task::status(&client, &task_id, ctx.output_format, ctx.compact).await
+            }
+            TaskCommands::List { task_type, status } => {
+                let client = ctx.get_client();
+                commands::task::list(
+                    &client,
+                    task_type.as_deref(),
+                    status.as_deref(),
+                    ctx.output_format,
+                    ctx.compact,
+                )
+                .await
+            }
+        },
         Commands::Status => {
             let client = ctx.get_client();
             commands::observer::system(&client, ctx.output_format, ctx.compact).await
@@ -1146,9 +1190,9 @@ async fn main() {
         }
         Commands::Reindex {
             uri,
-            regenerate,
+            mode,
             wait,
-        } => handlers::handle_reindex(uri, regenerate, wait, ctx).await,
+        } => handlers::handle_reindex(uri, mode, wait, ctx).await,
         Commands::Get { uri, local_path } => handlers::handle_get(uri, local_path, ctx).await,
         Commands::Find {
             query,
@@ -1330,6 +1374,20 @@ mod tests {
         ]);
 
         assert!(result.is_err(), "removed write flags should not parse");
+    }
+
+    #[test]
+    fn cli_parses_reindex_command() {
+        let result = Cli::try_parse_from([
+            "ov",
+            "reindex",
+            "viking://resources/demo",
+            "--mode",
+            "semantic_and_vectors",
+            "--wait=false",
+        ]);
+
+        assert!(result.is_ok(), "reindex command should parse");
     }
 
     #[test]

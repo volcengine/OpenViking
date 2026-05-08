@@ -176,27 +176,32 @@ function parseTranscript(content) {
   return messages;
 }
 
-// Per-block cap for tool input / tool result snippets. Sized to keep most invocations
-// (URLs, file paths, search queries, short results) verbatim while bounding worst-case
-// blowup when an agent reads a large file or fetches a long page.
-const TOOL_BLOCK_MAX_CHARS = 4096;
+// Tool result (output) retention. 0 = drop tool_result blocks entirely; >0 = keep,
+// truncated to that many chars. Default 0 — memory extraction signal lives in the
+// agent's prose summary of what happened, not in the raw bytes the tool returned
+// (file contents, web pages, command stdout). Operators who want replay-style
+// archives can set this >0 to retain truncated results.
+const TOOL_RESULT_MAX_CHARS = 0;
 
-function truncateForLog(value) {
-  let s;
-  if (typeof value === "string") {
-    s = value;
-  } else {
-    try {
-      s = JSON.stringify(value, null, 2);
-    } catch {
-      s = String(value);
-    }
+function formatToolInput(value) {
+  // Tool inputs are agent-authored. We keep them verbatim — they're usually short
+  // (URLs, file paths, queries) and a pathologically long input is itself signal
+  // worth surfacing to the memory extractor.
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
   }
-  if (typeof s !== "string") s = "";
-  if (s.length <= TOOL_BLOCK_MAX_CHARS) return s;
+}
+
+function truncateToolResult(s) {
+  if (TOOL_RESULT_MAX_CHARS <= 0) return null; // drop
+  if (typeof s !== "string") s = String(s ?? "");
+  if (s.length <= TOOL_RESULT_MAX_CHARS) return s;
   return (
-    s.slice(0, TOOL_BLOCK_MAX_CHARS) +
-    `\n... [truncated, ${s.length - TOOL_BLOCK_MAX_CHARS} more chars]`
+    s.slice(0, TOOL_RESULT_MAX_CHARS) +
+    `\n... [truncated, ${s.length - TOOL_RESULT_MAX_CHARS} more chars]`
   );
 }
 
@@ -210,10 +215,10 @@ function extractToolResultText(content) {
 }
 
 /**
- * Extract user/assistant turns. Captures plain text, tool_use input (server-side args),
- * and tool_result content (tool output). Tool blocks are inlined into the per-turn text
- * so the OV memory extractor sees "what happened" with substance, not just tool names.
- * Each tool block is truncated to TOOL_BLOCK_MAX_CHARS to bound size.
+ * Extract user/assistant turns. Captures plain text + tool_use input (verbatim) and,
+ * if TOOL_RESULT_MAX_CHARS > 0, tool_result output (truncated). Tool blocks are inlined
+ * into the per-turn text so the OV memory extractor sees what the agent did with
+ * substance, not just tool names.
  */
 function extractAllTurns(messages) {
   const turns = [];
@@ -235,11 +240,12 @@ function extractAllTurns(messages) {
             parts.push(block.text);
           } else if (block.type === "tool_use" && typeof block.name === "string") {
             toolNames.push(block.name);
-            parts.push(`[tool: ${block.name}]\n${truncateForLog(block.input)}`);
+            parts.push(`[tool: ${block.name}]\n${formatToolInput(block.input)}`);
           } else if (block.type === "tool_result") {
             const resultText = extractToolResultText(block.content);
-            if (resultText) {
-              parts.push(`[tool result]\n${truncateForLog(resultText)}`);
+            const truncated = resultText ? truncateToolResult(resultText) : null;
+            if (truncated) {
+              parts.push(`[tool result]\n${truncated}`);
             }
           }
         }
