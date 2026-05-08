@@ -169,8 +169,8 @@ viking://resources/snapshots/{calendar:today}/
 ### CLI 使用
 
 ```bash
-# 添加今天的邮件
-ov add-resource --parent "viking://resources/emails/{calendar:today}/inbox" ./emails/*.eml
+# 添加今天的邮件 --parent-auto-create 可以简写为 -p
+ov add-resource --parent-auto-create "viking://resources/emails/{calendar:today}/inbox" ./emails/*.eml
 
 # 读取昨天的日志
 ov read "viking://resources/logs/{calendar:yesterday}/app.log"
@@ -178,8 +178,8 @@ ov read "viking://resources/logs/{calendar:yesterday}/app.log"
 # 准备明天的任务
 ov write --uri "viking://resources/tasks/{calendar:tomorrow}/todo.md" --content "规划一天"
 
-# 上传月度报告
-ov add-resource --parent "viking://resources/reports/{calendar:ym}" ./report.pdf
+# 上传月度报告 --parent-auto-create 可以简写为 -p
+ov add-resource --parent-auto-create "viking://resources/reports/{calendar:ym}" ./report.pdf
 ```
 
 ## 目录结构

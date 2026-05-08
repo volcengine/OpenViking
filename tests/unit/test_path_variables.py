@@ -150,6 +150,29 @@ class TestCalendarVariableProvider:
         provider = CalendarVariableProvider()
         assert provider.namespace == "calendar"
 
+    def test_default_provider_uses_current_time_each_call(self):
+        """Test that default provider (no fixed dt) gets current time each call."""
+        # Create provider without fixed dt
+        provider = CalendarVariableProvider()
+
+        # Get variables multiple times - each call uses current time
+        variables1 = provider.get_variables()
+        variables2 = provider.get_variables()
+
+        # Should return same date (since we call within same second)
+        assert variables1["today"] == variables2["today"]
+
+    def test_fixed_dt_provider_does_not_update(self):
+        """Test that provider with explicit dt always uses that date."""
+        fixed_dt = datetime(2026, 5, 7, 14, 30, 0)
+        provider = CalendarVariableProvider(fixed_dt)
+
+        variables1 = provider.get_variables()
+        assert variables1["today"] == "2026/05/07"
+
+        variables2 = provider.get_variables()
+        assert variables2["today"] == "2026/05/07"
+
 
 class TestPathVariableResolver:
     """Tests for path variable resolver."""

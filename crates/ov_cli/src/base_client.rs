@@ -53,11 +53,11 @@ impl TimeoutConfig {
     }
 
     pub fn for_resource_processing() -> Self {
-        Self::new(60, 1.0)
+        Self::new(60, 5.0)
     }
 
     pub fn for_upload() -> Self {
-        Self::new(60, 0.3)
+        Self::new(60, 10.0)
     }
 
     pub fn calculate(&self, file_path: &Path) -> Result<std::time::Duration> {

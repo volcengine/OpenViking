@@ -62,10 +62,10 @@ class CalendarVariableProvider(VariableProvider):
         return "calendar"
 
     def __init__(self, dt: Optional[datetime] = None):
-        self.dt = dt or datetime.now()
+        self.dt = dt
 
     def get_variables(self) -> Dict[str, str]:
-        dt = self.dt
+        dt = self.dt or datetime.now()
         year = dt.year
         month = f"{dt.month:02d}"
         day = f"{dt.day:02d}"

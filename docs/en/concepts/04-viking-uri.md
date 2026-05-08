@@ -170,8 +170,8 @@ Path variables are resolved **server-side** at the time of API execution. The CL
 ### Use with CLI
 
 ```bash
-# Add today's emails
-ov add-resource --parent "viking://resources/emails/{calendar:today}/inbox" ./emails/*.eml
+# Add today's emails, --parent-auto-create can be shortened to -p
+ov add-resource --parent-auto-create "viking://resources/emails/{calendar:today}/inbox" ./emails/*.eml
 
 # Read yesterday's log
 ov read "viking://resources/logs/{calendar:yesterday}/app.log"
@@ -179,8 +179,8 @@ ov read "viking://resources/logs/{calendar:yesterday}/app.log"
 # Prep tomorrow's tasks
 ov write --uri "viking://resources/tasks/{calendar:tomorrow}/todo.md" --content "Plan the day"
 
-# Upload monthly report
-ov add-resource --parent "viking://resources/reports/{calendar:ym}" ./report.pdf
+# Upload monthly report, --parent-auto-create can be shortened to -p
+ov add-resource --parent-auto-create "viking://resources/reports/{calendar:ym}" ./report.pdf
 ```
 
 ## Directory Structure
