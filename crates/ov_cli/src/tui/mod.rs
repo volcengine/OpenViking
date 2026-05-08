@@ -2,6 +2,7 @@ mod app;
 mod event;
 mod tree;
 mod ui;
+mod image_preview;
 
 use std::io;
 
@@ -15,6 +16,7 @@ use ratatui::prelude::*;
 use crate::client::HttpClient;
 use crate::error::Result;
 use app::App;
+use image_preview::ImagePreviewer;
 
 pub async fn run_tui(client: HttpClient, uri: &str) -> Result<()> {
     // Set up panic hook to restore terminal
@@ -45,6 +47,16 @@ async fn run_loop(client: HttpClient, uri: &str) -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::new(client);
+    let mut image_previewer = ImagePreviewer::new();
+    let previewer_available = ImagePreviewer::is_available();
+
+    // Initialize image previewer if available
+    if previewer_available {
+        if let Err(e) = image_previewer.init() {
+            eprintln!("Warning: Failed to initialize image previewer: {}", e);
+        }
+    }
+
     app.init(uri).await;
 
     loop {
@@ -63,7 +75,42 @@ async fn run_loop(client: HttpClient, uri: &str) -> Result<()> {
         // Update status message (clear after 3 seconds)
         app.update_messages();
 
-        terminal.draw(|frame| ui::render(frame, &app))?;
+        // Store content area
+        let mut captured_content_area = None;
+
+        // Render TUI
+        terminal.draw(|frame| {
+            let areas = ui::render_with_content_area(frame, &app);
+            // Save content area
+            captured_content_area = Some(areas.1);
+        })?;
+
+        // Update the preview area coordinates
+        if let Some(content_area) = captured_content_area {
+            image_previewer.set_preview_area(image_preview::PreviewArea {
+                x: content_area.x,
+                y: content_area.y,
+                width: content_area.width,
+                height: content_area.height,
+            });
+        }
+
+        // Update image display based on current file
+        if previewer_available {
+            if let Some(image_path) = &app.current_preview_image {
+                if let Err(e) = image_previewer.display_image(image_path) {
+                    // Don't spam errors, just try to clear and show in status bar
+                    let _ = image_previewer.clear_image();
+                    // Only update status if not locked
+                    if !app.status_message_locked {
+                        app.status_message = format!("Image preview error: {}", e);
+                        app.status_message_time = Some(std::time::Instant::now());
+                    }
+                }
+            } else {
+                let _ = image_previewer.clear_image();
+            }
+        }
 
         if ct_event::poll(std::time::Duration::from_millis(100))? {
             if let Event::Key(key) = ct_event::read()? {
@@ -77,6 +124,9 @@ async fn run_loop(client: HttpClient, uri: &str) -> Result<()> {
             break;
         }
     }
+
+    // Cleanup image previewer
+    image_previewer.cleanup();
 
     Ok(())
 }

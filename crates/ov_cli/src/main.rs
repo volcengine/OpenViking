@@ -845,6 +845,10 @@ enum ConfigCommands {
     Show,
     /// Validate configuration file
     Validate,
+    /// Interactive setup to configure CLI
+    SetupCli,
+    /// Switch between saved configurations
+    Switch,
 }
 
 fn find_command_index(args: &[OsString]) -> Option<usize> {
