@@ -39,3 +39,9 @@ export {
   type RecallHit,
   type RecallOptions,
 } from "./ov-client.js";
+
+export {
+  INJECTED_BLOCK_PATTERNS,
+  sanitize,
+  stripInjectedBlocks,
+} from "./capture/sanitize.js";
