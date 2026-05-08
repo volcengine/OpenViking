@@ -8,6 +8,7 @@ tags:
   - Context
   - Memory
   - Retrieval
+cover: /covers/context-provenance.png
 excerpt: OpenViking treats context as a first-class layer for agents, so memory, resources, and skills can be managed through one consistent model.
 description: A mock engineering note about why agents need a dedicated context layer.
 ---

@@ -8,6 +8,7 @@ tags:
   - OpenViking
   - Context
   - Agents
+cover: /covers/openviking-banner.jpg
 excerpt: Blog posts are a better place for product thinking, architecture notes, release context, and implementation tradeoffs that do not belong in the docs tree.
 description: A short note on separating long-form project writing from the documentation site.
 ---
