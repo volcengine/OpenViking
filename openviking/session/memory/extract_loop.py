@@ -524,7 +524,8 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
     def _build_final_operations_skeleton(self) -> Dict[str, List[Any]]:
         """Build an empty operations object matching the expected flat schema fields."""
-        return {field: [] for field in self._expected_fields or ["delete_uris"]}
+        fields = ["delete_uris", *(self._expected_fields or [])]
+        return {field: [] for field in dict.fromkeys(fields)}
 
     def _build_final_operations_instruction(self) -> str:
         """Build schema-aware final-iteration instructions for the LLM."""

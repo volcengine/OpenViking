@@ -199,7 +199,7 @@ class TestAllowedDirectoriesList:
 
                 # Verify the result contains the expected directories with variables replaced
                 assert "viking://user/default/memories/preferences" in result
-        assert "viking://agent/default/memories/tools" in result
+                assert "viking://agent/default/memories/tools" in result
 
 
 class TestExtractLoopFinalJsonRetry:
@@ -213,6 +213,15 @@ class TestExtractLoopFinalJsonRetry:
         assert '"delete_uris": []' in instruction
         assert '"preferences": []' in instruction
         assert '"tools": []' in instruction
+
+    def test_final_skeleton_always_includes_delete_uris(self):
+        extract_loop = object.__new__(ExtractLoop)
+        extract_loop._expected_fields = ["preferences"]
+
+        assert extract_loop._build_final_operations_skeleton() == {
+            "delete_uris": [],
+            "preferences": [],
+        }
 
     @pytest.mark.asyncio
     async def test_final_unparseable_response_raises_instead_of_empty_success(self):
