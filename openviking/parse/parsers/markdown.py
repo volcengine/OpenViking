@@ -211,13 +211,15 @@ class MarkdownParser(BaseParser):
             await viking_fs.mkdir(temp_uri)
             logger.debug(f"[MarkdownParser] Created temp directory: {temp_uri}")
 
-            explicit_name = kwargs.get("resource_name") or kwargs.get("source_name")
+            explicit_name = kwargs.get("resource_name")
+            if not explicit_name and kwargs.get("source_name"):
+                explicit_name = _smart_stem(kwargs["source_name"])
 
             # Preserve the original uploaded filename when available instead of
             # the temp upload name (e.g. upload_<uuid>.txt).
             doc_title = meta.get("frontmatter", {}).get(
                 "title",
-                _smart_stem(explicit_name)
+                explicit_name
                 if explicit_name
                 else _smart_stem(source_path)
                 if source_path

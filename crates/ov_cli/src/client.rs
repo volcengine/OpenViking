@@ -1,8 +1,9 @@
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use std::env;
 use std::path::Path;
 
-pub use crate::base_client::{api_error_from_envelope, BaseClient, FileUploader, TimeoutConfig};
+pub use crate::base_client::{BaseClient, FileUploader, TimeoutConfig};
 
 use crate::error::{Error, Result};
 
@@ -39,6 +40,20 @@ impl HttpClient {
 
     pub fn api_key(&self) -> Option<&str> {
         self.base.api_key()
+    }
+
+    fn upload_mode(&self) -> Option<String> {
+        match env::var("OPENVIKING_UPLOAD_MODE") {
+            Ok(value) => {
+                let normalized = value.trim().to_ascii_lowercase();
+                if normalized == "shared" || normalized == "local" {
+                    Some(normalized)
+                } else {
+                    None
+                }
+            }
+            Err(_) => None,
+        }
     }
 
     // ============ HTTP Methods ============
@@ -85,20 +100,24 @@ impl HttpClient {
 
     // ============ File Helper Methods ============
 
+    fn create_uploader(&self) -> FileUploader {
+        FileUploader::new(&self.base).with_upload_mode(self.upload_mode())
+    }
+
     fn zip_directory(&self, dir_path: &Path) -> Result<tempfile::NamedTempFile> {
-        FileUploader::new(&self.base).zip_directory(dir_path)
+        self.create_uploader().zip_directory(dir_path)
     }
 
     fn zip_directory_with_progress(&self, dir_path: &Path, verbose: bool) -> Result<tempfile::NamedTempFile> {
-        FileUploader::new(&self.base).zip_directory_with_progress(dir_path, verbose)
+        self.create_uploader().zip_directory_with_progress(dir_path, verbose)
     }
 
     async fn upload_temp_file(&self, file_path: &Path) -> Result<String> {
-        FileUploader::new(&self.base).upload_temp_file(file_path).await
+        self.create_uploader().upload_temp_file(file_path).await
     }
 
     async fn upload_temp_file_with_progress(&self, file_path: &Path, verbose: bool) -> Result<String> {
-        FileUploader::new(&self.base).upload_temp_file_with_progress(file_path, verbose).await
+        self.create_uploader().upload_temp_file_with_progress(file_path, verbose).await
     }
 
     // ============ Content Methods ============
@@ -162,7 +181,7 @@ impl HttpClient {
 
     /// Download file as raw bytes
     pub async fn get_bytes(&self, uri: &str) -> Result<Vec<u8>> {
-        let url = format!("{}/api/v1/content/download", self.base.base_url());
+        let url = format!("{}/api/v1/content/download", self.base.base_url);
         let params = vec![("uri".to_string(), uri.to_string())];
 
         let response = self
@@ -593,7 +612,7 @@ impl HttpClient {
             "uri": uri,
         });
 
-        let url = format!("{}/api/v1/pack/export", self.base.base_url());
+        let url = format!("{}/api/v1/pack/export", self.base.base_url);
         let response = self
             .base
             .http

@@ -355,11 +355,20 @@ impl BaseClient {
 /// Handles file compression and upload logic
 pub struct FileUploader<'a> {
     client: &'a BaseClient,
+    upload_mode: Option<String>,
 }
 
 impl<'a> FileUploader<'a> {
     pub fn new(client: &'a BaseClient) -> Self {
-        Self { client }
+        Self {
+            client,
+            upload_mode: None,
+        }
+    }
+
+    pub fn with_upload_mode(mut self, upload_mode: Option<String>) -> Self {
+        self.upload_mode = upload_mode;
+        self
     }
 
     pub fn zip_directory(&self, dir_path: &Path) -> Result<NamedTempFile> {
@@ -500,7 +509,10 @@ impl<'a> FileUploader<'a> {
             .mime_str("application/octet-stream")
             .map_err(|e| Error::Network(format!("Failed to set mime type: {}", e)))?;
 
-        let form = reqwest::multipart::Form::new().part("file", part);
+        let mut form = reqwest::multipart::Form::new().part("file", part);
+        if let Some(upload_mode) = &self.upload_mode {
+            form = form.text("upload_mode", upload_mode.clone());
+        }
 
         let mut headers = self.client.build_headers();
         headers.remove(reqwest::header::CONTENT_TYPE);
@@ -558,7 +570,10 @@ impl<'a> FileUploader<'a> {
             .mime_str("application/octet-stream")
             .map_err(|e| Error::Network(format!("Failed to set mime type: {}", e)))?;
 
-        let form = reqwest::multipart::Form::new().part("file", part);
+        let mut form = reqwest::multipart::Form::new().part("file", part);
+        if let Some(upload_mode) = &self.upload_mode {
+            form = form.text("upload_mode", upload_mode.clone());
+        }
 
         let mut headers = self.client.build_headers();
         headers.remove(reqwest::header::CONTENT_TYPE);

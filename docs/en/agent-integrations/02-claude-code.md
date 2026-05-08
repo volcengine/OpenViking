@@ -172,6 +172,15 @@ This plugin **complements** Claude Code's native memory system, it doesn't repla
 
 `auto-capture` strips `<openviking-context>`, `<system-reminder>`, `<relevant-memories>`, and `[Subagent Context]` blocks before pushing to OV — without this, the recall context the plugin injects this turn would be captured back as part of the user's message next turn.
 
+### OV session ID derivation
+
+The OV session ID embeds the CC `session_id` verbatim, so you can map between the two by eye:
+
+- Parent: `cc-<ccSessionId>`, e.g. `cc-7d978bb3-cd9c-4ac6-828d-20965d66b783`
+- Subagent: `cc-<ccSessionId>__agent-<agentId>`, e.g. `cc-7d978bb3-cd9c-4ac6-828d-20965d66b783__agent-abc123`
+
+`~/.openviking/state/last-capture.json` shows the live `cc_session_id` and `ov_session_id` for the current session; the CC side's session ID is also the filename of `~/.claude/projects/<encoded-cwd>/<session_id>.jsonl`.
+
 ## Troubleshooting
 
 | Symptom                                    | Cause                                                          | Fix                                                                                          |

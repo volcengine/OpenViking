@@ -6,6 +6,13 @@
  * This replaces the old one-shot session model (create → add → extract → delete)
  * with a persistent session that lets OV's own commit/extract pipeline run.
  *
+ * Format:
+ *   parent:    cc-<ccSessionId>
+ *   subagent:  cc-<ccSessionId>__agent-<agentId>
+ *
+ * The CC session_id is preserved verbatim so the OV id is human-readable and
+ * the parent/subagent lineage is visible at a glance.
+ *
  * Works with endpoints in openviking/server/routers/sessions.py:
  *   - POST   /api/v1/sessions/{id}/messages           (auto_create=true by default)
  *   - POST   /api/v1/sessions/{id}/commit
@@ -13,10 +20,7 @@
  *   - GET    /api/v1/sessions/{id}/context?token_budget=N
  */
 
-import { createHash } from "node:crypto";
-
 const OV_SESSION_PREFIX = "cc-";
-const OV_SESSION_HASH_LEN = 16;
 
 /**
  * Glob → RegExp. Minimal implementation: supports `*` (any chars except /),
@@ -58,15 +62,19 @@ export function isBypassed(cfg, { sessionId, cwd } = {}) {
 
 /**
  * Derive a stable OV session ID from a CC session_id.
- * Optionally mix in an extra suffix (e.g. subagent agent_id) for isolation.
+ *
+ * Optionally append a suffix (e.g. subagent agent_id) for isolation. The suffix
+ * is normalized: `:` → `-` (so `agent:abc123` → `agent-abc123`) and any
+ * characters outside [A-Za-z0-9._-] become `-`. Result: `cc-<uuid>__<suffix>`.
  */
 export function deriveOvSessionId(ccSessionId, suffix = "") {
   if (!ccSessionId || typeof ccSessionId !== "string") {
     throw new Error("deriveOvSessionId requires a non-empty ccSessionId");
   }
-  const material = suffix ? `${ccSessionId}\x1f${suffix}` : ccSessionId;
-  const hash = createHash("sha256").update(material).digest("hex").slice(0, OV_SESSION_HASH_LEN);
-  return `${OV_SESSION_PREFIX}${hash}`;
+  const base = `${OV_SESSION_PREFIX}${ccSessionId}`;
+  if (!suffix) return base;
+  const normalized = String(suffix).replace(/:/g, "-").replace(/[^A-Za-z0-9._-]/g, "-");
+  return `${base}__${normalized}`;
 }
 
 /**

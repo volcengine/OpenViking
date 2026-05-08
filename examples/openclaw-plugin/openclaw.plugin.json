@@ -13,7 +13,7 @@
   "contracts": {
     "tools": [
       "ov_import",
-      "ov_search",
+      "memory_search",
       "memory_recall",
       "memory_store",
       "memory_forget",

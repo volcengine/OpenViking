@@ -422,6 +422,49 @@ async def test_grep_missing_uri_returns_not_found(client: httpx.AsyncClient):
     assert resp.json()["status"] == "error"
 
 
+async def test_grep_level_limit_filters_by_relative_match_path(
+    client: httpx.AsyncClient,
+    upload_temp_dir,
+):
+    root_file = upload_temp_dir / "root_level.md"
+    root_file.write_text("OpenViking on root level\n")
+    deep_file = upload_temp_dir / "deep_level.md"
+    deep_file.write_text("OpenViking in deep level\n")
+
+    await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": root_file.name,
+            "to": "viking://resources/level-limit/root_level.md",
+            "reason": "test",
+        },
+    )
+    await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": deep_file.name,
+            "to": "viking://resources/level-limit/nested/deeper/deep_level.md",
+            "reason": "test",
+        },
+    )
+
+    resp = await client.post(
+        "/api/v1/search/grep",
+        json={
+            "uri": "viking://resources/level-limit",
+            "pattern": "OpenViking",
+            "level_limit": 2,
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    uris = {m["uri"] for m in body["result"]["matches"]}
+    assert "viking://resources/level-limit/root_level.md/root_level.md" in uris
+    assert "viking://resources/level-limit/nested/deeper/deep_level.md/deep_level.md" not in uris
+
+
 async def test_grep_exclude_uri_excludes_specific_uri_range(
     client: httpx.AsyncClient,
     upload_temp_dir,

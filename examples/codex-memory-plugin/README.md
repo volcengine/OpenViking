@@ -11,10 +11,10 @@ This example intentionally stays MCP-only:
 
 Codex gets four tools:
 
-- `openviking_recall`
-- `openviking_store`
-- `openviking_forget`
-- `openviking_health`
+- `find`
+- `remember`
+- `forget`
+- `health`
 
 ## Files
 
@@ -72,18 +72,18 @@ Supported environment overrides:
 
 ## Tools
 
-### `openviking_recall`
+### `find`
 
-Search OpenViking memory.
+Find OpenViking memory.
 
 Parameters:
 
-- `query`: search query
-- `target_uri`: optional search scope, default `viking://user/memories`
+- `query`: find query
+- `target_uri`: optional find scope, default `viking://user/memories`
 - `limit`: optional max results
 - `score_threshold`: optional minimum score
 
-### `openviking_store`
+### `remember`
 
 Store a memory by creating a short OpenViking session, adding the text, and
 committing the session. Memory creation is extraction-dependent; the tool
@@ -94,16 +94,16 @@ Parameters:
 - `text`: information to store
 - `role`: optional message role, default `user`
 
-### `openviking_forget`
+### `forget`
 
 Delete an exact memory URI. This example intentionally does not auto-delete by
-query; use `openviking_recall` first, then pass the exact URI.
+query; use `find` first, then pass the exact URI.
 
 Parameters:
 
 - `uri`: exact `viking://user/.../memories/...` or `viking://agent/.../memories/...` URI
 
-### `openviking_health`
+### `health`
 
 Check server reachability.
 

@@ -193,6 +193,9 @@ class AsyncHTTPClient(BaseClient):
         self._user = UserIdentifier.the_default_user()
         self._timeout = timeout
         self._extra_headers = extra_headers
+        self._upload_mode = None
+        if should_load_cli_config and cli_config is not None and cli_config.upload is not None:
+            self._upload_mode = cli_config.upload.mode
         self._http: Optional[httpx.AsyncClient] = None
         self._observer: Optional[_HTTPObserver] = None
 
@@ -346,9 +349,13 @@ class AsyncHTTPClient(BaseClient):
         """Upload a file to /api/v1/resources/temp_upload and return the temp_file_id."""
         with open(file_path, "rb") as f:
             files = {"file": (Path(file_path).name, f, "application/octet-stream")}
+            data = None
+            if self._upload_mode:
+                data = {"upload_mode": self._upload_mode}
             response = await self._http.post(
                 "/api/v1/resources/temp_upload",
                 files=files,
+                data=data,
             )
         result = self._handle_response(response)
         return result.get("temp_file_id", "")

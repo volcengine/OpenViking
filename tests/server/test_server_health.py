@@ -7,9 +7,61 @@ import asyncio
 import time
 
 import httpx
+import pytest
 
-from openviking.server.app import create_app
+from openviking.server.app import _on_deferred_init_done, create_app
 from openviking.server.config import ServerConfig
+
+
+class _ExitCalled(Exception):
+    def __init__(self, code: int):
+        self.code = code
+        super().__init__(f"os._exit({code})")
+
+
+async def test_deferred_init_failure_exits_process(monkeypatch):
+    async def fail_init():
+        raise RuntimeError("init failed")
+
+    def fake_exit(code: int):
+        raise _ExitCalled(code)
+
+    monkeypatch.setattr("openviking.server.app.os._exit", fake_exit)
+    task = asyncio.create_task(fail_init())
+    with pytest.raises(RuntimeError):
+        await task
+
+    with pytest.raises(_ExitCalled) as exc_info:
+        _on_deferred_init_done(task)
+
+    assert exc_info.value.code == 1
+
+
+async def test_deferred_init_success_does_not_exit(monkeypatch):
+    async def complete_init():
+        return None
+
+    monkeypatch.setattr(
+        "openviking.server.app.os._exit",
+        lambda code: pytest.fail(f"os._exit({code}) should not be called"),
+    )
+    task = asyncio.create_task(complete_init())
+    await task
+
+    _on_deferred_init_done(task)
+
+
+async def test_deferred_init_cancellation_does_not_exit(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.server.app.os._exit",
+        lambda code: pytest.fail(f"os._exit({code}) should not be called"),
+    )
+    task = asyncio.create_task(asyncio.sleep(60))
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    _on_deferred_init_done(task)
 
 
 async def test_health_endpoint(client: httpx.AsyncClient):
@@ -50,6 +102,9 @@ async def test_404_for_unknown_route(client: httpx.AsyncClient):
 
 async def test_lifespan_shutdown_ignores_cancelled_service_close():
     class _Service:
+        async def initialize(self):
+            pass
+
         async def close(self):
             raise asyncio.CancelledError("shutdown")
 

@@ -4,10 +4,9 @@
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
 from openviking.utils.network_guard import ensure_public_remote_target
 from openviking_cli.exceptions import PermissionDeniedError
@@ -55,6 +54,8 @@ def deny_direct_local_skill_input(value: str) -> None:
 
 def _read_upload_meta(meta_path: Path) -> Optional[dict]:
     """Read upload metadata file if it exists."""
+    import json
+
     try:
         if meta_path.exists():
             with open(meta_path, "r") as f:
@@ -62,57 +63,3 @@ def _read_upload_meta(meta_path: Path) -> Optional[dict]:
     except Exception:
         pass
     return None
-
-
-def resolve_uploaded_temp_file_id(
-    temp_file_id: str, upload_temp_dir: Path
-) -> Tuple[str, Optional[str]]:
-    """Resolve a temp upload id to a regular file under the server upload temp dir.
-
-    Returns:
-        Tuple of (resolved_file_path, original_filename)
-        original_filename is None if no meta file exists.
-    """
-    if not temp_file_id or temp_file_id in {".", ".."}:
-        raise PermissionDeniedError(
-            "HTTP server only accepts regular files from the upload temp directory."
-        )
-
-    raw_name = Path(temp_file_id)
-    if raw_name.name != temp_file_id or "/" in temp_file_id or "\\" in temp_file_id:
-        raise PermissionDeniedError(
-            "HTTP server only accepts temp_file_id values issued from the upload temp directory."
-        )
-
-    raw_path = upload_temp_dir / temp_file_id
-    if raw_path.is_symlink():
-        raise PermissionDeniedError(
-            "HTTP server only accepts regular files from the upload temp directory."
-        )
-
-    try:
-        resolved_path = raw_path.resolve(strict=True)
-    except (FileNotFoundError, OSError) as exc:
-        raise PermissionDeniedError(
-            "HTTP server only accepts regular files from the upload temp directory."
-        ) from exc
-
-    upload_root = upload_temp_dir.resolve()
-    try:
-        resolved_path.relative_to(upload_root)
-    except ValueError as exc:
-        raise PermissionDeniedError(
-            "HTTP server only accepts temp_file_id values issued from the upload temp directory."
-        ) from exc
-
-    if not resolved_path.is_file():
-        raise PermissionDeniedError(
-            "HTTP server only accepts regular files from the upload temp directory."
-        )
-
-    # Try to read original filename from meta file
-    meta_path = upload_temp_dir / f"{temp_file_id}.ov_upload.meta"
-    meta = _read_upload_meta(meta_path)
-    original_filename = meta.get("original_filename") if meta else None
-
-    return (str(resolved_path), original_filename)
