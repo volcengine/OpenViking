@@ -312,4 +312,37 @@ describe("openviking-copilot-mcp stdio", () => {
       await client.close();
     }
   });
+
+  it("adopts OPENVIKING_CLI_SESSION_ID as the default capture session id", async () => {
+    await execFileAsync(process.execPath, ["scripts/build.mjs"], { cwd: cliRoot });
+
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: ["dist/mcp-server.js"],
+      cwd: cliRoot,
+      stderr: "pipe",
+      env: {
+        HOME: process.env["HOME"] ?? "",
+        PATH: process.env["PATH"] ?? "",
+        OPENVIKING_BYPASS_SESSION: "true",
+        OPENVIKING_MEMORY_ENABLED: "true",
+        OPENVIKING_URL: "http://127.0.0.1:1",
+        // Wrapper-coordinated session id (#27): the MCP server should
+        // pick this up as the default capture session and surface it
+        // when the model calls openviking_capture without sessionId.
+        OPENVIKING_CLI_SESSION_ID: "cp-wrapper-coord-test",
+      },
+    });
+    const client = new Client({ name: "stdio-wrapper-test", version: "0.0.0" });
+    await client.connect(transport);
+    try {
+      const result = await callTool(client, "openviking_capture", {
+        user: "wrapper-coord-user",
+        assistant: "wrapper-coord-reply",
+      });
+      expect(JSON.parse(textOf(result)).sessionId).toBe("cp-wrapper-coord-test");
+    } finally {
+      await client.close();
+    }
+  });
 });

@@ -243,7 +243,20 @@ export async function runStdioMcpServer(opts: RunStdioMcpServerOptions = {}): Pr
   const client = opts.createClient
     ? opts.createClient(cfg)
     : new OVClient(cfg, { logger });
-  const server = createOpenVikingMcpServer({ client, config: cfg, logger, version: opts.version });
+  // Coordinate with the copilot() shell-wrapper fallback (#27): when
+  // the wrapper is in use it sets OPENVIKING_CLI_SESSION_ID before
+  // launching `copilot`, which transitively launches us. Adopting the
+  // same id as the default capture session lets the wrapper's
+  // post-exit `--commit-flush --session=<id>` hit the same OV session
+  // any in-process openviking_capture calls wrote to.
+  const wrapperSessionId = process.env["OPENVIKING_CLI_SESSION_ID"]?.trim() || undefined;
+  const server = createOpenVikingMcpServer({
+    client,
+    config: cfg,
+    logger,
+    version: opts.version,
+    ...(wrapperSessionId ? { defaultSessionId: wrapperSessionId } : {}),
+  });
   const transport = opts.createTransport ? opts.createTransport() : new StdioServerTransport();
   await server.connect(transport);
 }

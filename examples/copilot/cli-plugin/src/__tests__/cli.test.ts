@@ -176,3 +176,90 @@ describe("runMain — argv error handling", () => {
     expect(s.stderr).toContain("--help");
   });
 });
+
+describe("runMain — --commit-flush", () => {
+  it("rejects when --session=<id> is missing with exit code 2", async () => {
+    const s = makeStreams();
+    const loadConfig = vi.fn((_opts: LoadConfigOptions) => fakeCfg());
+    const commitFlush = vi.fn();
+    const code = await runMain(["--commit-flush"], {
+      stdout: s.stdoutFn, stderr: s.stderrFn,
+      loadConfig, commitFlush,
+    });
+    expect(code).toBe(2);
+    expect(s.stderr).toContain("requires --session");
+    expect(commitFlush).not.toHaveBeenCalled();
+  });
+
+  it("calls commitFlush(cfg, sessionId) and exits 0 on ok", async () => {
+    const s = makeStreams();
+    const loadConfig = vi.fn((_opts: LoadConfigOptions) => fakeCfg({ apiKey: "test" }));
+    const commitFlush = vi.fn(async () => ({ ok: true as const, value: { committed: true } }));
+    const code = await runMain(["--commit-flush", "--session=cp-abc"], {
+      stdout: s.stdoutFn, stderr: s.stderrFn,
+      loadConfig, commitFlush,
+    });
+    expect(code).toBe(0);
+    expect(commitFlush).toHaveBeenCalledTimes(1);
+    expect(commitFlush.mock.calls[0]![0]!.apiKey).toBe("test");
+    expect(commitFlush.mock.calls[0]![1]).toBe("cp-abc");
+    expect(s.stdout).toBe("");
+    expect(s.stderr).toBe("");
+  });
+
+  it("exits 1 with a stderr message when commitFlush returns ok:false", async () => {
+    const s = makeStreams();
+    const loadConfig = vi.fn((_opts: LoadConfigOptions) => fakeCfg());
+    const commitFlush = vi.fn(async () => ({
+      ok: false as const,
+      error: { message: "ECONNREFUSED", status: 0 },
+    }));
+    const code = await runMain(["--commit-flush", "--session=cp-z"], {
+      stdout: s.stdoutFn, stderr: s.stderrFn,
+      loadConfig, commitFlush,
+    });
+    expect(code).toBe(1);
+    expect(s.stderr).toContain("commit-flush failed");
+    expect(s.stderr).toContain("ECONNREFUSED");
+  });
+
+  it("includes HTTP status when present in the error", async () => {
+    const s = makeStreams();
+    const loadConfig = vi.fn((_opts: LoadConfigOptions) => fakeCfg());
+    const commitFlush = vi.fn(async () => ({
+      ok: false as const,
+      error: { message: "not found", status: 404 },
+    }));
+    const code = await runMain(["--commit-flush", "--session=cp-z"], {
+      stdout: s.stdoutFn, stderr: s.stderrFn,
+      loadConfig, commitFlush,
+    });
+    expect(code).toBe(1);
+    expect(s.stderr).toContain("HTTP 404");
+    expect(s.stderr).toContain("not found");
+  });
+
+  it("trims whitespace in the --session value before passing it through", async () => {
+    const s = makeStreams();
+    const loadConfig = vi.fn((_opts: LoadConfigOptions) => fakeCfg());
+    const commitFlush = vi.fn(async () => ({ ok: true as const, value: {} }));
+    const code = await runMain(["--commit-flush", "--session=  cp-spaced  "], {
+      stdout: s.stdoutFn, stderr: s.stderrFn,
+      loadConfig, commitFlush,
+    });
+    expect(code).toBe(0);
+    expect(commitFlush.mock.calls[0]![1]).toBe("cp-spaced");
+  });
+
+  it("rejects an empty --session= value (whitespace-only) with exit code 2", async () => {
+    const s = makeStreams();
+    const loadConfig = vi.fn((_opts: LoadConfigOptions) => fakeCfg());
+    const commitFlush = vi.fn();
+    const code = await runMain(["--commit-flush", "--session=   "], {
+      stdout: s.stdoutFn, stderr: s.stderrFn,
+      loadConfig, commitFlush,
+    });
+    expect(code).toBe(2);
+    expect(commitFlush).not.toHaveBeenCalled();
+  });
+});

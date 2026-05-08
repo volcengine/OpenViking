@@ -9,6 +9,14 @@
  *     users can verify their `mcp.json` env passthrough is wired up
  *   - default invocation (no flags) — start the stdio MCP server
  *
+ * Issue #27 adds:
+ *   - `--commit-flush --session=<id>` — load PluginConfig, build an
+ *     OVClient, force-commit `<id>`. Used by the `copilot()` shell-
+ *     wrapper fallback at end-of-session so any pending turns the
+ *     model captured (via `openviking_capture`) but didn't trigger
+ *     a threshold commit for actually land as archives. Exits 0 on
+ *     success or bypass-short-circuit; non-zero on transport error.
+ *
  * `runMain(argv, opts)` is exported as a vitest-friendly entry point;
  * the bin shim (`mcp-server.ts`) just calls it with `process.argv`.
  *
@@ -20,7 +28,9 @@
 import {
   isPluginEnabled as defaultIsEnabled,
   loadConfig as defaultLoadConfig,
+  OVClient,
   type LoadConfigOptions,
+  type OVResult,
   type PluginConfig,
 } from "@openviking/copilot-shared";
 import { runStdioMcpServer as defaultRunStdioMcpServer } from "./server.js";
@@ -40,10 +50,14 @@ environment variables (priority: env > ovcli.conf > ov.conf >
 defaults).
 
 Options:
-  -h, --help       Show this help message and exit
-  -v, --version    Show package version and exit
-  --check          Load PluginConfig and print a redacted summary
-                   (verifies your mcp.json env passthrough is wired)
+  -h, --help                   Show this help message and exit
+  -v, --version                Show package version and exit
+  --check                      Load PluginConfig and print a redacted
+                               summary (verifies your mcp.json env
+                               passthrough is wired up)
+  --commit-flush --session=ID  Force-commit the given OpenViking
+                               session (used by the copilot() shell-
+                               wrapper fallback at end-of-session)
 
 Configuration files (read-only):
   ~/.openviking/ovcli.conf   url, api_key, account, user, agent_id
@@ -52,7 +66,7 @@ Configuration files (read-only):
 Environment variables (subset):
   OPENVIKING_URL, OPENVIKING_API_KEY, OPENVIKING_ACCOUNT,
   OPENVIKING_USER, OPENVIKING_AGENT_ID, OPENVIKING_MEMORY_ENABLED,
-  OPENVIKING_DEBUG
+  OPENVIKING_DEBUG, OPENVIKING_CLI_SESSION_ID
 
 See PLAN.md §8 for the full priority chain and field list.
 `;
@@ -66,6 +80,13 @@ export interface RunMainDeps {
   loadConfig?: (opts: LoadConfigOptions) => PluginConfig;
   isPluginEnabled?: () => boolean;
   runStdioMcpServer?: (opts: { version: string; loadConfig: (opts: LoadConfigOptions) => PluginConfig }) => Promise<void>;
+  /**
+   * Inject for tests — replaces the default OVClient.commit
+   * invocation that `--commit-flush` triggers. Takes the resolved
+   * cfg and the target session id; returns the OVResult so the
+   * caller can map success/error to exit codes.
+   */
+  commitFlush?: (cfg: PluginConfig, sessionId: string) => Promise<OVResult<unknown>>;
 }
 
 export interface RunMainOptions extends RunMainStreams, RunMainDeps {}
@@ -84,14 +105,20 @@ export async function runMain(
   const loadConfig = opts.loadConfig ?? defaultLoadConfig;
   const isEnabled = opts.isPluginEnabled ?? defaultIsEnabled;
   const runStdioMcpServer = opts.runStdioMcpServer ?? defaultRunStdioMcpServer;
+  const commitFlush = opts.commitFlush ?? defaultCommitFlush;
 
-  // Single-pass argv parser — only --flag forms, no values.
+  // Single-pass argv parser — handles --flag and --key=value forms.
   const flags = new Set<string>();
+  let sessionArg: string | undefined;
   for (const a of argv) {
     if (a === "-h") flags.add("--help");
     else if (a === "-v") flags.add("--version");
-    else if (a.startsWith("--")) flags.add(a);
-    else {
+    else if (a.startsWith("--session=")) {
+      sessionArg = a.slice("--session=".length);
+      flags.add("--session");
+    } else if (a.startsWith("--")) {
+      flags.add(a);
+    } else {
       err(`Unknown positional argument: ${a}\n`);
       err("Run with --help for usage.\n");
       return 2;
@@ -108,6 +135,15 @@ export async function runMain(
   }
   if (flags.has("--check")) {
     return runConfigCheck({ loadConfig, isEnabled, out, err });
+  }
+  if (flags.has("--commit-flush")) {
+    return runCommitFlushCommand({
+      loadConfig,
+      commitFlush,
+      sessionId: sessionArg,
+      out,
+      err,
+    });
   }
 
   await runStdioMcpServer({ version: VERSION, loadConfig });
@@ -142,4 +178,37 @@ function runConfigCheck(args: {
   ];
   args.out(lines.join("\n"));
   return enabled ? 0 : 3;
+}
+
+async function runCommitFlushCommand(args: {
+  loadConfig: (opts: LoadConfigOptions) => PluginConfig;
+  commitFlush: (cfg: PluginConfig, sessionId: string) => Promise<OVResult<unknown>>;
+  sessionId: string | undefined;
+  out: (c: string) => void;
+  err: (c: string) => void;
+}): Promise<number> {
+  if (!args.sessionId || !args.sessionId.trim()) {
+    args.err("--commit-flush requires --session=<id>\n");
+    return 2;
+  }
+  const cfg = args.loadConfig({ agentIdDefault: "copilot-cli" });
+  const res = await args.commitFlush(cfg, args.sessionId.trim());
+  if (!res.ok) {
+    args.err(
+      `commit-flush failed: ${res.error.status ? `HTTP ${res.error.status}: ` : ""}${res.error.message}\n`,
+    );
+    return 1;
+  }
+  return 0;
+}
+
+/**
+ * Default `--commit-flush` implementation: build an OVClient from the
+ * resolved cfg and force-commit the session. Bypass is honoured by
+ * OVClient itself (returns ok with skipped:true), so this never
+ * needs an explicit isBypassed branch.
+ */
+async function defaultCommitFlush(cfg: PluginConfig, sessionId: string): Promise<OVResult<unknown>> {
+  const client = new OVClient(cfg);
+  return client.commit(sessionId, { force: true });
 }
