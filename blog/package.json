@@ -10,6 +10,6 @@
   },
   "dependencies": {
     "valaxy": "0.28.4",
-    "valaxy-theme-starter": "0.3.4"
+    "valaxy-theme-press": "0.28.4"
   }
 }

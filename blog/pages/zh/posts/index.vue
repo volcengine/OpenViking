@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import BlogIndex from '../components/BlogIndex.vue'
+import BlogIndex from '../../../components/BlogIndex.vue'
 </script>
 
 <template>

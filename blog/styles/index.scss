@@ -22,7 +22,66 @@ body {
   background: var(--va-c-bg);
 }
 
+.pr-navbar {
+  display: grid !important;
+  grid-template-columns: minmax(0, min(100%, calc(var(--pr-layout-max-width, 1440px) - 64px)));
+  justify-content: center !important;
+  padding-right: 24px !important;
+  padding-left: 24px !important;
+}
+
+.pr-navbar > a,
+.pr-navbar > div {
+  grid-row: 1;
+  grid-column: 1;
+}
+
+.pr-navbar > a {
+  justify-self: start;
+}
+
+.pr-navbar > div {
+  justify-self: end;
+}
+
+@media (max-width: 767px) {
+  .pr-navbar {
+    grid-template-columns: minmax(0, 100%);
+    padding-right: 16px !important;
+    padding-left: 16px !important;
+  }
+}
+
 .markdown-body img {
   border: 1px solid rgba(88, 100, 95, 0.16);
   border-radius: 8px;
+}
+
+.pr-nav-bar-social-links {
+  display: flex !important;
+  align-items: center;
+}
+
+.pr-social-link {
+  border-radius: 6px;
+  color: var(--pr-nav-text);
+}
+
+.pr-social-link::before {
+  display: block;
+  width: 20px;
+  height: 20px;
+  background: currentcolor;
+  content: "";
+  mask: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M12 .5C5.65.5.5 5.65.5 12c0 5.09 3.29 9.39 7.86 10.92.58.11.79-.25.79-.56v-2.17c-3.2.7-3.87-1.36-3.87-1.36-.52-1.33-1.28-1.68-1.28-1.68-1.05-.72.08-.71.08-.71 1.16.08 1.77 1.19 1.77 1.19 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.73-1.54-2.55-.29-5.23-1.28-5.23-5.68 0-1.25.45-2.28 1.19-3.08-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.18 1.18A11.1 11.1 0 0 1 12 6.04c.98 0 1.97.13 2.89.39 2.2-1.49 3.17-1.18 3.17-1.18.63 1.58.23 2.75.11 3.04.74.8 1.19 1.83 1.19 3.08 0 4.42-2.69 5.39-5.25 5.67.41.36.78 1.06.78 2.14v3.18c0 .31.21.68.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z'/%3E%3C/svg%3E") center / contain no-repeat;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M12 .5C5.65.5.5 5.65.5 12c0 5.09 3.29 9.39 7.86 10.92.58.11.79-.25.79-.56v-2.17c-3.2.7-3.87-1.36-3.87-1.36-.52-1.33-1.28-1.68-1.28-1.68-1.05-.72.08-.71.08-.71 1.16.08 1.77 1.19 1.77 1.19 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.73-1.54-2.55-.29-5.23-1.28-5.23-5.68 0-1.25.45-2.28 1.19-3.08-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.18 1.18A11.1 11.1 0 0 1 12 6.04c.98 0 1.97.13 2.89.39 2.2-1.49 3.17-1.18 3.17-1.18.63 1.58.23 2.75.11 3.04.74.8 1.19 1.83 1.19 3.08 0 4.42-2.69 5.39-5.25 5.67.41.36.78 1.06.78 2.14v3.18c0 .31.21.68.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+.pr-social-link > * {
+  display: none;
+}
+
+.pr-social-link:hover {
+  color: var(--va-c-primary);
+  background: transparent;
 }
