@@ -83,3 +83,11 @@ export {
   type FormatRecallBlockOptions,
   type FormatRecallBlockResult,
 } from "./recall/format.js";
+
+export {
+  DEFAULT_MAX_ENTRIES as RECALL_CACHE_DEFAULT_MAX_ENTRIES,
+  DEFAULT_TTL_MS as RECALL_CACHE_DEFAULT_TTL_MS,
+  RecallCache,
+  type RecallCacheKey,
+  type RecallCacheOptions,
+} from "./recall/cache.js";
