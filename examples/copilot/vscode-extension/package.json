@@ -28,7 +28,21 @@
         "name": "openviking",
         "fullName": "OpenViking",
         "description": "Long-term memory backed by OpenViking",
-        "isSticky": true
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "recall",
+            "description": "Search OpenViking memory and inspect the recalled context block"
+          },
+          {
+            "name": "store",
+            "description": "Append the message body as a stored memory and force an archive"
+          },
+          {
+            "name": "forget",
+            "description": "Delete a viking:// URI from OpenViking (irreversible)"
+          }
+        ]
       }
     ],
     "languageModelTools": [],

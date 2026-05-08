@@ -291,6 +291,30 @@ describe("OVClient — endpoint shapes", () => {
     await client.commit("cc-with/slash");
     expect(calls[0]!.url).toBe("http://ov.test/api/v1/sessions/cc-with%2Fslash/commit");
   });
+
+  it("forget DELETEs /api/v1/fs?uri=... with URL-encoded uri", async () => {
+    const { calls, impl } = makeMockFetch({ responses: [{ body: { result: { uri: "viking://m/1" } } }] });
+    const client = new OVClient(baseCfg(), { fetchImpl: impl });
+    const res = await client.forget("viking://m/1");
+    expect(res.ok).toBe(true);
+    expect(calls[0]!.method).toBe("DELETE");
+    expect(calls[0]!.url).toBe("http://ov.test/api/v1/fs?uri=viking%3A%2F%2Fm%2F1");
+  });
+
+  it("forget(uri, {recursive:true}) appends &recursive=true", async () => {
+    const { calls, impl } = makeMockFetch({ responses: [{ body: { result: {} } }] });
+    const client = new OVClient(baseCfg(), { fetchImpl: impl });
+    await client.forget("viking://dir/path", { recursive: true });
+    expect(calls[0]!.url).toBe("http://ov.test/api/v1/fs?uri=viking%3A%2F%2Fdir%2Fpath&recursive=true");
+  });
+
+  it("forget short-circuits when bypass is active", async () => {
+    const { calls, impl } = makeMockFetch({ responses: [{ body: {} }] });
+    const client = new OVClient(baseCfg({ bypassSession: true }), { fetchImpl: impl });
+    const res = await client.forget("viking://x");
+    expect(res.ok).toBe(true);
+    expect(calls).toHaveLength(0);
+  });
 });
 
 describe("OVClient — error mapping", () => {

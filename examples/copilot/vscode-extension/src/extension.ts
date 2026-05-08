@@ -20,6 +20,7 @@ import {
   type ActivationHandle,
   type PluginConfig,
 } from "./extension-core";
+import { registerOpenVikingParticipant } from "./participant";
 
 let handle: ActivationHandle | null = null;
 
@@ -34,6 +35,8 @@ export function activate(context: vscode.ExtensionContext): void {
     // `OPENVIKING_MEMORY_ENABLED=1` after a reload picks us back up.
     return;
   }
+
+  context.subscriptions.push(registerOpenVikingParticipant(context, handle));
 
   context.subscriptions.push(
     new vscode.Disposable(() => {

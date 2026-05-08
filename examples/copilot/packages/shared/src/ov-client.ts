@@ -190,6 +190,14 @@ export class OVClient {
     return this.fetchJSON("POST", path, { jsonBody: body });
   }
 
+  async forget(uri: string, opts: { recursive?: boolean } = {}): Promise<OVResult<unknown>> {
+    if (this.isBypassed()) return this.bypassed("forget", { skipped: true });
+    const qs = new URLSearchParams({ uri });
+    if (opts.recursive) qs.set("recursive", "true");
+    const path = `/api/v1/fs?${qs.toString()}`;
+    return this.fetchJSON("DELETE", path);
+  }
+
   async fetchArchiveOverview(
     sessionId: string,
     budgetTokens: number,
@@ -230,7 +238,7 @@ export class OVClient {
   }
 
   private async fetchJSON<T = unknown>(
-    method: "GET" | "POST",
+    method: "GET" | "POST" | "DELETE",
     path: string,
     opts: { jsonBody?: unknown; timeoutMs?: number } = {},
   ): Promise<OVResult<T>> {
