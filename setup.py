@@ -344,9 +344,14 @@ class OpenVikingBuildExt(build_ext):
                 with zipfile.ZipFile(str(whl_files[0])) as zf:
                     for name in zf.namelist():
                         basename = Path(name).name
-                        if basename.startswith("ragfs_python.abi3.") and (
-                            basename.endswith(".so") or basename.endswith(".pyd")
-                        ):
+                        is_ragfs_extension = (
+                            basename == "ragfs_python.pyd"
+                            or (
+                                basename.startswith("ragfs_python.abi3.")
+                                and basename.endswith((".so", ".pyd"))
+                            )
+                        )
+                        if is_ragfs_extension:
                             target_path = ragfs_lib_dir / basename
                             with zf.open(name) as src, open(target_path, "wb") as dst:
                                 dst.write(src.read())
@@ -357,7 +362,7 @@ class OpenVikingBuildExt(build_ext):
                             break
 
                 if not extracted:
-                    message = "Could not find ragfs_python abi3 .so/.pyd in built wheel."
+                    message = "Could not find ragfs_python stable-ABI native extension in built wheel."
                     if require_ragfs_artifact:
                         raise RuntimeError(message)
                     print(f"[Warning] {message}")

@@ -76,11 +76,16 @@ def load_locomo_data(
 def build_session_messages(
     item: Dict[str, Any],
     session_range: Optional[Tuple[int, int]] = None,
+    group_chat: bool = False,
 ) -> List[Dict[str, Any]]:
     """Build session messages for one LoCoMo sample.
 
     Returns list of dicts with keys: messages, meta.
     Each dict represents a session with multiple messages (user/assistant role).
+
+    Args:
+        group_chat: If True (default), group-chat mode — role_id=speaker.
+                    If False, single-chat mode — no role_id/speaker on messages.
     """
     conv = item["conversation"]
     speakers = f"{conv['speaker_a']} & {conv['speaker_b']}"
@@ -101,14 +106,16 @@ def build_session_messages(
         dt_key = f"{sk}_date_time"
         date_time = conv.get(dt_key, "")
 
-        # Extract messages with all as user role, including speaker in content
         messages = []
         for idx, msg in enumerate(conv[sk]):
             speaker = msg.get("speaker", "unknown")
             text = msg.get("text", "")
-            messages.append(
-                {"role": "user", "text": f"[{speaker}]: {text}", "speaker": speaker, "index": idx}
-            )
+            if group_chat:
+                messages.append({"role": "user", "text": text, "speaker": speaker, "index": idx})
+            else:
+                # single-chat 模式下所有消息用统一 user_id 上传，
+                # speaker 信息需要嵌入文本以保留说话人身份
+                messages.append({"role": "user", "text": f"{speaker}: {text}", "index": idx})
 
         sessions.append(
             {
@@ -300,12 +307,13 @@ async def viking_ingest(
         except ValueError:
             print(f"Warning: Failed to parse session_time: {session_time}", file=sys.stderr)
 
-    # Create client
+    # Create client with 10-minute timeout
     client = ov.AsyncHTTPClient(
         url=openviking_url,
         user=user_id,
         agent_id=agent_id,
         account=account,
+        timeout=600,
     )
     await client.initialize()
 
@@ -327,6 +335,7 @@ async def viking_ingest(
                 role=msg["role"],
                 parts=[{"type": "text", "text": msg["text"]}],
                 created_at=msg_created_at,
+                role_id=msg.get("speaker"),
             )
 
         # Commit
@@ -338,6 +347,7 @@ async def viking_ingest(
 
         # 等待 task 完成以获取准确 token 消耗
         task_id = result.get("task_id")
+        trace_id = result.get("trace_id", "")
         if task_id:
             # 轮询任务状态直到完成
             max_attempts = 1200  # 最多等待20分钟
@@ -348,15 +358,13 @@ async def viking_ingest(
                     token_usage = _parse_token_usage(task)
                     break
                 elif status in ("failed", "cancelled", "unknown"):
-                    raise RuntimeError(f"Task {task_id} {status}: {task}")
-                await asyncio.sleep(1)
+                    raise RuntimeError(f"Task {task_id} {status}, trace_id={trace_id}: {task}")
+                await asyncio.sleep(2)
             else:
-                raise RuntimeError(f"Task {task_id} timed out after {max_attempts} attempts")
+                raise RuntimeError(f"Task {task_id} timed out after {max_attempts} attempts, trace_id={trace_id}")
         else:
             token_usage = {"embedding": 0, "vlm": 0, "total": 0}
 
-        # Get trace_id from commit result
-        trace_id = result.get("trace_id", "")
         return {"token_usage": token_usage, "task_id": task_id, "trace_id": trace_id}
 
     finally:
@@ -375,21 +383,24 @@ def parse_session_range(s: str) -> Tuple[int, int]:
 async def process_single_session(
     messages: List[Dict[str, Any]],
     sample_id: str | int,
-    session_key: str,
-    meta: Dict[str, Any],
-    run_time: str,
-    ingest_record: Dict[str, Any],
-    args: argparse.Namespace,
+    display_id: str = "",
+    session_key: str = "",
+    meta: Dict[str, Any] = None,
+    run_time: str = "",
+    ingest_record: Dict[str, Any] = None,
+    args: argparse.Namespace = None,
 ) -> Dict[str, Any]:
     """处理单个会话的导入任务"""
+    meta = meta or {}
+    ingest_record = ingest_record or {}
+    csv_id = display_id or str(sample_id)
     try:
-        # 使用 sample_id 作为 user_id 和 agent_id，实现独立的 userspace/agentspace
         result = await viking_ingest(
             messages,
             args.openviking_url,
             meta.get("date_time"),
-            user_id=str(sample_id),
-            agent_id=str(sample_id),
+            user_id=csv_id,
+            agent_id=f"agent_{csv_id}",
             account=args.account,
         )
         token_usage = result["token_usage"]
@@ -398,14 +409,14 @@ async def process_single_session(
         embedding_tokens = token_usage.get("embedding", 0)
         vlm_tokens = token_usage.get("vlm", 0)
         print(
-            f"    -> [COMPLETED] [{sample_id}/{session_key}] embed={embedding_tokens}, vlm={vlm_tokens}, task_id={task_id}, trace_id={trace_id}",
+            f"    -> [COMPLETED] [{csv_id}/{session_key}] embed={embedding_tokens}, vlm={vlm_tokens}, task_id={task_id}, trace_id={trace_id}",
             file=sys.stderr,
         )
 
         # Write success record
         result = {
             "timestamp": run_time,
-            "sample_id": sample_id,
+            "sample_id": csv_id,
             "session": session_key,
             "status": "success",
             "meta": meta,
@@ -420,19 +431,19 @@ async def process_single_session(
         write_success_record(result, args.success_csv)
 
         # Mark as successfully ingested
-        mark_ingested(sample_id, session_key, ingest_record, meta)
+        mark_ingested(csv_id, session_key, ingest_record, meta)
         save_ingest_record(ingest_record)  # Save immediately after success
 
         return result
 
     except Exception as e:
-        print(f"    -> [ERROR] [{sample_id}/{session_key}] {e}", file=sys.stderr)
+        print(f"    -> [ERROR] [{csv_id}/{session_key}] {e}", file=sys.stderr)
         traceback.print_exc(file=sys.stderr)
 
         # Write error record
         result = {
             "timestamp": run_time,
-            "sample_id": sample_id,
+            "sample_id": csv_id,
             "session": session_key,
             "status": "error",
             "error": str(e),
@@ -444,8 +455,53 @@ async def process_single_session(
         return result
 
 
+def parse_retry_wrong_csv(csv_path: str) -> Dict[str, set]:
+    """Parse a judged result CSV, extract valid wrong questions, and return
+    per-sample session numbers derived from evidence.
+
+    Returns: {sample_id: {session_num, ...}}
+    """
+    with open(csv_path, "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        wrong_items = [row for row in reader
+                       if row.get("is_invalid", "").lower() != "true"
+                       and row.get("result") == "WRONG"]
+
+    if not wrong_items:
+        print(f"[retry-wrong] No valid wrong questions found in {csv_path}", file=sys.stderr)
+        return {}
+
+    sample_sessions: Dict[str, set] = {}
+    for row in wrong_items:
+        sample_id = row["sample_id"]
+        if sample_id not in sample_sessions:
+            sample_sessions[sample_id] = set()
+        try:
+            evidence = json.loads(row.get("evidence", "[]"))
+        except json.JSONDecodeError:
+            evidence = []
+        for ev in evidence:
+            try:
+                session_num = int(ev.split(":")[0][1:])
+                sample_sessions[sample_id].add(session_num)
+            except (ValueError, IndexError):
+                pass
+
+    total_wrong = len(wrong_items)
+    print(
+        f"[retry-wrong] {total_wrong} valid wrong questions across {len(sample_sessions)} samples",
+        file=sys.stderr,
+    )
+    return sample_sessions
+
+
 async def run_import(args: argparse.Namespace) -> None:
     session_range = parse_session_range(args.sessions) if args.sessions else None
+
+    # --retry-wrong: build per-sample session ranges from wrong questions
+    retry_wrong_sessions = None  # sample_id -> (min, max) or set of session nums
+    if args.retry_wrong:
+        retry_wrong_sessions = parse_retry_wrong_csv(args.retry_wrong)
 
     # 如果指定了 question-index，自动从 evidence 推断需要的 session
     if args.question_index is not None and not args.sessions:
@@ -510,17 +566,52 @@ async def run_import(args: argparse.Namespace) -> None:
     error_count = 0
     total_embedding_tokens = 0
     total_vlm_tokens = 0
+    tasks = []
 
     if args.input.endswith(".json"):
         # LoCoMo JSON format
         samples = load_locomo_data(args.input, args.sample)
 
-        # 为每个 sample 创建独立的处理协程
-        async def process_sample(item):
-            sample_id = item["sample_id"]
-            sessions = build_session_messages(item, session_range)
+        # --retry-wrong: resolve sample_id -> sample_index and filter
+        if retry_wrong_sessions:
+            # Build mapping from data
+            with open(args.input, "r", encoding="utf-8") as f:
+                all_data = json.load(f)
+            sample_id_to_index = {f"sample_{i}": i for i in range(len(all_data))}
+            # Filter samples to only those with wrong questions
+            retry_sample_indices = set()
+            for sid in retry_wrong_sessions:
+                idx = sample_id_to_index.get(sid)
+                if idx is not None:
+                    retry_sample_indices.add(idx)
+            # If --sample was specified, also filter by that
+            if args.sample is not None:
+                retry_sample_indices &= {args.sample}
+            samples = [all_data[i] for i in sorted(retry_sample_indices)]
+            # Reload with load_locomo_data's return format
+            # Actually we need to re-index, so let's just filter the loaded samples
+            print(
+                f"[retry-wrong] {len(retry_wrong_sessions)} samples with wrong questions, "
+                f"filtered to {len(samples)} samples to import",
+                file=sys.stderr,
+            )
 
-            print(f"\n=== Sample {sample_id} ===", file=sys.stderr)
+        # 为每个 sample 创建独立的处理协程
+        async def process_sample(item, sample_index):
+            nonlocal success_count, error_count, total_embedding_tokens, total_vlm_tokens
+            sample_id = item["sample_id"]
+            display_id = f"sample_{sample_index}"
+
+            # --retry-wrong: use per-sample session range from evidence
+            sample_session_range = session_range
+            if retry_wrong_sessions and display_id in retry_wrong_sessions:
+                sess_nums = retry_wrong_sessions[display_id]
+                if sess_nums:
+                    sample_session_range = (min(sess_nums), max(sess_nums))
+
+            sessions = build_session_messages(item, sample_session_range, group_chat=args.group_chat)
+
+            print(f"\n=== Sample {display_id} ({sample_id}) ===", file=sys.stderr)
             print(f"    {len(sessions)} session(s) to import", file=sys.stderr)
 
             # 同一 sample 内串行处理所有 sessions
@@ -547,18 +638,25 @@ async def run_import(args: argparse.Namespace) -> None:
                 print(f"  [{label}] {preview}", file=sys.stderr)
 
                 # 串行执行（等待完成后再处理下一个 session）
-                await process_single_session(
+                res = await process_single_session(
                     messages=messages,
                     sample_id=sample_id,
+                    display_id=display_id,
                     session_key=session_key,
                     meta=meta,
                     run_time=run_time,
                     ingest_record=ingest_record,
                     args=args,
                 )
+                if res.get("status") == "success":
+                    success_count += 1
+                    total_embedding_tokens += res.get("embedding_tokens", 0)
+                    total_vlm_tokens += res.get("vlm_tokens", 0)
+                elif res.get("status") == "error":
+                    error_count += 1
 
         # 不同 sample 之间并行执行
-        tasks = [asyncio.create_task(process_sample(item)) for item in samples]
+        tasks = [asyncio.create_task(process_sample(item, idx)) for idx, item in enumerate(samples)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
     else:
@@ -595,6 +693,7 @@ async def run_import(args: argparse.Namespace) -> None:
                 process_single_session(
                     messages=messages,
                     sample_id="txt",
+                    display_id=f"txt_{idx}",
                     session_key=session_key,
                     meta={"session_index": idx},
                     run_time=run_time,
@@ -609,16 +708,21 @@ async def run_import(args: argparse.Namespace) -> None:
         f"\n[INFO] Starting import with {len(tasks)} tasks to process",
         file=sys.stderr,
     )
-    await asyncio.gather(*tasks, return_exceptions=True)
+    task_results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    # 从成功 CSV 统计结果
-    if Path(args.success_csv).exists():
-        with open(args.success_csv, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                success_count += 1
-                total_embedding_tokens += int(row.get("embedding_tokens", 0) or 0)
-                total_vlm_tokens += int(row.get("vlm_tokens", 0) or 0)
+    # 统计纯文本路径的结果（JSON 路径已在 process_sample 内统计）
+    if not args.input.endswith(".json"):
+        for r in task_results:
+            if isinstance(r, Exception):
+                error_count += 1
+                continue
+            if isinstance(r, dict):
+                if r.get("status") == "success":
+                    success_count += 1
+                    total_embedding_tokens += r.get("embedding_tokens", 0)
+                    total_vlm_tokens += r.get("vlm_tokens", 0)
+                elif r.get("status") == "error":
+                    error_count += 1
 
     # Final summary
     total_processed = success_count + error_count + skipped_count
@@ -632,10 +736,10 @@ async def run_import(args: argparse.Namespace) -> None:
     print(f"Total VLM tokens: {total_vlm_tokens}", file=sys.stderr)
     if success_count > 0:
         print(
-            f"Average Embedding per session: {total_embedding_tokens // success_count}",
+            f"Average Embedding per session: {total_embedding_tokens / success_count:.1f}",
             file=sys.stderr,
         )
-        print(f"Average VLM per session: {total_vlm_tokens // success_count}", file=sys.stderr)
+        print(f"Average VLM per session: {total_vlm_tokens / success_count:.1f}", file=sys.stderr)
     print(f"\nResults saved to:", file=sys.stderr)
     print(f"  - Success records: {args.success_csv}", file=sys.stderr)
     print(f"  - Error logs: {args.error_log}", file=sys.stderr)
@@ -701,10 +805,21 @@ def main():
         help="Force re-import even if already recorded as completed",
     )
     parser.add_argument(
+        "--group-chat",
+        action="store_true",
+        default=False,
+        help="Group-chat mode: set role_id/speaker on messages. Default is group-chat mode.",
+    )
+    parser.add_argument(
         "--clear-ingest-record",
         action="store_true",
         default=False,
         help="Clear all existing ingest records before running",
+    )
+    parser.add_argument(
+        "--retry-wrong",
+        default=None,
+        help="Path to a judged result CSV. Only import sessions needed by valid wrong questions.",
     )
     args = parser.parse_args()
 

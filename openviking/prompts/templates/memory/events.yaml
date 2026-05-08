@@ -9,6 +9,7 @@ description: |
   - If possible, combine the user's current behavior and reactions to speculate on the user's possible thoughts or actions.
   - Describe the complete content of an event within a single event as much as possible; do not split one event into multiple parts.
   - Record content that mentions time.
+  - Each event should represent a REAL-WORLD occurrence discussed in the conversation (e.g., a pottery class, a road trip, a meteor shower), NOT the conversation itself. A conversation is the medium, not the event. Split multi-topic conversations into separate events by topic. Do NOT name events after who was chatting — name them after WHAT happened.
 directory: "viking://user/{{ user_space }}/memories/events"
 filename_template: "{{ extract_context.get_year(ranges) }}/{{ extract_context.get_month(ranges) }}/{{ extract_context.get_day(ranges) }}/{{ event_name }}.md"
 enabled: true
@@ -16,8 +17,8 @@ enabled: true
 # upsert 表示新增或更新（默认行为）
 operation_mode: "add_only"
 content_template: |
-  time: {{extract_context.get_first_message_time_with_weekday_from_ranges(ranges|default(''))|default('N/A')}}
-  {{ extract_context.read_message_ranges(ranges|default('')).pretty_print() if ranges else '' }}
+  {{extract_context.get_first_message_time_with_weekday_from_ranges(ranges|default(''))|default('N/A')}} ChatLog: 
+  {{ extract_context.get_event_content(ranges, summary, 0) }}
 
 
 overview_template: |-
@@ -31,7 +32,14 @@ fields:
   - name: event_name
     type: string
     description: |
-      Event name in Chinese or English. If English, use lowercase with underscores, max 3 words. Do not include any dates.
+      Output a real-world event name only.
+      Rules:
+      1. Can be Chinese or English;
+      2. If English: all lowercase, use underscore instead of space, maximum 3 words;
+      3. Never include any date, time, year or number;
+      4. Must be the actual real-life event being discussed, NOT the chat/conversation itself;
+      5. Forbidden format: person name + chat, chat about xxx, daily talk;
+      6. Output only the event name, no extra explanation.
     merge_op: immutable
 
   - name: goal
@@ -48,7 +56,9 @@ fields:
   - name: ranges
     type: string
     description: |
-      Conversation message index ranges to extract, format: "start-end,start-end,..."
-      Example: "0-3,40-45" means extract messages 0-3 and 40-45.
+      Conversation message index ranges to extract. Supports:
+      - Range: "start-end" (e.g., "0-3" means messages 0 to 3)
+      - Single index: "N" (e.g., "7" means only message 7)
+      - Mixed: "0-3,7,15-20" (ranges and single indices combined)
     merge_op: immutable
 

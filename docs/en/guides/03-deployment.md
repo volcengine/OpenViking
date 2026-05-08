@@ -197,9 +197,21 @@ docker run -d \
 ```
 
 By default, the Docker image starts:
-- OpenViking HTTP service on port `1933`
+- OpenViking HTTP service on port `1933` (bound to `0.0.0.0`)
 - OpenViking Console on port `8020`
 - `vikingbot` gateway
+
+Since the server binds to `0.0.0.0` inside the container (required for Docker port-mapping to work), you **must** set `root_api_key` in your `ov.conf`:
+
+```json
+{
+  "server": {
+    "root_api_key": "your-secret-root-key"
+  }
+}
+```
+
+The server will refuse to start without it. You can override the bind address via the `OPENVIKING_SERVER_HOST` environment variable if needed.
 
 Upgrade the container:
 ```bash

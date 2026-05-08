@@ -679,6 +679,11 @@ OpenViking 仍处于早期阶段，有许多改进和探索的空间。我们真
 
 [![Star History Chart](https://api.star-history.com/svg?repos=volcengine/OpenViking&type=timeline&legend=top-left)](https://www.star-history.com/#volcengine/OpenViking&type=timeline&legend=top-left)
 
+## 安全与隐私
+
+本项目高度重视安全问题。
+有关漏洞报告方式和受支持版本，请参见 [SECURITY.md](SECURITY.md)
+
 ## 许可证
 
 OpenViking 项目不同组件采用不同的开源协议：

@@ -30,7 +30,12 @@ from openviking.core.namespace import (
 from openviking.core.namespace import (
     is_accessible as namespace_is_accessible,
 )
-from openviking.pyagfs.exceptions import AGFSClientError, AGFSDirectoryNotEmptyError, AGFSHTTPError
+from openviking.pyagfs.exceptions import (
+    AGFSClientError,
+    AGFSDirectoryNotEmptyError,
+    AGFSHTTPError,
+    AGFSNotSupportedError,
+)
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext, Role
@@ -619,7 +624,8 @@ class VikingFS:
     ) -> Dict:
         """Content search by pattern or keywords.
 
-        Grep search implemented at VikingFS layer, supports encrypted files.
+        Optimized implementation that uses agfs native grep when possible.
+        Falls back to VikingFS layer implementation for encrypted files.
 
         Args:
             uri: Viking URI
@@ -629,10 +635,171 @@ class VikingFS:
             node_limit: Maximum number of results to return
             level_limit: Maximum depth level to traverse (default: 5)
             ctx: Request context
+
+        Returns:
+            Dict with matches, count, match_count, files_scanned
         """
         self._ensure_access(uri, ctx)
         await self.stat(uri, ctx=ctx)
 
+        if self._encryptor:
+            return await self._grep_encrypted(
+                uri=uri,
+                pattern=pattern,
+                exclude_uri=exclude_uri,
+                case_insensitive=case_insensitive,
+                node_limit=node_limit,
+                level_limit=level_limit,
+                ctx=ctx,
+            )
+
+        try:
+            return await self._grep_with_agfs(
+                uri=uri,
+                pattern=pattern,
+                exclude_uri=exclude_uri,
+                case_insensitive=case_insensitive,
+                node_limit=node_limit,
+                level_limit=level_limit,
+                ctx=ctx,
+            )
+        except (AttributeError, AGFSNotSupportedError, NotImplementedError) as e:
+            logger.debug(f"agfs grep unavailable, falling back to VikingFS implementation: {e}")
+
+        return await self._grep_encrypted(
+            uri=uri,
+            pattern=pattern,
+            exclude_uri=exclude_uri,
+            case_insensitive=case_insensitive,
+            node_limit=node_limit,
+            level_limit=level_limit,
+            ctx=ctx,
+        )
+
+    async def _grep_with_agfs(
+        self,
+        uri: str,
+        pattern: str,
+        exclude_uri: Optional[str] = None,
+        case_insensitive: bool = False,
+        node_limit: Optional[int] = None,
+        level_limit: int = 5,
+        ctx: Optional[RequestContext] = None,
+    ) -> Dict:
+        """Grep using agfs native implementation.
+
+        This is the optimized path for non-encrypted files.
+        Uses agfs.grep() which performs matching on the server side.
+
+        Prefer pushing filters down to agfs backend:
+        - exclude_uri -> exclude_path
+        - level_limit -> level_limit
+
+        Args:
+            uri: Viking URI
+            pattern: Regular expression pattern to search for
+            exclude_uri: Optional URI prefix to exclude from search
+            case_insensitive: Whether to perform case-insensitive matching
+            node_limit: Maximum number of results to return
+            level_limit: Maximum depth level to traverse
+            ctx: Request context
+
+        Returns:
+            Dict with matches, count, match_count, files_scanned
+        """
+        path = self._uri_to_path(uri, ctx=ctx)
+
+        excluded_path = None
+        if exclude_uri:
+            normalized_excluded_uri = self._normalize_uri(exclude_uri).rstrip("/")
+            self._ensure_access(normalized_excluded_uri, ctx)
+            excluded_path = self._uri_to_path(normalized_excluded_uri, ctx=ctx)
+
+        try:
+            result = await asyncio.to_thread(
+                self.agfs.grep,
+                path=path,
+                pattern=pattern,
+                recursive=True,
+                case_insensitive=case_insensitive,
+                stream=False,
+                node_limit=node_limit,
+                exclude_path=excluded_path,
+                level_limit=level_limit,
+            )
+        except (AttributeError, AGFSNotSupportedError, NotImplementedError):
+            # Capability missing: let the outer caller fall back to the VikingFS implementation.
+            logger.warning("agfs grep unavailable, falling back to VikingFS implementation")
+            raise
+
+        matches = result.get("matches", [])
+        results = []
+        files_scanned_set = set()
+
+        for match in matches:
+            match_file = match.get("file", "")
+            if not match_file:
+                continue
+
+            agfs_file_path = self._resolve_grep_match_agfs_path(path, match_file)
+
+            file_uri = self._path_to_uri(agfs_file_path, ctx=ctx)
+
+            files_scanned_set.add(file_uri)
+
+            results.append(
+                {
+                    "line": match.get("line", match.get("line_number", 0)),
+                    "uri": file_uri,
+                    "content": match.get("content", ""),
+                }
+            )
+
+            if node_limit and len(results) >= node_limit:
+                break
+
+        # Prefer backend-provided scanned file count if available; otherwise fall back to
+        # counting files that produced at least one match (best-effort).
+        backend_files_scanned = result.get("files_scanned")
+        if isinstance(backend_files_scanned, int) and backend_files_scanned >= 0:
+            files_scanned = backend_files_scanned
+        else:
+            files_scanned = len(files_scanned_set)
+
+        return {
+            "matches": results,
+            "count": len(results),
+            "match_count": len(results),
+            "files_scanned": files_scanned,
+        }
+
+    async def _grep_encrypted(
+        self,
+        uri: str,
+        pattern: str,
+        exclude_uri: Optional[str] = None,
+        case_insensitive: bool = False,
+        node_limit: Optional[int] = None,
+        level_limit: int = 5,
+        ctx: Optional[RequestContext] = None,
+    ) -> Dict:
+        """Grep implementation for encrypted files.
+
+        This implementation decrypts files at VikingFS layer before matching.
+        Used when encryption is enabled or when agfs.grep is not available.
+
+        Args:
+            uri: Viking URI
+            pattern: Regular expression pattern to search for
+            exclude_uri: Optional URI prefix to exclude from search
+            case_insensitive: Whether to perform case-insensitive matching
+            node_limit: Maximum number of results to return
+            level_limit: Maximum depth level to traverse (default: 5)
+            ctx: Request context
+
+        Returns:
+            Dict with matches, count, match_count, files_scanned
+        """
         flags = re.IGNORECASE if case_insensitive else 0
         compiled_pattern = re.compile(pattern, flags)
         excluded_prefix = None
@@ -760,6 +927,18 @@ class VikingFS:
         except Exception as e:
             logger.debug(f"Failed to grep {entry_uri}: {e}")
             return [], 1
+
+    def _resolve_grep_match_agfs_path(self, base_path: str, match_file: str) -> str:
+        """Resolve a grep match path (relative to query root) into a full AGFS path."""
+        if match_file == ".":
+            return base_path
+        return f"{base_path.rstrip('/')}/{match_file.lstrip('/')}"
+
+    def _calculate_grep_match_depth(self, match_file: str) -> int:
+        """Calculate relative depth from a grep result path relative to the query root."""
+        if not match_file or match_file == ".":
+            return 0
+        return len([part for part in match_file.split("/") if part])
 
     async def stat(self, uri: str, ctx: Optional[RequestContext] = None) -> Dict[str, Any]:
         """
@@ -2170,6 +2349,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Write context to AGFS (L0/L1/L2)."""
+
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
 

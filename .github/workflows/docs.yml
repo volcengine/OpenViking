@@ -15,12 +15,6 @@ on:
       - '.github/workflows/_docs-deploy.yml'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
-    inputs:
-      deploy:
-        description: 'Deploy docs to GitHub Pages'
-        required: false
-        type: boolean
-        default: true
 
 permissions:
   contents: read
@@ -28,14 +22,14 @@ permissions:
 jobs:
   docs-check:
     name: Build Docs
-    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.deploy == false)
+    if: github.event_name == 'pull_request'
     uses: ./.github/workflows/_docs.yml
     permissions:
       contents: read
 
   docs-deploy:
     name: Build and Deploy Docs
-    if: github.repository == 'volcengine/OpenViking' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.deploy == true))
+    if: github.repository == 'volcengine/OpenViking' && github.event_name != 'pull_request'
     uses: ./.github/workflows/_docs-deploy.yml
     permissions:
       contents: read

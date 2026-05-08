@@ -7,11 +7,11 @@ use crate::client::HttpClient;
 pub struct FsEntry {
     pub uri: String,
     #[serde(default)]
-    pub size: Option<u64>,
+    pub _size: Option<u64>,
     #[serde(default)]
     pub is_dir: bool,
     #[serde(default)]
-    pub mod_time: Option<String>,
+    pub _mod_time: Option<String>,
 }
 
 impl FsEntry {
@@ -69,9 +69,9 @@ impl TreeState {
             let mut root_node = TreeNode {
                 entry: FsEntry {
                     uri: "/".to_string(),
-                    size: None,
+                    _size: None,
                     is_dir: true,
-                    mod_time: None,
+                    _mod_time: None,
                 },
                 depth: 0,
                 expanded: true,
@@ -86,9 +86,9 @@ impl TreeState {
                 let mut node = TreeNode {
                     entry: FsEntry {
                         uri: scope_uri.clone(),
-                        size: None,
+                        _size: None,
                         is_dir: true,
-                        mod_time: None,
+                        _mod_time: None,
                     },
                     depth: 1,
                     expanded: false,
@@ -122,9 +122,9 @@ impl TreeState {
                     self.nodes = vec![TreeNode {
                         entry: FsEntry {
                             uri: format!("(error: {})", e),
-                            size: None,
+                            _size: None,
                             is_dir: false,
-                            mod_time: None,
+                            _mod_time: None,
                         },
                         depth: 0,
                         expanded: false,

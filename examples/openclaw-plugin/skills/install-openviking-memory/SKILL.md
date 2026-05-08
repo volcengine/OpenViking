@@ -10,7 +10,7 @@ description: OpenViking long-term memory plugin guide. Once installed, the plugi
 - **Auto-Capture**: At `afterTurn` (end of one user turn run), automatically extracts memories from user/assistant messages
   - `semantic` mode: captures all qualifying user text, relying on OpenViking's extraction pipeline to filter
   - `keyword` mode: only captures text matching trigger words (e.g. "remember", "preference", etc.)
-- **Auto-Recall**: At `before_prompt_build`, automatically searches for relevant memories and injects them into context
+- **Auto-Recall**: In `assemble()`, automatically searches for relevant memories and prepends them to the current user message context
 
 ## Available Tools
 
@@ -55,11 +55,25 @@ Example: User says "Forget my phone number"
 
 ## Configuration
 
+The plugin connects to an OpenViking HTTP server. Start OpenViking first and keep it running:
+
+```bash
+openviking-server init
+openviking-server doctor
+openviking-server
+```
+
+The default local plugin URL is `http://127.0.0.1:1933`. Check it with:
+
+```bash
+curl http://127.0.0.1:1933/health
+```
+
 | Field | Default | Description |
 |-------|---------|-------------|
 | `baseUrl` | `http://127.0.0.1:1933` | OpenViking server URL |
 | `apiKey` | — | OpenViking API Key (optional) |
-| `agent_prefix` | `default` | Agent prefix identifying this instance to OpenViking |
+| `agent_prefix` | empty | Optional prefix for OpenClaw agent IDs. Interactive setup accepts only letters, digits, `_`, and `-`. If no agent ID is available, the plugin uses `main` |
 | `targetUri` | `viking://user/memories` | Default search scope |
 | `autoCapture` | `true` | Automatically capture memories |
 | `captureMode` | `semantic` | Capture mode: `semantic` / `keyword` |
@@ -71,7 +85,10 @@ Example: User says "Forget my phone number"
 ## Daily Operations
 
 ```bash
-# Start
+# Start OpenViking server
+openviking-server
+
+# Start or restart OpenClaw gateway
 openclaw gateway
 
 # Check status

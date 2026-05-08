@@ -887,9 +887,7 @@ ov import ./agent_memory.ovpack viking://agent/{agent_id}/user/{user_id}/ --forc
 ```
 
 - 不要把 `.ovpack` 直接导入到 `.../memories/` 本身，否则会得到 `.../memories/memories/...`
-- 当 `isolate_agent_scope_by_user = true` 时，`viking://agent/{agent_id}/user/` 不是合法目标；必须显式提供 `user_id`
-
-原因：
+- 当 `isolate_agent_scope_by_user = true` 时，`viking://agent/{agent_id}/user/` 不是合法目标；必须显式提供 `user_id}`
 
 - 当前 agent root 是 hash space，而不是显式 `agent_id`
 - hash 值不能从结果稳定反推出原始 `user_id / agent_id`

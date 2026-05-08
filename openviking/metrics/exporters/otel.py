@@ -121,6 +121,7 @@ class OTelMetricExporter(MetricExporter):
         service_name: str = "openviking-server",
         export_interval_ms: int = 10000,
         export_timeout_seconds: Optional[float] = None,
+        headers: Optional[dict[str, str]] = None,
         enabled: bool = True,
     ) -> None:
         """
@@ -136,6 +137,7 @@ class OTelMetricExporter(MetricExporter):
             service_name: Service name written into OTLP resource attributes.
             export_interval_ms: Periodic export interval in milliseconds.
             export_timeout_seconds: Transport timeout for one OTLP export request.
+            headers: Additional OTLP exporter headers for vendor-specific auth.
             enabled: Whether the exporter is enabled.
         """
         self._registry = registry
@@ -145,6 +147,7 @@ class OTelMetricExporter(MetricExporter):
         self._insecure = bool(insecure)
         self._endpoint = endpoint
         self._service_name = service_name
+        self._headers = {str(key): str(value) for key, value in (headers or {}).items()}
         self._export_interval_ms = max(1000, int(export_interval_ms))
         self._export_timeout_seconds = float(
             export_timeout_seconds
@@ -591,10 +594,13 @@ class OTelMetricExporter(MetricExporter):
         if self._http_session is None:
             return
         payload = request.SerializeToString()
+        request_headers = {"Content-Type": "application/x-protobuf"}
+        if self._headers:
+            request_headers.update(self._headers)
         self._http_session.post(
             self._endpoint,
             data=payload,
-            headers={"Content-Type": "application/x-protobuf"},
+            headers=request_headers,
             timeout=self._export_timeout_seconds,
         ).raise_for_status()
 
@@ -607,7 +613,15 @@ class OTelMetricExporter(MetricExporter):
         """
         if self._grpc_stub is None:
             return
-        self._grpc_stub.Export(request, timeout=self._export_timeout_seconds)
+        metadata = list(self._headers.items()) if self._headers else None
+        if metadata:
+            self._grpc_stub.Export(
+                request,
+                timeout=self._export_timeout_seconds,
+                metadata=metadata,
+            )
+        else:
+            self._grpc_stub.Export(request, timeout=self._export_timeout_seconds)
 
     def start(self) -> None:
         """

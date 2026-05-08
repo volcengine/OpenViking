@@ -975,6 +975,182 @@ openviking unlink viking://resources/docs/auth/ viking://resources/docs/security
 
 ---
 
+### export_ovpack
+
+将资源树导出为 `.ovpack` 文件。
+
+#### 1. API 实现介绍
+
+将指定 URI 下的所有资源打包成 `.ovpack` 格式文件，用于备份或迁移。需要 ROOT 或 ADMIN 权限。
+
+**处理流程**：
+1. 验证用户权限
+2. 遍历指定 URI 下的资源
+3. 打包成 zip 格式（.ovpack）
+4. 以文件流形式返回
+
+**代码入口**：
+- `openviking/server/routers/pack.py:export_ovpack` - HTTP 路由
+- `openviking/service/pack_service.py` - 核心服务实现
+- `crates/ov_cli/src/handlers.rs:handle_export` - CLI 处理
+
+#### 2. 接口和参数说明
+
+**参数**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| uri | string | 是 | - | 要导出的 Viking URI |
+
+**权限要求**：ROOT 或 ADMIN
+
+#### 3. 使用示例
+
+**HTTP API**
+
+```
+POST /api/v1/pack/export
+Content-Type: application/json
+```
+
+```bash
+curl -X POST http://localhost:1933/api/v1/pack/export \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-admin-key" \
+  -d '{
+    "uri": "viking://resources/my-project/"
+  }' \
+  --output my-project.ovpack
+```
+
+**Python SDK**
+
+```python
+import openviking as ov
+
+client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-admin-key")
+client.initialize()
+
+# 导出到本地文件（HTTP SDK 会自动处理下载）
+# 注意：导出功能主要通过 CLI 使用
+```
+
+**CLI**
+
+```bash
+# 导出资源
+ov export viking://resources/my-project/ ./exports/my-project.ovpack
+```
+
+**响应示例**
+
+此接口直接返回文件流（`Content-Type: application/zip`），不返回 JSON 包装体。
+
+---
+
+### import_ovpack
+
+导入 `.ovpack` 文件。
+
+#### 1. API 实现介绍
+
+将 `.ovpack` 文件导入到指定位置，用于恢复或迁移数据。需要 ROOT 或 ADMIN 权限。
+
+**处理流程**：
+1. 验证用户权限
+2. 解析上传的 `.ovpack` 文件
+3. 导入资源到目标位置
+4. 可选地触发向量化
+
+**代码入口**：
+- `openviking/server/routers/pack.py:import_ovpack` - HTTP 路由
+- `openviking/service/pack_service.py` - 核心服务实现
+- `crates/ov_cli/src/handlers.rs:handle_import` - CLI 处理
+
+#### 2. 接口和参数说明
+
+**参数**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| temp_file_id | string | 是 | - | 临时上传文件 ID（通过 [temp_upload](02-resources.md#temp_upload) 获取） |
+| parent | string | 是 | - | 目标父级 URI（导入到此处） |
+| force | bool | 否 | False | 是否覆盖已有资源 |
+| vectorize | bool | 否 | True | 是否触发向量化 |
+
+**权限要求**：ROOT 或 ADMIN
+
+#### 3. 使用示例
+
+**HTTP API**
+
+```
+POST /api/v1/pack/import
+Content-Type: application/json
+```
+
+```bash
+# 第一步：上传 .ovpack 文件
+TEMP_FILE_ID=$(
+  curl -s -X POST http://localhost:1933/api/v1/resources/temp_upload \
+    -H "X-API-Key: your-admin-key" \
+    -F "file=@./exports/my-project.ovpack" \
+  | jq -r '.result.temp_file_id'
+)
+
+# 第二步：导入
+curl -X POST http://localhost:1933/api/v1/pack/import \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-admin-key" \
+  -d "{
+    \"temp_file_id\": \"$TEMP_FILE_ID\",
+    \"parent\": \"viking://resources/imported/\",
+    \"force\": true,
+    \"vectorize\": true
+  }"
+```
+
+**Python SDK**
+
+```python
+import openviking as ov
+
+client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-admin-key")
+client.initialize()
+
+# 导入 .ovpack 文件（HTTP SDK 会自动处理上传）
+# 注意：导入功能主要通过 CLI 使用
+```
+
+**CLI**
+
+```bash
+# 导入 .ovpack 文件
+ov import ./exports/my-project.ovpack viking://resources/imported/
+
+# 强制覆盖已有内容
+ov import ./exports/my-project.ovpack viking://resources/imported/ --force
+
+# 不进行向量化
+ov import ./exports/my-project.ovpack viking://resources/imported/ --no-vectorize
+```
+
+**响应示例**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://resources/imported/my-project/"
+  },
+  "telemetry": {
+    "operation_id": "550e8400-e29b-41d4-a716-446655440000"
+  }
+}
+```
+
+---
+
 ## 相关文档
 
 - [Viking URI](../concepts/04-viking-uri.md) - URI 规范

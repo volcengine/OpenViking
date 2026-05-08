@@ -9,12 +9,14 @@ Supports all LLM providers with OpenAI-compatible API endpoints, including:
 
 import json
 from typing import Any
-from openai import AsyncOpenAI
+
 from loguru import logger
+from openai import AsyncOpenAI
 
 from vikingbot.integrations.langfuse import LangfuseClient
 from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from vikingbot.utils.helpers import cal_str_tokens
+from vikingbot.utils.tracing import get_current_response_id
 
 
 class OpenAICompatibleProvider(LLMProvider):
@@ -148,6 +150,9 @@ class OpenAICompatibleProvider(LLMProvider):
         try:
             if self.langfuse.enabled and self.langfuse._client:
                 metadata = {"has_tools": tools is not None}
+                response_id = get_current_response_id()
+                if response_id:
+                    metadata["response_id"] = response_id
                 client = self.langfuse._client
                 # Use start_observation with generation type
                 if hasattr(client, "start_observation"):
@@ -158,6 +163,10 @@ class OpenAICompatibleProvider(LLMProvider):
                         input=messages,
                         metadata=metadata,
                     )
+                    if response_id:
+                        self.langfuse.register_generation(
+                            response_id, langfuse_observation, metadata=metadata
+                        )
 
             response = await self.client.chat.completions.create(**kwargs)
             llm_response = self._parse_response(response)
@@ -174,7 +183,14 @@ class OpenAICompatibleProvider(LLMProvider):
                 # Update observation with output and usage
                 update_kwargs: dict[str, Any] = {
                     "output": output_text,
-                    "metadata": {"finish_reason": llm_response.finish_reason},
+                    "metadata": {
+                        "finish_reason": llm_response.finish_reason,
+                        **(
+                            {"response_id": get_current_response_id()}
+                            if get_current_response_id()
+                            else {}
+                        ),
+                    },
                 }
 
                 if llm_response.usage:
@@ -192,6 +208,13 @@ class OpenAICompatibleProvider(LLMProvider):
                         usage_details["cache_read_input_tokens"] = cache_read_tokens
 
                     update_kwargs["usage_details"] = usage_details
+
+                response_id = get_current_response_id()
+                if response_id:
+                    self.langfuse.update_generation_metadata(
+                        response_id,
+                        update_kwargs.get("metadata", {}),
+                    )
 
                 # Update the observation
                 if hasattr(langfuse_observation, "update"):
@@ -220,7 +243,14 @@ class OpenAICompatibleProvider(LLMProvider):
                     if hasattr(langfuse_observation, "update"):
                         langfuse_observation.update(
                             output=f"Error: {str(e)}",
-                            metadata={"error": str(e)},
+                            metadata={
+                                "error": str(e),
+                                **(
+                                    {"response_id": get_current_response_id()}
+                                    if get_current_response_id()
+                                    else {}
+                                ),
+                            },
                         )
                     if hasattr(langfuse_observation, "end"):
                         langfuse_observation.end()

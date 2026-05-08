@@ -431,6 +431,7 @@ vikingbot gateway
 - Session and user tracking
 - LLM call monitoring
 - Token usage tracking
+- Feedback observability design: `bot/docs/vikingbot-feedback-observability-design.md`
 
 </details>
 

@@ -283,7 +283,7 @@ class MemoryExtractor:
             config = get_openviking_config()
             output_language = resolve_with_override(
                 config,
-                lambda fb: self._detect_output_language(messages, fallback_language=fb),
+                lambda: self._detect_output_language(messages, fallback_language="en"),
             )
             history_summary = str(context.get("summary") or "")
 

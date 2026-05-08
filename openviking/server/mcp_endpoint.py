@@ -234,7 +234,11 @@ async def store(messages: list[StoreMessage]) -> str:
     session = await service.sessions.get(session_id, ctx, auto_create=True)
     for msg in messages:
         if msg.content:
-            session.add_message(msg.role, [TextPart(text=msg.content)])
+            session.add_message(
+                msg.role,
+                [TextPart(text=msg.content)],
+                role_id=ctx.resolve_role_id(msg.role),
+            )
     await service.sessions.commit_async(session_id, ctx)
     return f"Stored {len(messages)} message(s) and committed for memory extraction."
 
@@ -242,17 +246,37 @@ async def store(messages: list[StoreMessage]) -> str:
 # -- add_resource ----------------------------------------------------------
 
 
+_LOCAL_FILE_HINT = (
+    "MCP add_resource only accepts remote URLs (http(s)://, git@, ssh://, git://). "
+    "For local files or directories, use the `ov` CLI:\n"
+    "  1. Try first: ov add-resource <path>\n"
+    "     (if `ov` is already on PATH, this is all you need)\n"
+    "  2. If `ov` is not installed, run:\n"
+    "     curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/crates/ov_cli/install.sh | bash\n"
+    "  3. Only if connecting to a remote / multi-tenant OpenViking server, "
+    "configure ~/.openviking/ovcli.conf:\n"
+    '       {"url": "https://your-host", "api_key": "your-key"}'
+)
+
+
 @mcp.tool()
 async def add_resource(path: str, description: str = "") -> str:
-    """Add a resource (local file path or URL) to OpenViking. This is an asynchronous operation — the resource will be processed in the background."""
+    """Add a remote resource (HTTP/HTTPS URL or git URL) to OpenViking. Asynchronous — processed in the background. Local file paths are not supported here; use the `ov add-resource` CLI for local files."""
+    from openviking.server.local_input_guard import require_remote_resource_source
+
     service = get_service()
     ctx = _get_ctx()
+    try:
+        path = require_remote_resource_source(path)
+    except PermissionDeniedError:
+        return f"Error: {_LOCAL_FILE_HINT}"
     try:
         result = await service.resources.add_resource(
             path=path,
             ctx=ctx,
             reason=description,
             wait=False,
+            enforce_public_remote_targets=True,
         )
         root_uri = result.get("root_uri", "")
         return (

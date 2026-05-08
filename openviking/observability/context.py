@@ -259,6 +259,28 @@ def reset_observability_context(token: contextvars.Token) -> None:
     _OBSERVABILITY_CONTEXT.reset(token)
 
 
+def _clone_observability_context(ctx: Optional[ObservabilityContext]) -> ObservabilityContext:
+    """
+    Clone the current observability context.
+
+    Note:
+        ContextVars restore by object reference. If we mutate the existing context
+        in-place and then call `set()`, a later `reset(token)` would restore the
+        same mutated object, breaking the expected reset semantics.
+    """
+    if ctx is None:
+        return ObservabilityContext()
+
+    # Shallow copy: span attribute objects are treated as immutable snapshots.
+    return ObservabilityContext(
+        root=ctx.root,
+        operation=ctx.operation,
+        execution_trace_id=ctx.execution_trace_id,
+        execution_span_id=ctx.execution_span_id,
+        extra=dict(ctx.extra),
+    )
+
+
 def bind_root_context(root_attrs: RootSpanAttributes) -> contextvars.Token:
     """
     Bind root context for HTTP requests.
@@ -269,7 +291,8 @@ def bind_root_context(root_attrs: RootSpanAttributes) -> contextvars.Token:
     Returns:
         A token that can be used to reset the context.
     """
-    ctx = get_observability_context()
+    current = _OBSERVABILITY_CONTEXT.get()
+    ctx = _clone_observability_context(current)
     ctx.bind_root(root_attrs)
     return set_observability_context(ctx)
 
@@ -284,7 +307,8 @@ def bind_operation_context(operation_attrs: OperationSpanAttributes) -> contextv
     Returns:
         A token that can be used to reset the context.
     """
-    ctx = get_observability_context()
+    current = _OBSERVABILITY_CONTEXT.get()
+    ctx = _clone_observability_context(current)
     ctx.bind_operation(operation_attrs)
     return set_observability_context(ctx)
 

@@ -3,6 +3,24 @@
   "name": "OpenViking",
   "kind": "context-engine",
   "description": "OpenClaw context-engine plugin for memory management — powered by OpenViking",
+  "activation": {
+    "onStartup": true,
+    "onCapabilities": [
+      "hook",
+      "tool"
+    ]
+  },
+  "contracts": {
+    "tools": [
+      "ov_import",
+      "ov_search",
+      "memory_recall",
+      "memory_store",
+      "memory_forget",
+      "ov_archive_search",
+      "ov_archive_expand"
+    ]
+  },
   "uiHints": {
     "baseUrl": {
       "label": "OpenViking Base URL",
@@ -11,13 +29,8 @@
     },
     "agent_prefix": {
       "label": "Agent Prefix",
-      "placeholder": "auto-generated",
-      "help": "OpenViking agent prefix. default: follow OpenClaw ctx.agentId. Non-default: use `<prefix>_<OpenClaw ctx.agentId>` (sanitized to letters/digits/_/-), so the configured value acts as a prefix."
-    },
-    "serverAuthMode": {
-      "label": "Server Auth Mode",
-      "placeholder": "api_key",
-      "help": "api_key (default): send X-API-Key when configured, otherwise dev fallback to default/default tenant headers. trusted: always send accountId/userId and optionally send apiKey when configured."
+      "placeholder": "optional-prefix",
+      "help": "Optional OpenViking agent prefix. Empty: follow OpenClaw ctx.agentId directly. Non-empty: use `<prefix>_<OpenClaw ctx.agentId>` (sanitized to letters/digits/_/-). If OpenClaw ctx.agentId is unavailable, use OpenClaw default agent `main`."
     },
     "apiKey": {
       "label": "OpenViking API Key",
@@ -28,13 +41,13 @@
     "accountId": {
       "label": "Account ID",
       "placeholder": "(derived from API key)",
-      "help": "Advanced option. Tenant account ID. Only needed when using root key or trusted auth mode. With a user key the server derives identity from the key.",
+      "help": "Advanced option. Tenant account ID. Only needed when explicitly sending identity headers, such as root-key or trusted deployments. With a user key the server derives identity from the key.",
       "advanced": true
     },
     "userId": {
       "label": "User ID",
       "placeholder": "(derived from API key)",
-      "help": "Advanced option. Tenant user ID. Only needed when using root key or trusted auth mode.",
+      "help": "Advanced option. Tenant user ID. Only needed when explicitly sending identity headers.",
       "advanced": true
     },
     "isolateUserScopeByAgent": {
@@ -131,9 +144,15 @@
     },
     "commitTokenThreshold": {
       "label": "Commit Token Threshold",
-      "placeholder": "2000",
+      "placeholder": "20000",
       "advanced": true,
       "help": "Minimum estimated pending tokens before auto-commit triggers. Set to 0 to commit every turn."
+    },
+    "commitKeepRecentCount": {
+      "label": "Commit Keep Recent Count",
+      "placeholder": "10",
+      "advanced": true,
+      "help": "WM v2: number of most-recent messages kept live after an afterTurn commit. Compact path always uses 0."
     },
     "emitStandardDiagnostics": {
       "label": "Standard diagnostics (diag JSON lines)",
@@ -161,7 +180,8 @@
         "description": "Deprecated: use agent_prefix instead"
       },
       "serverAuthMode": {
-        "type": "string"
+        "type": "string",
+        "description": "Deprecated and ignored. Tenant identity headers are controlled by explicit accountId/userId."
       },
       "apiKey": {
         "type": "string"
@@ -222,6 +242,11 @@
       },
       "commitTokenThreshold": {
         "type": "number"
+      },
+      "commitKeepRecentCount": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1000
       },
       "bypassSessionPatterns": {
         "type": "array",

@@ -22,6 +22,8 @@ class ToolContext:
             and session_key. This determines the sandbox directory for the session.
         sender_id: Optional identifier for the message sender, used for tracking
             and permission checks.
+        memory_user_ids: Optional list of user IDs for memory retrieval. Used by
+            openviking_search tool to search specific users' memory spaces.
 
     Example:
         >>> context = ToolContext(
@@ -35,6 +37,7 @@ class ToolContext:
     sandbox_manager: SandboxManager | None = None
     workspace_id: str = sandbox_manager.to_workspace_id(session_key) if sandbox_manager else None
     sender_id: str | None = None
+    memory_user_ids: list[str] | None = None
 
 
 """Base class for agent tools."""

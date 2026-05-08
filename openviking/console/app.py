@@ -242,6 +242,13 @@ def _create_proxy_router() -> APIRouter:
             return invalid
         return await _forward_request(request, f"/api/v1/admin/accounts/{account_id}/users")
 
+    @router.get("/ov/admin/accounts/{account_id}/agents")
+    async def admin_agents(request: Request, account_id: str):
+        invalid = _validate_path_param(account_id, "account_id")
+        if invalid:
+            return invalid
+        return await _forward_request(request, f"/api/v1/admin/accounts/{account_id}/agents")
+
     @router.get("/ov/system/status")
     async def system_status(request: Request):
         return await _forward_request(request, "/api/v1/system/status")

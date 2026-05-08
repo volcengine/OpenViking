@@ -402,6 +402,11 @@ class HierarchicalRetriever:
                     # 只添加 level 2 的文件
                     if r.get("level", 2) == 2:
                         score = r.get("_score", 0.0)
+                        if not passes_threshold(score):
+                            logger.debug(
+                                f"[RecursiveSearch] Initial candidate URI {uri} score {score:.4f} did not pass threshold {effective_threshold}"
+                            )
+                            continue
                         r["_final_score"] = score
                         collected_by_uri[uri] = r
                         logger.debug(

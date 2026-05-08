@@ -203,7 +203,6 @@ describe("context-engine afterTurn()", () => {
     const { engine, logger } = makeEngine({
       commitTokenThreshold: 50,
       getSession: { pending_tokens: 5000 },
-      cfgOverrides: { serverAuthMode: "trusted" },
     });
 
     await engine.afterTurn!({
@@ -222,28 +221,8 @@ describe("context-engine afterTurn()", () => {
     );
   });
 
-  it("passes sanitized senderId as role_id in trusted mode", async () => {
-    const { engine, client } = makeEngine({
-      cfgOverrides: { serverAuthMode: "trusted" },
-    });
-
-    await engine.afterTurn!({
-      sessionId: "s1",
-      sessionFile: "",
-      messages: [{ role: "user", content: "hello world" }],
-      prePromptMessageCount: 0,
-      runtimeContext: { senderId: "telegram:12345" },
-    });
-
-    expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
-    expect(client.addSessionMessage.mock.calls[0][5]).toBe("telegram_12345");
-  });
-
-
-  it("passes sanitized senderId as role_id in api_key mode", async () => {
-    const { engine, client } = makeEngine({
-      cfgOverrides: { serverAuthMode: "api_key" },
-    });
+  it("passes sanitized senderId as role_id", async () => {
+    const { engine, client } = makeEngine();
 
     await engine.afterTurn!({
       sessionId: "s1",

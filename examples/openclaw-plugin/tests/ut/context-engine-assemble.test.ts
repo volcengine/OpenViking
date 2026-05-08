@@ -47,6 +47,8 @@ function makeEngine(
   const logger = makeLogger();
   const client = {
     getSessionContext: vi.fn().mockResolvedValue(contextResult),
+    find: vi.fn().mockResolvedValue({ memories: [], resources: [], total: 0 }),
+    read: vi.fn().mockResolvedValue(""),
   } as unknown as OpenVikingClient;
   const getClient = vi.fn().mockResolvedValue(client);
   const resolveAgentId = vi.fn((sessionId: string) => `agent:${sessionId}`);
@@ -69,7 +71,11 @@ function makeEngine(
 
   return {
     engine,
-    client: client as unknown as { getSessionContext: ReturnType<typeof vi.fn> },
+    client: client as unknown as {
+      getSessionContext: ReturnType<typeof vi.fn>;
+      find: ReturnType<typeof vi.fn>;
+      read: ReturnType<typeof vi.fn>;
+    },
     getClient,
     logger,
     resolveAgentId,
@@ -77,6 +83,191 @@ function makeEngine(
 }
 
 describe("context-engine assemble()", () => {
+  it("prepends auto-recall to the latest user message during transformContext", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ status: "ok" }),
+      }),
+    );
+    try {
+      const { engine, client } = makeEngine(
+        {
+          latest_archive_overview: "This OV context must not be rebuilt during transformContext.",
+          pre_archive_abstracts: [],
+          messages: [
+            {
+              id: "stored-current-user",
+              role: "user",
+              created_at: "2026-04-30T00:00:00Z",
+              parts: [{ type: "text", text: "stale stored prompt" }],
+            },
+          ],
+          estimatedTokens: 12,
+          stats: makeStats(),
+        },
+        {
+          cfgOverrides: {
+            autoRecall: true,
+            recallPreferAbstract: true,
+          },
+        },
+      );
+      client.find
+        .mockResolvedValueOnce({
+          memories: [
+            {
+              uri: "viking://user/default/memories/rust-pref",
+              level: 2,
+              category: "preferences",
+              abstract: "User prefers Rust for backend tasks.",
+              score: 0.93,
+            },
+          ],
+          total: 1,
+        })
+        .mockResolvedValueOnce({ memories: [], total: 0 });
+
+      const sourceMessages = [
+        { role: "user", content: "[Session History Summary]\nOlder archive summary." },
+        { role: "assistant", content: [{ type: "text", text: "Previous answer." }] },
+        { role: "user", content: "what backend language should we use?" },
+      ];
+
+      const result = await engine.assemble({
+        sessionId: "session-transform",
+        messages: sourceMessages,
+      });
+
+      expect(client.getSessionContext).not.toHaveBeenCalled();
+      expect(result.messages).toHaveLength(sourceMessages.length);
+      expect(result.messages[0]).toBe(sourceMessages[0]);
+      expect(result.messages[1]).toBe(sourceMessages[1]);
+      expect(result.messages[2]?.role).toBe("user");
+      expect(result.messages[2]?.content).toMatch(/^<relevant-memories>/);
+      expect(result.messages[2]?.content).toContain("Source: openviking-auto-recall");
+      expect(result.messages[2]?.content).toContain("User prefers Rust for backend tasks.");
+      expect(result.messages[2]?.content).toContain("what backend language should we use?");
+      expect(result.systemPromptAddition).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("passes through transformContext messages when the latest message is not user", async () => {
+    const { engine, getClient } = makeEngine(
+      {
+        latest_archive_overview: "unused",
+        pre_archive_abstracts: [],
+        messages: [],
+        estimatedTokens: 0,
+        stats: makeStats(),
+      },
+      {
+        cfgOverrides: {
+          autoRecall: true,
+        },
+      },
+    );
+    const sourceMessages = [
+      { role: "user", content: "run the tool" },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "tool_1", name: "bash", arguments: {} }],
+      },
+    ];
+
+    const result = await engine.assemble({
+      sessionId: "session-tool-loop",
+      messages: sourceMessages,
+    });
+
+    expect(getClient).not.toHaveBeenCalled();
+    expect(result.messages).toBe(sourceMessages);
+    expect(result.estimatedTokens).toBe(roughEstimate(sourceMessages));
+  });
+
+  it("passes through transformContext latest user messages when auto-recall is disabled", async () => {
+    const { engine, getClient } = makeEngine({
+      latest_archive_overview: "unused",
+      pre_archive_abstracts: [],
+      messages: [],
+      estimatedTokens: 0,
+      stats: makeStats(),
+    });
+    const sourceMessages = [
+      { role: "assistant", content: [{ type: "text", text: "Previous answer." }] },
+      { role: "user", content: "what backend language should we use?" },
+    ];
+
+    const result = await engine.assemble({
+      sessionId: "session-auto-recall-disabled",
+      messages: sourceMessages,
+    });
+
+    expect(getClient).not.toHaveBeenCalled();
+    expect(result.messages).toBe(sourceMessages);
+    expect(result.estimatedTokens).toBe(roughEstimate(sourceMessages));
+  });
+
+  it("treats prompt-less assemble with availableTools as main assemble", async () => {
+    const { engine, client, resolveAgentId } = makeEngine({
+      latest_archive_overview: "# Session Summary\nPreviously discussed repository setup.",
+      pre_archive_abstracts: [
+        {
+          archive_id: "archive_001",
+          abstract: "Previously discussed repository setup.",
+        },
+      ],
+      messages: [
+        {
+          id: "msg_main_no_prompt",
+          role: "assistant",
+          created_at: "2026-03-24T00:00:00Z",
+          parts: [{ type: "text", text: "Stored answer from OpenViking." }],
+        },
+      ],
+      estimatedTokens: 120,
+      stats: {
+        ...makeStats(),
+        totalArchives: 1,
+        includedArchives: 1,
+        archiveTokens: 40,
+        activeTokens: 80,
+      },
+    });
+
+    const liveMessages = [{ role: "user", content: "fallback live message" }];
+    const result = await engine.assemble({
+      sessionId: "session-main-no-prompt",
+      messages: liveMessages,
+      tokenBudget: 4096,
+      availableTools: new Set(),
+    });
+
+    expect(resolveAgentId).toHaveBeenCalledWith(
+      "session-main-no-prompt",
+      undefined,
+      "session-main-no-prompt",
+    );
+    expect(client.getSessionContext).toHaveBeenCalledWith(
+      "session-main-no-prompt",
+      4096,
+      "agent:session-main-no-prompt",
+    );
+    expect(client.find).not.toHaveBeenCalled();
+    expect(result.messages[0]).toEqual({
+      role: "user",
+      content: "[Session History Summary]\n# Session Summary\nPreviously discussed repository setup.",
+    });
+    expect(result.messages[1]).toEqual({
+      role: "assistant",
+      content: [{ type: "text", text: "Stored answer from OpenViking." }],
+    });
+    expect(result.systemPromptAddition).toContain("Session Context Guide");
+  });
+
   it("assembles summary archive and completed tool parts into agent messages", async () => {
     const { engine, client, resolveAgentId } = makeEngine({
       latest_archive_overview: "# Session Summary\nPreviously discussed repository setup.",
@@ -117,6 +308,7 @@ describe("context-engine assemble()", () => {
 
     const liveMessages = [{ role: "user", content: "fallback live message" }];
     const result = await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "session-1",
       messages: liveMessages,
       tokenBudget: 4096,
@@ -133,10 +325,6 @@ describe("context-engine assemble()", () => {
       content: "[Session History Summary]\n# Session Summary\nPreviously discussed repository setup.",
     });
     expect(result.messages[1]).toEqual({
-      role: "user",
-      content: "[Archive Index]\narchive_001: Previously discussed repository setup.",
-    });
-    expect(result.messages[2]).toEqual({
       role: "assistant",
       content: [
         { type: "text", text: "I checked the latest context." },
@@ -149,7 +337,7 @@ describe("context-engine assemble()", () => {
         },
       ],
     });
-    expect(result.messages[3]).toEqual({
+    expect(result.messages[2]).toEqual({
       role: "toolResult",
       toolCallId: "tool_123",
       toolName: "read_file",
@@ -176,6 +364,7 @@ describe("context-engine assemble()", () => {
 
     const liveMessages = [{ role: "user", content: "fallback live message" }];
     const result = await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "runtime-session",
       sessionKey: "agent:main:cron:nightly:run:1",
       messages: liveMessages,
@@ -219,6 +408,7 @@ describe("context-engine assemble()", () => {
     });
 
     const result = await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "session-running",
       messages: [],
     });
@@ -279,6 +469,7 @@ describe("context-engine assemble()", () => {
     });
 
     const result = await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "session-missing-id",
       messages: [],
     });
@@ -322,6 +513,7 @@ describe("context-engine assemble()", () => {
     ];
 
     const result = await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "session-fallback",
       messages: liveMessages,
       tokenBudget: 1024,
@@ -348,6 +540,7 @@ describe("context-engine assemble()", () => {
     ];
 
     const result = await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "session-new-user",
       messages: liveMessages,
     });
@@ -383,6 +576,7 @@ describe("context-engine assemble()", () => {
     ];
 
     const result = await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "session-empty-parts",
       messages: liveMessages,
     });
@@ -427,6 +621,7 @@ describe("context-engine assemble()", () => {
     });
 
     const result = await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "session-budgeted",
       messages: [],
       tokenBudget: 1024,
@@ -457,6 +652,7 @@ describe("context-engine assemble()", () => {
     ];
 
     const result = await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "session-error",
       messages: liveMessages,
     });
@@ -491,7 +687,11 @@ describe("context-engine assemble()", () => {
       stats: { ...makeStats(), activeTokens: 50 },
     });
 
-    const result = await engine.assemble({ sessionId: "session-tool-only", messages: [] });
+    const result = await engine.assemble({
+      prompt: "current user prompt",
+      sessionId: "session-tool-only",
+      messages: [],
+    });
 
     const emptyContentMsg = result.messages.find(
       (m) => typeof m.content === "string" && m.content === "",

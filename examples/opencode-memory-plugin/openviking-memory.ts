@@ -277,6 +277,8 @@ function debouncedSaveSessionMap(): void {
 interface OpenVikingConfig {
   endpoint: string
   apiKey: string
+  account: string
+  user: string
   enabled: boolean
   timeoutMs: number
   autoCommit?: {
@@ -358,6 +360,8 @@ type CommitStartResult =
 const DEFAULT_CONFIG: OpenVikingConfig = {
   endpoint: "http://localhost:1933",
   apiKey: "",
+  account: "",
+  user: "",
   enabled: true,
   timeoutMs: 30000,
   autoCommit: {
@@ -441,6 +445,12 @@ function loadConfig(): OpenVikingConfig {
       if (process.env.OPENVIKING_API_KEY) {
         config.apiKey = process.env.OPENVIKING_API_KEY
       }
+      if (process.env.OPENVIKING_ACCOUNT) {
+        config.account = process.env.OPENVIKING_ACCOUNT
+      }
+      if (process.env.OPENVIKING_USER) {
+        config.user = process.env.OPENVIKING_USER
+      }
 
       return config
     }
@@ -461,6 +471,12 @@ function loadConfig(): OpenVikingConfig {
   if (process.env.OPENVIKING_API_KEY) {
     config.apiKey = process.env.OPENVIKING_API_KEY
   }
+  if (process.env.OPENVIKING_ACCOUNT) {
+    config.account = process.env.OPENVIKING_ACCOUNT
+  }
+  if (process.env.OPENVIKING_USER) {
+    config.user = process.env.OPENVIKING_USER
+  }
   if (config.autoCommit) {
     config.autoCommit.intervalMinutes = getAutoCommitIntervalMinutes(config)
   }
@@ -480,15 +496,29 @@ interface HttpRequestOptions {
   abortSignal?: AbortSignal
 }
 
-async function makeRequest<T = any>(config: OpenVikingConfig, options: HttpRequestOptions): Promise<T> {
-  const url = `${config.endpoint}${options.endpoint}`
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
+function buildOpenVikingHeaders(config: OpenVikingConfig, includeContentType = true): Record<string, string> {
+  const headers: Record<string, string> = {}
+
+  if (includeContentType) {
+    headers["Content-Type"] = "application/json"
   }
 
   if (config.apiKey) {
     headers["X-API-Key"] = config.apiKey
   }
+  if (config.account) {
+    headers["X-OpenViking-Account"] = config.account
+  }
+  if (config.user) {
+    headers["X-OpenViking-User"] = config.user
+  }
+
+  return headers
+}
+
+async function makeRequest<T = any>(config: OpenVikingConfig, options: HttpRequestOptions): Promise<T> {
+  const url = `${config.endpoint}${options.endpoint}`
+  const headers = buildOpenVikingHeaders(config)
 
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? config.timeoutMs)
@@ -811,10 +841,7 @@ async function detectBackgroundCommitSupport(config: OpenVikingConfig): Promise<
     return backgroundCommitSupported
   }
 
-  const headers: Record<string, string> = {}
-  if (config.apiKey) {
-    headers["X-API-Key"] = config.apiKey
-  }
+  const headers = buildOpenVikingHeaders(config, false)
 
   try {
     const response = await fetch(`${config.endpoint}/api/v1/tasks?limit=1`, {

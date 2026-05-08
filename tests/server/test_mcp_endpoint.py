@@ -24,7 +24,7 @@ from openviking.server.mcp_endpoint import (
     search,
     store,
 )
-from openviking.server.mcp_endpoint import list_dir as list_tool
+from openviking.server.mcp_endpoint import ls as list_tool
 from openviking_cli.exceptions import UnauthenticatedError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -170,16 +170,55 @@ async def test_store_batch_messages(service):
     assert "2 message" in result
 
 
+async def test_store_populates_role_id_from_ctx(service, monkeypatch):
+    """Regression: MCP store used to persist role_id=None because it skipped the
+    HTTP router's fallback resolver. With ctx.resolve_role_id, user msgs should
+    get user.user_id and assistant msgs should get user.agent_id.
+
+    We capture role_id at the add_message boundary instead of reading it back from
+    storage, because store() commits the session synchronously and committed
+    messages move out of session.messages into archive files.
+    """
+    from openviking.session.session import Session
+
+    captured: list[tuple[str, str | None]] = []
+    original = Session.add_message
+
+    def _spy(self, role, parts, role_id=None, created_at=None):
+        captured.append((role, role_id))
+        return original(self, role, parts, role_id=role_id, created_at=created_at)
+
+    monkeypatch.setattr(Session, "add_message", _spy)
+
+    await store(
+        messages=[
+            StoreMessage(role="user", content="user msg"),
+            StoreMessage(role="assistant", content="assistant msg"),
+        ]
+    )
+
+    assert captured == [
+        ("user", DEFAULT_CTX.user.user_id),
+        ("assistant", DEFAULT_CTX.user.agent_id),
+    ]
+
+
 # ---------------------------------------------------------------------------
 # add_resource tool
 # ---------------------------------------------------------------------------
 
 
-async def test_add_resource_nonexistent_path(service):
+async def test_add_resource_rejects_local_path_with_cli_hint(service):
     result = await add_resource(path="/tmp/definitely_does_not_exist_xyz.md")
-    assert (
-        "error" in result.lower() or "not found" in result.lower() or "resource" in result.lower()
-    )
+    assert "error" in result.lower()
+    assert "ov add-resource" in result
+    assert "ovcli.conf" in result
+
+
+async def test_add_resource_rejects_bare_filename_with_cli_hint(service):
+    result = await add_resource(path="some_local_file.md")
+    assert "error" in result.lower()
+    assert "ov add-resource" in result
 
 
 # ---------------------------------------------------------------------------

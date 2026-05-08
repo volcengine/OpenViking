@@ -298,7 +298,8 @@ Example:
             },
             "endpoint": "otel-collector:4317",
             "service_name": "openviking-server",
-            "export_interval_ms": 10000
+            "export_interval_ms": 10000,
+            "headers": {}
           }
         }
       },
@@ -309,7 +310,8 @@ Example:
           "insecure": true
         },
         "endpoint": "otel-collector:4317",
-        "service_name": "openviking-server"
+        "service_name": "openviking-server",
+        "headers": {}
       },
       "logs": {
         "enabled": true,
@@ -318,12 +320,20 @@ Example:
           "insecure": true
         },
         "endpoint": "otel-collector:4317",
-        "service_name": "openviking-server"
+        "service_name": "openviking-server",
+        "headers": {}
       }
     }
   }
 }
 ```
+
+Notes:
+
+- `headers` forwards custom OTLP request headers or gRPC metadata to the exporter.
+- This is useful when an OTLP backend requires extra auth headers for direct ingestion.
+- The `headers` shape is the same across `traces`, `logs`, and `metrics.exporters.otel`.
+- When `protocol="grpc"`, `headers` are sent as gRPC metadata and keys should be lowercase, for example `x-byteapm-appkey`; this restriction does not apply to `protocol="http"`.
 
 For full fields, supported ranges, and more examples, see:
 
