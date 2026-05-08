@@ -29,27 +29,13 @@ pub async fn run_tui(client: HttpClient, uri: &str) -> Result<()> {
         original_hook(panic_info);
     }));
 
-    // Initialize image previewer BEFORE entering alternate screen
-    let mut image_previewer = ImagePreviewer::new();
-    let previewer_available = ImagePreviewer::is_available();
-    let mut previewer_initialized = false;
-
-    if previewer_available {
-        if let Err(e) = image_previewer.init() {
-            eprintln!("Warning: Failed to initialize image previewer: {}", e);
-        } else {
-            previewer_initialized = true;
-            eprintln!("Image previewer initialized successfully");
-        }
-    }
-
     enable_raw_mode()?;
     if let Err(e) = io::stdout().execute(EnterAlternateScreen) {
         let _ = disable_raw_mode();
         return Err(crate::error::Error::Io(e));
     }
 
-    let result = run_loop(client, uri, image_previewer, previewer_available, previewer_initialized).await;
+    let result = run_loop(client, uri).await;
 
     // Always restore terminal
     let _ = disable_raw_mode();
@@ -58,18 +44,16 @@ pub async fn run_tui(client: HttpClient, uri: &str) -> Result<()> {
     result
 }
 
-async fn run_loop(
-    client: HttpClient,
-    uri: &str,
-    mut image_previewer: ImagePreviewer,
-    previewer_available: bool,
-    previewer_initialized: bool,
-) -> Result<()> {
+async fn run_loop(client: HttpClient, uri: &str) -> Result<()> {
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::new(client);
+    let mut image_previewer = ImagePreviewer::new();
     let mut show_debug_logs = false;
+
+    // Initialize viuer (always available)
+    let _ = image_previewer.init();
 
     app.init(uri).await;
 
@@ -92,7 +76,20 @@ async fn run_loop(
         // Store content area
         let mut captured_content_area = None;
 
-        // Render TUI
+        // Track if we had an image in the previous iteration
+        static PREV_HAD_IMAGE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        let had_image = PREV_HAD_IMAGE.load(std::sync::atomic::Ordering::Relaxed);
+        let has_image = app.current_preview_image.is_some();
+
+        // Clear image if we just transitioned away from an image
+        if !show_debug_logs && had_image && !has_image {
+            // Use ratatui terminal clear to properly reset
+            let _ = terminal.clear();
+            let _ = image_previewer.clear_image();
+        }
+        PREV_HAD_IMAGE.store(has_image, std::sync::atomic::Ordering::Relaxed);
+
+        // Render TUI first
         terminal.draw(|frame| {
             if show_debug_logs {
                 // Show debug logs
@@ -100,12 +97,12 @@ async fn run_loop(
                 let text: Vec<Line> = debug_logs
                     .iter()
                     .rev()
-                    .take(usize::from(frame.size().height.saturating_sub(2)))
+                    .take(usize::from(frame.area().height.saturating_sub(2)))
                     .map(|s| Line::from(s.as_str()))
                     .collect();
                 let paragraph = Paragraph::new(text)
                     .block(Block::default().borders(Borders::ALL).title(" Debug Logs (Press L to hide) "));
-                frame.render_widget(paragraph, frame.size());
+                frame.render_widget(paragraph, frame.area());
             } else {
                 // Normal UI
                 let areas = ui::render_with_content_area(frame, &app);
@@ -125,20 +122,14 @@ async fn run_loop(
                 });
             }
 
-            // Update image display based on current file only if initialized
-            if previewer_available && previewer_initialized {
-                if let Some(image_path) = &app.current_preview_image {
-                    if let Err(e) = image_previewer.display_image(image_path) {
-                        // Don't spam errors, just try to clear and show in status bar
-                        let _ = image_previewer.clear_image();
-                        // Only update status if not locked
-                        if !app.status_message_locked {
-                            app.status_message = format!("Image preview error: {}", e);
-                            app.status_message_time = Some(std::time::Instant::now());
-                        }
+            // Update image display based on current file
+            if let Some(image_path) = &app.current_preview_image {
+                if let Err(e) = image_previewer.display_image(image_path) {
+                    // Show error in status bar
+                    if !app.status_message_locked {
+                        app.status_message = format!("Image preview error: {}", e);
+                        app.status_message_time = Some(std::time::Instant::now());
                     }
-                } else {
-                    let _ = image_previewer.clear_image();
                 }
             }
         }

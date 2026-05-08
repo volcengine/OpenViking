@@ -71,7 +71,7 @@ pub struct App {
     pub current_uri: String,
     pub current_preview_image: Option<String>,
     pub temp_image_file: Option<NamedTempFile>,
-    pub image_previewer_available: bool,
+    pub pending_image_uri: Option<(String, String)>, // (uri, filename)
 }
 
 impl App {
@@ -96,7 +96,7 @@ impl App {
             current_uri: "/".to_string(),
             current_preview_image: None,
             temp_image_file: None,
-            image_previewer_available: image_preview::ImagePreviewer::is_available(),
+            pending_image_uri: None,
         }
     }
 
@@ -117,6 +117,7 @@ impl App {
                 self.content_scroll = 0;
                 self.current_preview_image = None;
                 self.temp_image_file = None;
+                self.pending_image_uri = None;
                 return;
             }
         };
@@ -128,6 +129,7 @@ impl App {
         // Clear previous image preview
         self.current_preview_image = None;
         self.temp_image_file = None;
+        self.pending_image_uri = None;
 
         if is_dir {
             // For root-level scope URIs (e.g. viking://resources), show a
@@ -192,7 +194,12 @@ impl App {
         // Check if this is an image file
         let filename = uri.split('/').last().unwrap_or("");
         if image_preview::is_image_file(filename) {
-            self.load_image_preview_content(uri, filename).await;
+            // Don't load image automatically - just show prompt
+            self.pending_image_uri = Some((uri.to_string(), filename.to_string()));
+            self.content = format!(
+                "Image: {}\n\nPress '.' to load and preview the image.",
+                filename
+            );
             return;
         }
 
@@ -214,55 +221,70 @@ impl App {
         // Show image info in the content area
         let mut info_text = format!("Image: {}\n\n", filename);
 
-        if self.image_previewer_available {
-            info_text.push_str("Image preview is being displayed above.\n\n");
-        } else {
-            info_text.push_str(image_preview::ImagePreviewer::installation_instructions());
-            info_text.push_str("\n\n");
-        }
+        info_text.push_str("Image preview is being displayed above.\n\n");
 
         // Try to get the image and save to temp file for preview
-        if self.image_previewer_available {
-            match self.client.get_bytes(uri).await {
-                Ok(bytes) if !bytes.is_empty() => {
-                    // Get file extension from filename
-                    let ext = std::path::Path::new(filename)
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("png");
+        match self.client.get_bytes(uri).await {
+            Ok(bytes) if !bytes.is_empty() => {
+                // Get file extension from filename, convert to lowercase
+                let ext = std::path::Path::new(filename)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| e.to_lowercase())
+                    .unwrap_or("png".to_string());
 
-                    // Create temp file with proper extension
-                    match tempfile::Builder::new()
-                        .prefix("ov-tui-img-")
-                        .suffix(&format!(".{}", ext))
-                        .tempfile()
-                    {
-                        Ok(mut temp_file) => {
-                            if temp_file.write_all(&bytes).is_ok() {
-                                let path = temp_file.path().to_str().map(|s| s.to_string());
-                                if let Some(path) = path {
-                                    self.current_preview_image = Some(path);
-                                    // Keep temp file alive
-                                    self.temp_image_file = Some(temp_file);
-                                    info_text.push_str(&format!("Size: {} bytes", bytes.len()));
+                // Create temp file with proper extension
+                match tempfile::Builder::new()
+                    .prefix("ov-tui-img-")
+                    .suffix(&format!(".{}", ext))
+                    .tempfile()
+                {
+                    Ok(mut temp_file) => {
+                        match temp_file.write_all(&bytes) {
+                            Ok(_) => {
+                                match temp_file.flush() {
+                                    Ok(_) => {
+                                        let path = temp_file.path().to_str().map(|s| s.to_string());
+                                        if let Some(path) = path {
+                                            self.current_preview_image = Some(path);
+                                            // Keep temp file alive
+                                            self.temp_image_file = Some(temp_file);
+                                            info_text.push_str(&format!("Size: {} bytes", bytes.len()));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        info_text.push_str(&format!("(Could not write temp file: {})", e));
+                                    }
                                 }
                             }
-                        }
-                        Err(e) => {
-                            info_text.push_str(&format!("(Could not create temp file for preview: {})", e));
+                            Err(e) => {
+                                info_text.push_str(&format!("(Could not write temp file: {})", e));
+                            }
                         }
                     }
+                    Err(e) => {
+                        info_text.push_str(&format!("(Could not create temp file for preview: {})", e));
+                    }
                 }
-                Ok(_) => {
-                    info_text.push_str("(empty image)");
-                }
-                Err(e) => {
-                    info_text.push_str(&format!("(error reading image: {})", e));
-                }
+            }
+            Ok(_) => {
+                info_text.push_str("(empty image)");
+            }
+            Err(e) => {
+                info_text.push_str(&format!("(error reading image: {})", e));
             }
         }
 
         self.content = info_text;
+    }
+
+    /// Load and preview the pending image (if any)
+    pub async fn load_pending_image(&mut self) -> bool {
+        if let Some((uri, filename)) = self.pending_image_uri.take() {
+            self.load_image_preview_content(&uri, &filename).await;
+            return true;
+        }
+        false
     }
 
     pub fn scroll_content_up(&mut self) {

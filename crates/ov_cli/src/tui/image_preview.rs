@@ -1,17 +1,9 @@
-use std::process::{Child, Stdio};
-use std::io::Write;
 use std::sync::{Arc, Mutex};
-use serde_json;
-
-/// Image previewer using ueberzugpp
-pub struct ImagePreviewer {
-    ueberzugpp_process: Option<Child>,
-    socket_path: Option<String>,
-    current_image: Arc<Mutex<Option<String>>>,
-    preview_area: Arc<Mutex<Option<PreviewArea>>>,
-    stderr_reader: Option<std::thread::JoinHandle<()>>,
-    debug_log: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
-}
+use std::path::Path;
+use crossterm::{
+    ExecutableCommand,
+    cursor::MoveTo,
+};
 
 /// Preview area coordinates (in terminal cells)
 #[derive(Debug, Clone, Copy)]
@@ -22,16 +14,34 @@ pub struct PreviewArea {
     pub height: u16,
 }
 
+/// Check if a file is an image based on extension
+pub fn is_image_file(filename: &str) -> bool {
+    let path = Path::new(filename);
+    let ext = path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase());
+    matches!(ext.as_deref(), Some("png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "tiff" | "tif"))
+}
+
+/// Image previewer using viuer (simpler, more reliable)
+pub struct ImagePreviewer {
+    current_image: Arc<Mutex<Option<String>>>,
+    preview_area: Arc<Mutex<Option<PreviewArea>>>,
+    debug_log: Option<Arc<Mutex<Vec<String>>>>,
+}
+
 impl ImagePreviewer {
     /// Create a new image previewer
     pub fn new() -> Self {
         Self {
-            ueberzugpp_process: None,
-            socket_path: None,
             current_image: Arc::new(Mutex::new(None)),
             preview_area: Arc::new(Mutex::new(None)),
-            stderr_reader: None,
             debug_log: Some(Arc::new(Mutex::new(Vec::new()))),
+        }
+    }
+
+    /// Add a debug log entry
+    fn log(&self, message: &str) {
+        if let Some(log) = &self.debug_log {
+            log.lock().unwrap().push(message.to_string());
         }
     }
 
@@ -44,125 +54,36 @@ impl ImagePreviewer {
         }
     }
 
-    /// Add a debug log entry
-    fn log(&self, message: &str) {
-        if let Some(log) = &self.debug_log {
-            log.lock().unwrap().push(message.to_string());
-        }
-    }
-
-    /// Check if ueberzug is available
+    /// Check if viuer is available (it always is, since it's a library)
     pub fn is_available() -> bool {
-        #[cfg(target_os = "macos")]
-        {
-            // Check via brew
-            std::process::Command::new("brew")
-                .args(["list", "ueberzugpp"])
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
-        }
-        #[cfg(target_os = "linux")]
-        {
-            // Check if ueberzug or ueberzugpp is available
-            std::process::Command::new("which")
-                .arg("ueberzug")
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
-            ||
-            std::process::Command::new("which")
-                .arg("ueberzugpp")
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-        {
-            false
-        }
+        true
     }
 
-    /// Get installation instructions
+    /// Get installation instructions (not needed for viuer)
     pub fn installation_instructions() -> &'static str {
-        #[cfg(target_os = "macos")]
-        {
-            "To enable image preview, install ueberzugpp:\n  brew install jstkdng/programs/ueberzugpp"
-        }
-        #[cfg(target_os = "linux")]
-        {
-            "To enable image preview, install ueberzug or ueberzugpp:\n  ueberzug: pip install ueberzug\n  ueberzugpp: See https://github.com/jstkdng/ueberzugpp for installation instructions"
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-        {
-            "Image preview is only available on macOS and Linux"
-        }
+        "Image preview is available (using viuer)"
     }
 
-    /// Initialize the image previewer
+    /// Initialize the image previewer (nothing to do for viuer)
     pub fn init(&mut self) -> Result<(), String> {
-        self.log("Initializing image previewer...");
-
-        if !Self::is_available() {
-            self.log("ueberzug is not installed");
-            return Err("ueberzug is not installed".to_string());
-        }
-
-        // Try ueberzug first, then ueberzugpp as fallback
-        let cmd = if cfg!(target_os = "macos") {
-            "ueberzug"
-        } else {
-            // On Linux, try both
-            if std::process::Command::new("which")
-                .arg("ueberzug")
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
-            {
-                "ueberzug"
-            } else {
-                "ueberzugpp"
-            }
-        };
-
-        self.log(&format!("Starting {}...", cmd));
-
-        // Start ueberzug layer process with --parser json (this is critical!)
-        let mut child = std::process::Command::new(cmd)
-            .args(["layer", "--silent", "--parser", "json"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| {
-                let msg = format!("Failed to start {}: {}", cmd, e);
-                self.log(&msg);
-                msg
-            })?;
-
-        // Capture stderr
-        let stderr = child.stderr.take().unwrap();
-        let debug_log_clone = self.debug_log.clone();
-        let cmd_for_thread = cmd.to_string();
-        self.stderr_reader = Some(std::thread::spawn(move || {
-            use std::io::BufRead;
-            let reader = std::io::BufReader::new(stderr);
-            for line in reader.lines() {
-                if let Ok(line) = line {
-                    if let Some(log) = &debug_log_clone {
-                        log.lock().unwrap().push(format!("[{} stderr]: {}", cmd_for_thread, line));
-                    }
-                }
-            }
-        }));
-
-        self.ueberzugpp_process = Some(child);
-        self.log(&format!("{} process started", cmd));
-
-        // Wait a bit for the process to initialize
-        std::thread::sleep(std::time::Duration::from_millis(200));
-
+        self.log("Initialized viuer image previewer");
         Ok(())
+    }
+
+    /// Set the preview area coordinates
+    pub fn set_preview_area(&mut self, area: PreviewArea) {
+        self.log(&format!("Set preview area: {:?}", area));
+        *self.preview_area.lock().unwrap() = Some(area);
+    }
+
+    /// Get the preview area
+    pub fn preview_area(&self) -> Option<PreviewArea> {
+        *self.preview_area.lock().unwrap()
+    }
+
+    /// Check if an image is currently displayed
+    pub fn has_image_displayed(&self) -> bool {
+        self.current_image.lock().unwrap().is_some()
     }
 
     /// Display an image at the last known preview area
@@ -191,121 +112,176 @@ impl ImagePreviewer {
             return Err(format!("Path is not a file: {}", image_path));
         }
 
-        // Build the command
-        let cmd = serde_json::json!({
-            "action": "add",
-            "identifier": "ov_preview",
-            "x": area.x,
-            "y": area.y,
-            "width": area.width,
-            "height": area.height,
-            "path": image_path,
-            "scaler": "fit_contain",
-        });
+        self.log(&format!("Displaying image: {}", image_path));
+        self.log(&format!("Preview area: x={}, y={}, width={}, height={}", area.x, area.y, area.width, area.height));
 
-        let cmd_str = serde_json::to_string(&cmd).map_err(|e| {
-            format!("Failed to serialize command: {}", e)
-        })?;
+        // Calculate dimensions - viuer uses half-blocks, so height is in characters
+        // Each character cell can display 2x1 pixels (approximate)
+        let max_width = Some(area.width.saturating_sub(2) as u32);
+        let max_height = Some(area.height.saturating_sub(2) as u32);
+        self.log(&format!("Target dimensions: width={:?}, height={:?}", max_width, max_height));
 
-        // Get the process reference
-        let child = self.ueberzugpp_process.as_mut().ok_or_else(|| {
-            "ueberzug not initialized".to_string()
-        })?;
-        let stdin = child.stdin.as_mut().ok_or_else(|| {
-            "Failed to get ueberzug stdin".to_string()
-        })?;
+        // Try with multiple terminal protocols to find what works
+        let configs = [
+            // Try with kitty/iterm2 first with sizing
+            viuer::Config {
+                restore_cursor: true,
+                transparent: true,
+                truecolor: true,
+                use_kitty: true,
+                use_iterm: true,
+                width: max_width,
+                height: max_height,
+                ..Default::default()
+            },
+            // Try with kitty/iterm2 with transparency disabled
+            viuer::Config {
+                restore_cursor: true,
+                transparent: false,
+                truecolor: true,
+                use_kitty: true,
+                use_iterm: true,
+                width: max_width,
+                height: max_height,
+                ..Default::default()
+            },
+            // Then try without special protocols with sizing
+            viuer::Config {
+                restore_cursor: true,
+                transparent: true,
+                truecolor: true,
+                use_kitty: false,
+                use_iterm: false,
+                width: max_width,
+                height: max_height,
+                ..Default::default()
+            },
+            // Try without special protocols with transparency disabled
+            viuer::Config {
+                restore_cursor: true,
+                transparent: false,
+                truecolor: true,
+                use_kitty: false,
+                use_iterm: false,
+                width: max_width,
+                height: max_height,
+                ..Default::default()
+            },
+            // Try with just width specified
+            viuer::Config {
+                restore_cursor: true,
+                transparent: true,
+                truecolor: true,
+                width: max_width,
+                ..Default::default()
+            },
+            // Try with default settings (no sizing)
+            viuer::Config {
+                restore_cursor: true,
+                transparent: true,
+                truecolor: true,
+                ..Default::default()
+            },
+        ];
 
-        // Write to stdin
-        writeln!(stdin, "{}", cmd_str).map_err(|e| {
-            format!("Failed to send command to ueberzug: {}", e)
-        })?;
-        stdin.flush().map_err(|e| {
-            format!("Failed to flush ueberzug stdin: {}", e)
-        })?;
+        let mut displayed = false;
+        let mut last_error_str = None;
 
-        // Check if process is still alive
-        match child.try_wait() {
-            Ok(None) => {}
-            Ok(Some(status)) => {
-                return Err(format!("ueberzug exited unexpectedly with status: {}", status));
-            }
-            Err(e) => {
-                return Err(format!("Failed to check ueberzug process: {}", e));
+        // First try using print_from_file (more reliable for different formats)
+        self.log("Trying viuer::print_from_file");
+        for (i, config) in configs.iter().enumerate() {
+            self.log(&format!("Trying viuer config {} (print_from_file)", i + 1));
+            self.log(&format!("Config details: width={:?}, height={:?}, use_kitty={}, use_iterm={}",
+                config.width, config.height, config.use_kitty, config.use_iterm));
+
+            // Move cursor to the preview area position
+            self.log(&format!("Moving cursor to x={}, y={}", area.x, area.y));
+            match std::io::stdout().execute(MoveTo(area.x, area.y)) {
+                Ok(_) => {
+                    match viuer::print_from_file(image_path, config) {
+                        Ok(_) => {
+                            displayed = true;
+                            self.log(&format!("Success with config {} (print_from_file)", i + 1));
+                            break;
+                        }
+                        Err(e) => {
+                            self.log(&format!("Config {} failed (print_from_file): {}", i + 1, e));
+                            last_error_str = Some(format!("{}", e));
+                        }
+                    }
+                }
+                Err(e) => {
+                    self.log(&format!("Failed to move cursor: {}", e));
+                    last_error_str = Some(format!("Cursor move failed: {}", e));
+                }
             }
         }
 
-        // Update current image
-        *self.current_image.lock().unwrap() = Some(image_path.to_string());
+        // If print_from_file didn't work, try loading with image crate first
+        if !displayed {
+            self.log("print_from_file failed, trying with image crate");
+            match image::open(image_path) {
+                Ok(img) => {
+                    self.log(&format!("Image loaded: {}x{}", img.width(), img.height()));
 
+                    for (i, config) in configs.iter().enumerate() {
+                        self.log(&format!("Trying viuer config {} (image crate)", i + 1));
+
+                        // Move cursor to the preview area position
+                        match std::io::stdout().execute(MoveTo(area.x, area.y)) {
+                            Ok(_) => {
+                                match viuer::print(&img, config) {
+                                    Ok(_) => {
+                                        displayed = true;
+                                        self.log(&format!("Success with config {} (image crate)", i + 1));
+                                        break;
+                                    }
+                                    Err(e) => {
+                                        self.log(&format!("Config {} failed (image crate): {}", i + 1, e));
+                                        last_error_str = Some(format!("{}", e));
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                self.log(&format!("Failed to move cursor: {}", e));
+                                last_error_str = Some(format!("Cursor move failed: {}", e));
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    self.log(&format!("Failed to load image: {}", e));
+                    last_error_str = Some(format!("Image load failed: {}", e));
+                }
+            }
+        }
+
+        if !displayed {
+            return Err(format!("Failed to display image with all configs. Last error: {:?}", last_error_str));
+        }
+
+        *self.current_image.lock().unwrap() = Some(image_path.to_string());
+        self.log("Image displayed successfully");
         Ok(())
     }
 
     /// Clear the currently displayed image
     pub fn clear_image(&mut self) -> Result<(), String> {
-        let child = match &mut self.ueberzugpp_process {
-            Some(child) => child,
-            None => return Ok(()),
-        };
-
-        let stdin = match child.stdin.as_mut() {
-            Some(stdin) => stdin,
-            None => return Ok(()),
-        };
-
-        let cmd = serde_json::json!({
-            "action": "remove",
-            "identifier": "ov_preview",
-        });
-
-        let cmd_str = serde_json::to_string(&cmd).unwrap_or_default();
-        let _ = writeln!(stdin, "{}", cmd_str);
-        let _ = stdin.flush();
-
+        // Clear the state - ratatui's next render will cover the image
         *self.current_image.lock().unwrap() = None;
-
+        self.log("Image cleared");
         Ok(())
-    }
-
-    /// Set the preview area
-    pub fn set_preview_area(&mut self, area: PreviewArea) {
-        *self.preview_area.lock().unwrap() = Some(area);
-    }
-
-    /// Get the preview area
-    pub fn preview_area(&self) -> Option<PreviewArea> {
-        *self.preview_area.lock().unwrap()
-    }
-
-    /// Check if an image is currently displayed
-    pub fn has_image_displayed(&self) -> bool {
-        self.current_image.lock().unwrap().is_some()
     }
 
     /// Cleanup resources
     pub fn cleanup(&mut self) {
+        self.log("Cleaning up image previewer");
         let _ = self.clear_image();
-        if let Some(mut child) = self.ueberzugpp_process.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
     }
 }
 
-impl Drop for ImagePreviewer {
-    fn drop(&mut self) {
-        self.cleanup();
+impl Default for ImagePreviewer {
+    fn default() -> Self {
+        Self::new()
     }
-}
-
-/// Check if a file is an image based on extension
-pub fn is_image_file(filename: &str) -> bool {
-    let lower = filename.to_lowercase();
-    lower.ends_with(".png")
-        || lower.ends_with(".jpg")
-        || lower.ends_with(".jpeg")
-        || lower.ends_with(".gif")
-        || lower.ends_with(".webp")
-        || lower.ends_with(".svg")
-        || lower.ends_with(".bmp")
-        || lower.ends_with(".ico")
 }
