@@ -67,17 +67,17 @@ def levenshtein_distance(s1: str, s2: str) -> int:
 def normalize_string(text: str) -> str:
     """Normalize string by handling smart quotes and special characters."""
     replacements = {
-        "‘": "'",
-        "’": "'",
-        "“": '"',
-        "”": '"',
-        " ": " ",
-        "​": "",
-        "‌": "",
-        "‍": "",
-        "‎": "",
-        "‏": "",
-        "﻿": "",
+        "\u2018": "'",
+        "\u2019": "'",
+        "\u201c": '"',
+        "\u201d": '"',
+        "\u00a0": " ",
+        "\u200b": "",
+        "\u200c": "",
+        "\u200d": "",
+        "\u200e": "",
+        "\u200f": "",
+        "\ufeff": "",
     }
     for old, new in replacements.items():
         text = text.replace(old, new)
