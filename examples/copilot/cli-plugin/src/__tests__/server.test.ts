@@ -7,7 +7,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CallToolResultSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, it } from "vitest";
 import type { OVResult, OVTurn, RecallHit, RecallOptions, ReadOptions, CommitOptions } from "@openviking/copilot-shared";
-import { createOpenVikingMcpServer, type OpenVikingToolClient } from "../server.js";
+import { createOpenVikingMcpServer, type OpenVikingToolClient, type OpenVikingToolDeps } from "../server.js";
 
 const execFileAsync = promisify(execFile);
 const cliRoot = fileURLToPath(new URL("../../", import.meta.url));
@@ -56,10 +56,15 @@ class FakeOVClient implements OpenVikingToolClient {
   }
 }
 
-async function withMcpClient<T>(fake: FakeOVClient, cb: (client: Client) => Promise<T>): Promise<T> {
+async function withMcpClient<T>(
+  fake: FakeOVClient,
+  cb: (client: Client) => Promise<T>,
+  config: OpenVikingToolDeps["config"] = { recallLimit: 4, scoreThreshold: 0.2 },
+): Promise<T> {
   const server = createOpenVikingMcpServer({
     client: fake,
-    config: { recallLimit: 4, scoreThreshold: 0.2 },
+    config,
+    defaultSessionId: "cp-default",
     version: "test",
   });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -75,7 +80,7 @@ async function withMcpClient<T>(fake: FakeOVClient, cb: (client: Client) => Prom
 }
 
 async function callTool(client: Client, name: string, args: Record<string, unknown> = {}): Promise<CallToolResult> {
-  const result = await client.callTool({ name, arguments: args }, CallToolResultSchema);
+  const result = CallToolResultSchema.parse(await client.callTool({ name, arguments: args }, CallToolResultSchema));
   if (!("content" in result)) throw new Error("Expected a call tool content result");
   return result;
 }
@@ -87,11 +92,13 @@ function textOf(result: CallToolResult): string {
 }
 
 describe("OpenViking MCP tools", () => {
-  it("registers the Phase 2 recall tool set without capture creep", async () => {
+  it("registers the Phase 3 CLI tool set", async () => {
     const fake = new FakeOVClient();
     await withMcpClient(fake, async (client) => {
       const list = await client.listTools();
-      expect(list.tools.map((tool) => tool.name).sort()).toEqual([
+      const tools = list.tools.sort((a, b) => a.name.localeCompare(b.name));
+      expect(tools.map((tool) => tool.name)).toEqual([
+        "openviking_capture",
         "openviking_forget",
         "openviking_health",
         "openviking_read",
@@ -99,6 +106,8 @@ describe("OpenViking MCP tools", () => {
         "openviking_search",
         "openviking_store",
       ]);
+      const capture = tools.find((tool) => tool.name === "openviking_capture");
+      expect(capture?.description).toContain("model-discretion based");
     });
   });
 
@@ -159,6 +168,74 @@ describe("OpenViking MCP tools", () => {
       expect(text).not.toContain("low score");
     });
     expect(fake.recallCalls).toEqual([{ query: "auth migration", opts: { limit: 8, sessionId: "cp-123", scoreThreshold: 0 } }]);
+  });
+
+  it("captures a CLI turn via the shared sanitise and queue path", async () => {
+    const fake = new FakeOVClient();
+    await withMcpClient(fake, async (client) => {
+      const result = await callTool(client, "openviking_capture", {
+        sessionId: "cp-123",
+        user: "<openviking-context>recall</openviking-context>real user",
+        assistant: "real reply <system-reminder>x</system-reminder>",
+      });
+      expect(JSON.parse(textOf(result))).toMatchObject({
+        captured: 2,
+        skipped: false,
+        triggeredCommit: false,
+        sessionId: "cp-123",
+      });
+    });
+    expect(fake.appendCalls).toHaveLength(1);
+    expect(fake.appendCalls[0]!.sessionId).toBe("cp-123");
+    expect(fake.appendCalls[0]!.turns).toHaveLength(2);
+    expect(fake.appendCalls[0]!.turns[0]!.content).toContain("real user");
+    expect(fake.appendCalls[0]!.turns[0]!.content).not.toContain("openviking-context");
+    expect(fake.appendCalls[0]!.turns[1]!.content).toContain("real reply");
+    expect(fake.appendCalls[0]!.turns[1]!.content).not.toContain("system-reminder");
+    expect(fake.commitCalls).toEqual([]);
+  });
+
+  it("captures into the default CLI MCP session when sessionId is omitted", async () => {
+    const fake = new FakeOVClient();
+    await withMcpClient(fake, async (client) => {
+      const result = await callTool(client, "openviking_capture", {
+        user: "remember this",
+        assistant: "remembered",
+      });
+      expect(JSON.parse(textOf(result))).toMatchObject({ captured: 2, sessionId: "cp-default" });
+    });
+    expect(fake.appendCalls[0]!.sessionId).toBe("cp-default");
+  });
+
+  it("triggers commits through CommitQueue when the capture threshold is crossed", async () => {
+    const fake = new FakeOVClient();
+    await withMcpClient(fake, async (client) => {
+      const result = await callTool(client, "openviking_capture", {
+        sessionId: "cp-123",
+        user: "commit me",
+      });
+      expect(JSON.parse(textOf(result))).toMatchObject({ captured: 1, triggeredCommit: true, pendingAfter: 0 });
+    }, {
+      captureAssistantTurns: true,
+      captureMaxLength: 100_000,
+      commitTokenThreshold: 1,
+      writePathAsync: false,
+    });
+    expect(fake.commitCalls).toEqual([{ sessionId: "cp-123", opts: { force: false } }]);
+  });
+
+  it("skips capture without appending when autoCapture is disabled", async () => {
+    const fake = new FakeOVClient();
+    await withMcpClient(fake, async (client) => {
+      const result = await callTool(client, "openviking_capture", {
+        sessionId: "cp-123",
+        user: "do not store",
+        assistant: "not stored",
+      });
+      expect(JSON.parse(textOf(result))).toEqual({ captured: 0, skipped: true, reason: "autoCapture disabled" });
+    }, { autoCapture: false });
+    expect(fake.appendCalls).toEqual([]);
+    expect(fake.commitCalls).toEqual([]);
   });
 
   it("reads URI content as plain text", async () => {
@@ -227,6 +304,7 @@ describe("openviking-copilot-mcp stdio", () => {
     await client.connect(transport);
     try {
       const list = await client.listTools();
+      expect(list.tools.map((tool) => tool.name)).toContain("openviking_capture");
       expect(list.tools.map((tool) => tool.name)).toContain("openviking_recall");
       const result = await callTool(client, "openviking_health");
       expect(JSON.parse(textOf(result))).toEqual({ bypassed: true });

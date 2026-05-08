@@ -3,12 +3,16 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import {
+  CommitQueue,
   OPENVIKING_RECALL_TOOL_DESCRIPTION,
   buildRecallContextBlock,
   createDebugLogger,
+  deriveSessionId,
+  fromCaptureToolArgs,
   loadConfig as defaultLoadConfig,
   OVClient,
   type CommitOptions,
+  type DebugLogger,
   type LoadConfigOptions,
   type OVResult,
   type OVTurn,
@@ -22,6 +26,7 @@ import { z } from "zod/v4";
 
 const SERVER_NAME = "openviking-copilot-mcp";
 const DEFAULT_VERSION = "0.0.0";
+const OPENVIKING_CAPTURE_TOOL_DESCRIPTION = "Call this once at the end of every GitHub Copilot CLI assistant turn, after the final answer is ready. Pass the user's prompt in `user` and the final assistant answer in `assistant`; omit `assistant` only when capturing a user-only turn. The tool sanitizes injected context, appends the turn to OpenViking, and uses the same commit queue as the VS Code capture path. This capture is model-discretion based: if the model does not call the tool, the turn cannot be captured.";
 
 export interface OpenVikingToolClient {
   health(): Promise<OVResult<unknown>>;
@@ -36,14 +41,21 @@ export interface OpenVikingToolDeps {
   client: OpenVikingToolClient;
   config?: Partial<Pick<
     PluginConfig,
+    | "autoCapture"
     | "autoRecall"
+    | "captureAssistantTurns"
+    | "captureMaxLength"
+    | "commitTokenThreshold"
     | "recallLimit"
     | "scoreThreshold"
     | "minQueryLength"
     | "recallMaxContentChars"
     | "recallTokenBudget"
     | "recallPreferAbstract"
+    | "writePathAsync"
   >>;
+  defaultSessionId?: string;
+  logger?: DebugLogger;
 }
 
 export interface CreateOpenVikingMcpServerOptions extends OpenVikingToolDeps {
@@ -64,6 +76,9 @@ export function createOpenVikingMcpServer(opts: CreateOpenVikingMcpServerOptions
 }
 
 export function registerOpenVikingTools(server: McpServer, deps: OpenVikingToolDeps): void {
+  const captureQueues = new Map<string, CommitQueue>();
+  const defaultCaptureSessionId = deps.defaultSessionId ?? deriveSessionId("copilot-cli", `mcp:${process.cwd()}:${Date.now()}`);
+
   server.registerTool(
     "openviking_health",
     {
@@ -116,6 +131,47 @@ export function registerOpenVikingTools(server: McpServer, deps: OpenVikingToolD
         sessionId: args.sessionId ?? "",
       }, args.query, { targetUri: args.targetUri });
       return { content: [{ type: "text", text: recall.block ?? emptyRecallBlock("No relevant OpenViking context found.") }] };
+    }),
+  );
+
+  server.registerTool(
+    "openviking_capture",
+    {
+      title: "OpenViking capture",
+      description: OPENVIKING_CAPTURE_TOOL_DESCRIPTION,
+      inputSchema: {
+        user: z.string().min(1),
+        assistant: z.string().optional(),
+        sessionId: z.string().min(1).optional(),
+      },
+    },
+    async (args) => runTool(async () => {
+      if (deps.config?.autoCapture === false) {
+        return textJson({ captured: 0, skipped: true, reason: "autoCapture disabled" });
+      }
+
+      const sessionId = args.sessionId ?? defaultCaptureSessionId;
+      const turns = fromCaptureToolArgs(
+        { user: args.user, assistant: args.assistant },
+        {
+          captureAssistantTurns: deps.config?.captureAssistantTurns ?? true,
+          captureMaxLength: deps.config?.captureMaxLength ?? 24000,
+        },
+      );
+
+      if (turns.length === 0) {
+        return textJson({ captured: 0, skipped: true, reason: "empty after sanitise", sessionId });
+      }
+
+      const queue = captureQueueForSession(captureQueues, deps, sessionId);
+      const res = await queue.enqueue(turns);
+      return textJson({
+        captured: res.appended,
+        skipped: res.appended === 0,
+        triggeredCommit: res.triggeredCommit,
+        pendingAfter: res.pendingAfter,
+        sessionId,
+      });
     }),
   );
 
@@ -183,10 +239,11 @@ export function registerOpenVikingTools(server: McpServer, deps: OpenVikingToolD
 export async function runStdioMcpServer(opts: RunStdioMcpServerOptions = {}): Promise<void> {
   const loadConfig = opts.loadConfig ?? defaultLoadConfig;
   const cfg = loadConfig({ agentIdDefault: "copilot-cli" });
+  const logger = createDebugLogger(cfg, { scope: "copilot-cli-mcp" });
   const client = opts.createClient
     ? opts.createClient(cfg)
-    : new OVClient(cfg, { logger: createDebugLogger(cfg, { scope: "copilot-cli-mcp" }) });
-  const server = createOpenVikingMcpServer({ client, config: cfg, version: opts.version });
+    : new OVClient(cfg, { logger });
+  const server = createOpenVikingMcpServer({ client, config: cfg, logger, version: opts.version });
   const transport = opts.createTransport ? opts.createTransport() : new StdioServerTransport();
   await server.connect(transport);
 }
@@ -202,6 +259,25 @@ async function runTool(cb: () => Promise<CallToolResult>): Promise<CallToolResul
 function fromOVResult<T>(res: OVResult<T>, format: (value: T) => string = jsonString): CallToolResult {
   if (!res.ok) return toolError(`${res.error.status ? `HTTP ${res.error.status}: ` : ""}${res.error.message}`);
   return { content: [{ type: "text", text: format(res.value) }] };
+}
+
+function captureQueueForSession(
+  queues: Map<string, CommitQueue>,
+  deps: OpenVikingToolDeps,
+  sessionId: string,
+): CommitQueue {
+  const existing = queues.get(sessionId);
+  if (existing) return existing;
+
+  const queue = new CommitQueue({
+    sessionId,
+    client: deps.client,
+    threshold: deps.config?.commitTokenThreshold ?? 20000,
+    async: deps.config?.writePathAsync ?? true,
+    logger: deps.logger,
+  });
+  queues.set(sessionId, queue);
+  return queue;
 }
 
 function recallConfig(cfg: OpenVikingToolDeps["config"]): RecallContextConfig {

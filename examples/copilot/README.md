@@ -29,6 +29,12 @@ Current VS Code support:
 - Capture is participant-scoped: completed `@openviking` participant turns are committed to OpenViking.
 - Stable VS Code 1.99 chat APIs expose `vscode.chat.createChatParticipant(...)` for extension-owned participants, but do not expose a global default-chat response event such as `vscode.chat.onDidReceiveChatResponse`. Default `@workspace` turns therefore cannot be captured without VS Code adding a turn-level event.
 
+Current CLI support:
+
+- Recall works through the `openviking_recall` MCP tool.
+- Capture works through the `openviking_capture` MCP tool, which the model is asked to call at the end of a turn with `{ user, assistant }`.
+- CLI capture is model-discretion based. It can sanitize and commit a turn when called, but it cannot guarantee 100% coverage if the model declines or forgets to invoke the tool.
+
 ## Quickstart (development)
 
 ```bash
