@@ -12,8 +12,8 @@ from openviking.session.memory.tools import (
     MemoryReadTool,
     MemorySearchTool,
     get_tool,
-    get_tool_schemas,
     list_tools,
+    get_tool_schemas,
 )
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -77,14 +77,16 @@ class TestMemoryTools:
             ),
             role=Role.USER,
         )
+        viking_fs = MockVikingFS()
+        # Create tool_ctx with viking_fs included
         tool_ctx = ToolContext(
+            viking_fs=viking_fs,
             request_ctx=request_ctx,
             default_search_uris=["viking://user/test-account/test-user/memories"],
+            read_file_contents={},
         )
-        viking_fs = MockVikingFS()
 
         result = await MemorySearchTool().execute(
-            viking_fs,
             tool_ctx,
             query="profile",
             limit=2,

@@ -9,6 +9,7 @@ from fastapi import APIRouter, Body, Depends, Query
 from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel, ConfigDict
 
+from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_viking_uri
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
 from openviking.server.auth import get_request_context, require_role
@@ -55,6 +56,7 @@ async def read(
 ):
     """Read file content (L2)."""
     service = get_service()
+    uri = resolve_path_variables(uri)
     try:
         result = await service.fs.read(uri, ctx=_ctx, offset=offset, limit=limit)
     except AGFSNotFoundError:
@@ -89,6 +91,7 @@ async def abstract(
 ):
     """Read L0 abstract."""
     service = get_service()
+    uri = resolve_path_variables(uri)
     try:
         result = await service.fs.abstract(uri, ctx=_ctx)
     except AGFSNotFoundError:
@@ -109,6 +112,7 @@ async def overview(
 ):
     """Read L1 overview."""
     service = get_service()
+    uri = resolve_path_variables(uri)
     try:
         result = await service.fs.overview(uri, ctx=_ctx)
     except AGFSNotFoundError:
@@ -129,6 +133,7 @@ async def download(
 ):
     """Download file as raw bytes (for images, binaries, etc.)."""
     service = get_service()
+    uri = resolve_path_variables(uri)
     try:
         content = await service.fs.read_file_bytes(uri, ctx=_ctx)
     except AGFSNotFoundError:
@@ -163,11 +168,12 @@ async def write(
 ):
     """Write text content to a file (replace, append, or create) and refresh semantics/vectors."""
     service = get_service()
+    uri = resolve_path_variables(request.uri)
     execution = await run_operation(
         operation="content.write",
         telemetry=request.telemetry,
         fn=lambda: service.fs.write(
-            uri=request.uri,
+            uri=uri,
             content=request.content,
             ctx=_ctx,
             mode=request.mode,
@@ -191,7 +197,8 @@ async def reindex(
     from openviking.service.task_tracker import get_task_tracker
     from openviking.storage.viking_fs import get_viking_fs
 
-    uri = validate_viking_uri(body.uri)
+    uri = resolve_path_variables(body.uri)
+    uri = validate_viking_uri(uri)
     viking_fs = get_viking_fs()
 
     if not await viking_fs.exists(uri, ctx=ctx):

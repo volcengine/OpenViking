@@ -82,6 +82,26 @@ class ExtractContext:
         first_time = msg_range._first_message_time()
         return first_time.split("-")[2] if first_time else None
 
+    def get_timestamp_from_ranges(self, ranges_str: str) -> str:
+        """根据 ranges 获取第一条消息的紧凑时间戳（YYYYMMDDHHMMSS），用于文件名去重。
+
+        Fallback 到 datetime.now() 以保证总是返回非空字符串。
+        """
+        from datetime import datetime
+
+        msg_range = self.read_message_ranges(ranges_str) if ranges_str else None
+        if msg_range:
+            for elem in msg_range.elements:
+                if isinstance(elem, str):
+                    continue
+                created_at = getattr(elem, "created_at", None)
+                if created_at:
+                    try:
+                        return datetime.fromisoformat(created_at).strftime("%Y%m%d%H%M%S")
+                    except (ValueError, TypeError):
+                        continue
+        return datetime.now().strftime("%Y%m%d%H%M%S")
+
     def get_event_content(self, ranges_str: str, summary: str, ratio_threshold: float = 0.2) -> str:
         """根据原始消息与 summary 的字符数比例，决定返回原始消息还是摘要。"""
         if not ranges_str or not summary:
@@ -353,35 +373,53 @@ class MemoryUpdater:
     ):
         """Apply upsert operation from a flat model."""
         viking_fs = self._get_viking_fs()
+
         memory_type = resolved_op.memory_type
         schema = self._registry.get(memory_type)
-        metadata: Dict[str, Any] = dict(resolved_op.memory_fields)
-        # Process fields defined in schema (apply merge_op)
-        for field in schema.fields:
-            if field.name in resolved_op.memory_fields:
-                patch_value = resolved_op.memory_fields[field.name]
-                # Get current value
-                if resolved_op.old_memory_file_content is None:
-                    current_value = None
-                else:
-                    if field.name == "content":
-                        current_value = resolved_op.old_memory_file_content.plain_content
-                    else:
-                        current_value = resolved_op.old_memory_file_content.memory_fields.get(
-                            field.name
-                        )
-                # Use merge_op to process field value
-                merge_op = MergeOpFactory.from_field(field)
-                new_value = merge_op.apply(current_value, patch_value)
-                metadata[field.name] = new_value
-
-        # serialize_with_metadata modifies metadata dict, so pass a copy
-        new_full_content = serialize_with_metadata(
-            metadata.copy(),
-            content_template=schema.content_template,
-            extract_context=extract_context,
-        )
+        # Process each URI independently
         for uri in resolved_op.uris:
+            old_content = resolved_op.old_memory_file_content
+            if old_content is None:
+                # If no pre-fetched content, try to read it now
+                try:
+                    content = await viking_fs.read_file(uri, ctx=ctx)
+                    if content:
+                        parsed = parse_memory_file_with_fields(content)
+                        old_content = MemoryFileContent(
+                            uri=uri,
+                            plain_content=parsed.get("content", ""),
+                            memory_fields=parsed
+                        )
+                except Exception:
+                    # File doesn't exist yet, that's okay
+                    pass
+
+            metadata: Dict[str, Any] = dict(resolved_op.memory_fields)
+            # Process fields defined in schema (apply merge_op)
+            for field in schema.fields:
+                if field.name in resolved_op.memory_fields:
+                    patch_value = resolved_op.memory_fields[field.name]
+                    # Get current value for this URI
+                    if old_content is None:
+                        current_value = None
+                    else:
+                        if field.name == "content":
+                            current_value = old_content.plain_content
+                        else:
+                            current_value = old_content.memory_fields.get(
+                                field.name
+                            )
+                    # Use merge_op to process field value
+                    merge_op = MergeOpFactory.from_field(field)
+                    new_value = merge_op.apply(current_value, patch_value)
+                    metadata[field.name] = new_value
+
+            # serialize_with_metadata modifies metadata dict, so pass a copy
+            new_full_content = serialize_with_metadata(
+                metadata.copy(),
+                content_template=schema.content_template,
+                extract_context=extract_context,
+            )
             await viking_fs.write_file(uri, new_full_content, ctx=ctx)
 
     async def _apply_delete(self, uri: str, ctx: RequestContext) -> None:

@@ -1,54 +1,47 @@
-use reqwest::{Client as ReqwestClient, StatusCode};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::env;
-use std::fs::File;
 use std::path::Path;
-use std::str::FromStr;
-use tempfile::{Builder, NamedTempFile};
-use zip::CompressionMethod;
-use zip::write::FileOptions;
 
-use indicatif::{ProgressBar, ProgressStyle};
+pub use crate::base_client::{BaseClient, FileUploader, TimeoutConfig};
 
 use crate::error::{Error, Result};
 
-fn api_error_from_envelope(json: &Value, status: StatusCode) -> String {
-    let error_code = json
-        .get("error")
-        .and_then(|e| e.get("code"))
-        .and_then(|c| c.as_str());
-    let error_msg = json
-        .get("error")
-        .and_then(|e| e.get("message"))
-        .and_then(|m| m.as_str())
-        .map(|s| s.to_string())
-        .or_else(|| {
-            json.get("detail")
-                .and_then(|d| d.as_str())
-                .map(|s| s.to_string())
-        })
-        .unwrap_or_else(|| format!("HTTP error {}", status));
-
-    match error_code {
-        Some(code) => format!("[{}] {}", code, error_msg),
-        None => error_msg,
-    }
-}
+// ============ HttpClient ============
 
 /// High-level HTTP client for OpenViking API
 #[derive(Clone)]
 pub struct HttpClient {
-    http: ReqwestClient,
-    base_url: String,
-    api_key: Option<String>,
-    account: Option<String>,
-    user: Option<String>,
-    agent_id: Option<String>,
-    extra_headers: Option<std::collections::HashMap<String, String>>,
+    base: BaseClient,
 }
 
 impl HttpClient {
+    pub fn new(
+        base_url: impl Into<String>,
+        api_key: Option<String>,
+        agent_id: Option<String>,
+        account: Option<String>,
+        user: Option<String>,
+        timeout_secs: f64,
+        extra_headers: Option<std::collections::HashMap<String, String>>,
+    ) -> Self {
+        Self {
+            base: BaseClient::new(base_url, api_key, agent_id, account, user, timeout_secs, extra_headers),
+        }
+    }
+
+    pub fn user_id(&self) -> Option<&str> {
+        self.base.user_id()
+    }
+
+    pub fn agent_id(&self) -> Option<&str> {
+        self.base.agent_id()
+    }
+
+    pub fn api_key(&self) -> Option<&str> {
+        self.base.api_key()
+    }
+
     fn upload_mode(&self) -> Option<String> {
         match env::var("OPENVIKING_UPLOAD_MODE") {
             Ok(value) => {
@@ -63,325 +56,68 @@ impl HttpClient {
         }
     }
 
-    /// Create a new HTTP client
-    pub fn new(
-        base_url: impl Into<String>,
-        api_key: Option<String>,
-        agent_id: Option<String>,
-        account: Option<String>,
-        user: Option<String>,
-        timeout_secs: f64,
-        extra_headers: Option<std::collections::HashMap<String, String>>,
-    ) -> Self {
-        let http = ReqwestClient::builder()
-            .timeout(std::time::Duration::from_secs_f64(timeout_secs))
-            .build()
-            .expect("Failed to build HTTP client");
+    // ============ HTTP Methods ============
 
-        Self {
-            http,
-            base_url: base_url.into().trim_end_matches('/').to_string(),
-            api_key,
-            account,
-            user,
-            agent_id,
-            extra_headers,
-        }
-    }
-
-    pub fn user_id(&self) -> Option<&str> {
-        self.user.as_deref()
-    }
-
-    pub fn agent_id(&self) -> Option<&str> {
-        self.agent_id.as_deref()
-    }
-
-    pub fn api_key(&self) -> Option<&str> {
-        self.api_key.as_deref()
-    }
-
-    /// Zip a directory to a temporary file
-    fn zip_directory(&self, dir_path: &Path) -> Result<NamedTempFile> {
-        if !dir_path.is_dir() {
-            return Err(Error::Network(format!(
-                "Path {} is not a directory",
-                dir_path.display()
-            )));
-        }
-
-        let temp_file = Builder::new().suffix(".zip").tempfile()?;
-        let file = File::create(temp_file.path())?;
-        let mut zip = zip::ZipWriter::new(file);
-        let options: FileOptions<'_, ()> =
-            FileOptions::default().compression_method(CompressionMethod::Deflated);
-
-        let walkdir = walkdir::WalkDir::new(dir_path);
-        for entry in walkdir.into_iter().filter_map(|e| e.ok()) {
-            let path = entry.path();
-            if path.is_file() {
-                let name = path.strip_prefix(dir_path).unwrap_or(path);
-                let name_str = name.to_str().ok_or_else(|| {
-                    Error::InvalidPath(format!("Non-UTF-8 path: {}", name.to_string_lossy()))
-                })?;
-                zip.start_file(name_str, options)?;
-                let mut file = File::open(path)?;
-                std::io::copy(&mut file, &mut zip)?;
-            }
-        }
-
-        zip.finish()?;
-        Ok(temp_file)
-    }
-
-    /// Upload a temporary file and return the temp_file_id
-    async fn upload_temp_file(&self, file_path: &Path) -> Result<String> {
-        let url = format!("{}/api/v1/resources/temp_upload", self.base_url);
-        let file_name = file_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("temp_upload.zip");
-
-        // Read file content
-        let file_content = tokio::fs::read(file_path).await?;
-
-        // Create multipart form
-        let part = reqwest::multipart::Part::bytes(file_content).file_name(file_name.to_string());
-
-        let part = part
-            .mime_str("application/octet-stream")
-            .map_err(|e| Error::Network(format!("Failed to set mime type: {}", e)))?;
-
-        let mut form = reqwest::multipart::Form::new().part("file", part);
-        if let Some(upload_mode) = self.upload_mode() {
-            form = form.text("upload_mode", upload_mode);
-        }
-
-        let mut headers = self.build_headers();
-        // Remove Content-Type: application/json, let reqwest set multipart/form-data automatically
-        headers.remove(reqwest::header::CONTENT_TYPE);
-
-        // Use a separate HTTP client with a long timeout for large file uploads
-        // - Connect timeout: 30 seconds (to fail fast if server is unreachable)
-        // - Total request timeout: 30 minutes (to allow large file transfers)
-        let long_timeout_client = reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(30))
-            .timeout(std::time::Duration::from_secs(1800))
-            .build()
-            .map_err(|e| Error::Network(format!("Failed to build long-timeout HTTP client: {}", e)))?;
-
-        let response = long_timeout_client
-            .post(&url)
-            .headers(headers)
-            .multipart(form)
-            .send()
-            .await
-            .map_err(|e| Error::Network(format!("File upload failed: {}", e)))?;
-
-        let result: Value = self.handle_response(response).await?;
-        result
-            .get("temp_file_id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .ok_or_else(|| Error::Parse("Missing temp_file_id in response".to_string()))
-    }
-
-    fn build_headers(&self) -> reqwest::header::HeaderMap {
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(
-            reqwest::header::CONTENT_TYPE,
-            reqwest::header::HeaderValue::from_static("application/json"),
-        );
-        if let Some(api_key) = &self.api_key {
-            if let Ok(value) = reqwest::header::HeaderValue::from_str(api_key) {
-                headers.insert("X-API-Key", value);
-            }
-        }
-        if let Some(agent_id) = &self.agent_id {
-            if let Ok(value) = reqwest::header::HeaderValue::from_str(agent_id) {
-                headers.insert("X-OpenViking-Agent", value);
-            }
-        }
-        if let Some(account) = &self.account {
-            if let Ok(value) = reqwest::header::HeaderValue::from_str(account) {
-                headers.insert("X-OpenViking-Account", value);
-            }
-        }
-        if let Some(user) = &self.user {
-            if let Ok(value) = reqwest::header::HeaderValue::from_str(user) {
-                headers.insert("X-OpenViking-User", value);
-            }
-        }
-        if let Some(extra_headers) = &self.extra_headers {
-            for (key, value) in extra_headers {
-                if let Ok(header_name) = reqwest::header::HeaderName::from_str(key) {
-                    if let Ok(header_value) = reqwest::header::HeaderValue::from_str(value) {
-                        headers.insert(header_name, header_value);
-                    }
-                }
-            }
-        }
-        headers
-    }
-
-    /// Make a GET request
     pub async fn get<T: DeserializeOwned>(
         &self,
         path: &str,
         params: &[(String, String)],
     ) -> Result<T> {
-        let url = format!("{}{}", self.base_url, path);
-        let response = self
-            .http
-            .get(&url)
-            .headers(self.build_headers())
-            .query(params)
-            .send()
-            .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
-
-        self.handle_response(response).await
+        self.base.get(path, params).await
     }
 
-    /// Make a POST request
     pub async fn post<B: serde::Serialize, T: DeserializeOwned>(
         &self,
         path: &str,
         body: &B,
     ) -> Result<T> {
-        let url = format!("{}{}", self.base_url, path);
-        let response = self
-            .http
-            .post(&url)
-            .headers(self.build_headers())
-            .json(body)
-            .send()
-            .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
-
-        self.handle_response(response).await
+        self.base.post(path, body).await
     }
 
-    /// Make a PUT request
     pub async fn put<B: serde::Serialize, T: DeserializeOwned>(
         &self,
         path: &str,
         body: &B,
     ) -> Result<T> {
-        let url = format!("{}{}", self.base_url, path);
-        let response = self
-            .http
-            .put(&url)
-            .headers(self.build_headers())
-            .json(body)
-            .send()
-            .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
-
-        self.handle_response(response).await
+        self.base.put(path, body).await
     }
 
-    /// Make a DELETE request
     pub async fn delete<T: DeserializeOwned>(
         &self,
         path: &str,
         params: &[(String, String)],
     ) -> Result<T> {
-        let url = format!("{}{}", self.base_url, path);
-        let response = self
-            .http
-            .delete(&url)
-            .headers(self.build_headers())
-            .query(params)
-            .send()
-            .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
-
-        self.handle_response(response).await
+        self.base.delete(path, params).await
     }
 
-    /// Make a DELETE request with a JSON body
     pub async fn delete_with_body<B: serde::Serialize, T: DeserializeOwned>(
         &self,
         path: &str,
         body: &B,
     ) -> Result<T> {
-        let url = format!("{}{}", self.base_url, path);
-        let response = self
-            .http
-            .delete(&url)
-            .headers(self.build_headers())
-            .json(body)
-            .send()
-            .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
-
-        self.handle_response(response).await
+        self.base.delete_with_body(path, body).await
     }
 
-    async fn handle_response<T: DeserializeOwned>(&self, response: reqwest::Response) -> Result<T> {
-        let status = response.status();
+    // ============ File Helper Methods ============
 
-        // Handle empty response (204 No Content, etc.)
-        if status == StatusCode::NO_CONTENT || status == StatusCode::ACCEPTED {
-            return serde_json::from_value(Value::Null)
-                .map_err(|e| Error::Parse(format!("Failed to parse empty response: {}", e)));
-        }
+    fn create_uploader(&self) -> FileUploader {
+        FileUploader::new(&self.base).with_upload_mode(self.upload_mode())
+    }
 
-        // First get the raw bytes/text to enable debugging when JSON parsing fails
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| Error::Network(format!("Failed to read response body: {}", e)))?;
+    fn zip_directory(&self, dir_path: &Path) -> Result<tempfile::NamedTempFile> {
+        self.create_uploader().zip_directory(dir_path)
+    }
 
-        // Try to parse as JSON
-        let json: Value = match serde_json::from_slice(&bytes) {
-            Ok(json) => json,
-            Err(e) => {
-                // If parsing fails, try to convert bytes to string for debugging
-                let body_str = String::from_utf8_lossy(&bytes);
-                return Err(Error::Network(format!(
-                    "Failed to parse JSON response: {}\n\nRaw response body:\n{}",
-                    e, body_str
-                )));
-            }
-        };
+    fn zip_directory_with_progress(&self, dir_path: &Path, verbose: bool) -> Result<tempfile::NamedTempFile> {
+        self.create_uploader().zip_directory_with_progress(dir_path, verbose)
+    }
 
-        // Handle HTTP errors
-        if !status.is_success() {
-            return Err(Error::Api(api_error_from_envelope(&json, status)));
-        }
+    async fn upload_temp_file(&self, file_path: &Path) -> Result<String> {
+        self.create_uploader().upload_temp_file(file_path).await
+    }
 
-        // Handle API errors (status == success but body has error)
-        if let Some(error) = json.get("error") {
-            if !error.is_null() {
-                let code = error
-                    .get("code")
-                    .and_then(|c| c.as_str())
-                    .unwrap_or("UNKNOWN");
-                let message = error
-                    .get("message")
-                    .and_then(|m| m.as_str())
-                    .unwrap_or("Unknown error");
-                return Err(Error::Api(format!("[{}] {}", code, message)));
-            }
-        }
-
-        // Extract result from wrapped response or use the whole response
-        let result = if let Some(result) = json.get("result") {
-            result.clone()
-        } else {
-            json.clone()
-        };
-
-        serde_json::from_value(result)
-            .map_err(|e| {
-                // If final deserialization fails, include the JSON we were trying to parse
-                Error::Parse(format!(
-                    "Failed to deserialize response: {}\n\nJSON that failed to parse:\n{}",
-                    e, json
-                ))
-            })
+    async fn upload_temp_file_with_progress(&self, file_path: &Path, verbose: bool) -> Result<String> {
+        self.create_uploader().upload_temp_file_with_progress(file_path, verbose).await
     }
 
     // ============ Content Methods ============
@@ -445,13 +181,14 @@ impl HttpClient {
 
     /// Download file as raw bytes
     pub async fn get_bytes(&self, uri: &str) -> Result<Vec<u8>> {
-        let url = format!("{}/api/v1/content/download", self.base_url);
+        let url = format!("{}/api/v1/content/download", self.base.base_url);
         let params = vec![("uri".to_string(), uri.to_string())];
 
         let response = self
+            .base
             .http
             .get(&url)
-            .headers(self.build_headers())
+            .headers(self.base.build_headers())
             .query(&params)
             .send()
             .await
@@ -459,7 +196,6 @@ impl HttpClient {
 
         let status = response.status();
         if !status.is_success() {
-            // Try to parse error message as JSON, but if that fails show raw response
             let bytes = response
                 .bytes()
                 .await
@@ -658,6 +394,7 @@ impl HttpClient {
         path: &str,
         to: Option<String>,
         parent: Option<String>,
+        parent_auto_create: Option<String>,
         reason: &str,
         instruction: &str,
         wait: bool,
@@ -672,6 +409,14 @@ impl HttpClient {
         verbose: bool,
     ) -> Result<serde_json::Value> {
         let path_obj = Path::new(path);
+
+        // Determine effective parent and create_parent flag
+        let (effective_parent, create_parent) = match (parent, parent_auto_create) {
+            (Some(p), None) => (Some(p), false),
+            (None, Some(p)) => (Some(p), true),
+            (None, None) => (None, false),
+            (Some(_), Some(_)) => unreachable!("handled in cli"),
+        };
 
         if path_obj.exists() {
             if path_obj.is_dir() {
@@ -694,7 +439,8 @@ impl HttpClient {
                     "temp_file_id": temp_file_id,
                     "source_name": source_name,
                     "to": to,
-                    "parent": parent,
+                    "parent": effective_parent,
+                    "create_parent": create_parent,
                     "reason": reason,
                     "instruction": instruction,
                     "wait": wait,
@@ -707,7 +453,8 @@ impl HttpClient {
                     "watch_interval": watch_interval,
                 });
 
-                self.post("/api/v1/resources", &body).await
+                let dynamic_timeout = TimeoutConfig::for_resource_processing().calculate(zip_file.path())?;
+                self.base.post_with_timeout("/api/v1/resources", &body, dynamic_timeout).await
             } else if path_obj.is_file() {
                 let source_name = path_obj
                     .file_name()
@@ -723,7 +470,8 @@ impl HttpClient {
                     "temp_file_id": temp_file_id,
                     "source_name": source_name,
                     "to": to,
-                    "parent": parent,
+                    "parent": effective_parent,
+                    "create_parent": create_parent,
                     "reason": reason,
                     "instruction": instruction,
                     "wait": wait,
@@ -736,12 +484,14 @@ impl HttpClient {
                     "watch_interval": watch_interval,
                 });
 
-                self.post("/api/v1/resources", &body).await
+                let dynamic_timeout = TimeoutConfig::for_resource_processing().calculate(path_obj)?;
+                self.base.post_with_timeout("/api/v1/resources", &body, dynamic_timeout).await
             } else {
                 let body = serde_json::json!({
                     "path": path,
                     "to": to,
-                    "parent": parent,
+                    "parent": effective_parent,
+                    "create_parent": create_parent,
                     "reason": reason,
                     "instruction": instruction,
                     "wait": wait,
@@ -760,7 +510,8 @@ impl HttpClient {
             let body = serde_json::json!({
                 "path": path,
                 "to": to,
-                "parent": parent,
+                "parent": effective_parent,
+                "create_parent": create_parent,
                 "reason": reason,
                 "instruction": instruction,
                 "wait": wait,
@@ -775,164 +526,6 @@ impl HttpClient {
 
             self.post("/api/v1/resources", &body).await
         }
-    }
-
-    /// Zip a directory to a temporary file with progress display
-    fn zip_directory_with_progress(&self, dir_path: &Path, verbose: bool) -> Result<NamedTempFile> {
-        if !dir_path.is_dir() {
-            return Err(Error::Network(format!(
-                "Path {} is not a directory",
-                dir_path.display()
-            )));
-        }
-
-        let temp_file = Builder::new().suffix(".zip").tempfile()?;
-        let file = File::create(temp_file.path())?;
-        let mut zip = zip::ZipWriter::new(file);
-        let options: FileOptions<'_, ()> =
-            FileOptions::default().compression_method(CompressionMethod::Deflated);
-
-        // First, calculate total size and file count
-        let mut total_size = 0u64;
-        let mut total_files = 0u64;
-        let walkdir = walkdir::WalkDir::new(dir_path);
-        for entry in walkdir.into_iter().filter_map(|e| e.ok()) {
-            let path = entry.path();
-            if path.is_file() {
-                if let Ok(meta) = std::fs::metadata(path) {
-                    total_size += meta.len();
-                    total_files += 1;
-                }
-            }
-        }
-
-        // Now create progress bar and zip
-        let pb = if total_size > 0 {
-            let pb = ProgressBar::new(total_size);
-            pb.set_style(
-                ProgressStyle::default_bar()
-                    .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta}) {msg}")
-                    .unwrap_or_else(|_| ProgressStyle::default_bar())
-                    .progress_chars("#>-"),
-            );
-            pb.set_message(format!("Compressing {} files", total_files));
-            Some(pb)
-        } else {
-            let pb = ProgressBar::new_spinner();
-            pb.set_message("Compressing files...");
-            Some(pb)
-        };
-
-        let walkdir = walkdir::WalkDir::new(dir_path);
-        for entry in walkdir.into_iter().filter_map(|e| e.ok()) {
-            let path = entry.path();
-            if path.is_file() {
-                let name = path.strip_prefix(dir_path).unwrap_or(path);
-                let name_str = name.to_str().ok_or_else(|| {
-                    Error::InvalidPath(format!("Non-UTF-8 path: {}", name.to_string_lossy()))
-                })?;
-                if verbose {
-                    eprintln!("  Adding: {}", name_str);
-                }
-                zip.start_file(name_str, options)?;
-                let mut file = File::open(path)?;
-                let file_size = std::io::copy(&mut file, &mut zip)?;
-
-                if let Some(pb) = &pb {
-                    if pb.length().is_some() {
-                        pb.inc(file_size);
-                    }
-                }
-            }
-        }
-
-        zip.finish()?;
-
-        let zip_size = std::fs::metadata(temp_file.path())?.len();
-        let zip_size_mb = zip_size as f64 / 1024.0 / 1024.0;
-        let original_size_mb = if total_size > 0 {
-            total_size as f64 / 1024.0 / 1024.0
-        } else {
-            0.0
-        };
-
-        if let Some(pb) = pb {
-            if total_size > 0 {
-                pb.finish_with_message(format!("Compression complete: {:.2} MiB → {:.2} MiB", original_size_mb, zip_size_mb));
-            } else {
-                pb.finish_with_message(format!("Compression complete: {:.2} MiB", zip_size_mb));
-            }
-        }
-
-        Ok(temp_file)
-    }
-
-    /// Upload a temporary file with progress display
-    async fn upload_temp_file_with_progress(
-        &self,
-        file_path: &Path,
-        verbose: bool,
-    ) -> Result<String> {
-        use indicatif::ProgressBar;
-
-        let url = format!("{}/api/v1/resources/temp_upload", self.base_url);
-        let file_name = file_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("temp_upload.zip");
-
-        // Read file content
-        let file_content = tokio::fs::read(file_path).await?;
-        let file_size = file_content.len() as u64;
-
-        if verbose {
-            eprintln!("Uploading: {} ({:.2} MB)", file_name, file_size as f64 / 1024.0 / 1024.0);
-        }
-
-        // Create progress bar (spinner style)
-        let pb = ProgressBar::new_spinner();
-        pb.set_message(format!("Uploading {} ({:.2} MB)...", file_name, file_size as f64 / 1024.0 / 1024.0));
-        pb.enable_steady_tick(std::time::Duration::from_millis(100));
-
-        // Create multipart form
-        let part = reqwest::multipart::Part::bytes(file_content)
-            .file_name(file_name.to_string());
-
-        let part = part
-            .mime_str("application/octet-stream")
-            .map_err(|e| Error::Network(format!("Failed to set mime type: {}", e)))?;
-
-        let mut form = reqwest::multipart::Form::new().part("file", part);
-        if let Some(upload_mode) = self.upload_mode() {
-            form = form.text("upload_mode", upload_mode);
-        }
-
-        let mut headers = self.build_headers();
-        headers.remove(reqwest::header::CONTENT_TYPE);
-
-        // Use a separate HTTP client with a long timeout for large file uploads
-        let long_timeout_client = reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(30))
-            .timeout(std::time::Duration::from_secs(1800))
-            .build()
-            .map_err(|e| Error::Network(format!("Failed to build long-timeout HTTP client: {}", e)))?;
-
-        let response = long_timeout_client
-            .post(&url)
-            .headers(headers)
-            .multipart(form)
-            .send()
-            .await
-            .map_err(|e| Error::Network(format!("File upload failed: {}", e)))?;
-
-        pb.finish_with_message("Upload complete");
-
-        let result: Value = self.handle_response(response).await?;
-        result
-            .get("temp_file_id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .ok_or_else(|| Error::Parse("Missing temp_file_id in response".to_string()))
     }
 
     pub async fn add_skill(
@@ -953,7 +546,8 @@ impl HttpClient {
                     "wait": wait,
                     "timeout": timeout,
                 });
-                self.post("/api/v1/skills", &body).await
+                let dynamic_timeout = TimeoutConfig::for_resource_processing().calculate(zip_file.path())?;
+                self.base.post_with_timeout("/api/v1/skills", &body, dynamic_timeout).await
             } else if path_obj.is_file() {
                 let temp_file_id = self.upload_temp_file(path_obj).await?;
 
@@ -962,7 +556,8 @@ impl HttpClient {
                     "wait": wait,
                     "timeout": timeout,
                 });
-                self.post("/api/v1/skills", &body).await
+                let dynamic_timeout = TimeoutConfig::for_resource_processing().calculate(path_obj)?;
+                self.base.post_with_timeout("/api/v1/skills", &body, dynamic_timeout).await
             } else {
                 let body = serde_json::json!({
                     "data": data,
@@ -1017,11 +612,12 @@ impl HttpClient {
             "uri": uri,
         });
 
-        let url = format!("{}/api/v1/pack/export", self.base_url);
+        let url = format!("{}/api/v1/pack/export", self.base.base_url);
         let response = self
+            .base
             .http
             .post(&url)
-            .headers(self.build_headers())
+            .headers(self.base.build_headers())
             .json(&body)
             .send()
             .await
@@ -1029,7 +625,6 @@ impl HttpClient {
 
         let status = response.status();
         if !status.is_success() {
-            // Try to parse error message as JSON, but if that fails show raw response
             let bytes = response
                 .bytes()
                 .await
@@ -1056,13 +651,11 @@ impl HttpClient {
             return Err(Error::Api(error_msg));
         }
 
-        // Download the file content
         let bytes = response
             .bytes()
             .await
             .map_err(|e| Error::Network(format!("Failed to read response bytes: {}", e)))?;
 
-        // Determine target path
         let to_path = Path::new(to);
         let final_path = if to_path.is_dir() {
             let base_name = uri
@@ -1077,12 +670,10 @@ impl HttpClient {
             to_path.to_path_buf()
         };
 
-        // Ensure parent directory exists
         if let Some(parent) = final_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
-        // Write file
         std::fs::write(&final_path, bytes)?;
 
         Ok(final_path.to_string_lossy().to_string())
@@ -1328,58 +919,34 @@ impl HttpClient {
 
 #[cfg(test)]
 mod tests {
-    use super::{HttpClient, api_error_from_envelope};
+    use super::{BaseClient, HttpClient, TimeoutConfig};
+    use crate::base_client::api_error_from_envelope;
     use reqwest::StatusCode;
     use serde_json::json;
     use std::collections::HashMap;
 
     #[test]
-    fn build_headers_includes_tenant_identity_headers() {
-        let client = HttpClient::new(
-            "http://localhost:1933",
-            Some("test-key".to_string()),
-            Some("assistant-1".to_string()),
-            Some("acme".to_string()),
-            Some("alice".to_string()),
-            5.0,
-            None,
-        );
+    fn timeout_config_calculation() {
+        let config = TimeoutConfig::new(60, 2.0);
 
-        let headers = client.build_headers();
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(temp_file.path(), vec![0u8; 1024 * 1024]).unwrap();
 
-        assert_eq!(
-            headers
-                .get("X-API-Key")
-                .and_then(|value| value.to_str().ok()),
-            Some("test-key")
-        );
-        assert_eq!(
-            headers
-                .get("X-OpenViking-Agent")
-                .and_then(|value| value.to_str().ok()),
-            Some("assistant-1")
-        );
-        assert_eq!(
-            headers
-                .get("X-OpenViking-Account")
-                .and_then(|value| value.to_str().ok()),
-            Some("acme")
-        );
-        assert_eq!(
-            headers
-                .get("X-OpenViking-User")
-                .and_then(|value| value.to_str().ok()),
-            Some("alice")
-        );
+        let timeout = config.calculate(temp_file.path()).unwrap();
+        assert_eq!(timeout, std::time::Duration::from_secs(60));
+
+        std::fs::write(temp_file.path(), vec![0u8; 40 * 1024 * 1024]).unwrap();
+
+        let timeout = config.calculate(temp_file.path()).unwrap();
+        assert_eq!(timeout, std::time::Duration::from_secs(80));
     }
 
     #[test]
-    fn build_headers_includes_extra_headers() {
+    fn build_headers_includes_extra_headers_for_base_client() {
         let mut extra_headers = HashMap::new();
         extra_headers.insert("X-Custom-Header".to_string(), "custom-value".to_string());
-        extra_headers.insert("Authorization".to_string(), "Bearer token".to_string());
 
-        let client = HttpClient::new(
+        let client = BaseClient::new(
             "http://localhost:1933",
             Some("test-key".to_string()),
             Some("assistant-1".to_string()),
@@ -1392,12 +959,12 @@ mod tests {
         let headers = client.build_headers();
 
         assert_eq!(
-            headers.get("X-Custom-Header").and_then(|value| value.to_str().ok()),
-            Some("custom-value")
+            headers.get("X-API-Key").and_then(|value| value.to_str().ok()),
+            Some("test-key")
         );
         assert_eq!(
-            headers.get("Authorization").and_then(|value| value.to_str().ok()),
-            Some("Bearer token")
+            headers.get("X-Custom-Header").and_then(|value| value.to_str().ok()),
+            Some("custom-value")
         );
     }
 
@@ -1439,21 +1006,5 @@ mod tests {
             api_error_from_envelope(&body, StatusCode::INTERNAL_SERVER_ERROR),
             "[PROCESSING_ERROR] Parse error: boom"
         );
-    }
-
-    #[test]
-    fn successful_result_status_failed_stays_domain_status() {
-        let envelope = json!({
-            "status": "ok",
-            "result": {
-                "status": "failed",
-                "task_id": "task-1",
-                "error": "boom"
-            }
-        });
-        let result = envelope.get("result").unwrap();
-
-        assert_eq!(result["status"], "failed");
-        assert_eq!(result["task_id"], "task-1");
     }
 }

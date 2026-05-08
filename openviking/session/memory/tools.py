@@ -119,7 +119,7 @@ class MemoryTool(ABC):
         Execute the tool with given parameters.
 
         Args:
-            ctx: Tool context
+            ctx: Tool context (contains viking_fs)
             **kwargs: Tool-specific parameters
 
         Returns:
@@ -330,6 +330,11 @@ def get_tool(name: str) -> Optional[MemoryTool]:
 
 # Tools exposed to LLM (not all registered tools are exposed)
 LLM_TOOLS = ["read"]
+
+
+def get_tool_schemas() -> List[Dict[str, Any]]:
+    """Get tools exposed to LLM in OpenAI function schema format."""
+    return [tool.to_schema() for tool in MEMORY_TOOLS_REGISTRY.values() if tool.name in LLM_TOOLS]
 
 
 

@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict
 from starlette.background import BackgroundTask
 
+from openviking.core.path_variables import resolve_path_variables
 from openviking.server.auth import get_request_context, require_auth_root_or_admin
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
@@ -53,16 +54,19 @@ async def export_ovpack(
     """Export context as .ovpack file and stream it to client."""
     service = get_service()
 
+    # Resolve path variables
+    uri = resolve_path_variables(body.uri)
+
     # Create temp file for export
     temp_dir = tempfile.gettempdir()
     temp_file = os.path.join(temp_dir, f"export_{os.urandom(16).hex()}.ovpack")
 
     try:
         # Export to temp file
-        await service.pack.export_ovpack(body.uri, temp_file, ctx=ctx)
+        await service.pack.export_ovpack(uri, temp_file, ctx=ctx)
 
         # Determine filename from URI
-        base_name = body.uri.strip().rstrip("/").split("/")[-1]
+        base_name = uri.strip().rstrip("/").split("/")[-1]
         if not base_name:
             base_name = "export"
         filename = f"{base_name}.ovpack"
@@ -97,10 +101,14 @@ async def import_ovpack(
     service = get_service()
     store = TempUploadStore.build(request.app.state.config)
     resolved = await store.resolve_for_consume(body.temp_file_id, ctx)
+
+    # Resolve path variables
+    parent = resolve_path_variables(body.parent)
+
     try:
         result = await service.pack.import_ovpack(
             resolved.local_path,
-            body.parent,
+            parent,
             ctx=ctx,
             force=body.force,
             vectorize=body.vectorize,
@@ -112,4 +120,5 @@ async def import_ovpack(
         await store.mark_consumed(resolved, ctx)
     finally:
         await resolved.cleanup()
+
     return Response(status="ok", result={"uri": result})

@@ -1,3 +1,4 @@
+mod base_client;
 mod client;
 mod commands;
 mod config;
@@ -184,6 +185,9 @@ enum Commands {
         /// Target parent URI (must already exist and be a directory) (cannot be used with --to)
         #[arg(long)]
         parent: Option<String>,
+        /// Target parent URI (create parent directory if it does not exist) (cannot be used with --to or --parent)
+        #[arg(short = 'p', long = "parent-auto-create")]
+        parent_auto_create: Option<String>,
         /// Reason for import
         #[arg(long, default_value = "")]
         reason: String,
@@ -983,6 +987,7 @@ async fn main() {
             path,
             to,
             parent,
+            parent_auto_create,
             reason,
             instruction,
             wait,
@@ -998,6 +1003,7 @@ async fn main() {
                 path,
                 to,
                 parent,
+                parent_auto_create,
                 reason,
                 instruction,
                 wait,

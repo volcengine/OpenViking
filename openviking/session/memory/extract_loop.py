@@ -325,7 +325,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
         for op in upsert_operations:
             for uri in op.uris:
                 old_content = self.context_provider.read_file_contents.get(uri)
-                if old_content:
+                if old_content and op.old_memory_file_content is None:
                     op.old_memory_file_content = old_content
                     break
 
@@ -410,7 +410,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
         # Call LLM with tools - use tools from strategy
         tools = None
         tool_choice = None
-        if not self._disable_tools_for_iteration:
+        if not self._disable_tools_for_iteration and self._tool_schemas:
             tools = self._tool_schemas
             tool_choice = "auto"
         with bind_telemetry_stage("memory_extract"):

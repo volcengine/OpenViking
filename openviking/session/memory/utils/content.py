@@ -80,9 +80,6 @@ def serialize_with_metadata(
             # If template rendering fails, use content as-is
             pass
 
-    # Restore metadata (we popped content earlier)
-    # Note: metadata dict is modified in place, caller should be aware
-
     # Clean metadata - remove None values and memory_type
     clean_metadata = {k: v for k, v in metadata.items() if v is not None and k != "memory_type"}
 

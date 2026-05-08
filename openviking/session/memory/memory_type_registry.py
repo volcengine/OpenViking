@@ -204,6 +204,7 @@ class MemoryTypeRegistry:
             directory=data.get("directory", ""),
             enabled=data.get("enabled", data.get("enable", True)),
             operation_mode=data.get("operation_mode", "upsert"),
+            agent_only=data.get("agent_only", False),
             overview_template=data.get("overview_template"),
         )
 

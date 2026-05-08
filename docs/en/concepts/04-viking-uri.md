@@ -108,6 +108,81 @@ viking://session/{session_id}/tools/          # Tool executions
 viking://session/{session_id}/history/        # Archived history
 ```
 
+## Path Variables
+
+Viking URI supports path variables for dynamic path generation. This is especially useful for organizing time-series data like emails, logs, daily reports, etc.
+
+### Variable Syntax
+
+```
+{namespace:key}
+```
+
+- **namespace**: Variable provider namespace (e.g., `calendar`, `env`, `user`)
+- **key**: Variable name within the namespace
+
+### Calendar Variables
+
+The `calendar` namespace provides date-related variables:
+
+| Variable | Description | Example (2026-05-07) |
+|----------|-------------|----------------------|
+| `{calendar:today}` | Full date path | `2026/05/07` |
+| `{calendar:yesterday}` | Yesterday's date path | `2026/05/06` |
+| `{calendar:tomorrow}` | Tomorrow's date path | `2026/05/08` |
+| `{calendar:year}` | Year | `2026` |
+| `{calendar:month}` | Month with leading zero | `05` |
+| `{calendar:day}` | Day with leading zero | `07` |
+| `{calendar:ym}` | Year/month | `2026/05` |
+| `{calendar:quarter}` | Quarter (Q1-Q4) | `Q2` |
+| `{calendar:yq}` | Year/quarter | `2026/Q2` |
+| `{calendar:week}` | ISO week number with leading zero | `18` |
+| `{calendar:yw}` | Year/ISO week | `2026/w18` |
+
+### Usage Examples
+
+```python
+# Organize emails by date
+viking://resources/emails/{calendar:today}/inbox
+# Renders to: viking://resources/emails/2026/05/07/inbox
+
+# View yesterday's logs
+viking://resources/logs/{calendar:yesterday}/app.log
+# Renders to: viking://resources/logs/2026/05/06/app.log
+
+# Pre-upload tomorrow's tasks
+viking://resources/tasks/{calendar:tomorrow}/todo.md
+# Renders to: viking://resources/tasks/2026/05/08/todo.md
+
+# Monthly logs
+viking://resources/logs/{calendar:year}/{calendar:month}/app.log
+# Renders to: viking://resources/logs/2026/05/app.log
+
+# Daily snapshots
+viking://resources/snapshots/{calendar:today}/
+# Renders to: viking://resources/snapshots/2026/05/07/
+```
+
+### Resolution
+
+Path variables are resolved **server-side** at the time of API execution. The CLI/SDK passes the URI template as-is, and the server renders it to a concrete path based on the current context (time, authenticated user, etc.).
+
+### Use with CLI
+
+```bash
+# Add today's emails, --parent-auto-create can be shortened to -p
+ov add-resource --parent-auto-create "viking://resources/emails/{calendar:today}/inbox" ./emails/*.eml
+
+# Read yesterday's log
+ov read "viking://resources/logs/{calendar:yesterday}/app.log"
+
+# Prep tomorrow's tasks
+ov write --uri "viking://resources/tasks/{calendar:tomorrow}/todo.md" --content "Plan the day"
+
+# Upload monthly report, --parent-auto-create can be shortened to -p
+ov add-resource --parent-auto-create "viking://resources/reports/{calendar:ym}" ./report.pdf
+```
+
 ## Directory Structure
 
 ```

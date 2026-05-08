@@ -1173,7 +1173,7 @@ class VikingFS:
                     raise mapped from exc
                 raise
             # Fallback to default if .abstract.md doesn't exist
-            return f"# {uri}\n\n[Directory abstract is not ready]"
+            return f"# {uri} [Directory abstract is not ready]"
 
         if self._encryptor:
             real_ctx = self._ctx_or_default(ctx)

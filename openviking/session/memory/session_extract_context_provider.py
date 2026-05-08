@@ -208,8 +208,11 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         pre_fetch_messages = []
         pre_fetch_messages.append(self._build_conversation_message())
 
-        # 触发 registry 加载
-        schemas = self._get_registry().list_all(include_disabled=False)
+        # 触发 registry 加载，过滤掉 agent_only 的 schema（trajectory/experience 只由 agent memory 处理）
+        schemas = [
+            s for s in self._get_registry().list_all(include_disabled=False)
+            if not getattr(s, "agent_only", False)
+        ]
 
         from openviking.server.identity import ToolContext
 
@@ -347,7 +350,10 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
 
     def get_memory_schemas(self, ctx: RequestContext) -> List[Any]:
         """获取需要参与的 memory schemas（内部自动加载）"""
-        return self._get_registry().list_all(include_disabled=False)
+        return [
+            s for s in self._get_registry().list_all(include_disabled=False)
+            if not getattr(s, "agent_only", False)
+        ]
 
     def get_schema_directories(self) -> List[str]:
         """返回需要加载的 schema 目录"""

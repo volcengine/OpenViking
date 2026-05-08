@@ -7,6 +7,7 @@ import asyncio
 from fastapi import APIRouter, Body
 from pydantic import BaseModel
 
+from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_viking_uri
 from openviking.server.auth import require_role
 from openviking.server.dependencies import get_service
@@ -48,7 +49,8 @@ async def reindex(
     from openviking.service.task_tracker import get_task_tracker
     from openviking.storage.viking_fs import get_viking_fs
 
-    uri = validate_viking_uri(body.uri)
+    uri = resolve_path_variables(body.uri)
+    uri = validate_viking_uri(uri)
     viking_fs = get_viking_fs()
 
     # Validate URI exists
