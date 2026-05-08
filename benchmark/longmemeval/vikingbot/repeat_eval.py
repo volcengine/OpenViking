@@ -48,10 +48,10 @@ def parse_args() -> argparse.Namespace:
         help="Parallel request count for judge.py, default: 5",
     )
     parser.add_argument(
-        "--answer-mode",
-        choices=["single-search-context"],
-        default="single-search-context",
-        help="Answer generation mode passed through to run_eval.py, default: single-search-context",
+        "--single-search-context-limit",
+        type=int,
+        default=10,
+        help="Number of retrieved memory files to read into the answer prompt, default: 10",
     )
     return parser.parse_args()
 
@@ -228,8 +228,8 @@ def main() -> int:
                 str(args.threads),
                 "--timeout",
                 str(args.timeout),
-                "--answer-mode",
-                args.answer_mode,
+                "--single-search-context-limit",
+                str(args.single_search_context_limit),
             ]
         )
         run_cmd(

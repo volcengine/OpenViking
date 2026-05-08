@@ -127,7 +127,7 @@ python benchmark/longmemeval/vikingbot/run_eval.py \
   --output result/longmemeval_single_search_context.csv \
   --threads 4 \
   --timeout 300 \
-  --single-search-context-limit 30
+  --single-search-context-limit 10
 
 python benchmark/longmemeval/vikingbot/judge.py \
   --input result/longmemeval_single_search_context.csv \
@@ -179,8 +179,8 @@ python benchmark/longmemeval/vikingbot/stat_judge_result.py \
 
 1. 用 question 作为 query。
 2. 在 `viking://user/<sample_user_id>/memories` 下 search。
-3. fetch limit 固定为 100。
-4. 取前 `--single-search-context-limit` 个 URI，默认 30。
+3. 直接按 `--single-search-context-limit` 召回 URI，默认 10。
+4. 取召回 URI 作为 context。
 5. 逐个 `read` 文件内容。
 6. 把 memory 内容拼入 LongMemEval answer prompt。
 7. 单轮调用回答模型。

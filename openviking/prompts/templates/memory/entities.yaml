@@ -5,7 +5,7 @@ description: |
   Entity should be rich and distributed - avoid putting all info in one entity.
 directory: "viking://user/{{ user_space }}/memories/entities"
 filename_template: "{{ category }}/{{ name }}.md"
-enabled: true
+enabled: false
 
 fields:
   - name: category

@@ -23,6 +23,7 @@ except ModuleNotFoundError:
 
 LONGMEMEVAL_TIME_FORMAT = "%Y/%m/%d (%a) %H:%M"
 DEFAULT_SINGLE_SEARCH_CONTEXT_LIMIT = 10
+DEFAULT_SINGLE_SEARCH_RERANK_LIMIT = 10
 
 
 def get_token_encoding_name(model_name: str | None = None) -> str:
@@ -220,6 +221,68 @@ def count_retrieved_memory_content_tokens(
     )
 
 
+def build_single_search_reranker() -> Any | None:
+    from openviking.models.rerank import RerankClient
+    from openviking_cli.utils.config import get_openviking_config
+
+    rerank_config = get_openviking_config().rerank
+    if not rerank_config or not rerank_config.is_available():
+        return None
+    return RerankClient.from_config(rerank_config)
+
+
+def _single_search_rerank_document(context: dict[str, Any]) -> str:
+    content = str(context.get("content", "") or "")
+    if content and not content.startswith("[READ ERROR]"):
+        return content
+    return str(context.get("abstract", "") or "")
+
+
+def rerank_single_search_contexts(
+    question: str,
+    contexts: list[dict[str, Any]],
+    reranker: Any | None,
+    limit: int = DEFAULT_SINGLE_SEARCH_RERANK_LIMIT,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if not reranker or len(contexts) <= 1:
+        return contexts, []
+
+    documents = [_single_search_rerank_document(context) for context in contexts]
+    try:
+        scores = reranker.rerank_batch(question, documents)
+    except Exception:
+        return contexts, []
+
+    if not scores or len(scores) != len(contexts):
+        return contexts, []
+
+    ranked_contexts = []
+    rerank_scores = []
+    for context, score in zip(contexts, scores, strict=True):
+        if not isinstance(score, (int, float)):
+            return contexts, []
+        next_context = dict(context)
+        next_context["rerank_score"] = float(score)
+        ranked_contexts.append(next_context)
+        rerank_scores.append(
+            {
+                "uri": str(context.get("uri", "")),
+                "score": float(score),
+                "raw_rank": context.get("raw_rank"),
+            }
+        )
+
+    ranked_contexts.sort(
+        key=lambda context: (
+            context.get("rerank_score", 0.0),
+            -int(context.get("raw_rank", 0) or 0),
+        ),
+        reverse=True,
+    )
+    selected_contexts = ranked_contexts[: max(1, limit)]
+    return selected_contexts, rerank_scores
+
+
 def build_single_search_vlm() -> Any:
     from openviking.models.vlm import VLMFactory
     from openviking_cli.utils.config import get_openviking_config
@@ -282,7 +345,7 @@ def run_single_search_context_answer(
             search_result,
             limit=single_search_context_limit,
         )
-        context_uris = [context["uri"] for context in contexts]
+        retrieved_uris = [context["uri"] for context in contexts]
 
         for context in contexts:
             uri = context["uri"]
@@ -294,6 +357,17 @@ def run_single_search_context_answer(
                 )
             except Exception as exc:
                 context["content"] = f"[READ ERROR] {exc}"
+
+        reranker = build_single_search_reranker()
+        rerank_enabled = reranker is not None
+        rerank_limit = DEFAULT_SINGLE_SEARCH_RERANK_LIMIT
+        contexts, rerank_scores = rerank_single_search_contexts(
+            question=question,
+            contexts=contexts,
+            reranker=reranker,
+            limit=rerank_limit,
+        )
+        context_uris = [context["uri"] for context in contexts]
 
         prompt = build_single_search_context_prompt(
             question=question,
@@ -317,9 +391,22 @@ def run_single_search_context_answer(
             print(f"memory_content_tokens: {memory_prompt_tokens}", flush=True)
             print(f"memory_content_chars: {memory_chars}", flush=True)
             print(f"memory_tokenizer: {memory_tokenizer}", flush=True)
+            print(f"rerank_enabled: {rerank_enabled}", flush=True)
+            if rerank_enabled:
+                print(f"rerank_limit: {rerank_limit}", flush=True)
+            print("retrieved_uris:", flush=True)
+            for uri in retrieved_uris:
+                print(f"  {uri}", flush=True)
             print("context_uris:", flush=True)
             for uri in context_uris:
                 print(f"  {uri}", flush=True)
+            if rerank_scores:
+                print("rerank_scores:", flush=True)
+                for item in rerank_scores:
+                    print(
+                        f"  score={item['score']} raw_rank={item.get('raw_rank')} uri={item['uri']}",
+                        flush=True,
+                    )
             print("===== SINGLE SEARCH DEBUG END =====", flush=True)
         raw_response = vlm.get_completion(prompt)
         response = _response_text(raw_response)
@@ -341,7 +428,11 @@ def run_single_search_context_answer(
             [
                 {
                     "iteration": 1,
+                    "retrieved_uris": retrieved_uris,
                     "context_uris": context_uris,
+                    "rerank_enabled": rerank_enabled,
+                    "rerank_limit": rerank_limit if rerank_enabled else 0,
+                    "rerank_scores": rerank_scores,
                 }
             ],
         )
@@ -356,7 +447,11 @@ def run_single_search_context_answer(
             [
                 {
                     "iteration": 1,
+                    "retrieved_uris": [],
                     "context_uris": [],
+                    "rerank_enabled": False,
+                    "rerank_limit": 0,
+                    "rerank_scores": [],
                 }
             ],
         )
