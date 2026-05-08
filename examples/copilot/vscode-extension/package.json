@@ -52,6 +52,13 @@
         "label": "OpenViking"
       }
     ],
+    "commands": [
+      {
+        "command": "openviking.setApiKey",
+        "title": "OpenViking: Set API Key",
+        "category": "OpenViking"
+      }
+    ],
     "configuration": {
       "title": "OpenViking",
       "properties": {
@@ -63,7 +70,7 @@
         "openviking.apiKey": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Bearer token for the OpenViking server. **Prefer the `OpenViking: Set API Key` command** (writes to VS Code SecretStorage) over inline values here."
+          "markdownDescription": "**⚠️ Prefer the `OpenViking: Set API Key` command** (writes to VS Code SecretStorage). Inline values here are honoured for backwards compatibility but can leak through git, settings sync, or screen sharing. The SecretStorage value, when present, takes precedence over this setting."
         },
         "openviking.account": {
           "type": "string",
@@ -85,15 +92,113 @@
           "default": true,
           "markdownDescription": "Inject relevant OpenViking memories at the top of each user turn."
         },
+        "openviking.recallLimit": {
+          "type": "number",
+          "default": 6,
+          "minimum": 1,
+          "markdownDescription": "Maximum number of memories injected per turn."
+        },
+        "openviking.recallTokenBudget": {
+          "type": "number",
+          "default": 2000,
+          "minimum": 200,
+          "markdownDescription": "Token budget for inline content. Items beyond the budget degrade to URI-only hints."
+        },
+        "openviking.recallMaxContentChars": {
+          "type": "number",
+          "default": 500,
+          "minimum": 50,
+          "markdownDescription": "Per-item character cap before content is truncated with `...`."
+        },
+        "openviking.recallPreferAbstract": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Prefer the item's abstract over fetching full content (fewer round-trips, less detail)."
+        },
+        "openviking.scoreThreshold": {
+          "type": "number",
+          "default": 0.35,
+          "minimum": 0,
+          "maximum": 1,
+          "markdownDescription": "Minimum relevance score in `[0, 1]` to include a hit."
+        },
+        "openviking.minQueryLength": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "markdownDescription": "Skip recall for queries shorter than this many characters."
+        },
         "openviking.autoCapture": {
           "type": "boolean",
           "default": true,
           "markdownDescription": "Capture chat turns into OpenViking after each response."
         },
+        "openviking.captureMode": {
+          "type": "string",
+          "default": "semantic",
+          "enum": ["semantic", "keyword"],
+          "markdownDescription": "`semantic` (always capture) or `keyword` (trigger-based capture)."
+        },
+        "openviking.captureMaxLength": {
+          "type": "number",
+          "default": 24000,
+          "minimum": 200,
+          "markdownDescription": "Reject turns whose sanitised text length exceeds this. Storing a half-truncated message is worse than skipping it."
+        },
+        "openviking.captureAssistantTurns": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Include assistant turns in the capture stream. Set to `false` for user-only mode."
+        },
+        "openviking.commitTokenThreshold": {
+          "type": "number",
+          "default": 20000,
+          "minimum": 1000,
+          "markdownDescription": "Pending-token threshold that triggers a commit. Lower values produce archives faster."
+        },
+        "openviking.resumeContextBudget": {
+          "type": "number",
+          "default": 32000,
+          "minimum": 1024,
+          "markdownDescription": "Token budget for the archive overview fetched on session resume."
+        },
+        "openviking.timeoutMs": {
+          "type": "number",
+          "default": 15000,
+          "minimum": 1000,
+          "markdownDescription": "HTTP timeout for general requests (ms)."
+        },
+        "openviking.captureTimeoutMs": {
+          "type": "number",
+          "default": 30000,
+          "minimum": 1000,
+          "markdownDescription": "HTTP timeout for the capture path (ms)."
+        },
+        "openviking.writePathAsync": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Detach commit dispatches into a background worker so VS Code isn't blocked on commit RTT."
+        },
+        "openviking.bypassSession": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "One-shot bypass: skip every recall + capture in this VS Code session."
+        },
+        "openviking.bypassSessionPatterns": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "markdownDescription": "Glob patterns matched against the workspace folder URI. Matching workspaces silently bypass OpenViking."
+        },
         "openviking.debug": {
           "type": "boolean",
           "default": false,
           "markdownDescription": "Write hook logs to `~/.openviking/logs/copilot-vscode-hooks.log`."
+        },
+        "openviking.debugLogPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Override the debug log path. Empty to use the default `~/.openviking/logs/copilot-vscode-hooks.log`."
         }
       }
     }

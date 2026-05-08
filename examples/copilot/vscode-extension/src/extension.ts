@@ -2,15 +2,14 @@
  * VS Code adapter for the OpenViking Copilot extension.
  *
  * Stays as thin as possible — every piece of logic lives in
- * `extension-core.ts` so it can be unit-tested without VS Code. This
- * file's job is:
- *   - read `openviking.*` workspace/user settings into hostOverrides
- *   - call buildActivationHandle
- *   - register `runDeactivate` as a disposable
+ * `extension-core.ts`, `participant-core.ts`, `commands-core.ts`,
+ * and `mcp/manifest.ts` so it can be unit-tested without VS Code.
  *
- * The chat participant (#16/#17), LM tools (#22/#26), and SecretStorage-
- * backed `Set API Key` command (#19) hook into this handle in later
- * issues.
+ * Activation is async because we read `apiKey` from VS Code
+ * SecretStorage before building the activation handle. SecretStorage
+ * has the highest priority for `apiKey` — above settings.json — so
+ * users who run `OpenViking: Set API Key` never need to touch
+ * settings.json.
  */
 
 import * as vscode from "vscode";
@@ -20,20 +19,29 @@ import {
   type ActivationHandle,
   type PluginConfig,
 } from "./extension-core";
+import { registerOpenVikingCommands } from "./commands";
 import { registerOpenVikingMcpProvider } from "./mcp/register";
 import { registerOpenVikingParticipant } from "./participant";
+import { OPENVIKING_SETTINGS, SECRETS_API_KEY } from "./settings-schema";
 
 let handle: ActivationHandle | null = null;
 
-export function activate(context: vscode.ExtensionContext): void {
-  handle = buildActivationHandle({
-    hostOverrides: readWorkspaceOverrides(),
-  });
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  // Register commands first so the user can reach `Set API Key` even
+  // when buildActivationHandle returns null (plugin disabled).
+  for (const disposable of registerOpenVikingCommands(context)) {
+    context.subscriptions.push(disposable);
+  }
+
+  const secretApiKey = await context.secrets.get(SECRETS_API_KEY);
+  const overrides = readWorkspaceOverrides();
+  if (secretApiKey && secretApiKey.trim()) {
+    overrides.apiKey = secretApiKey.trim();
+  }
+
+  handle = buildActivationHandle({ hostOverrides: overrides });
 
   if (!handle) {
-    // Plugin is disabled (no config files, no env force-enable). Stay
-    // out of the way silently — re-running activation is cheap, so
-    // `OPENVIKING_MEMORY_ENABLED=1` after a reload picks us back up.
     return;
   }
 
@@ -54,37 +62,52 @@ export async function deactivate(): Promise<void> {
 }
 
 /**
- * Map `openviking.*` workspace/user settings to PluginConfig
- * overrides. The full ~20-field schema lives in #19; this minimal
- * subset is enough to drive activation + recall + capture defaults.
+ * Map every `openviking.*` workspace/user setting from the typed
+ * catalogue (`settings-schema.ts`) into a `Partial<PluginConfig>`.
+ * The same descriptor list drives the manifest schema, so adding a
+ * new setting only requires touching `settings-schema.ts` + the
+ * manifest — this loop picks it up automatically as long as the
+ * descriptor declares a `cfgField`.
  */
 function readWorkspaceOverrides(): Partial<PluginConfig> {
   const cfg = vscode.workspace.getConfiguration("openviking");
-  const overrides: Partial<PluginConfig> = {};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const out: Record<string, any> = {};
 
-  const url = cfg.get<string>("url");
-  if (typeof url === "string" && url.trim()) overrides.baseUrl = url.trim().replace(/\/+$/, "");
+  for (const desc of OPENVIKING_SETTINGS) {
+    if (!desc.cfgField) continue;
+    const settingName = desc.key.replace(/^openviking\./, "");
 
-  const apiKey = cfg.get<string>("apiKey");
-  if (typeof apiKey === "string" && apiKey.trim()) overrides.apiKey = apiKey.trim();
+    switch (desc.type) {
+      case "string":
+      case "enum": {
+        const v = cfg.get<string>(settingName);
+        if (typeof v === "string" && v.trim()) {
+          out[desc.cfgField] =
+            desc.cfgField === "baseUrl" ? v.trim().replace(/\/+$/, "") : v.trim();
+        }
+        break;
+      }
+      case "boolean": {
+        const v = cfg.get<boolean>(settingName);
+        if (typeof v === "boolean") out[desc.cfgField] = v;
+        break;
+      }
+      case "number": {
+        const v = cfg.get<number>(settingName);
+        if (typeof v === "number" && Number.isFinite(v)) out[desc.cfgField] = v;
+        break;
+      }
+      case "string-array": {
+        const v = cfg.get<string[]>(settingName);
+        if (Array.isArray(v)) {
+          const arr = v.filter((s): s is string => typeof s === "string" && s.trim().length > 0);
+          if (arr.length > 0) out[desc.cfgField] = arr;
+        }
+        break;
+      }
+    }
+  }
 
-  const account = cfg.get<string>("account");
-  if (typeof account === "string" && account.trim()) overrides.accountId = account.trim();
-
-  const user = cfg.get<string>("user");
-  if (typeof user === "string" && user.trim()) overrides.userId = user.trim();
-
-  const agentId = cfg.get<string>("agentId");
-  if (typeof agentId === "string" && agentId.trim()) overrides.agentId = agentId.trim();
-
-  const autoRecall = cfg.get<boolean>("autoRecall");
-  if (typeof autoRecall === "boolean") overrides.autoRecall = autoRecall;
-
-  const autoCapture = cfg.get<boolean>("autoCapture");
-  if (typeof autoCapture === "boolean") overrides.autoCapture = autoCapture;
-
-  const debug = cfg.get<boolean>("debug");
-  if (typeof debug === "boolean") overrides.debug = debug;
-
-  return overrides;
+  return out as Partial<PluginConfig>;
 }
