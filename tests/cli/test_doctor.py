@@ -47,6 +47,24 @@ class TestCheckConfig:
         assert not ok
         assert "Invalid JSON" in detail
 
+    def test_fail_unknown_top_level_config_field(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(json.dumps({"unknown_section": {}}))
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            ok, detail, fix = check_config()
+        assert not ok
+        assert "Invalid configuration" in detail
+        assert "unknown_section" in fix
+
+    def test_fail_unknown_nested_config_field(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(json.dumps({"embedding": {"dense": {"enabld": True}}}))
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            ok, detail, fix = check_config()
+        assert not ok
+        assert "Invalid configuration" in detail
+        assert "embedding.dense.enabld" in fix
+
     def test_pass_without_embedding_section(self, tmp_path: Path):
         config = tmp_path / "ov.conf"
         config.write_text(json.dumps({"server": {}}))

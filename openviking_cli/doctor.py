@@ -18,8 +18,9 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from openviking_cli.utils.config.config_loader import resolve_config_path
+from openviking_cli.utils.config.config_loader import load_json_config, resolve_config_path
 from openviking_cli.utils.config.consts import OPENVIKING_CONFIG_ENV
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
 # ANSI helpers (disabled when stdout is not a terminal)
@@ -62,7 +63,7 @@ def _load_config_json(config_path: Path) -> Optional[dict]:
 
 
 def check_config() -> tuple[bool, str, Optional[str]]:
-    """Validate ov.conf exists and is valid JSON with required sections."""
+    """Validate ov.conf exists, is valid JSON, and matches OpenVikingConfig."""
     config_path = _find_config()
     if config_path is None:
         return (
@@ -72,19 +73,14 @@ def check_config() -> tuple[bool, str, Optional[str]]:
         )
 
     try:
-        raw = config_path.read_text(encoding="utf-8")
-        raw = os.path.expandvars(raw)
-        data = json.loads(raw)
-    except json.JSONDecodeError as exc:
+        data = load_json_config(config_path)
+    except ValueError as exc:
         return False, f"Invalid JSON in {config_path}", f"Fix syntax error: {exc}"
 
-    missing = [key for key in () if key not in data]
-    if missing:
-        return (
-            False,
-            f"{config_path} missing required sections: {', '.join(missing)}",
-            "Add the missing sections (see examples/ov.conf.example)",
-        )
+    try:
+        OpenVikingConfig.from_dict(data)
+    except ValueError as exc:
+        return False, f"Invalid configuration in {config_path}", f"Fix ov.conf: {exc}"
 
     return True, str(config_path), None
 
